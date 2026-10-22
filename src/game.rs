@@ -165,6 +165,8 @@ pub struct Game {
     pub mute_hits: bool,
     /// Show the live offset suggestion under the hit error meter.
     pub show_offset_hint: bool,
+    /// Scale the suggestion to current UR; off = plain average of the last 40 hits.
+    pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
     offset: f64,
 }
@@ -216,6 +218,7 @@ impl Game {
             hide_notes: false,
             mute_hits: false,
             show_offset_hint: false,
+            ur_scaled_hint: true,
             offset: 0.0,
         }
     }
@@ -321,6 +324,12 @@ impl Game {
         }
         // An error measured under offset `o` would have been `e - (current - o)` under the current one.
         let corrected: Vec<f64> = s.errors.iter().zip(&s.error_offsets).map(|(e, o)| e - (current_offset - o)).collect();
+        if !self.ur_scaled_hint {
+            // Simple mode: average of the last 40 hits, applied in full.
+            let estimate = calibrate::estimate(&corrected[n.saturating_sub(40)..], current_offset)?;
+            let significant = estimate.error_ms.abs() >= 3.0;
+            return Some(OffsetHint { estimate, needed: MIN_HITS, significant });
+        }
         // Current consistency from the latest 40 hits sizes the window.
         let probe = calibrate::estimate(&corrected[n.saturating_sub(40)..], current_offset)?;
         let sigma = probe.ur / 10.0;
@@ -810,6 +819,18 @@ mod tests {
         let h = g.offset_suggestion(0.0).unwrap();
         assert!(h.significant);
         assert!((11.0..=12.0).contains(&h.estimate.suggested_offset), "{}", h.estimate.suggested_offset);
+    }
+
+    #[test]
+    fn simple_mode_uses_plain_last_40_average() {
+        let mut g = game();
+        g.ur_scaled_hint = false;
+        hits(&mut g, &spread(4.0, 20.0, 30), 0.0);
+        let h = g.offset_suggestion(0.0).unwrap();
+        // Same noisy hits the UR-scaled mode calls "looks good": simple mode flags and applies all of it.
+        assert!(h.significant);
+        assert_eq!(h.estimate.suggested_offset, 4.0);
+        assert_eq!(h.estimate.hits, 30);
     }
 
     #[test]

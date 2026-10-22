@@ -26,6 +26,8 @@ pub struct Config {
     pub calibration_bpm: f64,
     /// Show a live offset suggestion during play.
     pub show_offset_hint: bool,
+    /// Scale that suggestion to current UR (off: plain average of the last 40 hits).
+    pub offset_hint_ur_scaled: bool,
     pub audio_buffer: u32,
     pub show_fps: bool,
     /// Left rim, left centre, right centre, right rim.
@@ -45,6 +47,7 @@ impl Default for Config {
             frame_delay_ms: 0.0,
             calibration_bpm: 120.0,
             show_offset_hint: true,
+            offset_hint_ur_scaled: true,
             audio_buffer: 256,
             show_fps: true,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
@@ -108,6 +111,7 @@ impl Config {
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
                 "show_fps" => cfg.show_fps = v == "true",
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
+                "offset_hint_ur_scaled" => cfg.offset_hint_ur_scaled = v == "true",
                 "keys" => {
                     let keys: Vec<KeyCode> = v.split(',').filter_map(|s| parse_key(s.trim())).collect();
                     if let Ok(k) = keys.try_into() {
@@ -145,7 +149,8 @@ impl Config {
              # audio device buffer in frames (lower = less latency, more risk of crackle)\n\
              audio_buffer = {}\n\
              show_fps = {}\n\
-             show_offset_hint = {}\n",
+             show_offset_hint = {}\n\
+             offset_hint_ur_scaled = {}\n",
             keys.join(", "),
             self.offset_ms,
             self.scroll_speed,
@@ -158,6 +163,7 @@ impl Config {
             self.audio_buffer,
             self.show_fps,
             self.show_offset_hint,
+            self.offset_hint_ur_scaled,
         );
         out.push_str("# extra song folders / .osz files, one per line\n");
         for s in &self.songs {

@@ -193,6 +193,7 @@ impl State {
             Item::Calibrate => "Enter to start".into(),
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
             Item::LiveOffset => on(c.show_offset_hint),
+            Item::LiveOffsetUr => on(c.offset_hint_ur_scaled),
         }
     }
 
@@ -244,6 +245,7 @@ impl State {
             // Started with Enter in `settings_key`; arrows do nothing.
             Item::Calibrate => return,
             Item::LiveOffset => self.cfg.show_offset_hint = !self.cfg.show_offset_hint,
+            Item::LiveOffsetUr => self.cfg.offset_hint_ur_scaled = !self.cfg.offset_hint_ur_scaled,
             Item::CalibrationBpm => {
                 let (lo, hi) = calibrate::BPM_RANGE;
                 self.cfg.calibration_bpm = (self.cfg.calibration_bpm + 5.0 * d).clamp(lo, hi);
@@ -642,6 +644,7 @@ impl State {
                     }
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
+                game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.draw(canvas, self.cfg.scroll_speed);
                 if let Some(plan) = &mut self.shots {
                     if plan.times.last().is_some_and(|&t| game.time >= t) {
