@@ -11,3 +11,17 @@ symphonia = { version = "0.6", features = ["mp3", "ogg", "vorbis", "wav", "pcm",
 wgpu = "30"
 winit = "0.30"
 zip = { version = "9", default-features = false, features = ["deflate"] }
+
+[features]
+default = ["pipewire"]
+# Native PipeWire output (lower latency than going through the ALSA plugin). Set TAIKO_ALSA=1 to bypass at runtime.
+pipewire = ["cpal/pipewire"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+# Audio decoding is unbearably slow unoptimised; keep dependencies fast in debug builds too.
+[profile.dev.package."*"]
+opt-level = 3

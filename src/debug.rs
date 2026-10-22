@@ -1,0 +1,134 @@
+//! Diagnostics: screenshot encoding and frame/clock smoothness statistics.
+//!
+//! `TAIKO_STATS=1` prints a report when leaving gameplay; `TAIKO_SHOTS=dir:ms,ms,...` saves PNGs
+//! at the given gameplay times (used for headless testing).
+
+use std::path::{Path, PathBuf};
+
+/// Minimal PNG writer (uncompressed deflate) so screenshots need no extra dependencies.
+pub fn write_png(path: &Path, width: u32, height: u32, rgb: &[u8]) -> std::io::Result<()> {
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &b in data {
+            crc ^= b as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let start = out.len();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let crc = crc32(&out[start..]);
+        out.extend_from_slice(&crc.to_be_bytes());
+    }
+    let mut raw = Vec::with_capacity((width as usize * 3 + 1) * height as usize);
+    for row in rgb.chunks_exact(width as usize * 3) {
+        raw.push(0);
+        raw.extend_from_slice(row);
+    }
+    let mut z = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
+    for (i, block) in blocks.iter().enumerate() {
+        z.push((i == blocks.len() - 1) as u8);
+        z.extend_from_slice(&(block.len() as u16).to_le_bytes());
+        z.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
+        z.extend_from_slice(block);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in &raw {
+        a = (a + x as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(&mut out, b"IDAT", &z);
+    chunk(&mut out, b"IEND", &[]);
+    std::fs::write(path, out)
+}
+
+pub struct ShotPlan {
+    pub dir: PathBuf,
+    pub times: Vec<f64>,
+}
+
+impl ShotPlan {
+    pub fn from_env() -> Option<ShotPlan> {
+        let v = std::env::var("TAIKO_SHOTS").ok()?;
+        let (dir, times) = v.rsplit_once(':')?;
+        let mut times: Vec<f64> = times.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        times.sort_by(|a, b| b.total_cmp(a));
+        Some(ShotPlan { dir: PathBuf::from(dir), times })
+    }
+}
+
+/// Collects per-frame samples during gameplay.
+#[derive(Default)]
+pub struct Smoothness {
+    frame_ms: Vec<f64>,
+    /// |game-time advance − wall-time advance| per frame.
+    jitter_ms: Vec<f64>,
+    /// Smoothed clock minus raw audio position.
+    drift_ms: Vec<f64>,
+    backwards: u32,
+    last: Option<(f64, f64)>,
+}
+
+impl Smoothness {
+    pub fn sample(&mut self, wall_ms: f64, game_ms: f64, audio_ms: Option<f64>) {
+        if let Some((w, g)) = self.last {
+            let dw = wall_ms - w;
+            let dg = game_ms - g;
+            self.frame_ms.push(dw);
+            self.jitter_ms.push((dg - dw).abs());
+            if dg < 0.0 {
+                self.backwards += 1;
+            }
+        }
+        if let Some(a) = audio_ms {
+            self.drift_ms.push(game_ms - a);
+        }
+        self.last = Some((wall_ms, game_ms));
+    }
+
+    pub fn report(&self) -> String {
+        fn pct(v: &[f64], p: f64) -> f64 {
+            if v.is_empty() {
+                return 0.0;
+            }
+            let mut s = v.to_vec();
+            s.sort_by(|a, b| a.total_cmp(b));
+            s[((s.len() - 1) as f64 * p).round() as usize]
+        }
+        let n = self.frame_ms.len().max(1) as f64;
+        let mean = self.frame_ms.iter().sum::<f64>() / n;
+        let drift_abs: Vec<f64> = self.drift_ms.iter().map(|d| d.abs()).collect();
+        format!(
+            "frames {}  avg {:.0} fps\n\
+             frame time  p50 {:.3}  p99 {:.3}  max {:.3} ms\n\
+             clock jitter vs wall  p50 {:.4}  p99 {:.4}  max {:.4} ms  (backwards steps: {})\n\
+             clock vs raw audio  p50 {:.3}  p99 {:.3}  max {:.3} ms",
+            self.frame_ms.len(),
+            1000.0 / mean.max(1e-9),
+            pct(&self.frame_ms, 0.5),
+            pct(&self.frame_ms, 0.99),
+            pct(&self.frame_ms, 1.0),
+            pct(&self.jitter_ms, 0.5),
+            pct(&self.jitter_ms, 0.99),
+            pct(&self.jitter_ms, 1.0),
+            self.backwards,
+            pct(&drift_abs, 0.5),
+            pct(&drift_abs, 0.99),
+            pct(&drift_abs, 1.0),
+        )
+    }
+}
