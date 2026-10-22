@@ -24,6 +24,8 @@ pub struct Config {
     pub frame_delay_ms: f64,
     /// Tempo of the offset-calibration click track.
     pub calibration_bpm: f64,
+    /// Show a live offset suggestion during play.
+    pub show_offset_hint: bool,
     pub audio_buffer: u32,
     pub show_fps: bool,
     /// Left rim, left centre, right centre, right rim.
@@ -42,6 +44,7 @@ impl Default for Config {
             fps_cap: 0,
             frame_delay_ms: 0.0,
             calibration_bpm: 120.0,
+            show_offset_hint: true,
             audio_buffer: 256,
             show_fps: true,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
@@ -104,6 +107,7 @@ impl Config {
                 "frame_delay_ms" => cfg.frame_delay_ms = v.parse::<f64>().unwrap_or(0.0).clamp(0.0, MAX_FRAME_DELAY),
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
                 "show_fps" => cfg.show_fps = v == "true",
+                "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "keys" => {
                     let keys: Vec<KeyCode> = v.split(',').filter_map(|s| parse_key(s.trim())).collect();
                     if let Ok(k) = keys.try_into() {
@@ -140,7 +144,8 @@ impl Config {
              calibration_bpm = {}\n\
              # audio device buffer in frames (lower = less latency, more risk of crackle)\n\
              audio_buffer = {}\n\
-             show_fps = {}\n",
+             show_fps = {}\n\
+             show_offset_hint = {}\n",
             keys.join(", "),
             self.offset_ms,
             self.scroll_speed,
@@ -152,6 +157,7 @@ impl Config {
             self.calibration_bpm,
             self.audio_buffer,
             self.show_fps,
+            self.show_offset_hint,
         );
         out.push_str("# extra song folders / .osz files, one per line\n");
         for s in &self.songs {

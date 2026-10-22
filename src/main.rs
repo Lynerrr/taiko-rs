@@ -192,6 +192,7 @@ impl State {
             Item::Fullscreen => on(self.fullscreen),
             Item::Calibrate => "Enter to start".into(),
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
+            Item::LiveOffset => on(c.show_offset_hint),
         }
     }
 
@@ -242,6 +243,7 @@ impl State {
             Item::Fullscreen => self.toggle_fullscreen(window),
             // Started with Enter in `settings_key`; arrows do nothing.
             Item::Calibrate => return,
+            Item::LiveOffset => self.cfg.show_offset_hint = !self.cfg.show_offset_hint,
             Item::CalibrationBpm => {
                 let (lo, hi) = calibrate::BPM_RANGE;
                 self.cfg.calibration_bpm = (self.cfg.calibration_bpm + 5.0 * d).clamp(lo, hi);
@@ -381,7 +383,25 @@ impl State {
         }
     }
 
+    /// Applies the live offset suggestion from the song being played (O key).
+    fn apply_live_offset(&mut self) {
+        let Scene::Play { game, .. } = &self.scene else { return };
+        match game.offset_suggestion(self.cfg.offset_ms) {
+            Some(e) => {
+                let was = self.cfg.offset_ms;
+                self.cfg.offset_ms = e.suggested_offset;
+                self.cfg.save();
+                self.toast(format!("offset {:+.0} ms (was {was:+.0})", e.suggested_offset));
+            }
+            None => self.toast("need at least 10 hits for a suggestion".into()),
+        }
+    }
+
     fn pause_key(&mut self, code: KeyCode) {
+        if code == KeyCode::KeyO {
+            self.apply_live_offset();
+            return;
+        }
         let Scene::Play { game, entry } = &mut self.scene else { return };
         let cursor = game.paused.unwrap_or(0);
         match code {
@@ -512,6 +532,7 @@ impl State {
             Scene::Settings { .. } => self.settings_key(code, window),
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => {}
             Scene::Play { game, entry } => match code {
+                KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
                 KeyCode::Space => game.skip(self.audio.as_ref(), self.cfg.offset_ms),
                 KeyCode::Backquote => {
@@ -616,6 +637,7 @@ impl State {
                         sm.sample(wall, game.raw_time, game.last_audio_ms);
                     }
                 }
+                game.show_offset_hint = self.cfg.show_offset_hint;
                 game.draw(canvas, self.cfg.scroll_speed);
                 if let Some(plan) = &mut self.shots {
                     if plan.times.last().is_some_and(|&t| game.time >= t) {

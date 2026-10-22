@@ -38,6 +38,7 @@ Build needs `clang` and PipeWire headers for the default `pipewire` feature; bui
 | Tab (or F1) | switch between the SONGS and SETTINGS tabs |
 | Space | skip intro |
 | Esc (in game) | pause menu: continue, retry, settings, quit; Esc again resumes |
+| O (in game or pause menu) | apply the live offset suggestion shown under the hit error meter |
 | `` ` `` | restart map |
 | Esc (song select) | clear search / quit |
 | - / = (Shift: ×5) | audio offset −/+ 1 ms |
@@ -61,6 +62,11 @@ calibrate purely by ear. The overlay shows your average error and the suggested 
 the end (or **Enter** to finish early) you get the result, using a median-filtered average that
 ignores stray taps, with **Enter** to apply, **R** to retry (Left/Right changes the tempo) and
 **Esc** to discard.
+
+You can also skip calibration: while playing any map, the line under the hit error meter shows
+your average error over the **last 40 hits** and a suggested offset (after 10 hits). Press **O**
+to apply it on the spot; hits recorded before the change are re-expressed under the new offset,
+so the suggestion settles instead of overshooting. Toggle it with Settings → Live offset suggestion.
 
 ## Frame pacing on Wayland
 

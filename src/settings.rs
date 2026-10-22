@@ -9,6 +9,7 @@ pub enum Item {
     Offset,
     Calibrate,
     CalibrationBpm,
+    LiveOffset,
     Key(usize),
     ShowConverts,
     MusicVolume,
@@ -21,11 +22,12 @@ pub enum Item {
     Fullscreen,
 }
 
-pub const ITEMS: [(&str, Item); 17] = [
+pub const ITEMS: [(&str, Item); 18] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Offset),
     ("GAMEPLAY", Item::Calibrate),
     ("GAMEPLAY", Item::CalibrationBpm),
+    ("GAMEPLAY", Item::LiveOffset),
     ("GAMEPLAY", Item::Key(0)),
     ("GAMEPLAY", Item::Key(1)),
     ("GAMEPLAY", Item::Key(2)),
@@ -50,6 +52,7 @@ impl Item {
             Item::Offset => "Audio offset",
             Item::Calibrate => "Offset calibration",
             Item::CalibrationBpm => "Calibration tempo",
+            Item::LiveOffset => "Live offset suggestion",
             Item::Key(i) => KEY_LABELS[i],
             Item::ShowConverts => "Show osu!standard converts",
             Item::MusicVolume => "Music volume",
@@ -69,6 +72,7 @@ impl Item {
             Item::Offset => "Raise it if you hit late on average (results screen tells you). Shift = 5 ms steps.",
             Item::Calibrate => "Enter: play a click track with notes exactly on the beat; it measures and sets your offset.",
             Item::CalibrationBpm => "Tempo of the calibration click track. Pick one close to the maps you play.",
+            Item::LiveOffset => "While playing, suggest an offset from your last 40 hits; press O to apply it.",
             Item::Key(_) => "Enter, then press the new key. Esc cancels.",
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
             Item::MusicVolume | Item::FxVolume => "Left / Right to adjust.",
@@ -114,8 +118,8 @@ impl SettingsUi {
             }
             let selected = i == self.cursor;
             let (bg, border) = if selected { (0x34344a, 0xEB452C) } else { (0x1d1d27, 0x2a2a38) };
-            c.round_rect(x0, y, col, 16.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
-            c.text(x0 + 10.0, y + 4.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
+            c.round_rect(x0, y, col, 15.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+            c.text(x0 + 10.0, y + 4.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
             let v = if selected && self.binding.is_some() {
                 "press a key...".to_string()
             } else if selected && !matches!(item, Item::Key(_)) {
@@ -124,8 +128,8 @@ impl SettingsUi {
                 value(*item)
             };
             let v_col = if selected && self.binding.is_some() { 0xFFD34D } else { 0xffffff };
-            c.text_right(x0 + col - 10.0, y + 4.5, 7.0, rgba(v_col, 1.0), &v);
-            y += 19.0;
+            c.text_right(x0 + col - 10.0, y + 4.0, 7.0, rgba(v_col, 1.0), &v);
+            y += 18.0;
         }
         c.text_centered(w / 2.0, 446.0, 8.0, rgba(0x9a9ab0, 1.0), self.item().help());
         c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), footer);

@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, Beatmap, Kind};
+use crate::calibrate;
 use crate::clock::GameClock;
 use crate::render::{rgba, Canvas};
 
@@ -75,6 +76,9 @@ pub struct Stats {
     pub swells: u32,
     pub strong: u32,
     pub errors: Vec<f64>,
+    /// Audio offset in effect when each error was measured, so suggestions stay right after the
+    /// offset changes mid-song.
+    pub error_offsets: Vec<f64>,
 }
 
 impl Stats {
@@ -150,6 +154,10 @@ pub struct Game {
     /// Calibration: draw no notes or barlines (play by ear) / play no hitsounds on presses.
     pub hide_notes: bool,
     pub mute_hits: bool,
+    /// Show the live offset suggestion under the hit error meter.
+    pub show_offset_hint: bool,
+    /// Offset used for the current frame / last press.
+    offset: f64,
 }
 
 impl Game {
@@ -198,11 +206,14 @@ impl Game {
             paused: None,
             hide_notes: false,
             mute_hits: false,
+            show_offset_hint: false,
+            offset: 0.0,
         }
     }
 
     /// Advances the clock. Returns true once the map is over.
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>, offset: f64) -> bool {
+        self.offset = offset;
         if self.paused.is_some() {
             self.clock.hold(now);
             self.time = self.raw_time - offset;
@@ -281,6 +292,24 @@ impl Game {
                 a.set_paused(false);
             }
         }
+    }
+
+    /// Offset suggestion from the most recent hits, re-expressed relative to `current_offset`.
+    pub fn offset_suggestion(&self, current_offset: f64) -> Option<calibrate::Estimate> {
+        const WINDOW: usize = 40;
+        const MIN_HITS: usize = 10;
+        let s = &self.stats;
+        let start = s.errors.len().saturating_sub(WINDOW);
+        // An error measured under offset `o` would have been `e - (current - o)` under the current one.
+        let corrected: Vec<f64> = s.errors[start..]
+            .iter()
+            .zip(&s.error_offsets[start..])
+            .map(|(e, o)| e - (current_offset - o))
+            .collect();
+        if corrected.len() < MIN_HITS {
+            return None;
+        }
+        calibrate::estimate(&corrected, current_offset)
     }
 
     pub fn can_skip(&self) -> bool {
@@ -368,6 +397,7 @@ impl Game {
         s.max_combo = s.max_combo.max(s.combo);
         if let Some(e) = error.filter(|_| judge != Judge::Miss) {
             s.errors.push(e);
+            s.error_offsets.push(self.offset);
             self.recent_errors.push_back((e, t, judge));
             if self.recent_errors.len() > 64 {
                 self.recent_errors.pop_front();
@@ -379,6 +409,7 @@ impl Game {
     /// Handles a drum key (0 = left rim, 1 = left centre, 2 = right centre, 3 = right rim).
     pub fn press(&mut self, key: usize, at: Instant, audio: Option<&Engine>, offset: f64) {
         let t = self.clock.at(at) - offset;
+        self.offset = offset;
         let kat = key == 0 || key == 3;
         self.presses[key] = t;
         let sfx = self.judge_press(key, kat, t);
@@ -664,6 +695,25 @@ impl Game {
             c.circle(cx + mean as f32 * scale, my - 18.0, 3.5, rgba(WHITE, 0.9), rgba(WHITE, 0.0), 0.0);
         }
         c.rect(cx - 1.0, my - 14.0, 2.0, 28.0, rgba(WHITE, 0.9));
+        if self.show_offset_hint {
+            match self.offset_suggestion(self.offset) {
+                Some(e) if e.error_ms.abs() < 3.0 => {
+                    let text = format!("offset looks good ({:+.1} ms over last {} hits)", e.error_ms, e.hits);
+                    c.text_centered(cx, my + 20.0, 8.0, rgba(0x86E05A, 0.9), &text);
+                }
+                Some(e) => {
+                    let dir = if e.error_ms > 0.0 { "late" } else { "early" };
+                    let text = format!(
+                        "{:.1} ms {dir} over last {} hits  |  suggested offset {:+.0} ms  |  O to apply",
+                        e.error_ms.abs(),
+                        e.hits,
+                        e.suggested_offset
+                    );
+                    c.text_centered(cx, my + 20.0, 8.0, rgba(0xFFD34D, 0.95), &text);
+                }
+                None => {}
+            }
+        }
 
         // Map info.
         let m = &self.map.meta;
@@ -685,5 +735,38 @@ impl Game {
             }
             c.text_centered(w / 2.0, 360.0, 9.0, rgba(0x8a8aa0, 1.0), "Up/Down + Enter    Esc: continue");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn game() -> Game {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        Game::new(map, Arc::new(Track { samples: Vec::new() }), None)
+    }
+
+    #[test]
+    fn live_suggestion_needs_ten_hits_and_uses_recent_ones() {
+        let mut g = game();
+        g.stats.errors = vec![9.0; 9];
+        g.stats.error_offsets = vec![0.0; 9];
+        assert!(g.offset_suggestion(0.0).is_none());
+        // 50 old early hits, then 40 recent late ones: only the last 40 count.
+        g.stats.errors = [vec![-30.0; 50], vec![8.0; 40]].concat();
+        g.stats.error_offsets = vec![0.0; 90];
+        assert_eq!(g.offset_suggestion(0.0).unwrap().suggested_offset, 8.0);
+    }
+
+    #[test]
+    fn applying_mid_song_does_not_double_count() {
+        let mut g = game();
+        g.stats.errors = vec![10.0; 20];
+        g.stats.error_offsets = vec![20.0; 20];
+        let first = g.offset_suggestion(20.0).unwrap().suggested_offset;
+        assert_eq!(first, 30.0);
+        // After applying, the same hits re-expressed under +30 suggest staying at +30.
+        assert_eq!(g.offset_suggestion(30.0).unwrap().suggested_offset, 30.0);
     }
 }
