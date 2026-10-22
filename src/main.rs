@@ -7,6 +7,8 @@ mod debug;
 mod font;
 mod game;
 mod library;
+mod multiplayer;
+mod net;
 mod render;
 mod settings;
 mod ui;
@@ -44,6 +46,12 @@ enum Scene {
     /// Offset calibration run; `back` is where to return (the settings tab).
     Calibrate { game: Box<Game>, back: Box<Scene> },
     CalibrateDone { estimate: calibrate::Estimate, back: Box<Scene> },
+    /// Multiplayer: host/join form, room lobby, waiting/countdown, match, results.
+    MpMenu,
+    Lobby,
+    MpWait { rx: Option<Receiver<Loaded>>, loaded: Option<(Beatmap, Arc<Track>)>, start: Option<Instant> },
+    MpPlay { game: Box<Game>, quit_armed: Option<Instant> },
+    MpResults,
 }
 
 struct Toast {
@@ -91,6 +99,12 @@ struct State {
     adapter: String,
     input_script: Option<debug::InputScript>,
     wall_shots: Vec<f64>,
+    mp: Option<multiplayer::Session>,
+    mp_connecting: Option<multiplayer::Connecting>,
+    mp_menu: multiplayer::Menu,
+    mp_status: String,
+    /// Song select is being used by the host to pick the lobby map.
+    picking_lobby_map: bool,
 }
 
 const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
@@ -104,8 +118,14 @@ impl State {
         if let Some(a) = &self.audio {
             a.stop();
         }
-        let path = self.library[entry].path.clone();
         let label = self.library[entry].label();
+        let rx = self.spawn_loader(entry);
+        self.scene = Scene::Loading { rx, label, entry };
+    }
+
+    /// Parses the map and decodes its audio on a background thread.
+    fn spawn_loader(&self, entry: usize) -> Receiver<Loaded> {
+        let path = self.library[entry].path.clone();
         let rate = self.audio.as_ref().map(|a| a.rate);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -120,7 +140,7 @@ impl State {
             })();
             let _ = tx.send(result);
         });
-        self.scene = Scene::Loading { rx, label, entry };
+        rx
     }
 
     fn to_select(&mut self) {
@@ -287,6 +307,9 @@ impl State {
             KeyCode::ArrowRight => self.adjust_setting(item, 1, window),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => self.start_calibration(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.adjust_setting(item, 1, window),
+            KeyCode::Tab if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select)) => {
+                self.open_multiplayer();
+            }
             KeyCode::Escape | KeyCode::Tab | KeyCode::F1 => self.close_settings(),
             _ => {}
         }
@@ -387,7 +410,7 @@ impl State {
 
     /// Applies the live offset suggestion from the song being played (O key).
     fn apply_live_offset(&mut self) {
-        let Scene::Play { game, .. } = &self.scene else { return };
+        let (Scene::Play { game, .. } | Scene::MpPlay { game, .. }) = &self.scene else { return };
         match game.offset_suggestion(self.cfg.offset_ms) {
             Some(h) if !h.significant => {
                 let text = format!("offset already within +-{:.1} ms of your hits", h.estimate.margin_ms);
@@ -487,6 +510,278 @@ impl State {
         true
     }
 
+    fn open_multiplayer(&mut self) {
+        self.scene = if self.mp.is_some() { Scene::Lobby } else { Scene::MpMenu };
+    }
+
+    fn pick_lobby_map(&mut self, entry: usize) {
+        self.picking_lobby_map = false;
+        let e = &self.library[entry];
+        let info = net::MapInfo { hash: e.hash, artist: e.meta.artist.clone(), title: e.meta.title.clone(), version: e.meta.version.clone() };
+        if let Some(s) = &self.mp {
+            s.client.send(net::ClientMsg::SelectMap(info));
+        }
+        self.scene = Scene::Lobby;
+    }
+
+    fn leave_room(&mut self, why: &str) {
+        if let Some(a) = &self.audio {
+            a.stop();
+        }
+        self.mp = None;
+        self.picking_lobby_map = false;
+        self.mp_status = why.to_string();
+        self.scene = Scene::MpMenu;
+    }
+
+    fn multiplayer_key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        // Drum keys during a match go straight to the game.
+        if let Scene::MpPlay { game, .. } = &mut self.scene {
+            if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
+                if !repeat {
+                    game.press(k, at, self.audio.as_ref(), self.cfg.offset_ms);
+                }
+                return;
+            }
+        }
+        if matches!(self.scene, Scene::MpMenu) {
+            self.mp_menu_key(code, text);
+            return;
+        }
+        if repeat || self.handle_global_key(code, window) {
+            return;
+        }
+        match &mut self.scene {
+            Scene::Lobby => {
+                let Some(s) = &mut self.mp else {
+                    self.scene = Scene::MpMenu;
+                    return;
+                };
+                match code {
+                    KeyCode::Space | KeyCode::KeyR => {
+                        if s.me().is_some_and(|p| p.has_map) {
+                            s.ready = !s.me().is_some_and(|p| p.ready);
+                            s.client.send(net::ClientMsg::Ready(s.ready));
+                        } else {
+                            self.toast("you don't have this map".into());
+                        }
+                    }
+                    KeyCode::KeyM if s.is_host() && !s.in_match => {
+                        self.picking_lobby_map = true;
+                        self.scene = Scene::Select;
+                    }
+                    KeyCode::Enter | KeyCode::NumpadEnter if s.is_host() => {
+                        if s.players.iter().any(|p| p.ready && p.has_map) {
+                            s.client.send(net::ClientMsg::StartMatch);
+                        } else {
+                            self.toast("nobody is ready yet".into());
+                        }
+                    }
+                    KeyCode::Tab => self.scene = Scene::Select,
+                    KeyCode::Escape => {
+                        let why = if s.is_host() { "room closed" } else { "left the room" };
+                        self.leave_room(why);
+                    }
+                    _ => {}
+                }
+            }
+            Scene::MpWait { .. } => {
+                if code == KeyCode::Escape {
+                    if let Some(s) = &self.mp {
+                        s.client.send(net::ClientMsg::Loaded(false));
+                        s.client.send(net::ClientMsg::Finished(net::Final { quit: true, ..Default::default() }));
+                    }
+                    self.scene = Scene::Lobby;
+                }
+            }
+            Scene::MpPlay { game, quit_armed } => match code {
+                KeyCode::KeyO => self.apply_live_offset(),
+                KeyCode::Space => game.skip(self.audio.as_ref(), self.cfg.offset_ms),
+                KeyCode::Escape => {
+                    // No pausing in a match; a second Esc forfeits.
+                    if quit_armed.is_some_and(|t| t.elapsed() < Duration::from_millis(1500)) {
+                        if let Some(s) = &self.mp {
+                            s.client.send(net::ClientMsg::Finished(multiplayer::final_from(&game.stats, true)));
+                        }
+                        if let Some(a) = &self.audio {
+                            a.stop();
+                        }
+                        self.scene = Scene::MpResults;
+                    } else {
+                        *quit_armed = Some(Instant::now());
+                        self.toast("press Esc again to forfeit".into());
+                    }
+                }
+                _ => {}
+            },
+            Scene::MpResults => {
+                // Results stay on the session so the lobby can show the last winner.
+                if matches!(code, KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape) {
+                    self.scene = Scene::Lobby;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn mp_menu_key(&mut self, code: KeyCode, text: Option<&str>) {
+        use multiplayer::{MENU_ROWS, ROW_ADDRESS, ROW_HOST, ROW_JOIN, ROW_NAME, ROW_PORT};
+        let row = self.mp_menu.cursor;
+        match code {
+            KeyCode::ArrowUp => self.mp_menu.cursor = row.saturating_sub(1),
+            KeyCode::ArrowDown => self.mp_menu.cursor = (row + 1).min(MENU_ROWS - 1),
+            KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
+            KeyCode::Backspace => {
+                match row {
+                    ROW_NAME => {
+                        self.cfg.mp_name.pop();
+                    }
+                    ROW_PORT => self.cfg.mp_port /= 10,
+                    ROW_ADDRESS => {
+                        self.cfg.mp_address.pop();
+                    }
+                    _ => {}
+                }
+                self.cfg.save();
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                if self.mp_connecting.is_some() {
+                    return;
+                }
+                let name = self.cfg.mp_name.clone();
+                match row {
+                    ROW_HOST => {
+                        self.mp_status = format!("opening room on port {}...", self.cfg.mp_port);
+                        self.mp_connecting = Some(multiplayer::start_host(self.cfg.mp_port, name));
+                    }
+                    ROW_JOIN if self.cfg.mp_address.trim().is_empty() => self.mp_status = "type the host's address first".into(),
+                    ROW_JOIN => {
+                        self.mp_status = format!("connecting to {}...", self.cfg.mp_address);
+                        self.mp_connecting = Some(multiplayer::start_join(self.cfg.mp_address.clone(), name));
+                    }
+                    _ => self.mp_menu.cursor = (row + 1).min(MENU_ROWS - 1),
+                }
+                self.cfg.save();
+            }
+            _ => {
+                let Some(text) = text else { return };
+                for ch in text.chars().filter(|c| c.is_ascii_graphic() || *c == ' ') {
+                    match row {
+                        ROW_NAME if self.cfg.mp_name.len() < 20 => self.cfg.mp_name.push(ch),
+                        ROW_PORT => {
+                            if let Some(d) = ch.to_digit(10) {
+                                let p = self.cfg.mp_port as u32 * 10 + d;
+                                if p <= u16::MAX as u32 {
+                                    self.cfg.mp_port = p as u16;
+                                }
+                            }
+                        }
+                        ROW_ADDRESS if self.cfg.mp_address.len() < 64 && ch != ' ' => self.cfg.mp_address.push(ch),
+                        _ => {}
+                    }
+                }
+                self.cfg.save();
+            }
+        }
+    }
+
+    /// Finishes pending connections and applies messages from the room.
+    fn poll_multiplayer(&mut self) {
+        if let Some(rx) = &self.mp_connecting {
+            match rx.try_recv() {
+                Ok(Ok(session)) => {
+                    self.mp = Some(session);
+                    self.mp_connecting = None;
+                    self.mp_status.clear();
+                    if matches!(self.scene, Scene::MpMenu) {
+                        self.scene = Scene::Lobby;
+                    }
+                }
+                Ok(Err(e)) => {
+                    self.mp_status = e;
+                    self.mp_connecting = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.mp_connecting = None,
+            }
+        }
+        let Some(s) = &mut self.mp else { return };
+        for msg in s.client.poll() {
+            self.handle_server_msg(msg);
+        }
+    }
+
+    fn handle_server_msg(&mut self, msg: net::ServerMsg) {
+        use net::ServerMsg;
+        match msg {
+            ServerMsg::Room { players, map, in_match } => {
+                let library = &self.library;
+                let Some(s) = &mut self.mp else { return };
+                s.players = players;
+                s.in_match = in_match;
+                let hash = map.as_ref().map(|m| m.hash);
+                if hash != s.reported_map {
+                    s.reported_map = hash;
+                    let have = hash.is_some_and(|h| library.iter().any(|e| e.hash == h));
+                    s.client.send(net::ClientMsg::HasMap(have));
+                    s.ready = false;
+                }
+                s.map = map;
+                // Dropped from the match (e.g. load timeout) while waiting for it to start.
+                let dropped = s.me().is_some_and(|p| p.status == net::Status::Lobby);
+                if dropped && matches!(self.scene, Scene::MpWait { start: None, .. }) {
+                    self.scene = Scene::Lobby;
+                    self.toast("the match started without you (map didn't load in time)".into());
+                }
+            }
+            ServerMsg::Prepare(map) => {
+                let Some(s) = &self.mp else { return };
+                // Not in a position to play (single-player song, calibration): sit this one out.
+                if matches!(self.scene, Scene::Play { .. } | Scene::Calibrate { .. } | Scene::Loading { .. }) {
+                    s.client.send(net::ClientMsg::Loaded(false));
+                    return;
+                }
+                match self.library.iter().position(|e| e.hash == map.hash) {
+                    Some(i) => {
+                        if let Some(a) = &self.audio {
+                            a.stop();
+                        }
+                        self.picking_lobby_map = false;
+                        let rx = self.spawn_loader(i);
+                        self.scene = Scene::MpWait { rx: Some(rx), loaded: None, start: None };
+                    }
+                    None => s.client.send(net::ClientMsg::Loaded(false)),
+                }
+            }
+            ServerMsg::Start { at } => {
+                let Some(s) = &self.mp else { return };
+                let when = s.client.local_instant(at);
+                if let Scene::MpWait { start, .. } = &mut self.scene {
+                    *start = Some(when);
+                }
+            }
+            ServerMsg::Results(r) => {
+                if let Some(s) = &mut self.mp {
+                    s.results = Some(r);
+                }
+            }
+            ServerMsg::Rejected(why) | ServerMsg::Disconnected(why) => {
+                let in_mp = matches!(self.scene, Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults);
+                self.toast(format!("multiplayer: {why}"));
+                self.mp = None;
+                self.picking_lobby_map = false;
+                if in_mp {
+                    if let Some(a) = &self.audio {
+                        a.stop();
+                    }
+                    self.mp_status = why;
+                    self.scene = Scene::MpMenu;
+                }
+            }
+            ServerMsg::Welcome { .. } | ServerMsg::Pong { .. } => {}
+        }
+    }
+
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
         // Key capture must see every key, before any shortcut can claim it.
         if self.settings_ui.binding.is_some() && matches!(self.scene, Scene::Settings { .. }) {
@@ -498,6 +793,25 @@ impl State {
         if matches!(self.scene, Scene::Calibrate { .. } | Scene::CalibrateDone { .. }) {
             self.calibration_key(code, repeat, at, window);
             return;
+        }
+        if matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults) {
+            self.multiplayer_key(code, repeat, text, at, window);
+            return;
+        }
+        if self.picking_lobby_map && matches!(self.scene, Scene::Select) && !repeat {
+            match code {
+                KeyCode::Escape if self.select.filter.is_empty() => {
+                    self.picking_lobby_map = false;
+                    self.scene = Scene::Lobby;
+                    return;
+                }
+                KeyCode::Tab | KeyCode::F1 => {
+                    self.picking_lobby_map = false;
+                    self.scene = Scene::Lobby;
+                    return;
+                }
+                _ => {}
+            }
         }
         if let Scene::Play { game, .. } = &mut self.scene {
             if game.paused.is_some() {
@@ -521,6 +835,7 @@ impl State {
         }
         match &mut self.scene {
             Scene::Select => match self.select.key(code, &self.library) {
+                SelectAction::Play(i) if self.picking_lobby_map => self.pick_lobby_map(i),
                 SelectAction::Play(i) => self.start_loading(i),
                 SelectAction::Settings => self.open_settings(),
                 SelectAction::Quit => self.quit = true,
@@ -537,6 +852,7 @@ impl State {
             }
             Scene::Settings { .. } => self.settings_key(code, window),
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => {}
+            Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => {}
             Scene::Play { game, entry } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
@@ -579,6 +895,7 @@ impl State {
         }
 
         canvas.clear(width);
+        self.poll_multiplayer();
         let mut next: Option<Scene> = None;
         let mut capture: Option<String> = None;
         let mut finish_calibration = false;
@@ -611,6 +928,11 @@ impl State {
         match &mut self.scene {
             Scene::Select => {
                 self.select.draw(canvas, &self.library, dt, &self.status);
+                if self.picking_lobby_map {
+                    let w = canvas.width;
+                    canvas.round_rect(24.0, 438.0, w - 48.0, 34.0, 8.0, rgba(0x2b1a17, 1.0), rgba(0xEB452C, 1.0), 1.5);
+                    canvas.text_centered(w / 2.0, 450.0, 10.0, rgba(0xffffff, 1.0), "Picking the lobby map: Enter to choose, Esc to cancel");
+                }
             }
             Scene::Loading { rx, label, entry } => {
                 canvas.text_centered(canvas.width / 2.0, 200.0, 14.0, rgba(0xffffff, 1.0), "Loading");
@@ -662,6 +984,72 @@ impl State {
                 }
             }
             Scene::Results { results, .. } => results.draw(canvas),
+            Scene::MpMenu => {
+                multiplayer::draw_menu(canvas, &self.mp_menu, &self.cfg.mp_name, self.cfg.mp_port, &self.cfg.mp_address, &self.mp_status, self.mp_connecting.is_some());
+            }
+            Scene::Lobby => match &self.mp {
+                Some(s) => {
+                    let have = s.map.as_ref().is_some_and(|m| self.library.iter().any(|e| e.hash == m.hash));
+                    multiplayer::draw_lobby(canvas, s, have);
+                }
+                None => next = Some(Scene::MpMenu),
+            },
+            Scene::MpWait { rx, loaded, start } => {
+                if let Some(r) = rx {
+                    match r.try_recv() {
+                        Ok(Ok(l)) => {
+                            *loaded = Some(l);
+                            *rx = None;
+                            if let Some(s) = &self.mp {
+                                s.client.send(net::ClientMsg::Loaded(true));
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            if let Some(s) = &self.mp {
+                                s.client.send(net::ClientMsg::Loaded(false));
+                            }
+                            self.status = format!("failed to load map: {e}");
+                            next = Some(Scene::Lobby);
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {}
+                        Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Lobby),
+                    }
+                }
+                if start.is_some_and(|at| now >= at) {
+                    if let Some((map, track)) = loaded.take() {
+                        let game = Game::new(map, track, self.audio.as_ref());
+                        next = Some(Scene::MpPlay { game: Box::new(game), quit_armed: None });
+                    }
+                }
+                if let Some(s) = &self.mp {
+                    multiplayer::draw_waiting(canvas, s, *start, loaded.is_some(), now);
+                }
+            }
+            Scene::MpPlay { game, .. } => {
+                let done = game.update(now, self.audio.as_ref(), self.cfg.offset_ms);
+                if self.auto {
+                    game.autoplay(self.audio.as_ref());
+                }
+                game.show_offset_hint = self.cfg.show_offset_hint;
+                game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
+                game.draw(canvas, self.cfg.scroll_speed);
+                let live = multiplayer::live_from(game);
+                if let Some(s) = &mut self.mp {
+                    multiplayer::draw_scoreboard(canvas, s, &live);
+                    if s.last_live.elapsed() >= Duration::from_millis(100) {
+                        s.last_live = now;
+                        s.client.send(net::ClientMsg::Live(live));
+                    }
+                    if done {
+                        s.client.send(net::ClientMsg::Finished(multiplayer::final_from(&game.stats, false)));
+                        next = Some(Scene::MpResults);
+                    }
+                }
+            }
+            Scene::MpResults => match &self.mp {
+                Some(s) => multiplayer::draw_results(canvas, s),
+                None => next = Some(Scene::MpMenu),
+            },
             Scene::Calibrate { game, .. } => {
                 if game.update(now, self.audio.as_ref(), self.cfg.offset_ms) {
                     finish_calibration = true;
@@ -1015,6 +1403,11 @@ fn main() {
         adapter: String::new(),
         input_script: debug::InputScript::from_env(),
         wall_shots: debug::wall_shots_from_env(),
+        mp: None,
+        mp_connecting: None,
+        mp_menu: multiplayer::Menu::default(),
+        mp_status: String::new(),
+        picking_lobby_map: false,
     };
     if let Some(i) = direct {
         state.start_loading(i);

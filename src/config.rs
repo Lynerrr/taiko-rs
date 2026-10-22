@@ -26,6 +26,10 @@ pub struct Config {
     pub calibration_bpm: f64,
     /// Show a live offset suggestion during play.
     pub show_offset_hint: bool,
+    /// Multiplayer: display name, port to host on, last address joined.
+    pub mp_name: String,
+    pub mp_port: u16,
+    pub mp_address: String,
     /// Scale that suggestion to current UR (off: plain average of the last 40 hits).
     pub offset_hint_ur_scaled: bool,
     pub audio_buffer: u32,
@@ -47,6 +51,9 @@ impl Default for Config {
             frame_delay_ms: 0.0,
             calibration_bpm: 120.0,
             show_offset_hint: true,
+            mp_name: std::env::var("USER").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| "player".into()),
+            mp_port: 7777,
+            mp_address: String::new(),
             offset_hint_ur_scaled: true,
             audio_buffer: 256,
             show_fps: true,
@@ -111,6 +118,9 @@ impl Config {
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
                 "show_fps" => cfg.show_fps = v == "true",
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
+                "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
+                "mp_port" => cfg.mp_port = v.parse().unwrap_or(cfg.mp_port),
+                "mp_address" => cfg.mp_address = v.to_string(),
                 "offset_hint_ur_scaled" => cfg.offset_hint_ur_scaled = v == "true",
                 "keys" => {
                     let keys: Vec<KeyCode> = v.split(',').filter_map(|s| parse_key(s.trim())).collect();
@@ -165,6 +175,7 @@ impl Config {
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
         );
+        out.push_str(&format!("# multiplayer\nmp_name = {}\nmp_port = {}\nmp_address = {}\n", self.mp_name, self.mp_port, self.mp_address));
         out.push_str("# extra song folders / .osz files, one per line\n");
         for s in &self.songs {
             out.push_str(&format!("songs = {}\n", s.display()));

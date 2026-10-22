@@ -140,11 +140,11 @@ impl SettingsUi {
     }
 }
 
-/// Top bar shared by the song list and settings: logo plus SONGS / SETTINGS tabs.
+/// Top bar shared by the song list, settings and multiplayer: logo plus the three tabs.
 pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
     c.text(24.0, 24.0, 16.0, rgba(0xffffff, 1.0), "taiko-rs");
     let mut x = 24.0 + Canvas::text_width(16.0, "taiko-rs") + 24.0;
-    for (i, name) in ["SONGS", "SETTINGS"].iter().enumerate() {
+    for (i, name) in ["SONGS", "SETTINGS", "MULTIPLAYER"].iter().enumerate() {
         let tw = Canvas::text_width(9.0, name);
         let on = i == active;
         c.round_rect(x, 20.0, tw + 20.0, 22.0, 6.0, rgba(if on { 0xEB452C } else { 0x23232f }, 1.0), rgba(if on { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);

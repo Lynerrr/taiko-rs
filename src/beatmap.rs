@@ -105,9 +105,8 @@ fn num<T: std::str::FromStr>(s: Option<&str>) -> Option<T> {
 }
 
 /// Reads the header sections and counts hit objects; cheap enough to run over a whole Songs folder.
-pub fn read_meta(path: &Path) -> Option<(Meta, usize)> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let (meta, _) = parse_sections(&text, true);
+pub fn read_meta(text: &str) -> Option<(Meta, usize)> {
+    let (meta, _) = parse_sections(text, true);
     let objects = text
         .split_once("[HitObjects]")
         .map(|(_, rest)| rest.lines().filter(|l| l.contains(',')).count())

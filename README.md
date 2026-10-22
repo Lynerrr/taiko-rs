@@ -71,6 +71,21 @@ and noisy estimates suggest a proportionally smaller change. Press **O**
 to apply it on the spot; hits recorded before the change are re-expressed under the new offset,
 so the suggestion settles instead of overshooting. Toggle it with Settings → Live offset suggestion.
 
+## Multiplayer
+
+Versus play over direct TCP (default port **7777**). Tab to the **MULTIPLAYER** tab:
+
+- **Host:** set your name and port, choose *HOST A GAME*. Friends need your public IP and the
+  port must be reachable (port-forwarded / open). In the lobby press **M** to pick the map from
+  your song list, **Space** to ready up, **Enter** to start once players are ready.
+- **Join:** type the host's `ip` or `ip:port` and choose *JOIN GAME*; **Space** to ready up.
+
+Maps are matched by a hash of the `.osu` file, so everyone needs the same difficulty in their
+Songs folder (players without it show "no map"). Each client syncs its clock to the host with
+pings, and the song starts at a shared instant 3 s after everyone has loaded. During the match a
+live scoreboard shows everyone's score, accuracy and combo; there is no pause (Esc twice
+forfeits). Results show score, accuracy, max combo, judgements and UR for everyone.
+
 ## Frame pacing on Wayland
 
 **Use vsync (the default).** A Wayland compositor shows exactly one frame per refresh no matter
@@ -109,4 +124,6 @@ spins so frames stay evenly spaced.
 | `src/ui.rs` | song select and results screens |
 | `src/settings.rs` | settings tab items and layout, tab bar |
 | `src/calibrate.rs` | offset calibration: estimate, overlay and result screen |
+| `src/net.rs` | multiplayer protocol, room server, client with clock sync |
+| `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
 | `src/library.rs` | Songs folder / `.osz` scanning |

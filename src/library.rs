@@ -8,6 +8,8 @@ pub struct Entry {
     pub path: PathBuf,
     pub meta: Meta,
     pub objects: usize,
+    /// Content hash of the `.osu`, for matching maps between multiplayer clients.
+    pub hash: u64,
 }
 
 impl Entry {
@@ -107,8 +109,10 @@ pub fn scan(inputs: &[PathBuf]) -> Vec<Entry> {
     let mut entries: Vec<Entry> = files
         .into_iter()
         .filter_map(|path| {
-            let (meta, objects) = beatmap::read_meta(&path)?;
-            meta.is_playable().then_some(Entry { path, meta, objects })
+            let bytes = std::fs::read(&path).ok()?;
+            let (meta, objects) = beatmap::read_meta(&String::from_utf8_lossy(&bytes))?;
+            let hash = crate::net::map_hash(&bytes);
+            meta.is_playable().then_some(Entry { path, meta, objects, hash })
         })
         .collect();
     entries.sort_by(|a, b| {
