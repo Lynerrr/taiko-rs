@@ -22,6 +22,21 @@ const START_LEAD_MS: f64 = 3000.0;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 /// Live score broadcasts during a match.
 const MATCH_BROADCAST: Duration = Duration::from_millis(100);
+/// Longest accepted message; anything bigger drops the connection.
+const MAX_LINE: u64 = 256 * 1024;
+
+/// Reads one newline-terminated message, refusing oversized ones. `Ok(None)` at end of stream.
+fn read_message(reader: &mut impl BufRead, buf: &mut String) -> std::io::Result<Option<()>> {
+    buf.clear();
+    let n = std::io::Read::take(&mut *reader, MAX_LINE).read_line(buf)?;
+    if n == 0 {
+        return Ok(None);
+    }
+    if !buf.ends_with('\n') && n as u64 >= MAX_LINE {
+        return Err(std::io::Error::other("message too large"));
+    }
+    Ok(Some(()))
+}
 
 /// FNV-1a over the `.osu` file: identifies a difficulty across machines.
 pub fn map_hash(bytes: &[u8]) -> u64 {
@@ -84,7 +99,8 @@ pub struct PlayerInfo {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ClientMsg {
-    Hello { name: String, protocol: u32 },
+    /// `host_token` is set only by the host's own client, proving it owns the room.
+    Hello { name: String, protocol: u32, host_token: Option<u64> },
     Ping { t: f64 },
     SelectMap(MapInfo),
     HasMap(bool),
@@ -128,6 +144,7 @@ fn clean_name(name: &str) -> String {
 /// A running room. Dropping it closes the room and disconnects everyone.
 pub struct Server {
     stop: Arc<AtomicBool>,
+    pub token: u64,
 }
 
 impl Drop for Server {
@@ -149,6 +166,13 @@ pub fn host(port: u16) -> Result<Server, String> {
         .map_err(|e| format!("can't listen on port {port}: {e}"))?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let stop = Arc::new(AtomicBool::new(false));
+    let token = {
+        use std::hash::{BuildHasher, Hasher};
+        // RandomState is seeded from the OS per process: unguessable for this purpose.
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+        h.finish()
+    };
     let (events, rx) = mpsc::channel();
     {
         let stop = stop.clone();
@@ -171,9 +195,9 @@ pub fn host(port: u16) -> Result<Server, String> {
     }
     {
         let stop = stop.clone();
-        thread::Builder::new().name("mp-room".into()).spawn(move || room_loop(rx, stop)).map_err(|e| e.to_string())?;
+        thread::Builder::new().name("mp-room".into()).spawn(move || room_loop(rx, stop, token)).map_err(|e| e.to_string())?;
     }
-    Ok(Server { stop })
+    Ok(Server { stop, token })
 }
 
 fn spawn_connection(stream: TcpStream, id: u32, events: Sender<Event>) {
@@ -193,8 +217,9 @@ fn spawn_connection(stream: TcpStream, id: u32, events: Sender<Event>) {
         if events.send(Event::Joined(id, tx)).is_err() {
             return;
         }
-        for line in BufReader::new(stream).lines() {
-            let Ok(line) = line else { break };
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        while let Ok(Some(())) = read_message(&mut reader, &mut line) {
             if let Ok(msg) = serde_json::from_str::<ClientMsg>(&line) {
                 if events.send(Event::Msg(id, msg)).is_err() {
                     break;
@@ -220,7 +245,7 @@ enum Phase {
     Playing,
 }
 
-fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>) {
+fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
     let epoch = Instant::now();
     let now_ms = || epoch.elapsed().as_secs_f64() * 1000.0;
     let mut players: Vec<Player> = Vec::new();
@@ -233,16 +258,11 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>) {
     while !stop.load(Ordering::Relaxed) {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Event::Joined(id, tx)) => {
-                // The host's own client connects first and owns the room.
-                let host = host_id.is_none();
-                if host {
-                    host_id = Some(id);
-                }
                 players.push(Player {
                     info: PlayerInfo {
                         id,
                         name: String::new(),
-                        host,
+                        host: false,
                         ready: false,
                         has_map: false,
                         status: Status::Lobby,
@@ -263,7 +283,13 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>) {
                 let is_host = host_id == Some(id);
                 let Some(p) = players.iter_mut().find(|p| p.info.id == id) else { continue };
                 match msg {
-                    ClientMsg::Hello { name, protocol } => {
+                    ClientMsg::Hello { name, protocol, host_token } => {
+                        // Only the client holding the room's token becomes host, however fast
+                        // anyone else connects.
+                        if host_token == Some(token) && host_id.is_none() {
+                            host_id = Some(id);
+                            p.info.host = true;
+                        }
                         if protocol != PROTOCOL {
                             let _ = p.tx.send(ServerMsg::Rejected(format!("version mismatch (host {PROTOCOL}, you {protocol})")));
                             players.retain(|p| p.info.id != id);
@@ -427,7 +453,7 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
 }
 
 impl Client {
-    pub fn connect(addr: &str, name: &str) -> Result<Client, String> {
+    pub fn connect(addr: &str, name: &str, host_token: Option<u64>) -> Result<Client, String> {
         let sa = resolve(addr)?;
         let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(5)).map_err(|e| format!("can't connect to {sa}: {e}"))?;
         let _ = stream.set_nodelay(true);
@@ -445,8 +471,9 @@ impl Client {
         });
         let (inbox, rx) = mpsc::channel();
         thread::spawn(move || {
-            for line in BufReader::new(reader).lines() {
-                let Ok(line) = line else { break };
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            while let Ok(Some(())) = read_message(&mut reader, &mut line) {
                 if let Ok(msg) = serde_json::from_str::<ServerMsg>(&line) {
                     if inbox.send((Instant::now(), msg)).is_err() {
                         return;
@@ -466,7 +493,7 @@ impl Client {
                 thread::sleep(Duration::from_millis(if i < 10 { 100 } else { 1000 }));
             }
         });
-        let _ = tx.send(ClientMsg::Hello { name: name.to_string(), protocol: PROTOCOL });
+        let _ = tx.send(ClientMsg::Hello { name: name.to_string(), protocol: PROTOCOL, host_token });
         Ok(Client { tx, rx, stream, epoch, best_rtt: f64::INFINITY, offset: 0.0, rtt_ms: 0.0, id: None })
     }
 
@@ -531,14 +558,37 @@ mod tests {
     }
 
     #[test]
+    fn oversized_message_drops_the_connection() {
+        let port = 48_000 + (std::process::id() % 1000) as u16;
+        let _server = host(port).unwrap();
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let junk = vec![b'x'; (MAX_LINE as usize) + 10];
+        let _ = raw.write_all(&junk);
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = [0u8; 16];
+        // The host closes the socket: read returns 0 (EOF) or an error, rather than hanging.
+        let res = std::io::Read::read(&mut raw, &mut buf);
+        assert!(matches!(res, Ok(0) | Err(_)), "connection still open: {res:?}");
+    }
+
+    #[test]
     fn full_match_over_localhost() {
         let port = 47_000 + (std::process::id() % 1000) as u16;
-        let _server = host(port).unwrap();
+        let server = host(port).unwrap();
         let addr = format!("127.0.0.1:{port}");
-        let mut a = Client::connect(&addr, "alice").unwrap();
-        wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        let mut b = Client::connect(&addr, "bob").unwrap();
+        // An intruder racing in first must not become host.
+        let mut b = Client::connect(&addr, "bob", None).unwrap();
         wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
+        let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
+        wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
+        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new() }));
+        thread::sleep(Duration::from_millis(100));
+        // Any state change makes the room broadcast again, so we can inspect it.
+        a.send(ClientMsg::HasMap(false));
+        let ServerMsg::Room { players, map, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::Room { players, .. } if players.len() == 2)) else { unreachable!() };
+        assert!(map.is_none(), "non-host picked the map");
+        assert!(players.iter().any(|p| p.name == "alice" && p.host));
+        assert!(players.iter().any(|p| p.name == "bob" && !p.host));
 
         let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into() };
         a.send(ClientMsg::SelectMap(map.clone()));

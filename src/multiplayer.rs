@@ -56,8 +56,9 @@ pub fn start_host(port: u16, name: String) -> Connecting {
     std::thread::spawn(move || {
         let result = (|| {
             let server = net::host(port)?;
-            let client = Client::connect(&format!("127.0.0.1:{port}"), &name)
-                .or_else(|_| Client::connect(&format!("[::1]:{port}"), &name))?;
+            let token = Some(server.token);
+            let client = Client::connect(&format!("127.0.0.1:{port}"), &name, token)
+                .or_else(|_| Client::connect(&format!("[::1]:{port}"), &name, token))?;
             Ok(Session::new(client, Some(server), format!("hosting on port {port}")))
         })();
         let _ = tx.send(result);
@@ -68,7 +69,7 @@ pub fn start_host(port: u16, name: String) -> Connecting {
 pub fn start_join(address: String, name: String) -> Connecting {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = Client::connect(&address, &name).map(|c| Session::new(c, None, format!("connected to {address}")));
+        let result = Client::connect(&address, &name, None).map(|c| Session::new(c, None, format!("connected to {address}")));
         let _ = tx.send(result);
     });
     rx
@@ -147,12 +148,13 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
 // ---------------------------------------------------------------------------------------------
 // Lobby
 
-fn status_text(p: &PlayerInfo) -> (&'static str, u32) {
+/// `map_chosen`: "no map" only means something once the host has picked one.
+fn status_text(p: &PlayerInfo, map_chosen: bool) -> (&'static str, u32) {
     match p.status {
         Status::Loading => ("loading", 0x9a9ab0),
         Status::Playing => ("playing", 0x438EAD),
         Status::Finished => ("finished", 0x9a9ab0),
-        Status::Lobby if !p.has_map => ("no map", 0xFF4B4B),
+        Status::Lobby if map_chosen && !p.has_map => ("no map", 0xFF4B4B),
         Status::Lobby if p.ready => ("ready", 0x86E05A),
         Status::Lobby => ("not ready", 0x8a8aa0),
     }
@@ -195,7 +197,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
             name.push_str("  (you)");
         }
         c.text(x0 + 12.0, y + 7.0, 9.0, rgba(0xffffff, 1.0), &name);
-        let (st, color) = status_text(p);
+        let (st, color) = status_text(p, s.map.is_some());
         c.text_right(x0 + col - 12.0, y + 7.0, 9.0, rgba(color, 1.0), st);
     }
 
@@ -241,7 +243,7 @@ pub fn draw_waiting(c: &mut Canvas, s: &Session, start: Option<Instant>, loaded:
     let size = if start.is_some() { 48.0 } else { 16.0 };
     c.text_centered(w / 2.0, 180.0, size, rgba(0xffffff, 1.0), &big);
     for (i, p) in s.players.iter().filter(|p| p.status != Status::Lobby).enumerate().take(10) {
-        let (st, color) = status_text(p);
+        let (st, color) = status_text(p, true);
         c.text_centered(w / 2.0, 270.0 + i as f32 * 16.0, 9.0, rgba(color, 1.0), &format!("{}  -  {st}", p.name));
     }
 }

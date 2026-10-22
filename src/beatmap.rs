@@ -189,7 +189,8 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
                 let _sample_set = f.next();
                 let _sample_index = f.next();
                 let _volume = f.next();
-                let uninherited = num::<i32>(f.next()).map(|v| v != 0).unwrap_or(true);
+                // Old formats have no uninherited field: a negative beat length marks an SV point.
+                let uninherited = num::<i32>(f.next()).map(|v| v != 0).unwrap_or(beat_length >= 0.0);
                 let effects = num::<u32>(f.next()).unwrap_or(0);
                 body.timing.push(RawTimingPoint { time, beat_length, meter, uninherited, effects });
             }
@@ -314,7 +315,7 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                 });
             }
         } else if ty & 8 != 0 {
-            let end = f[5].trim().parse::<f64>().map(|e| e + version_offset).unwrap_or(time).max(time);
+            let end = f.get(5).and_then(|e| e.trim().parse::<f64>().ok()).map(|e| e + version_offset).unwrap_or(time).max(time);
             let required = ((end - time) / 1000.0 * swell_hit_multiplier).max(1.0) as u32;
             notes.push(Note {
                 time,
@@ -465,6 +466,23 @@ SliderTickRate:1
         assert_eq!(difficulty_range(5.0, 50.0, 35.0, 20.0), 35.0);
         assert_eq!(difficulty_range(10.0, 50.0, 35.0, 20.0), 20.0);
         assert_eq!(difficulty_range(0.0, 120.0, 80.0, 50.0), 120.0);
+    }
+
+    #[test]
+    fn old_format_negative_beat_length_is_an_sv_change() {
+        // v4-era timing points: no uninherited flag, inherited points marked by negative beat length.
+        let map = parse("osu file format v4\n[Difficulty]\nSliderMultiplier:1.4\n[TimingPoints]\n0,500,4,1,0,100\n2000,-50,4,1,0,100\n[HitObjects]\n256,192,1000,1,0\n256,192,3000,1,0\n");
+        assert_eq!(map.notes.len(), 2);
+        assert!((map.notes[1].velocity / map.notes[0].velocity - 2.0).abs() < 1e-9);
+        // Pre-v5 maps are shifted by 24 ms, like osu! does.
+        assert_eq!(map.notes[0].time, 1024.0);
+    }
+
+    #[test]
+    fn short_spinner_line_does_not_panic() {
+        let map = parse("osu file format v14\n[TimingPoints]\n0,500,4,1,0,100,1,0\n[HitObjects]\n256,192,1000,8,0\n256,192,2000,1,0\n");
+        assert_eq!(map.notes.len(), 2);
+        assert_eq!(map.notes[0].kind, Kind::Swell);
     }
 
     #[test]

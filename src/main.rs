@@ -453,6 +453,7 @@ impl State {
     fn handle_global_key(&mut self, key: KeyCode, window: Option<&Window>) -> bool {
         let step = if self.modifiers_shift { 5.0 } else { 1.0 };
         match key {
+            KeyCode::Minus | KeyCode::Equal if matches!(self.scene, Scene::Select) && !self.select.filter.is_empty() => return false,
             KeyCode::Minus | KeyCode::NumpadSubtract => self.cfg.offset_ms -= step,
             KeyCode::Equal | KeyCode::NumpadAdd => self.cfg.offset_ms += step,
             KeyCode::F3 => self.cfg.scroll_speed = (self.cfg.scroll_speed - 0.05).max(0.3),
@@ -804,6 +805,15 @@ impl State {
         }
         if matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults) {
             self.multiplayer_key(code, repeat, text, at, window);
+            return;
+        }
+        if self.mp.is_some()
+            && !self.picking_lobby_map
+            && matches!(self.scene, Scene::Select)
+            && code == KeyCode::Escape
+            && self.select.filter.is_empty()
+        {
+            self.scene = Scene::Lobby;
             return;
         }
         if self.picking_lobby_map && matches!(self.scene, Scene::Select) && !repeat {
@@ -1330,7 +1340,15 @@ impl ApplicationHandler for App {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         lock(&self.state).quit = true;
         if let Some(t) = self.render_thread.take() {
-            let _ = t.join();
+            // A vsync'd present can block indefinitely while the window is minimised; don't let
+            // that keep the game from closing.
+            let deadline = Instant::now() + Duration::from_millis(750);
+            while !t.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if t.is_finished() {
+                let _ = t.join();
+            }
         }
         lock(&self.state).cfg.save();
     }
