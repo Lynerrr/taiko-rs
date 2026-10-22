@@ -1,0 +1,13 @@
+[package]
+name = "taiko-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
+cpal = "0.18"
+pollster = "1.0.1"
+symphonia = { version = "0.6", features = ["mp3", "ogg", "vorbis", "wav", "pcm", "flac"] }
+wgpu = "30"
+winit = "0.30"
+zip = { version = "9", default-features = false, features = ["deflate"] }
