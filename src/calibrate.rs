@@ -22,6 +22,8 @@ pub struct Estimate {
     pub error_ms: f64,
     /// Consistency, as osu! unstable rate (10x standard deviation).
     pub ur: f64,
+    /// 95% confidence half-width of `error_ms`: 1.96 * sigma / sqrt(hits).
+    pub margin_ms: f64,
     pub suggested_offset: f64,
 }
 
@@ -41,6 +43,7 @@ pub fn estimate(errors: &[f64], current_offset: f64) -> Option<Estimate> {
         hits: kept.len(),
         error_ms: mean,
         ur: var.sqrt() * 10.0,
+        margin_ms: 1.96 * var.sqrt() / (kept.len() as f64).sqrt(),
         // Hitting late by e ms means the audio reaches you e ms later than assumed.
         suggested_offset: (current_offset + mean).round(),
     })
@@ -78,7 +81,7 @@ pub fn draw_result(c: &mut Canvas, e: &Estimate, current_offset: f64, bpm: f64) 
     let cx = w / 2.0;
     c.text_centered(cx, 70.0, 14.0, rgba(0x9a9ab0, 1.0), "OFFSET CALIBRATION");
     let dir = if e.error_ms >= 0.0 { "late" } else { "early" };
-    c.text_centered(cx, 120.0, 16.0, rgba(0xffffff, 1.0), &format!("You hit {:.1} ms {dir} on average", e.error_ms.abs()));
+    c.text_centered(cx, 120.0, 16.0, rgba(0xffffff, 1.0), &format!("You hit {:.1} +-{:.1} ms {dir} on average", e.error_ms.abs(), e.margin_ms));
     c.text_centered(cx, 170.0, 40.0, rgba(0xFFD34D, 1.0), &format!("{:+.0} ms", e.suggested_offset));
     c.text_centered(cx, 228.0, 10.0, rgba(0xc8c8d8, 1.0), &format!("suggested offset (currently {current_offset:+.0} ms)"));
     let consistency = match e.ur {

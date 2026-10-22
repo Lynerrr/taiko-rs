@@ -64,7 +64,10 @@ ignores stray taps, with **Enter** to apply, **R** to retry (Left/Right changes 
 **Esc** to discard.
 
 You can also skip calibration: while playing any map, the line under the hit error meter shows
-your average error over the **last 40 hits** and a suggested offset (after 10 hits). Press **O**
+your average error with its 95% margin, your current UR, and a suggested offset. It is scaled to
+your consistency: the window grows until the average is known to about ±3 ms (≈40 hits at UR 100,
+≈100 at UR 150, up to 200), it only flags an offset problem when the error exceeds that margin,
+and noisy estimates suggest a proportionally smaller change. Press **O**
 to apply it on the spot; hits recorded before the change are re-expressed under the new offset,
 so the suggestion settles instead of overshooting. Toggle it with Settings → Live offset suggestion.
 

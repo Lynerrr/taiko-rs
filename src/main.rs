@@ -387,11 +387,15 @@ impl State {
     fn apply_live_offset(&mut self) {
         let Scene::Play { game, .. } = &self.scene else { return };
         match game.offset_suggestion(self.cfg.offset_ms) {
-            Some(e) => {
+            Some(h) if !h.significant => {
+                let text = format!("offset already within +-{:.1} ms of your hits", h.estimate.margin_ms);
+                self.toast(text);
+            }
+            Some(h) => {
                 let was = self.cfg.offset_ms;
-                self.cfg.offset_ms = e.suggested_offset;
+                self.cfg.offset_ms = h.estimate.suggested_offset;
                 self.cfg.save();
-                self.toast(format!("offset {:+.0} ms (was {was:+.0})", e.suggested_offset));
+                self.toast(format!("offset {:+.0} ms (was {was:+.0})", h.estimate.suggested_offset));
             }
             None => self.toast("need at least 10 hits for a suggestion".into()),
         }

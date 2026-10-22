@@ -117,6 +117,15 @@ impl Windows {
     }
 }
 
+/// Live offset suggestion during play.
+pub struct OffsetHint {
+    pub estimate: calibrate::Estimate,
+    /// Hits wanted for the target confidence at the current UR.
+    pub needed: usize,
+    /// Whether the average error is clearly larger than its uncertainty.
+    pub significant: bool,
+}
+
 struct StrongPending {
     note: usize,
     kat: bool,
@@ -294,22 +303,34 @@ impl Game {
         }
     }
 
-    /// Offset suggestion from the most recent hits, re-expressed relative to `current_offset`.
-    pub fn offset_suggestion(&self, current_offset: f64) -> Option<calibrate::Estimate> {
-        const WINDOW: usize = 40;
+    /// Offset suggestion from recent hits, re-expressed relative to `current_offset` and scaled to
+    /// how consistent the player currently is (UR): noisier hitting uses more hits, only counts as
+    /// off when the error exceeds its confidence margin, and suggests a more cautious change.
+    pub fn offset_suggestion(&self, current_offset: f64) -> Option<OffsetHint> {
         const MIN_HITS: usize = 10;
+        const MAX_HITS: usize = 200;
+        /// Aim to know the average error to within this (95% confidence half-width).
+        const TARGET_MARGIN_MS: f64 = 3.0;
+        /// Typical size of a real offset error; sets how strongly noisy estimates are shrunk.
+        const PRIOR_MS: f64 = 10.0;
+
         let s = &self.stats;
-        let start = s.errors.len().saturating_sub(WINDOW);
-        // An error measured under offset `o` would have been `e - (current - o)` under the current one.
-        let corrected: Vec<f64> = s.errors[start..]
-            .iter()
-            .zip(&s.error_offsets[start..])
-            .map(|(e, o)| e - (current_offset - o))
-            .collect();
-        if corrected.len() < MIN_HITS {
+        let n = s.errors.len();
+        if n < MIN_HITS {
             return None;
         }
-        calibrate::estimate(&corrected, current_offset)
+        // An error measured under offset `o` would have been `e - (current - o)` under the current one.
+        let corrected: Vec<f64> = s.errors.iter().zip(&s.error_offsets).map(|(e, o)| e - (current_offset - o)).collect();
+        // Current consistency from the latest 40 hits sizes the window.
+        let probe = calibrate::estimate(&corrected[n.saturating_sub(40)..], current_offset)?;
+        let sigma = probe.ur / 10.0;
+        let needed = ((1.96 * sigma / TARGET_MARGIN_MS).powi(2).ceil() as usize).clamp(MIN_HITS * 2, MAX_HITS);
+        let mut estimate = calibrate::estimate(&corrected[n.saturating_sub(needed)..], current_offset)?;
+        let se = estimate.margin_ms / 1.96;
+        let shrink = PRIOR_MS.powi(2) / (PRIOR_MS.powi(2) + se.powi(2));
+        estimate.suggested_offset = (current_offset + estimate.error_ms * shrink).round();
+        let significant = estimate.error_ms.abs() > estimate.margin_ms.max(2.0);
+        Some(OffsetHint { estimate, needed, significant })
     }
 
     pub fn can_skip(&self) -> bool {
@@ -696,22 +717,23 @@ impl Game {
         }
         c.rect(cx - 1.0, my - 14.0, 2.0, 28.0, rgba(WHITE, 0.9));
         if self.show_offset_hint {
-            match self.offset_suggestion(self.offset) {
-                Some(e) if e.error_ms.abs() < 3.0 => {
-                    let text = format!("offset looks good ({:+.1} ms over last {} hits)", e.error_ms, e.hits);
-                    c.text_centered(cx, my + 20.0, 8.0, rgba(0x86E05A, 0.9), &text);
-                }
-                Some(e) => {
+            if let Some(h) = self.offset_suggestion(self.offset) {
+                let e = &h.estimate;
+                let building = if e.hits < h.needed { format!("  confidence {}/{}", e.hits, h.needed) } else { String::new() };
+                let stats = format!("UR {:.0}, {} hits", e.ur, e.hits);
+                if h.significant {
                     let dir = if e.error_ms > 0.0 { "late" } else { "early" };
                     let text = format!(
-                        "{:.1} ms {dir} over last {} hits  |  suggested offset {:+.0} ms  |  O to apply",
+                        "{:.1} +-{:.1} ms {dir} ({stats})  |  suggested offset {:+.0} ms  |  O to apply{building}",
                         e.error_ms.abs(),
-                        e.hits,
+                        e.margin_ms,
                         e.suggested_offset
                     );
                     c.text_centered(cx, my + 20.0, 8.0, rgba(0xFFD34D, 0.95), &text);
+                } else {
+                    let text = format!("offset looks good: {:+.1} +-{:.1} ms ({stats}){building}", e.error_ms, e.margin_ms);
+                    c.text_centered(cx, my + 20.0, 8.0, rgba(0x86E05A, 0.9), &text);
                 }
-                None => {}
             }
         }
 
@@ -747,26 +769,57 @@ mod tests {
         Game::new(map, Arc::new(Track { samples: Vec::new() }), None)
     }
 
+    fn hits(g: &mut Game, errors: &[f64], offset: f64) {
+        g.stats.errors.extend_from_slice(errors);
+        g.stats.error_offsets.extend(std::iter::repeat(offset).take(errors.len()));
+    }
+
+    /// Deterministic spread around `mean` with standard deviation close to `sd`.
+    fn spread(mean: f64, sd: f64, n: usize) -> Vec<f64> {
+        (0..n).map(|i| mean + if i % 2 == 0 { sd } else { -sd }).collect()
+    }
+
     #[test]
-    fn live_suggestion_needs_ten_hits_and_uses_recent_ones() {
+    fn needs_ten_hits() {
         let mut g = game();
-        g.stats.errors = vec![9.0; 9];
-        g.stats.error_offsets = vec![0.0; 9];
+        hits(&mut g, &[9.0; 9], 0.0);
         assert!(g.offset_suggestion(0.0).is_none());
-        // 50 old early hits, then 40 recent late ones: only the last 40 count.
-        g.stats.errors = [vec![-30.0; 50], vec![8.0; 40]].concat();
-        g.stats.error_offsets = vec![0.0; 90];
-        assert_eq!(g.offset_suggestion(0.0).unwrap().suggested_offset, 8.0);
+    }
+
+    #[test]
+    fn consistent_player_gets_full_correction_quickly() {
+        let mut g = game();
+        hits(&mut g, &spread(8.0, 2.0, 25), 0.0);
+        let h = g.offset_suggestion(0.0).unwrap();
+        assert!(h.significant);
+        assert_eq!(h.needed, 20);
+        assert_eq!(h.estimate.suggested_offset, 8.0);
+    }
+
+    #[test]
+    fn noisy_player_needs_more_hits_and_gets_no_false_alarm() {
+        let mut g = game();
+        // UR ~200 with a 4 ms bias: over 30 hits that is within the noise.
+        hits(&mut g, &spread(4.0, 20.0, 30), 0.0);
+        let h = g.offset_suggestion(0.0).unwrap();
+        assert!(h.needed > 100, "needed {}", h.needed);
+        assert!(!h.significant);
+        // A real 12 ms bias at the same UR, once enough hits exist, is flagged but shrunk a little.
+        let mut g = game();
+        hits(&mut g, &spread(12.0, 20.0, 200), 0.0);
+        let h = g.offset_suggestion(0.0).unwrap();
+        assert!(h.significant);
+        assert!((11.0..=12.0).contains(&h.estimate.suggested_offset), "{}", h.estimate.suggested_offset);
     }
 
     #[test]
     fn applying_mid_song_does_not_double_count() {
         let mut g = game();
-        g.stats.errors = vec![10.0; 20];
-        g.stats.error_offsets = vec![20.0; 20];
-        let first = g.offset_suggestion(20.0).unwrap().suggested_offset;
-        assert_eq!(first, 30.0);
+        hits(&mut g, &spread(10.0, 1.0, 30), 20.0);
+        assert_eq!(g.offset_suggestion(20.0).unwrap().estimate.suggested_offset, 30.0);
         // After applying, the same hits re-expressed under +30 suggest staying at +30.
-        assert_eq!(g.offset_suggestion(30.0).unwrap().suggested_offset, 30.0);
+        let h = g.offset_suggestion(30.0).unwrap();
+        assert_eq!(h.estimate.suggested_offset, 30.0);
+        assert!(!h.significant);
     }
 }
