@@ -545,7 +545,15 @@ impl State {
             }
         }
         if matches!(self.scene, Scene::MpMenu) {
-            self.mp_menu_key(code, text);
+            // The form takes typed text, so only function keys act as shortcuts here.
+            let function_key = matches!(
+                code,
+                KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 | KeyCode::F5 | KeyCode::F6
+                    | KeyCode::F7 | KeyCode::F8 | KeyCode::F9 | KeyCode::F10 | KeyCode::F11 | KeyCode::F12
+            );
+            if !(function_key && !repeat && self.handle_global_key(code, window)) {
+                self.mp_menu_key(code, text);
+            }
             return;
         }
         if repeat || self.handle_global_key(code, window) {

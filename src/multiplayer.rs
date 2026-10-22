@@ -209,9 +209,15 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
     };
     c.text_centered(w / 2.0, 446.0, 8.0, rgba(0x9a9ab0, 1.0), &hint);
     if let Some(r) = &s.results {
-        let best = r.iter().filter_map(|p| p.result.as_ref().map(|f| (p, f))).max_by_key(|(_, f)| f.score);
-        if let Some((p, f)) = best {
-            let text = format!("Last match winner: {} with {:08} ({:.2}%)", p.name, f.score, f.accuracy * 100.0);
+        let finished: Vec<(&PlayerInfo, &Final)> = r.iter().filter_map(|p| p.result.as_ref().map(|f| (p, f))).collect();
+        if let Some(top) = finished.iter().map(|(_, f)| f.score).max() {
+            let winners: Vec<&str> = finished.iter().filter(|(_, f)| f.score == top).map(|(p, _)| p.name.as_str()).collect();
+            let acc = finished.iter().find(|(_, f)| f.score == top).map(|(_, f)| f.accuracy * 100.0).unwrap_or(0.0);
+            let text = if winners.len() > 1 {
+                format!("Last match: tie between {} at {top:08}", winners.join(" & "))
+            } else {
+                format!("Last match winner: {} with {top:08} ({acc:.2}%)", winners[0])
+            };
             c.text_centered(w / 2.0, 428.0, 9.0, rgba(0xFFD34D, 1.0), &text);
         }
     }
