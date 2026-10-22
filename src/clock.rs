@@ -48,6 +48,12 @@ impl GameClock {
         self.time
     }
 
+    /// Keeps the clock frozen (e.g. while paused): time stands still and `now` becomes the new
+    /// reference so the pause duration is never counted.
+    pub fn hold(&mut self, now: Instant) {
+        self.at = now;
+    }
+
     /// Clock reading at an arbitrary instant (e.g. when a key event arrived), without correction.
     pub fn at(&self, instant: Instant) -> f64 {
         let delta = if instant >= self.at {

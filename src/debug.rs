@@ -105,6 +105,10 @@ impl Smoothness {
         self.last = Some((wall_ms, game_ms));
     }
 
+    pub fn break_sequence(&mut self) {
+        self.last = None;
+    }
+
     pub fn sample_waits(&mut self, acquire_ms: f64, present_ms: f64, sample_age_ms: f64) {
         self.acquire_ms.push(acquire_ms);
         self.present_ms.push(present_ms);
@@ -152,4 +156,53 @@ impl Smoothness {
             pct(&self.sample_age_ms, 0.99),
         )
     }
+}
+
+/// `TAIKO_INPUT=ms:Key,ms:Key,...` injects key presses at wall-clock times after launch, for
+/// driving menus in headless tests. Keys use winit `KeyCode` names (`Escape`, `ArrowDown`, `KeyS`).
+pub struct InputScript {
+    events: Vec<(f64, winit::keyboard::KeyCode)>,
+}
+
+impl InputScript {
+    pub fn from_env() -> Option<InputScript> {
+        let v = std::env::var("TAIKO_INPUT").ok()?;
+        let mut events: Vec<(f64, winit::keyboard::KeyCode)> = v
+            .split(',')
+            .filter_map(|e| {
+                let (t, k) = e.split_once(':')?;
+                Some((t.trim().parse().ok()?, parse_keycode(k.trim())?))
+            })
+            .collect();
+        events.sort_by(|a, b| b.0.total_cmp(&a.0));
+        Some(InputScript { events })
+    }
+
+    /// Keys due by `elapsed_ms`, oldest first.
+    pub fn due(&mut self, elapsed_ms: f64) -> Vec<winit::keyboard::KeyCode> {
+        let mut out = Vec::new();
+        while self.events.last().is_some_and(|e| e.0 <= elapsed_ms) {
+            out.push(self.events.pop().unwrap().1);
+        }
+        out
+    }
+}
+
+fn parse_keycode(name: &str) -> Option<winit::keyboard::KeyCode> {
+    use winit::keyboard::KeyCode::*;
+    let fixed = [
+        ("Escape", Escape), ("Tab", Tab), ("Enter", Enter), ("Space", Space), ("Backspace", Backspace),
+        ("ArrowUp", ArrowUp), ("ArrowDown", ArrowDown), ("ArrowLeft", ArrowLeft), ("ArrowRight", ArrowRight),
+        ("F1", F1), ("F3", F3), ("F4", F4), ("F7", F7), ("F8", F8), ("F9", F9), ("F10", F10), ("F12", F12),
+    ];
+    fixed.iter().find(|(n, _)| *n == name).map(|(_, k)| *k).or_else(|| crate::config::parse_key(name))
+}
+
+/// `TAIKO_WALL_SHOTS=ms,ms` captures screenshots at wall-clock times after launch (any screen).
+pub fn wall_shots_from_env() -> Vec<f64> {
+    let mut v: Vec<f64> = std::env::var("TAIKO_WALL_SHOTS")
+        .map(|s| s.split(',').filter_map(|t| t.trim().parse().ok()).collect())
+        .unwrap_or_default();
+    v.sort_by(|a, b| b.total_cmp(a));
+    v
 }

@@ -7,6 +7,7 @@ mod font;
 mod game;
 mod library;
 mod render;
+mod settings;
 mod ui;
 
 use std::path::PathBuf;
@@ -24,9 +25,10 @@ use winit::window::{Fullscreen, Window, WindowId};
 use audio::{Engine, Track};
 use beatmap::Beatmap;
 use config::{Config, FPS_CAPS, FRAME_DELAYS};
-use game::Game;
+use game::{Game, PAUSE_ITEMS};
 use library::Entry;
 use render::{rgba, Canvas, PresentChoice, Renderer};
+use settings::{Item, SettingsUi};
 use ui::{Results, Select, SelectAction};
 
 type Loaded = Result<(Beatmap, Arc<Track>), String>;
@@ -36,6 +38,8 @@ enum Scene {
     Loading { rx: Receiver<Loaded>, label: String, entry: usize },
     Play { game: Box<Game>, entry: usize },
     Results { results: Results, entry: usize },
+    /// Settings tab; `prev` is restored on exit (song select, or a paused game).
+    Settings { prev: Box<Scene> },
 }
 
 struct Toast {
@@ -78,7 +82,14 @@ struct State {
     want_size: Option<(u32, u32)>,
     present: PresentChoice,
     refresh_hz: f64,
+    settings_ui: SettingsUi,
+    fullscreen: bool,
+    adapter: String,
+    input_script: Option<debug::InputScript>,
+    wall_shots: Vec<f64>,
 }
+
+const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 
 impl State {
     fn toast(&mut self, text: String) {
@@ -118,6 +129,158 @@ impl State {
     /// Longest frame delay that still leaves room to render before the next refresh.
     fn max_frame_delay(&self) -> f64 {
         (1000.0 / self.refresh_hz - 3.0).max(0.0)
+    }
+
+    fn refresh_status(&mut self) {
+        let audio_desc = self.audio.as_ref().map(|a| a.description.clone()).unwrap_or_else(|| "no audio".into());
+        self.status = format!("{}  |  {}  |  {:.0} Hz  |  config: ~/.config/taiko-rs/config.txt", self.adapter, audio_desc, self.refresh_hz);
+    }
+
+    fn open_settings(&mut self) {
+        let prev = std::mem::replace(&mut self.scene, Scene::Select);
+        self.scene = Scene::Settings { prev: Box::new(prev) };
+        self.settings_ui.binding = None;
+    }
+
+    fn close_settings(&mut self) {
+        if let Scene::Settings { prev } = std::mem::replace(&mut self.scene, Scene::Select) {
+            self.scene = *prev;
+        }
+    }
+
+    fn setting_value(&self, item: Item) -> String {
+        let c = &self.cfg;
+        let on = |b: bool| if b { "on" } else { "off" }.to_string();
+        match item {
+            Item::ScrollSpeed => format!("{:.2}x", c.scroll_speed),
+            Item::Offset => format!("{:+.0} ms", c.offset_ms),
+            Item::Key(i) => config::key_name(c.keys[i]),
+            Item::ShowConverts => on(self.select.show_converts),
+            Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
+            Item::FxVolume => format!("{:.0}%", c.fx_volume * 100.0),
+            Item::AudioBuffer => {
+                let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
+                let ms = c.audio_buffer as f64 / rate as f64 * 1000.0;
+                format!("{} frames ({ms:.1} ms)", c.audio_buffer)
+            }
+            Item::PresentMode => self.present.name().to_string(),
+            Item::FrameDelay => format!("{:.0} ms", c.frame_delay_ms),
+            Item::FpsCap => {
+                if c.fps_cap == 0 {
+                    "unlimited".into()
+                } else {
+                    c.fps_cap.to_string()
+                }
+            }
+            Item::ShowFps => on(c.show_fps),
+            Item::Fullscreen => on(self.fullscreen),
+        }
+    }
+
+    /// Changes a setting one step in `dir` (-1 / +1), applying it immediately.
+    fn adjust_setting(&mut self, item: Item, dir: i32, window: Option<&Window>) {
+        let d = dir as f64;
+        match item {
+            Item::ScrollSpeed => self.cfg.scroll_speed = (self.cfg.scroll_speed + 0.05 * d).clamp(0.3, 4.0),
+            Item::Offset => self.cfg.offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
+            Item::Key(i) => {
+                self.settings_ui.binding = Some(i);
+                return;
+            }
+            Item::ShowConverts => {
+                self.select.show_converts = !self.select.show_converts;
+                self.select.refilter(&self.library);
+                return;
+            }
+            Item::MusicVolume => self.cfg.music_volume = (self.cfg.music_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
+            Item::FxVolume => self.cfg.fx_volume = (self.cfg.fx_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
+            Item::AudioBuffer => {
+                if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
+                    self.toast("change the audio buffer from song select".into());
+                    return;
+                }
+                let i = AUDIO_BUFFERS.iter().position(|&b| b >= self.cfg.audio_buffer).unwrap_or(2);
+                self.cfg.audio_buffer = AUDIO_BUFFERS[(i as i32 + dir).clamp(0, AUDIO_BUFFERS.len() as i32 - 1) as usize];
+                // Reopen the device with the new buffer size; the old stream must close first.
+                self.audio = None;
+                self.audio = match Engine::new(self.cfg.audio_buffer) {
+                    Ok(a) => Some(a),
+                    Err(e) => {
+                        self.toast(format!("audio failed: {e}"));
+                        None
+                    }
+                };
+                self.refresh_status();
+            }
+            Item::PresentMode => {
+                self.want_present = Some(if dir > 0 { self.present.next() } else { self.present.next().next() });
+            }
+            Item::FrameDelay => self.cfg.frame_delay_ms = (self.cfg.frame_delay_ms + d).clamp(0.0, self.max_frame_delay()).round(),
+            Item::FpsCap => {
+                let i = FPS_CAPS.iter().position(|&c| c == self.cfg.fps_cap).unwrap_or(0) as i32;
+                self.cfg.fps_cap = FPS_CAPS[(i + dir).rem_euclid(FPS_CAPS.len() as i32) as usize];
+            }
+            Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
+            Item::Fullscreen => self.toggle_fullscreen(window),
+        }
+        if let Some(a) = &self.audio {
+            a.set_volume(self.cfg.music_volume, self.cfg.fx_volume);
+            if item == Item::FxVolume {
+                a.sfx(audio::Sfx::Don);
+            }
+        }
+        self.cfg.save();
+    }
+
+    fn toggle_fullscreen(&mut self, window: Option<&Window>) {
+        if let Some(w) = window {
+            self.fullscreen = w.fullscreen().is_none();
+            w.set_fullscreen(self.fullscreen.then_some(Fullscreen::Borderless(None)));
+        }
+    }
+
+    fn settings_key(&mut self, code: KeyCode, window: Option<&Window>) {
+        if let Some(slot) = self.settings_ui.binding.take() {
+            if code != KeyCode::Escape {
+                // Swap if the key was already bound to another drum.
+                if let Some(other) = self.cfg.keys.iter().position(|&k| k == code) {
+                    self.cfg.keys[other] = self.cfg.keys[slot];
+                }
+                self.cfg.keys[slot] = code;
+                self.cfg.save();
+            }
+            return;
+        }
+        let item = self.settings_ui.item();
+        match code {
+            KeyCode::ArrowUp => self.settings_ui.move_cursor(-1),
+            KeyCode::ArrowDown => self.settings_ui.move_cursor(1),
+            KeyCode::ArrowLeft => self.adjust_setting(item, -1, window),
+            KeyCode::ArrowRight => self.adjust_setting(item, 1, window),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.adjust_setting(item, 1, window),
+            KeyCode::Escape | KeyCode::Tab | KeyCode::F1 => self.close_settings(),
+            _ => {}
+        }
+    }
+
+    fn pause_key(&mut self, code: KeyCode) {
+        let Scene::Play { game, entry } = &mut self.scene else { return };
+        let cursor = game.paused.unwrap_or(0);
+        match code {
+            KeyCode::ArrowUp => game.paused = Some(cursor.saturating_sub(1)),
+            KeyCode::ArrowDown => game.paused = Some((cursor + 1).min(PAUSE_ITEMS.len() - 1)),
+            KeyCode::Escape => game.resume(self.audio.as_ref()),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
+                0 => game.resume(self.audio.as_ref()),
+                1 => {
+                    let e = *entry;
+                    self.start_loading(e);
+                }
+                2 => self.open_settings(),
+                _ => self.to_select(),
+            },
+            _ => {}
+        }
     }
 
     fn handle_global_key(&mut self, key: KeyCode, window: Option<&Window>) -> bool {
@@ -163,10 +326,7 @@ impl State {
                 return true;
             }
             KeyCode::F11 => {
-                if let Some(w) = window {
-                    let fs = if w.fullscreen().is_some() { None } else { Some(Fullscreen::Borderless(None)) };
-                    w.set_fullscreen(fs);
-                }
+                self.toggle_fullscreen(window);
                 return true;
             }
             KeyCode::F12 => {
@@ -184,7 +344,20 @@ impl State {
     }
 
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        // Key capture must see every key, before any shortcut can claim it.
+        if self.settings_ui.binding.is_some() && matches!(self.scene, Scene::Settings { .. }) {
+            if !repeat {
+                self.settings_key(code, window);
+            }
+            return;
+        }
         if let Scene::Play { game, .. } = &mut self.scene {
+            if game.paused.is_some() {
+                if !repeat && !self.cfg.keys.contains(&code) && !self.handle_global_key(code, window) {
+                    self.pause_key(code);
+                }
+                return;
+            }
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
                 if !repeat {
                     game.press(k, at, self.audio.as_ref(), self.cfg.offset_ms);
@@ -201,6 +374,7 @@ impl State {
         match &mut self.scene {
             Scene::Select => match self.select.key(code, &self.library) {
                 SelectAction::Play(i) => self.start_loading(i),
+                SelectAction::Settings => self.open_settings(),
                 SelectAction::Quit => self.quit = true,
                 SelectAction::None => {
                     if let Some(text) = text {
@@ -213,8 +387,9 @@ impl State {
                     self.to_select();
                 }
             }
+            Scene::Settings { .. } => self.settings_key(code, window),
             Scene::Play { game, entry } => match code {
-                KeyCode::Escape => self.to_select(),
+                KeyCode::Escape => game.pause(self.audio.as_ref()),
                 KeyCode::Space => game.skip(self.audio.as_ref(), self.cfg.offset_ms),
                 KeyCode::Backquote => {
                     let e = *entry;
@@ -256,6 +431,16 @@ impl State {
         canvas.clear(width);
         let mut next: Option<Scene> = None;
         let mut capture: Option<String> = None;
+        let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
+        if let Some(mut script) = self.input_script.take() {
+            for code in script.due(elapsed) {
+                self.key(code, false, None, now, None);
+            }
+            self.input_script = Some(script);
+        }
+        if self.wall_shots.last().is_some_and(|&t| elapsed >= t) {
+            capture = Some(format!("wall-{:.0}.png", self.wall_shots.pop().unwrap()));
+        }
         if self.shots.is_some() && self.stats.frames > 5 {
             let screen = match self.scene {
                 Scene::Select => Some("select"),
@@ -299,8 +484,13 @@ impl State {
                     game.autoplay(self.audio.as_ref());
                 }
                 if let Some(sm) = &mut self.smooth {
-                    let wall = now.duration_since(self.started).as_secs_f64() * 1000.0;
-                    sm.sample(wall, game.raw_time, game.last_audio_ms);
+                    if game.paused.is_some() {
+                        // A frozen clock isn't jitter; restart the frame-to-frame comparison on resume.
+                        sm.break_sequence();
+                    } else {
+                        let wall = now.duration_since(self.started).as_secs_f64() * 1000.0;
+                        sm.sample(wall, game.raw_time, game.last_audio_ms);
+                    }
                 }
                 game.draw(canvas, self.cfg.scroll_speed);
                 if let Some(plan) = &mut self.shots {
@@ -319,6 +509,17 @@ impl State {
                 }
             }
             Scene::Results { results, .. } => results.draw(canvas),
+            Scene::Settings { prev } => {
+                let from_game = matches!(**prev, Scene::Play { .. });
+                settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
+                let footer = if from_game {
+                    "Up/Down select   Left/Right change   Enter toggle / rebind   Esc back to pause menu"
+                } else {
+                    "Up/Down select   Left/Right change   Enter toggle / rebind   Esc or Tab back"
+                };
+                let this = &*self;
+                this.settings_ui.draw(canvas, &|item| this.setting_value(item), footer);
+            }
         }
         if let Some(s) = next {
             if matches!(s, Scene::Results { .. } | Scene::Select) {
@@ -506,8 +707,9 @@ impl ApplicationHandler for App {
             .unwrap_or(60.0);
         {
             let mut s = lock(&self.state);
-            let audio_desc = s.audio.as_ref().map(|a| a.description.clone()).unwrap_or_else(|| "no audio".into());
-            s.status = format!("{}  |  {}  |  {:.0} Hz  |  config: ~/.config/taiko-rs/config.txt", renderer.adapter_name, audio_desc, refresh_hz);
+            s.adapter = renderer.adapter_name.clone();
+            s.refresh_hz = refresh_hz;
+            s.refresh_status();
             eprintln!("renderer: {}, present: {}, refresh {refresh_hz:.2} Hz", renderer.adapter_name, renderer.present.name());
             s.present = renderer.present;
             s.cfg.present = renderer.present;
@@ -545,6 +747,14 @@ impl ApplicationHandler for App {
                 lock(&self.state).key(code, event.repeat, event.text.as_deref(), at, self.window.as_deref());
             }
             WindowEvent::ModifiersChanged(m) => lock(&self.state).modifiers_shift = m.state().shift_key(),
+            WindowEvent::Focused(false) => {
+                // Losing focus mid-song (alt-tab, notification) pauses instead of failing the map.
+                let mut guard = lock(&self.state);
+                let s = &mut *guard;
+                if let (Scene::Play { game, .. }, false) = (&mut s.scene, s.auto) {
+                    game.pause(s.audio.as_ref());
+                }
+            }
             _ => {}
         }
         if self.render_thread.is_none() && lock(&self.state).quit {
@@ -631,6 +841,11 @@ fn main() {
         want_size: None,
         present,
         refresh_hz: 60.0,
+        settings_ui: SettingsUi::default(),
+        fullscreen: false,
+        adapter: String::new(),
+        input_script: debug::InputScript::from_env(),
+        wall_shots: debug::wall_shots_from_env(),
     };
     if let Some(i) = direct {
         state.start_loading(i);

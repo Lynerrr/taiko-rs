@@ -33,6 +33,7 @@ pub enum Sfx {
 enum Cmd {
     Play { track: Arc<Track>, start_frame: i64 },
     Seek(i64),
+    Pause(bool),
     Stop,
     Sfx(Sfx),
 }
@@ -115,6 +116,11 @@ impl Engine {
         let _ = self.tx.send(Cmd::Stop);
     }
 
+    /// Freezes the song where it is (output goes silent; hitsounds still play).
+    pub fn set_paused(&self, paused: bool) {
+        let _ = self.tx.send(Cmd::Pause(paused));
+    }
+
     pub fn sfx(&self, s: Sfx) {
         let _ = self.tx.send(Cmd::Sfx(s));
     }
@@ -176,6 +182,7 @@ struct Mixer {
     channels: usize,
     track: Option<Arc<Track>>,
     frame: i64,
+    paused: bool,
     voices: Vec<Voice>,
     sounds: Arc<[Vec<f32>; 4]>,
 }
@@ -190,7 +197,7 @@ impl Mixer {
         channels: usize,
     ) -> Mixer {
         let sounds = Arc::new([synth_don(rate, false), synth_kat(rate, false), synth_don(rate, true), synth_kat(rate, true)]);
-        Mixer { rx, gc, stamp, volume, channels, track: None, frame: 0, voices: Vec::with_capacity(64), sounds }
+        Mixer { rx, gc, stamp, volume, channels, track: None, frame: 0, paused: false, voices: Vec::with_capacity(64), sounds }
     }
 
     fn render<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T], info: &OutputCallbackInfo) {
@@ -203,8 +210,10 @@ impl Mixer {
                             let _ = self.gc.send(old);
                         }
                         self.frame = start_frame;
+                        self.paused = false;
                     }
                     Cmd::Seek(f) => self.frame = f,
+                    Cmd::Pause(p) => self.paused = p,
                     Cmd::Stop => {
                         if let Some(old) = self.track.take() {
                             let _ = self.gc.send(old);
@@ -222,7 +231,7 @@ impl Mixer {
         let ts = info.timestamp();
         let latency = ts.playback.duration_since(ts.callback);
         if let Ok(mut s) = self.stamp.try_lock() {
-            *s = Stamp { playing: self.track.is_some(), frame: self.frame, at: now, latency };
+            *s = Stamp { playing: self.track.is_some() && !self.paused, frame: self.frame, at: now, latency };
         }
 
         let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed));
@@ -230,7 +239,7 @@ impl Mixer {
         let ch = self.channels;
         for frame in out.chunks_mut(ch) {
             let (mut l, mut r) = (0.0f32, 0.0f32);
-            if let Some(track) = &self.track {
+            if let Some(track) = self.track.as_ref().filter(|_| !self.paused) {
                 if self.frame >= 0 && (self.frame as usize) < track.frames() {
                     let i = self.frame as usize * 2;
                     l = track.samples[i] * music_vol;

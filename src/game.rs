@@ -27,6 +27,8 @@ const ROLL: u32 = 0xFCB806;
 const SWELL: u32 = 0xF39A2B;
 const WHITE: u32 = 0xFFFFFF;
 
+pub const PAUSE_ITEMS: [&str; 4] = ["Continue", "Retry", "Settings", "Quit to song select"];
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Judge {
     Great,
@@ -143,6 +145,8 @@ pub struct Game {
     auto_key: usize,
     /// After a seek the audio thread still reports the old position until its next callback.
     ignore_audio_until: Option<Instant>,
+    /// Pause menu cursor while paused.
+    pub paused: Option<usize>,
 }
 
 impl Game {
@@ -188,11 +192,17 @@ impl Game {
             raw_time: start,
             auto_key: 0,
             ignore_audio_until: None,
+            paused: None,
         }
     }
 
     /// Advances the clock. Returns true once the map is over.
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>, offset: f64) -> bool {
+        if self.paused.is_some() {
+            self.clock.hold(now);
+            self.time = self.raw_time - offset;
+            return false;
+        }
         let stale = self.ignore_audio_until.is_some_and(|u| now < u);
         let audio_ms = audio.and_then(|a| a.position_ms(now)).filter(|_| !stale);
         let raw = self.clock.update(now, audio_ms);
@@ -248,6 +258,23 @@ impl Game {
         let sfx = self.judge_press(key, key == 0 || key == 3, t);
         if let Some(a) = audio {
             a.sfx(sfx);
+        }
+    }
+
+    pub fn pause(&mut self, audio: Option<&Engine>) {
+        if self.paused.is_none() {
+            self.paused = Some(0);
+            if let Some(a) = audio {
+                a.set_paused(true);
+            }
+        }
+    }
+
+    pub fn resume(&mut self, audio: Option<&Engine>) {
+        if self.paused.take().is_some() {
+            if let Some(a) = audio {
+                a.set_paused(false);
+            }
         }
     }
 
@@ -634,8 +661,20 @@ impl Game {
         c.text(18.0, lane_top + LANE_H + 22.0, 10.0, rgba(0x9a9ab0, 1.0), &format!("{} - {}", m.artist, m.title));
         c.text(18.0, lane_top + LANE_H + 38.0, 10.0, rgba(0x6f6f86, 1.0), &format!("[{}]  OD {:.1}", m.version, m.od));
 
-        if self.can_skip() {
+        if self.can_skip() && self.paused.is_none() {
             c.text_centered(w / 2.0, 330.0, 12.0, rgba(WHITE, 0.7), "SPACE to skip intro");
+        }
+        if let Some(cursor) = self.paused {
+            c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78));
+            c.text_centered(w / 2.0, 120.0, 32.0, rgba(WHITE, 1.0), "PAUSED");
+            for (i, item) in PAUSE_ITEMS.iter().enumerate() {
+                let y = 190.0 + i as f32 * 40.0;
+                let selected = i == cursor;
+                let (bg, border) = if selected { (0x34344a, DON) } else { (0x1d1d27, 0x2a2a38) };
+                c.round_rect(w / 2.0 - 140.0, y, 280.0, 32.0, 8.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 2.0 } else { 1.0 });
+                c.text_centered(w / 2.0, y + 10.0, 12.0, rgba(if selected { WHITE } else { 0xc8c8d8 }, 1.0), item);
+            }
+            c.text_centered(w / 2.0, 360.0, 9.0, rgba(0x8a8aa0, 1.0), "Up/Down + Enter    Esc: continue");
         }
     }
 }

@@ -34,10 +34,12 @@ Build needs `clang` and PipeWire headers for the default `pipewire` feature; bui
 | --- | --- |
 | D / F / J / K | left rim (kat) / left centre (don) / right centre / right rim |
 | Enter, ↑/↓, ←/→ | play, select difficulty, jump between sets |
-| type, Backspace, Tab | search, edit search, toggle converts |
+| type, Backspace | search |
+| Tab (or F1) | switch between the SONGS and SETTINGS tabs |
 | Space | skip intro |
+| Esc (in game) | pause menu: continue, retry, settings, quit; Esc again resumes |
 | `` ` `` | restart map |
-| Esc | back / quit |
+| Esc (song select) | clear search / quit |
 | - / = (Shift: ×5) | audio offset −/+ 1 ms |
 | F3 / F4 | scroll speed |
 | F7 | present mode: vsync → mailbox → immediate |
@@ -45,8 +47,9 @@ Build needs `clang` and PipeWire headers for the default `pipewire` feature; bui
 | F9 | vsync frame delay: 0–14 ms (see below) |
 | F10 / F11 | FPS overlay / fullscreen |
 
-Settings (keys, offset, volumes, audio buffer size, present mode) live in
-`~/.config/taiko-rs/config.txt`. The results screen shows UR and mean hit error and tells
+Everything is adjustable in the **Settings** tab (scroll speed, offset, key bindings, converts,
+volumes, audio buffer, present mode, frame delay, FPS cap, overlay, fullscreen) and saved
+immediately to `~/.config/taiko-rs/config.txt`. Losing window focus mid-song pauses the game. The results screen shows UR and mean hit error and tells
 you which way to move the offset.
 
 ## Frame pacing on Wayland
@@ -72,6 +75,8 @@ spins so frames stay evenly spaced.
   drift and how long each frame blocked in acquire/present after each play.
 - `TAIKO_SHOTS=/dir:1000,5000` saves PNG screenshots at those gameplay times (plus the select
   and results screens); `TAIKO_EXIT_AFTER=1` quits after the results screenshot.
+- `TAIKO_INPUT=2000:Tab,3000:Enter` injects key presses and `TAIKO_WALL_SHOTS=1500,2500` takes
+  screenshots at wall-clock ms after launch, for scripted UI tests.
 
 ## Layout
 
@@ -83,4 +88,5 @@ spins so frames stay evenly spaced.
 | `src/game.rs` | judging, scoring, playfield drawing |
 | `src/render.rs` | wgpu SDF shape renderer, text, present mode handling |
 | `src/ui.rs` | song select and results screens |
+| `src/settings.rs` | settings tab items and layout, tab bar |
 | `src/library.rs` | Songs folder / `.osz` scanning |

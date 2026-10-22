@@ -73,7 +73,7 @@ pub fn key_name(k: KeyCode) -> String {
     s.strip_prefix("Key").or_else(|| s.strip_prefix("Digit")).map(str::to_owned).unwrap_or(s)
 }
 
-fn parse_key(s: &str) -> Option<KeyCode> {
+pub fn parse_key(s: &str) -> Option<KeyCode> {
     KEY_NAMES.iter().copied().find(|k| format!("{k:?}").eq_ignore_ascii_case(s) || key_name(*k).eq_ignore_ascii_case(s))
 }
 

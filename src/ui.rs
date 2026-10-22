@@ -17,6 +17,7 @@ pub struct Select {
 pub enum SelectAction {
     None,
     Play(usize),
+    Settings,
     Quit,
 }
 
@@ -83,10 +84,7 @@ impl Select {
                     return SelectAction::Play(i);
                 }
             }
-            KeyCode::Tab => {
-                self.show_converts = !self.show_converts;
-                self.refilter(library);
-            }
+            KeyCode::Tab | KeyCode::F1 => return SelectAction::Settings,
             KeyCode::Backspace => {
                 self.filter.pop();
                 self.refilter(library);
@@ -116,9 +114,8 @@ impl Select {
 
     pub fn draw(&mut self, c: &mut Canvas, library: &[Entry], dt_ms: f64, status: &str) {
         let w = c.width;
-        c.text(24.0, 28.0, 18.0, rgba(0xffffff, 1.0), "taiko-rs");
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
-        c.text_right(w - 24.0, 34.0, 10.0, rgba(0x9a9ab0, 1.0), &format!("{} maps  |  {mode} (Tab)", self.visible.len()));
+        crate::settings::tab_bar(c, 0, &format!("{} maps  |  {mode}", self.visible.len()));
 
         let search = if self.filter.is_empty() { "type to search...".to_string() } else { format!("search: {}_", self.filter) };
         c.round_rect(24.0, 54.0, w - 48.0, 24.0, 6.0, rgba(0x23232f, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
@@ -159,7 +156,7 @@ impl Select {
             c.text_right(w - 36.0, y + 8.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("{} obj", e.objects));
         }
 
-        c.text(24.0, 452.0, 8.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down select  Left/Right set  Tab converts  -/= offset  F3/F4 speed  F7 present  F8 fps cap  F11 fullscreen");
+        c.text(24.0, 452.0, 8.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down select  Left/Right set  Tab settings  -/= offset  F3/F4 speed  F11 fullscreen  Esc quit");
         c.text(24.0, 466.0, 8.0, rgba(0x55556a, 1.0), status);
     }
 }
