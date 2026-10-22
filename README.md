@@ -52,6 +52,16 @@ volumes, audio buffer, present mode, frame delay, FPS cap, overlay, fullscreen) 
 immediately to `~/.config/taiko-rs/config.txt`. Losing window focus mid-song pauses the game. The results screen shows UR and mean hit error and tells
 you which way to move the offset.
 
+## Offset calibration
+
+Settings → **Offset calibration** plays a generated click track (tempo set by **Calibration tempo**,
+60–240 BPM) with a centre note exactly on every click, sample-accurate. Hit F/J along with the
+clicks; your own hitsounds are muted so you sync to the click, and **H** hides the notes to
+calibrate purely by ear. The overlay shows your average error and the suggested offset live; at
+the end (or **Enter** to finish early) you get the result, using a median-filtered average that
+ignores stray taps, with **Enter** to apply, **R** to retry (Left/Right changes the tempo) and
+**Esc** to discard.
+
 ## Frame pacing on Wayland
 
 **Use vsync (the default).** A Wayland compositor shows exactly one frame per refresh no matter
@@ -89,4 +99,5 @@ spins so frames stay evenly spaced.
 | `src/render.rs` | wgpu SDF shape renderer, text, present mode handling |
 | `src/ui.rs` | song select and results screens |
 | `src/settings.rs` | settings tab items and layout, tab bar |
+| `src/calibrate.rs` | offset calibration: estimate, overlay and result screen |
 | `src/library.rs` | Songs folder / `.osz` scanning |

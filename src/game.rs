@@ -147,6 +147,9 @@ pub struct Game {
     ignore_audio_until: Option<Instant>,
     /// Pause menu cursor while paused.
     pub paused: Option<usize>,
+    /// Calibration: draw no notes or barlines (play by ear) / play no hitsounds on presses.
+    pub hide_notes: bool,
+    pub mute_hits: bool,
 }
 
 impl Game {
@@ -193,6 +196,8 @@ impl Game {
             auto_key: 0,
             ignore_audio_until: None,
             paused: None,
+            hide_notes: false,
+            mute_hits: false,
         }
     }
 
@@ -377,7 +382,7 @@ impl Game {
         let kat = key == 0 || key == 3;
         self.presses[key] = t;
         let sfx = self.judge_press(key, kat, t);
-        if let Some(a) = audio {
+        if let Some(a) = audio.filter(|_| !self.mute_hits) {
             a.sfx(sfx);
         }
     }
@@ -499,7 +504,8 @@ impl Game {
 
         // Barlines.
         let first_bar = self.map.barlines.partition_point(|b| b.time < t - 3000.0);
-        for b in &self.map.barlines[first_bar..] {
+        let bars = if self.hide_notes { &[][..] } else { &self.map.barlines[first_bar..] };
+        for b in bars {
             if b.time - t > lookahead {
                 break;
             }
@@ -534,6 +540,9 @@ impl Game {
                 continue;
             }
             self.visible.push(i);
+        }
+        if self.hide_notes {
+            self.visible.clear();
         }
         for &i in self.visible.iter().rev() {
             let n = &self.map.notes[i];
@@ -661,7 +670,7 @@ impl Game {
         c.text(18.0, lane_top + LANE_H + 22.0, 10.0, rgba(0x9a9ab0, 1.0), &format!("{} - {}", m.artist, m.title));
         c.text(18.0, lane_top + LANE_H + 38.0, 10.0, rgba(0x6f6f86, 1.0), &format!("[{}]  OD {:.1}", m.version, m.od));
 
-        if self.can_skip() && self.paused.is_none() {
+        if self.can_skip() && self.paused.is_none() && !self.mute_hits {
             c.text_centered(w / 2.0, 330.0, 12.0, rgba(WHITE, 0.7), "SPACE to skip intro");
         }
         if let Some(cursor) = self.paused {

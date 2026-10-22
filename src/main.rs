@@ -1,5 +1,6 @@
 mod audio;
 mod beatmap;
+mod calibrate;
 mod clock;
 mod config;
 mod debug;
@@ -40,6 +41,9 @@ enum Scene {
     Results { results: Results, entry: usize },
     /// Settings tab; `prev` is restored on exit (song select, or a paused game).
     Settings { prev: Box<Scene> },
+    /// Offset calibration run; `back` is where to return (the settings tab).
+    Calibrate { game: Box<Game>, back: Box<Scene> },
+    CalibrateDone { estimate: calibrate::Estimate, back: Box<Scene> },
 }
 
 struct Toast {
@@ -186,6 +190,8 @@ impl State {
             }
             Item::ShowFps => on(c.show_fps),
             Item::Fullscreen => on(self.fullscreen),
+            Item::Calibrate => "Enter to start".into(),
+            Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
         }
     }
 
@@ -234,6 +240,12 @@ impl State {
             }
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
             Item::Fullscreen => self.toggle_fullscreen(window),
+            // Started with Enter in `settings_key`; arrows do nothing.
+            Item::Calibrate => return,
+            Item::CalibrationBpm => {
+                let (lo, hi) = calibrate::BPM_RANGE;
+                self.cfg.calibration_bpm = (self.cfg.calibration_bpm + 5.0 * d).clamp(lo, hi);
+            }
         }
         if let Some(a) = &self.audio {
             a.set_volume(self.cfg.music_volume, self.cfg.fx_volume);
@@ -269,8 +281,102 @@ impl State {
             KeyCode::ArrowDown => self.settings_ui.move_cursor(1),
             KeyCode::ArrowLeft => self.adjust_setting(item, -1, window),
             KeyCode::ArrowRight => self.adjust_setting(item, 1, window),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => self.start_calibration(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.adjust_setting(item, 1, window),
             KeyCode::Escape | KeyCode::Tab | KeyCode::F1 => self.close_settings(),
+            _ => {}
+        }
+    }
+
+    fn start_calibration(&mut self) {
+        if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
+            self.toast("quit the song first to calibrate".into());
+            return;
+        }
+        let back = match std::mem::replace(&mut self.scene, Scene::Select) {
+            // Retrying from the result screen returns to wherever calibration was started from.
+            Scene::CalibrateDone { back, .. } => *back,
+            other => other,
+        };
+        let beat_ms = 60000.0 / self.cfg.calibration_bpm;
+        let beats = calibrate::total_beats(beat_ms);
+        let map = beatmap::calibration_map(beat_ms, calibrate::COUNT_IN_BEATS, beats);
+        let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
+        let track = Arc::new(audio::metronome(rate, beat_ms, beats, 2000.0));
+        let mut game = Game::new(map, track, self.audio.as_ref());
+        // Your own hitsounds would let you sync to yourself instead of to the click.
+        game.mute_hits = true;
+        self.scene = Scene::Calibrate { game: Box::new(game), back: Box::new(back) };
+    }
+
+    fn finish_calibration(&mut self) {
+        let Scene::Calibrate { game, back } = std::mem::replace(&mut self.scene, Scene::Select) else { return };
+        if let Some(a) = &self.audio {
+            a.stop();
+        }
+        match calibrate::estimate(&game.stats.errors, self.cfg.offset_ms) {
+            Some(estimate) if estimate.hits >= 4 => self.scene = Scene::CalibrateDone { estimate, back },
+            _ => {
+                self.scene = *back;
+                self.toast("calibration needs more hits".into());
+            }
+        }
+    }
+
+    fn leave_calibration(&mut self, apply: bool) {
+        if let Some(a) = &self.audio {
+            a.stop();
+        }
+        match std::mem::replace(&mut self.scene, Scene::Select) {
+            Scene::Calibrate { back, .. } => self.scene = *back,
+            Scene::CalibrateDone { estimate, back } => {
+                if apply {
+                    self.cfg.offset_ms = estimate.suggested_offset;
+                    self.cfg.save();
+                    self.toast(format!("offset set to {:+.0} ms", estimate.suggested_offset));
+                }
+                self.scene = *back;
+            }
+            other => self.scene = other,
+        }
+    }
+
+    fn calibration_key(&mut self, code: KeyCode, repeat: bool, at: Instant, window: Option<&Window>) {
+        if let Scene::Calibrate { game, .. } = &mut self.scene {
+            if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
+                if !repeat {
+                    game.press(k, at, self.audio.as_ref(), self.cfg.offset_ms);
+                }
+                return;
+            }
+            if repeat {
+                return;
+            }
+            match code {
+                KeyCode::KeyH => game.hide_notes = !game.hide_notes,
+                KeyCode::Enter | KeyCode::NumpadEnter => self.finish_calibration(),
+                KeyCode::Escape => self.leave_calibration(false),
+                KeyCode::F11 => self.toggle_fullscreen(window),
+                KeyCode::F12 => self.quit = true,
+                _ => {}
+            }
+            return;
+        }
+        if repeat {
+            return;
+        }
+        match code {
+            KeyCode::Enter | KeyCode::NumpadEnter => self.leave_calibration(true),
+            KeyCode::Escape => self.leave_calibration(false),
+            KeyCode::KeyR => self.start_calibration(),
+            KeyCode::ArrowLeft | KeyCode::ArrowRight => {
+                let step = if code == KeyCode::ArrowRight { 5.0 } else { -5.0 };
+                let (lo, hi) = calibrate::BPM_RANGE;
+                self.cfg.calibration_bpm = (self.cfg.calibration_bpm + step).clamp(lo, hi);
+                self.cfg.save();
+            }
+            KeyCode::F11 => self.toggle_fullscreen(window),
+            KeyCode::F12 => self.quit = true,
             _ => {}
         }
     }
@@ -363,6 +469,10 @@ impl State {
             }
             return;
         }
+        if matches!(self.scene, Scene::Calibrate { .. } | Scene::CalibrateDone { .. }) {
+            self.calibration_key(code, repeat, at, window);
+            return;
+        }
         if let Scene::Play { game, .. } = &mut self.scene {
             if game.paused.is_some() {
                 if !repeat && !self.cfg.keys.contains(&code) && !self.handle_global_key(code, window) {
@@ -400,6 +510,7 @@ impl State {
                 }
             }
             Scene::Settings { .. } => self.settings_key(code, window),
+            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => {}
             Scene::Play { game, entry } => match code {
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
                 KeyCode::Space => game.skip(self.audio.as_ref(), self.cfg.offset_ms),
@@ -443,6 +554,7 @@ impl State {
         canvas.clear(width);
         let mut next: Option<Scene> = None;
         let mut capture: Option<String> = None;
+        let mut finish_calibration = false;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
         if let Some(mut script) = self.input_script.take() {
             for code in script.due(elapsed) {
@@ -521,6 +633,19 @@ impl State {
                 }
             }
             Scene::Results { results, .. } => results.draw(canvas),
+            Scene::Calibrate { game, .. } => {
+                if game.update(now, self.audio.as_ref(), self.cfg.offset_ms) {
+                    finish_calibration = true;
+                }
+                if self.auto {
+                    game.autoplay(self.audio.as_ref());
+                }
+                game.draw(canvas, self.cfg.scroll_speed);
+                calibrate::draw_overlay(canvas, game, self.cfg.offset_ms, game.hide_notes);
+            }
+            Scene::CalibrateDone { estimate, .. } => {
+                calibrate::draw_result(canvas, estimate, self.cfg.offset_ms, self.cfg.calibration_bpm);
+            }
             Scene::Settings { prev } => {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
@@ -532,6 +657,9 @@ impl State {
                 let this = &*self;
                 this.settings_ui.draw(canvas, &|item| this.setting_value(item), footer);
             }
+        }
+        if finish_calibration {
+            self.finish_calibration();
         }
         if let Some(s) = next {
             if matches!(s, Scene::Results { .. } | Scene::Select) {

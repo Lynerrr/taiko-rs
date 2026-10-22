@@ -330,6 +330,32 @@ fn synth_kat(rate: u32, big: bool) -> Vec<f32> {
     out
 }
 
+/// A metronome track: a sharp click exactly on every beat (accented every 4th), for offset
+/// calibration. Each click's transient starts on the exact sample of its beat.
+pub fn metronome(rate: u32, beat_ms: f64, beats: u32, tail_ms: f64) -> Track {
+    let sr = rate as f64;
+    let len = ((beats as f64 * beat_ms + tail_ms) / 1000.0 * sr) as usize;
+    let mut samples = vec![0.0f32; len * 2];
+    let click_len = (sr * 0.045) as usize;
+    let mut noise = Noise(0x2545_f491);
+    for b in 0..beats {
+        let start = (b as f64 * beat_ms / 1000.0 * sr).round() as usize;
+        let accent = b % 4 == 0;
+        let freq = if accent { 1760.0 } else { 1320.0 };
+        let gain = if accent { 0.75 } else { 0.55 };
+        for i in 0..click_len {
+            let Some(frame) = samples.get_mut((start + i) * 2..(start + i) * 2 + 2) else { break };
+            let t = i as f32 / sr as f32;
+            let tone = (t * freq * std::f32::consts::TAU).sin() * (-t * 110.0).exp();
+            let tick = noise.next() * (-t * 900.0).exp() * 0.6;
+            let v = (tone + tick) * gain;
+            frame[0] += v;
+            frame[1] += v;
+        }
+    }
+    Track { samples }
+}
+
 /// Decodes a whole audio file to interleaved stereo at `rate`.
 pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
     use symphonia::core::codecs::audio::AudioDecoderOptions;

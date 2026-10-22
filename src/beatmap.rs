@@ -338,6 +338,29 @@ fn convert(map: &mut Beatmap, mut body: Body) {
     map.control_points = cps;
 }
 
+/// The offset-calibration chart: one don on every beat from `first_beat` to `beats`, matching
+/// the clicks of `audio::metronome` with the same `beat_ms`.
+pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
+    let meta = Meta {
+        title: "Offset calibration".into(),
+        artist: "taiko-rs".into(),
+        creator: "taiko-rs".into(),
+        version: format!("{:.0} BPM click track", 60000.0 / beat_ms),
+        mode: 1,
+        // OD 0 gives the widest windows, so even a badly-off offset still registers as hits.
+        od: 0.0,
+        slider_multiplier: 1.4,
+        slider_tick_rate: 1.0,
+        format_version: 14,
+        ..Default::default()
+    };
+    let velocity = meta.slider_multiplier * TAIKO_VELOCITY_MULTIPLIER * 100.0 / beat_ms;
+    let notes = (first_beat..beats).map(|b| hit(b as f64 * beat_ms, 0, velocity)).collect();
+    let barlines = (0..beats).step_by(4).map(|b| Barline { time: b as f64 * beat_ms, velocity }).collect();
+    let control_points = vec![ControlPoint { time: 0.0, beat_length: beat_ms, sv: 1.0, kiai: false }];
+    Beatmap { meta, notes, barlines, control_points }
+}
+
 fn hit(time: f64, sound: u32, velocity: f64) -> Note {
     let kat = sound & (2 | 8) != 0;
     Note {

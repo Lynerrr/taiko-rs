@@ -22,6 +22,8 @@ pub struct Config {
     /// Vsync only: wait this long after the previous frame before drawing the next, so the frame is
     /// sampled closer to the compositor's deadline (lower latency; too high causes stutter).
     pub frame_delay_ms: f64,
+    /// Tempo of the offset-calibration click track.
+    pub calibration_bpm: f64,
     pub audio_buffer: u32,
     pub show_fps: bool,
     /// Left rim, left centre, right centre, right rim.
@@ -39,6 +41,7 @@ impl Default for Config {
             present: PresentChoice::Fifo,
             fps_cap: 0,
             frame_delay_ms: 0.0,
+            calibration_bpm: 120.0,
             audio_buffer: 256,
             show_fps: true,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
@@ -97,6 +100,7 @@ impl Config {
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
+                "calibration_bpm" => cfg.calibration_bpm = v.parse::<f64>().unwrap_or(120.0).clamp(60.0, 240.0),
                 "frame_delay_ms" => cfg.frame_delay_ms = v.parse::<f64>().unwrap_or(0.0).clamp(0.0, MAX_FRAME_DELAY),
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
                 "show_fps" => cfg.show_fps = v == "true",
@@ -133,6 +137,7 @@ impl Config {
              fps_cap = {}\n\
              # vsync only: ms to wait before drawing each frame (lower latency; too high stutters)\n\
              frame_delay_ms = {}\n\
+             calibration_bpm = {}\n\
              # audio device buffer in frames (lower = less latency, more risk of crackle)\n\
              audio_buffer = {}\n\
              show_fps = {}\n",
@@ -144,6 +149,7 @@ impl Config {
             self.present.name(),
             self.fps_cap,
             self.frame_delay_ms,
+            self.calibration_bpm,
             self.audio_buffer,
             self.show_fps,
         );
