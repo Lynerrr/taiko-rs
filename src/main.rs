@@ -24,7 +24,7 @@ use winit::window::{Fullscreen, Window, WindowId};
 
 use audio::{Engine, Track};
 use beatmap::Beatmap;
-use config::{Config, FPS_CAPS, FRAME_DELAYS};
+use config::{Config, FPS_CAPS, FRAME_DELAYS, MAX_FRAME_DELAY};
 use game::{Game, PAUSE_ITEMS};
 use library::Entry;
 use render::{rgba, Canvas, PresentChoice, Renderer};
@@ -123,11 +123,20 @@ impl State {
         if let Some(a) = &self.audio {
             a.stop();
         }
+        self.report_smoothness();
         self.scene = Scene::Select;
     }
 
-    /// Longest frame delay that still leaves room to render before the next refresh.
-    fn max_frame_delay(&self) -> f64 {
+    fn report_smoothness(&mut self) {
+        if let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene) {
+            eprintln!("--- smoothness ({}, frame delay {:.0} ms) ---\n{}", self.present.name(), self.cfg.frame_delay_ms, sm.report());
+            *sm = debug::Smoothness::default();
+        }
+    }
+
+    /// Longest frame delay that reliably leaves room to render before the next refresh. Larger
+    /// values are allowed but may miss the compositor deadline.
+    fn safe_frame_delay(&self) -> f64 {
         (1000.0 / self.refresh_hz - 3.0).max(0.0)
     }
 
@@ -164,6 +173,9 @@ impl State {
                 format!("{} frames ({ms:.1} ms)", c.audio_buffer)
             }
             Item::PresentMode => self.present.name().to_string(),
+            Item::FrameDelay if c.frame_delay_ms > self.safe_frame_delay() => {
+                format!("{:.0} ms (past safe {:.1} ms)", c.frame_delay_ms, self.safe_frame_delay())
+            }
             Item::FrameDelay => format!("{:.0} ms", c.frame_delay_ms),
             Item::FpsCap => {
                 if c.fps_cap == 0 {
@@ -215,7 +227,7 @@ impl State {
             Item::PresentMode => {
                 self.want_present = Some(if dir > 0 { self.present.next() } else { self.present.next().next() });
             }
-            Item::FrameDelay => self.cfg.frame_delay_ms = (self.cfg.frame_delay_ms + d).clamp(0.0, self.max_frame_delay()).round(),
+            Item::FrameDelay => self.cfg.frame_delay_ms = (self.cfg.frame_delay_ms + d).clamp(0.0, MAX_FRAME_DELAY).round(),
             Item::FpsCap => {
                 let i = FPS_CAPS.iter().position(|&c| c == self.cfg.fps_cap).unwrap_or(0) as i32;
                 self.cfg.fps_cap = FPS_CAPS[(i + dir).rem_euclid(FPS_CAPS.len() as i32) as usize];
@@ -307,12 +319,12 @@ impl State {
             }
             KeyCode::F9 => {
                 let i = FRAME_DELAYS.iter().position(|&d| d == self.cfg.frame_delay_ms).unwrap_or(0);
-                let mut next = FRAME_DELAYS[(i + 1) % FRAME_DELAYS.len()];
-                if next > self.max_frame_delay() {
-                    next = 0.0;
-                }
+                let next = FRAME_DELAYS[(i + 1) % FRAME_DELAYS.len()];
                 self.cfg.frame_delay_ms = next;
                 let mut text = format!("frame delay: {next:.0} ms");
+                if next > self.safe_frame_delay() {
+                    text.push_str(&format!(" (past {:.1} ms may miss refreshes)", self.safe_frame_delay()));
+                }
                 if self.present != PresentChoice::Fifo {
                     text.push_str(" (vsync only)");
                 }
@@ -620,7 +632,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                     sm.sample_waits(waits.0, waits.1, waits.2);
                 }
             }
-            (s.present, s.cfg.fps_cap, s.cfg.frame_delay_ms.min(s.max_frame_delay()))
+            (s.present, s.cfg.fps_cap, s.cfg.frame_delay_ms)
         };
 
         let t0 = Instant::now();

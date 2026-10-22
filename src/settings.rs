@@ -66,7 +66,7 @@ impl Item {
             Item::MusicVolume | Item::FxVolume => "Left / Right to adjust.",
             Item::AudioBuffer => "Smaller = less audio latency; raise it if you hear crackling.",
             Item::PresentMode => "vsync is smoothest on Wayland; mailbox/immediate add judder.",
-            Item::FrameDelay => "vsync only: build frames later in each refresh for less lag. Too high = hitches.",
+            Item::FrameDelay => "vsync only: draw later in each refresh for less lag. Near/over one refresh (16.7 ms at 60 Hz) frames miss the deadline.",
             Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Fullscreen => "Shortcut: F11.",

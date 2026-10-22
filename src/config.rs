@@ -7,7 +7,8 @@ use winit::keyboard::KeyCode;
 use crate::render::PresentChoice;
 
 pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
-pub const FRAME_DELAYS: [f64; 8] = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0];
+pub const FRAME_DELAYS: [f64; 13] = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 25.0, 33.0];
+pub const MAX_FRAME_DELAY: f64 = 33.0;
 
 pub struct Config {
     /// Positive when your audio reaches you late; notes are shifted later by this much.
@@ -96,7 +97,7 @@ impl Config {
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
-                "frame_delay_ms" => cfg.frame_delay_ms = v.parse::<f64>().unwrap_or(0.0).clamp(0.0, 30.0),
+                "frame_delay_ms" => cfg.frame_delay_ms = v.parse::<f64>().unwrap_or(0.0).clamp(0.0, MAX_FRAME_DELAY),
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
                 "show_fps" => cfg.show_fps = v == "true",
                 "keys" => {
