@@ -7,6 +7,7 @@ use winit::keyboard::KeyCode;
 use crate::render::PresentChoice;
 
 pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
+pub const FRAME_DELAYS: [f64; 8] = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0];
 
 pub struct Config {
     /// Positive when your audio reaches you late; notes are shifted later by this much.
@@ -15,8 +16,11 @@ pub struct Config {
     pub music_volume: f32,
     pub fx_volume: f32,
     pub present: PresentChoice,
-    /// 0 = uncapped.
+    /// 0 = uncapped. Only applies to mailbox/immediate; vsync paces itself.
     pub fps_cap: u32,
+    /// Vsync only: wait this long after the previous frame before drawing the next, so the frame is
+    /// sampled closer to the compositor's deadline (lower latency; too high causes stutter).
+    pub frame_delay_ms: f64,
     pub audio_buffer: u32,
     pub show_fps: bool,
     /// Left rim, left centre, right centre, right rim.
@@ -31,8 +35,9 @@ impl Default for Config {
             scroll_speed: 1.0,
             music_volume: 0.7,
             fx_volume: 1.0,
-            present: PresentChoice::Mailbox,
+            present: PresentChoice::Fifo,
             fps_cap: 0,
+            frame_delay_ms: 0.0,
             audio_buffer: 256,
             show_fps: true,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
@@ -91,6 +96,7 @@ impl Config {
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
+                "frame_delay_ms" => cfg.frame_delay_ms = v.parse::<f64>().unwrap_or(0.0).clamp(0.0, 30.0),
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
                 "show_fps" => cfg.show_fps = v == "true",
                 "keys" => {
@@ -122,8 +128,10 @@ impl Config {
              fx_volume = {:.2}\n\
              # mailbox | immediate | vsync\n\
              present_mode = {}\n\
-             # 0 = uncapped\n\
+             # mailbox/immediate only; 0 = uncapped\n\
              fps_cap = {}\n\
+             # vsync only: ms to wait before drawing each frame (lower latency; too high stutters)\n\
+             frame_delay_ms = {}\n\
              # audio device buffer in frames (lower = less latency, more risk of crackle)\n\
              audio_buffer = {}\n\
              show_fps = {}\n",
@@ -134,6 +142,7 @@ impl Config {
             self.fx_volume,
             self.present.name(),
             self.fps_cap,
+            self.frame_delay_ms,
             self.audio_buffer,
             self.show_fps,
         );

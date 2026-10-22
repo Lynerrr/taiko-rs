@@ -311,16 +311,22 @@ impl Renderer {
         VIRTUAL_HEIGHT * self.config.width as f32 / self.config.height.max(1) as f32
     }
 
-    /// Draws a frame; with `capture`, also returns it as tightly packed RGB.
-    pub fn render(&mut self, shapes: &[Shape], clear: [f64; 3], capture: bool) -> Option<(u32, u32, Vec<u8>)> {
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+    /// Waits for a swapchain image. Under vsync this is where the frame may block, so callers
+    /// should sample the game clock only after it returns.
+    pub fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
+        match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
-                return None;
+                None
             }
-            _ => return None,
-        };
+            _ => None,
+        }
+    }
+
+    /// Draws `shapes` into an acquired frame and presents it; with `capture`, also returns the
+    /// frame as tightly packed RGB.
+    pub fn submit(&mut self, frame: wgpu::SurfaceTexture, shapes: &[Shape], clear: [f64; 3], capture: bool) -> Option<(u32, u32, Vec<u8>)> {
         if shapes.len() > self.capacity {
             self.capacity = shapes.len().next_power_of_two();
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);

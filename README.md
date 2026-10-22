@@ -8,9 +8,9 @@ A small, fast osu!taiko client in Rust, built for Linux/Wayland.
   arrives in buffer-sized chunks. Every note position is computed from that clock each frame
   (no accumulated motion), drawn as analytically anti-aliased SDF shapes in a single
   instanced draw call — sub-pixel accurate at any resolution and refresh rate.
-- **Low latency**: Mailbox present with one frame in flight (uncapped FPS by default),
-  native **PipeWire** output with a 256-frame buffer, hitsounds mixed directly in the audio
-  callback, key presses timestamped when they arrive rather than at the next frame.
+- **Low latency**: native **PipeWire** output with a 256-frame buffer, hitsounds mixed directly
+  in the audio callback, and a dedicated render thread so key presses are handled and
+  timestamped the instant they arrive — even while a vsync'd frame is waiting on the display.
 - Plays native taiko maps and osu!standard converts (lazer's conversion rules: split
   sliders, drumrolls, swells, big notes), with lazer hit windows.
 
@@ -40,18 +40,36 @@ Build needs `clang` and PipeWire headers for the default `pipewire` feature; bui
 | Esc | back / quit |
 | - / = (Shift: ×5) | audio offset −/+ 1 ms |
 | F3 / F4 | scroll speed |
-| F7 | present mode: mailbox → immediate → vsync |
-| F8 | FPS cap: unlimited, 2000, 1000, 500, 240, 144, 60 |
+| F7 | present mode: vsync → mailbox → immediate |
+| F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
+| F9 | vsync frame delay: 0–14 ms (see below) |
 | F10 / F11 | FPS overlay / fullscreen |
 
 Settings (keys, offset, volumes, audio buffer size, present mode) live in
 `~/.config/taiko-rs/config.txt`. The results screen shows UR and mean hit error and tells
 you which way to move the offset.
 
+## Frame pacing on Wayland
+
+**Use vsync (the default).** A Wayland compositor shows exactly one frame per refresh no matter
+how many you render, so mailbox/immediate don't put more frames on screen: the compositor picks
+whichever frame finished last, whose age is random each refresh (visible judder), and thousands
+of buffer commits per second compete with the compositor for the GPU — especially on an iGPU.
+Immediate only tears (the one real latency win) in fullscreen.
+
+Judging never depends on the frame rate: keys are timestamped on their own thread and audio is
+the clock, so vsync costs no accuracy. To cut vsync's *visual* latency, raise the **frame delay**
+(F9): after vsync releases a buffer, the renderer waits that long before sampling the clock, so frames are
+built closer to the compositor's deadline. Increase it until the FPS overlay's "worst" frame time
+starts to jump or notes hitch, then step back one notch (a 60 Hz display has ~16.7 ms per frame).
+
+If you do use mailbox, cap it (F8) to a few times your refresh rate; the limiter sleeps and then
+spins so frames stay evenly spaced.
+
 ## Diagnostics
 
-- `TAIKO_STATS=1` prints frame-time percentiles, clock-vs-wall-time jitter and clock-vs-audio
-  drift after each play.
+- `TAIKO_STATS=1` prints frame-time percentiles, clock-vs-wall-time jitter, clock-vs-audio
+  drift and how long each frame blocked in acquire/present after each play.
 - `TAIKO_SHOTS=/dir:1000,5000` saves PNG screenshots at those gameplay times (plus the select
   and results screens); `TAIKO_EXIT_AFTER=1` quits after the results screenshot.
 

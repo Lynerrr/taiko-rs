@@ -81,6 +81,11 @@ pub struct Smoothness {
     drift_ms: Vec<f64>,
     backwards: u32,
     last: Option<(f64, f64)>,
+    /// Time blocked waiting for a swapchain image / inside present, per frame.
+    acquire_ms: Vec<f64>,
+    present_ms: Vec<f64>,
+    /// Clock sample to the next refresh boundary (next acquire returning).
+    sample_age_ms: Vec<f64>,
 }
 
 impl Smoothness {
@@ -100,6 +105,14 @@ impl Smoothness {
         self.last = Some((wall_ms, game_ms));
     }
 
+    pub fn sample_waits(&mut self, acquire_ms: f64, present_ms: f64, sample_age_ms: f64) {
+        self.acquire_ms.push(acquire_ms);
+        self.present_ms.push(present_ms);
+        if sample_age_ms > 0.0 {
+            self.sample_age_ms.push(sample_age_ms);
+        }
+    }
+
     pub fn report(&self) -> String {
         fn pct(v: &[f64], p: f64) -> f64 {
             if v.is_empty() {
@@ -116,7 +129,9 @@ impl Smoothness {
             "frames {}  avg {:.0} fps\n\
              frame time  p50 {:.3}  p99 {:.3}  max {:.3} ms\n\
              clock jitter vs wall  p50 {:.4}  p99 {:.4}  max {:.4} ms  (backwards steps: {})\n\
-             clock vs raw audio  p50 {:.3}  p99 {:.3}  max {:.3} ms",
+             clock vs raw audio  p50 {:.3}  p99 {:.3}  max {:.3} ms\n\
+             blocked in acquire  p50 {:.3}  p99 {:.3} ms;  in present  p50 {:.3}  p99 {:.3} ms\n\
+             clock sample -> next refresh  p50 {:.3}  p99 {:.3} ms",
             self.frame_ms.len(),
             1000.0 / mean.max(1e-9),
             pct(&self.frame_ms, 0.5),
@@ -129,6 +144,12 @@ impl Smoothness {
             pct(&drift_abs, 0.5),
             pct(&drift_abs, 0.99),
             pct(&drift_abs, 1.0),
+            pct(&self.acquire_ms, 0.5),
+            pct(&self.acquire_ms, 0.99),
+            pct(&self.present_ms, 0.5),
+            pct(&self.present_ms, 0.99),
+            pct(&self.sample_age_ms, 0.5),
+            pct(&self.sample_age_ms, 0.99),
         )
     }
 }
