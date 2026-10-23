@@ -26,6 +26,7 @@ pub enum Item {
     ShowPlayfieldSize,
     KiaiEffects,
     ShowConverts,
+    HiddenMaps,
     MasterVolume,
     MusicVolume,
     FxVolume,
@@ -45,13 +46,14 @@ pub enum Item {
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 39] = [
+pub const ITEMS: [(&str, Item); 40] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::ResumeDelay),
     ("GAMEPLAY", Item::AntiMash),
     ("GAMEPLAY", Item::ShowConverts),
+    ("GAMEPLAY", Item::HiddenMaps),
     ("PLAYFIELD", Item::PlayfieldArea),
     ("PLAYFIELD", Item::PlayfieldPreset),
     ("PLAYFIELD", Item::PlayfieldReset),
@@ -128,6 +130,7 @@ impl Item {
             Item::ShowPlayfieldSize => "Show playfield size",
             Item::KiaiEffects => "Kiai effects",
             Item::ShowConverts => "Show osu!standard converts",
+            Item::HiddenMaps => "Hidden maps",
             Item::MasterVolume => "Master volume",
             Item::MusicVolume => "Music volume",
             Item::FxVolume => "Hitsound volume",
@@ -167,6 +170,7 @@ impl Item {
             Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key.",
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
+            Item::HiddenMaps => "Right-click a song to hide it here (files stay). Enter lists them all again.",
             Item::KiaiEffects => "During kiai time, tint the lane and pulse the hit target with the beat.",
             Item::MasterVolume => "Scales music and hitsounds. Anywhere: hold Alt and scroll the mouse wheel.",
             Item::MusicVolume | Item::FxVolume => "Left / Right to adjust.",

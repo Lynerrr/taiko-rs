@@ -173,6 +173,8 @@ pub struct Game {
     pub mute_hits: bool,
     /// Show the live offset suggestion under the hit error meter.
     pub show_offset_hint: bool,
+    /// Show the map's artist, title and difficulty under the lane.
+    pub show_map_info: bool,
     /// Kiai time tints the lane and pulses the hit target.
     pub kiai_effects: bool,
     /// osu!'s mash penalty: a wrong-colour or too-early hit on the next note is a miss. Off,
@@ -253,6 +255,7 @@ impl Game {
             hide_notes: false,
             mute_hits: false,
             show_offset_hint: false,
+            show_map_info: true,
             kiai_effects: true,
             anti_mash: false,
             record: false,
@@ -991,10 +994,13 @@ impl Game {
 
         // Map info.
         let m = &self.map.meta;
+        let show_info = self.show_map_info;
         let info_y = lane_top + LANE_H + 22.0;
         let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("   {:.2}x", self.rate) } else { String::new() };
-        c.text(18.0, info_y, 10.0, rgba(0x9a9ab0, 1.0), &format!("{} - {}", m.artist, m.title));
-        c.text(18.0, info_y + 16.0, 10.0, rgba(0x6f6f86, 1.0), &format!("[{}]  OD {:.1}{rate}", m.version, m.od));
+        if show_info {
+            c.text(18.0, info_y, 10.0, rgba(0x9a9ab0, 1.0), &format!("{} - {}", m.artist, m.title));
+            c.text(18.0, info_y + 16.0, 10.0, rgba(0x6f6f86, 1.0), &format!("[{}]  OD {:.1}{rate}", m.version, m.od));
+        }
 
         if self.can_skip() && self.paused.is_none() && !self.mute_hits {
             c.text_centered(w / 2.0, 330.0, 12.0, rgba(WHITE, 0.7), "SPACE to skip intro");

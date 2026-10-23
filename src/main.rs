@@ -195,6 +195,12 @@ struct State {
     focused: bool,
     /// The right button is held on song select (scrolling through the list).
     right_scroll: bool,
+    /// Right button pressed on song select and not moved yet (virtual units, what's under it):
+    /// released there it opens the row's menu; moved, it becomes right-click scrolling.
+    right_press: Option<(f32, f32, Option<render::Hit>)>,
+    /// Left button pressed on a song list row: dragging scrolls the list, releasing without
+    /// dragging clicks the row.
+    list_drag: Option<ListDrag>,
     /// The window has had focus at least once (the splash waits for it).
     focus_seen: bool,
     /// Background star rating / length / BPM analysis of the library, for sorting.
@@ -296,6 +302,16 @@ fn draw_game_area(
         layout::draw_frame(canvas, area, grip.is_some());
     }
 }
+
+/// A press on a song list row (see `State::list_drag`).
+struct ListDrag {
+    from_y: f32,
+    hit: render::Hit,
+    moved: bool,
+}
+
+/// How far (virtual units) a held button must move before it counts as dragging, not a click.
+const DRAG_START: f32 = 5.0;
 
 fn fmt_time(ms: f64) -> String {
     let s = (ms / 1000.0).max(0.0) as u64;
@@ -939,6 +955,7 @@ impl State {
             Item::DiscordPresence => on(c.discord_presence),
             Item::AntiMash => on(c.anti_mash),
             Item::ShowConverts => on(self.select.show_converts),
+            Item::HiddenMaps => self.select.hidden.describe(),
             Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
             Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
             Item::FxVolume => format!("{:.0}%", c.fx_volume * 100.0),
@@ -1012,6 +1029,8 @@ impl State {
                 self.select.refilter(&self.library);
                 return;
             }
+            // Acts on Enter in `settings_key`.
+            Item::HiddenMaps => return,
             Item::MasterVolume => self.cfg.master_volume = (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::MusicVolume => self.cfg.music_volume = (self.cfg.music_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::FxVolume => self.cfg.fx_volume = (self.cfg.fx_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
@@ -1352,6 +1371,15 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldArea => self.open_layout_editor(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldPreset => self.open_dropdown(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => self.open_skins_folder(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::HiddenMaps => {
+                if self.select.hidden.is_empty() {
+                    self.toast("nothing is hidden: right-click a song in the list to hide it".into());
+                } else {
+                    let what = self.select.hidden.describe();
+                    self.select.unhide_all(&self.library);
+                    self.toast(format!("{what} back in the song list"));
+                }
+            }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Skin => {
                 let names = std::iter::once(String::new()).chain(skin::list().into_iter().map(|(n, _)| n)).collect();
                 self.settings_ui.skins = Some(settings::SkinPicker::new(names, &self.cfg.skin));
@@ -1943,6 +1971,21 @@ impl State {
                 return CursorIcon::Pointer;
             }
         }
+        if let Some((px, py, _)) = self.right_press {
+            let (vx, vy) = self.mouse_virtual();
+            if !self.right_scroll && ((vx - px).abs() > DRAG_START || (vy - py).abs() > DRAG_START) {
+                self.right_scroll = true;
+            }
+        }
+        let (_, drag_y) = self.mouse_virtual();
+        if let Some(d) = &mut self.list_drag {
+            let dy = drag_y - d.from_y;
+            d.moved |= dy.abs() > DRAG_START;
+            if d.moved && matches!(self.scene, Scene::Select) {
+                self.select.drag_to(dy);
+                return CursorIcon::NsResize;
+            }
+        }
         if self.right_scroll {
             if matches!(self.scene, Scene::Select) {
                 let (_, vy) = self.mouse_virtual();
@@ -2040,12 +2083,25 @@ impl State {
 
     /// Right button on song select: hold it and move up and down to fly through the list, like
     /// osu!'s right-click scrolling.
+    /// Released without moving, it opens the row's menu (or, off the rows, jumps there).
     fn right_button(&mut self, pressed: bool) {
         let free = self.splash.is_none() && self.select.picker.is_none() && self.settings_ui.dropdown.is_none();
-        self.right_scroll = pressed && free && matches!(self.scene, Scene::Select);
-        if self.right_scroll {
-            let (_, vy) = self.mouse_virtual();
-            self.select.scroll_to(vy, &self.library);
+        let (vx, vy) = self.mouse_virtual();
+        if pressed {
+            self.select.menu = None;
+            self.right_scroll = false;
+            self.right_press = (free && matches!(self.scene, Scene::Select)).then(|| (vx, vy, self.hit_at(vx, vy)));
+            return;
+        }
+        let press = self.right_press.take();
+        if std::mem::take(&mut self.right_scroll) || !matches!(self.scene, Scene::Select) {
+            return;
+        }
+        match press {
+            Some((x, y, Some(render::Hit::SongRow(row)))) => self.select.menu = Some(ui::SongMenu { row, header: false, x, y }),
+            Some((x, y, Some(render::Hit::SongHeader(row)))) => self.select.menu = Some(ui::SongMenu { row, header: true, x, y }),
+            Some((_, y, _)) => self.select.scroll_to(y, &self.library),
+            None => {}
         }
     }
 
@@ -2157,11 +2213,30 @@ impl State {
             }
             return;
         }
+        if !pressed {
+            if let Some(d) = self.list_drag.take() {
+                if d.moved {
+                    self.select.drag_end(&self.library);
+                } else {
+                    self.click(d.hit, window);
+                }
+                return;
+            }
+        }
         if pressed {
             let (vx, vy) = self.mouse_virtual();
             let hit = self.hit_at(vx, vy);
             if self.select.picker.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::PickRow(_))) {
                 self.select.picker = None;
+                return;
+            }
+            if self.select.menu.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::SongMenu(_))) {
+                self.select.menu = None;
+                return;
+            }
+            // A row acts on release, unless the press turns into dragging the list.
+            if let (Scene::Select, Some(h @ (render::Hit::SongRow(_) | render::Hit::SongHeader(_)))) = (&self.scene, hit) {
+                self.list_drag = Some(ListDrag { from_y: vy, hit: h, moved: false });
                 return;
             }
             if self.settings_ui.skins.is_some() && !matches!(hit, Some(render::Hit::SkinRow(_))) {
@@ -2330,6 +2405,7 @@ impl State {
             }
             Scene::MpPlay { game, quit_armed } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
+                KeyCode::Tab => self.toggle_map_info(),
                 KeyCode::Space => {
                     if game.skip(self.audio.as_ref(), self.cfg.offset_ms) {
                         if let Some(s) = &self.mp {
@@ -2686,6 +2762,12 @@ impl State {
         self.select.played.insert(path, now);
     }
 
+    /// Tab in play: hides (or shows again) the map's name and the offset / UR line.
+    fn toggle_map_info(&mut self) {
+        self.cfg.show_map_info = !self.cfg.show_map_info;
+        self.cfg.save();
+    }
+
     fn cycle_sort(&mut self, dir: i32) {
         self.select.cycle_sort(dir, &self.library);
         self.cfg.sort = self.select.sort.name().to_string();
@@ -2916,6 +2998,10 @@ impl State {
             }
             return;
         }
+        // Any key closes the row menu; Esc does nothing else.
+        if matches!(self.scene, Scene::Select) && self.select.menu.take().is_some() && code == KeyCode::Escape {
+            return;
+        }
         if let (Scene::Select, Some(cursor)) = (&self.scene, self.select.picker) {
             let n = self.select.picker_len();
             match code {
@@ -3060,6 +3146,7 @@ impl State {
             Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) | Scene::VideoEdit(_) => {}
             Scene::Play { game, entry, from } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
+                KeyCode::Tab => self.toggle_map_info(),
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
                 KeyCode::Space => {
                     game.skip(self.audio.as_ref(), self.cfg.offset_ms);
@@ -3225,6 +3312,16 @@ impl State {
                         }
                     }
                     debug::Action::RightUp => self.right_button(false),
+                    debug::Action::LeftDown(x, y) => {
+                        let k = self.window_h as f64 / render::VIRTUAL_HEIGHT as f64;
+                        self.mouse_moved(x as f64 * k, y as f64 * k);
+                        self.mouse_button(true, None);
+                    }
+                    debug::Action::LeftMove(x, y) => {
+                        let k = self.window_h as f64 / render::VIRTUAL_HEIGHT as f64;
+                        self.mouse_moved(x as f64 * k, y as f64 * k);
+                    }
+                    debug::Action::LeftUp => self.mouse_button(false, None),
                     debug::Action::CtrlKey(code) => {
                         self.modifiers_ctrl = true;
                         self.key(code, false, None, now, None);
@@ -3267,6 +3364,11 @@ impl State {
                     }
                 }
             }
+        }
+        if !matches!(self.scene, Scene::Select) {
+            self.select.menu = None;
+            self.list_drag = None;
+            self.select.cancel_drag();
         }
         // Drawn again below if still watching a replay (after scripted input, which must see the
         // last frame's bar like real input does).
@@ -3351,7 +3453,8 @@ impl State {
                     }
                 }
                 // Offset advice is for live play (and its line would sit on the replay timeline).
-                game.show_offset_hint = self.cfg.show_offset_hint && game.replay.is_none();
+                game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
+                game.show_map_info = self.cfg.show_map_info;
                 game.kiai_effects = self.cfg.kiai_effects;
                 if game.replay.is_none() {
                     game.anti_mash = self.cfg.anti_mash;
@@ -3519,7 +3622,8 @@ impl State {
                 if self.auto {
                     game.autoplay(self.audio.as_ref());
                 }
-                game.show_offset_hint = self.cfg.show_offset_hint;
+                game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
+                game.show_map_info = self.cfg.show_map_info;
                 game.kiai_effects = self.cfg.kiai_effects;
                 if game.replay.is_none() {
                     game.anti_mash = self.cfg.anti_mash;
@@ -4137,6 +4241,13 @@ impl State {
                 self.browse.cursor = i;
                 self.download_key(KeyCode::Enter, None, window);
             }
+            Hit::SongHeader(row) => self.click(Hit::SongRow(row), window),
+            Hit::SongMenu(k) => {
+                let action = self.select.menu_items(&self.library).get(k).map(|(_, a)| *a);
+                if let Some(what) = action.and_then(|a| self.select.hide(a, &self.library)) {
+                    self.toast(format!("hid {what}: Settings > Hidden maps brings it back"));
+                }
+            }
             // Like osu!: the first click selects, clicking the selected difficulty plays it.
             Hit::SongRow(row) if row == self.select.cursor() => self.key(KeyCode::Enter, false, None, Instant::now(), window),
             // A song's own row picks its remembered (or hardest) difficulty.
@@ -4644,6 +4755,8 @@ fn main() {
         sprites_upload: None,
         focused: true,
         right_scroll: false,
+        right_press: None,
+        list_drag: None,
         focus_seen: false,
         mapinfo: None,
         mapinfo_sorted: false,

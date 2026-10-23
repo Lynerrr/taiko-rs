@@ -186,6 +186,11 @@ pub enum Action {
     RightDown(f32, f32),
     RightMove(f32, f32),
     RightUp,
+    /// Left button pressed at / pointer moved to a point (virtual units), and released:
+    /// `LeftDown:x:y`, `LeftMove:x:y`, `LeftUp`.
+    LeftDown(f32, f32),
+    LeftMove(f32, f32),
+    LeftUp,
     /// Wheel notches with Alt held (`AltWheelUp` / `AltWheelDown`).
     AltWheel(i32),
     /// A key with Shift held: `Shift+Enter`.
@@ -211,6 +216,12 @@ impl InputScript {
                     "ShrinkCorner" => Action::Drag { corner: true, dx: -300.0, dy: -200.0, hold: false },
                     "Release" => Action::Release,
                     "RightUp" => Action::RightUp,
+                    "LeftUp" => Action::LeftUp,
+                    k if k.starts_with("LeftDown:") || k.starts_with("LeftMove:") => {
+                        let mut p = k.split(':').skip(1).filter_map(|v| v.parse::<f32>().ok());
+                        let (x, y) = (p.next()?, p.next()?);
+                        if k.starts_with("LeftDown:") { Action::LeftDown(x, y) } else { Action::LeftMove(x, y) }
+                    }
                     "AltWheelUp" => Action::AltWheel(1),
                     "AltWheelDown" => Action::AltWheel(-1),
                     k if k.starts_with("RightDown:") || k.starts_with("RightMove:") => {
