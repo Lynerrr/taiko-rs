@@ -123,6 +123,8 @@ struct State {
     host_transfer: Option<std::sync::mpsc::Sender<Option<Vec<u8>>>>,
     /// When the background image last changed (it fades in).
     bg_changed: Option<Instant>,
+    /// A newly loaded skin's note images, for the render thread to upload.
+    sprites_upload: Option<render::Atlas>,
     /// The window has keyboard focus.
     focused: bool,
     /// Background star rating / length / BPM analysis of the library, for sorting.
@@ -673,9 +675,11 @@ impl State {
         self.cfg.save();
     }
 
-    /// Loads the configured skin and hands its hitsounds to the audio engine.
+    /// Loads the configured skin: its note images go to the renderer, its hitsounds to the audio
+    /// engine.
     fn load_skin(&mut self) {
         let skin = skin::load(&self.cfg.skin, self.audio.as_ref().map(|a| a.rate));
+        self.sprites_upload = Some(skin.notes);
         if let Some(a) = &self.audio {
             let h = skin.hitsounds;
             a.set_hitsounds(h.don, h.kat, h.finish);
@@ -2812,6 +2816,10 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         let now = acquired;
         let (capture, clip) = {
             let mut s = lock(&state);
+            if let Some(atlas) = s.sprites_upload.take() {
+                renderer.set_sprites(&atlas);
+                canvas.sprites = atlas.sprites.map(|s| s.map(|(_, size)| size));
+            }
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
             if let Some(image) = s.preview.bg_upload.take() {
                 renderer.set_background(image);
@@ -3129,6 +3137,7 @@ fn main() {
         preview_remote: false,
         host_transfer: None,
         bg_changed: None,
+        sprites_upload: None,
         focused: true,
         mapinfo: None,
         mapinfo_sorted: false,

@@ -89,7 +89,7 @@ pub const SECTIONS: [(&str, &str); 7] = [
     ("OFFSET", "audio offset, calibration"),
     ("AUDIO", "volume, latency"),
     ("VIDEO", "frame pacing, display"),
-    ("SKIN", "osu! skin hitsounds"),
+    ("SKIN", "notes, hitsounds"),
 ];
 
 /// First item of section `s`.
