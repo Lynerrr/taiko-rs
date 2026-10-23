@@ -8,6 +8,8 @@ use crate::render::{rgba, Canvas};
 
 pub struct Select {
     pub filter: String,
+    /// Files read so far while the library is still being scanned.
+    pub scanning: Option<usize>,
     pub show_converts: bool,
     visible: Vec<usize>,
     cursor: usize,
@@ -24,7 +26,7 @@ pub enum SelectAction {
 impl Select {
     pub fn new(library: &[Entry]) -> Select {
         let has_taiko = library.iter().any(|e| e.meta.mode == 1);
-        let mut s = Select { filter: String::new(), show_converts: !has_taiko, visible: Vec::new(), cursor: 0, scroll: 0.0 };
+        let mut s = Select { filter: String::new(), scanning: None, show_converts: !has_taiko, visible: Vec::new(), cursor: 0, scroll: 0.0 };
         s.refilter(library);
         s
     }
@@ -122,7 +124,10 @@ impl Select {
         let search_col = if self.filter.is_empty() { 0x6f6f86 } else { 0xffffff };
         c.text(34.0, 61.0, 10.0, rgba(search_col, 1.0), &search);
 
-        if self.visible.is_empty() {
+        if let Some(n) = self.scanning {
+            c.text_centered(w / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "Scanning your Songs folder...");
+            c.text_centered(w / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("{n} files read"));
+        } else if self.visible.is_empty() {
             c.text_centered(w / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "No maps found.");
             c.text_centered(w / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), "Run: taiko-rs <Songs folder | map.osz | map.osu>");
         }
@@ -153,7 +158,7 @@ impl Select {
                 label = label.chars().take(max_chars.saturating_sub(3)).collect::<String>() + "...";
             }
             c.text(46.0, y + 8.0, 10.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &label);
-            c.text_right(w - 36.0, y + 8.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("{} obj", e.objects));
+            c.text_right(w - 36.0, y + 8.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("OD {:.1}", e.meta.od));
         }
 
         c.text(24.0, 452.0, 8.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down select  Left/Right set  Tab settings  -/= offset  F3/F4 speed  F11 fullscreen  Esc quit");

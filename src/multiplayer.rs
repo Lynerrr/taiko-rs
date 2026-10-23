@@ -18,8 +18,9 @@ pub struct Session {
     pub ready: bool,
     pub last_live: Instant,
     pub label: String,
-    /// Last map hash we reported HasMap for.
+    /// Last map hash we reported HasMap for, and whether we have it.
     pub reported_map: Option<u64>,
+    pub have_map: bool,
 }
 
 impl Session {
@@ -35,6 +36,7 @@ impl Session {
             last_live: Instant::now(),
             label,
             reported_map: None,
+            have_map: false,
         }
     }
 

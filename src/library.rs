@@ -1,20 +1,28 @@
 //! Finds beatmaps: Songs folders, single map folders, `.osz` archives and `.osu` files.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 use crate::beatmap::{self, Meta};
 
 pub struct Entry {
     pub path: PathBuf,
     pub meta: Meta,
-    pub objects: usize,
-    /// Content hash of the `.osu`, for matching maps between multiplayer clients.
-    pub hash: u64,
+    /// File size: orders difficulties within a set (more objects = bigger file) without parsing them.
+    pub size: u64,
+    /// Content hash of the `.osu` for matching maps between multiplayer clients. Computed on first
+    /// use: hashing every file up front would make startup with a big library crawl.
+    hash: OnceLock<u64>,
 }
 
 impl Entry {
     pub fn label(&self) -> String {
         format!("{} - {} [{}]", self.meta.artist, self.meta.title, self.meta.version)
+    }
+
+    pub fn hash(&self) -> u64 {
+        *self.hash.get_or_init(|| crate::net::map_hash(&std::fs::read(&self.path).unwrap_or_default()))
     }
 }
 
@@ -86,7 +94,8 @@ fn collect_osu(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     }
 }
 
-pub fn scan(inputs: &[PathBuf]) -> Vec<Entry> {
+/// Finds playable difficulties under `inputs`. `found` counts files read so far, for the UI.
+pub fn scan(inputs: &[PathBuf], found: &AtomicUsize) -> Vec<Entry> {
     let mut files = Vec::new();
     for input in inputs {
         let ext = input.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
@@ -115,18 +124,25 @@ pub fn scan(inputs: &[PathBuf]) -> Vec<Entry> {
     }
     files.sort();
     files.dedup();
-    let mut entries: Vec<Entry> = files
-        .into_iter()
-        .filter_map(|path| {
-            let bytes = std::fs::read(&path).ok()?;
-            let (meta, objects) = beatmap::read_meta(&String::from_utf8_lossy(&bytes))?;
-            let hash = crate::net::map_hash(&bytes);
-            meta.is_playable().then_some(Entry { path, meta, objects, hash })
-        })
-        .collect();
+
+    let read = |path: &PathBuf| -> Option<Entry> {
+        // One malformed map must not take the whole scan down with it.
+        let meta = std::panic::catch_unwind(|| beatmap::read_meta_file(path)).ok().flatten();
+        found.fetch_add(1, Ordering::Relaxed);
+        let meta = meta?;
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        meta.is_playable().then(|| Entry { path: path.clone(), meta, size, hash: OnceLock::new() })
+    };
+    // Reading headers is I/O-bound: spread it over a thread per core.
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 16);
+    let chunk = files.len().div_ceil(threads).max(1);
+    let mut entries: Vec<Entry> = std::thread::scope(|s| {
+        let handles: Vec<_> = files.chunks(chunk).map(|part| s.spawn(move || part.iter().filter_map(read).collect::<Vec<_>>())).collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+    });
     entries.sort_by(|a, b| {
         let key = |e: &Entry| (e.meta.artist.to_lowercase(), e.meta.title.to_lowercase());
-        key(a).cmp(&key(b)).then(a.objects.cmp(&b.objects))
+        key(a).cmp(&key(b)).then(a.size.cmp(&b.size))
     });
     entries
 }

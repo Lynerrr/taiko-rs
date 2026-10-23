@@ -104,14 +104,30 @@ fn num<T: std::str::FromStr>(s: Option<&str>) -> Option<T> {
     s?.trim().parse().ok()
 }
 
-/// Reads the header sections and counts hit objects; cheap enough to run over a whole Songs folder.
-pub fn read_meta(text: &str) -> Option<(Meta, usize)> {
-    let (meta, _) = parse_sections(text, true);
-    let objects = text
-        .split_once("[HitObjects]")
-        .map(|(_, rest)| rest.lines().filter(|l| l.contains(',')).count())
-        .unwrap_or(0);
-    Some((meta, objects))
+/// Reads only the header sections (General/Metadata/Difficulty), stopping before events, timing
+/// and hit objects, so scanning a library of tens of thousands of maps reads a few KB per file.
+pub fn read_meta_file(path: &Path) -> Option<Meta> {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(std::fs::File::open(path).ok()?);
+    let mut text = String::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).ok()? == 0 {
+            break;
+        }
+        let l = String::from_utf8_lossy(&line);
+        let t = l.trim();
+        if t == "[Events]" || t == "[TimingPoints]" || t == "[HitObjects]" {
+            break;
+        }
+        text.push_str(&l);
+        // Malformed file without section headers: don't read the whole thing.
+        if text.len() > 64 * 1024 {
+            break;
+        }
+    }
+    Some(parse_sections(&text, true).0)
 }
 
 pub fn load(path: &Path) -> Result<Beatmap, String> {
@@ -152,7 +168,7 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
         }
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             section = &trimmed[1..trimmed.len() - 1];
-            if header_only && (section == "TimingPoints" || section == "HitObjects") {
+            if header_only && (section == "Events" || section == "TimingPoints" || section == "HitObjects") {
                 break;
             }
             continue;

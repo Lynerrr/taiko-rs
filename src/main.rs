@@ -18,6 +18,7 @@ mod ui;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -108,6 +109,18 @@ struct State {
     mp_status: String,
     /// Song select is being used by the host to pick the lobby map.
     picking_lobby_map: bool,
+    /// Background library scan: result channel and files-read counter.
+    scan: Option<(Receiver<Vec<Entry>>, Arc<AtomicUsize>)>,
+    /// A single .osu was given on the command line: play it once the scan finishes.
+    play_when_scanned: bool,
+}
+
+/// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
+/// Only those few candidates are hashed, so this stays cheap with a huge library.
+fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
+    library
+        .iter()
+        .position(|e| e.meta.version == m.version && e.meta.title == m.title && e.meta.artist == m.artist && e.hash() == m.hash)
 }
 
 const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
@@ -522,7 +535,7 @@ impl State {
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
         let e = &self.library[entry];
-        let info = net::MapInfo { hash: e.hash, artist: e.meta.artist.clone(), title: e.meta.title.clone(), version: e.meta.version.clone() };
+        let info = net::MapInfo { hash: e.hash(), artist: e.meta.artist.clone(), title: e.meta.title.clone(), version: e.meta.version.clone() };
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
@@ -698,6 +711,36 @@ impl State {
         }
     }
 
+    /// Installs the library once the background scan finishes.
+    fn poll_scan(&mut self) {
+        let Some((rx, found)) = &self.scan else { return };
+        self.select.scanning = Some(found.load(Ordering::Relaxed));
+        let library = match rx.try_recv() {
+            Ok(library) => library,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Vec::new(),
+        };
+        self.scan = None;
+        eprintln!("found {} playable difficulties", library.len());
+        self.library = library;
+        // Keep whatever was typed into the search box while scanning.
+        let filter = std::mem::take(&mut self.select.filter);
+        self.select = Select::new(&self.library);
+        self.select.filter = filter;
+        self.select.refilter(&self.library);
+        if self.play_when_scanned && !self.library.is_empty() {
+            self.play_when_scanned = false;
+            self.start_loading(0);
+        }
+        // A lobby map may have been announced before our library was ready.
+        if let Some(s) = &mut self.mp {
+            if let Some(m) = &s.map {
+                s.have_map = find_map(&self.library, m).is_some();
+                s.client.send(net::ClientMsg::HasMap(s.have_map));
+            }
+        }
+    }
+
     /// Finishes pending connections and applies messages from the room.
     fn poll_multiplayer(&mut self) {
         if let Some(rx) = &self.mp_connecting {
@@ -735,8 +778,8 @@ impl State {
                 let hash = map.as_ref().map(|m| m.hash);
                 if hash != s.reported_map {
                     s.reported_map = hash;
-                    let have = hash.is_some_and(|h| library.iter().any(|e| e.hash == h));
-                    s.client.send(net::ClientMsg::HasMap(have));
+                    s.have_map = map.as_ref().is_some_and(|m| find_map(library, m).is_some());
+                    s.client.send(net::ClientMsg::HasMap(s.have_map));
                     s.ready = false;
                 }
                 s.map = map;
@@ -754,7 +797,7 @@ impl State {
                     s.client.send(net::ClientMsg::Loaded(false));
                     return;
                 }
-                match self.library.iter().position(|e| e.hash == map.hash) {
+                match find_map(&self.library, &map) {
                     Some(i) => {
                         if let Some(a) = &self.audio {
                             a.stop();
@@ -917,6 +960,7 @@ impl State {
         }
 
         canvas.clear(width);
+        self.poll_scan();
         self.poll_multiplayer();
         let mut next: Option<Scene> = None;
         let mut capture: Option<String> = None;
@@ -1011,8 +1055,7 @@ impl State {
             }
             Scene::Lobby => match &self.mp {
                 Some(s) => {
-                    let have = s.map.as_ref().is_some_and(|m| self.library.iter().any(|e| e.hash == m.hash));
-                    multiplayer::draw_lobby(canvas, s, have);
+                    multiplayer::draw_lobby(canvas, s, s.have_map);
                 }
                 None => next = Some(Scene::MpMenu),
             },
@@ -1380,9 +1423,21 @@ fn main() {
     if args.is_empty() {
         inputs.extend(cfg.songs.iter().cloned());
     }
-    let started = Instant::now();
-    let library = library::scan(&inputs);
-    eprintln!("found {} playable difficulties in {:.0} ms", library.len(), started.elapsed().as_secs_f64() * 1000.0);
+    // Scan on a background thread so the window appears at once, even with a huge library.
+    let found = Arc::new(AtomicUsize::new(0));
+    let (scan_tx, scan_rx) = mpsc::channel();
+    {
+        let found = found.clone();
+        std::thread::Builder::new()
+            .name("library".into())
+            .spawn(move || {
+                let started = Instant::now();
+                let library = library::scan(&inputs, &found);
+                eprintln!("scanned {} files in {:.0} ms", found.load(Ordering::Relaxed), started.elapsed().as_secs_f64() * 1000.0);
+                let _ = scan_tx.send(library);
+            })
+            .expect("spawn library scan");
+    }
 
     let audio = match Engine::new(cfg.audio_buffer) {
         Ok(a) => {
@@ -1397,11 +1452,12 @@ fn main() {
     };
     cfg.save();
 
+    let library = Vec::new();
     let select = Select::new(&library);
     // A single .osu on the command line goes straight into gameplay.
-    let direct = (args.len() == 1 && library.len() == 1 && args[0].extension().is_some_and(|e| e == "osu")).then_some(0);
+    let play_when_scanned = args.len() == 1 && args[0].extension().is_some_and(|e| e == "osu");
     let present = cfg.present;
-    let mut state = State {
+    let state = State {
         cfg,
         library,
         select,
@@ -1439,10 +1495,9 @@ fn main() {
         mp_menu: multiplayer::Menu::default(),
         mp_status: String::new(),
         picking_lobby_map: false,
+        scan: Some((scan_rx, found)),
+        play_when_scanned,
     };
-    if let Some(i) = direct {
-        state.start_loading(i);
-    }
     let event_loop = EventLoop::new().expect("event loop");
     let mut app = App { state: Arc::new(Mutex::new(state)), window: None, render_thread: None, proxy: event_loop.create_proxy() };
     event_loop.run_app(&mut app).expect("run");
