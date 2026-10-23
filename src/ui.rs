@@ -4,7 +4,7 @@ use winit::keyboard::KeyCode;
 
 use crate::game::{Stats, Windows};
 use crate::library::Entry;
-use crate::render::{approach, progress, rgba, Canvas, Hit};
+use crate::render::{progress, rgba, Canvas, Hit};
 
 pub struct Select {
     pub filter: String,
@@ -21,13 +21,37 @@ pub struct Select {
     group_of: Vec<usize>,
     cursor: usize,
     scroll: f32,
-    /// Animated selection outline (content y) and how far the open song has expanded (0-1).
-    outline_y: f32,
-    open: (Option<usize>, f32),
+    anim: ListAnim,
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
     random_history: Vec<usize>,
     rng: u64,
 }
+
+/// Song list motion. Each selection change starts one eased transition from wherever things
+/// are to where they end up, so the scroll, the newly opened song, the closing one and the
+/// selection outline all move together and arrive at the same moment.
+#[derive(Default)]
+struct ListAnim {
+    /// The selection the current transition is heading to (None: not drawn yet).
+    cursor: Option<usize>,
+    start: Option<std::time::Instant>,
+    scroll_from: f32,
+    /// Outline position on screen when the transition started.
+    outline_from: f32,
+    /// Song (first visible row) opening and how far open it was at the start (0-1).
+    open: Option<usize>,
+    open_from: f32,
+    closing: Option<usize>,
+    closing_from: f32,
+    /// Where things were on the last frame, to start the next transition from.
+    scroll: f32,
+    outline: f32,
+    open_now: f32,
+    closing_now: f32,
+}
+
+/// Length of a song list transition.
+const LIST_ANIM_MS: f32 = 200.0;
 
 pub enum SelectAction {
     None,
@@ -50,8 +74,7 @@ impl Select {
             group_of: Vec::new(),
             cursor: 0,
             scroll: 0.0,
-            outline_y: f32::NAN,
-            open: (None, 1.0),
+            anim: ListAnim::default(),
             random_history: Vec::new(),
             rng: seed | 1,
         };
@@ -74,6 +97,8 @@ impl Select {
     }
 
     fn regroup(&mut self, library: &[Entry]) {
+        // Row indices change meaning: start the list's motion afresh.
+        self.anim = ListAnim::default();
         self.groups.clear();
         self.group_of.clear();
         let mut start = 0;
@@ -278,38 +303,69 @@ impl Select {
             Song(std::ops::Range<usize>),
             Diff(usize),
         }
-        // A newly opened song's difficulties slide out from under it.
+        let _ = dt_ms;
+        let (top, bottom) = (86.0, 440.0);
+        let view = bottom - top;
+        // Where everything ends up: the selected song open, the others closed.
         let open_start = self.group_of.get(self.cursor).map(|&g| groups[g].start);
-        if open_start != self.open.0 {
-            self.open = (open_start, if self.open.0.is_none() { 1.0 } else { 0.0 });
+        let (mut final_y, mut final_cursor) = (0.0f32, 0.0f32);
+        for g in groups {
+            final_y += SONG_H;
+            if g.contains(&self.cursor) {
+                final_cursor = final_y + (self.cursor - g.start) as f32 * DIFF_H;
+                final_y += g.len() as f32 * DIFF_H;
+            }
         }
-        approach(&mut self.open.1, 1.0, dt_ms as f32, 45.0);
-        let expand = self.open.1;
-        // (row, y, height, alpha)
+        let final_scroll = (final_cursor - view * 0.4).clamp(0.0, (final_y - view).max(0.0));
+        let final_outline = top + final_cursor - final_scroll;
+
+        // A new selection starts a transition from the current state.
+        let a = &mut self.anim;
+        if a.cursor != Some(self.cursor) || a.open != open_start {
+            if a.cursor.is_none() {
+                // First frame: no motion.
+                *a = ListAnim { open: open_start, open_from: 1.0, scroll_from: final_scroll, outline_from: final_outline, ..Default::default() };
+            } else {
+                if open_start != a.open {
+                    let reopen = open_start.is_some() && open_start == a.closing;
+                    let from = if reopen { a.closing_now } else { 0.0 };
+                    a.closing = a.open;
+                    a.closing_from = a.open_now;
+                    a.open = open_start;
+                    a.open_from = from;
+                } else {
+                    a.open_from = a.open_now;
+                    a.closing_from = a.closing_now;
+                }
+                a.scroll_from = a.scroll;
+                a.outline_from = a.outline;
+                a.start = Some(std::time::Instant::now());
+            }
+            a.cursor = Some(self.cursor);
+        }
+        let p = a.start.map(|t| progress(t, LIST_ANIM_MS)).unwrap_or(1.0);
+        let open_f = a.open_from + (1.0 - a.open_from) * p;
+        let closing_f = a.closing_from * (1.0 - p);
+        let scroll = a.scroll_from + (final_scroll - a.scroll_from) * p;
+        let outline = a.outline_from + (final_outline - a.outline_from) * p;
+        (a.scroll, a.outline, a.open_now, a.closing_now) = (scroll, outline, open_f, closing_f);
+        let (open_g, closing_g) = (a.open, a.closing);
+        self.scroll = scroll;
+
+        // (row, y, height, alpha): rows of opening / closing songs are squeezed and faded.
         let mut rows: Vec<(Row, f32, f32, f32)> = Vec::new();
         let mut y = 0.0;
-        let mut cursor_y = 0.0;
         for g in groups {
             rows.push((Row::Song(g.clone()), y, SONG_H, 1.0));
             y += SONG_H;
-            if g.contains(&self.cursor) {
+            let f = if Some(g.start) == open_g { open_f } else if Some(g.start) == closing_g { closing_f } else { 0.0 };
+            if f > 0.001 {
                 for i in g.clone() {
-                    if i == self.cursor {
-                        cursor_y = y;
-                    }
-                    rows.push((Row::Diff(i), y, DIFF_H, expand * expand));
-                    y += DIFF_H * expand;
+                    rows.push((Row::Diff(i), y, DIFF_H, f * f));
+                    y += DIFF_H * f;
                 }
             }
         }
-        let (top, bottom) = (86.0, 440.0);
-        let view = bottom - top;
-        let target = (cursor_y - view * 0.4).clamp(0.0, (y - view).max(0.0));
-        approach(&mut self.scroll, target, dt_ms as f32, 60.0);
-        if !self.outline_y.is_finite() {
-            self.outline_y = cursor_y;
-        }
-        approach(&mut self.outline_y, cursor_y, dt_ms as f32, 35.0);
         let max_chars = |size: f32, room: f32| (room / (size / 7.0 * 6.0)).max(4.0) as usize;
         let fit = |s: String, n: usize| if s.chars().count() > n { s.chars().take(n.saturating_sub(3)).collect::<String>() + "..." } else { s };
         for (row, ry, rh, alpha) in &rows {
@@ -352,8 +408,8 @@ impl Select {
             }
         }
 
-        // The selection outline glides between difficulties.
-        let oy = top + self.outline_y - self.scroll;
+        // The selection outline moves with the same transition.
+        let oy = outline;
         if !self.visible.is_empty() && oy > top - DIFF_H && oy < bottom {
             c.round_rect(44.0, oy, lw - 20.0, DIFF_H - 3.0, 5.0, rgba(0, 0.0), rgba(0xEB452C, 1.0), 1.5);
         }

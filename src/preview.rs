@@ -105,8 +105,9 @@ pub struct Preview {
     play_rect: Option<[f32; 4]>,
     /// Where the autoplay box was drawn (clicking it opens the fullscreen preview).
     box_rect: Option<[f32; 4]>,
-    /// When the shown map's preview became ready (it fades in).
+    /// When the shown map's preview became ready (it fades in), and for which entry.
     ready_at: Option<Instant>,
+    ready_for: Option<usize>,
     game: Option<Game>,
     last_time: f64,
     bg_path: Option<PathBuf>,
@@ -272,10 +273,6 @@ impl Preview {
                         if let Some(curve) = curve {
                             graph.use_curve(curve);
                         }
-                        let same_map = self.map.as_ref().is_some_and(|(mi, ..)| *mi == i);
-                        if !same_map {
-                            self.ready_at = Some(Instant::now());
-                        }
                         self.game = Some(new_preview_game(&map, self.requested_rate.0));
                         self.last_time = f64::NEG_INFINITY;
                         self.map = Some((i, map, details, graph));
@@ -327,21 +324,22 @@ impl Preview {
         }
 
         // Autoplay preview, driven by the music's clock. It waits while the music is still the
-        // previous speed's (its clock would read at the wrong rate).
-        let stale = self.audio.as_ref().is_some_and(|s| (s.rate, s.keep_pitch) != self.requested_rate);
+        // previous song's or speed's (its clock would put the notes in the wrong place).
+        let wanted = self.requested.and_then(|i| library.get(i)).map(audio_path);
+        let stale = self.audio.as_ref().is_none_or(|s| (s.rate, s.keep_pitch) != self.requested_rate || Some(&s.path) != wanted.as_ref());
         if !in_select || !self.audio_active || stale {
             return;
         }
+        let speed = self.requested_rate.0;
         if let Some(target) = self.pending_seek {
             // The engine applies seeks on its next callback; rebuild once the music is there so
             // the notes in between aren't lost.
-            let speed = self.requested_rate.0;
             let arrived = engine.position_ms(now).is_some_and(|p| (p * speed - target).abs() < 150.0 * speed);
             if arrived {
                 if let Some((_, map, _, _)) = &self.map {
                     let mut fresh = new_preview_game(map, speed);
+                    fresh.skip_to(target - 50.0);
                     fresh.update(now, Some(engine), offset);
-                    fresh.skip_to(fresh.time - 50.0);
                     self.last_time = fresh.time;
                     self.game = Some(fresh);
                 }
@@ -350,19 +348,21 @@ impl Preview {
             return;
         }
         let Some(game) = &mut self.game else { return };
-        game.update(now, Some(engine), offset);
-        if game.time < self.last_time - 1000.0 {
-            // The music looped: start the preview over from the preview point.
-            if let Some((_, map, _, _)) = &self.map {
-                let mut fresh = new_preview_game(map, self.requested_rate.0);
-                fresh.update(now, Some(engine), offset);
-                fresh.skip_to(fresh.time - 50.0);
-                *game = fresh;
+        // Where the music is, in map time, before the game expires anything: notes skipped over
+        // are marked played first, so jumping in never shows misses.
+        if let Some(t) = engine.position_ms(now).map(|p| (p - offset) * speed) {
+            if t < self.last_time - 1000.0 {
+                // The music looped: start the preview over from the preview point.
+                if let Some((_, map, _, _)) = &self.map {
+                    *game = new_preview_game(map, speed);
+                    game.skip_to(t - 50.0);
+                }
+            } else if t > self.last_time + 2000.0 {
+                // Jumped in (first frame, or the song changed): don't replay the skipped part.
+                game.skip_to(t - 50.0);
             }
-        } else if game.time > self.last_time + 2000.0 {
-            // Jumped in (first frame, or the song changed): don't replay the skipped part.
-            game.skip_to(game.time - 50.0);
         }
+        game.update(now, Some(engine), offset);
         self.last_time = game.time;
         game.autoplay(None);
     }
@@ -403,10 +403,20 @@ impl Preview {
         self.box_rect.is_some_and(|[bx, by, bw, bh]| x >= bx && x <= bx + bw && y >= by && y <= by + bh)
     }
 
-    /// The autoplay preview of library entry `i`, once it has loaded.
-    pub fn game_for(&mut self, i: usize) -> Option<&mut Game> {
-        let loaded = self.map.as_ref().is_some_and(|(mi, ..)| *mi == i) && self.seen == Some(i);
-        self.game.as_mut().filter(|_| loaded)
+    /// Whether entry `i`'s preview can be shown: its map is loaded and its own music is playing
+    /// (until then the autoplay would run on the previous song's clock).
+    fn ready(&self, library: &[Entry], i: usize) -> bool {
+        let Some(e) = library.get(i) else { return false };
+        let map = self.map.as_ref().is_some_and(|(mi, ..)| *mi == i) && self.seen == Some(i) && self.game.is_some();
+        let music = self.audio_active
+            && self.audio.as_ref().is_some_and(|s| s.path == audio_path(e) && (s.rate, s.keep_pitch) == self.requested_rate);
+        map && music && self.pending_seek.is_none()
+    }
+
+    /// The autoplay preview of library entry `i`, once it is ready.
+    pub fn game_for(&mut self, library: &[Entry], i: usize) -> Option<&mut Game> {
+        let ready = self.ready(library, i);
+        self.game.as_mut().filter(|_| ready)
     }
 
     /// The difficulty timeline of `e` (the selected map) in `rect`, with the start point and,
@@ -466,7 +476,14 @@ impl Preview {
         let room = ((w - 40.0 - pill) / (9.0 / 7.0 * 6.0)) as usize;
         let version = if version.chars().count() > room { version.chars().take(room.saturating_sub(3)).collect::<String>() + "..." } else { version };
         c.text(x + 14.0, y + 64.0, 9.0, rgba(0xEB452C, 1.0), &version);
-        let loaded = self.map.as_ref().filter(|(mi, _, _, _)| *mi == i);
+        // Map details, the autoplay and the timeline appear together, once the map's music plays.
+        let ready = self.ready(library, i) || (self.ready_for == Some(i) && self.map.as_ref().is_some_and(|(mi, ..)| *mi == i));
+        if ready && self.ready_for != Some(i) {
+            self.ready_for = Some(i);
+            self.ready_at = Some(Instant::now());
+        }
+        let fade = self.ready_at.filter(|_| ready).map(|t| crate::render::progress(t, 180.0)).unwrap_or(0.0);
+        let loaded = self.map.as_ref().filter(|(mi, _, _, _)| *mi == i && ready);
         let line = match loaded {
             Some((_, _, d, _)) => {
                 let bpm = if (d.bpm.1 - d.bpm.0).abs() < 0.5 { format!("{:.0} BPM", d.bpm.0) } else { format!("{:.0}-{:.0} BPM", d.bpm.0, d.bpm.1) };
@@ -475,11 +492,12 @@ impl Preview {
             }
             None => format!("OD {:.1}", e.meta.od),
         };
+        let _ = fade;
         c.text(x + 14.0, y + 80.0, 8.0, rgba(0xc8c8d8, 1.0), &line);
         if let Some((_, _, d, _)) = loaded {
             let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
             let notes = format!("{} ({}/{} don/kat)  {}  {}", plural(d.dons + d.kats, "note"), d.dons, d.kats, plural(d.rolls, "roll"), plural(d.swells, "swell"));
-            c.text(x + 14.0, y + 94.0, 8.0, rgba(0x8a8aa0, 1.0), &fit(&notes, 8.0));
+            c.text(x + 14.0, y + 94.0, 8.0, rgba(0x8a8aa0, fade), &fit(&notes, 8.0));
         }
 
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
@@ -487,7 +505,15 @@ impl Preview {
         c.round_rect(bx, by, bw, bh, 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
         self.box_rect = Some([bx, by, bw, bh]);
         let loaded = loaded.is_some();
-        self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], button);
+        if loaded {
+            self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], button);
+            if fade < 1.0 {
+                c.rect(bx - 1.0, by + bh + 4.0, bw + 2.0, GRAPH_H + 40.0, rgba(0x15151d, 1.0 - fade));
+            }
+        } else {
+            self.graph_rect = None;
+            self.play_rect = None;
+        }
         let game = self.game.as_mut().filter(|_| loaded)?;
         let full_w = c.width;
         let start = c.shapes.len();
@@ -500,11 +526,8 @@ impl Preview {
             // Song select only (download previews have no fullscreen view).
             c.text_right(bx + bw - 6.0, by + bh - 10.0, 6.0, rgba(0x6f6f86, 1.0), "click: fullscreen (Ctrl+Enter)");
         }
-        if let Some(at) = self.ready_at {
-            let t = crate::render::progress(at, 220.0);
-            if t < 1.0 {
-                c.round_rect(bx, by, bw, bh, 6.0, rgba(0x0c0c12, 1.0 - t), rgba(0, 0.0), 0.0);
-            }
+        if fade < 1.0 {
+            c.round_rect(bx, by, bw, bh, 6.0, rgba(0x0c0c12, 1.0 - fade), rgba(0, 0.0), 0.0);
         }
         let clip = crate::layout::Area { x: bx / full_w, y: by / VIRTUAL_HEIGHT, w: bw / full_w, h: bh / VIRTUAL_HEIGHT };
         Some((start..c.shapes.len(), clip))

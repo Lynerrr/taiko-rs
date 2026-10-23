@@ -116,6 +116,8 @@ struct State {
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
     preview_remote: bool,
+    /// When the background image last changed (it fades in).
+    bg_changed: Option<Instant>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
     lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
     /// Which screen was drawn last and since when, for the fade between screens.
@@ -1757,6 +1759,10 @@ impl State {
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
+            // A new background fades in instead of popping.
+            if let Some(t) = self.bg_changed {
+                self.bg_brightness *= render::progress(t, 220.0);
+            }
         }
         self.poll_multiplayer();
         self.poll_downloads();
@@ -1949,7 +1955,7 @@ impl State {
                     Some(i) => {
                         let scroll = self.cfg.scroll_speed;
                         let see_through = self.bg_brightness > 0.0;
-                        if let Some(game) = self.preview.game_for(i) {
+                        if let Some(game) = self.preview.game_for(&self.library, i) {
                             draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, see_through, |c| game.draw_playfield(c, scroll));
                         }
                         let e = &self.library[i];
@@ -2491,6 +2497,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
             if let Some(image) = s.preview.bg_upload.take() {
                 renderer.set_background(image);
+                s.bg_changed = Some(Instant::now());
             }
             renderer.bg_brightness = s.bg_brightness;
             (capture, s.frame_clip.take())
@@ -2782,6 +2789,7 @@ fn main() {
         installed_sets: None,
         lobby_lookup: None,
         preview_remote: false,
+        bg_changed: None,
         scene_kind: None,
         scene_since: Instant::now(),
         scrubbing: None,
