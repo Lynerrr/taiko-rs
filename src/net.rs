@@ -6,9 +6,9 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -215,7 +215,9 @@ impl Drop for Server {
 }
 
 enum Event {
-    Joined(u32, Sender<ServerMsg>),
+    /// A connection: its id, where to send to it, and a name that overrides its Hello's (the
+    /// account name in a room on the online server).
+    Joined(u32, Sender<ServerMsg>, Option<String>),
     Msg(u32, ClientMsg),
     Left(u32),
 }
@@ -245,13 +247,7 @@ pub fn host(port: u16) -> Result<Server, String> {
         l.set_nonblocking(true).map_err(|e| e.to_string())?;
     }
     let stop = Arc::new(AtomicBool::new(false));
-    let token = {
-        use std::hash::{BuildHasher, Hasher};
-        // RandomState is seeded from the OS per process: unguessable for this purpose.
-        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
-        h.finish()
-    };
+    let token = new_token();
     let (events, rx) = mpsc::channel();
     {
         let stop = stop.clone();
@@ -264,7 +260,7 @@ pub fn host(port: u16) -> Result<Server, String> {
                     for listener in &listeners {
                         if let Ok((stream, _)) = listener.accept() {
                             let _ = stream.set_nonblocking(false);
-                            spawn_connection(stream, next_id, events.clone());
+                            spawn_connection(BufReader::new(stream), next_id, events.clone(), None);
                             next_id += 1;
                             accepted = true;
                         }
@@ -278,14 +274,72 @@ pub fn host(port: u16) -> Result<Server, String> {
     }
     {
         let stop = stop.clone();
-        thread::Builder::new().name("mp-room".into()).spawn(move || room_loop(rx, stop, token)).map_err(|e| e.to_string())?;
+        thread::Builder::new().name("mp-room".into()).spawn(move || room_loop(rx, stop, token, None)).map_err(|e| e.to_string())?;
     }
     Ok(Server { stop, token, port })
 }
 
-fn spawn_connection(stream: TcpStream, id: u32, events: Sender<Event>) {
-    let _ = stream.set_nodelay(true);
-    let Ok(mut writer) = stream.try_clone() else { return };
+/// Proves who opened a room. RandomState is seeded from the OS per process: unguessable for this.
+fn new_token() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+    h.finish()
+}
+
+/// What a lobby list shows about a room.
+#[derive(Clone, Debug, Default)]
+pub struct Summary {
+    pub players: u32,
+    pub host: String,
+    pub map: Option<String>,
+    pub in_match: bool,
+}
+
+/// A room run by the online server: connections are handed to it after their own handshake
+/// there (account, which room). Dropping it closes the room.
+#[allow(dead_code)] // used by the online server (server/)
+pub struct Room {
+    events: Sender<Event>,
+    stop: Arc<AtomicBool>,
+    next_id: AtomicU32,
+    /// Given to whoever created the room, so it joins as host.
+    pub token: u64,
+    pub summary: Arc<Mutex<Summary>>,
+}
+
+impl Drop for Room {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+#[allow(dead_code)] // used by the online server (server/)
+pub fn open_room() -> Room {
+    let stop = Arc::new(AtomicBool::new(false));
+    let token = new_token();
+    let summary = Arc::new(Mutex::new(Summary::default()));
+    let (events, rx) = mpsc::channel();
+    {
+        let (stop, summary) = (stop.clone(), summary.clone());
+        thread::spawn(move || room_loop(rx, stop, token, Some(summary)));
+    }
+    Room { events, stop, next_id: AtomicU32::new(1), token, summary }
+}
+
+#[allow(dead_code)] // used by the online server (server/)
+impl Room {
+    /// Hands over a connection (its reader may already hold buffered input). `name` replaces
+    /// the one the client sends in Hello.
+    pub fn attach(&self, reader: BufReader<TcpStream>, name: Option<String>) {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        spawn_connection(reader, id, self.events.clone(), name);
+    }
+}
+
+fn spawn_connection(mut reader: BufReader<TcpStream>, id: u32, events: Sender<Event>, name: Option<String>) {
+    let _ = reader.get_ref().set_nodelay(true);
+    let Ok(mut writer) = reader.get_ref().try_clone() else { return };
     let (tx, rx) = mpsc::channel::<ServerMsg>();
     thread::spawn(move || {
         for msg in rx {
@@ -297,10 +351,9 @@ fn spawn_connection(stream: TcpStream, id: u32, events: Sender<Event>) {
         let _ = writer.shutdown(Shutdown::Both);
     });
     thread::spawn(move || {
-        if events.send(Event::Joined(id, tx)).is_err() {
+        if events.send(Event::Joined(id, tx, name)).is_err() {
             return;
         }
-        let mut reader = BufReader::new(stream);
         let mut line = String::new();
         while let Ok(Some(())) = read_message(&mut reader, &mut line) {
             if let Ok(msg) = serde_json::from_str::<ClientMsg>(&line) {
@@ -315,6 +368,8 @@ fn spawn_connection(stream: TcpStream, id: u32, events: Sender<Event>) {
 
 struct Player {
     info: PlayerInfo,
+    /// Overrides the name in Hello (see `Event::Joined`).
+    forced_name: Option<String>,
     tx: Sender<ServerMsg>,
     hello: bool,
     in_match: bool,
@@ -329,7 +384,8 @@ enum Phase {
     Playing,
 }
 
-fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
+/// `summary`: kept up to date for the online server's lobby list.
+fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Option<Arc<Mutex<Summary>>>) {
     let epoch = Instant::now();
     let now_ms = || epoch.elapsed().as_secs_f64() * 1000.0;
     let mut players: Vec<Player> = Vec::new();
@@ -348,8 +404,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
 
     while !stop.load(Ordering::Relaxed) {
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(Event::Joined(id, tx)) => {
+            Ok(Event::Joined(id, tx, forced_name)) => {
                 players.push(Player {
+                    forced_name,
                     info: PlayerInfo {
                         id,
                         name: String::new(),
@@ -452,7 +509,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
                             players.retain(|p| p.info.id != id);
                             continue;
                         }
-                        p.info.name = clean_name(&name);
+                        p.info.name = p.forced_name.clone().unwrap_or_else(|| clean_name(&name));
                         p.hello = true;
                         let _ = p.tx.send(ServerMsg::Welcome { id });
                         dirty = true;
@@ -584,6 +641,13 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
             for p in players.iter().filter(|p| p.hello) {
                 let _ = p.tx.send(room.clone());
             }
+            if let Some(s) = &summary {
+                let mut s = s.lock().unwrap();
+                s.players = players.iter().filter(|p| p.hello).count() as u32;
+                s.host = players.iter().find(|p| p.info.host).map(|p| p.info.name.clone()).unwrap_or_default();
+                s.map = map.as_ref().map(MapInfo::label);
+                s.in_match = phase != Phase::Lobby;
+            }
             dirty = false;
             last_broadcast = Instant::now();
         }
@@ -636,9 +700,16 @@ impl Client {
     pub fn connect(addr: &str, name: &str, host_token: Option<u64>) -> Result<Client, String> {
         let sa = resolve(addr)?;
         let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(5)).map_err(|e| format!("can't connect to {sa}: {e}"))?;
+        Client::over(BufReader::new(stream), name, host_token)
+    }
+
+    /// The room protocol over a connection that's already open (the online server's, after
+    /// joining a room there; its reader may hold buffered input).
+    pub fn over(reader: BufReader<TcpStream>, name: &str, host_token: Option<u64>) -> Result<Client, String> {
+        let stream = reader.get_ref().try_clone().map_err(|e| e.to_string())?;
         let _ = stream.set_nodelay(true);
+        let _ = stream.set_read_timeout(None);
         let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
-        let reader = stream.try_clone().map_err(|e| e.to_string())?;
         let epoch = Instant::now();
 
         let (tx, out) = mpsc::channel::<ClientMsg>();
@@ -651,7 +722,7 @@ impl Client {
         });
         let (inbox, rx) = mpsc::channel();
         thread::spawn(move || {
-            let mut reader = BufReader::new(reader);
+            let mut reader = reader;
             let mut line = String::new();
             while let Ok(Some(())) = read_message(&mut reader, &mut line) {
                 if let Ok(msg) = serde_json::from_str::<ServerMsg>(&line) {

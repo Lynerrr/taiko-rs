@@ -262,7 +262,20 @@ and the cover are fetched, and cached.
 
 ## Multiplayer
 
-Versus play over direct TCP (default port **7777**). Tab to the **MULTIPLAYER** tab:
+The **MULTIPLAYER** tab has two columns: **ONLINE** (lobbies on the taiko-rs server, no open
+port needed) and **DIRECT (P2P)** (one player hosts on their own port), which still works when
+the server is down.
+
+**Online:** create an account (username: 3-16 letters, digits, `_` or `-`; password: at least
+6 characters) or log in; the game remembers the session. Then *HOST AN ONLINE LOBBY*, or pick
+one of the listed lobbies (title, host, players, map, whether a match is on; refreshed every few
+seconds, **F5** to refresh now) and press Enter or click it. In online lobbies everyone shows
+up under their account name; everything else (map transfer from the host, make host,
+spectating, results) works as below. A lobby closes once it has been empty for 20 s. The
+server is `online_server` in the config (default `jashincraft.space:7800`); accounts are only
+used for multiplayer for now.
+
+**Direct** (default port **7777**):
 
 - **Host:** set your name and port, choose *HOST A GAME*. Friends need your public IP and the
   port must be reachable (port-forwarded / open). In the lobby press **M** to pick the map from
@@ -289,6 +302,22 @@ already running, anyone in the lobby who has the map can press **Spectate (S)** 
 match's log, so a spectator joining late catches up; the spectator plays the map 1.5 s behind
 live with every player's presses fed in (judged with that player's mash setting). Left/Right
 switches between players, A shows everyone stacked with their scores, Esc goes back to the lobby.
+
+### Running the online server
+
+`server/` is a separate small crate (`taiko-server`): accounts (argon2 password hashes, session
+tokens) in `DATA/accounts.json`, and lobbies that run the game's own room code (`src/net.rs`).
+Its protocol is `src/online.rs`: one JSON request line and one reply per connection; after
+`Joined` the same connection speaks the room protocol.
+
+```sh
+cd server && cargo run --release -- --port 7800 --data ./data          # locally
+server/deploy/deploy.sh user@host [ssh port]                            # static build + Docker
+```
+
+`deploy.sh` builds a static (musl) binary (`rustup target add x86_64-unknown-linux-musl` once),
+copies it with `server/deploy/Dockerfile` and `docker-compose.yml` to `~/taiko-server` and runs
+it with `restart: unless-stopped`. TCP port 7800 must be reachable.
 
 ## Discord status
 
@@ -342,6 +371,8 @@ spins so frames stay evenly spaced.
 | `src/calibrate.rs` | offset calibration: estimate, overlay and result screen |
 | `src/net.rs` | multiplayer protocol, room server, client with clock sync |
 | `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
+| `src/online.rs` | online server protocol (accounts, lobby list) and the game's side of it |
+| `server/` | `taiko-server`: accounts and server-hosted lobbies (deploy files in `server/deploy/`) |
 | `src/library.rs` | Songs folder / `.osz` scanning |
 | `src/logo.rs` | the logo: window icon, top bar |
 | `src/skin.rs` | osu! skins: listing, `.osk` unpacking, note image atlas, hitsounds |

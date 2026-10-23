@@ -1,2 +1,4 @@
 /target
 /.claude
+/server/target
+/server/deploy/taiko-server

@@ -10,6 +10,7 @@ mod config;
 mod cursor;
 mod debug;
 mod discord;
+mod online;
 mod difficulty;
 mod download;
 mod font;
@@ -2329,19 +2330,31 @@ impl State {
     }
 
     fn mp_menu_key(&mut self, code: KeyCode, text: Option<&str>) {
-        use multiplayer::{MENU_ROWS, ROW_ADDRESS, ROW_HOST, ROW_JOIN, ROW_NAME, ROW_PORT};
-        let row = self.mp_menu.cursor;
+        use multiplayer::Row;
+        let row = self.mp_menu.row();
+        let rows = self.mp_menu.rows().len();
+        let server = self.cfg.online_server.clone();
         match code {
-            KeyCode::ArrowUp => self.mp_menu.cursor = row.saturating_sub(1),
-            KeyCode::ArrowDown => self.mp_menu.cursor = (row + 1).min(MENU_ROWS - 1),
+            KeyCode::ArrowUp => self.mp_menu.cursor = self.mp_menu.cursor.min(rows - 1).saturating_sub(1),
+            KeyCode::ArrowDown => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
+            // Between the columns: online (left), direct play (right).
+            KeyCode::ArrowLeft => self.mp_menu.cursor = 0,
+            KeyCode::ArrowRight => self.mp_menu.select(Row::Name),
+            KeyCode::F5 => self.mp_menu.refresh(&server),
             KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
             KeyCode::Backspace => {
                 match row {
-                    ROW_NAME => {
+                    Row::User => {
+                        self.mp_menu.user.pop();
+                    }
+                    Row::Password => {
+                        self.mp_menu.password.pop();
+                    }
+                    Row::Name => {
                         self.cfg.mp_name.pop();
                     }
-                    ROW_PORT => self.cfg.mp_port /= 10,
-                    ROW_ADDRESS => {
+                    Row::Port => self.cfg.mp_port /= 10,
+                    Row::Address => {
                         self.cfg.mp_address.pop();
                     }
                     _ => {}
@@ -2353,17 +2366,52 @@ impl State {
                     return;
                 }
                 let name = self.cfg.mp_name.clone();
+                let token = self.cfg.online_token.clone();
+                let account = self.mp_menu.account.clone().unwrap_or_default();
                 match row {
-                    ROW_HOST => {
+                    Row::User => self.mp_menu.select(Row::Password),
+                    Row::LogIn | Row::Register | Row::Password if self.mp_menu.account_request.is_some() => {}
+                    Row::LogIn | Row::Register | Row::Password => {
+                        let (user, password) = (self.mp_menu.user.trim().to_string(), std::mem::take(&mut self.mp_menu.password));
+                        if !online::valid_name(&user) {
+                            self.mp_status = format!("usernames are {}", online::NAME_RULES);
+                            self.mp_menu.select(Row::User);
+                        } else if row == Row::Register && !online::valid_password(&password) {
+                            self.mp_status = "pick a password of at least 6 characters".into();
+                            self.mp_menu.select(Row::Password);
+                        } else if row == Row::Register {
+                            self.mp_status = format!("creating {user}...");
+                            self.mp_menu.account_call(&server, online::Request::Register { name: user, password });
+                        } else {
+                            self.mp_status = format!("logging in as {user}...");
+                            self.mp_menu.account_call(&server, online::Request::Login { name: user, password });
+                        }
+                    }
+                    Row::LogOut => {
+                        self.mp_menu.account_call(&server, online::Request::Logout { token });
+                        self.sign_out("logged out");
+                    }
+                    Row::HostOnline => {
+                        self.mp_status = "opening a lobby on the server...".into();
+                        let request = online::Request::CreateRoom { token, title: String::new() };
+                        self.mp_connecting = Some(multiplayer::start_online(server, request, account));
+                    }
+                    Row::Lobby(k) => {
+                        let Some(room) = self.mp_menu.rooms.get(k).cloned() else { return };
+                        self.mp_status = format!("joining {}...", room.title);
+                        let request = online::Request::JoinRoom { token, room: room.id };
+                        self.mp_connecting = Some(multiplayer::start_online(server, request, account));
+                    }
+                    Row::HostDirect => {
                         self.mp_status = format!("opening room on port {}...", self.cfg.mp_port);
                         self.mp_connecting = Some(multiplayer::start_host(self.cfg.mp_port, name));
                     }
-                    ROW_JOIN if self.cfg.mp_address.trim().is_empty() => self.mp_status = "type the host's address first".into(),
-                    ROW_JOIN => {
+                    Row::JoinDirect if self.cfg.mp_address.trim().is_empty() => self.mp_status = "type the host's address first".into(),
+                    Row::JoinDirect => {
                         self.mp_status = format!("connecting to {}...", self.cfg.mp_address);
                         self.mp_connecting = Some(multiplayer::start_join(self.cfg.mp_address.clone(), name));
                     }
-                    _ => self.mp_menu.cursor = (row + 1).min(MENU_ROWS - 1),
+                    Row::Name | Row::Port | Row::Address => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
                 }
                 self.cfg.save();
             }
@@ -2371,8 +2419,10 @@ impl State {
                 let Some(text) = text else { return };
                 for ch in text.chars().filter(|c| c.is_ascii_graphic() || *c == ' ') {
                     match row {
-                        ROW_NAME if self.cfg.mp_name.len() < 20 => self.cfg.mp_name.push(ch),
-                        ROW_PORT => {
+                        Row::User if self.mp_menu.user.len() < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') => self.mp_menu.user.push(ch),
+                        Row::Password if self.mp_menu.password.len() < 128 => self.mp_menu.password.push(ch),
+                        Row::Name if self.cfg.mp_name.len() < 20 => self.cfg.mp_name.push(ch),
+                        Row::Port => {
                             if let Some(d) = ch.to_digit(10) {
                                 let p = self.cfg.mp_port as u32 * 10 + d;
                                 if p <= u16::MAX as u32 {
@@ -2380,12 +2430,101 @@ impl State {
                                 }
                             }
                         }
-                        ROW_ADDRESS if self.cfg.mp_address.len() < 64 && ch != ' ' => self.cfg.mp_address.push(ch),
+                        Row::Address if self.cfg.mp_address.len() < 64 && ch != ' ' => self.cfg.mp_address.push(ch),
                         _ => {}
                     }
                 }
                 self.cfg.save();
             }
+        }
+    }
+
+    /// Forgets the saved online login.
+    fn sign_out(&mut self, why: &str) {
+        self.mp_menu.account = None;
+        self.mp_menu.rooms.clear();
+        self.cfg.online_token.clear();
+        self.cfg.save();
+        self.mp_status = why.to_string();
+        self.mp_menu.cursor = 0;
+    }
+
+    /// The online server's side of the multiplayer menu: the saved login, account replies and
+    /// a lobby list kept fresh while the menu is open.
+    fn poll_online(&mut self) {
+        let menu = &mut self.mp_menu;
+        if !menu.session_loaded {
+            menu.session_loaded = true;
+            if !self.cfg.online_token.is_empty() {
+                menu.account = Some(self.cfg.online_user.clone());
+                menu.user = self.cfg.online_user.clone();
+                let token = self.cfg.online_token.clone();
+                menu.account_call(&self.cfg.online_server, online::Request::WhoAmI { token });
+            }
+        }
+        if let Some(rx) = &menu.account_request {
+            match rx.try_recv() {
+                Ok(result) => {
+                    menu.account_request = None;
+                    match result {
+                        Ok(online::Reply::Account { name, token }) => {
+                            let fresh = menu.account.as_deref() != Some(&name) || self.cfg.online_token != token;
+                            menu.account = Some(name.clone());
+                            menu.online = Some(Ok(()));
+                            if fresh {
+                                self.mp_status = format!("logged in as {name}");
+                                menu.cursor = 0;
+                            }
+                            self.cfg.online_user = name;
+                            self.cfg.online_token = token;
+                            self.cfg.save();
+                            self.mp_menu.refresh(&self.cfg.online_server);
+                        }
+                        Ok(_) => {}
+                        Err(e) if e.contains("session") => self.sign_out(&e),
+                        Err(e) => {
+                            if e.contains("offline") {
+                                menu.online = Some(Err(e.clone()));
+                            }
+                            self.mp_status = e;
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => menu.account_request = None,
+            }
+        }
+        let menu = &mut self.mp_menu;
+        if let Some(rx) = &menu.rooms_request {
+            match rx.try_recv() {
+                Ok(result) => {
+                    menu.rooms_request = None;
+                    match result {
+                        Ok(rooms) => {
+                            // Keep the cursor on the same lobby when the list changes.
+                            let on = match menu.row() {
+                                multiplayer::Row::Lobby(k) => menu.rooms.get(k).map(|r| r.id),
+                                _ => None,
+                            };
+                            menu.rooms = rooms;
+                            menu.online = Some(Ok(()));
+                            match on.and_then(|id| menu.rooms.iter().position(|r| r.id == id)) {
+                                Some(k) => menu.select(multiplayer::Row::Lobby(k)),
+                                None => menu.cursor = menu.cursor.min(menu.rows().len() - 1),
+                            }
+                        }
+                        Err(e) => {
+                            menu.rooms.clear();
+                            menu.online = Some(Err(e));
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => menu.rooms_request = None,
+            }
+        }
+        if matches!(self.scene, Scene::MpMenu) && self.mp_menu.last_refresh.is_none_or(|t| t.elapsed() > Duration::from_secs(4)) {
+            self.mp_menu.refresh(&self.cfg.online_server);
         }
     }
 
@@ -2526,6 +2665,7 @@ impl State {
 
     /// Finishes pending connections and applies messages from the room.
     fn poll_multiplayer(&mut self) {
+        self.poll_online();
         if let Some(rx) = &self.mp_connecting {
             match rx.try_recv() {
                 Ok(Ok(session)) => {
@@ -3271,7 +3411,7 @@ impl State {
                 }
             }
             Scene::MpMenu => {
-                multiplayer::draw_menu(canvas, &self.mp_menu, &self.cfg.mp_name, self.cfg.mp_port, &self.cfg.mp_address, &self.mp_status, self.mp_connecting.is_some());
+                multiplayer::draw_menu(canvas, &self.mp_menu, &self.cfg.mp_name, self.cfg.mp_port, &self.cfg.mp_address, &self.cfg.online_server, &self.mp_status, self.mp_connecting.is_some());
             }
             Scene::Lobby => match &self.mp {
                 Some(s) => {
@@ -3957,7 +4097,7 @@ impl State {
             }
             Hit::MpRow(i) => {
                 self.mp_menu.cursor = i;
-                if matches!(i, multiplayer::ROW_HOST | multiplayer::ROW_JOIN) {
+                if self.mp_menu.row().is_action() {
                     self.mp_menu_key(KeyCode::Enter, None);
                 }
             }

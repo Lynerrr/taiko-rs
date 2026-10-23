@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::game::{Game, Stats};
 use crate::net::{self, Client, Final, Live, MapInfo, PlayerInfo, Server, Status};
+use crate::online;
 use crate::render::{rgba, Canvas, Hit};
 use winit::keyboard::KeyCode;
 
@@ -112,55 +113,267 @@ pub fn final_from(stats: &Stats, quit: bool) -> Final {
 // ---------------------------------------------------------------------------------------------
 // Host / join menu
 
-pub const ROW_NAME: usize = 0;
-pub const ROW_PORT: usize = 1;
-pub const ROW_HOST: usize = 2;
-pub const ROW_ADDRESS: usize = 3;
-pub const ROW_JOIN: usize = 4;
-pub const MENU_ROWS: usize = 5;
+/// The multiplayer menu's rows, top to bottom: the online column (an account, then lobbies on
+/// the server), then direct play (host on your own port / join by address) as the fallback.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Row {
+    User,
+    Password,
+    LogIn,
+    Register,
+    HostOnline,
+    Lobby(usize),
+    LogOut,
+    Name,
+    Port,
+    HostDirect,
+    Address,
+    JoinDirect,
+}
+
+impl Row {
+    /// Enter (or a click) does something; other rows are text fields.
+    pub fn is_action(self) -> bool {
+        !matches!(self, Row::User | Row::Password | Row::Name | Row::Port | Row::Address)
+    }
+}
 
 #[derive(Default)]
 pub struct Menu {
     pub cursor: usize,
+    /// The login form.
+    pub user: String,
+    pub password: String,
+    /// Logged in as (a saved session).
+    pub account: Option<String>,
+    pub rooms: Vec<online::RoomInfo>,
+    /// Whether the server answered the last request (None: not asked yet).
+    pub online: Option<Result<(), String>>,
+    pub account_request: Option<Receiver<Result<online::Reply, String>>>,
+    pub rooms_request: Option<Receiver<Result<Vec<online::RoomInfo>, String>>>,
+    pub last_refresh: Option<Instant>,
+    /// The saved session was loaded from the config (and is being checked).
+    pub session_loaded: bool,
 }
 
-pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &str, status: &str, busy: bool) {
+/// Lobbies shown at once (the list scrolls with the cursor).
+const LOBBY_ROWS: usize = 6;
+
+impl Menu {
+    pub fn rows(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        if self.account.is_some() {
+            rows.push(Row::HostOnline);
+            rows.extend((0..self.rooms.len()).map(Row::Lobby));
+            rows.push(Row::LogOut);
+        } else {
+            rows.extend([Row::User, Row::Password, Row::LogIn, Row::Register]);
+        }
+        rows.extend([Row::Name, Row::Port, Row::HostDirect, Row::Address, Row::JoinDirect]);
+        rows
+    }
+
+    pub fn row(&self) -> Row {
+        let rows = self.rows();
+        rows[self.cursor.min(rows.len() - 1)]
+    }
+
+    pub fn select(&mut self, row: Row) {
+        if let Some(i) = self.rows().iter().position(|r| *r == row) {
+            self.cursor = i;
+        }
+    }
+
+    /// Asks the server for its lobbies (in the background).
+    pub fn refresh(&mut self, server: &str) {
+        if self.rooms_request.is_some() {
+            return;
+        }
+        self.last_refresh = Some(Instant::now());
+        let (tx, rx) = mpsc::channel();
+        let server = server.to_string();
+        std::thread::spawn(move || {
+            let result = online::call(&server, online::Request::ListRooms).and_then(|r| match r {
+                online::Reply::Rooms(rooms) => Ok(rooms),
+                _ => Err("odd reply from the server".into()),
+            });
+            let _ = tx.send(result);
+        });
+        self.rooms_request = Some(rx);
+    }
+
+    /// Sends an account request (log in, register, log out, check a session) in the background.
+    pub fn account_call(&mut self, server: &str, request: online::Request) {
+        let (tx, rx) = mpsc::channel();
+        let server = server.to_string();
+        std::thread::spawn(move || {
+            let _ = tx.send(online::call(&server, request));
+        });
+        self.account_request = Some(rx);
+    }
+}
+
+/// Creates or joins a lobby on the online server; the connection then becomes the room's.
+pub fn start_online(server: String, request: online::Request, name: String) -> Connecting {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = (|| match online::exchange(&server, request)? {
+            (online::Reply::Joined { title, host_token, .. }, reader) => {
+                let client = Client::over(reader, &name, host_token)?;
+                Ok(Session::new(client, None, format!("online: {title}")))
+            }
+            (online::Reply::Error(e), _) => Err(e),
+            _ => Err("odd reply from the server".to_string()),
+        })();
+        let _ = tx.send(result);
+    });
+    rx
+}
+
+/// Text shown for the server in the menu, without the default port.
+fn server_label(server: &str) -> &str {
+    server.strip_suffix(&format!(":{}", online::DEFAULT_PORT)).unwrap_or(server)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &str, server: &str, status: &str, busy: bool) {
     let w = c.width;
     crate::settings::tab_bar(c, 2, "");
-    let col = (w - 48.0).min(520.0);
-    let x0 = (w - col) / 2.0;
-    let rows: [(&str, String, bool); MENU_ROWS] = [
-        ("Your name", name.to_string(), true),
-        ("Host on port", port.to_string(), true),
-        ("HOST A GAME", String::new(), false),
-        ("Join address", if address.is_empty() { "ip or ip:port".into() } else { address.to_string() }, true),
-        ("JOIN GAME", String::new(), false),
-    ];
-    let mut y = 80.0;
-    for (i, (label, value, editable)) in rows.iter().enumerate() {
-        if i == ROW_ADDRESS {
-            y += 18.0;
-        }
-        let sel = i == menu.cursor;
+    let gap = 20.0;
+    let col = ((w - 48.0 - gap) / 2.0).min(380.0);
+    let left = w / 2.0 - gap / 2.0 - col;
+    let right = w / 2.0 + gap / 2.0;
+    let rows = menu.rows();
+    let cursor = menu.cursor.min(rows.len() - 1);
+
+    // One row: a text field (label left, value right) or an action (centred).
+    let row = |c: &mut Canvas, i: usize, x: f32, y: f32, h: f32, label: &str, value: Option<(&str, bool)>| {
+        let sel = i == cursor;
         let (bg, border) = if sel { (0x34344a, 0xEB452C) } else { (0x1d1d27, 0x2a2a38) };
-        let bg = if !sel && c.hovered(x0, y, col, 30.0) { 0x262634 } else { bg };
-        c.round_rect(x0, y, col, 30.0, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
-        c.hit(x0, y, col, 30.0, Hit::MpRow(i));
-        if *editable {
-            c.text(x0 + 14.0, y + 11.0, 9.0, rgba(0x9a9ab0, 1.0), label);
-            let shown = if sel { format!("{value}_") } else { value.clone() };
-            let col_v = if i == ROW_ADDRESS && address.is_empty() && !sel { 0x55556a } else { 0xffffff };
-            c.text_right(x0 + col - 14.0, y + 11.0, 9.0, rgba(col_v, 1.0), &shown);
-        } else {
-            c.text_centered(x0 + col / 2.0, y + 10.0, 11.0, rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
+        let bg = if !sel && c.hovered(x, y, col, h) { 0x262634 } else { bg };
+        c.round_rect(x, y, col, h, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
+        c.hit(x, y, col, h, Hit::MpRow(i));
+        match value {
+            Some((v, placeholder)) => {
+                c.text(x + 14.0, y + h / 2.0 - 4.5, 9.0, rgba(0x9a9ab0, 1.0), label);
+                let shown = if sel { format!("{v}_") } else { v.to_string() };
+                let colour = if placeholder && !sel { 0x55556a } else { 0xffffff };
+                c.text_right(x + col - 14.0, y + h / 2.0 - 4.5, 9.0, rgba(colour, 1.0), &shown);
+            }
+            None => c.text_centered(x + col / 2.0, y + h / 2.0 - 5.5, 11.0, rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0), label),
+        }
+    };
+
+    // Online.
+    c.text(left, 62.0, 9.0, rgba(0xEB452C, 1.0), "ONLINE");
+    let (state, colour) = match &menu.online {
+        Some(Ok(())) => ("online", 0x86E05A),
+        Some(Err(_)) => ("offline", 0xFF4B4B),
+        None => ("connecting...", 0x8a8aa0),
+    };
+    c.text_right(left + col, 62.0, 8.0, rgba(colour, 1.0), &format!("{}  {state}", server_label(server)));
+    let mut y = 80.0;
+    let lobby_rows: Vec<(usize, usize)> = rows.iter().enumerate().filter_map(|(i, r)| if let Row::Lobby(k) = r { Some((i, *k)) } else { None }).collect();
+    // The visible window of lobbies follows the cursor.
+    let first = lobby_rows.iter().position(|(i, _)| *i == cursor).map(|p| p.saturating_sub(LOBBY_ROWS - 1)).unwrap_or(0);
+    for (i, r) in rows.iter().enumerate() {
+        match *r {
+            Row::User => {
+                row(c, i, left, y, 30.0, "Username", Some(if menu.user.is_empty() { (online::NAME_RULES, true) } else { (&menu.user, false) }));
+                y += 38.0;
+            }
+            Row::Password => {
+                let stars = "*".repeat(menu.password.chars().count());
+                row(c, i, left, y, 30.0, "Password", Some((&stars, false)));
+                y += 38.0;
+            }
+            Row::LogIn => {
+                row(c, i, left, y, 30.0, "LOG IN", None);
+                y += 38.0;
+            }
+            Row::Register => {
+                row(c, i, left, y, 30.0, "CREATE ACCOUNT", None);
+                y += 38.0;
+                c.text_centered(left + col / 2.0, y + 4.0, 7.0, rgba(0x6f6f86, 1.0), "An account is only needed for online lobbies.");
+                c.text_centered(left + col / 2.0, y + 18.0, 7.0, rgba(0x6f6f86, 1.0), "Direct play on the right works without one.");
+            }
+            Row::HostOnline => {
+                let who = menu.account.as_deref().unwrap_or("");
+                c.text(left, y - 2.0, 8.0, rgba(0x9a9ab0, 1.0), &format!("logged in as {who}"));
+                y += 12.0;
+                row(c, i, left, y, 30.0, "HOST AN ONLINE LOBBY", None);
+                y += 42.0;
+                c.text(left, y, 8.0, rgba(0xEB452C, 1.0), &format!("LOBBIES ({})", menu.rooms.len()));
+                y += 14.0;
+                if menu.rooms.is_empty() {
+                    let msg = match &menu.online {
+                        Some(Err(e)) => format!("server unreachable ({e}): use direct play"),
+                        _ => "nobody is hosting right now".into(),
+                    };
+                    c.text(left + 4.0, y + 4.0, 7.0, rgba(0x6f6f86, 1.0), &msg);
+                    y += 22.0;
+                }
+            }
+            Row::Lobby(k) => {
+                let shown = lobby_rows.iter().position(|(j, _)| *j == i).is_some_and(|p| p >= first && p < first + LOBBY_ROWS);
+                if !shown {
+                    continue;
+                }
+                let Some(r) = menu.rooms.get(k) else { continue };
+                let sel = i == cursor;
+                let (bg, border) = if sel { (0x34344a, 0xEB452C) } else { (0x1d1d27, 0x2a2a38) };
+                let bg = if !sel && c.hovered(left, y, col, 32.0) { 0x262634 } else { bg };
+                c.round_rect(left, y, col, 32.0, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
+                c.hit(left, y, col, 32.0, Hit::MpRow(i));
+                c.text(left + 12.0, y + 6.0, 9.0, rgba(0xffffff, 1.0), &r.title);
+                let players = format!("{} player{}", r.players, if r.players == 1 { "" } else { "s" });
+                c.text_right(left + col - 12.0, y + 6.0, 8.0, rgba(if r.in_match { 0x438EAD } else { 0x86E05A }, 1.0), if r.in_match { "in a match" } else { "in the lobby" });
+                let mut info = format!("host {}   {players}", r.host);
+                if let Some(m) = &r.map {
+                    info.push_str("   ");
+                    info.push_str(m);
+                }
+                let info: String = info.chars().take(((col - 24.0) / 4.6) as usize).collect();
+                c.text(left + 12.0, y + 20.0, 6.5, rgba(0x8a8aa0, 1.0), &info);
+                y += 36.0;
+            }
+            Row::LogOut => {
+                if lobby_rows.len() > LOBBY_ROWS {
+                    c.text_centered(left + col / 2.0, y, 7.0, rgba(0x6f6f86, 1.0), &format!("{} more (Up/Down)", lobby_rows.len() - LOBBY_ROWS));
+                    y += 12.0;
+                }
+                y += 4.0;
+                row(c, i, left, y, 24.0, "LOG OUT", None);
+            }
+            _ => {}
+        }
+    }
+
+    // Direct play.
+    c.text(right, 62.0, 9.0, rgba(0xEB452C, 1.0), "DIRECT (P2P)");
+    c.text_right(right + col, 62.0, 8.0, rgba(0x6f6f86, 1.0), "no account or server needed");
+    let mut y = 80.0;
+    for (i, r) in rows.iter().enumerate() {
+        match *r {
+            Row::Name => row(c, i, right, y, 30.0, "Your name", Some((name, false))),
+            Row::Port => row(c, i, right, y, 30.0, "Host on port", Some((&port.to_string(), false))),
+            Row::HostDirect => row(c, i, right, y, 30.0, "HOST A GAME", None),
+            Row::Address => {
+                y += 10.0;
+                row(c, i, right, y, 30.0, "Join address", Some(if address.is_empty() { ("ip or ip:port", true) } else { (address, false) }));
+            }
+            Row::JoinDirect => row(c, i, right, y, 30.0, "JOIN GAME", None),
+            _ => continue,
         }
         y += 38.0;
     }
+    c.text_centered(right + col / 2.0, y + 4.0, 7.0, rgba(0x6f6f86, 1.0), "Hosting: friends join with your public IP and");
+    c.text_centered(right + col / 2.0, y + 16.0, 7.0, rgba(0x6f6f86, 1.0), "this port (it must be reachable).");
+
     let msg = if busy { "connecting..." } else { status };
-    c.text_centered(w / 2.0, y + 16.0, 9.0, rgba(0xFFD34D, 1.0), msg);
-    c.text_centered(w / 2.0, 430.0, 8.0, rgba(0x8a8aa0, 1.0), "Hosting: friends join with your public IP and this port (it must be reachable).");
-    c.text_centered(w / 2.0, 446.0, 8.0, rgba(0x8a8aa0, 1.0), "Everyone needs the same map in their Songs folder.");
-    c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), "Up/Down select   type to edit   Enter host/join   Tab or Esc back");
+    c.text_centered(w / 2.0, 432.0, 9.0, rgba(0xFFD34D, 1.0), msg);
+    c.text_centered(w / 2.0, 450.0, 8.0, rgba(0x8a8aa0, 1.0), "Everyone needs the same map in their Songs folder (or gets it from the host).");
+    c.text_centered(w / 2.0, 464.0, 8.0, rgba(0x55556a, 1.0), "Up/Down select   Left/Right column   type to edit   Enter   F5 refresh   Tab or Esc back");
 }
 
 // ---------------------------------------------------------------------------------------------
