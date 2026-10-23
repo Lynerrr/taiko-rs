@@ -21,9 +21,9 @@ const SPEED_SCALE: f64 = 0.7;
 /// Second key of a big note must land within this window of the first.
 const STRONG_WINDOW: f64 = 30.0;
 const HIT_ANIM_MS: f64 = 160.0;
-/// The combo break plays this much louder than a hitsound (about +9.5 dB): over the music it
-/// should be impossible to miss.
-const COMBO_BREAK_GAIN: f32 = 3.0;
+/// The combo break plays a little louder than a hitsound (about +1.6 dB): noticeable over the
+/// music without being jarring.
+const COMBO_BREAK_GAIN: f32 = 1.2;
 
 const DON: u32 = 0xEB452C;
 const KAT: u32 = 0x438EAD;
@@ -509,15 +509,23 @@ impl Game {
         self.first_note - self.time > 3000.0
     }
 
-    pub fn skip(&mut self, audio: Option<&Engine>, offset: f64) {
-        if self.can_skip() {
-            let target = (self.first_note - 2000.0) / self.rate + offset;
+    /// Skips the intro; true when it did.
+    pub fn skip(&mut self, audio: Option<&Engine>, offset: f64) -> bool {
+        let skipped = self.can_skip();
+        if skipped {
+            let target = self.skip_target() / self.rate + offset;
             if let Some(a) = audio {
                 a.seek(target);
             }
             self.clock = GameClock::new(target, audio.is_some());
             self.ignore_audio_until = Some(Instant::now() + std::time::Duration::from_millis(80));
         }
+        skipped
+    }
+
+    /// Map time skipping the intro jumps to (just before the first note).
+    pub fn skip_target(&self) -> f64 {
+        self.first_note - 2000.0
     }
 
     pub fn progress(&self) -> f64 {

@@ -107,6 +107,25 @@ struct SpectateView {
     focus: Option<usize>,
     /// Presses that arrived before the games existed.
     pending: std::collections::HashMap<u32, (Vec<(f64, u8)>, bool)>,
+    /// Players who skipped the intro; once all have, so does the view.
+    skipped: std::collections::HashSet<u32>,
+    skip_done: bool,
+}
+
+impl SpectateView {
+    /// When every player has skipped the intro, skips it too, staying `SPECTATE_DELAY` behind.
+    fn follow_skip(&mut self, audio: Option<&audio::Engine>, offset: f64) {
+        if self.skip_done || self.games.is_empty() || !self.players.iter().all(|(id, _)| self.skipped.contains(id)) {
+            return;
+        }
+        self.skip_done = true;
+        let target = self.games[0].1.skip_target() - SPECTATE_DELAY.as_secs_f64() * 1000.0 * self.rate;
+        if self.games[0].1.time < target {
+            for (_, g) in &mut self.games {
+                g.seek(target, audio, offset);
+            }
+        }
+    }
 }
 
 struct Toast {
@@ -456,10 +475,23 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
     c.text(104.0, 22.0, 10.0, rgba(0xffffff, 1.0), &title);
 }
 
+/// How a map is named to other players (lobby map, a solo play friends watch).
+fn map_info(e: &Entry, rate: f64) -> net::MapInfo {
+    net::MapInfo {
+        hash: e.hash(),
+        artist: e.meta.artist.clone(),
+        title: e.meta.title.clone(),
+        version: e.meta.version.clone(),
+        rate,
+        from: None,
+        set_id: e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)),
+    }
+}
+
+/// The library entry for a map someone else named: the file's content hash identifies it (the
+/// title can differ, e.g. romanised on one side and Cyrillic on the other).
 fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
-    library
-        .iter()
-        .position(|e| e.meta.version == m.version && e.meta.title == m.title && e.meta.artist == m.artist && e.hash() == m.hash)
+    library.iter().position(|e| e.meta.version == m.version && e.hash() == m.hash)
 }
 
 /// A character typed into a playfield size: a digit, or `x` between width and height.
@@ -487,6 +519,10 @@ impl State {
 
     /// The present mode this frame should use.
     fn wanted_present(&self) -> PresentChoice {
+        // Watching someone else play needs no low input latency: always vsync (smoothest).
+        if matches!(self.scene, Scene::Spectate(_)) {
+            return PresentChoice::Fifo;
+        }
         if self.cfg.menu_vsync && !self.in_song() { PresentChoice::Fifo } else { self.cfg.present }
     }
 
@@ -2168,16 +2204,7 @@ impl State {
 
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
-        let e = &self.library[entry];
-        let info = net::MapInfo {
-            hash: e.hash(),
-            artist: e.meta.artist.clone(),
-            title: e.meta.title.clone(),
-            version: e.meta.version.clone(),
-            rate: self.cfg.rate,
-            from: None,
-            set_id: e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)),
-        };
+        let info = map_info(&self.library[entry], self.cfg.rate);
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
@@ -2303,7 +2330,13 @@ impl State {
             }
             Scene::MpPlay { game, quit_armed } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
-                KeyCode::Space => game.skip(self.audio.as_ref(), self.cfg.offset_ms),
+                KeyCode::Space => {
+                    if game.skip(self.audio.as_ref(), self.cfg.offset_ms) {
+                        if let Some(s) = &self.mp {
+                            s.client.send(net::ClientMsg::Skipped);
+                        }
+                    }
+                }
                 KeyCode::Escape => {
                     // No pausing in a match; a second Esc forfeits.
                     if quit_armed.is_some_and(|t| t.elapsed() < Duration::from_millis(1500)) {
@@ -2417,11 +2450,11 @@ impl State {
             }
             _ => {
                 let Some(text) = text else { return };
-                for ch in text.chars().filter(|c| c.is_ascii_graphic() || *c == ' ') {
+                for ch in text.chars().filter(|c| net::drawable_char(*c)) {
                     match row {
                         Row::User if self.mp_menu.user.len() < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') => self.mp_menu.user.push(ch),
-                        Row::Password if self.mp_menu.password.len() < 128 => self.mp_menu.password.push(ch),
-                        Row::Name if self.cfg.mp_name.len() < 20 => self.cfg.mp_name.push(ch),
+                        Row::Password if self.mp_menu.password.chars().count() < 128 => self.mp_menu.password.push(ch),
+                        Row::Name if self.cfg.mp_name.chars().count() < 20 => self.cfg.mp_name.push(ch),
                         Row::Port => {
                             if let Some(d) = ch.to_digit(10) {
                                 let p = self.cfg.mp_port as u32 * 10 + d;
@@ -2561,6 +2594,11 @@ impl State {
         });
         self.osudb_rx = Some(rx);
         self.select.refilter(&self.library);
+        // Start on a random song rather than the first one every time (not before a map given on
+        // the command line, nor in scripted runs, whose screenshots expect the first song).
+        if !self.play_when_scanned && self.input_script.is_none() && self.shots.is_none() {
+            self.select.random(&self.library);
+        }
         // Tests: TAIKO_OPEN_VIDEO=<replay file> opens the video editor for it.
         if let Some(file) = std::env::var_os("TAIKO_OPEN_VIDEO") {
             self.open_video_editor(std::path::Path::new(&file));
@@ -2758,12 +2796,20 @@ impl State {
                             games: Vec::new(),
                             focus: Some(0),
                             pending: std::collections::HashMap::new(),
+                            skipped: std::collections::HashSet::new(),
+                            skip_done: false,
                         }));
                     }
                     None => {
                         s.client.send(net::ClientMsg::Spectate(false));
                         self.toast("you need the map to spectate".into());
                     }
+                }
+            }
+            ServerMsg::Skipped { from } => {
+                if let Scene::Spectate(v) = &mut self.scene {
+                    v.skipped.insert(from);
+                    v.follow_skip(self.audio.as_ref(), self.cfg.offset_ms);
                 }
             }
             ServerMsg::Inputs { from, inputs, anti_mash } => {
@@ -2802,6 +2848,15 @@ impl State {
                     self.stop_audio();
                     self.mp_status = why;
                     self.scene = Scene::MpMenu;
+                }
+            }
+            ServerMsg::Chat { from, text } => {
+                if let Some(s) = &mut self.mp {
+                    s.chat.push((from, text));
+                    if s.chat.len() > 200 {
+                        s.chat.remove(0);
+                    }
+                    s.chat_unread += 1;
                 }
             }
             ServerMsg::Welcome { .. } | ServerMsg::Pong { .. } => {}
@@ -3006,7 +3061,9 @@ impl State {
             Scene::Play { game, entry, from } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
-                KeyCode::Space => game.skip(self.audio.as_ref(), self.cfg.offset_ms),
+                KeyCode::Space => {
+                    game.skip(self.audio.as_ref(), self.cfg.offset_ms);
+                }
                 KeyCode::Backquote => {
                     let (e, f) = (*entry, *from);
                     self.start_loading_from(e, f);
@@ -3530,6 +3587,8 @@ impl State {
                             g.banner = Some(format!("SPECTATING  -  {name}  ({}/{})", k + 1, v.players.len()));
                             v.games.push((*id, Box::new(g)));
                         }
+                        // Players may have skipped the intro before the view was ready.
+                        v.follow_skip(self.audio.as_ref(), self.cfg.offset_ms);
                     }
                 }
                 if v.games.is_empty() {

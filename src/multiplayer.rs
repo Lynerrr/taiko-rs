@@ -27,6 +27,9 @@ pub struct Session {
     pub map_entry: Option<usize>,
     /// Presses of the current match already sent to the room.
     pub inputs_sent: usize,
+    /// Lobby chat: (name, line), oldest first; and lines not seen yet.
+    pub chat: Vec<(String, String)>,
+    pub chat_unread: usize,
 }
 
 impl Session {
@@ -45,6 +48,8 @@ impl Session {
             have_map: false,
             map_entry: None,
             inputs_sent: 0,
+            chat: Vec::new(),
+            chat_unread: 0,
         }
     }
 

@@ -135,7 +135,9 @@ playhead marked, densest second called out). Click or drag on it, use the wheel 
 Ctrl+←/→ to seek the music and autoplay to any part of the map. Wherever you last scrolled to is
 remembered (a blue flag): **Play from 1:23** under the timeline (or Shift+Enter) starts the map there,
 with the music two seconds earlier and only the notes from that point on counting; retry keeps the
-start point. F2 picks a random song.
+start point. F2 picks a random song; the game also starts on a random one. Text is drawn with a
+built-in pixel font covering ASCII and Cyrillic, so Russian song titles (from `TitleUnicode` /
+`ArtistUnicode`), names, search and chat show as they are.
 
 **Local scores and replays:** every finished play (not autoplay or a play from a start point) is
 saved as a replay in `replays/` in the config folder. The results screen tells you where it
@@ -302,6 +304,7 @@ already running, anyone in the lobby who has the map can press **Spectate (S)** 
 match's log, so a spectator joining late catches up; the spectator plays the map 1.5 s behind
 live with every player's presses fed in (judged with that player's mash setting). Left/Right
 switches between players, A shows everyone stacked with their scores, Esc goes back to the lobby.
+When the players skip the intro, the spectator skips it too. Spectating always uses vsync.
 
 ### Running the online server
 

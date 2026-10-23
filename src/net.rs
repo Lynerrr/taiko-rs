@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 7;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Countdown between everyone having loaded and the song starting.
 const START_LEAD_MS: f64 = 3000.0;
@@ -146,6 +146,10 @@ pub enum ClientMsg {
     Spectator(bool),
     /// Host: hand the host role (picking maps, starting) to another player.
     GiveHost(u32),
+    /// During a match: skipped the intro (to just before the first note).
+    Skipped,
+    /// A line of lobby chat.
+    Chat(String),
 }
 
 /// A piece of a map set archive sent from the host's Songs folder. `data` is base64; the
@@ -180,6 +184,10 @@ pub enum ServerMsg {
     Spectate { map: MapInfo, at: f64, players: Vec<(u32, String)> },
     /// A player's presses, to spectators.
     Inputs { from: u32, inputs: Vec<(f64, u8)>, anti_mash: bool },
+    /// A player skipped the intro, to spectators.
+    Skipped { from: u32 },
+    /// Lobby chat (also the recent lines, to someone who just joined).
+    Chat { from: String, text: String },
     /// Synthesised locally when the connection drops.
     Disconnected(String),
 }
@@ -190,9 +198,20 @@ fn send_line<T: Serialize>(w: &mut TcpStream, msg: &T) -> std::io::Result<()> {
     w.write_all(line.as_bytes())
 }
 
-/// Keeps printable ASCII (all the built-in font can draw) and caps the length.
+/// Printable ASCII and Cyrillic: what the built-in font draws.
+pub fn drawable_char(c: char) -> bool {
+    c.is_ascii_graphic() || c == ' ' || matches!(c, 'А'..='я' | 'Ё' | 'ё')
+}
+
+/// A chat line: what the font draws, at most 200 characters, trimmed.
+pub fn clean_chat(text: &str) -> String {
+    let t: String = text.chars().filter(|c| drawable_char(*c)).take(200).collect();
+    t.trim().to_string()
+}
+
+/// Keeps what the built-in font can draw and caps the length.
 fn clean_name(name: &str) -> String {
-    let n: String = name.chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(20).collect();
+    let n: String = name.chars().filter(|c| drawable_char(*c)).take(20).collect();
     let n = n.trim().to_string();
     if n.is_empty() { "player".into() } else { n }
 }
@@ -401,6 +420,10 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
     let mut match_map: Option<MapInfo> = None;
     let mut start_at: Option<f64> = None;
     let mut match_inputs: std::collections::HashMap<u32, (Vec<(f64, u8)>, bool)> = std::collections::HashMap::new();
+    let mut match_skips: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // Recent lobby chat (name, line) for whoever joins, and each player's last lines (flood limit).
+    let mut chat: std::collections::VecDeque<(String, String)> = std::collections::VecDeque::new();
+    let mut chat_times: std::collections::HashMap<u32, std::collections::VecDeque<Instant>> = std::collections::HashMap::new();
 
     while !stop.load(Ordering::Relaxed) {
         match rx.recv_timeout(Duration::from_millis(50)) {
@@ -427,6 +450,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
             }
             Ok(Event::Left(id)) => {
                 players.retain(|p| p.info.id != id);
+                chat_times.remove(&id);
                 // A handed-over host leaving gives it back to the room's owner (or anyone left).
                 if host_id == Some(id) {
                     host_id = owner_id.filter(|o| players.iter().any(|p| p.info.id == *o)).or_else(|| players.iter().find(|p| p.hello).map(|p| p.info.id));
@@ -478,6 +502,33 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         }
                         continue;
                     }
+                    ClientMsg::Skipped => {
+                        if players.iter().any(|p| p.info.id == id && p.in_match) && match_skips.insert(id) {
+                            for s in players.iter().filter(|p| p.spectating) {
+                                let _ = s.tx.send(ServerMsg::Skipped { from: id });
+                            }
+                        }
+                        continue;
+                    }
+                    ClientMsg::Chat(text) => {
+                        let text = clean_chat(&text);
+                        let Some(name) = players.iter().find(|p| p.info.id == id && p.hello).map(|p| p.info.name.clone()) else { continue };
+                        // At most 5 lines per 3 s each.
+                        let times = chat_times.entry(id).or_default();
+                        times.retain(|t| t.elapsed() < Duration::from_secs(3));
+                        if text.is_empty() || times.len() >= 5 {
+                            continue;
+                        }
+                        times.push_back(Instant::now());
+                        chat.push_back((name.clone(), text.clone()));
+                        if chat.len() > 30 {
+                            chat.pop_front();
+                        }
+                        for p in players.iter().filter(|p| p.hello) {
+                            let _ = p.tx.send(ServerMsg::Chat { from: name.clone(), text: text.clone() });
+                        }
+                        continue;
+                    }
                     ClientMsg::Spectate(on) => {
                         let roster: Vec<(u32, String)> = players.iter().filter(|p| p.in_match).map(|p| (p.info.id, p.info.name.clone())).collect();
                         let Some(p) = players.iter_mut().find(|p| p.info.id == id) else { continue };
@@ -488,6 +539,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                             // Everything played so far, so a late spectator catches up.
                             for (&from, (inputs, anti_mash)) in &match_inputs {
                                 let _ = p.tx.send(ServerMsg::Inputs { from, inputs: inputs.clone(), anti_mash: *anti_mash });
+                            }
+                            for &from in &match_skips {
+                                let _ = p.tx.send(ServerMsg::Skipped { from });
                             }
                         }
                         continue;
@@ -512,6 +566,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         p.info.name = p.forced_name.clone().unwrap_or_else(|| clean_name(&name));
                         p.hello = true;
                         let _ = p.tx.send(ServerMsg::Welcome { id });
+                        for (from, text) in &chat {
+                            let _ = p.tx.send(ServerMsg::Chat { from: from.clone(), text: text.clone() });
+                        }
                         dirty = true;
                     }
                     ClientMsg::Ping { t } => {
@@ -594,6 +651,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                 start_at = Some(at);
                 match_map = map.clone();
                 match_inputs.clear();
+                match_skips.clear();
                 let mut started = false;
                 for p in players.iter_mut().filter(|p| p.in_match) {
                     if p.loaded == Some(true) {

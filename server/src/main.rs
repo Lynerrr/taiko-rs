@@ -13,17 +13,17 @@ mod net;
 #[path = "../../src/online.rs"]
 mod online;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, Read};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
-use online::{Envelope, Reply, Request, RoomInfo};
+use online::{Activity, ChatLine, Down, Envelope, Friend, Reply, Request, RoomInfo, SoloPlay, Up};
 use serde::{Deserialize, Serialize};
 
 /// Sessions last this long without logging in again.
@@ -40,6 +40,66 @@ struct User {
     name: String,
     hash: String,
     created: u64,
+    /// Friends and incoming friend requests (lowercased names).
+    #[serde(default)]
+    friends: Vec<String>,
+    #[serde(default)]
+    requests: Vec<String>,
+}
+
+const MAX_FRIENDS: usize = 200;
+/// Chat lines kept per pair of friends (in memory only).
+const CHAT_HISTORY: usize = 100;
+
+/// One open social connection (a player can have several, e.g. two PCs).
+struct Conn {
+    id: u64,
+    tx: mpsc::Sender<Down>,
+    activity: Activity,
+    /// Whose solo play this connection watches (lowercased name).
+    watching: Option<String>,
+    chat_times: VecDeque<Instant>,
+}
+
+/// A solo play being streamed to friends.
+struct Play {
+    play: SoloPlay,
+    inputs: Vec<(f64, u8)>,
+    t: f64,
+    paused: bool,
+    /// The connection streaming it.
+    conn: u64,
+}
+
+#[derive(Default)]
+struct Hub {
+    conns: HashMap<String, Vec<Conn>>,
+    plays: HashMap<String, Play>,
+    /// By (a, b) with a < b.
+    history: HashMap<(String, String), VecDeque<ChatLine>>,
+    next_conn: u64,
+}
+
+impl Hub {
+    fn send_to(&self, key: &str, d: &Down) {
+        for c in self.conns.get(key).into_iter().flatten() {
+            let _ = c.tx.send(d.clone());
+        }
+    }
+
+    fn send_to_watchers(&self, key: &str, d: &Down) {
+        for c in self.conns.values().flatten().filter(|c| c.watching.as_deref() == Some(key)) {
+            let _ = c.tx.send(d.clone());
+        }
+    }
+
+    fn conn(&mut self, key: &str, id: u64) -> Option<&mut Conn> {
+        self.conns.get_mut(key)?.iter_mut().find(|c| c.id == id)
+    }
+}
+
+fn pair(a: &str, b: &str) -> (String, String) {
+    if a < b { (a.to_string(), b.to_string()) } else { (b.to_string(), a.to_string()) }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -77,6 +137,7 @@ struct State {
     limits: Mutex<HashMap<IpAddr, Limits>>,
     /// Verified against when the name doesn't exist, so a login takes as long either way.
     dummy_hash: String,
+    hub: Mutex<Hub>,
 }
 
 fn now_secs() -> u64 {
@@ -115,6 +176,7 @@ impl State {
             next_room: AtomicU32::new(1),
             limits: Mutex::new(HashMap::new()),
             dummy_hash: hash_password("not a real password").expect("argon2"),
+            hub: Mutex::new(Hub::default()),
         }
     }
 
@@ -224,6 +286,12 @@ fn handle(state: &State, stream: TcpStream) {
             lobbies.insert(id, Lobby { room, title, owner: name, empty_since: Some(Instant::now()) });
             return;
         }
+        Request::Connect { token } => {
+            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
+            reply(&mut reader, Reply::Account { name: name.clone(), token });
+            social_session(state, reader, name);
+            return;
+        }
         Request::JoinRoom { token, room } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to join a lobby".into())) };
             let lobbies = state.lobbies.lock().unwrap();
@@ -258,7 +326,7 @@ fn register(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     if a.users.contains_key(&key) {
         return Reply::Error("that name is taken".into());
     }
-    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs() });
+    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new() });
     let token = state.new_session(&mut a, &key);
     state.save(&a);
     drop(a);
@@ -283,6 +351,258 @@ fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     let token = state.new_session(&mut a, &key);
     state.save(&a);
     Reply::Account { name: user.name, token }
+}
+
+impl State {
+    fn display_name(&self, key: &str) -> String {
+        self.accounts.lock().unwrap().users.get(key).map(|u| u.name.clone()).unwrap_or_else(|| key.to_string())
+    }
+
+    fn are_friends(&self, a: &str, b: &str) -> bool {
+        self.accounts.lock().unwrap().users.get(a).is_some_and(|u| u.friends.iter().any(|f| f == b))
+    }
+
+    fn friend_keys(&self, key: &str) -> Vec<String> {
+        self.accounts.lock().unwrap().users.get(key).map(|u| u.friends.clone()).unwrap_or_default()
+    }
+
+    /// The friend list as `key` sees it: friends with what they're doing, requests both ways.
+    fn friends_view(&self, key: &str) -> Down {
+        let (friends, requests, sent) = {
+            let a = self.accounts.lock().unwrap();
+            let Some(u) = a.users.get(key) else { return Down::Friends { friends: Vec::new(), requests: Vec::new(), sent: Vec::new() } };
+            let name = |k: &String| a.users.get(k).map(|u| u.name.clone()).unwrap_or_else(|| k.clone());
+            let friends: Vec<(String, String)> = u.friends.iter().map(|k| (k.clone(), name(k))).collect();
+            let requests = u.requests.iter().map(name).collect();
+            let sent = a.users.iter().filter(|(_, o)| o.requests.iter().any(|r| r == key)).map(|(_, o)| o.name.clone()).collect();
+            (friends, requests, sent)
+        };
+        let hub = self.hub.lock().unwrap();
+        let mut friends: Vec<Friend> = friends
+            .into_iter()
+            .map(|(k, name)| Friend { name, activity: hub.conns.get(&k).and_then(|v| v.last()).map(|c| c.activity.clone()) })
+            .collect();
+        friends.sort_by_key(|f| (f.activity.is_none(), f.name.to_lowercase()));
+        Down::Friends { friends, requests, sent }
+    }
+
+    fn push_friends(&self, key: &str) {
+        let view = self.friends_view(key);
+        self.hub.lock().unwrap().send_to(key, &view);
+    }
+
+    /// Everyone who has `key` as a friend sees their new state.
+    fn tell_friends(&self, key: &str) {
+        for f in self.friend_keys(key) {
+            self.push_friends(&f);
+        }
+    }
+
+    fn notice(&self, key: &str, text: String) {
+        self.hub.lock().unwrap().send_to(key, &Down::Notice(text));
+    }
+}
+
+/// A player's social connection: friend list, chat, watching and streaming solo plays.
+fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String) {
+    let key = name.to_ascii_lowercase();
+    let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(90)));
+    let Ok(mut writer) = reader.get_ref().try_clone() else { return };
+    let (tx, rx) = mpsc::channel::<Down>();
+    std::thread::spawn(move || {
+        for d in rx {
+            if online::write_line(&mut writer, &d).is_err() {
+                break;
+            }
+        }
+        let _ = writer.shutdown(std::net::Shutdown::Both);
+    });
+    let id = {
+        let mut hub = state.hub.lock().unwrap();
+        hub.next_conn += 1;
+        let id = hub.next_conn;
+        hub.conns.entry(key.clone()).or_default().push(Conn { id, tx: tx.clone(), activity: Activity::Menus, watching: None, chat_times: VecDeque::new() });
+        id
+    };
+    state.push_friends(&key);
+    {
+        let friends = state.friend_keys(&key);
+        let hub = state.hub.lock().unwrap();
+        for f in friends {
+            for line in hub.history.get(&pair(&key, &f)).into_iter().flatten() {
+                let _ = tx.send(Down::Chat(line.clone()));
+            }
+        }
+    }
+    state.tell_friends(&key);
+    while let Ok(line) = online::read_line(&mut reader) {
+        let Ok(up) = serde_json::from_str::<Up>(&line) else { continue };
+        social_up(state, &key, &name, id, &tx, up);
+    }
+    {
+        let mut hub = state.hub.lock().unwrap();
+        if let Some(v) = hub.conns.get_mut(&key) {
+            v.retain(|c| c.id != id);
+            if v.is_empty() {
+                hub.conns.remove(&key);
+            }
+        }
+        if hub.plays.get(&key).is_some_and(|p| p.conn == id) {
+            hub.plays.remove(&key);
+            hub.send_to_watchers(&key, &Down::WatchEnd { player: name.clone() });
+        }
+    }
+    state.tell_friends(&key);
+}
+
+fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Down>, up: Up) {
+    match up {
+        Up::Ping => {
+            let _ = tx.send(Down::Pong);
+        }
+        Up::Status(activity) => {
+            if let Some(c) = state.hub.lock().unwrap().conn(key, id) {
+                c.activity = activity;
+            }
+            state.tell_friends(key);
+        }
+        Up::AddFriend(other) => {
+            let other = other.trim().to_ascii_lowercase();
+            let outcome = {
+                let mut a = state.accounts.lock().unwrap();
+                if other == key {
+                    Err("that's you".to_string())
+                } else if !a.users.contains_key(&other) {
+                    Err(format!("there's no player named {other}"))
+                } else if a.users[key].friends.contains(&other) {
+                    Err(format!("{} is already your friend", a.users[&other].name))
+                } else if a.users[key].friends.len() >= MAX_FRIENDS {
+                    Err("your friend list is full".to_string())
+                } else if a.users[key].requests.contains(&other) {
+                    // They asked first: now friends.
+                    let me = a.users.get_mut(key).unwrap();
+                    me.requests.retain(|r| *r != other);
+                    me.friends.push(other.clone());
+                    a.users.get_mut(&other).unwrap().friends.push(key.to_string());
+                    state.save(&a);
+                    Ok((true, a.users[&other].name.clone()))
+                } else {
+                    let them = a.users.get_mut(&other).unwrap();
+                    if !them.requests.iter().any(|r| r == key) {
+                        them.requests.push(key.to_string());
+                    }
+                    state.save(&a);
+                    Ok((false, a.users[&other].name.clone()))
+                }
+            };
+            match outcome {
+                Err(e) => state.notice(key, e),
+                Ok((true, other_name)) => {
+                    state.notice(key, format!("you and {other_name} are friends now"));
+                    state.notice(&other, format!("{name} accepted your friend request"));
+                }
+                Ok((false, other_name)) => {
+                    state.notice(key, format!("friend request sent to {other_name}"));
+                    state.notice(&other, format!("{name} wants to be your friend (F9)"));
+                }
+            }
+            state.push_friends(key);
+            state.push_friends(&other);
+        }
+        Up::RemoveFriend(other) => {
+            let other = other.trim().to_ascii_lowercase();
+            {
+                let mut a = state.accounts.lock().unwrap();
+                if let Some(me) = a.users.get_mut(key) {
+                    me.friends.retain(|f| *f != other);
+                    me.requests.retain(|r| *r != other);
+                }
+                if let Some(them) = a.users.get_mut(&other) {
+                    them.friends.retain(|f| f != key);
+                    them.requests.retain(|r| r != key);
+                }
+                state.save(&a);
+            }
+            state.push_friends(key);
+            state.push_friends(&other);
+        }
+        Up::Chat { to, text } => {
+            let to = to.trim().to_ascii_lowercase();
+            if !state.are_friends(key, &to) {
+                return state.notice(key, "you can only message friends".into());
+            }
+            let text = net::clean_chat(&text);
+            if text.is_empty() {
+                return;
+            }
+            let to_name = state.display_name(&to);
+            let mut hub = state.hub.lock().unwrap();
+            if let Some(c) = hub.conn(key, id) {
+                c.chat_times.retain(|t| t.elapsed() < Duration::from_secs(5));
+                if c.chat_times.len() >= 8 {
+                    let _ = c.tx.send(Down::Notice("slow down a little".into()));
+                    return;
+                }
+                c.chat_times.push_back(Instant::now());
+            }
+            let line = ChatLine { from: name.to_string(), to: to_name, text, at: now_secs() };
+            let log = hub.history.entry(pair(key, &to)).or_default();
+            log.push_back(line.clone());
+            if log.len() > CHAT_HISTORY {
+                log.pop_front();
+            }
+            let d = Down::Chat(line);
+            hub.send_to(key, &d);
+            hub.send_to(&to, &d);
+        }
+        Up::Watch(other) => {
+            let other = other.trim().to_ascii_lowercase();
+            if !state.are_friends(key, &other) {
+                let _ = tx.send(Down::WatchStopped("you can only watch friends".into()));
+                return;
+            }
+            let other_name = state.display_name(&other);
+            let mut hub = state.hub.lock().unwrap();
+            if let Some(c) = hub.conn(key, id) {
+                c.watching = Some(other.clone());
+            }
+            match hub.plays.get(&other) {
+                Some(p) => {
+                    let _ = tx.send(Down::WatchStart { player: other_name, play: p.play.clone(), t: p.t, paused: p.paused, inputs: p.inputs.clone() });
+                }
+                None => {
+                    let _ = tx.send(Down::WatchEnd { player: other_name });
+                }
+            }
+        }
+        Up::StopWatching => {
+            if let Some(c) = state.hub.lock().unwrap().conn(key, id) {
+                c.watching = None;
+            }
+        }
+        Up::PlayStart(play) => {
+            let mut hub = state.hub.lock().unwrap();
+            let t = play.map.from.unwrap_or(f64::NEG_INFINITY);
+            let d = Down::WatchStart { player: name.to_string(), play: play.clone(), t, paused: false, inputs: Vec::new() };
+            hub.plays.insert(key.to_string(), Play { play, inputs: Vec::new(), t, paused: false, conn: id });
+            hub.send_to_watchers(key, &d);
+        }
+        Up::PlayFrame { t, paused, inputs } => {
+            let mut hub = state.hub.lock().unwrap();
+            let Some(p) = hub.plays.get_mut(key).filter(|p| p.conn == id) else { return };
+            p.t = t;
+            p.paused = paused;
+            p.inputs.extend_from_slice(&inputs);
+            hub.send_to_watchers(key, &Down::WatchFrame { t, paused, inputs });
+        }
+        Up::PlayEnd => {
+            let mut hub = state.hub.lock().unwrap();
+            if hub.plays.get(key).is_some_and(|p| p.conn == id) {
+                hub.plays.remove(key);
+                hub.send_to_watchers(key, &Down::WatchEnd { player: name.to_string() });
+            }
+        }
+    }
 }
 
 /// Closes lobbies that have been empty for a while.

@@ -33,6 +33,90 @@ pub enum Request {
     /// Opens a lobby on the server and joins it as its host.
     CreateRoom { token: String, title: String },
     JoinRoom { token: String, room: u32 },
+    /// The social connection (friends, chat, watching): after `Reply::Account` the connection
+    /// stays open, the game sending `Up` lines and the server `Down` lines.
+    Connect { token: String },
+}
+
+/// What a player is doing, for their friends.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum Activity {
+    Menus,
+    /// A solo play (friends can watch it).
+    Playing { map: String },
+    Lobby { room: Option<u32>, title: String },
+    Match { map: String },
+    Watching { name: String },
+}
+
+impl Activity {
+    pub fn describe(&self) -> String {
+        match self {
+            Activity::Menus => "in the menus".into(),
+            Activity::Playing { map } => format!("playing {map}"),
+            Activity::Lobby { title, .. } => format!("in lobby {title}"),
+            Activity::Match { map } => format!("in a match: {map}"),
+            Activity::Watching { name } => format!("watching {name}"),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Friend {
+    pub name: String,
+    /// None when offline.
+    pub activity: Option<Activity>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ChatLine {
+    pub from: String,
+    pub to: String,
+    pub text: String,
+    /// Unix seconds.
+    pub at: u64,
+}
+
+/// A solo play being streamed to friends.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SoloPlay {
+    pub map: crate::net::MapInfo,
+    pub anti_mash: bool,
+}
+
+/// Game -> server on the social connection.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum Up {
+    Status(Activity),
+    /// Sends a friend request, or accepts theirs.
+    AddFriend(String),
+    /// Unfriends, or declines / withdraws a request.
+    RemoveFriend(String),
+    Chat { to: String, text: String },
+    Watch(String),
+    StopWatching,
+    PlayStart(SoloPlay),
+    /// Every ~100 ms of a solo play: its map time, whether it's paused, presses since the last.
+    PlayFrame { t: f64, paused: bool, inputs: Vec<(f64, u8)> },
+    PlayEnd,
+    Ping,
+}
+
+/// Server -> game on the social connection.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum Down {
+    /// Friends (with what they're doing), requests to us, and ours still waiting.
+    Friends { friends: Vec<Friend>, requests: Vec<String>, sent: Vec<String> },
+    Chat(ChatLine),
+    Notice(String),
+    /// The watched friend is playing: the play, where they are and every press so far.
+    WatchStart { player: String, play: SoloPlay, t: f64, paused: bool, inputs: Vec<(f64, u8)> },
+    WatchFrame { t: f64, paused: bool, inputs: Vec<(f64, u8)> },
+    /// The watched friend's play ended (we keep watching for their next one).
+    WatchEnd { player: String },
+    /// Watching isn't possible (any more): why.
+    WatchStopped(String),
+    Pong,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -67,10 +151,15 @@ pub fn valid_password(password: &str) -> bool {
     (6..=128).contains(&password.chars().count())
 }
 
-/// A lobby title: printable ASCII (what the font draws), at most 32 characters.
+/// Text the built-in font draws (printable ASCII and Cyrillic), at most `max` characters.
+pub fn clean_text(text: &str, max: usize) -> String {
+    text.chars().filter(|c| c.is_ascii_graphic() || *c == ' ' || matches!(c, 'А'..='я' | 'Ё' | 'ё')).take(max).collect()
+}
+
+/// A lobby title, at most 32 characters.
 #[allow(dead_code)] // used by the online server (server/)
 pub fn clean_title(title: &str, owner: &str) -> String {
-    let t: String = title.chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(32).collect();
+    let t = clean_text(title, 32);
     let t = t.trim();
     if t.is_empty() { format!("{owner}'s lobby") } else { t.to_string() }
 }
@@ -120,6 +209,133 @@ pub fn exchange(server: &str, request: Request) -> Result<(Reply, BufReader<TcpS
     let line = read_line(&mut reader)?;
     let reply: Reply = serde_json::from_str(&line).map_err(|e| format!("odd reply from the server: {e}"))?;
     Ok((reply, reader))
+}
+
+/// What the social connection reports to the game.
+#[allow(dead_code)] // the game's side (the server only shares the protocol)
+pub enum SocialEvent {
+    /// (Re)connected as this account: resend what we're doing.
+    Connected(String),
+    Disconnected(String),
+    /// The saved login is no longer valid.
+    SessionExpired,
+    Down(Down),
+}
+
+/// The game's social connection (friends, chat, watching). It reconnects by itself while the
+/// server is away; dropping it disconnects.
+#[allow(dead_code)]
+pub struct Social {
+    tx: std::sync::mpsc::Sender<Up>,
+    rx: std::sync::mpsc::Receiver<SocialEvent>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[allow(dead_code)]
+impl Social {
+    pub fn start(server: String, token: String) -> Social {
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+        let (tx, out) = mpsc::channel::<Up>();
+        let (events, rx) = mpsc::channel();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = stop.clone();
+        std::thread::spawn(move || {
+            let mut announced_down = false;
+            while !stopped.load(Ordering::Relaxed) {
+                let (reply, reader) = match exchange(&server, Request::Connect { token: token.clone() }) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        if !announced_down {
+                            announced_down = true;
+                            let _ = events.send(SocialEvent::Disconnected(e));
+                        }
+                        for _ in 0..20 {
+                            if stopped.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(500));
+                        }
+                        continue;
+                    }
+                };
+                let name = match reply {
+                    Reply::Account { name, .. } => name,
+                    Reply::Error(e) if e.contains("session") => {
+                        let _ = events.send(SocialEvent::SessionExpired);
+                        return;
+                    }
+                    _ => {
+                        std::thread::sleep(Duration::from_secs(10));
+                        continue;
+                    }
+                };
+                let Ok(mut stream) = reader.get_ref().try_clone() else { continue };
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(70)));
+                // Whatever piled up while away is stale: the game resends its state on Connected.
+                while out.try_recv().is_ok() {}
+                let _ = events.send(SocialEvent::Connected(name));
+                let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+                {
+                    let (events, alive) = (events.clone(), alive.clone());
+                    std::thread::spawn(move || {
+                        let mut reader = reader;
+                        while let Ok(line) = read_line(&mut reader) {
+                            if let Ok(d) = serde_json::from_str::<Down>(&line) {
+                                if events.send(SocialEvent::Down(d)).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        alive.store(false, Ordering::Relaxed);
+                    });
+                }
+                let mut last_ping = std::time::Instant::now();
+                loop {
+                    if stopped.load(Ordering::Relaxed) {
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
+                        return;
+                    }
+                    if !alive.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let up = match out.recv_timeout(Duration::from_millis(300)) {
+                        Ok(up) => Some(up),
+                        Err(mpsc::RecvTimeoutError::Timeout) if last_ping.elapsed() > Duration::from_secs(25) => Some(Up::Ping),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    };
+                    if let Some(up) = up {
+                        if matches!(up, Up::Ping) {
+                            last_ping = std::time::Instant::now();
+                        }
+                        if write_line(&mut stream, &up).is_err() {
+                            break;
+                        }
+                    }
+                }
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+                let _ = events.send(SocialEvent::Disconnected("lost the connection".into()));
+                announced_down = true;
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        });
+        Social { tx, rx, stop }
+    }
+
+    pub fn send(&self, up: Up) {
+        let _ = self.tx.send(up);
+    }
+
+    pub fn poll(&self) -> Vec<SocialEvent> {
+        self.rx.try_iter().collect()
+    }
+}
+
+impl Drop for Social {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// One request and its reply; a `Reply::Error` comes back as `Err`.

@@ -108,6 +108,11 @@ fn kv(line: &str) -> Option<(&str, &str)> {
     Some((k.trim(), v.trim()))
 }
 
+/// Has Cyrillic and nothing the font can't draw.
+fn cyrillic(s: &str) -> bool {
+    s.chars().any(|c| matches!(c, 'А'..='я' | 'Ё' | 'ё')) && s.chars().all(crate::font::drawable)
+}
+
 fn num<T: std::str::FromStr>(s: Option<&str>) -> Option<T> {
     s?.trim().parse().ok()
 }
@@ -220,6 +225,9 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
             "Metadata" => match kv(trimmed) {
                 Some(("Title", v)) => meta.title = v.to_owned(),
                 Some(("Artist", v)) => meta.artist = v.to_owned(),
+                // Russian titles in Cyrillic (the font draws it); other scripts stay romanised.
+                Some(("TitleUnicode", v)) if cyrillic(v) => meta.title = v.to_owned(),
+                Some(("ArtistUnicode", v)) if cyrillic(v) => meta.artist = v.to_owned(),
                 Some(("Creator", v)) => meta.creator = v.to_owned(),
                 Some(("Version", v)) => meta.version = v.to_owned(),
                 Some(("BeatmapSetID", v)) => meta.set_id = v.trim().parse().ok().filter(|&id: &u32| id > 0),
