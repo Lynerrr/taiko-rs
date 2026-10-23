@@ -1,0 +1,147 @@
+name: Release build
+
+# Builds taiko-rs for Windows and Linux on every push to the main branch and publishes both as
+# the rolling "latest" release, which install.ps1 / install.sh download. Pull requests get the
+# same builds, tests and a Linux install test, without publishing anything.
+on:
+  push:
+    branches: [worktree-taiko-client]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/taiko-rs.exe dist/
+          Copy-Item README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath taiko-rs-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: taiko-rs-windows-x64.zip
+
+  linux:
+    # The oldest runner whose PipeWire headers the pipewire crate builds against (22.04's 0.3.48
+    # is too old). The binary needs its glibc (2.39) or newer: Ubuntu 24.04+, Debian 13+,
+    # Fedora 40+, Arch and the like.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang pkg-config libasound2-dev libpipewire-0.3-dev
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          mkdir -p dist/taiko-rs
+          cp target/release/taiko-rs README.md assets/taiko-rs.svg dist/taiko-rs/
+          strip dist/taiko-rs/taiko-rs
+          tar -czf taiko-rs-linux-x64.tar.gz -C dist taiko-rs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: taiko-rs-linux-x64.tar.gz
+
+  # install.sh against the archive just built, before anything is published.
+  linux-install-check:
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+      - name: Install from the build
+        run: |
+          sudo apt-get update && sudo apt-get install -y libpipewire-0.3-0t64 libasound2t64
+          TAIKO_RS_URL="file://$PWD/taiko-rs-linux-x64.tar.gz" sh install.sh --no-launch
+          test -x ~/.local/bin/taiko-rs
+          test -f ~/.local/share/applications/taiko-rs.desktop
+          ~/.local/bin/taiko-rs --help
+          sh install.sh --uninstall
+          test ! -e ~/.local/bin/taiko-rs
+
+  publish:
+    needs: [windows, linux, linux-install-check]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/worktree-taiko-client'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Publish "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Recreate the release so its tag always points at this commit.
+          gh release delete latest --yes --cleanup-tag || true
+          raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/worktree-taiko-client"
+          notes=$(printf 'Build of %s.\n\nInstall or update on Windows (PowerShell):\n```powershell\nirm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | sh\n```' "$GITHUB_SHA" "$raw" "$raw")
+          gh release create latest taiko-rs-windows-x64.zip taiko-rs-linux-x64.tar.gz --title "taiko-rs (latest build)" --notes "$notes" --target "$GITHUB_SHA"
+
+  # Runs the same one-line install command users run, on a fresh machine, against the release
+  # that was just published.
+  install-test:
+    needs: publish
+    runs-on: windows-latest
+    steps:
+      - name: Install with the published command
+        shell: pwsh
+        run: |
+          irm https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.ps1 | iex
+          Start-Sleep -Seconds 8
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\taiko-rs\taiko-rs.exe'
+          if (-not (Test-Path $exe)) { throw "taiko-rs.exe was not installed" }
+          $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'taiko-rs.lnk'
+          if (-not (Test-Path $link)) { throw "Start menu shortcut is missing" }
+          # The game writes its settings on startup, so this proves it launched and found its
+          # Windows config directory (the runner has no GPU, so it may exit right after).
+          $config = Join-Path $env:APPDATA 'taiko-rs\config.txt'
+          if (-not (Test-Path $config)) { throw "taiko-rs did not start (no $config)" }
+          Get-Content $config | Select-Object -First 5
+          $p = Get-Process taiko-rs -ErrorAction SilentlyContinue
+          if ($p) { "taiko-rs is running (pid $($p.Id))"; $p | Stop-Process -Force } else { "taiko-rs started and exited" }
+
+  install-test-linux:
+    needs: publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install with the published command
+        run: |
+          sudo apt-get update && sudo apt-get install -y libpipewire-0.3-0t64 libasound2t64
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh | sh -s -- --no-launch
+          ~/.local/bin/taiko-rs --help

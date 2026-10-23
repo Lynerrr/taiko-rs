@@ -14,6 +14,22 @@ A small, fast osu!taiko client in Rust, built for Linux/Wayland, with a Windows 
 - Plays native taiko maps and osu!standard converts (lazer's conversion rules: split
   sliders, drumrolls, swells, big notes), with lazer hit windows.
 
+## Linux
+
+Install or update with one command (no root needed):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.sh | sh
+```
+
+It downloads the latest x86_64 build from the [releases](https://github.com/Lynerrr/taiko-rs/releases/tag/latest)
+to `~/.local/bin/taiko-rs`, adds it to the app menu (with an icon) and launches it. Run it again to
+update; `sh -s -- --no-launch` installs without starting it and `sh -s -- --uninstall` removes it
+(settings and maps are kept). The build needs glibc 2.39+ (Ubuntu 24.04+, Debian 13+, Fedora
+40+, Arch...; older systems can build from source) and uses the system's PipeWire and ALSA libraries; the installer names the package to
+install if one is missing. Maps come from your osu! Songs folder (osu-winello / Wine installs are
+found on their own); without osu!, drop `.osz` files into `~/.local/share/taiko-rs/Songs`.
+
 ## Build & run
 
 ```sh
@@ -40,7 +56,7 @@ It downloads the latest build from the [releases](https://github.com/Lynerrr/tai
 into `%LOCALAPPDATA%\Programs\taiko-rs`, adds Start menu and desktop shortcuts and launches it.
 Maps come from your osu! stable Songs folder (`%LOCALAPPDATA%\osu!\Songs`); without osu!, drop
 `.osz` files into `%APPDATA%\taiko-rs\Songs`. Settings live in `%APPDATA%\taiko-rs\config.txt`.
-The build is produced by GitHub Actions on every push.
+Both builds are produced by GitHub Actions on every push.
 
 ## Controls
 
