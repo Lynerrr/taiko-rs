@@ -1,0 +1,177 @@
+//! Download tab: search the osu! mirrors for taiko sets and download them into the Songs folder.
+
+use std::collections::HashSet;
+use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant};
+
+use crate::download::{self, Job, SetInfo};
+use crate::render::{approach, rgba, Canvas, Hit};
+
+/// Search this long after the last keystroke.
+const TYPE_DELAY: Duration = Duration::from_millis(450);
+
+#[derive(Default)]
+pub struct Browse {
+    pub query: String,
+    pub results: Vec<SetInfo>,
+    pub cursor: usize,
+    scroll: f32,
+    pub status: String,
+    search: Option<Receiver<Result<Vec<SetInfo>, String>>>,
+    edited: Option<Instant>,
+    /// The query the shown results are for (None: nothing searched yet).
+    searched: Option<String>,
+}
+
+/// What a result row shows on its right.
+pub enum RowState {
+    Installed,
+    Downloading(Option<f32>),
+    Available,
+}
+
+impl Browse {
+    /// Starts a search for the current query now.
+    pub fn search_now(&mut self) {
+        let query = self.query.trim().to_string();
+        self.searched = Some(query.clone());
+        self.edited = None;
+        self.status = if query.is_empty() { "loading recent taiko maps...".into() } else { format!("searching \"{query}\"...") };
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(download::search(&query));
+        });
+        self.search = Some(rx);
+    }
+
+    /// Searches on first open.
+    pub fn opened(&mut self) {
+        if self.searched.is_none() {
+            self.search_now();
+        }
+    }
+
+    pub fn poll(&mut self, now: Instant) {
+        if self.edited.is_some_and(|t| now - t >= TYPE_DELAY) && self.searched.as_deref() != Some(self.query.trim()) {
+            self.search_now();
+        }
+        if let Some(rx) = &self.search {
+            if let Ok(result) = rx.try_recv() {
+                self.search = None;
+                match result {
+                    Ok(sets) => {
+                        self.status = if sets.is_empty() { "no taiko maps found".into() } else { String::new() };
+                        self.results = sets;
+                        self.cursor = 0;
+                    }
+                    Err(e) => self.status = format!("search failed: {e}"),
+                }
+            }
+        }
+    }
+
+    pub fn type_text(&mut self, text: &str) {
+        let before = self.query.len();
+        self.query.extend(text.chars().filter(|c| !c.is_control()));
+        if self.query.len() != before {
+            self.edited = Some(Instant::now());
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if self.query.pop().is_some() {
+            self.edited = Some(Instant::now());
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.query.clear();
+        self.edited = Some(Instant::now());
+    }
+
+    pub fn move_by(&mut self, n: i32) {
+        let last = self.results.len().saturating_sub(1) as i32;
+        self.cursor = (self.cursor as i32 + n).clamp(0, last.max(0)) as usize;
+    }
+
+    pub fn selected(&self) -> Option<&SetInfo> {
+        self.results.get(self.cursor)
+    }
+
+    pub fn draw(&mut self, c: &mut Canvas, jobs: &[Job], installed: &HashSet<u32>, songs_dir: &str) {
+        let w = c.width;
+        let col = (w - 48.0).min(760.0);
+        let x0 = (w - col) / 2.0;
+        crate::settings::tab_bar(c, 3, "maps from catboy.best / osu.direct");
+        let busy = self.search.is_some() || self.edited.is_some();
+        let text = if self.query.is_empty() { "type to search (artist, title, mapper)...".to_string() } else { format!("{}_", self.query) };
+        c.round_rect(x0, 54.0, col, 24.0, 6.0, rgba(0x23232f, 0.95), rgba(0x3a3a4e, 1.0), 1.0);
+        c.text(x0 + 10.0, 61.0, 10.0, rgba(if self.query.is_empty() { 0x6f6f86 } else { 0xffffff }, 1.0), &text);
+        if busy {
+            c.text_right(x0 + col - 10.0, 62.0, 8.0, rgba(0xFFD34D, 1.0), "searching...");
+        }
+
+        const ROW: f32 = 40.0;
+        let (top, bottom) = (86.0, 436.0);
+        let view = bottom - top;
+        let target = (self.cursor as f32 * ROW - view * 0.4).clamp(0.0, (self.results.len() as f32 * ROW - view).max(0.0));
+        approach(&mut self.scroll, target, c.dt_ms, 50.0);
+        let fit = |s: &str, size: f32, room: f32| -> String {
+            let max = (room / (size / 7.0 * 6.0)).max(4.0) as usize;
+            if s.chars().count() > max { s.chars().take(max.saturating_sub(3)).collect::<String>() + "..." } else { s.to_string() }
+        };
+        for (i, set) in self.results.iter().enumerate() {
+            let y = top + i as f32 * ROW - self.scroll;
+            if y + ROW < top || y > bottom {
+                continue;
+            }
+            let selected = i == self.cursor;
+            let hover = !selected && c.hovered(x0, y, col, ROW - 4.0);
+            let (bg, border) = if selected { (0x2b2b3d, 0xEB452C) } else if hover { (0x262634, 0x2a2a38) } else { (0x1d1d27, 0x2a2a38) };
+            c.round_rect(x0, y, col, ROW - 4.0, 7.0, rgba(bg, 0.95), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+            c.hit(x0, y, col, ROW, Hit::DlRow(i));
+            let state = if installed.contains(&set.id) {
+                RowState::Installed
+            } else if let Some(job) = jobs.iter().find(|j| j.set.id == set.id) {
+                RowState::Downloading(job.fraction())
+            } else {
+                RowState::Available
+            };
+            // Right side: star range and the download state / button.
+            let right = x0 + col - 10.0;
+            let action_w = 92.0;
+            match state {
+                RowState::Installed => c.text_right(right, y + 13.0, 8.0, rgba(0x86E05A, 1.0), "installed"),
+                RowState::Downloading(f) => {
+                    let (bx, by, bw) = (right - action_w, y + 11.0, action_w);
+                    c.round_rect(bx, by, bw, 12.0, 4.0, rgba(0x15151d, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+                    if let Some(f) = f {
+                        c.round_rect(bx + 1.0, by + 1.0, (bw - 2.0) * f.clamp(0.0, 1.0), 10.0, 3.0, rgba(0x438EAD, 1.0), rgba(0, 0.0), 0.0);
+                    }
+                    let label = f.map(|f| format!("{:.0}%", f * 100.0)).unwrap_or_else(|| "starting...".into());
+                    c.text_centered(bx + bw / 2.0, by + 3.0, 6.0, rgba(0xffffff, 1.0), &label);
+                }
+                RowState::Available => c.button(right - action_w, y + 8.0, action_w, 20.0, "Download", 8.0, Hit::DlGet(i), selected),
+            }
+            let lo = set.diffs.first().map(|d| d.1).unwrap_or(0.0);
+            let hi = set.diffs.last().map(|d| d.1).unwrap_or(0.0);
+            let pill_right = right - action_w - 10.0;
+            let pill = crate::stars::draw_pill(c, pill_right, y + 13.0, 7.0, Some(hi));
+            let range = if (hi - lo).abs() < 0.05 { String::new() } else { format!("{lo:.2} -") };
+            c.text_right(pill_right - pill - 4.0, y + 13.0, 7.0, rgba(0x8a8aa0, 1.0), &range);
+            let text_room = pill_right - pill - 70.0 - x0;
+            c.text(x0 + 12.0, y + 7.0, 9.0, rgba(0xffffff, 1.0), &fit(&format!("{} - {}", set.artist, set.title), 9.0, text_room));
+            let n = set.diffs.len();
+            let sub = format!("mapped by {}  |  {}  |  {n} taiko diff{}", set.creator, set.status, if n == 1 { "" } else { "s" });
+            c.text(x0 + 12.0, y + 22.0, 7.0, rgba(0x9a9ab0, 1.0), &fit(&sub, 7.0, text_room));
+        }
+        if self.results.is_empty() || !self.status.is_empty() {
+            let msg = if self.status.is_empty() { "no results" } else { self.status.as_str() };
+            c.text_centered(w / 2.0, if self.results.is_empty() { 220.0 } else { 440.0 }, 9.0, rgba(0xc8c8d8, 1.0), &fit(msg, 9.0, col));
+        }
+        let active = jobs.len();
+        let footer = if active > 0 { format!("{active} downloading  |  saving to {songs_dir}") } else { format!("saving to {songs_dir}") };
+        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Up/Down select   Enter / click download   type to search   Esc clear / back   Tab songs");
+        c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), &footer);
+    }
+}

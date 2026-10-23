@@ -153,6 +153,17 @@ and noisy estimates suggest a proportionally smaller change. Press **O**
 to apply it on the spot; hits recorded before the change are re-expressed under the new offset,
 so the suggestion settles instead of overshooting. Toggle it with Settings → Live offset suggestion.
 
+## Downloading maps
+
+The **DOWNLOAD** tab (or Ctrl+D on song select) searches the public osu! mirrors
+[catboy.best](https://catboy.best) and [osu.direct](https://osu.direct) (the second is tried when
+the first fails) for sets with taiko difficulties: type an artist, title or mapper; with no text it
+lists recent ones. Each result shows its mapper, status, number of taiko difficulties and star
+range. Enter, or the *Download* button, fetches the `.osz` with a progress bar and unpacks it into
+your Songs folder as `<set id> <artist> - <title>/` (the first folder being scanned, else
+`~/.local/share/taiko-rs/Songs` / `%APPDATA%\taiko-rs\Songs`, which is scanned at startup). The set
+shows up in the song list right away and is selected; sets you already have say *installed*.
+
 ## Multiplayer
 
 Versus play over direct TCP (default port **7777**). Tab to the **MULTIPLAYER** tab:
@@ -163,7 +174,9 @@ Versus play over direct TCP (default port **7777**). Tab to the **MULTIPLAYER** 
 - **Join:** type the host's `ip` or `ip:port` and choose *JOIN GAME*; **Space** to ready up.
 
 Maps are matched by a hash of the `.osu` file, so everyone needs the same difficulty in their
-Songs folder (players without it show "no map"). Each client syncs its clock to the host with
+Songs folder (players without it show "no map"). A player missing the map gets a **Download map
+(D)** button in the lobby: it fetches the host's beatmap set from the mirrors (by its set ID,
+else by searching for it) and reports the map as there once it's in. Each client syncs its clock to the host with
 pings, and the song starts at a shared instant 3 s after everyone has loaded. During the match a
 live scoreboard shows everyone's score, accuracy and combo; there is no pause (Esc twice
 forfeits). Results show score, accuracy, max combo, judgements and UR for everyone.
@@ -211,3 +224,6 @@ spins so frames stay evenly spaced.
 | `src/net.rs` | multiplayer protocol, room server, client with clock sync |
 | `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
 | `src/library.rs` | Songs folder / `.osz` scanning |
+| `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
+| `src/download.rs` | mirror search and `.osz` downloads (catboy.best, osu.direct) |
+| `src/browse.rs` | the Download tab |

@@ -167,7 +167,7 @@ pub struct InputScript {
 /// A scripted input: a key, or mouse pseudo-keys: `WheelUp`/`WheelDown` (one notch),
 /// `MoveDown`/`MoveRight` (drag the playfield area by 60 px), `ShrinkCorner` (drag its
 /// bottom-right corner up-left by 300x200 px).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Action {
     Key(winit::keyboard::KeyCode),
     Wheel(i32),
@@ -185,6 +185,10 @@ pub enum Action {
     AltWheel(i32),
     /// A key with Shift held: `Shift+Enter`.
     ShiftKey(winit::keyboard::KeyCode),
+    /// A key with Ctrl held: `Ctrl+KeyD`.
+    CtrlKey(winit::keyboard::KeyCode),
+    /// Typed text (search boxes): `Type:frums`.
+    Type(String),
 }
 
 impl InputScript {
@@ -216,6 +220,8 @@ impl InputScript {
                         Action::Drag { corner: false, dx, dy, hold: k.starts_with("Hold:") }
                     }
                     k if k.starts_with("Shift+") => Action::ShiftKey(parse_keycode(&k[6..])?),
+                    k if k.starts_with("Ctrl+") => Action::CtrlKey(parse_keycode(&k[5..])?),
+                    k if k.starts_with("Type:") => Action::Type(k[5..].replace('_', " ")),
                     k => Action::Key(parse_keycode(k)?),
                 };
                 Some((t.trim().parse().ok()?, action))

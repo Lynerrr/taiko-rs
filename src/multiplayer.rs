@@ -169,7 +169,8 @@ fn status_text(p: &PlayerInfo, map_chosen: bool) -> (&'static str, u32) {
     }
 }
 
-pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
+/// `download`: progress of fetching the lobby map, when it's being downloaded.
+pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<String>) {
     let w = c.width;
     let right = format!("{}   ping {:.0} ms", s.label, s.client.rtt_ms);
     crate::settings::tab_bar(c, 2, &right);
@@ -188,8 +189,10 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
         Some(m) => {
             let label = m.label();
             c.text(x0 + 14.0, 86.0, 10.0, rgba(0xffffff, 1.0), &label);
-            if !have_map {
-                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFF4B4B, 1.0), "not in your Songs folder");
+            if let Some(d) = &download {
+                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFFD34D, 1.0), d);
+            } else if !have_map {
+                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFF4B4B, 1.0), "not in your Songs folder - D to download");
             }
         }
         None => {
@@ -232,11 +235,17 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
         ]);
         c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x6f6f86, 1.0), "[ ] match rate   Tab songs");
     } else {
-        c.button_row(440.0, &[
-            ("Preview  (P)", Hit::Key(KeyCode::KeyP), false),
-            (ready_label, Hit::Key(KeyCode::Space), true),
-            ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false),
-        ]);
+        let missing = s.map.is_some() && !have_map;
+        if missing {
+            let label = if download.is_some() { "Downloading..." } else { "Download map  (D)" };
+            c.button_row(440.0, &[(label, Hit::Key(KeyCode::KeyD), true), ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false)]);
+        } else {
+            c.button_row(440.0, &[
+                ("Preview  (P)", Hit::Key(KeyCode::KeyP), false),
+                (ready_label, Hit::Key(KeyCode::Space), true),
+                ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false),
+            ]);
+        }
     }
     if let Some(r) = &s.results {
         let finished: Vec<(&PlayerInfo, &Final)> = r.iter().filter_map(|p| p.result.as_ref().map(|f| (p, f))).collect();

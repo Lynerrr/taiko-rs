@@ -652,6 +652,9 @@ pub enum Hit {
     MpRow(usize),
     /// Opens the playfield preset list.
     Presets,
+    /// A download tab result row / its Download button.
+    DlRow(usize),
+    DlGet(usize),
 }
 
 #[derive(Clone, Copy, Debug)]

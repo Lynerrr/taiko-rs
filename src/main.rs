@@ -3,11 +3,13 @@
 
 mod audio;
 mod beatmap;
+mod browse;
 mod calibrate;
 mod clock;
 mod config;
 mod debug;
 mod difficulty;
+mod download;
 mod font;
 mod game;
 mod layout;
@@ -62,6 +64,8 @@ enum Scene {
     /// The autoplay preview over the whole screen (in the playfield area, which can be moved
     /// and resized here), with the timeline. `back`: song select or the multiplayer lobby.
     Preview { back: Box<Scene> },
+    /// Download tab: search the mirrors, download sets into the Songs folder.
+    Download,
     /// Multiplayer: host/join form, room lobby, waiting/countdown, match, results.
     MpMenu,
     Lobby,
@@ -104,6 +108,14 @@ struct State {
     volume_shown: Option<Instant>,
     /// Clickable areas of the last frame drawn.
     hits: Vec<render::HitBox>,
+    browse: browse::Browse,
+    downloads: Vec<download::Job>,
+    /// Where downloaded sets go.
+    songs_dir: PathBuf,
+    /// Beatmap set IDs in the library (built when first needed).
+    installed_sets: Option<std::collections::HashSet<u32>>,
+    /// Looking up the lobby map on the mirrors (it had no set ID).
+    lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
     /// Which screen was drawn last and since when, for the fade between screens.
     scene_kind: Option<std::mem::Discriminant<Scene>>,
     scene_since: Instant,
@@ -207,6 +219,22 @@ fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32, slide: f32) {
 
 /// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
 /// Only those few candidates are hashed, so this stays cheap with a huge library.
+/// Where downloaded maps go: the first Songs folder being scanned, else taiko-rs's own (which
+/// is scanned at startup when it exists).
+fn download_dir(inputs: &[PathBuf]) -> PathBuf {
+    if let Some(dir) = inputs.iter().find(|p| p.is_dir()) {
+        return dir.clone();
+    }
+    #[cfg(windows)]
+    let own = config::user_dir(false).map(|d| d.join("Songs"));
+    #[cfg(not(windows))]
+    let own = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .map(|d| d.join("taiko-rs").join("Songs"));
+    own.unwrap_or_else(|| PathBuf::from("Songs"))
+}
+
 /// Marks the fullscreen preview as a preview: a blue frame and badge on the playfield area, and
 /// a header with the map and the controls.
 fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f32>, lobby: bool, size_label: &str) {
@@ -1011,6 +1039,7 @@ impl State {
         match &self.scene {
             Scene::Select if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Select => self.select.move_by(-notches),
+            Scene::Download => self.browse.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
                     dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
@@ -1192,6 +1221,7 @@ impl State {
             version: e.meta.version.clone(),
             rate: self.cfg.rate,
             from: None,
+            set_id: e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)),
         };
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
@@ -1260,6 +1290,7 @@ impl State {
                         self.toast(text);
                     }
                     KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
+                    KeyCode::KeyD if !s.have_map => self.download_lobby_map(),
                     KeyCode::KeyM if s.is_host() && !s.in_match => {
                         self.picking_lobby_map = true;
                         self.scene = Scene::Select;
@@ -1541,6 +1572,12 @@ impl State {
             self.preview_key(code, repeat, window);
             return;
         }
+        if matches!(self.scene, Scene::Download) {
+            if !repeat || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::Backspace | KeyCode::PageUp | KeyCode::PageDown) {
+                self.download_key(code, text, window);
+            }
+            return;
+        }
         if matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults) {
             self.multiplayer_key(code, repeat, text, at, window);
             return;
@@ -1594,6 +1631,7 @@ impl State {
                 self.play_from_marker();
             }
             Scene::Select if self.modifiers_ctrl && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) => self.open_preview(),
+            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyD => self.open_download(),
             Scene::Select if code == KeyCode::F2 => {
                 if self.modifiers_shift {
                     self.select.random_back();
@@ -1629,7 +1667,7 @@ impl State {
                 }
             }
             Scene::Settings { .. } => self.settings_key(code, window),
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. } => {}
+            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. } | Scene::Download => {}
             Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => {}
             Scene::Play { game, entry, from } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
@@ -1712,9 +1750,12 @@ impl State {
             };
         }
         self.poll_multiplayer();
+        self.poll_downloads();
+        self.browse.poll(now);
         let mut next: Option<Scene> = None;
         let mut capture: Option<String> = None;
         let preview_target = self.preview_target();
+        let lobby_download = self.lobby_download_status();
         let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
         let size_label = format!("Playfield {}", self.playfield_label());
         let mut finish_calibration = false;
@@ -1741,6 +1782,16 @@ impl State {
                         self.mouse_moved(x as f64 * k, y as f64 * k);
                         self.mouse_button(true, None);
                         self.mouse_button(false, None);
+                    }
+                    debug::Action::CtrlKey(code) => {
+                        self.modifiers_ctrl = true;
+                        self.key(code, false, None, now, None);
+                        self.modifiers_ctrl = false;
+                    }
+                    debug::Action::Type(text) => {
+                        for ch in text.chars() {
+                            self.key(KeyCode::KeyA, false, Some(&ch.to_string()), now, None);
+                        }
                     }
                     debug::Action::ShiftKey(code) => {
                         self.modifiers_shift = true;
@@ -1863,6 +1914,12 @@ impl State {
                 }
             }
             Scene::Results { results, .. } => results.draw(canvas),
+            Scene::Download => {
+                let installed = self.installed_sets.take().unwrap_or_default();
+                let dir = self.songs_dir.display().to_string();
+                self.browse.draw(canvas, &self.downloads, &installed, &dir);
+                self.installed_sets = Some(installed);
+            }
             Scene::Preview { back } => {
                 let lobby = matches!(**back, Scene::Lobby);
                 match preview_target {
@@ -1892,7 +1949,7 @@ impl State {
             }
             Scene::Lobby => match &self.mp {
                 Some(s) => {
-                    multiplayer::draw_lobby(canvas, s, s.have_map);
+                    multiplayer::draw_lobby(canvas, s, s.have_map, lobby_download);
                 }
                 None => next = Some(Scene::MpMenu),
             },
@@ -2094,6 +2151,176 @@ impl State {
         capture
     }
 
+    fn installed_sets(&mut self) -> &mut std::collections::HashSet<u32> {
+        let library = &self.library;
+        self.installed_sets.get_or_insert_with(|| {
+            library.iter().filter_map(|e| e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder))).collect()
+        })
+    }
+
+    fn open_download(&mut self) {
+        self.picking_lobby_map = false;
+        self.installed_sets();
+        self.browse.opened();
+        self.scene = Scene::Download;
+    }
+
+    /// Downloads a set unless it's already here or on its way.
+    fn start_download(&mut self, set: download::SetInfo) {
+        if self.installed_sets().contains(&set.id) {
+            self.toast(format!("{} - {} is already in your songs", set.artist, set.title));
+            return;
+        }
+        if self.downloads.iter().any(|j| j.set.id == set.id) {
+            return;
+        }
+        let dir = self.songs_dir.clone();
+        self.downloads.push(download::start(set, dir));
+    }
+
+    /// Lobby: fetch the map we don't have (by its set ID, else by searching for it).
+    fn download_lobby_map(&mut self) {
+        let Some(m) = self.mp.as_ref().and_then(|s| s.map.clone()) else { return };
+        if self.mp.as_ref().is_some_and(|s| s.have_map) || self.lobby_lookup.is_some() {
+            return;
+        }
+        match m.set_id {
+            Some(id) => self.start_download(download::SetInfo {
+                id,
+                artist: m.artist.clone(),
+                title: m.title.clone(),
+                creator: String::new(),
+                status: String::new(),
+                diffs: Vec::new(),
+            }),
+            None => {
+                let (tx, rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let found = download::search(&format!("{} {}", m.artist, m.title)).and_then(|sets| {
+                        sets.into_iter()
+                            .find(|s| s.title.eq_ignore_ascii_case(&m.title) && s.diffs.iter().any(|d| d.0 == m.version))
+                            .ok_or_else(|| "not found on the mirrors".to_string())
+                    });
+                    let _ = tx.send(found);
+                });
+                self.lobby_lookup = Some(rx);
+                self.toast("looking for the map on the mirrors...".into());
+            }
+        }
+    }
+
+    /// The lobby map's download progress, for the lobby screen.
+    fn lobby_download_status(&self) -> Option<String> {
+        if self.lobby_lookup.is_some() {
+            return Some("looking it up...".into());
+        }
+        let m = self.mp.as_ref()?.map.as_ref()?;
+        let job = self.downloads.iter().find(|j| Some(j.set.id) == m.set_id || (j.set.title == m.title && j.set.artist == m.artist))?;
+        Some(match job.fraction() {
+            Some(f) => format!("downloading {:.0}%", f * 100.0),
+            None => "downloading...".into(),
+        })
+    }
+
+    fn poll_downloads(&mut self) {
+        if let Some(rx) = &self.lobby_lookup {
+            match rx.try_recv() {
+                Ok(Ok(set)) => {
+                    self.lobby_lookup = None;
+                    self.start_download(set);
+                }
+                Ok(Err(e)) => {
+                    self.lobby_lookup = None;
+                    self.toast(format!("download failed: {e}"));
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.lobby_lookup = None,
+            }
+        }
+        let mut finished = Vec::new();
+        self.downloads.retain(|job| match job.rx.try_recv() {
+            Ok(result) => {
+                finished.push((job.set.clone(), result));
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                finished.push((job.set.clone(), Err("download stopped".into())));
+                false
+            }
+        });
+        for (set, result) in finished {
+            match result {
+                Ok(folder) => self.add_downloaded(&set, &folder),
+                Err(e) => {
+                    eprintln!("download {} failed: {e}", set.id);
+                    self.toast(format!("download failed: {}", e.chars().take(80).collect::<String>()));
+                }
+            }
+        }
+    }
+
+    /// Adds a freshly downloaded set to the library (appended, so existing indices stay valid).
+    fn add_downloaded(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
+        let known: std::collections::HashSet<PathBuf> = self.library.iter().filter(|e| e.path.starts_with(folder)).map(|e| e.path.clone()).collect();
+        let fresh: Vec<Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0)).into_iter().filter(|e| !known.contains(&e.path)).collect();
+        let first = fresh.iter().find(|e| e.meta.mode == 1).or(fresh.first()).map(|e| e.path.clone());
+        let n = fresh.len();
+        self.library.extend(fresh);
+        self.select.refilter(&self.library);
+        self.installed_sets().insert(set.id);
+        eprintln!("downloaded set {} into {} ({n} maps)", set.id, folder.display());
+        // Lobby: the map we were missing may be here now.
+        let library = &self.library;
+        let mut lobby_note = None;
+        if let Some(s) = &mut self.mp {
+            if let (Some(m), false) = (&s.map, s.have_map) {
+                s.map_entry = find_map(library, m);
+                s.have_map = s.map_entry.is_some();
+                s.client.send(net::ClientMsg::HasMap(s.have_map));
+                if !s.have_map && m.set_id == Some(set.id) {
+                    lobby_note = Some("downloaded, but the host has a different version of this map".to_string());
+                }
+            }
+        }
+        if !matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. }) && self.mp.is_none() {
+            if let Some(path) = &first {
+                self.select.select_path(&self.library, path);
+            }
+        }
+        let text = lobby_note.unwrap_or_else(|| format!("downloaded {} - {}", set.artist, set.title));
+        self.toast(text);
+    }
+
+    fn download_key(&mut self, code: KeyCode, text: Option<&str>, window: Option<&Window>) {
+        let function_key = matches!(
+            code,
+            KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 | KeyCode::F7 | KeyCode::F8 | KeyCode::F9 | KeyCode::F10 | KeyCode::F11 | KeyCode::F12
+        );
+        if function_key && self.handle_global_key(code, window) {
+            return;
+        }
+        match code {
+            KeyCode::ArrowUp => self.browse.move_by(-1),
+            KeyCode::ArrowDown => self.browse.move_by(1),
+            KeyCode::PageUp => self.browse.move_by(-8),
+            KeyCode::PageDown => self.browse.move_by(8),
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                if let Some(set) = self.browse.selected().cloned() {
+                    self.start_download(set);
+                }
+            }
+            KeyCode::Backspace => self.browse.backspace(),
+            KeyCode::Escape if !self.browse.query.is_empty() => self.browse.clear(),
+            KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
+            _ => {
+                if let Some(text) = text {
+                    self.browse.type_text(text);
+                }
+            }
+        }
+    }
+
     /// The topmost clickable thing under (`x`, `y`), from the last frame.
     fn hit_at(&self, x: f32, y: f32) -> Option<render::Hit> {
         self.hits.iter().rev().find(|h| h.contains(x, y)).map(|h| h.hit)
@@ -2102,7 +2329,7 @@ impl State {
     /// Switches between the top bar's tabs (songs, settings, multiplayer) from the screens that
     /// show it.
     fn goto_tab(&mut self, tab: usize) {
-        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::MpMenu));
+        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::MpMenu | Scene::Download));
         match (&self.scene, tab) {
             (Scene::Select, 1) => self.open_settings(),
             (Scene::Select, 2) => {
@@ -2119,6 +2346,14 @@ impl State {
             }
             (Scene::MpMenu | Scene::Lobby, 0) => self.scene = Scene::Select,
             (Scene::MpMenu | Scene::Lobby, 1) => self.open_settings(),
+            (Scene::Select | Scene::MpMenu | Scene::Lobby, 3) => self.open_download(),
+            (Scene::Settings { .. }, 3) if settings_from_menu => {
+                self.close_settings();
+                self.open_download();
+            }
+            (Scene::Download, 0) => self.scene = Scene::Select,
+            (Scene::Download, 1) => self.open_settings(),
+            (Scene::Download, 2) => self.open_multiplayer(),
             _ => {}
         }
     }
@@ -2129,6 +2364,12 @@ impl State {
             Hit::Key(code) => self.key(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::Presets => self.open_dropdown(),
+            Hit::DlRow(i) if i == self.browse.cursor => self.download_key(KeyCode::Enter, None, window),
+            Hit::DlRow(i) => self.browse.cursor = i,
+            Hit::DlGet(i) => {
+                self.browse.cursor = i;
+                self.download_key(KeyCode::Enter, None, window);
+            }
             // Like osu!: the first click selects, clicking the selected difficulty plays it.
             Hit::SongRow(row) if row == self.select.cursor() => self.key(KeyCode::Enter, false, None, Instant::now(), window),
             Hit::SongRow(row) => self.select.set_cursor(row),
@@ -2453,6 +2694,7 @@ fn main() {
     if args.is_empty() {
         inputs.extend(cfg.songs.iter().cloned());
     }
+    let songs_dir = download_dir(&inputs);
     // Scan on a background thread so the window appears at once, even with a huge library.
     let found = Arc::new(AtomicUsize::new(0));
     let (scan_tx, scan_rx) = mpsc::channel();
@@ -2509,6 +2751,11 @@ fn main() {
         modifiers_alt: false,
         volume_shown: None,
         hits: Vec::new(),
+        browse: browse::Browse::default(),
+        downloads: Vec::new(),
+        songs_dir,
+        installed_sets: None,
+        lobby_lookup: None,
         scene_kind: None,
         scene_since: Instant::now(),
         scrubbing: None,

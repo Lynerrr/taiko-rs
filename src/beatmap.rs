@@ -70,6 +70,8 @@ pub struct Meta {
     pub slider_multiplier: f64,
     pub slider_tick_rate: f64,
     pub format_version: i32,
+    /// osu! beatmap set ID from [Metadata] (missing on old or unsubmitted maps).
+    pub set_id: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -216,6 +218,7 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
                 Some(("Artist", v)) => meta.artist = v.to_owned(),
                 Some(("Creator", v)) => meta.creator = v.to_owned(),
                 Some(("Version", v)) => meta.version = v.to_owned(),
+                Some(("BeatmapSetID", v)) => meta.set_id = v.trim().parse().ok().filter(|&id: &u32| id > 0),
                 _ => {}
             },
             "Difficulty" => match kv(trimmed) {
