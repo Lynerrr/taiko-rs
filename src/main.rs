@@ -114,6 +114,8 @@ struct State {
     songs_dir: PathBuf,
     /// Beatmap set IDs in the library (built when first needed).
     installed_sets: Option<std::collections::HashSet<u32>>,
+    /// Whether the preview currently shows Download tab entries.
+    preview_remote: bool,
     /// Looking up the lobby map on the mirrors (it had no set ID).
     lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
     /// Which screen was drawn last and since when, for the fade between screens.
@@ -1039,6 +1041,7 @@ impl State {
         match &self.scene {
             Scene::Select if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Select => self.select.move_by(-notches),
+            Scene::Download if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Download => self.browse.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
@@ -1088,7 +1091,7 @@ impl State {
                 return CursorIcon::Pointer;
             }
         }
-        if matches!(self.scene, Scene::Select | Scene::Preview { .. }) {
+        if matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
             if let Some(last) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
                 if last.elapsed() >= Duration::from_millis(33) {
@@ -1121,7 +1124,7 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
-        if matches!(self.scene, Scene::Select | Scene::Preview { .. }) {
+        if matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
                 if self.preview.play_button_at(vx, vy) {
@@ -1723,13 +1726,19 @@ impl State {
         self.frame_clip = None;
         self.poll_scan();
         {
-            let in_select = matches!(self.scene, Scene::Select | Scene::Preview { .. });
+            // The Download tab previews remote maps through the same preview.
+            let browsing = matches!(self.scene, Scene::Download);
+            if browsing != self.preview_remote {
+                self.preview_remote = browsing;
+                self.preview.forget();
+            }
+            let in_select = matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download);
             let in_menu = in_select
                 || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby))
-                || matches!(self.scene, Scene::MpMenu | Scene::Lobby);
-            let selected = self.preview_target();
+                || matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::Download);
+            let (entries, selected) = if browsing { (&self.browse.remote, self.browse.shown) } else { (&self.library, self.preview_target()) };
             let rate = self.preview_rate();
-            self.preview.update(now, &self.library, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, rate);
+            self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, rate);
             self.stars.poll();
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
                 self.stars.request(i, &self.library[i].path, self.cfg.rate);
@@ -1839,7 +1848,7 @@ impl State {
                 let pw = canvas.width - x - 24.0;
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
                 if pw > 160.0 {
-                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, 380.0, self.cfg.scroll_speed, selected_stars) {
+                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, 380.0, self.cfg.scroll_speed, selected_stars, Some(("Play from", "Shift+Enter"))) {
                         self.frame_clip = Some(clip);
                     }
                 }
@@ -1917,8 +1926,22 @@ impl State {
             Scene::Download => {
                 let installed = self.installed_sets.take().unwrap_or_default();
                 let dir = self.songs_dir.display().to_string();
-                self.browse.draw(canvas, &self.downloads, &installed, &dir);
+                let lw = Select::list_width(canvas.width);
+                self.browse.draw(canvas, &self.downloads, &installed, &dir, lw);
                 self.installed_sets = Some(installed);
+                // The selected set's preview, like song select's.
+                let x = 24.0 + lw + 12.0;
+                let pw = canvas.width - x - 24.0;
+                let stars = self.browse.selected_diff().map(|d| d.stars);
+                if pw > 160.0 && self.browse.selected().is_some() {
+                    match self.preview.draw_panel(canvas, &self.browse.remote, x, 54.0, pw, 380.0, self.cfg.scroll_speed, stars, None) {
+                        Some(clip) => self.frame_clip = Some(clip),
+                        None if self.browse.shown.is_none() => {
+                            canvas.text_centered(x + pw / 2.0, 160.0, 8.0, rgba(0x8a8aa0, 1.0), "loading preview...");
+                        }
+                        None => {}
+                    }
+                }
             }
             Scene::Preview { back } => {
                 let lobby = matches!(**back, Scene::Lobby);
@@ -2198,7 +2221,7 @@ impl State {
                 std::thread::spawn(move || {
                     let found = download::search(&format!("{} {}", m.artist, m.title)).and_then(|sets| {
                         sets.into_iter()
-                            .find(|s| s.title.eq_ignore_ascii_case(&m.title) && s.diffs.iter().any(|d| d.0 == m.version))
+                            .find(|s| s.title.eq_ignore_ascii_case(&m.title) && s.diffs.iter().any(|d| d.version == m.version))
                             .ok_or_else(|| "not found on the mirrors".to_string())
                     });
                     let _ = tx.send(found);
@@ -2303,6 +2326,8 @@ impl State {
         match code {
             KeyCode::ArrowUp => self.browse.move_by(-1),
             KeyCode::ArrowDown => self.browse.move_by(1),
+            KeyCode::ArrowLeft => self.browse.cycle_diff(-1),
+            KeyCode::ArrowRight => self.browse.cycle_diff(1),
             KeyCode::PageUp => self.browse.move_by(-8),
             KeyCode::PageDown => self.browse.move_by(8),
             KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -2756,6 +2781,7 @@ fn main() {
         songs_dir,
         installed_sets: None,
         lobby_lookup: None,
+        preview_remote: false,
         scene_kind: None,
         scene_since: Instant::now(),
         scrubbing: None,

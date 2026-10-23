@@ -134,6 +134,16 @@ fn load_image(path: &Path) -> Option<Image> {
 }
 
 impl Preview {
+    /// The entry list changes meaning (song select <-> download previews): forget what was shown.
+    pub fn forget(&mut self) {
+        self.seen = None;
+        self.requested = None;
+        self.map = None;
+        self.game = None;
+        self.map_rx = None;
+        self.pending_seek = None;
+    }
+
     /// Something else (gameplay, calibration) took over the audio engine.
     pub fn invalidate_audio(&mut self) {
         self.audio_active = false;
@@ -217,7 +227,22 @@ impl Preview {
                         let (tx, rx) = mpsc::channel();
                         // Quick part first: from where the music was (speed change) or the preview point.
                         let part_from = self.resume_at.unwrap_or(e.meta.preview_time);
+                        let clip_at = e.meta.preview_time.max(0.0);
+                        let is_clip = song.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::download::CLIP_PREFIX));
                         std::thread::spawn(move || {
+                            if is_clip {
+                                // A download preview: ~10 s of music from the preview point, placed there.
+                                let clip = audio::decode(&song, sr).ok().map(|t| {
+                                    let base = (clip_at / 1000.0 * sr as f64 / speed).round() as i64;
+                                    (Arc::new(audio::change_rate(t, sr, speed, keep_pitch)), base, false)
+                                });
+                                let failed = clip.is_none();
+                                let _ = tx.send((song.clone(), clip));
+                                if !failed {
+                                    let _ = tx.send((song, None));
+                                }
+                                return;
+                            }
                             if part_from >= 0.0 {
                                 // SNIPPET_MS of playback covers that much more map time when sped up.
                                 if let Ok((part, base)) = audio::decode_part(&song, sr, Some((part_from, SNIPPET_MS * speed))) {
@@ -414,7 +439,8 @@ impl Preview {
     /// Details and the autoplay preview in the right-hand panel (virtual units). Returns the
     /// shape range to clip and the clip area.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_panel(&mut self, c: &mut Canvas, library: &[Entry], x: f32, y: f32, w: f32, h: f32, scroll_speed: f64, stars: Option<f32>) -> Option<(std::ops::Range<usize>, crate::layout::Area)> {
+    /// `button`: the action under the timeline as (verb, key hint), e.g. ("Play from", "Shift+Enter").
+    pub fn draw_panel(&mut self, c: &mut Canvas, library: &[Entry], x: f32, y: f32, w: f32, h: f32, scroll_speed: f64, stars: Option<f32>, button: Option<(&str, &str)>) -> Option<(std::ops::Range<usize>, crate::layout::Area)> {
         // The preview shows ~640 units of lane (several notes ahead), so its height follows the
         // panel width; the panel shrinks to fit instead of leaving empty space.
         let (band_top, band_h) = game::lane_band();
@@ -461,7 +487,7 @@ impl Preview {
         c.round_rect(bx, by, bw, bh, 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
         self.box_rect = Some([bx, by, bw, bh]);
         let loaded = loaded.is_some();
-        self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], Some(("Play from", "Shift+Enter")));
+        self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], button);
         let game = self.game.as_mut().filter(|_| loaded)?;
         let full_w = c.width;
         let start = c.shapes.len();
@@ -470,7 +496,10 @@ impl Preview {
         let oy = by + (bh - band_h * k) / 2.0 - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
-        c.text_right(bx + bw - 6.0, by + bh - 10.0, 6.0, rgba(0x6f6f86, 1.0), "click: fullscreen (Ctrl+Enter)");
+        if button.is_some() {
+            // Song select only (download previews have no fullscreen view).
+            c.text_right(bx + bw - 6.0, by + bh - 10.0, 6.0, rgba(0x6f6f86, 1.0), "click: fullscreen (Ctrl+Enter)");
+        }
         if let Some(at) = self.ready_at {
             let t = crate::render::progress(at, 220.0);
             if t < 1.0 {

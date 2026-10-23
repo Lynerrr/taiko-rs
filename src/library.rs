@@ -17,6 +17,11 @@ pub struct Entry {
 }
 
 impl Entry {
+    pub fn new(path: PathBuf, meta: Meta) -> Entry {
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        Entry { path, meta, size, hash: OnceLock::new() }
+    }
+
     pub fn label(&self) -> String {
         format!("{} - {} [{}]", self.meta.artist, self.meta.title, self.meta.version)
     }

@@ -164,6 +164,12 @@ your Songs folder as `<set id> <artist> - <title>/` (the first folder being scan
 `~/.local/share/taiko-rs/Songs` / `%APPDATA%\taiko-rs\Songs`, which is scanned at startup). The set
 shows up in the song list right away and is selected; sets you already have say *installed*.
 
+Before downloading, the selected result is previewed on the right like in song select: its cover
+as the background, details, star rating, difficulty timeline and the autoplay, with osu!'s ~10 s
+music clip from the preview point (so the autoplay is in sync there). Left/Right switches between
+the set's taiko difficulties (the hardest is shown first). Only that difficulty's `.osu`, the clip
+and the cover are fetched, and cached.
+
 ## Multiplayer
 
 Versus play over direct TCP (default port **7777**). Tab to the **MULTIPLAYER** tab:

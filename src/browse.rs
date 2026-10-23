@@ -1,14 +1,21 @@
 //! Download tab: search the osu! mirrors for taiko sets and download them into the Songs folder.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use crate::download::{self, Job, SetInfo};
+use crate::download::{self, Diff, Job, SetInfo};
+use crate::library::Entry;
 use crate::render::{approach, rgba, Canvas, Hit};
 
 /// Search this long after the last keystroke.
 const TYPE_DELAY: Duration = Duration::from_millis(450);
+/// Fetch the selected set's preview once the selection rests this long.
+const PREVIEW_DELAY: Duration = Duration::from_millis(250);
+
+/// (set id, beatmap id) of a previewed difficulty.
+type DiffKey = (u32, u32);
 
 #[derive(Default)]
 pub struct Browse {
@@ -21,6 +28,16 @@ pub struct Browse {
     edited: Option<Instant>,
     /// The query the shown results are for (None: nothing searched yet).
     searched: Option<String>,
+    /// Previewable difficulties fetched so far (entries for the song select preview) and their keys.
+    pub remote: Vec<Entry>,
+    remote_keys: Vec<DiffKey>,
+    /// The remote entry being previewed.
+    pub shown: Option<usize>,
+    /// Chosen difficulty per set (default: the hardest).
+    diff_choice: HashMap<u32, usize>,
+    wanted: Option<(DiffKey, Instant)>,
+    fetching: Option<(DiffKey, Receiver<Result<PathBuf, String>>)>,
+    failed: HashSet<DiffKey>,
 }
 
 /// What a result row shows on its right.
@@ -51,7 +68,65 @@ impl Browse {
         }
     }
 
+    /// The selected set's chosen difficulty.
+    pub fn selected_diff(&self) -> Option<&Diff> {
+        let set = self.selected()?;
+        let i = self.diff_choice.get(&set.id).copied().unwrap_or(set.diffs.len().saturating_sub(1));
+        set.diffs.get(i)
+    }
+
+    /// Left/Right: preview another difficulty of the selected set.
+    pub fn cycle_diff(&mut self, dir: i32) {
+        let Some(set) = self.selected() else { return };
+        let (id, n) = (set.id, set.diffs.len());
+        if n == 0 {
+            return;
+        }
+        let cur = self.diff_choice.get(&id).copied().unwrap_or(n - 1) as i32;
+        self.diff_choice.insert(id, (cur + dir).rem_euclid(n as i32) as usize);
+    }
+
+    /// Fetches the preview for the selection once it rests (one fetch at a time).
+    fn poll_preview(&mut self, now: Instant) {
+        if let Some((key, rx)) = &self.fetching {
+            if let Ok(result) = rx.try_recv() {
+                let key = *key;
+                self.fetching = None;
+                match result.map_err(|e| e.to_string()).and_then(|osu| make_entry(&osu).ok_or_else(|| "unreadable difficulty".into())) {
+                    Ok(entry) => {
+                        self.remote.push(entry);
+                        self.remote_keys.push(key);
+                    }
+                    Err(e) => {
+                        self.failed.insert(key);
+                        self.status = format!("no preview: {e}");
+                    }
+                }
+            }
+        }
+        let want = self.selected().zip(self.selected_diff()).map(|(s, d)| (s.id, d.id));
+        if want != self.wanted.map(|w| w.0) {
+            self.wanted = want.map(|k| (k, now));
+        }
+        let Some((key, since)) = self.wanted else {
+            self.shown = None;
+            return;
+        };
+        self.shown = self.remote_keys.iter().position(|&k| k == key);
+        let due = now - since >= PREVIEW_DELAY;
+        // A fetch for another selection is abandoned (its files stay cached for later).
+        let busy = self.fetching.as_ref().is_some_and(|(k, _)| *k == key);
+        if self.shown.is_none() && due && !busy && !self.failed.contains(&key) && key.1 != 0 {
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(download::fetch_preview(key.0, key.1));
+            });
+            self.fetching = Some((key, rx));
+        }
+    }
+
     pub fn poll(&mut self, now: Instant) {
+        self.poll_preview(now);
         if self.edited.is_some_and(|t| now - t >= TYPE_DELAY) && self.searched.as_deref() != Some(self.query.trim()) {
             self.search_now();
         }
@@ -98,10 +173,11 @@ impl Browse {
         self.results.get(self.cursor)
     }
 
-    pub fn draw(&mut self, c: &mut Canvas, jobs: &[Job], installed: &HashSet<u32>, songs_dir: &str) {
+    /// Draws the search box and results in a column `col` wide from the left edge (the preview
+    /// panel goes to its right).
+    pub fn draw(&mut self, c: &mut Canvas, jobs: &[Job], installed: &HashSet<u32>, songs_dir: &str, col: f32) {
         let w = c.width;
-        let col = (w - 48.0).min(760.0);
-        let x0 = (w - col) / 2.0;
+        let x0 = 24.0;
         crate::settings::tab_bar(c, 3, "maps from catboy.best / osu.direct");
         let busy = self.search.is_some() || self.edited.is_some();
         let text = if self.query.is_empty() { "type to search (artist, title, mapper)...".to_string() } else { format!("{}_", self.query) };
@@ -153,8 +229,8 @@ impl Browse {
                 }
                 RowState::Available => c.button(right - action_w, y + 8.0, action_w, 20.0, "Download", 8.0, Hit::DlGet(i), selected),
             }
-            let lo = set.diffs.first().map(|d| d.1).unwrap_or(0.0);
-            let hi = set.diffs.last().map(|d| d.1).unwrap_or(0.0);
+            let lo = set.diffs.first().map(|d| d.stars).unwrap_or(0.0);
+            let hi = set.diffs.last().map(|d| d.stars).unwrap_or(0.0);
             let pill_right = right - action_w - 10.0;
             let pill = crate::stars::draw_pill(c, pill_right, y + 13.0, 7.0, Some(hi));
             let range = if (hi - lo).abs() < 0.05 { String::new() } else { format!("{lo:.2} -") };
@@ -167,11 +243,21 @@ impl Browse {
         }
         if self.results.is_empty() || !self.status.is_empty() {
             let msg = if self.status.is_empty() { "no results" } else { self.status.as_str() };
-            c.text_centered(w / 2.0, if self.results.is_empty() { 220.0 } else { 440.0 }, 9.0, rgba(0xc8c8d8, 1.0), &fit(msg, 9.0, col));
+            c.text_centered(x0 + col / 2.0, if self.results.is_empty() { 220.0 } else { 440.0 }, 9.0, rgba(0xc8c8d8, 1.0), &fit(msg, 9.0, col));
         }
+        let _ = w;
         let active = jobs.len();
         let footer = if active > 0 { format!("{active} downloading  |  saving to {songs_dir}") } else { format!("saving to {songs_dir}") };
-        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Up/Down select   Enter / click download   type to search   Esc clear / back   Tab songs");
+        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Up/Down select   Left/Right difficulty   Enter / click download   type to search   Esc clear / back   Tab songs");
         c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), &footer);
     }
+}
+
+/// A library entry for a fetched preview: its `.osu`, with the music clip and cover next to it.
+fn make_entry(osu: &std::path::Path) -> Option<Entry> {
+    let mut meta = crate::beatmap::read_meta_file(osu)?;
+    let dir = osu.parent()?;
+    meta.audio_file = download::clip_in(dir)?;
+    meta.background = dir.join("cover.jpg").is_file().then(|| "cover.jpg".to_string());
+    Some(Entry::new(osu.to_path_buf(), meta))
 }

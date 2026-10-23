@@ -34,9 +34,21 @@ pub struct SetInfo {
     pub title: String,
     pub creator: String,
     pub status: String,
-    /// (difficulty name, star rating), easiest first.
-    pub diffs: Vec<(String, f32)>,
+    /// Taiko difficulties, easiest first.
+    pub diffs: Vec<Diff>,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Diff {
+    /// osu! beatmap ID (0 when unknown).
+    pub id: u32,
+    pub version: String,
+    pub stars: f32,
+}
+
+/// Preview clips are saved under this name; the preview treats such audio as a short clip
+/// that starts at the map's preview point.
+pub const CLIP_PREFIX: &str = "taiko-rs-preview-clip";
 
 impl SetInfo {
     /// Folder name like osu! uses: "123456 Artist - Title", made safe for any filesystem.
@@ -65,6 +77,8 @@ struct ApiSet {
 #[derive(Deserialize)]
 struct ApiMap {
     #[serde(default)]
+    id: u32,
+    #[serde(default)]
     version: String,
     #[serde(default)]
     mode_int: Option<u8>,
@@ -84,13 +98,13 @@ fn parse_sets(json: &str) -> Result<Vec<SetInfo>, String> {
     Ok(sets
         .into_iter()
         .filter_map(|s| {
-            let mut diffs: Vec<(String, f32)> = s
+            let mut diffs: Vec<Diff> = s
                 .beatmaps
                 .iter()
                 .filter(|b| b.mode_int == Some(1) || b.mode.as_deref() == Some("taiko"))
-                .map(|b| (b.version.clone(), b.difficulty_rating))
+                .map(|b| Diff { id: b.id, version: b.version.clone(), stars: b.difficulty_rating })
                 .collect();
-            diffs.sort_by(|a, b| a.1.total_cmp(&b.1));
+            diffs.sort_by(|a, b| a.stars.total_cmp(&b.stars));
             (!diffs.is_empty()).then_some(SetInfo { id: s.id, artist: s.artist, title: s.title, creator: s.creator, status: s.status, diffs })
         })
         .collect())
@@ -214,6 +228,61 @@ fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Fetches what a preview needs without downloading the set: the difficulty's `.osu`, the
+/// set's ~10 s music clip (from its preview point) and its cover, cached per set. Returns the
+/// `.osu` path; the clip and cover sit next to it.
+pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
+    let dir = crate::config::user_dir(true).unwrap_or_else(|| std::env::temp_dir().join("taiko-rs")).join("previews").join(set.to_string());
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // Short timeout: a throttled mirror shouldn't hold the preview up.
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(8))).build().into();
+    let get = |url: &str| -> Result<(Vec<u8>, String), String> {
+        let mut r = agent.get(url).header("User-Agent", USER_AGENT).call().map_err(|e| e.to_string())?;
+        let mime = r.body().mime_type().unwrap_or("").to_string();
+        let bytes = r.body_mut().with_config().limit(32 << 20).read_to_vec().map_err(|e| e.to_string())?;
+        Ok((bytes, mime))
+    };
+    let osu = dir.join(format!("{beatmap}.osu"));
+    if !osu.is_file() {
+        let urls = [format!("https://osu.direct/api/osu/{beatmap}"), format!("https://catboy.best/osu/{beatmap}")];
+        let mut last = String::new();
+        let mut saved = false;
+        for url in &urls {
+            match get(url) {
+                Ok((bytes, _)) if bytes.starts_with(b"osu file format") || bytes.windows(15).take(64).any(|w| w == b"osu file format") => {
+                    std::fs::write(&osu, bytes).map_err(|e| e.to_string())?;
+                    saved = true;
+                    break;
+                }
+                Ok(_) => last = "not a beatmap".into(),
+                Err(e) => last = e,
+            }
+        }
+        if !saved {
+            return Err(format!("difficulty: {last}"));
+        }
+    }
+    let have_clip = std::fs::read_dir(&dir).map(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().starts_with(CLIP_PREFIX))).unwrap_or(false);
+    if !have_clip {
+        let (bytes, mime) = get(&format!("https://b.ppy.sh/preview/{set}.mp3")).map_err(|e| format!("music: {e}"))?;
+        let ext = if mime.contains("ogg") || bytes.starts_with(b"OggS") { "ogg" } else { "mp3" };
+        std::fs::write(dir.join(format!("{CLIP_PREFIX}.{ext}")), bytes).map_err(|e| e.to_string())?;
+    }
+    let cover = dir.join("cover.jpg");
+    if !cover.is_file() {
+        // Optional: the preview works without a background.
+        if let Ok((bytes, _)) = get(&format!("https://assets.ppy.sh/beatmaps/{set}/covers/cover.jpg")) {
+            let _ = std::fs::write(&cover, bytes);
+        }
+    }
+    Ok(osu)
+}
+
+/// The clip file in a preview folder.
+pub fn clip_in(dir: &Path) -> Option<String> {
+    std::fs::read_dir(dir).ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).find(|n| n.starts_with(CLIP_PREFIX))
+}
+
 /// The beatmap set ID a library folder or map belongs to: "123456 Artist - Title" folders, as
 /// osu! names them.
 pub fn set_id_of_folder(path: &Path) -> Option<u32> {
@@ -235,9 +304,11 @@ mod tests {
             {"id": 8, "beatmaps": [{"version": "4K", "mode": "mania", "mode_int": 3, "difficulty_rating": 2.0}]}]"#;
         let sets = parse_sets(json).unwrap();
         assert_eq!(sets.len(), 1, "sets without taiko difficulties are dropped");
-        assert_eq!(sets[0].diffs, vec![("Kantan".to_string(), 1.2), ("Oni".to_string(), 4.5)]);
+        let names: Vec<(&str, f32)> = sets[0].diffs.iter().map(|d| (d.version.as_str(), d.stars)).collect();
+        assert_eq!(names, vec![("Kantan", 1.2), ("Oni", 4.5)]);
         assert_eq!(sets[0].folder_name(), "7 A - T_ x_");
         assert_eq!(set_id_of_folder(Path::new("/s/7 A - T_ x_")), Some(7));
         assert_eq!(set_id_of_folder(Path::new("/s/Some folder")), None);
     }
+
 }
