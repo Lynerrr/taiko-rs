@@ -131,7 +131,8 @@ Left/Right to move), **I** / **O** set where the video starts and ends, the crop
 the frame (edges resize) or picked with **C** (full, lane, square, vertical), **Z** the frame size
 (720p/1080p/1440p), **F** the frame rate, **H** hitsounds. **Enter** renders it frame by frame
 offscreen (with the music and the hitsounds as they were judged) into an MP4 in the `videos`
-folder next to the config. Needs [ffmpeg](https://ffmpeg.org) on the PATH (Windows:
+folder next to the config; once it's saved, **Show in folder (S)** opens the file manager with
+the video selected. Needs [ffmpeg](https://ffmpeg.org) on the PATH (Windows:
 `winget install ffmpeg`).
 
 **Sorting and collections:** the *Sort* button next to the search box (or Ctrl+S, Shift for

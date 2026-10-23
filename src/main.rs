@@ -157,6 +157,8 @@ struct State {
     /// A video export in progress, and the editor's last message.
     export: Option<video::Export>,
     video_status: String,
+    /// The video last exported from the open editor.
+    last_video: Option<PathBuf>,
     /// When the background image last changed (it fades in).
     bg_changed: Option<Instant>,
     /// A newly loaded skin's note images, for the render thread to upload.
@@ -306,6 +308,19 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         let right = format!("{}  {} miss  {}", r.player, r.miss, scores::age(r.date));
         c.text_right(bx - 6.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
+}
+
+/// `file://` URI for a local path.
+fn file_uri(path: &std::path::Path) -> String {
+    let mut uri = String::from("file://");
+    for b in path.to_string_lossy().bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
+            uri.push(b as char);
+        } else {
+            uri.push_str(&format!("%{b:02X}"));
+        }
+    }
+    uri
 }
 
 /// Volume overlay (bottom right) shown while Alt + wheel changes the master volume.
@@ -500,6 +515,7 @@ impl State {
         } else {
             "ffmpeg wasn't found: install it to export (Windows: winget install ffmpeg; Linux: your package manager)".into()
         };
+        self.last_video = None;
         self.scene = Scene::VideoEdit(Box::new(video::Editor::new(r, rx)));
     }
 
@@ -553,6 +569,11 @@ impl State {
             KeyCode::KeyF => ed.fps = (ed.fps + 1) % video::FRAME_RATES.len(),
             KeyCode::KeyH => ed.hitsounds = !ed.hitsounds,
             KeyCode::Enter | KeyCode::NumpadEnter => self.start_export(),
+            KeyCode::KeyS => {
+                if let Some(path) = self.last_video.clone() {
+                    self.show_in_folder(&path);
+                }
+            }
             KeyCode::Escape => {
                 self.to_select();
             }
@@ -981,6 +1002,34 @@ impl State {
         let opener = if cfg!(windows) { "explorer" } else { "xdg-open" };
         if std::process::Command::new(opener).arg(&dir).spawn().is_err() {
             self.toast(format!("skins go in {}", dir.display()));
+        }
+    }
+
+    /// Opens the file manager on `path`'s folder with the file selected where it can.
+    fn show_in_folder(&mut self, path: &std::path::Path) {
+        use std::process::Command;
+        let opened = if cfg!(windows) {
+            let mut arg = std::ffi::OsString::from("/select,");
+            arg.push(path);
+            Command::new("explorer").arg(arg).spawn().is_ok()
+        } else if cfg!(target_os = "macos") {
+            Command::new("open").arg("-R").arg(path).spawn().is_ok()
+        } else {
+            // The freedesktop file manager interface (Dolphin, Nautilus, ...) selects the file;
+            // otherwise just open its folder.
+            let uri = file_uri(path);
+            let selected = Command::new("dbus-send")
+                .args(["--session", "--print-reply", "--dest=org.freedesktop.FileManager1", "--type=method_call", "/org/freedesktop/FileManager1", "org.freedesktop.FileManager1.ShowItems"])
+                .arg(format!("array:string:{uri}"))
+                .arg("string:")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            selected || path.parent().is_some_and(|dir| Command::new("xdg-open").arg(dir).spawn().is_ok())
+        };
+        if !opened {
+            self.toast(format!("the video is in {}", path.parent().unwrap_or(path).display()));
         }
     }
 
@@ -2586,6 +2635,7 @@ impl State {
                     self.export = None;
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     self.video_status = format!("saved \"{name}\" in the videos folder");
+                    self.last_video = Some(path);
                     self.toast("video saved".into());
                 }
                 Ok(Err(e)) => {
@@ -3051,7 +3101,7 @@ impl State {
                 if let Some(g) = &mut ed.game {
                     g.kiai_effects = self.cfg.kiai_effects;
                 }
-                ed.draw(canvas, self.cfg.scroll_speed, progress, &self.video_status);
+                ed.draw(canvas, self.cfg.scroll_speed, progress, &self.video_status, self.last_video.is_some());
             }
             Scene::MpResults => match &self.mp {
                 Some(s) => multiplayer::draw_results(canvas, s),
@@ -3963,6 +4013,7 @@ fn main() {
         leaderboard: Vec::new(),
         export: None,
         video_status: String::new(),
+        last_video: None,
         bg_changed: None,
         sprites_upload: None,
         focused: true,

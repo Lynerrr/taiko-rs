@@ -158,7 +158,8 @@ impl Editor {
         (cw, ch, cx, cy)
     }
 
-    pub fn draw(&mut self, c: &mut Canvas, scroll_speed: f64, exporting: Option<f32>, status: &str) {
+    /// `saved`: a video was exported from this editor (offers to show it in its folder).
+    pub fn draw(&mut self, c: &mut Canvas, scroll_speed: f64, exporting: Option<f32>, status: &str, saved: bool) {
         let w = c.width;
         let label = &self.replay.map_label;
         c.text_centered(w / 2.0, 12.0, 9.0, rgba(0xffffff, 1.0), &format!("VIDEO  -  {label}  -  replay of {}", self.replay.player));
@@ -230,7 +231,12 @@ impl Editor {
             (&fps, Hit::Key(KeyCode::KeyF), false),
             (&hits, Hit::Key(KeyCode::KeyH), false),
         ]);
-        c.button_row(ty + th + 66.0, &[("Export MP4  (Enter)", Hit::Key(KeyCode::Enter), true), ("Back  (Esc)", Hit::Key(KeyCode::Escape), false)]);
+        let mut actions = vec![("Export MP4  (Enter)", Hit::Key(KeyCode::Enter), true)];
+        if saved {
+            actions.push(("Show in folder  (S)", Hit::Key(KeyCode::KeyS), false));
+        }
+        actions.push(("Back  (Esc)", Hit::Key(KeyCode::Escape), false));
+        c.button_row(ty + th + 66.0, &actions);
         if !status.is_empty() {
             c.text_centered(w / 2.0, ty + th + 90.0, 7.0, rgba(0xFFD34D, 1.0), status);
         }
