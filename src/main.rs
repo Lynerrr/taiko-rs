@@ -539,6 +539,7 @@ impl State {
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::KiaiEffects => on(c.kiai_effects),
+            Item::AntiMash => on(c.anti_mash),
             Item::ShowConverts => on(self.select.show_converts),
             Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
             Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
@@ -588,6 +589,7 @@ impl State {
             }
             Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
+            Item::AntiMash => self.cfg.anti_mash = !self.cfg.anti_mash,
             Item::ShowConverts => {
                 self.select.show_converts = !self.select.show_converts;
                 self.select.refilter(&self.library);
@@ -2068,6 +2070,7 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
                 game.kiai_effects = self.cfg.kiai_effects;
+                game.anti_mash = self.cfg.anti_mash;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 let hud_in = self.cfg.hud_in_playfield;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
@@ -2194,6 +2197,7 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
                 game.kiai_effects = self.cfg.kiai_effects;
+                game.anti_mash = self.cfg.anti_mash;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;

@@ -170,6 +170,9 @@ pub struct Game {
     pub show_offset_hint: bool,
     /// Kiai time tints the lane and pulses the hit target.
     pub kiai_effects: bool,
+    /// osu!'s mash penalty: a wrong-colour or too-early hit on the next note is a miss. Off,
+    /// such presses are ignored (only a note that passes unhit misses).
+    pub anti_mash: bool,
     /// Scale the suggestion to current UR; off = plain average of the last 40 hits.
     pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
@@ -233,6 +236,7 @@ impl Game {
             mute_hits: false,
             show_offset_hint: false,
             kiai_effects: true,
+            anti_mash: false,
             ur_scaled_hint: true,
             offset: 0.0,
             rate,
@@ -565,13 +569,16 @@ impl Game {
             } else {
                 Judge::Ok
             };
-            let is_big = n.big;
-            self.apply(i, judge, t, Some(err));
-            if judge != Judge::Miss && is_big {
-                self.strong = Some(StrongPending { note: i, kat, key, at: t });
-                return big;
+            // Without the mash penalty a press that would miss leaves the note alone.
+            if judge != Judge::Miss || self.anti_mash {
+                let is_big = n.big;
+                self.apply(i, judge, t, Some(err));
+                if judge != Judge::Miss && is_big {
+                    self.strong = Some(StrongPending { note: i, kat, key, at: t });
+                    return big;
+                }
+                return normal;
             }
-            return normal;
         }
 
         if let Some(i) = self.find_active(t, Kind::Roll) {
@@ -923,6 +930,25 @@ mod tests {
     /// Deterministic spread around `mean` with standard deviation close to `sd`.
     fn spread(mean: f64, sd: f64, n: usize) -> Vec<f64> {
         (0..n).map(|i| mean + if i % 2 == 0 { sd } else { -sd }).collect()
+    }
+
+    #[test]
+    fn mash_penalty_is_optional() {
+        let mut g = game();
+        let first = g.map.notes.iter().position(|n| matches!(n.kind, Kind::Don | Kind::Kat)).unwrap();
+        let (t0, kat) = (g.map.notes[first].time, g.map.notes[first].kind == Kind::Kat);
+        let early = t0 - (g.windows.ok + g.windows.miss) / 2.0;
+        // Off (default): too early or the wrong colour does nothing, the right hit still counts.
+        g.judge_press(1, kat, early);
+        g.judge_press(1, !kat, t0);
+        assert_eq!((g.stats.miss, g.state[first].judged), (0, None));
+        g.judge_press(1, kat, t0);
+        assert_eq!(g.state[first].judged, Some(Judge::Great));
+        // On: the early hit is a miss, like osu!.
+        let mut g = game();
+        g.anti_mash = true;
+        g.judge_press(1, kat, early);
+        assert_eq!((g.stats.miss, g.state[first].judged), (1, Some(Judge::Miss)));
     }
 
     #[test]
