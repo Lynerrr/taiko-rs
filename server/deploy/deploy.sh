@@ -8,5 +8,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 cargo build --release --target x86_64-unknown-linux-musl --manifest-path "$here/../Cargo.toml"
 ssh -p "$port" "$target" 'mkdir -p ~/taiko-server/data'
 scp -P "$port" "$here/../target/x86_64-unknown-linux-musl/release/taiko-server" "$here/Dockerfile" "$here/docker-compose.yml" "$target:taiko-server/"
-# Compose v2 (`docker compose`) or the older standalone `docker-compose`.
-ssh -p "$port" "$target" 'cd ~/taiko-server && if docker compose version >/dev/null 2>&1; then c="docker compose"; else c=docker-compose; fi && $c up -d --build && $c ps'
+# Compose v2 (`docker compose`) or the older standalone `docker-compose`. The image is built
+# first and the old container removed before starting the new one: docker-compose 1.29 can't
+# recreate containers on newer Docker (KeyError: 'ContainerConfig'), so downtime is a moment.
+ssh -p "$port" "$target" 'cd ~/taiko-server && if docker compose version >/dev/null 2>&1; then c="docker compose"; else c=docker-compose; fi && $c build && docker rm -f taiko-server >/dev/null 2>&1; $c up -d && $c ps'
