@@ -1,9 +1,11 @@
-//! Startup splash, timed to its voice clip (`assets/splash.ogg`, ~2.3 s): the screen powers on like
-//! a CRT, a boot log of what is really loading types itself out, a pixel portrait assembles from
-//! don/kat-coloured pixels, "taiko-rs" drops in with the syllables, the hiss glitches the picture,
-//! a loading bar fills to READY and the screen powers off into song select. Effects follow the
-//! clip's loudness. Any key or click skips to the power-off. Settings -> Video -> *Startup splash*
-//! turns it off.
+//! Startup splash, timed to its voice clip (`assets/splash.ogg`, ~2.3 s, an angry shout): the screen
+//! powers on like a CRT, a boot log of what is really loading types itself out and a pixel portrait
+//! assembles from don/kat-coloured pixels. Then the shout: every word punches the portrait at the
+//! camera with impact frames, shockwaves and screen shake, the loudest stretch turns into a
+//! deep-fried rage (speed lines, red vignette, colour split), the hiss glitches the picture, the
+//! title stamps in, a loading bar jumps to READY and the screen powers off into song select.
+//! Effects follow the clip's loudness. Any key or click skips to the power-off. Settings -> Video ->
+//! *Startup splash* turns it off.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,21 +19,36 @@ const VOICE: &[u8] = include_bytes!("../assets/splash.ogg");
 /// Size of one portrait pixel (virtual units); the title's font pixels are a bit bigger.
 const PX: f32 = 3.0;
 const TEXT_SIZE: f32 = 7.0 * 4.0;
-const TITLE: &str = "taiko-rs";
 
-// The timeline, in ms of the clip: a click at 100, the voice from 500 (a long "tai" up to
-// ~1150), "ko" around 1250-1400, a hiss 1420-1620, two short sounds around 1700 and 1900,
-// quiet from 2000.
+// The clip, in ms: a mic click at 100, then three words. The first 470-700 (syllables at 470 and
+// 610), the second and loudest 710-1190 (syllables at 710 and 910), a decay, then the third
+// 1430-1900: a hiss 1430-1630, a low vowel at 1650, a stop and a short vowel at 1830. Quiet
+// from 2000.
 const POWER_ON: f32 = 100.0;
-const ASSEMBLE: (f32, f32) = (150.0, 560.0);
-/// When each title letter lands.
-const LETTERS: [f32; 8] = [500.0, 610.0, 720.0, 1220.0, 1320.0, 1400.0, 1450.0, 1540.0];
-/// Drum hits on the voice: when, and whether it's a kat (blue) rather than a don (red).
-const HITS: [(f32, bool); 5] = [(500.0, false), (1220.0, true), (1450.0, false), (1700.0, false), (1900.0, true)];
+const ASSEMBLE: (f32, f32) = (120.0, 470.0);
+/// Every syllable hits: when, a kat (blue) rather than a don (red), and how hard (1 = impact
+/// frame, big shockwave, heavy shake).
+const HITS: [(f32, bool, f32); 7] =
+    [(470.0, false, 0.4), (610.0, true, 0.4), (710.0, false, 1.0), (910.0, false, 1.0), (1430.0, true, 0.5), (1650.0, false, 0.6), (1830.0, false, 1.0)];
+/// The loudest word: rage mode.
+const RAGE: (f32, f32) = (700.0, 1200.0);
+/// The hiss: glitches.
 const GLITCH: (f32, f32) = (1420.0, 1640.0);
-/// Loading bar progress keyframes (ms, 0..1): it stalls and jumps like a real one.
-const LOADING: [(f32, f32); 9] =
-    [(150.0, 0.0), (420.0, 0.16), (560.0, 0.21), (820.0, 0.52), (1160.0, 0.58), (1300.0, 0.71), (1640.0, 0.86), (1760.0, 0.93), (2000.0, 1.0)];
+/// The title, in parts that stamp in on syllables.
+const TITLE: [(&str, f32); 2] = [("taiko", 710.0), ("-rs", 1830.0)];
+/// Loading bar progress keyframes (ms, 0..1): it crawls, then the words kick it forward.
+const LOADING: [(f32, f32); 10] = [
+    (120.0, 0.0),
+    (460.0, 0.17),
+    (700.0, 0.24),
+    (730.0, 0.55),
+    (900.0, 0.6),
+    (930.0, 0.74),
+    (1420.0, 0.78),
+    (1640.0, 0.86),
+    (1820.0, 0.88),
+    (1850.0, 1.0),
+];
 const POWER_OFF: f32 = 2150.0;
 const POWER_OFF_LEN: f32 = 380.0;
 
@@ -73,12 +90,23 @@ fn ease_out_back(t: f32) -> f32 {
 }
 
 fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-    std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
+    std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t.clamp(0.0, 1.0))
 }
 
 fn with_alpha(mut c: [f32; 4], a: f32) -> [f32; 4] {
     c[3] *= a;
     c
+}
+
+/// "Deep-fried": more contrast and saturation, pushed toward red, by `amount` (0..1).
+fn fry(c: [f32; 4], amount: f32) -> [f32; 4] {
+    let l = (c[0] + c[1] + c[2]) / 3.0;
+    let mut out = c;
+    for v in &mut out[..3] {
+        let sat = l + (*v - l) * (1.0 + 1.2 * amount);
+        *v = ((sat - 0.5) * (1.0 + 0.8 * amount) + 0.5).clamp(0.0, 1.0);
+    }
+    mix(out, [1.0, 0.2, 0.1, c[3]], 0.25 * amount)
 }
 
 /// Piecewise-linear lookup in (time, value) keyframes.
@@ -89,6 +117,23 @@ fn keyframes(keys: &[(f32, f32)], t: f32) -> f32 {
     }
     let ((t0, v0), (t1, v1)) = (keys[i - 1], keys[i]);
     v0 + (v1 - v0) * (t - t0) / (t1 - t0)
+}
+
+/// How much of a fast-decaying kick from the hits is left at `t`: (punch 0..1, the strongest
+/// hit's impact frame 0..1 for its first 110 ms).
+fn kicks(t: f32) -> (f32, f32) {
+    let mut punch = 0.0f32;
+    let mut impact = 0.0f32;
+    for &(at, _, strength) in &HITS {
+        let since = t - at;
+        if since >= 0.0 {
+            punch = punch.max(strength * (-since / 140.0).exp());
+            if strength >= 1.0 && since < 110.0 {
+                impact = impact.max(1.0 - since / 110.0);
+            }
+        }
+    }
+    (punch, impact)
 }
 
 impl Splash {
@@ -157,57 +202,93 @@ impl Splash {
         }
         let start = c.shapes.len();
         let loud = self.loudness(t);
+        let (punch, impact) = kicks(t);
+        let rage = if (RAGE.0..RAGE.1).contains(&t) { loud } else { 0.0 };
+        let glitch = if (GLITCH.0..GLITCH.1).contains(&t) { (0.5 + loud * 1.5).min(1.0) } else { 0.0 };
+        let bucket = (t / 40.0) as u32;
 
         let (gw, gh) = (self.size.0 as f32, self.size.1 as f32);
         let (pw, ph) = (gw * PX, gh * PX);
         let (cx, cy) = (w / 2.0, 40.0 + ph / 2.0);
 
-        // Hit rings burst out behind the portrait; the picture bumps and the screen shakes.
-        let mut bump = 0.0f32;
-        let mut shake = 0.0f32;
-        for &(at, kat) in &HITS {
-            let p = (t - at) / 450.0;
+        // Red flash after an impact frame, and a red vignette that pulses with the rage.
+        let flash = if impact > 0.0 { 0.0 } else { kicks(t - 110.0).1 };
+        if flash > 0.0 {
+            c.rect(-20.0, -20.0, w + 40.0, VIRTUAL_HEIGHT + 40.0, rgba(0x8a0f05, 0.7 * flash));
+        }
+
+        // Speed lines rushing out from the face while the loudest word lasts.
+        if rage > 0.05 {
+            let rays = 56;
+            let shift = (t / 60.0) as u32;
+            for i in 0..rays {
+                let angle = (i as f32 + hash(i, shift, 20) * 0.6) / rays as f32 * std::f32::consts::TAU;
+                let (dx, dy) = (angle.cos(), angle.sin());
+                let inner = ph * 0.55 + hash(i, shift, 21) * 40.0;
+                let len = 80.0 + hash(i, shift, 22) * 260.0 * rage;
+                let col = if i % 3 == 0 { DON } else { 0xffffff };
+                let steps = (len / 6.0) as usize;
+                for k in 0..steps {
+                    let d = inner + k as f32 * 6.0;
+                    let fade = 1.0 - k as f32 / steps as f32;
+                    c.rect(cx + dx * d - 1.5, cy + dy * d - 1.5, 3.0, 3.0, rgba(col, 0.5 * rage * fade));
+                }
+            }
+        }
+
+        // Shockwaves burst out behind the portrait on every hit.
+        for &(at, kat, strength) in &HITS {
+            let p = (t - at) / (350.0 + 250.0 * strength);
             if (0.0..1.0).contains(&p) {
                 let col = if kat { KAT } else { DON };
-                let r = ph * 0.45 + ease_out_cubic(p) * ph * 0.6;
-                c.ring(cx, cy, r, rgba(col, (1.0 - p) * 0.8), 3.0 + 6.0 * (1.0 - p));
-                bump = bump.max((1.0 - p).powi(3) * 0.07);
-                shake = shake.max((1.0 - p).powi(4) * 7.0);
+                let r = ph * 0.45 + ease_out_cubic(p) * ph * (0.4 + 0.9 * strength);
+                c.ring(cx, cy, r, rgba(col, (1.0 - p) * 0.85), (3.0 + 9.0 * strength) * (1.0 - p));
+                if strength >= 1.0 {
+                    c.ring(cx, cy, r * 0.8, rgba(0xffffff, (1.0 - p) * 0.5), 2.0);
+                }
             }
         }
         // A glow that breathes with the voice.
-        c.glow(cx, cy, ph * 0.4, 50.0 + 40.0 * loud, mix(rgba(DON, 0.15 + 0.5 * loud), rgba(0xFFB347, 0.6 * loud), loud));
+        c.glow(cx, cy, ph * 0.4, 50.0 + 60.0 * loud, mix(rgba(DON, 0.15 + 0.5 * loud), rgba(0xFFB347, 0.6 * loud), loud));
 
-        // The hiss tears the picture: rows slide sideways, colour channels split, static.
-        let glitch = if (GLITCH.0..GLITCH.1).contains(&t) { (0.4 + loud * 1.5).min(1.0) } else { 0.0 };
-        let bucket = (t / 40.0) as u32;
-        let split = (glitch * 5.0).max((loud - 0.45).max(0.0) * 8.0);
-
-        let scale = 1.0 + bump + loud * 0.03;
+        // The portrait: assembles from flying pixels, then gets punched at the camera on every
+        // syllable, zooms and wobbles with the rage, tears on the hiss.
+        let split = (glitch * 6.0).max(rage * 7.0).max(punch * 5.0);
+        let scale = 1.0 + punch * 0.28 + rage * 0.12;
+        let wobble = rage * (t * 0.045).sin() * 0.18;
         let mut placed = Vec::with_capacity(self.pixels.len());
         for &(x, y, col) in &self.pixels {
-            let delay = ASSEMBLE.0 + (1.0 - y as f32 / gh) * 160.0 + hash(x, y, 1) * 120.0;
+            let delay = ASSEMBLE.0 + (1.0 - y as f32 / gh) * 130.0 + hash(x, y, 1) * 90.0;
             let p = ((t - delay) / (ASSEMBLE.1 - ASSEMBLE.0 - 200.0)).clamp(0.0, 1.0);
             if p <= 0.0 {
                 continue;
             }
-            let row_shift = if glitch > 0.0 && hash(y / 3, bucket, 5) > 0.72 { (hash(y / 3, bucket, 6) - 0.5) * 40.0 * glitch } else { 0.0 };
-            let tx = cx + ((x as f32 + 0.5) * PX - pw / 2.0) * scale + row_shift;
-            let ty = cy + ((y as f32 + 0.5) * PX - ph / 2.0) * scale;
+            let row_shift = if glitch > 0.0 && hash(y / 3, bucket, 5) > 0.7 { (hash(y / 3, bucket, 6) - 0.5) * 48.0 * glitch } else { 0.0 };
+            let ly = ((y as f32 + 0.5) * PX - ph / 2.0) * scale;
+            let tx = cx + ((x as f32 + 0.5) * PX - pw / 2.0) * scale + ly * wobble + row_shift;
+            let ty = cy + ly;
             let angle = hash(x, y, 2) * std::f32::consts::TAU;
             let dist = 180.0 + hash(x, y, 3) * 300.0;
             let (sx, sy) = (cx + angle.cos() * dist, cy + angle.sin() * dist * 0.7);
             let e = ease_out_back(p);
             let (px, py) = (sx + (tx - sx) * e, sy + (ty - sy) * e);
             let note = rgba(if hash(x, y, 4) < 0.5 { DON } else { KAT }, 1.0);
-            let mut colour = mix(note, col, ease_out_cubic((p - 0.35) / 0.65));
+            let mut colour = fry(mix(note, col, ease_out_cubic((p - 0.35) / 0.65)), rage.max(punch * 0.6));
             colour[3] = (p * 3.0).min(1.0);
+            // An impact frame: the face goes to a black silhouette on a white screen.
+            if impact > 0.0 {
+                colour = [0.0, 0.0, 0.0, 1.0];
+            }
             // Slightly oversized so neighbouring pixels leave no seams.
             let s = (PX * scale + 0.4) * (0.4 + 0.6 * ease_out_cubic(p));
             placed.push((px - s / 2.0, py - s / 2.0, s, colour, p >= 1.0));
         }
+        if impact > 0.0 {
+            // Oversized: the screen shake mustn't uncover its edges.
+            c.rect(-20.0, -20.0, w + 40.0, VIRTUAL_HEIGHT + 40.0, rgba(0xffffff, 0.9 * impact.sqrt()));
+        }
         // The split colour copies all go underneath, so they only show around the edges.
-        if split > 0.5 {
+        if split > 0.5 && impact <= 0.0 {
             for &(x, y, s, _, _) in placed.iter().filter(|p| p.4) {
                 c.rect(x - split, y, s, s, rgba(0xff2a4a, 0.4));
                 c.rect(x + split, y, s, s, rgba(0x2ad4ff, 0.4));
@@ -217,54 +298,68 @@ impl Splash {
             c.rect(x, y, s, s, colour);
         }
         if glitch > 0.0 {
-            for i in 0..140 {
+            for i in 0..160 {
                 let (nx, ny) = (hash(i, bucket, 7), hash(i, bucket, 8));
                 let v = 0.5 + hash(i, bucket, 9) * 0.5;
                 c.rect(cx - pw / 2.0 + nx * pw, cy - ph / 2.0 + ny * ph, PX, PX, [v, v, v, 0.7 * glitch]);
             }
-        }
-
-        // The title: letters drop in on the syllables and bounce.
-        let tw = Canvas::text_width(TEXT_SIZE, TITLE);
-        let mut x = cx - tw / 2.0;
-        let ty = cy + ph / 2.0 + 24.0;
-        for (i, ch) in TITLE.chars().enumerate() {
-            let s = ch.to_string();
-            let adv = Canvas::text_width(TEXT_SIZE, &s);
-            let p = (t - LETTERS[i] + 120.0) / 360.0;
-            if p > 0.0 {
-                let drop = (1.0 - ease_out_back(p)) * -70.0;
-                let col = if ch == '-' { 0x6f6f86 } else if i % 2 == 0 { 0xffffff } else { DON };
-                let a = (p * 4.0).min(1.0);
-                let jitter = if glitch > 0.0 && hash(i as u32, bucket, 10) > 0.6 { (hash(i as u32, bucket, 11) - 0.5) * 16.0 } else { 0.0 };
-                c.text(x + 2.0 + jitter, ty + drop + 2.0, TEXT_SIZE, rgba(0x000000, 0.5 * a), &s);
-                if split > 0.5 {
-                    c.text(x - split + jitter, ty + drop, TEXT_SIZE, rgba(0xff2a4a, 0.4 * a), &s);
-                    c.text(x + split + jitter, ty + drop, TEXT_SIZE, rgba(0x2ad4ff, 0.4 * a), &s);
-                }
-                c.text(x + jitter, ty + drop, TEXT_SIZE, rgba(col, a), &s);
+            // Whole-screen flicker on the hiss.
+            if hash(bucket, 0, 12) > 0.6 {
+                c.rect(0.0, 0.0, w, VIRTUAL_HEIGHT, rgba(0xffffff, 0.12 * glitch));
             }
-            x += adv;
         }
 
-        // A little lane under the title: notes scroll in and get hit on the beats.
+        // The title stamps in: each part slams down from huge, then shakes with the voice.
+        let full: String = TITLE.iter().map(|(s, _)| *s).collect();
+        let tw = Canvas::text_width(TEXT_SIZE, &full);
+        let ty = cy + ph / 2.0 + 24.0;
+        let mut x = cx - tw / 2.0;
+        for (part, at) in TITLE {
+            let pw_part = Canvas::text_width(TEXT_SIZE, part);
+            let p = (t - at + 60.0) / 220.0;
+            if p > 0.0 {
+                let k = 1.0 + (1.0 - ease_out_cubic(p)) * 2.5;
+                let size = TEXT_SIZE * k;
+                let (pcx, pcy) = (x + pw_part / 2.0, ty + TEXT_SIZE / 2.0);
+                let jitter = |salt: u32| (hash(salt, bucket, 13) - 0.5) * (10.0 * rage + 16.0 * glitch + 8.0 * punch);
+                let (jx, jy) = (jitter(1), jitter(2));
+                let a = (p * 3.0).min(1.0);
+                let mut lx = pcx - Canvas::text_width(size, part) / 2.0 + jx;
+                let ly = pcy - size / 2.0 + jy;
+                for (i, ch) in part.chars().enumerate() {
+                    let s = ch.to_string();
+                    let col = if ch == '-' { 0x6f6f86 } else if i % 2 == 0 { 0xffffff } else { DON };
+                    c.text(lx + 3.0, ly + 3.0, size, rgba(0x000000, 0.6 * a), &s);
+                    if split > 0.5 {
+                        c.text(lx - split, ly, size, rgba(0xff2a4a, 0.4 * a), &s);
+                        c.text(lx + split, ly, size, rgba(0x2ad4ff, 0.4 * a), &s);
+                    }
+                    c.text(lx, ly, size, rgba(if impact > 0.0 { 0x000000 } else { col }, a), &s);
+                    lx += Canvas::text_width(size, &s);
+                }
+            }
+            x += pw_part;
+        }
+
+        // A little lane under the title: notes scroll in and get hit on the syllables.
         let lane_y = ty + TEXT_SIZE + 22.0;
         let lane_w = tw + 40.0;
-        let lane_in = ease_out_cubic((t - 250.0) / 350.0);
+        let lane_in = ease_out_cubic((t - 200.0) / 300.0);
         if lane_in > 0.0 {
             let lw = lane_w * lane_in;
             c.round_rect(cx - lw / 2.0, lane_y - 13.0, lw, 26.0, 13.0, rgba(0x20202b, 1.0), rgba(0x3a3a4e, 1.0), 1.5);
             let hit_x = cx - lw / 2.0 + 20.0;
             c.ring(hit_x, lane_y, 9.0, rgba(0xffffff, 0.4 * lane_in), 1.5);
-            for &(at, kat) in &HITS {
+            for &(at, kat, strength) in &HITS {
                 // Notes travel 0.35 units per ms and flash when they reach the hit circle.
                 let col = if kat { KAT } else { DON };
+                let r = if strength >= 1.0 { 11.0 } else { 8.0 };
                 let since = t - at;
                 let nx = hit_x - since * 0.35;
-                if since < 0.0 && nx < cx + lw / 2.0 - 8.0 {
-                    c.circle(nx, lane_y, 8.0, rgba(col, 1.0), rgba(0xffffff, 1.0), 1.5);
+                if since < 0.0 && nx < cx + lw / 2.0 - r {
+                    c.circle(nx, lane_y, r, rgba(col, 1.0), rgba(0xffffff, 1.0), 1.5);
                 } else if (0.0..200.0).contains(&since) {
-                    c.glow(hit_x, lane_y, 9.0, 14.0, rgba(col, 1.0 - since / 200.0));
+                    c.glow(hit_x, lane_y, r + 1.0, 10.0 + 10.0 * strength, rgba(col, 1.0 - since / 200.0));
                 }
             }
         }
@@ -300,6 +395,20 @@ impl Splash {
         };
         c.text_centered(cx, by - 14.0, 7.0, rgba(if progress >= 1.0 { 0x86E05A } else { 0x9a9ab0 }, 1.0), &label);
 
+        // Red vignette closing in with the rage.
+        let edge = rage.max(punch * 0.5);
+        if edge > 0.02 {
+            for i in 0..8 {
+                let d = i as f32 * 7.0;
+                let a = 0.12 * edge * (1.0 - i as f32 / 8.0);
+                let col = rgba(0xff1a00, a);
+                c.rect(0.0, d, w, 7.0, col);
+                c.rect(0.0, VIRTUAL_HEIGHT - d - 7.0, w, 7.0, col);
+                c.rect(d, 0.0, 7.0, VIRTUAL_HEIGHT, col);
+                c.rect(w - d - 7.0, 0.0, 7.0, VIRTUAL_HEIGHT, col);
+            }
+        }
+
         // CRT: scanlines, a rolling bright band, and the power-on flash.
         for i in 0..(VIRTUAL_HEIGHT / 4.0) as usize {
             c.rect(0.0, i as f32 * 4.0, w, 1.2, rgba(0x000000, 0.22));
@@ -312,9 +421,11 @@ impl Splash {
             c.rect(0.0, VIRTUAL_HEIGHT / 2.0 - h / 2.0, w, h, rgba(0xffffff, (1.0 - on) * 0.85));
         }
 
-        // Shake everything, then the power-off: squash to a line, shrink the line to a dot.
-        if shake > 0.0 {
-            let (dx, dy) = ((t * 0.09).sin() * shake, (t * 0.13).cos() * shake);
+        // Shake everything (harder on the big hits and the rage), then the power-off: squash to a
+        // line, shrink the line to a dot.
+        let shake = punch * 12.0 + rage * 5.0 + glitch * 3.0;
+        if shake > 0.1 {
+            let (dx, dy) = ((t * 0.11).sin() * shake, (t * 0.17).cos() * shake);
             c.transform_since(start, [0.0, 0.0], 1.0, dx, dy);
         }
         if off > 0.0 {
