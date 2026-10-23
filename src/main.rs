@@ -1806,7 +1806,7 @@ impl State {
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
         if let Some(s) = &mut self.splash {
             if pressed {
-                s.skip(Instant::now());
+                s.skip(Instant::now(), self.audio.as_ref());
             }
             return;
         }
@@ -2446,7 +2446,7 @@ impl State {
         if let Some(s) = &mut self.splash {
             // Any key skips the splash and does nothing else.
             if !repeat {
-                s.skip(at);
+                s.skip(at, self.audio.as_ref());
             }
             return;
         }
@@ -2710,6 +2710,8 @@ impl State {
             let (entries, selected) = if browsing { (&self.browse.remote, self.browse.shown) } else { (&self.library, self.preview_target()) };
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
+            // The splash has its own sound: the preview music waits for it.
+            let in_menu = in_menu && self.splash.is_none();
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, rate);
             self.stars.poll();
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
@@ -3336,14 +3338,34 @@ impl State {
                 self.toast = None;
             }
         }
-        if let Some(s) = &mut self.splash {
-            let audio = &self.audio;
-            if !s.draw(canvas, now, &|sfx| if let Some(a) = audio { a.sfx(sfx) }) {
-                self.splash = None;
+        if self.splash.is_some() {
+            let boot = self.boot_log();
+            if let Some(s) = &mut self.splash {
+                if !s.draw(canvas, now, self.audio.as_ref(), &boot) {
+                    self.splash = None;
+                }
             }
         }
         std::mem::swap(&mut self.hits, &mut canvas.hits);
         capture
+    }
+
+    /// What the splash's boot log shows: what is actually starting up.
+    fn boot_log(&self) -> Vec<String> {
+        let songs = match &self.scan {
+            Some((_, found)) => format!("songs  scanning... {} files", found.load(Ordering::Relaxed)),
+            None => format!("songs  {} difficulties", self.library.len()),
+        };
+        let audio = self.audio.as_ref().map(|a| a.description.clone()).unwrap_or_else(|| "none (silent)".into());
+        let skin = if self.cfg.skin.is_empty() { "built-in" } else { &self.cfg.skin };
+        vec![
+            format!("taiko-rs {}", env!("CARGO_PKG_VERSION")),
+            format!("gpu    {}", self.adapter),
+            format!("audio  {audio}"),
+            songs,
+            format!("skin   {skin}"),
+            "drums  ready".into(),
+        ]
     }
 
     fn installed_sets(&mut self) -> &mut std::collections::HashSet<u32> {
@@ -4094,7 +4116,7 @@ fn main() {
     // No splash before a map given on the command line, or in scripted runs (TAIKO_SPLASH=1 forces it).
     let scripted = std::env::var_os("TAIKO_SHOTS").is_some() || std::env::var_os("TAIKO_INPUT").is_some();
     let want_splash = std::env::var_os("TAIKO_SPLASH").is_some() || (cfg.splash && !play_when_scanned && !scripted);
-    let splash = want_splash.then(splash::Splash::new).flatten();
+    let splash = if want_splash { splash::Splash::new(audio.as_ref().map(|a| a.rate)) } else { None };
     let present = cfg.present;
     let mut state = State {
         cfg,
