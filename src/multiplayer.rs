@@ -488,7 +488,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             (&start_label, Hit::Key(KeyCode::Enter), true),
             (if s.owns_room() { "Close room  (Esc)" } else { "Leave  (Esc)" }, Hit::Key(KeyCode::Escape), false),
         ]);
-        let hint = if me_spectator { "you'll watch the match   S: play instead   [ ] match rate   Tab songs" } else { "S: spectate instead   [ ] match rate   Tab songs" };
+        let hint = if me_spectator { "you'll watch the match   S: play instead   [ ] match rate   F1 mods (host)   Tab songs" } else { "S: spectate instead   [ ] match rate   F1 mods (host)   Tab songs" };
         c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x6f6f86, 1.0), hint);
     } else {
         let missing = s.map.is_some() && !have_map;

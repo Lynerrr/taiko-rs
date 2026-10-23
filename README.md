@@ -74,7 +74,8 @@ the next start) and restarts into it. *Check at startup* turns the check off. Bu
 | D / F / J / K | left rim (kat) / left centre (don) / right centre / right rim |
 | Enter, ↑/↓, ←/→ | play, select difficulty, jump between sets |
 | type, Backspace | search |
-| Tab (or F1) | switch between the SONGS and SETTINGS tabs |
+| Tab | switch between the SONGS and SETTINGS tabs |
+| F1 / the Mods button | mod select (song select; the host in a multiplayer lobby) |
 | [ / ] (Shift: ×5) | speed (rate) −/+ 0.05× on song select; host sets the match rate in the lobby |
 | F5 / F6 (rebindable) | previous / next playfield resolution preset, anywhere |
 | right mouse (hold and move, song select) | fly through the song list like osu!: the pointer's height over the list picks the song that far through it |
@@ -181,6 +182,59 @@ of the lobby map; the host's button is **Start the match from 1:23**, which sets
 match starts (shown next to the map; players re-ready, as after a rate change). The lobby also
 plays the lobby map's music. The background also shows behind
 the lane during play, darkened by Settings → *Background dim*.
+
+## Mods
+
+**F1** (or the *Mods* button next to *Sort*) on song select opens the mod select: five columns of
+mods to switch on and off (click, or arrows + Space; Backspace clears them, F1 / Esc closes). The
+picked mods stay on until you change them (`mods =` in the config), show on the Mods button, in
+play under the accuracy, on the results screen and on your local scores. Mods that can't go
+together switch each other off (EZ/HR, DT/HT/NC/DC/WU/WD, SD/PF/NF, HD/Sudden/Memory, ...).
+
+**HP:** like osu!lazer's taiko, the HP bar (under the score) starts empty, fills as you hit and
+drains on misses; a play that ends with it under half (the mark) is **failed**: grade F, and like
+osu! the score and replay aren't kept. A play from a start point never fails on HP.
+
+| | Mod | What it does |
+|---|---|---|
+| EZ | Easy | OD ×0.5, notes 0.8× as fast, a kinder HP bar (score ×0.5) |
+| NF | No Fail | can't fail (×0.5) |
+| HT / DC | Half Time / Daycore | 0.75× speed, same pitch / lower pitch (×0.3) |
+| HA | Half Notes | every other don/kat removed (×0.5) |
+| NB | No Finishers | big notes become normal ones |
+| HR | Hard Rock | OD ×1.4, notes 1.87× as fast (osu!lazer's taiko factor), a stricter HP bar (×1.06) |
+| SD / PF | Sudden Death / Perfect | the first miss / anything but a GREAT fails the play at once |
+| DT / NC | Double Time / Nightcore | 1.5× speed, same pitch / higher pitch (×1.12) |
+| HD | Hidden | notes fade out over the first 37.5% of their way in, like osu!lazer (×1.06) |
+| FL | Flashlight | only a circle around the drum is lit; smaller at 100 and 200 combo (×1.12) |
+| PR | Precise | OD +2 |
+| GN | Great or Nothing | an OK counts as a miss |
+| RX | Relax | colours don't matter: any key hits any note (not saved) |
+| AT | Autoplay | the map plays itself (not saved) |
+| SW / RD | Swap / Random | dons ↔ kats / every note a random colour (the same each play) |
+| CS | Constant Speed | every note scrolls at the map's usual speed: no SV changes |
+| AL | Alternate | the same hand can't hit twice in a row (a 2 s pause frees it) |
+| WU / WD | Wind Up / Wind Down | the song speeds up to 1.5× / slows down to 0.75× of your speed from the first note to the last |
+| AB | All Big | every don and kat is big |
+| AC / BR | Accel / Brake | notes start slow and rush in near the drum / fly in fast and brake |
+| WV | Wave | note speed swells and falls along the song (±35%) |
+| PU / ST | Pulse / Stutter | far notes jump forward on every beat / hold for half a beat, then catch up (each still reaches the drum exactly on time) |
+| CH | SV Chaos | every note its own speed (±30%): they overtake each other |
+| CR | Combo Rush | +5% note speed per 50 combo, back to normal on a miss |
+| KB | Kiai Boost | notes in kiai time 1.3× as fast |
+| FN | Finale | the last 15% of the map 1.5× as fast |
+| SU | Sudden | notes only show up close to the drum |
+| BL | Blink | approaching notes vanish on the second half of every beat |
+| BO | Blackout | kiai time turns the lights off but around the drum |
+| SP | Spotlight | a Flashlight that breathes with the beat |
+| CL | Colorless | dons and kats look the same |
+| MM | Memory | notes only shown for the first 15 seconds |
+| MR | Mirror | the lane is flipped: notes come from the left |
+| DK / EQ / ZM | Drunk / Earthquake / Zoom | the lane sways / shakes on big hits / pulses bigger on the beat |
+
+The scroll and visual mods only change where and how notes are drawn; judging always uses the
+real note times. In multiplayer the host's mods (F1 in the lobby) apply to everyone; replays,
+spectating and friends watching you play use the mods the play had.
 
 ## Playfield size and speed
 
@@ -406,7 +460,8 @@ spins so frames stay evenly spaced.
 | `src/beatmap.rs` | `.osu` parser, timing/SV control points, taiko conversion, barlines |
 | `src/audio.rs` | decode (symphonia) + resample, cpal/PipeWire output, mixer, built-in hitsounds |
 | `src/clock.rs` | audio-slaved smooth game clock |
-| `src/game.rs` | judging, scoring, playfield drawing |
+| `src/game.rs` | judging, scoring, HP, playfield drawing (and what the mods do to them) |
+| `src/mods.rs` | the mods: list, conflicts, multipliers, speed changes (Wind Up/Down time map) |
 | `src/render.rs` | wgpu SDF shape renderer, skin images, text, present mode handling |
 | `src/ui.rs` | song select and results screens |
 | `src/settings.rs` | settings tab items and layout, tab bar |
