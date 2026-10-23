@@ -167,6 +167,8 @@ spins so frames stay evenly spaced.
 
 - `TAIKO_STATS=1` prints frame-time percentiles, clock-vs-wall-time jitter, clock-vs-audio
   drift and how long each frame blocked in acquire/present after each play.
+- `TAIKO_PROFILE=1` prints the frame rate, CPU time to build a frame, submit time and shape
+  count every 2 seconds, in any screen (try with menus off vsync to see the uncapped rate).
 - `TAIKO_SHOTS=/dir:1000,5000` saves PNG screenshots at those gameplay times (plus the select
   and results screens); `TAIKO_EXIT_AFTER=1` quits after the results screenshot.
 - `TAIKO_INPUT=2000:Tab,3000:Enter` injects key presses and `TAIKO_WALL_SHOTS=1500,2500` takes

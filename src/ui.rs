@@ -14,6 +14,11 @@ pub struct Select {
     pub rate_label: String,
     pub show_converts: bool,
     visible: Vec<usize>,
+    /// Songs (beatmap sets) as ranges of `visible`: consecutive difficulties sharing a folder.
+    /// Rebuilt when `visible` changes, not per frame (big libraries have tens of thousands of maps).
+    groups: Vec<std::ops::Range<usize>>,
+    /// Index into `groups` for each row of `visible`.
+    group_of: Vec<usize>,
     cursor: usize,
     scroll: f32,
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
@@ -38,6 +43,8 @@ impl Select {
             rate_label: String::new(),
             show_converts: !has_taiko,
             visible: Vec::new(),
+            groups: Vec::new(),
+            group_of: Vec::new(),
             cursor: 0,
             scroll: 0.0,
             random_history: Vec::new(),
@@ -58,6 +65,26 @@ impl Select {
             .map(|(i, _)| i)
             .collect();
         self.cursor = selected.and_then(|s| self.visible.iter().position(|&v| v == s)).unwrap_or(0);
+        self.regroup(library);
+    }
+
+    fn regroup(&mut self, library: &[Entry]) {
+        self.groups.clear();
+        self.group_of.clear();
+        let mut start = 0;
+        for i in 1..=self.visible.len() {
+            let split = i == self.visible.len() || library[self.visible[i]].path.parent() != library[self.visible[i - 1]].path.parent();
+            if split {
+                self.group_of.extend(std::iter::repeat_n(self.groups.len(), i - start));
+                self.groups.push(start..i);
+                start = i;
+            }
+        }
+    }
+
+    /// The song (range of `visible`) containing the cursor.
+    fn cursor_group(&self) -> Option<std::ops::Range<usize>> {
+        self.group_of.get(self.cursor).map(|&g| self.groups[g].clone())
     }
 
     pub fn select_path(&mut self, library: &[Entry], path: &std::path::Path) {
@@ -146,28 +173,14 @@ impl Select {
         (screen_w * 0.52).max(300.0).min(screen_w - 48.0)
     }
 
-    /// Songs (beatmap sets) as ranges of `visible`: consecutive difficulties sharing a folder.
-    fn groups(&self, library: &[Entry]) -> Vec<std::ops::Range<usize>> {
-        let mut out = Vec::new();
-        let mut start = 0;
-        for i in 1..=self.visible.len() {
-            let split = i == self.visible.len() || library[self.visible[i]].path.parent() != library[self.visible[i - 1]].path.parent();
-            if split {
-                out.push(start..i);
-                start = i;
-            }
-        }
-        out
-    }
-
     /// F2: jump to a random song among those listed (search and filters apply), keeping the
     /// position within the difficulty list where possible.
-    pub fn random(&mut self, library: &[Entry]) {
-        let groups = self.groups(library);
+    pub fn random(&mut self) {
+        let groups = &self.groups;
         if groups.len() < 2 {
             return;
         }
-        let current = groups.iter().position(|g| g.contains(&self.cursor));
+        let current = self.group_of.get(self.cursor).copied();
         let offset = current.map(|g| self.cursor - groups[g].start).unwrap_or(0);
         // xorshift64*: plenty for picking songs, no dependency.
         self.rng ^= self.rng >> 12;
@@ -181,7 +194,7 @@ impl Select {
         if let Some(&here) = self.visible.get(self.cursor) {
             self.random_history.push(here);
         }
-        let g = &groups[pick];
+        let g = groups[pick].clone();
         self.cursor = g.start + offset.min(g.len() - 1);
     }
 
@@ -199,8 +212,8 @@ impl Select {
     /// Orders the selected song's difficulties by star rating once all of them are known, like
     /// osu!, keeping the same difficulty selected. (Other songs are collapsed, so their order
     /// doesn't show until they are opened.)
-    pub fn sort_selected_set(&mut self, library: &[Entry], stars: &dyn Fn(usize) -> Option<f32>) {
-        let Some(g) = self.groups(library).into_iter().find(|g| g.contains(&self.cursor)) else { return };
+    pub fn sort_selected_set(&mut self, stars: &dyn Fn(usize) -> Option<f32>) {
+        let Some(g) = self.cursor_group() else { return };
         let Some(keys) = self.visible[g.clone()].iter().map(|&i| stars(i)).collect::<Option<Vec<f32>>>() else { return };
         if keys.windows(2).all(|w| w[0] <= w[1]) {
             return;
@@ -211,20 +224,21 @@ impl Select {
         for (slot, (_, i)) in g.clone().zip(set) {
             self.visible[slot] = i;
         }
-        if let Some(pos) = self.visible.iter().position(|&v| v == current) {
-            self.cursor = pos;
+        // Sorting only reorders within the song, so the groups stay valid.
+        if let Some(pos) = self.visible[g.clone()].iter().position(|&v| v == current) {
+            self.cursor = g.start + pos;
         }
     }
 
-    pub fn selected_set(&self, library: &[Entry]) -> Vec<usize> {
-        self.groups(library).into_iter().find(|g| g.contains(&self.cursor)).map(|g| g.map(|i| self.visible[i]).collect()).unwrap_or_default()
+    pub fn selected_set(&self) -> Vec<usize> {
+        self.cursor_group().map(|g| self.visible[g].to_vec()).unwrap_or_default()
     }
 
     /// `stars` looks up a difficulty's star rating (library index) if it has been calculated.
     pub fn draw(&mut self, c: &mut Canvas, library: &[Entry], dt_ms: f64, status: &str, stars: &dyn Fn(usize) -> Option<f32>) {
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
-        let groups = self.groups(library);
+        let groups = &self.groups;
         crate::settings::tab_bar(c, 0, &format!("{} songs, {} maps  |  {mode}{}", groups.len(), self.visible.len(), self.rate_label));
 
         let lw = Self::list_width(w);
@@ -251,7 +265,7 @@ impl Select {
         let mut rows: Vec<(Row, f32, f32)> = Vec::new();
         let mut y = 0.0;
         let mut cursor_y = 0.0;
-        for g in &groups {
+        for g in groups {
             rows.push((Row::Song(g.clone()), y, SONG_H));
             y += SONG_H;
             if g.contains(&self.cursor) {

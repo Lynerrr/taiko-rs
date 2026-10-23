@@ -1398,7 +1398,7 @@ impl State {
                 if self.modifiers_shift {
                     self.select.random_back();
                 } else {
-                    self.select.random(&self.library);
+                    self.select.random();
                 }
             }
             Scene::Select if self.modifiers_ctrl && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) => {
@@ -1484,11 +1484,11 @@ impl State {
             self.preview.update(now, &self.library, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, self.cfg.rate);
             self.stars.poll();
             if in_select {
-                for i in self.select.selected_set(&self.library) {
+                for i in self.select.selected_set() {
                     self.stars.request(i, &self.library[i].path, self.cfg.rate);
                 }
                 let (stars, rate) = (&self.stars, self.cfg.rate);
-                self.select.sort_selected_set(&self.library, &|i| stars.get(i, rate));
+                self.select.sort_selected_set(&|i| stars.get(i, rate));
             }
             let has_bg = self.preview.has_background;
             self.bg_brightness = match self.scene {
@@ -1884,6 +1884,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     let mut last_sample: Option<Instant> = None;
     let mut requested_present: Option<PresentChoice> = None;
     let mut waits = (0.0, 0.0, 0.0);
+    // TAIKO_PROFILE=1: every 2 s, print where frame time goes (build = CPU under the state lock).
+    let profile = std::env::var_os("TAIKO_PROFILE").is_some();
+    let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) = (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
     loop {
         let (present, cap) = {
             let mut s = lock(&state);
@@ -1930,6 +1933,20 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         let t1 = Instant::now();
         let shot = renderer.submit(frame, &canvas.shapes, [0.071, 0.071, 0.098], capture.is_some(), clip);
         let presented = Instant::now();
+        if profile {
+            prof_n += 1;
+            prof_build += (t1 - now).as_secs_f64() * 1000.0;
+            prof_submit += (presented - t1).as_secs_f64() * 1000.0;
+            prof_shapes = prof_shapes.max(canvas.shapes.len());
+            if prof_start.elapsed() >= Duration::from_secs(2) {
+                let n = prof_n.max(1) as f64;
+                eprintln!(
+                    "profile: {:.0} fps  build {:.2} ms  submit {:.2} ms  shapes {}",
+                    n / prof_start.elapsed().as_secs_f64(), prof_build / n, prof_submit / n, prof_shapes
+                );
+                (prof_start, prof_n, prof_build, prof_submit, prof_shapes) = (Instant::now(), 0, 0.0, 0.0, 0);
+            }
+        }
         // Clock-sample-to-next-refresh: approximates how stale the previous frame was when shown.
         let sample_age = last_sample.map(|s| (acquired - s).as_secs_f64() * 1000.0).unwrap_or(0.0);
         last_sample = Some(now);
