@@ -79,13 +79,23 @@ pub struct Renderer {
     bg_capture_pipeline: wgpu::RenderPipeline,
     bg_layout: wgpu::BindGroupLayout,
     bg_sampler: wgpu::Sampler,
-    bg_uniform: wgpu::Buffer,
     /// Bind group and image aspect (w / h) of the current background.
-    bg: Option<(wgpu::BindGroup, f32)>,
+    bg: Option<BgLayer>,
+    /// The background being faded out while `bg` fades in.
+    bg_prev: Option<BgLayer>,
+    /// Progress of the cross-fade from `bg_prev` to `bg` (0 to 1).
+    pub bg_mix: f32,
     /// 0 hides the background, 1 shows it at full brightness.
     pub bg_brightness: f32,
     pub present: PresentChoice,
     pub adapter_name: String,
+}
+
+/// A background image on the GPU.
+struct BgLayer {
+    bind_group: wgpu::BindGroup,
+    aspect: f32,
+    uniform: wgpu::Buffer,
 }
 
 const BG_SHADER: &str = r#"
@@ -108,7 +118,8 @@ fn vs(@builtin(vertex_index) vi: u32) -> V {
 @fragment
 fn fs(i: V) -> @location(0) vec4<f32> {
     let t = textureSample(tex, samp, i.uv);
-    return vec4<f32>(t.rgb * bg.params.x, 1.0);
+    // params: brightness, opacity (for cross-fading into a new background).
+    return vec4<f32>(t.rgb * bg.params.x, bg.params.y);
 }
 "#;
 
@@ -329,7 +340,7 @@ impl Renderer {
                     module: &bg_shader,
                     entry_point: Some("fs"),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -342,12 +353,6 @@ impl Renderer {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
-        });
-        let bg_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("background"),
-            size: 32,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
         });
         let capacity = 4096;
         let instances = Self::make_instance_buffer(&device, capacity);
@@ -368,8 +373,9 @@ impl Renderer {
             bg_capture_pipeline,
             bg_layout,
             bg_sampler,
-            bg_uniform,
             bg: None,
+            bg_prev: None,
+            bg_mix: 1.0,
             bg_brightness: 0.0,
             present,
             adapter_name,
@@ -387,10 +393,13 @@ impl Renderer {
         })
     }
 
-    /// Replaces the background image (RGBA8, `w` x `h`), or removes it with `None`.
+    /// Replaces the background image (RGBA8, `w` x `h`), or removes it with `None`. The old one
+    /// stays drawn underneath while the new one fades in over it (`bg_mix`).
     pub fn set_background(&mut self, image: Option<(u32, u32, Vec<u8>)>) {
+        if let Some(old) = self.bg.take() {
+            self.bg_prev = Some(old);
+        }
         let Some((w, h, data)) = image.filter(|(w, h, d)| *w > 0 && *h > 0 && d.len() == (*w * *h * 4) as usize) else {
-            self.bg = None;
             return;
         };
         let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
@@ -412,16 +421,23 @@ impl Renderer {
             size,
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Each layer has its own uniform: its crop depends on its own aspect.
+        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("background"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("background"),
             layout: &self.bg_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.bg_uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.bg_sampler) },
             ],
         });
-        self.bg = Some((bind_group, w as f32 / h as f32));
+        self.bg = Some(BgLayer { bind_group, aspect: w as f32 / h as f32, uniform });
     }
 
     /// Applies a present mode, falling back toward vsync if the compositor lacks it.
@@ -504,12 +520,20 @@ impl Renderer {
         if !shapes.is_empty() {
             self.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
         }
-        if let Some((_, aspect)) = &self.bg {
-            // "Cover" fit: crop the image's long side so it fills the screen without stretching.
-            let screen = self.config.width as f32 / self.config.height.max(1) as f32;
-            let (u, v) = if *aspect > screen { (screen / aspect, 1.0) } else { (1.0, aspect / screen) };
-            let uniform = [(1.0 - u) / 2.0, (1.0 - v) / 2.0, (1.0 + u) / 2.0, (1.0 + v) / 2.0, self.bg_brightness, 0.0, 0.0, 0.0];
-            self.queue.write_buffer(&self.bg_uniform, 0, bytemuck::cast_slice(&uniform));
+        if self.bg_mix >= 1.0 {
+            self.bg_prev = None;
+        }
+        // The old background stays opaque under the new one (or fades out if there's none).
+        let mix = self.bg_mix.clamp(0.0, 1.0);
+        let prev_alpha = if self.bg.is_some() { 1.0 } else { 1.0 - mix };
+        let screen = self.config.width as f32 / self.config.height.max(1) as f32;
+        for (layer, alpha) in [(&self.bg_prev, prev_alpha), (&self.bg, mix)] {
+            if let Some(l) = layer {
+                // "Cover" fit: crop the image's long side so it fills the screen without stretching.
+                let (u, v) = if l.aspect > screen { (screen / l.aspect, 1.0) } else { (1.0, l.aspect / screen) };
+                let uniform = [(1.0 - u) / 2.0, (1.0 - v) / 2.0, (1.0 + u) / 2.0, (1.0 + v) / 2.0, self.bg_brightness, alpha, 0.0, 0.0];
+                self.queue.write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
+            }
         }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -584,10 +608,12 @@ impl Renderer {
             })],
             ..Default::default()
         });
-        if let Some((bind_group, _)) = self.bg.as_ref().filter(|_| self.bg_brightness > 0.0) {
-            pass.set_pipeline(if capture { &self.bg_capture_pipeline } else { &self.bg_pipeline });
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..4, 0..1);
+        if self.bg_brightness > 0.0 {
+            for layer in [&self.bg_prev, &self.bg].into_iter().flatten() {
+                pass.set_pipeline(if capture { &self.bg_capture_pipeline } else { &self.bg_pipeline });
+                pass.set_bind_group(0, &layer.bind_group, &[]);
+                pass.draw(0..4, 0..1);
+            }
         }
         pass.set_pipeline(if capture { &self.capture_pipeline } else { &self.pipeline });
         pass.set_bind_group(0, &self.bind_group, &[]);

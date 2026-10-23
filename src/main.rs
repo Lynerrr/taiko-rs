@@ -1772,10 +1772,7 @@ impl State {
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
-            // A new background fades in instead of popping.
-            if let Some(t) = self.bg_changed {
-                self.bg_brightness *= render::progress(t, 220.0);
-            }
+
         }
         self.poll_multiplayer();
         self.poll_downloads();
@@ -2513,6 +2510,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 s.bg_changed = Some(Instant::now());
             }
             renderer.bg_brightness = s.bg_brightness;
+            // A new background cross-fades from the previous one.
+            renderer.bg_mix = s.bg_changed.map(|t| render::progress(t, 300.0)).unwrap_or(1.0);
             (capture, s.frame_clip.take())
         };
         let clip = clip.map(|(range, a)| (range, [a.x, a.y, a.w, a.h]));
