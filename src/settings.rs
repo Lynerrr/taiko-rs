@@ -38,9 +38,11 @@ pub enum Item {
     ShowFps,
     Animations,
     Fullscreen,
+    Skin,
+    SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 34] = [
+pub const ITEMS: [(&str, Item); 36] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -75,16 +77,19 @@ pub const ITEMS: [(&str, Item); 34] = [
     ("VIDEO", Item::ShowFps),
     ("VIDEO", Item::Fullscreen),
     ("VIDEO", Item::Animations),
+    ("SKIN", Item::Skin),
+    ("SKIN", Item::SkinFolder),
 ];
 
 /// The sections in order, with a one-line summary for the sidebar.
-pub const SECTIONS: [(&str, &str); 6] = [
+pub const SECTIONS: [(&str, &str); 7] = [
     ("GAMEPLAY", "speed, rate, resume"),
     ("PLAYFIELD", "size, position, HUD"),
     ("INPUT", "drum and preset keys"),
     ("OFFSET", "audio offset, calibration"),
     ("AUDIO", "volume, latency"),
     ("VIDEO", "frame pacing, display"),
+    ("SKIN", "osu! skin hitsounds"),
 ];
 
 /// First item of section `s`.
@@ -128,6 +133,8 @@ impl Item {
             Item::ShowFps => "FPS overlay",
             Item::Animations => "UI animations",
             Item::Fullscreen => "Fullscreen",
+            Item::Skin => "Skin",
+            Item::SkinFolder => "Skins folder",
         }
     }
 
@@ -162,6 +169,8 @@ impl Item {
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
             Item::Fullscreen => "Shortcut: F11.",
+            Item::Skin => "An osu! skin from osu!'s Skins folder or taiko-rs's own. What it lacks stays built-in.",
+            Item::SkinFolder => "Enter: open taiko-rs's Skins folder. Drop .osk files there, then pick them above.",
         }
     }
 }

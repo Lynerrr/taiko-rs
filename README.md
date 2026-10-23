@@ -80,7 +80,7 @@ selection highlights glide, a song's difficulties slide open, settings scroll sm
 menu slides in, results count up with the grade popping in, toasts and the volume overlay slide,
 and the preview fades in on a new map. Gameplay itself is never animated or delayed by this.
 
-Everything is adjustable in the **Settings** tab, split into sections in a sidebar (Gameplay, Playfield, Input, Offset, Audio, Video; PgUp/PgDn or click to switch) (scroll speed, offset, key bindings, converts,
+Everything is adjustable in the **Settings** tab, split into sections in a sidebar (Gameplay, Playfield, Input, Offset, Audio, Video, Skin; PgUp/PgDn or click to switch) (scroll speed, offset, key bindings, converts,
 volumes, audio buffer, present mode, FPS cap, overlay, fullscreen) and saved
 immediately to `~/.config/taiko-rs/config.txt` (Windows: `%APPDATA%\taiko-rs\config.txt`). Losing window focus mid-song pauses the game. The results screen shows UR and mean hit error and tells
 you which way to move the offset.
@@ -161,6 +161,15 @@ your consistency: the window grows until the average is known to about ±3 ms (�
 and noisy estimates suggest a proportionally smaller change. Press **O**
 to apply it on the spot; hits recorded before the change are re-expressed under the new offset,
 so the suggestion settles instead of overshooting. Toggle it with Settings → Live offset suggestion.
+
+## Skins
+
+Settings → Skin → **Skin** (Left/Right) picks an osu! skin from osu!'s `Skins` folder (next to its
+Songs folder) or from taiko-rs's own, `~/.local/share/taiko-rs/Skins` / `%APPDATA%\taiko-rs\Skins`
+(*Skins folder* opens it; `.osk` files dropped there are unpacked on their own). Its taiko
+hitsounds replace the built-in ones: `taiko-normal-hitnormal` (don), `taiko-normal-hitclap` or
+`-hitwhistle` (kat) and `taiko-normal-hitfinish`, played on top for big notes. Anything the skin
+doesn't have stays built-in; an empty file mutes that sound, like in osu!.
 
 ## Downloading maps
 
@@ -245,6 +254,7 @@ spins so frames stay evenly spaced.
 | `src/net.rs` | multiplayer protocol, room server, client with clock sync |
 | `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
 | `src/library.rs` | Songs folder / `.osz` scanning |
+| `src/skin.rs` | osu! skins: listing, `.osk` unpacking, hitsounds |
 | `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
 | `src/download.rs` | mirror search and `.osz` downloads (catboy.best, osu.direct) |
 | `src/browse.rs` | the Download tab |

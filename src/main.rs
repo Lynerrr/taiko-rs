@@ -21,6 +21,7 @@ mod osudb;
 mod preview;
 mod render;
 mod settings;
+mod skin;
 mod stars;
 mod ui;
 
@@ -576,6 +577,10 @@ impl State {
             Item::PlayfieldReset => "Enter to reset".into(),
             Item::Rate => format!("{:.2}x", c.rate),
             Item::RateKeepPitch => on(c.rate_keep_pitch),
+            Item::Skin if c.skin.is_empty() => "built-in".into(),
+            Item::Skin if c.skin.chars().count() > 24 => c.skin.chars().take(21).collect::<String>() + "...",
+            Item::Skin => c.skin.clone(),
+            Item::SkinFolder => "Enter to open".into(),
         }
     }
 
@@ -616,6 +621,7 @@ impl State {
                         None
                     }
                 };
+                self.load_skin();
                 self.refresh_status();
             }
             Item::PresentMode => {
@@ -647,16 +653,42 @@ impl State {
                 self.cfg.rate = (((self.cfg.rate + step * d) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
             }
             Item::RateKeepPitch => self.cfg.rate_keep_pitch = !self.cfg.rate_keep_pitch,
+            Item::Skin => {
+                let names: Vec<String> = std::iter::once(String::new()).chain(skin::list().into_iter().map(|(n, _)| n)).collect();
+                let i = names.iter().position(|n| *n == self.cfg.skin).unwrap_or(0) as i32;
+                self.cfg.skin = names[(i + dir).rem_euclid(names.len() as i32) as usize].clone();
+                self.load_skin();
+            }
+            // Acts on Enter in `settings_key`.
+            Item::SkinFolder => return,
             Item::CalibrationBpm => {
                 let (lo, hi) = calibrate::BPM_RANGE;
                 self.cfg.calibration_bpm = (self.cfg.calibration_bpm + 5.0 * d).clamp(lo, hi);
             }
         }
         self.apply_volume();
-        if let (Some(a), Item::FxVolume) = (&self.audio, item) {
+        if let (Some(a), Item::FxVolume | Item::Skin) = (&self.audio, item) {
             a.sfx(audio::Sfx::Don);
         }
         self.cfg.save();
+    }
+
+    /// Loads the configured skin and hands its hitsounds to the audio engine.
+    fn load_skin(&mut self) {
+        let skin = skin::load(&self.cfg.skin, self.audio.as_ref().map(|a| a.rate));
+        if let Some(a) = &self.audio {
+            let h = skin.hitsounds;
+            a.set_hitsounds(h.don, h.kat, h.finish);
+        }
+    }
+
+    fn open_skins_folder(&mut self) {
+        let Some(dir) = skin::own_dir() else { return };
+        let _ = std::fs::create_dir_all(&dir);
+        let opener = if cfg!(windows) { "explorer" } else { "xdg-open" };
+        if std::process::Command::new(opener).arg(&dir).spawn().is_err() {
+            self.toast(format!("skins go in {}", dir.display()));
+        }
     }
 
     fn toggle_fullscreen(&mut self, window: Option<&Window>) {
@@ -718,6 +750,7 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => self.start_calibration(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldArea => self.open_layout_editor(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldPreset => self.open_dropdown(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => self.open_skins_folder(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
                 self.cfg.playfield_area = Area::FULL;
                 self.cfg.save();
@@ -3067,7 +3100,7 @@ fn main() {
     // A single .osu on the command line goes straight into gameplay.
     let play_when_scanned = args.len() == 1 && args[0].extension().is_some_and(|e| e == "osu");
     let present = cfg.present;
-    let state = State {
+    let mut state = State {
         cfg,
         library,
         select,
@@ -3141,6 +3174,7 @@ fn main() {
         resolutions: Vec::new(),
         monitor_modes: Vec::new(),
     };
+    state.load_skin();
     let event_loop = EventLoop::new().expect("event loop");
     let mut app = App { state: Arc::new(Mutex::new(state)), cursor: CursorIcon::Default, window: None, render_thread: None, proxy: event_loop.create_proxy() };
     event_loop.run_app(&mut app).expect("run");

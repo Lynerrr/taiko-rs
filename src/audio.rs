@@ -42,6 +42,15 @@ enum Cmd {
     Pause(bool),
     Stop,
     Sfx(Sfx),
+    /// Replaces the hitsounds (indexed by `Sfx`).
+    Sounds(Arc<[Vec<f32>; 4]>),
+}
+
+/// What the callback replaced, sent back so deallocation stays off the audio thread.
+#[allow(dead_code)] // only held to be dropped
+enum Garbage {
+    Track(Arc<Track>),
+    Sounds(Arc<[Vec<f32>; 4]>),
 }
 
 /// What the callback last told us about playback position.
@@ -59,7 +68,7 @@ struct Stamp {
 pub struct Engine {
     _stream: cpal::Stream,
     tx: Sender<Cmd>,
-    garbage: Receiver<Arc<Track>>,
+    garbage: Receiver<Garbage>,
     stamp: Arc<Mutex<Stamp>>,
     volume: Arc<[AtomicU32; 2]>,
     pub rate: u32,
@@ -81,7 +90,7 @@ impl Engine {
         let stamp = Arc::new(Mutex::new(Stamp { playing: false, frame: 0, at: Instant::now(), latency: Duration::ZERO }));
         let volume = Arc::new([AtomicU32::new(0.8f32.to_bits()), AtomicU32::new(1.0f32.to_bits())]);
         let fmt = supported.sample_format();
-        let open = |config: StreamConfig| -> Result<(cpal::Stream, Sender<Cmd>, Receiver<Arc<Track>>), String> {
+        let open = |config: StreamConfig| -> Result<(cpal::Stream, Sender<Cmd>, Receiver<Garbage>), String> {
             let (tx, rx) = mpsc::channel();
             let (gc_tx, garbage) = mpsc::channel();
             let mixer = Mixer::new(rx, gc_tx, stamp.clone(), volume.clone(), rate, channels);
@@ -141,6 +150,20 @@ impl Engine {
         let _ = self.tx.send(Cmd::Sfx(s));
     }
 
+    /// Replaces the hitsounds with mono samples at the device rate; `None` keeps the built-in one.
+    pub fn set_hitsounds(&self, don: Option<Vec<f32>>, kat: Option<Vec<f32>>, finish: Option<Vec<f32>>) {
+        let rate = self.rate;
+        // Like osu!, a big note is the normal hit with `finish` on top.
+        let big = |normal: &Option<Vec<f32>>, synth: fn(u32, bool) -> Vec<f32>| match (normal, &finish) {
+            (None, None) => synth(rate, true),
+            (Some(n), None) => n.clone(),
+            (n, Some(f)) => mix(&n.clone().unwrap_or_else(|| synth(rate, false)), f),
+        };
+        let (big_don, big_kat) = (big(&don, synth_don), big(&kat, synth_kat));
+        let sounds = [don.unwrap_or_else(|| synth_don(rate, false)), kat.unwrap_or_else(|| synth_kat(rate, false)), big_don, big_kat];
+        let _ = self.tx.send(Cmd::Sounds(Arc::new(sounds)));
+    }
+
     pub fn set_volume(&self, music: f32, effects: f32) {
         self.volume[0].store(music.to_bits(), Ordering::Relaxed);
         self.volume[1].store(effects.to_bits(), Ordering::Relaxed);
@@ -193,7 +216,7 @@ struct Voice {
 
 struct Mixer {
     rx: Receiver<Cmd>,
-    gc: Sender<Arc<Track>>,
+    gc: Sender<Garbage>,
     stamp: Arc<Mutex<Stamp>>,
     volume: Arc<[AtomicU32; 2]>,
     channels: usize,
@@ -209,7 +232,7 @@ struct Mixer {
 impl Mixer {
     fn new(
         rx: Receiver<Cmd>,
-        gc: Sender<Arc<Track>>,
+        gc: Sender<Garbage>,
         stamp: Arc<Mutex<Stamp>>,
         volume: Arc<[AtomicU32; 2]>,
         rate: u32,
@@ -226,7 +249,7 @@ impl Mixer {
                 match cmd {
                     Cmd::Play { track, start_frame, base } => {
                         if let Some(old) = self.track.replace(track) {
-                            let _ = self.gc.send(old);
+                            let _ = self.gc.send(Garbage::Track(old));
                         }
                         self.base = base;
                         self.frame = start_frame;
@@ -234,7 +257,7 @@ impl Mixer {
                     }
                     Cmd::Swap { track, base } => {
                         if let Some(old) = self.track.replace(track) {
-                            let _ = self.gc.send(old);
+                            let _ = self.gc.send(Garbage::Track(old));
                         }
                         self.base = base;
                     }
@@ -242,8 +265,11 @@ impl Mixer {
                     Cmd::Pause(p) => self.paused = p,
                     Cmd::Stop => {
                         if let Some(old) = self.track.take() {
-                            let _ = self.gc.send(old);
+                            let _ = self.gc.send(Garbage::Track(old));
                         }
+                    }
+                    Cmd::Sounds(sounds) => {
+                        let _ = self.gc.send(Garbage::Sounds(std::mem::replace(&mut self.sounds, sounds)));
                     }
                     Cmd::Sfx(sound) => {
                         if self.voices.len() < self.voices.capacity() {
@@ -399,6 +425,15 @@ impl Noise {
         self.0 ^= self.0 << 5;
         self.0 as f32 / u32::MAX as f32 * 2.0 - 1.0
     }
+}
+
+/// Two mono sounds played together.
+fn mix(a: &[f32], b: &[f32]) -> Vec<f32> {
+    let mut out = vec![0.0; a.len().max(b.len())];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = a.get(i).copied().unwrap_or(0.0) + b.get(i).copied().unwrap_or(0.0);
+    }
+    out
 }
 
 /// Centre hit: a pitched membrane thump with a falling pitch.
