@@ -123,8 +123,10 @@ you which way to move the offset.
 Songs are grouped: each beatmap set is one row, and the selected set expands to its difficulties,
 ordered by star rating. Star ratings are osu!'s own (via [rosu-pp](https://github.com/MaxOhn/rosu-pp),
 a precise port of lazer's calculator, converts included) at the current speed rate, coloured like
-osu!'s spectrum and calculated in the background for the selected song. Up/Down moves through difficulties, Left/Right jumps between songs, the wheel
-scrolls. The selected map's background fills the screen behind the menu, its music plays from the
+osu!'s spectrum and calculated in the background for the selected song. Up/Down (and the wheel) move through the
+selected song's difficulties and on into the next or previous song; Left/Right, PgUp/PgDn (5 songs)
+and Home/End jump between songs. A song opens on the difficulty you last picked in it, else its
+hardest. Hold the right mouse button to fly through the list like osu!. The selected map's background fills the screen behind the menu, its music plays from the
 map's preview point (looping), and the panel on the right shows its details (OD, BPM, length,
 note counts) above a live autoplay preview synced to that music, and a difficulty timeline like
 lazer's song progress graph: osu!'s strain over the whole map (kiai tinted, preview point and
