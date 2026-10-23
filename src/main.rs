@@ -306,8 +306,6 @@ fn draw_game_area(
 /// A press on a song list row (see `State::list_drag`).
 struct ListDrag {
     from_y: f32,
-    /// The song (group) selected when the press began.
-    from_song: usize,
     hit: render::Hit,
     moved: bool,
 }
@@ -1984,10 +1982,7 @@ impl State {
             let dy = drag_y - d.from_y;
             d.moved |= dy.abs() > DRAG_START;
             if d.moved && matches!(self.scene, Scene::Select) {
-                // The list follows the pointer: dragging down brings earlier songs into view.
-                let songs = (dy / ui::SONG_ROW_H).round() as i64;
-                let target = d.from_song as i64 - songs;
-                self.select.go_to_song(target, &self.library);
+                self.select.drag_to(dy);
                 return CursorIcon::NsResize;
             }
         }
@@ -2220,7 +2215,9 @@ impl State {
         }
         if !pressed {
             if let Some(d) = self.list_drag.take() {
-                if !d.moved {
+                if d.moved {
+                    self.select.drag_end(&self.library);
+                } else {
                     self.click(d.hit, window);
                 }
                 return;
@@ -2239,10 +2236,8 @@ impl State {
             }
             // A row acts on release, unless the press turns into dragging the list.
             if let (Scene::Select, Some(h @ (render::Hit::SongRow(_) | render::Hit::SongHeader(_)))) = (&self.scene, hit) {
-                if let Some(from_song) = self.select.current_song() {
-                    self.list_drag = Some(ListDrag { from_y: vy, from_song, hit: h, moved: false });
-                    return;
-                }
+                self.list_drag = Some(ListDrag { from_y: vy, hit: h, moved: false });
+                return;
             }
             if self.settings_ui.skins.is_some() && !matches!(hit, Some(render::Hit::SkinRow(_))) {
                 self.settings_ui.skins = None;
@@ -3373,6 +3368,7 @@ impl State {
         if !matches!(self.scene, Scene::Select) {
             self.select.menu = None;
             self.list_drag = None;
+            self.select.cancel_drag();
         }
         // Drawn again below if still watching a replay (after scripted input, which must see the
         // last frame's bar like real input does).
@@ -3385,7 +3381,7 @@ impl State {
                     String::new()
                 };
                 let (stars, rate) = (&self.stars, self.cfg.rate);
-                self.select.instant = self.right_scroll || self.list_drag.as_ref().is_some_and(|d| d.moved);
+                self.select.instant = self.right_scroll;
                 self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate));
                 let x = 24.0 + Select::list_width(canvas.width) + 12.0;
                 let pw = canvas.width - x - 24.0;

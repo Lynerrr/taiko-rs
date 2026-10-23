@@ -70,6 +70,10 @@ pub struct Select {
     pub hidden: Hidden,
     /// The right-click menu of a song list row.
     pub menu: Option<SongMenu>,
+    /// The list being dragged with the left button.
+    drag: Option<ListDrag>,
+    /// Where each song's own row is in the list as last drawn (list units, top = 0).
+    song_y: Vec<f32>,
     visible: Vec<usize>,
     /// Songs (beatmap sets) as ranges of `visible`: consecutive difficulties sharing a folder.
     /// Rebuilt when `visible` changes, not per frame (big libraries have tens of thousands of maps).
@@ -113,6 +117,18 @@ struct ListAnim {
     outline: f32,
     open_now: f32,
     closing_now: f32,
+    /// Length of the current transition (ms); 0 means `LIST_ANIM_MS`.
+    ms: f32,
+}
+
+/// The list held by the pointer: it scrolls with it, then flies on and settles on a song.
+struct ListDrag {
+    /// Scroll and outline when the drag began.
+    scroll: f32,
+    outline: f32,
+    /// Scroll now, and recent (time, scroll) samples for the release speed.
+    now: f32,
+    samples: std::collections::VecDeque<(std::time::Instant, f32)>,
 }
 
 /// Length of a song list transition.
@@ -148,6 +164,8 @@ impl Select {
             show_converts: !has_taiko,
             hidden: Hidden::load(),
             menu: None,
+            drag: None,
+            song_y: Vec::new(),
             visible: Vec::new(),
             groups: Vec::new(),
             group_of: Vec::new(),
@@ -456,6 +474,62 @@ impl Select {
         }
     }
 
+    /// Left-button drag: the list follows the pointer, `dy` (virtual units) from where it was
+    /// pressed. The selection stays put until it's let go.
+    pub fn drag_to(&mut self, dy: f32) {
+        let a = &self.anim;
+        let d = self.drag.get_or_insert_with(|| ListDrag { scroll: a.scroll, outline: a.outline, now: a.scroll, samples: Default::default() });
+        d.now = d.scroll - dy;
+        let now = std::time::Instant::now();
+        d.samples.push_back((now, d.now));
+        while d.samples.front().is_some_and(|(t, _)| now.duration_since(*t).as_millis() > 100) {
+            d.samples.pop_front();
+        }
+    }
+
+    /// Drops a drag without selecting anything (left song select mid-drag).
+    pub fn cancel_drag(&mut self) {
+        self.drag = None;
+    }
+
+    /// Lets go of the list: it carries on at the speed it was thrown, and the song that ends up
+    /// on the selection line gets selected, gliding there.
+    pub fn drag_end(&mut self, library: &[Entry]) {
+        let Some(d) = self.drag.take() else { return };
+        let velocity = match (d.samples.front(), d.samples.back()) {
+            (Some(&(t0, s0)), Some(&(t1, s1))) if t1 > t0 => (s1 - s0) / t1.duration_since(t0).as_secs_f32() / 1000.0,
+            _ => 0.0,
+        };
+        // Released while still: no throw.
+        let still = d.samples.back().is_none_or(|(t, _)| t.elapsed().as_millis() > 60);
+        let throw = if still { 0.0 } else { (velocity * 250.0).clamp(-3000.0, 3000.0) };
+        // From where the list is shown (held a little past an end, it springs back).
+        let line = self.anim.scroll + throw + (LIST_BOTTOM - LIST_TOP) * 0.4;
+        // The song whose row is nearest the line (in the list as drawn).
+        let target = self
+            .song_y
+            .iter()
+            .enumerate()
+            .min_by(|a, b| (a.1 - line).abs().total_cmp(&(b.1 - line).abs()))
+            .map(|(g, _)| g);
+        // Glide from where the list was dropped; further takes a little longer.
+        let ms = (LIST_ANIM_MS + throw.abs() * 0.15).clamp(LIST_ANIM_MS, 600.0);
+        match target {
+            Some(g) if self.group_of.get(self.cursor) != Some(&g) => {
+                self.enter_song(self.groups[g].start, library);
+                self.anim.ms = ms;
+                // Begins the transition from here (not from where the selection was).
+                self.anim.cursor = Some(usize::MAX);
+            }
+            _ => {
+                let a = &mut self.anim;
+                (a.scroll_from, a.outline_from, a.open_from, a.closing_from) = (a.scroll, a.outline, a.open_now, a.closing_now);
+                a.start = Some(std::time::Instant::now());
+                a.ms = ms;
+            }
+        }
+    }
+
     /// Index of the song (group) holding the selection.
     pub fn current_song(&self) -> Option<usize> {
         self.group_of.get(self.cursor).copied()
@@ -672,14 +746,26 @@ impl Select {
                 a.scroll_from = a.scroll;
                 a.outline_from = a.outline;
                 a.start = Some(std::time::Instant::now());
+                // A release's longer glide applies to the transition it starts, then resets.
+                if a.cursor != Some(usize::MAX) {
+                    a.ms = 0.0;
+                }
             }
             a.cursor = Some(self.cursor);
         }
-        let p = a.start.map(|t| progress(t, LIST_ANIM_MS)).unwrap_or(1.0);
+        let ms = if a.ms > 0.0 { a.ms } else { LIST_ANIM_MS };
+        let p = a.start.map(|t| progress(t, ms)).unwrap_or(1.0);
         let open_f = a.open_from + (1.0 - a.open_from) * p;
         let closing_f = a.closing_from * (1.0 - p);
-        let scroll = a.scroll_from + (final_scroll - a.scroll_from) * p;
-        let outline = a.outline_from + (final_outline - a.outline_from) * p;
+        let mut scroll = a.scroll_from + (final_scroll - a.scroll_from) * p;
+        let mut outline = a.outline_from + (final_outline - a.outline_from) * p;
+        if let Some(d) = &self.drag {
+            // Held: exactly where the pointer has it (a little past the ends at most).
+            let max = (final_y - view).max(0.0);
+            let now = if d.now < 0.0 { d.now * 0.3 } else if d.now > max { max + (d.now - max) * 0.3 } else { d.now };
+            outline = d.outline + (d.scroll - now);
+            scroll = now;
+        }
         (a.scroll, a.outline, a.open_now, a.closing_now) = (scroll, outline, open_f, closing_f);
         let (open_g, closing_g) = (a.open, a.closing);
         self.scroll = scroll;
@@ -687,7 +773,9 @@ impl Select {
         // (row, y, height, alpha): rows of opening / closing songs are squeezed and faded.
         let mut rows: Vec<(Row, f32, f32, f32)> = Vec::new();
         let mut y = 0.0;
+        self.song_y.clear();
         for g in groups {
+            self.song_y.push(y);
             rows.push((Row::Song(g.clone()), y, SONG_H, 1.0));
             y += SONG_H;
             let f = if Some(g.start) == open_g { open_f } else if Some(g.start) == closing_g { closing_f } else { 0.0 };
