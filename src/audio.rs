@@ -156,7 +156,7 @@ impl Engine {
         self.sfx_at(s, 1.0);
     }
 
-    /// Plays a sound at `volume` (0..1) of the hitsound volume.
+    /// Plays a sound at `volume` times the hitsound volume (1 = as recorded, more boosts it).
     pub fn sfx_at(&self, s: Sfx, volume: f32) {
         let _ = self.tx.send(Cmd::Sfx(s, volume));
     }

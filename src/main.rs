@@ -7,6 +7,7 @@ mod browse;
 mod calibrate;
 mod clock;
 mod config;
+mod cursor;
 mod debug;
 mod discord;
 mod difficulty;
@@ -242,6 +243,12 @@ struct State {
     bg_brightness: f32,
     /// Where the playfield size readout was drawn (virtual units), so it can be clicked.
     readout_rect: Option<[f32; 4]>,
+    /// Watching a replay: the timeline drawn this frame (virtual units), and when the pointer
+    /// dragging along it last seeked.
+    replay_bar: Option<[f32; 4]>,
+    replay_scrub: Option<Instant>,
+    /// Last time the pointer moved (gameplay hides it after a second of stillness).
+    mouse_moved_at: Instant,
     /// Snap guides to draw while dragging the playfield area.
     guides: Vec<layout::Guide>,
     /// Playfield presets (resolutions that fit the window), filled when the window opens.
@@ -273,6 +280,28 @@ fn draw_game_area(
 fn fmt_time(ms: f64) -> String {
     let s = (ms / 1000.0).max(0.0) as u64;
     format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// Replays: a timeline along the bottom of the screen to click or drag through. Returns the
+/// bar's rect (virtual units) for `replay_seek_at`.
+fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool) -> [f32; 4] {
+    let w = c.width;
+    let (start, end) = game.span();
+    let label = format!("{} / {}", fmt_time(game.time), fmt_time(end));
+    // Sized for the longest label so the bar doesn't twitch as the time changes.
+    let lw = Canvas::text_width(7.0, &format!("{} / {}", fmt_time(end), fmt_time(end)));
+    let (x, y, bw) = (18.0 + lw + 10.0, 456.0, w - 18.0 - (18.0 + lw + 10.0));
+    let rect = [x, y - 7.0, bw, 14.0];
+    let hover = active || c.hovered(rect[0] - 6.0, rect[1], rect[2] + 12.0, rect[3]);
+    let f = ((game.time - start) / (end - start).max(1.0)).clamp(0.0, 1.0) as f32;
+    let th = if hover { 4.0 } else { 2.0 };
+    c.text(18.0, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &label);
+    c.text(x, y + 9.0, 6.0, rgba(0x6f6f86, 1.0), "Left/Right or drag: seek");
+    c.rect(x, y - th / 2.0, bw, th, rgba(0x2a2a38, 1.0));
+    c.rect(x, y - th / 2.0, bw * f, th, rgba(0xEB452C, 1.0));
+    let k = if hover { 5.0 } else { 3.5 };
+    c.round_rect(x + bw * f - k, y - k, k * 2.0, k * 2.0, 1.0, rgba(0xffffff, 1.0), rgba(0xEB452C, 1.0), 1.5);
+    rect
 }
 
 /// Every spectated player at once: one lane per player, stacked, with their numbers.
@@ -915,7 +944,6 @@ impl State {
             Item::ResumeDelay => format!("{:.2} s", c.resume_delay_ms / 1000.0),
             Item::PlayfieldArea => c.playfield_area.describe(),
             Item::PlayfieldPreset => self.current_preset().map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| "custom".into()),
-            Item::HudPosition => if c.hud_in_playfield { "with playfield".into() } else { "screen".into() },
             Item::BackgroundDim => format!("{:.0}%", c.bg_dim * 100.0),
             Item::PlayfieldReset => "Enter to reset".into(),
             Item::Rate => format!("{:.2}x", c.rate),
@@ -994,7 +1022,6 @@ impl State {
                 self.cycle_preset(dir);
                 return;
             }
-            Item::HudPosition => self.cfg.hud_in_playfield = !self.cfg.hud_in_playfield,
             Item::BackgroundDim => self.cfg.bg_dim = (((self.cfg.bg_dim + 0.05 * dir as f32) * 20.0).round() / 20.0).clamp(0.0, 1.0),
             Item::Rate => {
                 let step = 0.05 * if self.modifiers_shift { 5.0 } else { 1.0 };
@@ -1476,6 +1503,36 @@ impl State {
         true
     }
 
+    /// Replays: seeks to the timeline position under the pointer, if it's on the timeline.
+    /// `grabbed` (dragging along it) takes any height, so the pointer can wander off the bar.
+    fn replay_seek_to_pointer(&mut self, grabbed: bool) -> bool {
+        let Some([x, y, w, h]) = self.replay_bar else { return false };
+        let (vx, vy) = self.mouse_virtual();
+        if !grabbed && !(vx >= x - 6.0 && vx <= x + w + 6.0 && vy >= y && vy <= y + h) {
+            return false;
+        }
+        let Scene::Play { game, .. } = &mut self.scene else { return false };
+        let (start, end) = game.span();
+        let t = start + ((vx - x) / w.max(1.0)).clamp(0.0, 1.0) as f64 * (end - start);
+        game.seek(t, self.audio.as_ref(), self.cfg.offset_ms);
+        true
+    }
+
+    /// Gameplay hides the pointer once it has been still for a second; menus (and the pause
+    /// menu) always show it.
+    fn cursor_hidden(&self, now: Instant) -> bool {
+        let playing = match &self.scene {
+            Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } => game.paused.is_none(),
+            Scene::Spectate(_) => true,
+            _ => false,
+        };
+        playing
+            && self.grip.is_none()
+            && self.replay_scrub.is_none()
+            && self.settings_ui.dropdown.is_none()
+            && now.saturating_duration_since(self.mouse_moved_at) >= Duration::from_secs(1)
+    }
+
     /// Scenes where the playfield area can be moved and resized with the mouse.
     fn area_editable(&self) -> bool {
         matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. })
@@ -1790,7 +1847,24 @@ impl State {
     /// Pointer moved: drags the area if a drag is active, otherwise updates the hover state.
     /// Returns the cursor to show.
     fn mouse_moved(&mut self, x: f64, y: f64) -> CursorIcon {
+        if (x, y) != self.mouse {
+            self.mouse_moved_at = Instant::now();
+        }
         self.mouse = (x, y);
+        if let Some(last) = self.replay_scrub {
+            // Each seek re-judges the replay up to there; ~30 a second is plenty.
+            if last.elapsed() >= Duration::from_millis(33) && self.replay_seek_to_pointer(true) {
+                self.replay_scrub = Some(Instant::now());
+            }
+            return CursorIcon::Pointer;
+        }
+        if let Some([bx, by, bw, bh]) = self.replay_bar {
+            let (vx, vy) = self.mouse_virtual();
+            if vx >= bx - 6.0 && vx <= bx + bw + 6.0 && vy >= by && vy <= by + bh {
+                self.hover = None;
+                return CursorIcon::Pointer;
+            }
+        }
         if self.right_scroll {
             if matches!(self.scene, Scene::Select) {
                 let (_, vy) = self.mouse_virtual();
@@ -1902,6 +1976,15 @@ impl State {
             if pressed {
                 s.skip(Instant::now(), self.audio.as_ref(), "a left click");
             }
+            return;
+        }
+        if pressed && self.settings_ui.dropdown.is_none() && self.replay_seek_to_pointer(false) {
+            self.replay_scrub = Some(Instant::now());
+            return;
+        }
+        if !pressed && self.replay_scrub.take().is_some() {
+            // Land exactly where the pointer was released.
+            self.replay_seek_to_pointer(true);
             return;
         }
         if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
@@ -2298,6 +2381,10 @@ impl State {
         if let Some(file) = std::env::var_os("TAIKO_OPEN_VIDEO") {
             self.open_video_editor(std::path::Path::new(&file));
         }
+        // Tests: TAIKO_WATCH=<replay file> plays it back.
+        if let Some(file) = std::env::var_os("TAIKO_WATCH") {
+            self.watch_replay(std::path::Path::new(&file));
+        }
         if self.play_when_scanned && !self.library.is_empty() {
             self.play_when_scanned = false;
             self.start_loading(0);
@@ -2665,9 +2752,15 @@ impl State {
                 return;
             }
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
-                if !repeat {
+                if !repeat && game.replay.is_none() {
                     game.press(k, at, self.audio.as_ref(), self.cfg.offset_ms);
                 }
+                return;
+            }
+            if game.replay.is_some() && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+                let step = if self.modifiers_shift { 15_000.0 } else { 5_000.0 };
+                let t = game.time + if code == KeyCode::ArrowRight { step } else { -step };
+                game.seek(t, self.audio.as_ref(), self.cfg.offset_ms);
                 return;
             }
         }
@@ -2933,6 +3026,9 @@ impl State {
                 }
             }
         }
+        // Drawn again below if still watching a replay (after scripted input, which must see the
+        // last frame's bar like real input does).
+        self.replay_bar = None;
         match &mut self.scene {
             Scene::Select => {
                 self.select.rate_label = if (self.cfg.rate - 1.0).abs() > 1e-6 {
@@ -3012,21 +3108,19 @@ impl State {
                         sm.sample(wall, game.raw_time, game.last_audio_ms);
                     }
                 }
-                game.show_offset_hint = self.cfg.show_offset_hint;
+                // Offset advice is for live play (and its line would sit on the replay timeline).
+                game.show_offset_hint = self.cfg.show_offset_hint && game.replay.is_none();
                 game.kiai_effects = self.cfg.kiai_effects;
                 if game.replay.is_none() {
                     game.anti_mash = self.cfg.anti_mash;
                 }
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                let hud_in = self.cfg.hud_in_playfield;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
-                    if hud_in {
-                        game.draw_hud(c);
-                    }
                 });
-                if !hud_in {
-                    game.draw_hud(canvas);
+                game.draw_hud(canvas);
+                if game.replay.is_some() && game.paused.is_none() {
+                    self.replay_bar = Some(draw_replay_bar(canvas, game, self.replay_scrub.is_some()));
                 }
                 if let Some(plan) = &mut self.shots {
                     if plan.times.last().is_some_and(|&t| game.time >= t) {
@@ -3191,21 +3285,12 @@ impl State {
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
-                let hud_in = self.cfg.hud_in_playfield;
-                let hud = |c: &mut Canvas, game: &Game| {
-                    game.draw_hud(c);
-                    if let Some(s) = mp {
-                        multiplayer::draw_scoreboard(c, s, &live);
-                    }
-                };
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
-                    if hud_in {
-                        hud(c, game);
-                    }
                 });
-                if !hud_in {
-                    hud(canvas, game);
+                game.draw_hud(canvas);
+                if let Some(s) = mp {
+                    multiplayer::draw_scoreboard(canvas, s, &live);
                 }
                 if let Some(s) = &mut self.mp {
                     if s.last_live.elapsed() >= Duration::from_millis(100) {
@@ -3275,16 +3360,10 @@ impl State {
                 match v.focus {
                     Some(k) if k < v.games.len() => {
                         let g = &mut v.games[k].1;
-                        let hud_in = self.cfg.hud_in_playfield;
                         draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                             g.draw_playfield(c, scroll);
-                            if hud_in {
-                                g.draw_hud(c);
-                            }
                         });
-                        if !hud_in {
-                            g.draw_hud(canvas);
-                        }
+                        g.draw_hud(canvas);
                         canvas.text_centered(canvas.width / 2.0, 470.0, 7.0, rgba(0x9a9ab0, 1.0), "Left/Right: other player   A: everyone   Esc: leave");
                     }
                     _ if !v.games.is_empty() => draw_spectate_all(canvas, &mut v.games, &v.players, scroll),
@@ -3329,18 +3408,11 @@ impl State {
                     game.autoplay(self.audio.as_ref());
                 }
                 let offset = self.cfg.offset_ms;
-                let hud_in = self.cfg.hud_in_playfield;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
-                    if hud_in {
-                        game.draw_hud(c);
-                        calibrate::draw_overlay(c, game, offset, game.hide_notes);
-                    }
                 });
-                if !hud_in {
-                    game.draw_hud(canvas);
-                    calibrate::draw_overlay(canvas, game, offset, game.hide_notes);
-                }
+                game.draw_hud(canvas);
+                calibrate::draw_overlay(canvas, game, offset, game.hide_notes);
             }
             Scene::CalibrateDone { estimate, .. } => {
                 calibrate::draw_result(canvas, estimate, self.cfg.offset_ms, self.cfg.calibration_bpm);
@@ -3358,6 +3430,7 @@ impl State {
             }
             Scene::LayoutEdit { .. } => {
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, false, game::draw_preview);
+                game::draw_preview_hud(canvas);
                 let area = self.cfg.playfield_area;
                 layout::draw_frame(canvas, area, true);
                 let w = canvas.width;
@@ -3867,13 +3940,22 @@ fn sleep_until(deadline: Instant) {
 
 /// The render loop. Order matters for latency: (under vsync) optionally delay, wait for the
 /// swapchain, and only then sample the clock and build the frame.
-fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoopProxy<()>) {
+/// What the render thread tells the window thread.
+enum UserEvent {
+    /// The render thread stopped (quit requested or screenshot run finished).
+    Stopped,
+    /// Gameplay wants the pointer hidden (it's been still a second) or back.
+    HideCursor(bool),
+}
+
+fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoopProxy<UserEvent>) {
     let mut canvas = Canvas::default();
     let mut export_canvas = Canvas::default();
     let mut next_frame = Instant::now();
     let mut last_sample: Option<Instant> = None;
     let mut requested_present: Option<PresentChoice> = None;
     let mut waits = (0.0, 0.0, 0.0);
+    let mut cursor_hidden = false;
     // TAIKO_PROFILE=1: every 2 s, print where frame time goes (build = CPU under the state lock).
     let profile = std::env::var_os("TAIKO_PROFILE").is_some();
     let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) = (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
@@ -3936,6 +4018,11 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 canvas.sprites = atlas.sprites.map(|s| s.map(|(_, size)| size));
             }
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
+            let hide = s.cursor_hidden(now);
+            if hide != cursor_hidden {
+                cursor_hidden = hide;
+                let _ = proxy.send_event(UserEvent::HideCursor(hide));
+            }
             if let Some(image) = s.preview.bg_upload.take() {
                 renderer.set_background(image);
                 s.bg_changed = Some(Instant::now());
@@ -3990,19 +4077,32 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             sleep_until(next_frame);
         }
     }
-    let _ = proxy.send_event(());
+    let _ = proxy.send_event(UserEvent::Stopped);
 }
 
 struct App {
     state: Arc<Mutex<State>>,
     /// Last cursor icon set, so it is only changed when the hover target changes.
     cursor: CursorIcon,
+    /// The pixel pointer (None if the platform refused it: the system one is used).
+    cursors: Option<cursor::Cursors>,
+    cursor_hidden: bool,
     window: Option<Arc<Window>>,
     render_thread: Option<JoinHandle<()>>,
-    proxy: EventLoopProxy<()>,
+    proxy: EventLoopProxy<UserEvent>,
 }
 
-impl ApplicationHandler for App {
+impl App {
+    fn set_cursor(&self, icon: CursorIcon) {
+        let Some(w) = &self.window else { return };
+        match &self.cursors {
+            Some(c) => w.set_cursor(c.get(icon)),
+            None => w.set_cursor(icon),
+        }
+    }
+}
+
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -4063,12 +4163,23 @@ impl ApplicationHandler for App {
         );
         // Input only wakes this thread when there is something to do.
         event_loop.set_control_flow(ControlFlow::Wait);
+        self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
         self.window = Some(window);
+        self.set_cursor(self.cursor);
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _: ()) {
-        // The render thread stopped (quit requested or screenshot run finished).
-        event_loop.exit();
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::Stopped => event_loop.exit(),
+            UserEvent::HideCursor(hide) => {
+                if hide != self.cursor_hidden {
+                    self.cursor_hidden = hide;
+                    if let Some(w) = &self.window {
+                        w.set_cursor_visible(!hide);
+                    }
+                }
+            }
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -4130,8 +4241,13 @@ impl ApplicationHandler for App {
                 let icon = lock(&self.state).mouse_moved(position.x, position.y);
                 if icon != self.cursor {
                     self.cursor = icon;
+                    self.set_cursor(icon);
+                }
+                // Moving brings a hidden pointer back at once, not a frame later.
+                if self.cursor_hidden && !lock(&self.state).cursor_hidden(Instant::now()) {
+                    self.cursor_hidden = false;
                     if let Some(w) = &self.window {
-                        w.set_cursor(icon);
+                        w.set_cursor_visible(true);
                     }
                 }
             }
@@ -4322,6 +4438,9 @@ fn main() {
         frame_clip: None,
         guides: Vec::new(),
         readout_rect: None,
+        replay_bar: None,
+        replay_scrub: None,
+        mouse_moved_at: Instant::now(),
         preview: preview::Preview::default(),
         stars: stars::Stars::default(),
         bg_brightness: 0.0,
@@ -4329,8 +4448,16 @@ fn main() {
         monitor_modes: Vec::new(),
     };
     state.load_skin();
-    let event_loop = EventLoop::new().expect("event loop");
-    let mut app = App { state: Arc::new(Mutex::new(state)), cursor: CursorIcon::Default, window: None, render_thread: None, proxy: event_loop.create_proxy() };
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
+    let mut app = App {
+        state: Arc::new(Mutex::new(state)),
+        cursor: CursorIcon::Default,
+        cursors: None,
+        cursor_hidden: false,
+        window: None,
+        render_thread: None,
+        proxy: event_loop.create_proxy(),
+    };
     event_loop.run_app(&mut app).expect("run");
 }
 
