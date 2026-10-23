@@ -312,7 +312,8 @@ When the players skip the intro, the spectator skips it too. Spectating always u
 ### Friends, chat and watching
 
 While logged in (MULTIPLAYER → ONLINE), **F9** (or the *friends* chip top right in the menus)
-opens a translucent overlay over whatever screen is up:
+opens a translucent overlay over whatever screen is up, including while spectating or watching
+(never over your own play):
 
 - **Add friend:** type a name on the first row and press Enter. They get a request (notification
   and a row in their list) to accept or decline; once both agree you're friends.

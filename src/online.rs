@@ -270,8 +270,13 @@ impl Social {
                         continue;
                     }
                 };
+                // Socket timeouts are per handle on Windows (shared on Linux): the reader's own
+                // handle must lose the 10 s request timeout, or a quiet stretch drops the link.
+                let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(70)));
+                let _ = reader.get_ref().set_write_timeout(None);
                 let Ok(mut stream) = reader.get_ref().try_clone() else { continue };
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(70)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
                 // Whatever piled up while away is stale: the game resends its state on Connected.
                 while out.try_recv().is_ok() {}
                 let _ = events.send(SocialEvent::Connected(name));

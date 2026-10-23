@@ -1673,7 +1673,8 @@ impl State {
     fn cursor_hidden(&self, now: Instant) -> bool {
         let playing = match &self.scene {
             Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } => game.paused.is_none(),
-            Scene::Spectate(_) | Scene::Watch(_) => true,
+            // Watching: hidden unless the friends overlay is open (it needs the pointer).
+            Scene::Spectate(_) | Scene::Watch(_) => !self.social.open,
             _ => false,
         };
         playing
@@ -2848,6 +2849,12 @@ impl State {
         }
     }
 
+    /// The friends overlay (and notifications) can show: outside songs, and while watching
+    /// someone else play (spectating a match, watching a friend), never over your own play.
+    fn overlay_allowed(&self) -> bool {
+        !self.in_song() || matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_))
+    }
+
     fn open_social(&mut self) {
         if !self.social.open {
             self.social.open = true;
@@ -2859,7 +2866,7 @@ impl State {
     fn toggle_social(&mut self) {
         if self.social.open {
             self.social.open = false;
-        } else if !self.in_song() || matches!(self.scene, Scene::Watch(_)) {
+        } else if self.overlay_allowed() {
             self.open_social();
             self.social.mark_read(self.mp.is_some());
         }
@@ -3061,8 +3068,8 @@ impl State {
                 self.social.sent_activity = Some(a);
             }
         }
-        let in_song = self.in_song();
-        self.social.expire_notes(in_song);
+        let hold = !self.overlay_allowed();
+        self.social.expire_notes(hold);
         if self.social.open && self.social.row(self.mp.is_some()) == social::Row::Lobby {
             if let Some(s) = &mut self.mp {
                 s.chat_unread = 0;
@@ -4387,7 +4394,7 @@ impl State {
                 self.volume_since = None;
             }
         }
-        if !self.in_song() && self.splash.is_none() {
+        if self.overlay_allowed() && self.splash.is_none() {
             let logged_in = self.mp_menu.account.is_some();
             let (lobby, lobby_unread) = match &self.mp {
                 Some(s) => (Some(&s.chat[..]), s.chat_unread),
@@ -4395,7 +4402,7 @@ impl State {
             };
             if self.social.open {
                 social::draw(canvas, &self.social, logged_in, lobby, lobby_unread);
-            } else if logged_in {
+            } else if logged_in && !self.in_song() {
                 social::draw_chip(canvas, &self.social, lobby_unread);
             }
             social::draw_notes(canvas, &self.social);

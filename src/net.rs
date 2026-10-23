@@ -764,9 +764,14 @@ impl Client {
     /// The room protocol over a connection that's already open (the online server's, after
     /// joining a room there; its reader may hold buffered input).
     pub fn over(reader: BufReader<TcpStream>, name: &str, host_token: Option<u64>) -> Result<Client, String> {
+        // Timeouts are per handle on Windows: clear the request ones on the reader's own handle
+        // too, not just the clone, or a quiet lobby drops after 10 s there.
+        let _ = reader.get_ref().set_read_timeout(None);
+        let _ = reader.get_ref().set_write_timeout(None);
         let stream = reader.get_ref().try_clone().map_err(|e| e.to_string())?;
         let _ = stream.set_nodelay(true);
         let _ = stream.set_read_timeout(None);
+        let _ = stream.set_write_timeout(None);
         let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
         let epoch = Instant::now();
 
