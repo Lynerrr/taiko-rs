@@ -118,6 +118,8 @@ struct State {
     preview_remote: bool,
     /// When the background image last changed (it fades in).
     bg_changed: Option<Instant>,
+    /// The window has keyboard focus.
+    focused: bool,
     /// Looking up the lobby map on the mirrors (it had no set ID).
     lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
     /// Which screen was drawn last and since when, for the fade between screens.
@@ -2634,15 +2636,24 @@ impl ApplicationHandler for App {
                 s.window_h = size.height as f32;
                 s.refresh_presets();
             }
-            WindowEvent::KeyboardInput { event, .. } => {
+            WindowEvent::KeyboardInput { event, is_synthetic, .. } => {
                 // Timestamp before anything else, including taking the lock.
                 let at = Instant::now();
-                if event.state != ElementState::Pressed {
+                // Synthetic presses are keys already held when the window gets focus (the Tab of
+                // an Alt+Tab back into the game): not real presses.
+                if event.state != ElementState::Pressed || is_synthetic {
                     return;
                 }
                 let PhysicalKey::Code(code) = event.physical_key else { return };
-                lock(&self.state).key(code, event.repeat, event.text.as_deref(), at, self.window.as_deref());
+                let mut s = lock(&self.state);
+                // Alt+Tab (switching windows) isn't a Tab press for the game; nor is anything
+                // that arrives while another window has focus.
+                if !s.focused || (s.modifiers_alt && code == KeyCode::Tab) {
+                    return;
+                }
+                s.key(code, event.repeat, event.text.as_deref(), at, self.window.as_deref());
             }
+            WindowEvent::Focused(true) => lock(&self.state).focused = true,
             WindowEvent::ModifiersChanged(m) => {
                 let mut s = lock(&self.state);
                 s.modifiers_shift = m.state().shift_key();
@@ -2676,6 +2687,9 @@ impl ApplicationHandler for App {
                 // Losing focus mid-song (alt-tab, notification) pauses instead of failing the map.
                 let mut guard = lock(&self.state);
                 let s = &mut *guard;
+                s.focused = false;
+                // Alt is released in the other window; don't keep it "held" here.
+                s.modifiers_alt = false;
                 if let (Scene::Play { game, .. }, false) = (&mut s.scene, s.auto) {
                     game.pause(s.audio.as_ref());
                 }
@@ -2790,6 +2804,7 @@ fn main() {
         lobby_lookup: None,
         preview_remote: false,
         bg_changed: None,
+        focused: true,
         scene_kind: None,
         scene_since: Instant::now(),
         scrubbing: None,
