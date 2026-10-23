@@ -124,7 +124,8 @@ best local scores under the preview panel, and clicking one plays its replay. Re
 map time each hit was judged at (plus the speed and the mash setting), so watching one
 reproduces the play exactly, whatever the offset.
 
-**Replay videos:** *Export video (V)* on the results screen opens a video editor for that play:
+**Replay videos:** *Export video (V)* on the results screen, or the *video* button on a score in
+song select's leaderboard (no need to watch it first), opens a video editor for that play:
 the replay at the timeline cursor (Space plays it with sound, click/drag the timeline or
 Left/Right to move), **I** / **O** set where the video starts and ends, the crop is dragged on
 the frame (edges resize) or picked with **C** (full, lane, square, vertical), **Z** the frame size
@@ -240,6 +241,8 @@ Versus play over direct TCP (default port **7777**). Tab to the **MULTIPLAYER** 
   port must be reachable (port-forwarded / open). In the lobby press **M** to pick the map from
   your song list, **Space** to ready up, **Enter** to start once players are ready.
 - **Join:** type the host's `ip` or `ip:port` and choose *JOIN GAME*; **Space** to ready up.
+- **Spectator:** in the lobby, **S** switches you between playing and spectating; a spectator
+  isn't readied and watches every match from its start.
 
 Maps are matched by a hash of the `.osu` file, so everyone needs the same difficulty in their
 Songs folder (players without it show "no map"). A player missing the map gets a **Download map
@@ -251,8 +254,8 @@ pings, and the song starts at a shared instant 3 s after everyone has loaded. Du
 live scoreboard shows everyone's score, accuracy and combo; there is no pause (Esc twice
 forfeits). Results show score, accuracy, max combo, judgements and UR for everyone.
 
-**Spectating:** when a match is running, anyone in the lobby who has the map can press
-**Spectate (S)**. Players stream the presses they're judged on to the room, which keeps the
+**Spectating:** spectators (see above) start watching when the match starts; when a match is
+already running, anyone in the lobby who has the map can press **Spectate (S)** to join it. Players stream the presses they're judged on to the room, which keeps the
 match's log, so a spectator joining late catches up; the spectator plays the map 1.5 s behind
 live with every player's presses fed in (judged with that player's mash setting). Left/Right
 switches between players, A shows everyone stacked with their scores, Esc goes back to the lobby.

@@ -290,7 +290,7 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         c.text(x + 90.0, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), "none yet - finish a play to set one");
         return;
     }
-    c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), "click to watch the replay");
+    c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), "click: watch the replay   video: export it");
     for (k, r) in rows.iter().enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
         let hover = c.hovered(x, ry, w, 16.0);
@@ -299,8 +299,12 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let left = format!("#{}  {:08}  {:.2}%  {}x{}", k + 1, r.score, r.accuracy * 100.0, r.max_combo, rate);
         c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &left);
+        // The video button sits on top of the row (drawn after it, so it wins the click).
+        let bw = Canvas::text_width(6.0, "video") + 12.0;
+        let bx = x + w - bw - 3.0;
+        c.button(bx, ry + 2.0, bw, 12.0, "video", 6.0, render::Hit::ScoreVideo(k), false);
         let right = format!("{}  {} miss  {}", r.player, r.miss, scores::age(r.date));
-        c.text_right(x + w - 8.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
+        c.text_right(bx - 6.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
 }
 
@@ -1849,6 +1853,9 @@ impl State {
                     return;
                 };
                 match code {
+                    KeyCode::Space | KeyCode::KeyR if s.me().is_some_and(|p| p.spectator) => {
+                        self.toast("you're spectating: S to play instead".into());
+                    }
                     KeyCode::Space | KeyCode::KeyR => {
                         if s.me().is_some_and(|p| p.has_map) {
                             s.ready = !s.me().is_some_and(|p| p.ready);
@@ -1876,6 +1883,13 @@ impl State {
                         } else {
                             self.toast("you need the map to spectate".into());
                         }
+                    }
+                    // Before a match: watch it (and the next ones) instead of playing.
+                    KeyCode::KeyS if !s.in_match => {
+                        let on = !s.me().is_some_and(|p| p.spectator);
+                        s.ready = false;
+                        s.client.send(net::ClientMsg::Spectator(on));
+                        self.toast(if on { "you'll spectate the match" } else { "you'll play the match" }.into());
                     }
                     KeyCode::KeyD if !s.have_map => self.download_lobby_map(),
                     KeyCode::KeyH if !s.have_map && s.map.is_some() && self.host_transfer.is_none() => {
@@ -3468,6 +3482,11 @@ impl State {
             Hit::ScoreRow(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
                     self.watch_replay(&file);
+                }
+            }
+            Hit::ScoreVideo(k) => {
+                if let Some(file) = self.leaderboard.get(k).cloned() {
+                    self.open_video_editor(&file);
                 }
             }
             Hit::DlCategory(i) => self.browse.set_category(download::Category::ALL[i]),

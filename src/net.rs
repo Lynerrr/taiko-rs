@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL: u32 = 5;
+pub const PROTOCOL: u32 = 6;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Countdown between everyone having loaded and the song starting.
 const START_LEAD_MS: f64 = 3000.0;
@@ -116,6 +116,9 @@ pub struct PlayerInfo {
     pub status: Status,
     pub live: Live,
     pub result: Option<Final>,
+    /// Watches matches instead of playing them.
+    #[serde(default)]
+    pub spectator: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -139,6 +142,8 @@ pub enum ClientMsg {
     Inputs { inputs: Vec<(f64, u8)>, anti_mash: bool },
     /// Start / stop watching the match in progress.
     Spectate(bool),
+    /// Lobby: be a spectator (watch every match from its start) or a player.
+    Spectator(bool),
 }
 
 /// A piece of a map set archive sent from the host's Songs folder. `data` is base64; the
@@ -350,6 +355,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
                         status: Status::Lobby,
                         live: Live::default(),
                         result: None,
+                        spectator: false,
                     },
                     tx,
                     hello: false,
@@ -450,7 +456,14 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
                         dirty = true;
                     }
                     ClientMsg::Ready(r) if phase == Phase::Lobby => {
-                        p.info.ready = r && p.info.has_map;
+                        p.info.ready = r && p.info.has_map && !p.info.spectator;
+                        dirty = true;
+                    }
+                    ClientMsg::Spectator(on) => {
+                        p.info.spectator = on;
+                        if on {
+                            p.info.ready = false;
+                        }
                         dirty = true;
                     }
                     ClientMsg::StartMatch if is_host && phase == Phase::Lobby => {
@@ -514,6 +527,14 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
                     }
                 }
                 phase = if started { Phase::Playing } else { Phase::Lobby };
+                // Spectators watch from the start.
+                if let (true, Some(m)) = (started, &map) {
+                    let roster: Vec<(u32, String)> = players.iter().filter(|p| p.in_match).map(|p| (p.info.id, p.info.name.clone())).collect();
+                    for p in players.iter_mut().filter(|p| p.hello && p.info.spectator && !p.in_match) {
+                        p.spectating = true;
+                        let _ = p.tx.send(ServerMsg::Spectate { map: m.clone(), at, players: roster.clone() });
+                    }
+                }
                 dirty = true;
             }
         }

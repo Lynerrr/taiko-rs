@@ -163,6 +163,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
 /// `map_chosen`: "no map" only means something once the host has picked one.
 fn status_text(p: &PlayerInfo, map_chosen: bool) -> (&'static str, u32) {
     match p.status {
+        Status::Lobby if p.spectator => ("spectator", 0x4fb4ff),
         Status::Loading => ("loading", 0x9a9ab0),
         Status::Playing => ("playing", 0x438EAD),
         Status::Finished => ("finished", 0x9a9ab0),
@@ -224,7 +225,9 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
 
     let ready = s.players.iter().filter(|p| p.ready && p.has_map).count();
     let me_ready = s.me().is_some_and(|p| p.ready);
+    let me_spectator = s.me().is_some_and(|p| p.spectator);
     let ready_label = if me_ready { "Unready  (Space)" } else { "Ready  (Space)" };
+    let spectate_label = if me_spectator { "Play instead  (S)" } else { "Spectate  (S)" };
     let start_label = format!("Start  (Enter, {ready} ready)");
     if s.in_match {
         c.text_centered(w / 2.0, 428.0, 8.0, rgba(0x9a9ab0, 1.0), "A match is in progress; you'll join the next one.");
@@ -236,11 +239,12 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         c.button_row(440.0, &[
             ("Pick map  (M)", Hit::Key(KeyCode::KeyM), false),
             ("Preview / start point  (P)", Hit::Key(KeyCode::KeyP), false),
-            (ready_label, Hit::Key(KeyCode::Space), false),
+            (if me_spectator { spectate_label } else { ready_label }, Hit::Key(if me_spectator { KeyCode::KeyS } else { KeyCode::Space }), false),
             (&start_label, Hit::Key(KeyCode::Enter), true),
             ("Close room  (Esc)", Hit::Key(KeyCode::Escape), false),
         ]);
-        c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x6f6f86, 1.0), "[ ] match rate   Tab songs");
+        let hint = if me_spectator { "you'll watch the match   S: play instead   [ ] match rate   Tab songs" } else { "S: spectate instead   [ ] match rate   Tab songs" };
+        c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x6f6f86, 1.0), hint);
     } else {
         let missing = s.map.is_some() && !have_map;
         if missing {
@@ -252,11 +256,16 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
                 ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false),
             ]);
         } else {
-            c.button_row(440.0, &[
-                ("Preview  (P)", Hit::Key(KeyCode::KeyP), false),
-                (ready_label, Hit::Key(KeyCode::Space), true),
-                ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false),
-            ]);
+            let mut buttons = vec![("Preview  (P)", Hit::Key(KeyCode::KeyP), false)];
+            if !me_spectator {
+                buttons.push((ready_label, Hit::Key(KeyCode::Space), true));
+            }
+            buttons.push((spectate_label, Hit::Key(KeyCode::KeyS), me_spectator));
+            buttons.push(("Leave  (Esc)", Hit::Key(KeyCode::Escape), false));
+            c.button_row(440.0, &buttons);
+            if me_spectator {
+                c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x4fb4ff, 1.0), "you'll watch the next match from its start");
+            }
         }
     }
     if let Some(r) = &s.results {
