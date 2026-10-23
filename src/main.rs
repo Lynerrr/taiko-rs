@@ -24,6 +24,7 @@ mod render;
 mod scores;
 mod settings;
 mod skin;
+mod splash;
 mod stars;
 mod ui;
 mod video;
@@ -135,6 +136,8 @@ struct State {
     modifiers_alt: bool,
     /// When the volume overlay was last poked (Alt + wheel).
     volume_shown: Option<Instant>,
+    /// The startup splash while it plays.
+    splash: Option<splash::Splash>,
     /// When the overlay appeared (it slides in once, not on every notch).
     volume_since: Option<Instant>,
     /// Clickable areas of the last frame drawn.
@@ -882,6 +885,7 @@ impl State {
             }
             Item::ShowFps => on(c.show_fps),
             Item::Animations => on(c.animations),
+            Item::Splash => on(c.splash),
             Item::Fullscreen => on(self.fullscreen),
             Item::Calibrate => "Enter to start".into(),
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
@@ -954,6 +958,7 @@ impl State {
             }
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
+            Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::Fullscreen => self.toggle_fullscreen(window),
             // Started with Enter in `settings_key`; arrows do nothing.
             Item::Calibrate => return,
@@ -1799,6 +1804,12 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
+        if let Some(s) = &mut self.splash {
+            if pressed {
+                s.skip(Instant::now(), self.audio.as_ref());
+            }
+            return;
+        }
         if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
             let (vx, vy) = (self.mouse.0 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0), self.mouse.1 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0));
             let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
@@ -2432,6 +2443,13 @@ impl State {
     }
 
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        if let Some(s) = &mut self.splash {
+            // Any key skips the splash and does nothing else.
+            if !repeat {
+                s.skip(at, self.audio.as_ref());
+            }
+            return;
+        }
         // Key capture must see every key, before any shortcut can claim it.
         if self.settings_ui.dropdown.is_some() && !repeat {
             let nav = matches!(
@@ -2692,6 +2710,8 @@ impl State {
             let (entries, selected) = if browsing { (&self.browse.remote, self.browse.shown) } else { (&self.library, self.preview_target()) };
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
+            // The splash has its own sound: the preview music waits for it.
+            let in_menu = in_menu && self.splash.is_none();
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, rate);
             self.stars.poll();
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
@@ -3318,8 +3338,34 @@ impl State {
                 self.toast = None;
             }
         }
+        if self.splash.is_some() {
+            let boot = self.boot_log();
+            if let Some(s) = &mut self.splash {
+                if !s.draw(canvas, now, self.audio.as_ref(), &boot) {
+                    self.splash = None;
+                }
+            }
+        }
         std::mem::swap(&mut self.hits, &mut canvas.hits);
         capture
+    }
+
+    /// What the splash's boot log shows: what is actually starting up.
+    fn boot_log(&self) -> Vec<String> {
+        let songs = match &self.scan {
+            Some((_, found)) => format!("songs  scanning... {} files", found.load(Ordering::Relaxed)),
+            None => format!("songs  {} difficulties", self.library.len()),
+        };
+        let audio = self.audio.as_ref().map(|a| a.description.clone()).unwrap_or_else(|| "none (silent)".into());
+        let skin = if self.cfg.skin.is_empty() { "built-in" } else { &self.cfg.skin };
+        vec![
+            format!("taiko-rs {}", env!("CARGO_PKG_VERSION")),
+            format!("gpu    {}", self.adapter),
+            format!("audio  {audio}"),
+            songs,
+            format!("skin   {skin}"),
+            "drums  ready".into(),
+        ]
     }
 
     fn installed_sets(&mut self) -> &mut std::collections::HashSet<u32> {
@@ -4067,6 +4113,10 @@ fn main() {
     select.played = load_plays();
     // A single .osu on the command line goes straight into gameplay.
     let play_when_scanned = args.len() == 1 && args[0].extension().is_some_and(|e| e == "osu");
+    // No splash before a map given on the command line, or in scripted runs (TAIKO_SPLASH=1 forces it).
+    let scripted = std::env::var_os("TAIKO_SHOTS").is_some() || std::env::var_os("TAIKO_INPUT").is_some();
+    let want_splash = std::env::var_os("TAIKO_SPLASH").is_some() || (cfg.splash && !play_when_scanned && !scripted);
+    let splash = if want_splash { splash::Splash::new(audio.as_ref().map(|a| a.rate)) } else { None };
     let present = cfg.present;
     let mut state = State {
         cfg,
@@ -4088,6 +4138,7 @@ fn main() {
         modifiers_ctrl: false,
         modifiers_alt: false,
         volume_shown: None,
+        splash,
         volume_since: None,
         hits: Vec::new(),
         browse: browse::Browse::default(),

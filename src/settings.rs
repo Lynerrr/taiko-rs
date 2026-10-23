@@ -37,13 +37,14 @@ pub enum Item {
     FpsCap,
     ShowFps,
     Animations,
+    Splash,
     Fullscreen,
     DiscordPresence,
     Skin,
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 37] = [
+pub const ITEMS: [(&str, Item); 38] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -79,6 +80,7 @@ pub const ITEMS: [(&str, Item); 37] = [
     ("VIDEO", Item::Fullscreen),
     ("VIDEO", Item::Animations),
     ("VIDEO", Item::DiscordPresence),
+    ("VIDEO", Item::Splash),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinFolder),
 ];
@@ -134,6 +136,7 @@ impl Item {
             Item::FpsCap => "FPS cap",
             Item::ShowFps => "FPS overlay",
             Item::Animations => "UI animations",
+            Item::Splash => "Startup splash",
             Item::Fullscreen => "Fullscreen",
             Item::DiscordPresence => "Discord status",
             Item::Skin => "Skin",
@@ -171,6 +174,7 @@ impl Item {
             Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
+            Item::Splash => "The animated intro when taiko-rs starts (any key or click skips it).",
             Item::Fullscreen => "Shortcut: F11.",
             Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",
             Item::Skin => "An osu! skin from osu!'s Skins folder or taiko-rs's own. What it lacks stays built-in.",

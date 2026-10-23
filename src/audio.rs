@@ -518,6 +518,21 @@ pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
 /// `None`. Also returns the device-rate frame the first sample belongs at: the samples are
 /// identical to the same stretch of a full decode, so one can be swapped for the other mid-song.
 pub fn decode_part(path: &Path, rate: u32, part: Option<(f64, f64)>) -> Result<(Track, i64), String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    decode_source(Box::new(file), path.extension().and_then(|e| e.to_str()), rate, part)
+}
+
+/// Decodes audio built into the binary (`ext`: its format's file extension).
+pub fn decode_bytes(bytes: &'static [u8], ext: &str, rate: u32) -> Result<Track, String> {
+    decode_source(Box::new(std::io::Cursor::new(bytes)), Some(ext), rate, None).map(|(track, _)| track)
+}
+
+fn decode_source(
+    source: Box<dyn symphonia::core::io::MediaSource>,
+    ext: Option<&str>,
+    rate: u32,
+    part: Option<(f64, f64)>,
+) -> Result<(Track, i64), String> {
     use symphonia::core::codecs::audio::AudioDecoderOptions;
     use symphonia::core::errors::Error;
     use symphonia::core::formats::probe::Hint;
@@ -526,10 +541,9 @@ pub fn decode_part(path: &Path, rate: u32, part: Option<(f64, f64)>) -> Result<(
     use symphonia::core::meta::MetadataOptions;
     use symphonia::core::units::Time;
 
-    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mss = MediaSourceStream::new(source, Default::default());
     let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = ext {
         hint.with_extension(ext);
     }
     let mut format = symphonia::default::get_probe()

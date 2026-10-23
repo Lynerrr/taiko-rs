@@ -96,6 +96,13 @@ selection highlights glide, a song's difficulties slide open, settings scroll sm
 menu slides in, results count up with the grade popping in, toasts and the volume overlay slide,
 and the preview fades in on a new map. Gameplay itself is never animated or delayed by this.
 
+At startup a short **splash** plays (about 2.5 s), timed to its own voice clip: the screen powers
+on like a CRT, a boot log types out what is really starting (GPU, audio device, songs found, skin),
+a pixel portrait assembles from don/kat coloured pixels and takes drum hits on the voice, *taiko-rs*
+drops in syllable by syllable, the hiss glitches the picture, a loading bar fills to READY and the
+screen powers off into song select, whose preview music waits until then. Effects follow the clip's
+loudness. Any key or click skips it; Settings → Video → *Startup splash* turns it off.
+
 Everything is adjustable in the **Settings** tab, split into sections in a sidebar (Gameplay, Playfield, Input, Offset, Audio, Video, Skin; PgUp/PgDn or click to switch) (scroll speed, offset, key bindings, converts,
 volumes, audio buffer, present mode, FPS cap, overlay, fullscreen) and saved
 immediately to `~/.config/taiko-rs/config.txt` (Windows: `%APPDATA%\taiko-rs\config.txt`). Losing window focus mid-song pauses the game. The results screen shows UR and mean hit error and tells
