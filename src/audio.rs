@@ -472,6 +472,26 @@ mod tests {
     }
 
     #[test]
+    fn wind_up_puts_beats_where_the_speed_map_says() {
+        let sr = 48000;
+        let input = metronome(sr, 500.0, 24, 1000.0);
+        let speed = crate::mods::Speed { r0: 1.0, r1: 1.5, m0: 1000.0, m1: 11_000.0 };
+        for keep_pitch in [true, false] {
+            let out = change_speed(Track { samples: input.samples.clone(), rate: 1.0 }, sr, &speed, keep_pitch);
+            assert_eq!(out.rate, 1.0);
+            for b in 2..22 {
+                let expected = speed.track(b as f64 * 500.0);
+                let ms = |t: f64| (t / 1000.0 * sr as f64) as usize;
+                let (from, to) = (ms(expected - 40.0), ms(expected + 60.0));
+                let peak = (from..to).map(|i| out.samples[i * 2].abs()).fold(0.0, f32::max);
+                let onset = (from..to).find(|&i| out.samples[i * 2].abs() >= peak * 0.5).unwrap();
+                let err = onset as f64 / sr as f64 * 1000.0 - expected;
+                assert!(err.abs() < 6.0, "keep_pitch {keep_pitch}: beat {b} off by {err:.1} ms");
+            }
+        }
+    }
+
+    #[test]
     fn without_keep_pitch_pitch_follows_speed() {
         let sr = 48000;
         let out = change_rate(Track { samples: sine(440.0, 2.0, sr), rate: 1.0 }, sr, 1.5, false);
@@ -686,18 +706,43 @@ pub fn change_rate(track: Track, sample_rate: u32, rate: f64, keep_pitch: bool) 
     if (rate - 1.0).abs() < 1e-6 || track.samples.is_empty() {
         return track;
     }
-    let samples = if keep_pitch { time_stretch(&track.samples, sample_rate, rate) } else { resample_ratio(&track.samples, rate) };
+    let samples = if keep_pitch {
+        let frames = track.samples.len() / 2;
+        time_stretch(&track.samples, sample_rate, |n| n * rate, (frames as f64 / rate) as usize)
+    } else {
+        resample_ratio(&track.samples, rate)
+    };
     Track { samples, rate }
+}
+
+/// Like `change_rate`, for a speed that changes over the song (Wind Up / Down): output (song)
+/// time t plays the map at `speed.map(t)`. The track's `rate` is the starting speed.
+pub fn change_speed(track: Track, sample_rate: u32, speed: &crate::mods::Speed, keep_pitch: bool) -> Track {
+    if speed.is_constant() || track.samples.is_empty() {
+        return change_rate(track, sample_rate, speed.r0, keep_pitch);
+    }
+    let sr = sample_rate as f64;
+    let frames = track.samples.len() / 2;
+    // Output frame -> input frame, through map time.
+    let in_of = |n: f64| speed.map(n / sr * 1000.0) / 1000.0 * sr;
+    let out_frames = (speed.track(frames as f64 / sr * 1000.0) / 1000.0 * sr) as usize;
+    let samples = if keep_pitch {
+        time_stretch(&track.samples, sample_rate, in_of, out_frames)
+    } else {
+        resample_by(&track.samples, out_frames, |n| in_of(n as f64))
+    };
+    Track { samples, rate: speed.r0 }
 }
 
 /// WSOLA time stretch of interleaved stereo: overlap-adds Hann-windowed ~40 ms grains, choosing
 /// each grain's source position within +-8 ms so its waveform lines up with the previous grain.
-fn time_stretch(input: &[f32], sample_rate: u32, rate: f64) -> Vec<f32> {
+/// `in_of` maps an output frame to the input frame that should sound there; the output is
+/// `out_len` frames long.
+fn time_stretch(input: &[f32], sample_rate: u32, in_of: impl Fn(f64) -> f64, out_len: usize) -> Vec<f32> {
     let frames = input.len() / 2;
     let sr = sample_rate as f64;
     let win = ((sr * 0.040) as usize).max(64) & !1;
     let hop_out = win / 2;
-    let hop_in = hop_out as f64 * rate;
     let search = (sr * 0.008) as usize;
     let window: Vec<f32> = (0..win).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / win as f32).cos()).collect();
     // Alignment is searched on a 4x-decimated mono copy (then refined at full rate) to stay fast.
@@ -714,13 +759,13 @@ fn time_stretch(input: &[f32], sample_rate: u32, rate: f64) -> Vec<f32> {
         s
     };
 
-    let out_frames = (frames as f64 / rate) as usize + win;
+    let out_frames = out_len + win;
     let mut out = vec![0.0f32; out_frames * 2];
     let mut norm = vec![0.0f32; out_frames];
-    // Grains are placed so their centres (where the Hann window weighs most) map exactly to
-    // input time = output time * rate; anchoring their starts instead would play the music
-    // ~win/2 * (rate - 1) late (about 7 ms at 1.5x), off its notes.
-    let centre_shift = win as f64 / 2.0 * (rate - 1.0);
+    // Grains are placed so their centres (where the Hann window weighs most) land exactly where
+    // `in_of` says; anchoring their starts instead would play the music ~win/2 * (rate - 1)
+    // late (about 7 ms at 1.5x), off its notes.
+    let half = win as f64 / 2.0;
     // Candidates nearest `nominal` first, so ties (silence) keep the grain on time.
     let around = |centre: usize, lo: usize, hi: usize| {
         (0..=(hi - lo)).flat_map(move |d| [centre.checked_sub(d), Some(centre + d)]).flatten().filter(move |&c| c >= lo && c <= hi)
@@ -728,7 +773,7 @@ fn time_stretch(input: &[f32], sample_rate: u32, rate: f64) -> Vec<f32> {
     let mut prev: Option<usize> = None;
     let mut k = 0usize;
     loop {
-        let nominal = (k as f64 * hop_in + centre_shift).max(0.0) as usize;
+        let nominal = (in_of((k * hop_out) as f64 + half) - half).max(0.0) as usize;
         let out_pos = k * hop_out;
         if nominal + win + search >= frames || out_pos + win > out_frames {
             break;
@@ -792,15 +837,20 @@ fn resample_ratio(input: &[f32], ratio: f64) -> Vec<f32> {
 
 /// Like `resample_ratio`, with output frame n reading input position `phase + n * ratio`.
 fn resample_from(input: &[f32], ratio: f64, phase: f64) -> Vec<f32> {
+    let frames_out = ((input.len() / 2) as f64 - phase) / ratio;
+    resample_by(input, frames_out.floor().max(0.0) as usize, |n| phase + n as f64 * ratio)
+}
+
+/// Cubic resampling where output frame n reads input position `pos(n)`.
+fn resample_by(input: &[f32], frames_out: usize, pos: impl Fn(usize) -> f64) -> Vec<f32> {
     let frames_in = input.len() / 2;
-    let frames_out = ((frames_in as f64 - phase) / ratio).floor().max(0.0) as usize;
     let mut out = Vec::with_capacity(frames_out * 2);
     let at = |i: isize, c: usize| -> f32 {
         let i = i.clamp(0, frames_in as isize - 1) as usize;
         input[i * 2 + c]
     };
     for n in 0..frames_out {
-        let pos = phase + n as f64 * ratio;
+        let pos = pos(n);
         let i = pos.floor() as isize;
         let t = (pos - i as f64) as f32;
         for c in 0..2 {

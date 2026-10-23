@@ -879,6 +879,9 @@ pub enum Hit {
     SongHeader(usize),
     /// An item of the song list's right-click menu.
     SongMenu(usize),
+    /// A mod in the mod select (index into `mods::ALL`) / the song select's Mods button.
+    ModToggle(usize),
+    ModsButton,
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
     SettingStep(usize, i32),
@@ -1069,6 +1072,18 @@ impl Canvas {
         for h in self.hits.iter_mut().filter(|h| h.shape > start) {
             let [x, y, w, hh] = h.rect;
             h.rect = [anchor[0] + (x - anchor[0]) * scale + dx, anchor[1] + (y - anchor[1]) * scale + dy, w * scale, hh * scale];
+        }
+    }
+
+    /// Flips every shape drawn since `start` left to right across a canvas `w` wide (Mirror
+    /// mod; text drawn this way would read backwards, so it is drawn afterwards).
+    pub fn mirror_since(&mut self, start: usize, w: f32) {
+        for sh in &mut self.shapes[start..] {
+            sh.center[0] = w - sh.center[0];
+            // Half circles swap sides; other values there mark sprites.
+            if (0.5..2.5).contains(&sh.params[3]) {
+                sh.params[3] = 3.0 - sh.params[3];
+            }
         }
     }
 

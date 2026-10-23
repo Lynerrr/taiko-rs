@@ -19,6 +19,7 @@ mod layout;
 mod library;
 mod logo;
 mod mapinfo;
+mod mods;
 mod multiplayer;
 mod net;
 mod osudb;
@@ -56,6 +57,7 @@ use winit::window::CursorIcon;
 use library::Entry;
 use render::{rgba, Canvas, PresentChoice, Renderer};
 use settings::{Dropdown, Item, PresetAction, SettingsUi};
+use mods::Mods;
 use ui::{Results, Select, SelectAction};
 
 type Loaded = Result<(Beatmap, Arc<Track>), String>;
@@ -103,6 +105,7 @@ struct SpectateView {
     start: Instant,
     from: Option<f64>,
     rate: f64,
+    mods: Mods,
     players: Vec<(u32, String)>,
     /// One game per player, fed with their presses.
     games: Vec<(u32, Box<Game>)>,
@@ -224,6 +227,10 @@ struct State {
     scores: Vec<scores::ScoreRow>,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
+    /// Mods of the play being loaded.
+    pending_mods: Mods,
+    /// The mod select is open: the mod the keyboard is on (index into `mods::ALL`).
+    mod_select: Option<usize>,
     /// Replay files of the leaderboard rows drawn this frame.
     leaderboard: Vec<PathBuf>,
     /// A video export in progress, and the editor's last message.
@@ -432,7 +439,8 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         c.round_rect(x, ry, w, 16.0, 5.0, rgba(if hover { 0x262634 } else { 0x15151d }, 0.9), rgba(0x2a2a38, 1.0), 1.0);
         c.hit(x, ry, w, 16.0, render::Hit::ScoreRow(k));
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
-        let left = format!("#{}  {:08}  {:.2}%  {}x{}", k + 1, r.score, r.accuracy * 100.0, r.max_combo, rate);
+        let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods) };
+        let left = format!("#{}  {:08}  {:.2}%  {}x{}{}", k + 1, r.score, r.accuracy * 100.0, r.max_combo, rate, mods);
         c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &left);
         // The video button sits on top of the row (drawn after it, so it wins the click).
         let bw = Canvas::text_width(6.0, "video") + 12.0;
@@ -544,8 +552,9 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
 }
 
 /// How a map is named to other players (lobby map, a solo play friends watch).
-fn map_info(e: &Entry, rate: f64) -> net::MapInfo {
+fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
     net::MapInfo {
+        mods: mods.list(),
         hash: e.hash(),
         artist: e.meta.artist.clone(),
         title: e.meta.title.clone(),
@@ -602,8 +611,21 @@ impl State {
     }
 
     /// The preview's decoded song, when it was prepared at the speed `entry` is about to play at.
-    fn cached_track(&self, entry: usize, rate: f64) -> Option<Arc<Track>> {
-        self.preview.cached_track(&self.library[entry], rate, self.cfg.rate_keep_pitch)
+    fn cached_track(&self, entry: usize, rate: f64, keep_pitch: bool) -> Option<Arc<Track>> {
+        self.preview.cached_track(&self.library[entry], rate, keep_pitch)
+    }
+
+    /// Speed and pitch of a play started now: the selected speed, or what DT/HT/NC/DC force.
+    fn play_speed(&self) -> (f64, bool) {
+        self.cfg.mods.speed(self.cfg.rate, self.cfg.rate_keep_pitch)
+    }
+
+    /// Loads `entry` for a play at `rate` with `mods` (`keep_pitch` unless NC/DC say otherwise).
+    fn load_with(&mut self, entry: usize, rate: f64, mods: Mods) -> Receiver<Loaded> {
+        let (rate, keep_pitch) = mods.speed(rate, self.cfg.rate_keep_pitch);
+        let cached = self.cached_track(entry, rate, keep_pitch);
+        self.pending_mods = mods;
+        self.spawn_loader(entry, rate, keep_pitch, mods, cached)
     }
 
     /// Speed the preview plays at: the match rate for the lobby map, else the selected rate.
@@ -611,8 +633,8 @@ impl State {
         let lobby_rate = self.mp.as_ref().and_then(|s| s.map.as_ref().filter(|_| s.map_entry.is_some() && s.map_entry == self.preview_target()).map(|m| m.rate));
         let lobby = matches!(self.scene, Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_))
             || matches!(&self.scene, Scene::Preview { back } | Scene::Settings { prev: back } if matches!(**back, Scene::Lobby));
-        let rate = lobby_rate.filter(|_| lobby).unwrap_or(self.cfg.rate);
-        (rate, self.cfg.rate_keep_pitch)
+        let (rate, keep_pitch) = self.play_speed();
+        (lobby_rate.filter(|_| lobby).unwrap_or(rate), keep_pitch)
     }
 
     /// The playfield area's size in pixels.
@@ -659,7 +681,7 @@ impl State {
         };
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
-        let rx = self.spawn_loader(entry, r.rate, self.cached_track(entry, r.rate));
+        let rx = self.load_with(entry, r.rate, Mods::from_list(&r.mods));
         self.video_status = if video::find_ffmpeg().is_some() {
             String::new()
         } else {
@@ -704,7 +726,8 @@ impl State {
                         a.stop();
                     }
                 } else if let (Some((_, track)), Some(a)) = (&ed.map, &self.audio) {
-                    a.play(track.clone(), ed.cursor / rate);
+                    let at = ed.game.as_ref().map(|g| g.track_at(ed.cursor)).unwrap_or(ed.cursor / rate);
+                    a.play(track.clone(), at);
                     ed.playing = Some((Instant::now(), ed.cursor));
                 }
             }
@@ -753,7 +776,8 @@ impl State {
         let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.hitsounds { sim.sfx_log.take().unwrap_or_default() } else { Vec::new() };
         let sounds = audio::hitsound_set(sr, skin::load(&self.cfg.skin, Some(sr)).hitsounds);
         let (music, fx) = self.cfg.volumes();
-        let samples = video::mix_audio(track, sr, ed.replay.rate, ed.start, ed.end, music.max(0.05), &sfx, &sounds, fx);
+        let speed = sim.speed();
+        let samples = video::mix_audio(track, sr, &speed, ed.start, ed.end, music.max(0.05), &sfx, &sounds, fx);
         let Some(dir) = video::videos_dir() else { return };
         let _ = std::fs::create_dir_all(&dir);
         let wav = dir.join(format!(".audio-{}.wav", std::process::id()));
@@ -768,9 +792,11 @@ impl State {
             Ok(encoder) => {
                 let mut game = Box::new(video::replay_game(map, track, &ed.replay));
                 game.set_time(ed.start);
-                let step = 1000.0 / fps as f64 * ed.replay.rate;
-                let frames = ((ed.end - ed.start) / step).ceil().max(1.0) as u64;
-                self.export = Some(video::Export { game, t: ed.start, step, size, encoder, frame: 0, frames, out });
+                // Frames are evenly spaced in song time (what the video's audio follows).
+                let step = 1000.0 / fps as f64;
+                let (t0, t1) = (speed.track(ed.start), speed.track(ed.end));
+                let frames = ((t1 - t0) / step).ceil().max(1.0) as u64;
+                self.export = Some(video::Export { game, t: t0, step, size, encoder, frame: 0, frames, out });
                 self.video_status = String::new();
             }
             Err(e) => self.video_status = e,
@@ -792,7 +818,8 @@ impl State {
         let tx = ex.encoder.tx.clone()?;
         let (w, h) = ex.size;
         ex.game.kiai_effects = kiai;
-        ex.game.set_time(ex.t);
+        let t = ex.game.speed().map(ex.t);
+        ex.game.set_time(t);
         c.clear(render::VIRTUAL_HEIGHT * w as f32 / h as f32);
         ex.game.draw_playfield(c, scroll);
         ex.game.draw_hud(c);
@@ -823,7 +850,7 @@ impl State {
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
         let label = format!("replay of {}: {}", r.player, self.library[entry].label());
-        let rx = self.spawn_loader(entry, r.rate, self.cached_track(entry, r.rate));
+        let rx = self.load_with(entry, r.rate, Mods::from_list(&r.mods));
         self.pending_replay = Some(r);
         self.scene = Scene::Loading { rx, label, entry, from: None };
     }
@@ -837,7 +864,7 @@ impl State {
         if let Some(t) = from {
             label.push_str(&format!("  (from {})", fmt_time(t)));
         }
-        let rx = self.spawn_loader(entry, self.cfg.rate, self.cached_track(entry, self.cfg.rate));
+        let rx = self.load_with(entry, self.cfg.rate, self.cfg.mods);
         self.scene = Scene::Loading { rx, label, entry, from };
     }
 
@@ -941,18 +968,21 @@ impl State {
 
     /// Parses the map and decodes its audio on a background thread.
     /// `speed`: rate modifier to prepare the track for (time-stretched or resampled once here).
-    fn spawn_loader(&self, entry: usize, speed: f64, cached: Option<Arc<Track>>) -> Receiver<Loaded> {
+    /// Loads a map and its song prepared at `speed` (plus Wind Up / Down from `mods`).
+    fn spawn_loader(&self, entry: usize, speed: f64, keep_pitch: bool, mods: Mods, cached: Option<Arc<Track>>) -> Receiver<Loaded> {
         let path = self.library[entry].path.clone();
         let rate = self.audio.as_ref().map(|a| a.rate);
-        let keep_pitch = self.cfg.rate_keep_pitch;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = (|| {
                 let map = beatmap::load(&path)?;
                 let audio_path = path.parent().unwrap_or(&path).join(&map.meta.audio_file);
+                let speed = game::speed_for(&map, mods, speed);
+                // A track prepared at one constant speed can't serve a changing one.
+                let cached = cached.filter(|_| speed.is_constant());
                 let track = match (cached, rate) {
                     (Some(track), _) => track,
-                    (None, Some(rate)) => Arc::new(audio::change_rate(audio::decode(&audio_path, rate)?, rate, speed, keep_pitch)),
+                    (None, Some(rate)) => Arc::new(audio::change_speed(audio::decode(&audio_path, rate)?, rate, &speed, keep_pitch)),
                     (None, None) => Arc::new(Track { samples: Vec::new(), rate: 1.0 }),
                 };
                 Ok((map, track))
@@ -1470,6 +1500,7 @@ impl State {
         let mut game = Game::new(map, track, self.audio.as_ref());
         // Your own hitsounds would let you sync to yourself instead of to the click.
         game.mute_hits = true;
+        game.show_hp = false;
         self.scene = Scene::Calibrate { game: Box::new(game), back: Box::new(back) };
     }
 
@@ -2009,6 +2040,10 @@ impl State {
         if notches == 0 {
             return;
         }
+        if let Some(cur) = self.mod_select.filter(|_| !self.modifiers_alt) {
+            self.mod_select = Some(mods::step(cur, 0, -notches));
+            return;
+        }
         if self.modifiers_alt {
             let v = ((self.cfg.master_volume + 0.05 * notches as f32) * 20.0).round() / 20.0;
             self.cfg.master_volume = v.clamp(0.0, 1.0);
@@ -2205,6 +2240,9 @@ impl State {
     /// osu!'s right-click scrolling.
     /// Released without moving, it opens the row's menu (or, off the rows, jumps there).
     fn right_button(&mut self, pressed: bool) {
+        if self.mod_select.is_some() {
+            return;
+        }
         let free = self.splash.is_none() && self.select.picker.is_none() && self.settings_ui.dropdown.is_none();
         let (vx, vy) = self.mouse_virtual();
         if pressed {
@@ -2242,6 +2280,16 @@ impl State {
         if let Some(s) = &mut self.splash {
             if pressed {
                 s.skip(Instant::now(), self.audio.as_ref(), "a left click");
+            }
+            return;
+        }
+        if self.mod_select.is_some() {
+            // Only the mod select's own chips and buttons; nothing under it.
+            if pressed {
+                let (vx, vy) = self.mouse_virtual();
+                if let Some(hit @ (render::Hit::ModToggle(_) | render::Hit::Key(_))) = self.hit_at(vx, vy) {
+                    self.click(hit, window);
+                }
             }
             return;
         }
@@ -2412,7 +2460,7 @@ impl State {
 
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
-        let info = map_info(&self.library[entry], self.cfg.rate);
+        let info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
@@ -2475,14 +2523,17 @@ impl State {
                         self.cfg.rate = ((self.cfg.rate + step) * 100.0).round() / 100.0;
                         self.cfg.rate = self.cfg.rate.clamp(RATE_RANGE.0, RATE_RANGE.1);
                         self.cfg.save();
+                        let (rate, mods) = (self.cfg.mods.speed(self.cfg.rate, true).0, self.cfg.mods);
                         if let Some(mut m) = s.map.clone() {
-                            m.rate = self.cfg.rate;
+                            m.rate = rate;
+                            m.mods = mods.list();
                             s.client.send(net::ClientMsg::SelectMap(m));
                         }
-                        let text = format!("match rate {:.2}x", self.cfg.rate);
+                        let text = format!("match rate {rate:.2}x");
                         self.toast(text);
                     }
                     KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
+                    KeyCode::F1 => self.open_mod_select(),
                     KeyCode::KeyS if s.in_match && s.me().is_some_and(|p| p.status == net::Status::Lobby) => {
                         if s.have_map {
                             s.client.send(net::ClientMsg::Spectate(true));
@@ -2794,6 +2845,7 @@ impl State {
         self.select.filter = filter;
         self.select.played = played;
         self.select.sort = sort;
+        self.select.mods_label = self.cfg.mods.label();
         let maps = self.library.iter().enumerate().map(|(i, e)| (i, e.path.clone(), e.modified, e.size)).collect();
         let info = mapinfo::MapInfo::spawn(maps, self.library.len());
         self.select.info = Some(info.results.clone());
@@ -2896,6 +2948,57 @@ impl State {
             }
         }
         self.select.played.insert(path, now);
+    }
+
+    /// F1 / the Mods button: the mod select, on the first mod that's on.
+    fn open_mod_select(&mut self) {
+        if let Some(s) = &self.mp {
+            if matches!(self.scene, Scene::Lobby) && !s.is_host() {
+                self.toast("the host picks the mods".into());
+                return;
+            }
+        }
+        let first = self.cfg.mods.iter().next().and_then(|m| mods::ALL.iter().position(|&x| x == m)).unwrap_or(0);
+        self.mod_select = Some(first);
+    }
+
+    fn toggle_mod(&mut self, m: mods::Mod) {
+        self.cfg.mods.toggle(m);
+        self.mods_changed();
+    }
+
+    /// After the mods change: save them, and as the lobby host tell the room.
+    fn mods_changed(&mut self) {
+        self.cfg.save();
+        self.select.mods_label = self.cfg.mods.label();
+        let (rate, mods) = (self.play_speed().0, self.cfg.mods);
+        if let Some(s) = &self.mp {
+            if s.is_host() && !s.in_match {
+                if let Some(mut m) = s.map.clone() {
+                    m.rate = rate;
+                    m.mods = mods.list();
+                    s.client.send(net::ClientMsg::SelectMap(m));
+                }
+            }
+        }
+    }
+
+    /// Keys while the mod select is open.
+    fn mod_select_key(&mut self, code: KeyCode) {
+        let Some(cur) = self.mod_select else { return };
+        match code {
+            KeyCode::ArrowLeft => self.mod_select = Some(mods::step(cur, -1, 0)),
+            KeyCode::ArrowRight => self.mod_select = Some(mods::step(cur, 1, 0)),
+            KeyCode::ArrowUp => self.mod_select = Some(mods::step(cur, 0, -1)),
+            KeyCode::ArrowDown => self.mod_select = Some(mods::step(cur, 0, 1)),
+            KeyCode::Space | KeyCode::Enter | KeyCode::NumpadEnter => self.toggle_mod(mods::ALL[cur]),
+            KeyCode::Backspace | KeyCode::Delete => {
+                self.cfg.mods = Mods::NONE;
+                self.mods_changed();
+            }
+            KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
+            _ => {}
+        }
     }
 
     /// Tab in play: hides (or shows again) the map's name and the offset / UR line.
@@ -3269,7 +3372,7 @@ impl State {
             }
             game.log_inputs = true;
             let Some(e) = self.library.get(*entry) else { return };
-            conn.send(online::Up::PlayStart(online::SoloPlay { map: map_info(e, game.rate), anti_mash: game.anti_mash }));
+            conn.send(online::Up::PlayStart(online::SoloPlay { map: map_info(e, game.rate, game.mods), anti_mash: game.anti_mash }));
             self.stream = Some((id, 0, Instant::now() - Duration::from_secs(1)));
         }
         let Some((_, sent, last)) = self.stream.as_mut() else { return };
@@ -3295,8 +3398,7 @@ impl State {
                     Some(i) => {
                         v.entry = Some(i);
                         self.preview.show_background_for(&self.library[i]);
-                        let track = self.cached_track(i, play.map.rate);
-                        v.rx = Some(self.spawn_loader(i, play.map.rate, track));
+                        v.rx = Some(self.load_with(i, play.map.rate, Mods::from_list(&play.map.mods)));
                     }
                     None if !v.fetching => {
                         v.fetching = true;
@@ -3312,7 +3414,8 @@ impl State {
                     v.rx = None;
                     let anti_mash = v.play.as_ref().is_some_and(|p| p.anti_mash);
                     let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
-                    let mut g = Game::new(map, track, self.audio.as_ref());
+                    let mods = v.play.as_ref().map(|p| Mods::from_list(&p.map.mods)).unwrap_or_default();
+                    let mut g = Game::with_mods(map, track, self.audio.as_ref(), mods);
                     g.replay = Some((std::mem::take(&mut v.inputs), 0));
                     g.anti_mash = anti_mash;
                     g.watched = true;
@@ -3414,7 +3517,7 @@ impl State {
                         self.stop_audio();
                         self.picking_lobby_map = false;
                         self.preview.show_background_for(&self.library[i]);
-                        let rx = self.spawn_loader(i, map.rate, self.cached_track(i, map.rate));
+                        let rx = self.load_with(i, map.rate, Mods::from_list(&map.mods));
                         self.scene = Scene::MpWait { rx: Some(rx), loaded: None, start: None, from: map.from };
                     }
                     None => s.client.send(net::ClientMsg::Loaded(false)),
@@ -3435,13 +3538,15 @@ impl State {
                         let start = s.client.local_instant(at);
                         self.stop_audio();
                         self.preview.show_background_for(&self.library[i]);
-                        let rx = self.spawn_loader(i, map.rate, self.cached_track(i, map.rate));
+                        let mods = Mods::from_list(&map.mods);
+                        let rx = self.load_with(i, map.rate, mods);
                         self.scene = Scene::Spectate(Box::new(SpectateView {
                             rx: Some(rx),
                             loaded: None,
                             start,
                             from: map.from,
                             rate: map.rate,
+                            mods,
                             players,
                             games: Vec::new(),
                             focus: Some(0),
@@ -3535,6 +3640,12 @@ impl State {
             );
             if !(function_key && self.handle_global_key(code, window)) {
                 self.social_key(code, text);
+            }
+            return;
+        }
+        if self.mod_select.is_some() {
+            if !repeat || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+                self.mod_select_key(code);
             }
             return;
         }
@@ -3720,6 +3831,7 @@ impl State {
                 SelectAction::Play(i) if self.picking_lobby_map => self.pick_lobby_map(i),
                 SelectAction::Play(i) => self.start_loading(i),
                 SelectAction::Settings => self.open_settings(),
+                SelectAction::Mods => self.open_mod_select(),
                 SelectAction::Quit => self.quit = true,
                 SelectAction::None => {
                     if let Some(text) = text {
@@ -3822,14 +3934,15 @@ impl State {
             let in_menu = in_menu && self.splash.is_none();
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.play_offset, rate);
             self.stars.poll();
+            let play_rate = self.play_speed().0;
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
-                self.stars.request(i, &self.library[i].path, self.cfg.rate);
+                self.stars.request(i, &self.library[i].path, play_rate);
             }
             if matches!(self.scene, Scene::Select) {
                 for i in self.select.selected_set() {
-                    self.stars.request(i, &self.library[i].path, self.cfg.rate);
+                    self.stars.request(i, &self.library[i].path, play_rate);
                 }
-                let (stars, rate) = (&self.stars, self.cfg.rate);
+                let (stars, rate) = (&self.stars, play_rate);
                 self.select.sort_selected_set(&|i| stars.get(i, rate));
                 self.select.remember_selection(&self.library);
             }
@@ -3957,6 +4070,9 @@ impl State {
                 }
             }
         }
+        if !matches!(self.scene, Scene::Select | Scene::Lobby) {
+            self.mod_select = None;
+        }
         if !matches!(self.scene, Scene::Select) {
             self.select.menu = None;
             self.list_drag = None;
@@ -3967,12 +4083,13 @@ impl State {
         self.replay_bar = None;
         match &mut self.scene {
             Scene::Select => {
-                self.select.rate_label = if (self.cfg.rate - 1.0).abs() > 1e-6 {
+                // DT / HT show on the Mods button instead.
+                self.select.rate_label = if (self.cfg.rate - 1.0).abs() > 1e-6 && self.cfg.mods.rate_override().is_none() {
                     format!("  |  {:.2}x{}", self.cfg.rate, if self.cfg.rate_keep_pitch { "" } else { " (pitch)" })
                 } else {
                     String::new()
                 };
-                let (stars, rate) = (&self.stars, self.cfg.rate);
+                let (stars, rate) = (&self.stars, self.play_speed().0);
                 self.select.instant = self.right_scroll;
                 self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate));
                 let x = 24.0 + Select::list_width(canvas.width) + 12.0;
@@ -4005,7 +4122,8 @@ impl State {
                 canvas.text_centered(canvas.width / 2.0, 226.0, 10.0, rgba(0x9a9ab0, 1.0), label);
                 match rx.try_recv() {
                     Ok(Ok((map, track))) => {
-                        let mut game = Game::new(map, track, self.audio.as_ref());
+                        let mods = std::mem::take(&mut self.pending_mods);
+                        let mut game = Game::with_mods(map, track, self.audio.as_ref(), mods);
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
@@ -4017,7 +4135,12 @@ impl State {
                                 game.replay = Some((r.inputs, 0));
                             }
                             // Full plays (not autoplay, not from a start point) are kept.
-                            None => game.record = (!self.auto || std::env::var_os("TAIKO_RECORD_AUTO").is_some()) && from.is_none(),
+                            None => {
+                                game.record = (!self.auto || std::env::var_os("TAIKO_RECORD_AUTO").is_some()) && from.is_none() && !mods.unranked();
+                                if mods.has(mods::Mod::Autoplay) {
+                                    game.banner = Some("AUTOPLAY".into());
+                                }
+                            }
                         }
                         next = Some(Scene::Play { game: Box::new(game), entry: *entry, from: *from });
                     }
@@ -4032,7 +4155,7 @@ impl State {
             }
             Scene::Play { game, entry, from } => {
                 let done = game.update(now, self.audio.as_ref(), self.play_offset);
-                if self.auto && game.replay.is_none() {
+                if (self.auto || game.mods.has(mods::Mod::Autoplay)) && game.replay.is_none() {
                     game.autoplay(self.audio.as_ref());
                 }
                 if let Some(sm) = &mut self.smooth {
@@ -4067,9 +4190,17 @@ impl State {
                 }
                 if done {
                     let m = &game.map.meta;
-                    let rate = if (game.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", game.rate) } else { String::new() };
+                    let rate = if (game.rate - 1.0).abs() > 1e-6 && game.mods.rate_override().is_none() { format!("  {:.2}x", game.rate) } else { String::new() };
                     let part = from.map(|t| format!("  from {}", fmt_time(t))).unwrap_or_default();
-                    let title = format!("{} - {} [{}]{rate}{part}", m.artist, m.title, m.version);
+                    let mods = if game.mods.is_empty() { String::new() } else { format!("  +{}", game.mods.label()) };
+                    let title = format!("{} - {} [{}]{rate}{mods}{part}", m.artist, m.title, m.version);
+                    let failed = game.failed();
+                    if game.failed_early() {
+                        if let Some(a) = &self.audio {
+                            a.stop();
+                        }
+                        self.preview.invalidate_audio();
+                    }
                     let mut results = Results {
                         shown: Instant::now(),
                         title,
@@ -4078,8 +4209,10 @@ impl State {
                         replay: None,
                         rank: None,
                         watched: game.replay_of.clone(),
+                        failed,
                     };
-                    if game.record {
+                    // Failed plays aren't kept, like osu!.
+                    if game.record && !failed {
                         let e = &self.library[*entry];
                         let st = &game.stats;
                         let replay = scores::Replay {
@@ -4092,6 +4225,7 @@ impl State {
                             rate: game.rate,
                             keep_pitch: self.cfg.rate_keep_pitch,
                             anti_mash: game.anti_mash,
+                            mods: game.mods.list(),
                             score: st.score,
                             accuracy: st.accuracy(),
                             max_combo: st.max_combo,
@@ -4148,7 +4282,7 @@ impl State {
                             draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, see_through, |c| game.draw_playfield(c, scroll));
                         }
                         let e = &self.library[i];
-                        let stars = self.stars.get(i, self.cfg.rate);
+                        let stars = self.stars.get(i, self.play_speed().0);
                         draw_preview_chrome(canvas, &self.cfg, e, stars, lobby, &size_label);
                         let (x, y, w) = (24.0, 394.0, canvas.width - 48.0);
                         canvas.round_rect(x, y, w, 78.0, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
@@ -4194,7 +4328,7 @@ impl State {
                 }
                 if start.is_some_and(|at| now >= at) {
                     if let Some((map, track)) = loaded.take() {
-                        let mut game = Game::new(map, track, self.audio.as_ref());
+                        let mut game = Game::with_mods(map, track, self.audio.as_ref(), self.pending_mods);
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
@@ -4211,7 +4345,7 @@ impl State {
             }
             Scene::MpPlay { game, .. } => {
                 let done = game.update(now, self.audio.as_ref(), self.play_offset);
-                if self.auto {
+                if self.auto || game.mods.has(mods::Mod::Autoplay) {
                     game.autoplay(self.audio.as_ref());
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
@@ -4241,7 +4375,14 @@ impl State {
                         }
                     }
                     if done {
-                        s.client.send(net::ClientMsg::Finished(multiplayer::final_from(&game.stats, false)));
+                        // Failing (SD / PF) ends the match for you like forfeiting does.
+                        let failed = game.failed_early();
+                        s.client.send(net::ClientMsg::Finished(multiplayer::final_from(&game.stats, failed)));
+                        if failed {
+                            if let Some(a) = &self.audio {
+                                a.stop();
+                            }
+                        }
                         next = Some(Scene::MpResults);
                     }
                 }
@@ -4265,15 +4406,15 @@ impl State {
                 // players were SPECTATE_DELAY ago, every player's game snapping to it.
                 if v.games.is_empty() && now >= v.start + SPECTATE_DELAY {
                     if let (Some((map, track)), Some(audio)) = (v.loaded.take(), self.audio.as_ref()) {
-                        let probe = Game::new(map.clone(), track.clone(), None);
+                        let probe = Game::with_mods(map.clone(), track.clone(), None, v.mods);
                         let first_ms = match v.from {
-                            Some(t) => (t - 2000.0 * v.rate).max(probe.time) / v.rate + self.play_offset,
-                            None => probe.time / v.rate,
+                            Some(t) => (probe.track_at(t) - 2000.0).max(probe.track_at(probe.time)) + self.play_offset,
+                            None => probe.track_at(probe.time),
                         };
                         let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
                         audio.play(track.clone(), first_ms + behind);
                         for (k, (id, name)) in v.players.iter().enumerate() {
-                            let mut g = Game::new(map.clone(), track.clone(), None);
+                            let mut g = Game::with_mods(map.clone(), track.clone(), None, v.mods);
                             if let Some(t) = v.from {
                                 g.skip_to(t);
                             }
@@ -4337,7 +4478,11 @@ impl State {
                     }
                     Ok(_) => {
                         if let Some((at, from)) = ed.playing {
-                            let t = from + at.elapsed().as_secs_f64() * 1000.0 * ed.replay.rate;
+                            let elapsed = at.elapsed().as_secs_f64() * 1000.0;
+                            let t = match &ed.game {
+                                Some(g) => g.speed().map(g.track_at(from) + elapsed),
+                                None => from + elapsed * ed.replay.rate,
+                            };
                             if t >= ed.end {
                                 ed.playing = None;
                                 if let Some(a) = &self.audio {
@@ -4411,6 +4556,9 @@ impl State {
             self.readout_rect = Some([canvas.width - 8.0 - tw - 4.0, 464.0, tw + 8.0, 15.0]);
         } else {
             self.readout_rect = None;
+        }
+        if let Some(cur) = self.mod_select {
+            ui::draw_mod_select(canvas, self.cfg.mods, cur);
         }
         if self.settings_ui.dropdown.is_some() {
             let (groups, current, screen) = (self.preset_groups(), self.current_preset(), self.screen_size());
@@ -4905,6 +5053,11 @@ impl State {
                 self.download_key(KeyCode::Enter, None, window);
             }
             Hit::SongHeader(row) => self.click(Hit::SongRow(row), window),
+            Hit::ModsButton => self.open_mod_select(),
+            Hit::ModToggle(i) => {
+                self.mod_select = Some(i);
+                self.toggle_mod(mods::ALL[i]);
+            }
             Hit::SongMenu(k) => {
                 let action = self.select.menu_items(&self.library).get(k).map(|(_, a)| *a);
                 if let Some(what) = action.and_then(|a| self.select.hide(a, &self.library)) {
@@ -5367,6 +5520,7 @@ fn main() {
     let library = Vec::new();
     let mut select = Select::new(&library);
     select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
+    select.mods_label = cfg.mods.label();
     select.played = load_plays();
     // A single .osu on the command line goes straight into gameplay.
     let play_when_scanned = args.len() == 1 && args[0].extension().is_some_and(|e| e == "osu");
@@ -5410,6 +5564,8 @@ fn main() {
         host_transfer: None,
         scores: scores::load_index(),
         pending_replay: None,
+        pending_mods: Mods::NONE,
+        mod_select: None,
         leaderboard: Vec::new(),
         export: None,
         video_status: String::new(),

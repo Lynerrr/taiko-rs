@@ -69,6 +69,8 @@ pub struct Meta {
     pub audio_lead_in: f64,
     pub mode: u8,
     pub od: f64,
+    /// HP drain rate (taiko: how fast the HP bar fills and drains).
+    pub hp: f64,
     /// Background image file (relative to the map folder), from the [Events] section.
     pub background: Option<String>,
     pub slider_multiplier: f64,
@@ -191,7 +193,7 @@ struct Body<'a> {
 }
 
 fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
-    let mut meta = Meta { slider_multiplier: 1.4, slider_tick_rate: 1.0, od: 5.0, format_version: 14, ..Default::default() };
+    let mut meta = Meta { slider_multiplier: 1.4, slider_tick_rate: 1.0, od: 5.0, hp: 5.0, format_version: 14, ..Default::default() };
     let mut body = Body { timing: Vec::new(), objects: Vec::new() };
     let mut section = "";
     let mut od_seen = false;
@@ -264,6 +266,7 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
     if !od_seen {
         meta.od = hp;
     }
+    meta.hp = hp;
     (meta, body)
 }
 
@@ -411,6 +414,7 @@ pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
         mode: 1,
         // OD 0 gives the widest windows, so even a badly-off offset still registers as hits.
         od: 0.0,
+        hp: 5.0,
         slider_multiplier: 1.4,
         slider_tick_rate: 1.0,
         format_version: 14,

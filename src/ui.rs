@@ -65,6 +65,8 @@ pub struct Select {
     pub scanning: Option<usize>,
     /// Speed modifier shown in the header ("" at 1.0x).
     pub rate_label: String,
+    /// The mods picked ("HDHR"), shown on the Mods button.
+    pub mods_label: String,
     pub show_converts: bool,
     /// Maps hidden from the list (right-click → Hide); the files stay where they are.
     pub hidden: Hidden,
@@ -143,6 +145,7 @@ pub enum SelectAction {
     None,
     Play(usize),
     Settings,
+    Mods,
     Quit,
 }
 
@@ -161,6 +164,7 @@ impl Select {
             info_progress: String::new(),
             scanning: None,
             rate_label: String::new(),
+            mods_label: String::new(),
             show_converts: !has_taiko,
             hidden: Hidden::load(),
             menu: None,
@@ -345,7 +349,8 @@ impl Select {
                     return SelectAction::Play(i);
                 }
             }
-            KeyCode::Tab | KeyCode::F1 => return SelectAction::Settings,
+            KeyCode::Tab => return SelectAction::Settings,
+            KeyCode::F1 => return SelectAction::Mods,
             KeyCode::Backspace => {
                 self.filter.pop();
                 self.refilter(library);
@@ -682,7 +687,11 @@ impl Select {
         };
         let sw = Canvas::text_width(7.0, &sort_label) + 20.0;
         let cw = if self.collections.is_empty() { 0.0 } else { Canvas::text_width(7.0, &coll_label) + 20.0 };
-        let mut bx = 24.0 + lw - sw;
+        let mods_label = if self.mods_label.is_empty() { "Mods".to_string() } else { format!("Mods: {}", self.mods_label) };
+        let mw = Canvas::text_width(7.0, &mods_label) + 20.0;
+        let mut bx = 24.0 + lw - mw;
+        c.button(bx, 56.0, mw, 20.0, &mods_label, 7.0, Hit::ModsButton, !self.mods_label.is_empty());
+        bx -= sw + 6.0;
         c.button(bx, 56.0, sw, 20.0, &sort_label, 7.0, Hit::SortCycle, false);
         if cw > 0.0 {
             bx -= cw + 6.0;
@@ -842,7 +851,7 @@ impl Select {
             let (y0, y1) = (y.max(top - 2.0), (*y + *hh).min(bottom + 2.0));
             (*y, *hh) = (y0, (y1 - y0).max(0.0));
         }
-        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down difficulty  Left/Right song  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit");
+        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down difficulty  Left/Right song  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit");
         if let Some(cursor) = self.picker {
             self.draw_picker(c, cursor);
         }
@@ -851,6 +860,56 @@ impl Select {
         }
         c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), status);
     }
+}
+
+/// The mod select (F1): a column per group, each mod a chip to switch on or off. `cursor` is
+/// the keyboard selection (index into `mods::ALL`).
+pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
+    use crate::mods::{ALL, GROUPS};
+    let w = c.width;
+    c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.72));
+    let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
+    c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
+    c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "MODS");
+    c.text(px + 70.0, py + 16.0, 6.0, rgba(0x6f6f86, 1.0), "arrows + Space toggle   Backspace clears   F1 / Esc closes");
+    let mult = mods.multiplier();
+    let rank = if mods.unranked() { "  (not saved)" } else { "" };
+    c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &format!("score x{mult:.2}{rank}"));
+    let col_w = (pw - 24.0) / GROUPS.len() as f32;
+    const ROW: f32 = 27.0;
+    let mut hovered = None;
+    for (g, (title, accent, list)) in GROUPS.iter().enumerate() {
+        let x = px + 12.0 + g as f32 * col_w;
+        c.text(x + 4.0, py + 38.0, 7.0, rgba(*accent, 1.0), title);
+        for (r, &m) in list.iter().enumerate() {
+            let y = py + 52.0 + r as f32 * ROW;
+            let i = ALL.iter().position(|&x| x == m).unwrap_or(0);
+            let on = mods.has(m);
+            let hover = c.hovered(x, y, col_w - 6.0, ROW - 4.0);
+            if hover {
+                hovered = Some(m);
+            }
+            let bg = if i == cursor { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
+            let border = if i == cursor { 0xEB452C } else if on { *accent } else { 0x2a2a38 };
+            c.round_rect(x, y, col_w - 6.0, ROW - 4.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if i == cursor { 1.5 } else { 1.0 });
+            c.round_rect(x + 4.0, y + 4.0, 22.0, ROW - 12.0, 3.0, rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
+            c.text_centered(x + 15.0, y + 8.0, 7.0, rgba(if on { 0x15151d } else { *accent }, 1.0), m.acronym());
+            let room = ((col_w - 40.0) / 6.0).max(3.0) as usize;
+            let name: String = if m.name().chars().count() > room { m.name().chars().take(room.saturating_sub(1)).collect::<String>() + "." } else { m.name().into() };
+            c.text(x + 31.0, y + 8.5, 6.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), &name);
+            c.hit(x, y, col_w - 6.0, ROW - 4.0, Hit::ModToggle(i));
+        }
+    }
+    // What the pointed-at (else the selected) mod does.
+    let shown = hovered.unwrap_or(ALL[cursor.min(ALL.len() - 1)]);
+    let dy = py + ph - 46.0;
+    c.text(px + 16.0, dy, 8.0, rgba(0xffffff, 1.0), &format!("{} ({})", shown.name(), shown.acronym()));
+    c.text(px + 16.0, dy + 13.0, 7.0, rgba(0x9a9ab0, 1.0), shown.description());
+    let active = if mods.is_empty() { "none".to_string() } else { mods.iter().map(|m| m.acronym()).collect::<Vec<_>>().join(" ") };
+    c.text(px + 16.0, py + ph - 16.0, 7.0, rgba(0xc8c8d8, 1.0), &format!("on: {active}"));
+    let bw = 60.0;
+    c.button(px + pw - bw - 12.0, py + ph - 24.0, bw, 16.0, "Close", 7.0, Hit::Key(KeyCode::F1), true);
+    c.button(px + pw - 2.0 * bw - 18.0, py + ph - 24.0, bw, 16.0, "Clear", 7.0, Hit::Key(KeyCode::Backspace), false);
 }
 
 /// Maps hidden from the song list in taiko-rs only (osu! and the Songs folder are untouched):
@@ -1003,6 +1062,8 @@ pub struct Results {
     pub rank: Option<(usize, usize)>,
     /// Watching someone's replay rather than playing.
     pub watched: Option<String>,
+    /// Failed: Sudden Death / Perfect, or the HP bar under half at the end.
+    pub failed: bool,
 }
 
 impl Results {
@@ -1025,11 +1086,17 @@ impl Results {
         } else {
             "D"
         };
+        // A failed play gets F, and says so.
+        let grade = if self.failed { "F" } else { grade };
         let count = progress(self.shown, 700.0);
         let pop = progress(self.shown + std::time::Duration::from_millis(450), 300.0);
         if pop > 0.0 {
             let size = 70.0 * (1.6 - 0.6 * pop);
-            c.text_centered(cx, 80.0 + (70.0 - size) / 2.0, size, rgba(0xFFD34D, pop), grade);
+            let col = if self.failed { 0xEB452C } else { 0xFFD34D };
+            c.text_centered(cx, 80.0 + (70.0 - size) / 2.0, size, rgba(col, pop), grade);
+        }
+        if self.failed {
+            c.text_centered(cx, 56.0, 10.0, rgba(0xEB452C, 1.0), "FAILED");
         }
         c.text_centered(cx, 170.0, 28.0, rgba(0xffffff, 1.0), &format!("{:.2}%", acc * count as f64));
         c.text_centered(cx, 212.0, 16.0, rgba(0xc8c8d8, 1.0), &format!("{:08}", (s.score as f64 * count as f64) as u64));

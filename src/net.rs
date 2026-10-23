@@ -63,6 +63,9 @@ pub struct MapInfo {
     /// osu! beatmap set, so players without the map can download it.
     #[serde(default)]
     pub set_id: Option<u32>,
+    /// Mods the host picked for the match (acronyms, e.g. "HD"); `rate` already includes DT/HT.
+    #[serde(default)]
+    pub mods: Vec<String>,
 }
 
 fn one() -> f64 {
@@ -73,7 +76,8 @@ impl MapInfo {
     pub fn label(&self) -> String {
         let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", self.rate) } else { String::new() };
         let from = self.from.map(|t| format!("  from {}:{:02}", (t / 1000.0) as u64 / 60, (t / 1000.0) as u64 % 60)).unwrap_or_default();
-        format!("{} - {} [{}]{rate}{from}", self.artist, self.title, self.version)
+        let mods = if self.mods.is_empty() { String::new() } else { format!("  +{}", self.mods.concat()) };
+        format!("{} - {} [{}]{rate}{mods}{from}", self.artist, self.title, self.version)
     }
 }
 
@@ -913,7 +917,7 @@ mod tests {
         wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
         let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
         wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None }));
+        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new() }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
         a.send(ClientMsg::HasMap(false));
@@ -922,7 +926,7 @@ mod tests {
         assert!(players.iter().any(|p| p.name == "alice" && p.host));
         assert!(players.iter().any(|p| p.name == "bob" && !p.host));
 
-        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9) };
+        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9), mods: vec!["HD".into()] };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
         for c in [&a, &b] {
