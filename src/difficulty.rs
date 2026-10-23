@@ -173,9 +173,9 @@ mod tests {
 
     fn map(notes: Vec<Note>) -> Beatmap {
         let control_points = vec![
-            ControlPoint { time: 0.0, beat_length: 500.0, sv: 1.0, kiai: false },
-            ControlPoint { time: 20_000.0, beat_length: 500.0, sv: 1.0, kiai: true },
-            ControlPoint { time: 24_000.0, beat_length: 500.0, sv: 1.0, kiai: false },
+            ControlPoint { time: 0.0, beat_length: 500.0, sv: 1.0, kiai: false, volume: 1.0 },
+            ControlPoint { time: 20_000.0, beat_length: 500.0, sv: 1.0, kiai: true, volume: 1.0 },
+            ControlPoint { time: 24_000.0, beat_length: 500.0, sv: 1.0, kiai: false, volume: 1.0 },
         ];
         Beatmap { meta: Meta::default(), notes, barlines: Vec::new(), control_points }
     }

@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::audio::{Sfx, Track};
+use crate::audio::{Sfx, Sounds, Track};
 use crate::beatmap::Beatmap;
 use crate::game::{self, Game};
 use crate::layout::{Area, Grip};
@@ -263,7 +263,7 @@ pub fn find_ffmpeg() -> Option<PathBuf> {
 
 /// The music of [start, end] (map ms) with the hitsounds mixed in, as 16-bit stereo at `sr`.
 #[allow(clippy::too_many_arguments)]
-pub fn mix_audio(track: &Track, sr: u32, rate: f64, start: f64, end: f64, music: f32, sfx: &[(f64, Sfx)], sounds: &[Vec<f32>; 4], fx: f32) -> Vec<i16> {
+pub fn mix_audio(track: &Track, sr: u32, rate: f64, start: f64, end: f64, music: f32, sfx: &[(f64, Sfx, f32)], sounds: &Sounds, fx: f32) -> Vec<i16> {
     // The track plays `rate` map ms per ms; frame 0 is map time 0.
     let frame_of = |map_ms: f64| (map_ms / rate / 1000.0 * sr as f64).round() as i64;
     let (f0, f1) = (frame_of(start), frame_of(end));
@@ -276,14 +276,14 @@ pub fn mix_audio(track: &Track, sr: u32, rate: f64, start: f64, end: f64, music:
             out[i * 2 + 1] = track.samples[src as usize * 2 + 1] * music;
         }
     }
-    for &(t, s) in sfx {
+    for &(t, s, volume) in sfx {
         let at = frame_of(t) - f0;
         let sound = &sounds[s as usize];
         for (k, v) in sound.iter().enumerate() {
             let i = at + k as i64;
             if i >= 0 && (i as usize) < n {
-                out[i as usize * 2] += v * fx;
-                out[i as usize * 2 + 1] += v * fx;
+                out[i as usize * 2] += v * fx * volume;
+                out[i as usize * 2 + 1] += v * fx * volume;
             }
         }
     }
@@ -395,13 +395,14 @@ mod tests {
         let sr = 1000;
         // 2 s of a constant 0.25 at 1.5x speed: map times 0..3000 ms.
         let track = Track { samples: vec![0.25; 2 * 2000], rate: 1.5 };
-        let sounds = [vec![0.5; 10], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1]];
-        // Cut 1500..3000 map ms = 1000..2000 track ms; a don at map 2250 ms = track frame 1500.
-        let out = mix_audio(&track, sr, 1.5, 1500.0, 3000.0, 1.0, &[(2250.0, Sfx::Don)], &sounds, 1.0);
+        let sounds = [vec![0.5; 10], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1]];
+        // Cut 1500..3000 map ms = 1000..2000 track ms; a don at map 2250 ms = track frame 1500,
+        // at its timing point's 50% volume (on top of the 0.25 music: 0.25 + 0.5 * 0.5).
+        let out = mix_audio(&track, sr, 1.5, 1500.0, 3000.0, 1.0, &[(2250.0, Sfx::Don, 0.5)], &sounds, 1.0);
         assert_eq!(out.len(), 1000 * 2);
         let at = |i: usize| out[i * 2] as f32 / 32767.0;
         assert!((at(0) - 0.25).abs() < 1e-3);
-        assert!((at(500) - 0.75).abs() < 1e-3 && (at(509) - 0.75).abs() < 1e-3);
+        assert!((at(500) - 0.5).abs() < 1e-3 && (at(509) - 0.5).abs() < 1e-3);
         assert!((at(510) - 0.25).abs() < 1e-3);
     }
 

@@ -1,4 +1,4 @@
-//! osu! skins: the note images and hitsounds of a skin from osu!'s `Skins` folder, or from an
+//! osu! skins: the note images, hitsounds and combo break sound of a skin from osu!'s `Skins` folder, or from an
 //! `.osk` dropped into taiko-rs's own one. Anything a skin doesn't have stays built-in.
 
 use std::collections::HashMap;
@@ -172,17 +172,8 @@ fn note_atlas(files: &Files) -> Atlas {
     atlas
 }
 
-/// Hitsounds as mono samples at the device rate; `None` keeps the built-in one.
-#[derive(Default)]
-pub struct Hitsounds {
-    pub don: Option<Vec<f32>>,
-    pub kat: Option<Vec<f32>>,
-    /// Played on top of don / kat for big notes.
-    pub finish: Option<Vec<f32>>,
-}
-
 pub struct Skin {
-    pub hitsounds: Hitsounds,
+    pub hitsounds: audio::Custom,
     pub notes: Atlas,
 }
 
@@ -190,16 +181,17 @@ pub struct Skin {
 /// audio device's sample rate, or None to skip the sounds.
 pub fn load(name: &str, rate: Option<u32>) -> Skin {
     let dir = (!name.is_empty()).then(|| list().into_iter().find(|(n, _)| n == name)).flatten().map(|(_, d)| d);
-    let Some(dir) = dir else { return Skin { hitsounds: Hitsounds::default(), notes: Atlas::default() } };
+    let Some(dir) = dir else { return Skin { hitsounds: audio::Custom::default(), notes: Atlas::default() } };
     let files = Files::read(&dir);
     let hitsounds = match rate {
-        Some(rate) => Hitsounds {
+        Some(rate) => audio::Custom {
             // osu!taiko plays the clap for rim hits; some skins only ship the whistle.
             don: files.sound(&["taiko-normal-hitnormal"]).and_then(|p| decode_sound(p, rate)),
             kat: files.sound(&["taiko-normal-hitclap", "taiko-normal-hitwhistle"]).and_then(|p| decode_sound(p, rate)),
             finish: files.sound(&["taiko-normal-hitfinish"]).and_then(|p| decode_sound(p, rate)),
+            combobreak: files.sound(&["combobreak"]).and_then(|p| decode_sound(p, rate)),
         },
-        None => Hitsounds::default(),
+        None => audio::Custom::default(),
     };
     Skin { hitsounds, notes: note_atlas(&files) }
 }
@@ -211,7 +203,7 @@ fn decode_sound(path: &Path, rate: u32) -> Option<Vec<f32>> {
         return Some(Vec::new());
     }
     match audio::decode(path, rate) {
-        Ok(track) => Some(track.samples.chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect()),
+        Ok(track) => Some(audio::mono(&track)),
         Err(e) => {
             eprintln!("skin: {}: {e}", path.display());
             None

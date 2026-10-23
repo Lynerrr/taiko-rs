@@ -31,7 +31,12 @@ pub enum Sfx {
     Kat,
     BigDon,
     BigKat,
+    /// A combo of 20 or more broken by a miss.
+    ComboBreak,
 }
+
+/// One sound per `Sfx`.
+pub type Sounds = [Vec<f32>; 5];
 
 enum Cmd {
     /// `base`: the song frame the track's first sample belongs at (a partial decode).
@@ -41,16 +46,17 @@ enum Cmd {
     Seek(i64),
     Pause(bool),
     Stop,
-    Sfx(Sfx),
+    /// A sound and its volume (0..1, the map's timing point volume for hits).
+    Sfx(Sfx, f32),
     /// Replaces the hitsounds (indexed by `Sfx`).
-    Sounds(Arc<[Vec<f32>; 4]>),
+    Sounds(Arc<Sounds>),
 }
 
 /// What the callback replaced, sent back so deallocation stays off the audio thread.
 #[allow(dead_code)] // only held to be dropped
 enum Garbage {
     Track(Arc<Track>),
-    Sounds(Arc<[Vec<f32>; 4]>),
+    Sounds(Arc<Sounds>),
 }
 
 /// What the callback last told us about playback position.
@@ -147,12 +153,17 @@ impl Engine {
     }
 
     pub fn sfx(&self, s: Sfx) {
-        let _ = self.tx.send(Cmd::Sfx(s));
+        self.sfx_at(s, 1.0);
+    }
+
+    /// Plays a sound at `volume` (0..1) of the hitsound volume.
+    pub fn sfx_at(&self, s: Sfx, volume: f32) {
+        let _ = self.tx.send(Cmd::Sfx(s, volume));
     }
 
     /// Replaces the hitsounds with mono samples at the device rate; `None` keeps the built-in one.
-    pub fn set_hitsounds(&self, don: Option<Vec<f32>>, kat: Option<Vec<f32>>, finish: Option<Vec<f32>>) {
-        let sounds = hitsound_set(self.rate, don, kat, finish);
+    pub fn set_hitsounds(&self, custom: Custom) {
+        let sounds = hitsound_set(self.rate, custom);
         let _ = self.tx.send(Cmd::Sounds(Arc::new(sounds)));
     }
 
@@ -204,6 +215,7 @@ where
 struct Voice {
     sound: Sfx,
     pos: usize,
+    volume: f32,
 }
 
 struct Mixer {
@@ -218,7 +230,7 @@ struct Mixer {
     frame: i64,
     paused: bool,
     voices: Vec<Voice>,
-    sounds: Arc<[Vec<f32>; 4]>,
+    sounds: Arc<Sounds>,
 }
 
 impl Mixer {
@@ -230,7 +242,7 @@ impl Mixer {
         rate: u32,
         channels: usize,
     ) -> Mixer {
-        let sounds = Arc::new([synth_don(rate, false), synth_kat(rate, false), synth_don(rate, true), synth_kat(rate, true)]);
+        let sounds = Arc::new(hitsound_set(rate, Custom::default()));
         Mixer { rx, gc, stamp, volume, channels, track: None, base: 0, frame: 0, paused: false, voices: Vec::with_capacity(64), sounds }
     }
 
@@ -263,9 +275,9 @@ impl Mixer {
                     Cmd::Sounds(sounds) => {
                         let _ = self.gc.send(Garbage::Sounds(std::mem::replace(&mut self.sounds, sounds)));
                     }
-                    Cmd::Sfx(sound) => {
+                    Cmd::Sfx(sound, volume) => {
                         if self.voices.len() < self.voices.capacity() {
-                            self.voices.push(Voice { sound, pos: 0 });
+                            self.voices.push(Voice { sound, pos: 0, volume });
                         }
                     }
                 }
@@ -295,8 +307,8 @@ impl Mixer {
             for v in &mut self.voices {
                 let buf = &self.sounds[v.sound as usize];
                 if let Some(s) = buf.get(v.pos) {
-                    l += s * fx_vol;
-                    r += s * fx_vol;
+                    l += s * fx_vol * v.volume;
+                    r += s * fx_vol * v.volume;
                 }
                 v.pos += 1;
             }
@@ -408,7 +420,7 @@ mod tests {
     }
 }
 
-/// Deterministic white noise so the synthesized hitsounds are identical every run.
+/// Deterministic white noise so the metronome clicks are identical every run.
 struct Noise(u32);
 impl Noise {
     fn next(&mut self) -> f32 {
@@ -419,16 +431,43 @@ impl Noise {
     }
 }
 
-/// The four hitsounds (indexed by `Sfx`) at `rate`: a skin's where given, else built-in. Like
-/// osu!, a big note is the normal hit with `finish` on top.
-pub fn hitsound_set(rate: u32, don: Option<Vec<f32>>, kat: Option<Vec<f32>>, finish: Option<Vec<f32>>) -> [Vec<f32>; 4] {
-    let big = |normal: &Option<Vec<f32>>, synth: fn(u32, bool) -> Vec<f32>| match (normal, &finish) {
-        (None, None) => synth(rate, true),
-        (Some(n), None) => n.clone(),
-        (n, Some(f)) => mix(&n.clone().unwrap_or_else(|| synth(rate, false)), f),
-    };
-    let (big_don, big_kat) = (big(&don, synth_don), big(&kat, synth_kat));
-    [don.unwrap_or_else(|| synth_don(rate, false)), kat.unwrap_or_else(|| synth_kat(rate, false)), big_don, big_kat]
+/// A skin's sounds as mono samples at the device rate; `None` keeps the built-in one.
+#[derive(Default)]
+pub struct Custom {
+    pub don: Option<Vec<f32>>,
+    pub kat: Option<Vec<f32>>,
+    /// Played on top of don / kat for big notes.
+    pub finish: Option<Vec<f32>>,
+    pub combobreak: Option<Vec<f32>>,
+}
+
+/// The built-in hitsounds (`assets/hitsounds`, from the quassbot v2 skin).
+const BUILT_IN: [(&[u8], &str); 4] = [
+    (include_bytes!("../assets/hitsounds/don.wav"), "wav"),
+    (include_bytes!("../assets/hitsounds/kat.wav"), "wav"),
+    (include_bytes!("../assets/hitsounds/finish.wav"), "wav"),
+    (include_bytes!("../assets/hitsounds/combobreak.ogg"), "ogg"),
+];
+
+/// A built-in sound as mono samples at `rate`.
+fn built_in(index: usize, rate: u32) -> Vec<f32> {
+    let (bytes, ext) = BUILT_IN[index];
+    decode_bytes(bytes, ext, rate).map(|t| mono(&t)).unwrap_or_default()
+}
+
+/// Stereo samples folded down to mono.
+pub fn mono(track: &Track) -> Vec<f32> {
+    track.samples.chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect()
+}
+
+/// The sounds (indexed by `Sfx`) at `rate`: a skin's where given, else built-in. Like osu!, a
+/// big note is the normal hit with `finish` on top.
+pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
+    let don = custom.don.unwrap_or_else(|| built_in(0, rate));
+    let kat = custom.kat.unwrap_or_else(|| built_in(1, rate));
+    let finish = custom.finish.unwrap_or_else(|| built_in(2, rate));
+    let combobreak = custom.combobreak.unwrap_or_else(|| built_in(3, rate));
+    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak]
 }
 
 /// Two mono sounds played together.
@@ -436,49 +475,6 @@ fn mix(a: &[f32], b: &[f32]) -> Vec<f32> {
     let mut out = vec![0.0; a.len().max(b.len())];
     for (i, o) in out.iter_mut().enumerate() {
         *o = a.get(i).copied().unwrap_or(0.0) + b.get(i).copied().unwrap_or(0.0);
-    }
-    out
-}
-
-/// Centre hit: a pitched membrane thump with a falling pitch.
-fn synth_don(rate: u32, big: bool) -> Vec<f32> {
-    let sr = rate as f32;
-    let len = (sr * if big { 0.35 } else { 0.22 }) as usize;
-    let mut out = Vec::with_capacity(len);
-    let mut phase = 0.0f32;
-    let mut noise = Noise(0x1234_5678);
-    let mut lp = 0.0f32;
-    let gain = if big { 0.95 } else { 0.7 };
-    for i in 0..len {
-        let t = i as f32 / sr;
-        let freq = 95.0 + 110.0 * (-t * 38.0).exp();
-        phase += freq / sr * std::f32::consts::TAU;
-        let body = phase.sin() + 0.25 * (phase * 2.0).sin();
-        let env = (-t * if big { 11.0 } else { 16.0 }).exp() * (t * 2000.0).min(1.0);
-        lp += (noise.next() - lp) * 0.08;
-        let attack = lp * (-t * 120.0).exp() * 2.5;
-        out.push((body * env + attack) * gain);
-    }
-    out
-}
-
-/// Rim hit: a short, bright woody click.
-fn synth_kat(rate: u32, big: bool) -> Vec<f32> {
-    let sr = rate as f32;
-    let len = (sr * if big { 0.16 } else { 0.1 }) as usize;
-    let mut out = Vec::with_capacity(len);
-    let mut noise = Noise(0x9e37_79b9);
-    let (mut hp_prev_in, mut hp_out) = (0.0f32, 0.0f32);
-    let gain = if big { 0.6 } else { 0.45 };
-    for i in 0..len {
-        let t = i as f32 / sr;
-        let tone = (t * 1250.0 * std::f32::consts::TAU).sin() * 0.7 + (t * 2090.0 * std::f32::consts::TAU).sin() * 0.45;
-        let env = (-t * if big { 32.0 } else { 45.0 }).exp() * (t * 3000.0).min(1.0);
-        let n = noise.next();
-        hp_out = 0.85 * (hp_out + n - hp_prev_in);
-        hp_prev_in = n;
-        let click = hp_out * (-t * 260.0).exp() * 1.4;
-        out.push((tone * env + click) * gain);
     }
     out
 }

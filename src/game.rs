@@ -181,8 +181,10 @@ pub struct Game {
     pub replay_of: Option<String>,
     /// Text shown at the top ("REPLAY - x", "SPECTATING - x").
     pub banner: Option<String>,
-    /// When set, every hitsound played is logged (map time, sound), e.g. for video audio.
-    pub sfx_log: Option<Vec<(f64, Sfx)>>,
+    /// When set, every hitsound played is logged (map time, sound, volume), e.g. for video audio.
+    pub sfx_log: Option<Vec<(f64, Sfx, f32)>>,
+    /// A miss broke a combo of 20 or more at this map time: the combo break sound is due.
+    combo_break: Option<f64>,
     /// Scale the suggestion to current UR; off = plain average of the last 40 hits.
     pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
@@ -253,6 +255,7 @@ impl Game {
             replay_of: None,
             banner: None,
             sfx_log: None,
+            combo_break: None,
             ur_scaled_hint: true,
             offset: 0.0,
             rate,
@@ -278,6 +281,7 @@ impl Game {
         self.time = (raw - offset) * self.rate;
         self.feed_replay(audio);
         self.expire(self.time);
+        self.play_combo_break(audio);
         self.time > self.end_time + 1500.0 || raw > self.track_ms + 500.0
     }
 
@@ -328,7 +332,23 @@ impl Game {
         self.presses[key] = t;
         let sfx = self.judge_press(key, key == 0 || key == 3, t);
         if let Some(a) = audio {
-            a.sfx(sfx);
+            a.sfx_at(sfx, self.volume_at(t));
+        }
+    }
+
+    /// Hitsound volume at map time `t`: the timing point's, like osu!.
+    fn volume_at(&self, t: f64) -> f32 {
+        beatmap::control_point_at(&self.map.control_points, t).volume
+    }
+
+    /// Plays (and logs) the combo break sound when a miss just broke a long combo.
+    fn play_combo_break(&mut self, audio: Option<&Engine>) {
+        let Some(t) = self.combo_break.take() else { return };
+        if let Some(log) = &mut self.sfx_log {
+            log.push((t, Sfx::ComboBreak, 1.0));
+        }
+        if let Some(a) = audio.filter(|_| !self.mute_hits) {
+            a.sfx(Sfx::ComboBreak);
         }
     }
 
@@ -516,6 +536,10 @@ impl Game {
             }
             Judge::Miss => {
                 s.miss += 1;
+                // Like osu!, losing a combo of 20 or more gets the combo break sound.
+                if s.combo >= 20 {
+                    self.combo_break = Some(t);
+                }
                 s.combo = 0;
             }
         }
@@ -547,12 +571,14 @@ impl Game {
         let kat = key == 0 || key == 3;
         self.presses[key] = t;
         let sfx = self.judge_press(key, kat, t);
+        let volume = self.volume_at(t);
         if let Some(log) = &mut self.sfx_log {
-            log.push((t, sfx));
+            log.push((t, sfx, volume));
         }
         if let Some(a) = audio.filter(|_| !self.mute_hits) {
-            a.sfx(sfx);
+            a.sfx_at(sfx, volume);
         }
+        self.play_combo_break(audio);
     }
 
     /// Replays without audio: jumps to map time `t` (forwards only), judging the recorded presses
@@ -562,6 +588,7 @@ impl Game {
         self.raw_time = t / self.rate + self.offset;
         self.feed_replay(None);
         self.expire(t);
+        self.play_combo_break(None);
     }
 
     /// The last moment anything happens in the map (map ms).
@@ -1044,6 +1071,22 @@ mod tests {
         let (a, b) = (&live.stats, &back.stats);
         assert_eq!((a.great, a.ok, a.miss, a.score, a.max_combo), (b.great, b.ok, b.miss, b.score, b.max_combo));
         assert!(a.miss > 0 && a.great > 0, "the test play should mix judgements");
+    }
+
+    #[test]
+    fn a_long_combo_broken_plays_the_combo_break_once() {
+        let mut g = game();
+        g.sfx_log = Some(Vec::new());
+        let notes: Vec<(f64, bool)> = g.map.notes.iter().filter(|n| matches!(n.kind, Kind::Don | Kind::Kat)).map(|n| (n.time, n.kind == Kind::Kat)).collect();
+        // 25 good hits, then let notes pass: one combo break, nothing for the misses after it.
+        for &(t, kat) in &notes[..25] {
+            g.press_at(if kat { 0 } else { 1 }, t, None);
+        }
+        g.set_time(notes[28].0 + 1000.0);
+        let log = g.sfx_log.take().unwrap();
+        let breaks: Vec<f64> = log.iter().filter(|e| matches!(e.1, Sfx::ComboBreak)).map(|e| e.0).collect();
+        assert_eq!(breaks.len(), 1, "{breaks:?}");
+        assert!(log.iter().filter(|e| !matches!(e.1, Sfx::ComboBreak)).all(|e| e.2 == 1.0));
     }
 
     #[test]
