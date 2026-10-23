@@ -252,8 +252,8 @@ pub fn draw_waiting(c: &mut Canvas, s: &Session, start: Option<Instant>, loaded:
 }
 
 /// Live standings drawn over the playfield.
-/// `y0`: top of the board (just under the map info, which follows the playfield).
-pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live, y0: f32) {
+pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
+    let y0 = 282.0;
     let my_id = s.client.id;
     let mut rows: Vec<(String, Live, bool, bool)> = s
         .players

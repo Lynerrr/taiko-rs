@@ -6,8 +6,8 @@ use crate::render::{rgba, Canvas};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
     ScrollSpeed,
-    PlayfieldSize,
-    PlayfieldPosition,
+    PlayfieldArea,
+    PlayfieldReset,
     Rate,
     RateKeepPitch,
     Offset,
@@ -29,8 +29,8 @@ pub enum Item {
 
 pub const ITEMS: [(&str, Item); 23] = [
     ("GAMEPLAY", Item::ScrollSpeed),
-    ("GAMEPLAY", Item::PlayfieldSize),
-    ("GAMEPLAY", Item::PlayfieldPosition),
+    ("GAMEPLAY", Item::PlayfieldArea),
+    ("GAMEPLAY", Item::PlayfieldReset),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::Offset),
@@ -59,8 +59,8 @@ impl Item {
     pub fn label(self) -> &'static str {
         match self {
             Item::ScrollSpeed => "Scroll speed",
-            Item::PlayfieldSize => "Playfield size",
-            Item::PlayfieldPosition => "Playfield position",
+            Item::PlayfieldArea => "Playfield area",
+            Item::PlayfieldReset => "Reset playfield area",
             Item::Rate => "Speed (rate)",
             Item::RateKeepPitch => "Rate keeps pitch",
             Item::Offset => "Audio offset",
@@ -84,8 +84,8 @@ impl Item {
     pub fn help(self) -> &'static str {
         match self {
             Item::ScrollSpeed => "How fast notes travel. Shortcut: F3 / F4.",
-            Item::PlayfieldSize => "Smaller notes for big screens. In game: mouse wheel. Mouse wheel works here too.",
-            Item::PlayfieldPosition => "Moves the lane up/down. In game (or on the preview here): drag with the mouse.",
+            Item::PlayfieldArea => "Enter: edit where gameplay is drawn. In game: drag to move, drag edges to resize, wheel to scale.",
+            Item::PlayfieldReset => "Enter: make gameplay fill the whole screen again.",
             Item::Rate => "Song speed like DT (1.50x) / HT (0.75x). Song select: [ and ] (Shift = 0.25x steps).",
             Item::RateKeepPitch => "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore).",
             Item::Offset => "Raise it if you hit late on average (results screen tells you). Shift = 5 ms steps.",

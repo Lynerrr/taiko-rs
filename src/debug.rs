@@ -164,13 +164,15 @@ pub struct InputScript {
     events: Vec<(f64, Action)>,
 }
 
-/// A scripted input: a key, or mouse pseudo-keys `WheelUp`/`WheelDown`/`DragUp`/`DragDown`
-/// (one wheel notch, or a 40 px left-button drag).
+/// A scripted input: a key, or mouse pseudo-keys: `WheelUp`/`WheelDown` (one notch),
+/// `MoveDown`/`MoveRight` (drag the playfield area by 60 px), `ShrinkCorner` (drag its
+/// bottom-right corner up-left by 300x200 px).
 #[derive(Clone, Copy, Debug)]
 pub enum Action {
     Key(winit::keyboard::KeyCode),
     Wheel(i32),
-    Drag(f64),
+    /// Press at the area's centre (or its bottom-right corner), drag by (dx, dy) px, release.
+    Drag { corner: bool, dx: f64, dy: f64 },
 }
 
 impl InputScript {
@@ -183,8 +185,9 @@ impl InputScript {
                 let action = match k.trim() {
                     "WheelUp" => Action::Wheel(1),
                     "WheelDown" => Action::Wheel(-1),
-                    "DragUp" => Action::Drag(-40.0),
-                    "DragDown" => Action::Drag(40.0),
+                    "MoveDown" => Action::Drag { corner: false, dx: 0.0, dy: 60.0 },
+                    "MoveRight" => Action::Drag { corner: false, dx: 60.0, dy: 0.0 },
+                    "ShrinkCorner" => Action::Drag { corner: true, dx: -300.0, dy: -200.0 },
                     k => Action::Key(parse_keycode(k)?),
                 };
                 Some((t.trim().parse().ok()?, action))

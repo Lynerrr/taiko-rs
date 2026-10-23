@@ -30,24 +30,6 @@ const WHITE: u32 = 0xFFFFFF;
 
 pub const PAUSE_ITEMS: [&str; 4] = ["Continue", "Retry", "Settings", "Quit to song select"];
 
-/// Playfield size and vertical position (virtual units) from the settings.
-#[derive(Clone, Copy)]
-pub struct View {
-    pub scale: f32,
-    pub dy: f32,
-}
-
-impl View {
-    pub fn lane_bottom(&self) -> f32 {
-        LANE_Y + self.dy + (LANE_H / 2.0 + 3.0) * self.scale
-    }
-    /// Vertical offset range that keeps the whole lane on screen at `scale`.
-    pub fn dy_range(scale: f32) -> (f32, f32) {
-        let half = (LANE_H / 2.0 + 3.0) * scale;
-        (half + 4.0 - LANE_Y, 480.0 - 60.0 - half - LANE_Y)
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Judge {
     Great,
@@ -571,12 +553,11 @@ impl Game {
         None
     }
 
-    pub fn draw(&mut self, c: &mut Canvas, scroll_speed: f64, view: View) {
+    /// Draws the whole gameplay view into `c` as if it were the window (the caller maps it into
+    /// the playfield area).
+    pub fn draw(&mut self, c: &mut Canvas, scroll_speed: f64) {
         let t = self.time;
-        // The playfield is drawn at scale 1 and transformed afterwards; widen it so it still
-        // reaches the right edge when shrunk.
-        let playfield_start = c.shapes.len();
-        let w = c.width / view.scale;
+        let w = c.width;
         let speed = SPEED_SCALE * scroll_speed;
         let x_of = |time: f64, vel: f64| HIT_X + ((time - t) * vel * speed) as f32;
         let lookahead = ((w - HIT_X + BIG_R) as f64 / (self.min_velocity * speed)).min(30_000.0);
@@ -727,8 +708,6 @@ impl Game {
                 c.text_centered(HIT_X, lane_top - 30.0 - age * 0.02, 15.0, rgba(j.color(), a), j.label());
             }
         }
-        c.transform_since(playfield_start, [0.0, LANE_Y], view.scale, view.dy);
-        let w = c.width;
 
         // Score / accuracy.
         c.text_right(w - 18.0, 18.0, 24.0, rgba(WHITE, 1.0), &format!("{:08}", self.stats.score));
@@ -780,15 +759,13 @@ impl Game {
 
         // Map info.
         let m = &self.map.meta;
-        let info_y = view.lane_bottom() + 16.0;
+        let info_y = lane_top + LANE_H + 22.0;
         let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("   {:.2}x", self.rate) } else { String::new() };
         c.text(18.0, info_y, 10.0, rgba(0x9a9ab0, 1.0), &format!("{} - {}", m.artist, m.title));
         c.text(18.0, info_y + 16.0, 10.0, rgba(0x6f6f86, 1.0), &format!("[{}]  OD {:.1}{rate}", m.version, m.od));
 
         if self.can_skip() && self.paused.is_none() && !self.mute_hits {
-            // Below the lane (which can be moved), but above the hit error meter.
-            let y = (view.lane_bottom() + 52.0).min(392.0);
-            c.text_centered(w / 2.0, y, 12.0, rgba(WHITE, 0.7), "SPACE to skip intro");
+            c.text_centered(w / 2.0, 330.0, 12.0, rgba(WHITE, 0.7), "SPACE to skip intro");
         }
         if let Some(cursor) = self.paused {
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78));
@@ -805,11 +782,9 @@ impl Game {
     }
 }
 
-/// A still playfield (lane, drum, a few notes) at the configured size/position, shown in settings
-/// while those are adjusted.
-pub fn draw_preview(c: &mut Canvas, view: View) {
-    let start = c.shapes.len();
-    let w = c.width / view.scale;
+/// A still playfield (lane, drum, a few notes, score) for the playfield area editor.
+pub fn draw_preview(c: &mut Canvas) {
+    let w = c.width;
     let lane_top = LANE_Y - LANE_H / 2.0;
     c.rect(0.0, lane_top - 3.0, w, LANE_H + 6.0, rgba(0x3a3a4e, 1.0));
     c.rect(0.0, lane_top, w, LANE_H, rgba(0x20202b, 1.0));
@@ -824,7 +799,9 @@ pub fn draw_preview(c: &mut Canvas, view: View) {
     c.rect(0.0, lane_top, PANEL_W, LANE_H, rgba(0x191921, 1.0));
     c.circle(PANEL_W / 2.0, LANE_Y, 46.0, rgba(0x2f2f3e, 1.0), rgba(0x4a4a60, 1.0), 2.0);
     c.circle(PANEL_W / 2.0, LANE_Y, 32.0, rgba(0xe9dcc3, 1.0), rgba(0x8a7b63, 1.0), 2.0);
-    c.transform_since(start, [0.0, LANE_Y], view.scale, view.dy);
+    c.text_right(w - 18.0, 18.0, 24.0, rgba(WHITE, 1.0), "00000000");
+    c.text_right(w - 18.0, 50.0, 14.0, rgba(0xc8c8d8, 1.0), "100.00%");
+    c.text_centered(w / 2.0, 300.0, 14.0, rgba(WHITE, 0.85), "drag to move, edges to resize");
 }
 
 #[cfg(test)]

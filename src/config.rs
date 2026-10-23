@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use winit::keyboard::KeyCode;
 
+use crate::layout::Area;
 use crate::render::PresentChoice;
 
 pub const RATE_RANGE: (f64, f64) = (0.5, 2.0);
@@ -26,9 +27,8 @@ pub struct Config {
     pub frame_delay_ms: f64,
     /// Tempo of the offset-calibration click track.
     pub calibration_bpm: f64,
-    /// Playfield size (1.0 = default) and vertical shift in virtual units (480 = screen height).
-    pub playfield_scale: f32,
-    pub playfield_y: f32,
+    /// Where gameplay is drawn on screen (fractions; full screen by default).
+    pub playfield_area: Area,
     /// Speed modifier (1.5 = DT, 0.75 = HT) and whether it keeps the music's pitch.
     pub rate: f64,
     pub rate_keep_pitch: bool,
@@ -58,8 +58,7 @@ impl Default for Config {
             fps_cap: 0,
             frame_delay_ms: 0.0,
             calibration_bpm: 120.0,
-            playfield_scale: 1.0,
-            playfield_y: 0.0,
+            playfield_area: Area::FULL,
             rate: 1.0,
             rate_keep_pitch: true,
             show_offset_hint: true,
@@ -144,8 +143,7 @@ impl Config {
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
-                "playfield_scale" => cfg.playfield_scale = v.parse::<f32>().unwrap_or(1.0).clamp(0.5, 1.6),
-                "playfield_y" => cfg.playfield_y = v.parse::<f32>().unwrap_or(0.0).clamp(-300.0, 300.0),
+                "playfield_area" => cfg.playfield_area = Area::parse(v).unwrap_or(Area::FULL),
                 "rate" => cfg.rate = v.parse::<f64>().unwrap_or(1.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
                 "rate_keep_pitch" => cfg.rate_keep_pitch = v != "false",
                 "calibration_bpm" => cfg.calibration_bpm = v.parse::<f64>().unwrap_or(120.0).clamp(60.0, 240.0),
@@ -191,8 +189,8 @@ impl Config {
              # vsync only: ms to wait before drawing each frame (lower latency; too high stutters)\n\
              frame_delay_ms = {}\n\
              calibration_bpm = {}\n\
-             playfield_scale = {:.2}\n\
-             playfield_y = {:.0}\n\
+             # playfield area: x, y, width, height as fractions of the screen\n\
+             playfield_area = {}\n\
              # speed modifier (1.5 = DT) and whether it keeps the music's pitch\n\
              rate = {:.2}\n\
              rate_keep_pitch = {}\n\
@@ -210,8 +208,7 @@ impl Config {
             self.fps_cap,
             self.frame_delay_ms,
             self.calibration_bpm,
-            self.playfield_scale,
-            self.playfield_y,
+            self.playfield_area.to_config(),
             self.rate,
             self.rate_keep_pitch,
             self.audio_buffer,

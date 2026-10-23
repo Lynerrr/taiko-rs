@@ -9,6 +9,7 @@ mod config;
 mod debug;
 mod font;
 mod game;
+mod layout;
 mod library;
 mod multiplayer;
 mod net;
@@ -32,7 +33,9 @@ use winit::window::{Fullscreen, Window, WindowId};
 use audio::{Engine, Track};
 use beatmap::Beatmap;
 use config::{Config, FPS_CAPS, FRAME_DELAYS, MAX_FRAME_DELAY, RATE_RANGE};
-use game::{Game, View, PAUSE_ITEMS};
+use game::{Game, PAUSE_ITEMS};
+use layout::{Area, Grip};
+use winit::window::CursorIcon;
 use library::Entry;
 use render::{rgba, Canvas, PresentChoice, Renderer};
 use settings::{Item, SettingsUi};
@@ -50,6 +53,8 @@ enum Scene {
     /// Offset calibration run; `back` is where to return (the settings tab).
     Calibrate { game: Box<Game>, back: Box<Scene> },
     CalibrateDone { estimate: calibrate::Estimate, back: Box<Scene> },
+    /// Full-screen editor for the playfield area, opened from settings.
+    LayoutEdit { back: Box<Scene> },
     /// Multiplayer: host/join form, room lobby, waiting/countdown, match, results.
     MpMenu,
     Lobby,
@@ -116,9 +121,35 @@ struct State {
     /// Mouse: fractional wheel notches (touchpads), left-button drag of the playfield, window
     /// height for converting pixels to virtual units, and how long the settings preview shows.
     wheel_acc: f32,
-    drag_y: Option<f64>,
+    /// Pointer position (physical px), the active playfield-area drag (grip, where it started,
+    /// area at that moment) and what the pointer hovers.
+    mouse: (f64, f64),
+    grip: Option<(Grip, (f64, f64), Area)>,
+    hover: Option<Grip>,
+    window_w: f32,
     window_h: f32,
-    preview_until: Option<Instant>,
+    /// Shapes of this frame to clip to the playfield area.
+    frame_clip: Option<(std::ops::Range<usize>, Area)>,
+}
+
+/// Draws gameplay (via `f`) into the playfield area, records the shapes to clip, and shows the
+/// area's frame while it's being dragged or an edge is hovered.
+fn draw_game_area(
+    canvas: &mut Canvas,
+    cfg: &Config,
+    clip: &mut Option<(std::ops::Range<usize>, Area)>,
+    grip: &Option<(Grip, (f64, f64), Area)>,
+    hover: &Option<Grip>,
+    f: impl FnOnce(&mut Canvas),
+) {
+    let area = cfg.playfield_area;
+    let (start, full) = layout::begin(canvas, area);
+    f(canvas);
+    let range = layout::end(canvas, area, start, full);
+    *clip = Some((range, area));
+    if grip.is_some() || matches!(hover, Some(Grip::Resize { .. })) {
+        layout::draw_frame(canvas, area, grip.is_some());
+    }
 }
 
 /// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
@@ -239,8 +270,8 @@ impl State {
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
             Item::LiveOffset => on(c.show_offset_hint),
             Item::LiveOffsetUr => on(c.offset_hint_ur_scaled),
-            Item::PlayfieldSize => format!("{:.0}%", c.playfield_scale * 100.0),
-            Item::PlayfieldPosition => format!("{:+.0}", c.playfield_y),
+            Item::PlayfieldArea => c.playfield_area.describe(),
+            Item::PlayfieldReset => "Enter to reset".into(),
             Item::Rate => format!("{:.2}x", c.rate),
             Item::RateKeepPitch => on(c.rate_keep_pitch),
         }
@@ -295,14 +326,8 @@ impl State {
             Item::Calibrate => return,
             Item::LiveOffset => self.cfg.show_offset_hint = !self.cfg.show_offset_hint,
             Item::LiveOffsetUr => self.cfg.offset_hint_ur_scaled = !self.cfg.offset_hint_ur_scaled,
-            Item::PlayfieldSize => {
-                self.adjust_playfield(0.05 * dir as f32, 0.0);
-                return;
-            }
-            Item::PlayfieldPosition => {
-                self.adjust_playfield(0.0, 5.0 * dir as f32);
-                return;
-            }
+            // Both act on Enter in `settings_key`.
+            Item::PlayfieldArea | Item::PlayfieldReset => return,
             Item::Rate => {
                 let step = 0.05 * if self.modifiers_shift { 5.0 } else { 1.0 };
                 self.cfg.rate = (((self.cfg.rate + step * d) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
@@ -348,6 +373,12 @@ impl State {
             KeyCode::ArrowLeft => self.adjust_setting(item, -1, window),
             KeyCode::ArrowRight => self.adjust_setting(item, 1, window),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => self.start_calibration(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldArea => self.open_layout_editor(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
+                self.cfg.playfield_area = Area::FULL;
+                self.cfg.save();
+                self.toast("playfield fills the screen".into());
+            }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.adjust_setting(item, 1, window),
             KeyCode::Tab if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select)) => {
                 self.open_multiplayer();
@@ -553,52 +584,105 @@ impl State {
         true
     }
 
-    fn view(&self) -> View {
-        View { scale: self.cfg.playfield_scale, dy: self.cfg.playfield_y }
+    /// Scenes where the playfield area can be moved and resized with the mouse.
+    fn area_editable(&self) -> bool {
+        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } | Scene::LayoutEdit { .. })
     }
 
-    /// Grows/shrinks and moves the playfield, keeping it on screen; shows the settings preview.
-    fn adjust_playfield(&mut self, dscale: f32, ddy: f32) {
-        let c = &mut self.cfg;
-        c.playfield_scale = ((c.playfield_scale + dscale) * 100.0).round() / 100.0;
-        c.playfield_scale = c.playfield_scale.clamp(0.5, 1.6);
-        let (lo, hi) = View::dy_range(c.playfield_scale);
-        c.playfield_y = (c.playfield_y + ddy).clamp(lo, hi);
-        c.save();
-        self.preview_until = Some(Instant::now() + Duration::from_millis(1500));
+    fn open_layout_editor(&mut self) {
+        let back = std::mem::replace(&mut self.scene, Scene::Select);
+        self.scene = Scene::LayoutEdit { back: Box::new(back) };
     }
 
-    fn in_gameplay(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. })
+    fn layout_key(&mut self, code: KeyCode) {
+        let a = self.cfg.playfield_area;
+        let step = 0.01;
+        // Arrows move; Shift+arrows resize from the bottom-right, like a window.
+        let resize = |dx: f32, dy: f32| layout::drag(a, Grip::Resize { left: false, right: true, top: false, bottom: true }, dx, dy);
+        let moved = |dx: f32, dy: f32| layout::drag(a, Grip::Move, dx, dy);
+        let shift = self.modifiers_shift;
+        let next = match code {
+            KeyCode::ArrowLeft if shift => resize(-step, 0.0),
+            KeyCode::ArrowRight if shift => resize(step, 0.0),
+            KeyCode::ArrowUp if shift => resize(0.0, -step),
+            KeyCode::ArrowDown if shift => resize(0.0, step),
+            KeyCode::ArrowLeft => moved(-step, 0.0),
+            KeyCode::ArrowRight => moved(step, 0.0),
+            KeyCode::ArrowUp => moved(0.0, -step),
+            KeyCode::ArrowDown => moved(0.0, step),
+            KeyCode::KeyR => Area::FULL,
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
+                self.cfg.save();
+                if let Scene::LayoutEdit { back } = std::mem::replace(&mut self.scene, Scene::Select) {
+                    self.scene = *back;
+                }
+                return;
+            }
+            _ => return,
+        };
+        self.cfg.playfield_area = next;
+        self.cfg.save();
     }
 
-    /// Mouse wheel: playfield size in game, the list in song select / settings.
+    /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
     fn wheel(&mut self, notches: i32) {
         if notches == 0 {
             return;
         }
-        if self.in_gameplay() {
-            self.adjust_playfield(0.05 * notches as f32, 0.0);
-            let text = format!("playfield {:.0}%", self.cfg.playfield_scale * 100.0);
+        if self.area_editable() {
+            self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
+            self.cfg.save();
+            let text = format!("playfield: {}", self.cfg.playfield_area.describe());
             self.toast(text);
             return;
         }
         match &self.scene {
             Scene::Select => self.select.move_by(-notches),
-            Scene::Settings { .. } if self.settings_ui.item() == Item::PlayfieldSize => self.adjust_playfield(0.05 * notches as f32, 0.0),
             Scene::Settings { .. } => self.settings_ui.move_cursor(-notches),
             _ => {}
         }
     }
 
-    /// Left-button drag moves the playfield vertically, in game or over the settings preview.
-    fn drag(&mut self, pixels: f64) {
-        let in_settings = matches!(self.scene, Scene::Settings { .. })
-            && matches!(self.settings_ui.item(), Item::PlayfieldSize | Item::PlayfieldPosition);
-        if self.in_gameplay() || in_settings {
-            let units = pixels as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0);
-            self.adjust_playfield(0.0, units);
+    /// Pointer moved: drags the area if a drag is active, otherwise updates the hover state.
+    /// Returns the cursor to show.
+    fn mouse_moved(&mut self, x: f64, y: f64) -> CursorIcon {
+        self.mouse = (x, y);
+        let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
+        if let Some((grip, (px, py), from)) = self.grip {
+            self.cfg.playfield_area = layout::drag(from, grip, ((x - px) / sw) as f32, ((y - py) / sh) as f32);
+            return grip.cursor();
         }
+        if !self.area_editable() {
+            self.hover = None;
+            return CursorIcon::Default;
+        }
+        self.hover = layout::hit(self.cfg.playfield_area, x, y, sw, sh);
+        self.hover.map(|g| g.cursor()).unwrap_or(CursorIcon::Default)
+    }
+
+    fn mouse_button(&mut self, pressed: bool) {
+        if pressed {
+            if self.area_editable() {
+                let (sw, sh) = (self.window_w as f64, self.window_h as f64);
+                if let Some(g) = layout::hit(self.cfg.playfield_area, self.mouse.0, self.mouse.1, sw, sh) {
+                    self.grip = Some((g, self.mouse, self.cfg.playfield_area));
+                }
+            }
+        } else if self.grip.take().is_some() {
+            self.cfg.save();
+        }
+    }
+
+    /// Scripted drag for headless tests: press at the area centre (or bottom-right corner).
+    fn simulate_drag(&mut self, corner: bool, dx: f64, dy: f64) {
+        let a = self.cfg.playfield_area;
+        let (sw, sh) = (self.window_w as f64, self.window_h as f64);
+        let (fx, fy) = if corner { (a.x + a.w, a.y + a.h) } else { (a.x + a.w / 2.0, a.y + a.h / 2.0) };
+        let start = (fx as f64 * sw - if corner { 2.0 } else { 0.0 }, fy as f64 * sh - if corner { 2.0 } else { 0.0 });
+        self.mouse_moved(start.0, start.1);
+        self.mouse_button(true);
+        self.mouse_moved(start.0 + dx, start.1 + dy);
+        self.mouse_button(false);
     }
 
     fn open_multiplayer(&mut self) {
@@ -941,6 +1025,10 @@ impl State {
             self.calibration_key(code, repeat, at, window);
             return;
         }
+        if matches!(self.scene, Scene::LayoutEdit { .. }) {
+            self.layout_key(code);
+            return;
+        }
         if matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults) {
             self.multiplayer_key(code, repeat, text, at, window);
             return;
@@ -1014,7 +1102,7 @@ impl State {
                 }
             }
             Scene::Settings { .. } => self.settings_key(code, window),
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => {}
+            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => {}
             Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => {}
             Scene::Play { game, entry } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
@@ -1058,6 +1146,7 @@ impl State {
         }
 
         canvas.clear(width);
+        self.frame_clip = None;
         self.poll_scan();
         self.poll_multiplayer();
         let mut next: Option<Scene> = None;
@@ -1069,7 +1158,7 @@ impl State {
                 match action {
                     debug::Action::Key(code) => self.key(code, false, None, now, None),
                     debug::Action::Wheel(n) => self.wheel(n),
-                    debug::Action::Drag(px) => self.drag(px),
+                    debug::Action::Drag { corner, dx, dy } => self.simulate_drag(corner, dx, dy),
                 }
             }
             self.input_script = Some(script);
@@ -1140,8 +1229,7 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                let view = View { scale: self.cfg.playfield_scale, dy: self.cfg.playfield_y };
-                game.draw(canvas, self.cfg.scroll_speed, view);
+                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| game.draw(c, self.cfg.scroll_speed));
                 if let Some(plan) = &mut self.shots {
                     if plan.times.last().is_some_and(|&t| game.time >= t) {
                         let t = plan.times.pop().unwrap();
@@ -1206,11 +1294,15 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                let view = View { scale: self.cfg.playfield_scale, dy: self.cfg.playfield_y };
-                game.draw(canvas, self.cfg.scroll_speed, view);
                 let live = multiplayer::live_from(game);
+                let mp = &self.mp;
+                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| {
+                    game.draw(c, self.cfg.scroll_speed);
+                    if let Some(s) = mp {
+                        multiplayer::draw_scoreboard(c, s, &live);
+                    }
+                });
                 if let Some(s) = &mut self.mp {
-                    multiplayer::draw_scoreboard(canvas, s, &live, view.lane_bottom() + 56.0);
                     if s.last_live.elapsed() >= Duration::from_millis(100) {
                         s.last_live = now;
                         s.client.send(net::ClientMsg::Live(live));
@@ -1232,9 +1324,11 @@ impl State {
                 if self.auto {
                     game.autoplay(self.audio.as_ref());
                 }
-                let view = View { scale: self.cfg.playfield_scale, dy: self.cfg.playfield_y };
-                game.draw(canvas, self.cfg.scroll_speed, view);
-                calibrate::draw_overlay(canvas, game, self.cfg.offset_ms, game.hide_notes);
+                let offset = self.cfg.offset_ms;
+                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| {
+                    game.draw(c, self.cfg.scroll_speed);
+                    calibrate::draw_overlay(c, game, offset, game.hide_notes);
+                });
             }
             Scene::CalibrateDone { estimate, .. } => {
                 calibrate::draw_result(canvas, estimate, self.cfg.offset_ms, self.cfg.calibration_bpm);
@@ -1249,14 +1343,15 @@ impl State {
                 };
                 let this = &*self;
                 this.settings_ui.draw(canvas, &|item| this.setting_value(item), footer);
-                let previewing = this.preview_until.is_some_and(|t| now < t)
-                    || matches!(this.settings_ui.item(), Item::PlayfieldSize | Item::PlayfieldPosition) && this.drag_y.is_some();
-                if previewing {
-                    canvas.rect(0.0, 0.0, canvas.width, 480.0, rgba(0x0b0b10, 0.75));
-                    game::draw_preview(canvas, this.view());
-                    let text = format!("playfield {:.0}%   position {:+.0}   (wheel: size, drag: position)", this.cfg.playfield_scale * 100.0, this.cfg.playfield_y);
-                    canvas.text_centered(canvas.width / 2.0, this.view().lane_bottom() + 18.0, 9.0, rgba(0xffffff, 1.0), &text);
-                }
+            }
+            Scene::LayoutEdit { .. } => {
+                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, game::draw_preview);
+                let area = self.cfg.playfield_area;
+                layout::draw_frame(canvas, area, true);
+                let w = canvas.width;
+                canvas.round_rect(w / 2.0 - 330.0, 440.0, 660.0, 34.0, 8.0, rgba(0x000000, 0.75), rgba(0xEB452C, 0.6), 1.0);
+                canvas.text_centered(w / 2.0, 446.0, 8.0, rgba(0xffffff, 1.0), &format!("Playfield area: {}", area.describe()));
+                canvas.text_centered(w / 2.0, 460.0, 7.0, rgba(0x9a9ab0, 1.0), "Drag to move, edges/corners to resize, wheel to scale.  Arrows move, Shift+arrows resize, R full screen, Enter/Esc done");
             }
         }
         if finish_calibration {
@@ -1377,9 +1472,14 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             sleep_until(acquired + Duration::from_secs_f64(delay / 1000.0));
         }
         let now = Instant::now();
-        let capture = lock(&state).build_frame(&mut canvas, now, renderer.virtual_width());
+        let (capture, clip) = {
+            let mut s = lock(&state);
+            let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
+            (capture, s.frame_clip.take())
+        };
+        let clip = clip.map(|(range, a)| (range, [a.x, a.y, a.w, a.h]));
         let t1 = Instant::now();
-        let shot = renderer.submit(frame, &canvas.shapes, [0.071, 0.071, 0.098], capture.is_some());
+        let shot = renderer.submit(frame, &canvas.shapes, [0.071, 0.071, 0.098], capture.is_some(), clip);
         let presented = Instant::now();
         // Clock-sample-to-next-refresh: approximates how stale the previous frame was when shown.
         let sample_age = last_sample.map(|s| (acquired - s).as_secs_f64() * 1000.0).unwrap_or(0.0);
@@ -1410,6 +1510,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
 
 struct App {
     state: Arc<Mutex<State>>,
+    /// Last cursor icon set, so it is only changed when the hover target changes.
+    cursor: CursorIcon,
     window: Option<Arc<Window>>,
     render_thread: Option<JoinHandle<()>>,
     proxy: EventLoopProxy<()>,
@@ -1450,6 +1552,7 @@ impl ApplicationHandler for App {
         {
             let mut s = lock(&self.state);
             s.adapter = renderer.adapter_name.clone();
+            s.window_w = window.inner_size().width as f32;
             s.window_h = window.inner_size().height as f32;
             s.refresh_hz = refresh_hz;
             s.refresh_status();
@@ -1482,6 +1585,7 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => {
                 let mut s = lock(&self.state);
                 s.want_size = Some((size.width, size.height));
+                s.window_w = size.width as f32;
                 s.window_h = size.height as f32;
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -1506,21 +1610,15 @@ impl ApplicationHandler for App {
                 s.wheel(notches as i32);
             }
             WindowEvent::MouseInput { state: button_state, button: winit::event::MouseButton::Left, .. } => {
-                let mut s = lock(&self.state);
-                if button_state == ElementState::Released {
-                    s.drag_y = None;
-                } else {
-                    s.drag_y = Some(f64::NAN);
-                }
+                lock(&self.state).mouse_button(button_state == ElementState::Pressed);
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let mut s = lock(&self.state);
-                if let Some(last) = s.drag_y {
-                    // NaN marks "pressed, no position yet".
-                    if !last.is_nan() {
-                        s.drag(position.y - last);
+                let icon = lock(&self.state).mouse_moved(position.x, position.y);
+                if icon != self.cursor {
+                    self.cursor = icon;
+                    if let Some(w) = &self.window {
+                        w.set_cursor(icon);
                     }
-                    s.drag_y = Some(position.y);
                 }
             }
             WindowEvent::Focused(false) => {
@@ -1651,12 +1749,15 @@ fn main() {
         scan: Some((scan_rx, found)),
         play_when_scanned,
         wheel_acc: 0.0,
-        drag_y: None,
+        mouse: (0.0, 0.0),
+        grip: None,
+        hover: None,
+        window_w: 1280.0,
         window_h: 720.0,
-        preview_until: None,
+        frame_clip: None,
     };
     let event_loop = EventLoop::new().expect("event loop");
-    let mut app = App { state: Arc::new(Mutex::new(state)), window: None, render_thread: None, proxy: event_loop.create_proxy() };
+    let mut app = App { state: Arc::new(Mutex::new(state)), cursor: CursorIcon::Default, window: None, render_thread: None, proxy: event_loop.create_proxy() };
     event_loop.run_app(&mut app).expect("run");
 }
 

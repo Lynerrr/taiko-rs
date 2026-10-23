@@ -51,8 +51,7 @@ The build is produced by GitHub Actions on every push.
 | type, Backspace | search |
 | Tab (or F1) | switch between the SONGS and SETTINGS tabs |
 | [ / ] (Shift: ×5) | speed (rate) −/+ 0.05× on song select; host sets the match rate in the lobby |
-| mouse wheel (in game) | playfield size |
-| left-drag (in game) | move the playfield up/down |
+| mouse (in game) | drag inside the playfield to move it, drag its edges/corners to resize it, wheel to scale it |
 | Space | skip intro |
 | Esc (in game) | pause menu: continue, retry, settings, quit; Esc again resumes |
 | O (in game or pause menu) | apply the live offset suggestion shown under the hit error meter |
@@ -72,11 +71,13 @@ you which way to move the offset.
 
 ## Playfield size and speed
 
-- **Playfield size / position:** the mouse wheel during play resizes the whole lane (notes, drum,
-  hit target) from 50% to 160%, and dragging with the left button moves it up or down; it stays
-  on screen and the lane always spans the full width. Settings → *Playfield size* / *Playfield
-  position* do the same with a live preview (wheel and drag work on the preview too). Handy on big
-  monitors, where the default notes are large.
+- **Playfield area:** gameplay can run in a smaller "window" inside a fullscreen game, handy on big
+  monitors. Everything (lane, notes, HUD, pause menu, multiplayer scoreboard) is laid out inside
+  the area as if it were the window, and clipped to it. During play, drag inside it to move it,
+  drag an edge or corner to resize it (the cursor changes like on a window frame) and use the
+  wheel to scale it. Settings → *Playfield area* opens an editor with a sample playfield (mouse,
+  or arrows to move / Shift+arrows to resize, R for full screen); *Reset playfield area* restores
+  full screen.
 - **Speed (rate):** 0.50×–2.00× in 0.05× steps (`[` / `]` on song select, Shift for 0.25×, or
   Settings → *Speed*). With *Rate keeps pitch* on (default) the music is time-stretched (WSOLA) so
   it sounds normal, like osu!'s DT/HT; off, it is resampled and the pitch follows the speed

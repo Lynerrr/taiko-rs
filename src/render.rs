@@ -326,7 +326,24 @@ impl Renderer {
 
     /// Draws `shapes` into an acquired frame and presents it; with `capture`, also returns the
     /// frame as tightly packed RGB.
-    pub fn submit(&mut self, frame: wgpu::SurfaceTexture, shapes: &[Shape], clear: [f64; 3], capture: bool) -> Option<(u32, u32, Vec<u8>)> {
+    /// `clip`: shapes in that range are clipped to a screen rectangle given as fractions
+    /// (x, y, w, h) — the playfield area — so notes can't spill outside it.
+    pub fn submit(
+        &mut self,
+        frame: wgpu::SurfaceTexture,
+        shapes: &[Shape],
+        clear: [f64; 3],
+        capture: bool,
+        clip: Option<(std::ops::Range<usize>, [f32; 4])>,
+    ) -> Option<(u32, u32, Vec<u8>)> {
+        let clip = clip.map(|(range, r)| {
+            let (sw, sh) = (self.config.width as f32, self.config.height as f32);
+            let x = (r[0] * sw).floor().clamp(0.0, sw - 1.0);
+            let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
+            let w = (r[2] * sw).ceil().clamp(1.0, sw - x);
+            let h = (r[3] * sh).ceil().clamp(1.0, sh - y);
+            (range, [x as u32, y as u32, w as u32, h as u32])
+        });
         if shapes.len() > self.capacity {
             self.capacity = shapes.len().next_power_of_two();
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
@@ -342,7 +359,7 @@ impl Renderer {
         }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.encode_pass(&mut encoder, &view, &self.pipeline, shapes.len(), clear);
+        self.encode_pass(&mut encoder, &view, &self.pipeline, shapes.len(), clear, clip.as_ref());
 
         let (w, h) = (self.config.width, self.config.height);
         let readback = capture.then(|| {
@@ -357,7 +374,7 @@ impl Renderer {
                 view_formats: &[],
             });
             let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-            self.encode_pass(&mut encoder, &target_view, &self.capture_pipeline, shapes.len(), clear);
+            self.encode_pass(&mut encoder, &target_view, &self.capture_pipeline, shapes.len(), clear, clip.as_ref());
             let bpr = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("capture"),
@@ -391,7 +408,15 @@ impl Renderer {
         Some((w, h, rgb))
     }
 
-    fn encode_pass(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, pipeline: &wgpu::RenderPipeline, count: usize, clear: [f64; 3]) {
+    fn encode_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        pipeline: &wgpu::RenderPipeline,
+        count: usize,
+        clear: [f64; 3],
+        clip: Option<&(std::ops::Range<usize>, [u32; 4])>,
+    ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -408,7 +433,16 @@ impl Renderer {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instances.slice(..));
-        pass.draw(0..4, 0..count as u32);
+        match clip {
+            None => pass.draw(0..4, 0..count as u32),
+            Some((range, [x, y, w, h])) => {
+                pass.draw(0..4, 0..range.start as u32);
+                pass.set_scissor_rect(*x, *y, *w, *h);
+                pass.draw(0..4, range.start as u32..range.end as u32);
+                pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
+                pass.draw(0..4, range.end as u32..count as u32);
+            }
+        }
     }
 }
 
@@ -470,11 +504,11 @@ impl Canvas {
         self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, side as f32] });
     }
 
-    /// Scales every shape drawn since `start` about `anchor`, then moves it down by `dy` (playfield
-    /// size and position). Radii, borders and glows scale with it, so the result stays crisp.
-    pub fn transform_since(&mut self, start: usize, anchor: [f32; 2], scale: f32, dy: f32) {
+    /// Scales every shape drawn since `start` about `anchor`, then moves it by (`dx`, `dy`). Radii,
+    /// borders and glows scale with it, so the result stays crisp (used for the playfield area).
+    pub fn transform_since(&mut self, start: usize, anchor: [f32; 2], scale: f32, dx: f32, dy: f32) {
         for sh in &mut self.shapes[start..] {
-            sh.center = [anchor[0] + (sh.center[0] - anchor[0]) * scale, anchor[1] + (sh.center[1] - anchor[1]) * scale + dy];
+            sh.center = [anchor[0] + (sh.center[0] - anchor[0]) * scale + dx, anchor[1] + (sh.center[1] - anchor[1]) * scale + dy];
             sh.half = [sh.half[0] * scale, sh.half[1] * scale];
             sh.params[0] *= scale;
             sh.params[1] *= scale;
