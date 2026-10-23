@@ -25,6 +25,8 @@ foreach ($folder in [Environment]::GetFolderPath('Programs'), [Environment]::Get
     $link = $shell.CreateShortcut((Join-Path $folder 'taiko-rs.lnk'))
     $link.TargetPath = $exe
     $link.WorkingDirectory = $dir
+    $ico = Join-Path $dir 'taiko-rs.ico'
+    if (Test-Path $ico) { $link.IconLocation = $ico }
     $link.Save()
 }
 

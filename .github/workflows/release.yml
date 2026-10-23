@@ -36,6 +36,7 @@ jobs:
           New-Item -ItemType Directory dist | Out-Null
           Copy-Item target/release/taiko-rs.exe dist/
           Copy-Item README.md dist/
+          Copy-Item assets/taiko-rs.ico dist/
           Compress-Archive -Path dist/* -DestinationPath taiko-rs-windows-x64.zip
 
       - uses: actions/upload-artifact@v4
@@ -65,7 +66,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist/taiko-rs
-          cp target/release/taiko-rs README.md assets/taiko-rs.svg dist/taiko-rs/
+          cp target/release/taiko-rs README.md assets/taiko-rs.png dist/taiko-rs/
           strip dist/taiko-rs/taiko-rs
           tar -czf taiko-rs-linux-x64.tar.gz -C dist taiko-rs
 

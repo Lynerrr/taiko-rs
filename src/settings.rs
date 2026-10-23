@@ -512,8 +512,20 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
         /// Where the active tab's highlight is (x, width), so it slides between tabs.
         static PILL: Cell<(f32, f32)> = const { Cell::new((f32::NAN, 0.0)) };
     }
-    c.text(24.0, 24.0, 16.0, rgba(0xffffff, 1.0), "taiko-rs");
-    let x0 = 24.0 + Canvas::text_width(16.0, "taiko-rs") + 24.0;
+    crate::logo::draw(c, 22.0, 18.0, 26.0);
+    // The name like the wordmark: letters alternating white and red, "-rs" red.
+    let mut tx = 54.0;
+    for (i, ch) in "taiko-rs".chars().enumerate() {
+        let s = ch.to_string();
+        let col = match ch {
+            '-' => 0x6f6f86,
+            'r' | 's' => 0xEB452C,
+            _ if i % 2 == 0 => 0xffffff,
+            _ => 0xEB452C,
+        };
+        tx += c.text(tx, 24.0, 16.0, rgba(col, 1.0), &s);
+    }
+    let x0 = tx + 24.0;
     let names = ["SONGS", "SETTINGS", "MULTIPLAYER", "DOWNLOAD"];
     let mut x = x0;
     let mut target = (x0, 0.0);
