@@ -28,7 +28,7 @@ const ROLL: u32 = 0xFCB806;
 const SWELL: u32 = 0xF39A2B;
 const WHITE: u32 = 0xFFFFFF;
 
-pub const PAUSE_ITEMS: [&str; 4] = ["Continue", "Retry", "Settings", "Quit to song select"];
+pub const PAUSE_ITEMS: [&str; 5] = ["Continue", "Retry", "Playfield size", "Settings", "Quit to song select"];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Judge {
@@ -795,13 +795,14 @@ impl Game {
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78));
             c.text_centered(w / 2.0, 120.0, 32.0, rgba(WHITE, 1.0), "PAUSED");
             for (i, item) in PAUSE_ITEMS.iter().enumerate() {
-                let y = 190.0 + i as f32 * 40.0;
+                let y = 170.0 + i as f32 * 38.0;
                 let selected = i == cursor;
                 let (bg, border) = if selected { (0x34344a, DON) } else { (0x1d1d27, 0x2a2a38) };
                 c.round_rect(w / 2.0 - 140.0, y, 280.0, 32.0, 8.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 2.0 } else { 1.0 });
                 c.text_centered(w / 2.0, y + 10.0, 12.0, rgba(if selected { WHITE } else { 0xc8c8d8 }, 1.0), item);
             }
-            c.text_centered(w / 2.0, 360.0, 9.0, rgba(0x8a8aa0, 1.0), "Up/Down + Enter    Esc: continue");
+            let hint_y = 170.0 + PAUSE_ITEMS.len() as f32 * 38.0 + 8.0;
+            c.text_centered(w / 2.0, hint_y, 9.0, rgba(0x8a8aa0, 1.0), "Up/Down + Enter    Esc: continue");
         }
     }
 }

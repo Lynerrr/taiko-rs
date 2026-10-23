@@ -16,6 +16,9 @@ pub struct Select {
     visible: Vec<usize>,
     cursor: usize,
     scroll: f32,
+    /// Songs visited with F2, so Shift+F2 can step back (library indices).
+    random_history: Vec<usize>,
+    rng: u64,
 }
 
 pub enum SelectAction {
@@ -28,7 +31,18 @@ pub enum SelectAction {
 impl Select {
     pub fn new(library: &[Entry]) -> Select {
         let has_taiko = library.iter().any(|e| e.meta.mode == 1);
-        let mut s = Select { filter: String::new(), scanning: None, rate_label: String::new(), show_converts: !has_taiko, visible: Vec::new(), cursor: 0, scroll: 0.0 };
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9e37_79b9_7f4a_7c15);
+        let mut s = Select {
+            filter: String::new(),
+            scanning: None,
+            rate_label: String::new(),
+            show_converts: !has_taiko,
+            visible: Vec::new(),
+            cursor: 0,
+            scroll: 0.0,
+            random_history: Vec::new(),
+            rng: seed | 1,
+        };
         s.refilter(library);
         s
     }
@@ -146,7 +160,68 @@ impl Select {
         out
     }
 
-    pub fn draw(&mut self, c: &mut Canvas, library: &[Entry], dt_ms: f64, status: &str) {
+    /// F2: jump to a random song among those listed (search and filters apply), keeping the
+    /// position within the difficulty list where possible.
+    pub fn random(&mut self, library: &[Entry]) {
+        let groups = self.groups(library);
+        if groups.len() < 2 {
+            return;
+        }
+        let current = groups.iter().position(|g| g.contains(&self.cursor));
+        let offset = current.map(|g| self.cursor - groups[g].start).unwrap_or(0);
+        // xorshift64*: plenty for picking songs, no dependency.
+        self.rng ^= self.rng >> 12;
+        self.rng ^= self.rng << 25;
+        self.rng ^= self.rng >> 27;
+        let r = self.rng.wrapping_mul(0x2545_f491_4f6c_dd1d);
+        let mut pick = (r % groups.len() as u64) as usize;
+        if Some(pick) == current {
+            pick = (pick + 1) % groups.len();
+        }
+        if let Some(&here) = self.visible.get(self.cursor) {
+            self.random_history.push(here);
+        }
+        let g = &groups[pick];
+        self.cursor = g.start + offset.min(g.len() - 1);
+    }
+
+    /// Shift+F2: back to the song before the last random jump.
+    pub fn random_back(&mut self) {
+        while let Some(prev) = self.random_history.pop() {
+            if let Some(pos) = self.visible.iter().position(|&v| v == prev) {
+                self.cursor = pos;
+                return;
+            }
+        }
+    }
+
+    /// Library indices of the selected song's difficulties (for star rating requests).
+    /// Orders the selected song's difficulties by star rating once all of them are known, like
+    /// osu!, keeping the same difficulty selected. (Other songs are collapsed, so their order
+    /// doesn't show until they are opened.)
+    pub fn sort_selected_set(&mut self, library: &[Entry], stars: &dyn Fn(usize) -> Option<f32>) {
+        let Some(g) = self.groups(library).into_iter().find(|g| g.contains(&self.cursor)) else { return };
+        let Some(keys) = self.visible[g.clone()].iter().map(|&i| stars(i)).collect::<Option<Vec<f32>>>() else { return };
+        if keys.windows(2).all(|w| w[0] <= w[1]) {
+            return;
+        }
+        let current = self.visible[self.cursor];
+        let mut set: Vec<(f32, usize)> = keys.into_iter().zip(self.visible[g.clone()].iter().copied()).collect();
+        set.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (slot, (_, i)) in g.clone().zip(set) {
+            self.visible[slot] = i;
+        }
+        if let Some(pos) = self.visible.iter().position(|&v| v == current) {
+            self.cursor = pos;
+        }
+    }
+
+    pub fn selected_set(&self, library: &[Entry]) -> Vec<usize> {
+        self.groups(library).into_iter().find(|g| g.contains(&self.cursor)).map(|g| g.map(|i| self.visible[i]).collect()).unwrap_or_default()
+    }
+
+    /// `stars` looks up a difficulty's star rating (library index) if it has been calculated.
+    pub fn draw(&mut self, c: &mut Canvas, library: &[Entry], dt_ms: f64, status: &str, stars: &dyn Fn(usize) -> Option<f32>) {
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
         let groups = self.groups(library);
@@ -223,13 +298,14 @@ impl Select {
                     c.round_rect(44.0, y, lw - 20.0, rh - 3.0, 5.0, rgba(bg, 0.92), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
                     let col = if selected { 0xffffff } else { 0xc8c8d8 };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
-                    c.text(56.0, y + 6.0, 8.0, rgba(col, 1.0), &fit(format!("{}{convert}", e.meta.version), max_chars(8.0, lw - 120.0)));
-                    c.text_right(24.0 + lw - 12.0, y + 6.0, 8.0, rgba(0x8a8aa0, 1.0), &format!("OD {:.1}", e.meta.od));
+                    let pill = crate::stars::draw_pill(c, 24.0 + lw - 10.0, y + 6.0, 7.0, stars(self.visible[*i]));
+                    c.text_right(24.0 + lw - 18.0 - pill, y + 6.0, 7.0, rgba(0x8a8aa0, 1.0), &format!("OD {:.1}", e.meta.od));
+                    c.text(56.0, y + 6.0, 8.0, rgba(col, 1.0), &fit(format!("{}{convert}", e.meta.version), max_chars(8.0, lw - 170.0)));
                 }
             }
         }
 
-        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down difficulty  Left/Right song  wheel scroll  [ ] rate  Tab settings  -/= offset  F11 fullscreen  Esc quit");
+        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down difficulty  Left/Right song  F2 random  [ ] rate  Ctrl+Left/Right seek  Tab settings  -/= offset  Esc quit");
         c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), status);
     }
 }

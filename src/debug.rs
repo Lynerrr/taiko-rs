@@ -175,6 +175,10 @@ pub enum Action {
     /// unless `hold` (then `Release` ends it), so screenshots can catch an in-progress drag.
     Drag { corner: bool, dx: f64, dy: f64, hold: bool },
     Release,
+    /// Click the song select difficulty timeline at this fraction of its width.
+    ClickGraph(f32),
+    /// Seek the song select preview by this many ms (what Ctrl+Left/Right does).
+    SeekBy(f64),
 }
 
 impl InputScript {
@@ -191,6 +195,8 @@ impl InputScript {
                     "MoveRight" => Action::Drag { corner: false, dx: 60.0, dy: 0.0, hold: false },
                     "ShrinkCorner" => Action::Drag { corner: true, dx: -300.0, dy: -200.0, hold: false },
                     "Release" => Action::Release,
+                    k if k.starts_with("ClickGraph:") => Action::ClickGraph(k[11..].parse().ok()?),
+                    k if k.starts_with("SeekBy:") => Action::SeekBy(k[7..].parse().ok()?),
                     // Move:dx:dy and Hold:dx:dy (drag without releasing).
                     k if k.starts_with("Move:") || k.starts_with("Hold:") => {
                         let mut p = k.split(':').skip(1).filter_map(|v| v.parse::<f64>().ok());

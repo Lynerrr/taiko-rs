@@ -54,7 +54,9 @@ The build is produced by GitHub Actions on every push.
 | F5 / F6 (rebindable) | previous / next playfield resolution preset, anywhere |
 | mouse (in game) | drag inside the playfield to move it, drag its edges/corners to resize it, wheel to scale it |
 | Space | skip intro |
-| Esc (in game) | pause menu: continue, retry, settings, quit; Esc again resumes |
+| Esc (in game) | pause menu: continue, retry, playfield size, settings, quit; Esc again resumes |
+| F2 / Shift+F2 | random song / back to the previous random pick (song select) |
+| Ctrl+← / → | seek the song select preview ±5 s |
 | O (in game or pause menu) | apply the live offset suggestion shown under the hit error meter |
 | `` ` `` | restart map |
 | Esc (song select) | clear search / quit |
@@ -72,11 +74,16 @@ you which way to move the offset.
 
 ## Song select
 
-Songs are grouped: each beatmap set is one row, and the selected set expands to its difficulties
-(easiest first). Up/Down moves through difficulties, Left/Right jumps between songs, the wheel
+Songs are grouped: each beatmap set is one row, and the selected set expands to its difficulties,
+ordered by star rating. Star ratings are osu!'s own (via [rosu-pp](https://github.com/MaxOhn/rosu-pp),
+a precise port of lazer's calculator, converts included) at the current speed rate, coloured like
+osu!'s spectrum and calculated in the background for the selected song. Up/Down moves through difficulties, Left/Right jumps between songs, the wheel
 scrolls. The selected map's background fills the screen behind the menu, its music plays from the
 map's preview point (looping), and the panel on the right shows its details (OD, BPM, length,
-note counts) above a live autoplay preview synced to that music. The background also shows behind
+note counts) above a live autoplay preview synced to that music, and a difficulty timeline like
+lazer's song progress graph: osu!'s strain over the whole map (kiai tinted, preview point and
+playhead marked, densest second called out). Click or drag on it, use the wheel over it, or
+Ctrl+←/→ to seek the music and autoplay to any part of the map. F2 picks a random song. The background also shows behind
 the lane during play, darkened by Settings → *Background dim*.
 
 ## Playfield size and speed
@@ -92,7 +99,8 @@ the lane during play, darkened by Settings → *Background dim*.
   ratio, largest first; or F5/F6 anywhere, `[` / `]` in the editor) sizes it like a window of a
   given resolution, centred: your monitor's modes plus common ones such as 1280x720, 1024x768 and
   800x600. The playfield's resolution is shown in the bottom-right corner during play (Settings →
-  *Show playfield size*). *HUD position* keeps score, accuracy, the hit error meter and
+  *Show playfield size*); click it, or choose *Playfield size* in the pause menu, to pick a preset
+  from the same list mid-game. *HUD position* keeps score, accuracy, the hit error meter and
   map info inside the playfield, or fixed at the screen's corners.
 - **Speed (rate):** 0.50×–2.00× in 0.05× steps (`[` / `]` on song select, Shift for 0.25×, or
   Settings → *Speed*). With *Rate keeps pitch* on (default) the music is time-stretched (WSOLA) so

@@ -7,6 +7,7 @@ mod calibrate;
 mod clock;
 mod config;
 mod debug;
+mod difficulty;
 mod font;
 mod game;
 mod layout;
@@ -16,6 +17,7 @@ mod net;
 mod preview;
 mod render;
 mod settings;
+mod stars;
 mod ui;
 
 use std::path::PathBuf;
@@ -91,6 +93,9 @@ struct State {
     stats: FrameStats,
     status: String,
     modifiers_shift: bool,
+    modifiers_ctrl: bool,
+    /// Dragging along the song select difficulty timeline; last seek time for throttling.
+    scrubbing: Option<Instant>,
     auto: bool,
     shots: Option<debug::ShotPlan>,
     /// Screens still to capture once each when a shot plan is active.
@@ -132,8 +137,12 @@ struct State {
     frame_clip: Option<(std::ops::Range<usize>, Area)>,
     /// Song select preview: background, preview music, autoplay preview.
     preview: preview::Preview,
+    /// Star ratings (rosu-pp), calculated in the background for the selected song.
+    stars: stars::Stars,
     /// Background brightness for this frame (0 hides it).
     bg_brightness: f32,
+    /// Where the playfield size readout was drawn (virtual units), so it can be clicked.
+    readout_rect: Option<[f32; 4]>,
     /// Snap guides to draw while dragging the playfield area.
     guides: Vec<layout::Guide>,
     /// Playfield presets (resolutions that fit the window), filled when the window opens.
@@ -580,7 +589,8 @@ impl State {
                     let e = *entry;
                     self.start_loading(e);
                 }
-                2 => self.open_settings(),
+                2 => self.open_dropdown(),
+                3 => self.open_settings(),
                 _ => self.to_select(),
             },
             _ => {}
@@ -795,7 +805,13 @@ impl State {
             return;
         }
         let n = self.preset_list().len();
+        if let Some(dd) = &mut self.settings_ui.dropdown {
+            dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
+            return;
+        }
+        let (vx, vy) = self.mouse_virtual();
         match &self.scene {
+            Scene::Select if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Select => self.select.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
@@ -812,6 +828,18 @@ impl State {
     fn mouse_moved(&mut self, x: f64, y: f64) -> CursorIcon {
         self.mouse = (x, y);
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
+        let (vx, vy) = self.mouse_virtual();
+        if let Some(dd) = &mut self.settings_ui.dropdown {
+            if let Some(i) = dd.row_at(vx, vy) {
+                dd.cursor = i;
+                return CursorIcon::Pointer;
+            }
+            return CursorIcon::Default;
+        }
+        if self.grip.is_none() && self.readout_rect.is_some_and(|r| vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3]) {
+            self.hover = None;
+            return CursorIcon::Pointer;
+        }
         if let Some((grip, (px, py), from)) = self.grip {
             let raw = layout::drag(from, grip, ((x - px) / sw) as f32, ((y - py) / sh) as f32);
             // Snap within 12 px of the screen's edges / centre lines; Shift places freely.
@@ -827,6 +855,21 @@ impl State {
         if !self.area_editable() {
             self.hover = None;
             let (vx, vy) = self.mouse_virtual();
+            if matches!(self.scene, Scene::Select) {
+                if let Some(last) = self.scrubbing {
+                    // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
+                    if last.elapsed() >= Duration::from_millis(33) {
+                        if let Some(t) = self.preview.time_at(vx, vy) {
+                            self.preview.seek(t, self.audio.as_ref());
+                        }
+                        self.scrubbing = Some(Instant::now());
+                    }
+                    return CursorIcon::Pointer;
+                }
+                if self.preview.time_at(vx, vy).is_some() {
+                    return CursorIcon::Pointer;
+                }
+            }
             if let Some(dd) = &mut self.settings_ui.dropdown {
                 if let Some(i) = dd.row_at(vx, vy) {
                     dd.cursor = i;
@@ -840,7 +883,35 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool) {
-        if pressed && self.settings_ui.dropdown.is_some() && matches!(self.scene, Scene::Settings { .. }) {
+        if matches!(self.scene, Scene::Select) {
+            let (vx, vy) = self.mouse_virtual();
+            if pressed {
+                if let Some(t) = self.preview.time_at(vx, vy) {
+                    self.preview.seek(t, self.audio.as_ref());
+                    self.scrubbing = Some(Instant::now());
+                    return;
+                }
+            } else if self.scrubbing.take().is_some() {
+                // Land exactly where the pointer was released.
+                if let Some(t) = self.preview.time_at(vx, vy) {
+                    self.preview.seek(t, self.audio.as_ref());
+                }
+                return;
+            }
+        }
+        if pressed && self.settings_ui.dropdown.is_none() {
+            let (vx, vy) = self.mouse_virtual();
+            if self.readout_rect.is_some_and(|r| vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3]) {
+                // Clicking the resolution readout opens the preset list; single-player pauses
+                // first (a multiplayer match keeps running).
+                if let Scene::Play { game, .. } | Scene::Calibrate { game, .. } = &mut self.scene {
+                    game.pause(self.audio.as_ref());
+                }
+                self.open_dropdown();
+                return;
+            }
+        }
+        if pressed && self.settings_ui.dropdown.is_some() {
             let (vx, vy) = self.mouse_virtual();
             let dd = self.settings_ui.dropdown.as_ref().unwrap();
             let hit = dd.row_at(vx, vy);
@@ -1088,6 +1159,7 @@ impl State {
             Err(mpsc::TryRecvError::Disconnected) => Vec::new(),
         };
         self.scan = None;
+        self.stars.clear();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
         // Keep whatever was typed into the search box while scanning.
@@ -1204,7 +1276,18 @@ impl State {
 
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
         // Key capture must see every key, before any shortcut can claim it.
-        if (self.settings_ui.binding.is_some() || self.settings_ui.dropdown.is_some()) && matches!(self.scene, Scene::Settings { .. }) {
+        if self.settings_ui.dropdown.is_some() && !repeat {
+            let nav = matches!(
+                code,
+                KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
+                    | KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space | KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab
+            );
+            if nav {
+                self.dropdown_key(code);
+                return;
+            }
+        }
+        if self.settings_ui.binding.is_some() && matches!(self.scene, Scene::Settings { .. }) {
             if !repeat {
                 self.settings_key(code, window);
             }
@@ -1273,6 +1356,17 @@ impl State {
             return;
         }
         match &mut self.scene {
+            Scene::Select if code == KeyCode::F2 => {
+                if self.modifiers_shift {
+                    self.select.random_back();
+                } else {
+                    self.select.random(&self.library);
+                }
+            }
+            Scene::Select if self.modifiers_ctrl && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) => {
+                let step = if code == KeyCode::ArrowRight { 5000.0 } else { -5000.0 };
+                self.preview.seek_by(step, self.audio.as_ref());
+            }
             Scene::Select if matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) => {
                 let step = if code == KeyCode::BracketRight { 0.05 } else { -0.05 } * if self.modifiers_shift { 5.0 } else { 1.0 };
                 self.cfg.rate = (((self.cfg.rate + step) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
@@ -1349,7 +1443,15 @@ impl State {
                 || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select))
                 || matches!(self.scene, Scene::MpMenu | Scene::Lobby);
             let selected = self.select.selected();
-            self.preview.update(now, &self.library, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms);
+            self.preview.update(now, &self.library, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, self.cfg.rate);
+            self.stars.poll();
+            if in_select {
+                for i in self.select.selected_set(&self.library) {
+                    self.stars.request(i, &self.library[i].path, self.cfg.rate);
+                }
+                let (stars, rate) = (&self.stars, self.cfg.rate);
+                self.select.sort_selected_set(&self.library, &|i| stars.get(i, rate));
+            }
             let has_bg = self.preview.has_background;
             self.bg_brightness = match self.scene {
                 _ if !has_bg => 0.0,
@@ -1370,6 +1472,16 @@ impl State {
                     debug::Action::Wheel(n) => self.wheel(n),
                     debug::Action::Drag { corner, dx, dy, hold } => self.simulate_drag(corner, dx, dy, hold),
                     debug::Action::Release => self.mouse_button(false),
+                    debug::Action::ClickGraph(f) => {
+                        if let Some([gx, gy, gw, gh]) = self.preview.graph_rect() {
+                            // Virtual units back to pixels, then a real press/release.
+                            let k = self.window_h as f64 / render::VIRTUAL_HEIGHT as f64;
+                            self.mouse = (((gx + gw * f) as f64) * k, ((gy + gh / 2.0) as f64) * k);
+                            self.mouse_button(true);
+                            self.mouse_button(false);
+                        }
+                    }
+                    debug::Action::SeekBy(ms) => self.preview.seek_by(ms, self.audio.as_ref()),
                 }
             }
             self.input_script = Some(script);
@@ -1400,11 +1512,13 @@ impl State {
                 } else {
                     String::new()
                 };
-                self.select.draw(canvas, &self.library, dt, &self.status);
+                let (stars, rate) = (&self.stars, self.cfg.rate);
+                self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate));
                 let x = 24.0 + Select::list_width(canvas.width) + 12.0;
                 let pw = canvas.width - x - 24.0;
+                let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
                 if pw > 160.0 {
-                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, 380.0, self.cfg.scroll_speed) {
+                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, 380.0, self.cfg.scroll_speed, selected_stars) {
                         self.frame_clip = Some(clip);
                     }
                 }
@@ -1588,10 +1702,6 @@ impl State {
                 };
                 let this = &*self;
                 this.settings_ui.draw(canvas, &|item| this.setting_value(item), footer);
-                let (groups, current, screen) = (this.preset_groups(), this.current_preset(), this.screen_size());
-                if let Some(dd) = &mut self.settings_ui.dropdown {
-                    dd.draw(canvas, &groups, current, screen);
-                }
             }
             Scene::LayoutEdit { .. } => {
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, false, game::draw_preview);
@@ -1616,7 +1726,18 @@ impl State {
             } else {
                 " (custom)"
             };
-            canvas.text_right(canvas.width - 8.0, 468.0, 7.0, rgba(0x8a8aa0, 0.85), &format!("{pw}x{ph}{kind}"));
+            let text = format!("{pw}x{ph}{kind}");
+            let tw = Canvas::text_width(7.0, &text);
+            canvas.text_right(canvas.width - 8.0, 468.0, 7.0, rgba(0x8a8aa0, 0.85), &text);
+            self.readout_rect = Some([canvas.width - 8.0 - tw - 4.0, 464.0, tw + 8.0, 15.0]);
+        } else {
+            self.readout_rect = None;
+        }
+        if self.settings_ui.dropdown.is_some() {
+            let (groups, current, screen) = (self.preset_groups(), self.current_preset(), self.screen_size());
+            if let Some(dd) = &mut self.settings_ui.dropdown {
+                dd.draw(canvas, &groups, current, screen);
+            }
         }
         if finish_calibration {
             self.finish_calibration();
@@ -1870,7 +1991,11 @@ impl ApplicationHandler for App {
                 let PhysicalKey::Code(code) = event.physical_key else { return };
                 lock(&self.state).key(code, event.repeat, event.text.as_deref(), at, self.window.as_deref());
             }
-            WindowEvent::ModifiersChanged(m) => lock(&self.state).modifiers_shift = m.state().shift_key(),
+            WindowEvent::ModifiersChanged(m) => {
+                let mut s = lock(&self.state);
+                s.modifiers_shift = m.state().shift_key();
+                s.modifiers_ctrl = m.state().control_key();
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let mut s = lock(&self.state);
                 s.wheel_acc += match delta {
@@ -1998,6 +2123,8 @@ fn main() {
         },
         status: String::new(),
         modifiers_shift: false,
+        modifiers_ctrl: false,
+        scrubbing: None,
         auto,
         shots: debug::ShotPlan::from_env(),
         pending_screen_shots: vec!["select", "results"],
@@ -2028,7 +2155,9 @@ fn main() {
         window_h: 720.0,
         frame_clip: None,
         guides: Vec::new(),
+        readout_rect: None,
         preview: preview::Preview::default(),
+        stars: stars::Stars::default(),
         bg_brightness: 0.0,
         resolutions: Vec::new(),
         monitor_modes: Vec::new(),
@@ -2060,6 +2189,8 @@ fn info(path: &std::path::Path) {
     );
     let (lo, hi) = map.notes.iter().fold((f64::MAX, 0.0f64), |(lo, hi), n| (lo.min(n.velocity), hi.max(n.velocity)));
     println!("  first {:.0} ms  last {:.0} ms  velocity {lo:.3}..{hi:.3} px/ms", map.notes[0].time, map.notes.last().unwrap().end_time);
+    let (sr, sr_dt) = (stars::star_rating(path, 1.0), stars::star_rating(path, 1.5));
+    println!("  stars {:.2} (1.5x: {:.2})", sr.unwrap_or(f64::NAN), sr_dt.unwrap_or(f64::NAN));
     let audio_path = path.parent().unwrap_or(path).join(&m.audio_file);
     let t = Instant::now();
     match audio::decode(&audio_path, 48000) {
