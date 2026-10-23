@@ -25,8 +25,8 @@ curl -fsSL https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-cli
 It downloads the latest x86_64 build from the [releases](https://github.com/Lynerrr/taiko-rs/releases/tag/latest)
 to `~/.local/bin/taiko-rs`, adds it to the app menu (with an icon) and launches it. Run it again to
 update; `sh -s -- --no-launch` installs without starting it and `sh -s -- --uninstall` removes it
-(settings and maps are kept). The build runs on glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora,
-Arch...) and uses the system's PipeWire and ALSA libraries; the installer names the package to
+(settings and maps are kept). The build needs glibc 2.39+ (Ubuntu 24.04+, Debian 13+, Fedora
+40+, Arch...; older systems can build from source) and uses the system's PipeWire and ALSA libraries; the installer names the package to
 install if one is missing. Maps come from your osu! Songs folder (osu-winello / Wine installs are
 found on their own); without osu!, drop `.osz` files into `~/.local/share/taiko-rs/Songs`.
 

@@ -44,9 +44,10 @@ jobs:
           path: taiko-rs-windows-x64.zip
 
   linux:
-    # The oldest supported runner: the binary needs this glibc (2.35) or newer, so it runs on
-    # Ubuntu 22.04+, Debian 12+, Fedora, Arch and the like.
-    runs-on: ubuntu-22.04
+    # The oldest runner whose PipeWire headers the pipewire crate builds against (22.04's 0.3.48
+    # is too old). The binary needs its glibc (2.39) or newer: Ubuntu 24.04+, Debian 13+,
+    # Fedora 40+, Arch and the like.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -76,7 +77,7 @@ jobs:
   # install.sh against the archive just built, before anything is published.
   linux-install-check:
     needs: linux
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -84,7 +85,7 @@ jobs:
           name: linux
       - name: Install from the build
         run: |
-          sudo apt-get update && sudo apt-get install -y libpipewire-0.3-0 libasound2
+          sudo apt-get update && sudo apt-get install -y libpipewire-0.3-0t64 libasound2t64
           TAIKO_RS_URL="file://$PWD/taiko-rs-linux-x64.tar.gz" sh install.sh --no-launch
           test -x ~/.local/bin/taiko-rs
           test -f ~/.local/share/applications/taiko-rs.desktop
@@ -137,10 +138,10 @@ jobs:
 
   install-test-linux:
     needs: publish
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Install with the published command
         run: |
-          sudo apt-get update && sudo apt-get install -y libpipewire-0.3-0 libasound2
+          sudo apt-get update && sudo apt-get install -y libpipewire-0.3-0t64 libasound2t64
           curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh | sh -s -- --no-launch
           ~/.local/bin/taiko-rs --help
