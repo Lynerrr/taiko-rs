@@ -140,6 +140,107 @@ pub fn drag(from: Area, grip: Grip, dx: f32, dy: f32) -> Area {
     a.clamped()
 }
 
+/// A snap guide line: vertical (`x` = position) or horizontal, in screen fractions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Guide {
+    Vertical(f32),
+    Horizontal(f32),
+}
+
+/// Snaps the area's edges and centre to the screen's edges and centre lines when within
+/// `tol_x`/`tol_y` (fractions), like guides in an image editor. Only edges the grip moves snap,
+/// so a resize never shifts the opposite edge.
+pub fn snap(a: Area, grip: Grip, tol_x: f32, tol_y: f32) -> (Area, Vec<Guide>) {
+    let mut a = a;
+    let mut guides = Vec::new();
+    // Best (smallest) correction among candidate (feature position, target line) pairs.
+    fn best(pairs: &[(f32, f32)], tol: f32) -> Option<(f32, f32)> {
+        pairs
+            .iter()
+            .map(|&(pos, line)| (line - pos, line))
+            .filter(|(d, _)| d.abs() <= tol)
+            .min_by(|x, y| x.0.abs().total_cmp(&y.0.abs()))
+    }
+    match grip {
+        Grip::Move => {
+            let xs = [(a.x, 0.0), (a.x, 0.5), (a.x + a.w, 0.5), (a.x + a.w, 1.0), (a.x + a.w / 2.0, 0.5)];
+            if let Some((d, line)) = best(&xs, tol_x) {
+                a.x += d;
+                guides.push(Guide::Vertical(line));
+            }
+            let ys = [(a.y, 0.0), (a.y, 0.5), (a.y + a.h, 0.5), (a.y + a.h, 1.0), (a.y + a.h / 2.0, 0.5)];
+            if let Some((d, line)) = best(&ys, tol_y) {
+                a.y += d;
+                guides.push(Guide::Horizontal(line));
+            }
+        }
+        Grip::Resize { left, right, top, bottom } => {
+            let (r, b) = (a.x + a.w, a.y + a.h);
+            if left {
+                if let Some((d, line)) = best(&[(a.x, 0.0), (a.x, 0.5)], tol_x) {
+                    a.x += d;
+                    a.w = r - a.x;
+                    guides.push(Guide::Vertical(line));
+                }
+            }
+            if right {
+                if let Some((d, line)) = best(&[(r, 0.5), (r, 1.0)], tol_x) {
+                    a.w += d;
+                    guides.push(Guide::Vertical(line));
+                }
+            }
+            if top {
+                if let Some((d, line)) = best(&[(a.y, 0.0), (a.y, 0.5)], tol_y) {
+                    a.y += d;
+                    a.h = b - a.y;
+                    guides.push(Guide::Horizontal(line));
+                }
+            }
+            if bottom {
+                if let Some((d, line)) = best(&[(b, 0.5), (b, 1.0)], tol_y) {
+                    a.h += d;
+                    guides.push(Guide::Horizontal(line));
+                }
+            }
+        }
+    }
+    (a.clamped(), guides)
+}
+
+pub fn draw_guides(c: &mut Canvas, guides: &[Guide]) {
+    for g in guides {
+        match *g {
+            Guide::Vertical(x) => c.rect(x * c.width - 0.6, 0.0, 1.2, VIRTUAL_HEIGHT, rgba(0x4fc3f7, 0.85)),
+            Guide::Horizontal(y) => c.rect(0.0, y * VIRTUAL_HEIGHT - 0.6, c.width, 1.2, rgba(0x4fc3f7, 0.85)),
+        }
+    }
+}
+
+/// Resolutions offered as playfield presets: the monitor's own modes plus common ones, keeping
+/// those that fit in a `screen_w` x `screen_h` window, smallest first.
+pub fn presets(monitor_modes: &[(u32, u32)], screen_w: u32, screen_h: u32) -> Vec<(u32, u32)> {
+    const COMMON: [(u32, u32); 18] = [
+        (640, 480), (800, 600), (1024, 576), (1024, 768), (1152, 864), (1280, 720), (1280, 800), (1280, 960),
+        (1280, 1024), (1366, 768), (1440, 900), (1600, 900), (1600, 1200), (1680, 1050), (1920, 1080),
+        (1920, 1200), (2560, 1080), (2560, 1440),
+    ];
+    let mut out: Vec<(u32, u32)> = monitor_modes
+        .iter()
+        .chain(COMMON.iter())
+        .copied()
+        .filter(|&(w, h)| w >= 320 && h >= 240 && w <= screen_w && h <= screen_h && !(w == screen_w && h == screen_h))
+        .collect();
+    out.sort_by_key(|&(w, h)| (w * h, w));
+    out.dedup();
+    out
+}
+
+/// A centred area the size of a `w` x `h` window on a `screen_w` x `screen_h` screen.
+pub fn preset_area(w: u32, h: u32, screen_w: f32, screen_h: f32) -> Area {
+    let (fw, fh) = (w as f32 / screen_w.max(1.0), h as f32 / screen_h.max(1.0));
+    Area { x: (1.0 - fw) / 2.0, y: (1.0 - fh) / 2.0, w: fw, h: fh }.clamped()
+}
+
 /// Starts drawing into `area`: darkens the rest of the screen and switches the canvas to the
 /// area's own coordinate space (480 units tall, width from its aspect). Returns the first shape
 /// index and the full-screen width for `end`.
@@ -204,6 +305,32 @@ mod tests {
         let d = drag(a, Grip::Move, -1.0, 0.0);
         assert_eq!(d.x, 0.0);
         assert_eq!(d.w, 0.5);
+    }
+
+    #[test]
+    fn snaps_to_centre_and_edges() {
+        // Area centre 0.003 left of the screen centre: moving snaps it onto 0.5.
+        let a = Area { x: 0.247, y: 0.1, w: 0.5, h: 0.5 };
+        let (s, g) = snap(a, Grip::Move, 0.01, 0.01);
+        assert!((s.x + s.w / 2.0 - 0.5).abs() < 1e-6);
+        assert!(g.contains(&Guide::Vertical(0.5)));
+        // Far from any line: untouched.
+        let b = Area { x: 0.1, y: 0.2, w: 0.3, h: 0.3 };
+        assert_eq!(snap(b, Grip::Move, 0.01, 0.01).0, b);
+        // Resizing the right edge near the screen edge snaps it to 1.0, left edge unchanged.
+        let c = Area { x: 0.3, y: 0.3, w: 0.695, h: 0.4 };
+        let (s, _) = snap(c, Grip::Resize { left: false, right: true, top: false, bottom: false }, 0.01, 0.01);
+        assert!((s.x - 0.3).abs() < 1e-6 && (s.x + s.w - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn presets_fit_the_screen_and_centre() {
+        let p = presets(&[(1920, 1080), (1280, 720)], 1920, 1080);
+        assert!(p.contains(&(1280, 720)) && p.contains(&(800, 600)));
+        assert!(!p.contains(&(1920, 1080)) && !p.contains(&(2560, 1440)));
+        assert!(p.windows(2).all(|w| w[0].0 * w[0].1 <= w[1].0 * w[1].1));
+        let a = preset_area(1280, 720, 1920.0, 1080.0);
+        assert!((a.w - 2.0 / 3.0).abs() < 1e-6 && (a.x - 1.0 / 6.0).abs() < 1e-6);
     }
 
     #[test]

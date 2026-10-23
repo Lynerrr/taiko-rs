@@ -7,7 +7,9 @@ use crate::render::{rgba, Canvas};
 pub enum Item {
     ScrollSpeed,
     PlayfieldArea,
+    PlayfieldPreset,
     PlayfieldReset,
+    HudPosition,
     Rate,
     RateKeepPitch,
     Offset,
@@ -27,10 +29,12 @@ pub enum Item {
     Fullscreen,
 }
 
-pub const ITEMS: [(&str, Item); 23] = [
+pub const ITEMS: [(&str, Item); 25] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::PlayfieldArea),
+    ("GAMEPLAY", Item::PlayfieldPreset),
     ("GAMEPLAY", Item::PlayfieldReset),
+    ("GAMEPLAY", Item::HudPosition),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::Offset),
@@ -61,6 +65,8 @@ impl Item {
             Item::ScrollSpeed => "Scroll speed",
             Item::PlayfieldArea => "Playfield area",
             Item::PlayfieldReset => "Reset playfield area",
+            Item::PlayfieldPreset => "Playfield preset",
+            Item::HudPosition => "HUD position",
             Item::Rate => "Speed (rate)",
             Item::RateKeepPitch => "Rate keeps pitch",
             Item::Offset => "Audio offset",
@@ -86,6 +92,8 @@ impl Item {
             Item::ScrollSpeed => "How fast notes travel. Shortcut: F3 / F4.",
             Item::PlayfieldArea => "Enter: edit where gameplay is drawn. In game: drag to move, drag edges to resize, wheel to scale.",
             Item::PlayfieldReset => "Enter: make gameplay fill the whole screen again.",
+            Item::PlayfieldPreset => "Left/Right: size the playfield like a window of that resolution, centred.",
+            Item::HudPosition => "With playfield: score etc. move with it. Screen: they stay at fixed screen positions.",
             Item::Rate => "Song speed like DT (1.50x) / HT (0.75x). Song select: [ and ] (Shift = 0.25x steps).",
             Item::RateKeepPitch => "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore).",
             Item::Offset => "Raise it if you hit late on average (results screen tells you). Shift = 5 ms steps.",

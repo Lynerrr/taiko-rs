@@ -553,9 +553,9 @@ impl Game {
         None
     }
 
-    /// Draws the whole gameplay view into `c` as if it were the window (the caller maps it into
-    /// the playfield area).
-    pub fn draw(&mut self, c: &mut Canvas, scroll_speed: f64) {
+    /// Lane, barlines, notes, drum, combo and judgements, laid out as if `c` were the window (the
+    /// caller maps it into the playfield area).
+    pub fn draw_playfield(&mut self, c: &mut Canvas, scroll_speed: f64) {
         let t = self.time;
         let w = c.width;
         let speed = SPEED_SCALE * scroll_speed;
@@ -708,6 +708,15 @@ impl Game {
                 c.text_centered(HIT_X, lane_top - 30.0 - age * 0.02, 15.0, rgba(j.color(), a), j.label());
             }
         }
+
+    }
+
+    /// Score, accuracy, progress, hit error meter, offset advice, map info, skip hint and the pause
+    /// menu. Drawn with the playfield, or at fixed screen positions (HUD position setting).
+    pub fn draw_hud(&self, c: &mut Canvas) {
+        let t = self.time;
+        let w = c.width;
+        let lane_top = LANE_Y - LANE_H / 2.0;
 
         // Score / accuracy.
         c.text_right(w - 18.0, 18.0, 24.0, rgba(WHITE, 1.0), &format!("{:08}", self.stats.score));

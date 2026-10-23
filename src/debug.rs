@@ -171,8 +171,10 @@ pub struct InputScript {
 pub enum Action {
     Key(winit::keyboard::KeyCode),
     Wheel(i32),
-    /// Press at the area's centre (or its bottom-right corner), drag by (dx, dy) px, release.
-    Drag { corner: bool, dx: f64, dy: f64 },
+    /// Press at the area's centre (or its bottom-right corner), drag by (dx, dy) px, and release
+    /// unless `hold` (then `Release` ends it), so screenshots can catch an in-progress drag.
+    Drag { corner: bool, dx: f64, dy: f64, hold: bool },
+    Release,
 }
 
 impl InputScript {
@@ -185,9 +187,16 @@ impl InputScript {
                 let action = match k.trim() {
                     "WheelUp" => Action::Wheel(1),
                     "WheelDown" => Action::Wheel(-1),
-                    "MoveDown" => Action::Drag { corner: false, dx: 0.0, dy: 60.0 },
-                    "MoveRight" => Action::Drag { corner: false, dx: 60.0, dy: 0.0 },
-                    "ShrinkCorner" => Action::Drag { corner: true, dx: -300.0, dy: -200.0 },
+                    "MoveDown" => Action::Drag { corner: false, dx: 0.0, dy: 60.0, hold: false },
+                    "MoveRight" => Action::Drag { corner: false, dx: 60.0, dy: 0.0, hold: false },
+                    "ShrinkCorner" => Action::Drag { corner: true, dx: -300.0, dy: -200.0, hold: false },
+                    "Release" => Action::Release,
+                    // Move:dx:dy and Hold:dx:dy (drag without releasing).
+                    k if k.starts_with("Move:") || k.starts_with("Hold:") => {
+                        let mut p = k.split(':').skip(1).filter_map(|v| v.parse::<f64>().ok());
+                        let (dx, dy) = (p.next()?, p.next()?);
+                        Action::Drag { corner: false, dx, dy, hold: k.starts_with("Hold:") }
+                    }
                     k => Action::Key(parse_keycode(k)?),
                 };
                 Some((t.trim().parse().ok()?, action))

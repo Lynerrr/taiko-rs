@@ -29,6 +29,8 @@ pub struct Config {
     pub calibration_bpm: f64,
     /// Where gameplay is drawn on screen (fractions; full screen by default).
     pub playfield_area: Area,
+    /// HUD (score, accuracy, hit error meter...) inside the playfield area, or fixed on screen.
+    pub hud_in_playfield: bool,
     /// Speed modifier (1.5 = DT, 0.75 = HT) and whether it keeps the music's pitch.
     pub rate: f64,
     pub rate_keep_pitch: bool,
@@ -59,6 +61,7 @@ impl Default for Config {
             frame_delay_ms: 0.0,
             calibration_bpm: 120.0,
             playfield_area: Area::FULL,
+            hud_in_playfield: true,
             rate: 1.0,
             rate_keep_pitch: true,
             show_offset_hint: true,
@@ -144,6 +147,7 @@ impl Config {
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
                 "playfield_area" => cfg.playfield_area = Area::parse(v).unwrap_or(Area::FULL),
+                "hud_in_playfield" => cfg.hud_in_playfield = v != "false",
                 "rate" => cfg.rate = v.parse::<f64>().unwrap_or(1.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
                 "rate_keep_pitch" => cfg.rate_keep_pitch = v != "false",
                 "calibration_bpm" => cfg.calibration_bpm = v.parse::<f64>().unwrap_or(120.0).clamp(60.0, 240.0),
@@ -191,6 +195,7 @@ impl Config {
              calibration_bpm = {}\n\
              # playfield area: x, y, width, height as fractions of the screen\n\
              playfield_area = {}\n\
+             hud_in_playfield = {}\n\
              # speed modifier (1.5 = DT) and whether it keeps the music's pitch\n\
              rate = {:.2}\n\
              rate_keep_pitch = {}\n\
@@ -209,6 +214,7 @@ impl Config {
             self.frame_delay_ms,
             self.calibration_bpm,
             self.playfield_area.to_config(),
+            self.hud_in_playfield,
             self.rate,
             self.rate_keep_pitch,
             self.audio_buffer,

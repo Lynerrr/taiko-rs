@@ -130,6 +130,11 @@ struct State {
     window_h: f32,
     /// Shapes of this frame to clip to the playfield area.
     frame_clip: Option<(std::ops::Range<usize>, Area)>,
+    /// Snap guides to draw while dragging the playfield area.
+    guides: Vec<layout::Guide>,
+    /// Playfield presets (resolutions that fit the window), filled when the window opens.
+    resolutions: Vec<(u32, u32)>,
+    monitor_modes: Vec<(u32, u32)>,
 }
 
 /// Draws gameplay (via `f`) into the playfield area, records the shapes to clip, and shows the
@@ -271,6 +276,8 @@ impl State {
             Item::LiveOffset => on(c.show_offset_hint),
             Item::LiveOffsetUr => on(c.offset_hint_ur_scaled),
             Item::PlayfieldArea => c.playfield_area.describe(),
+            Item::PlayfieldPreset => self.current_preset().map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| "custom".into()),
+            Item::HudPosition => if c.hud_in_playfield { "with playfield".into() } else { "screen".into() },
             Item::PlayfieldReset => "Enter to reset".into(),
             Item::Rate => format!("{:.2}x", c.rate),
             Item::RateKeepPitch => on(c.rate_keep_pitch),
@@ -328,6 +335,11 @@ impl State {
             Item::LiveOffsetUr => self.cfg.offset_hint_ur_scaled = !self.cfg.offset_hint_ur_scaled,
             // Both act on Enter in `settings_key`.
             Item::PlayfieldArea | Item::PlayfieldReset => return,
+            Item::PlayfieldPreset => {
+                self.cycle_preset(dir);
+                return;
+            }
+            Item::HudPosition => self.cfg.hud_in_playfield = !self.cfg.hud_in_playfield,
             Item::Rate => {
                 let step = 0.05 * if self.modifiers_shift { 5.0 } else { 1.0 };
                 self.cfg.rate = (((self.cfg.rate + step * d) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
@@ -611,6 +623,10 @@ impl State {
             KeyCode::ArrowUp => moved(0.0, -step),
             KeyCode::ArrowDown => moved(0.0, step),
             KeyCode::KeyR => Area::FULL,
+            KeyCode::BracketLeft | KeyCode::BracketRight => {
+                self.cycle_preset(if code == KeyCode::BracketRight { 1 } else { -1 });
+                return;
+            }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                 self.cfg.save();
                 if let Scene::LayoutEdit { back } = std::mem::replace(&mut self.scene, Scene::Select) {
@@ -622,6 +638,37 @@ impl State {
         };
         self.cfg.playfield_area = next;
         self.cfg.save();
+    }
+
+    fn refresh_presets(&mut self) {
+        self.resolutions = layout::presets(&self.monitor_modes, self.window_w as u32, self.window_h as u32);
+    }
+
+    /// The preset the current area matches (within a pixel), if any.
+    fn current_preset(&self) -> Option<(u32, u32)> {
+        let a = self.cfg.playfield_area;
+        self.resolutions.iter().copied().find(|&(w, h)| {
+            let p = layout::preset_area(w, h, self.window_w, self.window_h);
+            (p.w - a.w).abs() * self.window_w < 1.5 && (p.h - a.h).abs() * self.window_h < 1.5
+        })
+    }
+
+    /// Steps through resolution presets, applying each as a centred area.
+    fn cycle_preset(&mut self, dir: i32) {
+        if self.resolutions.is_empty() {
+            self.toast("no smaller resolutions fit this window".into());
+            return;
+        }
+        let n = self.resolutions.len() as i32;
+        let i = match self.current_preset().and_then(|p| self.resolutions.iter().position(|&r| r == p)) {
+            Some(i) => (i as i32 + dir).rem_euclid(n),
+            // From a custom area, start at the largest (right) or smallest (left).
+            None => if dir > 0 { 0 } else { n - 1 },
+        } as usize;
+        let (w, h) = self.resolutions[i];
+        self.cfg.playfield_area = layout::preset_area(w, h, self.window_w, self.window_h);
+        self.cfg.save();
+        self.toast(format!("playfield {w}x{h}"));
     }
 
     /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
@@ -649,7 +696,15 @@ impl State {
         self.mouse = (x, y);
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
         if let Some((grip, (px, py), from)) = self.grip {
-            self.cfg.playfield_area = layout::drag(from, grip, ((x - px) / sw) as f32, ((y - py) / sh) as f32);
+            let raw = layout::drag(from, grip, ((x - px) / sw) as f32, ((y - py) / sh) as f32);
+            // Snap within 12 px of the screen's edges / centre lines; Shift places freely.
+            let (area, guides) = if self.modifiers_shift {
+                (raw, Vec::new())
+            } else {
+                layout::snap(raw, grip, (12.0 / sw) as f32, (12.0 / sh) as f32)
+            };
+            self.cfg.playfield_area = area;
+            self.guides = guides;
             return grip.cursor();
         }
         if !self.area_editable() {
@@ -669,12 +724,13 @@ impl State {
                 }
             }
         } else if self.grip.take().is_some() {
+            self.guides.clear();
             self.cfg.save();
         }
     }
 
     /// Scripted drag for headless tests: press at the area centre (or bottom-right corner).
-    fn simulate_drag(&mut self, corner: bool, dx: f64, dy: f64) {
+    fn simulate_drag(&mut self, corner: bool, dx: f64, dy: f64, hold: bool) {
         let a = self.cfg.playfield_area;
         let (sw, sh) = (self.window_w as f64, self.window_h as f64);
         let (fx, fy) = if corner { (a.x + a.w, a.y + a.h) } else { (a.x + a.w / 2.0, a.y + a.h / 2.0) };
@@ -682,7 +738,9 @@ impl State {
         self.mouse_moved(start.0, start.1);
         self.mouse_button(true);
         self.mouse_moved(start.0 + dx, start.1 + dy);
-        self.mouse_button(false);
+        if !hold {
+            self.mouse_button(false);
+        }
     }
 
     fn open_multiplayer(&mut self) {
@@ -1078,7 +1136,7 @@ impl State {
             return;
         }
         match &mut self.scene {
-            Scene::Select if matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) && self.select.filter.is_empty() => {
+            Scene::Select if matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) => {
                 let step = if code == KeyCode::BracketRight { 0.05 } else { -0.05 } * if self.modifiers_shift { 5.0 } else { 1.0 };
                 self.cfg.rate = (((self.cfg.rate + step) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
                 self.cfg.save();
@@ -1158,7 +1216,8 @@ impl State {
                 match action {
                     debug::Action::Key(code) => self.key(code, false, None, now, None),
                     debug::Action::Wheel(n) => self.wheel(n),
-                    debug::Action::Drag { corner, dx, dy } => self.simulate_drag(corner, dx, dy),
+                    debug::Action::Drag { corner, dx, dy, hold } => self.simulate_drag(corner, dx, dy, hold),
+                    debug::Action::Release => self.mouse_button(false),
                 }
             }
             self.input_script = Some(script);
@@ -1229,7 +1288,16 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| game.draw(c, self.cfg.scroll_speed));
+                let hud_in = self.cfg.hud_in_playfield;
+                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| {
+                    game.draw_playfield(c, self.cfg.scroll_speed);
+                    if hud_in {
+                        game.draw_hud(c);
+                    }
+                });
+                if !hud_in {
+                    game.draw_hud(canvas);
+                }
                 if let Some(plan) = &mut self.shots {
                     if plan.times.last().is_some_and(|&t| game.time >= t) {
                         let t = plan.times.pop().unwrap();
@@ -1296,12 +1364,22 @@ impl State {
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
-                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| {
-                    game.draw(c, self.cfg.scroll_speed);
+                let hud_in = self.cfg.hud_in_playfield;
+                let hud = |c: &mut Canvas, game: &Game| {
+                    game.draw_hud(c);
                     if let Some(s) = mp {
                         multiplayer::draw_scoreboard(c, s, &live);
                     }
+                };
+                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| {
+                    game.draw_playfield(c, self.cfg.scroll_speed);
+                    if hud_in {
+                        hud(c, game);
+                    }
                 });
+                if !hud_in {
+                    hud(canvas, game);
+                }
                 if let Some(s) = &mut self.mp {
                     if s.last_live.elapsed() >= Duration::from_millis(100) {
                         s.last_live = now;
@@ -1325,10 +1403,18 @@ impl State {
                     game.autoplay(self.audio.as_ref());
                 }
                 let offset = self.cfg.offset_ms;
+                let hud_in = self.cfg.hud_in_playfield;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| {
-                    game.draw(c, self.cfg.scroll_speed);
-                    calibrate::draw_overlay(c, game, offset, game.hide_notes);
+                    game.draw_playfield(c, self.cfg.scroll_speed);
+                    if hud_in {
+                        game.draw_hud(c);
+                        calibrate::draw_overlay(c, game, offset, game.hide_notes);
+                    }
                 });
+                if !hud_in {
+                    game.draw_hud(canvas);
+                    calibrate::draw_overlay(canvas, game, offset, game.hide_notes);
+                }
             }
             Scene::CalibrateDone { estimate, .. } => {
                 calibrate::draw_result(canvas, estimate, self.cfg.offset_ms, self.cfg.calibration_bpm);
@@ -1351,8 +1437,11 @@ impl State {
                 let w = canvas.width;
                 canvas.round_rect(w / 2.0 - 330.0, 440.0, 660.0, 34.0, 8.0, rgba(0x000000, 0.75), rgba(0xEB452C, 0.6), 1.0);
                 canvas.text_centered(w / 2.0, 446.0, 8.0, rgba(0xffffff, 1.0), &format!("Playfield area: {}", area.describe()));
-                canvas.text_centered(w / 2.0, 460.0, 7.0, rgba(0x9a9ab0, 1.0), "Drag to move, edges/corners to resize, wheel to scale.  Arrows move, Shift+arrows resize, R full screen, Enter/Esc done");
+                canvas.text_centered(w / 2.0, 460.0, 7.0, rgba(0x9a9ab0, 1.0), "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done");
             }
+        }
+        if self.grip.is_some() {
+            layout::draw_guides(canvas, &self.guides);
         }
         if finish_calibration {
             self.finish_calibration();
@@ -1554,6 +1643,11 @@ impl ApplicationHandler for App {
             s.adapter = renderer.adapter_name.clone();
             s.window_w = window.inner_size().width as f32;
             s.window_h = window.inner_size().height as f32;
+            s.monitor_modes = window
+                .current_monitor()
+                .map(|m| m.video_modes().map(|v| (v.size().width, v.size().height)).collect())
+                .unwrap_or_default();
+            s.refresh_presets();
             s.refresh_hz = refresh_hz;
             s.refresh_status();
             eprintln!("renderer: {}, present: {}, refresh {refresh_hz:.2} Hz", renderer.adapter_name, renderer.present.name());
@@ -1587,6 +1681,7 @@ impl ApplicationHandler for App {
                 s.want_size = Some((size.width, size.height));
                 s.window_w = size.width as f32;
                 s.window_h = size.height as f32;
+                s.refresh_presets();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 // Timestamp before anything else, including taking the lock.
@@ -1755,6 +1850,9 @@ fn main() {
         window_w: 1280.0,
         window_h: 720.0,
         frame_clip: None,
+        guides: Vec::new(),
+        resolutions: Vec::new(),
+        monitor_modes: Vec::new(),
     };
     let event_loop = EventLoop::new().expect("event loop");
     let mut app = App { state: Arc::new(Mutex::new(state)), cursor: CursorIcon::Default, window: None, render_thread: None, proxy: event_loop.create_proxy() };
