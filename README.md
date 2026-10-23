@@ -229,8 +229,12 @@ Songs folder) or from taiko-rs's own, `~/.local/share/taiko-rs/Skins` / `%APPDAT
 Its notes replace the drawn ones: `taikohitcircle` / `taikobigcircle` tinted red or blue with
 `taikohitcircleoverlay` / `taikobigcircleoverlay` on top (`@2x` preferred), packed into one
 texture so a frame is still a single draw call. Its taiko hitsounds replace the built-in ones: `taiko-normal-hitnormal` (don), `taiko-normal-hitclap` or
-`-hitwhistle` (kat) and `taiko-normal-hitfinish`, played on top for big notes. Anything the skin
-doesn't have stays built-in; an empty file mutes that sound, like in osu!.
+`-hitwhistle` (kat) and `taiko-normal-hitfinish`, played on top for big notes, and `combobreak`,
+played when a miss breaks a combo of 20 or more. Anything the skin doesn't have stays built-in (the
+built-in sounds come from the quassbot v2 skin); an empty file mutes that sound, like in osu!.
+
+Hitsounds play at the volume of the map's timing point (red or green line) at the moment of the
+hit, like in osu!, times the hitsound volume setting.
 
 ## Downloading maps
 
@@ -326,7 +330,7 @@ spins so frames stay evenly spaced.
 | File | |
 | --- | --- |
 | `src/beatmap.rs` | `.osu` parser, timing/SV control points, taiko conversion, barlines |
-| `src/audio.rs` | decode (symphonia) + resample, cpal/PipeWire output, mixer, hitsound synth |
+| `src/audio.rs` | decode (symphonia) + resample, cpal/PipeWire output, mixer, built-in hitsounds |
 | `src/clock.rs` | audio-slaved smooth game clock |
 | `src/game.rs` | judging, scoring, playfield drawing |
 | `src/render.rs` | wgpu SDF shape renderer, skin images, text, present mode handling |

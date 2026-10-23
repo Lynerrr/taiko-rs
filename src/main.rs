@@ -616,9 +616,8 @@ impl State {
         let mut sim = video::replay_game(map, track, &ed.replay);
         sim.sfx_log = Some(Vec::new());
         sim.set_time(ed.end);
-        let sfx: Vec<(f64, audio::Sfx)> = if ed.hitsounds { sim.sfx_log.take().unwrap_or_default() } else { Vec::new() };
-        let h = skin::load(&self.cfg.skin, Some(sr)).hitsounds;
-        let sounds = audio::hitsound_set(sr, h.don, h.kat, h.finish);
+        let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.hitsounds { sim.sfx_log.take().unwrap_or_default() } else { Vec::new() };
+        let sounds = audio::hitsound_set(sr, skin::load(&self.cfg.skin, Some(sr)).hitsounds);
         let (music, fx) = self.cfg.volumes();
         let samples = video::mix_audio(track, sr, ed.replay.rate, ed.start, ed.end, music.max(0.05), &sfx, &sounds, fx);
         let Some(dir) = video::videos_dir() else { return };
@@ -1076,8 +1075,7 @@ impl State {
         let skin = skin::load(&self.cfg.skin, self.audio.as_ref().map(|a| a.rate));
         self.sprites_upload = Some(skin.notes);
         if let Some(a) = &self.audio {
-            let h = skin.hitsounds;
-            a.set_hitsounds(h.don, h.kat, h.finish);
+            a.set_hitsounds(skin.hitsounds);
         }
     }
 

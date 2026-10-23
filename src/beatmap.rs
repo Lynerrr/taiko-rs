@@ -43,6 +43,8 @@ struct RawTimingPoint {
     meter: u32,
     uninherited: bool,
     effects: u32,
+    /// Hitsound volume, 0..1.
+    volume: f32,
 }
 
 /// Effective control state from one timing point onward.
@@ -52,6 +54,8 @@ pub struct ControlPoint {
     pub beat_length: f64,
     pub sv: f64,
     pub kiai: bool,
+    /// Hitsound volume from this point on, 0..1.
+    pub volume: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -237,11 +241,12 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
                 let meter = num::<u32>(f.next()).filter(|&m| m > 0).unwrap_or(4);
                 let _sample_set = f.next();
                 let _sample_index = f.next();
-                let _volume = f.next();
+                // Very old maps have no volume (full); osu!'s editor goes no lower than 5%.
+                let volume = num::<f32>(f.next()).map(|v| (v / 100.0).clamp(0.05, 1.0)).unwrap_or(1.0);
                 // Old formats have no uninherited field: a negative beat length marks an SV point.
                 let uninherited = num::<i32>(f.next()).map(|v| v != 0).unwrap_or(beat_length >= 0.0);
                 let effects = num::<u32>(f.next()).unwrap_or(0);
-                body.timing.push(RawTimingPoint { time, beat_length, meter, uninherited, effects });
+                body.timing.push(RawTimingPoint { time, beat_length, meter, uninherited, effects, volume });
             }
             "HitObjects" => body.objects.push(trimmed),
             _ => {}
@@ -271,14 +276,14 @@ fn build_control_points(raw: &mut [RawTimingPoint]) -> Vec<ControlPoint> {
         } else {
             sv = 1.0;
         }
-        let cp = ControlPoint { time: p.time, beat_length, sv, kiai: p.effects & 1 != 0 };
+        let cp = ControlPoint { time: p.time, beat_length, sv, kiai: p.effects & 1 != 0, volume: p.volume };
         match out.last_mut() {
             Some(last) if last.time == p.time => *last = cp,
             _ => out.push(cp),
         }
     }
     if out.is_empty() {
-        out.push(ControlPoint { time: 0.0, beat_length: 500.0, sv: 1.0, kiai: false });
+        out.push(ControlPoint { time: 0.0, beat_length: 500.0, sv: 1.0, kiai: false, volume: 1.0 });
     }
     out
 }
@@ -406,7 +411,7 @@ pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
     let velocity = meta.slider_multiplier * TAIKO_VELOCITY_MULTIPLIER * 100.0 / beat_ms;
     let notes = (first_beat..beats).map(|b| hit(b as f64 * beat_ms, 0, velocity)).collect();
     let barlines = (0..beats).step_by(4).map(|b| Barline { time: b as f64 * beat_ms, velocity }).collect();
-    let control_points = vec![ControlPoint { time: 0.0, beat_length: beat_ms, sv: 1.0, kiai: false }];
+    let control_points = vec![ControlPoint { time: 0.0, beat_length: beat_ms, sv: 1.0, kiai: false, volume: 1.0 }];
     Beatmap { meta, notes, barlines, control_points }
 }
 
@@ -525,6 +530,17 @@ SliderTickRate:1
         assert!((map.notes[1].velocity / map.notes[0].velocity - 2.0).abs() < 1e-9);
         // Pre-v5 maps are shifted by 24 ms, like osu! does.
         assert_eq!(map.notes[0].time, 1024.0);
+    }
+
+    #[test]
+    fn timing_points_carry_the_hitsound_volume() {
+        // Red line at 70%, green lines at 40% and (an editor-impossible) 0%, which osu! floors at 5%.
+        let map = parse("osu file format v14\n[TimingPoints]\n0,500,4,1,0,70,1,0\n1000,-100,4,1,0,40,0,0\n2000,-100,4,1,0,0,0,0\n[HitObjects]\n256,192,500,1,0\n");
+        let at = |t| control_point_at(&map.control_points, t).volume;
+        assert_eq!((at(500.0), at(1500.0), at(2500.0)), (0.7, 0.4, 0.05));
+        // No volume field at all (very old maps): full volume.
+        let old = parse("osu file format v3\n[TimingPoints]\n0,500\n[HitObjects]\n256,192,500,1,0\n");
+        assert_eq!(control_point_at(&old.control_points, 600.0).volume, 1.0);
     }
 
     #[test]
