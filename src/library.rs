@@ -18,18 +18,31 @@ impl Entry {
     }
 }
 
-/// Default osu! stable install locations (Wine / osu-winello) that have a Songs folder.
+/// Default osu! stable install locations that have a Songs folder.
 pub fn default_song_dirs() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return out };
     let mut candidates = Vec::new();
-    // osu-winello records the install path here.
-    if let Ok(p) = std::fs::read_to_string(home.join(".local/share/osuconfig/osupath")) {
-        candidates.push(PathBuf::from(p.trim()).join("Songs"));
+    #[cfg(windows)]
+    {
+        // osu! stable installs per-user here by default.
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            candidates.push(local.join("osu!").join("Songs"));
+        }
+        candidates.push(PathBuf::from(r"C:\osu!\Songs"));
+        if let Some(cfg) = crate::config::user_dir(false) {
+            candidates.push(cfg.join("Songs"));
+        }
     }
-    candidates.push(home.join(".local/share/osu-wine/osu!/Songs"));
-    candidates.push(home.join("osu!/Songs"));
-    candidates.push(home.join(".local/share/taiko-rs/Songs"));
+    #[cfg(not(windows))]
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        // osu-winello records the install path here.
+        if let Ok(p) = std::fs::read_to_string(home.join(".local/share/osuconfig/osupath")) {
+            candidates.push(PathBuf::from(p.trim()).join("Songs"));
+        }
+        candidates.push(home.join(".local/share/osu-wine/osu!/Songs"));
+        candidates.push(home.join("osu!/Songs"));
+        candidates.push(home.join(".local/share/taiko-rs/Songs"));
+    }
     for c in candidates {
         if c.is_dir() && !out.contains(&c) {
             out.push(c);
@@ -39,11 +52,7 @@ pub fn default_song_dirs() -> Vec<PathBuf> {
 }
 
 fn cache_dir() -> PathBuf {
-    std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(std::env::temp_dir)
-        .join("taiko-rs")
+    crate::config::user_dir(true).unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
 }
 
 /// Extracts an `.osz` once into the cache and returns the folder.

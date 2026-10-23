@@ -1,3 +1,6 @@
+// Release builds on Windows are a GUI app: no console window behind the game.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod audio;
 mod beatmap;
 mod calibrate;
@@ -166,7 +169,8 @@ impl State {
 
     fn refresh_status(&mut self) {
         let audio_desc = self.audio.as_ref().map(|a| a.description.clone()).unwrap_or_else(|| "no audio".into());
-        self.status = format!("{}  |  {}  |  {:.0} Hz  |  config: ~/.config/taiko-rs/config.txt", self.adapter, audio_desc, self.refresh_hz);
+        let config = config::config_path().map(|p| p.display().to_string()).unwrap_or_else(|| "not saved".into());
+        self.status = format!("{}  |  {}  |  {:.0} Hz  |  config: {config}", self.adapter, audio_desc, self.refresh_hz);
     }
 
     fn open_settings(&mut self) {
@@ -1254,6 +1258,7 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
         let mut attrs = Window::default_attributes()
             .with_title("taiko-rs")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));

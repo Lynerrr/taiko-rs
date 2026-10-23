@@ -1,0 +1,48 @@
+name: Windows build
+
+# Builds taiko-rs.exe on every push to the main branch and publishes it as the rolling
+# "latest" release, which install.ps1 downloads.
+on:
+  push:
+    branches: [worktree-taiko-client]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/taiko-rs.exe dist/
+          Copy-Item README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath taiko-rs-windows-x64.zip
+
+      - name: Publish "latest" release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Recreate the release so its tag always points at this commit.
+          gh release delete latest --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE = 0
+          $notes = "Windows build of $env:GITHUB_SHA.`n`nInstall or update (PowerShell):`n``````powershell`nirm https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/worktree-taiko-client/install.ps1 | iex`n``````"
+          gh release create latest taiko-rs-windows-x64.zip --title "taiko-rs (latest Windows build)" --notes $notes --target $env:GITHUB_SHA

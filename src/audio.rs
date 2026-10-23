@@ -144,7 +144,8 @@ impl Engine {
 }
 
 fn pick_host() -> cpal::Host {
-    #[cfg(feature = "pipewire")]
+    // cpal only has a PipeWire host on Linux; elsewhere (WASAPI on Windows) the default host is right.
+    #[cfg(all(feature = "pipewire", target_os = "linux"))]
     if std::env::var_os("TAIKO_ALSA").is_none() {
         if let Ok(host) = cpal::host_from_id(cpal::HostId::PipeWire) {
             if host.default_output_device().is_some() {

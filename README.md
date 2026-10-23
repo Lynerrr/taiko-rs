@@ -1,6 +1,6 @@
 # taiko-rs
 
-A small, fast osu!taiko client in Rust, built for Linux/Wayland.
+A small, fast osu!taiko client in Rust, built for Linux/Wayland, with a Windows build.
 
 - **Native Wayland** via winit (falls back to X11 automatically), **Vulkan** via wgpu.
 - **Smooth scrolling**: the game clock free-runs on the monotonic clock and is gently
@@ -28,6 +28,20 @@ cargo build --release
 Build needs `clang` and PipeWire headers for the default `pipewire` feature; build with
 `--no-default-features` to use ALSA only, or set `TAIKO_ALSA=1` at runtime.
 
+## Windows
+
+Install or update with one PowerShell command (no admin needed):
+
+```powershell
+irm https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.ps1 | iex
+```
+
+It downloads the latest build from the [releases](https://github.com/Lynerrr/taiko-rs/releases/tag/latest)
+into `%LOCALAPPDATA%\Programs\taiko-rs`, adds Start menu and desktop shortcuts and launches it.
+Maps come from your osu! stable Songs folder (`%LOCALAPPDATA%\osu!\Songs`); without osu!, drop
+`.osz` files into `%APPDATA%\taiko-rs\Songs`. Settings live in `%APPDATA%\taiko-rs\config.txt`.
+The build is produced by GitHub Actions on every push.
+
 ## Controls
 
 | Key | Action |
@@ -50,7 +64,7 @@ Build needs `clang` and PipeWire headers for the default `pipewire` feature; bui
 
 Everything is adjustable in the **Settings** tab (scroll speed, offset, key bindings, converts,
 volumes, audio buffer, present mode, frame delay, FPS cap, overlay, fullscreen) and saved
-immediately to `~/.config/taiko-rs/config.txt`. Losing window focus mid-song pauses the game. The results screen shows UR and mean hit error and tells
+immediately to `~/.config/taiko-rs/config.txt` (Windows: `%APPDATA%\taiko-rs\config.txt`). Losing window focus mid-song pauses the game. The results screen shows UR and mean hit error and tells
 you which way to move the offset.
 
 ## Offset calibration

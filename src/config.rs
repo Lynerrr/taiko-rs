@@ -1,4 +1,5 @@
-//! Settings persisted as a plain `key = value` file in `$XDG_CONFIG_HOME/taiko-rs/config.txt`.
+//! Settings persisted as a plain `key = value` file: `$XDG_CONFIG_HOME/taiko-rs/config.txt` on
+//! Linux, `%APPDATA%\taiko-rs\config.txt` on Windows.
 
 use std::path::PathBuf;
 
@@ -51,7 +52,11 @@ impl Default for Config {
             frame_delay_ms: 0.0,
             calibration_bpm: 120.0,
             show_offset_hint: true,
-            mp_name: std::env::var("USER").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| "player".into()),
+            mp_name: std::env::var("USER")
+                .or_else(|_| std::env::var("USERNAME"))
+                .ok()
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| "player".into()),
             mp_port: 7777,
             mp_address: String::new(),
             offset_hint_ur_scaled: true,
@@ -63,11 +68,26 @@ impl Default for Config {
     }
 }
 
-fn config_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("taiko-rs").join("config.txt"))
+/// Per-user taiko-rs directory: settings (`cache == false`) or disposable data like extracted
+/// `.osz` files (`cache == true`).
+pub fn user_dir(cache: bool) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let var = if cache { "LOCALAPPDATA" } else { "APPDATA" };
+        std::env::var_os(var).map(|d| PathBuf::from(d).join("taiko-rs"))
+    }
+    #[cfg(not(windows))]
+    {
+        let (xdg, fallback) = if cache { ("XDG_CACHE_HOME", ".cache") } else { ("XDG_CONFIG_HOME", ".config") };
+        std::env::var_os(xdg)
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback)))
+            .map(|d| d.join("taiko-rs"))
+    }
+}
+
+pub fn config_path() -> Option<PathBuf> {
+    Some(user_dir(false)?.join("config.txt"))
 }
 
 const KEY_NAMES: &[KeyCode] = &[
