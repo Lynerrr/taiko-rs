@@ -333,6 +333,7 @@ spins so frames stay evenly spaced.
 | `src/net.rs` | multiplayer protocol, room server, client with clock sync |
 | `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
 | `src/library.rs` | Songs folder / `.osz` scanning |
+| `src/logo.rs` | the logo: window icon, top bar |
 | `src/skin.rs` | osu! skins: listing, `.osk` unpacking, note image atlas, hitsounds |
 | `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
 | `src/discord.rs` | Discord Rich Presence over the local IPC socket / pipe |

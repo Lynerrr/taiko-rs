@@ -15,6 +15,7 @@ mod font;
 mod game;
 mod layout;
 mod library;
+mod logo;
 mod mapinfo;
 mod multiplayer;
 mod net;
@@ -3979,6 +3980,7 @@ impl ApplicationHandler for App {
         #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
         let mut attrs = Window::default_attributes()
             .with_title("taiko-rs")
+            .with_window_icon(logo::window_icon())
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
             .with_fullscreen(lock(&self.state).cfg.fullscreen.then_some(Fullscreen::Borderless(None)));
         #[cfg(target_os = "linux")]

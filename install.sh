@@ -12,14 +12,16 @@ bin_dir="$HOME/.local/bin"
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
 exe="$bin_dir/taiko-rs"
 desktop="$data_dir/applications/taiko-rs.desktop"
-icon="$data_dir/icons/hicolor/scalable/apps/taiko-rs.svg"
+icon="$data_dir/icons/hicolor/256x256/apps/taiko-rs.png"
+# Earlier installs put an SVG icon here.
+old_icon="$data_dir/icons/hicolor/scalable/apps/taiko-rs.svg"
 
 launch=1
 for arg in "$@"; do
     case "$arg" in
         --no-launch) launch=0 ;;
         --uninstall)
-            rm -f "$exe" "$desktop" "$icon"
+            rm -f "$exe" "$desktop" "$icon" "$old_icon"
             echo "Removed taiko-rs. Settings ($HOME/.config/taiko-rs) and maps ($data_dir/taiko-rs) are kept."
             exit 0
             ;;
@@ -50,7 +52,8 @@ tar -xzf "$tmp/taiko-rs.tar.gz" -C "$tmp"
 mkdir -p "$bin_dir" "$(dirname "$desktop")" "$(dirname "$icon")"
 install -m 755 "$tmp/taiko-rs/taiko-rs" "$exe.new"
 mv -f "$exe.new" "$exe"
-install -m 644 "$tmp/taiko-rs/taiko-rs.svg" "$icon"
+install -m 644 "$tmp/taiko-rs/taiko-rs.png" "$icon"
+rm -f "$old_icon"
 
 cat > "$desktop" <<EOF
 [Desktop Entry]
