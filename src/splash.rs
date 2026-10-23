@@ -1,11 +1,11 @@
 //! Startup splash, timed to its voice clip (`assets/splash.ogg`, ~2.3 s, an angry shout): the screen
 //! powers on like a CRT, a boot log of what is really loading types itself out and a pixel portrait
-//! assembles from don/kat-coloured pixels. Then the shout: every word punches the portrait at the
-//! camera with impact frames, shockwaves and screen shake, the loudest stretch turns into a
-//! deep-fried rage (speed lines, red vignette, colour split), the hiss glitches the picture, the
-//! title stamps in, a loading bar jumps to READY and the screen powers off into song select.
-//! Effects follow the clip's loudness. Any key or click skips to the power-off. Settings -> Video ->
-//! *Startup splash* turns it off.
+//! (one of several, picked at random) assembles from don/kat-coloured pixels. Then the shout: every
+//! word punches the portrait at the camera with impact frames, shockwaves and screen shake, the
+//! loudest stretch turns into a deep-fried rage (speed lines, red vignette, colour split), the hiss
+//! glitches the picture, the title stamps in, a loading bar jumps to READY and the screen powers off
+//! into song select. Effects follow the clip's loudness. Any key or click skips to the power-off.
+//! Settings -> Video -> *Startup splash* turns it off.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -13,7 +13,18 @@ use std::time::Instant;
 use crate::audio::{self, Engine, Track};
 use crate::render::{rgba, Canvas, VIRTUAL_HEIGHT};
 
-const PORTRAIT: &[u8] = include_bytes!("../assets/splash.png");
+/// Pixel portraits, one picked at random each start.
+const PORTRAITS: [&[u8]; 9] = [
+    include_bytes!("../assets/splash.png"),
+    include_bytes!("../assets/splash2.png"),
+    include_bytes!("../assets/splash3.png"),
+    include_bytes!("../assets/splash4.png"),
+    include_bytes!("../assets/splash5.png"),
+    include_bytes!("../assets/splash6.png"),
+    include_bytes!("../assets/splash7.png"),
+    include_bytes!("../assets/splash8.png"),
+    include_bytes!("../assets/splash9.png"),
+];
 const VOICE: &[u8] = include_bytes!("../assets/splash.ogg");
 
 /// Size of one portrait pixel (virtual units); the title's font pixels are a bit bigger.
@@ -139,7 +150,11 @@ fn kicks(t: f32) -> (f32, f32) {
 impl Splash {
     /// `rate`: the audio device's sample rate, or None to run silent.
     pub fn new(rate: Option<u32>) -> Option<Splash> {
-        let img = image::load_from_memory(PORTRAIT).ok()?.to_rgba8();
+        // TAIKO_SPLASH=<n> picks portrait n (1-based) instead.
+        let pick = std::env::var("TAIKO_SPLASH").ok().and_then(|v| v.parse::<usize>().ok()).filter(|n| (1..=PORTRAITS.len()).contains(n));
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+        let index = pick.map(|n| n - 1).unwrap_or(nanos as usize % PORTRAITS.len());
+        let img = image::load_from_memory(PORTRAITS[index]).ok()?.to_rgba8();
         let pixels = img
             .enumerate_pixels()
             .filter(|(_, _, p)| p[3] > 127)

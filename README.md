@@ -98,7 +98,7 @@ and the preview fades in on a new map. Gameplay itself is never animated or dela
 
 At startup a short **splash** plays (about 2.5 s), timed to its own voice clip: the screen powers
 on like a CRT, a boot log types out what is really starting (GPU, audio device, songs found, skin),
-a pixel portrait assembles from don/kat coloured pixels and takes drum hits on the voice, *taiko-rs*
+a pixel portrait (one of nine, picked at random each start) assembles from don/kat coloured pixels and takes drum hits on the voice, *taiko-rs*
 drops in syllable by syllable, the hiss glitches the picture, a loading bar fills to READY and the
 screen powers off into song select, whose preview music waits until then. Effects follow the clip's
 loudness. Any key or click skips it; Settings → Video → *Startup splash* turns it off.
