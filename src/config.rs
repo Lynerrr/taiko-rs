@@ -10,8 +10,6 @@ use crate::render::PresentChoice;
 
 pub const RATE_RANGE: (f64, f64) = (0.5, 2.0);
 pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
-pub const FRAME_DELAYS: [f64; 13] = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 25.0, 33.0];
-pub const MAX_FRAME_DELAY: f64 = 33.0;
 
 pub struct Config {
     /// Positive when your audio reaches you late; notes are shifted later by this much.
@@ -27,7 +25,6 @@ pub struct Config {
     pub fps_cap: u32,
     /// Vsync only: wait this long after the previous frame before drawing the next, so the frame is
     /// sampled closer to the compositor's deadline (lower latency; too high causes stutter).
-    pub frame_delay_ms: f64,
     /// Tempo of the offset-calibration click track.
     pub calibration_bpm: f64,
     /// Where gameplay is drawn on screen (fractions; full screen by default).
@@ -68,7 +65,6 @@ impl Default for Config {
             present: PresentChoice::Fifo,
             menu_vsync: true,
             fps_cap: 0,
-            frame_delay_ms: 0.0,
             calibration_bpm: 120.0,
             playfield_area: Area::FULL,
             hud_in_playfield: true,
@@ -168,7 +164,6 @@ impl Config {
                 "rate" => cfg.rate = v.parse::<f64>().unwrap_or(1.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
                 "rate_keep_pitch" => cfg.rate_keep_pitch = v != "false",
                 "calibration_bpm" => cfg.calibration_bpm = v.parse::<f64>().unwrap_or(120.0).clamp(60.0, 240.0),
-                "frame_delay_ms" => cfg.frame_delay_ms = v.parse::<f64>().unwrap_or(0.0).clamp(0.0, MAX_FRAME_DELAY),
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
                 "show_fps" => cfg.show_fps = v == "true",
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
@@ -219,8 +214,6 @@ impl Config {
              menu_vsync = {}\n\
              # mailbox/immediate only; 0 = uncapped\n\
              fps_cap = {}\n\
-             # vsync only: ms to wait before drawing each frame (lower latency; too high stutters)\n\
-             frame_delay_ms = {}\n\
              calibration_bpm = {}\n\
              # playfield area: x, y, width, height as fractions of the screen\n\
              playfield_area = {}\n\
@@ -245,7 +238,6 @@ impl Config {
             self.present.name(),
             self.menu_vsync,
             self.fps_cap,
-            self.frame_delay_ms,
             self.calibration_bpm,
             self.playfield_area.to_config(),
             self.hud_in_playfield,

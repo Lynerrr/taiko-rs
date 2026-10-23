@@ -64,11 +64,10 @@ The build is produced by GitHub Actions on every push.
 | F3 / F4 | scroll speed |
 | F7 | gameplay present mode: vsync → mailbox → immediate (menus stay on vsync by default) |
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
-| F9 | vsync frame delay: 0–14 ms (see below) |
 | F10 / F11 | FPS overlay / fullscreen |
 
 Everything is adjustable in the **Settings** tab (scroll speed, offset, key bindings, converts,
-volumes, audio buffer, present mode, frame delay, FPS cap, overlay, fullscreen) and saved
+volumes, audio buffer, present mode, FPS cap, overlay, fullscreen) and saved
 immediately to `~/.config/taiko-rs/config.txt` (Windows: `%APPDATA%\taiko-rs\config.txt`). Losing window focus mid-song pauses the game. The results screen shows UR and mean hit error and tells
 you which way to move the offset.
 
@@ -154,10 +153,7 @@ of buffer commits per second compete with the compositor for the GPU — especia
 Immediate only tears (the one real latency win) in fullscreen.
 
 Judging never depends on the frame rate: keys are timestamped on their own thread and audio is
-the clock, so vsync costs no accuracy. To cut vsync's *visual* latency, raise the **frame delay**
-(F9): after vsync releases a buffer, the renderer waits that long before sampling the clock, so frames are
-built closer to the compositor's deadline. Increase it until the FPS overlay's "worst" frame time
-starts to jump or notes hitch, then step back one notch (a 60 Hz display has ~16.7 ms per frame).
+the clock, so vsync costs no accuracy.
 
 If you do use mailbox, cap it (F8) to a few times your refresh rate; the limiter sleeps and then
 spins so frames stay evenly spaced.

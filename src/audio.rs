@@ -34,7 +34,10 @@ pub enum Sfx {
 }
 
 enum Cmd {
-    Play { track: Arc<Track>, start_frame: i64 },
+    /// `base`: the song frame the track's first sample belongs at (a partial decode).
+    Play { track: Arc<Track>, start_frame: i64, base: i64 },
+    /// Replaces the playing track without moving the play position.
+    Swap { track: Arc<Track>, base: i64 },
     Seek(i64),
     Pause(bool),
     Stop,
@@ -107,8 +110,18 @@ impl Engine {
     }
 
     pub fn play(&self, track: Arc<Track>, start_ms: f64) {
+        self.play_part(track, 0, start_ms);
+    }
+
+    /// Plays part of a song: `base` is the song frame the track's first sample belongs at.
+    pub fn play_part(&self, track: Arc<Track>, base: i64, start_ms: f64) {
         let start_frame = (start_ms / 1000.0 * self.rate as f64).round() as i64;
-        let _ = self.tx.send(Cmd::Play { track, start_frame });
+        let _ = self.tx.send(Cmd::Play { track, start_frame, base });
+    }
+
+    /// Swaps in another decode of the playing song (the full one for a part), seamlessly.
+    pub fn swap(&self, track: Arc<Track>, base: i64) {
+        let _ = self.tx.send(Cmd::Swap { track, base });
     }
 
     pub fn seek(&self, ms: f64) {
@@ -185,6 +198,8 @@ struct Mixer {
     volume: Arc<[AtomicU32; 2]>,
     channels: usize,
     track: Option<Arc<Track>>,
+    /// Song frame of the track's first sample.
+    base: i64,
     frame: i64,
     paused: bool,
     voices: Vec<Voice>,
@@ -201,7 +216,7 @@ impl Mixer {
         channels: usize,
     ) -> Mixer {
         let sounds = Arc::new([synth_don(rate, false), synth_kat(rate, false), synth_don(rate, true), synth_kat(rate, true)]);
-        Mixer { rx, gc, stamp, volume, channels, track: None, frame: 0, paused: false, voices: Vec::with_capacity(64), sounds }
+        Mixer { rx, gc, stamp, volume, channels, track: None, base: 0, frame: 0, paused: false, voices: Vec::with_capacity(64), sounds }
     }
 
     fn render<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T], info: &OutputCallbackInfo) {
@@ -209,12 +224,19 @@ impl Mixer {
         {
             while let Ok(cmd) = self.rx.try_recv() {
                 match cmd {
-                    Cmd::Play { track, start_frame } => {
+                    Cmd::Play { track, start_frame, base } => {
                         if let Some(old) = self.track.replace(track) {
                             let _ = self.gc.send(old);
                         }
+                        self.base = base;
                         self.frame = start_frame;
                         self.paused = false;
+                    }
+                    Cmd::Swap { track, base } => {
+                        if let Some(old) = self.track.replace(track) {
+                            let _ = self.gc.send(old);
+                        }
+                        self.base = base;
                     }
                     Cmd::Seek(f) => self.frame = f,
                     Cmd::Pause(p) => self.paused = p,
@@ -244,8 +266,9 @@ impl Mixer {
         for frame in out.chunks_mut(ch) {
             let (mut l, mut r) = (0.0f32, 0.0f32);
             if let Some(track) = self.track.as_ref().filter(|_| !self.paused) {
-                if self.frame >= 0 && (self.frame as usize) < track.frames() {
-                    let i = self.frame as usize * 2;
+                let at = self.frame - self.base;
+                if at >= 0 && (at as usize) < track.frames() {
+                    let i = at as usize * 2;
                     l = track.samples[i] * music_vol;
                     r = track.samples[i + 1] * music_vol;
                 }
@@ -311,6 +334,51 @@ mod tests {
             assert!((f - 440.0).abs() < 8.0, "rate {rate}: pitch moved to {f} Hz");
             assert_eq!(out.rate, rate);
         }
+    }
+
+    #[test]
+    fn partial_decode_lines_up_with_full_decode() {
+        // A 6 s stereo WAV with a sweep, so any misalignment shows up as a difference.
+        let sr = 44100u32;
+        let frames = sr as usize * 6;
+        let mut wav = Vec::new();
+        let data_len = (frames * 4) as u32;
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&sr.to_le_bytes());
+        wav.extend_from_slice(&(sr * 4).to_le_bytes());
+        wav.extend_from_slice(&4u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..frames {
+            let t = i as f32 / sr as f32;
+            let v = ((t * (200.0 + 300.0 * t)) * std::f32::consts::TAU).sin() * 0.5;
+            for c in [v, -v] {
+                wav.extend_from_slice(&((c * 32767.0) as i16).to_le_bytes());
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("taiko-rs-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sweep.wav");
+        std::fs::write(&path, wav).unwrap();
+        for rate in [44100u32, 48000] {
+            let full = decode(&path, rate).unwrap();
+            let (part, base) = decode_part(&path, rate, Some((2500.0, 2000.0))).unwrap();
+            let start_ms = base as f64 / rate as f64 * 1000.0;
+            assert!((2400.0..=2500.0).contains(&start_ms), "starts at {start_ms} ms");
+            assert!(part.frames() as u32 >= rate * 19 / 10, "only {} frames", part.frames());
+            // Away from the edges (where resampling clamps), the samples are the same.
+            for i in 8..part.frames() - 8 {
+                let j = (base as usize + i) * 2;
+                assert!((full.samples[j] - part.samples[i * 2]).abs() < 1e-4, "frame {i} differs at {rate} Hz");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -404,12 +472,20 @@ pub fn metronome(rate: u32, beat_ms: f64, beats: u32, tail_ms: f64) -> Track {
 
 /// Decodes a whole audio file to interleaved stereo at `rate`.
 pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
+    decode_part(path, rate, None).map(|(track, _)| track)
+}
+
+/// Decodes `len_ms` of audio starting at (or just before) `from_ms`, or the whole file with
+/// `None`. Also returns the device-rate frame the first sample belongs at: the samples are
+/// identical to the same stretch of a full decode, so one can be swapped for the other mid-song.
+pub fn decode_part(path: &Path, rate: u32, part: Option<(f64, f64)>) -> Result<(Track, i64), String> {
     use symphonia::core::codecs::audio::AudioDecoderOptions;
     use symphonia::core::errors::Error;
     use symphonia::core::formats::probe::Hint;
-    use symphonia::core::formats::{FormatOptions, TrackType};
+    use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo, TrackType};
     use symphonia::core::io::MediaSourceStream;
     use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::units::Time;
 
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -422,12 +498,19 @@ pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
         .map_err(|e| format!("probe: {e}"))?;
     let track = format.default_track(TrackType::Audio).ok_or("no audio track")?;
     let track_id = track.id;
+    let time_base = track.time_base;
     let params = track.codec_params.as_ref().and_then(|p| p.audio()).ok_or("no audio codec params")?;
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(params, &AudioDecoderOptions::default())
         .map_err(|e| format!("decoder: {e}"))?;
+    if let Some((from_ms, _)) = part {
+        let time = Time::try_from_secs_f64(from_ms.max(0.0) / 1000.0).ok_or("bad seek time")?;
+        format.seek(SeekMode::Accurate, SeekTo::Time { time, track_id: Some(track_id) }).map_err(|e| format!("seek: {e}"))?;
+    }
 
     let mut src_rate = 0u32;
+    // Source frame of the first decoded sample (0 for a full decode).
+    let mut src_start: Option<i64> = part.is_none().then_some(0);
     let mut stereo: Vec<f32> = Vec::new();
     let mut packet_buf: Vec<f32> = Vec::new();
     loop {
@@ -440,12 +523,18 @@ pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
         if packet.track_id != track_id {
             continue;
         }
+        let pts = packet.pts.get();
         let buf = match decoder.decode(&packet) {
             Ok(b) => b,
             Err(Error::DecodeError(_)) => continue,
             Err(e) => return Err(format!("decode: {e}")),
         };
         src_rate = buf.spec().rate();
+        if src_start.is_none() {
+            let tb = time_base.ok_or("no time base")?;
+            let frame = pts as i128 * tb.numer.get() as i128 * src_rate as i128 / tb.denom.get() as i128;
+            src_start = Some(frame as i64);
+        }
         let ch = buf.spec().channels().count().max(1);
         buf.copy_to_vec_interleaved(&mut packet_buf);
         for frame in packet_buf.chunks_exact(ch) {
@@ -453,12 +542,23 @@ pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
             stereo.push(l);
             stereo.push(r);
         }
+        if let Some((_, len_ms)) = part {
+            if stereo.len() as f64 / 2.0 >= len_ms / 1000.0 * src_rate as f64 {
+                break;
+            }
+        }
     }
-    if stereo.is_empty() || src_rate == 0 {
+    let Some(src_start) = src_start.filter(|_| !stereo.is_empty() && src_rate != 0) else {
         return Err("audio file decoded to nothing".into());
+    };
+    if src_rate == rate {
+        return Ok((Track { samples: stereo, rate: 1.0 }, src_start));
     }
-    let samples = if src_rate == rate { stereo } else { resample(&stereo, src_rate, rate) };
-    Ok(Track { samples, rate: 1.0 })
+    // Resample on the same grid as a full decode: output frame n reads source position n * ratio.
+    let ratio = src_rate as f64 / rate as f64;
+    let first = (src_start as f64 / ratio).ceil() as i64;
+    let samples = resample_from(&stereo, ratio, first as f64 * ratio - src_start as f64);
+    Ok((Track { samples, rate: 1.0 }, first))
 }
 
 /// Speeds a track up (`rate` > 1) or slows it down. With `keep_pitch` the music is time-stretched
@@ -559,22 +659,23 @@ fn time_stretch(input: &[f32], sample_rate: u32, rate: f64) -> Vec<f32> {
     out
 }
 
-/// Cubic (Catmull-Rom) resampling of interleaved stereo. Done once at load time.
-fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
-    resample_ratio(input, from as f64 / to as f64)
+/// Cubic (Catmull-Rom) resampling of interleaved stereo by an arbitrary ratio: output frame n
+/// reads input position n * ratio. Done once at load time.
+fn resample_ratio(input: &[f32], ratio: f64) -> Vec<f32> {
+    resample_from(input, ratio, 0.0)
 }
 
-/// Resamples by an arbitrary ratio: output frame n reads input position n * ratio.
-fn resample_ratio(input: &[f32], ratio: f64) -> Vec<f32> {
+/// Like `resample_ratio`, with output frame n reading input position `phase + n * ratio`.
+fn resample_from(input: &[f32], ratio: f64, phase: f64) -> Vec<f32> {
     let frames_in = input.len() / 2;
-    let frames_out = (frames_in as f64 / ratio).floor() as usize;
+    let frames_out = ((frames_in as f64 - phase) / ratio).floor().max(0.0) as usize;
     let mut out = Vec::with_capacity(frames_out * 2);
     let at = |i: isize, c: usize| -> f32 {
         let i = i.clamp(0, frames_in as isize - 1) as usize;
         input[i * 2 + c]
     };
     for n in 0..frames_out {
-        let pos = n as f64 * ratio;
+        let pos = phase + n as f64 * ratio;
         let i = pos.floor() as isize;
         let t = (pos - i as f64) as f32;
         for c in 0..2 {

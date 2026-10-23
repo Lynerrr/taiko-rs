@@ -35,7 +35,7 @@ use winit::window::{Fullscreen, Window, WindowId};
 
 use audio::{Engine, Track};
 use beatmap::Beatmap;
-use config::{Config, FPS_CAPS, FRAME_DELAYS, MAX_FRAME_DELAY, RATE_RANGE};
+use config::{Config, FPS_CAPS, RATE_RANGE};
 use game::{Game, PAUSE_ITEMS};
 use layout::{Area, Grip};
 use winit::window::CursorIcon;
@@ -247,15 +247,9 @@ impl State {
 
     fn report_smoothness(&mut self) {
         if let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene) {
-            eprintln!("--- smoothness ({}, frame delay {:.0} ms) ---\n{}", self.present.name(), self.cfg.frame_delay_ms, sm.report());
+            eprintln!("--- smoothness ({}) ---\n{}", self.present.name(), sm.report());
             *sm = debug::Smoothness::default();
         }
-    }
-
-    /// Longest frame delay that reliably leaves room to render before the next refresh. Larger
-    /// values are allowed but may miss the compositor deadline.
-    fn safe_frame_delay(&self) -> f64 {
-        (1000.0 / self.refresh_hz - 3.0).max(0.0)
     }
 
     fn refresh_status(&mut self) {
@@ -295,10 +289,6 @@ impl State {
             }
             Item::PresentMode => c.present.name().to_string(),
             Item::MenuVsync => on(c.menu_vsync),
-            Item::FrameDelay if c.frame_delay_ms > self.safe_frame_delay() => {
-                format!("{:.0} ms (past safe {:.1} ms)", c.frame_delay_ms, self.safe_frame_delay())
-            }
-            Item::FrameDelay => format!("{:.0} ms", c.frame_delay_ms),
             Item::FpsCap => {
                 if c.fps_cap == 0 {
                     "unlimited".into()
@@ -362,7 +352,6 @@ impl State {
                 self.cfg.present = if dir > 0 { self.cfg.present.next() } else { self.cfg.present.next().next() };
             }
             Item::MenuVsync => self.cfg.menu_vsync = !self.cfg.menu_vsync,
-            Item::FrameDelay => self.cfg.frame_delay_ms = (self.cfg.frame_delay_ms + d).clamp(0.0, MAX_FRAME_DELAY).round(),
             Item::FpsCap => {
                 let i = FPS_CAPS.iter().position(|&c| c == self.cfg.fps_cap).unwrap_or(0) as i32;
                 self.cfg.fps_cap = FPS_CAPS[(i + dir).rem_euclid(FPS_CAPS.len() as i32) as usize];
@@ -619,21 +608,6 @@ impl State {
                 let mut text = if self.cfg.fps_cap == 0 { "fps cap: unlimited".to_string() } else { format!("fps cap: {}", self.cfg.fps_cap) };
                 if self.present == PresentChoice::Fifo {
                     text.push_str(" (mailbox/immediate only)");
-                }
-                self.toast(text);
-                self.cfg.save();
-                return true;
-            }
-            KeyCode::F9 => {
-                let i = FRAME_DELAYS.iter().position(|&d| d == self.cfg.frame_delay_ms).unwrap_or(0);
-                let next = FRAME_DELAYS[(i + 1) % FRAME_DELAYS.len()];
-                self.cfg.frame_delay_ms = next;
-                let mut text = format!("frame delay: {next:.0} ms");
-                if next > self.safe_frame_delay() {
-                    text.push_str(&format!(" (past {:.1} ms may miss refreshes)", self.safe_frame_delay()));
-                }
-                if self.present != PresentChoice::Fifo {
-                    text.push_str(" (vsync only)");
                 }
                 self.toast(text);
                 self.cfg.save();
@@ -1762,7 +1736,6 @@ impl State {
 
         if self.cfg.show_fps {
             let mode = match self.present {
-                PresentChoice::Fifo if self.cfg.frame_delay_ms > 0.0 => format!("vsync +{:.0}ms delay", self.cfg.frame_delay_ms),
                 PresentChoice::Fifo => "vsync".to_string(),
                 p if self.cfg.fps_cap > 0 => format!("{} cap {}", p.name(), self.cfg.fps_cap),
                 p => p.name().to_string(),
@@ -1818,7 +1791,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     let mut requested_present: Option<PresentChoice> = None;
     let mut waits = (0.0, 0.0, 0.0);
     loop {
-        let (present, cap, delay) = {
+        let (present, cap) = {
             let mut s = lock(&state);
             if s.quit {
                 break;
@@ -1840,7 +1813,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                     sm.sample_waits(waits.0, waits.1, waits.2);
                 }
             }
-            (s.present, s.cfg.fps_cap, s.cfg.frame_delay_ms)
+            (s.present, s.cfg.fps_cap)
         };
 
         let t0 = Instant::now();
@@ -1849,13 +1822,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             continue;
         };
         let acquired = Instant::now();
-        // Under vsync, acquire returns right after a refresh. Sleeping here (not before acquire)
-        // moves the clock sample later into the refresh interval, closer to the compositor's
-        // deadline, which is what actually reduces visual latency.
-        if present == PresentChoice::Fifo && delay > 0.0 {
-            sleep_until(acquired + Duration::from_secs_f64(delay / 1000.0));
-        }
-        let now = Instant::now();
+        let now = acquired;
         let (capture, clip) = {
             let mut s = lock(&state);
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());

@@ -28,13 +28,12 @@ pub enum Item {
     BackgroundDim,
     PresentMode,
     MenuVsync,
-    FrameDelay,
     FpsCap,
     ShowFps,
     Fullscreen,
 }
 
-pub const ITEMS: [(&str, Item); 30] = [
+pub const ITEMS: [(&str, Item); 29] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::PlayfieldArea),
     ("GAMEPLAY", Item::PlayfieldPreset),
@@ -61,7 +60,6 @@ pub const ITEMS: [(&str, Item); 30] = [
     ("VIDEO", Item::BackgroundDim),
     ("VIDEO", Item::PresentMode),
     ("VIDEO", Item::MenuVsync),
-    ("VIDEO", Item::FrameDelay),
     ("VIDEO", Item::FpsCap),
     ("VIDEO", Item::ShowFps),
     ("VIDEO", Item::Fullscreen),
@@ -95,7 +93,6 @@ impl Item {
             Item::BackgroundDim => "Background dim",
             Item::PresentMode => "Present mode (gameplay)",
             Item::MenuVsync => "Menus use vsync",
-            Item::FrameDelay => "Frame delay",
             Item::FpsCap => "FPS cap",
             Item::ShowFps => "FPS overlay",
             Item::Fullscreen => "Fullscreen",
@@ -125,7 +122,6 @@ impl Item {
             Item::BackgroundDim => "How dark the map background is during play. 100% hides it.",
             Item::PresentMode => "Used during songs. vsync is smoothest on Wayland; mailbox/immediate add judder.",
             Item::MenuVsync => "Song select (and its autoplay preview), settings and results always use vsync.",
-            Item::FrameDelay => "vsync only: draw later in each refresh for less lag. Near/over one refresh (16.7 ms at 60 Hz) frames miss the deadline.",
             Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Fullscreen => "Shortcut: F11.",
