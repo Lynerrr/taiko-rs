@@ -938,7 +938,6 @@ pub fn lane_band() -> (f32, f32) {
     (LANE_Y - LANE_H / 2.0 - 34.0, LANE_H + 42.0)
 }
 
-/// A still playfield (lane, drum, a few notes, score) for the playfield area editor.
 /// A don or kat drawn with the skin's images: the circle tinted `col`, then its overlay. False
 /// (nothing drawn) when the skin has no circle for it.
 fn skin_note(c: &mut Canvas, x: f32, y: f32, r: f32, big: bool, col: u32, alpha: f32) -> bool {
@@ -950,6 +949,7 @@ fn skin_note(c: &mut Canvas, x: f32, y: f32, r: f32, big: bool, col: u32, alpha:
     true
 }
 
+/// A still playfield (lane, drum, a few notes, score) for the playfield area editor.
 pub fn draw_preview(c: &mut Canvas) {
     let w = c.width;
     let lane_top = LANE_Y - LANE_H / 2.0;
