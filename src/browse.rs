@@ -249,23 +249,23 @@ impl Browse {
         }
         // Website-style filters: status category, then order (click the active one to flip it).
         let chip = |c: &mut Canvas, x: f32, y: f32, label: &str, on: bool, hit: Hit| -> f32 {
-            let w = Canvas::text_width(6.0, label) + 12.0;
+            let w = Canvas::text_width(6.0, label) + 8.0;
             let hover = !on && c.hovered(x, y, w, 15.0);
             let bg = if on { 0xEB452C } else if hover { 0x34344a } else { 0x23232f };
             c.round_rect(x, y, w, 15.0, 5.0, rgba(bg, 1.0), rgba(if on { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
-            c.text(x + 6.0, y + 4.5, 6.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
+            c.text(x + 4.0, y + 4.5, 6.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
             c.hit(x, y, w, 15.0, hit);
-            w + 4.0
+            w + 3.0
         };
         let mut x = x0;
         c.text(x, 88.0, 6.0, rgba(0x8a8aa0, 1.0), "STATUS");
-        x += 40.0;
+        x += 32.0;
         for (i, cat) in Category::ALL.iter().enumerate() {
             x += chip(c, x, 84.0, cat.name(), *cat == self.category, Hit::DlCategory(i));
         }
         let mut x = x0;
         c.text(x, 107.0, 6.0, rgba(0x8a8aa0, 1.0), "SORT");
-        x += 40.0;
+        x += 32.0;
         for (i, key) in SortKey::ALL.iter().enumerate() {
             let on = *key == self.sort;
             let label = if on && *key != SortKey::Relevance { format!("{} {}", key.name(), if self.desc { "v" } else { "^" }) } else { key.name().to_string() };
