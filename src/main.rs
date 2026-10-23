@@ -27,6 +27,7 @@ mod render;
 mod scores;
 mod settings;
 mod skin;
+mod social;
 mod splash;
 mod stars;
 mod ui;
@@ -85,6 +86,8 @@ enum Scene {
     MpPlay { game: Box<Game>, quit_armed: Option<Instant> },
     /// Watching the match in progress.
     Spectate(Box<SpectateView>),
+    /// Watching a friend's solo play.
+    Watch(Box<WatchView>),
     /// Turning a replay into a video: cut, crop, size, export.
     VideoEdit(Box<video::Editor>),
     MpResults,
@@ -124,6 +127,47 @@ impl SpectateView {
             for (_, g) in &mut self.games {
                 g.seek(target, audio, offset);
             }
+        }
+    }
+}
+
+/// How far behind a watched friend the view plays (room for the network).
+const WATCH_DELAY_MS: f64 = 2000.0;
+
+/// Watching a friend's solo play: a replay fed live, a little behind, holding while they pause.
+struct WatchView {
+    player: String,
+    play: Option<online::SoloPlay>,
+    entry: Option<usize>,
+    rx: Option<Receiver<Loaded>>,
+    game: Option<Box<Game>>,
+    /// Presses that arrived before the game existed.
+    inputs: Vec<(f64, u8)>,
+    /// Their map time when last heard, when that was, and whether they're paused.
+    clock: (f64, Instant, bool),
+    held: bool,
+    fetching: bool,
+    looked: Option<Instant>,
+}
+
+impl WatchView {
+    fn new(player: String) -> WatchView {
+        WatchView { player, play: None, entry: None, rx: None, game: None, inputs: Vec::new(), clock: (-1.0e9, Instant::now(), true), held: false, fetching: false, looked: None }
+    }
+
+    /// Where the player is now (map time).
+    fn their_time(&self) -> f64 {
+        let (t, at, paused) = self.clock;
+        let rate = self.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
+        if paused { t } else { t + at.elapsed().as_secs_f64() * 1000.0 * rate }
+    }
+
+    fn status(&self) -> String {
+        match (&self.play, self.entry) {
+            (None, _) => format!("waiting for {} to play something...", self.player),
+            (Some(_), None) if self.fetching => "getting the map...".into(),
+            (Some(_), None) => "looking for the map...".into(),
+            (Some(_), Some(_)) => "loading...".into(),
         }
     }
 }
@@ -243,6 +287,10 @@ struct State {
     /// Discord status: the connection thread (while enabled), the activity last set, and when
     /// it was last worked out.
     discord: Option<discord::Presence>,
+    /// Friends, chat and notifications (the F9 overlay) over the social connection.
+    social: social::Social,
+    /// The solo play being streamed to friends: which game, presses sent, last frame sent.
+    stream: Option<(usize, usize, Instant)>,
     presence: Option<discord::Activity>,
     presence_at: Option<Instant>,
     /// Background library scan: result channel and files-read counter.
@@ -530,13 +578,13 @@ impl State {
 
     /// Scenes that use the gameplay present mode; everything else is a menu.
     fn in_song(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. } | Scene::Spectate(_))
+        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. } | Scene::Spectate(_) | Scene::Watch(_))
     }
 
     /// The present mode this frame should use.
     fn wanted_present(&self) -> PresentChoice {
         // Watching someone else play needs no low input latency: always vsync (smoothest).
-        if matches!(self.scene, Scene::Spectate(_)) {
+        if matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_)) {
             return PresentChoice::Fifo;
         }
         if self.cfg.menu_vsync && !self.in_song() { PresentChoice::Fifo } else { self.cfg.present }
@@ -1254,6 +1302,7 @@ impl State {
                 let who = v.focus.and_then(|k| v.games.get(k)).and_then(|(id, _)| v.players.iter().find(|p| p.0 == *id)).map(|p| p.1.clone());
                 (label, who.map(|w| format!("Spectating {w}")).unwrap_or_else(|| "Spectating everyone".into()))
             }
+            Scene::Watch(v) => (format!("Watching {}", v.player), v.play.as_ref().map(|p| p.map.label()).unwrap_or_default()),
             Scene::MpResults => (self.mp.as_ref().and_then(|s| s.map.as_ref()).map(map_label).unwrap_or_default(), "Multiplayer results".into()),
             Scene::VideoEdit(ed) => ("Making a replay video".into(), ed.replay.map_label.clone()),
             // Anywhere else while in a room (its lobby, or song select picking its map).
@@ -1624,7 +1673,7 @@ impl State {
     fn cursor_hidden(&self, now: Instant) -> bool {
         let playing = match &self.scene {
             Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } => game.paused.is_none(),
-            Scene::Spectate(_) => true,
+            Scene::Spectate(_) | Scene::Watch(_) => true,
             _ => false,
         };
         playing
@@ -2106,6 +2155,19 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
+        if pressed && self.splash.is_none() {
+            let (vx, vy) = self.mouse_virtual();
+            let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
+            let [px, py, pw, ph] = social::panel_rect(width);
+            let on_panel = self.social.open && vx >= px && vx <= px + pw && vy >= py && vy <= py + ph;
+            let on_social = matches!(self.hit_at(vx, vy), Some(render::Hit::SocialToggle | render::Hit::SocialNote(_)));
+            if on_panel || on_social {
+                if let Some(hit) = self.hit_at(vx, vy) {
+                    self.click(hit, window);
+                }
+                return;
+            }
+        }
         if let Some(s) = &mut self.splash {
             if pressed {
                 s.skip(Instant::now(), self.audio.as_ref(), "a left click");
@@ -2550,6 +2612,7 @@ impl State {
 
     /// Forgets the saved online login.
     fn sign_out(&mut self, why: &str) {
+        self.social = social::Social::default();
         self.mp_menu.account = None;
         self.mp_menu.rooms.clear();
         self.cfg.online_token.clear();
@@ -2583,6 +2646,8 @@ impl State {
                             if fresh {
                                 self.mp_status = format!("logged in as {name}");
                                 menu.cursor = 0;
+                                // A new login: reconnect the social side with its token.
+                                self.social = social::Social::default();
                             }
                             self.cfg.online_user = name;
                             self.cfg.online_token = token;
@@ -2783,9 +2848,435 @@ impl State {
         }
     }
 
+    fn open_social(&mut self) {
+        if !self.social.open {
+            self.social.open = true;
+            self.social.opened_at = Some(Instant::now());
+        }
+    }
+
+    /// F9: the friends overlay (not during songs).
+    fn toggle_social(&mut self) {
+        if self.social.open {
+            self.social.open = false;
+        } else if !self.in_song() || matches!(self.scene, Scene::Watch(_)) {
+            self.open_social();
+            self.social.mark_read(self.mp.is_some());
+        }
+    }
+
+    fn social_key(&mut self, code: KeyCode, text: Option<&str>) {
+        use social::Row;
+        let in_lobby = self.mp.is_some();
+        let rows = self.social.rows(in_lobby).len();
+        let row = self.social.row(in_lobby);
+        match code {
+            KeyCode::Escape => self.social.open = false,
+            KeyCode::ArrowUp => self.social.cursor = self.social.cursor.min(rows - 1).saturating_sub(1),
+            KeyCode::ArrowDown => self.social.cursor = (self.social.cursor + 1).min(rows - 1),
+            KeyCode::Backspace => {
+                self.social.input.pop();
+            }
+            KeyCode::Delete if self.social.input.is_empty() => match row {
+                Row::Request(_) => self.social_action(social::Action::Decline),
+                Row::Friend(k) => {
+                    if let (Some(f), Some(c)) = (self.social.friends.get(k), &self.social.conn) {
+                        c.send(online::Up::RemoveFriend(f.name.clone()));
+                        self.toast(format!("removed {} from your friends", f.name));
+                    }
+                }
+                _ => {}
+            },
+            KeyCode::KeyW if self.modifiers_ctrl => self.social_action(social::Action::Watch),
+            KeyCode::KeyJ if self.modifiers_ctrl => self.social_action(social::Action::Join),
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let text = self.social.input.trim().to_string();
+                match row {
+                    Row::AddFriend if !text.is_empty() => {
+                        if let Some(c) = &self.social.conn {
+                            c.send(online::Up::AddFriend(text));
+                        }
+                        self.social.input.clear();
+                    }
+                    Row::Request(_) => self.social_action(social::Action::Accept),
+                    Row::Friend(k) if !text.is_empty() => {
+                        if let (Some(f), Some(c)) = (self.social.friends.get(k), &self.social.conn) {
+                            c.send(online::Up::Chat { to: f.name.clone(), text });
+                        }
+                        self.social.input.clear();
+                    }
+                    Row::Lobby if !text.is_empty() => {
+                        if let Some(s) = &self.mp {
+                            s.client.send(net::ClientMsg::Chat(text));
+                        }
+                        self.social.input.clear();
+                    }
+                    _ => {}
+                }
+            }
+            _ => {
+                let Some(text) = text else { return };
+                for ch in text.chars().filter(|c| net::drawable_char(*c)) {
+                    let len = self.social.input.chars().count();
+                    let ok = match row {
+                        Row::AddFriend => len < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
+                        _ => len < 200,
+                    };
+                    if ok {
+                        self.social.input.push(ch);
+                    }
+                }
+            }
+        }
+        self.social.mark_read(in_lobby);
+        if self.social.row(in_lobby) == Row::Lobby {
+            if let Some(s) = &mut self.mp {
+                s.chat_unread = 0;
+            }
+        }
+    }
+
+    /// A button on the selected overlay row (or its keyboard shortcut).
+    fn social_action(&mut self, action: social::Action) {
+        use social::{Action, Row};
+        let in_lobby = self.mp.is_some();
+        match (self.social.row(in_lobby), action) {
+            (Row::Request(k), Action::Accept | Action::Decline) => {
+                let Some(name) = self.social.requests.get(k).cloned() else { return };
+                if let Some(c) = &self.social.conn {
+                    c.send(if action == Action::Accept { online::Up::AddFriend(name) } else { online::Up::RemoveFriend(name) });
+                }
+            }
+            (Row::Friend(k), Action::Watch) => {
+                if let Some(f) = self.social.friends.get(k).cloned() {
+                    self.watch(f.name);
+                }
+            }
+            (Row::Friend(k), Action::Join) => {
+                let Some(f) = self.social.friends.get(k).cloned() else { return };
+                let Some(online::Activity::Lobby { room: Some(room), title }) = f.activity else {
+                    self.toast(format!("{} isn't in an online lobby", f.name));
+                    return;
+                };
+                if self.mp.is_some() || self.mp_connecting.is_some() {
+                    self.toast("leave your lobby first".into());
+                    return;
+                }
+                self.social.open = false;
+                self.mp_status = format!("joining {title}...");
+                self.scene = Scene::MpMenu;
+                let request = online::Request::JoinRoom { token: self.cfg.online_token.clone(), room };
+                let account = self.mp_menu.account.clone().unwrap_or_default();
+                self.mp_connecting = Some(multiplayer::start_online(self.cfg.online_server.clone(), request, account));
+            }
+            _ => {}
+        }
+    }
+
+    /// Starts watching a friend's solo plays.
+    fn watch(&mut self, name: String) {
+        if self.mp.is_some() {
+            self.toast("leave your lobby first".into());
+            return;
+        }
+        let Some(c) = self.social.conn.as_ref().filter(|_| self.social.connected) else {
+            self.toast("not connected to the server".into());
+            return;
+        };
+        c.send(online::Up::Watch(name.clone()));
+        self.stop_audio();
+        self.social.open = false;
+        self.scene = Scene::Watch(Box::new(WatchView::new(name)));
+    }
+
+    fn stop_watching(&mut self) {
+        if let Some(c) = &self.social.conn {
+            c.send(online::Up::StopWatching);
+        }
+        self.stop_audio();
+        self.to_select();
+    }
+
+    /// What we're doing, for friends.
+    fn activity(&self) -> online::Activity {
+        use online::Activity;
+        let lobby_map = || self.mp.as_ref().and_then(|s| s.map.as_ref()).map(|m| m.label()).unwrap_or_default();
+        match &self.scene {
+            Scene::Play { game, entry, .. } if game.replay.is_none() => Activity::Playing { map: self.library.get(*entry).map(|e| e.label()).unwrap_or_default() },
+            Scene::Watch(v) => Activity::Watching { name: v.player.clone() },
+            Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_) => Activity::Match { map: lobby_map() },
+            _ => match &self.mp {
+                Some(s) => Activity::Lobby { room: s.online_room, title: s.label.strip_prefix("online: ").unwrap_or(&s.label).to_string() },
+                None => Activity::Menus,
+            },
+        }
+    }
+
+    /// The social connection: (re)connects while logged in, applies what the server says and
+    /// keeps our status current.
+    fn poll_social(&mut self) {
+        if self.social.conn.is_none() && self.mp_menu.account.is_some() && !self.cfg.online_token.is_empty() {
+            self.social.conn = Some(online::Social::start(self.cfg.online_server.clone(), self.cfg.online_token.clone()));
+        }
+        let Some(conn) = &self.social.conn else { return };
+        for event in conn.poll() {
+            match event {
+                online::SocialEvent::Connected(name) => {
+                    self.social.connected = true;
+                    self.social.me = Some(name);
+                    // The server resends the friend list and recent chat.
+                    self.social.chats.clear();
+                    self.social.have_list = false;
+                    self.social.sent_activity = None;
+                    self.stream = None;
+                    if let Scene::Watch(v) = &self.scene {
+                        let player = v.player.clone();
+                        if let Some(c) = &self.social.conn {
+                            c.send(online::Up::Watch(player));
+                        }
+                    }
+                }
+                online::SocialEvent::Disconnected(_) => {
+                    if self.social.connected {
+                        self.social.notify("offline", "lost the connection to the server", 0xFF4B4B, social::NoteAction::None);
+                    }
+                    self.social.connected = false;
+                    for f in &mut self.social.friends {
+                        f.activity = None;
+                    }
+                }
+                online::SocialEvent::SessionExpired => {
+                    self.sign_out("your session expired: log in again");
+                    return;
+                }
+                online::SocialEvent::Down(d) => self.social_down(d),
+            }
+        }
+        if self.social.connected {
+            let a = self.activity();
+            if self.social.sent_activity.as_ref() != Some(&a) {
+                if let Some(c) = &self.social.conn {
+                    c.send(online::Up::Status(a.clone()));
+                }
+                self.social.sent_activity = Some(a);
+            }
+        }
+        let in_song = self.in_song();
+        self.social.expire_notes(in_song);
+        if self.social.open && self.social.row(self.mp.is_some()) == social::Row::Lobby {
+            if let Some(s) = &mut self.mp {
+                s.chat_unread = 0;
+            }
+        }
+    }
+
+    fn social_down(&mut self, d: online::Down) {
+        use online::{Activity, Down};
+        use social::{key, NoteAction};
+        match d {
+            Down::Friends { friends, requests, sent } => {
+                if self.social.have_list {
+                    for f in &friends {
+                        let old = self.social.friends.iter().find(|o| key(&o.name) == key(&f.name));
+                        // A new friend isn't "coming online"; only one who was offline is.
+                        let was_online = old.is_none_or(|o| o.activity.is_some());
+                        let was_playing = old.is_some_and(|o| matches!(o.activity, Some(Activity::Playing { .. })));
+                        match &f.activity {
+                            Some(Activity::Playing { map }) if !was_playing => {
+                                self.social.notify(format!("{} is playing", f.name), map.clone(), 0x438EAD, NoteAction::Watch(f.name.clone()))
+                            }
+                            Some(a) if !was_online => self.social.notify(format!("{} is online", f.name), a.describe(), 0x86E05A, NoteAction::Chat(f.name.clone())),
+                            _ => {}
+                        }
+                    }
+                    for r in &requests {
+                        if !self.social.requests.contains(r) {
+                            self.social.notify("friend request", format!("{r} wants to be friends"), 0xFFD34D, NoteAction::Requests);
+                        }
+                    }
+                }
+                self.social.have_list = true;
+                self.social.friends = friends;
+                self.social.requests = requests;
+                self.social.sent = sent;
+                let rows = self.social.rows(self.mp.is_some()).len();
+                self.social.cursor = self.social.cursor.min(rows - 1);
+            }
+            Down::Chat(line) => {
+                let me = self.social.me.clone().unwrap_or_default();
+                let mine = key(&line.from) == key(&me);
+                let other = if mine { line.to.clone() } else { line.from.clone() };
+                // Lines from before we connected are history (sent again on connect): no alerts.
+                let fresh = line.at + 10 >= discord::unix_now();
+                let log = self.social.chats.entry(key(&other)).or_default();
+                log.push(line.clone());
+                if log.len() > 200 {
+                    log.remove(0);
+                }
+                let viewing = self.social.open && matches!(self.social.row(self.mp.is_some()), social::Row::Friend(k) if self.social.friends.get(k).is_some_and(|f| key(&f.name) == key(&other)));
+                if !mine && fresh && !viewing {
+                    *self.social.unread.entry(key(&other)).or_default() += 1;
+                    self.social.notify(line.from.clone(), line.text.clone(), 0x4fb4ff, NoteAction::Chat(line.from.clone()));
+                }
+            }
+            Down::Notice(text) => self.social.notify("taiko-rs", text, 0x9a9ab0, NoteAction::None),
+            Down::WatchStart { player, play, t, paused, inputs } => {
+                if let Scene::Watch(v) = &mut self.scene {
+                    if key(&v.player) == key(&player) {
+                        v.play = Some(play);
+                        v.inputs = inputs;
+                        v.clock = (t, Instant::now(), paused);
+                        v.game = None;
+                        v.rx = None;
+                        v.entry = None;
+                        v.held = false;
+                        v.fetching = false;
+                        v.looked = None;
+                        if let Some(a) = &self.audio {
+                            a.stop();
+                        }
+                    }
+                }
+            }
+            Down::WatchFrame { t, paused, inputs } => {
+                if let Scene::Watch(v) = &mut self.scene {
+                    v.clock = (t, Instant::now(), paused);
+                    match v.game.as_mut().and_then(|g| g.replay.as_mut()) {
+                        Some((list, _)) => list.extend_from_slice(&inputs),
+                        None => v.inputs.extend_from_slice(&inputs),
+                    }
+                }
+            }
+            Down::WatchEnd { player } => {
+                if let Scene::Watch(v) = &mut self.scene {
+                    if key(&v.player) == key(&player) {
+                        let name = v.player.clone();
+                        **v = WatchView::new(name);
+                        if let Some(a) = &self.audio {
+                            a.stop();
+                        }
+                    }
+                }
+            }
+            Down::WatchStopped(why) => {
+                self.toast(why);
+                if matches!(self.scene, Scene::Watch(_)) {
+                    self.stop_audio();
+                    self.to_select();
+                }
+            }
+            Down::Pong => {}
+        }
+    }
+
+    /// Streams a solo play to friends who watch: its start, then every 100 ms where it is and
+    /// the presses since (the first frame sends all of them, for a mid-play reconnect).
+    fn stream_play(&mut self) {
+        let connected = self.social.connected;
+        let Scene::Play { game, entry, .. } = &mut self.scene else {
+            if self.stream.take().is_some() && connected {
+                if let Some(c) = &self.social.conn {
+                    c.send(online::Up::PlayEnd);
+                }
+            }
+            return;
+        };
+        let Some(conn) = self.social.conn.as_ref().filter(|_| connected && game.replay.is_none()) else {
+            self.stream = None;
+            return;
+        };
+        let id = &**game as *const Game as usize;
+        if self.stream.map(|s| s.0) != Some(id) {
+            if self.stream.is_some() {
+                conn.send(online::Up::PlayEnd);
+            }
+            game.log_inputs = true;
+            let Some(e) = self.library.get(*entry) else { return };
+            conn.send(online::Up::PlayStart(online::SoloPlay { map: map_info(e, game.rate), anti_mash: game.anti_mash }));
+            self.stream = Some((id, 0, Instant::now() - Duration::from_secs(1)));
+        }
+        let Some((_, sent, last)) = self.stream.as_mut() else { return };
+        if last.elapsed() >= Duration::from_millis(100) {
+            *last = Instant::now();
+            let inputs = game.inputs.get(*sent..).unwrap_or_default().to_vec();
+            *sent = game.inputs.len();
+            conn.send(online::Up::PlayFrame { t: game.time, paused: game.paused.is_some() || game.resuming.is_some(), inputs });
+        }
+    }
+
+    /// The watch view: finds (or downloads) and loads the map, starts the replay where the
+    /// friend is (minus the delay), holds while they pause and catches up when they skip.
+    fn watch_tick(&mut self) {
+        if !matches!(self.scene, Scene::Watch(_)) {
+            return;
+        }
+        let Scene::Watch(mut v) = std::mem::replace(&mut self.scene, Scene::Select) else { return };
+        if let (Some(play), None, None) = (v.play.clone(), v.entry, &v.game) {
+            if v.looked.is_none_or(|t| t.elapsed() > Duration::from_secs(1)) {
+                v.looked = Some(Instant::now());
+                match find_map(&self.library, &play.map) {
+                    Some(i) => {
+                        v.entry = Some(i);
+                        self.preview.show_background_for(&self.library[i]);
+                        let track = self.cached_track(i, play.map.rate);
+                        v.rx = Some(self.spawn_loader(i, play.map.rate, track));
+                    }
+                    None if !v.fetching => {
+                        v.fetching = true;
+                        self.fetch_map(play.map.clone());
+                    }
+                    None => {}
+                }
+            }
+        }
+        if let Some(rx) = &v.rx {
+            match rx.try_recv() {
+                Ok(Ok((map, track))) => {
+                    v.rx = None;
+                    let anti_mash = v.play.as_ref().is_some_and(|p| p.anti_mash);
+                    let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
+                    let mut g = Game::new(map, track, self.audio.as_ref());
+                    g.replay = Some((std::mem::take(&mut v.inputs), 0));
+                    g.anti_mash = anti_mash;
+                    g.watched = true;
+                    g.banner = Some(format!("WATCHING  -  {}", v.player));
+                    let target = v.their_time() - WATCH_DELAY_MS * rate;
+                    if target > g.time {
+                        g.seek(target, self.audio.as_ref(), self.cfg.offset_ms);
+                    }
+                    v.game = Some(Box::new(g));
+                }
+                Ok(Err(e)) => {
+                    v.rx = None;
+                    self.toast(format!("can't load the map: {e}"));
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => v.rx = None,
+            }
+        }
+        let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
+        let target = v.their_time() - WATCH_DELAY_MS * rate;
+        if let Some(g) = &mut v.game {
+            if !v.held && g.time > target + 250.0 {
+                g.pause(self.audio.as_ref());
+                v.held = true;
+            } else if v.held && target >= g.time {
+                g.resume(self.audio.as_ref());
+                v.held = false;
+            } else if !v.held && g.time < target - 4000.0 * rate {
+                // Far behind (they skipped the intro, or we stalled): jump to them.
+                g.seek(target, self.audio.as_ref(), self.cfg.offset_ms);
+            }
+        }
+        self.scene = Scene::Watch(v);
+    }
+
     /// Finishes pending connections and applies messages from the room.
     fn poll_multiplayer(&mut self) {
         self.poll_online();
+        self.poll_social();
+        self.stream_play();
+        self.watch_tick();
         if let Some(rx) = &self.mp_connecting {
             match rx.try_recv() {
                 Ok(Ok(session)) => {
@@ -2953,6 +3444,22 @@ impl State {
             }
             return;
         }
+        // The friends overlay: F9 anywhere outside songs; while open it takes the keyboard
+        // (function keys still work).
+        if code == KeyCode::F9 && !repeat {
+            self.toggle_social();
+            return;
+        }
+        if self.social.open {
+            let function_key = matches!(
+                code,
+                KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 | KeyCode::F5 | KeyCode::F6 | KeyCode::F7 | KeyCode::F8 | KeyCode::F10 | KeyCode::F11 | KeyCode::F12
+            );
+            if !(function_key && self.handle_global_key(code, window)) {
+                self.social_key(code, text);
+            }
+            return;
+        }
         // Key capture must see every key, before any shortcut can claim it.
         if self.settings_ui.dropdown.is_some() && !repeat {
             let nav = matches!(
@@ -3017,6 +3524,12 @@ impl State {
         }
         if matches!(self.scene, Scene::VideoEdit(_)) {
             self.video_key(code, repeat, window);
+            return;
+        }
+        if matches!(self.scene, Scene::Watch(_)) && code == KeyCode::Escape {
+            if !repeat {
+                self.stop_watching();
+            }
             return;
         }
         if let Scene::Spectate(v) = &mut self.scene {
@@ -3143,7 +3656,7 @@ impl State {
             }
             Scene::Settings { .. } => self.settings_key(code, window),
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. } | Scene::Download => {}
-            Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) | Scene::VideoEdit(_) => {}
+            Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) | Scene::Watch(_) | Scene::VideoEdit(_) => {}
             Scene::Play { game, entry, from } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
@@ -3244,7 +3757,7 @@ impl State {
             let has_bg = self.preview.has_background;
             self.bg_brightness = match self.scene {
                 _ if !has_bg => 0.0,
-                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Loading { .. } | Scene::Preview { .. } | Scene::Spectate(_) | Scene::VideoEdit(_) => 1.0 - self.cfg.bg_dim,
+                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Loading { .. } | Scene::Preview { .. } | Scene::Spectate(_) | Scene::Watch(_) | Scene::VideoEdit(_) => 1.0 - self.cfg.bg_dim,
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
@@ -3689,6 +4202,7 @@ impl State {
                             g.anti_mash = mash;
                             g.replay = Some((inputs, 0));
                             g.banner = Some(format!("SPECTATING  -  {name}  ({}/{})", k + 1, v.players.len()));
+                            g.watched = true;
                             v.games.push((*id, Box::new(g)));
                         }
                         // Players may have skipped the intro before the view was ready.
@@ -3717,6 +4231,24 @@ impl State {
                     _ if !v.games.is_empty() => draw_spectate_all(canvas, &mut v.games, &v.players, scroll),
                     _ => {}
                 }
+            }
+            Scene::Watch(v) => {
+                let scroll = self.cfg.scroll_speed;
+                match &mut v.game {
+                    Some(g) => {
+                        g.kiai_effects = self.cfg.kiai_effects;
+                        g.update(now, self.audio.as_ref(), self.cfg.offset_ms);
+                        draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
+                            g.draw_playfield(c, scroll);
+                        });
+                        g.draw_hud(canvas);
+                        if v.held {
+                            canvas.text_centered(canvas.width / 2.0, 300.0, 9.0, rgba(0x9a9ab0, 1.0), &format!("{} paused", v.player));
+                        }
+                    }
+                    None => canvas.text_centered(canvas.width / 2.0, 220.0, 12.0, rgba(0xffffff, 1.0), &v.status()),
+                }
+                canvas.text_centered(canvas.width / 2.0, 470.0, 7.0, rgba(0x9a9ab0, 1.0), "Esc: stop watching   F9: friends");
             }
             Scene::VideoEdit(ed) => {
                 match ed.poll() {
@@ -3855,6 +4387,19 @@ impl State {
                 self.volume_since = None;
             }
         }
+        if !self.in_song() && self.splash.is_none() {
+            let logged_in = self.mp_menu.account.is_some();
+            let (lobby, lobby_unread) = match &self.mp {
+                Some(s) => (Some(&s.chat[..]), s.chat_unread),
+                None => (None, 0),
+            };
+            if self.social.open {
+                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread);
+            } else if logged_in {
+                social::draw_chip(canvas, &self.social, lobby_unread);
+            }
+            social::draw_notes(canvas, &self.social);
+        }
         if let Some(t) = &self.toast {
             if now < t.until {
                 let a = (t.until.duration_since(now).as_secs_f32() / 0.3).min(1.0);
@@ -3931,6 +4476,14 @@ impl State {
     fn download_lobby_map(&mut self) {
         let Some(m) = self.mp.as_ref().and_then(|s| s.map.clone()) else { return };
         if self.mp.as_ref().is_some_and(|s| s.have_map) || self.lobby_lookup.is_some() {
+            return;
+        }
+        self.fetch_map(m);
+    }
+
+    /// Downloads the set a map someone else has comes from (mirrors: by set id, else a search).
+    fn fetch_map(&mut self, m: net::MapInfo) {
+        if self.lobby_lookup.is_some() {
             return;
         }
         match m.set_id {
@@ -4208,6 +4761,37 @@ impl State {
             Hit::ScoreRow(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
                     self.watch_replay(&file);
+                }
+            }
+            Hit::SocialToggle => self.toggle_social(),
+            Hit::SocialPanel => {}
+            Hit::SocialRow(i) => {
+                self.social.cursor = i;
+                self.social.mark_read(self.mp.is_some());
+            }
+            Hit::SocialAction(i, action) => {
+                self.social.cursor = i;
+                self.social_action(action);
+            }
+            Hit::SocialNote(i) => {
+                if i < self.social.notes.len() {
+                    let note = self.social.notes.remove(i);
+                    match note.action {
+                        social::NoteAction::Chat(name) => {
+                            self.open_social();
+                            self.social.select_friend(&name, self.mp.is_some());
+                            self.social.mark_read(self.mp.is_some());
+                        }
+                        social::NoteAction::Requests => {
+                            self.open_social();
+                            let in_lobby = self.mp.is_some();
+                            if let Some(r) = self.social.rows(in_lobby).iter().position(|r| matches!(r, social::Row::Request(_))) {
+                                self.social.cursor = r;
+                            }
+                        }
+                        social::NoteAction::Watch(name) => self.watch(name),
+                        social::NoteAction::None => {}
+                    }
                 }
             }
             Hit::GiveHost(id) => {
@@ -4786,6 +5370,8 @@ fn main() {
         mp_status: String::new(),
         picking_lobby_map: false,
         discord: None,
+        social: social::Social::default(),
+        stream: None,
         presence: None,
         presence_at: None,
         scan: Some((scan_rx, found)),

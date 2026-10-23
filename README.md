@@ -309,6 +309,28 @@ live with every player's presses fed in (judged with that player's mash setting)
 switches between players, A shows everyone stacked with their scores, Esc goes back to the lobby.
 When the players skip the intro, the spectator skips it too. Spectating always uses vsync.
 
+### Friends, chat and watching
+
+While logged in (MULTIPLAYER → ONLINE), **F9** (or the *friends* chip top right in the menus)
+opens a translucent overlay over whatever screen is up:
+
+- **Add friend:** type a name on the first row and press Enter. They get a request (notification
+  and a row in their list) to accept or decline; once both agree you're friends.
+- **Friends** are listed online first, with what they're doing (in the menus, playing a map, in
+  a lobby, in a match, watching someone). **watch** / Ctrl+W on a friend playing solo, **join** /
+  Ctrl+J on a friend in an online lobby, Del removes a friend.
+- **Chat:** select a friend and type; Enter sends. No lobby needed; messages reach them on any
+  screen (the last 100 per friend are kept on the server while it runs and shown when you come
+  online). In a lobby there's also **# lobby chat**, whose latest lines show on the lobby screen.
+- **Notifications** (top right, a few seconds, held back during songs): new messages, friend
+  requests, a friend coming online, a friend starting a map (click to watch). Unread counts show
+  on the chip.
+- **Watching a solo play:** your presses stream to the server while you play (friends only can
+  watch). The watcher plays the map 2 s behind you, holds while you pause, follows skips and
+  retries, and downloads the map from the mirrors first if they don't have it. Esc stops.
+
+Everything typed can be Cyrillic, except account names (Latin letters, digits, `_`, `-`).
+
 ### Running the online server
 
 `server/` is a separate small crate (`taiko-server`): accounts (argon2 password hashes, session

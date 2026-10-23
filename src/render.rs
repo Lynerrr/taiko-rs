@@ -907,6 +907,13 @@ pub enum Hit {
     ScoreVideo(usize),
     /// Lobby: give the host role to this player.
     GiveHost(u32),
+    /// The friends overlay: its chip, its panel (swallows clicks), a row, a row's button, and a
+    /// notification card.
+    SocialToggle,
+    SocialPanel,
+    SocialRow(usize),
+    SocialAction(usize, crate::social::Action),
+    SocialNote(usize),
 }
 
 #[derive(Clone, Copy, Debug)]

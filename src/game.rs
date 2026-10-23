@@ -182,6 +182,11 @@ pub struct Game {
     pub anti_mash: bool,
     /// Record presses (map time judged at, key) for a replay.
     pub record: bool,
+    /// Also keep `inputs` without saving a replay (a solo play streamed to watching friends).
+    pub log_inputs: bool,
+    /// Someone else's play being watched: no pause menu (it holds while they pause) and no
+    /// skip prompt (it follows their skips).
+    pub watched: bool,
     pub inputs: Vec<(f64, u8)>,
     /// Playing a replay back: its presses and the next one due; and whose it is.
     pub replay: Option<(Vec<(f64, u8)>, usize)>,
@@ -259,6 +264,8 @@ impl Game {
             kiai_effects: true,
             anti_mash: false,
             record: false,
+            log_inputs: false,
+            watched: false,
             inputs: Vec::new(),
             replay: None,
             replay_of: None,
@@ -335,7 +342,7 @@ impl Game {
     }
 
     fn auto_hit(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
-        if self.record {
+        if self.record || self.log_inputs {
             self.inputs.push((t, key as u8));
         }
         self.presses[key] = t;
@@ -619,7 +626,7 @@ impl Game {
     pub fn press(&mut self, key: usize, at: Instant, audio: Option<&Engine>, offset: f64) {
         let t = (self.clock.at(at) - offset) * self.rate;
         self.offset = offset;
-        if self.record {
+        if self.record || self.log_inputs {
             self.inputs.push((t, key as u8));
         }
         self.press_at(key, t, audio);
@@ -1002,7 +1009,7 @@ impl Game {
             c.text(18.0, info_y + 16.0, 10.0, rgba(0x6f6f86, 1.0), &format!("[{}]  OD {:.1}{rate}", m.version, m.od));
         }
 
-        if self.can_skip() && self.paused.is_none() && !self.mute_hits {
+        if self.can_skip() && self.paused.is_none() && !self.mute_hits && !self.watched {
             c.text_centered(w / 2.0, 330.0, 12.0, rgba(WHITE, 0.7), "SPACE to skip intro");
         }
         if let (Some(_), Some((start, end))) = (self.paused, self.resuming) {
@@ -1021,7 +1028,7 @@ impl Game {
             }
             c.text_centered(cx, cy - 7.0, 14.0, rgba(WHITE, 1.0), &format!("{:.1}", left));
             c.text_centered(cx, cy + 36.0, 8.0, rgba(0x9a9ab0, 1.0), "get ready   (Esc: back to menu)");
-        } else if let Some(cursor) = self.paused {
+        } else if let Some(cursor) = self.paused.filter(|_| !self.watched) {
             let t = progress(self.paused_at, 180.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78 * t));
             c.text_centered(w / 2.0, 120.0 - (1.0 - t) * 12.0, 32.0, rgba(WHITE, t), "PAUSED");

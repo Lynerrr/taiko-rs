@@ -30,6 +30,8 @@ pub struct Session {
     /// Lobby chat: (name, line), oldest first; and lines not seen yet.
     pub chat: Vec<(String, String)>,
     pub chat_unread: usize,
+    /// The lobby's id on the online server (friends can join it from their list).
+    pub online_room: Option<u32>,
 }
 
 impl Session {
@@ -50,6 +52,7 @@ impl Session {
             inputs_sent: 0,
             chat: Vec::new(),
             chat_unread: 0,
+            online_room: None,
         }
     }
 
@@ -223,9 +226,11 @@ pub fn start_online(server: String, request: online::Request, name: String) -> C
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let result = (|| match online::exchange(&server, request)? {
-            (online::Reply::Joined { title, host_token, .. }, reader) => {
+            (online::Reply::Joined { room, title, host_token }, reader) => {
                 let client = Client::over(reader, &name, host_token)?;
-                Ok(Session::new(client, None, format!("online: {title}")))
+                let mut s = Session::new(client, None, format!("online: {title}"));
+                s.online_room = Some(room);
+                Ok(s)
             }
             (online::Reply::Error(e), _) => Err(e),
             _ => Err("odd reply from the server".to_string()),
@@ -453,6 +458,16 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         c.text_right(x0 + col - 12.0, y + 7.0, 9.0, rgba(color, 1.0), st);
     }
 
+    // The latest lobby chat (F9 to write).
+    if !s.chat.is_empty() && s.players.len() <= 8 {
+        let top = 136.0 + s.players.len().min(10) as f32 * 26.0 + 10.0;
+        let lines = ((428.0 - top) / 11.0).max(0.0) as usize;
+        c.text(x0, top, 7.0, rgba(0x4fb4ff, 1.0), "LOBBY CHAT  (F9 to write)");
+        for (k, (from, text)) in s.chat.iter().skip(s.chat.len().saturating_sub(lines.saturating_sub(1))).enumerate() {
+            let line: String = format!("{from}: {text}").chars().take(((col - 8.0) / 4.4) as usize).collect();
+            c.text(x0 + 4.0, top + 12.0 + k as f32 * 11.0, 6.5, rgba(0xdedeea, 1.0), &line);
+        }
+    }
     let ready = s.players.iter().filter(|p| p.ready && p.has_map).count();
     let me_ready = s.me().is_some_and(|p| p.ready);
     let me_spectator = s.me().is_some_and(|p| p.spectator);

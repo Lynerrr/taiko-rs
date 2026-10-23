@@ -503,7 +503,6 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
                 }
                 Ok((false, other_name)) => {
                     state.notice(key, format!("friend request sent to {other_name}"));
-                    state.notice(&other, format!("{name} wants to be your friend (F9)"));
                 }
             }
             state.push_friends(key);
@@ -582,7 +581,8 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
         }
         Up::PlayStart(play) => {
             let mut hub = state.hub.lock().unwrap();
-            let t = play.map.from.unwrap_or(f64::NEG_INFINITY);
+            // Before its first frame (JSON has no infinity: far before any map starts).
+            let t = play.map.from.unwrap_or(-1.0e9);
             let d = Down::WatchStart { player: name.to_string(), play: play.clone(), t, paused: false, inputs: Vec::new() };
             hub.plays.insert(key.to_string(), Play { play, inputs: Vec::new(), t, paused: false, conn: id });
             hub.send_to_watchers(key, &d);
