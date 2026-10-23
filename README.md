@@ -77,6 +77,7 @@ the next start) and restarts into it. *Check at startup* turns the check off. Bu
 | Tab (or F1) | switch between the SONGS and SETTINGS tabs |
 | [ / ] (Shift: ×5) | speed (rate) −/+ 0.05× on song select; host sets the match rate in the lobby |
 | F5 / F6 (rebindable) | previous / next playfield resolution preset, anywhere |
+| right mouse (hold, song select) | fly through the song list like osu!: the pointer's height over the list picks the song that far through it |
 | mouse (in game) | drag inside the playfield to move it, drag its edges/corners to resize it, wheel to scale it |
 | Space | skip intro |
 | Esc (in game) | pause menu: continue, retry, playfield size, settings, quit; Esc again resumes after a short countdown (Settings → *Resume delay*, 0–3 s) |

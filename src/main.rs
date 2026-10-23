@@ -172,6 +172,8 @@ struct State {
     sprites_upload: Option<render::Atlas>,
     /// The window has keyboard focus.
     focused: bool,
+    /// The right button is held on song select (scrolling through the list).
+    right_scroll: bool,
     /// The window has had focus at least once (the splash waits for it).
     focus_seen: bool,
     /// Background star rating / length / BPM analysis of the library, for sorting.
@@ -1791,6 +1793,14 @@ impl State {
     /// Returns the cursor to show.
     fn mouse_moved(&mut self, x: f64, y: f64) -> CursorIcon {
         self.mouse = (x, y);
+        if self.right_scroll {
+            if matches!(self.scene, Scene::Select) {
+                let (_, vy) = self.mouse_virtual();
+                self.select.scroll_to(vy, &self.library);
+                return CursorIcon::NsResize;
+            }
+            self.right_scroll = false;
+        }
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
         let (vx, vy) = self.mouse_virtual();
         let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
@@ -1876,6 +1886,17 @@ impl State {
         }
         self.hover = layout::hit(self.cfg.playfield_area, x, y, sw, sh);
         self.hover.map(|g| g.cursor()).unwrap_or(CursorIcon::Default)
+    }
+
+    /// Right button on song select: hold it and move up and down to fly through the list, like
+    /// osu!'s right-click scrolling.
+    fn right_button(&mut self, pressed: bool) {
+        let free = self.splash.is_none() && self.select.picker.is_none() && self.settings_ui.dropdown.is_none();
+        self.right_scroll = pressed && free && matches!(self.scene, Scene::Select);
+        if self.right_scroll {
+            let (_, vy) = self.mouse_virtual();
+            self.select.scroll_to(vy, &self.library);
+        }
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
@@ -2861,6 +2882,16 @@ impl State {
                         self.mouse_button(true, None);
                         self.mouse_button(false, None);
                     }
+                    debug::Action::RightDown(x, y) | debug::Action::RightMove(x, y) => {
+                        let k = self.window_h as f64 / render::VIRTUAL_HEIGHT as f64;
+                        if matches!(action, debug::Action::RightDown(..)) {
+                            self.mouse = (x as f64 * k, y as f64 * k);
+                            self.right_button(true);
+                        } else {
+                            self.mouse_moved(x as f64 * k, y as f64 * k);
+                        }
+                    }
+                    debug::Action::RightUp => self.right_button(false),
                     debug::Action::CtrlKey(code) => {
                         self.modifiers_ctrl = true;
                         self.key(code, false, None, now, None);
@@ -4093,6 +4124,9 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state: button_state, button: winit::event::MouseButton::Left, .. } => {
                 lock(&self.state).mouse_button(button_state == ElementState::Pressed, self.window.as_deref());
             }
+            WindowEvent::MouseInput { state: button_state, button: winit::event::MouseButton::Right, .. } => {
+                lock(&self.state).right_button(button_state == ElementState::Pressed);
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 let icon = lock(&self.state).mouse_moved(position.x, position.y);
                 if icon != self.cursor {
@@ -4107,6 +4141,8 @@ impl ApplicationHandler for App {
                 let mut guard = lock(&self.state);
                 let s = &mut *guard;
                 s.focused = false;
+                // The release may happen in another window.
+                s.right_scroll = false;
                 // Alt is released in the other window; don't keep it "held" here.
                 s.modifiers_alt = false;
                 if let (Scene::Play { game, .. }, false) = (&mut s.scene, s.auto) {
@@ -4244,6 +4280,7 @@ fn main() {
         bg_changed: None,
         sprites_upload: None,
         focused: true,
+        right_scroll: false,
         focus_seen: false,
         mapinfo: None,
         mapinfo_sorted: false,
