@@ -179,6 +179,12 @@ pub enum Action {
     ClickGraph(f32),
     /// Seek the song select preview by this many ms (what Ctrl+Left/Right does).
     SeekBy(f64),
+    /// Left click at a point in virtual units (480 tall): `Click:x:y`.
+    Click(f32, f32),
+    /// Wheel notches with Alt held (`AltWheelUp` / `AltWheelDown`).
+    AltWheel(i32),
+    /// A key with Shift held: `Shift+Enter`.
+    ShiftKey(winit::keyboard::KeyCode),
 }
 
 impl InputScript {
@@ -195,6 +201,12 @@ impl InputScript {
                     "MoveRight" => Action::Drag { corner: false, dx: 60.0, dy: 0.0, hold: false },
                     "ShrinkCorner" => Action::Drag { corner: true, dx: -300.0, dy: -200.0, hold: false },
                     "Release" => Action::Release,
+                    "AltWheelUp" => Action::AltWheel(1),
+                    "AltWheelDown" => Action::AltWheel(-1),
+                    k if k.starts_with("Click:") => {
+                        let mut p = k.split(':').skip(1).filter_map(|v| v.parse::<f32>().ok());
+                        Action::Click(p.next()?, p.next()?)
+                    }
                     k if k.starts_with("ClickGraph:") => Action::ClickGraph(k[11..].parse().ok()?),
                     k if k.starts_with("SeekBy:") => Action::SeekBy(k[7..].parse().ok()?),
                     // Move:dx:dy and Hold:dx:dy (drag without releasing).
@@ -203,6 +215,7 @@ impl InputScript {
                         let (dx, dy) = (p.next()?, p.next()?);
                         Action::Drag { corner: false, dx, dy, hold: k.starts_with("Hold:") }
                     }
+                    k if k.starts_with("Shift+") => Action::ShiftKey(parse_keycode(&k[6..])?),
                     k => Action::Key(parse_keycode(k)?),
                 };
                 Some((t.trim().parse().ok()?, action))

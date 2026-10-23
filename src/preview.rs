@@ -92,6 +92,11 @@ pub struct Preview {
     /// Where the difficulty timeline was drawn (virtual units) and the time range it spans.
     graph_rect: Option<[f32; 4]>,
     timeline: (f64, f64),
+    /// Start point picked on the timeline: (song file, map time). Kept while browsing the
+    /// difficulties of that song.
+    marker: Option<(PathBuf, f64)>,
+    /// Where the "Play from" button was drawn.
+    play_rect: Option<[f32; 4]>,
     game: Option<Game>,
     last_time: f64,
     bg_path: Option<PathBuf>,
@@ -321,6 +326,22 @@ impl Preview {
         }
     }
 
+    /// Remembers map time `t` of the selected song as the point to play from.
+    pub fn set_marker(&mut self, t: f64, library: &[Entry]) {
+        if let Some(e) = self.seen.and_then(|i| library.get(i)) {
+            self.marker = Some((audio_path(e), t.max(0.0)));
+        }
+    }
+
+    /// The start point picked for `e`'s song, if any.
+    pub fn marker(&self, e: &Entry) -> Option<f64> {
+        self.marker.as_ref().filter(|(p, _)| *p == audio_path(e)).map(|(_, t)| *t)
+    }
+
+    pub fn play_button_at(&self, x: f32, y: f32) -> bool {
+        self.play_rect.is_some_and(|[bx, by, bw, bh]| x >= bx && x <= bx + bw && y >= by && y <= by + bh)
+    }
+
     pub fn graph_rect(&self) -> Option<[f32; 4]> {
         self.graph_rect
     }
@@ -345,8 +366,9 @@ impl Preview {
         let k = (w - 20.0) / 640.0;
         let preview_h = band_h * k + 12.0;
         const GRAPH_H: f32 = 40.0;
-        let h = h.min(114.0 + preview_h + 8.0 + GRAPH_H + 26.0);
+        let h = h.min(114.0 + preview_h + 8.0 + GRAPH_H + 44.0);
         self.graph_rect = None;
+        self.play_rect = None;
         c.round_rect(x, y, w, h, 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
         let Some(i) = self.seen.filter(|&i| i < library.len()) else { return None };
         let e = &library[i];
@@ -384,8 +406,10 @@ impl Preview {
         if let (Some((_, _, _, graph)), Some(game)) = (loaded, self.game.as_ref()) {
             let rect = [bx, by + bh + 8.0, bw, GRAPH_H];
             let preview_at = e.meta.preview_time;
-            self.timeline = draw_graph(c, graph, rect, game.time, preview_at);
+            let marker = self.marker(e);
+            self.timeline = draw_graph(c, graph, rect, game.time, preview_at, marker);
             self.graph_rect = Some(rect);
+            self.play_rect = draw_play_button(c, x + w / 2.0, rect[1] + GRAPH_H + 17.0, marker);
         }
         let game = self.game.as_mut().filter(|_| loaded.is_some())?;
         let full_w = c.width;
@@ -407,7 +431,7 @@ fn fmt_time(ms: f64) -> String {
 
 /// Difficulty timeline like lazer's song progress graph: strain bars over the map's length,
 /// kiai tinted, the preview point marked, and a playhead. Returns the time range it spans.
-fn draw_graph(c: &mut Canvas, g: &Graph, [x, y, w, h]: [f32; 4], now: f64, preview_at: f64) -> (f64, f64) {
+pub fn draw_graph(c: &mut Canvas, g: &Graph, [x, y, w, h]: [f32; 4], now: f64, preview_at: f64, marker: Option<f64>) -> (f64, f64) {
     let (t0, t1) = (g.start.min(0.0).max(g.start - 2000.0), g.end);
     let span = (t1 - t0).max(1.0);
     let x_of = |t: f64| x + (((t - t0) / span).clamp(0.0, 1.0) as f32) * w;
@@ -434,13 +458,43 @@ fn draw_graph(c: &mut Canvas, g: &Graph, [x, y, w, h]: [f32; 4], now: f64, previ
         let px = x_of(preview_at);
         c.rect(px - 0.5, y + 1.0, 1.0, 5.0, rgba(0x86E05A, 1.0));
     }
+    if let Some(m) = marker {
+        // The picked start point: a blue line with a little flag.
+        let mx = x_of(m);
+        c.rect(mx - 0.75, y - 3.0, 1.5, h + 6.0, rgba(MARKER, 1.0));
+        c.rect(mx + 0.75, y - 3.0, 6.0, 4.5, rgba(MARKER, 1.0));
+    }
     let hx = x_of(now);
     c.rect(hx - 0.75, y - 2.0, 1.5, h + 4.0, rgba(0xffffff, 0.95));
     c.text(x, y + h + 5.0, 7.0, rgba(0xc8c8d8, 1.0), &format!("{} / {}", fmt_time(now - t0.min(0.0)), fmt_time(t1)));
-    c.text_centered(x + w / 2.0, y + h + 16.0, 6.0, rgba(0x6f6f86, 1.0), "click / drag / wheel to seek");
     let peak = format!("peak {:.1} notes/s at {}", g.peak_nps, fmt_time(g.peak_nps_at));
     c.text_right(x + w, y + h + 5.0, 7.0, rgba(0x8a8aa0, 1.0), &peak);
     (t0, t1)
+}
+
+const MARKER: u32 = 0x4fb4ff;
+
+/// "Play from 1:23" under the timeline once a start point is picked (else a hint). Returns the
+/// button's rect.
+pub fn draw_play_button(c: &mut Canvas, cx: f32, y: f32, marker: Option<f64>) -> Option<[f32; 4]> {
+    let Some(t) = marker else {
+        c.text_centered(cx, y + 4.0, 6.0, rgba(0x6f6f86, 1.0), "click the graph to pick a start point - drag / wheel to seek");
+        return None;
+    };
+    let label = format!("Play from {}", fmt_time(t));
+    let hint = "Shift+Enter";
+    let (lw, hw) = (Canvas::text_width(8.0, &label), Canvas::text_width(6.0, hint));
+    let bw = 14.0 + 10.0 + lw + 10.0 + hw + 10.0;
+    let (bx, bh) = (cx - bw / 2.0, 17.0);
+    c.round_rect(bx, y, bw, bh, 5.0, rgba(0x173049, 1.0), rgba(MARKER, 1.0), 1.0);
+    // A play triangle out of thin slices (the font is plain ASCII).
+    for i in 0..7 {
+        let f = i as f32;
+        c.rect(bx + 9.0 + f, y + 4.5 + f * 0.5, 1.0, 8.0 - f, rgba(0xffffff, 1.0));
+    }
+    c.text(bx + 24.0, y + 5.0, 8.0, rgba(0xffffff, 1.0), &label);
+    c.text(bx + 24.0 + lw + 10.0, y + 6.0, 6.0, rgba(0x9ac8f0, 1.0), hint);
+    Some([bx, y, bw, bh])
 }
 
 fn new_preview_game(map: &Beatmap) -> Game {

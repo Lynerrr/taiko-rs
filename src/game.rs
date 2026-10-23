@@ -365,6 +365,21 @@ impl Game {
         }
     }
 
+    /// Starts play at map time `t` instead of the beginning: the music starts two seconds
+    /// before it, and everything that ends earlier counts as not played (no score, no misses).
+    pub fn start_from(&mut self, t: f64, audio: Option<&Engine>, offset: f64) {
+        let start = (t - 2000.0 * self.rate).max(self.time);
+        let target = start / self.rate + offset;
+        if let Some(a) = audio {
+            a.seek(target);
+        }
+        self.clock = GameClock::new(target, audio.is_some());
+        self.ignore_audio_until = Some(Instant::now() + std::time::Duration::from_millis(80));
+        self.raw_time = target;
+        self.time = start;
+        self.skip_to(t);
+    }
+
     pub fn can_skip(&self) -> bool {
         self.first_note - self.time > 3000.0
     }

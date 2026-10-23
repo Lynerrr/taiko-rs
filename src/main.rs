@@ -48,9 +48,10 @@ type Loaded = Result<(Beatmap, Arc<Track>), String>;
 
 enum Scene {
     Select,
-    Loading { rx: Receiver<Loaded>, label: String, entry: usize },
-    Play { game: Box<Game>, entry: usize },
-    Results { results: Results, entry: usize },
+    /// `from`: map time to start at (picked on the song select timeline), None = from the start.
+    Loading { rx: Receiver<Loaded>, label: String, entry: usize, from: Option<f64> },
+    Play { game: Box<Game>, entry: usize, from: Option<f64> },
+    Results { results: Results, entry: usize, from: Option<f64> },
     /// Settings tab; `prev` is restored on exit (song select, or a paused game).
     Settings { prev: Box<Scene> },
     /// Offset calibration run; `back` is where to return (the settings tab).
@@ -94,6 +95,9 @@ struct State {
     status: String,
     modifiers_shift: bool,
     modifiers_ctrl: bool,
+    modifiers_alt: bool,
+    /// When the volume overlay was last poked (Alt + wheel).
+    volume_shown: Option<Instant>,
     /// Dragging along the song select difficulty timeline; last seek time for throttling.
     scrubbing: Option<Instant>,
     auto: bool,
@@ -173,6 +177,27 @@ fn draw_game_area(
 
 /// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
 /// Only those few candidates are hashed, so this stays cheap with a huge library.
+fn fmt_time(ms: f64) -> String {
+    let s = (ms / 1000.0).max(0.0) as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// Volume overlay (bottom right) shown while Alt + wheel changes the master volume.
+fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32) {
+    let (w, h) = (190.0, 58.0);
+    let (x, y) = (c.width - w - 16.0, 480.0 - h - 30.0);
+    c.round_rect(x, y, w, h, 8.0, rgba(0x101018, 0.88 * a), rgba(0x3a3a4e, a), 1.0);
+    c.text(x + 12.0, y + 10.0, 9.0, rgba(0xffffff, a), "Volume");
+    c.text_right(x + w - 12.0, y + 10.0, 9.0, rgba(0xffffff, a), &format!("{:.0}%", cfg.master_volume * 100.0));
+    let (bx, by, bw) = (x + 12.0, y + 26.0, w - 24.0);
+    c.round_rect(bx, by, bw, 6.0, 3.0, rgba(0x2a2a38, a), rgba(0, 0.0), 0.0);
+    if cfg.master_volume > 0.0 {
+        c.round_rect(bx, by, (bw * cfg.master_volume).max(6.0), 6.0, 3.0, rgba(0xEB452C, a), rgba(0, 0.0), 0.0);
+    }
+    let detail = format!("music {:.0}%   hitsounds {:.0}%", cfg.music_volume * 100.0, cfg.fx_volume * 100.0);
+    c.text(x + 12.0, y + 40.0, 7.0, rgba(0x9a9ab0, a), &detail);
+}
+
 fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
     library
         .iter()
@@ -209,11 +234,33 @@ impl State {
     }
 
     fn start_loading(&mut self, entry: usize) {
+        self.start_loading_from(entry, None);
+    }
+
+    fn start_loading_from(&mut self, entry: usize, from: Option<f64>) {
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
-        let label = self.library[entry].label();
+        let mut label = self.library[entry].label();
+        if let Some(t) = from {
+            label.push_str(&format!("  (from {})", fmt_time(t)));
+        }
         let rx = self.spawn_loader(entry, self.cfg.rate, self.cached_track(entry, self.cfg.rate));
-        self.scene = Scene::Loading { rx, label, entry };
+        self.scene = Scene::Loading { rx, label, entry, from };
+    }
+
+    /// Plays the selected map from the start point picked on its timeline.
+    fn play_from_marker(&mut self) {
+        let Some(i) = self.select.selected() else { return };
+        if let Some(t) = self.preview.marker(&self.library[i]) {
+            self.start_loading_from(i, Some(t));
+        }
+    }
+
+    fn apply_volume(&self) {
+        if let Some(a) = &self.audio {
+            let (music, fx) = self.cfg.volumes();
+            a.set_volume(music, fx);
+        }
     }
 
     /// Parses the map and decodes its audio on a background thread.
@@ -280,6 +327,7 @@ impl State {
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::ShowConverts => on(self.select.show_converts),
+            Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
             Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
             Item::FxVolume => format!("{:.0}%", c.fx_volume * 100.0),
             Item::AudioBuffer => {
@@ -328,6 +376,7 @@ impl State {
                 self.select.refilter(&self.library);
                 return;
             }
+            Item::MasterVolume => self.cfg.master_volume = (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::MusicVolume => self.cfg.music_volume = (self.cfg.music_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::FxVolume => self.cfg.fx_volume = (self.cfg.fx_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::AudioBuffer => {
@@ -380,11 +429,9 @@ impl State {
                 self.cfg.calibration_bpm = (self.cfg.calibration_bpm + 5.0 * d).clamp(lo, hi);
             }
         }
-        if let Some(a) = &self.audio {
-            a.set_volume(self.cfg.music_volume, self.cfg.fx_volume);
-            if item == Item::FxVolume {
-                a.sfx(audio::Sfx::Don);
-            }
+        self.apply_volume();
+        if let (Some(a), Item::FxVolume) = (&self.audio, item) {
+            a.sfx(audio::Sfx::Don);
         }
         self.cfg.save();
     }
@@ -566,7 +613,7 @@ impl State {
             self.apply_live_offset();
             return;
         }
-        let Scene::Play { game, entry } = &mut self.scene else { return };
+        let Scene::Play { game, entry, from } = &mut self.scene else { return };
         let cursor = game.paused.unwrap_or(0);
         match code {
             KeyCode::ArrowUp => game.paused = Some(cursor.saturating_sub(1)),
@@ -575,8 +622,8 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
                 0 => game.resume(self.audio.as_ref()),
                 1 => {
-                    let e = *entry;
-                    self.start_loading(e);
+                    let (e, f) = (*entry, *from);
+                    self.start_loading_from(e, f);
                 }
                 2 => self.open_dropdown(),
                 3 => self.open_settings(),
@@ -771,6 +818,14 @@ impl State {
         if notches == 0 {
             return;
         }
+        if self.modifiers_alt {
+            let v = ((self.cfg.master_volume + 0.05 * notches as f32) * 20.0).round() / 20.0;
+            self.cfg.master_volume = v.clamp(0.0, 1.0);
+            self.apply_volume();
+            self.cfg.save();
+            self.volume_shown = Some(Instant::now());
+            return;
+        }
         if self.area_editable() {
             self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
             self.cfg.save();
@@ -840,7 +895,7 @@ impl State {
                     }
                     return CursorIcon::Pointer;
                 }
-                if self.preview.time_at(vx, vy).is_some() {
+                if self.preview.time_at(vx, vy).is_some() || self.preview.play_button_at(vx, vy) {
                     return CursorIcon::Pointer;
                 }
             }
@@ -860,15 +915,21 @@ impl State {
         if matches!(self.scene, Scene::Select) {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
+                if self.preview.play_button_at(vx, vy) && !self.picking_lobby_map {
+                    self.play_from_marker();
+                    return;
+                }
                 if let Some(t) = self.preview.time_at(vx, vy) {
                     self.preview.seek(t, self.audio.as_ref());
+                    self.preview.set_marker(t, &self.library);
                     self.scrubbing = Some(Instant::now());
                     return;
                 }
             } else if self.scrubbing.take().is_some() {
-                // Land exactly where the pointer was released.
+                // Land exactly where the pointer was released, and remember that point.
                 if let Some(t) = self.preview.time_at(vx, vy) {
                     self.preview.seek(t, self.audio.as_ref());
+                    self.preview.set_marker(t, &self.library);
                 }
                 return;
             }
@@ -1330,6 +1391,9 @@ impl State {
             return;
         }
         match &mut self.scene {
+            Scene::Select if self.modifiers_shift && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) && !self.picking_lobby_map => {
+                self.play_from_marker();
+            }
             Scene::Select if code == KeyCode::F2 => {
                 if self.modifiers_shift {
                     self.select.random_back();
@@ -1367,20 +1431,20 @@ impl State {
             Scene::Settings { .. } => self.settings_key(code, window),
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => {}
             Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => {}
-            Scene::Play { game, entry } => match code {
+            Scene::Play { game, entry, from } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
                 KeyCode::Space => game.skip(self.audio.as_ref(), self.cfg.offset_ms),
                 KeyCode::Backquote => {
-                    let e = *entry;
-                    self.start_loading(e);
+                    let (e, f) = (*entry, *from);
+                    self.start_loading_from(e, f);
                 }
                 _ => {}
             },
-            Scene::Results { entry, .. } => match code {
+            Scene::Results { entry, from, .. } => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter => {
-                    let e = *entry;
-                    self.start_loading(e);
+                    let (e, f) = (*entry, *from);
+                    self.start_loading_from(e, f);
                 }
                 KeyCode::Escape => {
                     let path = self.library[*entry].path.clone();
@@ -1456,6 +1520,22 @@ impl State {
                         }
                     }
                     debug::Action::SeekBy(ms) => self.preview.seek_by(ms, self.audio.as_ref()),
+                    debug::Action::Click(x, y) => {
+                        let k = self.window_h as f64 / render::VIRTUAL_HEIGHT as f64;
+                        self.mouse_moved(x as f64 * k, y as f64 * k);
+                        self.mouse_button(true);
+                        self.mouse_button(false);
+                    }
+                    debug::Action::ShiftKey(code) => {
+                        self.modifiers_shift = true;
+                        self.key(code, false, None, now, None);
+                        self.modifiers_shift = false;
+                    }
+                    debug::Action::AltWheel(n) => {
+                        self.modifiers_alt = true;
+                        self.wheel(n);
+                        self.modifiers_alt = false;
+                    }
                 }
             }
             self.input_script = Some(script);
@@ -1502,13 +1582,16 @@ impl State {
                     canvas.text_centered(w / 2.0, 450.0, 10.0, rgba(0xffffff, 1.0), "Picking the lobby map: Enter to choose, Esc to cancel");
                 }
             }
-            Scene::Loading { rx, label, entry } => {
+            Scene::Loading { rx, label, entry, from } => {
                 canvas.text_centered(canvas.width / 2.0, 200.0, 14.0, rgba(0xffffff, 1.0), "Loading");
                 canvas.text_centered(canvas.width / 2.0, 226.0, 10.0, rgba(0x9a9ab0, 1.0), label);
                 match rx.try_recv() {
                     Ok(Ok((map, track))) => {
-                        let game = Game::new(map, track, self.audio.as_ref());
-                        next = Some(Scene::Play { game: Box::new(game), entry: *entry });
+                        let mut game = Game::new(map, track, self.audio.as_ref());
+                        if let Some(t) = *from {
+                            game.start_from(t, self.audio.as_ref(), self.cfg.offset_ms);
+                        }
+                        next = Some(Scene::Play { game: Box::new(game), entry: *entry, from: *from });
                     }
                     Ok(Err(e)) => {
                         self.status = format!("failed to load {label}: {e}");
@@ -1519,7 +1602,7 @@ impl State {
                     Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Select),
                 }
             }
-            Scene::Play { game, entry } => {
+            Scene::Play { game, entry, from } => {
                 let done = game.update(now, self.audio.as_ref(), self.cfg.offset_ms);
                 if self.auto {
                     game.autoplay(self.audio.as_ref());
@@ -1554,10 +1637,12 @@ impl State {
                 if done {
                     let m = &game.map.meta;
                     let rate = if (game.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", game.rate) } else { String::new() };
-                    let title = format!("{} - {} [{}]{rate}", m.artist, m.title, m.version);
+                    let part = from.map(|t| format!("  from {}", fmt_time(t))).unwrap_or_default();
+                    let title = format!("{} - {} [{}]{rate}{part}", m.artist, m.title, m.version);
                     next = Some(Scene::Results {
                         results: Results { title, stats: game.stats.clone(), windows: game.windows },
                         entry: *entry,
+                        from: *from,
                     });
                 }
             }
@@ -1744,6 +1829,15 @@ impl State {
             let tw = Canvas::text_width(8.0, &text);
             canvas.round_rect(6.0, 6.0, tw + 12.0, 16.0, 4.0, rgba(0x000000, 0.55), rgba(0, 0.0), 0.0);
             canvas.text(12.0, 10.0, 8.0, rgba(0x9fe09f, 1.0), &text);
+        }
+        if let Some(shown) = self.volume_shown {
+            let age = now.saturating_duration_since(shown).as_secs_f32();
+            if age < 1.6 {
+                let a = ((1.6 - age) / 0.3).min(1.0);
+                draw_volume(canvas, &self.cfg, a);
+            } else {
+                self.volume_shown = None;
+            }
         }
         if let Some(t) = &self.toast {
             if now < t.until {
@@ -1962,6 +2056,7 @@ impl ApplicationHandler for App {
                 let mut s = lock(&self.state);
                 s.modifiers_shift = m.state().shift_key();
                 s.modifiers_ctrl = m.state().control_key();
+                s.modifiers_alt = m.state().alt_key();
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let mut s = lock(&self.state);
@@ -2058,7 +2153,8 @@ fn main() {
     let audio = match Engine::new(cfg.audio_buffer) {
         Ok(a) => {
             eprintln!("audio: {}", a.description);
-            a.set_volume(cfg.music_volume, cfg.fx_volume);
+            let (music, fx) = cfg.volumes();
+            a.set_volume(music, fx);
             Some(a)
         }
         Err(e) => {
@@ -2091,6 +2187,8 @@ fn main() {
         status: String::new(),
         modifiers_shift: false,
         modifiers_ctrl: false,
+        modifiers_alt: false,
+        volume_shown: None,
         scrubbing: None,
         auto,
         shots: debug::ShotPlan::from_env(),

@@ -22,6 +22,7 @@ pub enum Item {
     PresetKey(usize),
     ShowPlayfieldSize,
     ShowConverts,
+    MasterVolume,
     MusicVolume,
     FxVolume,
     AudioBuffer,
@@ -33,7 +34,7 @@ pub enum Item {
     Fullscreen,
 }
 
-pub const ITEMS: [(&str, Item); 29] = [
+pub const ITEMS: [(&str, Item); 30] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::PlayfieldArea),
     ("GAMEPLAY", Item::PlayfieldPreset),
@@ -54,6 +55,7 @@ pub const ITEMS: [(&str, Item); 29] = [
     ("GAMEPLAY", Item::Key(2)),
     ("GAMEPLAY", Item::Key(3)),
     ("GAMEPLAY", Item::ShowConverts),
+    ("AUDIO", Item::MasterVolume),
     ("AUDIO", Item::MusicVolume),
     ("AUDIO", Item::FxVolume),
     ("AUDIO", Item::AudioBuffer),
@@ -87,6 +89,7 @@ impl Item {
             Item::PresetKey(_) => "Next preset key",
             Item::ShowPlayfieldSize => "Show playfield size",
             Item::ShowConverts => "Show osu!standard converts",
+            Item::MasterVolume => "Master volume",
             Item::MusicVolume => "Music volume",
             Item::FxVolume => "Hitsound volume",
             Item::AudioBuffer => "Audio buffer",
@@ -117,6 +120,7 @@ impl Item {
             Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key.",
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
+            Item::MasterVolume => "Scales music and hitsounds. Anywhere: hold Alt and scroll the mouse wheel.",
             Item::MusicVolume | Item::FxVolume => "Left / Right to adjust.",
             Item::AudioBuffer => "Smaller = less audio latency; raise it if you hear crackling.",
             Item::BackgroundDim => "How dark the map background is during play. 100% hides it.",

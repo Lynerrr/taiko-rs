@@ -15,6 +15,8 @@ pub struct Config {
     /// Positive when your audio reaches you late; notes are shifted later by this much.
     pub offset_ms: f64,
     pub scroll_speed: f64,
+    /// Scales both volumes below (Alt + mouse wheel anywhere).
+    pub master_volume: f32,
     pub music_volume: f32,
     pub fx_volume: f32,
     /// Present mode during songs.
@@ -60,6 +62,7 @@ impl Default for Config {
         Config {
             offset_ms: 0.0,
             scroll_speed: 1.0,
+            master_volume: 1.0,
             music_volume: 0.7,
             fx_volume: 1.0,
             present: PresentChoice::Fifo,
@@ -139,6 +142,11 @@ pub fn parse_key(s: &str) -> Option<KeyCode> {
 }
 
 impl Config {
+    /// Music and hitsound volume after the master volume.
+    pub fn volumes(&self) -> (f32, f32) {
+        (self.master_volume * self.music_volume, self.master_volume * self.fx_volume)
+    }
+
     pub fn load() -> Config {
         let mut cfg = Config::default();
         let Some(path) = config_path() else { return cfg };
@@ -153,6 +161,7 @@ impl Config {
             match k {
                 "offset_ms" => cfg.offset_ms = v.parse().unwrap_or(cfg.offset_ms),
                 "scroll_speed" => cfg.scroll_speed = v.parse::<f64>().unwrap_or(cfg.scroll_speed).clamp(0.3, 4.0),
+                "master_volume" => cfg.master_volume = v.parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0),
                 "music_volume" => cfg.music_volume = v.parse::<f32>().unwrap_or(cfg.music_volume).clamp(0.0, 1.0),
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
@@ -206,6 +215,7 @@ impl Config {
              show_playfield_size = {}\n\
              offset_ms = {}\n\
              scroll_speed = {:.2}\n\
+             master_volume = {:.2}\n\
              music_volume = {:.2}\n\
              fx_volume = {:.2}\n\
              # mailbox | immediate | vsync\n\
@@ -233,6 +243,7 @@ impl Config {
             self.show_playfield_size,
             self.offset_ms,
             self.scroll_speed,
+            self.master_volume,
             self.music_volume,
             self.fx_volume,
             self.present.name(),

@@ -57,6 +57,8 @@ The build is produced by GitHub Actions on every push.
 | Esc (in game) | pause menu: continue, retry, playfield size, settings, quit; Esc again resumes |
 | F2 / Shift+F2 | random song / back to the previous random pick (song select) |
 | Ctrl+← / → | seek the song select preview ±5 s |
+| Shift+Enter | play the selected map from the start point picked on its timeline |
+| Alt + wheel | master volume (anywhere) |
 | O (in game or pause menu) | apply the live offset suggestion shown under the hit error meter |
 | `` ` `` | restart map |
 | Esc (song select) | clear search / quit |
@@ -82,7 +84,10 @@ map's preview point (looping), and the panel on the right shows its details (OD,
 note counts) above a live autoplay preview synced to that music, and a difficulty timeline like
 lazer's song progress graph: osu!'s strain over the whole map (kiai tinted, preview point and
 playhead marked, densest second called out). Click or drag on it, use the wheel over it, or
-Ctrl+←/→ to seek the music and autoplay to any part of the map. F2 picks a random song. The background also shows behind
+Ctrl+←/→ to seek the music and autoplay to any part of the map. Clicking it also remembers that
+point (a blue flag): **Play from 1:23** under the timeline (or Shift+Enter) starts the map there,
+with the music two seconds earlier and only the notes from that point on counting; retry keeps the
+start point. F2 picks a random song. The background also shows behind
 the lane during play, darkened by Settings → *Background dim*.
 
 ## Playfield size and speed
