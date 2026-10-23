@@ -1891,10 +1891,16 @@ impl State {
                         s.client.send(net::ClientMsg::Spectator(on));
                         self.toast(if on { "you'll spectate the match" } else { "you'll play the match" }.into());
                     }
-                    KeyCode::KeyD if !s.have_map => self.download_lobby_map(),
-                    KeyCode::KeyH if !s.have_map && s.map.is_some() && self.host_transfer.is_none() => {
-                        s.client.send(net::ClientMsg::RequestMap);
-                        self.toast("asking the host for the map...".into());
+                    // Missing the map: from the host by default (fast, works for any map), the
+                    // mirrors with M or Shift+D.
+                    KeyCode::KeyD | KeyCode::KeyM if !s.have_map && s.map.is_some() && !s.is_host() && (code == KeyCode::KeyM || self.modifiers_shift) => {
+                        self.download_lobby_map()
+                    }
+                    KeyCode::KeyD | KeyCode::KeyH if !s.have_map && s.map.is_some() && !s.is_host() => {
+                        if self.host_transfer.is_none() {
+                            s.client.send(net::ClientMsg::RequestMap);
+                            self.toast("getting the map from the host...".into());
+                        }
                     }
                     KeyCode::KeyM if s.is_host() && !s.in_match => {
                         self.picking_lobby_map = true;
@@ -1909,7 +1915,7 @@ impl State {
                     }
                     KeyCode::Tab => self.scene = Scene::Select,
                     KeyCode::Escape => {
-                        let why = if s.is_host() { "room closed" } else { "left the room" };
+                        let why = if s.owns_room() { "room closed" } else { "left the room" };
                         self.leave_room(why);
                     }
                     _ => {}
@@ -3278,8 +3284,10 @@ impl State {
     /// Player: a piece of the lobby map from the host.
     fn receive_map_part(&mut self, part: net::MapPart) {
         if let Some(e) = part.error {
+            // Fall back to the mirrors.
             self.host_transfer = None;
-            self.toast(format!("the host couldn't send the map: {e}"));
+            self.toast(format!("the host couldn't send it ({e}); trying the mirrors"));
+            self.download_lobby_map();
             return;
         }
         if part.offset == 0 {
@@ -3482,6 +3490,13 @@ impl State {
             Hit::ScoreRow(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
                     self.watch_replay(&file);
+                }
+            }
+            Hit::GiveHost(id) => {
+                if let Some(s) = &self.mp {
+                    s.client.send(net::ClientMsg::GiveHost(id));
+                    let name = s.players.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_default();
+                    self.toast(format!("{name} is the host now"));
                 }
             }
             Hit::ScoreVideo(k) => {

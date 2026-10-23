@@ -897,6 +897,8 @@ pub enum Hit {
     /// A row of the song select leaderboard (watches that replay) / its video button.
     ScoreRow(usize),
     ScoreVideo(usize),
+    /// Lobby: give the host role to this player.
+    GiveHost(u32),
 }
 
 #[derive(Clone, Copy, Debug)]

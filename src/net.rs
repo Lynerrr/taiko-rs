@@ -144,6 +144,8 @@ pub enum ClientMsg {
     Spectate(bool),
     /// Lobby: be a spectator (watch every match from its start) or a player.
     Spectator(bool),
+    /// Host: hand the host role (picking maps, starting) to another player.
+    GiveHost(u32),
 }
 
 /// A piece of a map set archive sent from the host's Songs folder. `data` is base64; the
@@ -336,6 +338,8 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
     let mut dirty = false;
     let mut last_broadcast = Instant::now();
     let mut host_id: Option<u32> = None;
+    // Whoever opened the room (its machine runs the server); the host role can move around.
+    let mut owner_id: Option<u32> = None;
     // The match in progress, for spectators: its map, start (server ms) and every player's
     // presses so far (with their mash setting).
     let mut match_map: Option<MapInfo> = None;
@@ -366,6 +370,13 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
             }
             Ok(Event::Left(id)) => {
                 players.retain(|p| p.info.id != id);
+                // A handed-over host leaving gives it back to the room's owner (or anyone left).
+                if host_id == Some(id) {
+                    host_id = owner_id.filter(|o| players.iter().any(|p| p.info.id == *o)).or_else(|| players.iter().find(|p| p.hello).map(|p| p.info.id));
+                    for p in &mut players {
+                        p.info.host = Some(p.info.id) == host_id;
+                    }
+                }
                 dirty = true;
             }
             Ok(Event::Msg(id, msg)) => {
@@ -385,6 +396,16 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
                             if let Some(dest) = players.iter().find(|p| p.info.id == to) {
                                 let _ = dest.tx.send(ServerMsg::MapFile(part));
                             }
+                        }
+                        continue;
+                    }
+                    ClientMsg::GiveHost(to) if is_host => {
+                        if players.iter().any(|q| q.info.id == to && q.hello) {
+                            host_id = Some(to);
+                            for q in &mut players {
+                                q.info.host = q.info.id == to;
+                            }
+                            dirty = true;
                         }
                         continue;
                     }
@@ -423,6 +444,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
                         // anyone else connects.
                         if host_token == Some(token) && host_id.is_none() {
                             host_id = Some(id);
+                            owner_id = Some(id);
                             p.info.host = true;
                         }
                         if protocol != PROTOCOL {

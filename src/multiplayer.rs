@@ -52,7 +52,13 @@ impl Session {
         self.players.iter().find(|p| p.id == id)
     }
 
+    /// Has the host role: picks maps and starts matches (it can be handed over).
     pub fn is_host(&self) -> bool {
+        self.me().is_some_and(|p| p.host)
+    }
+
+    /// This machine runs the room (closing it ends it for everyone).
+    pub fn owns_room(&self) -> bool {
         self.server.is_some()
     }
 }
@@ -196,7 +202,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             if let Some(d) = &download {
                 c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFFD34D, 1.0), d);
             } else if !have_map {
-                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFF4B4B, 1.0), "not in your Songs folder - D: mirrors, H: from the host");
+                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFF4B4B, 1.0), "not in your Songs folder - D: get it from the host");
             }
         }
         None => {
@@ -211,6 +217,12 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         let y = 136.0 + i as f32 * 26.0;
         let me = Some(p.id) == my_id;
         c.round_rect(x0, y, col, 22.0, 6.0, rgba(if me { 0x2b2b3d } else { 0x1d1d27 }, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+        if s.is_host() && !me && !s.in_match {
+            // Hand the host role over.
+            let label = "make host";
+            let bw = Canvas::text_width(7.0, label) + 14.0;
+            c.button(x0 + col - 110.0 - bw, y + 4.0, bw, 14.0, label, 7.0, Hit::GiveHost(p.id), false);
+        }
         let mut name = p.name.clone();
         if p.host {
             name.push_str("  (host)");
@@ -241,7 +253,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             ("Preview / start point  (P)", Hit::Key(KeyCode::KeyP), false),
             (if me_spectator { spectate_label } else { ready_label }, Hit::Key(if me_spectator { KeyCode::KeyS } else { KeyCode::Space }), false),
             (&start_label, Hit::Key(KeyCode::Enter), true),
-            ("Close room  (Esc)", Hit::Key(KeyCode::Escape), false),
+            (if s.owns_room() { "Close room  (Esc)" } else { "Leave  (Esc)" }, Hit::Key(KeyCode::Escape), false),
         ]);
         let hint = if me_spectator { "you'll watch the match   S: play instead   [ ] match rate   Tab songs" } else { "S: spectate instead   [ ] match rate   Tab songs" };
         c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x6f6f86, 1.0), hint);
@@ -249,10 +261,10 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         let missing = s.map.is_some() && !have_map;
         if missing {
             let busy = download.is_some();
-            let label = if busy { "Downloading..." } else { "Download map  (D)" };
+            let label = if busy { "Downloading..." } else { "Get it from the host  (D)" };
             c.button_row(440.0, &[
                 (label, Hit::Key(KeyCode::KeyD), true),
-                (if busy { "..." } else { "Get it from the host  (H)" }, Hit::Key(KeyCode::KeyH), false),
+                (if busy { "..." } else { "From the mirrors  (M)" }, Hit::Key(KeyCode::KeyM), false),
                 ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false),
             ]);
         } else {
