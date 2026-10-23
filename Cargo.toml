@@ -32,3 +32,9 @@ panic = "abort"
 # Audio decoding is unbearably slow unoptimised; keep dependencies fast in debug builds too.
 [profile.dev.package."*"]
 opt-level = 3
+
+# cpal 0.18.2 with one fix: on Windows (WASAPI) it counted the stream latency twice when
+# reporting when audio is heard, making the game clock lag the sound. See vendor/cpal/src/host/
+# wasapi/stream.rs (`output_timestamp`).
+[patch.crates-io]
+cpal = { path = "vendor/cpal" }

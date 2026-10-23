@@ -349,3 +349,4 @@ spins so frames stay evenly spaced.
 | `src/discord.rs` | Discord Rich Presence over the local IPC socket / pipe |
 | `src/download.rs` | mirror search and `.osz` downloads (catboy.best, osu.direct) |
 | `src/browse.rs` | the Download tab |
+| `vendor/cpal` | cpal 0.18.2 with one fix: WASAPI counted the stream latency twice in its playback timestamps (Windows players needed a much lower offset) |
