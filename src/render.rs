@@ -18,8 +18,31 @@ pub struct Shape {
     pub half: [f32; 2],
     pub fill: [f32; 4],
     pub border: [f32; 4],
-    /// x: corner radius, y: border width, z: glow/softness width, w: half clip (0 none, 1 left, 2 right).
+    /// x: corner radius, y: border width, z: glow/softness width, w: half clip (0 none, 1 left, 2 right)
+    /// or a skin image (`SPRITE_BASE` + `Sprite`, tinted by `fill`).
     pub params: [f32; 4],
+}
+
+/// Skin images, packed into one texture so they draw in the same instanced call as the shapes.
+#[derive(Clone, Copy, Debug)]
+pub enum Sprite {
+    HitCircle,
+    HitCircleOverlay,
+    BigCircle,
+    BigCircleOverlay,
+}
+
+pub const SPRITES: usize = 4;
+const SPRITE_BASE: f32 = 10.0;
+
+/// Skin images side by side (premultiplied RGBA8), each with its UV rect and its size relative
+/// to the note radius. The default (no images) brings back the drawn notes.
+#[derive(Default)]
+pub struct Atlas {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    pub sprites: [Option<([f32; 4], [f32; 2])>; SPRITES],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +93,10 @@ pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    /// The shapes' bind group: globals, then the skin atlas (its UV rects, texture and sampler).
+    shape_layout: wgpu::BindGroupLayout,
+    sprite_rects: wgpu::Buffer,
+    sampler: wgpu::Sampler,
     instances: wgpu::Buffer,
     capacity: usize,
     supported_modes: Vec<wgpu::PresentMode>,
@@ -126,6 +153,9 @@ fn fs(i: V) -> @location(0) vec4<f32> {
 const SHADER: &str = r#"
 struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32 };
 @group(0) @binding(0) var<uniform> g: Globals;
+@group(0) @binding(1) var<uniform> sprites: array<vec4<f32>, 4>;
+@group(0) @binding(2) var atlas: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
 
 struct Inst {
     @location(0) center: vec2<f32>,
@@ -170,6 +200,14 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
 
 @fragment
 fn fs(in: VOut) -> @location(0) vec4<f32> {
+    if (in.params.w > 9.5) {
+        // A skin image (premultiplied), tinted by fill.
+        let rect = sprites[min(u32(in.params.w - 9.5), 3u)];
+        let uv = in.local / (2.0 * in.half) + 0.5;
+        let t = textureSampleLevel(atlas, samp, rect.xy + clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)) * rect.zw, 0.0);
+        let inside = select(0.0, 1.0, all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0)));
+        return vec4<f32>(t.rgb * in.fill.rgb, t.a) * in.fill.a * inside;
+    }
     let r = min(in.params.x, min(in.half.x, in.half.y));
     let d = sd_round_box(in.local, in.half, r);
     let glow = in.params.z;
@@ -233,24 +271,47 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let uniform = |binding, visibility| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        };
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                uniform(0, wgpu::ShaderStages::VERTEX),
+                uniform(1, wgpu::ShaderStages::FRAGMENT),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &bgl,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
+        let sprite_rects = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sprites"),
+            size: (SPRITES * 16) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let bind_group = Self::shape_bind_group(&device, &queue, &bgl, &globals, &sprite_rects, &sampler, &Atlas::default());
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[Some(&bgl)],
@@ -365,6 +426,9 @@ impl Renderer {
             pipeline,
             globals,
             bind_group,
+            shape_layout: bgl,
+            sprite_rects,
+            sampler,
             instances,
             capacity,
             supported_modes: caps.present_modes,
@@ -390,6 +454,58 @@ impl Renderer {
             size: (capacity * std::mem::size_of::<Shape>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        })
+    }
+
+    /// Uploads a skin's images; an empty atlas removes them.
+    pub fn set_sprites(&mut self, atlas: &Atlas) {
+        self.bind_group = Self::shape_bind_group(&self.device, &self.queue, &self.shape_layout, &self.globals, &self.sprite_rects, &self.sampler, atlas);
+    }
+
+    fn shape_bind_group(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        globals: &wgpu::Buffer,
+        rects: &wgpu::Buffer,
+        sampler: &wgpu::Sampler,
+        atlas: &Atlas,
+    ) -> wgpu::BindGroup {
+        // The texture can't be empty: no images is one transparent pixel.
+        let (w, h, data) = if atlas.rgba.len() == (atlas.width * atlas.height * 4) as usize && atlas.width > 0 && atlas.height > 0 {
+            (atlas.width, atlas.height, atlas.rgba.as_slice())
+        } else {
+            (1, 1, &[0u8; 4][..])
+        };
+        let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("skin"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            texture.as_image_copy(),
+            data,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
+            size,
+        );
+        let uv: [[f32; 4]; SPRITES] = atlas.sprites.map(|s| s.map(|(uv, _)| uv).unwrap_or_default());
+        queue.write_buffer(rects, 0, bytemuck::cast_slice(&uv));
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: rects.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
+            ],
         })
     }
 
@@ -741,6 +857,8 @@ pub struct Canvas {
     pub dt_ms: f32,
     /// Shape ranges clipped to a rect (virtual units), e.g. scrolling lists.
     pub clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
+    /// Size (relative to the radius) of each skin image the renderer has; None = not in the skin.
+    pub sprites: [Option<[f32; 2]>; SPRITES],
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
@@ -841,6 +959,14 @@ impl Canvas {
     /// Left (`side` 1) or right (`side` 2) half of a circle.
     pub fn half_circle(&mut self, x: f32, y: f32, r: f32, side: u8, fill: [f32; 4], border: [f32; 4], border_w: f32) {
         self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, side as f32] });
+    }
+
+    /// A skin image centred on (`x`, `y`) for something of radius `r`, tinted by `tint`. False
+    /// (nothing drawn) when the skin doesn't have it.
+    pub fn sprite(&mut self, sprite: Sprite, x: f32, y: f32, r: f32, tint: [f32; 4]) -> bool {
+        let Some([sx, sy]) = self.sprites[sprite as usize] else { return false };
+        self.shapes.push(Shape { center: [x, y], half: [r * sx, r * sy], fill: tint, border: tint, params: [0.0, 0.0, 0.0, SPRITE_BASE + sprite as usize as f32] });
+        true
     }
 
     /// Scales every shape drawn since `start` about `anchor`, then moves it by (`dx`, `dy`). Radii,

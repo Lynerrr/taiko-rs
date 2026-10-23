@@ -66,6 +66,8 @@ pub struct Config {
     pub preset_keys: [KeyCode; 2],
     /// Show the playfield's resolution in a corner during play.
     pub show_playfield_size: bool,
+    /// Name of the osu! skin in use (its folder name); empty = built-in.
+    pub skin: String,
     pub songs: Vec<PathBuf>,
 }
 
@@ -106,6 +108,7 @@ impl Default for Config {
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             show_playfield_size: true,
+            skin: String::new(),
             songs: Vec::new(),
         }
     }
@@ -217,6 +220,7 @@ impl Config {
                     }
                 }
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
+                "skin" => cfg.skin = v.to_string(),
                 "songs" => cfg.songs.push(PathBuf::from(v)),
                 _ => {}
             }
@@ -299,6 +303,7 @@ impl Config {
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
         );
+        out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
         out.push_str(&format!("# multiplayer\nmp_name = {}\nmp_port = {}\nmp_address = {}\n", self.mp_name, self.mp_port, self.mp_address));
         out.push_str("# extra song folders / .osz files, one per line\n");
         for s in &self.songs {
