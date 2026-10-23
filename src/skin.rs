@@ -1,10 +1,11 @@
-//! osu! skins: the hitsounds of a skin from osu!'s `Skins` folder, or from an `.osk` dropped into
-//! taiko-rs's own one. Anything a skin doesn't have keeps the built-in sound.
+//! osu! skins: the note images and hitsounds of a skin from osu!'s `Skins` folder, or from an
+//! `.osk` dropped into taiko-rs's own one. Anything a skin doesn't have stays built-in.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::audio;
+use crate::render::{Atlas, Sprite, SPRITES};
 
 /// taiko-rs's own Skins folder, next to its Songs folder. `.osk` files dropped here are
 /// extracted into a folder of the same name.
@@ -101,6 +102,74 @@ impl Files {
     fn sound(&self, stems: &[&str]) -> Option<&Path> {
         stems.iter().flat_map(|s| ["wav", "ogg", "mp3"].map(|ext| format!("{s}.{ext}"))).find_map(|n| self.0.get(&n)).map(PathBuf::as_path)
     }
+
+    /// The first of `stems` present as a PNG, preferring the `@2x` version. True when it is one.
+    fn image(&self, stems: &[&str]) -> Option<(&Path, bool)> {
+        stems.iter().find_map(|s| {
+            let hd = self.0.get(&format!("{s}@2x.png")).map(|p| (p.as_path(), true));
+            hd.or_else(|| self.0.get(&format!("{s}.png")).map(|p| (p.as_path(), false)))
+        })
+    }
+}
+
+/// The note images osu!taiko uses: circles (tinted red or blue) and the overlays drawn on top.
+const NOTE_IMAGES: [(Sprite, &[&str]); SPRITES] = [
+    (Sprite::HitCircle, &["taikohitcircle"]),
+    (Sprite::HitCircleOverlay, &["taikohitcircleoverlay", "taikohitcircleoverlay-0"]),
+    (Sprite::BigCircle, &["taikobigcircle"]),
+    (Sprite::BigCircleOverlay, &["taikobigcircleoverlay", "taikobigcircleoverlay-0"]),
+];
+
+/// Packs the skin's note images into one atlas. Images are premultiplied (so filtering doesn't
+/// darken their edges) and capped in size: notes are never drawn bigger than that.
+fn note_atlas(files: &Files) -> Atlas {
+    const MAX: u32 = 256;
+    const GAP: u32 = 2;
+    let mut images = Vec::new();
+    for (sprite, stems) in NOTE_IMAGES {
+        let Some((path, hd)) = files.image(stems) else { continue };
+        let mut img = match image::open(path) {
+            Ok(i) => i.to_rgba8(),
+            Err(e) => {
+                eprintln!("skin: {}: {e}", path.display());
+                continue;
+            }
+        };
+        // osu! draws a 128 px (SD) circle image at the note's size.
+        let sd = if hd { 2.0 } else { 1.0 };
+        let size = [img.width() as f32 / sd / 128.0, img.height() as f32 / sd / 128.0];
+        for px in img.pixels_mut() {
+            let a = px[3] as u32;
+            for c in &mut px.0[..3] {
+                *c = ((*c as u32 * a + 127) / 255) as u8;
+            }
+        }
+        let scale = (MAX as f32 / img.width().max(img.height()) as f32).min(1.0);
+        if scale < 1.0 {
+            let (w, h) = (((img.width() as f32 * scale).round() as u32).max(1), ((img.height() as f32 * scale).round() as u32).max(1));
+            img = image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle);
+        }
+        images.push((sprite, img, size));
+    }
+    // The circle is what makes a skinned note; overlays alone stay unused.
+    let has = |s: Sprite| images.iter().any(|(i, _, _)| *i as usize == s as usize);
+    if !has(Sprite::HitCircle) && !has(Sprite::BigCircle) {
+        return Atlas::default();
+    }
+    let width = images.iter().map(|(_, i, _)| i.width() + GAP).sum::<u32>();
+    let height = images.iter().map(|(_, i, _)| i.height()).max().unwrap_or(1);
+    let mut atlas = Atlas { width, height, rgba: vec![0; (width * height * 4) as usize], ..Default::default() };
+    let mut x = 0;
+    for (sprite, img, size) in images {
+        for (row, line) in img.as_raw().chunks_exact(img.width() as usize * 4).enumerate() {
+            let at = ((row as u32 * width + x) * 4) as usize;
+            atlas.rgba[at..at + line.len()].copy_from_slice(line);
+        }
+        let uv = [x as f32 / width as f32, 0.0, img.width() as f32 / width as f32, img.height() as f32 / height as f32];
+        atlas.sprites[sprite as usize] = Some((uv, size));
+        x += img.width() + GAP;
+    }
+    atlas
 }
 
 /// Hitsounds as mono samples at the device rate; `None` keeps the built-in one.
@@ -114,13 +183,14 @@ pub struct Hitsounds {
 
 pub struct Skin {
     pub hitsounds: Hitsounds,
+    pub notes: Atlas,
 }
 
 /// Loads the skin called `name` (built-in for "" or one that isn't installed). `rate`: the
 /// audio device's sample rate, or None to skip the sounds.
 pub fn load(name: &str, rate: Option<u32>) -> Skin {
     let dir = (!name.is_empty()).then(|| list().into_iter().find(|(n, _)| n == name)).flatten().map(|(_, d)| d);
-    let Some(dir) = dir else { return Skin { hitsounds: Hitsounds::default() } };
+    let Some(dir) = dir else { return Skin { hitsounds: Hitsounds::default(), notes: Atlas::default() } };
     let files = Files::read(&dir);
     let hitsounds = match rate {
         Some(rate) => Hitsounds {
@@ -131,7 +201,7 @@ pub fn load(name: &str, rate: Option<u32>) -> Skin {
         },
         None => Hitsounds::default(),
     };
-    Skin { hitsounds }
+    Skin { hitsounds, notes: note_atlas(&files) }
 }
 
 /// A hitsound as mono samples. Skins mute a sound with a tiny empty file; one that fails to

@@ -8,7 +8,7 @@ use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
-use crate::render::{progress, rgba, Canvas, Hit};
+use crate::render::{progress, rgba, Canvas, Hit, Sprite};
 
 pub const PANEL_W: f32 = 150.0;
 pub const HIT_X: f32 = PANEL_W + 64.0;
@@ -699,15 +699,20 @@ impl Game {
                             let p = ((t - st.judged_at) / HIT_ANIM_MS).clamp(0.0, 1.0) as f32;
                             if p < 1.0 {
                                 let y = LANE_Y - 80.0 * p * (2.0 - p);
-                                c.circle(HIT_X, y, r * (1.0 + 0.15 * p), rgba(col, 1.0 - p), rgba(WHITE, 1.0 - p), 3.0);
+                                let r = r * (1.0 + 0.15 * p);
+                                if !skin_note(c, HIT_X, y, r, n.big, col, 1.0 - p) {
+                                    c.circle(HIT_X, y, r, rgba(col, 1.0 - p), rgba(WHITE, 1.0 - p), 3.0);
+                                }
                             }
                         }
                         judged => {
                             let x = x_of(n.time, n.velocity);
                             if x > -r && x < w + r {
                                 let a = if judged.is_some() { 0.4 } else { 1.0 };
-                                c.circle(x, LANE_Y, r + 2.0, rgba(0x000000, 0.35 * a), rgba(0x000000, 0.0), 0.0);
-                                c.circle(x, LANE_Y, r, rgba(col, a), rgba(WHITE, a), r * 0.1);
+                                if !skin_note(c, x, LANE_Y, r, n.big, col, a) {
+                                    c.circle(x, LANE_Y, r + 2.0, rgba(0x000000, 0.35 * a), rgba(0x000000, 0.0), 0.0);
+                                    c.circle(x, LANE_Y, r, rgba(col, a), rgba(WHITE, a), r * 0.1);
+                                }
                             }
                         }
                     }
@@ -892,6 +897,17 @@ pub fn lane_band() -> (f32, f32) {
 }
 
 /// A still playfield (lane, drum, a few notes, score) for the playfield area editor.
+/// A don or kat drawn with the skin's images: the circle tinted `col`, then its overlay. False
+/// (nothing drawn) when the skin has no circle for it.
+fn skin_note(c: &mut Canvas, x: f32, y: f32, r: f32, big: bool, col: u32, alpha: f32) -> bool {
+    let (circle, overlay) = if big { (Sprite::BigCircle, Sprite::BigCircleOverlay) } else { (Sprite::HitCircle, Sprite::HitCircleOverlay) };
+    if !c.sprite(circle, x, y, r, rgba(col, alpha)) {
+        return false;
+    }
+    c.sprite(overlay, x, y, r, rgba(WHITE, alpha));
+    true
+}
+
 pub fn draw_preview(c: &mut Canvas) {
     let w = c.width;
     let lane_top = LANE_Y - LANE_H / 2.0;
@@ -902,8 +918,11 @@ pub fn draw_preview(c: &mut Canvas) {
     // Back to front, like gameplay.
     c.capsule(HIT_X + 560.0, HIT_X + 760.0, LANE_Y, NOTE_R * 0.86, rgba(ROLL, 1.0), rgba(WHITE, 1.0), 2.5);
     c.circle(HIT_X + 560.0, LANE_Y, NOTE_R, rgba(ROLL, 1.0), rgba(WHITE, 1.0), NOTE_R * 0.1);
-    for (dx, col, r) in [(400.0, DON, BIG_R), (260.0, KAT, NOTE_R), (150.0, DON, NOTE_R)] {
-        c.circle(HIT_X + dx, LANE_Y, r, rgba(col, 1.0), rgba(WHITE, 1.0), r * 0.1);
+    for (dx, col, big) in [(400.0, DON, true), (260.0, KAT, false), (150.0, DON, false)] {
+        let r = if big { BIG_R } else { NOTE_R };
+        if !skin_note(c, HIT_X + dx, LANE_Y, r, big, col, 1.0) {
+            c.circle(HIT_X + dx, LANE_Y, r, rgba(col, 1.0), rgba(WHITE, 1.0), r * 0.1);
+        }
     }
     c.rect(0.0, lane_top, PANEL_W, LANE_H, rgba(0x191921, 1.0));
     c.circle(PANEL_W / 2.0, LANE_Y, 46.0, rgba(0x2f2f3e, 1.0), rgba(0x4a4a60, 1.0), 2.0);

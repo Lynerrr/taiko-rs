@@ -166,8 +166,11 @@ so the suggestion settles instead of overshooting. Toggle it with Settings → L
 
 Settings → Skin → **Skin** (Left/Right) picks an osu! skin from osu!'s `Skins` folder (next to its
 Songs folder) or from taiko-rs's own, `~/.local/share/taiko-rs/Skins` / `%APPDATA%\taiko-rs\Skins`
-(*Skins folder* opens it; `.osk` files dropped there are unpacked on their own). Its taiko
-hitsounds replace the built-in ones: `taiko-normal-hitnormal` (don), `taiko-normal-hitclap` or
+(*Skins folder* opens it; `.osk` files dropped there are unpacked on their own).
+
+Its notes replace the drawn ones: `taikohitcircle` / `taikobigcircle` tinted red or blue with
+`taikohitcircleoverlay` / `taikobigcircleoverlay` on top (`@2x` preferred), packed into one
+texture so a frame is still a single draw call. Its taiko hitsounds replace the built-in ones: `taiko-normal-hitnormal` (don), `taiko-normal-hitclap` or
 `-hitwhistle` (kat) and `taiko-normal-hitfinish`, played on top for big notes. Anything the skin
 doesn't have stays built-in; an empty file mutes that sound, like in osu!.
 
@@ -247,14 +250,14 @@ spins so frames stay evenly spaced.
 | `src/audio.rs` | decode (symphonia) + resample, cpal/PipeWire output, mixer, hitsound synth |
 | `src/clock.rs` | audio-slaved smooth game clock |
 | `src/game.rs` | judging, scoring, playfield drawing |
-| `src/render.rs` | wgpu SDF shape renderer, text, present mode handling |
+| `src/render.rs` | wgpu SDF shape renderer, skin images, text, present mode handling |
 | `src/ui.rs` | song select and results screens |
 | `src/settings.rs` | settings tab items and layout, tab bar |
 | `src/calibrate.rs` | offset calibration: estimate, overlay and result screen |
 | `src/net.rs` | multiplayer protocol, room server, client with clock sync |
 | `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
 | `src/library.rs` | Songs folder / `.osz` scanning |
-| `src/skin.rs` | osu! skins: listing, `.osk` unpacking, hitsounds |
+| `src/skin.rs` | osu! skins: listing, `.osk` unpacking, note image atlas, hitsounds |
 | `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
 | `src/download.rs` | mirror search and `.osz` downloads (catboy.best, osu.direct) |
 | `src/browse.rs` | the Download tab |
