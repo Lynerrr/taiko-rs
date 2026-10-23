@@ -47,7 +47,7 @@ use layout::{Area, Grip};
 use winit::window::CursorIcon;
 use library::Entry;
 use render::{rgba, Canvas, PresentChoice, Renderer};
-use settings::{Dropdown, Item, SettingsUi};
+use settings::{Dropdown, Item, PresetAction, SettingsUi};
 use ui::{Results, Select, SelectAction};
 
 type Loaded = Result<(Beatmap, Arc<Track>), String>;
@@ -389,6 +389,17 @@ fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
         .position(|e| e.meta.version == m.version && e.meta.title == m.title && e.meta.artist == m.artist && e.hash() == m.hash)
 }
 
+/// A character typed into a playfield size: a digit, or `x` between width and height.
+fn size_char(code: KeyCode) -> Option<char> {
+    use KeyCode::*;
+    let digits = [Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9];
+    let numpad = [Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9];
+    if let Some(d) = digits.iter().chain(numpad.iter()).position(|&k| k == code) {
+        return char::from_digit(d as u32 % 10, 10);
+    }
+    matches!(code, KeyX | Space | NumpadMultiply).then_some('x')
+}
+
 const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 
 impl State {
@@ -428,9 +439,15 @@ impl State {
     }
 
     /// "1280x720 (full screen)": the playfield's size in pixels.
+    /// The playfield area's size in pixels.
+    fn playfield_size(&self) -> (u32, u32) {
+        let a = self.cfg.playfield_area;
+        ((a.w * self.window_w).round() as u32, (a.h * self.window_h).round() as u32)
+    }
+
     fn playfield_label(&self) -> String {
         let a = self.cfg.playfield_area;
-        let (pw, ph) = ((a.w * self.window_w).round() as u32, (a.h * self.window_h).round() as u32);
+        let (pw, ph) = self.playfield_size();
         let kind = if a.is_full() {
             " (full screen)"
         } else if self.current_preset().is_some() {
@@ -1124,7 +1141,7 @@ impl State {
     /// The preset the current area matches (within a pixel), if any.
     fn current_preset(&self) -> Option<(u32, u32)> {
         let a = self.cfg.playfield_area;
-        self.resolutions.iter().copied().find(|&(w, h)| {
+        self.preset_list().into_iter().find(|&(w, h)| {
             let p = layout::preset_area(w, h, self.window_w, self.window_h);
             (p.w - a.w).abs() * self.window_w < 1.5 && (p.h - a.h).abs() * self.window_h < 1.5
         })
@@ -1134,8 +1151,19 @@ impl State {
         (self.window_w as u32, self.window_h as u32)
     }
 
+    /// The saved sizes first, then the built-in ones grouped by aspect ratio.
     fn preset_groups(&self) -> Vec<(&'static str, Vec<(u32, u32)>)> {
-        layout::group_presets(&self.resolutions, self.screen_size())
+        let saved = &self.cfg.saved_presets;
+        let others: Vec<(u32, u32)> = self.resolutions.iter().copied().filter(|r| !saved.contains(r)).collect();
+        let mut groups = layout::group_presets(&others, self.screen_size());
+        if !saved.is_empty() {
+            groups.insert(0, (settings::SAVED, saved.clone()));
+        }
+        groups
+    }
+
+    fn fits_window(&self, (w, h): (u32, u32)) -> bool {
+        w <= self.window_w as u32 && h <= self.window_h as u32
     }
 
     /// Presets in dropdown order (grouped by aspect ratio, largest first).
@@ -1144,6 +1172,10 @@ impl State {
     }
 
     fn apply_preset(&mut self, (w, h): (u32, u32)) {
+        if !self.fits_window((w, h)) {
+            self.toast(format!("{w}x{h} doesn't fit this window"));
+            return;
+        }
         self.cfg.playfield_area = layout::preset_area(w, h, self.window_w, self.window_h);
         self.cfg.save();
         self.toast(format!("playfield {w}x{h}"));
@@ -1151,7 +1183,7 @@ impl State {
 
     /// Steps through resolution presets in dropdown order, applying each as a centred area.
     fn cycle_preset(&mut self, dir: i32) {
-        let list = self.preset_list();
+        let list: Vec<(u32, u32)> = self.preset_list().into_iter().filter(|&r| self.fits_window(r)).collect();
         if list.is_empty() {
             self.toast("no smaller resolutions fit this window".into());
             return;
@@ -1164,12 +1196,9 @@ impl State {
         self.apply_preset(list[i]);
     }
 
+    /// Opens the preset list, even when it's empty: saved sizes can be added there.
     fn open_dropdown(&mut self) {
         let list = self.preset_list();
-        if list.is_empty() {
-            self.toast("no smaller resolutions fit this window".into());
-            return;
-        }
         let cursor = self.current_preset().and_then(|p| list.iter().position(|&r| r == p)).unwrap_or(0);
         self.settings_ui.dropdown = Some(Dropdown::new(cursor));
     }
@@ -1177,8 +1206,36 @@ impl State {
     fn dropdown_key(&mut self, code: KeyCode) {
         let list = self.preset_list();
         let n = list.len();
+        let saved = self.cfg.saved_presets.len();
+        let shift = self.modifiers_shift;
         let Some(dd) = &mut self.settings_ui.dropdown else { return };
+        if let Some((_, text)) = &mut dd.editing {
+            match code {
+                KeyCode::Escape => dd.editing = None,
+                KeyCode::Backspace => {
+                    text.pop();
+                }
+                KeyCode::Enter | KeyCode::NumpadEnter => {
+                    if let Some((index, text)) = dd.editing.take() {
+                        self.finish_preset_edit(index, text);
+                    }
+                }
+                _ => {
+                    if let Some(ch) = size_char(code).filter(|_| text.len() < 11) {
+                        text.push(ch);
+                    }
+                }
+            }
+            return;
+        }
+        let on_saved = dd.cursor < saved;
         match code {
+            KeyCode::ArrowUp if shift && on_saved => self.preset_action(PresetAction::Up),
+            KeyCode::ArrowDown if shift && on_saved => self.preset_action(PresetAction::Down),
+            KeyCode::KeyS => self.preset_action(PresetAction::SaveCurrent),
+            KeyCode::KeyA | KeyCode::Insert => self.preset_action(PresetAction::Add),
+            KeyCode::KeyE | KeyCode::F2 => self.preset_action(PresetAction::Edit),
+            KeyCode::Delete => self.preset_action(PresetAction::Delete),
             KeyCode::ArrowUp => dd.cursor = dd.cursor.saturating_sub(1),
             KeyCode::ArrowDown => dd.cursor = (dd.cursor + 1).min(n.saturating_sub(1)),
             KeyCode::PageUp => dd.cursor = dd.cursor.saturating_sub(8),
@@ -1194,6 +1251,86 @@ impl State {
             }
             KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab => self.settings_ui.dropdown = None,
             _ => {}
+        }
+    }
+
+    /// Changes the saved playfield sizes from the preset dropdown.
+    fn preset_action(&mut self, action: PresetAction) {
+        let saved = self.cfg.saved_presets.len();
+        let size = self.playfield_size();
+        let Some(dd) = &mut self.settings_ui.dropdown else { return };
+        let i = dd.cursor;
+        match action {
+            PresetAction::SaveCurrent => {
+                if let Some(at) = self.cfg.saved_presets.iter().position(|&p| p == size) {
+                    dd.cursor = at;
+                    self.toast(format!("{}x{} is already saved", size.0, size.1));
+                    return;
+                }
+                self.cfg.saved_presets.push(size);
+                dd.cursor = saved;
+                self.toast(format!("saved {}x{}", size.0, size.1));
+            }
+            PresetAction::Add => {
+                dd.editing = Some((None, String::new()));
+                return;
+            }
+            PresetAction::Edit if i < saved => {
+                let (w, h) = self.cfg.saved_presets[i];
+                dd.editing = Some((Some(i), format!("{w}x{h}")));
+                return;
+            }
+            PresetAction::Delete if i < saved => {
+                // The cursor stays on the same row, now the next size.
+                let (w, h) = self.cfg.saved_presets.remove(i);
+                self.toast(format!("removed {w}x{h}"));
+            }
+            PresetAction::Up if i > 0 && i < saved => {
+                self.cfg.saved_presets.swap(i, i - 1);
+                dd.cursor = i - 1;
+            }
+            PresetAction::Down if i + 1 < saved => {
+                self.cfg.saved_presets.swap(i, i + 1);
+                dd.cursor = i + 1;
+            }
+            _ => return,
+        }
+        let n = self.preset_list().len();
+        if let Some(dd) = &mut self.settings_ui.dropdown {
+            dd.cursor = dd.cursor.min(n.saturating_sub(1));
+        }
+        self.cfg.save();
+    }
+
+    /// Saves a typed size: a new saved size (`index` None) or a change to saved size `index`.
+    fn finish_preset_edit(&mut self, index: Option<usize>, text: String) {
+        let Some(size) = layout::parse_size(&text) else {
+            self.toast("type a size like 1280x720".into());
+            if let Some(dd) = &mut self.settings_ui.dropdown {
+                dd.editing = Some((index, text));
+            }
+            return;
+        };
+        let saved = &mut self.cfg.saved_presets;
+        let cursor = match saved.iter().position(|&p| p == size) {
+            Some(at) if Some(at) != index => {
+                self.toast(format!("{}x{} is already saved", size.0, size.1));
+                at
+            }
+            _ => match index {
+                Some(i) => {
+                    saved[i] = size;
+                    i
+                }
+                None => {
+                    saved.push(size);
+                    saved.len() - 1
+                }
+            },
+        };
+        self.cfg.save();
+        if let Some(dd) = &mut self.settings_ui.dropdown {
+            dd.cursor = cursor;
         }
     }
 
@@ -1267,7 +1404,10 @@ impl State {
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
         let (vx, vy) = self.mouse_virtual();
         if let Some(dd) = &mut self.settings_ui.dropdown {
-            if let Some(i) = dd.row_at(vx, vy) {
+            if dd.button_at(vx, vy).is_some() {
+                return CursorIcon::Pointer;
+            }
+            if let Some(i) = dd.row_at(vx, vy).filter(|_| dd.editing.is_none()) {
                 dd.cursor = i;
                 return CursorIcon::Pointer;
             }
@@ -1374,6 +1514,21 @@ impl State {
         if pressed && self.settings_ui.dropdown.is_some() {
             let (vx, vy) = self.mouse_virtual();
             let dd = self.settings_ui.dropdown.as_ref().unwrap();
+            if let Some(action) = dd.button_at(vx, vy) {
+                self.preset_action(action);
+                return;
+            }
+            if dd.editing.is_some() {
+                // Clicking elsewhere while typing a size cancels it (outside also closes the list).
+                let outside = !dd.contains(vx, vy);
+                if let Some(dd) = &mut self.settings_ui.dropdown {
+                    dd.editing = None;
+                }
+                if outside {
+                    self.settings_ui.dropdown = None;
+                }
+                return;
+            }
             let hit = dd.row_at(vx, vy);
             let inside = dd.contains(vx, vy);
             let pick = hit.and_then(|i| self.preset_list().get(i).copied());
@@ -1912,8 +2067,11 @@ impl State {
                 code,
                 KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
                     | KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space | KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab
+                    | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyE | KeyCode::F2 | KeyCode::Insert | KeyCode::Delete
             );
-            if nav {
+            // Typing a size takes every key.
+            let typing = self.settings_ui.dropdown.as_ref().is_some_and(|d| d.editing.is_some());
+            if nav || typing {
                 self.dropdown_key(code);
                 return;
             }
@@ -2673,8 +2831,9 @@ impl State {
         }
         if self.settings_ui.dropdown.is_some() {
             let (groups, current, screen) = (self.preset_groups(), self.current_preset(), self.screen_size());
+            let (saved, playfield) = (self.cfg.saved_presets.len(), self.playfield_size());
             if let Some(dd) = &mut self.settings_ui.dropdown {
-                dd.draw(canvas, &groups, current, screen);
+                dd.draw(canvas, &groups, saved, current, screen, playfield);
             }
         }
         if finish_calibration {
