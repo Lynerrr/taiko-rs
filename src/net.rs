@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Countdown between everyone having loaded and the song starting.
 const START_LEAD_MS: f64 = 3000.0;
@@ -130,6 +130,24 @@ pub enum ClientMsg {
     Loaded(bool),
     Live(Live),
     Finished(Final),
+    /// A player without the lobby map asks the host for it.
+    RequestMap,
+    /// Host: a piece of the map set archive for player `to`.
+    MapFile { to: u32, part: MapPart },
+}
+
+/// A piece of a map set archive sent from the host's Songs folder. `data` is base64; the
+/// transfer is complete when `offset + data` reaches `total`. `error` instead of data when the
+/// host can't send it.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MapPart {
+    /// Folder name for the set.
+    pub name: String,
+    pub total: u64,
+    pub offset: u64,
+    pub data: String,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -142,6 +160,10 @@ pub enum ServerMsg {
     /// Start the song at this server time (ms).
     Start { at: f64 },
     Results(Vec<PlayerInfo>),
+    /// To the host: player `from` wants the lobby map's files.
+    MapRequested { from: u32 },
+    /// From the host: part of the lobby map's files.
+    MapFile(MapPart),
     /// Synthesised locally when the connection drops.
     Disconnected(String),
 }
@@ -326,6 +348,26 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
             }
             Ok(Event::Msg(id, msg)) => {
                 let is_host = host_id == Some(id);
+                // Map transfers are relayed between the host and one player, lobby only.
+                let msg = match msg {
+                    ClientMsg::RequestMap => {
+                        if let (Some(h), true, true) = (host_id, phase == Phase::Lobby, map.is_some()) {
+                            if let Some(host) = players.iter().find(|p| p.info.id == h) {
+                                let _ = host.tx.send(ServerMsg::MapRequested { from: id });
+                            }
+                        }
+                        continue;
+                    }
+                    ClientMsg::MapFile { to, part } => {
+                        if is_host {
+                            if let Some(dest) = players.iter().find(|p| p.info.id == to) {
+                                let _ = dest.tx.send(ServerMsg::MapFile(part));
+                            }
+                        }
+                        continue;
+                    }
+                    other => other,
+                };
                 let Some(p) = players.iter_mut().find(|p| p.info.id == id) else { continue };
                 match msg {
                     ClientMsg::Hello { name, protocol, host_token } => {
@@ -548,6 +590,11 @@ impl Client {
 
     pub fn send(&self, msg: ClientMsg) {
         let _ = self.tx.send(msg);
+    }
+
+    /// For sending from another thread (big transfers).
+    pub fn sender(&self) -> Sender<ClientMsg> {
+        self.tx.clone()
     }
 
     /// Drains incoming messages, handling clock sync internally.

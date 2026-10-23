@@ -118,6 +118,8 @@ struct State {
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
     preview_remote: bool,
+    /// Receiving the lobby map from the host: where its parts go.
+    host_transfer: Option<std::sync::mpsc::Sender<Option<Vec<u8>>>>,
     /// When the background image last changed (it fades in).
     bg_changed: Option<Instant>,
     /// The window has keyboard focus.
@@ -1353,6 +1355,10 @@ impl State {
                     }
                     KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
                     KeyCode::KeyD if !s.have_map => self.download_lobby_map(),
+                    KeyCode::KeyH if !s.have_map && s.map.is_some() && self.host_transfer.is_none() => {
+                        s.client.send(net::ClientMsg::RequestMap);
+                        self.toast("asking the host for the map...".into());
+                    }
                     KeyCode::KeyM if s.is_host() && !s.in_match => {
                         self.picking_lobby_map = true;
                         self.scene = Scene::Select;
@@ -1672,6 +1678,8 @@ impl State {
                     *start = Some(when);
                 }
             }
+            ServerMsg::MapRequested { from } => self.send_map_to(from),
+            ServerMsg::MapFile(part) => self.receive_map_part(part),
             ServerMsg::Results(r) => {
                 if let Some(s) = &mut self.mp {
                     s.results = Some(r);
@@ -2418,6 +2426,82 @@ impl State {
         }
     }
 
+    /// Host: packs the lobby map's set folder and sends it to player `to`, on a thread.
+    fn send_map_to(&mut self, to: u32) {
+        let Some(s) = &self.mp else { return };
+        let tx = s.client.sender();
+        let folder = s.map_entry.and_then(|i| self.library[i].path.parent().map(|p| p.to_path_buf()));
+        std::thread::spawn(move || {
+            let send = |part: net::MapPart| tx.send(net::ClientMsg::MapFile { to, part }).is_ok();
+            let error = |why: String| net::MapPart { name: String::new(), total: 0, offset: 0, data: String::new(), error: Some(why) };
+            let Some(folder) = folder else {
+                send(error("the host doesn't have the map either".into()));
+                return;
+            };
+            let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            match download::pack_folder(&folder) {
+                Ok(bytes) => {
+                    let total = bytes.len() as u64;
+                    for (k, chunk) in bytes.chunks(download::PART_BYTES).enumerate() {
+                        let part = net::MapPart {
+                            name: name.clone(),
+                            total,
+                            offset: (k * download::PART_BYTES) as u64,
+                            data: download::base64_encode(chunk),
+                            error: None,
+                        };
+                        if !send(part) {
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    send(error(e));
+                }
+            }
+        });
+    }
+
+    /// Player: a piece of the lobby map from the host.
+    fn receive_map_part(&mut self, part: net::MapPart) {
+        if let Some(e) = part.error {
+            self.host_transfer = None;
+            self.toast(format!("the host couldn't send the map: {e}"));
+            return;
+        }
+        if part.offset == 0 {
+            let Some(m) = self.mp.as_ref().and_then(|s| s.map.clone()) else { return };
+            let set = download::SetInfo {
+                id: m.set_id.unwrap_or(0),
+                artist: m.artist.clone(),
+                title: m.title.clone(),
+                creator: String::new(),
+                status: String::new(),
+                diffs: Vec::new(),
+                play_count: 0,
+                favourite_count: 0,
+                rating: 0.0,
+                ranked_date: String::new(),
+            };
+            let (job, feed) = download::receive(set, part.name.clone(), part.total, self.songs_dir.clone());
+            self.downloads.push(job);
+            self.host_transfer = Some(feed);
+        }
+        let Some(feed) = &self.host_transfer else { return };
+        match download::base64_decode(&part.data) {
+            Some(bytes) => {
+                let last = part.offset + bytes.len() as u64 >= part.total;
+                if feed.send(Some(bytes)).is_err() || last {
+                    self.host_transfer = None;
+                }
+            }
+            None => {
+                let _ = feed.send(None);
+                self.host_transfer = None;
+            }
+        }
+    }
+
     /// The lobby map's download progress, for the lobby screen.
     fn lobby_download_status(&self) -> Option<String> {
         if self.lobby_lookup.is_some() {
@@ -3010,6 +3094,7 @@ fn main() {
         installed_sets: None,
         lobby_lookup: None,
         preview_remote: false,
+        host_transfer: None,
         bg_changed: None,
         focused: true,
         mapinfo: None,

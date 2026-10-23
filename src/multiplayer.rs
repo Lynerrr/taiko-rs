@@ -192,7 +192,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             if let Some(d) = &download {
                 c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFFD34D, 1.0), d);
             } else if !have_map {
-                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFF4B4B, 1.0), "not in your Songs folder - D to download");
+                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFF4B4B, 1.0), "not in your Songs folder - D: mirrors, H: from the host");
             }
         }
         None => {
@@ -237,8 +237,13 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
     } else {
         let missing = s.map.is_some() && !have_map;
         if missing {
-            let label = if download.is_some() { "Downloading..." } else { "Download map  (D)" };
-            c.button_row(440.0, &[(label, Hit::Key(KeyCode::KeyD), true), ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false)]);
+            let busy = download.is_some();
+            let label = if busy { "Downloading..." } else { "Download map  (D)" };
+            c.button_row(440.0, &[
+                (label, Hit::Key(KeyCode::KeyD), true),
+                (if busy { "..." } else { "Get it from the host  (H)" }, Hit::Key(KeyCode::KeyH), false),
+                ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false),
+            ]);
         } else {
             c.button_row(440.0, &[
                 ("Preview  (P)", Hit::Key(KeyCode::KeyP), false),

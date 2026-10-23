@@ -4,7 +4,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -409,6 +409,132 @@ fn download_to(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> R
     Ok(())
 }
 
+/// Raw bytes per transfer message (well under the room's line limit once base64-encoded).
+pub const PART_BYTES: usize = 96 * 1024;
+
+/// Packs a map set folder into an `.osz` (stored, not compressed: audio and images already
+/// are). Refuses absurdly large folders.
+pub fn pack_folder(dir: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Write as _;
+    const LIMIT: u64 = 300 << 20;
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).map_err(|e| e.to_string())?.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if files.len() < 10_000 {
+                    stack.push(p);
+                }
+            } else {
+                files.push(p);
+            }
+        }
+    }
+    let size: u64 = files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
+    if size > LIMIT {
+        return Err(format!("the set is too big to send ({} MB)", size >> 20));
+    }
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::with_capacity(size as usize + 4096)));
+    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for f in files {
+        let Ok(rel) = f.strip_prefix(dir) else { continue };
+        let name = rel.to_string_lossy().replace('\\', "/");
+        let bytes = std::fs::read(&f).map_err(|e| e.to_string())?;
+        zip.start_file(name, options).map_err(|e| e.to_string())?;
+        zip.write_all(&bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(zip.finish().map_err(|e| e.to_string())?.into_inner())
+}
+
+const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+pub fn base64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(B64[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let mut lookup = [255u8; 256];
+    for (i, &c) in B64.iter().enumerate() {
+        lookup[c as usize] = i as u8;
+    }
+    let bytes: Vec<u8> = text.bytes().filter(|&c| c != b'=').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for chunk in bytes.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            let v = lookup[c as usize];
+            if v == 255 {
+                return None;
+            }
+            n |= (v as u32) << (18 - 6 * i);
+        }
+        for i in 0..chunk.len().saturating_sub(1) {
+            out.push((n >> (16 - 8 * i)) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// A folder name from another machine, made safe to create here.
+pub fn safe_folder_name(name: &str) -> String {
+    let clean: String = name.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
+    let clean = clean.trim().trim_matches('.').chars().take(120).collect::<String>();
+    if clean.is_empty() { "map from host".into() } else { clean }
+}
+
+/// Receives a map set from the multiplayer host: feed the parts (None aborts); the job
+/// reports the unpacked folder like a mirror download.
+pub fn receive(set: SetInfo, name: String, total: u64, songs: PathBuf) -> (Job, Sender<Option<Vec<u8>>>) {
+    let (feed, parts) = mpsc::channel::<Option<Vec<u8>>>();
+    let (tx, rx) = mpsc::channel();
+    let done = Arc::new(AtomicU64::new(0));
+    let total_bytes = Arc::new(AtomicU64::new(total));
+    let d = done.clone();
+    std::thread::spawn(move || {
+        let result = (|| {
+            std::fs::create_dir_all(&songs).map_err(|e| e.to_string())?;
+            let name = safe_folder_name(&name);
+            let dest = songs.join(&name);
+            let archive = songs.join(format!("{name}.osz.part"));
+            let mut file = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
+            let mut got = 0u64;
+            while got < total {
+                match parts.recv() {
+                    Ok(Some(bytes)) => {
+                        file.write_all(&bytes).map_err(|e| e.to_string())?;
+                        got += bytes.len() as u64;
+                        d.store(got, Ordering::Relaxed);
+                    }
+                    _ => {
+                        drop(file);
+                        let _ = std::fs::remove_file(&archive);
+                        return Err("the transfer was interrupted".to_string());
+                    }
+                }
+            }
+            drop(file);
+            let result = extract(&archive, &dest);
+            let _ = std::fs::remove_file(&archive);
+            result.map(|_| dest)
+        })();
+        let _ = tx.send(result);
+    });
+    (Job { set, done, total: total_bytes, rx }, feed)
+}
+
 /// Unpacks an `.osz` into `dest` (via a temporary folder, so a half-extracted set never shows up).
 fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
@@ -503,6 +629,16 @@ mod tests {
         assert_eq!(sets[0].folder_name(), "7 A - T_ x_");
         assert_eq!(set_id_of_folder(Path::new("/s/7 A - T_ x_")), Some(7));
         assert_eq!(set_id_of_folder(Path::new("/s/Some folder")), None);
+    }
+
+    #[test]
+    fn base64_round_trips() {
+        for len in 0..40usize {
+            let data: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
+            assert_eq!(base64_decode(&base64_encode(&data)).unwrap(), data);
+        }
+        assert_eq!(base64_encode(b"taiko"), "dGFpa28=");
+        assert_eq!(safe_folder_name("../../etc"), "_.._etc");
     }
 
 }

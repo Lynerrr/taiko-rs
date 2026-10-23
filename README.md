@@ -195,7 +195,9 @@ Versus play over direct TCP (default port **7777**). Tab to the **MULTIPLAYER** 
 Maps are matched by a hash of the `.osu` file, so everyone needs the same difficulty in their
 Songs folder (players without it show "no map"). A player missing the map gets a **Download map
 (D)** button in the lobby: it fetches the host's beatmap set from the mirrors (by its set ID,
-else by searching for it) and reports the map as there once it's in. Each client syncs its clock to the host with
+else by searching for it) and reports the map as there once it's in. **Get it from the host (H)**
+copies the host's own set folder through the room connection instead (works for unsubmitted or
+edited maps too; lobby only). Each client syncs its clock to the host with
 pings, and the song starts at a shared instant 3 s after everyone has loaded. During the match a
 live scoreboard shows everyone's score, accuracy and combo; there is no pause (Esc twice
 forfeits). Results show score, accuracy, max combo, judgements and UR for everyone.
