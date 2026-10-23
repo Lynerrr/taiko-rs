@@ -717,6 +717,75 @@ impl Renderer {
         Some((w, h, rgb))
     }
 
+    /// Renders shapes (with the background) into an offscreen `w` x `h` image and reads it back as
+    /// RGBA rows. `clips` are rects as fractions of the image. Used for video frames.
+    pub fn render_offscreen(&mut self, shapes: &[Shape], clips: &[(std::ops::Range<usize>, [f32; 4])], w: u32, h: u32, clear: [f64; 3]) -> Option<Vec<u8>> {
+        let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = clips
+            .iter()
+            .filter(|(range, _)| range.start < range.end && range.end <= shapes.len())
+            .map(|(range, r)| {
+                let (sw, sh) = (w as f32, h as f32);
+                let x = (r[0] * sw).floor().clamp(0.0, sw - 1.0);
+                let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
+                let cw = (r[2] * sw).ceil().clamp(1.0, sw - x);
+                let ch = (r[3] * sh).ceil().clamp(1.0, sh - y);
+                (range.clone(), [x as u32, y as u32, cw as u32, ch as u32])
+            })
+            .collect();
+        if shapes.len() > self.capacity {
+            self.capacity = shapes.len().next_power_of_two();
+            self.instances = Self::make_instance_buffer(&self.device, self.capacity);
+        }
+        let globals = Globals { screen_px: [w as f32, h as f32], px_per_unit: h as f32 / VIRTUAL_HEIGHT, _pad: 0.0 };
+        self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        if !shapes.is_empty() {
+            self.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
+        }
+        let screen = w as f32 / h.max(1) as f32;
+        if let Some(l) = &self.bg {
+            let (u, v) = if l.aspect > screen { (screen / l.aspect, 1.0) } else { (1.0, l.aspect / screen) };
+            let uniform = [(1.0 - u) / 2.0, (1.0 - v) / 2.0, (1.0 + u) / 2.0, (1.0 + v) / 2.0, self.bg_brightness, 1.0, 0.0, 0.0];
+            self.queue.write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
+        }
+        // Only the current background (no cross-fade) in a video frame.
+        let prev = self.bg_prev.take();
+        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("offscreen"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        self.encode_pass(&mut encoder, &view, true, shapes.len(), clear, &clip);
+        self.bg_prev = prev;
+        let bpr = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("offscreen"),
+            size: (bpr * h) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: None } },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.queue.submit([encoder.finish()]);
+        buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok()?;
+        let data = buf.slice(..).get_mapped_range().ok()?;
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for row in data.chunks_exact(bpr as usize) {
+            rgba.extend_from_slice(&row[..(w * 4) as usize]);
+        }
+        Some(rgba)
+    }
+
     fn encode_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,

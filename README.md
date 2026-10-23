@@ -108,6 +108,15 @@ best local scores under the preview panel, and clicking one plays its replay. Re
 map time each hit was judged at (plus the speed and the mash setting), so watching one
 reproduces the play exactly, whatever the offset.
 
+**Replay videos:** *Export video (V)* on the results screen opens a video editor for that play:
+the replay at the timeline cursor (Space plays it with sound, click/drag the timeline or
+Left/Right to move), **I** / **O** set where the video starts and ends, the crop is dragged on
+the frame (edges resize) or picked with **C** (full, lane, square, vertical), **Z** the frame size
+(720p/1080p/1440p), **F** the frame rate, **H** hitsounds. **Enter** renders it frame by frame
+offscreen (with the music and the hitsounds as they were judged) into an MP4 in the `videos`
+folder next to the config. Needs [ffmpeg](https://ffmpeg.org) on the PATH (Windows:
+`winget install ffmpeg`).
+
 **Sorting and collections:** the *Sort* button next to the search box (or Ctrl+S, Shift for
 backwards) orders songs by artist, title, difficulty, length, BPM, recently played or date added;
 a song goes by its hardest / longest / most recently played difficulty. Difficulty, length and BPM

@@ -152,15 +152,7 @@ impl Engine {
 
     /// Replaces the hitsounds with mono samples at the device rate; `None` keeps the built-in one.
     pub fn set_hitsounds(&self, don: Option<Vec<f32>>, kat: Option<Vec<f32>>, finish: Option<Vec<f32>>) {
-        let rate = self.rate;
-        // Like osu!, a big note is the normal hit with `finish` on top.
-        let big = |normal: &Option<Vec<f32>>, synth: fn(u32, bool) -> Vec<f32>| match (normal, &finish) {
-            (None, None) => synth(rate, true),
-            (Some(n), None) => n.clone(),
-            (n, Some(f)) => mix(&n.clone().unwrap_or_else(|| synth(rate, false)), f),
-        };
-        let (big_don, big_kat) = (big(&don, synth_don), big(&kat, synth_kat));
-        let sounds = [don.unwrap_or_else(|| synth_don(rate, false)), kat.unwrap_or_else(|| synth_kat(rate, false)), big_don, big_kat];
+        let sounds = hitsound_set(self.rate, don, kat, finish);
         let _ = self.tx.send(Cmd::Sounds(Arc::new(sounds)));
     }
 
@@ -425,6 +417,18 @@ impl Noise {
         self.0 ^= self.0 << 5;
         self.0 as f32 / u32::MAX as f32 * 2.0 - 1.0
     }
+}
+
+/// The four hitsounds (indexed by `Sfx`) at `rate`: a skin's where given, else built-in. Like
+/// osu!, a big note is the normal hit with `finish` on top.
+pub fn hitsound_set(rate: u32, don: Option<Vec<f32>>, kat: Option<Vec<f32>>, finish: Option<Vec<f32>>) -> [Vec<f32>; 4] {
+    let big = |normal: &Option<Vec<f32>>, synth: fn(u32, bool) -> Vec<f32>| match (normal, &finish) {
+        (None, None) => synth(rate, true),
+        (Some(n), None) => n.clone(),
+        (n, Some(f)) => mix(&n.clone().unwrap_or_else(|| synth(rate, false)), f),
+    };
+    let (big_don, big_kat) = (big(&don, synth_don), big(&kat, synth_kat));
+    [don.unwrap_or_else(|| synth_don(rate, false)), kat.unwrap_or_else(|| synth_kat(rate, false)), big_don, big_kat]
 }
 
 /// Two mono sounds played together.

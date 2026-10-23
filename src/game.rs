@@ -181,6 +181,8 @@ pub struct Game {
     pub replay_of: Option<String>,
     /// Text shown at the top ("REPLAY - x", "SPECTATING - x").
     pub banner: Option<String>,
+    /// When set, every hitsound played is logged (map time, sound), e.g. for video audio.
+    pub sfx_log: Option<Vec<(f64, Sfx)>>,
     /// Scale the suggestion to current UR; off = plain average of the last 40 hits.
     pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
@@ -250,6 +252,7 @@ impl Game {
             replay: None,
             replay_of: None,
             banner: None,
+            sfx_log: None,
             ur_scaled_hint: true,
             offset: 0.0,
             rate,
@@ -544,9 +547,26 @@ impl Game {
         let kat = key == 0 || key == 3;
         self.presses[key] = t;
         let sfx = self.judge_press(key, kat, t);
+        if let Some(log) = &mut self.sfx_log {
+            log.push((t, sfx));
+        }
         if let Some(a) = audio.filter(|_| !self.mute_hits) {
             a.sfx(sfx);
         }
+    }
+
+    /// Replays without audio: jumps to map time `t` (forwards only), judging the recorded presses
+    /// on the way, e.g. to render a replay frame by frame.
+    pub fn set_time(&mut self, t: f64) {
+        self.time = t;
+        self.raw_time = t / self.rate + self.offset;
+        self.feed_replay(None);
+        self.expire(t);
+    }
+
+    /// The last moment anything happens in the map (map ms).
+    pub fn end_time(&self) -> f64 {
+        self.end_time
     }
 
     /// Replays: the recorded presses up to now, before anything expires, so each is judged

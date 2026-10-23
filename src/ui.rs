@@ -754,6 +754,7 @@ impl Results {
         let mut buttons = vec![("Retry  (Enter)", Hit::Key(KeyCode::Enter), true)];
         if self.replay.is_some() {
             buttons.push(("Watch replay  (R)", Hit::Key(KeyCode::KeyR), false));
+            buttons.push(("Export video  (V)", Hit::Key(KeyCode::KeyV), false));
         }
         buttons.push(("Song select  (Esc)", Hit::Key(KeyCode::Escape), false));
         c.button_row(424.0, &buttons);
