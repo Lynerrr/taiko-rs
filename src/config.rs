@@ -38,6 +38,8 @@ pub struct Config {
     pub rate_keep_pitch: bool,
     /// Show a live offset suggestion during play.
     pub show_offset_hint: bool,
+    /// The map's name and the offset/UR line during play (Tab hides them).
+    pub show_map_info: bool,
     /// Multiplayer: display name, port to host on, last address joined.
     pub mp_name: String,
     pub mp_port: u16,
@@ -100,6 +102,7 @@ impl Default for Config {
             rate: 1.0,
             rate_keep_pitch: true,
             show_offset_hint: true,
+            show_map_info: true,
             mp_name: std::env::var("USER")
                 .or_else(|_| std::env::var("USERNAME"))
                 .ok()
@@ -225,6 +228,7 @@ impl Config {
                 "anti_mash" => cfg.anti_mash = v == "true",
                 "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
+                "show_map_info" => cfg.show_map_info = v != "false",
                 "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
                 "mp_port" => cfg.mp_port = v.parse().unwrap_or(cfg.mp_port),
                 "mp_address" => cfg.mp_address = v.to_string(),
@@ -303,7 +307,9 @@ impl Config {
              # wrong-colour / too-early hits count as misses (osu!'s mash penalty)\n\
              anti_mash = {}\n\
              show_offset_hint = {}\n\
-             offset_hint_ur_scaled = {}\n",
+             offset_hint_ur_scaled = {}\n\
+             # map name and UR line during play (Tab toggles)\n\
+             show_map_info = {}\n",
             keys.join(", "),
             self.preset_keys.iter().map(|k| key_name(*k)).collect::<Vec<_>>().join(", "),
             self.show_playfield_size,
@@ -333,6 +339,7 @@ impl Config {
             self.anti_mash,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
+            self.show_map_info,
         );
         out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
         out.push_str(&format!(

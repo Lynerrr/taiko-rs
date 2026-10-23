@@ -66,6 +66,10 @@ pub struct Select {
     /// Speed modifier shown in the header ("" at 1.0x).
     pub rate_label: String,
     pub show_converts: bool,
+    /// Maps hidden from the list (right-click → Hide); the files stay where they are.
+    pub hidden: Hidden,
+    /// The right-click menu of a song list row.
+    pub menu: Option<SongMenu>,
     visible: Vec<usize>,
     /// Songs (beatmap sets) as ranges of `visible`: consecutive difficulties sharing a folder.
     /// Rebuilt when `visible` changes, not per frame (big libraries have tens of thousands of maps).
@@ -115,6 +119,8 @@ struct ListAnim {
 const LIST_ANIM_MS: f32 = 200.0;
 /// Top and bottom of the song list (virtual units).
 const LIST_TOP: f32 = 86.0;
+/// Height of a song's own row in the list (virtual units).
+pub const SONG_ROW_H: f32 = 34.0;
 const LIST_BOTTOM: f32 = 440.0;
 
 pub enum SelectAction {
@@ -140,6 +146,8 @@ impl Select {
             scanning: None,
             rate_label: String::new(),
             show_converts: !has_taiko,
+            hidden: Hidden::load(),
+            menu: None,
             visible: Vec::new(),
             groups: Vec::new(),
             group_of: Vec::new(),
@@ -165,6 +173,7 @@ impl Select {
             .enumerate()
             .filter(|(_, e)| self.show_converts || e.meta.mode == 1)
             .filter(|(i, _)| only.is_none_or(|set| set.contains(i)))
+            .filter(|(_, e)| !self.hidden.contains(&e.path))
             .filter(|(_, e)| needle.is_empty() || e.label().to_lowercase().contains(&needle) || e.meta.creator.to_lowercase().contains(&needle))
             .map(|(i, _)| i)
             .collect();
@@ -447,6 +456,76 @@ impl Select {
         }
     }
 
+    /// Index of the song (group) holding the selection.
+    pub fn current_song(&self) -> Option<usize> {
+        self.group_of.get(self.cursor).copied()
+    }
+
+    /// Opens song `g` (clamped to the list), on its remembered or hardest difficulty.
+    pub fn go_to_song(&mut self, g: i64, library: &[Entry]) {
+        if self.groups.is_empty() {
+            return;
+        }
+        let g = g.clamp(0, self.groups.len() as i64 - 1) as usize;
+        if self.group_of.get(self.cursor) != Some(&g) {
+            self.enter_song(self.groups[g].start, library);
+        }
+    }
+
+    /// The menu's items for its row: hide the difficulty (not on a song's own row), hide the song.
+    pub fn menu_items(&self, library: &[Entry]) -> Vec<(String, MenuAction)> {
+        let Some(m) = &self.menu else { return Vec::new() };
+        let Some(&i) = self.visible.get(m.row) else { return Vec::new() };
+        let fit = |s: String| if s.chars().count() > 30 { s.chars().take(27).collect::<String>() + "..." } else { s };
+        let mut items = Vec::new();
+        if !m.header {
+            items.push((fit(format!("Hide [{}]", library[i].meta.version)), MenuAction::HideDifficulty));
+        }
+        items.push((fit(format!("Hide {}", library[i].meta.title)), MenuAction::HideSong));
+        items
+    }
+
+    /// Hides the menu's map or its whole song, keeping the selection near where it was.
+    /// Returns what was hidden, for a message.
+    pub fn hide(&mut self, action: MenuAction, library: &[Entry]) -> Option<String> {
+        let m = self.menu.take()?;
+        let &i = self.visible.get(m.row)?;
+        let g = *self.group_of.get(m.row)?;
+        let what = match action {
+            MenuAction::HideDifficulty => {
+                self.hidden.maps.insert(library[i].path.clone());
+                format!("[{}]", library[i].meta.version)
+            }
+            MenuAction::HideSong => {
+                self.hidden.songs.insert(library[i].path.parent()?.to_path_buf());
+                let t = &library[i].meta.title;
+                if t.chars().count() > 30 { t.chars().take(27).collect::<String>() + "..." } else { t.clone() }
+            }
+        };
+        self.hidden.save();
+        // The selection stays unless it was hidden: then another difficulty of that song, else
+        // the song that takes its place in the list.
+        let current = self.visible.get(self.cursor).copied();
+        let stay = current.filter(|&c| !self.hidden.contains(&library[c].path)).or_else(|| {
+            let g = self.current_song()?;
+            self.groups[g].clone().map(|r| self.visible[r]).find(|&v| !self.hidden.contains(&library[v].path))
+        });
+        let place = self.current_song().unwrap_or(g);
+        self.refilter(library);
+        match stay.and_then(|v| self.visible.iter().position(|&x| x == v)) {
+            Some(pos) => self.cursor = pos,
+            None => self.go_to_song(place as i64, library),
+        }
+        Some(what)
+    }
+
+    /// Settings: lists everything that was hidden again.
+    pub fn unhide_all(&mut self, library: &[Entry]) {
+        self.hidden = Hidden::default();
+        self.hidden.save();
+        self.refilter(library);
+    }
+
     /// osu!'s right-click scrolling: the pointer's height over the list (`y`, virtual units)
     /// picks the song that far through the whole list, top to bottom.
     pub fn scroll_to(&mut self, y: f32, library: &[Entry]) {
@@ -550,7 +629,7 @@ impl Select {
         }
 
         // Rows: one per song, plus the selected song's difficulties under it.
-        const SONG_H: f32 = 34.0;
+        const SONG_H: f32 = SONG_ROW_H;
         const DIFF_H: f32 = 22.0;
         enum Row {
             Song(std::ops::Range<usize>),
@@ -636,7 +715,7 @@ impl Select {
                     let hover = !open && c.hovered(24.0, y, lw, rh - 4.0);
                     let bg = if hover { 0x262634 } else { bg };
                     c.round_rect(24.0, y, lw, rh - 4.0, 7.0, rgba(bg, 0.88), rgba(border, 1.0), 1.0);
-                    c.hit(24.0, y, lw, *rh, Hit::SongRow(g.start));
+                    c.hit(24.0, y, lw, *rh, Hit::SongHeader(g.start));
                     let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
                     let tag = if any_taiko { 0xEB452C } else { 0x438EAD };
                     c.round_rect(32.0, y + 8.0, 5.0, rh - 20.0, 2.5, rgba(tag, 1.0), rgba(tag, 1.0), 0.0);
@@ -679,11 +758,111 @@ impl Select {
         if let Some(cursor) = self.picker {
             self.draw_picker(c, cursor);
         }
+        if self.menu.is_some() {
+            self.draw_menu(c, library);
+        }
         c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), status);
     }
 }
 
+/// Maps hidden from the song list in taiko-rs only (osu! and the Songs folder are untouched):
+/// whole songs by folder, single difficulties by file. Kept in `hidden.tsv` in the config folder.
+#[derive(Default)]
+pub struct Hidden {
+    pub songs: std::collections::HashSet<std::path::PathBuf>,
+    pub maps: std::collections::HashSet<std::path::PathBuf>,
+}
+
+impl Hidden {
+    fn file() -> Option<std::path::PathBuf> {
+        crate::config::user_dir(false).map(|d| d.join("hidden.tsv"))
+    }
+
+    /// Lines of `song<TAB>folder` or `map<TAB>file`.
+    pub fn load() -> Hidden {
+        let mut h = Hidden::default();
+        let Some(text) = Self::file().and_then(|f| std::fs::read_to_string(f).ok()) else { return h };
+        for line in text.lines() {
+            match line.split_once('\t') {
+                Some(("song", p)) => h.songs.insert(p.into()),
+                Some(("map", p)) => h.maps.insert(p.into()),
+                _ => false,
+            };
+        }
+        h
+    }
+
+    pub fn save(&self) {
+        let Some(file) = Self::file() else { return };
+        let mut text = String::new();
+        for p in &self.songs {
+            text += &format!("song\t{}\n", p.display());
+        }
+        for p in &self.maps {
+            text += &format!("map\t{}\n", p.display());
+        }
+        if let Err(e) = std::fs::write(&file, text) {
+            eprintln!("couldn't save {}: {e}", file.display());
+        }
+    }
+
+    pub fn contains(&self, path: &std::path::Path) -> bool {
+        self.maps.contains(path) || path.parent().is_some_and(|f| self.songs.contains(f))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.songs.is_empty() && self.maps.is_empty()
+    }
+
+    /// "2 songs, 1 difficulty" (settings value).
+    pub fn describe(&self) -> String {
+        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        match (self.songs.len(), self.maps.len()) {
+            (0, 0) => "none".into(),
+            (s, 0) => plural(s, "song", "songs"),
+            (0, m) => plural(m, "difficulty", "difficulties"),
+            (s, m) => format!("{}, {}", plural(s, "song", "songs"), plural(m, "difficulty", "difficulties")),
+        }
+    }
+}
+
+/// The right-click menu of a song list row, opened where the pointer was (virtual units).
+pub struct SongMenu {
+    pub row: usize,
+    /// Opened on the song's own row (not one of its difficulties).
+    pub header: bool,
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MenuAction {
+    HideDifficulty,
+    HideSong,
+}
+
 impl Select {
+    /// The right-click menu, next to the pointer and kept on screen.
+    fn draw_menu(&self, c: &mut Canvas, library: &[Entry]) {
+        const ROW: f32 = 18.0;
+        let Some(m) = &self.menu else { return };
+        let items = self.menu_items(library);
+        let bw = 200.0;
+        let bh = items.len() as f32 * ROW + 26.0;
+        let x = m.x.min(c.width - bw - 8.0).max(8.0);
+        let y = m.y.min(480.0 - bh - 8.0).max(8.0);
+        c.round_rect(x, y, bw, bh, 6.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
+        for (k, (label, _)) in items.iter().enumerate() {
+            let ry = y + 6.0 + k as f32 * ROW;
+            if c.hovered(x + 4.0, ry, bw - 8.0, ROW - 2.0) {
+                c.round_rect(x + 4.0, ry, bw - 8.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(0xEB452C, 1.0), 1.0);
+            }
+            c.hit(x + 4.0, ry, bw - 8.0, ROW - 2.0, Hit::SongMenu(k));
+            c.text(x + 12.0, ry + 5.0, 7.0, rgba(0xffffff, 1.0), label);
+        }
+        c.text(x + 12.0, y + bh - 14.0, 6.0, rgba(0x6f6f86, 1.0), "only in taiko-rs; files stay");
+    }
+
     /// The collection list over the song list.
     fn draw_picker(&self, c: &mut Canvas, cursor: usize) {
         const ROW: f32 = 18.0;

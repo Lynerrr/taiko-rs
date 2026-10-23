@@ -873,8 +873,12 @@ pub enum Hit {
     Key(winit::keyboard::KeyCode),
     /// Top bar tab: 0 songs, 1 settings, 2 multiplayer.
     Tab(usize),
-    /// A row of the song list (index into its visible list): a song or a difficulty.
+    /// A row of the song list (index into its visible list): a difficulty, or a song's own row
+    /// (pointing at its first difficulty).
     SongRow(usize),
+    SongHeader(usize),
+    /// An item of the song list's right-click menu.
+    SongMenu(usize),
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
     SettingStep(usize, i32),
