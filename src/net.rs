@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Countdown between everyone having loaded and the song starting.
 const START_LEAD_MS: f64 = 3000.0;
@@ -134,6 +134,11 @@ pub enum ClientMsg {
     RequestMap,
     /// Host: a piece of the map set archive for player `to`.
     MapFile { to: u32, part: MapPart },
+    /// During a match: presses judged since the last batch (map time, key), and whether the
+    /// player has the mash penalty on (spectators judge the same way).
+    Inputs { inputs: Vec<(f64, u8)>, anti_mash: bool },
+    /// Start / stop watching the match in progress.
+    Spectate(bool),
 }
 
 /// A piece of a map set archive sent from the host's Songs folder. `data` is base64; the
@@ -164,6 +169,10 @@ pub enum ServerMsg {
     MapRequested { from: u32 },
     /// From the host: part of the lobby map's files.
     MapFile(MapPart),
+    /// Watching the match: its map, when it started (server ms) and who plays (id, name).
+    Spectate { map: MapInfo, at: f64, players: Vec<(u32, String)> },
+    /// A player's presses, to spectators.
+    Inputs { from: u32, inputs: Vec<(f64, u8)>, anti_mash: bool },
     /// Synthesised locally when the connection drops.
     Disconnected(String),
 }
@@ -303,6 +312,7 @@ struct Player {
     hello: bool,
     in_match: bool,
     loaded: Option<bool>,
+    spectating: bool,
 }
 
 #[derive(PartialEq)]
@@ -321,6 +331,11 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
     let mut dirty = false;
     let mut last_broadcast = Instant::now();
     let mut host_id: Option<u32> = None;
+    // The match in progress, for spectators: its map, start (server ms) and every player's
+    // presses so far (with their mash setting).
+    let mut match_map: Option<MapInfo> = None;
+    let mut start_at: Option<f64> = None;
+    let mut match_inputs: std::collections::HashMap<u32, (Vec<(f64, u8)>, bool)> = std::collections::HashMap::new();
 
     while !stop.load(Ordering::Relaxed) {
         match rx.recv_timeout(Duration::from_millis(50)) {
@@ -340,6 +355,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
                     hello: false,
                     in_match: false,
                     loaded: None,
+                    spectating: false,
                 });
             }
             Ok(Event::Left(id)) => {
@@ -362,6 +378,32 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
                         if is_host {
                             if let Some(dest) = players.iter().find(|p| p.info.id == to) {
                                 let _ = dest.tx.send(ServerMsg::MapFile(part));
+                            }
+                        }
+                        continue;
+                    }
+                    ClientMsg::Inputs { inputs, anti_mash } => {
+                        if players.iter().any(|p| p.info.id == id && p.in_match) {
+                            let log = match_inputs.entry(id).or_default();
+                            log.0.extend_from_slice(&inputs);
+                            log.1 = anti_mash;
+                            let msg = ServerMsg::Inputs { from: id, inputs, anti_mash };
+                            for s in players.iter().filter(|p| p.spectating) {
+                                let _ = s.tx.send(msg.clone());
+                            }
+                        }
+                        continue;
+                    }
+                    ClientMsg::Spectate(on) => {
+                        let roster: Vec<(u32, String)> = players.iter().filter(|p| p.in_match).map(|p| (p.info.id, p.info.name.clone())).collect();
+                        let Some(p) = players.iter_mut().find(|p| p.info.id == id) else { continue };
+                        p.spectating = false;
+                        if let (true, Phase::Playing, false, Some(m), Some(at)) = (on, &phase, p.in_match, &match_map, start_at) {
+                            p.spectating = true;
+                            let _ = p.tx.send(ServerMsg::Spectate { map: m.clone(), at, players: roster });
+                            // Everything played so far, so a late spectator catches up.
+                            for (&from, (inputs, anti_mash)) in &match_inputs {
+                                let _ = p.tx.send(ServerMsg::Inputs { from, inputs: inputs.clone(), anti_mash: *anti_mash });
                             }
                         }
                         continue;
@@ -457,6 +499,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
             let waiting = players.iter().any(|p| p.in_match && p.loaded.is_none());
             if !waiting || Instant::now() >= deadline {
                 let at = now_ms() + START_LEAD_MS;
+                start_at = Some(at);
+                match_map = map.clone();
+                match_inputs.clear();
                 let mut started = false;
                 for p in players.iter_mut().filter(|p| p.in_match) {
                     if p.loaded == Some(true) {
@@ -478,6 +523,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
             for p in &mut players {
                 let _ = p.tx.send(ServerMsg::Results(results.clone()));
                 p.in_match = false;
+                p.spectating = false;
                 p.info.ready = false;
                 p.info.status = Status::Lobby;
             }

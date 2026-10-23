@@ -24,6 +24,8 @@ pub struct Session {
     pub have_map: bool,
     /// Our library entry for the lobby map.
     pub map_entry: Option<usize>,
+    /// Presses of the current match already sent to the room.
+    pub inputs_sent: usize,
 }
 
 impl Session {
@@ -41,6 +43,7 @@ impl Session {
             reported_map: None,
             have_map: false,
             map_entry: None,
+            inputs_sent: 0,
         }
     }
 
@@ -224,7 +227,11 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
     let ready_label = if me_ready { "Unready  (Space)" } else { "Ready  (Space)" };
     let start_label = format!("Start  (Enter, {ready} ready)");
     if s.in_match {
-        c.text_centered(w / 2.0, 446.0, 8.0, rgba(0x9a9ab0, 1.0), "A match is in progress; you'll join the next one.");
+        c.text_centered(w / 2.0, 428.0, 8.0, rgba(0x9a9ab0, 1.0), "A match is in progress; you'll join the next one.");
+        let me_playing = s.me().is_some_and(|p| p.status != Status::Lobby);
+        if !me_playing && have_map {
+            c.button_row(440.0, &[("Spectate  (S)", Hit::Key(KeyCode::KeyS), true), ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false)]);
+        }
     } else if s.is_host() {
         c.button_row(440.0, &[
             ("Pick map  (M)", Hit::Key(KeyCode::KeyM), false),

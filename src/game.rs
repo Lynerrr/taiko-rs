@@ -179,6 +179,8 @@ pub struct Game {
     /// Playing a replay back: its presses and the next one due; and whose it is.
     pub replay: Option<(Vec<(f64, u8)>, usize)>,
     pub replay_of: Option<String>,
+    /// Text shown at the top ("REPLAY - x", "SPECTATING - x").
+    pub banner: Option<String>,
     /// Scale the suggestion to current UR; off = plain average of the last 40 hits.
     pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
@@ -247,6 +249,7 @@ impl Game {
             inputs: Vec::new(),
             replay: None,
             replay_of: None,
+            banner: None,
             ur_scaled_hint: true,
             offset: 0.0,
             rate,
@@ -829,11 +832,10 @@ impl Game {
         let t = self.time;
         let w = c.width;
         let lane_top = LANE_Y - LANE_H / 2.0;
-        if let Some(who) = &self.replay_of {
-            let text = format!("REPLAY  -  {who}");
+        if let Some(text) = &self.banner {
             let tw = Canvas::text_width(9.0, &text);
             c.round_rect(w / 2.0 - tw / 2.0 - 12.0, 14.0, tw + 24.0, 20.0, 10.0, rgba(0x173049, 0.9), rgba(0x4fb4ff, 1.0), 1.0);
-            c.text_centered(w / 2.0, 19.5, 9.0, rgba(WHITE, 1.0), &text);
+            c.text_centered(w / 2.0, 19.5, 9.0, rgba(WHITE, 1.0), text);
         }
 
         // Score / accuracy.

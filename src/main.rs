@@ -76,7 +76,28 @@ enum Scene {
     /// `from`: map time the match starts at.
     MpWait { rx: Option<Receiver<Loaded>>, loaded: Option<(Beatmap, Arc<Track>)>, start: Option<Instant>, from: Option<f64> },
     MpPlay { game: Box<Game>, quit_armed: Option<Instant> },
+    /// Watching the match in progress.
+    Spectate(Box<SpectateView>),
     MpResults,
+}
+
+/// How far behind the live match spectators watch, so players' presses arrive in time.
+const SPECTATE_DELAY: Duration = Duration::from_millis(1500);
+
+struct SpectateView {
+    rx: Option<Receiver<Loaded>>,
+    loaded: Option<(Beatmap, Arc<Track>)>,
+    /// When the match started (local clock), its start point and speed.
+    start: Instant,
+    from: Option<f64>,
+    rate: f64,
+    players: Vec<(u32, String)>,
+    /// One game per player, fed with their presses.
+    games: Vec<(u32, Box<Game>)>,
+    /// The player shown, or None for everyone at once.
+    focus: Option<usize>,
+    /// Presses that arrived before the games existed.
+    pending: std::collections::HashMap<u32, (Vec<(f64, u8)>, bool)>,
 }
 
 struct Toast {
@@ -228,6 +249,32 @@ fn fmt_time(ms: f64) -> String {
     format!("{}:{:02}", s / 60, s % 60)
 }
 
+/// Every spectated player at once: one lane per player, stacked, with their numbers.
+fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[(u32, String)], scroll: f64) {
+    let n = games.len().max(1) as f32;
+    let (band_top, band_h) = game::lane_band();
+    let (top, bottom) = (40.0, 470.0);
+    let strip = ((bottom - top) / n).min(120.0);
+    let k = strip / band_h;
+    let full_w = c.width;
+    c.text_centered(full_w / 2.0, 16.0, 9.0, rgba(0x4fb4ff, 1.0), "SPECTATING  -  everyone   Left/Right or A: one player   Esc leave");
+    for (i, (id, g)) in games.iter_mut().enumerate() {
+        let y = top + i as f32 * strip;
+        let start = c.shapes.len();
+        c.width = full_w / k;
+        g.draw_playfield(c, scroll);
+        c.transform_since(start, [0.0, 0.0], k, 0.0, y - band_top * k);
+        c.width = full_w;
+        c.clip_since(start, 0.0, y, full_w, strip - 2.0);
+        let name = players.iter().find(|(p, _)| p == id).map(|(_, n)| n.as_str()).unwrap_or("?");
+        let st = &g.stats;
+        let line = format!("{name}   {:08}   {:.2}%   {}x", st.score, st.accuracy() * 100.0, st.combo);
+        let tw = Canvas::text_width(8.0, &line);
+        c.round_rect(full_w - tw - 28.0, y + 4.0, tw + 16.0, 16.0, 6.0, rgba(0x000000, 0.6), rgba(0, 0.0), 0.0);
+        c.text_right(full_w - 20.0, y + 8.0, 8.0, rgba(0xffffff, 1.0), &line);
+    }
+}
+
 /// Local scores for the selected map, under the song select panel.
 fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow]) {
     c.text(x + 4.0, y + 2.0, 7.0, rgba(0xEB452C, 1.0), "LOCAL SCORES");
@@ -351,7 +398,7 @@ impl State {
 
     /// Scenes that use the gameplay present mode; everything else is a menu.
     fn in_song(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. })
+        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. } | Scene::Spectate(_))
     }
 
     /// The present mode this frame should use.
@@ -374,7 +421,7 @@ impl State {
     /// Speed the preview plays at: the match rate for the lobby map, else the selected rate.
     fn preview_rate(&self) -> (f64, bool) {
         let lobby_rate = self.mp.as_ref().and_then(|s| s.map.as_ref().filter(|_| s.map_entry.is_some() && s.map_entry == self.preview_target()).map(|m| m.rate));
-        let lobby = matches!(self.scene, Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults)
+        let lobby = matches!(self.scene, Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_))
             || matches!(&self.scene, Scene::Preview { back } | Scene::Settings { prev: back } if matches!(**back, Scene::Lobby));
         let rate = lobby_rate.filter(|_| lobby).unwrap_or(self.cfg.rate);
         (rate, self.cfg.rate_keep_pitch)
@@ -442,7 +489,7 @@ impl State {
     /// select selection.
     fn preview_target(&self) -> Option<usize> {
         let lobby = match &self.scene {
-            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => true,
+            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) => true,
             Scene::Preview { back } | Scene::Settings { prev: back } => matches!(**back, Scene::Lobby),
             _ => false,
         };
@@ -1447,6 +1494,13 @@ impl State {
                         self.toast(text);
                     }
                     KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
+                    KeyCode::KeyS if s.in_match && s.me().is_some_and(|p| p.status == net::Status::Lobby) => {
+                        if s.have_map {
+                            s.client.send(net::ClientMsg::Spectate(true));
+                        } else {
+                            self.toast("you need the map to spectate".into());
+                        }
+                    }
                     KeyCode::KeyD if !s.have_map => self.download_lobby_map(),
                     KeyCode::KeyH if !s.have_map && s.map.is_some() && self.host_transfer.is_none() => {
                         s.client.send(net::ClientMsg::RequestMap);
@@ -1772,14 +1826,61 @@ impl State {
                 }
             }
             ServerMsg::MapRequested { from } => self.send_map_to(from),
+            ServerMsg::Spectate { map, at, players } => {
+                let Some(s) = &self.mp else { return };
+                match find_map(&self.library, &map) {
+                    Some(i) => {
+                        let start = s.client.local_instant(at);
+                        self.stop_audio();
+                        self.preview.show_background_for(&self.library[i]);
+                        let rx = self.spawn_loader(i, map.rate, self.cached_track(i, map.rate));
+                        self.scene = Scene::Spectate(Box::new(SpectateView {
+                            rx: Some(rx),
+                            loaded: None,
+                            start,
+                            from: map.from,
+                            rate: map.rate,
+                            players,
+                            games: Vec::new(),
+                            focus: Some(0),
+                            pending: std::collections::HashMap::new(),
+                        }));
+                    }
+                    None => {
+                        s.client.send(net::ClientMsg::Spectate(false));
+                        self.toast("you need the map to spectate".into());
+                    }
+                }
+            }
+            ServerMsg::Inputs { from, inputs, anti_mash } => {
+                if let Scene::Spectate(v) = &mut self.scene {
+                    match v.games.iter_mut().find(|(id, _)| *id == from) {
+                        Some((_, g)) => {
+                            g.anti_mash = anti_mash;
+                            if let Some((list, _)) = &mut g.replay {
+                                list.extend_from_slice(&inputs);
+                            }
+                        }
+                        None => {
+                            let e = v.pending.entry(from).or_default();
+                            e.0.extend_from_slice(&inputs);
+                            e.1 = anti_mash;
+                        }
+                    }
+                }
+            }
             ServerMsg::MapFile(part) => self.receive_map_part(part),
             ServerMsg::Results(r) => {
                 if let Some(s) = &mut self.mp {
                     s.results = Some(r);
                 }
+                if matches!(self.scene, Scene::Spectate(_)) {
+                    self.stop_audio();
+                    self.scene = Scene::MpResults;
+                }
             }
             ServerMsg::Rejected(why) | ServerMsg::Disconnected(why) => {
-                let in_mp = matches!(self.scene, Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults);
+                let in_mp = matches!(self.scene, Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_));
                 self.toast(format!("multiplayer: {why}"));
                 self.mp = None;
                 self.picking_lobby_map = false;
@@ -1846,6 +1947,29 @@ impl State {
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.select.pick_collection(cursor, &self.library),
                 KeyCode::Escape | KeyCode::Backspace => self.select.picker = None,
                 _ => {}
+            }
+            return;
+        }
+        if let Scene::Spectate(v) = &mut self.scene {
+            let n = v.players.len().max(1);
+            match code {
+                KeyCode::ArrowLeft | KeyCode::ArrowRight if !repeat => {
+                    let dir = if code == KeyCode::ArrowRight { 1 } else { n - 1 };
+                    v.focus = Some(v.focus.map(|f| (f + dir) % n).unwrap_or(0));
+                }
+                KeyCode::KeyA | KeyCode::Tab if !repeat => v.focus = if v.focus.is_some() { None } else { Some(0) },
+                KeyCode::Escape if !repeat => {
+                    if let Some(s) = &self.mp {
+                        s.client.send(net::ClientMsg::Spectate(false));
+                    }
+                    self.stop_audio();
+                    self.scene = Scene::Lobby;
+                }
+                _ => {
+                    if !repeat {
+                        self.handle_global_key(code, window);
+                    }
+                }
             }
             return;
         }
@@ -1944,7 +2068,7 @@ impl State {
             }
             Scene::Settings { .. } => self.settings_key(code, window),
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. } | Scene::Download => {}
-            Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => {}
+            Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) => {}
             Scene::Play { game, entry, from } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
@@ -2033,7 +2157,7 @@ impl State {
             let has_bg = self.preview.has_background;
             self.bg_brightness = match self.scene {
                 _ if !has_bg => 0.0,
-                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Loading { .. } | Scene::Preview { .. } => 1.0 - self.cfg.bg_dim,
+                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Loading { .. } | Scene::Preview { .. } | Scene::Spectate(_) => 1.0 - self.cfg.bg_dim,
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
@@ -2164,6 +2288,7 @@ impl State {
                             Some(r) => {
                                 game.anti_mash = r.anti_mash;
                                 game.replay_of = Some(r.player.clone());
+                                game.banner = Some(format!("REPLAY  -  {}", r.player));
                                 game.replay = Some((r.inputs, 0));
                             }
                             // Full plays (not autoplay, not from a start point) are kept.
@@ -2349,6 +2474,10 @@ impl State {
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.cfg.offset_ms);
                         }
+                        game.record = true;
+                        if let Some(s) = &mut self.mp {
+                            s.inputs_sent = 0;
+                        }
                         next = Some(Scene::MpPlay { game: Box::new(game), quit_armed: None });
                     }
                 }
@@ -2389,11 +2518,84 @@ impl State {
                     if s.last_live.elapsed() >= Duration::from_millis(100) {
                         s.last_live = now;
                         s.client.send(net::ClientMsg::Live(live));
+                        if game.inputs.len() > s.inputs_sent {
+                            let inputs = game.inputs[s.inputs_sent..].to_vec();
+                            s.inputs_sent = game.inputs.len();
+                            s.client.send(net::ClientMsg::Inputs { inputs, anti_mash: game.anti_mash });
+                        }
                     }
                     if done {
                         s.client.send(net::ClientMsg::Finished(multiplayer::final_from(&game.stats, false)));
                         next = Some(Scene::MpResults);
                     }
+                }
+            }
+            Scene::Spectate(v) => {
+                if let Some(rx) = &v.rx {
+                    match rx.try_recv() {
+                        Ok(Ok(l)) => {
+                            v.loaded = Some(l);
+                            v.rx = None;
+                        }
+                        Ok(Err(e)) => {
+                            self.status = format!("can't spectate: {e}");
+                            next = Some(Scene::Lobby);
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {}
+                        Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Lobby),
+                    }
+                }
+                // Start once the map is ready and the delay has passed: the music where the
+                // players were SPECTATE_DELAY ago, every player's game snapping to it.
+                if v.games.is_empty() && now >= v.start + SPECTATE_DELAY {
+                    if let (Some((map, track)), Some(audio)) = (v.loaded.take(), self.audio.as_ref()) {
+                        let probe = Game::new(map.clone(), track.clone(), None);
+                        let first_ms = match v.from {
+                            Some(t) => (t - 2000.0 * v.rate).max(probe.time) / v.rate + self.cfg.offset_ms,
+                            None => probe.time / v.rate,
+                        };
+                        let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
+                        audio.play(track.clone(), first_ms + behind);
+                        for (k, (id, name)) in v.players.iter().enumerate() {
+                            let mut g = Game::new(map.clone(), track.clone(), None);
+                            if let Some(t) = v.from {
+                                g.skip_to(t);
+                            }
+                            let (inputs, mash) = v.pending.remove(id).unwrap_or_default();
+                            g.anti_mash = mash;
+                            g.replay = Some((inputs, 0));
+                            g.banner = Some(format!("SPECTATING  -  {name}  ({}/{})", k + 1, v.players.len()));
+                            v.games.push((*id, Box::new(g)));
+                        }
+                    }
+                }
+                if v.games.is_empty() {
+                    canvas.text_centered(canvas.width / 2.0, 220.0, 12.0, rgba(0xffffff, 1.0), "joining the match...");
+                }
+                let scroll = self.cfg.scroll_speed;
+                for (k, (_, g)) in v.games.iter_mut().enumerate() {
+                    // Only the player watched (or the first one) is heard.
+                    g.mute_hits = v.focus.unwrap_or(0) != k;
+                    g.kiai_effects = self.cfg.kiai_effects;
+                    g.update(now, self.audio.as_ref(), self.cfg.offset_ms);
+                }
+                match v.focus {
+                    Some(k) if k < v.games.len() => {
+                        let g = &mut v.games[k].1;
+                        let hud_in = self.cfg.hud_in_playfield;
+                        draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
+                            g.draw_playfield(c, scroll);
+                            if hud_in {
+                                g.draw_hud(c);
+                            }
+                        });
+                        if !hud_in {
+                            g.draw_hud(canvas);
+                        }
+                        canvas.text_centered(canvas.width / 2.0, 470.0, 7.0, rgba(0x9a9ab0, 1.0), "Left/Right: other player   A: everyone   Esc: leave");
+                    }
+                    _ if !v.games.is_empty() => draw_spectate_all(canvas, &mut v.games, &v.players, scroll),
+                    _ => {}
                 }
             }
             Scene::MpResults => match &self.mp {

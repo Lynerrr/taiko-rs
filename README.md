@@ -221,6 +221,12 @@ pings, and the song starts at a shared instant 3 s after everyone has loaded. Du
 live scoreboard shows everyone's score, accuracy and combo; there is no pause (Esc twice
 forfeits). Results show score, accuracy, max combo, judgements and UR for everyone.
 
+**Spectating:** when a match is running, anyone in the lobby who has the map can press
+**Spectate (S)**. Players stream the presses they're judged on to the room, which keeps the
+match's log, so a spectator joining late catches up; the spectator plays the map 1.5 s behind
+live with every player's presses fed in (judged with that player's mash setting). Left/Right
+switches between players, A shows everyone stacked with their scores, Esc goes back to the lobby.
+
 ## Frame pacing on Wayland
 
 Settings → *Present mode (gameplay)* applies during songs; with *Menus use vsync* (default) song
