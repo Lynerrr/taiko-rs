@@ -39,7 +39,7 @@ use layout::{Area, Grip};
 use winit::window::CursorIcon;
 use library::Entry;
 use render::{rgba, Canvas, PresentChoice, Renderer};
-use settings::{Item, SettingsUi};
+use settings::{Dropdown, Item, SettingsUi};
 use ui::{Results, Select, SelectAction};
 
 type Loaded = Result<(Beatmap, Arc<Track>), String>;
@@ -100,7 +100,6 @@ struct State {
     smooth: Option<debug::Smoothness>,
     started: Instant,
     /// Requests from the input thread that only the render thread can apply.
-    want_present: Option<PresentChoice>,
     want_size: Option<(u32, u32)>,
     present: PresentChoice,
     refresh_hz: f64,
@@ -176,6 +175,16 @@ const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 impl State {
     fn toast(&mut self, text: String) {
         self.toast = Some(Toast { text, until: Instant::now() + Duration::from_millis(1500) });
+    }
+
+    /// Scenes that use the gameplay present mode; everything else is a menu.
+    fn in_song(&self) -> bool {
+        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. })
+    }
+
+    /// The present mode this frame should use.
+    fn wanted_present(&self) -> PresentChoice {
+        if self.cfg.menu_vsync && !self.in_song() { PresentChoice::Fifo } else { self.cfg.present }
     }
 
     fn stop_audio(&mut self) {
@@ -265,6 +274,8 @@ impl State {
             Item::ScrollSpeed => format!("{:.2}x", c.scroll_speed),
             Item::Offset => format!("{:+.0} ms", c.offset_ms),
             Item::Key(i) => config::key_name(c.keys[i]),
+            Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
+            Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::ShowConverts => on(self.select.show_converts),
             Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
             Item::FxVolume => format!("{:.0}%", c.fx_volume * 100.0),
@@ -273,7 +284,8 @@ impl State {
                 let ms = c.audio_buffer as f64 / rate as f64 * 1000.0;
                 format!("{} frames ({ms:.1} ms)", c.audio_buffer)
             }
-            Item::PresentMode => self.present.name().to_string(),
+            Item::PresentMode => c.present.name().to_string(),
+            Item::MenuVsync => on(c.menu_vsync),
             Item::FrameDelay if c.frame_delay_ms > self.safe_frame_delay() => {
                 format!("{:.0} ms (past safe {:.1} ms)", c.frame_delay_ms, self.safe_frame_delay())
             }
@@ -307,10 +319,11 @@ impl State {
         match item {
             Item::ScrollSpeed => self.cfg.scroll_speed = (self.cfg.scroll_speed + 0.05 * d).clamp(0.3, 4.0),
             Item::Offset => self.cfg.offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
-            Item::Key(i) => {
-                self.settings_ui.binding = Some(i);
+            Item::Key(_) | Item::PresetKey(_) => {
+                self.settings_ui.binding = Some(item);
                 return;
             }
+            Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
             Item::ShowConverts => {
                 self.select.show_converts = !self.select.show_converts;
                 self.select.refilter(&self.library);
@@ -337,8 +350,9 @@ impl State {
                 self.refresh_status();
             }
             Item::PresentMode => {
-                self.want_present = Some(if dir > 0 { self.present.next() } else { self.present.next().next() });
+                self.cfg.present = if dir > 0 { self.cfg.present.next() } else { self.cfg.present.next().next() };
             }
+            Item::MenuVsync => self.cfg.menu_vsync = !self.cfg.menu_vsync,
             Item::FrameDelay => self.cfg.frame_delay_ms = (self.cfg.frame_delay_ms + d).clamp(0.0, MAX_FRAME_DELAY).round(),
             Item::FpsCap => {
                 let i = FPS_CAPS.iter().position(|&c| c == self.cfg.fps_cap).unwrap_or(0) as i32;
@@ -385,15 +399,38 @@ impl State {
     }
 
     fn settings_key(&mut self, code: KeyCode, window: Option<&Window>) {
-        if let Some(slot) = self.settings_ui.binding.take() {
+        if let Some(item) = self.settings_ui.binding.take() {
             if code != KeyCode::Escape {
-                // Swap if the key was already bound to another drum.
-                if let Some(other) = self.cfg.keys.iter().position(|&k| k == code) {
-                    self.cfg.keys[other] = self.cfg.keys[slot];
+                match item {
+                    Item::Key(slot) => {
+                        if self.cfg.preset_keys.contains(&code) {
+                            self.toast(format!("{} is a playfield preset key", config::key_name(code)));
+                            return;
+                        }
+                        // Swap if the key was already bound to another drum.
+                        if let Some(other) = self.cfg.keys.iter().position(|&k| k == code) {
+                            self.cfg.keys[other] = self.cfg.keys[slot];
+                        }
+                        self.cfg.keys[slot] = code;
+                    }
+                    Item::PresetKey(slot) => {
+                        if self.cfg.keys.contains(&code) {
+                            self.toast(format!("{} is a drum key", config::key_name(code)));
+                            return;
+                        }
+                        if let Some(other) = self.cfg.preset_keys.iter().position(|&k| k == code) {
+                            self.cfg.preset_keys[other] = self.cfg.preset_keys[slot];
+                        }
+                        self.cfg.preset_keys[slot] = code;
+                    }
+                    _ => {}
                 }
-                self.cfg.keys[slot] = code;
                 self.cfg.save();
             }
+            return;
+        }
+        if self.settings_ui.dropdown.is_some() {
+            self.dropdown_key(code);
             return;
         }
         let item = self.settings_ui.item();
@@ -404,6 +441,7 @@ impl State {
             KeyCode::ArrowRight => self.adjust_setting(item, 1, window),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => self.start_calibration(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldArea => self.open_layout_editor(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldPreset => self.open_dropdown(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
                 self.cfg.playfield_area = Area::FULL;
                 self.cfg.save();
@@ -558,7 +596,11 @@ impl State {
             KeyCode::F3 => self.cfg.scroll_speed = (self.cfg.scroll_speed - 0.05).max(0.3),
             KeyCode::F4 => self.cfg.scroll_speed = (self.cfg.scroll_speed + 0.05).min(4.0),
             KeyCode::F7 => {
-                self.want_present = Some(self.present.next());
+                self.cfg.present = self.cfg.present.next();
+                self.cfg.save();
+                let note = if self.cfg.menu_vsync && !self.in_song() { " (menus stay on vsync)" } else { "" };
+                let text = format!("gameplay present mode: {}{note}", self.cfg.present.name());
+                self.toast(text);
                 return true;
             }
             KeyCode::F8 => {
@@ -667,22 +709,77 @@ impl State {
         })
     }
 
-    /// Steps through resolution presets, applying each as a centred area.
-    fn cycle_preset(&mut self, dir: i32) {
-        if self.resolutions.is_empty() {
-            self.toast("no smaller resolutions fit this window".into());
-            return;
-        }
-        let n = self.resolutions.len() as i32;
-        let i = match self.current_preset().and_then(|p| self.resolutions.iter().position(|&r| r == p)) {
-            Some(i) => (i as i32 + dir).rem_euclid(n),
-            // From a custom area, start at the largest (right) or smallest (left).
-            None => if dir > 0 { 0 } else { n - 1 },
-        } as usize;
-        let (w, h) = self.resolutions[i];
+    fn screen_size(&self) -> (u32, u32) {
+        (self.window_w as u32, self.window_h as u32)
+    }
+
+    fn preset_groups(&self) -> Vec<(&'static str, Vec<(u32, u32)>)> {
+        layout::group_presets(&self.resolutions, self.screen_size())
+    }
+
+    /// Presets in dropdown order (grouped by aspect ratio, largest first).
+    fn preset_list(&self) -> Vec<(u32, u32)> {
+        self.preset_groups().into_iter().flat_map(|(_, l)| l).collect()
+    }
+
+    fn apply_preset(&mut self, (w, h): (u32, u32)) {
         self.cfg.playfield_area = layout::preset_area(w, h, self.window_w, self.window_h);
         self.cfg.save();
         self.toast(format!("playfield {w}x{h}"));
+    }
+
+    /// Steps through resolution presets in dropdown order, applying each as a centred area.
+    fn cycle_preset(&mut self, dir: i32) {
+        let list = self.preset_list();
+        if list.is_empty() {
+            self.toast("no smaller resolutions fit this window".into());
+            return;
+        }
+        let n = list.len() as i32;
+        let i = match self.current_preset().and_then(|p| list.iter().position(|&r| r == p)) {
+            Some(i) => (i as i32 + dir).rem_euclid(n),
+            None => if dir > 0 { 0 } else { n - 1 },
+        } as usize;
+        self.apply_preset(list[i]);
+    }
+
+    fn open_dropdown(&mut self) {
+        let list = self.preset_list();
+        if list.is_empty() {
+            self.toast("no smaller resolutions fit this window".into());
+            return;
+        }
+        let cursor = self.current_preset().and_then(|p| list.iter().position(|&r| r == p)).unwrap_or(0);
+        self.settings_ui.dropdown = Some(Dropdown::new(cursor));
+    }
+
+    fn dropdown_key(&mut self, code: KeyCode) {
+        let list = self.preset_list();
+        let n = list.len();
+        let Some(dd) = &mut self.settings_ui.dropdown else { return };
+        match code {
+            KeyCode::ArrowUp => dd.cursor = dd.cursor.saturating_sub(1),
+            KeyCode::ArrowDown => dd.cursor = (dd.cursor + 1).min(n.saturating_sub(1)),
+            KeyCode::PageUp => dd.cursor = dd.cursor.saturating_sub(8),
+            KeyCode::PageDown => dd.cursor = (dd.cursor + 8).min(n.saturating_sub(1)),
+            KeyCode::Home => dd.cursor = 0,
+            KeyCode::End => dd.cursor = n.saturating_sub(1),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
+                let pick = list.get(dd.cursor).copied();
+                self.settings_ui.dropdown = None;
+                if let Some(p) = pick {
+                    self.apply_preset(p);
+                }
+            }
+            KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab => self.settings_ui.dropdown = None,
+            _ => {}
+        }
+    }
+
+    /// Pointer position in virtual units (480 tall).
+    fn mouse_virtual(&self) -> (f32, f32) {
+        let k = render::VIRTUAL_HEIGHT / self.window_h.max(1.0);
+        (self.mouse.0 as f32 * k, self.mouse.1 as f32 * k)
     }
 
     /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
@@ -697,8 +794,14 @@ impl State {
             self.toast(text);
             return;
         }
+        let n = self.preset_list().len();
         match &self.scene {
             Scene::Select => self.select.move_by(-notches),
+            Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
+                if let Some(dd) = &mut self.settings_ui.dropdown {
+                    dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
+                }
+            }
             Scene::Settings { .. } => self.settings_ui.move_cursor(-notches),
             _ => {}
         }
@@ -723,6 +826,13 @@ impl State {
         }
         if !self.area_editable() {
             self.hover = None;
+            let (vx, vy) = self.mouse_virtual();
+            if let Some(dd) = &mut self.settings_ui.dropdown {
+                if let Some(i) = dd.row_at(vx, vy) {
+                    dd.cursor = i;
+                    return CursorIcon::Pointer;
+                }
+            }
             return CursorIcon::Default;
         }
         self.hover = layout::hit(self.cfg.playfield_area, x, y, sw, sh);
@@ -730,6 +840,20 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool) {
+        if pressed && self.settings_ui.dropdown.is_some() && matches!(self.scene, Scene::Settings { .. }) {
+            let (vx, vy) = self.mouse_virtual();
+            let dd = self.settings_ui.dropdown.as_ref().unwrap();
+            let hit = dd.row_at(vx, vy);
+            let inside = dd.contains(vx, vy);
+            let pick = hit.and_then(|i| self.preset_list().get(i).copied());
+            if hit.is_some() || !inside {
+                self.settings_ui.dropdown = None;
+            }
+            if let Some(p) = pick {
+                self.apply_preset(p);
+            }
+            return;
+        }
         if pressed {
             if self.area_editable() {
                 let (sw, sh) = (self.window_w as f64, self.window_h as f64);
@@ -1080,11 +1204,17 @@ impl State {
 
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
         // Key capture must see every key, before any shortcut can claim it.
-        if self.settings_ui.binding.is_some() && matches!(self.scene, Scene::Settings { .. }) {
+        if (self.settings_ui.binding.is_some() || self.settings_ui.dropdown.is_some()) && matches!(self.scene, Scene::Settings { .. }) {
             if !repeat {
                 self.settings_key(code, window);
             }
             return;
+        }
+        if !repeat && !matches!(self.scene, Scene::MpMenu) && self.settings_ui.dropdown.is_none() {
+            if let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code) {
+                self.cycle_preset(if i == 0 { -1 } else { 1 });
+                return;
+            }
         }
         if matches!(self.scene, Scene::Calibrate { .. } | Scene::CalibrateDone { .. }) {
             self.calibration_key(code, repeat, at, window);
@@ -1458,6 +1588,10 @@ impl State {
                 };
                 let this = &*self;
                 this.settings_ui.draw(canvas, &|item| this.setting_value(item), footer);
+                let (groups, current, screen) = (this.preset_groups(), this.current_preset(), this.screen_size());
+                if let Some(dd) = &mut self.settings_ui.dropdown {
+                    dd.draw(canvas, &groups, current, screen);
+                }
             }
             Scene::LayoutEdit { .. } => {
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, false, game::draw_preview);
@@ -1471,6 +1605,18 @@ impl State {
         }
         if self.grip.is_some() {
             layout::draw_guides(canvas, &self.guides);
+        }
+        if self.cfg.show_playfield_size && matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }) {
+            let a = self.cfg.playfield_area;
+            let (pw, ph) = ((a.w * self.window_w).round() as u32, (a.h * self.window_h).round() as u32);
+            let kind = if a.is_full() {
+                " (full screen)"
+            } else if self.current_preset().is_some() {
+                ""
+            } else {
+                " (custom)"
+            };
+            canvas.text_right(canvas.width - 8.0, 468.0, 7.0, rgba(0x8a8aa0, 0.85), &format!("{pw}x{ph}{kind}"));
         }
         if finish_calibration {
             self.finish_calibration();
@@ -1548,6 +1694,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     let mut canvas = Canvas::default();
     let mut next_frame = Instant::now();
     let mut last_sample: Option<Instant> = None;
+    let mut requested_present: Option<PresentChoice> = None;
     let mut waits = (0.0, 0.0, 0.0);
     loop {
         let (present, cap, delay) = {
@@ -1558,14 +1705,14 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             if let Some((w, h)) = s.want_size.take() {
                 renderer.resize(w, h);
             }
-            if let Some(p) = s.want_present.take() {
-                renderer.set_present(p);
-                // A mode the compositor lacks falls back; remember what we actually got.
+            // Switch present mode when entering/leaving songs (menus can stay on vsync). Compare
+            // with what was requested, not what was granted, so an unsupported mode that falls
+            // back isn't re-applied every frame.
+            let wanted = s.wanted_present();
+            if requested_present != Some(wanted) {
+                renderer.set_present(wanted);
+                requested_present = Some(wanted);
                 s.present = renderer.present;
-                s.cfg.present = renderer.present;
-                let name = renderer.present.name();
-                s.toast(format!("present mode: {name}"));
-                s.cfg.save();
             }
             if matches!(s.scene, Scene::Play { .. }) {
                 if let Some(sm) = &mut s.smooth {
@@ -1858,7 +2005,6 @@ fn main() {
         quit: false,
         smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
         started: Instant::now(),
-        want_present: None,
         want_size: None,
         present,
         refresh_hz: 60.0,

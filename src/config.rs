@@ -19,7 +19,10 @@ pub struct Config {
     pub scroll_speed: f64,
     pub music_volume: f32,
     pub fx_volume: f32,
+    /// Present mode during songs.
     pub present: PresentChoice,
+    /// Menus (song select and its preview, settings, results) always use vsync.
+    pub menu_vsync: bool,
     /// 0 = uncapped. Only applies to mailbox/immediate; vsync paces itself.
     pub fps_cap: u32,
     /// Vsync only: wait this long after the previous frame before drawing the next, so the frame is
@@ -48,6 +51,10 @@ pub struct Config {
     pub show_fps: bool,
     /// Left rim, left centre, right centre, right rim.
     pub keys: [KeyCode; 4],
+    /// Previous / next playfield resolution preset.
+    pub preset_keys: [KeyCode; 2],
+    /// Show the playfield's resolution in a corner during play.
+    pub show_playfield_size: bool,
     pub songs: Vec<PathBuf>,
 }
 
@@ -59,6 +66,7 @@ impl Default for Config {
             music_volume: 0.7,
             fx_volume: 1.0,
             present: PresentChoice::Fifo,
+            menu_vsync: true,
             fps_cap: 0,
             frame_delay_ms: 0.0,
             calibration_bpm: 120.0,
@@ -79,6 +87,8 @@ impl Default for Config {
             audio_buffer: 256,
             show_fps: true,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
+            preset_keys: [KeyCode::F5, KeyCode::F6],
+            show_playfield_size: true,
             songs: Vec::new(),
         }
     }
@@ -118,7 +128,9 @@ const KEY_NAMES: &[KeyCode] = &[
     KeyCode::AltLeft, KeyCode::AltRight, KeyCode::CapsLock, KeyCode::Tab, KeyCode::Enter, KeyCode::ArrowLeft,
     KeyCode::ArrowRight, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::Numpad0, KeyCode::Numpad1,
     KeyCode::Numpad2, KeyCode::Numpad3, KeyCode::Numpad4, KeyCode::Numpad5, KeyCode::Numpad6, KeyCode::Numpad7,
-    KeyCode::Numpad8, KeyCode::Numpad9,
+    KeyCode::Numpad8, KeyCode::Numpad9, KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4, KeyCode::F5,
+    KeyCode::F6, KeyCode::F7, KeyCode::F8, KeyCode::F9, KeyCode::F10, KeyCode::F11, KeyCode::F12, KeyCode::Minus,
+    KeyCode::Equal, KeyCode::PageUp, KeyCode::PageDown, KeyCode::Home, KeyCode::End, KeyCode::Insert, KeyCode::Delete,
 ];
 
 pub fn key_name(k: KeyCode) -> String {
@@ -148,6 +160,7 @@ impl Config {
                 "music_volume" => cfg.music_volume = v.parse::<f32>().unwrap_or(cfg.music_volume).clamp(0.0, 1.0),
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
+                "menu_vsync" => cfg.menu_vsync = v != "false",
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
                 "playfield_area" => cfg.playfield_area = Area::parse(v).unwrap_or(Area::FULL),
                 "hud_in_playfield" => cfg.hud_in_playfield = v != "false",
@@ -169,6 +182,13 @@ impl Config {
                         cfg.keys = k;
                     }
                 }
+                "preset_keys" => {
+                    let keys: Vec<KeyCode> = v.split(',').filter_map(|s| parse_key(s.trim())).collect();
+                    if let Ok(k) = keys.try_into() {
+                        cfg.preset_keys = k;
+                    }
+                }
+                "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "songs" => cfg.songs.push(PathBuf::from(v)),
                 _ => {}
             }
@@ -186,12 +206,17 @@ impl Config {
             "# taiko-rs settings\n\
              # keys = left rim, left centre, right centre, right rim\n\
              keys = {}\n\
+             # previous / next playfield resolution preset\n\
+             preset_keys = {}\n\
+             show_playfield_size = {}\n\
              offset_ms = {}\n\
              scroll_speed = {:.2}\n\
              music_volume = {:.2}\n\
              fx_volume = {:.2}\n\
              # mailbox | immediate | vsync\n\
              present_mode = {}\n\
+             # menus always use vsync (gameplay uses present_mode)\n\
+             menu_vsync = {}\n\
              # mailbox/immediate only; 0 = uncapped\n\
              fps_cap = {}\n\
              # vsync only: ms to wait before drawing each frame (lower latency; too high stutters)\n\
@@ -211,11 +236,14 @@ impl Config {
              show_offset_hint = {}\n\
              offset_hint_ur_scaled = {}\n",
             keys.join(", "),
+            self.preset_keys.iter().map(|k| key_name(*k)).collect::<Vec<_>>().join(", "),
+            self.show_playfield_size,
             self.offset_ms,
             self.scroll_speed,
             self.music_volume,
             self.fx_volume,
             self.present.name(),
+            self.menu_vsync,
             self.fps_cap,
             self.frame_delay_ms,
             self.calibration_bpm,

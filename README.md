@@ -51,6 +51,7 @@ The build is produced by GitHub Actions on every push.
 | type, Backspace | search |
 | Tab (or F1) | switch between the SONGS and SETTINGS tabs |
 | [ / ] (Shift: ×5) | speed (rate) −/+ 0.05× on song select; host sets the match rate in the lobby |
+| F5 / F6 (rebindable) | previous / next playfield resolution preset, anywhere |
 | mouse (in game) | drag inside the playfield to move it, drag its edges/corners to resize it, wheel to scale it |
 | Space | skip intro |
 | Esc (in game) | pause menu: continue, retry, settings, quit; Esc again resumes |
@@ -59,7 +60,7 @@ The build is produced by GitHub Actions on every push.
 | Esc (song select) | clear search / quit |
 | - / = (Shift: ×5) | audio offset −/+ 1 ms |
 | F3 / F4 | scroll speed |
-| F7 | present mode: vsync → mailbox → immediate |
+| F7 | gameplay present mode: vsync → mailbox → immediate (menus stay on vsync by default) |
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
 | F9 | vsync frame delay: 0–14 ms (see below) |
 | F10 / F11 | FPS overlay / fullscreen |
@@ -87,9 +88,11 @@ the lane during play, darkened by Settings → *Background dim*.
   wheel to scale it. Settings → *Playfield area* opens an editor with a sample playfield (mouse,
   or arrows to move / Shift+arrows to resize, R for full screen); *Reset playfield area* restores
   full screen. While dragging, the area snaps to the screen's edges and centre lines (guides are
-  shown; hold Shift to place freely). *Playfield preset* (or `[` / `]` in the editor) sizes it
-  like a window of a given resolution, centred: your monitor's modes plus common ones such as
-  1280x720, 1024x768 and 800x600. *HUD position* keeps score, accuracy, the hit error meter and
+  shown; hold Shift to place freely). *Playfield preset* (Enter opens a list grouped by aspect
+  ratio, largest first; or F5/F6 anywhere, `[` / `]` in the editor) sizes it like a window of a
+  given resolution, centred: your monitor's modes plus common ones such as 1280x720, 1024x768 and
+  800x600. The playfield's resolution is shown in the bottom-right corner during play (Settings →
+  *Show playfield size*). *HUD position* keeps score, accuracy, the hit error meter and
   map info inside the playfield, or fixed at the screen's corners.
 - **Speed (rate):** 0.50×–2.00× in 0.05× steps (`[` / `]` on song select, Shift for 0.25×, or
   Settings → *Speed*). With *Rate keeps pitch* on (default) the music is time-stretched (WSOLA) so
@@ -132,6 +135,9 @@ live scoreboard shows everyone's score, accuracy and combo; there is no pause (E
 forfeits). Results show score, accuracy, max combo, judgements and UR for everyone.
 
 ## Frame pacing on Wayland
+
+Settings → *Present mode (gameplay)* applies during songs; with *Menus use vsync* (default) song
+select, its autoplay preview, settings and results always use vsync.
 
 **Use vsync (the default).** A Wayland compositor shows exactly one frame per refresh no matter
 how many you render, so mailbox/immediate don't put more frames on screen: the compositor picks

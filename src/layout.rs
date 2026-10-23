@@ -235,6 +235,30 @@ pub fn presets(monitor_modes: &[(u32, u32)], screen_w: u32, screen_h: u32) -> Ve
     out
 }
 
+/// Aspect-ratio name for a resolution ("16:9", "4:3", ...), or "Other".
+pub fn aspect_name(w: u32, h: u32) -> &'static str {
+    let r = w as f32 / h.max(1) as f32;
+    const NAMES: [(&str, f32); 6] = [("16:9", 16.0 / 9.0), ("16:10", 1.6), ("4:3", 4.0 / 3.0), ("5:4", 1.25), ("3:2", 1.5), ("21:9", 2.37)];
+    NAMES.iter().find(|(_, a)| (r - a).abs() < if *a > 2.0 { 0.06 } else { 0.02 }).map(|(n, _)| *n).unwrap_or("Other")
+}
+
+/// Presets grouped by aspect ratio like a display-settings list: the screen's own ratio first,
+/// then the usual order, largest resolution first within each group.
+pub fn group_presets(presets: &[(u32, u32)], screen: (u32, u32)) -> Vec<(&'static str, Vec<(u32, u32)>)> {
+    const ORDER: [&str; 7] = ["16:9", "16:10", "4:3", "5:4", "3:2", "21:9", "Other"];
+    let native = aspect_name(screen.0, screen.1);
+    let mut names: Vec<&str> = vec![native];
+    names.extend(ORDER.iter().copied().filter(|n| *n != native));
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let mut list: Vec<(u32, u32)> = presets.iter().copied().filter(|&(w, h)| aspect_name(w, h) == name).collect();
+            list.sort_by_key(|&(w, h)| std::cmp::Reverse((w * h, w)));
+            (!list.is_empty()).then_some((name, list))
+        })
+        .collect()
+}
+
 /// A centred area the size of a `w` x `h` window on a `screen_w` x `screen_h` screen.
 pub fn preset_area(w: u32, h: u32, screen_w: f32, screen_h: f32) -> Area {
     let (fw, fh) = (w as f32 / screen_w.max(1.0), h as f32 / screen_h.max(1.0));
@@ -332,6 +356,21 @@ mod tests {
         assert!(p.windows(2).all(|w| w[0].0 * w[0].1 <= w[1].0 * w[1].1));
         let a = preset_area(1280, 720, 1920.0, 1080.0);
         assert!((a.w - 2.0 / 3.0).abs() < 1e-6 && (a.x - 1.0 / 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn groups_by_aspect_with_native_first() {
+        let p = presets(&[], 1920, 1200);
+        let g = group_presets(&p, (1920, 1200));
+        assert_eq!(g[0].0, "16:10");
+        let names: Vec<&str> = g.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"16:9") && names.contains(&"4:3") && names.contains(&"5:4"));
+        for (_, list) in &g {
+            assert!(list.windows(2).all(|w| w[0].0 * w[0].1 >= w[1].0 * w[1].1), "largest first");
+        }
+        assert_eq!(aspect_name(1366, 768), "16:9");
+        assert_eq!(aspect_name(2560, 1080), "21:9");
+        assert_eq!(aspect_name(1280, 1024), "5:4");
     }
 
     #[test]
