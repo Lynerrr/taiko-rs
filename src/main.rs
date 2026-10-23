@@ -538,6 +538,8 @@ impl State {
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
             Item::LiveOffset => on(c.show_offset_hint),
             Item::LiveOffsetUr => on(c.offset_hint_ur_scaled),
+            Item::ResumeDelay if c.resume_delay_ms <= 0.0 => "off".into(),
+            Item::ResumeDelay => format!("{:.2} s", c.resume_delay_ms / 1000.0),
             Item::PlayfieldArea => c.playfield_area.describe(),
             Item::PlayfieldPreset => self.current_preset().map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| "custom".into()),
             Item::HudPosition => if c.hud_in_playfield { "with playfield".into() } else { "screen".into() },
@@ -600,6 +602,7 @@ impl State {
             Item::Calibrate => return,
             Item::LiveOffset => self.cfg.show_offset_hint = !self.cfg.show_offset_hint,
             Item::LiveOffsetUr => self.cfg.offset_hint_ur_scaled = !self.cfg.offset_hint_ur_scaled,
+            Item::ResumeDelay => self.cfg.resume_delay_ms = (self.cfg.resume_delay_ms + 250.0 * d).clamp(0.0, 3000.0),
             // Both act on Enter in `settings_key`.
             Item::PlayfieldArea | Item::PlayfieldReset => return,
             Item::PlayfieldPreset => {
@@ -805,13 +808,21 @@ impl State {
             return;
         }
         let Scene::Play { game, entry, from } = &mut self.scene else { return };
+        if game.resuming.is_some() {
+            // Counting down: Esc goes back to the menu, everything else waits.
+            if code == KeyCode::Escape {
+                game.cancel_resume();
+            }
+            return;
+        }
+        let delay = Duration::from_millis(self.cfg.resume_delay_ms as u64);
         let cursor = game.paused.unwrap_or(0);
         match code {
             KeyCode::ArrowUp => game.paused = Some(cursor.saturating_sub(1)),
             KeyCode::ArrowDown => game.paused = Some((cursor + 1).min(PAUSE_ITEMS.len() - 1)),
-            KeyCode::Escape => game.resume(self.audio.as_ref()),
+            KeyCode::Escape => game.resume_after(delay, self.audio.as_ref()),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
-                0 => game.resume(self.audio.as_ref()),
+                0 => game.resume_after(delay, self.audio.as_ref()),
                 1 => {
                     let (e, f) = (*entry, *from);
                     self.start_loading_from(e, f);

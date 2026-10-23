@@ -161,6 +161,8 @@ pub struct Game {
     /// Pause menu cursor while paused.
     pub paused: Option<usize>,
     paused_at: Instant,
+    /// Counting down to unpause: (started, ends). The menu is hidden meanwhile.
+    pub resuming: Option<(Instant, Instant)>,
     /// Calibration: draw no notes or barlines (play by ear) / play no hitsounds on presses.
     pub hide_notes: bool,
     pub mute_hits: bool,
@@ -224,6 +226,7 @@ impl Game {
             ignore_audio_until: None,
             paused: None,
             paused_at: Instant::now(),
+            resuming: None,
             hide_notes: false,
             mute_hits: false,
             show_offset_hint: false,
@@ -236,6 +239,9 @@ impl Game {
     /// Advances the clock. Returns true once the map is over.
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>, offset: f64) -> bool {
         self.offset = offset;
+        if self.resuming.is_some_and(|(_, end)| now >= end) {
+            self.resume(audio);
+        }
         if self.paused.is_some() {
             self.clock.hold(now);
             self.time = (self.raw_time - offset) * self.rate;
@@ -300,6 +306,8 @@ impl Game {
     }
 
     pub fn pause(&mut self, audio: Option<&Engine>) {
+        // Pausing again (e.g. losing focus) during the resume countdown shows the menu again.
+        self.cancel_resume();
         if self.paused.is_none() {
             self.paused = Some(0);
             self.paused_at = Instant::now();
@@ -310,10 +318,29 @@ impl Game {
     }
 
     pub fn resume(&mut self, audio: Option<&Engine>) {
+        self.resuming = None;
         if self.paused.take().is_some() {
             if let Some(a) = audio {
                 a.set_paused(false);
             }
+        }
+    }
+
+    /// Leaves the pause menu: unpauses after `delay` (a countdown over the frozen playfield), or
+    /// at once with no delay.
+    pub fn resume_after(&mut self, delay: std::time::Duration, audio: Option<&Engine>) {
+        if delay.is_zero() {
+            self.resume(audio);
+        } else if self.paused.is_some() {
+            let now = Instant::now();
+            self.resuming = Some((now, now + delay));
+        }
+    }
+
+    /// Back to the pause menu from the resume countdown.
+    pub fn cancel_resume(&mut self) {
+        if self.resuming.take().is_some() {
+            self.paused_at = Instant::now();
         }
     }
 
@@ -809,7 +836,23 @@ impl Game {
         if self.can_skip() && self.paused.is_none() && !self.mute_hits {
             c.text_centered(w / 2.0, 330.0, 12.0, rgba(WHITE, 0.7), "SPACE to skip intro");
         }
-        if let Some(cursor) = self.paused {
+        if let (Some(_), Some((start, end))) = (self.paused, self.resuming) {
+            // Resume countdown: the playfield stays visible, lightly dimmed.
+            let now = Instant::now();
+            let left = end.saturating_duration_since(now).as_secs_f32();
+            let total = (end - start).as_secs_f32().max(0.001);
+            c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.35 * (left / total).min(1.0)));
+            let (cx, cy) = (w / 2.0, 330.0);
+            c.ring(cx, cy, 26.0, rgba(0x2a2a38, 0.9), 4.0);
+            // Shrinking arc, drawn as dots around the ring.
+            let n = 48;
+            for k in 0..((left / total * n as f32).ceil() as usize).min(n) {
+                let a = -std::f32::consts::FRAC_PI_2 + k as f32 / n as f32 * std::f32::consts::TAU;
+                c.circle(cx + a.cos() * 26.0, cy + a.sin() * 26.0, 2.2, rgba(DON, 1.0), rgba(DON, 1.0), 0.0);
+            }
+            c.text_centered(cx, cy - 7.0, 14.0, rgba(WHITE, 1.0), &format!("{:.1}", left));
+            c.text_centered(cx, cy + 36.0, 8.0, rgba(0x9a9ab0, 1.0), "get ready   (Esc: back to menu)");
+        } else if let Some(cursor) = self.paused {
             let t = progress(self.paused_at, 180.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78 * t));
             c.text_centered(w / 2.0, 120.0 - (1.0 - t) * 12.0, 32.0, rgba(WHITE, t), "PAUSED");

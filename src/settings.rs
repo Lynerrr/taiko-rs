@@ -19,6 +19,7 @@ pub enum Item {
     CalibrationBpm,
     LiveOffset,
     LiveOffsetUr,
+    ResumeDelay,
     Key(usize),
     /// Previous (0) / next (1) playfield preset key.
     PresetKey(usize),
@@ -37,7 +38,7 @@ pub enum Item {
     Fullscreen,
 }
 
-pub const ITEMS: [(&str, Item); 31] = [
+pub const ITEMS: [(&str, Item); 32] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::PlayfieldArea),
     ("GAMEPLAY", Item::PlayfieldPreset),
@@ -53,6 +54,7 @@ pub const ITEMS: [(&str, Item); 31] = [
     ("GAMEPLAY", Item::CalibrationBpm),
     ("GAMEPLAY", Item::LiveOffset),
     ("GAMEPLAY", Item::LiveOffsetUr),
+    ("GAMEPLAY", Item::ResumeDelay),
     ("GAMEPLAY", Item::Key(0)),
     ("GAMEPLAY", Item::Key(1)),
     ("GAMEPLAY", Item::Key(2)),
@@ -88,6 +90,7 @@ impl Item {
             Item::CalibrationBpm => "Calibration tempo",
             Item::LiveOffset => "Live offset suggestion",
             Item::LiveOffsetUr => "Scale suggestion to UR",
+            Item::ResumeDelay => "Resume delay",
             Item::Key(i) => KEY_LABELS[i],
             Item::PresetKey(0) => "Previous preset key",
             Item::PresetKey(_) => "Next preset key",
@@ -121,6 +124,7 @@ impl Item {
             Item::CalibrationBpm => "Tempo of the calibration click track. Pick one close to the maps you play.",
             Item::LiveOffset => "While playing, suggest an offset from your recent hits; press O to apply it.",
             Item::LiveOffsetUr => "On: more hits and a +- margin when your UR is high. Off: plain average of the last 40 hits.",
+            Item::ResumeDelay => "Countdown before the song continues after the pause menu (0 = at once).",
             Item::Key(_) => "Enter, then press the new key. Esc cancels.",
             Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key.",
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",

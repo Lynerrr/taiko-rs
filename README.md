@@ -54,7 +54,7 @@ The build is produced by GitHub Actions on every push.
 | F5 / F6 (rebindable) | previous / next playfield resolution preset, anywhere |
 | mouse (in game) | drag inside the playfield to move it, drag its edges/corners to resize it, wheel to scale it |
 | Space | skip intro |
-| Esc (in game) | pause menu: continue, retry, playfield size, settings, quit; Esc again resumes |
+| Esc (in game) | pause menu: continue, retry, playfield size, settings, quit; Esc again resumes after a short countdown (Settings → *Resume delay*, 0–3 s) |
 | F2 / Shift+F2 | random song / back to the previous random pick (song select) |
 | Ctrl+← / → | seek the song select preview ±5 s |
 | Shift+Enter | play the selected map from the start point picked on its timeline |

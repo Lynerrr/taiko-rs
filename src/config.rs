@@ -48,6 +48,8 @@ pub struct Config {
     pub offset_hint_ur_scaled: bool,
     pub audio_buffer: u32,
     pub show_fps: bool,
+    /// Countdown before play continues after the pause menu (ms).
+    pub resume_delay_ms: f64,
     /// Menu animations (screen fades, sliding highlights, ...).
     pub animations: bool,
     /// Start in (borderless) fullscreen; F11 toggles and remembers it.
@@ -91,6 +93,7 @@ impl Default for Config {
             show_fps: true,
             fullscreen: true,
             animations: true,
+            resume_delay_ms: 1000.0,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             show_playfield_size: true,
@@ -183,6 +186,7 @@ impl Config {
                 "show_fps" => cfg.show_fps = v == "true",
                 "fullscreen" => cfg.fullscreen = v != "false",
                 "animations" => cfg.animations = v != "false",
+                "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
                 "mp_port" => cfg.mp_port = v.parse().unwrap_or(cfg.mp_port),
@@ -246,6 +250,8 @@ impl Config {
              show_fps = {}\n\
              fullscreen = {}\n\
              animations = {}\n\
+             # countdown before play continues after pausing (ms)\n\
+             resume_delay_ms = {:.0}\n\
              show_offset_hint = {}\n\
              offset_hint_ur_scaled = {}\n",
             keys.join(", "),
@@ -269,6 +275,7 @@ impl Config {
             self.show_fps,
             self.fullscreen,
             self.animations,
+            self.resume_delay_ms,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
         );
