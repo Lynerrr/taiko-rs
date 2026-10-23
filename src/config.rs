@@ -7,6 +7,7 @@ use winit::keyboard::KeyCode;
 
 use crate::render::PresentChoice;
 
+pub const RATE_RANGE: (f64, f64) = (0.5, 2.0);
 pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
 pub const FRAME_DELAYS: [f64; 13] = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 25.0, 33.0];
 pub const MAX_FRAME_DELAY: f64 = 33.0;
@@ -25,6 +26,12 @@ pub struct Config {
     pub frame_delay_ms: f64,
     /// Tempo of the offset-calibration click track.
     pub calibration_bpm: f64,
+    /// Playfield size (1.0 = default) and vertical shift in virtual units (480 = screen height).
+    pub playfield_scale: f32,
+    pub playfield_y: f32,
+    /// Speed modifier (1.5 = DT, 0.75 = HT) and whether it keeps the music's pitch.
+    pub rate: f64,
+    pub rate_keep_pitch: bool,
     /// Show a live offset suggestion during play.
     pub show_offset_hint: bool,
     /// Multiplayer: display name, port to host on, last address joined.
@@ -51,6 +58,10 @@ impl Default for Config {
             fps_cap: 0,
             frame_delay_ms: 0.0,
             calibration_bpm: 120.0,
+            playfield_scale: 1.0,
+            playfield_y: 0.0,
+            rate: 1.0,
+            rate_keep_pitch: true,
             show_offset_hint: true,
             mp_name: std::env::var("USER")
                 .or_else(|_| std::env::var("USERNAME"))
@@ -133,6 +144,10 @@ impl Config {
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
+                "playfield_scale" => cfg.playfield_scale = v.parse::<f32>().unwrap_or(1.0).clamp(0.5, 1.6),
+                "playfield_y" => cfg.playfield_y = v.parse::<f32>().unwrap_or(0.0).clamp(-300.0, 300.0),
+                "rate" => cfg.rate = v.parse::<f64>().unwrap_or(1.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
+                "rate_keep_pitch" => cfg.rate_keep_pitch = v != "false",
                 "calibration_bpm" => cfg.calibration_bpm = v.parse::<f64>().unwrap_or(120.0).clamp(60.0, 240.0),
                 "frame_delay_ms" => cfg.frame_delay_ms = v.parse::<f64>().unwrap_or(0.0).clamp(0.0, MAX_FRAME_DELAY),
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
@@ -176,6 +191,11 @@ impl Config {
              # vsync only: ms to wait before drawing each frame (lower latency; too high stutters)\n\
              frame_delay_ms = {}\n\
              calibration_bpm = {}\n\
+             playfield_scale = {:.2}\n\
+             playfield_y = {:.0}\n\
+             # speed modifier (1.5 = DT) and whether it keeps the music's pitch\n\
+             rate = {:.2}\n\
+             rate_keep_pitch = {}\n\
              # audio device buffer in frames (lower = less latency, more risk of crackle)\n\
              audio_buffer = {}\n\
              show_fps = {}\n\
@@ -190,6 +210,10 @@ impl Config {
             self.fps_cap,
             self.frame_delay_ms,
             self.calibration_bpm,
+            self.playfield_scale,
+            self.playfield_y,
+            self.rate,
+            self.rate_keep_pitch,
             self.audio_buffer,
             self.show_fps,
             self.show_offset_hint,

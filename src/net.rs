@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Countdown between everyone having loaded and the song starting.
 const START_LEAD_MS: f64 = 3000.0;
@@ -54,6 +54,20 @@ pub struct MapInfo {
     pub artist: String,
     pub title: String,
     pub version: String,
+    /// Speed modifier the host picked for the match.
+    #[serde(default = "one")]
+    pub rate: f64,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+impl MapInfo {
+    pub fn label(&self) -> String {
+        let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", self.rate) } else { String::new() };
+        format!("{} - {} [{}]{rate}", self.artist, self.title, self.version)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -145,6 +159,8 @@ fn clean_name(name: &str) -> String {
 pub struct Server {
     stop: Arc<AtomicBool>,
     pub token: u64,
+    /// Port actually listened on (useful when 0 was requested).
+    pub port: u16,
 }
 
 impl Drop for Server {
@@ -165,9 +181,14 @@ pub fn host(port: u16) -> Result<Server, String> {
     // would be refused.
     let mut listeners = Vec::new();
     let mut last_err = None;
+    let mut port = port;
     for addr in ["::", "0.0.0.0"] {
         match TcpListener::bind((addr, port)) {
-            Ok(l) => listeners.push(l),
+            Ok(l) => {
+                // With port 0 the OS picks one; the second family must use the same port.
+                port = l.local_addr().map(|a| a.port()).unwrap_or(port);
+                listeners.push(l)
+            }
             Err(e) => last_err = Some(e),
         }
     }
@@ -214,7 +235,7 @@ pub fn host(port: u16) -> Result<Server, String> {
         let stop = stop.clone();
         thread::Builder::new().name("mp-room".into()).spawn(move || room_loop(rx, stop, token)).map_err(|e| e.to_string())?;
     }
-    Ok(Server { stop, token })
+    Ok(Server { stop, token, port })
 }
 
 fn spawn_connection(stream: TcpStream, id: u32, events: Sender<Event>) {
@@ -321,9 +342,13 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64) {
                         let _ = p.tx.send(ServerMsg::Pong { t, server: now_ms() });
                     }
                     ClientMsg::SelectMap(m) if is_host && phase == Phase::Lobby => {
+                        // Same map at a new rate: everyone still has it, they just re-ready.
+                        let same_map = map.as_ref().is_some_and(|old| old.hash == m.hash);
                         map = Some(m);
                         for p in &mut players {
-                            p.info.has_map = false;
+                            if !same_map {
+                                p.info.has_map = false;
+                            }
                             p.info.ready = false;
                         }
                         dirty = true;
@@ -576,8 +601,8 @@ mod tests {
 
     #[test]
     fn room_accepts_ipv4_and_ipv6() {
-        let port = 49_000 + (std::process::id() % 1000) as u16;
-        let _server = host(port).unwrap();
+        let server = host(0).unwrap();
+        let port = server.port;
         let mut v4 = Client::connect(&format!("127.0.0.1:{port}"), "v4", None).unwrap();
         wait_for(&mut v4, |m| matches!(m, ServerMsg::Welcome { .. }));
         // IPv6 loopback may be disabled on some machines; only check it when it exists.
@@ -589,8 +614,8 @@ mod tests {
 
     #[test]
     fn oversized_message_drops_the_connection() {
-        let port = 48_000 + (std::process::id() % 1000) as u16;
-        let _server = host(port).unwrap();
+        let server = host(0).unwrap();
+        let port = server.port;
         let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
         let junk = vec![b'x'; (MAX_LINE as usize) + 10];
         let _ = raw.write_all(&junk);
@@ -603,15 +628,15 @@ mod tests {
 
     #[test]
     fn full_match_over_localhost() {
-        let port = 47_000 + (std::process::id() % 1000) as u16;
-        let server = host(port).unwrap();
+        let server = host(0).unwrap();
+        let port = server.port;
         let addr = format!("127.0.0.1:{port}");
         // An intruder racing in first must not become host.
         let mut b = Client::connect(&addr, "bob", None).unwrap();
         wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
         let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
         wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new() }));
+        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0 }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
         a.send(ClientMsg::HasMap(false));
@@ -620,7 +645,7 @@ mod tests {
         assert!(players.iter().any(|p| p.name == "alice" && p.host));
         assert!(players.iter().any(|p| p.name == "bob" && !p.host));
 
-        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into() };
+        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5 };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
         for c in [&a, &b] {
@@ -630,7 +655,7 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
         a.send(ClientMsg::StartMatch);
         for c in [&mut a, &mut b] {
-            assert!(matches!(wait_for(c, |m| matches!(m, ServerMsg::Prepare(_))), ServerMsg::Prepare(m) if m.hash == 42));
+            assert!(matches!(wait_for(c, |m| matches!(m, ServerMsg::Prepare(_))), ServerMsg::Prepare(m) if m.hash == 42 && m.rate == 1.5));
             c.send(ClientMsg::Loaded(true));
         }
         let ServerMsg::Start { at: at_a } = wait_for(&mut a, |m| matches!(m, ServerMsg::Start { .. })) else { unreachable!() };

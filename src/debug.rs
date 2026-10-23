@@ -161,17 +161,33 @@ impl Smoothness {
 /// `TAIKO_INPUT=ms:Key,ms:Key,...` injects key presses at wall-clock times after launch, for
 /// driving menus in headless tests. Keys use winit `KeyCode` names (`Escape`, `ArrowDown`, `KeyS`).
 pub struct InputScript {
-    events: Vec<(f64, winit::keyboard::KeyCode)>,
+    events: Vec<(f64, Action)>,
+}
+
+/// A scripted input: a key, or mouse pseudo-keys `WheelUp`/`WheelDown`/`DragUp`/`DragDown`
+/// (one wheel notch, or a 40 px left-button drag).
+#[derive(Clone, Copy, Debug)]
+pub enum Action {
+    Key(winit::keyboard::KeyCode),
+    Wheel(i32),
+    Drag(f64),
 }
 
 impl InputScript {
     pub fn from_env() -> Option<InputScript> {
         let v = std::env::var("TAIKO_INPUT").ok()?;
-        let mut events: Vec<(f64, winit::keyboard::KeyCode)> = v
+        let mut events: Vec<(f64, Action)> = v
             .split(',')
             .filter_map(|e| {
                 let (t, k) = e.split_once(':')?;
-                Some((t.trim().parse().ok()?, parse_keycode(k.trim())?))
+                let action = match k.trim() {
+                    "WheelUp" => Action::Wheel(1),
+                    "WheelDown" => Action::Wheel(-1),
+                    "DragUp" => Action::Drag(-40.0),
+                    "DragDown" => Action::Drag(40.0),
+                    k => Action::Key(parse_keycode(k)?),
+                };
+                Some((t.trim().parse().ok()?, action))
             })
             .collect();
         events.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -179,7 +195,7 @@ impl InputScript {
     }
 
     /// Keys due by `elapsed_ms`, oldest first.
-    pub fn due(&mut self, elapsed_ms: f64) -> Vec<winit::keyboard::KeyCode> {
+    pub fn due(&mut self, elapsed_ms: f64) -> Vec<Action> {
         let mut out = Vec::new();
         while self.events.last().is_some_and(|e| e.0 <= elapsed_ms) {
             out.push(self.events.pop().unwrap().1);

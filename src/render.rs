@@ -470,6 +470,18 @@ impl Canvas {
         self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, side as f32] });
     }
 
+    /// Scales every shape drawn since `start` about `anchor`, then moves it down by `dy` (playfield
+    /// size and position). Radii, borders and glows scale with it, so the result stays crisp.
+    pub fn transform_since(&mut self, start: usize, anchor: [f32; 2], scale: f32, dy: f32) {
+        for sh in &mut self.shapes[start..] {
+            sh.center = [anchor[0] + (sh.center[0] - anchor[0]) * scale, anchor[1] + (sh.center[1] - anchor[1]) * scale + dy];
+            sh.half = [sh.half[0] * scale, sh.half[1] * scale];
+            sh.params[0] *= scale;
+            sh.params[1] *= scale;
+            sh.params[2] *= scale;
+        }
+    }
+
     pub fn glow(&mut self, x: f32, y: f32, r: f32, softness: f32, color: [f32; 4]) {
         self.shapes.push(Shape { center: [x, y], half: [r, r], fill: color, border: color, params: [r, 0.0, softness, 0.0] });
     }

@@ -61,7 +61,8 @@ pub fn start_host(port: u16, name: String) -> Connecting {
             let token = Some(server.token);
             let client = Client::connect(&format!("127.0.0.1:{port}"), &name, token)
                 .or_else(|_| Client::connect(&format!("[::1]:{port}"), &name, token))?;
-            Ok(Session::new(client, Some(server), format!("hosting on port {port}")))
+            let label = format!("hosting on port {}", server.port);
+            Ok(Session::new(client, Some(server), label))
         })();
         let _ = tx.send(result);
     });
@@ -173,7 +174,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
     c.text(x0 + 14.0, 70.0, 8.0, rgba(0xEB452C, 1.0), "MAP");
     match &s.map {
         Some(m) => {
-            let label = format!("{} - {} [{}]", m.artist, m.title, m.version);
+            let label = m.label();
             c.text(x0 + 14.0, 86.0, 10.0, rgba(0xffffff, 1.0), &label);
             if !have_map {
                 c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFF4B4B, 1.0), "not in your Songs folder");
@@ -207,7 +208,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
     let hint = if s.in_match {
         "A match is in progress; you'll join the next one.".to_string()
     } else if s.is_host() {
-        format!("M pick map   Space ready   Enter start ({ready} ready)   Tab songs   Esc close room")
+        format!("M pick map   [ ] rate   Space ready   Enter start ({ready} ready)   Tab songs   Esc close room")
     } else {
         "Space ready   Tab songs   Esc leave".to_string()
     };
@@ -234,7 +235,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
 pub fn draw_waiting(c: &mut Canvas, s: &Session, start: Option<Instant>, loaded: bool, now: Instant) {
     let w = c.width;
     if let Some(m) = &s.map {
-        c.text_centered(w / 2.0, 120.0, 11.0, rgba(0x9a9ab0, 1.0), &format!("{} - {} [{}]", m.artist, m.title, m.version));
+        c.text_centered(w / 2.0, 120.0, 11.0, rgba(0x9a9ab0, 1.0), &m.label());
     }
     let big = match start {
         Some(at) if at > now => format!("{}", (at - now).as_secs_f64().ceil() as u32),
@@ -251,7 +252,8 @@ pub fn draw_waiting(c: &mut Canvas, s: &Session, start: Option<Instant>, loaded:
 }
 
 /// Live standings drawn over the playfield.
-pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
+/// `y0`: top of the board (just under the map info, which follows the playfield).
+pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live, y0: f32) {
     let my_id = s.client.id;
     let mut rows: Vec<(String, Live, bool, bool)> = s
         .players
@@ -266,7 +268,6 @@ pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
         .collect();
     rows.sort_by(|a, b| b.1.score.cmp(&a.1.score));
     let x = 18.0;
-    let y0 = 282.0;
     let h = 16.0;
     c.round_rect(x - 6.0, y0 - 6.0, 300.0, rows.len().min(8) as f32 * h + 10.0, 6.0, rgba(0x000000, 0.45), rgba(0, 0.0), 0.0);
     for (i, (name, live, me, quit)) in rows.iter().enumerate().take(8) {
@@ -284,7 +285,7 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
     let title = if final_results.is_some() { "MATCH RESULTS" } else { "waiting for other players to finish..." };
     c.text_centered(w / 2.0, 50.0, 14.0, rgba(0xffffff, 1.0), title);
     if let Some(m) = &s.map {
-        c.text_centered(w / 2.0, 76.0, 9.0, rgba(0x9a9ab0, 1.0), &format!("{} - {} [{}]", m.artist, m.title, m.version));
+        c.text_centered(w / 2.0, 76.0, 9.0, rgba(0x9a9ab0, 1.0), &m.label());
     }
     let mut rows: Vec<PlayerInfo> = match final_results {
         Some(r) => r.clone(),

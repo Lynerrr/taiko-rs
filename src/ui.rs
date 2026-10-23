@@ -10,6 +10,8 @@ pub struct Select {
     pub filter: String,
     /// Files read so far while the library is still being scanned.
     pub scanning: Option<usize>,
+    /// Speed modifier shown in the header ("" at 1.0x).
+    pub rate_label: String,
     pub show_converts: bool,
     visible: Vec<usize>,
     cursor: usize,
@@ -26,7 +28,7 @@ pub enum SelectAction {
 impl Select {
     pub fn new(library: &[Entry]) -> Select {
         let has_taiko = library.iter().any(|e| e.meta.mode == 1);
-        let mut s = Select { filter: String::new(), scanning: None, show_converts: !has_taiko, visible: Vec::new(), cursor: 0, scroll: 0.0 };
+        let mut s = Select { filter: String::new(), scanning: None, rate_label: String::new(), show_converts: !has_taiko, visible: Vec::new(), cursor: 0, scroll: 0.0 };
         s.refilter(library);
         s
     }
@@ -103,6 +105,12 @@ impl Select {
         SelectAction::None
     }
 
+    /// Mouse wheel: move the selection by `n` rows (negative = up).
+    pub fn move_by(&mut self, n: i32) {
+        let last = self.visible.len().saturating_sub(1) as i32;
+        self.cursor = (self.cursor as i32 + n).clamp(0, last.max(0)) as usize;
+    }
+
     pub fn type_text(&mut self, text: &str, library: &[Entry]) {
         let mut changed = false;
         for ch in text.chars().filter(|c| !c.is_control()) {
@@ -117,7 +125,7 @@ impl Select {
     pub fn draw(&mut self, c: &mut Canvas, library: &[Entry], dt_ms: f64, status: &str) {
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
-        crate::settings::tab_bar(c, 0, &format!("{} maps  |  {mode}", self.visible.len()));
+        crate::settings::tab_bar(c, 0, &format!("{} maps  |  {mode}{}", self.visible.len(), self.rate_label));
 
         let search = if self.filter.is_empty() { "type to search...".to_string() } else { format!("search: {}_", self.filter) };
         c.round_rect(24.0, 54.0, w - 48.0, 24.0, 6.0, rgba(0x23232f, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
@@ -161,7 +169,7 @@ impl Select {
             c.text_right(w - 36.0, y + 8.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("OD {:.1}", e.meta.od));
         }
 
-        c.text(24.0, 452.0, 8.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down select  Left/Right set  Tab settings  -/= offset  F3/F4 speed  F11 fullscreen  Esc quit");
+        c.text(24.0, 452.0, 8.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down select  Left/Right set  [ ] rate  Tab settings  -/= offset  F3/F4 speed  F11 fullscreen  Esc quit");
         c.text(24.0, 466.0, 8.0, rgba(0x55556a, 1.0), status);
     }
 }

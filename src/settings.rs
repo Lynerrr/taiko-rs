@@ -6,6 +6,10 @@ use crate::render::{rgba, Canvas};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
     ScrollSpeed,
+    PlayfieldSize,
+    PlayfieldPosition,
+    Rate,
+    RateKeepPitch,
     Offset,
     Calibrate,
     CalibrationBpm,
@@ -23,8 +27,12 @@ pub enum Item {
     Fullscreen,
 }
 
-pub const ITEMS: [(&str, Item); 19] = [
+pub const ITEMS: [(&str, Item); 23] = [
     ("GAMEPLAY", Item::ScrollSpeed),
+    ("GAMEPLAY", Item::PlayfieldSize),
+    ("GAMEPLAY", Item::PlayfieldPosition),
+    ("GAMEPLAY", Item::Rate),
+    ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::Offset),
     ("GAMEPLAY", Item::Calibrate),
     ("GAMEPLAY", Item::CalibrationBpm),
@@ -51,6 +59,10 @@ impl Item {
     pub fn label(self) -> &'static str {
         match self {
             Item::ScrollSpeed => "Scroll speed",
+            Item::PlayfieldSize => "Playfield size",
+            Item::PlayfieldPosition => "Playfield position",
+            Item::Rate => "Speed (rate)",
+            Item::RateKeepPitch => "Rate keeps pitch",
             Item::Offset => "Audio offset",
             Item::Calibrate => "Offset calibration",
             Item::CalibrationBpm => "Calibration tempo",
@@ -72,6 +84,10 @@ impl Item {
     pub fn help(self) -> &'static str {
         match self {
             Item::ScrollSpeed => "How fast notes travel. Shortcut: F3 / F4.",
+            Item::PlayfieldSize => "Smaller notes for big screens. In game: mouse wheel. Mouse wheel works here too.",
+            Item::PlayfieldPosition => "Moves the lane up/down. In game (or on the preview here): drag with the mouse.",
+            Item::Rate => "Song speed like DT (1.50x) / HT (0.75x). Song select: [ and ] (Shift = 0.25x steps).",
+            Item::RateKeepPitch => "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore).",
             Item::Offset => "Raise it if you hit late on average (results screen tells you). Shift = 5 ms steps.",
             Item::Calibrate => "Enter: play a click track with notes exactly on the beat; it measures and sets your offset.",
             Item::CalibrationBpm => "Tempo of the calibration click track. Pick one close to the maps you play.",
@@ -106,24 +122,51 @@ impl SettingsUi {
         self.cursor = (self.cursor as i32 + delta).clamp(0, ITEMS.len() as i32 - 1) as usize;
     }
 
-    /// `value` gives the current display value of each item.
+    /// `value` gives the current display value of each item. The list scrolls to keep the
+    /// selected row visible.
     pub fn draw(&self, c: &mut Canvas, value: &dyn Fn(Item) -> String, footer: &str) {
+        const TOP: f32 = 56.0;
+        const BOTTOM: f32 = 436.0;
+        const ROW: f32 = 19.0;
+        const HEADER: f32 = 17.0;
         let w = c.width;
         let col = (w - 48.0).min(640.0);
         let x0 = (w - col) / 2.0;
-        let mut y = 58.0;
+
+        // Lay out every row once, then scroll so the cursor row sits inside the viewport.
+        let mut rows = Vec::with_capacity(ITEMS.len());
+        let mut headers = Vec::new();
+        let mut y = 0.0;
         let mut section = "";
-        for (i, (sec, item)) in ITEMS.iter().enumerate() {
+        for (sec, _) in ITEMS.iter() {
             if *sec != section {
                 section = sec;
-                y += 4.0;
-                c.text(x0, y, 8.0, rgba(0xEB452C, 1.0), sec);
-                y += 13.0;
+                headers.push((y, *sec));
+                y += HEADER;
             }
+            rows.push(y);
+            y += ROW;
+        }
+        let content = y;
+        let view = BOTTOM - TOP;
+        let cursor_y = rows[self.cursor];
+        let scroll = (cursor_y - view / 2.0).clamp(0.0, (content - view).max(0.0));
+        let visible = |y: f32, h: f32| y - scroll >= -1.0 && y - scroll + h <= view + 1.0;
+
+        for (hy, name) in headers {
+            if visible(hy, HEADER) {
+                c.text(x0, TOP + hy - scroll + 4.0, 8.0, rgba(0xEB452C, 1.0), name);
+            }
+        }
+        for (i, (_, item)) in ITEMS.iter().enumerate() {
+            if !visible(rows[i], ROW) {
+                continue;
+            }
+            let y = TOP + rows[i] - scroll;
             let selected = i == self.cursor;
             let (bg, border) = if selected { (0x34344a, 0xEB452C) } else { (0x1d1d27, 0x2a2a38) };
-            c.round_rect(x0, y, col, 14.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
-            c.text(x0 + 10.0, y + 3.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
+            c.round_rect(x0, y, col, 16.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+            c.text(x0 + 10.0, y + 4.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
             let v = if selected && self.binding.is_some() {
                 "press a key...".to_string()
             } else if selected && !matches!(item, Item::Key(_)) {
@@ -132,11 +175,17 @@ impl SettingsUi {
                 value(*item)
             };
             let v_col = if selected && self.binding.is_some() { 0xFFD34D } else { 0xffffff };
-            c.text_right(x0 + col - 10.0, y + 3.5, 7.0, rgba(v_col, 1.0), &v);
-            y += 17.0;
+            c.text_right(x0 + col - 10.0, y + 4.5, 7.0, rgba(v_col, 1.0), &v);
         }
-        c.text_centered(w / 2.0, 446.0, 8.0, rgba(0x9a9ab0, 1.0), self.item().help());
-        c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), footer);
+        // Scroll hints.
+        if scroll > 0.5 {
+            c.text_centered(w / 2.0, TOP - 9.0, 7.0, rgba(0x6f6f86, 1.0), "^ more ^");
+        }
+        if content - scroll > view + 0.5 {
+            c.text_centered(w / 2.0, BOTTOM + 1.0, 7.0, rgba(0x6f6f86, 1.0), "v more v");
+        }
+        c.text_centered(w / 2.0, 448.0, 8.0, rgba(0x9a9ab0, 1.0), self.item().help());
+        c.text_centered(w / 2.0, 464.0, 8.0, rgba(0x55556a, 1.0), footer);
     }
 }
 

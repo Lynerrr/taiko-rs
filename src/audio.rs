@@ -14,6 +14,9 @@ use cpal::{FromSample, OutputCallbackInfo, SizedSample, StreamConfig};
 /// Interleaved stereo samples at the device sample rate.
 pub struct Track {
     pub samples: Vec<f32>,
+    /// Playback rate the samples were prepared for (1.0 = original speed). One second of this
+    /// track covers `rate` seconds of the beatmap.
+    pub rate: f64,
 }
 
 impl Track {
@@ -277,6 +280,48 @@ fn soft_clip(x: f32) -> f32 {
     if x.abs() < 0.9 { x } else { x.signum() * (0.9 + 0.1 * ((x.abs() - 0.9) * 10.0).tanh()) }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sine(freq: f32, seconds: f32, sr: u32) -> Vec<f32> {
+        let n = (seconds * sr as f32) as usize;
+        (0..n).flat_map(|i| {
+            let v = (i as f32 / sr as f32 * freq * std::f32::consts::TAU).sin() * 0.5;
+            [v, v]
+        }).collect()
+    }
+
+    /// Dominant frequency from upward zero crossings of the left channel.
+    fn frequency(samples: &[f32], sr: u32) -> f32 {
+        let left: Vec<f32> = samples.iter().step_by(2).copied().collect();
+        let crossings = left.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+        crossings as f32 / (left.len() as f32 / sr as f32)
+    }
+
+    #[test]
+    fn keep_pitch_changes_length_not_pitch() {
+        let sr = 48000;
+        let input = Track { samples: sine(440.0, 4.0, sr), rate: 1.0 };
+        for rate in [0.75, 1.5, 2.0] {
+            let out = change_rate(Track { samples: input.samples.clone(), rate: 1.0 }, sr, rate, true);
+            let len_ratio = input.frames() as f64 / out.frames() as f64;
+            assert!((len_ratio - rate).abs() < 0.03, "rate {rate}: length ratio {len_ratio}");
+            let f = frequency(&out.samples, sr);
+            assert!((f - 440.0).abs() < 8.0, "rate {rate}: pitch moved to {f} Hz");
+            assert_eq!(out.rate, rate);
+        }
+    }
+
+    #[test]
+    fn without_keep_pitch_pitch_follows_speed() {
+        let sr = 48000;
+        let out = change_rate(Track { samples: sine(440.0, 2.0, sr), rate: 1.0 }, sr, 1.5, false);
+        let f = frequency(&out.samples, sr);
+        assert!((f - 660.0).abs() < 8.0, "expected ~660 Hz, got {f}");
+    }
+}
+
 /// Deterministic white noise so the synthesized hitsounds are identical every run.
 struct Noise(u32);
 impl Noise {
@@ -354,7 +399,7 @@ pub fn metronome(rate: u32, beat_ms: f64, beats: u32, tail_ms: f64) -> Track {
             frame[1] += v;
         }
     }
-    Track { samples }
+    Track { samples, rate: 1.0 }
 }
 
 /// Decodes a whole audio file to interleaved stereo at `rate`.
@@ -413,13 +458,115 @@ pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
         return Err("audio file decoded to nothing".into());
     }
     let samples = if src_rate == rate { stereo } else { resample(&stereo, src_rate, rate) };
-    Ok(Track { samples })
+    Ok(Track { samples, rate: 1.0 })
+}
+
+/// Speeds a track up (`rate` > 1) or slows it down. With `keep_pitch` the music is time-stretched
+/// so it sounds like the original, just faster (osu!'s DT/HT); otherwise it is resampled and the
+/// pitch moves with the speed (nightcore-style). Runs once at load time.
+pub fn change_rate(track: Track, sample_rate: u32, rate: f64, keep_pitch: bool) -> Track {
+    if (rate - 1.0).abs() < 1e-6 || track.samples.is_empty() {
+        return track;
+    }
+    let samples = if keep_pitch { time_stretch(&track.samples, sample_rate, rate) } else { resample_ratio(&track.samples, rate) };
+    Track { samples, rate }
+}
+
+/// WSOLA time stretch of interleaved stereo: overlap-adds Hann-windowed ~40 ms grains, choosing
+/// each grain's source position within +-8 ms so its waveform lines up with the previous grain.
+fn time_stretch(input: &[f32], sample_rate: u32, rate: f64) -> Vec<f32> {
+    let frames = input.len() / 2;
+    let sr = sample_rate as f64;
+    let win = ((sr * 0.040) as usize).max(64) & !1;
+    let hop_out = win / 2;
+    let hop_in = hop_out as f64 * rate;
+    let search = (sr * 0.008) as usize;
+    let window: Vec<f32> = (0..win).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / win as f32).cos()).collect();
+    // Alignment is searched on a 4x-decimated mono copy (then refined at full rate) to stay fast.
+    const DEC: usize = 4;
+    let mono: Vec<f32> = (0..frames).map(|i| 0.5 * (input[2 * i] + input[2 * i + 1])).collect();
+    let coarse: Vec<f32> = mono.chunks(DEC).map(|c| c.iter().sum::<f32>() / c.len() as f32).collect();
+    let corr = |sig: &[f32], a: usize, b: usize, len: usize, step: usize| -> f32 {
+        let mut s = 0.0f32;
+        let mut i = 0;
+        while i < len {
+            s += sig[a + i] * sig[b + i];
+            i += step;
+        }
+        s
+    };
+
+    let out_frames = (frames as f64 / rate) as usize + win;
+    let mut out = vec![0.0f32; out_frames * 2];
+    let mut norm = vec![0.0f32; out_frames];
+    let mut prev: Option<usize> = None;
+    let mut k = 0usize;
+    loop {
+        let nominal = (k as f64 * hop_in) as usize;
+        let out_pos = k * hop_out;
+        if nominal + win + search >= frames || out_pos + win > out_frames {
+            break;
+        }
+        let chosen = match prev {
+            None => nominal,
+            Some(p) => {
+                // Where the previous grain would naturally continue; find the candidate around
+                // `nominal` whose start looks most like it.
+                let target = p + hop_out;
+                let lo = nominal.saturating_sub(search);
+                let hi = nominal + search;
+                let ov = hop_out;
+                let (mut best, mut best_c) = (nominal, f32::MIN);
+                let mut cand = lo / DEC;
+                while cand * DEC <= hi {
+                    if (target + ov) / DEC < coarse.len() && (cand * DEC + ov) / DEC < coarse.len() {
+                        let c = corr(&coarse, target / DEC, cand, ov / DEC, 1);
+                        if c > best_c {
+                            best_c = c;
+                            best = cand * DEC;
+                        }
+                    }
+                    cand += 1;
+                }
+                let (mut fine, mut fine_c) = (best, f32::MIN);
+                for c in best.saturating_sub(DEC)..=(best + DEC).min(frames - win - 1) {
+                    let v = corr(&mono, target.min(frames - ov - 1), c, ov, 2);
+                    if v > fine_c {
+                        fine_c = v;
+                        fine = c;
+                    }
+                }
+                fine
+            }
+        };
+        for i in 0..win {
+            let wgt = window[i];
+            out[(out_pos + i) * 2] += input[(chosen + i) * 2] * wgt;
+            out[(out_pos + i) * 2 + 1] += input[(chosen + i) * 2 + 1] * wgt;
+            norm[out_pos + i] += wgt;
+        }
+        prev = Some(chosen);
+        k += 1;
+    }
+    let used = (k * hop_out + hop_out).min(out_frames);
+    out.truncate(used * 2);
+    for (i, n) in norm.iter().take(used).enumerate() {
+        if *n > 1e-3 {
+            out[i * 2] /= n;
+            out[i * 2 + 1] /= n;
+        }
+    }
+    out
 }
 
 /// Cubic (Catmull-Rom) resampling of interleaved stereo. Done once at load time.
 fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
+    resample_ratio(input, from as f64 / to as f64)
+}
+
+/// Resamples by an arbitrary ratio: output frame n reads input position n * ratio.
+fn resample_ratio(input: &[f32], ratio: f64) -> Vec<f32> {
     let frames_in = input.len() / 2;
-    let ratio = from as f64 / to as f64;
     let frames_out = (frames_in as f64 / ratio).floor() as usize;
     let mut out = Vec::with_capacity(frames_out * 2);
     let at = |i: isize, c: usize| -> f32 {

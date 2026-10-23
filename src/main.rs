@@ -31,8 +31,8 @@ use winit::window::{Fullscreen, Window, WindowId};
 
 use audio::{Engine, Track};
 use beatmap::Beatmap;
-use config::{Config, FPS_CAPS, FRAME_DELAYS, MAX_FRAME_DELAY};
-use game::{Game, PAUSE_ITEMS};
+use config::{Config, FPS_CAPS, FRAME_DELAYS, MAX_FRAME_DELAY, RATE_RANGE};
+use game::{Game, View, PAUSE_ITEMS};
 use library::Entry;
 use render::{rgba, Canvas, PresentChoice, Renderer};
 use settings::{Item, SettingsUi};
@@ -113,6 +113,12 @@ struct State {
     scan: Option<(Receiver<Vec<Entry>>, Arc<AtomicUsize>)>,
     /// A single .osu was given on the command line: play it once the scan finishes.
     play_when_scanned: bool,
+    /// Mouse: fractional wheel notches (touchpads), left-button drag of the playfield, window
+    /// height for converting pixels to virtual units, and how long the settings preview shows.
+    wheel_acc: f32,
+    drag_y: Option<f64>,
+    window_h: f32,
+    preview_until: Option<Instant>,
 }
 
 /// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
@@ -135,22 +141,24 @@ impl State {
             a.stop();
         }
         let label = self.library[entry].label();
-        let rx = self.spawn_loader(entry);
+        let rx = self.spawn_loader(entry, self.cfg.rate);
         self.scene = Scene::Loading { rx, label, entry };
     }
 
     /// Parses the map and decodes its audio on a background thread.
-    fn spawn_loader(&self, entry: usize) -> Receiver<Loaded> {
+    /// `speed`: rate modifier to prepare the track for (time-stretched or resampled once here).
+    fn spawn_loader(&self, entry: usize, speed: f64) -> Receiver<Loaded> {
         let path = self.library[entry].path.clone();
         let rate = self.audio.as_ref().map(|a| a.rate);
+        let keep_pitch = self.cfg.rate_keep_pitch;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = (|| {
                 let map = beatmap::load(&path)?;
                 let audio_path = path.parent().unwrap_or(&path).join(&map.meta.audio_file);
                 let track = match rate {
-                    Some(rate) => audio::decode(&audio_path, rate)?,
-                    None => Track { samples: Vec::new() },
+                    Some(rate) => audio::change_rate(audio::decode(&audio_path, rate)?, rate, speed, keep_pitch),
+                    None => Track { samples: Vec::new(), rate: 1.0 },
                 };
                 Ok((map, Arc::new(track)))
             })();
@@ -231,6 +239,10 @@ impl State {
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
             Item::LiveOffset => on(c.show_offset_hint),
             Item::LiveOffsetUr => on(c.offset_hint_ur_scaled),
+            Item::PlayfieldSize => format!("{:.0}%", c.playfield_scale * 100.0),
+            Item::PlayfieldPosition => format!("{:+.0}", c.playfield_y),
+            Item::Rate => format!("{:.2}x", c.rate),
+            Item::RateKeepPitch => on(c.rate_keep_pitch),
         }
     }
 
@@ -283,6 +295,19 @@ impl State {
             Item::Calibrate => return,
             Item::LiveOffset => self.cfg.show_offset_hint = !self.cfg.show_offset_hint,
             Item::LiveOffsetUr => self.cfg.offset_hint_ur_scaled = !self.cfg.offset_hint_ur_scaled,
+            Item::PlayfieldSize => {
+                self.adjust_playfield(0.05 * dir as f32, 0.0);
+                return;
+            }
+            Item::PlayfieldPosition => {
+                self.adjust_playfield(0.0, 5.0 * dir as f32);
+                return;
+            }
+            Item::Rate => {
+                let step = 0.05 * if self.modifiers_shift { 5.0 } else { 1.0 };
+                self.cfg.rate = (((self.cfg.rate + step * d) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
+            }
+            Item::RateKeepPitch => self.cfg.rate_keep_pitch = !self.cfg.rate_keep_pitch,
             Item::CalibrationBpm => {
                 let (lo, hi) = calibrate::BPM_RANGE;
                 self.cfg.calibration_bpm = (self.cfg.calibration_bpm + 5.0 * d).clamp(lo, hi);
@@ -528,6 +553,54 @@ impl State {
         true
     }
 
+    fn view(&self) -> View {
+        View { scale: self.cfg.playfield_scale, dy: self.cfg.playfield_y }
+    }
+
+    /// Grows/shrinks and moves the playfield, keeping it on screen; shows the settings preview.
+    fn adjust_playfield(&mut self, dscale: f32, ddy: f32) {
+        let c = &mut self.cfg;
+        c.playfield_scale = ((c.playfield_scale + dscale) * 100.0).round() / 100.0;
+        c.playfield_scale = c.playfield_scale.clamp(0.5, 1.6);
+        let (lo, hi) = View::dy_range(c.playfield_scale);
+        c.playfield_y = (c.playfield_y + ddy).clamp(lo, hi);
+        c.save();
+        self.preview_until = Some(Instant::now() + Duration::from_millis(1500));
+    }
+
+    fn in_gameplay(&self) -> bool {
+        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. })
+    }
+
+    /// Mouse wheel: playfield size in game, the list in song select / settings.
+    fn wheel(&mut self, notches: i32) {
+        if notches == 0 {
+            return;
+        }
+        if self.in_gameplay() {
+            self.adjust_playfield(0.05 * notches as f32, 0.0);
+            let text = format!("playfield {:.0}%", self.cfg.playfield_scale * 100.0);
+            self.toast(text);
+            return;
+        }
+        match &self.scene {
+            Scene::Select => self.select.move_by(-notches),
+            Scene::Settings { .. } if self.settings_ui.item() == Item::PlayfieldSize => self.adjust_playfield(0.05 * notches as f32, 0.0),
+            Scene::Settings { .. } => self.settings_ui.move_cursor(-notches),
+            _ => {}
+        }
+    }
+
+    /// Left-button drag moves the playfield vertically, in game or over the settings preview.
+    fn drag(&mut self, pixels: f64) {
+        let in_settings = matches!(self.scene, Scene::Settings { .. })
+            && matches!(self.settings_ui.item(), Item::PlayfieldSize | Item::PlayfieldPosition);
+        if self.in_gameplay() || in_settings {
+            let units = pixels as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0);
+            self.adjust_playfield(0.0, units);
+        }
+    }
+
     fn open_multiplayer(&mut self) {
         self.scene = if self.mp.is_some() { Scene::Lobby } else { Scene::MpMenu };
     }
@@ -535,7 +608,13 @@ impl State {
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
         let e = &self.library[entry];
-        let info = net::MapInfo { hash: e.hash(), artist: e.meta.artist.clone(), title: e.meta.title.clone(), version: e.meta.version.clone() };
+        let info = net::MapInfo {
+            hash: e.hash(),
+            artist: e.meta.artist.clone(),
+            title: e.meta.title.clone(),
+            version: e.meta.version.clone(),
+            rate: self.cfg.rate,
+        };
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
@@ -591,6 +670,18 @@ impl State {
                         } else {
                             self.toast("you don't have this map".into());
                         }
+                    }
+                    KeyCode::BracketLeft | KeyCode::BracketRight if s.is_host() && !s.in_match => {
+                        let step = if code == KeyCode::BracketRight { 0.05 } else { -0.05 } * if self.modifiers_shift { 5.0 } else { 1.0 };
+                        self.cfg.rate = ((self.cfg.rate + step) * 100.0).round() / 100.0;
+                        self.cfg.rate = self.cfg.rate.clamp(RATE_RANGE.0, RATE_RANGE.1);
+                        self.cfg.save();
+                        if let Some(mut m) = s.map.clone() {
+                            m.rate = self.cfg.rate;
+                            s.client.send(net::ClientMsg::SelectMap(m));
+                        }
+                        let text = format!("match rate {:.2}x", self.cfg.rate);
+                        self.toast(text);
                     }
                     KeyCode::KeyM if s.is_host() && !s.in_match => {
                         self.picking_lobby_map = true;
@@ -803,7 +894,7 @@ impl State {
                             a.stop();
                         }
                         self.picking_lobby_map = false;
-                        let rx = self.spawn_loader(i);
+                        let rx = self.spawn_loader(i, map.rate);
                         self.scene = Scene::MpWait { rx: Some(rx), loaded: None, start: None };
                     }
                     None => s.client.send(net::ClientMsg::Loaded(false)),
@@ -899,6 +990,13 @@ impl State {
             return;
         }
         match &mut self.scene {
+            Scene::Select if matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) && self.select.filter.is_empty() => {
+                let step = if code == KeyCode::BracketRight { 0.05 } else { -0.05 } * if self.modifiers_shift { 5.0 } else { 1.0 };
+                self.cfg.rate = (((self.cfg.rate + step) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
+                self.cfg.save();
+                let pitch = if self.cfg.rate_keep_pitch { "keeps pitch" } else { "pitch shifts" };
+                self.toast(format!("speed {:.2}x ({pitch})", self.cfg.rate));
+            }
             Scene::Select => match self.select.key(code, &self.library) {
                 SelectAction::Play(i) if self.picking_lobby_map => self.pick_lobby_map(i),
                 SelectAction::Play(i) => self.start_loading(i),
@@ -967,8 +1065,12 @@ impl State {
         let mut finish_calibration = false;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
         if let Some(mut script) = self.input_script.take() {
-            for code in script.due(elapsed) {
-                self.key(code, false, None, now, None);
+            for action in script.due(elapsed) {
+                match action {
+                    debug::Action::Key(code) => self.key(code, false, None, now, None),
+                    debug::Action::Wheel(n) => self.wheel(n),
+                    debug::Action::Drag(px) => self.drag(px),
+                }
             }
             self.input_script = Some(script);
         }
@@ -993,6 +1095,11 @@ impl State {
         }
         match &mut self.scene {
             Scene::Select => {
+                self.select.rate_label = if (self.cfg.rate - 1.0).abs() > 1e-6 {
+                    format!("  |  {:.2}x{}", self.cfg.rate, if self.cfg.rate_keep_pitch { "" } else { " (pitch)" })
+                } else {
+                    String::new()
+                };
                 self.select.draw(canvas, &self.library, dt, &self.status);
                 if self.picking_lobby_map {
                     let w = canvas.width;
@@ -1033,7 +1140,8 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                game.draw(canvas, self.cfg.scroll_speed);
+                let view = View { scale: self.cfg.playfield_scale, dy: self.cfg.playfield_y };
+                game.draw(canvas, self.cfg.scroll_speed, view);
                 if let Some(plan) = &mut self.shots {
                     if plan.times.last().is_some_and(|&t| game.time >= t) {
                         let t = plan.times.pop().unwrap();
@@ -1042,7 +1150,8 @@ impl State {
                 }
                 if done {
                     let m = &game.map.meta;
-                    let title = format!("{} - {} [{}]", m.artist, m.title, m.version);
+                    let rate = if (game.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", game.rate) } else { String::new() };
+                    let title = format!("{} - {} [{}]{rate}", m.artist, m.title, m.version);
                     next = Some(Scene::Results {
                         results: Results { title, stats: game.stats.clone(), windows: game.windows },
                         entry: *entry,
@@ -1097,10 +1206,11 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                game.draw(canvas, self.cfg.scroll_speed);
+                let view = View { scale: self.cfg.playfield_scale, dy: self.cfg.playfield_y };
+                game.draw(canvas, self.cfg.scroll_speed, view);
                 let live = multiplayer::live_from(game);
                 if let Some(s) = &mut self.mp {
-                    multiplayer::draw_scoreboard(canvas, s, &live);
+                    multiplayer::draw_scoreboard(canvas, s, &live, view.lane_bottom() + 56.0);
                     if s.last_live.elapsed() >= Duration::from_millis(100) {
                         s.last_live = now;
                         s.client.send(net::ClientMsg::Live(live));
@@ -1122,7 +1232,8 @@ impl State {
                 if self.auto {
                     game.autoplay(self.audio.as_ref());
                 }
-                game.draw(canvas, self.cfg.scroll_speed);
+                let view = View { scale: self.cfg.playfield_scale, dy: self.cfg.playfield_y };
+                game.draw(canvas, self.cfg.scroll_speed, view);
                 calibrate::draw_overlay(canvas, game, self.cfg.offset_ms, game.hide_notes);
             }
             Scene::CalibrateDone { estimate, .. } => {
@@ -1138,6 +1249,14 @@ impl State {
                 };
                 let this = &*self;
                 this.settings_ui.draw(canvas, &|item| this.setting_value(item), footer);
+                let previewing = this.preview_until.is_some_and(|t| now < t)
+                    || matches!(this.settings_ui.item(), Item::PlayfieldSize | Item::PlayfieldPosition) && this.drag_y.is_some();
+                if previewing {
+                    canvas.rect(0.0, 0.0, canvas.width, 480.0, rgba(0x0b0b10, 0.75));
+                    game::draw_preview(canvas, this.view());
+                    let text = format!("playfield {:.0}%   position {:+.0}   (wheel: size, drag: position)", this.cfg.playfield_scale * 100.0, this.cfg.playfield_y);
+                    canvas.text_centered(canvas.width / 2.0, this.view().lane_bottom() + 18.0, 9.0, rgba(0xffffff, 1.0), &text);
+                }
             }
         }
         if finish_calibration {
@@ -1331,6 +1450,7 @@ impl ApplicationHandler for App {
         {
             let mut s = lock(&self.state);
             s.adapter = renderer.adapter_name.clone();
+            s.window_h = window.inner_size().height as f32;
             s.refresh_hz = refresh_hz;
             s.refresh_status();
             eprintln!("renderer: {}, present: {}, refresh {refresh_hz:.2} Hz", renderer.adapter_name, renderer.present.name());
@@ -1359,7 +1479,11 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => lock(&self.state).quit = true,
-            WindowEvent::Resized(size) => lock(&self.state).want_size = Some((size.width, size.height)),
+            WindowEvent::Resized(size) => {
+                let mut s = lock(&self.state);
+                s.want_size = Some((size.width, size.height));
+                s.window_h = size.height as f32;
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 // Timestamp before anything else, including taking the lock.
                 let at = Instant::now();
@@ -1370,6 +1494,35 @@ impl ApplicationHandler for App {
                 lock(&self.state).key(code, event.repeat, event.text.as_deref(), at, self.window.as_deref());
             }
             WindowEvent::ModifiersChanged(m) => lock(&self.state).modifiers_shift = m.state().shift_key(),
+            WindowEvent::MouseWheel { delta, .. } => {
+                let mut s = lock(&self.state);
+                s.wheel_acc += match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                    // Touchpads report pixels; ~50 px per notch feels like a wheel.
+                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 50.0,
+                };
+                let notches = s.wheel_acc.trunc();
+                s.wheel_acc -= notches;
+                s.wheel(notches as i32);
+            }
+            WindowEvent::MouseInput { state: button_state, button: winit::event::MouseButton::Left, .. } => {
+                let mut s = lock(&self.state);
+                if button_state == ElementState::Released {
+                    s.drag_y = None;
+                } else {
+                    s.drag_y = Some(f64::NAN);
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let mut s = lock(&self.state);
+                if let Some(last) = s.drag_y {
+                    // NaN marks "pressed, no position yet".
+                    if !last.is_nan() {
+                        s.drag(position.y - last);
+                    }
+                    s.drag_y = Some(position.y);
+                }
+            }
             WindowEvent::Focused(false) => {
                 // Losing focus mid-song (alt-tab, notification) pauses instead of failing the map.
                 let mut guard = lock(&self.state);
@@ -1497,6 +1650,10 @@ fn main() {
         picking_lobby_map: false,
         scan: Some((scan_rx, found)),
         play_when_scanned,
+        wheel_acc: 0.0,
+        drag_y: None,
+        window_h: 720.0,
+        preview_until: None,
     };
     let event_loop = EventLoop::new().expect("event loop");
     let mut app = App { state: Arc::new(Mutex::new(state)), window: None, render_thread: None, proxy: event_loop.create_proxy() };
