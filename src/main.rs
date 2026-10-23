@@ -287,6 +287,10 @@ struct State {
     /// Discord status: the connection thread (while enabled), the activity last set, and when
     /// it was last worked out.
     discord: Option<discord::Presence>,
+    /// Each map's own offset (by content hash), on top of the global one.
+    map_offsets: std::collections::HashMap<u64, f64>,
+    /// The offset in effect: global + the current map's (worked out each frame).
+    play_offset: f64,
     /// Friends, chat and notifications (the F9 overlay) over the social connection.
     social: social::Social,
     /// The solo play being streamed to friends: which game, presses sent, last frame sent.
@@ -1501,7 +1505,7 @@ impl State {
         if let Scene::Calibrate { game, .. } = &mut self.scene {
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
                 if !repeat {
-                    game.press(k, at, self.audio.as_ref(), self.cfg.offset_ms);
+                    game.press(k, at, self.audio.as_ref(), self.play_offset);
                 }
                 return;
             }
@@ -1538,21 +1542,72 @@ impl State {
     }
 
     /// Applies the live offset suggestion from the song being played (O key).
+    /// Applies the live offset suggestion from the song being played (O key) to that map.
     fn apply_live_offset(&mut self) {
+        let Some(entry) = self.song_entry() else { return };
         let (Scene::Play { game, .. } | Scene::MpPlay { game, .. }) = &self.scene else { return };
-        match game.offset_suggestion(self.cfg.offset_ms) {
+        match game.offset_suggestion(self.play_offset) {
             Some(h) if !h.significant => {
                 let text = format!("offset already within +-{:.1} ms of your hits", h.estimate.margin_ms);
                 self.toast(text);
             }
-            Some(h) => {
+            // Shift+O: the suggestion is about every map (the same on all of them), so it goes
+            // to the global offset.
+            Some(h) if self.modifiers_shift => {
                 let was = self.cfg.offset_ms;
-                self.cfg.offset_ms = h.estimate.suggested_offset;
+                self.cfg.offset_ms = h.estimate.suggested_offset - self.map_offset(Some(entry));
                 self.cfg.save();
-                self.toast(format!("offset {:+.0} ms (was {was:+.0})", h.estimate.suggested_offset));
+                self.refresh_play_offset();
+                self.toast(format!("offset {:+.0} ms for all maps (was {was:+.0})", self.cfg.offset_ms));
+            }
+            Some(h) => {
+                let was = self.map_offset(Some(entry));
+                let map = h.estimate.suggested_offset - self.cfg.offset_ms;
+                self.set_map_offset(entry, map);
+                self.toast(format!("this map: offset {map:+.0} ms (was {was:+.0})"));
             }
             None => self.toast("need at least 10 hits for a suggestion".into()),
         }
+    }
+
+    /// The map played now, or whose results are up (its own offset is what -/+ and O change).
+    fn song_entry(&self) -> Option<usize> {
+        match &self.scene {
+            Scene::Loading { entry, .. } | Scene::Play { entry, .. } | Scene::Results { entry, .. } => Some(*entry),
+            Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => self.mp.as_ref().and_then(|s| s.map_entry),
+            _ => None,
+        }
+    }
+
+    /// The map whose offset applies on this screen (also the selected one, for the preview).
+    fn offset_entry(&self) -> Option<usize> {
+        match &self.scene {
+            Scene::Spectate(_) | Scene::Lobby => self.mp.as_ref().and_then(|s| s.map_entry),
+            Scene::Watch(v) => v.entry,
+            Scene::Select | Scene::Preview { .. } => self.select.selected(),
+            _ => self.song_entry(),
+        }
+    }
+
+    fn map_offset(&self, entry: Option<usize>) -> f64 {
+        entry.and_then(|i| self.library.get(i)).and_then(|e| self.map_offsets.get(&e.hash())).copied().unwrap_or(0.0)
+    }
+
+    fn set_map_offset(&mut self, entry: usize, ms: f64) {
+        let Some(e) = self.library.get(entry) else { return };
+        let ms = ms.round();
+        if ms == 0.0 {
+            self.map_offsets.remove(&e.hash());
+        } else {
+            self.map_offsets.insert(e.hash(), ms);
+        }
+        config::save_map_offsets(&self.map_offsets);
+        self.refresh_play_offset();
+    }
+
+    fn refresh_play_offset(&mut self) {
+        self.play_offset = self.cfg.offset_ms + self.map_offset(self.offset_entry());
+        self.preview.map_offset = self.map_offset(self.offset_entry());
     }
 
     /// Plays the current map again from where it was started (in game, paused or on results).
@@ -1603,8 +1658,24 @@ impl State {
         let step = if self.modifiers_shift { 5.0 } else { 1.0 };
         match key {
             KeyCode::Minus | KeyCode::Equal if matches!(self.scene, Scene::Select) && !self.select.filter.is_empty() => return false,
-            KeyCode::Minus | KeyCode::NumpadSubtract => self.cfg.offset_ms -= step,
-            KeyCode::Equal | KeyCode::NumpadAdd => self.cfg.offset_ms += step,
+            KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd => {
+                let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) { -step } else { step };
+                match self.song_entry() {
+                    Some(entry) => {
+                        let ms = self.map_offset(Some(entry)) + d;
+                        self.set_map_offset(entry, ms);
+                        let text = format!("this map: offset {ms:+.0} ms (total {:+.0})", self.play_offset);
+                        self.toast(text);
+                    }
+                    None => {
+                        self.cfg.offset_ms += d;
+                        self.cfg.save();
+                        self.refresh_play_offset();
+                        self.toast(format!("offset {:+.0} ms (all maps)", self.cfg.offset_ms));
+                    }
+                }
+                return true;
+            }
             KeyCode::F3 => self.cfg.scroll_speed = (self.cfg.scroll_speed - 0.05).max(0.3),
             KeyCode::F4 => self.cfg.scroll_speed = (self.cfg.scroll_speed + 0.05).min(4.0),
             KeyCode::F7 => {
@@ -1646,8 +1717,7 @@ impl State {
             _ => return false,
         }
         match key {
-            KeyCode::F3 | KeyCode::F4 => self.toast(format!("scroll speed {:.2}x", self.cfg.scroll_speed)),
-            _ => self.toast(format!("offset {:+.0} ms", self.cfg.offset_ms)),
+            _ => self.toast(format!("scroll speed {:.2}x", self.cfg.scroll_speed)),
         }
         self.cfg.save();
         true
@@ -1664,7 +1734,7 @@ impl State {
         let Scene::Play { game, .. } = &mut self.scene else { return false };
         let (start, end) = game.span();
         let t = start + ((vx - x) / w.max(1.0)).clamp(0.0, 1.0) as f64 * (end - start);
-        game.seek(t, self.audio.as_ref(), self.cfg.offset_ms);
+        game.seek(t, self.audio.as_ref(), self.play_offset);
         true
     }
 
@@ -2362,7 +2432,7 @@ impl State {
         if let Scene::MpPlay { game, .. } = &mut self.scene {
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
                 if !repeat && game.replay.is_none() {
-                    game.press(k, at, self.audio.as_ref(), self.cfg.offset_ms);
+                    game.press(k, at, self.audio.as_ref(), self.play_offset);
                 }
                 return;
             }
@@ -2470,7 +2540,7 @@ impl State {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
                 KeyCode::Space => {
-                    if game.skip(self.audio.as_ref(), self.cfg.offset_ms) {
+                    if game.skip(self.audio.as_ref(), self.play_offset) {
                         if let Some(s) = &self.mp {
                             s.client.send(net::ClientMsg::Skipped);
                         }
@@ -3249,7 +3319,7 @@ impl State {
                     g.banner = Some(format!("WATCHING  -  {}", v.player));
                     let target = v.their_time() - WATCH_DELAY_MS * rate;
                     if target > g.time {
-                        g.seek(target, self.audio.as_ref(), self.cfg.offset_ms);
+                        g.seek(target, self.audio.as_ref(), self.play_offset);
                     }
                     v.game = Some(Box::new(g));
                 }
@@ -3272,7 +3342,7 @@ impl State {
                 v.held = false;
             } else if !v.held && g.time < target - 4000.0 * rate {
                 // Far behind (they skipped the intro, or we stalled): jump to them.
-                g.seek(target, self.audio.as_ref(), self.cfg.offset_ms);
+                g.seek(target, self.audio.as_ref(), self.play_offset);
             }
         }
         self.scene = Scene::Watch(v);
@@ -3389,7 +3459,7 @@ impl State {
             ServerMsg::Skipped { from } => {
                 if let Scene::Spectate(v) = &mut self.scene {
                     v.skipped.insert(from);
-                    v.follow_skip(self.audio.as_ref(), self.cfg.offset_ms);
+                    v.follow_skip(self.audio.as_ref(), self.play_offset);
                 }
             }
             ServerMsg::Inputs { from, inputs, anti_mash } => {
@@ -3444,6 +3514,7 @@ impl State {
     }
 
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        self.refresh_play_offset();
         if let Some(s) = &mut self.splash {
             // Any key skips the splash and does nothing else.
             if !repeat {
@@ -3599,14 +3670,14 @@ impl State {
             }
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
                 if !repeat && game.replay.is_none() {
-                    game.press(k, at, self.audio.as_ref(), self.cfg.offset_ms);
+                    game.press(k, at, self.audio.as_ref(), self.play_offset);
                 }
                 return;
             }
             if game.replay.is_some() && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
                 let step = if self.modifiers_shift { 15_000.0 } else { 5_000.0 };
                 let t = game.time + if code == KeyCode::ArrowRight { step } else { -step };
-                game.seek(t, self.audio.as_ref(), self.cfg.offset_ms);
+                game.seek(t, self.audio.as_ref(), self.play_offset);
                 return;
             }
         }
@@ -3669,7 +3740,7 @@ impl State {
                 KeyCode::Tab => self.toggle_map_info(),
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
                 KeyCode::Space => {
-                    game.skip(self.audio.as_ref(), self.cfg.offset_ms);
+                    game.skip(self.audio.as_ref(), self.play_offset);
                 }
                 KeyCode::Backquote => {
                     let (e, f) = (*entry, *from);
@@ -3707,6 +3778,7 @@ impl State {
     /// Advances the game to `now` and fills `canvas`. Returns a screenshot name if this frame
     /// should be captured.
     fn build_frame(&mut self, canvas: &mut Canvas, now: Instant, width: f32) -> Option<String> {
+        self.refresh_play_offset();
         let dt = now.duration_since(self.stats.last).as_secs_f64() * 1000.0;
         self.stats.last = now;
         self.stats.frames += 1;
@@ -3748,7 +3820,7 @@ impl State {
             self.preview.kiai_effects = self.cfg.kiai_effects;
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
-            self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, rate);
+            self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.play_offset, rate);
             self.stars.poll();
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
                 self.stars.request(i, &self.library[i].path, self.cfg.rate);
@@ -3935,7 +4007,7 @@ impl State {
                     Ok(Ok((map, track))) => {
                         let mut game = Game::new(map, track, self.audio.as_ref());
                         if let Some(t) = *from {
-                            game.start_from(t, self.audio.as_ref(), self.cfg.offset_ms);
+                            game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
                         match self.pending_replay.take() {
                             Some(r) => {
@@ -3959,7 +4031,7 @@ impl State {
                 }
             }
             Scene::Play { game, entry, from } => {
-                let done = game.update(now, self.audio.as_ref(), self.cfg.offset_ms);
+                let done = game.update(now, self.audio.as_ref(), self.play_offset);
                 if self.auto && game.replay.is_none() {
                     game.autoplay(self.audio.as_ref());
                 }
@@ -4124,7 +4196,7 @@ impl State {
                     if let Some((map, track)) = loaded.take() {
                         let mut game = Game::new(map, track, self.audio.as_ref());
                         if let Some(t) = *from {
-                            game.start_from(t, self.audio.as_ref(), self.cfg.offset_ms);
+                            game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
                         game.record = true;
                         if let Some(s) = &mut self.mp {
@@ -4138,7 +4210,7 @@ impl State {
                 }
             }
             Scene::MpPlay { game, .. } => {
-                let done = game.update(now, self.audio.as_ref(), self.cfg.offset_ms);
+                let done = game.update(now, self.audio.as_ref(), self.play_offset);
                 if self.auto {
                     game.autoplay(self.audio.as_ref());
                 }
@@ -4195,7 +4267,7 @@ impl State {
                     if let (Some((map, track)), Some(audio)) = (v.loaded.take(), self.audio.as_ref()) {
                         let probe = Game::new(map.clone(), track.clone(), None);
                         let first_ms = match v.from {
-                            Some(t) => (t - 2000.0 * v.rate).max(probe.time) / v.rate + self.cfg.offset_ms,
+                            Some(t) => (t - 2000.0 * v.rate).max(probe.time) / v.rate + self.play_offset,
                             None => probe.time / v.rate,
                         };
                         let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
@@ -4213,7 +4285,7 @@ impl State {
                             v.games.push((*id, Box::new(g)));
                         }
                         // Players may have skipped the intro before the view was ready.
-                        v.follow_skip(self.audio.as_ref(), self.cfg.offset_ms);
+                        v.follow_skip(self.audio.as_ref(), self.play_offset);
                     }
                 }
                 if v.games.is_empty() {
@@ -4224,7 +4296,7 @@ impl State {
                     // Only the player watched (or the first one) is heard.
                     g.mute_hits = v.focus.unwrap_or(0) != k;
                     g.kiai_effects = self.cfg.kiai_effects;
-                    g.update(now, self.audio.as_ref(), self.cfg.offset_ms);
+                    g.update(now, self.audio.as_ref(), self.play_offset);
                 }
                 match v.focus {
                     Some(k) if k < v.games.len() => {
@@ -4244,7 +4316,7 @@ impl State {
                 match &mut v.game {
                     Some(g) => {
                         g.kiai_effects = self.cfg.kiai_effects;
-                        g.update(now, self.audio.as_ref(), self.cfg.offset_ms);
+                        g.update(now, self.audio.as_ref(), self.play_offset);
                         draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                             g.draw_playfield(c, scroll);
                         });
@@ -4288,7 +4360,7 @@ impl State {
                 None => next = Some(Scene::MpMenu),
             },
             Scene::Calibrate { game, .. } => {
-                if game.update(now, self.audio.as_ref(), self.cfg.offset_ms) {
+                if game.update(now, self.audio.as_ref(), self.play_offset) {
                     finish_calibration = true;
                 }
                 if self.auto {
@@ -5377,6 +5449,8 @@ fn main() {
         mp_status: String::new(),
         picking_lobby_map: false,
         discord: None,
+        map_offsets: config::load_map_offsets(),
+        play_offset: 0.0,
         social: social::Social::default(),
         stream: None,
         presence: None,

@@ -154,6 +154,26 @@ pub fn user_dir(cache: bool) -> Option<PathBuf> {
     }
 }
 
+/// Each map's own offset (on top of the global one), by the .osu's content hash:
+/// `map_offsets.tsv` in the config folder, one `hash<TAB>ms` per line.
+pub fn load_map_offsets() -> std::collections::HashMap<u64, f64> {
+    let Some(text) = user_dir(false).and_then(|d| std::fs::read_to_string(d.join("map_offsets.tsv")).ok()) else { return Default::default() };
+    text.lines()
+        .filter_map(|l| {
+            let (h, ms) = l.split_once('\t')?;
+            Some((u64::from_str_radix(h.trim(), 16).ok()?, ms.trim().parse::<f64>().ok()?))
+        })
+        .collect()
+}
+
+pub fn save_map_offsets(offsets: &std::collections::HashMap<u64, f64>) {
+    let Some(dir) = user_dir(false) else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let mut lines: Vec<String> = offsets.iter().map(|(h, ms)| format!("{h:016x}\t{ms}")).collect();
+    lines.sort();
+    let _ = std::fs::write(dir.join("map_offsets.tsv"), lines.join("\n") + "\n");
+}
+
 pub fn config_path() -> Option<PathBuf> {
     Some(user_dir(false)?.join("config.txt"))
 }

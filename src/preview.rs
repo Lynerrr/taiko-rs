@@ -116,6 +116,8 @@ pub struct Preview {
     pub has_background: bool,
     /// Passed on to the autoplay preview (the kiai effects setting).
     pub kiai_effects: bool,
+    /// The selected map's own offset, shown with its details.
+    pub map_offset: f64,
     /// Bottom of the song select panel as last drawn (virtual units).
     pub panel_bottom: f32,
     audio: Option<Song>,
@@ -493,7 +495,8 @@ impl Preview {
             Some((_, _, d, _)) => {
                 let bpm = if (d.bpm.1 - d.bpm.0).abs() < 0.5 { format!("{:.0} BPM", d.bpm.0) } else { format!("{:.0}-{:.0} BPM", d.bpm.0, d.bpm.1) };
                 let secs = (d.length_ms / 1000.0).max(0.0) as u64;
-                format!("OD {:.1}   {bpm}   {}:{:02}", e.meta.od, secs / 60, secs % 60)
+                let offset = if self.map_offset != 0.0 { format!("   offset {:+.0} ms", self.map_offset) } else { String::new() };
+                format!("OD {:.1}   {bpm}   {}:{:02}{offset}", e.meta.od, secs / 60, secs % 60)
             }
             None => format!("OD {:.1}", e.meta.od),
         };

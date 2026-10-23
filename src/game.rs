@@ -986,7 +986,7 @@ impl Game {
                 if h.significant {
                     let dir = if e.error_ms > 0.0 { "late" } else { "early" };
                     let text = format!(
-                        "{:.1} +-{:.1} ms {dir} ({stats})  |  suggested offset {:+.0} ms  |  O to apply{building}",
+                        "{:.1} +-{:.1} ms {dir} ({stats})  |  suggested offset {:+.0} ms  |  O: this map  Shift+O: all{building}",
                         e.error_ms.abs(),
                         e.margin_ms,
                         e.suggested_offset

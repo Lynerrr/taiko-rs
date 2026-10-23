@@ -159,7 +159,7 @@ impl Item {
             Item::PlayfieldPreset => "Enter: pick from a list (grouped by aspect ratio). Left/Right: previous/next.",
             Item::Rate => "Song speed like DT (1.50x) / HT (0.75x). Song select: [ and ] (Shift = 0.25x steps).",
             Item::RateKeepPitch => "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore).",
-            Item::Offset => "Raise it if you hit late on average (results screen tells you). Shift = 5 ms steps.",
+            Item::Offset => "For every map; raise it if you hit late. In a song, - / + (and O) set that map's own offset on top.",
             Item::Calibrate => "Enter: play a click track with notes exactly on the beat; it measures and sets your offset.",
             Item::CalibrationBpm => "Tempo of the calibration click track. Pick one close to the maps you play.",
             Item::LiveOffset => "While playing, suggest an offset from your recent hits; press O to apply it.",

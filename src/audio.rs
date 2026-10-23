@@ -411,6 +411,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Real files (paths in TAIKO_TEST_AUDIO, one per line in that file): a part decoded after a
+    /// seek must line up with the full decode. `cargo test -- --ignored --nocapture part_of_real`.
+    #[test]
+    #[ignore]
+    fn part_of_real_files_lines_up() {
+        let Some(list) = std::env::var_os("TAIKO_TEST_AUDIO") else { return };
+        let rate = 48000;
+        for path in std::fs::read_to_string(list).unwrap().lines().filter(|l| !l.is_empty()) {
+            let path = std::path::Path::new(path);
+            let full = decode(path, rate).unwrap();
+            for from in [30_000.0, 61_234.0] {
+                let (part, base) = decode_part(path, rate, Some((from, 3000.0))).unwrap();
+                // The shift (in frames) at which the part best matches the full decode.
+                let window = (rate as usize / 2).min(part.frames().saturating_sub(4000));
+                let best = (-3000i64..=3000)
+                    .min_by(|&a, &b| {
+                        let err = |lag: i64| -> f64 {
+                            (2000..2000 + window)
+                                .map(|i| {
+                                    let j = base + i as i64 + lag;
+                                    let f = full.samples.get(j.max(0) as usize * 2).copied().unwrap_or(0.0);
+                                    ((f - part.samples[i * 2]) as f64).powi(2)
+                                })
+                                .sum()
+                        };
+                        err(a).total_cmp(&err(b))
+                    })
+                    .unwrap();
+                println!("{:60} from {from:>6} ms: part is {best:+} frames ({:+.1} ms) off the full decode", path.display().to_string().chars().rev().take(60).collect::<String>().chars().rev().collect::<String>(), best as f64 / rate as f64 * 1000.0);
+            }
+        }
+    }
+
     #[test]
     fn keep_pitch_keeps_beats_on_time() {
         // Clicks every 500 ms: after stretching, each must start where its time / rate says,
@@ -607,8 +640,17 @@ fn decode_source(
         };
         src_rate = buf.spec().rate();
         if src_start.is_none() {
+            // After a seek, a decoder may give back less than the packet's frames (Vorbis's first
+            // packet decodes to nothing: it only primes the overlap). The part starts where the
+            // output does, not at the packet's timestamp, or it sits a packet (13-23 ms) early.
+            let out = buf.frames() as i128;
+            if out == 0 {
+                continue;
+            }
             let tb = time_base.ok_or("no time base")?;
-            let frame = pts as i128 * tb.numer.get() as i128 * src_rate as i128 / tb.denom.get() as i128;
+            let to_frames = |t: i128| t * tb.numer.get() as i128 * src_rate as i128 / tb.denom.get() as i128;
+            let dur = to_frames(packet.dur.get() as i128);
+            let frame = to_frames(pts as i128) + (dur - out).max(0);
             src_start = Some(frame as i64);
         }
         let ch = buf.spec().channels().count().max(1);

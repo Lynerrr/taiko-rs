@@ -89,10 +89,10 @@ the next start) and restarts into it. *Check at startup* turns the check off. Bu
 | Shift+Enter | play the selected map from the start point picked on its timeline |
 | Ctrl+Enter / click the autoplay box | fullscreen preview (song select); P in the multiplayer lobby |
 | Alt + wheel | master volume (anywhere) |
-| O (in game or pause menu) | apply the live offset suggestion shown under the hit error meter |
+| O (in game or pause menu) | apply the live offset suggestion to this map (Shift+O: to the global offset) |
 | `` ` `` or Ctrl+R | restart map (Ctrl+R also works paused and on the results screen) |
 | Esc (song select) | clear search / quit |
-| - / = (Shift: ×5) | audio offset −/+ 1 ms |
+| - / = (Shift: ×5) | offset −/+ 1 ms: this map's own during a song or on its results, else the global one |
 | F3 / F4 | scroll speed |
 | F7 | gameplay present mode: vsync → mailbox → immediate (menus stay on vsync by default) |
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
@@ -227,6 +227,19 @@ your consistency: the window grows until the average is known to about ±3 ms (�
 and noisy estimates suggest a proportionally smaller change. Press **O**
 to apply it on the spot; hits recorded before the change are re-expressed under the new offset,
 so the suggestion settles instead of overshooting. Toggle it with Settings → Live offset suggestion.
+
+**Per-map offsets.** The offset from calibration (and Settings → Audio offset) is global. Each map
+can have its own offset on top, like osu!'s local offset: during a song or on its results, **-** /
+**=** (Shift ×5) change that map's offset, and **O** applies the live suggestion to it
+(**Shift+O** applies it to the global offset instead, for when every map suggests the same). The
+map's offset shows in song select next to its length; they're saved in `map_offsets.tsv` in the
+config folder. In menus, - / = change the global offset.
+
+Where music timing could differ from osu!: map audio is decoded to the same sample as BASS (the
+library osu! uses) for MP3s with a LAME header and for OGG; MP3s without one start where BASS's
+"old gaps" mode puts them (what osu!lazer uses to match osu!stable). Old maps (`osu file format`
+v4 and below) get osu!'s implicit +24 ms. Calibration is by ear, while maps are also played by
+eye, so display latency, and each mapper's own timing, are what per-map offsets are for.
 
 ## Skins
 

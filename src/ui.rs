@@ -1054,7 +1054,7 @@ impl Results {
         }
         let hint = if s.errors.len() >= 20 && s.mean_error().abs() > 5.0 {
             let dir = if s.mean_error() > 0.0 { "late" } else { "early" };
-            format!("You hit {:.0} ms {dir} on average; press {} a few times to compensate.", s.mean_error().abs(), if s.mean_error() > 0.0 { "=" } else { "-" })
+            format!("You hit {:.0} ms {dir} on average; press {} a few times to adjust this map's offset.", s.mean_error().abs(), if s.mean_error() > 0.0 { "=" } else { "-" })
         } else {
             format!("Windows: great +-{:.0}  ok +-{:.0} ms", self.windows.great, self.windows.ok)
         };
