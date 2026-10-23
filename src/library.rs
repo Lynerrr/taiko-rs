@@ -11,6 +11,8 @@ pub struct Entry {
     pub meta: Meta,
     /// File size: orders difficulties within a set (more objects = bigger file) without parsing them.
     pub size: u64,
+    /// Last modified (Unix seconds): "date added" for sorting.
+    pub modified: u64,
     /// Content hash of the `.osu` for matching maps between multiplayer clients. Computed on first
     /// use: hashing every file up front would make startup with a big library crawl.
     hash: OnceLock<u64>,
@@ -18,8 +20,8 @@ pub struct Entry {
 
 impl Entry {
     pub fn new(path: PathBuf, meta: Meta) -> Entry {
-        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        Entry { path, meta, size, hash: OnceLock::new() }
+        let (size, modified) = file_stats(&path);
+        Entry { path, meta, size, modified, hash: OnceLock::new() }
     }
 
     pub fn label(&self) -> String {
@@ -29,6 +31,13 @@ impl Entry {
     pub fn hash(&self) -> u64 {
         *self.hash.get_or_init(|| crate::net::map_hash(&std::fs::read(&self.path).unwrap_or_default()))
     }
+}
+
+/// (size, modified as Unix seconds) of a file.
+pub fn file_stats(path: &Path) -> (u64, u64) {
+    let Ok(md) = std::fs::metadata(path) else { return (0, 0) };
+    let modified = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+    (md.len(), modified)
 }
 
 /// Default osu! stable install locations that have a Songs folder.
@@ -135,8 +144,8 @@ pub fn scan(inputs: &[PathBuf], found: &AtomicUsize) -> Vec<Entry> {
         let meta = std::panic::catch_unwind(|| beatmap::read_meta_file(path)).ok().flatten();
         found.fetch_add(1, Ordering::Relaxed);
         let meta = meta?;
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        meta.is_playable().then(|| Entry { path: path.clone(), meta, size, hash: OnceLock::new() })
+        let (size, modified) = file_stats(path);
+        meta.is_playable().then(|| Entry { path: path.clone(), meta, size, modified, hash: OnceLock::new() })
     };
     // Reading headers is I/O-bound: spread it over a thread per core.
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 16);

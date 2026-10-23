@@ -681,6 +681,10 @@ pub enum Hit {
     /// A download tab result row / its Download button.
     DlRow(usize),
     DlGet(usize),
+    /// Song select: next sort mode / open the collection list / a row of that list.
+    SortCycle,
+    CollectionPick,
+    PickRow(usize),
 }
 
 #[derive(Clone, Copy, Debug)]

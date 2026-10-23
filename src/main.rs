@@ -14,8 +14,10 @@ mod font;
 mod game;
 mod layout;
 mod library;
+mod mapinfo;
 mod multiplayer;
 mod net;
+mod osudb;
 mod preview;
 mod render;
 mod settings;
@@ -120,6 +122,13 @@ struct State {
     bg_changed: Option<Instant>,
     /// The window has keyboard focus.
     focused: bool,
+    /// Background star rating / length / BPM analysis of the library, for sorting.
+    mapinfo: Option<mapinfo::MapInfo>,
+    /// Whether the song list was re-sorted after the analysis finished.
+    mapinfo_sorted: bool,
+    /// Folders being scanned (where osu!.db / collection.db are looked for).
+    song_dirs: Vec<PathBuf>,
+    osudb_rx: Option<Receiver<Option<osudb::OsuDb>>>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
     lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
     /// Which screen was drawn last and since when, for the fade between screens.
@@ -221,6 +230,21 @@ fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32, slide: f32) {
     }
     let detail = format!("music {:.0}%   hitsounds {:.0}%", cfg.music_volume * 100.0, cfg.fx_volume * 100.0);
     c.text(x + 12.0, y + 40.0, 7.0, rgba(0x9a9ab0, a), &detail);
+}
+
+/// When each map was last played in taiko-rs (`plays.tsv`: Unix seconds, tab, path).
+fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
+    let mut out = std::collections::HashMap::new();
+    let Some(text) = config::user_dir(false).and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok()) else { return out };
+    for line in text.lines() {
+        if let Some((t, path)) = line.split_once('\t') {
+            if let Ok(t) = t.parse::<u64>() {
+                let slot = out.entry(PathBuf::from(path)).or_insert(0);
+                *slot = (*slot).max(t);
+            }
+        }
+    }
+    out
 }
 
 /// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
@@ -342,6 +366,7 @@ impl State {
     }
 
     fn start_loading_from(&mut self, entry: usize, from: Option<f64>) {
+        self.record_play(entry);
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
         let mut label = self.library[entry].label();
@@ -1055,6 +1080,10 @@ impl State {
         let (vx, vy) = self.mouse_virtual();
         match &self.scene {
             Scene::Select if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
+            Scene::Select if self.select.picker.is_some() => {
+                let n = self.select.picker_len() as i32;
+                self.select.picker = self.select.picker.map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
+            }
             Scene::Select => self.select.move_by(-notches),
             Scene::Download if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Download => self.browse.move_by(-notches),
@@ -1195,7 +1224,12 @@ impl State {
         }
         if pressed {
             let (vx, vy) = self.mouse_virtual();
-            if let Some(hit) = self.hit_at(vx, vy) {
+            let hit = self.hit_at(vx, vy);
+            if self.select.picker.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::PickRow(_))) {
+                self.select.picker = None;
+                return;
+            }
+            if let Some(hit) = hit {
                 self.click(hit, window);
                 return;
             }
@@ -1439,10 +1473,25 @@ impl State {
         self.stars.clear();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
-        // Keep whatever was typed into the search box while scanning.
+        // Keep whatever was typed into the search box while scanning, and the sort.
         let filter = std::mem::take(&mut self.select.filter);
+        let played = std::mem::take(&mut self.select.played);
+        let sort = self.select.sort;
         self.select = Select::new(&self.library);
         self.select.filter = filter;
+        self.select.played = played;
+        self.select.sort = sort;
+        let maps = self.library.iter().enumerate().map(|(i, e)| (i, e.path.clone(), e.modified, e.size)).collect();
+        let info = mapinfo::MapInfo::spawn(maps, self.library.len());
+        self.select.info = Some(info.results.clone());
+        self.mapinfo = Some(info);
+        self.mapinfo_sorted = false;
+        let dirs = self.song_dirs.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(dirs.iter().find_map(|d| osudb::load(d)));
+        });
+        self.osudb_rx = Some(rx);
         self.select.refilter(&self.library);
         if self.play_when_scanned && !self.library.is_empty() {
             self.play_when_scanned = false;
@@ -1455,6 +1504,86 @@ impl State {
                 s.have_map = s.map_entry.is_some();
                 s.client.send(net::ClientMsg::HasMap(s.have_map));
             }
+        }
+    }
+
+    /// Folds osu!'s collections and play history in once read, and re-sorts when the
+    /// difficulty analysis finishes.
+    fn poll_sorting(&mut self) {
+        if let Some(rx) = &self.osudb_rx {
+            if let Ok(db) = rx.try_recv() {
+                self.osudb_rx = None;
+                if let Some(db) = db {
+                    self.apply_osu_db(db);
+                }
+            }
+        }
+        let Some(info) = &self.mapinfo else { return };
+        let (done, total) = (info.done.load(Ordering::Relaxed), info.total.load(Ordering::Relaxed));
+        let finished = info.finished();
+        self.select.info_progress = if !finished && self.select.sort.needs_info() { format!("  |  analysing {done}/{total}") } else { String::new() };
+        if finished && !self.mapinfo_sorted {
+            self.mapinfo_sorted = true;
+            if self.select.sort.needs_info() {
+                self.select.refilter(&self.library);
+            }
+        }
+    }
+
+    fn apply_osu_db(&mut self, db: osudb::OsuDb) {
+        let key = |folder: &str, file: &str| (folder.to_lowercase(), file.to_lowercase());
+        let index: std::collections::HashMap<(String, String), usize> = self
+            .library
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                let folder = e.path.parent()?.file_name()?.to_str()?;
+                let file = e.path.file_name()?.to_str()?;
+                Some((key(folder, file), i))
+            })
+            .collect();
+        let entry_of = |md5: &str| db.by_md5.get(md5).and_then(|m| index.get(&key(&m.folder, &m.file)).copied());
+        for m in db.by_md5.values().filter(|m| m.last_played > 0) {
+            if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
+                let t = self.select.played.entry(self.library[i].path.clone()).or_insert(0);
+                *t = (*t).max(m.last_played);
+            }
+        }
+        self.select.collections = db
+            .collections
+            .iter()
+            .map(|(name, maps)| (name.clone(), maps.iter().filter_map(|h| entry_of(h)).collect::<std::collections::HashSet<usize>>()))
+            .filter(|(_, set)| !set.is_empty())
+            .collect();
+        eprintln!("osu!.db: {} maps, {} collections with maps here", db.by_md5.len(), self.select.collections.len());
+        self.select.refilter(&self.library);
+    }
+
+    /// Remembers that `entry` was just played (for "recently played").
+    fn record_play(&mut self, entry: usize) {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let path = self.library[entry].path.clone();
+        if let Some(file) = config::user_dir(false).map(|d| d.join("plays.tsv")) {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file) {
+                let _ = writeln!(f, "{now}\t{}", path.display());
+            }
+        }
+        self.select.played.insert(path, now);
+    }
+
+    fn cycle_sort(&mut self, dir: i32) {
+        self.select.cycle_sort(dir, &self.library);
+        self.cfg.sort = self.select.sort.name().to_string();
+        self.cfg.save();
+        self.toast(format!("sorted by {}", self.select.sort.name()));
+    }
+
+    fn open_collections(&mut self) {
+        if self.select.collections.is_empty() {
+            self.toast("no osu! collections found (collection.db next to your Songs folder)".into());
+        } else {
+            self.select.picker = Some(self.select.collection.map(|c| c + 1).unwrap_or(0));
         }
     }
 
@@ -1596,6 +1725,19 @@ impl State {
             }
             return;
         }
+        if let (Scene::Select, Some(cursor)) = (&self.scene, self.select.picker) {
+            let n = self.select.picker_len();
+            match code {
+                KeyCode::ArrowUp => self.select.picker = Some(cursor.saturating_sub(1)),
+                KeyCode::ArrowDown => self.select.picker = Some((cursor + 1).min(n - 1)),
+                KeyCode::PageUp => self.select.picker = Some(cursor.saturating_sub(10)),
+                KeyCode::PageDown => self.select.picker = Some((cursor + 10).min(n - 1)),
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.select.pick_collection(cursor, &self.library),
+                KeyCode::Escape | KeyCode::Backspace => self.select.picker = None,
+                _ => {}
+            }
+            return;
+        }
         if matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults) {
             self.multiplayer_key(code, repeat, text, at, window);
             return;
@@ -1650,6 +1792,11 @@ impl State {
             }
             Scene::Select if self.modifiers_ctrl && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) => self.open_preview(),
             Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyD => self.open_download(),
+            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyS => {
+                let dir = if self.modifiers_shift { -1 } else { 1 };
+                self.cycle_sort(dir);
+            }
+            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyL => self.open_collections(),
             Scene::Select if code == KeyCode::F2 => {
                 if self.modifiers_shift {
                     self.select.random_back();
@@ -1776,6 +1923,7 @@ impl State {
         }
         self.poll_multiplayer();
         self.poll_downloads();
+        self.poll_sorting();
         self.browse.poll(now);
         let mut next: Option<Scene> = None;
         let mut capture: Option<String> = None;
@@ -2305,7 +2453,12 @@ impl State {
         let fresh: Vec<Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0)).into_iter().filter(|e| !known.contains(&e.path)).collect();
         let first = fresh.iter().find(|e| e.meta.mode == 1).or(fresh.first()).map(|e| e.path.clone());
         let n = fresh.len();
+        let start = self.library.len();
         self.library.extend(fresh);
+        if let Some(info) = &self.mapinfo {
+            info.extend(self.library[start..].iter().enumerate().map(|(k, e)| (start + k, e.path.clone(), e.modified, e.size)).collect());
+            self.mapinfo_sorted = false;
+        }
         self.select.refilter(&self.library);
         self.installed_sets().insert(set.id);
         eprintln!("downloaded set {} into {} ({n} maps)", set.id, folder.display());
@@ -2405,6 +2558,12 @@ impl State {
             Hit::Key(code) => self.key(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::Presets => self.open_dropdown(),
+            Hit::SortCycle => {
+                let dir = if self.modifiers_shift { -1 } else { 1 };
+                self.cycle_sort(dir);
+            }
+            Hit::CollectionPick => self.open_collections(),
+            Hit::PickRow(i) => self.select.pick_collection(i, &self.library),
             Hit::DlRow(i) if i == self.browse.cursor => self.download_key(KeyCode::Enter, None, window),
             Hit::DlRow(i) => self.browse.cursor = i,
             Hit::DlGet(i) => {
@@ -2751,6 +2910,7 @@ fn main() {
         inputs.extend(cfg.songs.iter().cloned());
     }
     let songs_dir = download_dir(&inputs);
+    let songs_dirs_for_db: Vec<PathBuf> = inputs.iter().filter(|p| p.is_dir()).cloned().collect();
     // Scan on a background thread so the window appears at once, even with a huge library.
     let found = Arc::new(AtomicUsize::new(0));
     let (scan_tx, scan_rx) = mpsc::channel();
@@ -2782,7 +2942,9 @@ fn main() {
     cfg.save();
 
     let library = Vec::new();
-    let select = Select::new(&library);
+    let mut select = Select::new(&library);
+    select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
+    select.played = load_plays();
     // A single .osu on the command line goes straight into gameplay.
     let play_when_scanned = args.len() == 1 && args[0].extension().is_some_and(|e| e == "osu");
     let present = cfg.present;
@@ -2815,6 +2977,10 @@ fn main() {
         preview_remote: false,
         bg_changed: None,
         focused: true,
+        mapinfo: None,
+        mapinfo_sorted: false,
+        song_dirs: songs_dirs_for_db,
+        osudb_rx: None,
         scene_kind: None,
         scene_since: Instant::now(),
         scrubbing: None,

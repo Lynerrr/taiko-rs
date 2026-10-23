@@ -6,8 +6,61 @@ use crate::game::{Stats, Windows};
 use crate::library::Entry;
 use crate::render::{progress, rgba, Canvas, Hit};
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SortMode {
+    Artist,
+    Title,
+    Difficulty,
+    Length,
+    Bpm,
+    Played,
+    Added,
+}
+
+impl SortMode {
+    pub const ALL: [SortMode; 7] = [SortMode::Artist, SortMode::Title, SortMode::Difficulty, SortMode::Length, SortMode::Bpm, SortMode::Played, SortMode::Added];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            SortMode::Artist => "artist",
+            SortMode::Title => "title",
+            SortMode::Difficulty => "difficulty",
+            SortMode::Length => "length",
+            SortMode::Bpm => "bpm",
+            SortMode::Played => "recently played",
+            SortMode::Added => "date added",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<SortMode> {
+        SortMode::ALL.into_iter().find(|m| m.name() == s)
+    }
+
+    pub fn step(self, dir: i32) -> SortMode {
+        let i = SortMode::ALL.iter().position(|&m| m == self).unwrap_or(0) as i32;
+        SortMode::ALL[(i + dir).rem_euclid(SortMode::ALL.len() as i32) as usize]
+    }
+
+    /// Sorts that need the background difficulty / length / BPM analysis.
+    pub fn needs_info(self) -> bool {
+        matches!(self, SortMode::Difficulty | SortMode::Length | SortMode::Bpm)
+    }
+}
+
 pub struct Select {
     pub filter: String,
+    pub sort: SortMode,
+    /// Star rating / length / BPM per library index, filled in the background.
+    pub info: Option<crate::mapinfo::Shared>,
+    /// When each map was last played (Unix seconds), from taiko-rs and osu!.
+    pub played: std::collections::HashMap<std::path::PathBuf, u64>,
+    /// osu! collections: (name, library indices).
+    pub collections: Vec<(String, std::collections::HashSet<usize>)>,
+    /// The collection shown (None: everything) and the open collection list's cursor.
+    pub collection: Option<usize>,
+    pub picker: Option<usize>,
+    /// Shown in the header while the analysis for the current sort is running.
+    pub info_progress: String,
     /// Files read so far while the library is still being scanned.
     pub scanning: Option<usize>,
     /// Speed modifier shown in the header ("" at 1.0x).
@@ -66,6 +119,13 @@ impl Select {
         let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9e37_79b9_7f4a_7c15);
         let mut s = Select {
             filter: String::new(),
+            sort: SortMode::Artist,
+            info: None,
+            played: std::collections::HashMap::new(),
+            collections: Vec::new(),
+            collection: None,
+            picker: None,
+            info_progress: String::new(),
             scanning: None,
             rate_label: String::new(),
             show_converts: !has_taiko,
@@ -85,15 +145,94 @@ impl Select {
     pub fn refilter(&mut self, library: &[Entry]) {
         let selected = self.visible.get(self.cursor).copied();
         let needle = self.filter.to_lowercase();
+        let only = self.collection.and_then(|c| self.collections.get(c)).map(|(_, set)| set);
         self.visible = library
             .iter()
             .enumerate()
             .filter(|(_, e)| self.show_converts || e.meta.mode == 1)
+            .filter(|(i, _)| only.is_none_or(|set| set.contains(i)))
             .filter(|(_, e)| needle.is_empty() || e.label().to_lowercase().contains(&needle) || e.meta.creator.to_lowercase().contains(&needle))
             .map(|(i, _)| i)
             .collect();
+        self.sort_visible(library);
         self.cursor = selected.and_then(|s| self.visible.iter().position(|&v| v == s)).unwrap_or(0);
         self.regroup(library);
+    }
+
+    /// Orders songs by the sort mode, keeping each song's difficulties together (and in their
+    /// order). A song's value is its highest (hardest, longest, most recent...).
+    fn sort_visible(&mut self, library: &[Entry]) {
+        if self.sort == SortMode::Artist {
+            return; // the library is already in artist / title order
+        }
+        let mut folder_ids: std::collections::HashMap<&std::path::Path, usize> = std::collections::HashMap::new();
+        let folder = |i: usize| library[i].path.parent().unwrap_or(std::path::Path::new(""));
+        for &i in &self.visible {
+            let n = folder_ids.len();
+            folder_ids.entry(folder(i)).or_insert(n);
+        }
+        let info = self.info.as_ref().map(|i| i.lock().unwrap());
+        let value = |i: usize| -> f64 {
+            let info = || info.as_ref().and_then(|v| v.get(i).copied().flatten());
+            match self.sort {
+                SortMode::Difficulty => info().map(|x| x.stars as f64).unwrap_or(f64::NAN),
+                SortMode::Length => info().map(|x| x.length_ms as f64).unwrap_or(f64::NAN),
+                SortMode::Bpm => info().map(|x| x.bpm as f64).unwrap_or(f64::NAN),
+                SortMode::Played => self.played.get(&library[i].path).map(|&t| t as f64).unwrap_or(f64::NAN),
+                SortMode::Added => library[i].modified as f64,
+                SortMode::Artist | SortMode::Title => 0.0,
+            }
+        };
+        let mut set_value = vec![f64::NAN; folder_ids.len()];
+        for &i in &self.visible {
+            let f = folder_ids[folder(i)];
+            let v = value(i);
+            if v.is_finite() && !(set_value[f] >= v) {
+                set_value[f] = v;
+            }
+        }
+        let newest_first = matches!(self.sort, SortMode::Played | SortMode::Added);
+        let title = |i: usize| (library[i].meta.title.to_lowercase(), library[i].meta.artist.to_lowercase());
+        let mut keyed: Vec<(usize, usize)> = self.visible.iter().map(|&i| (folder_ids[folder(i)], i)).collect();
+        if self.sort == SortMode::Title {
+            let titles: Vec<(String, String)> = {
+                let mut t = vec![(String::new(), String::new()); folder_ids.len()];
+                for &(f, i) in &keyed {
+                    if t[f].0.is_empty() {
+                        t[f] = title(i);
+                    }
+                }
+                t
+            };
+            keyed.sort_by(|a, b| titles[a.0].cmp(&titles[b.0]).then(a.0.cmp(&b.0)));
+        } else {
+            keyed.sort_by(|a, b| {
+                let (x, y) = (set_value[a.0], set_value[b.0]);
+                // Unknown values go last either way.
+                let order = match (x.is_nan(), y.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    _ if newest_first => y.total_cmp(&x),
+                    _ => x.total_cmp(&y),
+                };
+                order.then(a.0.cmp(&b.0))
+            });
+        }
+        self.visible = keyed.into_iter().map(|(_, i)| i).collect();
+    }
+
+    /// Ctrl+S / the Sort button: next (or previous) sort mode.
+    pub fn cycle_sort(&mut self, dir: i32, library: &[Entry]) {
+        self.sort = self.sort.step(dir);
+        self.refilter(library);
+    }
+
+    /// Picks the collection list row `row` (0 = all songs).
+    pub fn pick_collection(&mut self, row: usize, library: &[Entry]) {
+        self.collection = row.checked_sub(1).filter(|&c| c < self.collections.len());
+        self.picker = None;
+        self.refilter(library);
     }
 
     fn regroup(&mut self, library: &[Entry]) {
@@ -280,11 +419,26 @@ impl Select {
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
         let groups = &self.groups;
-        crate::settings::tab_bar(c, 0, &format!("{} songs, {} maps  |  {mode}{}", groups.len(), self.visible.len(), self.rate_label));
+        crate::settings::tab_bar(c, 0, &format!("{} songs, {} maps  |  {mode}{}{}", groups.len(), self.visible.len(), self.rate_label, self.info_progress));
 
         let lw = Self::list_width(w);
+        // Sort and collection buttons share the search row.
+        let sort_label = format!("Sort: {}", self.sort.name());
+        let coll_label = match self.collection.and_then(|c| self.collections.get(c)) {
+            Some((name, _)) => format!("Collection: {}", name.chars().take(18).collect::<String>()),
+            None => "Collection: all".to_string(),
+        };
+        let sw = Canvas::text_width(7.0, &sort_label) + 20.0;
+        let cw = if self.collections.is_empty() { 0.0 } else { Canvas::text_width(7.0, &coll_label) + 20.0 };
+        let mut bx = 24.0 + lw - sw;
+        c.button(bx, 56.0, sw, 20.0, &sort_label, 7.0, Hit::SortCycle, false);
+        if cw > 0.0 {
+            bx -= cw + 6.0;
+            c.button(bx, 56.0, cw, 20.0, &coll_label, 7.0, Hit::CollectionPick, self.collection.is_some());
+        }
+        let search_w = bx - 24.0 - 6.0;
         let search = if self.filter.is_empty() { "type to search...".to_string() } else { format!("search: {}_", self.filter) };
-        c.round_rect(24.0, 54.0, lw, 24.0, 6.0, rgba(0x23232f, 0.9), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect(24.0, 54.0, search_w, 24.0, 6.0, rgba(0x23232f, 0.9), rgba(0x3a3a4e, 1.0), 1.0);
         let search_col = if self.filter.is_empty() { 0x6f6f86 } else { 0xffffff };
         c.text(34.0, 61.0, 10.0, rgba(search_col, 1.0), &search);
 
@@ -413,8 +567,53 @@ impl Select {
         if !self.visible.is_empty() && oy > top - DIFF_H && oy < bottom {
             c.round_rect(44.0, oy, lw - 20.0, DIFF_H - 3.0, 5.0, rgba(0, 0.0), rgba(0xEB452C, 1.0), 1.5);
         }
-        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down difficulty  Left/Right song  F2 random  [ ] rate  Ctrl+Left/Right seek  Tab settings  -/= offset  Esc quit");
+        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down difficulty  Left/Right song  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit");
+        if let Some(cursor) = self.picker {
+            self.draw_picker(c, cursor);
+        }
         c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), status);
+    }
+}
+
+impl Select {
+    /// The collection list over the song list.
+    fn draw_picker(&self, c: &mut Canvas, cursor: usize) {
+        const ROW: f32 = 18.0;
+        let w = c.width;
+        c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.5));
+        let rows: Vec<String> = std::iter::once("All songs".to_string())
+            .chain(self.collections.iter().map(|(name, maps)| format!("{name}  ({})", maps.len())))
+            .collect();
+        let (bw, max_h) = (320.0, 380.0);
+        let bh = (rows.len() as f32 * ROW + 56.0).min(max_h);
+        let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
+        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
+        c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "osu! collections");
+        let (top, view) = (by + 32.0, bh - 50.0);
+        let scroll = (cursor as f32 * ROW - view / 2.0).clamp(0.0, (rows.len() as f32 * ROW - view).max(0.0));
+        for (i, label) in rows.iter().enumerate() {
+            let y = top + i as f32 * ROW - scroll;
+            if y < top - 1.0 || y + ROW > top + view + 1.0 {
+                continue;
+            }
+            let selected = i == cursor;
+            let current = (i == 0 && self.collection.is_none()) || self.collection.is_some_and(|c| c + 1 == i);
+            let hover = c.hovered(bx + 8.0, y, bw - 16.0, ROW - 2.0);
+            if selected || hover {
+                c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
+            }
+            c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::PickRow(i));
+            let text: String = label.chars().take(40).collect();
+            c.text(bx + 20.0, y + 5.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &text);
+            if current {
+                c.text_right(bx + bw - 20.0, y + 5.0, 7.0, rgba(0x86E05A, 1.0), "shown");
+            }
+        }
+        c.text_centered(w / 2.0, by + bh - 11.0, 6.0, rgba(0x6f6f86, 1.0), "Up/Down or mouse   Enter/click show   Esc close");
+    }
+
+    pub fn picker_len(&self) -> usize {
+        self.collections.len() + 1
     }
 }
 

@@ -101,6 +101,15 @@ remembered (a blue flag): **Play from 1:23** under the timeline (or Shift+Enter)
 with the music two seconds earlier and only the notes from that point on counting; retry keeps the
 start point. F2 picks a random song.
 
+**Sorting and collections:** the *Sort* button next to the search box (or Ctrl+S, Shift for
+backwards) orders songs by artist, title, difficulty, length, BPM, recently played or date added;
+a song goes by its hardest / longest / most recently played difficulty. Difficulty, length and BPM
+come from a background pass over the library (osu!'s star ratings via rosu-pp, like the pills)
+that is cached, so only new maps are analysed on later starts; the header shows its progress.
+"Recently played" combines plays in taiko-rs with osu! stable's own history from `osu!.db`. If
+an osu! stable install owns the Songs folder, its collections (`collection.db`) are listed under
+the *Collection* button (or Ctrl+L) to show just one of them.
+
 **Fullscreen preview:** click the autoplay box (or Ctrl+Enter) to watch the autoplay over the
 whole screen, drawn in your playfield area so you can move and resize it right there (drag, drag
 the edges, wheel; F5/F6 or the *Playfield* button for presets) and see how it will look. It is marked as a preview (blue frame,
