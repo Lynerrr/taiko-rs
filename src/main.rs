@@ -169,6 +169,8 @@ struct State {
     sprites_upload: Option<render::Atlas>,
     /// The window has keyboard focus.
     focused: bool,
+    /// The window has had focus at least once (the splash waits for it).
+    focus_seen: bool,
     /// Background star rating / length / BPM analysis of the library, for sorting.
     mapinfo: Option<mapinfo::MapInfo>,
     /// Whether the song list was re-sorted after the analysis finished.
@@ -3340,8 +3342,10 @@ impl State {
         }
         if self.splash.is_some() {
             let boot = self.boot_log();
+            // Some window managers never report focus: don't wait forever.
+            let ready = self.focus_seen || self.started.elapsed() > Duration::from_secs(5);
             if let Some(s) = &mut self.splash {
-                if !s.draw(canvas, now, self.audio.as_ref(), &boot) {
+                if !s.draw(canvas, now, self.audio.as_ref(), &boot, ready) {
                     self.splash = None;
                 }
             }
@@ -3988,7 +3992,11 @@ impl ApplicationHandler for App {
                 }
                 s.key(code, event.repeat, event.text.as_deref(), at, self.window.as_deref());
             }
-            WindowEvent::Focused(true) => lock(&self.state).focused = true,
+            WindowEvent::Focused(true) => {
+                let mut s = lock(&self.state);
+                s.focused = true;
+                s.focus_seen = true;
+            }
             WindowEvent::ModifiersChanged(m) => {
                 let mut s = lock(&self.state);
                 s.modifiers_shift = m.state().shift_key();
@@ -4157,6 +4165,7 @@ fn main() {
         bg_changed: None,
         sprites_upload: None,
         focused: true,
+        focus_seen: false,
         mapinfo: None,
         mapinfo_sorted: false,
         song_dirs: songs_dirs_for_db,

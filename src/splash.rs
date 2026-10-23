@@ -68,8 +68,12 @@ const KAT: u32 = 0x438EAD;
 const BG: u32 = 0x0b0b10;
 
 pub struct Splash {
-    /// The first frame drawn: the window can take a moment to appear after startup.
+    /// When it started: once the window is up and focused (see `draw`).
     started: Option<Instant>,
+    /// When the window was first ready to show it.
+    ready_since: Option<Instant>,
+    /// The clip's playback position drives the timeline, unless it drifts from the wall clock.
+    audio_clock: bool,
     /// Portrait pixels: grid position and colour.
     pixels: Vec<(u32, u32, [f32; 4])>,
     size: (u32, u32),
@@ -162,15 +166,23 @@ impl Splash {
             .collect();
         let voice = rate.and_then(|r| audio::decode_bytes(VOICE, "ogg", r).ok().map(|t| (r, t)));
         let envelope = voice.as_ref().map(|(r, t)| envelope(t, *r)).unwrap_or_default();
-        Some(Splash { started: None, pixels, size: img.dimensions(), voice: voice.map(|(_, t)| Arc::new(t)), envelope, skipped_at: None })
+        Some(Splash { started: None, ready_since: None, audio_clock: true, pixels, size: img.dimensions(), voice: voice.map(|(_, t)| Arc::new(t)), envelope, skipped_at: None })
     }
 
     /// Splash time (ms): the clip's position while it plays, so the picture stays on the voice,
-    /// else time since the first frame.
-    fn clock(&self, now: Instant, engine: Option<&Engine>) -> f32 {
+    /// else time since it started. A position far from the wall clock (an audio device reporting
+    /// odd timestamps) would race through the whole splash, so then the wall clock takes over.
+    fn clock(&mut self, now: Instant, engine: Option<&Engine>) -> f32 {
         let wall = self.started.map(|s| now.saturating_duration_since(s).as_secs_f32() * 1000.0).unwrap_or(0.0);
         match engine.and_then(|e| e.position_ms(now)) {
-            Some(p) if self.voice.is_some() && self.skipped_at.is_none() => p as f32,
+            Some(p) if self.audio_clock && self.voice.is_some() && self.skipped_at.is_none() => {
+                if (p as f32 - wall).abs() > 300.0 {
+                    eprintln!("splash: audio clock {p:.0} ms vs wall {wall:.0} ms, using the wall clock");
+                    self.audio_clock = false;
+                    return wall;
+                }
+                p as f32
+            }
             _ => wall,
         }
     }
@@ -193,8 +205,17 @@ impl Splash {
     }
 
     /// Covers the screen until the power-off is through; false once it's over. `boot`: lines for
-    /// the boot log (what is loading, for real).
-    pub fn draw(&mut self, c: &mut Canvas, now: Instant, engine: Option<&Engine>, boot: &[String]) -> bool {
+    /// the boot log (what is loading, for real). `ready`: the window has focus. Until then (a
+    /// window opened behind others, as Windows does when the launcher lost the foreground) and for
+    /// a moment after, it holds a black screen, so the splash isn't over before anyone sees it.
+    pub fn draw(&mut self, c: &mut Canvas, now: Instant, engine: Option<&Engine>, boot: &[String], ready: bool) -> bool {
+        if self.started.is_none() && self.skipped_at.is_none() {
+            let since = if ready { *self.ready_since.get_or_insert(now) } else { now };
+            if now.saturating_duration_since(since).as_millis() < 150 {
+                c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(BG, 1.0));
+                return true;
+            }
+        }
         if self.started.is_none() {
             self.started = Some(now);
             if let (Some(e), Some(v)) = (engine, &self.voice) {
