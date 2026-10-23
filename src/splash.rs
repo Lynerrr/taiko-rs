@@ -36,6 +36,8 @@ const TEXT_SIZE: f32 = 7.0 * 4.0;
 // 1430-1900: a hiss 1430-1630, a low vowel at 1650, a stop and a short vowel at 1830. Quiet
 // from 2000.
 const POWER_ON: f32 = 100.0;
+/// Input this soon after the splash starts (or while it waits for the window) doesn't skip it.
+const SKIP_AFTER: std::time::Duration = std::time::Duration::from_millis(400);
 const ASSEMBLE: (f32, f32) = (120.0, 470.0);
 /// Every syllable hits: when, a kat (blue) rather than a don (red), and how hard (1 = impact
 /// frame, big shockwave, heavy shake).
@@ -68,6 +70,8 @@ const KAT: u32 = 0x438EAD;
 const BG: u32 = 0x0b0b10;
 
 pub struct Splash {
+    /// When it was made (startup), for the log.
+    created: Instant,
     /// When it started: once the window is up and focused (see `draw`).
     started: Option<Instant>,
     /// When the window was first ready to show it.
@@ -166,7 +170,7 @@ impl Splash {
             .collect();
         let voice = rate.and_then(|r| audio::decode_bytes(VOICE, "ogg", r).ok().map(|t| (r, t)));
         let envelope = voice.as_ref().map(|(r, t)| envelope(t, *r)).unwrap_or_default();
-        Some(Splash { started: None, ready_since: None, audio_clock: true, pixels, size: img.dimensions(), voice: voice.map(|(_, t)| Arc::new(t)), envelope, skipped_at: None })
+        Some(Splash { created: Instant::now(), started: None, ready_since: None, audio_clock: true, pixels, size: img.dimensions(), voice: voice.map(|(_, t)| Arc::new(t)), envelope, skipped_at: None })
     }
 
     /// Splash time (ms): the clip's position while it plays, so the picture stays on the voice,
@@ -191,10 +195,18 @@ impl Splash {
         self.envelope.get((t / 10.0).max(0.0) as usize).copied().unwrap_or(0.0)
     }
 
-    /// Jumps to the power-off (any key or click) and silences the clip.
-    pub fn skip(&mut self, now: Instant, engine: Option<&Engine>) {
+    /// Jumps to the power-off (any key or click; `why` says which, for the log) and silences the
+    /// clip. Ignored until it has played for a moment: on Windows an input event can arrive while
+    /// the window is still coming up (none of it the player's), which skipped it unseen.
+    pub fn skip(&mut self, now: Instant, engine: Option<&Engine>, why: &str) {
+        let launch = now.saturating_duration_since(self.created).as_millis();
+        if self.started.is_none_or(|s| now.saturating_duration_since(s) < SKIP_AFTER) {
+            eprintln!("splash: ignored {why} at {launch} ms after launch (too early to skip)");
+            return;
+        }
         let t = self.clock(now, engine);
         if self.skipped_at.is_none() && t < POWER_OFF {
+            eprintln!("splash: skipped by {why} at {t:.0} ms ({launch} ms after launch)");
             self.skipped_at = Some(t);
             // The clock is wall time from here on: restart it where the clip was.
             self.started = Some(now - std::time::Duration::from_secs_f32(t / 1000.0));
@@ -217,6 +229,7 @@ impl Splash {
             }
         }
         if self.started.is_none() {
+            eprintln!("splash: started {} ms after launch (window ready: {ready})", now.saturating_duration_since(self.created).as_millis());
             self.started = Some(now);
             if let (Some(e), Some(v)) = (engine, &self.voice) {
                 e.play(v.clone(), 0.0);
@@ -226,6 +239,7 @@ impl Splash {
         let off_from = self.skipped_at.unwrap_or(POWER_OFF);
         let off = ((t - off_from) / POWER_OFF_LEN).clamp(0.0, 1.0);
         if off >= 1.0 {
+            eprintln!("splash: over at {t:.0} ms ({} ms after launch)", now.saturating_duration_since(self.created).as_millis());
             return false;
         }
         // Frozen where it was when skipped, so the power-off shows the picture as it was.
@@ -489,4 +503,25 @@ fn envelope(track: &Track, rate: u32) -> Vec<f32> {
     let peak = rms.iter().copied().fold(0.0f32, f32::max).max(1e-6);
     // A gentle curve so quieter parts still move things a little.
     rms.iter().map(|v| (v / peak).powf(0.7)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn early_input_does_not_skip() {
+        let mut s = Splash::new(None).unwrap();
+        let now = Instant::now();
+        // Still waiting for the window.
+        s.skip(now, None, "test");
+        assert!(s.skipped_at.is_none());
+        // Just started.
+        s.started = Some(now);
+        s.skip(now + std::time::Duration::from_millis(100), None, "test");
+        assert!(s.skipped_at.is_none());
+        // Well into it: skips.
+        s.skip(now + std::time::Duration::from_millis(900), None, "test");
+        assert!(s.skipped_at.is_some_and(|t| (t - 900.0).abs() < 1.0));
+    }
 }

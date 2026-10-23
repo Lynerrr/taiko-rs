@@ -1881,7 +1881,7 @@ impl State {
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
         if let Some(s) = &mut self.splash {
             if pressed {
-                s.skip(Instant::now(), self.audio.as_ref());
+                s.skip(Instant::now(), self.audio.as_ref(), "a left click");
             }
             return;
         }
@@ -2521,7 +2521,7 @@ impl State {
         if let Some(s) = &mut self.splash {
             // Any key skips the splash and does nothing else.
             if !repeat {
-                s.skip(at, self.audio.as_ref());
+                s.skip(at, self.audio.as_ref(), &format!("key {code:?}"));
             }
             return;
         }
