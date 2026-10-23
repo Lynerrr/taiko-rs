@@ -264,6 +264,16 @@ match's log, so a spectator joining late catches up; the spectator plays the map
 live with every player's presses fed in (judged with that player's mash setting). Left/Right
 switches between players, A shows everyone stacked with their scores, Esc goes back to the lobby.
 
+## Discord status
+
+While Discord is running, your status shows *Playing taiko-rs* with what you're doing: the map
+(with stars and speed) while playing, paused or watching a replay; the multiplayer lobby, match
+or who you're spectating; song select, downloads, settings or the video editor; and how long
+you've been at it. It talks to Discord's local IPC socket directly (the desktop app, Flatpak,
+Snap and Vesktop are found), reconnects if Discord starts later, and clears the status when the
+game closes. Turn it off in Settings → Video → *Discord status* (`discord_presence = false`);
+`discord_app_id` points it at your own Discord application.
+
 ## Frame pacing on Wayland
 
 Settings → *Present mode (gameplay)* applies during songs; with *Menus use vsync* (default) song
@@ -309,5 +319,6 @@ spins so frames stay evenly spaced.
 | `src/library.rs` | Songs folder / `.osz` scanning |
 | `src/skin.rs` | osu! skins: listing, `.osk` unpacking, note image atlas, hitsounds |
 | `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
+| `src/discord.rs` | Discord Rich Presence over the local IPC socket / pipe |
 | `src/download.rs` | mirror search and `.osz` downloads (catboy.best, osu.direct) |
 | `src/browse.rs` | the Download tab |

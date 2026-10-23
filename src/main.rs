@@ -8,6 +8,7 @@ mod calibrate;
 mod clock;
 mod config;
 mod debug;
+mod discord;
 mod difficulty;
 mod download;
 mod font;
@@ -202,6 +203,11 @@ struct State {
     mp_status: String,
     /// Song select is being used by the host to pick the lobby map.
     picking_lobby_map: bool,
+    /// Discord status: the connection thread (while enabled), the activity last set, and when
+    /// it was last worked out.
+    discord: Option<discord::Presence>,
+    presence: Option<discord::Activity>,
+    presence_at: Option<Instant>,
     /// Background library scan: result channel and files-read counter.
     scan: Option<(Receiver<Vec<Entry>>, Arc<AtomicUsize>)>,
     /// A single .osu was given on the command line: play it once the scan finishes.
@@ -854,6 +860,7 @@ impl State {
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::KiaiEffects => on(c.kiai_effects),
+            Item::DiscordPresence => on(c.discord_presence),
             Item::AntiMash => on(c.anti_mash),
             Item::ShowConverts => on(self.select.show_converts),
             Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
@@ -908,6 +915,7 @@ impl State {
             }
             Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
+            Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
             Item::AntiMash => self.cfg.anti_mash = !self.cfg.anti_mash,
             Item::ShowConverts => {
                 self.select.show_converts = !self.select.show_converts;
@@ -1003,6 +1011,86 @@ impl State {
         if std::process::Command::new(opener).arg(&dir).spawn().is_err() {
             self.toast(format!("skins go in {}", dir.display()));
         }
+    }
+
+    /// Keeps the Discord status in line with what's on screen (checked about once a second).
+    fn update_presence(&mut self) {
+        if self.presence_at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+            return;
+        }
+        self.presence_at = Some(Instant::now());
+        let app_id = if self.cfg.discord_app_id.is_empty() { discord::DEFAULT_APP_ID } else { self.cfg.discord_app_id.as_str() };
+        if !self.cfg.discord_presence || app_id.is_empty() {
+            // Dropping the connection clears the status.
+            self.discord = None;
+            self.presence = None;
+            return;
+        }
+        let app_id = app_id.to_string();
+        let Some((details, state)) = self.presence_text() else { return };
+        let discord = self.discord.get_or_insert_with(|| discord::Presence::start(app_id));
+        // The timer restarts when the top line changes (a new map, a new screen).
+        let start = match &self.presence {
+            Some(p) if p.details == details => p.start,
+            _ => discord::unix_now(),
+        };
+        let activity = discord::Activity { details, state, start };
+        if self.presence.as_ref() != Some(&activity) {
+            discord.set(Some(activity.clone()));
+            self.presence = Some(activity);
+        }
+    }
+
+    /// The two lines of the Discord status for the current screen.
+    fn presence_text(&self) -> Option<(String, String)> {
+        let map_label = |m: &net::MapInfo| format!("{} - {} [{}]", m.artist, m.title, m.version);
+        let players = |s: &multiplayer::Session| {
+            let n = s.players.len();
+            format!("{n} player{}", if n == 1 { "" } else { "s" })
+        };
+        let rate_text = |rate: f64| if (rate - 1.0).abs() > 1e-6 { format!("  {rate:.2}x") } else { String::new() };
+        let lobby = |s: &multiplayer::Session| {
+            let role = if s.is_host() { "hosting" } else { "in" };
+            let details = format!("Multiplayer lobby ({}, {role})", players(s));
+            let state = s.map.as_ref().map(map_label).unwrap_or_else(|| "picking a map".into());
+            (details, state)
+        };
+        Some(match &self.scene {
+            Scene::Loading { entry, .. } => (self.library.get(*entry)?.label(), "Loading...".into()),
+            Scene::Play { game, entry, .. } => {
+                let label = self.library.get(*entry)?.label();
+                let state = if let Some(who) = &game.replay_of {
+                    format!("Watching {who}'s replay")
+                } else if game.paused.is_some() {
+                    "Paused".into()
+                } else {
+                    let stars = self.stars.get(*entry, game.rate).map(|s| format!("  {s:.2}*")).unwrap_or_default();
+                    format!("Playing{stars}{}", rate_text(game.rate))
+                };
+                (label, state)
+            }
+            Scene::Results { entry, .. } => (self.library.get(*entry)?.label(), "Looking at the results".into()),
+            Scene::MpWait { .. } | Scene::MpPlay { .. } => {
+                let s = self.mp.as_ref()?;
+                let label = s.map.as_ref().map(map_label).unwrap_or_default();
+                let rate = s.map.as_ref().map(|m| m.rate).unwrap_or(1.0);
+                (label, format!("Multiplayer match, {}{}", players(s), rate_text(rate)))
+            }
+            Scene::Spectate(v) => {
+                let label = self.mp.as_ref().and_then(|s| s.map.as_ref()).map(map_label).unwrap_or_default();
+                let who = v.focus.and_then(|k| v.games.get(k)).and_then(|(id, _)| v.players.iter().find(|p| p.0 == *id)).map(|p| p.1.clone());
+                (label, who.map(|w| format!("Spectating {w}")).unwrap_or_else(|| "Spectating everyone".into()))
+            }
+            Scene::MpResults => (self.mp.as_ref().and_then(|s| s.map.as_ref()).map(map_label).unwrap_or_default(), "Multiplayer results".into()),
+            Scene::VideoEdit(ed) => ("Making a replay video".into(), ed.replay.map_label.clone()),
+            // Anywhere else while in a room (its lobby, or song select picking its map).
+            _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
+            Scene::MpMenu => ("Multiplayer menu".into(), String::new()),
+            Scene::Download => ("Looking for new maps".into(), String::new()),
+            Scene::Settings { .. } | Scene::LayoutEdit { .. } => ("Tweaking settings".into(), String::new()),
+            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => ("Calibrating the offset".into(), String::new()),
+            _ => ("Choosing a song".into(), self.select.selected().and_then(|i| self.library.get(i)).map(|e| e.label()).unwrap_or_default()),
+        })
     }
 
     /// Opens the file manager on `path`'s folder with the file selected where it can.
@@ -2629,6 +2717,7 @@ impl State {
         self.poll_multiplayer();
         self.poll_downloads();
         self.poll_sorting();
+        self.update_presence();
         if let Some(ex) = &self.export {
             match ex.encoder.done.try_recv() {
                 Ok(Ok(path)) => {
@@ -4044,6 +4133,9 @@ fn main() {
         mp_menu: multiplayer::Menu::default(),
         mp_status: String::new(),
         picking_lobby_map: false,
+        discord: None,
+        presence: None,
+        presence_at: None,
         scan: Some((scan_rx, found)),
         play_when_scanned,
         wheel_acc: 0.0,

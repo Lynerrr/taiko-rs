@@ -52,6 +52,10 @@ pub struct Config {
     pub anti_mash: bool,
     /// Kiai time effects on the lane (tint, pulsing glow).
     pub kiai_effects: bool,
+    /// Show what you're doing in your Discord status.
+    pub discord_presence: bool,
+    /// Discord application whose name the status shows (empty = the built-in one).
+    pub discord_app_id: String,
     /// Song select order (ui::SortMode name).
     pub sort: String,
     /// Countdown before play continues after the pause menu (ms).
@@ -106,6 +110,8 @@ impl Default for Config {
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
             kiai_effects: true,
+            discord_presence: true,
+            discord_app_id: String::new(),
             anti_mash: false,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
@@ -203,6 +209,8 @@ impl Config {
                 "animations" => cfg.animations = v != "false",
                 "sort" => cfg.sort = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
+                "discord_presence" => cfg.discord_presence = v != "false",
+                "discord_app_id" => cfg.discord_app_id = v.to_string(),
                 "anti_mash" => cfg.anti_mash = v == "true",
                 "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
@@ -311,6 +319,10 @@ impl Config {
             self.offset_hint_ur_scaled,
         );
         out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
+        out.push_str(&format!(
+            "# Discord status (\"Playing taiko-rs\"); app id empty = the built-in one\ndiscord_presence = {}\ndiscord_app_id = {}\n",
+            self.discord_presence, self.discord_app_id
+        ));
         out.push_str(&format!("# multiplayer\nmp_name = {}\nmp_port = {}\nmp_address = {}\n", self.mp_name, self.mp_port, self.mp_address));
         out.push_str("# extra song folders / .osz files, one per line\n");
         for s in &self.songs {

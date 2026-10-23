@@ -38,11 +38,12 @@ pub enum Item {
     ShowFps,
     Animations,
     Fullscreen,
+    DiscordPresence,
     Skin,
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 36] = [
+pub const ITEMS: [(&str, Item); 37] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -77,6 +78,7 @@ pub const ITEMS: [(&str, Item); 36] = [
     ("VIDEO", Item::ShowFps),
     ("VIDEO", Item::Fullscreen),
     ("VIDEO", Item::Animations),
+    ("VIDEO", Item::DiscordPresence),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinFolder),
 ];
@@ -88,7 +90,7 @@ pub const SECTIONS: [(&str, &str); 7] = [
     ("INPUT", "drum and preset keys"),
     ("OFFSET", "audio offset, calibration"),
     ("AUDIO", "volume, latency"),
-    ("VIDEO", "frame pacing, display"),
+    ("VIDEO", "frame pacing, display, Discord"),
     ("SKIN", "notes, hitsounds"),
 ];
 
@@ -133,6 +135,7 @@ impl Item {
             Item::ShowFps => "FPS overlay",
             Item::Animations => "UI animations",
             Item::Fullscreen => "Fullscreen",
+            Item::DiscordPresence => "Discord status",
             Item::Skin => "Skin",
             Item::SkinFolder => "Skins folder",
         }
@@ -169,6 +172,7 @@ impl Item {
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
             Item::Fullscreen => "Shortcut: F11.",
+            Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",
             Item::Skin => "An osu! skin from osu!'s Skins folder or taiko-rs's own. What it lacks stays built-in.",
             Item::SkinFolder => "Enter: open taiko-rs's Skins folder. Drop .osk files there, then pick them above.",
         }
