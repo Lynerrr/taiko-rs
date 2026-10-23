@@ -1,7 +1,7 @@
 //! Settings tab: the list of options and how it is drawn. Values are read and changed by the
 //! caller (it owns the config, audio engine and window).
 
-use crate::render::{rgba, Canvas};
+use crate::render::{rgba, Canvas, Hit};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
@@ -279,6 +279,8 @@ impl SettingsUi {
             let selected = i == self.cursor;
             let (bg, border) = if selected { (0x34344a, 0xEB452C) } else { (0x1d1d27, 0x2a2a38) };
             c.round_rect(x0, y, col, 16.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+            // The whole row pitch, so the gaps between rows aren't dead.
+            c.hit(x0, y - 1.5, col, ROW, Hit::SettingRow(i));
             c.text(x0 + 10.0, y + 4.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
             let v = if selected && self.binding.is_some() {
                 "press a key...".to_string()
@@ -289,6 +291,12 @@ impl SettingsUi {
             };
             let v_col = if selected && self.binding.is_some() { 0xFFD34D } else { 0xffffff };
             c.text_right(x0 + col - 10.0, y + 4.5, 7.0, rgba(v_col, 1.0), &v);
+            if selected && self.binding.is_none() && !matches!(item, Item::Key(_) | Item::PresetKey(_)) {
+                // The "<" and ">" around the value step it.
+                let tw = Canvas::text_width(7.0, &v);
+                c.hit(x0 + col - 10.0 - tw - 6.0, y, 18.0, 16.0, Hit::SettingStep(i, -1));
+                c.hit(x0 + col - 22.0, y, 20.0, 16.0, Hit::SettingStep(i, 1));
+            }
         }
         // Scroll hints.
         if scroll > 0.5 {
@@ -309,7 +317,10 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
     for (i, name) in ["SONGS", "SETTINGS", "MULTIPLAYER"].iter().enumerate() {
         let tw = Canvas::text_width(9.0, name);
         let on = i == active;
-        c.round_rect(x, 20.0, tw + 20.0, 22.0, 6.0, rgba(if on { 0xEB452C } else { 0x23232f }, 1.0), rgba(if on { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
+        let hover = !on && c.hovered(x, 20.0, tw + 20.0, 22.0);
+        let fill = if on { 0xEB452C } else if hover { 0x34344a } else { 0x23232f };
+        c.round_rect(x, 20.0, tw + 20.0, 22.0, 6.0, rgba(fill, 1.0), rgba(if on { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
+        c.hit(x, 20.0, tw + 20.0, 22.0, Hit::Tab(i));
         c.text(x + 10.0, 27.0, 9.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), name);
         x += tw + 28.0;
     }

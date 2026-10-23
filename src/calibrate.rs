@@ -2,7 +2,8 @@
 //! errors into a suggested offset.
 
 use crate::game::Game;
-use crate::render::{rgba, Canvas};
+use crate::render::{rgba, Canvas, Hit};
+use winit::keyboard::KeyCode;
 
 /// Clicks before the first note, so the pulse is established before you have to hit.
 pub const COUNT_IN_BEATS: u32 = 8;
@@ -94,8 +95,16 @@ pub fn draw_result(c: &mut Canvas, e: &Estimate, current_offset: f64, bpm: f64) 
     if e.hits < MIN_HITS {
         c.text_centered(cx, 292.0, 9.0, rgba(0xFF4B4B, 1.0), &format!("Only {} hits; at least {MIN_HITS} recommended", e.hits));
     }
-    c.text_centered(cx, 360.0, 11.0, rgba(0xffffff, 1.0), "Enter: apply     R: retry     Esc: discard");
-    c.text_centered(cx, 386.0, 9.0, rgba(0x9a9ab0, 1.0), &format!("retry tempo: <  {bpm:.0} BPM  >   (Left/Right)"));
+    c.button_row(352.0, &[
+        ("Apply  (Enter)", Hit::Key(KeyCode::Enter), true),
+        ("Retry  (R)", Hit::Key(KeyCode::KeyR), false),
+        ("Discard  (Esc)", Hit::Key(KeyCode::Escape), false),
+    ]);
+    let tempo = format!("retry tempo: {bpm:.0} BPM   (Left/Right)");
+    let tw = Canvas::text_width(9.0, &tempo);
+    c.text_centered(cx, 388.0, 9.0, rgba(0x9a9ab0, 1.0), &tempo);
+    c.button(cx - tw / 2.0 - 30.0, 384.0, 22.0, 16.0, "<", 8.0, Hit::Key(KeyCode::ArrowLeft), false);
+    c.button(cx + tw / 2.0 + 8.0, 384.0, 22.0, 16.0, ">", 8.0, Hit::Key(KeyCode::ArrowRight), false);
 }
 
 #[cfg(test)]

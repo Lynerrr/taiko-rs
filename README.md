@@ -67,7 +67,13 @@ The build is produced by GitHub Actions on every push.
 | F3 / F4 | scroll speed |
 | F7 | gameplay present mode: vsync → mailbox → immediate (menus stay on vsync by default) |
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
-| F10 / F11 | FPS overlay / fullscreen |
+| F10 / F11 | FPS overlay / fullscreen (the game starts fullscreen; F11 is remembered) |
+
+**Mouse:** everything can also be clicked. The top tabs switch screens; in the song list the
+first click selects a song or difficulty and clicking the selected difficulty plays it; settings
+rows select on the first click and toggle/open on the second, and `<` / `>` step values; the pause
+menu follows the pointer; results, calibration and the multiplayer menu, lobby and results have
+buttons (each shows its key).
 
 Everything is adjustable in the **Settings** tab (scroll speed, offset, key bindings, converts,
 volumes, audio buffer, present mode, FPS cap, overlay, fullscreen) and saved
@@ -92,9 +98,10 @@ start point. F2 picks a random song.
 
 **Fullscreen preview:** click the autoplay box (or Ctrl+Enter) to watch the autoplay over the
 whole screen, drawn in your playfield area so you can move and resize it right there (drag, drag
-the edges, wheel; F5/F6 presets) and see how it will look. It is marked as a preview (blue frame,
+the edges, wheel; F5/F6 or the *Playfield* button for presets) and see how it will look. It is marked as a preview (blue frame,
 PREVIEW header, no score) and has the full-width timeline: click to seek and pick a start point,
-then Enter or **Play from 1:23**. Esc goes back. In a multiplayer lobby, P opens the same preview
+then Enter or **Play from 1:23**. Esc goes back. Both previews play at the selected speed rate
+(music and autoplay; changing it carries on from the same point), and the match rate in the lobby. In a multiplayer lobby, P opens the same preview
 of the lobby map; the host's button is **Start the match from 1:23**, which sets where everyone's
 match starts (shown next to the map; players re-ready, as after a rate change). The lobby also
 plays the lobby map's music. The background also shows behind

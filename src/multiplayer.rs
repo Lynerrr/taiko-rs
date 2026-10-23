@@ -5,7 +5,8 @@ use std::time::Instant;
 
 use crate::game::{Game, Stats};
 use crate::net::{self, Client, Final, Live, MapInfo, PlayerInfo, Server, Status};
-use crate::render::{rgba, Canvas};
+use crate::render::{rgba, Canvas, Hit};
+use winit::keyboard::KeyCode;
 
 pub struct Session {
     pub client: Client,
@@ -133,7 +134,9 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
         }
         let sel = i == menu.cursor;
         let (bg, border) = if sel { (0x34344a, 0xEB452C) } else { (0x1d1d27, 0x2a2a38) };
+        let bg = if !sel && c.hovered(x0, y, col, 30.0) { 0x262634 } else { bg };
         c.round_rect(x0, y, col, 30.0, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
+        c.hit(x0, y, col, 30.0, Hit::MpRow(i));
         if *editable {
             c.text(x0 + 14.0, y + 11.0, 9.0, rgba(0x9a9ab0, 1.0), label);
             let shown = if sel { format!("{value}_") } else { value.clone() };
@@ -173,7 +176,13 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
     let col = (w - 48.0).min(640.0);
     let x0 = (w - col) / 2.0;
 
-    c.round_rect(x0, 62.0, col, 46.0, 8.0, rgba(0x1d1d27, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+    let can_preview = s.map.is_some() && have_map;
+    let hover = can_preview && c.hovered(x0, 62.0, col, 46.0);
+    c.round_rect(x0, 62.0, col, 46.0, 8.0, rgba(if hover { 0x262634 } else { 0x1d1d27 }, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+    if can_preview {
+        c.hit(x0, 62.0, col, 46.0, Hit::Key(KeyCode::KeyP));
+        c.text_right(x0 + col - 14.0, 70.0, 7.0, rgba(0x6f6f86, 1.0), "click to preview");
+    }
     c.text(x0 + 14.0, 70.0, 8.0, rgba(0xEB452C, 1.0), "MAP");
     match &s.map {
         Some(m) => {
@@ -208,14 +217,27 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
     }
 
     let ready = s.players.iter().filter(|p| p.ready && p.has_map).count();
-    let hint = if s.in_match {
-        "A match is in progress; you'll join the next one.".to_string()
+    let me_ready = s.me().is_some_and(|p| p.ready);
+    let ready_label = if me_ready { "Unready  (Space)" } else { "Ready  (Space)" };
+    let start_label = format!("Start  (Enter, {ready} ready)");
+    if s.in_match {
+        c.text_centered(w / 2.0, 446.0, 8.0, rgba(0x9a9ab0, 1.0), "A match is in progress; you'll join the next one.");
     } else if s.is_host() {
-        format!("M pick map   P preview / start point   [ ] rate   Space ready   Enter start ({ready} ready)   Tab songs   Esc close room")
+        c.button_row(440.0, &[
+            ("Pick map  (M)", Hit::Key(KeyCode::KeyM), false),
+            ("Preview / start point  (P)", Hit::Key(KeyCode::KeyP), false),
+            (ready_label, Hit::Key(KeyCode::Space), false),
+            (&start_label, Hit::Key(KeyCode::Enter), true),
+            ("Close room  (Esc)", Hit::Key(KeyCode::Escape), false),
+        ]);
+        c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x6f6f86, 1.0), "[ ] match rate   Tab songs");
     } else {
-        "Space ready   P preview   Tab songs   Esc leave".to_string()
-    };
-    c.text_centered(w / 2.0, 446.0, 8.0, rgba(0x9a9ab0, 1.0), &hint);
+        c.button_row(440.0, &[
+            ("Preview  (P)", Hit::Key(KeyCode::KeyP), false),
+            (ready_label, Hit::Key(KeyCode::Space), true),
+            ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false),
+        ]);
+    }
     if let Some(r) = &s.results {
         let finished: Vec<(&PlayerInfo, &Final)> = r.iter().filter_map(|p| p.result.as_ref().map(|f| (p, f))).collect();
         if let Some(top) = finished.iter().map(|(_, f)| f.score).max() {
@@ -323,6 +345,5 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
         };
         c.text(x0 + 14.0, y + 8.0, 8.0, rgba(if me { 0xFFD34D } else { 0xffffff }, 1.0), &line);
     }
-    let hint = if final_results.is_some() { "Enter or Esc: back to lobby" } else { "Esc: back to lobby" };
-    c.text_centered(w / 2.0, 446.0, 9.0, rgba(0x9a9ab0, 1.0), hint);
+    c.button_row(440.0, &[("Back to lobby  (Esc)", Hit::Key(KeyCode::Escape), final_results.is_some())]);
 }

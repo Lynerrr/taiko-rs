@@ -605,11 +605,48 @@ impl Renderer {
     }
 }
 
+/// Something clickable drawn this frame, for mouse navigation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Hit {
+    /// A button that does what this key does.
+    Key(winit::keyboard::KeyCode),
+    /// Top bar tab: 0 songs, 1 settings, 2 multiplayer.
+    Tab(usize),
+    /// A row of the song list (index into its visible list): a song or a difficulty.
+    SongRow(usize),
+    SettingRow(usize),
+    /// The `<` (-1) / `>` (+1) of the selected settings row.
+    SettingStep(usize, i32),
+    PauseItem(usize),
+    MpRow(usize),
+    /// Opens the playfield preset list.
+    Presets,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HitBox {
+    pub rect: [f32; 4],
+    pub hit: Hit,
+    /// Shapes drawn before it, so a transform of later shapes (the playfield area) moves it too.
+    shape: usize,
+}
+
+impl HitBox {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        let [rx, ry, rw, rh] = self.rect;
+        x >= rx && x <= rx + rw && y >= ry && y <= ry + rh
+    }
+}
+
 /// Immediate-mode drawing helpers. Coordinates are virtual units.
 #[derive(Default)]
 pub struct Canvas {
     pub shapes: Vec<Shape>,
     pub width: f32,
+    /// Clickable areas, in drawing order (later ones are on top).
+    pub hits: Vec<HitBox>,
+    /// Pointer position (virtual units), for hover highlights.
+    pub mouse: (f32, f32),
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
@@ -621,7 +658,47 @@ const CLEAR: [f32; 4] = [0.0; 4];
 impl Canvas {
     pub fn clear(&mut self, width: f32) {
         self.shapes.clear();
+        self.hits.clear();
         self.width = width;
+    }
+
+    /// Makes a rect clickable. Call after drawing at least one of its shapes, so it belongs to
+    /// the same transformed region.
+    pub fn hit(&mut self, x: f32, y: f32, w: f32, h: f32, hit: Hit) {
+        self.hits.push(HitBox { rect: [x, y, w, h], hit, shape: self.shapes.len() });
+    }
+
+    pub fn hovered(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
+        let (mx, my) = self.mouse;
+        mx >= x && mx <= x + w && my >= y && my <= y + h
+    }
+
+    /// A clickable button, highlighted under the pointer. `accent`: the main action.
+    #[allow(clippy::too_many_arguments)]
+    pub fn button(&mut self, x: f32, y: f32, w: f32, h: f32, label: &str, size: f32, hit: Hit, accent: bool) {
+        let hover = self.hovered(x, y, w, h);
+        let (bg, border) = match (accent, hover) {
+            (true, false) => (0x2b1a17, 0xEB452C),
+            (true, true) => (0x4a221b, 0xFF6A50),
+            (false, false) => (0x23232f, 0x3a3a4e),
+            (false, true) => (0x34344a, 0x6a6a88),
+        };
+        self.round_rect(x, y, w, h, 6.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
+        self.text_centered(x + w / 2.0, y + (h - size) / 2.0, size, rgba(0xffffff, 1.0), label);
+        self.hit(x, y, w, h, hit);
+    }
+
+    /// A centred row of buttons: (label, hit, accent).
+    pub fn button_row(&mut self, y: f32, buttons: &[(&str, Hit, bool)]) {
+        const SIZE: f32 = 8.0;
+        const GAP: f32 = 8.0;
+        let widths: Vec<f32> = buttons.iter().map(|(l, _, _)| Canvas::text_width(SIZE, l) + 28.0).collect();
+        let total = widths.iter().sum::<f32>() + GAP * (buttons.len().saturating_sub(1)) as f32;
+        let mut x = (self.width - total) / 2.0;
+        for ((label, hit, accent), w) in buttons.iter().zip(widths) {
+            self.button(x, y, w, 20.0, label, SIZE, *hit, *accent);
+            x += w + GAP;
+        }
     }
 
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, fill: [f32; 4]) {
@@ -672,6 +749,10 @@ impl Canvas {
             sh.params[0] *= scale;
             sh.params[1] *= scale;
             sh.params[2] *= scale;
+        }
+        for h in self.hits.iter_mut().filter(|h| h.shape > start) {
+            let [x, y, w, hh] = h.rect;
+            h.rect = [anchor[0] + (x - anchor[0]) * scale + dx, anchor[1] + (y - anchor[1]) * scale + dy, w * scale, hh * scale];
         }
     }
 

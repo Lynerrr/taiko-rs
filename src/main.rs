@@ -102,6 +102,8 @@ struct State {
     modifiers_alt: bool,
     /// When the volume overlay was last poked (Alt + wheel).
     volume_shown: Option<Instant>,
+    /// Clickable areas of the last frame drawn.
+    hits: Vec<render::HitBox>,
     /// Dragging along the song select difficulty timeline; last seek time for throttling.
     scrubbing: Option<Instant>,
     auto: bool,
@@ -204,7 +206,7 @@ fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32) {
 /// Only those few candidates are hashed, so this stays cheap with a huge library.
 /// Marks the fullscreen preview as a preview: a blue frame and badge on the playfield area, and
 /// a header with the map and the controls.
-fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f32>, lobby: bool) {
+fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f32>, lobby: bool, size_label: &str) {
     let blue = preview::MARKER;
     let a = cfg.playfield_area;
     let (ax, ay, aw, ah) = (a.x * c.width, a.y * render::VIRTUAL_HEIGHT, a.w * c.width, a.h * render::VIRTUAL_HEIGHT);
@@ -220,9 +222,17 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
     c.round_rect(32.0, 18.0, 62.0, 18.0, 9.0, rgba(0x173049, 1.0), rgba(blue, 1.0), 1.0);
     c.text(41.0, 23.0, 8.0, rgba(0xffffff, 1.0), "PREVIEW");
     let pill = stars::draw_pill(c, c.width - 36.0, 22.0, 8.0, stars);
-    let hints = if lobby { "Esc lobby   drag / edges / wheel: playfield" } else { "Esc back   Enter play   drag / edges / wheel: playfield" };
-    let hw = Canvas::text_width(7.0, hints);
-    c.text_right(c.width - 44.0 - pill, 24.0, 7.0, rgba(0x8a8aa0, 1.0), hints);
+    let back = if lobby { "Lobby  (Esc)" } else { "Back  (Esc)" };
+    let bw = Canvas::text_width(8.0, back) + 24.0;
+    let bx = c.width - 44.0 - pill - bw;
+    c.button(bx, 17.0, bw, 20.0, back, 8.0, render::Hit::Key(KeyCode::Escape), false);
+    let presets = format!("{size_label}  (F5/F6)");
+    let pw = Canvas::text_width(8.0, &presets) + 24.0;
+    let px = bx - 8.0 - pw;
+    c.button(px, 17.0, pw, 20.0, &presets, 8.0, render::Hit::Presets, false);
+    let hints = if lobby { "drag / wheel: playfield" } else { "Enter play   drag / wheel: playfield" };
+    let hw = Canvas::text_width(7.0, hints) + bw + pw + 20.0;
+    c.text_right(px - 12.0, 24.0, 7.0, rgba(0x8a8aa0, 1.0), hints);
     let room = c.width - 48.0 - 110.0 - hw - pill - 24.0;
     let mut title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
     let max = (room / (10.0 / 7.0 * 6.0)).max(4.0) as usize;
@@ -262,9 +272,32 @@ impl State {
         self.preview.invalidate_audio();
     }
 
-    /// The preview's decoded song, when it can be reused for playing `entry` at normal speed.
+    /// The preview's decoded song, when it was prepared at the speed `entry` is about to play at.
     fn cached_track(&self, entry: usize, rate: f64) -> Option<Arc<Track>> {
-        ((rate - 1.0).abs() < 1e-6).then(|| self.preview.cached_track(&self.library[entry])).flatten()
+        self.preview.cached_track(&self.library[entry], rate, self.cfg.rate_keep_pitch)
+    }
+
+    /// Speed the preview plays at: the match rate for the lobby map, else the selected rate.
+    fn preview_rate(&self) -> (f64, bool) {
+        let lobby_rate = self.mp.as_ref().and_then(|s| s.map.as_ref().filter(|_| s.map_entry.is_some() && s.map_entry == self.preview_target()).map(|m| m.rate));
+        let lobby = matches!(self.scene, Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults)
+            || matches!(&self.scene, Scene::Preview { back } | Scene::Settings { prev: back } if matches!(**back, Scene::Lobby));
+        let rate = lobby_rate.filter(|_| lobby).unwrap_or(self.cfg.rate);
+        (rate, self.cfg.rate_keep_pitch)
+    }
+
+    /// "1280x720 (full screen)": the playfield's size in pixels.
+    fn playfield_label(&self) -> String {
+        let a = self.cfg.playfield_area;
+        let (pw, ph) = ((a.w * self.window_w).round() as u32, (a.h * self.window_h).round() as u32);
+        let kind = if a.is_full() {
+            " (full screen)"
+        } else if self.current_preset().is_some() {
+            ""
+        } else {
+            " (custom)"
+        };
+        format!("{pw}x{ph}{kind}")
     }
 
     fn start_loading(&mut self, entry: usize) {
@@ -557,6 +590,8 @@ impl State {
         if let Some(w) = window {
             self.fullscreen = w.fullscreen().is_none();
             w.set_fullscreen(self.fullscreen.then_some(Fullscreen::Borderless(None)));
+            self.cfg.fullscreen = self.fullscreen;
+            self.cfg.save();
         }
     }
 
@@ -943,6 +978,11 @@ impl State {
             self.volume_shown = Some(Instant::now());
             return;
         }
+        let n = self.preset_list().len();
+        if let Some(dd) = &mut self.settings_ui.dropdown {
+            dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
+            return;
+        }
         if matches!(self.scene, Scene::Preview { .. }) {
             let (vx, vy) = self.mouse_virtual();
             if self.preview.time_at(vx, vy).is_some() {
@@ -1005,6 +1045,15 @@ impl State {
             self.guides = guides;
             return grip.cursor();
         }
+        if self.scrubbing.is_none() {
+            if let Some(hit) = self.hit_at(vx, vy) {
+                if let (render::Hit::PauseItem(i), Scene::Play { game, .. }) = (hit, &mut self.scene) {
+                    game.paused = Some(i);
+                }
+                self.hover = None;
+                return CursorIcon::Pointer;
+            }
+        }
         if matches!(self.scene, Scene::Select | Scene::Preview { .. }) {
             if let Some(last) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
@@ -1037,7 +1086,7 @@ impl State {
         self.hover.map(|g| g.cursor()).unwrap_or(CursorIcon::Default)
     }
 
-    fn mouse_button(&mut self, pressed: bool) {
+    fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
         if matches!(self.scene, Scene::Select | Scene::Preview { .. }) {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
@@ -1093,6 +1142,11 @@ impl State {
             return;
         }
         if pressed {
+            let (vx, vy) = self.mouse_virtual();
+            if let Some(hit) = self.hit_at(vx, vy) {
+                self.click(hit, window);
+                return;
+            }
             if self.area_editable() {
                 let (sw, sh) = (self.window_w as f64, self.window_h as f64);
                 if let Some(g) = layout::hit(self.cfg.playfield_area, self.mouse.0, self.mouse.1, sw, sh) {
@@ -1112,10 +1166,10 @@ impl State {
         let (fx, fy) = if corner { (a.x + a.w, a.y + a.h) } else { (a.x + a.w / 2.0, a.y + a.h / 2.0) };
         let start = (fx as f64 * sw - if corner { 2.0 } else { 0.0 }, fy as f64 * sh - if corner { 2.0 } else { 0.0 });
         self.mouse_moved(start.0, start.1);
-        self.mouse_button(true);
+        self.mouse_button(true, None);
         self.mouse_moved(start.0 + dx, start.1 + dy);
         if !hold {
-            self.mouse_button(false);
+            self.mouse_button(false, None);
         }
     }
 
@@ -1614,6 +1668,7 @@ impl State {
         }
 
         canvas.clear(width);
+        canvas.mouse = self.mouse_virtual();
         self.frame_clip = None;
         self.poll_scan();
         {
@@ -1622,7 +1677,8 @@ impl State {
                 || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby))
                 || matches!(self.scene, Scene::MpMenu | Scene::Lobby);
             let selected = self.preview_target();
-            self.preview.update(now, &self.library, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, self.cfg.rate);
+            let rate = self.preview_rate();
+            self.preview.update(now, &self.library, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, rate);
             self.stars.poll();
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
                 self.stars.request(i, &self.library[i].path, self.cfg.rate);
@@ -1647,6 +1703,7 @@ impl State {
         let mut capture: Option<String> = None;
         let preview_target = self.preview_target();
         let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
+        let size_label = format!("Playfield {}", self.playfield_label());
         let mut finish_calibration = false;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
         if let Some(mut script) = self.input_script.take() {
@@ -1655,22 +1712,22 @@ impl State {
                     debug::Action::Key(code) => self.key(code, false, None, now, None),
                     debug::Action::Wheel(n) => self.wheel(n),
                     debug::Action::Drag { corner, dx, dy, hold } => self.simulate_drag(corner, dx, dy, hold),
-                    debug::Action::Release => self.mouse_button(false),
+                    debug::Action::Release => self.mouse_button(false, None),
                     debug::Action::ClickGraph(f) => {
                         if let Some([gx, gy, gw, gh]) = self.preview.graph_rect() {
                             // Virtual units back to pixels, then a real press/release.
                             let k = self.window_h as f64 / render::VIRTUAL_HEIGHT as f64;
                             self.mouse = (((gx + gw * f) as f64) * k, ((gy + gh / 2.0) as f64) * k);
-                            self.mouse_button(true);
-                            self.mouse_button(false);
+                            self.mouse_button(true, None);
+                            self.mouse_button(false, None);
                         }
                     }
                     debug::Action::SeekBy(ms) => self.preview.seek_by(ms, self.audio.as_ref()),
                     debug::Action::Click(x, y) => {
                         let k = self.window_h as f64 / render::VIRTUAL_HEIGHT as f64;
                         self.mouse_moved(x as f64 * k, y as f64 * k);
-                        self.mouse_button(true);
-                        self.mouse_button(false);
+                        self.mouse_button(true, None);
+                        self.mouse_button(false, None);
                     }
                     debug::Action::ShiftKey(code) => {
                         self.modifiers_shift = true;
@@ -1804,7 +1861,7 @@ impl State {
                         }
                         let e = &self.library[i];
                         let stars = self.stars.get(i, self.cfg.rate);
-                        draw_preview_chrome(canvas, &self.cfg, e, stars, lobby);
+                        draw_preview_chrome(canvas, &self.cfg, e, stars, lobby, &size_label);
                         let (x, y, w) = (24.0, 394.0, canvas.width - 48.0);
                         canvas.round_rect(x, y, w, 78.0, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
                         let button = match (lobby, lobby_host) {
@@ -1949,16 +2006,7 @@ impl State {
             layout::draw_guides(canvas, &self.guides);
         }
         if self.cfg.show_playfield_size && matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }) {
-            let a = self.cfg.playfield_area;
-            let (pw, ph) = ((a.w * self.window_w).round() as u32, (a.h * self.window_h).round() as u32);
-            let kind = if a.is_full() {
-                " (full screen)"
-            } else if self.current_preset().is_some() {
-                ""
-            } else {
-                " (custom)"
-            };
-            let text = format!("{pw}x{ph}{kind}");
+            let text = self.playfield_label();
             let tw = Canvas::text_width(7.0, &text);
             canvas.text_right(canvas.width - 8.0, 468.0, 7.0, rgba(0x8a8aa0, 0.85), &text);
             self.readout_rect = Some([canvas.width - 8.0 - tw - 4.0, 464.0, tw + 8.0, 15.0]);
@@ -2023,7 +2071,67 @@ impl State {
                 self.toast = None;
             }
         }
+        std::mem::swap(&mut self.hits, &mut canvas.hits);
         capture
+    }
+
+    /// The topmost clickable thing under (`x`, `y`), from the last frame.
+    fn hit_at(&self, x: f32, y: f32) -> Option<render::Hit> {
+        self.hits.iter().rev().find(|h| h.contains(x, y)).map(|h| h.hit)
+    }
+
+    /// Switches between the top bar's tabs (songs, settings, multiplayer) from the screens that
+    /// show it.
+    fn goto_tab(&mut self, tab: usize) {
+        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::MpMenu));
+        match (&self.scene, tab) {
+            (Scene::Select, 1) => self.open_settings(),
+            (Scene::Select, 2) => {
+                self.picking_lobby_map = false;
+                self.open_multiplayer();
+            }
+            (Scene::Settings { .. }, 0) if settings_from_menu => {
+                self.close_settings();
+                self.scene = Scene::Select;
+            }
+            (Scene::Settings { .. }, 2) if settings_from_menu => {
+                self.close_settings();
+                self.open_multiplayer();
+            }
+            (Scene::MpMenu | Scene::Lobby, 0) => self.scene = Scene::Select,
+            (Scene::MpMenu | Scene::Lobby, 1) => self.open_settings(),
+            _ => {}
+        }
+    }
+
+    fn click(&mut self, hit: render::Hit, window: Option<&Window>) {
+        use render::Hit;
+        match hit {
+            Hit::Key(code) => self.key(code, false, None, Instant::now(), window),
+            Hit::Tab(i) => self.goto_tab(i),
+            Hit::Presets => self.open_dropdown(),
+            // Like osu!: the first click selects, clicking the selected difficulty plays it.
+            Hit::SongRow(row) if row == self.select.cursor() => self.key(KeyCode::Enter, false, None, Instant::now(), window),
+            Hit::SongRow(row) => self.select.set_cursor(row),
+            Hit::SettingRow(i) if i == self.settings_ui.cursor => self.settings_key(KeyCode::Enter, window),
+            Hit::SettingRow(i) => self.settings_ui.cursor = i,
+            Hit::SettingStep(i, dir) => {
+                self.settings_ui.cursor = i;
+                self.adjust_setting(settings::ITEMS[i].1, dir, window);
+            }
+            Hit::PauseItem(i) => {
+                if let Scene::Play { game, .. } = &mut self.scene {
+                    game.paused = Some(i);
+                }
+                self.pause_key(KeyCode::Enter);
+            }
+            Hit::MpRow(i) => {
+                self.mp_menu.cursor = i;
+                if matches!(i, multiplayer::ROW_HOST | multiplayer::ROW_JOIN) {
+                    self.mp_menu_key(KeyCode::Enter, None);
+                }
+            }
+        }
     }
 }
 
@@ -2164,7 +2272,8 @@ impl ApplicationHandler for App {
         #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
         let mut attrs = Window::default_attributes()
             .with_title("taiko-rs")
-            .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
+            .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
+            .with_fullscreen(lock(&self.state).cfg.fullscreen.then_some(Fullscreen::Borderless(None)));
         #[cfg(target_os = "linux")]
         {
             use winit::platform::wayland::WindowAttributesExtWayland;
@@ -2260,7 +2369,7 @@ impl ApplicationHandler for App {
                 s.wheel(notches as i32);
             }
             WindowEvent::MouseInput { state: button_state, button: winit::event::MouseButton::Left, .. } => {
-                lock(&self.state).mouse_button(button_state == ElementState::Pressed);
+                lock(&self.state).mouse_button(button_state == ElementState::Pressed, self.window.as_deref());
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let icon = lock(&self.state).mouse_moved(position.x, position.y);
@@ -2305,6 +2414,7 @@ impl ApplicationHandler for App {
 
 fn main() {
     let cfg = Config::load();
+    let start_fullscreen = cfg.fullscreen;
     let mut args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let auto = args.iter().any(|a| a == "--auto");
     args.retain(|a| a != "--auto");
@@ -2379,6 +2489,7 @@ fn main() {
         modifiers_ctrl: false,
         modifiers_alt: false,
         volume_shown: None,
+        hits: Vec::new(),
         scrubbing: None,
         auto,
         shots: debug::ShotPlan::from_env(),
@@ -2391,7 +2502,7 @@ fn main() {
         present,
         refresh_hz: 60.0,
         settings_ui: SettingsUi::default(),
-        fullscreen: false,
+        fullscreen: start_fullscreen,
         adapter: String::new(),
         input_script: debug::InputScript::from_env(),
         wall_shots: debug::wall_shots_from_env(),

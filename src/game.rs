@@ -8,7 +8,7 @@ use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
-use crate::render::{rgba, Canvas};
+use crate::render::{rgba, Canvas, Hit};
 
 pub const PANEL_W: f32 = 150.0;
 pub const HIT_X: f32 = PANEL_W + 64.0;
@@ -814,6 +814,7 @@ impl Game {
                 let selected = i == cursor;
                 let (bg, border) = if selected { (0x34344a, DON) } else { (0x1d1d27, 0x2a2a38) };
                 c.round_rect(w / 2.0 - 140.0, y, 280.0, 32.0, 8.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 2.0 } else { 1.0 });
+                c.hit(w / 2.0 - 140.0, y, 280.0, 32.0, Hit::PauseItem(i));
                 c.text_centered(w / 2.0, y + 10.0, 12.0, rgba(if selected { WHITE } else { 0xc8c8d8 }, 1.0), item);
             }
             let hint_y = 170.0 + PAUSE_ITEMS.len() as f32 * 38.0 + 8.0;

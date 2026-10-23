@@ -4,7 +4,7 @@ use winit::keyboard::KeyCode;
 
 use crate::game::{Stats, Windows};
 use crate::library::Entry;
-use crate::render::{rgba, Canvas};
+use crate::render::{rgba, Canvas, Hit};
 
 pub struct Select {
     pub filter: String,
@@ -163,6 +163,17 @@ impl Select {
         }
     }
 
+    /// Row of the visible list under the cursor.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn set_cursor(&mut self, row: usize) {
+        if row < self.visible.len() {
+            self.cursor = row;
+        }
+    }
+
     /// The selected difficulty (library index).
     pub fn selected(&self) -> Option<usize> {
         self.visible.get(self.cursor).copied()
@@ -295,7 +306,10 @@ impl Select {
                     let e = &library[self.visible[g.start]];
                     let open = g.contains(&self.cursor);
                     let (bg, border) = if open { (0x2b2b3d, 0x5a5a78) } else { (0x1d1d27, 0x2a2a38) };
+                    let hover = !open && c.hovered(24.0, y, lw, rh - 4.0);
+                    let bg = if hover { 0x262634 } else { bg };
                     c.round_rect(24.0, y, lw, rh - 4.0, 7.0, rgba(bg, 0.88), rgba(border, 1.0), 1.0);
+                    c.hit(24.0, y, lw, *rh, Hit::SongRow(g.start));
                     let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
                     let tag = if any_taiko { 0xEB452C } else { 0x438EAD };
                     c.round_rect(32.0, y + 8.0, 5.0, rh - 20.0, 2.5, rgba(tag, 1.0), rgba(tag, 1.0), 0.0);
@@ -309,7 +323,9 @@ impl Select {
                     let e = &library[self.visible[*i]];
                     let selected = *i == self.cursor;
                     let (bg, border) = if selected { (0x34344a, 0xEB452C) } else { (0x191921, 0x2a2a38) };
+                    let bg = if !selected && c.hovered(44.0, y, lw - 20.0, rh - 3.0) { 0x24242f } else { bg };
                     c.round_rect(44.0, y, lw - 20.0, rh - 3.0, 5.0, rgba(bg, 0.92), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+                    c.hit(44.0, y, lw - 20.0, *rh, Hit::SongRow(*i));
                     let col = if selected { 0xffffff } else { 0xc8c8d8 };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
                     let pill = crate::stars::draw_pill(c, 24.0 + lw - 10.0, y + 6.0, 7.0, stars(self.visible[*i]));
@@ -379,6 +395,6 @@ impl Results {
             format!("Windows: great +-{:.0}  ok +-{:.0} ms", self.windows.great, self.windows.ok)
         };
         c.text_centered(cx, 380.0, 9.0, rgba(0x8a8aa0, 1.0), &hint);
-        c.text_centered(cx, 430.0, 10.0, rgba(0x6f6f86, 1.0), "Enter: retry    Esc: song select");
+        c.button_row(424.0, &[("Retry  (Enter)", Hit::Key(KeyCode::Enter), true), ("Song select  (Esc)", Hit::Key(KeyCode::Escape), false)]);
     }
 }

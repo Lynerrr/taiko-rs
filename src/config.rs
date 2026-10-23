@@ -48,6 +48,8 @@ pub struct Config {
     pub offset_hint_ur_scaled: bool,
     pub audio_buffer: u32,
     pub show_fps: bool,
+    /// Start in (borderless) fullscreen; F11 toggles and remembers it.
+    pub fullscreen: bool,
     /// Left rim, left centre, right centre, right rim.
     pub keys: [KeyCode; 4],
     /// Previous / next playfield resolution preset.
@@ -85,6 +87,7 @@ impl Default for Config {
             offset_hint_ur_scaled: true,
             audio_buffer: 256,
             show_fps: true,
+            fullscreen: true,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             show_playfield_size: true,
@@ -175,6 +178,7 @@ impl Config {
                 "calibration_bpm" => cfg.calibration_bpm = v.parse::<f64>().unwrap_or(120.0).clamp(60.0, 240.0),
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
                 "show_fps" => cfg.show_fps = v == "true",
+                "fullscreen" => cfg.fullscreen = v != "false",
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
                 "mp_port" => cfg.mp_port = v.parse().unwrap_or(cfg.mp_port),
@@ -236,6 +240,7 @@ impl Config {
              # audio device buffer in frames (lower = less latency, more risk of crackle)\n\
              audio_buffer = {}\n\
              show_fps = {}\n\
+             fullscreen = {}\n\
              show_offset_hint = {}\n\
              offset_hint_ur_scaled = {}\n",
             keys.join(", "),
@@ -257,6 +262,7 @@ impl Config {
             self.rate_keep_pitch,
             self.audio_buffer,
             self.show_fps,
+            self.fullscreen,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
         );
