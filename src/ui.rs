@@ -122,55 +122,115 @@ impl Select {
         }
     }
 
+    /// The selected difficulty (library index).
+    pub fn selected(&self) -> Option<usize> {
+        self.visible.get(self.cursor).copied()
+    }
+
+    /// Width of the song list; the preview panel takes the rest.
+    pub fn list_width(screen_w: f32) -> f32 {
+        (screen_w * 0.52).max(300.0).min(screen_w - 48.0)
+    }
+
+    /// Songs (beatmap sets) as ranges of `visible`: consecutive difficulties sharing a folder.
+    fn groups(&self, library: &[Entry]) -> Vec<std::ops::Range<usize>> {
+        let mut out = Vec::new();
+        let mut start = 0;
+        for i in 1..=self.visible.len() {
+            let split = i == self.visible.len() || library[self.visible[i]].path.parent() != library[self.visible[i - 1]].path.parent();
+            if split {
+                out.push(start..i);
+                start = i;
+            }
+        }
+        out
+    }
+
     pub fn draw(&mut self, c: &mut Canvas, library: &[Entry], dt_ms: f64, status: &str) {
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
-        crate::settings::tab_bar(c, 0, &format!("{} maps  |  {mode}{}", self.visible.len(), self.rate_label));
+        let groups = self.groups(library);
+        crate::settings::tab_bar(c, 0, &format!("{} songs, {} maps  |  {mode}{}", groups.len(), self.visible.len(), self.rate_label));
 
+        let lw = Self::list_width(w);
         let search = if self.filter.is_empty() { "type to search...".to_string() } else { format!("search: {}_", self.filter) };
-        c.round_rect(24.0, 54.0, w - 48.0, 24.0, 6.0, rgba(0x23232f, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect(24.0, 54.0, lw, 24.0, 6.0, rgba(0x23232f, 0.9), rgba(0x3a3a4e, 1.0), 1.0);
         let search_col = if self.filter.is_empty() { 0x6f6f86 } else { 0xffffff };
         c.text(34.0, 61.0, 10.0, rgba(search_col, 1.0), &search);
 
         if let Some(n) = self.scanning {
-            c.text_centered(w / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "Scanning your Songs folder...");
-            c.text_centered(w / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("{n} files read"));
+            c.text_centered(24.0 + lw / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "Scanning your Songs folder...");
+            c.text_centered(24.0 + lw / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("{n} files read"));
         } else if self.visible.is_empty() {
-            c.text_centered(w / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "No maps found.");
-            c.text_centered(w / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), "Run: taiko-rs <Songs folder | map.osz | map.osu>");
+            c.text_centered(24.0 + lw / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "No maps found.");
+            c.text_centered(24.0 + lw / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), "Run: taiko-rs <Songs folder | map.osz | map.osu>");
         }
 
-        let row_h: f32 = 30.0;
-        let top = 90.0;
-        let bottom = 440.0;
-        let rows = ((bottom - top) / row_h).floor();
-        // Smoothly scroll the list to keep the cursor centred.
-        let target = (self.cursor as f32 - rows / 2.0 + 0.5).clamp(0.0, (self.visible.len() as f32 - rows).max(0.0));
+        // Rows: one per song, plus the selected song's difficulties under it.
+        const SONG_H: f32 = 34.0;
+        const DIFF_H: f32 = 22.0;
+        enum Row {
+            Song(std::ops::Range<usize>),
+            Diff(usize),
+        }
+        let mut rows: Vec<(Row, f32, f32)> = Vec::new();
+        let mut y = 0.0;
+        let mut cursor_y = 0.0;
+        for g in &groups {
+            rows.push((Row::Song(g.clone()), y, SONG_H));
+            y += SONG_H;
+            if g.contains(&self.cursor) {
+                for i in g.clone() {
+                    if i == self.cursor {
+                        cursor_y = y;
+                    }
+                    rows.push((Row::Diff(i), y, DIFF_H));
+                    y += DIFF_H;
+                }
+            }
+        }
+        let (top, bottom) = (86.0, 440.0);
+        let view = bottom - top;
+        let target = (cursor_y - view * 0.4).clamp(0.0, (y - view).max(0.0));
         let k = 1.0 - (-dt_ms as f32 / 60.0).exp();
         self.scroll += (target - self.scroll) * k;
-        let first = self.scroll.floor().max(0.0) as usize;
-        for (row, &idx) in self.visible.iter().enumerate().skip(first).take(rows as usize + 2) {
-            let y = top + (row as f32 - self.scroll) * row_h;
-            if y < top - row_h || y > bottom {
+        let max_chars = |size: f32, room: f32| (room / (size / 7.0 * 6.0)).max(4.0) as usize;
+        let fit = |s: String, n: usize| if s.chars().count() > n { s.chars().take(n.saturating_sub(3)).collect::<String>() + "..." } else { s };
+        for (row, ry, rh) in &rows {
+            let y = top + ry - self.scroll;
+            if y + rh < top || y > bottom {
                 continue;
             }
-            let e = &library[idx];
-            let selected = row == self.cursor;
-            let (bg, border) = if selected { (0x34344a, 0xEB452C) } else { (0x1d1d27, 0x2a2a38) };
-            c.round_rect(24.0, y, w - 48.0, row_h - 4.0, 6.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 2.0 } else { 1.0 });
-            let tag_col = if e.meta.mode == 1 { 0xEB452C } else { 0x438EAD };
-            c.round_rect(32.0, y + 8.0, 6.0, row_h - 20.0, 3.0, rgba(tag_col, 1.0), rgba(tag_col, 1.0), 0.0);
-            let max_chars = ((w - 160.0) / (10.0 / 7.0 * 6.0)) as usize;
-            let mut label = e.label();
-            if label.chars().count() > max_chars {
-                label = label.chars().take(max_chars.saturating_sub(3)).collect::<String>() + "...";
+            match row {
+                Row::Song(g) => {
+                    let e = &library[self.visible[g.start]];
+                    let open = g.contains(&self.cursor);
+                    let (bg, border) = if open { (0x2b2b3d, 0x5a5a78) } else { (0x1d1d27, 0x2a2a38) };
+                    c.round_rect(24.0, y, lw, rh - 4.0, 7.0, rgba(bg, 0.88), rgba(border, 1.0), 1.0);
+                    let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
+                    let tag = if any_taiko { 0xEB452C } else { 0x438EAD };
+                    c.round_rect(32.0, y + 8.0, 5.0, rh - 20.0, 2.5, rgba(tag, 1.0), rgba(tag, 1.0), 0.0);
+                    c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &fit(e.meta.title.clone(), max_chars(10.0, lw - 110.0)));
+                    let sub = format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator);
+                    c.text(44.0, y + 20.0, 7.0, rgba(0x9a9ab0, 1.0), &fit(sub, max_chars(7.0, lw - 110.0)));
+                    let n = g.len();
+                    c.text_right(24.0 + lw - 12.0, y + 11.0, 8.0, rgba(0x8a8aa0, 1.0), &format!("{n} diff{}", if n == 1 { "" } else { "s" }));
+                }
+                Row::Diff(i) => {
+                    let e = &library[self.visible[*i]];
+                    let selected = *i == self.cursor;
+                    let (bg, border) = if selected { (0x34344a, 0xEB452C) } else { (0x191921, 0x2a2a38) };
+                    c.round_rect(44.0, y, lw - 20.0, rh - 3.0, 5.0, rgba(bg, 0.92), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+                    let col = if selected { 0xffffff } else { 0xc8c8d8 };
+                    let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
+                    c.text(56.0, y + 6.0, 8.0, rgba(col, 1.0), &fit(format!("{}{convert}", e.meta.version), max_chars(8.0, lw - 120.0)));
+                    c.text_right(24.0 + lw - 12.0, y + 6.0, 8.0, rgba(0x8a8aa0, 1.0), &format!("OD {:.1}", e.meta.od));
+                }
             }
-            c.text(46.0, y + 8.0, 10.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &label);
-            c.text_right(w - 36.0, y + 8.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("OD {:.1}", e.meta.od));
         }
 
-        c.text(24.0, 452.0, 8.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down select  Left/Right set  [ ] rate  Tab settings  -/= offset  F3/F4 speed  F11 fullscreen  Esc quit");
-        c.text(24.0, 466.0, 8.0, rgba(0x55556a, 1.0), status);
+        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down difficulty  Left/Right song  wheel scroll  [ ] rate  Tab settings  -/= offset  F11 fullscreen  Esc quit");
+        c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), status);
     }
 }
 

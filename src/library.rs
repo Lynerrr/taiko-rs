@@ -141,7 +141,8 @@ pub fn scan(inputs: &[PathBuf], found: &AtomicUsize) -> Vec<Entry> {
         handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
     });
     entries.sort_by(|a, b| {
-        let key = |e: &Entry| (e.meta.artist.to_lowercase(), e.meta.title.to_lowercase());
+        // Same-named songs from different folders stay separate sets.
+        let key = |e: &Entry| (e.meta.artist.to_lowercase(), e.meta.title.to_lowercase(), e.path.parent().map(|p| p.to_path_buf()));
         key(a).cmp(&key(b)).then(a.size.cmp(&b.size))
     });
     entries

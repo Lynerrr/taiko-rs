@@ -65,6 +65,8 @@ pub struct Meta {
     pub audio_lead_in: f64,
     pub mode: u8,
     pub od: f64,
+    /// Background image file (relative to the map folder), from the [Events] section.
+    pub background: Option<String>,
     pub slider_multiplier: f64,
     pub slider_tick_rate: f64,
     pub format_version: i32,
@@ -111,6 +113,7 @@ pub fn read_meta_file(path: &Path) -> Option<Meta> {
     let mut reader = std::io::BufReader::new(std::fs::File::open(path).ok()?);
     let mut text = String::new();
     let mut line = Vec::new();
+    let mut background = None;
     loop {
         line.clear();
         if reader.read_until(b'\n', &mut line).ok()? == 0 {
@@ -118,7 +121,11 @@ pub fn read_meta_file(path: &Path) -> Option<Meta> {
         }
         let l = String::from_utf8_lossy(&line);
         let t = l.trim();
-        if t == "[Events]" || t == "[TimingPoints]" || t == "[HitObjects]" {
+        if t == "[Events]" {
+            background = read_background(&mut reader);
+            break;
+        }
+        if t == "[TimingPoints]" || t == "[HitObjects]" {
             break;
         }
         text.push_str(&l);
@@ -127,7 +134,30 @@ pub fn read_meta_file(path: &Path) -> Option<Meta> {
             break;
         }
     }
-    Some(parse_sections(&text, true).0)
+    let mut meta = parse_sections(&text, true).0;
+    meta.background = background;
+    Some(meta)
+}
+
+/// The background is the first `0,0,"file",x,y` event, right at the top of [Events].
+fn read_background(reader: &mut impl std::io::BufRead) -> Option<String> {
+    let mut line = Vec::new();
+    for _ in 0..400 {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).ok()? == 0 {
+            return None;
+        }
+        let l = String::from_utf8_lossy(&line);
+        let t = l.trim();
+        if t.starts_with('[') {
+            return None;
+        }
+        if let Some(rest) = t.strip_prefix("0,0,") {
+            let name = rest.split(',').next()?.trim().trim_matches('"');
+            return (!name.is_empty()).then(|| name.to_string());
+        }
+    }
+    None
 }
 
 pub fn load(path: &Path) -> Result<Beatmap, String> {

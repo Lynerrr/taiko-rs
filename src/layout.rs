@@ -244,14 +244,15 @@ pub fn preset_area(w: u32, h: u32, screen_w: f32, screen_h: f32) -> Area {
 /// Starts drawing into `area`: darkens the rest of the screen and switches the canvas to the
 /// area's own coordinate space (480 units tall, width from its aspect). Returns the first shape
 /// index and the full-screen width for `end`.
-pub fn begin(c: &mut Canvas, area: Area) -> (usize, f32) {
+/// With `see_through`, the area lets the map background show behind the lane.
+pub fn begin(c: &mut Canvas, area: Area, see_through: bool) -> (usize, f32) {
     let full = c.width;
     if !area.is_full() {
-        c.rect(0.0, 0.0, full, VIRTUAL_HEIGHT, rgba(0x08080b, 1.0));
+        c.rect(0.0, 0.0, full, VIRTUAL_HEIGHT, rgba(0x08080b, if see_through { 0.85 } else { 1.0 }));
     }
     let start = c.shapes.len();
     c.width = full * area.w / area.h;
-    c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(0x121219, 1.0));
+    c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(0x121219, if see_through { 0.0 } else { 1.0 }));
     (start, full)
 }
 

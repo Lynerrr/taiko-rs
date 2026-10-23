@@ -69,6 +69,15 @@ volumes, audio buffer, present mode, frame delay, FPS cap, overlay, fullscreen) 
 immediately to `~/.config/taiko-rs/config.txt` (Windows: `%APPDATA%\taiko-rs\config.txt`). Losing window focus mid-song pauses the game. The results screen shows UR and mean hit error and tells
 you which way to move the offset.
 
+## Song select
+
+Songs are grouped: each beatmap set is one row, and the selected set expands to its difficulties
+(easiest first). Up/Down moves through difficulties, Left/Right jumps between songs, the wheel
+scrolls. The selected map's background fills the screen behind the menu, its music plays from the
+map's preview point (looping), and the panel on the right shows its details (OD, BPM, length,
+note counts) above a live autoplay preview synced to that music. The background also shows behind
+the lane during play, darkened by Settings → *Background dim*.
+
 ## Playfield size and speed
 
 - **Playfield area:** gameplay can run in a smaller "window" inside a fullscreen game, handy on big
@@ -77,7 +86,11 @@ you which way to move the offset.
   drag an edge or corner to resize it (the cursor changes like on a window frame) and use the
   wheel to scale it. Settings → *Playfield area* opens an editor with a sample playfield (mouse,
   or arrows to move / Shift+arrows to resize, R for full screen); *Reset playfield area* restores
-  full screen.
+  full screen. While dragging, the area snaps to the screen's edges and centre lines (guides are
+  shown; hold Shift to place freely). *Playfield preset* (or `[` / `]` in the editor) sizes it
+  like a window of a given resolution, centred: your monitor's modes plus common ones such as
+  1280x720, 1024x768 and 800x600. *HUD position* keeps score, accuracy, the hit error meter and
+  map info inside the playfield, or fixed at the screen's corners.
 - **Speed (rate):** 0.50×–2.00× in 0.05× steps (`[` / `]` on song select, Shift for 0.25×, or
   Settings → *Speed*). With *Rate keeps pitch* on (default) the music is time-stretched (WSOLA) so
   it sounds normal, like osu!'s DT/HT; off, it is resampled and the pitch follows the speed

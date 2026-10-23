@@ -350,6 +350,21 @@ impl Game {
         Some(OffsetHint { estimate, needed, significant })
     }
 
+    /// Marks everything ending before `t` as already played, without scoring or animations (the
+    /// song select preview jumps into the middle of the song).
+    pub fn skip_to(&mut self, t: f64) {
+        for (n, st) in self.map.notes.iter().zip(self.state.iter_mut()) {
+            if n.end_time < t {
+                st.judged = Some(Judge::Great);
+                st.judged_at = f64::NEG_INFINITY;
+                st.finished = true;
+            }
+        }
+        while self.cursor < self.map.notes.len() && self.state[self.cursor].finished {
+            self.cursor += 1;
+        }
+    }
+
     pub fn can_skip(&self) -> bool {
         self.first_note - self.time > 3000.0
     }
@@ -789,6 +804,12 @@ impl Game {
             c.text_centered(w / 2.0, 360.0, 9.0, rgba(0x8a8aa0, 1.0), "Up/Down + Enter    Esc: continue");
         }
     }
+}
+
+/// Vertical band (top, height) of the lane with a little room for judgements, for previews that
+/// show only the lane.
+pub fn lane_band() -> (f32, f32) {
+    (LANE_Y - LANE_H / 2.0 - 34.0, LANE_H + 42.0)
 }
 
 /// A still playfield (lane, drum, a few notes, score) for the playfield area editor.

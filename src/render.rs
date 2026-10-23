@@ -74,9 +74,43 @@ pub struct Renderer {
     capacity: usize,
     supported_modes: Vec<wgpu::PresentMode>,
     capture_pipeline: wgpu::RenderPipeline,
+    /// Map background: drawn as a full-screen "cover" image under the shapes.
+    bg_pipeline: wgpu::RenderPipeline,
+    bg_capture_pipeline: wgpu::RenderPipeline,
+    bg_layout: wgpu::BindGroupLayout,
+    bg_sampler: wgpu::Sampler,
+    bg_uniform: wgpu::Buffer,
+    /// Bind group and image aspect (w / h) of the current background.
+    bg: Option<(wgpu::BindGroup, f32)>,
+    /// 0 hides the background, 1 shows it at full brightness.
+    pub bg_brightness: f32,
     pub present: PresentChoice,
     pub adapter_name: String,
 }
+
+const BG_SHADER: &str = r#"
+struct Bg { uv: vec4<f32>, params: vec4<f32> };
+@group(0) @binding(0) var<uniform> bg: Bg;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> V {
+    let c = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u));
+    var o: V;
+    o.pos = vec4<f32>(c.x * 2.0 - 1.0, 1.0 - c.y * 2.0, 0.0, 1.0);
+    o.uv = mix(bg.uv.xy, bg.uv.zw, c);
+    return o;
+}
+
+@fragment
+fn fs(i: V) -> @location(0) vec4<f32> {
+    let t = textureSample(tex, samp, i.uv);
+    return vec4<f32>(t.rgb * bg.params.x, 1.0);
+}
+"#;
 
 const SHADER: &str = r#"
 struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32 };
@@ -246,6 +280,75 @@ impl Renderer {
         let pipeline = make_pipeline(format);
         // Screenshots render into an offscreen target, independent of what the compositor allows.
         let capture_pipeline = make_pipeline(wgpu::TextureFormat::Rgba8Unorm);
+        // Background pipelines (one per target format, like the shape pipelines).
+        let bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("background"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let bg_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("background"),
+            source: wgpu::ShaderSource::Wgsl(BG_SHADER.into()),
+        });
+        let bg_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&bg_layout)],
+            immediate_size: 0,
+        });
+        let make_bg_pipeline = |format: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("background"),
+                layout: Some(&bg_pipeline_layout),
+                vertex: wgpu::VertexState { module: &bg_shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &bg_shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let bg_pipeline = make_bg_pipeline(format);
+        let bg_capture_pipeline = make_bg_pipeline(wgpu::TextureFormat::Rgba8Unorm);
+        let bg_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("background"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let bg_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("background"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let capacity = 4096;
         let instances = Self::make_instance_buffer(&device, capacity);
 
@@ -261,6 +364,13 @@ impl Renderer {
             capacity,
             supported_modes: caps.present_modes,
             capture_pipeline,
+            bg_pipeline,
+            bg_capture_pipeline,
+            bg_layout,
+            bg_sampler,
+            bg_uniform,
+            bg: None,
+            bg_brightness: 0.0,
             present,
             adapter_name,
         };
@@ -275,6 +385,43 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         })
+    }
+
+    /// Replaces the background image (RGBA8, `w` x `h`), or removes it with `None`.
+    pub fn set_background(&mut self, image: Option<(u32, u32, Vec<u8>)>) {
+        let Some((w, h, data)) = image.filter(|(w, h, d)| *w > 0 && *h > 0 && d.len() == (*w * *h * 4) as usize) else {
+            self.bg = None;
+            return;
+        };
+        let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("background"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // The image's sRGB bytes go straight to the (non-sRGB) surface, like shape colours.
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            texture.as_image_copy(),
+            &data,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
+            size,
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("background"),
+            layout: &self.bg_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.bg_uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.bg_sampler) },
+            ],
+        });
+        self.bg = Some((bind_group, w as f32 / h as f32));
     }
 
     /// Applies a present mode, falling back toward vsync if the compositor lacks it.
@@ -357,9 +504,16 @@ impl Renderer {
         if !shapes.is_empty() {
             self.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
         }
+        if let Some((_, aspect)) = &self.bg {
+            // "Cover" fit: crop the image's long side so it fills the screen without stretching.
+            let screen = self.config.width as f32 / self.config.height.max(1) as f32;
+            let (u, v) = if *aspect > screen { (screen / aspect, 1.0) } else { (1.0, aspect / screen) };
+            let uniform = [(1.0 - u) / 2.0, (1.0 - v) / 2.0, (1.0 + u) / 2.0, (1.0 + v) / 2.0, self.bg_brightness, 0.0, 0.0, 0.0];
+            self.queue.write_buffer(&self.bg_uniform, 0, bytemuck::cast_slice(&uniform));
+        }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.encode_pass(&mut encoder, &view, &self.pipeline, shapes.len(), clear, clip.as_ref());
+        self.encode_pass(&mut encoder, &view, false, shapes.len(), clear, clip.as_ref());
 
         let (w, h) = (self.config.width, self.config.height);
         let readback = capture.then(|| {
@@ -374,7 +528,7 @@ impl Renderer {
                 view_formats: &[],
             });
             let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-            self.encode_pass(&mut encoder, &target_view, &self.capture_pipeline, shapes.len(), clear, clip.as_ref());
+            self.encode_pass(&mut encoder, &target_view, true, shapes.len(), clear, clip.as_ref());
             let bpr = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("capture"),
@@ -412,7 +566,7 @@ impl Renderer {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        pipeline: &wgpu::RenderPipeline,
+        capture: bool,
         count: usize,
         clear: [f64; 3],
         clip: Option<&(std::ops::Range<usize>, [u32; 4])>,
@@ -430,7 +584,12 @@ impl Renderer {
             })],
             ..Default::default()
         });
-        pass.set_pipeline(pipeline);
+        if let Some((bind_group, _)) = self.bg.as_ref().filter(|_| self.bg_brightness > 0.0) {
+            pass.set_pipeline(if capture { &self.bg_capture_pipeline } else { &self.bg_pipeline });
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..4, 0..1);
+        }
+        pass.set_pipeline(if capture { &self.capture_pipeline } else { &self.pipeline });
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instances.slice(..));
         match clip {

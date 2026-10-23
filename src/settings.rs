@@ -22,6 +22,7 @@ pub enum Item {
     MusicVolume,
     FxVolume,
     AudioBuffer,
+    BackgroundDim,
     PresentMode,
     FrameDelay,
     FpsCap,
@@ -29,7 +30,7 @@ pub enum Item {
     Fullscreen,
 }
 
-pub const ITEMS: [(&str, Item); 25] = [
+pub const ITEMS: [(&str, Item); 26] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::PlayfieldArea),
     ("GAMEPLAY", Item::PlayfieldPreset),
@@ -50,6 +51,7 @@ pub const ITEMS: [(&str, Item); 25] = [
     ("AUDIO", Item::MusicVolume),
     ("AUDIO", Item::FxVolume),
     ("AUDIO", Item::AudioBuffer),
+    ("VIDEO", Item::BackgroundDim),
     ("VIDEO", Item::PresentMode),
     ("VIDEO", Item::FrameDelay),
     ("VIDEO", Item::FpsCap),
@@ -79,6 +81,7 @@ impl Item {
             Item::MusicVolume => "Music volume",
             Item::FxVolume => "Hitsound volume",
             Item::AudioBuffer => "Audio buffer",
+            Item::BackgroundDim => "Background dim",
             Item::PresentMode => "Present mode",
             Item::FrameDelay => "Frame delay",
             Item::FpsCap => "FPS cap",
@@ -105,6 +108,7 @@ impl Item {
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
             Item::MusicVolume | Item::FxVolume => "Left / Right to adjust.",
             Item::AudioBuffer => "Smaller = less audio latency; raise it if you hear crackling.",
+            Item::BackgroundDim => "How dark the map background is during play. 100% hides it.",
             Item::PresentMode => "vsync is smoothest on Wayland; mailbox/immediate add judder.",
             Item::FrameDelay => "vsync only: draw later in each refresh for less lag. Near/over one refresh (16.7 ms at 60 Hz) frames miss the deadline.",
             Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",

@@ -13,6 +13,7 @@ mod layout;
 mod library;
 mod multiplayer;
 mod net;
+mod preview;
 mod render;
 mod settings;
 mod ui;
@@ -130,6 +131,10 @@ struct State {
     window_h: f32,
     /// Shapes of this frame to clip to the playfield area.
     frame_clip: Option<(std::ops::Range<usize>, Area)>,
+    /// Song select preview: background, preview music, autoplay preview.
+    preview: preview::Preview,
+    /// Background brightness for this frame (0 hides it).
+    bg_brightness: f32,
     /// Snap guides to draw while dragging the playfield area.
     guides: Vec<layout::Guide>,
     /// Playfield presets (resolutions that fit the window), filled when the window opens.
@@ -145,10 +150,11 @@ fn draw_game_area(
     clip: &mut Option<(std::ops::Range<usize>, Area)>,
     grip: &Option<(Grip, (f64, f64), Area)>,
     hover: &Option<Grip>,
+    see_through: bool,
     f: impl FnOnce(&mut Canvas),
 ) {
     let area = cfg.playfield_area;
-    let (start, full) = layout::begin(canvas, area);
+    let (start, full) = layout::begin(canvas, area, see_through);
     f(canvas);
     let range = layout::end(canvas, area, start, full);
     *clip = Some((range, area));
@@ -172,18 +178,29 @@ impl State {
         self.toast = Some(Toast { text, until: Instant::now() + Duration::from_millis(1500) });
     }
 
-    fn start_loading(&mut self, entry: usize) {
+    fn stop_audio(&mut self) {
         if let Some(a) = &self.audio {
             a.stop();
         }
+        self.preview.invalidate_audio();
+    }
+
+    /// The preview's decoded song, when it can be reused for playing `entry` at normal speed.
+    fn cached_track(&self, entry: usize, rate: f64) -> Option<Arc<Track>> {
+        ((rate - 1.0).abs() < 1e-6).then(|| self.preview.cached_track(&self.library[entry])).flatten()
+    }
+
+    fn start_loading(&mut self, entry: usize) {
+        self.stop_audio();
+        self.preview.show_background_for(&self.library[entry]);
         let label = self.library[entry].label();
-        let rx = self.spawn_loader(entry, self.cfg.rate);
+        let rx = self.spawn_loader(entry, self.cfg.rate, self.cached_track(entry, self.cfg.rate));
         self.scene = Scene::Loading { rx, label, entry };
     }
 
     /// Parses the map and decodes its audio on a background thread.
     /// `speed`: rate modifier to prepare the track for (time-stretched or resampled once here).
-    fn spawn_loader(&self, entry: usize, speed: f64) -> Receiver<Loaded> {
+    fn spawn_loader(&self, entry: usize, speed: f64, cached: Option<Arc<Track>>) -> Receiver<Loaded> {
         let path = self.library[entry].path.clone();
         let rate = self.audio.as_ref().map(|a| a.rate);
         let keep_pitch = self.cfg.rate_keep_pitch;
@@ -192,11 +209,12 @@ impl State {
             let result = (|| {
                 let map = beatmap::load(&path)?;
                 let audio_path = path.parent().unwrap_or(&path).join(&map.meta.audio_file);
-                let track = match rate {
-                    Some(rate) => audio::change_rate(audio::decode(&audio_path, rate)?, rate, speed, keep_pitch),
-                    None => Track { samples: Vec::new(), rate: 1.0 },
+                let track = match (cached, rate) {
+                    (Some(track), _) => track,
+                    (None, Some(rate)) => Arc::new(audio::change_rate(audio::decode(&audio_path, rate)?, rate, speed, keep_pitch)),
+                    (None, None) => Arc::new(Track { samples: Vec::new(), rate: 1.0 }),
                 };
-                Ok((map, Arc::new(track)))
+                Ok((map, track))
             })();
             let _ = tx.send(result);
         });
@@ -204,9 +222,7 @@ impl State {
     }
 
     fn to_select(&mut self) {
-        if let Some(a) = &self.audio {
-            a.stop();
-        }
+        self.stop_audio();
         self.report_smoothness();
         self.scene = Scene::Select;
     }
@@ -278,6 +294,7 @@ impl State {
             Item::PlayfieldArea => c.playfield_area.describe(),
             Item::PlayfieldPreset => self.current_preset().map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| "custom".into()),
             Item::HudPosition => if c.hud_in_playfield { "with playfield".into() } else { "screen".into() },
+            Item::BackgroundDim => format!("{:.0}%", c.bg_dim * 100.0),
             Item::PlayfieldReset => "Enter to reset".into(),
             Item::Rate => format!("{:.2}x", c.rate),
             Item::RateKeepPitch => on(c.rate_keep_pitch),
@@ -340,6 +357,7 @@ impl State {
                 return;
             }
             Item::HudPosition => self.cfg.hud_in_playfield = !self.cfg.hud_in_playfield,
+            Item::BackgroundDim => self.cfg.bg_dim = (((self.cfg.bg_dim + 0.05 * dir as f32) * 20.0).round() / 20.0).clamp(0.0, 1.0),
             Item::Rate => {
                 let step = 0.05 * if self.modifiers_shift { 5.0 } else { 1.0 };
                 self.cfg.rate = (((self.cfg.rate + step * d) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
@@ -423,9 +441,7 @@ impl State {
 
     fn finish_calibration(&mut self) {
         let Scene::Calibrate { game, back } = std::mem::replace(&mut self.scene, Scene::Select) else { return };
-        if let Some(a) = &self.audio {
-            a.stop();
-        }
+        self.stop_audio();
         match calibrate::estimate(&game.stats.errors, self.cfg.offset_ms) {
             Some(estimate) if estimate.hits >= 4 => self.scene = Scene::CalibrateDone { estimate, back },
             _ => {
@@ -436,9 +452,7 @@ impl State {
     }
 
     fn leave_calibration(&mut self, apply: bool) {
-        if let Some(a) = &self.audio {
-            a.stop();
-        }
+        self.stop_audio();
         match std::mem::replace(&mut self.scene, Scene::Select) {
             Scene::Calibrate { back, .. } => self.scene = *back,
             Scene::CalibrateDone { estimate, back } => {
@@ -764,9 +778,7 @@ impl State {
     }
 
     fn leave_room(&mut self, why: &str) {
-        if let Some(a) = &self.audio {
-            a.stop();
-        }
+        self.stop_audio();
         self.mp = None;
         self.picking_lobby_map = false;
         self.mp_status = why.to_string();
@@ -862,9 +874,7 @@ impl State {
                         if let Some(s) = &self.mp {
                             s.client.send(net::ClientMsg::Finished(multiplayer::final_from(&game.stats, true)));
                         }
-                        if let Some(a) = &self.audio {
-                            a.stop();
-                        }
+                        self.stop_audio();
                         self.scene = Scene::MpResults;
                     } else {
                         *quit_armed = Some(Instant::now());
@@ -1032,11 +1042,10 @@ impl State {
                 }
                 match find_map(&self.library, &map) {
                     Some(i) => {
-                        if let Some(a) = &self.audio {
-                            a.stop();
-                        }
+                        self.stop_audio();
                         self.picking_lobby_map = false;
-                        let rx = self.spawn_loader(i, map.rate);
+                        self.preview.show_background_for(&self.library[i]);
+                        let rx = self.spawn_loader(i, map.rate, self.cached_track(i, map.rate));
                         self.scene = Scene::MpWait { rx: Some(rx), loaded: None, start: None };
                     }
                     None => s.client.send(net::ClientMsg::Loaded(false)),
@@ -1060,9 +1069,7 @@ impl State {
                 self.mp = None;
                 self.picking_lobby_map = false;
                 if in_mp {
-                    if let Some(a) = &self.audio {
-                        a.stop();
-                    }
+                    self.stop_audio();
                     self.mp_status = why;
                     self.scene = Scene::MpMenu;
                 }
@@ -1206,6 +1213,21 @@ impl State {
         canvas.clear(width);
         self.frame_clip = None;
         self.poll_scan();
+        {
+            let in_select = matches!(self.scene, Scene::Select);
+            let in_menu = in_select
+                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select))
+                || matches!(self.scene, Scene::MpMenu | Scene::Lobby);
+            let selected = self.select.selected();
+            self.preview.update(now, &self.library, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms);
+            let has_bg = self.preview.has_background;
+            self.bg_brightness = match self.scene {
+                _ if !has_bg => 0.0,
+                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Loading { .. } => 1.0 - self.cfg.bg_dim,
+                Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
+                _ => 0.35,
+            };
+        }
         self.poll_multiplayer();
         let mut next: Option<Scene> = None;
         let mut capture: Option<String> = None;
@@ -1249,6 +1271,13 @@ impl State {
                     String::new()
                 };
                 self.select.draw(canvas, &self.library, dt, &self.status);
+                let x = 24.0 + Select::list_width(canvas.width) + 12.0;
+                let pw = canvas.width - x - 24.0;
+                if pw > 160.0 {
+                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, 380.0, self.cfg.scroll_speed) {
+                        self.frame_clip = Some(clip);
+                    }
+                }
                 if self.picking_lobby_map {
                     let w = canvas.width;
                     canvas.round_rect(24.0, 438.0, w - 48.0, 34.0, 8.0, rgba(0x2b1a17, 1.0), rgba(0xEB452C, 1.0), 1.5);
@@ -1289,7 +1318,7 @@ impl State {
                 game.show_offset_hint = self.cfg.show_offset_hint;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 let hud_in = self.cfg.hud_in_playfield;
-                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| {
+                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
                     if hud_in {
                         game.draw_hud(c);
@@ -1371,7 +1400,7 @@ impl State {
                         multiplayer::draw_scoreboard(c, s, &live);
                     }
                 };
-                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| {
+                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
                     if hud_in {
                         hud(c, game);
@@ -1404,7 +1433,7 @@ impl State {
                 }
                 let offset = self.cfg.offset_ms;
                 let hud_in = self.cfg.hud_in_playfield;
-                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, |c| {
+                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
                     if hud_in {
                         game.draw_hud(c);
@@ -1431,7 +1460,7 @@ impl State {
                 this.settings_ui.draw(canvas, &|item| this.setting_value(item), footer);
             }
             Scene::LayoutEdit { .. } => {
-                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, game::draw_preview);
+                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, false, game::draw_preview);
                 let area = self.cfg.playfield_area;
                 layout::draw_frame(canvas, area, true);
                 let w = canvas.width;
@@ -1448,9 +1477,7 @@ impl State {
         }
         if let Some(s) = next {
             if matches!(s, Scene::Results { .. } | Scene::Select) {
-                if let Some(a) = &self.audio {
-                    a.stop();
-                }
+                self.stop_audio();
                 if let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene) {
                     eprintln!("--- smoothness ({}) ---\n{}", self.present.name(), sm.report());
                     *sm = debug::Smoothness::default();
@@ -1564,6 +1591,10 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         let (capture, clip) = {
             let mut s = lock(&state);
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
+            if let Some(image) = s.preview.bg_upload.take() {
+                renderer.set_background(image);
+            }
+            renderer.bg_brightness = s.bg_brightness;
             (capture, s.frame_clip.take())
         };
         let clip = clip.map(|(range, a)| (range, [a.x, a.y, a.w, a.h]));
@@ -1851,6 +1882,8 @@ fn main() {
         window_h: 720.0,
         frame_clip: None,
         guides: Vec::new(),
+        preview: preview::Preview::default(),
+        bg_brightness: 0.0,
         resolutions: Vec::new(),
         monitor_modes: Vec::new(),
     };
