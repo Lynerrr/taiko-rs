@@ -412,6 +412,33 @@ mod tests {
     }
 
     #[test]
+    fn keep_pitch_keeps_beats_on_time() {
+        // Clicks every 500 ms: after stretching, each must start where its time / rate says,
+        // or every DT/HT map would play off its notes.
+        let sr = 48000;
+        let input = metronome(sr, 500.0, 16, 1000.0);
+        for rate in [0.75, 1.3, 1.5] {
+            let out = change_rate(Track { samples: input.samples.clone(), rate: 1.0 }, sr, rate, true);
+            let mut sum = 0.0;
+            for b in 2..14 {
+                let expected = b as f64 * 500.0 / rate;
+                // Where the click reaches half its peak: grains fade in, so its first faint
+                // sample can come early without being heard early.
+                let ms = |t: f64| (t / 1000.0 * sr as f64) as usize;
+                let (from, to) = (ms(expected - 40.0), ms(expected + 60.0));
+                let peak = (from..to).map(|i| out.samples[i * 2].abs()).fold(0.0, f32::max);
+                let onset = (from..to).find(|&i| out.samples[i * 2].abs() >= peak * 0.5).unwrap();
+                let err = onset as f64 / sr as f64 * 1000.0 - expected;
+                // A click can straddle two grains: each lands within a few ms, on time on average.
+                assert!(err.abs() < 6.0, "rate {rate}: beat {b} off by {err:.1} ms");
+                sum += err;
+            }
+            let mean = sum / 12.0;
+            assert!(mean.abs() < 3.5, "rate {rate}: beats {mean:.1} ms off on average");
+        }
+    }
+
+    #[test]
     fn without_keep_pitch_pitch_follows_speed() {
         let sr = 48000;
         let out = change_rate(Track { samples: sine(440.0, 2.0, sr), rate: 1.0 }, sr, 1.5, false);
@@ -648,10 +675,18 @@ fn time_stretch(input: &[f32], sample_rate: u32, rate: f64) -> Vec<f32> {
     let out_frames = (frames as f64 / rate) as usize + win;
     let mut out = vec![0.0f32; out_frames * 2];
     let mut norm = vec![0.0f32; out_frames];
+    // Grains are placed so their centres (where the Hann window weighs most) map exactly to
+    // input time = output time * rate; anchoring their starts instead would play the music
+    // ~win/2 * (rate - 1) late (about 7 ms at 1.5x), off its notes.
+    let centre_shift = win as f64 / 2.0 * (rate - 1.0);
+    // Candidates nearest `nominal` first, so ties (silence) keep the grain on time.
+    let around = |centre: usize, lo: usize, hi: usize| {
+        (0..=(hi - lo)).flat_map(move |d| [centre.checked_sub(d), Some(centre + d)]).flatten().filter(move |&c| c >= lo && c <= hi)
+    };
     let mut prev: Option<usize> = None;
     let mut k = 0usize;
     loop {
-        let nominal = (k as f64 * hop_in) as usize;
+        let nominal = (k as f64 * hop_in + centre_shift).max(0.0) as usize;
         let out_pos = k * hop_out;
         if nominal + win + search >= frames || out_pos + win > out_frames {
             break;
@@ -666,8 +701,7 @@ fn time_stretch(input: &[f32], sample_rate: u32, rate: f64) -> Vec<f32> {
                 let hi = nominal + search;
                 let ov = hop_out;
                 let (mut best, mut best_c) = (nominal, f32::MIN);
-                let mut cand = lo / DEC;
-                while cand * DEC <= hi {
+                for cand in around(nominal / DEC, lo / DEC, hi / DEC) {
                     if (target + ov) / DEC < coarse.len() && (cand * DEC + ov) / DEC < coarse.len() {
                         let c = corr(&coarse, target / DEC, cand, ov / DEC, 1);
                         if c > best_c {
@@ -675,10 +709,10 @@ fn time_stretch(input: &[f32], sample_rate: u32, rate: f64) -> Vec<f32> {
                             best = cand * DEC;
                         }
                     }
-                    cand += 1;
                 }
                 let (mut fine, mut fine_c) = (best, f32::MIN);
-                for c in best.saturating_sub(DEC)..=(best + DEC).min(frames - win - 1) {
+                let fine_lo = best.saturating_sub(DEC);
+                for c in around(best, fine_lo, (best + DEC).min(frames - win - 1).max(fine_lo)) {
                     let v = corr(&mono, target.min(frames - ov - 1), c, ov, 2);
                     if v > fine_c {
                         fine_c = v;
