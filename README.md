@@ -99,7 +99,8 @@ the next start) and restarts into it. *Check at startup* turns the check off. Bu
 first click selects a song or difficulty and clicking the selected difficulty plays it; settings
 rows select on the first click and toggle/open on the second, and `<` / `>` step values; the pause
 menu follows the pointer; results, calibration and the multiplayer menu, lobby and results have
-buttons (each shows its key).
+buttons (each shows its key). The pointer is a pixel arrow in the game's colours (it turns red
+over anything clickable); during play it hides itself after a second without moving.
 
 **Animations** (Settings → Video → *UI animations*, on by default): screens fade in, the tab and
 selection highlights glide, a song's difficulties slide open, settings scroll smoothly, the pause
@@ -141,7 +142,9 @@ saved as a replay in `replays/` in the config folder. The results screen tells y
 ranks among your scores on that map and has **Watch replay (R)**; song select lists the map's
 best local scores under the preview panel, and clicking one plays its replay. Replays store the
 map time each hit was judged at (plus the speed and the mash setting), so watching one
-reproduces the play exactly, whatever the offset.
+reproduces the play exactly, whatever the offset. While watching, a timeline along the bottom
+of the screen jumps anywhere in the play (click or drag it), and Left/Right skip 5 seconds back
+or forward (Shift: 15).
 
 **Replay videos:** *Export video (V)* on the results screen, or the *video* button on a score in
 song select's leaderboard (no need to watch it first), opens a video editor for that play:
@@ -177,8 +180,9 @@ the lane during play, darkened by Settings → *Background dim*.
 ## Playfield size and speed
 
 - **Playfield area:** gameplay can run in a smaller "window" inside a fullscreen game, handy on big
-  monitors. Everything (lane, notes, HUD, pause menu, multiplayer scoreboard) is laid out inside
-  the area as if it were the window, and clipped to it. During play, drag inside it to move it,
+  monitors. The lane, notes and drum are laid out inside the area as if it were the window, and
+  clipped to it; the HUD (score, accuracy, hit error meter, map info, pause menu, multiplayer
+  scoreboard) stays where it is on the screen, so moving or resizing the area never touches it. During play, drag inside it to move it,
   drag an edge or corner to resize it (the cursor changes like on a window frame) and use the
   wheel to scale it. Settings → *Playfield area* opens an editor with a sample playfield (mouse,
   or arrows to move / Shift+arrows to resize, R for full screen); *Reset playfield area* restores
@@ -193,8 +197,7 @@ the lane during play, darkened by Settings → *Background dim*.
   size*) types one in (`1280x720`), and on a saved size **E** edits it, **Del** deletes it and
   **Shift+Up/Down** moves it (or the *up* / *down* / *edit* / *del* buttons on the row). They're kept in
   that order in `saved_presets` in the config and come first for F5/F6 too; one bigger than the
-  window says *too big*. *HUD position* keeps score, accuracy, the hit error meter and
-  map info inside the playfield, or fixed at the screen's corners.
+  window says *too big*.
 - **Speed (rate):** 0.50×–2.00× in 0.05× steps (`[` / `]` on song select, Shift for 0.25×, or
   Settings → *Speed*). With *Rate keeps pitch* on (default) the music is time-stretched (WSOLA) so
   it sounds normal, like osu!'s DT/HT; off, it is resampled and the pitch follows the speed
@@ -230,7 +233,7 @@ Its notes replace the drawn ones: `taikohitcircle` / `taikobigcircle` tinted red
 `taikohitcircleoverlay` / `taikobigcircleoverlay` on top (`@2x` preferred), packed into one
 texture so a frame is still a single draw call. Its taiko hitsounds replace the built-in ones: `taiko-normal-hitnormal` (don), `taiko-normal-hitclap` or
 `-hitwhistle` (kat) and `taiko-normal-hitfinish`, played on top for big notes, and `combobreak`,
-played when a miss breaks a combo of 20 or more. Anything the skin doesn't have stays built-in (the
+played (loud, well above the hitsounds) when a miss breaks a combo of 20 or more. Anything the skin doesn't have stays built-in (the
 built-in sounds come from the quassbot v2 skin); an empty file mutes that sound, like in osu!.
 
 Hitsounds play at the volume of the map's timing point (red or green line) at the moment of the

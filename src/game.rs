@@ -21,6 +21,9 @@ const SPEED_SCALE: f64 = 0.7;
 /// Second key of a big note must land within this window of the first.
 const STRONG_WINDOW: f64 = 30.0;
 const HIT_ANIM_MS: f64 = 160.0;
+/// The combo break plays this much louder than a hitsound (about +9.5 dB): over the music it
+/// should be impossible to miss.
+const COMBO_BREAK_GAIN: f32 = 3.0;
 
 const DON: u32 = 0xEB452C;
 const KAT: u32 = 0x438EAD;
@@ -142,6 +145,8 @@ pub struct Game {
     pub windows: Windows,
     /// Gameplay time (ms) of the current frame.
     pub time: f64,
+    /// Map time play starts at (before the first note, or the lead-in).
+    start: f64,
     end_time: f64,
     track_ms: f64,
     first_note: f64,
@@ -228,6 +233,7 @@ impl Game {
             cursor: 0,
             stats: Stats::default(),
             time: start,
+            start,
             end_time,
             track_ms,
             first_note,
@@ -345,10 +351,10 @@ impl Game {
     fn play_combo_break(&mut self, audio: Option<&Engine>) {
         let Some(t) = self.combo_break.take() else { return };
         if let Some(log) = &mut self.sfx_log {
-            log.push((t, Sfx::ComboBreak, 1.0));
+            log.push((t, Sfx::ComboBreak, COMBO_BREAK_GAIN));
         }
         if let Some(a) = audio.filter(|_| !self.mute_hits) {
-            a.sfx(Sfx::ComboBreak);
+            a.sfx_at(Sfx::ComboBreak, COMBO_BREAK_GAIN);
         }
     }
 
@@ -455,6 +461,48 @@ impl Game {
         self.raw_time = target;
         self.time = start;
         self.skip_to(t);
+    }
+
+    /// Replays: jumps to map time `t`, backwards or forwards. Everything before `t` is judged
+    /// again, silently, from the recorded presses, and the music carries on from there.
+    pub fn seek(&mut self, t: f64, audio: Option<&Engine>, offset: f64) {
+        let t = t.clamp(self.start, self.end_time);
+        if t < self.time {
+            self.rewind();
+        }
+        self.offset = offset;
+        self.set_time(t);
+        let target = t / self.rate + offset;
+        if let Some(a) = audio {
+            a.seek(target);
+        }
+        self.clock = GameClock::new(target, audio.is_some());
+        self.ignore_audio_until = Some(Instant::now() + std::time::Duration::from_millis(80));
+        self.raw_time = target;
+    }
+
+    /// Back to the state before the first note: nothing judged, no score, the replay from its
+    /// first press.
+    fn rewind(&mut self) {
+        for st in &mut self.state {
+            *st = NoteState { ticks: vec![false; st.ticks.len()], ..Default::default() };
+        }
+        self.cursor = 0;
+        self.stats = Stats::default();
+        self.presses = [f64::NEG_INFINITY; 4];
+        self.last_judge = None;
+        self.recent_errors.clear();
+        self.strong = None;
+        self.combo_break = None;
+        if let Some((_, next)) = &mut self.replay {
+            *next = 0;
+        }
+        self.time = self.start;
+    }
+
+    /// Map time of the start and end of play, for a timeline.
+    pub fn span(&self) -> (f64, f64) {
+        (self.start, self.end_time)
     }
 
     pub fn can_skip(&self) -> bool {
@@ -874,7 +922,7 @@ impl Game {
     }
 
     /// Score, accuracy, progress, hit error meter, offset advice, map info, skip hint and the pause
-    /// menu. Drawn with the playfield, or at fixed screen positions (HUD position setting).
+    /// menu, at fixed screen positions: resizing the playfield area never moves them.
     pub fn draw_hud(&self, c: &mut Canvas) {
         let t = self.time;
         let w = c.width;
@@ -998,7 +1046,7 @@ fn skin_note(c: &mut Canvas, x: f32, y: f32, r: f32, big: bool, col: u32, alpha:
     true
 }
 
-/// A still playfield (lane, drum, a few notes, score) for the playfield area editor.
+/// A still playfield (lane, drum, a few notes) for the playfield area editor.
 pub fn draw_preview(c: &mut Canvas) {
     let w = c.width;
     let lane_top = LANE_Y - LANE_H / 2.0;
@@ -1018,9 +1066,14 @@ pub fn draw_preview(c: &mut Canvas) {
     c.rect(0.0, lane_top, PANEL_W, LANE_H, rgba(0x191921, 1.0));
     c.circle(PANEL_W / 2.0, LANE_Y, 46.0, rgba(0x2f2f3e, 1.0), rgba(0x4a4a60, 1.0), 2.0);
     c.circle(PANEL_W / 2.0, LANE_Y, 32.0, rgba(0xe9dcc3, 1.0), rgba(0x8a7b63, 1.0), 2.0);
+    c.text_centered(w / 2.0, 300.0, 14.0, rgba(WHITE, 0.85), "drag to move, edges to resize");
+}
+
+/// The editor's stand-in score, where the real HUD goes: fixed on screen, whatever the area.
+pub fn draw_preview_hud(c: &mut Canvas) {
+    let w = c.width;
     c.text_right(w - 18.0, 18.0, 24.0, rgba(WHITE, 1.0), "00000000");
     c.text_right(w - 18.0, 50.0, 14.0, rgba(0xc8c8d8, 1.0), "100.00%");
-    c.text_centered(w / 2.0, 300.0, 14.0, rgba(WHITE, 0.85), "drag to move, edges to resize");
 }
 
 #[cfg(test)]
@@ -1071,6 +1124,33 @@ mod tests {
         let (a, b) = (&live.stats, &back.stats);
         assert_eq!((a.great, a.ok, a.miss, a.score, a.max_combo), (b.great, b.ok, b.miss, b.score, b.max_combo));
         assert!(a.miss > 0 && a.great > 0, "the test play should mix judgements");
+    }
+
+    #[test]
+    fn seeking_a_replay_back_and_forth_lands_on_the_same_state() {
+        let mut g = game();
+        let inputs: Vec<(f64, u8)> = g
+            .map
+            .notes
+            .iter()
+            .filter(|n| matches!(n.kind, Kind::Don | Kind::Kat))
+            .enumerate()
+            .map(|(k, n)| (n.time + [-20.0, 10.0, 60.0][k % 3], if n.kind == Kind::Kat { 0 } else { 1 }))
+            .collect();
+        g.replay = Some((inputs, 0));
+        let (start, end) = g.span();
+        let mid = (start + end) / 2.0;
+        g.seek(mid, None, 0.0);
+        let at_mid = (g.stats.great, g.stats.ok, g.stats.miss, g.stats.score, g.stats.combo);
+        assert!(at_mid.0 > 0);
+        g.seek(end, None, 0.0);
+        assert!(g.stats.score > at_mid.3);
+        // Back to the middle: rebuilt from the start, same as getting there directly.
+        g.seek(mid, None, 0.0);
+        assert_eq!((g.stats.great, g.stats.ok, g.stats.miss, g.stats.score, g.stats.combo), at_mid);
+        assert_eq!(g.time, mid);
+        g.seek(start - 10_000.0, None, 0.0);
+        assert_eq!((g.stats.score, g.time), (0, start));
     }
 
     #[test]

@@ -31,8 +31,6 @@ pub struct Config {
     pub calibration_bpm: f64,
     /// Where gameplay is drawn on screen (fractions; full screen by default).
     pub playfield_area: Area,
-    /// HUD (score, accuracy, hit error meter...) inside the playfield area, or fixed on screen.
-    pub hud_in_playfield: bool,
     /// How much the map background is darkened during play (1.0 = hidden).
     pub bg_dim: f32,
     /// Speed modifier (1.5 = DT, 0.75 = HT) and whether it keeps the music's pitch.
@@ -94,7 +92,6 @@ impl Default for Config {
             fps_cap: 0,
             calibration_bpm: 120.0,
             playfield_area: Area::FULL,
-            hud_in_playfield: true,
             bg_dim: 0.8,
             rate: 1.0,
             rate_keep_pitch: true,
@@ -204,7 +201,6 @@ impl Config {
                 "menu_vsync" => cfg.menu_vsync = v != "false",
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
                 "playfield_area" => cfg.playfield_area = Area::parse(v).unwrap_or(Area::FULL),
-                "hud_in_playfield" => cfg.hud_in_playfield = v != "false",
                 "bg_dim" => cfg.bg_dim = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
                 "rate" => cfg.rate = v.parse::<f64>().unwrap_or(1.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
                 "rate_keep_pitch" => cfg.rate_keep_pitch = v != "false",
@@ -277,7 +273,6 @@ impl Config {
              calibration_bpm = {}\n\
              # playfield area: x, y, width, height as fractions of the screen\n\
              playfield_area = {}\n\
-             hud_in_playfield = {}\n\
              # background darkening during play, 0 (none) to 1 (hidden)\n\
              bg_dim = {:.2}\n\
              # speed modifier (1.5 = DT) and whether it keeps the music's pitch\n\
@@ -313,7 +308,6 @@ impl Config {
             self.fps_cap,
             self.calibration_bpm,
             self.playfield_area.to_config(),
-            self.hud_in_playfield,
             self.bg_dim,
             self.rate,
             self.rate_keep_pitch,

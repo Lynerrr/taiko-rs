@@ -11,7 +11,6 @@ pub enum Item {
     PlayfieldArea,
     PlayfieldPreset,
     PlayfieldReset,
-    HudPosition,
     Rate,
     RateKeepPitch,
     Offset,
@@ -46,7 +45,7 @@ pub enum Item {
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 40] = [
+pub const ITEMS: [(&str, Item); 39] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -56,7 +55,6 @@ pub const ITEMS: [(&str, Item); 40] = [
     ("PLAYFIELD", Item::PlayfieldArea),
     ("PLAYFIELD", Item::PlayfieldPreset),
     ("PLAYFIELD", Item::PlayfieldReset),
-    ("PLAYFIELD", Item::HudPosition),
     ("PLAYFIELD", Item::ShowPlayfieldSize),
     ("PLAYFIELD", Item::BackgroundDim),
     ("PLAYFIELD", Item::KiaiEffects),
@@ -92,7 +90,7 @@ pub const ITEMS: [(&str, Item); 40] = [
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 8] = [
     ("GAMEPLAY", "speed, rate, resume"),
-    ("PLAYFIELD", "size, position, HUD"),
+    ("PLAYFIELD", "size, position"),
     ("INPUT", "drum and preset keys"),
     ("OFFSET", "audio offset, calibration"),
     ("AUDIO", "volume, latency"),
@@ -115,7 +113,6 @@ impl Item {
             Item::PlayfieldArea => "Playfield area",
             Item::PlayfieldReset => "Reset playfield area",
             Item::PlayfieldPreset => "Playfield preset",
-            Item::HudPosition => "HUD position",
             Item::Rate => "Speed (rate)",
             Item::RateKeepPitch => "Rate keeps pitch",
             Item::Offset => "Audio offset",
@@ -157,7 +154,6 @@ impl Item {
             Item::PlayfieldArea => "Enter: edit where gameplay is drawn. In game: drag to move, drag edges to resize, wheel to scale.",
             Item::PlayfieldReset => "Enter: make gameplay fill the whole screen again.",
             Item::PlayfieldPreset => "Enter: pick from a list (grouped by aspect ratio). Left/Right: previous/next.",
-            Item::HudPosition => "With playfield: score etc. move with it. Screen: they stay at fixed screen positions.",
             Item::Rate => "Song speed like DT (1.50x) / HT (0.75x). Song select: [ and ] (Shift = 0.25x steps).",
             Item::RateKeepPitch => "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore).",
             Item::Offset => "Raise it if you hit late on average (results screen tells you). Shift = 5 ms steps.",

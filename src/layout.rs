@@ -1,6 +1,7 @@
 //! The playfield area: gameplay renders inside a rectangle of the screen that behaves like a
 //! window — drag inside it to move it, drag its edges or corners to resize it, wheel to scale it.
-//! Everything inside (lane, HUD, pause menu) is laid out as if that rectangle were the window.
+//! The lane inside is laid out as if that rectangle were the window; the HUD (score, accuracy,
+//! hit error meter, pause menu) stays on the screen and is never moved or scaled with it.
 
 use winit::window::CursorIcon;
 
