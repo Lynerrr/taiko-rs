@@ -979,9 +979,20 @@ impl State {
         }
     }
 
+    /// Plays the current map again from where it was started (in game, paused or on results).
+    fn restart_map(&mut self) {
+        if let Scene::Play { entry, from, .. } | Scene::Results { entry, from, .. } = self.scene {
+            self.start_loading_from(entry, from);
+        }
+    }
+
     fn pause_key(&mut self, code: KeyCode) {
         if code == KeyCode::KeyO {
             self.apply_live_offset();
+            return;
+        }
+        if code == KeyCode::KeyR && self.modifiers_ctrl {
+            self.restart_map();
             return;
         }
         let Scene::Play { game, entry, from } = &mut self.scene else { return };
@@ -2077,8 +2088,10 @@ impl State {
                     let (e, f) = (*entry, *from);
                     self.start_loading_from(e, f);
                 }
+                KeyCode::KeyR if self.modifiers_ctrl => self.restart_map(),
                 _ => {}
             },
+            Scene::Results { .. } if code == KeyCode::KeyR && self.modifiers_ctrl => self.restart_map(),
             Scene::Results { results, .. } if code == KeyCode::KeyR && results.replay.is_some() => {
                 if let Some(file) = results.replay.clone() {
                     self.watch_replay(&file);
