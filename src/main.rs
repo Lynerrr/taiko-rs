@@ -24,6 +24,7 @@ mod render;
 mod scores;
 mod settings;
 mod skin;
+mod splash;
 mod stars;
 mod ui;
 mod video;
@@ -135,6 +136,8 @@ struct State {
     modifiers_alt: bool,
     /// When the volume overlay was last poked (Alt + wheel).
     volume_shown: Option<Instant>,
+    /// The startup splash while it plays.
+    splash: Option<splash::Splash>,
     /// When the overlay appeared (it slides in once, not on every notch).
     volume_since: Option<Instant>,
     /// Clickable areas of the last frame drawn.
@@ -882,6 +885,7 @@ impl State {
             }
             Item::ShowFps => on(c.show_fps),
             Item::Animations => on(c.animations),
+            Item::Splash => on(c.splash),
             Item::Fullscreen => on(self.fullscreen),
             Item::Calibrate => "Enter to start".into(),
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
@@ -954,6 +958,7 @@ impl State {
             }
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
+            Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::Fullscreen => self.toggle_fullscreen(window),
             // Started with Enter in `settings_key`; arrows do nothing.
             Item::Calibrate => return,
@@ -1799,6 +1804,12 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
+        if let Some(s) = &mut self.splash {
+            if pressed {
+                s.skip(Instant::now());
+            }
+            return;
+        }
         if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
             let (vx, vy) = (self.mouse.0 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0), self.mouse.1 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0));
             let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
@@ -2432,6 +2443,13 @@ impl State {
     }
 
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        if let Some(s) = &mut self.splash {
+            // Any key skips the splash and does nothing else.
+            if !repeat {
+                s.skip(at);
+            }
+            return;
+        }
         // Key capture must see every key, before any shortcut can claim it.
         if self.settings_ui.dropdown.is_some() && !repeat {
             let nav = matches!(
@@ -3318,6 +3336,12 @@ impl State {
                 self.toast = None;
             }
         }
+        if let Some(s) = &mut self.splash {
+            let audio = &self.audio;
+            if !s.draw(canvas, now, &|sfx| if let Some(a) = audio { a.sfx(sfx) }) {
+                self.splash = None;
+            }
+        }
         std::mem::swap(&mut self.hits, &mut canvas.hits);
         capture
     }
@@ -4067,6 +4091,10 @@ fn main() {
     select.played = load_plays();
     // A single .osu on the command line goes straight into gameplay.
     let play_when_scanned = args.len() == 1 && args[0].extension().is_some_and(|e| e == "osu");
+    // No splash before a map given on the command line, or in scripted runs (TAIKO_SPLASH=1 forces it).
+    let scripted = std::env::var_os("TAIKO_SHOTS").is_some() || std::env::var_os("TAIKO_INPUT").is_some();
+    let want_splash = std::env::var_os("TAIKO_SPLASH").is_some() || (cfg.splash && !play_when_scanned && !scripted);
+    let splash = want_splash.then(splash::Splash::new).flatten();
     let present = cfg.present;
     let mut state = State {
         cfg,
@@ -4088,6 +4116,7 @@ fn main() {
         modifiers_ctrl: false,
         modifiers_alt: false,
         volume_shown: None,
+        splash,
         volume_since: None,
         hits: Vec::new(),
         browse: browse::Browse::default(),
