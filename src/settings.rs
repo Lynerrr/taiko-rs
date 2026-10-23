@@ -1,7 +1,9 @@
 //! Settings tab: the list of options and how it is drawn. Values are read and changed by the
 //! caller (it owns the config, audio engine and window).
 
-use crate::render::{rgba, Canvas, Hit};
+use std::cell::Cell;
+
+use crate::render::{approach, rgba, Canvas, Hit};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
@@ -31,10 +33,11 @@ pub enum Item {
     MenuVsync,
     FpsCap,
     ShowFps,
+    Animations,
     Fullscreen,
 }
 
-pub const ITEMS: [(&str, Item); 30] = [
+pub const ITEMS: [(&str, Item); 31] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::PlayfieldArea),
     ("GAMEPLAY", Item::PlayfieldPreset),
@@ -64,6 +67,7 @@ pub const ITEMS: [(&str, Item); 30] = [
     ("VIDEO", Item::MenuVsync),
     ("VIDEO", Item::FpsCap),
     ("VIDEO", Item::ShowFps),
+    ("VIDEO", Item::Animations),
     ("VIDEO", Item::Fullscreen),
 ];
 
@@ -98,6 +102,7 @@ impl Item {
             Item::MenuVsync => "Menus use vsync",
             Item::FpsCap => "FPS cap",
             Item::ShowFps => "FPS overlay",
+            Item::Animations => "UI animations",
             Item::Fullscreen => "Fullscreen",
         }
     }
@@ -128,6 +133,7 @@ impl Item {
             Item::MenuVsync => "Song select (and its autoplay preview), settings and results always use vsync.",
             Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
+            Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
             Item::Fullscreen => "Shortcut: F11.",
         }
     }
@@ -140,6 +146,9 @@ pub struct SettingsUi {
     pub binding: Option<Item>,
     /// Open resolution dropdown.
     pub dropdown: Option<Dropdown>,
+    /// Animated list scroll and highlight position (content units; NaN = not drawn yet).
+    scroll: Cell<f32>,
+    highlight: Cell<f32>,
 }
 
 /// The playfield preset dropdown: a cursor over the flattened list, plus where each row was
@@ -263,7 +272,17 @@ impl SettingsUi {
         let content = y;
         let view = BOTTOM - TOP;
         let cursor_y = rows[self.cursor];
-        let scroll = (cursor_y - view / 2.0).clamp(0.0, (content - view).max(0.0));
+        let target = (cursor_y - view / 2.0).clamp(0.0, (content - view).max(0.0));
+        let (mut scroll, mut hl) = (self.scroll.get(), self.highlight.get());
+        if !scroll.is_finite() || self.scroll.get() == 0.0 && self.highlight.get() == 0.0 && cursor_y > 0.0 {
+            // First draw: no slide in from the top.
+            scroll = target;
+            hl = cursor_y;
+        }
+        approach(&mut scroll, target, c.dt_ms, 45.0);
+        approach(&mut hl, cursor_y, c.dt_ms, 35.0);
+        self.scroll.set(scroll);
+        self.highlight.set(hl);
         let visible = |y: f32, h: f32| y - scroll >= -1.0 && y - scroll + h <= view + 1.0;
 
         for (hy, name) in headers {
@@ -277,8 +296,8 @@ impl SettingsUi {
             }
             let y = TOP + rows[i] - scroll;
             let selected = i == self.cursor;
-            let (bg, border) = if selected { (0x34344a, 0xEB452C) } else { (0x1d1d27, 0x2a2a38) };
-            c.round_rect(x0, y, col, 16.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+            let (bg, border) = if selected { (0x34344a, 0x2a2a38) } else { (0x1d1d27, 0x2a2a38) };
+            c.round_rect(x0, y, col, 16.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
             // The whole row pitch, so the gaps between rows aren't dead.
             c.hit(x0, y - 1.5, col, ROW, Hit::SettingRow(i));
             c.text(x0 + 10.0, y + 4.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
@@ -298,6 +317,11 @@ impl SettingsUi {
                 c.hit(x0 + col - 22.0, y, 20.0, 16.0, Hit::SettingStep(i, 1));
             }
         }
+        // The selection outline glides to the selected row.
+        let hy = TOP + hl - scroll;
+        if hy > TOP - 8.0 && hy < BOTTOM - 8.0 {
+            c.round_rect(x0, hy, col, 16.0, 5.0, rgba(0, 0.0), rgba(0xEB452C, 1.0), 1.5);
+        }
         // Scroll hints.
         if scroll > 0.5 {
             c.text_centered(w / 2.0, TOP - 9.0, 7.0, rgba(0x6f6f86, 1.0), "^ more ^");
@@ -312,16 +336,39 @@ impl SettingsUi {
 
 /// Top bar shared by the song list, settings and multiplayer: logo plus the three tabs.
 pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
+    thread_local! {
+        /// Where the active tab's highlight is (x, width), so it slides between tabs.
+        static PILL: Cell<(f32, f32)> = const { Cell::new((f32::NAN, 0.0)) };
+    }
     c.text(24.0, 24.0, 16.0, rgba(0xffffff, 1.0), "taiko-rs");
-    let mut x = 24.0 + Canvas::text_width(16.0, "taiko-rs") + 24.0;
-    for (i, name) in ["SONGS", "SETTINGS", "MULTIPLAYER"].iter().enumerate() {
+    let x0 = 24.0 + Canvas::text_width(16.0, "taiko-rs") + 24.0;
+    let names = ["SONGS", "SETTINGS", "MULTIPLAYER"];
+    let mut x = x0;
+    let mut target = (x0, 0.0);
+    for (i, name) in names.iter().enumerate() {
         let tw = Canvas::text_width(9.0, name);
         let on = i == active;
         let hover = !on && c.hovered(x, 20.0, tw + 20.0, 22.0);
-        let fill = if on { 0xEB452C } else if hover { 0x34344a } else { 0x23232f };
-        c.round_rect(x, 20.0, tw + 20.0, 22.0, 6.0, rgba(fill, 1.0), rgba(if on { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
+        let fill = if hover { 0x34344a } else { 0x23232f };
+        c.round_rect(x, 20.0, tw + 20.0, 22.0, 6.0, rgba(fill, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
         c.hit(x, 20.0, tw + 20.0, 22.0, Hit::Tab(i));
-        c.text(x + 10.0, 27.0, 9.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), name);
+        if on {
+            target = (x, tw + 20.0);
+        }
+        x += tw + 28.0;
+    }
+    let (mut px, mut pw) = PILL.with(|p| p.get());
+    if !px.is_finite() {
+        (px, pw) = target;
+    }
+    approach(&mut px, target.0, c.dt_ms, 40.0);
+    approach(&mut pw, target.1, c.dt_ms, 40.0);
+    PILL.with(|p| p.set((px, pw)));
+    c.round_rect(px, 20.0, pw, 22.0, 6.0, rgba(0xEB452C, 1.0), rgba(0xEB452C, 1.0), 1.0);
+    let mut x = x0;
+    for (i, name) in names.iter().enumerate() {
+        let tw = Canvas::text_width(9.0, name);
+        c.text(x + 10.0, 27.0, 9.0, rgba(if i == active { 0xffffff } else { 0x9a9ab0 }, 1.0), name);
         x += tw + 28.0;
     }
     c.text(x + 4.0, 27.0, 8.0, rgba(0x55556a, 1.0), "Tab");

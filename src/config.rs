@@ -48,6 +48,8 @@ pub struct Config {
     pub offset_hint_ur_scaled: bool,
     pub audio_buffer: u32,
     pub show_fps: bool,
+    /// Menu animations (screen fades, sliding highlights, ...).
+    pub animations: bool,
     /// Start in (borderless) fullscreen; F11 toggles and remembers it.
     pub fullscreen: bool,
     /// Left rim, left centre, right centre, right rim.
@@ -88,6 +90,7 @@ impl Default for Config {
             audio_buffer: 256,
             show_fps: true,
             fullscreen: true,
+            animations: true,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             show_playfield_size: true,
@@ -179,6 +182,7 @@ impl Config {
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
                 "show_fps" => cfg.show_fps = v == "true",
                 "fullscreen" => cfg.fullscreen = v != "false",
+                "animations" => cfg.animations = v != "false",
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
                 "mp_port" => cfg.mp_port = v.parse().unwrap_or(cfg.mp_port),
@@ -241,6 +245,7 @@ impl Config {
              audio_buffer = {}\n\
              show_fps = {}\n\
              fullscreen = {}\n\
+             animations = {}\n\
              show_offset_hint = {}\n\
              offset_hint_ur_scaled = {}\n",
             keys.join(", "),
@@ -263,6 +268,7 @@ impl Config {
             self.audio_buffer,
             self.show_fps,
             self.fullscreen,
+            self.animations,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
         );

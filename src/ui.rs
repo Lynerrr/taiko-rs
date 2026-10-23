@@ -4,7 +4,7 @@ use winit::keyboard::KeyCode;
 
 use crate::game::{Stats, Windows};
 use crate::library::Entry;
-use crate::render::{rgba, Canvas, Hit};
+use crate::render::{approach, progress, rgba, Canvas, Hit};
 
 pub struct Select {
     pub filter: String,
@@ -21,6 +21,9 @@ pub struct Select {
     group_of: Vec<usize>,
     cursor: usize,
     scroll: f32,
+    /// Animated selection outline (content y) and how far the open song has expanded (0-1).
+    outline_y: f32,
+    open: (Option<usize>, f32),
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
     random_history: Vec<usize>,
     rng: u64,
@@ -47,6 +50,8 @@ impl Select {
             group_of: Vec::new(),
             cursor: 0,
             scroll: 0.0,
+            outline_y: f32::NAN,
+            open: (None, 1.0),
             random_history: Vec::new(),
             rng: seed | 1,
         };
@@ -273,32 +278,43 @@ impl Select {
             Song(std::ops::Range<usize>),
             Diff(usize),
         }
-        let mut rows: Vec<(Row, f32, f32)> = Vec::new();
+        // A newly opened song's difficulties slide out from under it.
+        let open_start = self.group_of.get(self.cursor).map(|&g| groups[g].start);
+        if open_start != self.open.0 {
+            self.open = (open_start, if self.open.0.is_none() { 1.0 } else { 0.0 });
+        }
+        approach(&mut self.open.1, 1.0, dt_ms as f32, 45.0);
+        let expand = self.open.1;
+        // (row, y, height, alpha)
+        let mut rows: Vec<(Row, f32, f32, f32)> = Vec::new();
         let mut y = 0.0;
         let mut cursor_y = 0.0;
         for g in groups {
-            rows.push((Row::Song(g.clone()), y, SONG_H));
+            rows.push((Row::Song(g.clone()), y, SONG_H, 1.0));
             y += SONG_H;
             if g.contains(&self.cursor) {
                 for i in g.clone() {
                     if i == self.cursor {
                         cursor_y = y;
                     }
-                    rows.push((Row::Diff(i), y, DIFF_H));
-                    y += DIFF_H;
+                    rows.push((Row::Diff(i), y, DIFF_H, expand * expand));
+                    y += DIFF_H * expand;
                 }
             }
         }
         let (top, bottom) = (86.0, 440.0);
         let view = bottom - top;
         let target = (cursor_y - view * 0.4).clamp(0.0, (y - view).max(0.0));
-        let k = 1.0 - (-dt_ms as f32 / 60.0).exp();
-        self.scroll += (target - self.scroll) * k;
+        approach(&mut self.scroll, target, dt_ms as f32, 60.0);
+        if !self.outline_y.is_finite() {
+            self.outline_y = cursor_y;
+        }
+        approach(&mut self.outline_y, cursor_y, dt_ms as f32, 35.0);
         let max_chars = |size: f32, room: f32| (room / (size / 7.0 * 6.0)).max(4.0) as usize;
         let fit = |s: String, n: usize| if s.chars().count() > n { s.chars().take(n.saturating_sub(3)).collect::<String>() + "..." } else { s };
-        for (row, ry, rh) in &rows {
+        for (row, ry, rh, alpha) in &rows {
             let y = top + ry - self.scroll;
-            if y + rh < top || y > bottom {
+            if y + rh < top || y > bottom || *alpha < 0.02 {
                 continue;
             }
             match row {
@@ -320,27 +336,34 @@ impl Select {
                     c.text_right(24.0 + lw - 12.0, y + 11.0, 8.0, rgba(0x8a8aa0, 1.0), &format!("{n} diff{}", if n == 1 { "" } else { "s" }));
                 }
                 Row::Diff(i) => {
+                    let a = *alpha;
                     let e = &library[self.visible[*i]];
                     let selected = *i == self.cursor;
-                    let (bg, border) = if selected { (0x34344a, 0xEB452C) } else { (0x191921, 0x2a2a38) };
+                    let bg = if selected { 0x34344a } else { 0x191921 };
                     let bg = if !selected && c.hovered(44.0, y, lw - 20.0, rh - 3.0) { 0x24242f } else { bg };
-                    c.round_rect(44.0, y, lw - 20.0, rh - 3.0, 5.0, rgba(bg, 0.92), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+                    c.round_rect(44.0, y, lw - 20.0, rh - 3.0, 5.0, rgba(bg, 0.92 * a), rgba(0x2a2a38, a), 1.0);
                     c.hit(44.0, y, lw - 20.0, *rh, Hit::SongRow(*i));
                     let col = if selected { 0xffffff } else { 0xc8c8d8 };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
-                    let pill = crate::stars::draw_pill(c, 24.0 + lw - 10.0, y + 6.0, 7.0, stars(self.visible[*i]));
-                    c.text_right(24.0 + lw - 18.0 - pill, y + 6.0, 7.0, rgba(0x8a8aa0, 1.0), &format!("OD {:.1}", e.meta.od));
-                    c.text(56.0, y + 6.0, 8.0, rgba(col, 1.0), &fit(format!("{}{convert}", e.meta.version), max_chars(8.0, lw - 170.0)));
+                    let pill = if a > 0.6 { crate::stars::draw_pill(c, 24.0 + lw - 10.0, y + 6.0, 7.0, stars(self.visible[*i])) } else { 40.0 };
+                    c.text_right(24.0 + lw - 18.0 - pill, y + 6.0, 7.0, rgba(0x8a8aa0, a), &format!("OD {:.1}", e.meta.od));
+                    c.text(56.0, y + 6.0, 8.0, rgba(col, a), &fit(format!("{}{convert}", e.meta.version), max_chars(8.0, lw - 170.0)));
                 }
             }
         }
 
+        // The selection outline glides between difficulties.
+        let oy = top + self.outline_y - self.scroll;
+        if !self.visible.is_empty() && oy > top - DIFF_H && oy < bottom {
+            c.round_rect(44.0, oy, lw - 20.0, DIFF_H - 3.0, 5.0, rgba(0, 0.0), rgba(0xEB452C, 1.0), 1.5);
+        }
         c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down difficulty  Left/Right song  F2 random  [ ] rate  Ctrl+Left/Right seek  Tab settings  -/= offset  Esc quit");
         c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), status);
     }
 }
 
 pub struct Results {
+    pub shown: std::time::Instant,
     pub title: String,
     pub stats: Stats,
     pub windows: Windows,
@@ -366,9 +389,14 @@ impl Results {
         } else {
             "D"
         };
-        c.text_centered(cx, 80.0, 70.0, rgba(0xFFD34D, 1.0), grade);
-        c.text_centered(cx, 170.0, 28.0, rgba(0xffffff, 1.0), &format!("{acc:.2}%"));
-        c.text_centered(cx, 212.0, 16.0, rgba(0xc8c8d8, 1.0), &format!("{:08}", s.score));
+        let count = progress(self.shown, 700.0);
+        let pop = progress(self.shown + std::time::Duration::from_millis(450), 300.0);
+        if pop > 0.0 {
+            let size = 70.0 * (1.6 - 0.6 * pop);
+            c.text_centered(cx, 80.0 + (70.0 - size) / 2.0, size, rgba(0xFFD34D, pop), grade);
+        }
+        c.text_centered(cx, 170.0, 28.0, rgba(0xffffff, 1.0), &format!("{:.2}%", acc * count as f64));
+        c.text_centered(cx, 212.0, 16.0, rgba(0xc8c8d8, 1.0), &format!("{:08}", (s.score as f64 * count as f64) as u64));
 
         let lines = [
             (0xFFD34D, format!("GREAT  {}", s.great)),

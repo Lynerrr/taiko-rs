@@ -8,7 +8,7 @@ use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
-use crate::render::{rgba, Canvas, Hit};
+use crate::render::{progress, rgba, Canvas, Hit};
 
 pub const PANEL_W: f32 = 150.0;
 pub const HIT_X: f32 = PANEL_W + 64.0;
@@ -160,6 +160,7 @@ pub struct Game {
     ignore_audio_until: Option<Instant>,
     /// Pause menu cursor while paused.
     pub paused: Option<usize>,
+    paused_at: Instant,
     /// Calibration: draw no notes or barlines (play by ear) / play no hitsounds on presses.
     pub hide_notes: bool,
     pub mute_hits: bool,
@@ -222,6 +223,7 @@ impl Game {
             auto_key: 0,
             ignore_audio_until: None,
             paused: None,
+            paused_at: Instant::now(),
             hide_notes: false,
             mute_hits: false,
             show_offset_hint: false,
@@ -300,6 +302,7 @@ impl Game {
     pub fn pause(&mut self, audio: Option<&Engine>) {
         if self.paused.is_none() {
             self.paused = Some(0);
+            self.paused_at = Instant::now();
             if let Some(a) = audio {
                 a.set_paused(true);
             }
@@ -807,10 +810,13 @@ impl Game {
             c.text_centered(w / 2.0, 330.0, 12.0, rgba(WHITE, 0.7), "SPACE to skip intro");
         }
         if let Some(cursor) = self.paused {
-            c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78));
-            c.text_centered(w / 2.0, 120.0, 32.0, rgba(WHITE, 1.0), "PAUSED");
+            let t = progress(self.paused_at, 180.0);
+            c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78 * t));
+            c.text_centered(w / 2.0, 120.0 - (1.0 - t) * 12.0, 32.0, rgba(WHITE, t), "PAUSED");
             for (i, item) in PAUSE_ITEMS.iter().enumerate() {
-                let y = 170.0 + i as f32 * 38.0;
+                // Items slide up one after another.
+                let ti = progress(self.paused_at + std::time::Duration::from_millis(25 * i as u64), 180.0);
+                let y = 170.0 + i as f32 * 38.0 + (1.0 - ti) * 18.0;
                 let selected = i == cursor;
                 let (bg, border) = if selected { (0x34344a, DON) } else { (0x1d1d27, 0x2a2a38) };
                 c.round_rect(w / 2.0 - 140.0, y, 280.0, 32.0, 8.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 2.0 } else { 1.0 });
@@ -818,7 +824,9 @@ impl Game {
                 c.text_centered(w / 2.0, y + 10.0, 12.0, rgba(if selected { WHITE } else { 0xc8c8d8 }, 1.0), item);
             }
             let hint_y = 170.0 + PAUSE_ITEMS.len() as f32 * 38.0 + 8.0;
-            c.text_centered(w / 2.0, hint_y, 9.0, rgba(0x8a8aa0, 1.0), "Up/Down + Enter    Esc: continue");
+            // Fades in once the items have slid past it.
+            let th = progress(self.paused_at + std::time::Duration::from_millis(220), 150.0);
+            c.text_centered(w / 2.0, hint_y, 9.0, rgba(0x8a8aa0, th), "Up/Down + Enter    Esc: continue");
         }
     }
 }

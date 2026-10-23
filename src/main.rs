@@ -104,6 +104,9 @@ struct State {
     volume_shown: Option<Instant>,
     /// Clickable areas of the last frame drawn.
     hits: Vec<render::HitBox>,
+    /// Which screen was drawn last and since when, for the fade between screens.
+    scene_kind: Option<std::mem::Discriminant<Scene>>,
+    scene_since: Instant,
     /// Dragging along the song select difficulty timeline; last seek time for throttling.
     scrubbing: Option<Instant>,
     auto: bool,
@@ -187,9 +190,9 @@ fn fmt_time(ms: f64) -> String {
 }
 
 /// Volume overlay (bottom right) shown while Alt + wheel changes the master volume.
-fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32) {
+fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32, slide: f32) {
     let (w, h) = (190.0, 58.0);
-    let (x, y) = (c.width - w - 16.0, 480.0 - h - 30.0);
+    let (x, y) = (c.width - w - 16.0 + slide, 480.0 - h - 30.0);
     c.round_rect(x, y, w, h, 8.0, rgba(0x101018, 0.88 * a), rgba(0x3a3a4e, a), 1.0);
     c.text(x + 12.0, y + 10.0, 9.0, rgba(0xffffff, a), "Volume");
     c.text_right(x + w - 12.0, y + 10.0, 9.0, rgba(0xffffff, a), &format!("{:.0}%", cfg.master_volume * 100.0));
@@ -495,6 +498,7 @@ impl State {
                 }
             }
             Item::ShowFps => on(c.show_fps),
+            Item::Animations => on(c.animations),
             Item::Fullscreen => on(self.fullscreen),
             Item::Calibrate => "Enter to start".into(),
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
@@ -556,6 +560,7 @@ impl State {
                 self.cfg.fps_cap = FPS_CAPS[(i + dir).rem_euclid(FPS_CAPS.len() as i32) as usize];
             }
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
+            Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Fullscreen => self.toggle_fullscreen(window),
             // Started with Enter in `settings_key`; arrows do nothing.
             Item::Calibrate => return,
@@ -1669,6 +1674,14 @@ impl State {
 
         canvas.clear(width);
         canvas.mouse = self.mouse_virtual();
+        canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
+        render::set_animations(self.cfg.animations);
+        // Screen changes fade in.
+        let kind = std::mem::discriminant(&self.scene);
+        if self.scene_kind != Some(kind) {
+            self.scene_kind = Some(kind);
+            self.scene_since = now;
+        }
         self.frame_clip = None;
         self.poll_scan();
         {
@@ -1843,7 +1856,7 @@ impl State {
                     let part = from.map(|t| format!("  from {}", fmt_time(t))).unwrap_or_default();
                     let title = format!("{} - {} [{}]{rate}{part}", m.artist, m.title, m.version);
                     next = Some(Scene::Results {
-                        results: Results { title, stats: game.stats.clone(), windows: game.windows },
+                        results: Results { shown: Instant::now(), title, stats: game.stats.clone(), windows: game.windows },
                         entry: *entry,
                         from: *from,
                     });
@@ -2040,6 +2053,10 @@ impl State {
             self.scene = s;
         }
 
+        let fade = render::progress(self.scene_since, 160.0);
+        if fade < 1.0 {
+            canvas.rect(0.0, 0.0, canvas.width, render::VIRTUAL_HEIGHT, rgba(0x121219, 0.85 * (1.0 - fade)));
+        }
         if self.cfg.show_fps {
             let mode = match self.present {
                 PresentChoice::Fifo => "vsync".to_string(),
@@ -2055,7 +2072,8 @@ impl State {
             let age = now.saturating_duration_since(shown).as_secs_f32();
             if age < 1.6 {
                 let a = ((1.6 - age) / 0.3).min(1.0);
-                draw_volume(canvas, &self.cfg, a);
+                let slide = (1.0 - render::progress(shown, 160.0)) * 40.0;
+                draw_volume(canvas, &self.cfg, a, slide);
             } else {
                 self.volume_shown = None;
             }
@@ -2063,10 +2081,11 @@ impl State {
         if let Some(t) = &self.toast {
             if now < t.until {
                 let a = (t.until.duration_since(now).as_secs_f32() / 0.3).min(1.0);
+                let rise = (1.0 - render::progress(t.until - Duration::from_millis(1500), 160.0)) * 14.0;
                 let tw = Canvas::text_width(12.0, &t.text);
                 let x = canvas.width / 2.0 - tw / 2.0;
-                canvas.round_rect(x - 12.0, 380.0, tw + 24.0, 28.0, 8.0, rgba(0x000000, 0.7 * a), rgba(0xffffff, 0.2 * a), 1.0);
-                canvas.text(x, 388.0, 12.0, rgba(0xffffff, a), &t.text);
+                canvas.round_rect(x - 12.0, 380.0 + rise, tw + 24.0, 28.0, 8.0, rgba(0x000000, 0.7 * a), rgba(0xffffff, 0.2 * a), 1.0);
+                canvas.text(x, 388.0 + rise, 12.0, rgba(0xffffff, a), &t.text);
             } else {
                 self.toast = None;
             }
@@ -2490,6 +2509,8 @@ fn main() {
         modifiers_alt: false,
         volume_shown: None,
         hits: Vec::new(),
+        scene_kind: None,
+        scene_since: Instant::now(),
         scrubbing: None,
         auto,
         shots: debug::ShotPlan::from_env(),

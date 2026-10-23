@@ -605,6 +605,37 @@ impl Renderer {
     }
 }
 
+static ANIMATIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// UI animations on or off (Settings -> Video). Off, every animation shows its end state.
+pub fn set_animations(on: bool) {
+    ANIMATIONS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn animations() -> bool {
+    ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Moves `value` toward `target`, covering ~63% of the way every `tau_ms` (jumps there with
+/// animations off).
+pub fn approach(value: &mut f32, target: f32, dt_ms: f32, tau_ms: f32) {
+    if !animations() || !value.is_finite() {
+        *value = target;
+    } else {
+        *value += (target - *value) * (1.0 - (-dt_ms / tau_ms).exp());
+    }
+}
+
+/// Eased-out progress (0 to 1) of an animation started at `since` lasting `ms`; 1 with
+/// animations off.
+pub fn progress(since: std::time::Instant, ms: f32) -> f32 {
+    if !animations() {
+        return 1.0;
+    }
+    let t = (since.elapsed().as_secs_f32() * 1000.0 / ms).clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
 /// Something clickable drawn this frame, for mouse navigation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
@@ -647,6 +678,8 @@ pub struct Canvas {
     pub hits: Vec<HitBox>,
     /// Pointer position (virtual units), for hover highlights.
     pub mouse: (f32, f32),
+    /// Time since the previous frame (ms), for animations.
+    pub dt_ms: f32,
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {

@@ -105,6 +105,8 @@ pub struct Preview {
     play_rect: Option<[f32; 4]>,
     /// Where the autoplay box was drawn (clicking it opens the fullscreen preview).
     box_rect: Option<[f32; 4]>,
+    /// When the shown map's preview became ready (it fades in).
+    ready_at: Option<Instant>,
     game: Option<Game>,
     last_time: f64,
     bg_path: Option<PathBuf>,
@@ -244,6 +246,10 @@ impl Preview {
                         let mut graph = difficulty::analyze(&map);
                         if let Some(curve) = curve {
                             graph.use_curve(curve);
+                        }
+                        let same_map = self.map.as_ref().is_some_and(|(mi, ..)| *mi == i);
+                        if !same_map {
+                            self.ready_at = Some(Instant::now());
                         }
                         self.game = Some(new_preview_game(&map, self.requested_rate.0));
                         self.last_time = f64::NEG_INFINITY;
@@ -465,6 +471,12 @@ impl Preview {
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
         c.text_right(bx + bw - 6.0, by + bh - 10.0, 6.0, rgba(0x6f6f86, 1.0), "click: fullscreen (Ctrl+Enter)");
+        if let Some(at) = self.ready_at {
+            let t = crate::render::progress(at, 220.0);
+            if t < 1.0 {
+                c.round_rect(bx, by, bw, bh, 6.0, rgba(0x0c0c12, 1.0 - t), rgba(0, 0.0), 0.0);
+            }
+        }
         let clip = crate::layout::Area { x: bx / full_w, y: by / VIRTUAL_HEIGHT, w: bw / full_w, h: bh / VIRTUAL_HEIGHT };
         Some((start..c.shapes.len(), clip))
     }

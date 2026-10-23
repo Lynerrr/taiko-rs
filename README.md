@@ -75,6 +75,11 @@ rows select on the first click and toggle/open on the second, and `<` / `>` step
 menu follows the pointer; results, calibration and the multiplayer menu, lobby and results have
 buttons (each shows its key).
 
+**Animations** (Settings → Video → *UI animations*, on by default): screens fade in, the tab and
+selection highlights glide, a song's difficulties slide open, settings scroll smoothly, the pause
+menu slides in, results count up with the grade popping in, toasts and the volume overlay slide,
+and the preview fades in on a new map. Gameplay itself is never animated or delayed by this.
+
 Everything is adjustable in the **Settings** tab (scroll speed, offset, key bindings, converts,
 volumes, audio buffer, present mode, FPS cap, overlay, fullscreen) and saved
 immediately to `~/.config/taiko-rs/config.txt` (Windows: `%APPDATA%\taiko-rs\config.txt`). Losing window focus mid-song pauses the game. The results screen shows UR and mean hit error and tells
