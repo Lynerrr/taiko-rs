@@ -168,6 +168,8 @@ pub struct Game {
     pub mute_hits: bool,
     /// Show the live offset suggestion under the hit error meter.
     pub show_offset_hint: bool,
+    /// Kiai time tints the lane and pulses the hit target.
+    pub kiai_effects: bool,
     /// Scale the suggestion to current UR; off = plain average of the last 40 hits.
     pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
@@ -230,6 +232,7 @@ impl Game {
             hide_notes: false,
             mute_hits: false,
             show_offset_hint: false,
+            kiai_effects: true,
             ur_scaled_hint: true,
             offset: 0.0,
             rate,
@@ -625,12 +628,13 @@ impl Game {
         let cp = beatmap::control_point_at(&self.map.control_points, t);
         let beat_phase = ((t - cp.time) / cp.beat_length).rem_euclid(1.0) as f32;
         let pulse = (1.0 - beat_phase).powi(3);
+        let kiai = cp.kiai && self.kiai_effects;
 
         // Lane.
-        let lane_col = if cp.kiai { rgba(0x2b2433, 1.0) } else { rgba(0x20202b, 1.0) };
+        let lane_col = if kiai { rgba(0x2b2433, 1.0) } else { rgba(0x20202b, 1.0) };
         c.rect(0.0, lane_top - 3.0, w, LANE_H + 6.0, rgba(0x3a3a4e, 1.0));
         c.rect(0.0, lane_top, w, LANE_H, lane_col);
-        if cp.kiai {
+        if kiai {
             c.rect(PANEL_W, lane_top, w - PANEL_W, LANE_H, rgba(0xff8a3d, 0.05 + 0.06 * pulse));
         }
 
@@ -650,7 +654,7 @@ impl Game {
         // Hit target.
         c.circle(HIT_X, LANE_Y, BIG_R, rgba(WHITE, 0.03), rgba(WHITE, 0.12), 2.0);
         c.circle(HIT_X, LANE_Y, NOTE_R + 1.0, rgba(WHITE, 0.06), rgba(WHITE, 0.4), 2.5);
-        if cp.kiai {
+        if kiai {
             c.glow(HIT_X, LANE_Y, NOTE_R, 30.0, rgba(0xffb347, 0.25 * pulse));
         }
         if let Some((j, at)) = self.last_judge {

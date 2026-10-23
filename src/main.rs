@@ -538,6 +538,7 @@ impl State {
             Item::Key(i) => config::key_name(c.keys[i]),
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
+            Item::KiaiEffects => on(c.kiai_effects),
             Item::ShowConverts => on(self.select.show_converts),
             Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
             Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
@@ -586,6 +587,7 @@ impl State {
                 return;
             }
             Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
+            Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::ShowConverts => {
                 self.select.show_converts = !self.select.show_converts;
                 self.select.refilter(&self.library);
@@ -1906,6 +1908,7 @@ impl State {
                 || matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::Download);
             let (entries, selected) = if browsing { (&self.browse.remote, self.browse.shown) } else { (&self.library, self.preview_target()) };
             let rate = self.preview_rate();
+            self.preview.kiai_effects = self.cfg.kiai_effects;
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, rate);
             self.stars.poll();
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
@@ -2064,6 +2067,7 @@ impl State {
                     }
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
+                game.kiai_effects = self.cfg.kiai_effects;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 let hud_in = self.cfg.hud_in_playfield;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
@@ -2120,7 +2124,9 @@ impl State {
                     Some(i) => {
                         let scroll = self.cfg.scroll_speed;
                         let see_through = self.bg_brightness > 0.0;
+                        let kiai = self.cfg.kiai_effects;
                         if let Some(game) = self.preview.game_for(&self.library, i) {
+                            game.kiai_effects = kiai;
                             draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, see_through, |c| game.draw_playfield(c, scroll));
                         }
                         let e = &self.library[i];
@@ -2187,6 +2193,7 @@ impl State {
                     game.autoplay(self.audio.as_ref());
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
+                game.kiai_effects = self.cfg.kiai_effects;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;

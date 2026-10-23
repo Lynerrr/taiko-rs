@@ -48,6 +48,8 @@ pub struct Config {
     pub offset_hint_ur_scaled: bool,
     pub audio_buffer: u32,
     pub show_fps: bool,
+    /// Kiai time effects on the lane (tint, pulsing glow).
+    pub kiai_effects: bool,
     /// Song select order (ui::SortMode name).
     pub sort: String,
     /// Countdown before play continues after the pause menu (ms).
@@ -97,6 +99,7 @@ impl Default for Config {
             animations: true,
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
+            kiai_effects: true,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             show_playfield_size: true,
@@ -190,6 +193,7 @@ impl Config {
                 "fullscreen" => cfg.fullscreen = v != "false",
                 "animations" => cfg.animations = v != "false",
                 "sort" => cfg.sort = v.to_string(),
+                "kiai_effects" => cfg.kiai_effects = v != "false",
                 "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
@@ -258,6 +262,7 @@ impl Config {
              resume_delay_ms = {:.0}\n\
              # song select order: artist, title, difficulty, length, bpm, recently played, date added\n\
              sort = {}\n\
+             kiai_effects = {}\n\
              show_offset_hint = {}\n\
              offset_hint_ur_scaled = {}\n",
             keys.join(", "),
@@ -283,6 +288,7 @@ impl Config {
             self.animations,
             self.resume_delay_ms,
             self.sort,
+            self.kiai_effects,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
         );

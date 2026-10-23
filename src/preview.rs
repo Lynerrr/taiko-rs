@@ -114,6 +114,8 @@ pub struct Preview {
     /// New background for the renderer: `Some(None)` clears it.
     pub bg_upload: Option<Option<Image>>,
     pub has_background: bool,
+    /// Passed on to the autoplay preview (the kiai effects setting).
+    pub kiai_effects: bool,
     audio: Option<Song>,
     audio_active: bool,
 }
@@ -518,6 +520,7 @@ impl Preview {
         let full_w = c.width;
         let start = c.shapes.len();
         c.width = bw / k;
+        game.kiai_effects = self.kiai_effects;
         game.draw_playfield(c, scroll_speed);
         let oy = by + (bh - band_h * k) / 2.0 - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
