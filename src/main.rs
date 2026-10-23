@@ -701,6 +701,12 @@ impl State {
         match code {
             KeyCode::ArrowUp => self.settings_ui.move_cursor(-1),
             KeyCode::ArrowDown => self.settings_ui.move_cursor(1),
+            KeyCode::PageUp | KeyCode::PageDown => {
+                let n = settings::SECTIONS.len() as i32;
+                let dir = if code == KeyCode::PageDown { 1 } else { -1 };
+                let next = (self.settings_ui.section() as i32 + dir).rem_euclid(n) as usize;
+                self.settings_ui.cursor = settings::section_start(next);
+            }
             KeyCode::ArrowLeft => self.adjust_setting(item, -1, window),
             KeyCode::ArrowRight => self.adjust_setting(item, 1, window),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => self.start_calibration(),
@@ -2242,9 +2248,9 @@ impl State {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
                 let footer = if from_game {
-                    "Up/Down select   Left/Right change   Enter toggle / rebind   Esc back to pause menu"
+                    "Up/Down select   PgUp/PgDn section   Left/Right change   Enter toggle / rebind   Esc back to pause menu"
                 } else {
-                    "Up/Down select   Left/Right change   Enter toggle / rebind   Esc or Tab back"
+                    "Up/Down select   PgUp/PgDn section   Left/Right change   Enter toggle / rebind   Esc or Tab back"
                 };
                 let this = &*self;
                 this.settings_ui.draw(canvas, &|item| this.setting_value(item), footer);
@@ -2558,6 +2564,10 @@ impl State {
             Hit::Key(code) => self.key(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::Presets => self.open_dropdown(),
+            Hit::SettingsSection(i) => {
+                self.settings_ui.binding = None;
+                self.settings_ui.cursor = settings::section_start(i);
+            }
             Hit::SortCycle => {
                 let dir = if self.modifiers_shift { -1 } else { 1 };
                 self.cycle_sort(dir);

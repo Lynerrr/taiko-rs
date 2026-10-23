@@ -685,6 +685,8 @@ pub enum Hit {
     SortCycle,
     CollectionPick,
     PickRow(usize),
+    /// A settings sidebar section.
+    SettingsSection(usize),
 }
 
 #[derive(Clone, Copy, Debug)]

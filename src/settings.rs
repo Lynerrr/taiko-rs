@@ -40,38 +40,53 @@ pub enum Item {
 
 pub const ITEMS: [(&str, Item); 32] = [
     ("GAMEPLAY", Item::ScrollSpeed),
-    ("GAMEPLAY", Item::PlayfieldArea),
-    ("GAMEPLAY", Item::PlayfieldPreset),
-    ("GAMEPLAY", Item::PlayfieldReset),
-    ("GAMEPLAY", Item::PresetKey(0)),
-    ("GAMEPLAY", Item::PresetKey(1)),
-    ("GAMEPLAY", Item::HudPosition),
-    ("GAMEPLAY", Item::ShowPlayfieldSize),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
-    ("GAMEPLAY", Item::Offset),
-    ("GAMEPLAY", Item::Calibrate),
-    ("GAMEPLAY", Item::CalibrationBpm),
-    ("GAMEPLAY", Item::LiveOffset),
-    ("GAMEPLAY", Item::LiveOffsetUr),
     ("GAMEPLAY", Item::ResumeDelay),
-    ("GAMEPLAY", Item::Key(0)),
-    ("GAMEPLAY", Item::Key(1)),
-    ("GAMEPLAY", Item::Key(2)),
-    ("GAMEPLAY", Item::Key(3)),
     ("GAMEPLAY", Item::ShowConverts),
+    ("PLAYFIELD", Item::PlayfieldArea),
+    ("PLAYFIELD", Item::PlayfieldPreset),
+    ("PLAYFIELD", Item::PlayfieldReset),
+    ("PLAYFIELD", Item::HudPosition),
+    ("PLAYFIELD", Item::ShowPlayfieldSize),
+    ("PLAYFIELD", Item::BackgroundDim),
+    ("INPUT", Item::Key(0)),
+    ("INPUT", Item::Key(1)),
+    ("INPUT", Item::Key(2)),
+    ("INPUT", Item::Key(3)),
+    ("INPUT", Item::PresetKey(0)),
+    ("INPUT", Item::PresetKey(1)),
+    ("OFFSET", Item::Offset),
+    ("OFFSET", Item::Calibrate),
+    ("OFFSET", Item::CalibrationBpm),
+    ("OFFSET", Item::LiveOffset),
+    ("OFFSET", Item::LiveOffsetUr),
     ("AUDIO", Item::MasterVolume),
     ("AUDIO", Item::MusicVolume),
     ("AUDIO", Item::FxVolume),
     ("AUDIO", Item::AudioBuffer),
-    ("VIDEO", Item::BackgroundDim),
     ("VIDEO", Item::PresentMode),
     ("VIDEO", Item::MenuVsync),
     ("VIDEO", Item::FpsCap),
     ("VIDEO", Item::ShowFps),
-    ("VIDEO", Item::Animations),
     ("VIDEO", Item::Fullscreen),
+    ("VIDEO", Item::Animations),
 ];
+
+/// The sections in order, with a one-line summary for the sidebar.
+pub const SECTIONS: [(&str, &str); 6] = [
+    ("GAMEPLAY", "speed, rate, resume"),
+    ("PLAYFIELD", "size, position, HUD"),
+    ("INPUT", "drum and preset keys"),
+    ("OFFSET", "audio offset, calibration"),
+    ("AUDIO", "volume, latency"),
+    ("VIDEO", "frame pacing, display"),
+];
+
+/// First item of section `s`.
+pub fn section_start(s: usize) -> usize {
+    ITEMS.iter().position(|(sec, _)| *sec == SECTIONS[s].0).unwrap_or(0)
+}
 
 const KEY_LABELS: [&str; 4] = ["Left rim (kat)", "Left centre (don)", "Right centre (don)", "Right rim (kat)"];
 
@@ -150,7 +165,7 @@ pub struct SettingsUi {
     pub binding: Option<Item>,
     /// Open resolution dropdown.
     pub dropdown: Option<Dropdown>,
-    /// Animated list scroll and highlight position (content units; NaN = not drawn yet).
+    /// The section last drawn and the animated highlight position in it.
     scroll: Cell<f32>,
     highlight: Cell<f32>,
 }
@@ -248,63 +263,57 @@ impl SettingsUi {
         self.cursor = (self.cursor as i32 + delta).clamp(0, ITEMS.len() as i32 - 1) as usize;
     }
 
-    /// `value` gives the current display value of each item. The list scrolls to keep the
-    /// selected row visible.
+    /// Section of the selected item.
+    pub fn section(&self) -> usize {
+        SECTIONS.iter().position(|(name, _)| *name == ITEMS[self.cursor].0).unwrap_or(0)
+    }
+
+    /// A sidebar of sections and the selected section's settings. `value` gives the current
+    /// display value of each item.
     pub fn draw(&self, c: &mut Canvas, value: &dyn Fn(Item) -> String, footer: &str) {
-        const TOP: f32 = 56.0;
-        const BOTTOM: f32 = 436.0;
-        const ROW: f32 = 19.0;
-        const HEADER: f32 = 17.0;
+        const TOP: f32 = 62.0;
+        const ROW: f32 = 30.0;
         let w = c.width;
-        let col = (w - 48.0).min(640.0);
-        let x0 = (w - col) / 2.0;
+        let total = (w - 48.0).min(780.0);
+        let x0 = (w - total) / 2.0;
+        let side_w = 170.0;
+        let (cx, col) = (x0 + side_w + 16.0, total - side_w - 16.0);
+        let section = self.section();
 
-        // Lay out every row once, then scroll so the cursor row sits inside the viewport.
-        let mut rows = Vec::with_capacity(ITEMS.len());
-        let mut headers = Vec::new();
-        let mut y = 0.0;
-        let mut section = "";
-        for (sec, _) in ITEMS.iter() {
-            if *sec != section {
-                section = sec;
-                headers.push((y, *sec));
-                y += HEADER;
-            }
-            rows.push(y);
-            y += ROW;
+        // Sidebar.
+        for (i, (name, about)) in SECTIONS.iter().enumerate() {
+            let y = TOP + i as f32 * 40.0;
+            let on = i == section;
+            let hover = !on && c.hovered(x0, y, side_w, 34.0);
+            let bg = if on { 0x2b1a17 } else if hover { 0x262634 } else { 0x1d1d27 };
+            c.round_rect(x0, y, side_w, 34.0, 7.0, rgba(bg, 0.95), rgba(if on { 0xEB452C } else { 0x2a2a38 }, 1.0), if on { 1.5 } else { 1.0 });
+            c.hit(x0, y, side_w, 34.0, Hit::SettingsSection(i));
+            c.text(x0 + 12.0, y + 7.0, 9.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), name);
+            c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), about);
         }
-        let content = y;
-        let view = BOTTOM - TOP;
-        let cursor_y = rows[self.cursor];
-        let target = (cursor_y - view / 2.0).clamp(0.0, (content - view).max(0.0));
-        let (mut scroll, mut hl) = (self.scroll.get(), self.highlight.get());
-        if !scroll.is_finite() || self.scroll.get() == 0.0 && self.highlight.get() == 0.0 && cursor_y > 0.0 {
-            // First draw: no slide in from the top.
-            scroll = target;
-            hl = cursor_y;
+
+        // The section's settings.
+        let rows: Vec<(usize, Item)> = ITEMS.iter().enumerate().filter(|(_, (sec, _))| *sec == SECTIONS[section].0).map(|(i, (_, it))| (i, *it)).collect();
+        c.text(cx, TOP - 2.0, 11.0, rgba(0xEB452C, 1.0), SECTIONS[section].0);
+        let first = rows.first().map(|r| r.0).unwrap_or(0);
+        let target = (self.cursor - first) as f32 * ROW;
+        // The highlight glides within a section and jumps when the section changes.
+        let mut hl = self.highlight.get();
+        if self.scroll.get() != section as f32 || !hl.is_finite() {
+            hl = target;
+            self.scroll.set(section as f32);
         }
-        approach(&mut scroll, target, c.dt_ms, 45.0);
-        approach(&mut hl, cursor_y, c.dt_ms, 35.0);
-        self.scroll.set(scroll);
+        approach(&mut hl, target, c.dt_ms, 35.0);
         self.highlight.set(hl);
-        let visible = |y: f32, h: f32| y - scroll >= -1.0 && y - scroll + h <= view + 1.0;
-
-        for (hy, name) in headers {
-            if visible(hy, HEADER) {
-                c.text(x0, TOP + hy - scroll + 4.0, 8.0, rgba(0xEB452C, 1.0), name);
-            }
-        }
-        for (i, (_, item)) in ITEMS.iter().enumerate() {
-            if !visible(rows[i], ROW) {
-                continue;
-            }
-            let y = TOP + rows[i] - scroll;
-            let selected = i == self.cursor;
-            let (bg, border) = if selected { (0x34344a, 0x2a2a38) } else { (0x1d1d27, 0x2a2a38) };
-            c.round_rect(x0, y, col, 16.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
-            // The whole row pitch, so the gaps between rows aren't dead.
-            c.hit(x0, y - 1.5, col, ROW, Hit::SettingRow(i));
-            c.text(x0 + 10.0, y + 4.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
+        let list_top = TOP + 18.0;
+        for (k, (i, item)) in rows.iter().enumerate() {
+            let y = list_top + k as f32 * ROW;
+            let selected = *i == self.cursor;
+            let hover = !selected && c.hovered(cx, y, col, ROW - 4.0);
+            let bg = if selected { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
+            c.round_rect(cx, y, col, ROW - 4.0, 6.0, rgba(bg, 0.95), rgba(0x2a2a38, 1.0), 1.0);
+            c.hit(cx, y - 2.0, col, ROW, Hit::SettingRow(*i));
+            c.text(cx + 12.0, y + 9.5, 8.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
             let v = if selected && self.binding.is_some() {
                 "press a key...".to_string()
             } else if selected && !matches!(item, Item::Key(_) | Item::PresetKey(_)) {
@@ -313,29 +322,36 @@ impl SettingsUi {
                 value(*item)
             };
             let v_col = if selected && self.binding.is_some() { 0xFFD34D } else { 0xffffff };
-            c.text_right(x0 + col - 10.0, y + 4.5, 7.0, rgba(v_col, 1.0), &v);
+            c.text_right(cx + col - 12.0, y + 9.5, 8.0, rgba(v_col, 1.0), &v);
             if selected && self.binding.is_none() && !matches!(item, Item::Key(_) | Item::PresetKey(_)) {
                 // The "<" and ">" around the value step it.
-                let tw = Canvas::text_width(7.0, &v);
-                c.hit(x0 + col - 10.0 - tw - 6.0, y, 18.0, 16.0, Hit::SettingStep(i, -1));
-                c.hit(x0 + col - 22.0, y, 20.0, 16.0, Hit::SettingStep(i, 1));
+                let tw = Canvas::text_width(8.0, &v);
+                c.hit(cx + col - 12.0 - tw - 6.0, y, 20.0, ROW - 4.0, Hit::SettingStep(*i, -1));
+                c.hit(cx + col - 26.0, y, 24.0, ROW - 4.0, Hit::SettingStep(*i, 1));
             }
         }
-        // The selection outline glides to the selected row.
-        let hy = TOP + hl - scroll;
-        if hy > TOP - 8.0 && hy < BOTTOM - 8.0 {
-            c.round_rect(x0, hy, col, 16.0, 5.0, rgba(0, 0.0), rgba(0xEB452C, 1.0), 1.5);
-        }
-        // Scroll hints.
-        if scroll > 0.5 {
-            c.text_centered(w / 2.0, TOP - 9.0, 7.0, rgba(0x6f6f86, 1.0), "^ more ^");
-        }
-        if content - scroll > view + 0.5 {
-            c.text_centered(w / 2.0, BOTTOM + 1.0, 7.0, rgba(0x6f6f86, 1.0), "v more v");
-        }
-        c.text_centered(w / 2.0, 448.0, 8.0, rgba(0x9a9ab0, 1.0), self.item().help());
-        c.text_centered(w / 2.0, 464.0, 8.0, rgba(0x55556a, 1.0), footer);
+        c.round_rect(cx, list_top + hl, col, ROW - 4.0, 6.0, rgba(0, 0.0), rgba(0xEB452C, 1.0), 1.5);
+
+        // What the selected setting does.
+        let help_y = list_top + rows.len() as f32 * ROW + 10.0;
+        c.round_rect(cx, help_y, col, 30.0, 6.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        let help = self.item().help();
+        let max = ((col - 20.0) / (7.0 / 7.0 * 6.0)) as usize;
+        let (line1, line2) = split_help(help, max);
+        c.text(cx + 10.0, help_y + 6.0, 7.0, rgba(0x9a9ab0, 1.0), &line1);
+        c.text(cx + 10.0, help_y + 17.0, 7.0, rgba(0x9a9ab0, 1.0), &line2);
+        c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), footer);
     }
+}
+
+/// Wraps help text onto two lines of at most `max` characters.
+fn split_help(text: &str, max: usize) -> (String, String) {
+    if text.chars().count() <= max {
+        return (text.to_string(), String::new());
+    }
+    let cut = text.char_indices().take_while(|(i, _)| *i <= max).filter(|(_, ch)| *ch == ' ').map(|(i, _)| i).last().unwrap_or(max.min(text.len()));
+    let rest: String = text[cut..].trim_start().chars().take(max).collect();
+    (text[..cut].to_string(), rest)
 }
 
 /// Top bar shared by the song list, settings and multiplayer: logo plus the three tabs.
