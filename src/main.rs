@@ -1055,15 +1055,13 @@ impl State {
                 }
                 if let Some(t) = self.preview.time_at(vx, vy) {
                     self.preview.seek(t, self.audio.as_ref());
-                    self.preview.set_marker(t, &self.library);
                     self.scrubbing = Some(Instant::now());
                     return;
                 }
             } else if self.scrubbing.take().is_some() {
-                // Land exactly where the pointer was released, and remember that point.
+                // Land exactly where the pointer was released.
                 if let Some(t) = self.preview.time_at(vx, vy) {
                     self.preview.seek(t, self.audio.as_ref());
-                    self.preview.set_marker(t, &self.library);
                 }
                 return;
             }

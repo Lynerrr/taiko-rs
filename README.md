@@ -85,8 +85,8 @@ map's preview point (looping), and the panel on the right shows its details (OD,
 note counts) above a live autoplay preview synced to that music, and a difficulty timeline like
 lazer's song progress graph: osu!'s strain over the whole map (kiai tinted, preview point and
 playhead marked, densest second called out). Click or drag on it, use the wheel over it, or
-Ctrl+←/→ to seek the music and autoplay to any part of the map. Clicking it also remembers that
-point (a blue flag): **Play from 1:23** under the timeline (or Shift+Enter) starts the map there,
+Ctrl+←/→ to seek the music and autoplay to any part of the map. Wherever you last scrolled to is
+remembered (a blue flag): **Play from 1:23** under the timeline (or Shift+Enter) starts the map there,
 with the music two seconds earlier and only the notes from that point on counting; retry keeps the
 start point. F2 picks a random song.
 

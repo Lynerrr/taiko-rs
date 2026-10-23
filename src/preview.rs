@@ -92,8 +92,8 @@ pub struct Preview {
     /// Where the difficulty timeline was drawn (virtual units) and the time range it spans.
     graph_rect: Option<[f32; 4]>,
     timeline: (f64, f64),
-    /// Start point picked on the timeline: (song file, map time). Kept while browsing the
-    /// difficulties of that song.
+    /// Start point: where the timeline was last scrolled to (song file, map time). Kept while
+    /// browsing the difficulties of that song.
     marker: Option<(PathBuf, f64)>,
     /// Where the "Play from" button was drawn.
     play_rect: Option<[f32; 4]>,
@@ -309,29 +309,26 @@ impl Preview {
         game.autoplay(None);
     }
 
-    /// Jumps the preview music (and the autoplay) to map time `t`.
+    /// Jumps the preview music (and the autoplay) to map time `t`, and remembers it as the
+    /// start point (the blue flag): wherever you last scrolled to is where "Play from" starts.
     pub fn seek(&mut self, t: f64, engine: Option<&Engine>) {
         let (Some(engine), Some(song)) = (engine, &self.audio) else { return };
         if !self.audio_active {
             return;
         }
-        let first_ms = song.base as f64 / engine.rate as f64 * 1000.0;
-        let t = t.clamp(first_ms, (song.end_ms(engine.rate) - 1000.0).max(first_ms));
+        // Until the full decode replaces the quick part, the song's length isn't known; seeking
+        // outside the part is silent for that moment instead of being refused.
+        let last = if song.full { (song.end_ms(engine.rate) - 1000.0).max(0.0) } else { f64::INFINITY };
+        let t = t.clamp(0.0, last);
         engine.seek(t);
         self.pending_seek = Some(t);
+        self.marker = Some((song.path.clone(), t));
     }
 
     pub fn seek_by(&mut self, delta_ms: f64, engine: Option<&Engine>) {
         let now = self.pending_seek.or_else(|| self.game.as_ref().map(|g| g.time));
         if let Some(t) = now {
             self.seek(t + delta_ms, engine);
-        }
-    }
-
-    /// Remembers map time `t` of the selected song as the point to play from.
-    pub fn set_marker(&mut self, t: f64, library: &[Entry]) {
-        if let Some(e) = self.seen.and_then(|i| library.get(i)) {
-            self.marker = Some((audio_path(e), t.max(0.0)));
         }
     }
 
@@ -501,7 +498,7 @@ pub const MARKER: u32 = 0x4fb4ff;
 /// button's rect.
 fn draw_play_button(c: &mut Canvas, cx: f32, y: f32, marker: Option<f64>, button: Option<(&str, &str)>) -> Option<[f32; 4]> {
     let (Some(t), Some((verb, hint))) = (marker, button) else {
-        let text = if button.is_some() { "click the graph to pick a start point - drag / wheel to seek" } else { "click / drag / wheel to seek" };
+        let text = if button.is_some() { "click / drag / wheel to scroll - play from where you stop" } else { "click / drag / wheel to scroll" };
         c.text_centered(cx, y + 4.0, 6.0, rgba(0x6f6f86, 1.0), text);
         return None;
     };
