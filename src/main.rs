@@ -880,6 +880,7 @@ impl State {
         let prev = std::mem::replace(&mut self.scene, Scene::Select);
         self.scene = Scene::Settings { prev: Box::new(prev) };
         self.settings_ui.binding = None;
+        self.settings_ui.skins = None;
     }
 
     fn close_settings(&mut self) {
@@ -1046,6 +1047,20 @@ impl State {
             a.sfx(audio::Sfx::Don);
         }
         self.cfg.save();
+    }
+
+    /// Uses row `i` of the open skin list and closes it.
+    fn pick_skin(&mut self, i: usize) {
+        let Some(p) = self.settings_ui.skins.take() else { return };
+        let Some(name) = p.names.get(i) else { return };
+        if *name != self.cfg.skin {
+            self.cfg.skin = name.clone();
+            self.load_skin();
+            self.cfg.save();
+        }
+        if let Some(a) = &self.audio {
+            a.sfx(audio::Sfx::Don);
+        }
     }
 
     /// Installs the newer build when there is one, else looks for one.
@@ -1233,6 +1248,23 @@ impl State {
     }
 
     fn settings_key(&mut self, code: KeyCode, window: Option<&Window>) {
+        if let Some(p) = &mut self.settings_ui.skins {
+            match code {
+                KeyCode::ArrowUp => p.move_cursor(-1),
+                KeyCode::ArrowDown => p.move_cursor(1),
+                KeyCode::PageUp => p.move_cursor(-8),
+                KeyCode::PageDown => p.move_cursor(8),
+                KeyCode::Home => p.move_cursor(-(p.names.len() as i32)),
+                KeyCode::End => p.move_cursor(p.names.len() as i32),
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
+                    let i = p.cursor;
+                    self.pick_skin(i);
+                }
+                KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab => self.settings_ui.skins = None,
+                _ => {}
+            }
+            return;
+        }
         if let Some(item) = self.settings_ui.binding.take() {
             if code != KeyCode::Escape {
                 match item {
@@ -1283,6 +1315,10 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldArea => self.open_layout_editor(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldPreset => self.open_dropdown(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => self.open_skins_folder(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Skin => {
+                let names = std::iter::once(String::new()).chain(skin::list().into_iter().map(|(n, _)| n)).collect();
+                self.settings_ui.skins = Some(settings::SkinPicker::new(names, &self.cfg.skin));
+            }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Update => self.update_now(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
                 self.cfg.playfield_area = Area::FULL;
@@ -1839,6 +1875,11 @@ impl State {
                     dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
                 }
             }
+            Scene::Settings { .. } if self.settings_ui.skins.is_some() => {
+                if let Some(p) = &mut self.settings_ui.skins {
+                    p.move_cursor(-notches);
+                }
+            }
             Scene::Settings { .. } => self.settings_ui.move_cursor(-notches),
             _ => {}
         }
@@ -2084,6 +2125,10 @@ impl State {
             let hit = self.hit_at(vx, vy);
             if self.select.picker.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::PickRow(_))) {
                 self.select.picker = None;
+                return;
+            }
+            if self.settings_ui.skins.is_some() && !matches!(hit, Some(render::Hit::SkinRow(_))) {
+                self.settings_ui.skins = None;
                 return;
             }
             if let Some(hit) = hit {
@@ -3427,6 +3472,9 @@ impl State {
                 };
                 let this = &*self;
                 this.settings_ui.draw(canvas, &|item| this.setting_value(item), footer);
+                if let Some(p) = &self.settings_ui.skins {
+                    p.draw(canvas, &self.cfg.skin);
+                }
             }
             Scene::LayoutEdit { .. } => {
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, false, game::draw_preview);
@@ -3883,6 +3931,7 @@ impl State {
             }
             Hit::CollectionPick => self.open_collections(),
             Hit::PickRow(i) => self.select.pick_collection(i, &self.library),
+            Hit::SkinRow(i) => self.pick_skin(i),
             Hit::DlRow(i) if i == self.browse.cursor => self.download_key(KeyCode::Enter, None, window),
             Hit::DlRow(i) => self.browse.cursor = i,
             Hit::DlGet(i) => {

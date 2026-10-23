@@ -99,8 +99,8 @@ the next start) and restarts into it. *Check at startup* turns the check off. Bu
 first click selects a song or difficulty and clicking the selected difficulty plays it; settings
 rows select on the first click and toggle/open on the second, and `<` / `>` step values; the pause
 menu follows the pointer; results, calibration and the multiplayer menu, lobby and results have
-buttons (each shows its key). The pointer is a pixel arrow in the game's colours (it turns red
-over anything clickable); during play it hides itself after a second without moving.
+buttons (each shows its key). The pointer is a small pixel arrowhead in the game's colours (it turns
+red over anything clickable); during play it hides itself after a second without moving.
 
 **Animations** (Settings → Video → *UI animations*, on by default): screens fade in, the tab and
 selection highlights glide, a song's difficulties slide open, settings scroll smoothly, the pause
@@ -225,7 +225,7 @@ so the suggestion settles instead of overshooting. Toggle it with Settings → L
 
 ## Skins
 
-Settings → Skin → **Skin** (Left/Right) picks an osu! skin from osu!'s `Skins` folder (next to its
+Settings → Skin → **Skin** (Enter or click opens a list of every installed skin; Left/Right step through them) picks an osu! skin from osu!'s `Skins` folder (next to its
 Songs folder) or from taiko-rs's own, `~/.local/share/taiko-rs/Skins` / `%APPDATA%\taiko-rs\Skins`
 (*Skins folder* opens it; `.osk` files dropped there are unpacked on their own).
 

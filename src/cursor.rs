@@ -1,34 +1,29 @@
-//! The pointer: a pixel-art arrow in the interface's colours (white with a red edge, red with a
-//! white edge over something clickable), scaled up with hard pixels like the LCD font.
+//! The pointer: a pixel-art arrowhead in the interface's colours (light with a red edge, red with
+//! a light edge over something clickable), scaled up with hard pixels like the LCD font.
 
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Cursor, CursorIcon, CustomCursor};
 
-/// `X` outline, `w` body, `r` accent edge, `.` clear. The hotspot is the top-left pixel.
-const ARROW: [&str; 19] = [
-    "X...........",
-    "XX..........",
-    "XwX.........",
-    "XwrX........",
-    "XwwrX.......",
-    "XwwwrX......",
-    "XwwwwrX.....",
-    "XwwwwwrX....",
-    "XwwwwwwrX...",
-    "XwwwwwwwrX..",
-    "XwwwwwwwwrX.",
-    "XwwwwwwXXXXX",
-    "XwwwXwrX....",
-    "XwwXXwrX....",
-    "XwX..XwrX...",
-    "XX...XwrX...",
-    "X.....XwrX..",
-    "......XwrX..",
-    ".......XX...",
+/// `X` outline, `w` body, `r` accent edge, `.` clear: an arrowhead pointing up-left. The
+/// hotspot is the tip.
+const ARROW: [&str; 13] = [
+    "XXX..........",
+    "XwXXXX.......",
+    "XXwwwXXXX....",
+    ".XwwwwwwXXXX.",
+    ".XwwwwwwwwwXX",
+    ".XXwwwwwwrrrX",
+    "..XwwwwwrrXXX",
+    "..XwwwwrrXX..",
+    "..XXwwrrXX...",
+    "...XwrrXX....",
+    "...XwrXX.....",
+    "...XXrX......",
+    "....XXX......",
 ];
 
 const OUTLINE: [u8; 4] = [0x12, 0x12, 0x19, 0xff];
-const WHITE: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
+const WHITE: [u8; 4] = [0xe8, 0xe8, 0xf2, 0xff];
 const ACCENT: [u8; 4] = [0xeb, 0x45, 0x2c, 0xff];
 
 /// RGBA pixels of the arrow, each art pixel `scale` x `scale`; `hover` swaps body and edge.
@@ -66,12 +61,13 @@ impl Cursors {
         let scale = (2.0 * scale_factor).round().clamp(1.0, 8.0) as usize;
         let make = |hover| {
             let (px, w, h) = arrow_rgba(scale, hover);
-            CustomCursor::from_rgba(px, w as u16, h as u16, 0, 0).ok().map(|s| event_loop.create_custom_cursor(s))
+            let tip = (scale / 2) as u16;
+            CustomCursor::from_rgba(px, w as u16, h as u16, tip, tip).ok().map(|s| event_loop.create_custom_cursor(s))
         };
         Some(Cursors { arrow: make(false)?, hover: make(true)? })
     }
 
-    /// The pixel arrow for the plain and "clickable" pointers; the system ones for resizing
+    /// The pixel arrowhead for the plain and "clickable" pointers; the system ones for resizing
     /// and moving the playfield, where the shape says which way it goes.
     pub fn get(&self, icon: CursorIcon) -> Cursor {
         match icon {
@@ -90,7 +86,7 @@ mod tests {
     fn art_is_rectangular_and_scales() {
         assert!(ARROW.iter().all(|r| r.len() == ARROW[0].len()));
         let (px, w, h) = arrow_rgba(3, false);
-        assert_eq!((w, h, px.len()), (36, 57, 36 * 57 * 4));
+        assert_eq!((w, h, px.len()), (39, 39, 39 * 39 * 4));
         // The hotspot pixel is outline, the far corner clear.
         assert_eq!(&px[..4], &OUTLINE);
         assert_eq!(&px[(w - 1) * 4..w * 4], &[0, 0, 0, 0]);
