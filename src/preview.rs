@@ -116,6 +116,8 @@ pub struct Preview {
     pub has_background: bool,
     /// Passed on to the autoplay preview (the kiai effects setting).
     pub kiai_effects: bool,
+    /// Bottom of the song select panel as last drawn (virtual units).
+    pub panel_bottom: f32,
     audio: Option<Song>,
     audio_active: bool,
 }
@@ -460,6 +462,7 @@ impl Preview {
         let preview_h = band_h * k + 12.0;
         const GRAPH_H: f32 = 40.0;
         let h = h.min(114.0 + preview_h + 8.0 + GRAPH_H + 44.0);
+        self.panel_bottom = y + h;
         self.graph_rect = None;
         self.play_rect = None;
         self.box_rect = None;

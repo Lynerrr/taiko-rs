@@ -684,6 +684,12 @@ pub struct Results {
     pub title: String,
     pub stats: Stats,
     pub windows: Windows,
+    /// The saved replay of this play (or the replay that was watched).
+    pub replay: Option<std::path::PathBuf>,
+    /// Place among this map's local scores (1-based) and how many there are.
+    pub rank: Option<(usize, usize)>,
+    /// Watching someone's replay rather than playing.
+    pub watched: Option<String>,
 }
 
 impl Results {
@@ -740,6 +746,16 @@ impl Results {
             format!("Windows: great +-{:.0}  ok +-{:.0} ms", self.windows.great, self.windows.ok)
         };
         c.text_centered(cx, 380.0, 9.0, rgba(0x8a8aa0, 1.0), &hint);
-        c.button_row(424.0, &[("Retry  (Enter)", Hit::Key(KeyCode::Enter), true), ("Song select  (Esc)", Hit::Key(KeyCode::Escape), false)]);
+        if let Some(who) = &self.watched {
+            c.text_centered(cx, 404.0, 9.0, rgba(0x4fb4ff, 1.0), &format!("replay of {who}"));
+        } else if let Some((rank, of)) = self.rank {
+            c.text_centered(cx, 404.0, 9.0, rgba(0xFFD34D, 1.0), &format!("#{rank} of {of} local scores on this map"));
+        }
+        let mut buttons = vec![("Retry  (Enter)", Hit::Key(KeyCode::Enter), true)];
+        if self.replay.is_some() {
+            buttons.push(("Watch replay  (R)", Hit::Key(KeyCode::KeyR), false));
+        }
+        buttons.push(("Song select  (Esc)", Hit::Key(KeyCode::Escape), false));
+        c.button_row(424.0, &buttons);
     }
 }

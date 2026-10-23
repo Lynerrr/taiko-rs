@@ -20,6 +20,7 @@ mod net;
 mod osudb;
 mod preview;
 mod render;
+mod scores;
 mod settings;
 mod stars;
 mod ui;
@@ -120,6 +121,12 @@ struct State {
     preview_remote: bool,
     /// Receiving the lobby map from the host: where its parts go.
     host_transfer: Option<std::sync::mpsc::Sender<Option<Vec<u8>>>>,
+    /// Local scores (index of saved replays).
+    scores: Vec<scores::ScoreRow>,
+    /// The replay to attach to the game being loaded.
+    pending_replay: Option<scores::Replay>,
+    /// Replay files of the leaderboard rows drawn this frame.
+    leaderboard: Vec<PathBuf>,
     /// When the background image last changed (it fades in).
     bg_changed: Option<Instant>,
     /// The window has keyboard focus.
@@ -216,6 +223,27 @@ fn draw_game_area(
 fn fmt_time(ms: f64) -> String {
     let s = (ms / 1000.0).max(0.0) as u64;
     format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// Local scores for the selected map, under the song select panel.
+fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow]) {
+    c.text(x + 4.0, y + 2.0, 7.0, rgba(0xEB452C, 1.0), "LOCAL SCORES");
+    if rows.is_empty() {
+        c.text(x + 90.0, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), "none yet - finish a play to set one");
+        return;
+    }
+    c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), "click to watch the replay");
+    for (k, r) in rows.iter().enumerate() {
+        let ry = y + 14.0 + k as f32 * 18.0;
+        let hover = c.hovered(x, ry, w, 16.0);
+        c.round_rect(x, ry, w, 16.0, 5.0, rgba(if hover { 0x262634 } else { 0x15151d }, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        c.hit(x, ry, w, 16.0, render::Hit::ScoreRow(k));
+        let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
+        let left = format!("#{}  {:08}  {:.2}%  {}x{}", k + 1, r.score, r.accuracy * 100.0, r.max_combo, rate);
+        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &left);
+        let right = format!("{}  {} miss  {}", r.player, r.miss, scores::age(r.date));
+        c.text_right(x + w - 8.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
+    }
 }
 
 /// Volume overlay (bottom right) shown while Alt + wheel changes the master volume.
@@ -367,7 +395,35 @@ impl State {
         self.start_loading_from(entry, None);
     }
 
+    /// Loads the map of a saved replay and plays it back.
+    fn watch_replay(&mut self, file: &std::path::Path) {
+        let r = match scores::load_replay(file) {
+            Ok(r) => r,
+            Err(e) => {
+                self.toast(format!("can't open the replay: {e}"));
+                return;
+            }
+        };
+        // The same file where it was, else any map with the same contents.
+        let entry = self
+            .library
+            .iter()
+            .position(|e| e.path.to_string_lossy() == r.map_path && e.hash() == r.map_hash)
+            .or_else(|| self.library.iter().position(|e| e.label() == r.map_label && e.hash() == r.map_hash));
+        let Some(entry) = entry else {
+            self.toast(format!("{} isn't in your songs", r.map_label));
+            return;
+        };
+        self.stop_audio();
+        self.preview.show_background_for(&self.library[entry]);
+        let label = format!("replay of {}: {}", r.player, self.library[entry].label());
+        let rx = self.spawn_loader(entry, r.rate, self.cached_track(entry, r.rate));
+        self.pending_replay = Some(r);
+        self.scene = Scene::Loading { rx, label, entry, from: None };
+    }
+
     fn start_loading_from(&mut self, entry: usize, from: Option<f64>) {
+        self.pending_replay = None;
         self.record_play(entry);
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
@@ -1305,7 +1361,7 @@ impl State {
         // Drum keys during a match go straight to the game.
         if let Scene::MpPlay { game, .. } = &mut self.scene {
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
-                if !repeat {
+                if !repeat && game.replay.is_none() {
                     game.press(k, at, self.audio.as_ref(), self.cfg.offset_ms);
                 }
                 return;
@@ -1862,6 +1918,11 @@ impl State {
                 }
                 _ => {}
             },
+            Scene::Results { results, .. } if code == KeyCode::KeyR && results.replay.is_some() => {
+                if let Some(file) = results.replay.clone() {
+                    self.watch_replay(&file);
+                }
+            }
             Scene::Results { entry, from, .. } => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter => {
                     let (e, f) = (*entry, *from);
@@ -2031,9 +2092,20 @@ impl State {
                 let x = 24.0 + Select::list_width(canvas.width) + 12.0;
                 let pw = canvas.width - x - 24.0;
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
+                self.leaderboard.clear();
                 if pw > 160.0 {
                     if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, 380.0, self.cfg.scroll_speed, selected_stars, Some(("Play from", "Shift+Enter"))) {
                         self.frame_clip = Some(clip);
+                    }
+                    if let Some(i) = self.select.selected() {
+                        let top = self.preview.panel_bottom + 8.0;
+                        let fits = ((436.0 - top - 16.0) / 18.0).floor().max(0.0) as usize;
+                        if fits > 0 {
+                            let hash = self.library[i].hash();
+                            let rows = scores::top(&self.scores, hash, fits);
+                            self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
+                            draw_leaderboard(canvas, x, top, pw, &rows);
+                        }
                     }
                 }
                 if self.picking_lobby_map {
@@ -2051,6 +2123,15 @@ impl State {
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.cfg.offset_ms);
                         }
+                        match self.pending_replay.take() {
+                            Some(r) => {
+                                game.anti_mash = r.anti_mash;
+                                game.replay_of = Some(r.player.clone());
+                                game.replay = Some((r.inputs, 0));
+                            }
+                            // Full plays (not autoplay, not from a start point) are kept.
+                            None => game.record = (!self.auto || std::env::var_os("TAIKO_RECORD_AUTO").is_some()) && from.is_none(),
+                        }
                         next = Some(Scene::Play { game: Box::new(game), entry: *entry, from: *from });
                     }
                     Ok(Err(e)) => {
@@ -2064,7 +2145,7 @@ impl State {
             }
             Scene::Play { game, entry, from } => {
                 let done = game.update(now, self.audio.as_ref(), self.cfg.offset_ms);
-                if self.auto {
+                if self.auto && game.replay.is_none() {
                     game.autoplay(self.audio.as_ref());
                 }
                 if let Some(sm) = &mut self.smooth {
@@ -2078,7 +2159,9 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
                 game.kiai_effects = self.cfg.kiai_effects;
-                game.anti_mash = self.cfg.anti_mash;
+                if game.replay.is_none() {
+                    game.anti_mash = self.cfg.anti_mash;
+                }
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 let hud_in = self.cfg.hud_in_playfield;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
@@ -2101,11 +2184,49 @@ impl State {
                     let rate = if (game.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", game.rate) } else { String::new() };
                     let part = from.map(|t| format!("  from {}", fmt_time(t))).unwrap_or_default();
                     let title = format!("{} - {} [{}]{rate}{part}", m.artist, m.title, m.version);
-                    next = Some(Scene::Results {
-                        results: Results { shown: Instant::now(), title, stats: game.stats.clone(), windows: game.windows },
-                        entry: *entry,
-                        from: *from,
-                    });
+                    let mut results = Results {
+                        shown: Instant::now(),
+                        title,
+                        stats: game.stats.clone(),
+                        windows: game.windows,
+                        replay: None,
+                        rank: None,
+                        watched: game.replay_of.clone(),
+                    };
+                    if game.record {
+                        let e = &self.library[*entry];
+                        let st = &game.stats;
+                        let replay = scores::Replay {
+                            version: scores::new_version(),
+                            map_hash: e.hash(),
+                            map_path: e.path.to_string_lossy().into_owned(),
+                            map_label: e.label(),
+                            player: self.cfg.mp_name.clone(),
+                            date: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+                            rate: game.rate,
+                            keep_pitch: self.cfg.rate_keep_pitch,
+                            anti_mash: game.anti_mash,
+                            score: st.score,
+                            accuracy: st.accuracy(),
+                            max_combo: st.max_combo,
+                            great: st.great,
+                            ok: st.ok,
+                            miss: st.miss,
+                            ur: st.unstable_rate(),
+                            inputs: std::mem::take(&mut game.inputs),
+                        };
+                        match scores::save(&replay) {
+                            Ok(row) => {
+                                results.replay = Some(row.file.clone());
+                                self.scores.push(row);
+                                let all = scores::top(&self.scores, replay.map_hash, usize::MAX);
+                                let rank = all.iter().position(|r| r.date == replay.date && r.score == replay.score).map(|p| p + 1);
+                                results.rank = rank.map(|r| (r, all.len()));
+                            }
+                            Err(e) => eprintln!("couldn't save the replay: {e}"),
+                        }
+                    }
+                    next = Some(Scene::Results { results, entry: *entry, from: *from });
                 }
             }
             Scene::Results { results, .. } => results.draw(canvas),
@@ -2205,7 +2326,9 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint;
                 game.kiai_effects = self.cfg.kiai_effects;
-                game.anti_mash = self.cfg.anti_mash;
+                if game.replay.is_none() {
+                    game.anti_mash = self.cfg.anti_mash;
+                }
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
@@ -2666,6 +2789,11 @@ impl State {
             Hit::Key(code) => self.key(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::Presets => self.open_dropdown(),
+            Hit::ScoreRow(k) => {
+                if let Some(file) = self.leaderboard.get(k).cloned() {
+                    self.watch_replay(&file);
+                }
+            }
             Hit::DlCategory(i) => self.browse.set_category(download::Category::ALL[i]),
             Hit::DlSort(i) => self.browse.set_sort(download::SortKey::ALL[i]),
             Hit::SettingsSection(i) => {
@@ -3095,6 +3223,9 @@ fn main() {
         lobby_lookup: None,
         preview_remote: false,
         host_transfer: None,
+        scores: scores::load_index(),
+        pending_replay: None,
+        leaderboard: Vec::new(),
         bg_changed: None,
         focused: true,
         mapinfo: None,

@@ -709,6 +709,8 @@ pub enum Hit {
     /// Download tab status category / sort chips.
     DlCategory(usize),
     DlSort(usize),
+    /// A row of the song select leaderboard (watches that replay).
+    ScoreRow(usize),
 }
 
 #[derive(Clone, Copy, Debug)]

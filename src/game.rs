@@ -173,6 +173,12 @@ pub struct Game {
     /// osu!'s mash penalty: a wrong-colour or too-early hit on the next note is a miss. Off,
     /// such presses are ignored (only a note that passes unhit misses).
     pub anti_mash: bool,
+    /// Record presses (map time judged at, key) for a replay.
+    pub record: bool,
+    pub inputs: Vec<(f64, u8)>,
+    /// Playing a replay back: its presses and the next one due; and whose it is.
+    pub replay: Option<(Vec<(f64, u8)>, usize)>,
+    pub replay_of: Option<String>,
     /// Scale the suggestion to current UR; off = plain average of the last 40 hits.
     pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
@@ -237,6 +243,10 @@ impl Game {
             show_offset_hint: false,
             kiai_effects: true,
             anti_mash: false,
+            record: false,
+            inputs: Vec::new(),
+            replay: None,
+            replay_of: None,
             ur_scaled_hint: true,
             offset: 0.0,
             rate,
@@ -260,6 +270,7 @@ impl Game {
         self.last_audio_ms = audio_ms;
         self.raw_time = raw;
         self.time = (raw - offset) * self.rate;
+        self.feed_replay(audio);
         self.expire(self.time);
         self.time > self.end_time + 1500.0 || raw > self.track_ms + 500.0
     }
@@ -305,6 +316,9 @@ impl Game {
     }
 
     fn auto_hit(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
+        if self.record {
+            self.inputs.push((t, key as u8));
+        }
         self.presses[key] = t;
         let sfx = self.judge_press(key, key == 0 || key == 3, t);
         if let Some(a) = audio {
@@ -516,12 +530,34 @@ impl Game {
     pub fn press(&mut self, key: usize, at: Instant, audio: Option<&Engine>, offset: f64) {
         let t = (self.clock.at(at) - offset) * self.rate;
         self.offset = offset;
+        if self.record {
+            self.inputs.push((t, key as u8));
+        }
+        self.press_at(key, t, audio);
+    }
+
+    /// A press judged at map time `t` (live, or from a replay).
+    fn press_at(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
         let kat = key == 0 || key == 3;
         self.presses[key] = t;
         let sfx = self.judge_press(key, kat, t);
         if let Some(a) = audio.filter(|_| !self.mute_hits) {
             a.sfx(sfx);
         }
+    }
+
+    /// Replays: the recorded presses up to now, before anything expires, so each is judged
+    /// exactly as it was.
+    fn feed_replay(&mut self, audio: Option<&Engine>) {
+        let Some((inputs, mut next)) = self.replay.take() else { return };
+        while let Some(&(t, key)) = inputs.get(next) {
+            if t > self.time {
+                break;
+            }
+            self.press_at((key as usize).min(3), t, audio);
+            next += 1;
+        }
+        self.replay = Some((inputs, next));
     }
 
     fn judge_press(&mut self, key: usize, kat: bool, t: f64) -> Sfx {
@@ -788,6 +824,12 @@ impl Game {
         let t = self.time;
         let w = c.width;
         let lane_top = LANE_Y - LANE_H / 2.0;
+        if let Some(who) = &self.replay_of {
+            let text = format!("REPLAY  -  {who}");
+            let tw = Canvas::text_width(9.0, &text);
+            c.round_rect(w / 2.0 - tw / 2.0 - 12.0, 14.0, tw + 24.0, 20.0, 10.0, rgba(0x173049, 0.9), rgba(0x4fb4ff, 1.0), 1.0);
+            c.text_centered(w / 2.0, 19.5, 9.0, rgba(WHITE, 1.0), &text);
+        }
 
         // Score / accuracy.
         c.text_right(w - 18.0, 18.0, 24.0, rgba(WHITE, 1.0), &format!("{:08}", self.stats.score));
@@ -930,6 +972,37 @@ mod tests {
     /// Deterministic spread around `mean` with standard deviation close to `sd`.
     fn spread(mean: f64, sd: f64, n: usize) -> Vec<f64> {
         (0..n).map(|i| mean + if i % 2 == 0 { sd } else { -sd }).collect()
+    }
+
+    #[test]
+    fn replay_reproduces_the_play() {
+        // A sloppy play: early, late, wrong colour, doubled hits.
+        let mut live = game();
+        live.record = true;
+        let notes: Vec<(f64, bool)> = live.map.notes.iter().filter(|n| matches!(n.kind, Kind::Don | Kind::Kat)).map(|n| (n.time, n.kind == Kind::Kat)).collect();
+        for (k, &(t, kat)) in notes.iter().enumerate() {
+            let jitter = [-30.0, 12.0, 45.0, -70.0, 0.0, 100.0][k % 6];
+            let key = if (k % 7 == 3) != kat { 0 } else { 1 };
+            let at = t + jitter;
+            live.inputs.push((at, key as u8));
+            live.press_at(key, at, None);
+            if k % 5 == 0 {
+                live.inputs.push((at + 8.0, 2));
+                live.press_at(2, at + 8.0, None);
+            }
+        }
+        let end = notes.last().unwrap().0 + 1000.0;
+        live.time = end;
+        live.expire(end);
+
+        let mut back = game();
+        back.replay = Some((live.inputs.clone(), 0));
+        back.time = end;
+        back.feed_replay(None);
+        back.expire(end);
+        let (a, b) = (&live.stats, &back.stats);
+        assert_eq!((a.great, a.ok, a.miss, a.score, a.max_combo), (b.great, b.ok, b.miss, b.score, b.max_combo));
+        assert!(a.miss > 0 && a.great > 0, "the test play should mix judgements");
     }
 
     #[test]

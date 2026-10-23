@@ -101,6 +101,13 @@ remembered (a blue flag): **Play from 1:23** under the timeline (or Shift+Enter)
 with the music two seconds earlier and only the notes from that point on counting; retry keeps the
 start point. F2 picks a random song.
 
+**Local scores and replays:** every finished play (not autoplay or a play from a start point) is
+saved as a replay in `replays/` in the config folder. The results screen tells you where it
+ranks among your scores on that map and has **Watch replay (R)**; song select lists the map's
+best local scores under the preview panel, and clicking one plays its replay. Replays store the
+map time each hit was judged at (plus the speed and the mash setting), so watching one
+reproduces the play exactly, whatever the offset.
+
 **Sorting and collections:** the *Sort* button next to the search box (or Ctrl+S, Shift for
 backwards) orders songs by artist, title, difficulty, length, BPM, recently played or date added;
 a song goes by its hardest / longest / most recently played difficulty. Difficulty, length and BPM
