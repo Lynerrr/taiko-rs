@@ -1776,7 +1776,7 @@ impl State {
                 let n = self.select.picker_len() as i32;
                 self.select.picker = self.select.picker.map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
-            Scene::Select => self.select.move_by(-notches),
+            Scene::Select => self.select.step(-notches, &self.library),
             Scene::Download if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Download => self.browse.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
@@ -2943,6 +2943,7 @@ impl State {
                     String::new()
                 };
                 let (stars, rate) = (&self.stars, self.cfg.rate);
+                self.select.instant = self.right_scroll;
                 self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate));
                 let x = 24.0 + Select::list_width(canvas.width) + 12.0;
                 let pw = canvas.width - x - 24.0;
@@ -3819,7 +3820,7 @@ impl State {
             }
             // Like osu!: the first click selects, clicking the selected difficulty plays it.
             Hit::SongRow(row) if row == self.select.cursor() => self.key(KeyCode::Enter, false, None, Instant::now(), window),
-            // A song's own row picks its remembered (or easiest) difficulty.
+            // A song's own row picks its remembered (or hardest) difficulty.
             Hit::SongRow(row) if self.select.is_song_start(row) && !self.select.in_open_song(row) => self.select.enter_song(row, &self.library),
             Hit::SongRow(row) => self.select.set_cursor(row),
             Hit::SettingRow(i) if i == self.settings_ui.cursor => self.settings_key(KeyCode::Enter, window),
