@@ -1807,7 +1807,7 @@ impl State {
                 if self.modifiers_shift {
                     self.select.random_back();
                 } else {
-                    self.select.random();
+                    self.select.random(&self.library);
                 }
             }
             Scene::Select if self.modifiers_ctrl && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) => {
@@ -1917,6 +1917,7 @@ impl State {
                 }
                 let (stars, rate) = (&self.stars, self.cfg.rate);
                 self.select.sort_selected_set(&|i| stars.get(i, rate));
+                self.select.remember_selection(&self.library);
             }
             let has_bg = self.preview.has_background;
             self.bg_brightness = match self.scene {
@@ -2590,6 +2591,8 @@ impl State {
             }
             // Like osu!: the first click selects, clicking the selected difficulty plays it.
             Hit::SongRow(row) if row == self.select.cursor() => self.key(KeyCode::Enter, false, None, Instant::now(), window),
+            // A song's own row picks its remembered (or easiest) difficulty.
+            Hit::SongRow(row) if self.select.is_song_start(row) && !self.select.in_open_song(row) => self.select.enter_song(row, &self.library),
             Hit::SongRow(row) => self.select.set_cursor(row),
             Hit::SettingRow(i) if i == self.settings_ui.cursor => self.settings_key(KeyCode::Enter, window),
             Hit::SettingRow(i) => self.settings_ui.cursor = i,

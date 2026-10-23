@@ -75,6 +75,11 @@ pub struct Select {
     cursor: usize,
     scroll: f32,
     anim: ListAnim,
+    /// The difficulty last selected in each song (library index by folder), this session.
+    remembered: std::collections::HashMap<std::path::PathBuf, usize>,
+    /// Entered this song (first visible row) on its easiest difficulty: keep it there when the
+    /// difficulties get sorted by stars.
+    first_pending: Option<usize>,
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
     random_history: Vec<usize>,
     rng: u64,
@@ -135,6 +140,8 @@ impl Select {
             cursor: 0,
             scroll: 0.0,
             anim: ListAnim::default(),
+            remembered: std::collections::HashMap::new(),
+            first_pending: None,
             random_history: Vec::new(),
             rng: seed | 1,
         };
@@ -290,7 +297,7 @@ impl Select {
                             i -= 1;
                         }
                     }
-                    self.cursor = i;
+                    self.enter_song(i, library);
                 }
             }
             KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -332,6 +339,16 @@ impl Select {
         }
     }
 
+    /// Whether `row` is the first row of its song (what a song's own row points at).
+    pub fn is_song_start(&self, row: usize) -> bool {
+        self.group_of.get(row).is_some_and(|&g| self.groups[g].start == row)
+    }
+
+    /// Whether `row` is in the song that is open (selected).
+    pub fn in_open_song(&self, row: usize) -> bool {
+        self.group_of.get(row).is_some() && self.group_of.get(row) == self.group_of.get(self.cursor)
+    }
+
     /// Row of the visible list under the cursor.
     pub fn cursor(&self) -> usize {
         self.cursor
@@ -355,7 +372,7 @@ impl Select {
 
     /// F2: jump to a random song among those listed (search and filters apply), keeping the
     /// position within the difficulty list where possible.
-    pub fn random(&mut self) {
+    pub fn random(&mut self, library: &[Entry]) {
         let groups = &self.groups;
         if groups.len() < 2 {
             return;
@@ -374,8 +391,28 @@ impl Select {
         if let Some(&here) = self.visible.get(self.cursor) {
             self.random_history.push(here);
         }
-        let g = groups[pick].clone();
-        self.cursor = g.start + offset.min(g.len() - 1);
+        let _ = offset;
+        let start = groups[pick].start;
+        self.enter_song(start, library);
+    }
+
+    /// Selects the song containing row `row`: the difficulty last picked there this session,
+    /// else its easiest.
+    pub fn enter_song(&mut self, row: usize, library: &[Entry]) {
+        let Some(&g) = self.group_of.get(row) else { return };
+        let g = self.groups[g].clone();
+        let folder = library[self.visible[g.start]].path.parent().map(|p| p.to_path_buf());
+        let remembered = folder.and_then(|f| self.remembered.get(&f).copied()).and_then(|i| self.visible[g.clone()].iter().position(|&v| v == i));
+        match remembered {
+            Some(pos) => {
+                self.cursor = g.start + pos;
+                self.first_pending = None;
+            }
+            None => {
+                self.cursor = g.start;
+                self.first_pending = Some(g.start);
+            }
+        }
     }
 
     /// Shift+F2: back to the song before the last random jump.
@@ -399,19 +436,35 @@ impl Select {
             return;
         }
         let current = self.visible[self.cursor];
+        // Still on the row it entered on: it means "the easiest", wherever that ends up.
+        let to_first = self.first_pending == Some(g.start) && self.cursor == g.start;
         let mut set: Vec<(f32, usize)> = keys.into_iter().zip(self.visible[g.clone()].iter().copied()).collect();
         set.sort_by(|a, b| a.0.total_cmp(&b.0));
         for (slot, (_, i)) in g.clone().zip(set) {
             self.visible[slot] = i;
         }
         // Sorting only reorders within the song, so the groups stay valid.
-        if let Some(pos) = self.visible[g.clone()].iter().position(|&v| v == current) {
+        if to_first {
+            self.cursor = g.start;
+        } else if let Some(pos) = self.visible[g.clone()].iter().position(|&v| v == current) {
             self.cursor = g.start + pos;
         }
+        self.first_pending = None;
     }
 
     pub fn selected_set(&self) -> Vec<usize> {
         self.cursor_group().map(|g| self.visible[g].to_vec()).unwrap_or_default()
+    }
+
+    /// Remembers the selected difficulty for its song (call once a frame).
+    pub fn remember_selection(&mut self, library: &[Entry]) {
+        if let Some(&i) = self.visible.get(self.cursor) {
+            if let Some(folder) = library[i].path.parent() {
+                if self.remembered.get(folder) != Some(&i) {
+                    self.remembered.insert(folder.to_path_buf(), i);
+                }
+            }
+        }
     }
 
     /// `stars` looks up a difficulty's star rating (library index) if it has been calculated.
