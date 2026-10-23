@@ -181,6 +181,11 @@ pub enum Action {
     SeekBy(f64),
     /// Left click at a point in virtual units (480 tall): `Click:x:y`.
     Click(f32, f32),
+    /// Right button pressed at / pointer moved to a point (virtual units), and released:
+    /// `RightDown:x:y`, `RightMove:x:y`, `RightUp`.
+    RightDown(f32, f32),
+    RightMove(f32, f32),
+    RightUp,
     /// Wheel notches with Alt held (`AltWheelUp` / `AltWheelDown`).
     AltWheel(i32),
     /// A key with Shift held: `Shift+Enter`.
@@ -205,8 +210,14 @@ impl InputScript {
                     "MoveRight" => Action::Drag { corner: false, dx: 60.0, dy: 0.0, hold: false },
                     "ShrinkCorner" => Action::Drag { corner: true, dx: -300.0, dy: -200.0, hold: false },
                     "Release" => Action::Release,
+                    "RightUp" => Action::RightUp,
                     "AltWheelUp" => Action::AltWheel(1),
                     "AltWheelDown" => Action::AltWheel(-1),
+                    k if k.starts_with("RightDown:") || k.starts_with("RightMove:") => {
+                        let mut p = k.split(':').skip(1).filter_map(|v| v.parse::<f32>().ok());
+                        let (x, y) = (p.next()?, p.next()?);
+                        if k.starts_with("RightDown:") { Action::RightDown(x, y) } else { Action::RightMove(x, y) }
+                    }
                     k if k.starts_with("Click:") => {
                         let mut p = k.split(':').skip(1).filter_map(|v| v.parse::<f32>().ok());
                         Action::Click(p.next()?, p.next()?)

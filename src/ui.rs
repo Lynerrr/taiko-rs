@@ -110,6 +110,9 @@ struct ListAnim {
 
 /// Length of a song list transition.
 const LIST_ANIM_MS: f32 = 200.0;
+/// Top and bottom of the song list (virtual units).
+const LIST_TOP: f32 = 86.0;
+const LIST_BOTTOM: f32 = 440.0;
 
 pub enum SelectAction {
     None,
@@ -415,6 +418,20 @@ impl Select {
         }
     }
 
+    /// osu!'s right-click scrolling: the pointer's height over the list (`y`, virtual units)
+    /// picks the song that far through the whole list, top to bottom.
+    pub fn scroll_to(&mut self, y: f32, library: &[Entry]) {
+        let n = self.groups.len();
+        if n == 0 {
+            return;
+        }
+        let frac = ((y - LIST_TOP) / (LIST_BOTTOM - LIST_TOP)).clamp(0.0, 1.0);
+        let g = (frac * (n - 1) as f32).round() as usize;
+        if self.group_of.get(self.cursor) != Some(&g) {
+            self.enter_song(self.groups[g].start, library);
+        }
+    }
+
     /// Shift+F2: back to the song before the last random jump.
     pub fn random_back(&mut self) {
         while let Some(prev) = self.random_history.pop() {
@@ -511,7 +528,7 @@ impl Select {
             Diff(usize),
         }
         let _ = dt_ms;
-        let (top, bottom) = (86.0, 440.0);
+        let (top, bottom) = (LIST_TOP, LIST_BOTTOM);
         let view = bottom - top;
         // Where everything ends up: the selected song open, the others closed.
         let open_start = self.group_of.get(self.cursor).map(|&g| groups[g].start);
