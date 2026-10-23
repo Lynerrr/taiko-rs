@@ -27,6 +27,7 @@ mod skin;
 mod splash;
 mod stars;
 mod ui;
+mod update;
 mod video;
 
 use std::path::PathBuf;
@@ -138,6 +139,7 @@ struct State {
     volume_shown: Option<Instant>,
     /// The startup splash while it plays.
     splash: Option<splash::Splash>,
+    updater: update::Updater,
     /// When the overlay appeared (it slides in once, not on every notch).
     volume_since: Option<Instant>,
     /// Clickable areas of the last frame drawn.
@@ -888,6 +890,20 @@ impl State {
             Item::ShowFps => on(c.show_fps),
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
+            Item::CheckUpdates => on(c.check_updates),
+            Item::Update => {
+                let build = update::BUILD.map(update::short);
+                match (self.updater.status(), build) {
+                    (_, None) => "local build (no updates)".into(),
+                    (update::Status::Off, Some(b)) => format!("{b}, Enter to check"),
+                    (update::Status::Checking, _) => "checking...".into(),
+                    (update::Status::UpToDate, Some(b)) => format!("{b}, up to date"),
+                    (update::Status::Available { commit, .. }, Some(b)) => format!("{b} -> {}, Enter to install", update::short(&commit)),
+                    (update::Status::Downloading, _) => format!("downloading {:.0}%", self.updater.progress() * 100.0),
+                    (update::Status::Installed, _) => "restarting...".into(),
+                    (update::Status::Failed(_), _) => "failed, Enter to retry".into(),
+                }
+            }
             Item::Fullscreen => on(self.fullscreen),
             Item::Calibrate => "Enter to start".into(),
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
@@ -961,6 +977,9 @@ impl State {
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Splash => self.cfg.splash = !self.cfg.splash,
+            Item::CheckUpdates => self.cfg.check_updates = !self.cfg.check_updates,
+            // Acts on Enter in `settings_key`.
+            Item::Update => return,
             Item::Fullscreen => self.toggle_fullscreen(window),
             // Started with Enter in `settings_key`; arrows do nothing.
             Item::Calibrate => return,
@@ -998,6 +1017,54 @@ impl State {
             a.sfx(audio::Sfx::Don);
         }
         self.cfg.save();
+    }
+
+    /// Installs the newer build when there is one, else looks for one.
+    fn update_now(&mut self) {
+        if update::BUILD.is_none() {
+            self.toast("a local build doesn't update itself".into());
+            return;
+        }
+        match self.updater.status() {
+            update::Status::Available { commit, .. } => {
+                self.updater.install();
+                self.toast(format!("downloading {}...", update::short(&commit)));
+            }
+            update::Status::Checking | update::Status::Downloading | update::Status::Installed => {}
+            _ => {
+                self.updater.check();
+                self.toast("checking for updates...".into());
+            }
+        }
+    }
+
+    /// The badge top right while there's an update to install (menus only), and the restart
+    /// once it's installed.
+    fn draw_update(&mut self, c: &mut Canvas) {
+        let text = match self.updater.status() {
+            update::Status::Available { commit, .. } => format!("update {}  Ctrl+U", update::short(&commit)),
+            update::Status::Downloading => format!("updating {:.0}%", self.updater.progress() * 100.0),
+            update::Status::Installed => {
+                match update::restart() {
+                    Ok(()) => self.quit = true,
+                    Err(e) => {
+                        self.toast(format!("installed; restart taiko-rs ({e})"));
+                        self.updater = update::Updater::new(false);
+                    }
+                }
+                return;
+            }
+            _ => return,
+        };
+        if self.in_song() {
+            return;
+        }
+        let w = Canvas::text_width(7.0, &text) + 14.0;
+        let x = c.width - 8.0 - w;
+        let hover = c.hovered(x, 3.0, w, 14.0);
+        c.round_rect(x, 3.0, w, 14.0, 4.0, rgba(if hover { 0x2f8f4a } else { 0x1f6b36 }, 0.95), rgba(0x86E05A, 1.0), 1.0);
+        c.text(x + 7.0, 6.5, 7.0, rgba(0xffffff, 1.0), &text);
+        c.hit(x, 3.0, w, 14.0, render::Hit::Update);
     }
 
     /// Loads the configured skin: its note images go to the renderer, its hitsounds to the audio
@@ -1188,6 +1255,7 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldArea => self.open_layout_editor(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldPreset => self.open_dropdown(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => self.open_skins_folder(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Update => self.update_now(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
                 self.cfg.playfield_area = Area::FULL;
                 self.cfg.save();
@@ -1391,6 +1459,10 @@ impl State {
             }
             KeyCode::F12 => {
                 self.quit = true;
+                return true;
+            }
+            KeyCode::KeyU if self.modifiers_ctrl && !self.in_song() => {
+                self.update_now();
                 return true;
             }
             _ => return false,
@@ -3340,6 +3412,7 @@ impl State {
                 self.toast = None;
             }
         }
+        self.draw_update(canvas);
         if self.splash.is_some() {
             let boot = self.boot_log();
             // Some window managers never report focus: don't wait forever.
@@ -3676,6 +3749,7 @@ impl State {
             Hit::Key(code) => self.key(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::Presets => self.open_dropdown(),
+            Hit::Update => self.update_now(),
             Hit::ScoreRow(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
                     self.watch_replay(&file);
@@ -4125,6 +4199,8 @@ fn main() {
     let scripted = std::env::var_os("TAIKO_SHOTS").is_some() || std::env::var_os("TAIKO_INPUT").is_some();
     let want_splash = std::env::var_os("TAIKO_SPLASH").is_some() || (cfg.splash && !play_when_scanned && !scripted);
     let splash = if want_splash { splash::Splash::new(audio.as_ref().map(|a| a.rate)) } else { None };
+    update::cleanup();
+    let updater = update::Updater::new(cfg.check_updates);
     let present = cfg.present;
     let mut state = State {
         cfg,
@@ -4147,6 +4223,7 @@ fn main() {
         modifiers_alt: false,
         volume_shown: None,
         splash,
+        updater,
         volume_since: None,
         hits: Vec::new(),
         browse: browse::Browse::default(),

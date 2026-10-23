@@ -891,6 +891,8 @@ pub enum Hit {
     PickRow(usize),
     /// A settings sidebar section.
     SettingsSection(usize),
+    /// The update badge: install the new build.
+    Update,
     /// Download tab status category / sort chips.
     DlCategory(usize),
     DlSort(usize),

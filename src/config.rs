@@ -64,6 +64,8 @@ pub struct Config {
     pub animations: bool,
     /// The animated splash screen at startup.
     pub splash: bool,
+    /// Look for a newer build at startup.
+    pub check_updates: bool,
     /// Start in (borderless) fullscreen; F11 toggles and remembers it.
     pub fullscreen: bool,
     /// Left rim, left centre, right centre, right rim.
@@ -110,6 +112,7 @@ impl Default for Config {
             fullscreen: true,
             animations: true,
             splash: true,
+            check_updates: true,
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
             kiai_effects: true,
@@ -211,6 +214,7 @@ impl Config {
                 "fullscreen" => cfg.fullscreen = v != "false",
                 "animations" => cfg.animations = v != "false",
                 "splash" => cfg.splash = v != "false",
+                "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
                 "discord_presence" => cfg.discord_presence = v != "false",
@@ -285,6 +289,7 @@ impl Config {
              fullscreen = {}\n\
              animations = {}\n\
              splash = {}\n\
+             check_updates = {}\n\
              # countdown before play continues after pausing (ms)\n\
              resume_delay_ms = {:.0}\n\
              # song select order: artist, title, difficulty, length, bpm, recently played, date added\n\
@@ -317,6 +322,7 @@ impl Config {
             self.fullscreen,
             self.animations,
             self.splash,
+            self.check_updates,
             self.resume_delay_ms,
             self.sort,
             self.kiai_effects,
