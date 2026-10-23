@@ -160,11 +160,24 @@ enum Event {
 }
 
 pub fn host(port: u16) -> Result<Server, String> {
-    // Dual-stack when available, so friends can join over IPv4 or IPv6.
-    let listener = TcpListener::bind(("::", port))
-        .or_else(|_| TcpListener::bind(("0.0.0.0", port)))
-        .map_err(|e| format!("can't listen on port {port}: {e}"))?;
-    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    // Listen on IPv6 and IPv4. On Linux the `::` socket is dual-stack, so the IPv4 bind just
+    // fails as "in use"; on Windows `::` is IPv6-only and both are needed, or IPv4 friends
+    // would be refused.
+    let mut listeners = Vec::new();
+    let mut last_err = None;
+    for addr in ["::", "0.0.0.0"] {
+        match TcpListener::bind((addr, port)) {
+            Ok(l) => listeners.push(l),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    if listeners.is_empty() {
+        let e = last_err.map(|e| e.to_string()).unwrap_or_default();
+        return Err(format!("can't listen on port {port}: {e}"));
+    }
+    for l in &listeners {
+        l.set_nonblocking(true).map_err(|e| e.to_string())?;
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let token = {
         use std::hash::{BuildHasher, Hasher};
@@ -181,13 +194,17 @@ pub fn host(port: u16) -> Result<Server, String> {
             .spawn(move || {
                 let mut next_id = 1;
                 while !stop.load(Ordering::Relaxed) {
-                    match listener.accept() {
-                        Ok((stream, _)) => {
+                    let mut accepted = false;
+                    for listener in &listeners {
+                        if let Ok((stream, _)) = listener.accept() {
                             let _ = stream.set_nonblocking(false);
                             spawn_connection(stream, next_id, events.clone());
                             next_id += 1;
+                            accepted = true;
                         }
-                        Err(_) => thread::sleep(Duration::from_millis(50)),
+                    }
+                    if !accepted {
+                        thread::sleep(Duration::from_millis(50));
                     }
                 }
             })
@@ -554,6 +571,19 @@ mod tests {
             }
             assert!(Instant::now() < until, "timed out waiting for message");
             thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn room_accepts_ipv4_and_ipv6() {
+        let port = 49_000 + (std::process::id() % 1000) as u16;
+        let _server = host(port).unwrap();
+        let mut v4 = Client::connect(&format!("127.0.0.1:{port}"), "v4", None).unwrap();
+        wait_for(&mut v4, |m| matches!(m, ServerMsg::Welcome { .. }));
+        // IPv6 loopback may be disabled on some machines; only check it when it exists.
+        if std::net::TcpListener::bind("[::1]:0").is_ok() {
+            let mut v6 = Client::connect(&format!("[::1]:{port}"), "v6", None).unwrap();
+            wait_for(&mut v6, |m| matches!(m, ServerMsg::Welcome { .. }));
         }
     }
 
