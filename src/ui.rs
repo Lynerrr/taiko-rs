@@ -520,6 +520,8 @@ impl Select {
                 }
             }
         }
+        let list_start = c.shapes.len();
+        let hits_start = c.hits.len();
         let max_chars = |size: f32, room: f32| (room / (size / 7.0 * 6.0)).max(4.0) as usize;
         let fit = |s: String, n: usize| if s.chars().count() > n { s.chars().take(n.saturating_sub(3)).collect::<String>() + "..." } else { s };
         for (row, ry, rh, alpha) in &rows {
@@ -566,6 +568,13 @@ impl Select {
         let oy = outline;
         if !self.visible.is_empty() && oy > top - DIFF_H && oy < bottom {
             c.round_rect(44.0, oy, lw - 20.0, DIFF_H - 3.0, 5.0, rgba(0, 0.0), rgba(0xEB452C, 1.0), 1.5);
+        }
+        // Rows scrolling past the edges slide under them instead of over the search row.
+        c.clip_since(list_start, 20.0, top - 2.0, lw + 8.0, bottom - top + 4.0);
+        for h in &mut c.hits[hits_start..] {
+            let [_, y, _, hh] = &mut h.rect;
+            let (y0, y1) = (y.max(top - 2.0), (*y + *hh).min(bottom + 2.0));
+            (*y, *hh) = (y0, (y1 - y0).max(0.0));
         }
         c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down difficulty  Left/Right song  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit");
         if let Some(cursor) = self.picker {

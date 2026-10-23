@@ -2691,9 +2691,12 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             renderer.bg_mix = s.bg_changed.map(|t| render::progress(t, 300.0)).unwrap_or(1.0);
             (capture, s.frame_clip.take())
         };
-        let clip = clip.map(|(range, a)| (range, [a.x, a.y, a.w, a.h]));
+        // The playfield / preview clip (fractions) plus the lists' (virtual units).
+        let vw = canvas.width.max(1.0);
+        let mut clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clip.into_iter().map(|(range, a)| (range, [a.x, a.y, a.w, a.h])).collect();
+        clips.extend(canvas.clips.drain(..).map(|(range, [x, y, w, h])| (range, [x / vw, y / render::VIRTUAL_HEIGHT, w / vw, h / render::VIRTUAL_HEIGHT])));
         let t1 = Instant::now();
-        let shot = renderer.submit(frame, &canvas.shapes, [0.071, 0.071, 0.098], capture.is_some(), clip);
+        let shot = renderer.submit(frame, &canvas.shapes, [0.071, 0.071, 0.098], capture.is_some(), clips);
         let presented = Instant::now();
         if profile {
             prof_n += 1;

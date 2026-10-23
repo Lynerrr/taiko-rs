@@ -497,15 +497,30 @@ impl Renderer {
         shapes: &[Shape],
         clear: [f64; 3],
         capture: bool,
-        clip: Option<(std::ops::Range<usize>, [f32; 4])>,
+        clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
     ) -> Option<(u32, u32, Vec<u8>)> {
-        let clip = clip.map(|(range, r)| {
-            let (sw, sh) = (self.config.width as f32, self.config.height as f32);
-            let x = (r[0] * sw).floor().clamp(0.0, sw - 1.0);
-            let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
-            let w = (r[2] * sw).ceil().clamp(1.0, sw - x);
-            let h = (r[3] * sh).ceil().clamp(1.0, sh - y);
-            (range, [x as u32, y as u32, w as u32, h as u32])
+        // Clipped shape ranges (rects as fractions of the screen) -> pixel scissors, in order,
+        // without overlaps.
+        let mut clip: Vec<(std::ops::Range<usize>, [u32; 4])> = clips
+            .into_iter()
+            .filter(|(range, _)| range.start < range.end && range.end <= shapes.len())
+            .map(|(range, r)| {
+                let (sw, sh) = (self.config.width as f32, self.config.height as f32);
+                let x = (r[0] * sw).floor().clamp(0.0, sw - 1.0);
+                let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
+                let w = (r[2] * sw).ceil().clamp(1.0, sw - x);
+                let h = (r[3] * sh).ceil().clamp(1.0, sh - y);
+                (range, [x as u32, y as u32, w as u32, h as u32])
+            })
+            .collect();
+        clip.sort_by_key(|(range, _)| range.start);
+        let mut end = 0;
+        clip.retain(|(range, _)| {
+            let ok = range.start >= end;
+            if ok {
+                end = range.end;
+            }
+            ok
         });
         if shapes.len() > self.capacity {
             self.capacity = shapes.len().next_power_of_two();
@@ -537,7 +552,7 @@ impl Renderer {
         }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.encode_pass(&mut encoder, &view, false, shapes.len(), clear, clip.as_ref());
+        self.encode_pass(&mut encoder, &view, false, shapes.len(), clear, &clip);
 
         let (w, h) = (self.config.width, self.config.height);
         let readback = capture.then(|| {
@@ -552,7 +567,7 @@ impl Renderer {
                 view_formats: &[],
             });
             let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-            self.encode_pass(&mut encoder, &target_view, true, shapes.len(), clear, clip.as_ref());
+            self.encode_pass(&mut encoder, &target_view, true, shapes.len(), clear, &clip);
             let bpr = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("capture"),
@@ -593,7 +608,7 @@ impl Renderer {
         capture: bool,
         count: usize,
         clear: [f64; 3],
-        clip: Option<&(std::ops::Range<usize>, [u32; 4])>,
+        clips: &[(std::ops::Range<usize>, [u32; 4])],
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -618,15 +633,19 @@ impl Renderer {
         pass.set_pipeline(if capture { &self.capture_pipeline } else { &self.pipeline });
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instances.slice(..));
-        match clip {
-            None => pass.draw(0..4, 0..count as u32),
-            Some((range, [x, y, w, h])) => {
-                pass.draw(0..4, 0..range.start as u32);
-                pass.set_scissor_rect(*x, *y, *w, *h);
-                pass.draw(0..4, range.start as u32..range.end as u32);
-                pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
-                pass.draw(0..4, range.end as u32..count as u32);
+        // Unclipped runs between the clipped ranges.
+        let mut at = 0u32;
+        for (range, [x, y, w, h]) in clips {
+            if (range.start as u32) > at {
+                pass.draw(0..4, at..range.start as u32);
             }
+            pass.set_scissor_rect(*x, *y, *w, *h);
+            pass.draw(0..4, range.start as u32..range.end as u32);
+            pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
+            at = range.end as u32;
+        }
+        if (count as u32) > at {
+            pass.draw(0..4, at..count as u32);
         }
     }
 }
@@ -718,6 +737,8 @@ pub struct Canvas {
     pub mouse: (f32, f32),
     /// Time since the previous frame (ms), for animations.
     pub dt_ms: f32,
+    /// Shape ranges clipped to a rect (virtual units), e.g. scrolling lists.
+    pub clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
@@ -730,7 +751,16 @@ impl Canvas {
     pub fn clear(&mut self, width: f32) {
         self.shapes.clear();
         self.hits.clear();
+        self.clips.clear();
         self.width = width;
+    }
+
+    /// Clips everything drawn since shape `start` to a rect (virtual units).
+    pub fn clip_since(&mut self, start: usize, x: f32, y: f32, w: f32, h: f32) {
+        let end = self.shapes.len();
+        if end > start {
+            self.clips.push((start..end, [x, y, w, h]));
+        }
     }
 
     /// Makes a rect clickable. Call after drawing at least one of its shapes, so it belongs to

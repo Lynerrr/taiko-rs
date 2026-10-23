@@ -281,6 +281,8 @@ impl Browse {
             let max = (room / (size / 7.0 * 6.0)).max(4.0) as usize;
             if s.chars().count() > max { s.chars().take(max.saturating_sub(3)).collect::<String>() + "..." } else { s.to_string() }
         };
+        let list_start = c.shapes.len();
+        let hits_start = c.hits.len();
         for (i, set) in self.results.iter().enumerate() {
             let y = top + i as f32 * ROW - self.scroll;
             if y + ROW < top || y > bottom {
@@ -325,6 +327,12 @@ impl Browse {
             let n = set.diffs.len();
             let sub = format!("mapped by {}  |  {}  |  {n} taiko diff{}", set.creator, set.status, if n == 1 { "" } else { "s" });
             c.text(x0 + 12.0, y + 22.0, 7.0, rgba(0x9a9ab0, 1.0), &fit(&sub, 7.0, text_room));
+        }
+        c.clip_since(list_start, x0 - 4.0, top - 2.0, col + 8.0, bottom - top + 4.0);
+        for h in &mut c.hits[hits_start..] {
+            let [_, y, _, hh] = &mut h.rect;
+            let (y0, y1) = (y.max(top - 2.0), (*y + *hh).min(bottom + 2.0));
+            (*y, *hh) = (y0, (y1 - y0).max(0.0));
         }
         if self.results.is_empty() || !self.status.is_empty() {
             let msg = if self.status.is_empty() { "no results" } else { self.status.as_str() };
