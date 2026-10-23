@@ -142,7 +142,12 @@ the lane during play, darkened by Settings → *Background dim*.
   given resolution, centred: your monitor's modes plus common ones such as 1280x720, 1024x768 and
   800x600. The playfield's resolution is shown in the bottom-right corner during play (Settings →
   *Show playfield size*); click it, or choose *Playfield size* in the pause menu, to pick a preset
-  from the same list mid-game. *HUD position* keeps score, accuracy, the hit error meter and
+  from the same list mid-game. Your own sizes go in its **Saved** group at the top: **S** (or
+  *+ Save current*) saves the playfield's current size, e.g. one you dragged it to, **A** (*+ Add
+  size*) types one in (`1280x720`), and on a saved size **E** edits it, **Del** deletes it and
+  **Shift+Up/Down** moves it (or the *up* / *down* / *edit* / *del* buttons on the row). They're kept in
+  that order in `saved_presets` in the config and come first for F5/F6 too; one bigger than the
+  window says *too big*. *HUD position* keeps score, accuracy, the hit error meter and
   map info inside the playfield, or fixed at the screen's corners.
 - **Speed (rate):** 0.50×–2.00× in 0.05× steps (`[` / `]` on song select, Shift for 0.25×, or
   Settings → *Speed*). With *Rate keeps pitch* on (default) the music is time-stretched (WSOLA) so

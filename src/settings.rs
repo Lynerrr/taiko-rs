@@ -188,14 +188,35 @@ pub struct SettingsUi {
 }
 
 /// The playfield preset dropdown: a cursor over the flattened list, plus where each row was
-/// drawn (virtual units) so the mouse can hover and click them.
+/// drawn (virtual units) so the mouse can hover and click them. The first group is the player's
+/// own saved sizes, which can be added, edited, deleted and reordered.
 #[derive(Default)]
 pub struct Dropdown {
     pub cursor: usize,
     scroll: f32,
     pub rows: Vec<(usize, [f32; 4])>,
     pub bounds: [f32; 4],
+    /// Typing a size: for a new saved one (None) or saved one `i`, and the text so far.
+    pub editing: Option<(Option<usize>, String)>,
+    /// Buttons drawn last frame.
+    pub buttons: Vec<(PresetAction, [f32; 4])>,
 }
+
+/// What the dropdown's buttons (and their keys) do to the saved sizes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresetAction {
+    /// Save the playfield's current size.
+    SaveCurrent,
+    /// Type a new size.
+    Add,
+    Edit,
+    Delete,
+    Up,
+    Down,
+}
+
+/// Name of the saved sizes' group.
+pub const SAVED: &str = "Saved";
 
 impl Dropdown {
     pub fn new(cursor: usize) -> Dropdown {
@@ -204,71 +225,168 @@ impl Dropdown {
 
     /// Index of the row under (`x`, `y`) in virtual units.
     pub fn row_at(&self, x: f32, y: f32) -> Option<usize> {
-        self.rows.iter().find(|(_, r)| x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]).map(|(i, _)| *i)
+        self.rows.iter().find(|(_, r)| inside(r, x, y)).map(|(i, _)| *i)
+    }
+
+    pub fn button_at(&self, x: f32, y: f32) -> Option<PresetAction> {
+        self.buttons.iter().find(|(_, r)| inside(r, x, y)).map(|(a, _)| *a)
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
-        let b = self.bounds;
-        x >= b[0] && x <= b[0] + b[2] && y >= b[1] && y <= b[1] + b[3]
+        inside(&self.bounds, x, y)
     }
 
-    /// Draws the list centred on screen. `groups`: (aspect name, resolutions), `current`: the
-    /// preset matching the playfield now.
-    pub fn draw(&mut self, c: &mut Canvas, groups: &[(&str, Vec<(u32, u32)>)], current: Option<(u32, u32)>, native: (u32, u32)) {
+    fn button(&mut self, c: &mut Canvas, x: f32, y: f32, label: &str, action: PresetAction) -> f32 {
+        let w = Canvas::text_width(6.0, label) + 10.0;
+        let hover = c.hovered(x, y, w, 12.0);
+        c.round_rect(x, y, w, 12.0, 3.0, rgba(if hover { 0x4a4a64 } else { 0x2a2a3a }, 1.0), rgba(0x5a5a74, 1.0), 1.0);
+        c.text(x + 5.0, y + 3.0, 6.0, rgba(0xffffff, 1.0), label);
+        self.buttons.push((action, [x, y, w, 12.0]));
+        w
+    }
+
+    /// Draws the list centred on screen. `groups`: (aspect name, resolutions), the saved sizes
+    /// first when there are any; `saved`: how many; `current`: the preset matching the playfield
+    /// now; `playfield`: its size in pixels.
+    pub fn draw(
+        &mut self,
+        c: &mut Canvas,
+        groups: &[(&str, Vec<(u32, u32)>)],
+        saved: usize,
+        current: Option<(u32, u32)>,
+        native: (u32, u32),
+        playfield: (u32, u32),
+    ) {
         const ROW: f32 = 15.0;
         const HEAD: f32 = 16.0;
+        enum Line<'a> {
+            Head(&'a str),
+            Row(usize, u32, u32),
+            /// No saved sizes yet.
+            Hint,
+            /// Typing a new saved size.
+            Input,
+        }
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.55));
-        let (bw, max_h) = (300.0, 380.0);
-        let content: f32 = groups.iter().map(|(_, l)| HEAD + l.len() as f32 * ROW).sum::<f32>() + 8.0;
-        let bh = (content + 50.0).min(max_h);
+        self.buttons.clear();
+
+        // Lay out, then scroll so the cursor row (or the size being typed) stays visible.
+        let adding = matches!(self.editing, Some((None, _)));
+        let mut layout: Vec<(Line, f32)> = Vec::new();
+        let mut y = 0.0;
+        if saved == 0 {
+            layout.push((Line::Head(SAVED), y));
+            layout.push((if adding { Line::Input } else { Line::Hint }, y + HEAD));
+            y += HEAD + ROW;
+        }
+        let mut index = 0;
+        for (name, list) in groups {
+            layout.push((Line::Head(name), y));
+            y += HEAD;
+            for &(rw, rh) in list {
+                layout.push((Line::Row(index, rw, rh), y));
+                index += 1;
+                y += ROW;
+            }
+            // A new saved size is typed below the others.
+            if adding && saved > 0 && index == saved {
+                layout.push((Line::Input, y));
+                y += ROW;
+            }
+        }
+
+        let (bw, max_h) = (360.0, 390.0);
+        let bh = (y + 8.0 + 78.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         self.bounds = [bx, by, bw, bh];
         c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
         c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "Playfield preset");
         c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &format!("screen {}x{}", native.0, native.1));
+        let save_label = format!("+ Save current {}x{}", playfield.0, playfield.1);
+        let bw0 = self.button(c, bx + 14.0, by + 28.0, &save_label, PresetAction::SaveCurrent);
+        self.button(c, bx + 20.0 + bw0, by + 28.0, "+ Add size", PresetAction::Add);
 
-        // Lay out, then scroll so the cursor row stays visible.
-        let (top, view) = (by + 32.0, bh - 50.0);
-        let mut y = 0.0;
-        let mut layout = Vec::new();
-        let mut index = 0;
-        for (name, list) in groups {
-            layout.push((None, *name, y));
-            y += HEAD;
-            for &(rw, rh) in list {
-                layout.push((Some((index, rw, rh)), *name, y));
-                index += 1;
-                y += ROW;
-            }
-        }
-        let cursor_y = layout.iter().find(|(r, _, _)| r.is_some_and(|(i, _, _)| i == self.cursor)).map(|l| l.2).unwrap_or(0.0);
-        let target = (cursor_y - view / 2.0).clamp(0.0, (y - view).max(0.0));
-        self.scroll = target;
+        let (top, view) = (by + 48.0, bh - 78.0);
+        let focus = layout.iter().find(|(l, _)| match (l, &self.editing) {
+            (Line::Input, _) => true,
+            (Line::Row(i, ..), Some((Some(e), _))) => i == e,
+            (Line::Row(i, ..), None) => *i == self.cursor,
+            _ => false,
+        });
+        let focus_y = focus.map(|l| l.1).unwrap_or(0.0);
+        self.scroll = (focus_y - view / 2.0).clamp(0.0, (y - view).max(0.0));
         self.rows.clear();
-        for (row, name, ry) in layout {
-            let ry = top + ry - self.scroll;
+        let text_input = |c: &mut Canvas, ry: f32, text: &str| {
+            c.round_rect(bx + 8.0, ry, bw - 16.0, ROW - 2.0, 4.0, rgba(0x1d1d27, 1.0), rgba(0xFFD34D, 1.0), 1.0);
+            c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), &format!("{text}_"));
+            c.text_right(bx + bw - 22.0, ry + 3.5, 6.0, rgba(0x8a8aa0, 1.0), "width x height");
+        };
+        for (line, ly) in layout {
+            let ry = top + ly - self.scroll;
             if ry < top - 1.0 || ry + ROW > top + view + 1.0 {
                 continue;
             }
-            match row {
-                None => {
+            match line {
+                Line::Head(name) => {
                     c.text(bx + 14.0, ry + 5.0, 7.0, rgba(0xEB452C, 1.0), name);
                 }
-                Some((i, rw, rh)) => {
-                    let selected = i == self.cursor;
+                Line::Hint => {
+                    c.text(bx + 22.0, ry + 3.5, 6.0, rgba(0x6f6f86, 1.0), "none yet: S saves the playfield's size, A adds one");
+                }
+                Line::Input => {
+                    if let Some((_, text)) = &self.editing {
+                        text_input(c, ry, text);
+                    }
+                }
+                Line::Row(i, rw, rh) => {
+                    if let Some((Some(e), text)) = &self.editing {
+                        if *e == i {
+                            text_input(c, ry, text);
+                            continue;
+                        }
+                    }
+                    let selected = i == self.cursor && self.editing.is_none();
                     if selected {
                         c.round_rect(bx + 8.0, ry, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(0xEB452C, 1.0), 1.0);
                     }
-                    c.text(bx + 22.0, ry + 3.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &format!("{rw} x {rh}"));
-                    let tag = if Some((rw, rh)) == current { "current" } else { "" };
-                    c.text_right(bx + bw - 22.0, ry + 3.5, 7.0, rgba(0x86E05A, 1.0), tag);
                     self.rows.push((i, [bx + 8.0, ry, bw - 16.0, ROW - 2.0]));
+                    c.text(bx + 22.0, ry + 3.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &format!("{rw} x {rh}"));
+                    let fits = rw <= native.0 && rh <= native.1;
+                    let mut right = bx + bw - 22.0;
+                    if selected && i < saved {
+                        // Buttons for the saved size, right to left.
+                        for (label, action) in [("del", PresetAction::Delete), ("edit", PresetAction::Edit), ("down", PresetAction::Down), ("up", PresetAction::Up)] {
+                            let lw = Canvas::text_width(6.0, label) + 10.0;
+                            right -= lw;
+                            self.button(c, right, ry + 0.5, label, action);
+                            right -= 4.0;
+                        }
+                        right -= 6.0;
+                    }
+                    let (tag, col) = if !fits {
+                        ("too big", 0x8a8aa0)
+                    } else if Some((rw, rh)) == current {
+                        ("current", 0x86E05A)
+                    } else {
+                        ("", 0)
+                    };
+                    c.text_right(right, ry + 3.5, 7.0, rgba(col, 1.0), tag);
                 }
             }
         }
-        c.text_centered(w / 2.0, by + bh - 9.0, 6.0, rgba(0x6f6f86, 1.0), "Up/Down or mouse to choose   Enter/click apply   Esc close");
+        let (line1, line2) = if self.editing.is_some() {
+            ("type a size like 1280x720   Enter save   Esc cancel", "")
+        } else {
+            ("Up/Down or mouse choose   Enter/click apply   Esc close", "S save current   A add   E edit   Del delete   Shift+Up/Down move")
+        };
+        c.text_centered(w / 2.0, by + bh - 20.0, 6.0, rgba(0x6f6f86, 1.0), line1);
+        c.text_centered(w / 2.0, by + bh - 10.0, 6.0, rgba(0x6f6f86, 1.0), line2);
     }
+}
+
+fn inside(r: &[f32; 4], x: f32, y: f32) -> bool {
+    x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]
 }
 
 impl SettingsUi {

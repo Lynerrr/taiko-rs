@@ -259,6 +259,13 @@ pub fn group_presets(presets: &[(u32, u32)], screen: (u32, u32)) -> Vec<(&'stati
         .collect()
 }
 
+/// A playfield size typed or saved as `1280x720` (also `1280 720`, `1280*720`), within sane limits.
+pub fn parse_size(s: &str) -> Option<(u32, u32)> {
+    let mut parts = s.split(|c: char| c == 'x' || c == 'X' || c == '*' || c.is_whitespace()).filter(|p| !p.is_empty());
+    let (w, h) = (parts.next()?.parse::<u32>().ok()?, parts.next()?.parse::<u32>().ok()?);
+    (parts.next().is_none() && (320..=7680).contains(&w) && (240..=4320).contains(&h)).then_some((w, h))
+}
+
 /// A centred area the size of a `w` x `h` window on a `screen_w` x `screen_h` screen.
 pub fn preset_area(w: u32, h: u32, screen_w: f32, screen_h: f32) -> Area {
     let (fw, fh) = (w as f32 / screen_w.max(1.0), h as f32 / screen_h.max(1.0));
@@ -371,6 +378,17 @@ mod tests {
         assert_eq!(aspect_name(1366, 768), "16:9");
         assert_eq!(aspect_name(2560, 1080), "21:9");
         assert_eq!(aspect_name(1280, 1024), "5:4");
+    }
+
+    #[test]
+    fn parses_typed_sizes() {
+        assert_eq!(parse_size("1280x720"), Some((1280, 720)));
+        assert_eq!(parse_size(" 954 x 1028 "), Some((954, 1028)));
+        assert_eq!(parse_size("1600*900"), Some((1600, 900)));
+        assert_eq!(parse_size("1280"), None);
+        assert_eq!(parse_size("1280x720x2"), None);
+        assert_eq!(parse_size("10x10"), None);
+        assert_eq!(parse_size("x720"), None);
     }
 
     #[test]

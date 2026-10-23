@@ -66,6 +66,8 @@ pub struct Config {
     pub preset_keys: [KeyCode; 2],
     /// Show the playfield's resolution in a corner during play.
     pub show_playfield_size: bool,
+    /// The player's own playfield sizes, first in the preset list, in their order.
+    pub saved_presets: Vec<(u32, u32)>,
     /// Name of the osu! skin in use (its folder name); empty = built-in.
     pub skin: String,
     pub songs: Vec<PathBuf>,
@@ -108,6 +110,7 @@ impl Default for Config {
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             show_playfield_size: true,
+            saved_presets: Vec::new(),
             skin: String::new(),
             songs: Vec::new(),
         }
@@ -220,6 +223,7 @@ impl Config {
                     }
                 }
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
+                "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
                 "skin" => cfg.skin = v.to_string(),
                 "songs" => cfg.songs.push(PathBuf::from(v)),
                 _ => {}
@@ -241,6 +245,8 @@ impl Config {
              # previous / next playfield resolution preset\n\
              preset_keys = {}\n\
              show_playfield_size = {}\n\
+             # your own playfield sizes (preset list, in this order)\n\
+             saved_presets = {}\n\
              offset_ms = {}\n\
              scroll_speed = {:.2}\n\
              master_volume = {:.2}\n\
@@ -278,6 +284,7 @@ impl Config {
             keys.join(", "),
             self.preset_keys.iter().map(|k| key_name(*k)).collect::<Vec<_>>().join(", "),
             self.show_playfield_size,
+            self.saved_presets.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(", "),
             self.offset_ms,
             self.scroll_speed,
             self.master_volume,
