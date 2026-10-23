@@ -134,6 +134,8 @@ struct State {
     modifiers_alt: bool,
     /// When the volume overlay was last poked (Alt + wheel).
     volume_shown: Option<Instant>,
+    /// When the overlay appeared (it slides in once, not on every notch).
+    volume_since: Option<Instant>,
     /// Clickable areas of the last frame drawn.
     hits: Vec<render::HitBox>,
     browse: browse::Browse,
@@ -1513,7 +1515,11 @@ impl State {
             self.cfg.master_volume = v.clamp(0.0, 1.0);
             self.apply_volume();
             self.cfg.save();
-            self.volume_shown = Some(Instant::now());
+            let now = Instant::now();
+            if self.volume_shown.is_none() {
+                self.volume_since = Some(now);
+            }
+            self.volume_shown = Some(now);
             return;
         }
         let n = self.preset_list().len();
@@ -3134,10 +3140,11 @@ impl State {
             let age = now.saturating_duration_since(shown).as_secs_f32();
             if age < 1.6 {
                 let a = ((1.6 - age) / 0.3).min(1.0);
-                let slide = (1.0 - render::progress(shown, 160.0)) * 40.0;
+                let slide = (1.0 - render::progress(self.volume_since.unwrap_or(shown), 160.0)) * 40.0;
                 draw_volume(canvas, &self.cfg, a, slide);
             } else {
                 self.volume_shown = None;
+                self.volume_since = None;
             }
         }
         if let Some(t) = &self.toast {
@@ -3908,6 +3915,7 @@ fn main() {
         modifiers_ctrl: false,
         modifiers_alt: false,
         volume_shown: None,
+        volume_since: None,
         hits: Vec::new(),
         browse: browse::Browse::default(),
         downloads: Vec::new(),
