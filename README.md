@@ -61,7 +61,7 @@ The build is produced by GitHub Actions on every push.
 | Ctrl+Enter / click the autoplay box | fullscreen preview (song select); P in the multiplayer lobby |
 | Alt + wheel | master volume (anywhere) |
 | O (in game or pause menu) | apply the live offset suggestion shown under the hit error meter |
-| `` ` `` | restart map |
+| `` ` `` or Ctrl+R | restart map (Ctrl+R also works paused and on the results screen) |
 | Esc (song select) | clear search / quit |
 | - / = (Shift: ×5) | audio offset −/+ 1 ms |
 | F3 / F4 | scroll speed |
