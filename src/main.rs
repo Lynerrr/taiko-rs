@@ -59,10 +59,14 @@ enum Scene {
     CalibrateDone { estimate: calibrate::Estimate, back: Box<Scene> },
     /// Full-screen editor for the playfield area, opened from settings.
     LayoutEdit { back: Box<Scene> },
+    /// The autoplay preview over the whole screen (in the playfield area, which can be moved
+    /// and resized here), with the timeline. `back`: song select or the multiplayer lobby.
+    Preview { back: Box<Scene> },
     /// Multiplayer: host/join form, room lobby, waiting/countdown, match, results.
     MpMenu,
     Lobby,
-    MpWait { rx: Option<Receiver<Loaded>>, loaded: Option<(Beatmap, Arc<Track>)>, start: Option<Instant> },
+    /// `from`: map time the match starts at.
+    MpWait { rx: Option<Receiver<Loaded>>, loaded: Option<(Beatmap, Arc<Track>)>, start: Option<Instant>, from: Option<f64> },
     MpPlay { game: Box<Game>, quit_armed: Option<Instant> },
     MpResults,
 }
@@ -175,8 +179,6 @@ fn draw_game_area(
     }
 }
 
-/// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
-/// Only those few candidates are hashed, so this stays cheap with a huge library.
 fn fmt_time(ms: f64) -> String {
     let s = (ms / 1000.0).max(0.0) as u64;
     format!("{}:{:02}", s / 60, s % 60)
@@ -196,6 +198,38 @@ fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32) {
     }
     let detail = format!("music {:.0}%   hitsounds {:.0}%", cfg.music_volume * 100.0, cfg.fx_volume * 100.0);
     c.text(x + 12.0, y + 40.0, 7.0, rgba(0x9a9ab0, a), &detail);
+}
+
+/// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
+/// Only those few candidates are hashed, so this stays cheap with a huge library.
+/// Marks the fullscreen preview as a preview: a blue frame and badge on the playfield area, and
+/// a header with the map and the controls.
+fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f32>, lobby: bool) {
+    let blue = preview::MARKER;
+    let a = cfg.playfield_area;
+    let (ax, ay, aw, ah) = (a.x * c.width, a.y * render::VIRTUAL_HEIGHT, a.w * c.width, a.h * render::VIRTUAL_HEIGHT);
+    c.round_rect(ax + 1.0, ay + 1.0, aw - 2.0, ah - 2.0, 4.0, rgba(0, 0.0), rgba(blue, 0.55), 1.5);
+    let badge = "AUTOPLAY PREVIEW";
+    let bw = Canvas::text_width(7.0, badge) + 16.0;
+    // Below the header when the area reaches the top of the screen.
+    let by = (ay + 8.0).max(52.0);
+    c.round_rect(ax + 8.0, by, bw, 16.0, 8.0, rgba(blue, 0.85), rgba(0, 0.0), 0.0);
+    c.text(ax + 16.0, by + 4.5, 7.0, rgba(0x0c1a28, 1.0), badge);
+
+    c.round_rect(24.0, 10.0, c.width - 48.0, 34.0, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+    c.round_rect(32.0, 18.0, 62.0, 18.0, 9.0, rgba(0x173049, 1.0), rgba(blue, 1.0), 1.0);
+    c.text(41.0, 23.0, 8.0, rgba(0xffffff, 1.0), "PREVIEW");
+    let pill = stars::draw_pill(c, c.width - 36.0, 22.0, 8.0, stars);
+    let hints = if lobby { "Esc lobby   drag / edges / wheel: playfield" } else { "Esc back   Enter play   drag / edges / wheel: playfield" };
+    let hw = Canvas::text_width(7.0, hints);
+    c.text_right(c.width - 44.0 - pill, 24.0, 7.0, rgba(0x8a8aa0, 1.0), hints);
+    let room = c.width - 48.0 - 110.0 - hw - pill - 24.0;
+    let mut title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
+    let max = (room / (10.0 / 7.0 * 6.0)).max(4.0) as usize;
+    if title.chars().count() > max {
+        title = title.chars().take(max.saturating_sub(3)).collect::<String>() + "...";
+    }
+    c.text(104.0, 22.0, 10.0, rgba(0xffffff, 1.0), &title);
 }
 
 fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
@@ -246,6 +280,89 @@ impl State {
         }
         let rx = self.spawn_loader(entry, self.cfg.rate, self.cached_track(entry, self.cfg.rate));
         self.scene = Scene::Loading { rx, label, entry, from };
+    }
+
+    /// The map the preview shows: the lobby map in the lobby (and its preview), else the song
+    /// select selection.
+    fn preview_target(&self) -> Option<usize> {
+        let lobby = match &self.scene {
+            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => true,
+            Scene::Preview { back } | Scene::Settings { prev: back } => matches!(**back, Scene::Lobby),
+            _ => false,
+        };
+        let lobby_map = self.mp.as_ref().and_then(|s| s.map_entry).filter(|_| lobby);
+        lobby_map.or_else(|| self.select.selected())
+    }
+
+    fn open_preview(&mut self) {
+        if self.preview_target().is_none() {
+            return;
+        }
+        let back = std::mem::replace(&mut self.scene, Scene::Select);
+        self.scene = Scene::Preview { back: Box::new(back) };
+    }
+
+    fn close_preview(&mut self) {
+        if let Scene::Preview { back } = std::mem::replace(&mut self.scene, Scene::Select) {
+            self.scene = *back;
+        }
+    }
+
+    fn previewing_lobby(&self) -> bool {
+        matches!(&self.scene, Scene::Preview { back } if matches!(**back, Scene::Lobby))
+    }
+
+    /// Host, in the lobby preview: the picked start point becomes the match's.
+    fn set_match_start(&mut self) {
+        let Some(s) = &mut self.mp else { return };
+        if !s.is_host() || s.in_match {
+            return;
+        }
+        let (Some(i), Some(mut m)) = (s.map_entry, s.map.clone()) else { return };
+        m.from = self.preview.marker(&self.library[i]);
+        let text = match m.from {
+            Some(t) => format!("the match starts at {}", fmt_time(t)),
+            None => "the match starts at the beginning".to_string(),
+        };
+        s.client.send(net::ClientMsg::SelectMap(m));
+        self.toast(text);
+    }
+
+    /// The preview's button: play from the start point (or the match's start point).
+    fn preview_button(&mut self) {
+        if self.previewing_lobby() {
+            self.set_match_start();
+        } else if self.picking_lobby_map {
+            if let Some(i) = self.select.selected() {
+                self.pick_lobby_map(i);
+            }
+        } else {
+            self.play_from_marker();
+        }
+    }
+
+    fn preview_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
+        if matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+            let step = if code == KeyCode::ArrowRight { 5000.0 } else { -5000.0 };
+            self.preview.seek_by(step, self.audio.as_ref());
+            return;
+        }
+        if repeat || self.handle_global_key(code, window) {
+            return;
+        }
+        match code {
+            KeyCode::Escape | KeyCode::Backspace => self.close_preview(),
+            KeyCode::Enter | KeyCode::NumpadEnter if self.modifiers_ctrl => self.close_preview(),
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let marked = self.preview_target().is_some_and(|i| self.preview.marker(&self.library[i]).is_some());
+                if marked || self.previewing_lobby() || self.picking_lobby_map {
+                    self.preview_button();
+                } else if let Some(i) = self.select.selected() {
+                    self.start_loading(i);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Plays the selected map from the start point picked on its timeline.
@@ -685,7 +802,7 @@ impl State {
 
     /// Scenes where the playfield area can be moved and resized with the mouse.
     fn area_editable(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } | Scene::LayoutEdit { .. })
+        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. })
     }
 
     fn open_layout_editor(&mut self) {
@@ -826,6 +943,13 @@ impl State {
             self.volume_shown = Some(Instant::now());
             return;
         }
+        if matches!(self.scene, Scene::Preview { .. }) {
+            let (vx, vy) = self.mouse_virtual();
+            if self.preview.time_at(vx, vy).is_some() {
+                self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref());
+                return;
+            }
+        }
         if self.area_editable() {
             self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
             self.cfg.save();
@@ -881,24 +1005,26 @@ impl State {
             self.guides = guides;
             return grip.cursor();
         }
+        if matches!(self.scene, Scene::Select | Scene::Preview { .. }) {
+            if let Some(last) = self.scrubbing {
+                // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
+                if last.elapsed() >= Duration::from_millis(33) {
+                    if let Some(t) = self.preview.time_at(vx, vy) {
+                        self.preview.seek(t, self.audio.as_ref());
+                    }
+                    self.scrubbing = Some(Instant::now());
+                }
+                return CursorIcon::Pointer;
+            }
+            let on_box = matches!(self.scene, Scene::Select) && self.preview.box_at(vx, vy);
+            if self.preview.time_at(vx, vy).is_some() || self.preview.play_button_at(vx, vy) || on_box {
+                self.hover = None;
+                return CursorIcon::Pointer;
+            }
+        }
         if !self.area_editable() {
             self.hover = None;
             let (vx, vy) = self.mouse_virtual();
-            if matches!(self.scene, Scene::Select) {
-                if let Some(last) = self.scrubbing {
-                    // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
-                    if last.elapsed() >= Duration::from_millis(33) {
-                        if let Some(t) = self.preview.time_at(vx, vy) {
-                            self.preview.seek(t, self.audio.as_ref());
-                        }
-                        self.scrubbing = Some(Instant::now());
-                    }
-                    return CursorIcon::Pointer;
-                }
-                if self.preview.time_at(vx, vy).is_some() || self.preview.play_button_at(vx, vy) {
-                    return CursorIcon::Pointer;
-                }
-            }
             if let Some(dd) = &mut self.settings_ui.dropdown {
                 if let Some(i) = dd.row_at(vx, vy) {
                     dd.cursor = i;
@@ -912,11 +1038,19 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool) {
-        if matches!(self.scene, Scene::Select) {
+        if matches!(self.scene, Scene::Select | Scene::Preview { .. }) {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
-                if self.preview.play_button_at(vx, vy) && !self.picking_lobby_map {
-                    self.play_from_marker();
+                if self.preview.play_button_at(vx, vy) {
+                    if matches!(self.scene, Scene::Preview { .. }) {
+                        self.preview_button();
+                    } else if !self.picking_lobby_map {
+                        self.play_from_marker();
+                    }
+                    return;
+                }
+                if matches!(self.scene, Scene::Select) && self.preview.box_at(vx, vy) {
+                    self.open_preview();
                     return;
                 }
                 if let Some(t) = self.preview.time_at(vx, vy) {
@@ -1000,6 +1134,7 @@ impl State {
             title: e.meta.title.clone(),
             version: e.meta.version.clone(),
             rate: self.cfg.rate,
+            from: None,
         };
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
@@ -1067,6 +1202,7 @@ impl State {
                         let text = format!("match rate {:.2}x", self.cfg.rate);
                         self.toast(text);
                     }
+                    KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
                     KeyCode::KeyM if s.is_host() && !s.in_match => {
                         self.picking_lobby_map = true;
                         self.scene = Scene::Select;
@@ -1209,7 +1345,8 @@ impl State {
         // A lobby map may have been announced before our library was ready.
         if let Some(s) = &mut self.mp {
             if let Some(m) = &s.map {
-                s.have_map = find_map(&self.library, m).is_some();
+                s.map_entry = find_map(&self.library, m);
+                s.have_map = s.map_entry.is_some();
                 s.client.send(net::ClientMsg::HasMap(s.have_map));
             }
         }
@@ -1252,7 +1389,8 @@ impl State {
                 let hash = map.as_ref().map(|m| m.hash);
                 if hash != s.reported_map {
                     s.reported_map = hash;
-                    s.have_map = map.as_ref().is_some_and(|m| find_map(library, m).is_some());
+                    s.map_entry = map.as_ref().and_then(|m| find_map(library, m));
+                    s.have_map = s.map_entry.is_some();
                     s.client.send(net::ClientMsg::HasMap(s.have_map));
                     s.ready = false;
                 }
@@ -1277,7 +1415,7 @@ impl State {
                         self.picking_lobby_map = false;
                         self.preview.show_background_for(&self.library[i]);
                         let rx = self.spawn_loader(i, map.rate, self.cached_track(i, map.rate));
-                        self.scene = Scene::MpWait { rx: Some(rx), loaded: None, start: None };
+                        self.scene = Scene::MpWait { rx: Some(rx), loaded: None, start: None, from: map.from };
                     }
                     None => s.client.send(net::ClientMsg::Loaded(false)),
                 }
@@ -1342,6 +1480,10 @@ impl State {
             self.layout_key(code);
             return;
         }
+        if matches!(self.scene, Scene::Preview { .. }) {
+            self.preview_key(code, repeat, window);
+            return;
+        }
         if matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults) {
             self.multiplayer_key(code, repeat, text, at, window);
             return;
@@ -1394,6 +1536,7 @@ impl State {
             Scene::Select if self.modifiers_shift && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) && !self.picking_lobby_map => {
                 self.play_from_marker();
             }
+            Scene::Select if self.modifiers_ctrl && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) => self.open_preview(),
             Scene::Select if code == KeyCode::F2 => {
                 if self.modifiers_shift {
                     self.select.random_back();
@@ -1429,7 +1572,7 @@ impl State {
                 }
             }
             Scene::Settings { .. } => self.settings_key(code, window),
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => {}
+            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. } => {}
             Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => {}
             Scene::Play { game, entry, from } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
@@ -1476,14 +1619,17 @@ impl State {
         self.frame_clip = None;
         self.poll_scan();
         {
-            let in_select = matches!(self.scene, Scene::Select);
+            let in_select = matches!(self.scene, Scene::Select | Scene::Preview { .. });
             let in_menu = in_select
-                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select))
+                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby))
                 || matches!(self.scene, Scene::MpMenu | Scene::Lobby);
-            let selected = self.select.selected();
+            let selected = self.preview_target();
             self.preview.update(now, &self.library, selected, self.audio.as_ref(), in_menu, in_select, self.cfg.offset_ms, self.cfg.rate);
             self.stars.poll();
-            if in_select {
+            if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
+                self.stars.request(i, &self.library[i].path, self.cfg.rate);
+            }
+            if matches!(self.scene, Scene::Select) {
                 for i in self.select.selected_set() {
                     self.stars.request(i, &self.library[i].path, self.cfg.rate);
                 }
@@ -1493,7 +1639,7 @@ impl State {
             let has_bg = self.preview.has_background;
             self.bg_brightness = match self.scene {
                 _ if !has_bg => 0.0,
-                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Loading { .. } => 1.0 - self.cfg.bg_dim,
+                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Loading { .. } | Scene::Preview { .. } => 1.0 - self.cfg.bg_dim,
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
@@ -1501,6 +1647,8 @@ impl State {
         self.poll_multiplayer();
         let mut next: Option<Scene> = None;
         let mut capture: Option<String> = None;
+        let preview_target = self.preview_target();
+        let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
         let mut finish_calibration = false;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
         if let Some(mut script) = self.input_script.take() {
@@ -1647,6 +1795,30 @@ impl State {
                 }
             }
             Scene::Results { results, .. } => results.draw(canvas),
+            Scene::Preview { back } => {
+                let lobby = matches!(**back, Scene::Lobby);
+                match preview_target {
+                    Some(i) => {
+                        let scroll = self.cfg.scroll_speed;
+                        let see_through = self.bg_brightness > 0.0;
+                        if let Some(game) = self.preview.game_for(i) {
+                            draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, see_through, |c| game.draw_playfield(c, scroll));
+                        }
+                        let e = &self.library[i];
+                        let stars = self.stars.get(i, self.cfg.rate);
+                        draw_preview_chrome(canvas, &self.cfg, e, stars, lobby);
+                        let (x, y, w) = (24.0, 394.0, canvas.width - 48.0);
+                        canvas.round_rect(x, y, w, 78.0, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+                        let button = match (lobby, lobby_host) {
+                            (false, _) => Some(("Play from", "Enter")),
+                            (true, true) => Some(("Start the match from", "Enter")),
+                            (true, false) => None,
+                        };
+                        self.preview.draw_timeline(canvas, e, [x + 12.0, y + 10.0, w - 24.0, 34.0], button);
+                    }
+                    None => next = Some(*std::mem::replace(back, Box::new(Scene::Select))),
+                }
+            }
             Scene::MpMenu => {
                 multiplayer::draw_menu(canvas, &self.mp_menu, &self.cfg.mp_name, self.cfg.mp_port, &self.cfg.mp_address, &self.mp_status, self.mp_connecting.is_some());
             }
@@ -1656,7 +1828,7 @@ impl State {
                 }
                 None => next = Some(Scene::MpMenu),
             },
-            Scene::MpWait { rx, loaded, start } => {
+            Scene::MpWait { rx, loaded, start, from } => {
                 if let Some(r) = rx {
                     match r.try_recv() {
                         Ok(Ok(l)) => {
@@ -1679,7 +1851,10 @@ impl State {
                 }
                 if start.is_some_and(|at| now >= at) {
                     if let Some((map, track)) = loaded.take() {
-                        let game = Game::new(map, track, self.audio.as_ref());
+                        let mut game = Game::new(map, track, self.audio.as_ref());
+                        if let Some(t) = *from {
+                            game.start_from(t, self.audio.as_ref(), self.cfg.offset_ms);
+                        }
                         next = Some(Scene::MpPlay { game: Box::new(game), quit_armed: None });
                     }
                 }

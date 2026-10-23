@@ -21,6 +21,8 @@ pub struct Session {
     /// Last map hash we reported HasMap for, and whether we have it.
     pub reported_map: Option<u64>,
     pub have_map: bool,
+    /// Our library entry for the lobby map.
+    pub map_entry: Option<usize>,
 }
 
 impl Session {
@@ -37,6 +39,7 @@ impl Session {
             label,
             reported_map: None,
             have_map: false,
+            map_entry: None,
         }
     }
 
@@ -208,9 +211,9 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool) {
     let hint = if s.in_match {
         "A match is in progress; you'll join the next one.".to_string()
     } else if s.is_host() {
-        format!("M pick map   [ ] rate   Space ready   Enter start ({ready} ready)   Tab songs   Esc close room")
+        format!("M pick map   P preview / start point   [ ] rate   Space ready   Enter start ({ready} ready)   Tab songs   Esc close room")
     } else {
-        "Space ready   Tab songs   Esc leave".to_string()
+        "Space ready   P preview   Tab songs   Esc leave".to_string()
     };
     c.text_centered(w / 2.0, 446.0, 8.0, rgba(0x9a9ab0, 1.0), &hint);
     if let Some(r) = &s.results {

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 pub const DEFAULT_PORT: u16 = 7777;
 /// Countdown between everyone having loaded and the song starting.
 const START_LEAD_MS: f64 = 3000.0;
@@ -57,6 +57,9 @@ pub struct MapInfo {
     /// Speed modifier the host picked for the match.
     #[serde(default = "one")]
     pub rate: f64,
+    /// Map time the match starts at (picked by the host in the preview); None = the beginning.
+    #[serde(default)]
+    pub from: Option<f64>,
 }
 
 fn one() -> f64 {
@@ -66,7 +69,8 @@ fn one() -> f64 {
 impl MapInfo {
     pub fn label(&self) -> String {
         let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", self.rate) } else { String::new() };
-        format!("{} - {} [{}]{rate}", self.artist, self.title, self.version)
+        let from = self.from.map(|t| format!("  from {}:{:02}", (t / 1000.0) as u64 / 60, (t / 1000.0) as u64 % 60)).unwrap_or_default();
+        format!("{} - {} [{}]{rate}{from}", self.artist, self.title, self.version)
     }
 }
 
@@ -636,7 +640,7 @@ mod tests {
         wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
         let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
         wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0 }));
+        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
         a.send(ClientMsg::HasMap(false));
@@ -645,7 +649,7 @@ mod tests {
         assert!(players.iter().any(|p| p.name == "alice" && p.host));
         assert!(players.iter().any(|p| p.name == "bob" && !p.host));
 
-        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5 };
+        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0) };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
         for c in [&a, &b] {

@@ -58,6 +58,7 @@ The build is produced by GitHub Actions on every push.
 | F2 / Shift+F2 | random song / back to the previous random pick (song select) |
 | Ctrl+← / → | seek the song select preview ±5 s |
 | Shift+Enter | play the selected map from the start point picked on its timeline |
+| Ctrl+Enter / click the autoplay box | fullscreen preview (song select); P in the multiplayer lobby |
 | Alt + wheel | master volume (anywhere) |
 | O (in game or pause menu) | apply the live offset suggestion shown under the hit error meter |
 | `` ` `` | restart map |
@@ -87,7 +88,16 @@ playhead marked, densest second called out). Click or drag on it, use the wheel 
 Ctrl+←/→ to seek the music and autoplay to any part of the map. Clicking it also remembers that
 point (a blue flag): **Play from 1:23** under the timeline (or Shift+Enter) starts the map there,
 with the music two seconds earlier and only the notes from that point on counting; retry keeps the
-start point. F2 picks a random song. The background also shows behind
+start point. F2 picks a random song.
+
+**Fullscreen preview:** click the autoplay box (or Ctrl+Enter) to watch the autoplay over the
+whole screen, drawn in your playfield area so you can move and resize it right there (drag, drag
+the edges, wheel; F5/F6 presets) and see how it will look. It is marked as a preview (blue frame,
+PREVIEW header, no score) and has the full-width timeline: click to seek and pick a start point,
+then Enter or **Play from 1:23**. Esc goes back. In a multiplayer lobby, P opens the same preview
+of the lobby map; the host's button is **Start the match from 1:23**, which sets where everyone's
+match starts (shown next to the map; players re-ready, as after a rate change). The lobby also
+plays the lobby map's music. The background also shows behind
 the lane during play, darkened by Settings → *Background dim*.
 
 ## Playfield size and speed

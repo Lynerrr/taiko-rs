@@ -97,6 +97,8 @@ pub struct Preview {
     marker: Option<(PathBuf, f64)>,
     /// Where the "Play from" button was drawn.
     play_rect: Option<[f32; 4]>,
+    /// Where the autoplay box was drawn (clicking it opens the fullscreen preview).
+    box_rect: Option<[f32; 4]>,
     game: Option<Game>,
     last_time: f64,
     bg_path: Option<PathBuf>,
@@ -342,6 +344,29 @@ impl Preview {
         self.play_rect.is_some_and(|[bx, by, bw, bh]| x >= bx && x <= bx + bw && y >= by && y <= by + bh)
     }
 
+    pub fn box_at(&self, x: f32, y: f32) -> bool {
+        self.box_rect.is_some_and(|[bx, by, bw, bh]| x >= bx && x <= bx + bw && y >= by && y <= by + bh)
+    }
+
+    /// The autoplay preview of library entry `i`, once it has loaded.
+    pub fn game_for(&mut self, i: usize) -> Option<&mut Game> {
+        let loaded = self.map.as_ref().is_some_and(|(mi, ..)| *mi == i) && self.seen == Some(i);
+        self.game.as_mut().filter(|_| loaded)
+    }
+
+    /// The difficulty timeline of `e` (the selected map) in `rect`, with the start point and,
+    /// if `button` is given as (verb, key hint), a "<verb> 1:23" button under it.
+    pub fn draw_timeline(&mut self, c: &mut Canvas, e: &Entry, rect: [f32; 4], button: Option<(&str, &str)>) {
+        self.graph_rect = None;
+        self.play_rect = None;
+        let loaded = self.map.as_ref().filter(|(mi, ..)| Some(*mi) == self.seen);
+        let (Some((_, _, _, graph)), Some(game)) = (loaded, self.game.as_ref()) else { return };
+        let marker = self.marker(e);
+        self.timeline = draw_graph(c, graph, rect, game.time, e.meta.preview_time, marker);
+        self.graph_rect = Some(rect);
+        self.play_rect = draw_play_button(c, rect[0] + rect[2] / 2.0, rect[1] + rect[3] + 17.0, marker, button);
+    }
+
     pub fn graph_rect(&self) -> Option<[f32; 4]> {
         self.graph_rect
     }
@@ -369,6 +394,7 @@ impl Preview {
         let h = h.min(114.0 + preview_h + 8.0 + GRAPH_H + 44.0);
         self.graph_rect = None;
         self.play_rect = None;
+        self.box_rect = None;
         c.round_rect(x, y, w, h, 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
         let Some(i) = self.seen.filter(|&i| i < library.len()) else { return None };
         let e = &library[i];
@@ -403,15 +429,10 @@ impl Preview {
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
         let (bx, by, bw, bh) = (x + 10.0, y + 114.0, w - 20.0, preview_h);
         c.round_rect(bx, by, bw, bh, 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
-        if let (Some((_, _, _, graph)), Some(game)) = (loaded, self.game.as_ref()) {
-            let rect = [bx, by + bh + 8.0, bw, GRAPH_H];
-            let preview_at = e.meta.preview_time;
-            let marker = self.marker(e);
-            self.timeline = draw_graph(c, graph, rect, game.time, preview_at, marker);
-            self.graph_rect = Some(rect);
-            self.play_rect = draw_play_button(c, x + w / 2.0, rect[1] + GRAPH_H + 17.0, marker);
-        }
-        let game = self.game.as_mut().filter(|_| loaded.is_some())?;
+        self.box_rect = Some([bx, by, bw, bh]);
+        let loaded = loaded.is_some();
+        self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], Some(("Play from", "Shift+Enter")));
+        let game = self.game.as_mut().filter(|_| loaded)?;
         let full_w = c.width;
         let start = c.shapes.len();
         c.width = bw / k;
@@ -419,6 +440,7 @@ impl Preview {
         let oy = by + (bh - band_h * k) / 2.0 - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
+        c.text_right(bx + bw - 6.0, by + bh - 10.0, 6.0, rgba(0x6f6f86, 1.0), "click: fullscreen (Ctrl+Enter)");
         let clip = crate::layout::Area { x: bx / full_w, y: by / VIRTUAL_HEIGHT, w: bw / full_w, h: bh / VIRTUAL_HEIGHT };
         Some((start..c.shapes.len(), clip))
     }
@@ -472,17 +494,18 @@ pub fn draw_graph(c: &mut Canvas, g: &Graph, [x, y, w, h]: [f32; 4], now: f64, p
     (t0, t1)
 }
 
-const MARKER: u32 = 0x4fb4ff;
+pub const MARKER: u32 = 0x4fb4ff;
 
-/// "Play from 1:23" under the timeline once a start point is picked (else a hint). Returns the
+/// "<verb> 1:23" under the timeline once a start point is picked (else a hint). `button` is
+/// (verb, key hint); None shows no button (only the host picks a match's start). Returns the
 /// button's rect.
-pub fn draw_play_button(c: &mut Canvas, cx: f32, y: f32, marker: Option<f64>) -> Option<[f32; 4]> {
-    let Some(t) = marker else {
-        c.text_centered(cx, y + 4.0, 6.0, rgba(0x6f6f86, 1.0), "click the graph to pick a start point - drag / wheel to seek");
+fn draw_play_button(c: &mut Canvas, cx: f32, y: f32, marker: Option<f64>, button: Option<(&str, &str)>) -> Option<[f32; 4]> {
+    let (Some(t), Some((verb, hint))) = (marker, button) else {
+        let text = if button.is_some() { "click the graph to pick a start point - drag / wheel to seek" } else { "click / drag / wheel to seek" };
+        c.text_centered(cx, y + 4.0, 6.0, rgba(0x6f6f86, 1.0), text);
         return None;
     };
-    let label = format!("Play from {}", fmt_time(t));
-    let hint = "Shift+Enter";
+    let label = format!("{verb} {}", fmt_time(t));
     let (lw, hw) = (Canvas::text_width(8.0, &label), Canvas::text_width(6.0, hint));
     let bw = 14.0 + 10.0 + lw + 10.0 + hw + 10.0;
     let (bx, bh) = (cx - bw / 2.0, 17.0);
