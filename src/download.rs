@@ -26,6 +26,119 @@ const MIRRORS: [Mirror; 2] = [
     Mirror { name: "osu.direct", search: "https://osu.direct/api/v2/search", query_key: "query", amount_key: "amount", download: "https://osu.direct/api/d/" },
 ];
 
+/// Which mirror searches first: osu.direct can sort on its side, catboy.best can't.
+const SEARCH_ORDER: [usize; 2] = [1, 0];
+
+/// Search categories, like the osu! website's (beatmap status filters).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Category {
+    HasLeaderboard,
+    Ranked,
+    Qualified,
+    Loved,
+    Pending,
+    Wip,
+    Graveyard,
+    Any,
+}
+
+impl Category {
+    pub const ALL: [Category; 8] = [
+        Category::HasLeaderboard,
+        Category::Ranked,
+        Category::Qualified,
+        Category::Loved,
+        Category::Pending,
+        Category::Wip,
+        Category::Graveyard,
+        Category::Any,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Category::HasLeaderboard => "Has leaderboard",
+            Category::Ranked => "Ranked",
+            Category::Qualified => "Qualified",
+            Category::Loved => "Loved",
+            Category::Pending => "Pending",
+            Category::Wip => "WIP",
+            Category::Graveyard => "Graveyard",
+            Category::Any => "Any",
+        }
+    }
+
+    /// osu! ranked status codes to ask for (empty: any).
+    fn statuses(self) -> &'static [i32] {
+        match self {
+            Category::HasLeaderboard => &[1, 2, 3, 4],
+            Category::Ranked => &[1, 2],
+            Category::Qualified => &[3],
+            Category::Loved => &[4],
+            Category::Pending => &[0],
+            Category::Wip => &[-1],
+            Category::Graveyard => &[-2],
+            Category::Any => &[],
+        }
+    }
+}
+
+/// Search orders, like the osu! website's.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SortKey {
+    /// The mirror's order (best match); with no search text, newest ranked first.
+    Relevance,
+    Title,
+    Artist,
+    Difficulty,
+    Ranked,
+    Rating,
+    Plays,
+    Favourites,
+}
+
+impl SortKey {
+    pub const ALL: [SortKey; 8] = [
+        SortKey::Relevance,
+        SortKey::Title,
+        SortKey::Artist,
+        SortKey::Difficulty,
+        SortKey::Ranked,
+        SortKey::Rating,
+        SortKey::Plays,
+        SortKey::Favourites,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            SortKey::Relevance => "Relevance",
+            SortKey::Title => "Title",
+            SortKey::Artist => "Artist",
+            SortKey::Difficulty => "Difficulty",
+            SortKey::Ranked => "Ranked",
+            SortKey::Rating => "Rating",
+            SortKey::Plays => "Plays",
+            SortKey::Favourites => "Favourites",
+        }
+    }
+
+    /// The natural direction when first picked (text A-Z, numbers high to low).
+    pub fn default_desc(self) -> bool {
+        !matches!(self, SortKey::Title | SortKey::Artist | SortKey::Difficulty)
+    }
+
+    /// osu.direct's name for it, when it can sort that way itself.
+    fn server(self) -> Option<&'static str> {
+        match self {
+            SortKey::Title => Some("title"),
+            SortKey::Artist => Some("artist"),
+            SortKey::Ranked => Some("ranked_date"),
+            SortKey::Plays => Some("play_count"),
+            SortKey::Favourites => Some("favourite_count"),
+            SortKey::Relevance | SortKey::Difficulty | SortKey::Rating => None,
+        }
+    }
+}
+
 /// A beatmap set found on a mirror (only its taiko difficulties are kept).
 #[derive(Clone, Debug)]
 pub struct SetInfo {
@@ -36,6 +149,11 @@ pub struct SetInfo {
     pub status: String,
     /// Taiko difficulties, easiest first.
     pub diffs: Vec<Diff>,
+    pub play_count: u64,
+    pub favourite_count: u64,
+    pub rating: f32,
+    /// ISO 8601, empty if never ranked.
+    pub ranked_date: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +190,14 @@ struct ApiSet {
     status: String,
     #[serde(default)]
     beatmaps: Vec<ApiMap>,
+    #[serde(default)]
+    play_count: u64,
+    #[serde(default)]
+    favourite_count: u64,
+    #[serde(default)]
+    rating: f32,
+    #[serde(default)]
+    ranked_date: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -105,22 +231,35 @@ fn parse_sets(json: &str) -> Result<Vec<SetInfo>, String> {
                 .map(|b| Diff { id: b.id, version: b.version.clone(), stars: b.difficulty_rating })
                 .collect();
             diffs.sort_by(|a, b| a.stars.total_cmp(&b.stars));
-            (!diffs.is_empty()).then_some(SetInfo { id: s.id, artist: s.artist, title: s.title, creator: s.creator, status: s.status, diffs })
+            (!diffs.is_empty()).then_some(SetInfo {
+                id: s.id,
+                artist: s.artist,
+                title: s.title,
+                creator: s.creator,
+                status: s.status,
+                diffs,
+                play_count: s.play_count,
+                favourite_count: s.favourite_count,
+                rating: s.rating,
+                ranked_date: s.ranked_date.unwrap_or_default(),
+            })
         })
         .collect())
 }
 
-/// Searches the mirrors in turn for taiko sets matching `query` (empty: recent ones).
-pub fn search(query: &str) -> Result<Vec<SetInfo>, String> {
-    let agent = agent();
+/// One status (or any) from the first mirror that answers.
+fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Option<(&str, bool)>) -> Result<Vec<SetInfo>, String> {
     let mut errors = Vec::new();
-    for m in &MIRRORS {
-        let result = agent
-            .get(m.search)
-            .header("User-Agent", USER_AGENT)
-            .query(m.query_key, query)
-            .query("mode", "1")
-            .query(m.amount_key, "50")
+    for &k in &SEARCH_ORDER {
+        let m = &MIRRORS[k];
+        let mut req = agent.get(m.search).header("User-Agent", USER_AGENT).query(m.query_key, query).query("mode", "1").query(m.amount_key, "50");
+        if let Some(st) = status {
+            req = req.query("status", st.to_string());
+        }
+        if let (Some((key, desc)), "osu.direct") = (sort, m.name) {
+            req = req.query("sort", format!("{key}:{}", if desc { "desc" } else { "asc" }));
+        }
+        let result = req
             .call()
             .map_err(|e| e.to_string())
             .and_then(|mut r| r.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| e.to_string()))
@@ -131,6 +270,61 @@ pub fn search(query: &str) -> Result<Vec<SetInfo>, String> {
         }
     }
     Err(errors.join("; "))
+}
+
+/// Searches the mirrors for taiko sets matching `query` in `category`, ordered by `sort`
+/// (descending if `desc`). Categories spanning several statuses are fetched per status and
+/// merged.
+pub fn search(query: &str, category: Category, sort: SortKey, desc: bool) -> Result<Vec<SetInfo>, String> {
+    let agent = agent();
+    // With no text, "relevance" means newest ranked first, as on the website.
+    let (sort, desc) = if sort == SortKey::Relevance && query.trim().is_empty() { (SortKey::Ranked, true) } else { (sort, desc) };
+    let server = sort.server().map(|k| (k, desc));
+    let statuses: Vec<Option<i32>> = if category.statuses().is_empty() { vec![None] } else { category.statuses().iter().map(|&s| Some(s)).collect() };
+    let results: Vec<Result<Vec<SetInfo>, String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = statuses.iter().map(|&st| { let agent = &agent; s.spawn(move || search_status(agent, query, st, server)) }).collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("search failed".into()))).collect()
+    });
+    let mut errors = Vec::new();
+    let mut sets: Vec<SetInfo> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for r in results {
+        match r {
+            Ok(found) => sets.extend(found.into_iter().filter(|s| seen.insert(s.id))),
+            Err(e) => errors.push(e),
+        }
+    }
+    if sets.is_empty() && !errors.is_empty() {
+        return Err(errors.join("; "));
+    }
+    sort_sets(&mut sets, sort, desc);
+    sets.truncate(50);
+    Ok(sets)
+}
+
+/// Orders merged results (and does the sorts no mirror can do).
+fn sort_sets(sets: &mut [SetInfo], sort: SortKey, desc: bool) {
+    use std::cmp::Ordering;
+    let hardest = |s: &SetInfo| s.diffs.last().map(|d| d.stars).unwrap_or(0.0);
+    let order = |a: &SetInfo, b: &SetInfo| -> Ordering {
+        match sort {
+            SortKey::Relevance => Ordering::Equal,
+            SortKey::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
+            SortKey::Artist => a.artist.to_lowercase().cmp(&b.artist.to_lowercase()),
+            SortKey::Difficulty => hardest(a).total_cmp(&hardest(b)),
+            // Unranked sets have no date: they go last either way.
+            SortKey::Ranked => match (a.ranked_date.is_empty(), b.ranked_date.is_empty()) {
+                (false, false) => a.ranked_date.cmp(&b.ranked_date),
+                (x, y) => y.cmp(&x).reverse(),
+            },
+            SortKey::Rating => a.rating.total_cmp(&b.rating),
+            SortKey::Plays => a.play_count.cmp(&b.play_count),
+            SortKey::Favourites => a.favourite_count.cmp(&b.favourite_count),
+        }
+    };
+    if sort != SortKey::Relevance {
+        sets.sort_by(|a, b| if desc { order(b, a) } else { order(a, b) });
+    }
 }
 
 /// A download in progress. `done`/`total` are bytes (total 0 until known).

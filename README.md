@@ -165,10 +165,14 @@ so the suggestion settles instead of overshooting. Toggle it with Settings → L
 ## Downloading maps
 
 The **DOWNLOAD** tab (or Ctrl+D on song select) searches the public osu! mirrors
-[catboy.best](https://catboy.best) and [osu.direct](https://osu.direct) (the second is tried when
-the first fails) for sets with taiko difficulties: type an artist, title or mapper; with no text it
-lists recent ones. Each result shows its mapper, status, number of taiko difficulties and star
-range. Enter, or the *Download* button, fetches the `.osz` with a progress bar and unpacks it into
+[osu.direct](https://osu.direct) and [catboy.best](https://catboy.best) (the second is tried when
+the first fails) for taiko maps (sets with taiko difficulties; only those are shown): type an
+artist, title or mapper. Like the osu! website, a **status** row picks *Has leaderboard* (ranked,
+approved, qualified and loved; the default), *Ranked*, *Qualified*, *Loved*, *Pending*, *WIP*,
+*Graveyard* or *Any*, and a **sort** row orders by relevance, title, artist, difficulty, ranked
+date, rating, plays or favourites (click the active one to flip the direction; Ctrl+Left/Right and
+Ctrl+Up/Down step through them). With no text, newest ranked first. Each result shows its mapper,
+status, number of taiko difficulties and star range. Enter, or the *Download* button, fetches the `.osz` with a progress bar and unpacks it into
 your Songs folder as `<set id> <artist> - <title>/` (the first folder being scanned, else
 `~/.local/share/taiko-rs/Songs` / `%APPDATA%\taiko-rs\Songs`, which is scanned at startup). The set
 shows up in the song list right away and is selected; sets you already have say *installed*.

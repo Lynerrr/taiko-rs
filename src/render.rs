@@ -687,6 +687,9 @@ pub enum Hit {
     PickRow(usize),
     /// A settings sidebar section.
     SettingsSection(usize),
+    /// Download tab status category / sort chips.
+    DlCategory(usize),
+    DlSort(usize),
 }
 
 #[derive(Clone, Copy, Debug)]

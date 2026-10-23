@@ -2385,11 +2385,15 @@ impl State {
                 creator: String::new(),
                 status: String::new(),
                 diffs: Vec::new(),
+                play_count: 0,
+                favourite_count: 0,
+                rating: 0.0,
+                ranked_date: String::new(),
             }),
             None => {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let found = download::search(&format!("{} {}", m.artist, m.title)).and_then(|sets| {
+                    let found = download::search(&format!("{} {}", m.artist, m.title), download::Category::Any, download::SortKey::Relevance, true).and_then(|sets| {
                         sets.into_iter()
                             .find(|s| s.title.eq_ignore_ascii_case(&m.title) && s.diffs.iter().any(|d| d.version == m.version))
                             .ok_or_else(|| "not found on the mirrors".to_string())
@@ -2499,6 +2503,8 @@ impl State {
             return;
         }
         match code {
+            KeyCode::ArrowLeft | KeyCode::ArrowRight if self.modifiers_ctrl => self.browse.step_category(if code == KeyCode::ArrowRight { 1 } else { -1 }),
+            KeyCode::ArrowUp | KeyCode::ArrowDown if self.modifiers_ctrl => self.browse.step_sort(if code == KeyCode::ArrowDown { 1 } else { -1 }),
             KeyCode::ArrowUp => self.browse.move_by(-1),
             KeyCode::ArrowDown => self.browse.move_by(1),
             KeyCode::ArrowLeft => self.browse.cycle_diff(-1),
@@ -2564,6 +2570,8 @@ impl State {
             Hit::Key(code) => self.key(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::Presets => self.open_dropdown(),
+            Hit::DlCategory(i) => self.browse.set_category(download::Category::ALL[i]),
+            Hit::DlSort(i) => self.browse.set_sort(download::SortKey::ALL[i]),
             Hit::SettingsSection(i) => {
                 self.settings_ui.binding = None;
                 self.settings_ui.cursor = settings::section_start(i);

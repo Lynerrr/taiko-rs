@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use crate::download::{self, Diff, Job, SetInfo};
+use crate::download::{self, Category, Diff, Job, SetInfo, SortKey};
 use crate::library::Entry;
 use crate::render::{approach, rgba, Canvas, Hit};
 
@@ -17,9 +17,11 @@ const PREVIEW_DELAY: Duration = Duration::from_millis(250);
 /// (set id, beatmap id) of a previewed difficulty.
 type DiffKey = (u32, u32);
 
-#[derive(Default)]
 pub struct Browse {
     pub query: String,
+    pub category: Category,
+    pub sort: SortKey,
+    pub desc: bool,
     pub results: Vec<SetInfo>,
     pub cursor: usize,
     scroll: f32,
@@ -40,6 +42,31 @@ pub struct Browse {
     failed: HashSet<DiffKey>,
 }
 
+impl Default for Browse {
+    fn default() -> Browse {
+        Browse {
+            query: String::new(),
+            category: Category::HasLeaderboard,
+            sort: SortKey::Relevance,
+            desc: true,
+            results: Vec::new(),
+            cursor: 0,
+            scroll: 0.0,
+            status: String::new(),
+            search: None,
+            edited: None,
+            searched: None,
+            remote: Vec::new(),
+            remote_keys: Vec::new(),
+            shown: None,
+            diff_choice: HashMap::new(),
+            wanted: None,
+            fetching: None,
+            failed: HashSet::new(),
+        }
+    }
+}
+
 /// What a result row shows on its right.
 pub enum RowState {
     Installed,
@@ -48,17 +75,51 @@ pub enum RowState {
 }
 
 impl Browse {
-    /// Starts a search for the current query now.
+    /// Starts a search for the current query, category and order now.
     pub fn search_now(&mut self) {
         let query = self.query.trim().to_string();
         self.searched = Some(query.clone());
         self.edited = None;
-        self.status = if query.is_empty() { "loading recent taiko maps...".into() } else { format!("searching \"{query}\"...") };
+        self.status = if query.is_empty() { format!("loading {} taiko maps...", self.category.name().to_lowercase()) } else { format!("searching \"{query}\"...") };
         let (tx, rx) = mpsc::channel();
+        let (category, sort, desc) = (self.category, self.sort, self.desc);
         std::thread::spawn(move || {
-            let _ = tx.send(download::search(&query));
+            let _ = tx.send(download::search(&query, category, sort, desc));
         });
         self.search = Some(rx);
+    }
+
+    pub fn set_category(&mut self, c: Category) {
+        if c != self.category {
+            self.category = c;
+            self.search_now();
+        }
+    }
+
+    /// Picks an order; picking the current one again flips its direction.
+    pub fn set_sort(&mut self, s: SortKey) {
+        if s == self.sort {
+            self.desc = !self.desc;
+        } else {
+            self.sort = s;
+            self.desc = s.default_desc();
+        }
+        self.search_now();
+    }
+
+    pub fn step_category(&mut self, dir: i32) {
+        let all = Category::ALL;
+        let i = all.iter().position(|&c| c == self.category).unwrap_or(0) as i32;
+        self.set_category(all[(i + dir).rem_euclid(all.len() as i32) as usize]);
+    }
+
+    pub fn step_sort(&mut self, dir: i32) {
+        let all = SortKey::ALL;
+        let i = all.iter().position(|&s| s == self.sort).unwrap_or(0) as i32;
+        let next = all[(i + dir).rem_euclid(all.len() as i32) as usize];
+        self.sort = next;
+        self.desc = next.default_desc();
+        self.search_now();
     }
 
     /// Searches on first open.
@@ -186,9 +247,33 @@ impl Browse {
         if busy {
             c.text_right(x0 + col - 10.0, 62.0, 8.0, rgba(0xFFD34D, 1.0), "searching...");
         }
+        // Website-style filters: status category, then order (click the active one to flip it).
+        let chip = |c: &mut Canvas, x: f32, y: f32, label: &str, on: bool, hit: Hit| -> f32 {
+            let w = Canvas::text_width(6.0, label) + 12.0;
+            let hover = !on && c.hovered(x, y, w, 15.0);
+            let bg = if on { 0xEB452C } else if hover { 0x34344a } else { 0x23232f };
+            c.round_rect(x, y, w, 15.0, 5.0, rgba(bg, 1.0), rgba(if on { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
+            c.text(x + 6.0, y + 4.5, 6.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
+            c.hit(x, y, w, 15.0, hit);
+            w + 4.0
+        };
+        let mut x = x0;
+        c.text(x, 88.0, 6.0, rgba(0x8a8aa0, 1.0), "STATUS");
+        x += 40.0;
+        for (i, cat) in Category::ALL.iter().enumerate() {
+            x += chip(c, x, 84.0, cat.name(), *cat == self.category, Hit::DlCategory(i));
+        }
+        let mut x = x0;
+        c.text(x, 107.0, 6.0, rgba(0x8a8aa0, 1.0), "SORT");
+        x += 40.0;
+        for (i, key) in SortKey::ALL.iter().enumerate() {
+            let on = *key == self.sort;
+            let label = if on && *key != SortKey::Relevance { format!("{} {}", key.name(), if self.desc { "v" } else { "^" }) } else { key.name().to_string() };
+            x += chip(c, x, 103.0, &label, on, Hit::DlSort(i));
+        }
 
         const ROW: f32 = 40.0;
-        let (top, bottom) = (86.0, 436.0);
+        let (top, bottom) = (124.0, 436.0);
         let view = bottom - top;
         let target = (self.cursor as f32 * ROW - view * 0.4).clamp(0.0, (self.results.len() as f32 * ROW - view).max(0.0));
         approach(&mut self.scroll, target, c.dt_ms, 50.0);
@@ -248,7 +333,7 @@ impl Browse {
         let _ = w;
         let active = jobs.len();
         let footer = if active > 0 { format!("{active} downloading  |  saving to {songs_dir}") } else { format!("saving to {songs_dir}") };
-        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Up/Down select   Left/Right difficulty   Enter / click download   type to search   Esc clear / back   Tab songs");
+        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Up/Down select   Left/Right difficulty   Enter download   Ctrl+Left/Right status   Ctrl+Up/Down sort   Esc clear / back");
         c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), &footer);
     }
 }
