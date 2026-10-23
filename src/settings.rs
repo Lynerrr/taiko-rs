@@ -38,13 +38,15 @@ pub enum Item {
     ShowFps,
     Animations,
     Splash,
+    CheckUpdates,
+    Update,
     Fullscreen,
     DiscordPresence,
     Skin,
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 38] = [
+pub const ITEMS: [(&str, Item); 40] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -83,10 +85,12 @@ pub const ITEMS: [(&str, Item); 38] = [
     ("VIDEO", Item::Splash),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinFolder),
+    ("UPDATES", Item::Update),
+    ("UPDATES", Item::CheckUpdates),
 ];
 
 /// The sections in order, with a one-line summary for the sidebar.
-pub const SECTIONS: [(&str, &str); 7] = [
+pub const SECTIONS: [(&str, &str); 8] = [
     ("GAMEPLAY", "speed, rate, resume"),
     ("PLAYFIELD", "size, position, HUD"),
     ("INPUT", "drum and preset keys"),
@@ -94,6 +98,7 @@ pub const SECTIONS: [(&str, &str); 7] = [
     ("AUDIO", "volume, latency"),
     ("VIDEO", "frame pacing, display, Discord"),
     ("SKIN", "notes, hitsounds"),
+    ("UPDATES", "new versions"),
 ];
 
 /// First item of section `s`.
@@ -137,6 +142,8 @@ impl Item {
             Item::ShowFps => "FPS overlay",
             Item::Animations => "UI animations",
             Item::Splash => "Startup splash",
+            Item::Update => "Update",
+            Item::CheckUpdates => "Check at startup",
             Item::Fullscreen => "Fullscreen",
             Item::DiscordPresence => "Discord status",
             Item::Skin => "Skin",
@@ -175,6 +182,8 @@ impl Item {
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
             Item::Splash => "The animated intro when taiko-rs starts (any key or click skips it).",
+            Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko-rs restarts into it.",
+            Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",
             Item::Fullscreen => "Shortcut: F11.",
             Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",
             Item::Skin => "An osu! skin from osu!'s Skins folder or taiko-rs's own. What it lacks stays built-in.",

@@ -58,6 +58,15 @@ Maps come from your osu! stable Songs folder (`%LOCALAPPDATA%\osu!\Songs`); with
 `.osz` files into `%APPDATA%\taiko-rs\Songs`. Settings live in `%APPDATA%\taiko-rs\config.txt`.
 Both builds are produced by GitHub Actions on every push.
 
+### Updates
+
+Installed builds update themselves: at startup taiko-rs asks GitHub whether the `latest` release
+was built from a newer commit than it was, and if so a green **update** badge appears top right in
+the menus. Click it or press **Ctrl+U** (or Settings → Updates → *Update*) and it downloads the
+new build, swaps it in (on Windows the running exe is moved aside to `taiko-rs.exe.old`, deleted on
+the next start) and restarts into it. *Check at startup* turns the check off. Builds made with
+`cargo build` don't know their commit and never update themselves.
+
 ## Controls
 
 | Key | Action |

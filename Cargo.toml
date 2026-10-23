@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
 cpal = "0.18"
+# Unpacking the Linux release archive in the self-updater (already a dependency of zip).
+flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 pollster = "1.0.1"
 rosu-pp = "4"
