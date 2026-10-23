@@ -889,6 +889,8 @@ pub enum Hit {
     SortCycle,
     CollectionPick,
     PickRow(usize),
+    /// A row of the settings skin list.
+    SkinRow(usize),
     /// A settings sidebar section.
     SettingsSection(usize),
     /// The update badge: install the new build.

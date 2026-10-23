@@ -182,7 +182,7 @@ impl Item {
             Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",
             Item::Fullscreen => "Shortcut: F11.",
             Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",
-            Item::Skin => "An osu! skin from osu!'s Skins folder or taiko-rs's own. What it lacks stays built-in.",
+            Item::Skin => "Enter opens the list. osu! skins from osu!'s or taiko-rs's Skins folder.",
             Item::SkinFolder => "Enter: open taiko-rs's Skins folder. Drop .osk files there, then pick them above.",
         }
     }
@@ -195,6 +195,8 @@ pub struct SettingsUi {
     pub binding: Option<Item>,
     /// Open resolution dropdown.
     pub dropdown: Option<Dropdown>,
+    /// Open skin list.
+    pub skins: Option<SkinPicker>,
     /// The section last drawn and the animated highlight position in it.
     scroll: Cell<f32>,
     highlight: Cell<f32>,
@@ -395,6 +397,58 @@ impl Dropdown {
         };
         c.text_centered(w / 2.0, by + bh - 20.0, 6.0, rgba(0x6f6f86, 1.0), line1);
         c.text_centered(w / 2.0, by + bh - 10.0, 6.0, rgba(0x6f6f86, 1.0), line2);
+    }
+}
+
+/// Every installed skin in one list, so picking one isn't stepping through them all.
+pub struct SkinPicker {
+    /// Skin names, "" (built-in) first.
+    pub names: Vec<String>,
+    pub cursor: usize,
+}
+
+impl SkinPicker {
+    /// Opens on the skin in use.
+    pub fn new(names: Vec<String>, current: &str) -> SkinPicker {
+        let cursor = names.iter().position(|n| n == current).unwrap_or(0);
+        SkinPicker { names, cursor }
+    }
+
+    pub fn move_cursor(&mut self, delta: i32) {
+        self.cursor = (self.cursor as i32 + delta).clamp(0, self.names.len() as i32 - 1) as usize;
+    }
+
+    pub fn draw(&self, c: &mut Canvas, current: &str) {
+        const ROW: f32 = 18.0;
+        let w = c.width;
+        c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.55));
+        let n = self.names.len();
+        let (bw, max_h) = (320.0, 380.0);
+        let bh = (n as f32 * ROW + 56.0).min(max_h);
+        let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
+        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
+        c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "Skin");
+        c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &format!("{} installed", n - 1));
+        let (top, view) = (by + 32.0, bh - 50.0);
+        let scroll = (self.cursor as f32 * ROW - view / 2.0).clamp(0.0, (n as f32 * ROW - view).max(0.0));
+        for (i, name) in self.names.iter().enumerate() {
+            let y = top + i as f32 * ROW - scroll;
+            if y < top - 1.0 || y + ROW > top + view + 1.0 {
+                continue;
+            }
+            let selected = i == self.cursor;
+            let hover = c.hovered(bx + 8.0, y, bw - 16.0, ROW - 2.0);
+            if selected || hover {
+                c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
+            }
+            c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::SkinRow(i));
+            let label: String = if name.is_empty() { "built-in".into() } else { name.chars().take(38).collect() };
+            c.text(bx + 20.0, y + 5.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &label);
+            if name == current {
+                c.text_right(bx + bw - 20.0, y + 5.0, 7.0, rgba(0x86E05A, 1.0), "current");
+            }
+        }
+        c.text_centered(w / 2.0, by + bh - 11.0, 6.0, rgba(0x6f6f86, 1.0), "Up/Down or mouse   Enter/click use   Esc close");
     }
 }
 
