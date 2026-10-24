@@ -345,8 +345,11 @@ struct FocusSwitch {
 /// Multiverse: how a playfield looks this frame.
 #[derive(Clone, Copy, Default)]
 struct Focus {
-    /// How much it has the focus (0-1): colour, brightness, steadiness.
+    /// How much it has the focus (0-1): brightness, steadiness.
     focus: f32,
+    /// How much its dons and kats have their colours (0-1): ahead of the focus, so there's time
+    /// to look over before it lands.
+    colour: f32,
     /// How far it has grown to its size in focus (overshooting as it takes it).
     grow: f32,
     /// It's next: a flash on each of the two beats before it takes the focus.
@@ -363,7 +366,7 @@ struct Focus {
 
 impl Focus {
     /// The one playfield there is without Multiverse.
-    const FULL: Focus = Focus { focus: 1.0, grow: 1.0, call: 0.0, burst: None, settle: 1.0, aim: 0.0 };
+    const FULL: Focus = Focus { focus: 1.0, colour: 1.0, grow: 1.0, call: 0.0, burst: None, settle: 1.0, aim: 0.0 };
 }
 
 /// osu!px per ms -> virtual units per ms at scroll speed 1.0, so that a note stays on screen
@@ -608,7 +611,7 @@ struct Crumb {
     at: f64,
     /// How long it stays out (ms).
     life: f64,
-    /// 1 for a 1/1 note, smaller for faster rhythms.
+    /// 1 for a 1/1 note at 200 combo; smaller for faster rhythms and lower combos.
     size: f32,
     /// Where it starts, as a part of the lane's length, and how long it is (px).
     start: f32,
@@ -621,7 +624,16 @@ struct Crumb {
 /// reach the drum where they're expected.
 const CRUMBLE_SPAN: (f32, f32) = (0.25, 0.92);
 /// Crumble: the most the knocked-out pieces at one spot add up to sideways.
-const CRUMBLE_MAX_SHIFT: f32 = 40.0;
+const CRUMBLE_MAX_SHIFT: f32 = 55.0;
+/// Crumble: how hard a hit knocks the lane apart at `combo`: a quarter as hard as at 200 combo
+/// to begin with, then on up to 1.4x by 400.
+fn crumble_power(combo: u32) -> f32 {
+    let c = combo as f32;
+    0.25 + 0.75 * (c / 200.0).min(1.0) + 0.4 * ((c - 200.0) / 200.0).clamp(0.0, 1.0)
+}
+
+/// How long (ms) Crumble's pieces take to snap back into line after a miss.
+const CRUMBLE_MEND_MS: f64 = 250.0;
 
 /// Where things on the lane go this frame: the rail, and how Shatter and Cracked knock pieces
 /// of it sideways. `s` is the distance ahead of the hit target.
@@ -1958,12 +1970,17 @@ impl Game {
         out
     }
 
-    /// Crumble: note `i` judged at `t` knocks a piece out of the lane. The slower its rhythm the
-    /// bigger the piece, the further out and the longer it stays (a miss knocks out the biggest);
-    /// it goes where it overlaps the pieces still out the least.
+    /// Crumble: note `i` hit at `t` knocks a piece out of the lane. The slower its rhythm and the
+    /// higher the combo, the bigger the piece, the further out and the longer it stays; it goes
+    /// where it overlaps the pieces still out the least. A miss knocks nothing out: the combo is
+    /// gone, and the pieces still out snap back (`crumbs_at`).
     fn crumble(&mut self, i: usize, judge: Judge, t: f64) {
+        if judge == Judge::Miss {
+            return;
+        }
         let n = &self.map.notes[i];
-        let size = if judge == Judge::Miss { 1.2 } else { (self.flows[i].max(1) as f32).powf(-0.75) * if n.big { 1.25 } else { 1.0 } };
+        let rhythm = (self.flows[i].max(1) as f32).powf(-0.75) * if n.big { 1.25 } else { 1.0 };
+        let size = rhythm * crumble_power(self.stats.combo);
         self.crumbs.retain(|c| c.at <= t && t < c.at + c.life);
         if self.crumbs.len() >= 24 {
             self.crumbs.remove(0);
@@ -1983,11 +2000,14 @@ impl Game {
     }
 
     /// Crumble's knocked-out pieces at map time `t` on a lane `len` long, like `cracks_at`'s:
-    /// each snaps out and holds, then settles back over the rest of its life.
+    /// each snaps out and holds, then settles back over the rest of its life, or all at once
+    /// when a miss breaks the combo.
     fn crumbs_at(&self, t: f64, len: f32) -> impl Iterator<Item = (f32, f32, f32, f32)> + '_ {
+        let miss = self.misses.iter().rev().copied().find(|&m| m <= t);
         self.crumbs.iter().filter(move |c| c.at <= t && t < c.at + c.life).map(move |c| {
             let x = (t - c.at) / c.life;
-            let m = (smooth(0.0, 70.0 / c.life, x) * (1.0 - smooth(0.35, 1.0, x))) as f32;
+            let mend = miss.filter(|&m| m > c.at).map_or(1.0, |m| 1.0 - smooth(m, m + CRUMBLE_MEND_MS, t));
+            let m = (smooth(0.0, 70.0 / c.life, x) * (1.0 - smooth(0.35, 1.0, x)) * mend) as f32;
             (c.start * len, c.len, c.shift * m, 0.9 * m)
         })
     }
@@ -2048,6 +2068,7 @@ impl Game {
         let i = sw.partition_point(|s| s.at <= t);
         let now = i.checked_sub(1).map_or(FIRST_FOCUS, |i| sw[i].field);
         out[now].focus = 1.0;
+        out[now].colour = 1.0;
         out[now].grow = 1.0;
         out[now].settle = 1.0;
         if let Some(s) = i.checked_sub(1).map(|i| &sw[i]).filter(|s| t - s.at < FOCUS_BURST_MS) {
@@ -2059,12 +2080,16 @@ impl Game {
             let x = ((t - (at - fade)) / fade).clamp(0.0, 1.0);
             let p = smooth(0.0, 1.0, x) as f32;
             out[now].focus = 1.0 - p;
+            out[now].colour = 1.0 - p;
             out[now].grow = 1.0 - p;
             out[now].settle = 1.0 - p;
             out[next].focus = p;
             out[next].grow = overshoot(x as f32);
             let called = at - 2.0 * beat;
             out[next].settle = smooth(called, at - fade, t) as f32;
+            // Its notes bloom into colour over the first beat of the call, a beat before the
+            // focus lands; the one in focus keeps its colours till then.
+            out[next].colour = smooth(called, called + beat, t) as f32;
             out[next].aim = (smooth(called, called + 0.3 * beat, t) * (1.0 - smooth(at - 0.5 * fade, at, t))) as f32;
             // Called, it's already a little bigger than the rest.
             out[next].grow = out[next].grow.max(0.3 * out[next].aim);
@@ -2136,7 +2161,7 @@ impl Game {
     }
 
     /// One playfield (see `draw_playfield`). Multiverse's are windows, framed and lit by `look`;
-    /// out of focus, dons and kats look alike.
+    /// out of colour, dons and kats look alike.
     fn draw_field(&mut self, c: &mut Canvas, scroll_speed: f64, look: Focus) {
         use std::f32::consts::{PI, TAU};
         // Notes, barlines and the beat pulse are drawn at `vt`, where they'll be once the frame is
@@ -2288,7 +2313,7 @@ impl Game {
                 c.stretch_since(first, [x, y], squish, 1.0 / squish);
             }
         };
-        let (don, kat) = if mods.has(Mod::Colorless) { (GREY, GREY) } else { (mix(GREY, DON, look.focus), mix(GREY, KAT, look.focus)) };
+        let (don, kat) = if mods.has(Mod::Colorless) { (GREY, GREY) } else { (mix(GREY, DON, look.colour), mix(GREY, KAT, look.colour)) };
         // Text is drawn last, after Mirror flips the rest (letters must stay readable).
         let mut texts: Vec<(f32, f32, f32, [f32; 4], String)> = Vec::new();
 
@@ -3414,6 +3439,9 @@ mod tests {
         assert!(called[next].aim == 1.0 && called[next].call > 0.9 && called[next].settle > 0.5);
         assert!(called[other].aim == 0.0 && called[other].settle == 0.0);
         assert!(at(3625.0)[next].settle == 1.0);
+        // Its notes are in colour a beat before the focus lands; the one in focus keeps its own.
+        assert!(at(2990.0)[next].colour == 0.0 && at(3500.0)[next].colour == 1.0 && at(3500.0)[next].focus == 0.0);
+        assert!(at(3600.0)[FIRST_FOCUS].colour == 1.0);
         // The focus slides across over the last 375 ms and lands on the bar.
         let mid = at(3812.5);
         assert!((mid[next].focus - 0.5).abs() < 1e-6 && (mid[FIRST_FOCUS].focus - 0.5).abs() < 1e-6);
@@ -3532,6 +3560,31 @@ mod tests {
             assert!(geo.cracks.iter().all(|&(a, ..)| a >= 700.0 * CRUMBLE_SPAN.0 - 0.01));
         }
         assert!(g.cracks_at(times[39] + 3000.0, 700.0).is_empty());
+    }
+
+    #[test]
+    fn crumble_grows_with_the_combo_and_a_miss_puts_it_back() {
+        assert!(crumble_power(0) < 0.3 && crumble_power(200) == 1.0 && crumble_power(1000) > 1.3);
+        let mut g = kiai_game("CR");
+        let times: Vec<f64> = g.map.notes.iter().map(|n| n.time).collect();
+        g.flows.iter_mut().for_each(|f| *f = 1);
+        // A miss knocks nothing out.
+        g.set_time(times[0] + 200.0);
+        assert!(g.stats.miss == 1 && g.crumbs.is_empty());
+        // The same 1/1 note knocks out more at a higher combo.
+        g.press_at(1, times[1], None);
+        let low = g.crumbs[0];
+        g.stats.combo = 300;
+        g.press_at(1, times[2], None);
+        let high = *g.crumbs.last().unwrap();
+        assert!(high.len > low.len && high.shift.abs() > low.shift.abs() && high.life > low.life);
+        // A miss snaps the pieces still out back into line.
+        let out = |g: &Game, t: f64| g.crumbs_at(t, 700.0).map(|c| c.2.abs()).fold(0.0, f32::max);
+        g.set_time(times[3] + 200.0);
+        assert_eq!(g.stats.miss, 2);
+        let miss = *g.misses.back().unwrap();
+        assert!(out(&g, miss - 1.0) > 10.0);
+        assert_eq!(out(&g, miss + CRUMBLE_MEND_MS), 0.0);
     }
 
     #[test]
