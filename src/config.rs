@@ -11,6 +11,9 @@ use crate::render::PresentChoice;
 
 pub const RATE_RANGE: (f64, f64) = (0.5, 2.0);
 pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
+/// What scroll speed 1.0 was before it matched osu!, in today's terms (at 16:9: 0.7 virtual
+/// units per osu!px against the 639/693 lane ratio `game::osu_speed_scale` gives).
+const OLD_SCROLL_SPEED: f64 = 0.7 * 693.333 / 639.333;
 
 pub struct Config {
     /// Positive when your audio reaches you late; notes are shifted later by this much.
@@ -222,6 +225,7 @@ impl Config {
         let mut cfg = Config::default();
         let Some(path) = config_path() else { return cfg };
         let Ok(text) = std::fs::read_to_string(&path) else { return cfg };
+        let mut osu_scroll_speed = false;
         for line in text.lines() {
             let line = line.trim();
             if line.starts_with('#') {
@@ -232,6 +236,7 @@ impl Config {
             match k {
                 "offset_ms" => cfg.offset_ms = v.parse().unwrap_or(cfg.offset_ms),
                 "scroll_speed" => cfg.scroll_speed = v.parse::<f64>().unwrap_or(cfg.scroll_speed).clamp(0.3, 4.0),
+                "scroll_speed_osu" => osu_scroll_speed = v == "true",
                 "master_volume" => cfg.master_volume = v.parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0),
                 "music_volume" => cfg.music_volume = v.parse::<f32>().unwrap_or(cfg.music_volume).clamp(0.0, 1.0),
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
@@ -284,6 +289,11 @@ impl Config {
                 _ => {}
             }
         }
+        // Scroll speed 1.0 used to be ~0.76x of osu!'s (at 16:9). Left at 1.0 it now simply
+        // becomes osu!'s; a speed someone picked on purpose keeps looking the same.
+        if !osu_scroll_speed && (cfg.scroll_speed - 1.0).abs() > 1e-3 {
+            cfg.scroll_speed = (cfg.scroll_speed * OLD_SCROLL_SPEED).clamp(0.3, 4.0);
+        }
         cfg
     }
 
@@ -303,7 +313,9 @@ impl Config {
              # your own playfield sizes (preset list, in this order)\n\
              saved_presets = {}\n\
              offset_ms = {}\n\
+             # 1.00 = osu!'s scroll speed\n\
              scroll_speed = {:.2}\n\
+             scroll_speed_osu = true\n\
              master_volume = {:.2}\n\
              music_volume = {:.2}\n\
              fx_volume = {:.2}\n\

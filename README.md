@@ -94,7 +94,7 @@ the next start) and restarts into it. *Check at startup* turns the check off. Bu
 | `` ` `` or Ctrl+R | restart map (Ctrl+R also works paused and on the results screen) |
 | Esc (song select) | clear search / quit |
 | - / = (Shift: ×5) | offset −/+ 1 ms: this map's own during a song or on its results, else the global one |
-| F3 / F4 | scroll speed |
+| F3 / F4 | scroll speed (1.00x = osu!'s) |
 | F7 | gameplay present mode: vsync → mailbox → immediate (menus stay on vsync by default) |
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
 | F10 / F11 | FPS overlay / fullscreen (the game starts fullscreen; F11 is remembered) |
