@@ -21,7 +21,7 @@ const QUIET: Duration = Duration::from_millis(300);
 /// full song replaces it a moment later without a gap.
 const SNIPPET_MS: f64 = 15_000.0;
 
-pub type Image = (u32, u32, Vec<u8>);
+pub type Image = crate::render::BgImage;
 
 /// Decoded music for the selected set: all of it, or (until the full decode arrives) the part
 /// from the preview point, which belongs at song frame `base`.
@@ -137,7 +137,7 @@ fn load_image(path: &Path) -> Option<Image> {
     let img = image::open(path).ok()?;
     let img = if img.width() > 1920 || img.height() > 1200 { img.resize(1920, 1200, image::imageops::FilterType::Triangle) } else { img };
     let rgba = img.to_rgba8();
-    Some((rgba.width(), rgba.height(), rgba.into_raw()))
+    Some(Image::from_rgba(rgba.width(), rgba.height(), &rgba))
 }
 
 impl Preview {
@@ -260,7 +260,7 @@ impl Preview {
                                     }
                                 }
                             }
-                            let track = audio::decode(&song, sr).ok().map(|t| (Arc::new(audio::change_rate(t, sr, speed, keep_pitch)), 0, true));
+                            let track = audio::decode_shared(&song, sr).ok().map(|t| (audio::with_rate(t, sr, speed, keep_pitch), 0, true));
                             let _ = tx.send((song, track));
                         });
                         self.audio_rx = Some(rx);

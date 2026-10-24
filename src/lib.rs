@@ -1022,7 +1022,15 @@ impl State {
                 let cached = cached.filter(|_| speed.is_constant());
                 let track = match (cached, rate) {
                     (Some(track), _) => track,
-                    (None, Some(rate)) => Arc::new(audio::change_speed(audio::decode(&audio_path, rate)?, rate, &speed, keep_pitch)),
+                    (None, Some(rate)) => {
+                        // Shared with the preview's full decode if that is still running.
+                        let track = audio::decode_shared(&audio_path, rate)?;
+                        if speed.is_constant() {
+                            audio::with_rate(track, rate, speed.r0, keep_pitch)
+                        } else {
+                            Arc::new(audio::change_speed(Track { samples: track.samples.clone(), rate: track.rate }, rate, &speed, keep_pitch))
+                        }
+                    }
                     (None, None) => Arc::new(Track { samples: Vec::new(), rate: 1.0 }),
                 };
                 Ok((map, track))
@@ -5360,6 +5368,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     let mut cursor_hidden = false;
     // TAIKO_PROFILE=1: every 2 s, print where frame time goes (build = CPU under the state lock).
     let profile = std::env::var_os("TAIKO_PROFILE").is_some();
+    // The waits are only measured for the profile and the smoothness report: reading the clock
+    // can cost microseconds a time (HPET).
+    let timing = profile || std::env::var_os("TAIKO_STATS").is_some();
     let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) = (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
     // TAIKO_LAYOUT=1: print each text that doesn't fit (once), see `debug::layout_problems`.
     canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
@@ -5394,7 +5405,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             (s.present, s.cfg.fps_cap)
         };
 
-        let t0 = Instant::now();
+        let t0 = timing.then(Instant::now);
         let Some(frame) = renderer.acquire() else {
             std::thread::sleep(Duration::from_millis(2));
             continue;
@@ -5428,7 +5439,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             }
             // Video export frames above are drawn without the grid; the screen's frame with it.
             render::set_text_grid(renderer.text_grid());
+            render::set_frame_time(Some(now));
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
+            render::set_frame_time(None);
             render::set_text_grid(None);
             if canvas.audit {
                 for p in debug::layout_problems(&canvas) {
@@ -5453,29 +5466,52 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         };
         // The playfield / preview clip (fractions) plus the lists' (virtual units).
         let vw = canvas.width.max(1.0);
+        let to_fraction = |[x, y, w, h]: [f32; 4]| [x / vw, y / render::VIRTUAL_HEIGHT, w / vw, h / render::VIRTUAL_HEIGHT];
+        let opaque = canvas
+            .opaque_rect(clip.as_ref().map(|(range, a)| (range, [a.x * vw, a.y * render::VIRTUAL_HEIGHT, a.w * vw, a.h * render::VIRTUAL_HEIGHT])))
+            .map(to_fraction);
         let mut clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clip.into_iter().map(|(range, a)| (range, [a.x, a.y, a.w, a.h])).collect();
-        clips.extend(canvas.clips.drain(..).map(|(range, [x, y, w, h])| (range, [x / vw, y / render::VIRTUAL_HEIGHT, w / vw, h / render::VIRTUAL_HEIGHT])));
-        let t1 = Instant::now();
-        let shot = renderer.submit(frame, &canvas.shapes, [0.071, 0.071, 0.098], capture.is_some(), clips);
-        let presented = Instant::now();
-        if profile {
-            prof_n += 1;
-            prof_build += (t1 - now).as_secs_f64() * 1000.0;
-            prof_submit += (presented - t1).as_secs_f64() * 1000.0;
-            prof_shapes = prof_shapes.max(canvas.shapes.len());
-            if prof_start.elapsed() >= Duration::from_secs(2) {
-                let n = prof_n.max(1) as f64;
-                eprintln!(
-                    "profile: {:.0} fps  build {:.2} ms  submit {:.2} ms  shapes {}",
-                    n / prof_start.elapsed().as_secs_f64(), prof_build / n, prof_submit / n, prof_shapes
-                );
-                (prof_start, prof_n, prof_build, prof_submit, prof_shapes) = (Instant::now(), 0, 0.0, 0.0, 0);
+        clips.extend(canvas.clips.drain(..).map(|(range, r)| (range, to_fraction(r))));
+        let t1 = timing.then(Instant::now);
+        let shot = renderer.submit(frame, &canvas.shapes, [0.071, 0.071, 0.098], capture.is_some(), clips, opaque);
+        if let (Some(t0), Some(t1)) = (t0, t1) {
+            let presented = Instant::now();
+            // Clock-sample-to-next-refresh: approximates how stale the previous frame was when shown.
+            let sample_age = last_sample.map(|s| (acquired - s).as_secs_f64() * 1000.0).unwrap_or(0.0);
+            last_sample = Some(now);
+            waits = ((acquired - t0).as_secs_f64() * 1000.0, (presented - t1).as_secs_f64() * 1000.0, sample_age);
+            if profile {
+                prof_n += 1;
+                prof_build += (t1 - now).as_secs_f64() * 1000.0;
+                prof_submit += (presented - t1).as_secs_f64() * 1000.0;
+                prof_shapes = prof_shapes.max(canvas.shapes.len());
+                if prof_start.elapsed() >= Duration::from_secs(2) {
+                    let n = prof_n.max(1) as f64;
+                    let gpu = renderer.take_gpu_ms().map(|ms| format!("  gpu {ms:.2} ms")).unwrap_or_default();
+                    // Overdraw: the pixels this frame's quads cover, in screens (TAIKO_PROFILE=shapes
+                    // also lists the biggest).
+                    let ppu = renderer.size().1 as f32 / render::VIRTUAL_HEIGHT;
+                    let area = |sh: &render::Shape| {
+                        let pad = 1.5 + sh.params[2] * ppu;
+                        (sh.half[0] * ppu + pad) * 2.0 * (sh.half[1] * ppu + pad) * 2.0
+                    };
+                    let screen = (renderer.size().0 * renderer.size().1).max(1) as f32;
+                    let cover: f32 = canvas.shapes.iter().map(area).sum::<f32>() / screen;
+                    eprintln!(
+                        "profile: {:.0} fps  build {:.2} ms  submit {:.2} ms  shapes {}{gpu}  cover {cover:.2}",
+                        n / prof_start.elapsed().as_secs_f64(), prof_build / n, prof_submit / n, prof_shapes
+                    );
+                    if std::env::var("TAIKO_PROFILE").is_ok_and(|v| v == "shapes") {
+                        let mut big: Vec<&render::Shape> = canvas.shapes.iter().collect();
+                        big.sort_by(|a, b| area(b).total_cmp(&area(a)));
+                        for sh in big.iter().take(12) {
+                            eprintln!("  {:.3}  c {:?} h {:?} fill {:?} border {:?} p {:?}", area(sh) / screen, sh.center, sh.half, sh.fill, sh.border, sh.params);
+                        }
+                    }
+                    (prof_start, prof_n, prof_build, prof_submit, prof_shapes) = (Instant::now(), 0, 0.0, 0.0, 0);
+                }
             }
         }
-        // Clock-sample-to-next-refresh: approximates how stale the previous frame was when shown.
-        let sample_age = last_sample.map(|s| (acquired - s).as_secs_f64() * 1000.0).unwrap_or(0.0);
-        last_sample = Some(now);
-        waits = ((acquired - t0).as_secs_f64() * 1000.0, (presented - t1).as_secs_f64() * 1000.0, sample_age);
         if let (Some(name), Some((w, h, rgb))) = (capture, shot) {
             if let Some(dir) = lock(&state).shots.as_ref().map(|p| p.dir.clone()) {
                 let path = dir.join(name);
@@ -5490,8 +5526,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             // Fixed grid so frames are evenly spaced; resync if we fell behind.
             let period = Duration::from_secs_f64(1.0 / cap as f64);
             next_frame += period;
-            if next_frame < Instant::now() {
-                next_frame = Instant::now() + period;
+            let late = Instant::now();
+            if next_frame < late {
+                next_frame = late + period;
             }
             sleep_until(next_frame);
         }

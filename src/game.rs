@@ -1141,13 +1141,14 @@ impl Game {
         // Text is drawn last, after Mirror flips the rest (letters must stay readable).
         let mut texts: Vec<(f32, f32, f32, [f32; 4], String)> = Vec::new();
 
-        // Lane.
-        let lane_col = if kiai { rgba(0x2b2433, 1.0) } else { rgba(0x20202b, 1.0) };
-        c.rect(0.0, lane_top - 3.0, w, LANE_H + 6.0, rgba(0x3a3a4e, 1.0));
-        c.rect(0.0, lane_top, w, LANE_H, lane_col);
-        if kiai {
-            c.rect(PANEL_W, lane_top, w - PANEL_W, LANE_H, rgba(0xff8a3d, 0.05 + 0.06 * pulse));
-        }
+        // Lane (kiai tints it orange with the beat).
+        let lane_col = if kiai {
+            let (base, tint, a) = (rgba(0x2b2433, 1.0), rgba(0xff8a3d, 1.0), 0.05 + 0.06 * pulse);
+            [0, 1, 2, 3].map(|i| base[i] + (tint[i] - base[i]) * a)
+        } else {
+            rgba(0x20202b, 1.0)
+        };
+        draw_lane(c, lane_col);
 
         // Barlines.
         let first_bar = self.map.barlines.partition_point(|b| b.time < t - 3000.0);
@@ -1498,12 +1499,24 @@ fn skin_note(c: &mut Canvas, x: f32, y: f32, r: f32, big: bool, col: u32, alpha:
     true
 }
 
+/// The lane and its border. The border is two strips rather than a rect under the whole lane
+/// (they reach a unit under the lane, so its edge blends into border colour just the same), and
+/// the background isn't drawn under the lane at all (`mark_opaque`).
+fn draw_lane(c: &mut Canvas, color: [f32; 4]) {
+    let w = c.width;
+    let lane_top = LANE_Y - LANE_H / 2.0;
+    let border = rgba(0x3a3a4e, 1.0);
+    c.rect(0.0, lane_top - 3.0, w, 4.0, border);
+    c.rect(0.0, lane_top + LANE_H - 1.0, w, 4.0, border);
+    c.rect(0.0, lane_top, w, LANE_H, color);
+    c.mark_opaque();
+}
+
 /// A still playfield (lane, drum, a few notes) for the playfield area editor.
 pub fn draw_preview(c: &mut Canvas) {
     let w = c.width;
     let lane_top = LANE_Y - LANE_H / 2.0;
-    c.rect(0.0, lane_top - 3.0, w, LANE_H + 6.0, rgba(0x3a3a4e, 1.0));
-    c.rect(0.0, lane_top, w, LANE_H, rgba(0x20202b, 1.0));
+    draw_lane(c, rgba(0x20202b, 1.0));
     c.circle(HIT_X, LANE_Y, BIG_R, rgba(WHITE, 0.03), rgba(WHITE, 0.12), 2.0);
     c.circle(HIT_X, LANE_Y, NOTE_R + 1.0, rgba(WHITE, 0.06), rgba(WHITE, 0.4), 2.5);
     // Back to front, like gameplay.

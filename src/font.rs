@@ -168,22 +168,51 @@ const CYRILLIC: [[u8; 5]; 66] = [
     [0x38, 0x55, 0x54, 0x55, 0x18], // ё
 ];
 
-pub fn glyph(c: char) -> &'static [u8; 5] {
+/// How many glyphs there are: ASCII, then Cyrillic (`index` numbers them in that order).
+pub const COUNT: usize = 95 + 66;
+
+/// The glyph `c` draws as, numbered 0..COUNT: printable ASCII from 0, Cyrillic from 95.
+pub fn index(c: char) -> usize {
     let i = c as u32;
     match c {
-        _ if (32..127).contains(&i) => &GLYPHS[(i - 32) as usize],
-        '\u{410}'..='\u{44F}' => &CYRILLIC[(i - 0x410) as usize],
-        'Ё' => &CYRILLIC[64],
-        'ё' => &CYRILLIC[65],
+        _ if (32..127).contains(&i) => (i - 32) as usize,
+        '\u{410}'..='\u{44F}' => 95 + (i - 0x410) as usize,
+        'Ё' => 95 + 64,
+        'ё' => 95 + 65,
         // Typographic marks drawn as their plain ASCII look-alikes.
-        '«' | '»' | '“' | '”' | '„' => glyph('"'),
-        '‘' | '’' => glyph('\''),
-        '–' | '—' | '−' => glyph('-'),
-        '…' => glyph('.'),
-        '№' => glyph('#'),
-        '\u{a0}' => glyph(' '),
-        _ => &GLYPHS[('?' as u32 - 32) as usize],
+        '«' | '»' | '“' | '”' | '„' => index('"'),
+        '‘' | '’' => index('\''),
+        '–' | '—' | '−' => index('-'),
+        '…' => index('.'),
+        '№' => index('#'),
+        '\u{a0}' => index(' '),
+        _ => index('?'),
     }
+}
+
+pub fn glyph(c: char) -> &'static [u8; 5] {
+    by_index(index(c))
+}
+
+fn by_index(i: usize) -> &'static [u8; 5] {
+    if i < 95 { &GLYPHS[i] } else { &CYRILLIC[i - 95] }
+}
+
+/// Every glyph side by side as one 8-bit image (`COUNT * 5` x 7, 255 = ink), for the GPU: glyph
+/// `i`'s column `c`, row `r` is at (`i * 5 + c`, `r`).
+pub fn atlas() -> (u32, u32, Vec<u8>) {
+    let (w, h) = (COUNT * 5, 7);
+    let mut px = vec![0u8; w * h];
+    for i in 0..COUNT {
+        for (c, bits) in by_index(i).iter().enumerate() {
+            for r in 0..7 {
+                if bits & (1 << r) != 0 {
+                    px[r * w + i * 5 + c] = 255;
+                }
+            }
+        }
+    }
+    (w as u32, h as u32, px)
 }
 
 /// The font has a real glyph for `c` (anything else draws as `?`).
