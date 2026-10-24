@@ -559,7 +559,8 @@ pub fn receive(set: SetInfo, name: String, total: u64, songs: PathBuf) -> (Job, 
 /// Imports an `.osz` that is already on disk (opened with the game on Android) like a download:
 /// unpacked into `songs/<name>/` on a background thread, then the archive is removed.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
-pub fn import(archive: PathBuf, name: &str, songs: PathBuf) -> Job {
+/// `remove`: delete the archive once unpacked (a temporary copy, not the player's own file).
+pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool) -> Job {
     let name = safe_folder_name(name);
     let set = SetInfo {
         // osu! names its exports "<set id> <artist> - <title>.osz".
@@ -580,13 +581,17 @@ pub fn import(archive: PathBuf, name: &str, songs: PathBuf) -> Job {
             let dest = songs.join(&name);
             extract(&archive, &dest).map(|_| dest)
         });
-        let _ = std::fs::remove_file(&archive);
+        if remove {
+            let _ = std::fs::remove_file(&archive);
+        }
         let _ = tx.send(result);
     });
     Job { set, done: Arc::default(), total: Arc::default(), rx }
 }
 
 /// Unpacks an `.osz` into `dest` (via a temporary folder, so a half-extracted set never shows up).
+/// A set that is already there gets the archive's files on top: what else is in its folder (a
+/// difficulty of your own) stays.
 fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("not a beatmap archive ({e})"))?;
@@ -594,8 +599,29 @@ fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(&tmp);
     // `extract` rejects entries that would escape the destination (zip-slip).
     zip.extract(&tmp).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_dir_all(dest);
-    std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
+    if dest.is_dir() {
+        merge(&tmp, dest).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_dir_all(&tmp);
+    } else {
+        std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Moves everything in `from` into `into`, replacing files of the same name.
+fn merge(from: &Path, into: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let to = into.join(entry.file_name());
+        if entry.file_type()?.is_dir() && to.is_dir() {
+            merge(&entry.path(), &to)?;
+        } else {
+            if to.is_dir() {
+                std::fs::remove_dir_all(&to)?;
+            }
+            std::fs::rename(entry.path(), &to)?;
+        }
+    }
     Ok(())
 }
 
@@ -698,4 +724,26 @@ mod tests {
         assert_eq!(safe_folder_name("../../etc"), "_.._etc");
     }
 
+    #[test]
+    fn importing_a_set_again_keeps_what_else_is_in_its_folder() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("taiko-rs-extract-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join("set.osz");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("map [Oni].osu", stored).unwrap();
+        zip.write_all(b"new").unwrap();
+        zip.finish().unwrap();
+        let dest = root.join("123 Artist - Title");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("map [Oni].osu"), b"old").unwrap();
+        std::fs::write(dest.join("map [My Inner Oni].osu"), b"mine").unwrap();
+        extract(&archive, &dest).unwrap();
+        assert_eq!(std::fs::read(dest.join("map [Oni].osu")).unwrap(), b"new");
+        assert_eq!(std::fs::read(dest.join("map [My Inner Oni].osu")).unwrap(), b"mine");
+        assert!(!dest.with_extension("partial").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

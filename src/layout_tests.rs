@@ -196,6 +196,10 @@ fn assert_every_screen_fits() {
     check(&mut s, "collections", &mut out);
     s.select.picker = None;
 
+    s.drag_hover = Some(Instant::now() - Duration::from_secs(1));
+    check(&mut s, "files dragged over", &mut out);
+    s.drag_hover = None;
+
     s.cfg.skin = "Some Extremely Long Skin Name By A Famous Player [HD Edition] v2.1".into();
     s.open_settings();
     let mut section = "";
