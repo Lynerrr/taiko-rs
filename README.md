@@ -477,6 +477,6 @@ spins so frames stay evenly spaced.
 | `src/skin.rs` | osu! skins: listing, `.osk` unpacking, note image atlas, hitsounds |
 | `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
 | `src/discord.rs` | Discord Rich Presence over the local IPC socket / pipe |
-| `src/download.rs` | mirror search and `.osz` downloads (catboy.best, osu.direct) |
+| `src/download.rs` | mirror search and `.osz` downloads (osu.direct, catboy.best) |
 | `src/browse.rs` | the Download tab |
 | `vendor/cpal` | cpal 0.18.2 with one fix: WASAPI counted the stream latency twice in its playback timestamps (Windows players needed a much lower offset) |
