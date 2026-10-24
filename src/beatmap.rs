@@ -51,11 +51,22 @@ struct RawTimingPoint {
 #[derive(Clone, Copy, Debug)]
 pub struct ControlPoint {
     pub time: f64,
+    /// Time of the uninherited (red) point the beats are counted from: SV points don't move it.
+    pub beat_origin: f64,
     pub beat_length: f64,
     pub sv: f64,
     pub kiai: bool,
     /// Hitsound volume from this point on, 0..1.
     pub volume: f32,
+}
+
+impl ControlPoint {
+    /// How far into the current beat map time `t` is, 0..1. Counted from the red line: green
+    /// lines often sit mid-beat, and restarting the beat at them made the beat-driven mods
+    /// (Pulse, Stutter, Zoom...) twitch on SV-heavy maps.
+    pub fn beat_phase(&self, t: f64) -> f64 {
+        ((t - self.beat_origin) / self.beat_length).rem_euclid(1.0)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -274,27 +285,30 @@ fn build_control_points(raw: &mut [RawTimingPoint]) -> Vec<ControlPoint> {
     // Stable sort keeps file order for simultaneous points (inherited after uninherited).
     raw.sort_by(|a, b| a.time.total_cmp(&b.time));
     let mut out: Vec<ControlPoint> = Vec::with_capacity(raw.len());
-    let mut beat_length = raw.iter().find(|p| p.uninherited).map(|p| p.beat_length).unwrap_or(500.0);
+    let first_red = raw.iter().find(|p| p.uninherited);
+    let mut beat_length = first_red.map(|p| p.beat_length).unwrap_or(500.0);
+    let mut beat_origin = first_red.map(|p| p.time).unwrap_or(0.0);
     let mut sv;
     for p in raw.iter() {
         if p.uninherited {
             if p.beat_length > 0.0 {
                 beat_length = p.beat_length.clamp(6.0, 60000.0);
             }
+            beat_origin = p.time;
             sv = 1.0;
         } else if p.beat_length < 0.0 {
             sv = (-100.0 / p.beat_length).clamp(0.1, 10.0);
         } else {
             sv = 1.0;
         }
-        let cp = ControlPoint { time: p.time, beat_length, sv, kiai: p.effects & 1 != 0, volume: p.volume };
+        let cp = ControlPoint { time: p.time, beat_origin, beat_length, sv, kiai: p.effects & 1 != 0, volume: p.volume };
         match out.last_mut() {
             Some(last) if last.time == p.time => *last = cp,
             _ => out.push(cp),
         }
     }
     if out.is_empty() {
-        out.push(ControlPoint { time: 0.0, beat_length: 500.0, sv: 1.0, kiai: false, volume: 1.0 });
+        out.push(ControlPoint { time: 0.0, beat_origin: 0.0, beat_length: 500.0, sv: 1.0, kiai: false, volume: 1.0 });
     }
     out
 }
@@ -423,7 +437,7 @@ pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
     let velocity = meta.slider_multiplier * TAIKO_VELOCITY_MULTIPLIER * 100.0 / beat_ms;
     let notes = (first_beat..beats).map(|b| hit(b as f64 * beat_ms, 0, velocity)).collect();
     let barlines = (0..beats).step_by(4).map(|b| Barline { time: b as f64 * beat_ms, velocity }).collect();
-    let control_points = vec![ControlPoint { time: 0.0, beat_length: beat_ms, sv: 1.0, kiai: false, volume: 1.0 }];
+    let control_points = vec![ControlPoint { time: 0.0, beat_origin: 0.0, beat_length: beat_ms, sv: 1.0, kiai: false, volume: 1.0 }];
     Beatmap { meta, notes, barlines, control_points }
 }
 
@@ -553,6 +567,15 @@ SliderTickRate:1
         // No volume field at all (very old maps): full volume.
         let old = parse("osu file format v3\n[TimingPoints]\n0,500\n[HitObjects]\n256,192,500,1,0\n");
         assert_eq!(control_point_at(&old.control_points, 600.0).volume, 1.0);
+    }
+
+    #[test]
+    fn beats_count_from_the_red_line_not_green_ones() {
+        // Green lines mid-beat keep the beat; a new red line restarts it.
+        let map = parse("osu file format v14\n[TimingPoints]\n100,500,4,1,0,100,1,0\n1230,-50,4,1,0,100,0,0\n3000,400,4,1,0,100,1,0\n3170,-80,4,1,0,100,0,0\n[HitObjects]\n256,192,500,1,0\n");
+        let phase = |t| control_point_at(&map.control_points, t).beat_phase(t);
+        assert!((phase(1350.0) - 0.5).abs() < 1e-9);
+        assert!((phase(3300.0) - 0.75).abs() < 1e-9);
     }
 
     #[test]

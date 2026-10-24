@@ -303,6 +303,20 @@ impl Scroll<'_> {
     }
 }
 
+/// Pulse / Stutter's time shift of far notes at map time `t` (see `Scroll::warp`): Pulse makes
+/// them jump forward on each beat, Stutter hold, then catch up.
+fn beat_warp(mods: Mods, cp: &beatmap::ControlPoint, t: f64) -> f64 {
+    let p = cp.beat_phase(t);
+    if mods.has(Mod::Pulse) {
+        cp.beat_length * ((1.0 - (1.0 - p).powi(3)) - p)
+    } else if mods.has(Mod::Stutter) {
+        let x = ((p - 0.5) / 0.5).clamp(0.0, 1.0);
+        cp.beat_length * (x * x * (3.0 - 2.0 * x) - p)
+    } else {
+        0.0
+    }
+}
+
 /// A repeatable pseudo-random 0-1 for a map time (SV Chaos, Random).
 fn hash01(t: f64) -> f64 {
     let mut x = (t * 16.0).round() as i64 as u64 ^ 0x9e37_79b9_7f4a_7c15;
@@ -1053,7 +1067,7 @@ impl Game {
         let mods = self.mods;
         let lane_top = LANE_Y - LANE_H / 2.0;
         let cp = beatmap::control_point_at(&self.map.control_points, t);
-        let beat_phase = ((t - cp.time) / cp.beat_length).rem_euclid(1.0) as f32;
+        let beat_phase = cp.beat_phase(t) as f32;
         let pulse = (1.0 - beat_phase).powi(3);
         let kiai = cp.kiai && self.kiai_effects;
         let in_kiai = cp.kiai;
@@ -1063,16 +1077,7 @@ impl Game {
         let dt = (t - self.rush_t).clamp(0.0, 1000.0);
         self.rush += (rush_target - self.rush) * (dt / 250.0).min(1.0);
         self.rush_t = t;
-        // Pulse: notes far away jump forward on each beat; Stutter: they hold, then catch up.
-        let p = beat_phase as f64;
-        let warp = if mods.has(Mod::Pulse) {
-            cp.beat_length * ((1.0 - (1.0 - p).powi(3)) - p)
-        } else if mods.has(Mod::Stutter) {
-            let x = ((p - 0.5) / 0.5).clamp(0.0, 1.0);
-            cp.beat_length * (x * x * (3.0 - 2.0 * x) - p)
-        } else {
-            0.0
-        };
+        let warp = beat_warp(mods, cp, t);
         let scroll = Scroll {
             t,
             speed: SPEED_SCALE * scroll_speed * mods.scroll(),
@@ -1521,6 +1526,26 @@ mod tests {
         }
         let end = g.end_time + 2000.0;
         g.set_time(end);
+    }
+
+    #[test]
+    fn pulse_and_stutter_never_pull_notes_back_on_sv_heavy_maps() {
+        // A red line, then green lines off the beat every 130 ms (as on SV-heavy maps).
+        let red = beatmap::ControlPoint { time: 0.0, beat_origin: 0.0, beat_length: 500.0, sv: 1.0, kiai: false, volume: 1.0 };
+        let cps: Vec<_> = std::iter::once(red).chain((0..150).map(|k| beatmap::ControlPoint { time: 65.0 + 130.0 * k as f64, ..red })).collect();
+        for mods in ["PU", "ST"] {
+            let mods = Mods::parse(mods);
+            let mut last = f32::INFINITY;
+            let mut t = 6000.0;
+            while t < 10_000.0 {
+                let warp = beat_warp(mods, beatmap::control_point_at(&cps, t), t);
+                let s = Scroll { t, speed: SPEED_SCALE, lane: 640.0, mods, constant: None, first: 0.0, end: 20_000.0, cps: &cps, warp, rush: 1.0 };
+                let x = s.x(10_000.0, 0.5);
+                assert!(x <= last + 1e-3, "{mods:?} at {t}: {last} -> {x}");
+                last = x;
+                t += 2.0;
+            }
+        }
     }
 
     #[test]
