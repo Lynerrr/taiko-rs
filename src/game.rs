@@ -326,8 +326,9 @@ const FIELD_W: f32 = 0.78;
 const FIELD_ZOOM: (f32, f32) = (0.36, 0.6);
 /// Multiverse: the playfield that has the focus first (near the middle).
 const FIRST_FOCUS: usize = 4;
-/// Multiverse: the colour of the focus (its halo, frame and burst).
-const FOCUS_COL: u32 = 0xbfe9ff;
+/// Multiverse: the colour of the focus and the call (halo, frame, pings, sparks and burst): a
+/// bright red, so where to look next stands out.
+const FOCUS_COL: u32 = 0xff2a2a;
 /// Multiverse: how long (ms) the burst lasts as a playfield takes the focus.
 const FOCUS_BURST_MS: f64 = 600.0;
 
@@ -767,7 +768,7 @@ fn parked(f: usize) -> (f32, f32) {
     (HOMES[f].0.min(0.97 - FIELD_W), HOMES[f].1.clamp(140.0, 350.0))
 }
 
-/// Multiverse: where the focus moves to another playfield. Every 2 bars, every bar in kiai
+/// Multiverse: where the focus moves to another playfield. Every 4 bars, every 2 in kiai
 /// time, from the first note to the last, to one that parks well above or below the one that
 /// has it, so the one in focus never hides the one that's called.
 fn focus_switches(map: &Beatmap) -> Vec<FocusSwitch> {
@@ -777,7 +778,7 @@ fn focus_switches(map: &Beatmap) -> Vec<FocusSwitch> {
     let mut out = Vec::new();
     for (i, b) in map.barlines.iter().enumerate().skip(1) {
         let cp = beatmap::control_point_at(&map.control_points, b.time);
-        if i % if cp.kiai { 1 } else { 2 } != 0 || b.time <= first + 1000.0 || b.time >= last {
+        if i % if cp.kiai { 2 } else { 4 } != 0 || b.time <= first + 1000.0 || b.time >= last {
             continue;
         }
         let away: Vec<usize> = (0..FIELD_COUNT).filter(|&f| (parked(f).1 - parked(focus).1).abs() >= 80.0).collect();
@@ -2130,7 +2131,7 @@ impl Game {
                 let (x, y) = (a.0 + (b.0 - a.0) * s, a.1 + (b.1 - a.1) * s);
                 let alpha = looks[to].aim * (PI * s).sin() * (0.4 + 0.6 * s);
                 c.glow(x, y, 2.5, 7.0, rgba(FOCUS_COL, 0.6 * alpha));
-                c.circle(x, y, 2.0, rgba(WHITE, alpha), rgba(WHITE, 0.0), 0.0);
+                c.circle(x, y, 2.5, rgba(FOCUS_COL, alpha), rgba(FOCUS_COL, 0.0), 0.0);
             }
         }
     }
@@ -2296,7 +2297,7 @@ impl Game {
         // the call (glowing, flaring on each beat).
         let halo = (look.focus * (0.6 + 0.4 * pulse)).max(look.aim * (0.75 + 0.25 * look.call));
         if boxed && halo > 0.01 {
-            for (k, a) in [0.3, 0.16, 0.08, 0.03].into_iter().enumerate() {
+            for (k, a) in [0.6, 0.32, 0.16, 0.06].into_iter().enumerate() {
                 let d = 3.0 + 6.0 * k as f32;
                 c.round_rect(-d, lane_top - 3.0 - d, w + 2.0 * d, LANE_H + 6.0 + 2.0 * d, 4.0 + d, rgba(0, 0.0), rgba(FOCUS_COL, a * halo), 6.0);
             }
@@ -2580,7 +2581,7 @@ impl Game {
         // the focus: a flash and a ring off the drum.
         if boxed && !geo.bent() {
             let frame = tint(rgba(0x3a3a4e, 1.0), FOCUS_COL, look.focus.max(look.aim));
-            c.round_rect(0.0, lane_top - 3.0, w, LANE_H + 6.0, 4.0, rgba(0, 0.0), frame, 2.0);
+            c.round_rect(0.0, lane_top - 3.0, w, LANE_H + 6.0, 4.0, rgba(0, 0.0), frame, 3.0);
         }
         // Called: a ping off the drum on each beat.
         if boxed && look.aim > 0.0 {
@@ -3393,9 +3394,9 @@ mod tests {
     #[test]
     fn multiverse_calls_the_next_playfield_and_moves_the_focus_on_bars() {
         let g = kiai_game("MV");
-        // 2 s bars, kiai from 8 s: every 2 bars before it, every bar in it.
+        // 2 s bars, kiai from 8 s: every 4 bars before it (none past the first second), every 2 in it.
         let times: Vec<f64> = g.focus_switches.iter().map(|s| s.at).collect();
-        let want: Vec<f64> = std::iter::once(4000.0).chain((4..16).map(|i| i as f64 * 2000.0)).collect();
+        let want: Vec<f64> = (2..8).map(|i| i as f64 * 4000.0).collect();
         assert_eq!(times, want);
         let mut focus = FIRST_FOCUS;
         for s in &g.focus_switches {
@@ -3406,22 +3407,22 @@ mod tests {
         let next = g.focus_switches[0].field;
         let other = (0..FIELD_COUNT).find(|&f| f != next && f != FIRST_FOCUS).unwrap();
         let at = |t: f64| g.multiverse_at(t);
-        let calm = at(2000.0);
+        let calm = at(6000.0);
         assert!(calm[FIRST_FOCUS].focus == 1.0 && calm[FIRST_FOCUS].settle == 1.0);
         assert!(calm[next].settle == 0.0 && calm[next].aim == 0.0);
         // Called over the two beats before: it parks, lights up and pings on each beat.
-        let called = at(3510.0);
+        let called = at(7510.0);
         assert!(called[next].aim == 1.0 && called[next].call > 0.9 && called[next].settle > 0.5);
         assert!(called[other].aim == 0.0 && called[other].settle == 0.0);
-        assert!(at(3625.0)[next].settle == 1.0);
+        assert!(at(7625.0)[next].settle == 1.0);
         // The focus slides across over the last 375 ms and lands on the bar.
-        let mid = at(3812.5);
+        let mid = at(7812.5);
         assert!((mid[next].focus - 0.5).abs() < 1e-6 && (mid[FIRST_FOCUS].focus - 0.5).abs() < 1e-6);
-        let done = at(4000.0);
+        let done = at(8000.0);
         assert!(done[next].focus == 1.0 && done[next].aim == 0.0 && done[next].burst == Some(0.0));
         assert!(done[FIRST_FOCUS].focus == 0.0 && done[FIRST_FOCUS].settle == 0.0);
         // It overshoots its size on the way in and settles.
-        assert!(at(3950.0)[next].grow > 1.0 && (done[next].grow - 1.0).abs() < 1e-6);
+        assert!(at(7950.0)[next].grow > 1.0 && (done[next].grow - 1.0).abs() < 1e-6);
     }
 
     /// `TAIKO_MOD_SHOTS=<dir>`: a few frames of every mod as PNGs (drawn on the CPU), to look at.
