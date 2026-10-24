@@ -378,12 +378,13 @@ fn osu_speed_scale(w: f32) -> f64 {
 }
 
 /// How much faster than on a plain lane notes go along a lane `len` long on a canvas `w` wide.
-/// Rails only bend the lane: notes cross the screen at the usual speed, so a long rail (a
-/// spiral, a loop) shows more of the map ahead rather than rushing it in, and only the
-/// playfield shrinking to fit the shape (`zoom`) is made up for. Mania's and Spin's shorter
-/// lanes keep notes on them for the usual time.
-fn lane_stretch(rail: bool, len: f32, w: f32, zoom: f32) -> f64 {
-    if rail { 1.0 / zoom as f64 } else { (len / (w - HIT_X)) as f64 }
+/// Rails only bend the lane: notes go along it as they would along a plain one, as many to a
+/// stretch of lane, so a long rail (a spiral, a loop) shows more of the map ahead rather than
+/// rushing it in. A playfield shrunk to fit the shape is the same picture, smaller: speeding
+/// notes up to make up for it spread them out and rushed them along the rail. Mania's and Spin's
+/// shorter lanes keep notes on them for the usual time.
+fn lane_stretch(rail: bool, len: f32, w: f32) -> f64 {
+    if rail { 1.0 } else { (len / (w - HIT_X)) as f64 }
 }
 
 /// What bends note positions this frame: drawing only, judging always uses real time.
@@ -532,9 +533,9 @@ enum RailShape {
 }
 
 /// Loop: how far from the hit target it starts, its radius, and the angle the lane into it comes
-/// up at (short of a full turn by that): as steep as it gets while passing right of the hit error
-/// meter on a 16:9 screen.
-const LOOP_AT: f32 = 400.0;
+/// up at (short of a full turn by that). Full size on a 16:9 screen, with the lane coming in right
+/// of the hit error meter.
+const LOOP_AT: f32 = 390.0;
 const LOOP_R: f32 = 110.0;
 const LOOP_EXIT: f32 = 0.6;
 const LOOP_TURN: f32 = std::f32::consts::TAU - LOOP_EXIT;
@@ -601,7 +602,7 @@ impl RailShape {
             RailShape::Zigzag => 35.0,
             RailShape::UTurn => 150.0,
             RailShape::Spiral => 105.0,
-            RailShape::Loop => 100.0,
+            RailShape::Loop => 135.0,
             RailShape::Elbow => 200.0,
         }
     }
@@ -618,16 +619,7 @@ impl RailShape {
             RailShape::Elbow => 520.0,
         };
         let tall: f32 = if self == RailShape::Spiral { 0.85 } else { 1.0 };
-        let mut fit = (w - 8.0 - HIT_X) / (right - HIT_X);
-        if self == RailShape::Loop {
-            // On screen, and clear of the HP bar: all of it left of the bar, or its top under it
-            // (narrow screens).
-            let height = 2.0 * LOOP_R + LANE_H / 2.0 + 3.0;
-            let left_of_bar = (hp_bar_x(w) - 8.0 - HIT_X) / (right - HIT_X);
-            let under_bar = (LANE_Y + self.drop() - HP_BAR_Y - 16.0) / height;
-            fit = fit.min((LANE_Y + self.drop() - 8.0) / height).min(left_of_bar.max(under_bar));
-        }
-        tall.min(fit).max(0.3)
+        tall.min((w - 8.0 - HIT_X) / (right - HIT_X)).max(0.3)
     }
 }
 
@@ -2234,7 +2226,7 @@ impl Game {
         let portal = self.portal_at(vt, lane_len);
         let scroll = Scroll {
             t: vt,
-            speed: osu_speed_scale(w) * scroll_speed * mods.scroll() * lane_stretch(rail.is_some(), lane_len, w, rail_zoom),
+            speed: osu_speed_scale(w) * scroll_speed * mods.scroll() * lane_stretch(rail.is_some(), lane_len, w),
             lane: lane_len as f64,
             mods,
             warp,
@@ -3565,8 +3557,10 @@ mod tests {
     }
 
     #[test]
-    fn the_loop_crosses_the_lane_at_an_angle_and_keeps_clear_of_the_hud() {
+    fn the_loop_is_full_size_on_screen_and_crosses_the_lane_at_an_angle() {
         let shape = RailShape::Loop;
+        // As big as the other rails: on 16:9 nothing shrinks.
+        assert_eq!(shape.zoom(853.3), 1.0);
         for w in [853.3, 600.0] {
             let (len, zoom, drop) = (shape.length(w), shape.zoom(w), shape.drop());
             let rail = Rail::build(|s| shape.bend(s), len);
@@ -3580,13 +3574,16 @@ mod tests {
             while s < len {
                 for side in [-62.0, 0.0, 62.0] {
                     let (x, y) = at(s, side);
-                    if x > w + 10.0 || y > VIRTUAL_HEIGHT + 10.0 {
+                    // The lane in leaves by the bottom right.
+                    if x > w || y > VIRTUAL_HEIGHT {
                         continue;
                     }
-                    assert!(y > 4.0, "{w}: off the top at {s}");
-                    let hp_bar = x > hp_bar_x(w) && y < HP_BAR_Y + 12.0;
-                    let meter = (x - w / 2.0).abs() < 158.0 && y > 405.0;
-                    assert!(!hp_bar && !meter, "{w}: over the HUD at {s} ({x}, {y})");
+                    assert!(y > 4.0, "{w}: off the top at {s} ({x}, {y})");
+                    if w > 800.0 {
+                        // Its error ticks reach up to 419.
+                        let meter = (x - w / 2.0).abs() < 158.0 && y > 415.0;
+                        assert!(!meter, "over the hit error meter at {s} ({x}, {y})");
+                    }
                 }
                 s += 2.0;
             }
@@ -3598,19 +3595,19 @@ mod tests {
 
     #[test]
     fn rails_bend_the_lane_without_speeding_notes_up() {
-        // On screen (after the playfield shrinks to fit the shape), notes cross at the usual
-        // speed whatever the shape and the screen.
-        for w in [853.3, 600.0] {
+        // Along the lane, notes go as on a plain one (as many to a stretch of it), whatever the
+        // shape, its length, and how much the playfield shrinks to fit it.
+        for w in [853.3, 660.0, 600.0] {
             for mods in ["ZZ", "UT", "SI", "LP", "EB", "SS"] {
                 let g = kiai_game(mods);
-                for t in [0.0, 20_000.0] {
+                for t in [0.0, 20_000.0, 50_000.0] {
                     let (rail, len, _, zoom) = g.rail_at(t, w);
-                    let on_screen = lane_stretch(rail.is_some(), len, w, zoom) * zoom as f64;
-                    assert!((on_screen - 1.0).abs() < 1e-6, "{mods} at {w}: {on_screen}");
+                    assert!(zoom <= 1.0);
+                    assert_eq!(lane_stretch(rail.is_some(), len, w), 1.0, "{mods} at {w}");
                 }
             }
             // Plain lanes are as they were.
-            assert_eq!(lane_stretch(false, w - HIT_X, w, 1.0), 1.0);
+            assert_eq!(lane_stretch(false, w - HIT_X, w), 1.0);
         }
     }
 
