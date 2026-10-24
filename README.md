@@ -106,7 +106,8 @@ the next start) and restarts into it. *Check at startup* turns the check off. Bu
 | D / F / J / K | left rim (kat) / left centre (don) / right centre / right rim |
 | Enter, ↑/↓, ←/→ | play, select difficulty, jump between sets |
 | type, Backspace | search |
-| Tab (or F1) | switch between the SONGS and SETTINGS tabs |
+| Tab | switch between the SONGS and SETTINGS tabs |
+| F1 / the Mods button | mod select (song select; the host in a multiplayer lobby) |
 | [ / ] (Shift: ×5) | speed (rate) −/+ 0.05× on song select; host sets the match rate in the lobby |
 | F5 / F6 (rebindable) | previous / next playfield resolution preset, anywhere |
 | right mouse (hold and move, song select) | fly through the song list like osu!: the pointer's height over the list picks the song that far through it |
@@ -125,7 +126,7 @@ the next start) and restarts into it. *Check at startup* turns the check off. Bu
 | `` ` `` or Ctrl+R | restart map (Ctrl+R also works paused and on the results screen) |
 | Esc (song select) | clear search / quit |
 | - / = (Shift: ×5) | offset −/+ 1 ms: this map's own during a song or on its results, else the global one |
-| F3 / F4 | scroll speed |
+| F3 / F4 | scroll speed (1.00x = osu!'s) |
 | F7 | gameplay present mode: vsync → mailbox → immediate (menus stay on vsync by default) |
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
 | F10 / F11 | FPS overlay / fullscreen (the game starts fullscreen; F11 is remembered) |
@@ -213,6 +214,59 @@ of the lobby map; the host's button is **Start the match from 1:23**, which sets
 match starts (shown next to the map; players re-ready, as after a rate change). The lobby also
 plays the lobby map's music. The background also shows behind
 the lane during play, darkened by Settings → *Background dim*.
+
+## Mods
+
+**F1** (or the *Mods* button next to *Sort*) on song select opens the mod select: five columns of
+mods to switch on and off (click, or arrows + Space; Backspace clears them, F1 / Esc closes). The
+picked mods stay on until you change them (`mods =` in the config), show on the Mods button, in
+play under the accuracy, on the results screen and on your local scores. Mods that can't go
+together switch each other off (EZ/HR, DT/HT/NC/DC/WU/WD, SD/PF/NF, HD/Sudden/Memory, ...).
+
+**HP:** like osu!lazer's taiko, the HP bar (under the score) starts empty, fills as you hit and
+drains on misses; a play that ends with it under half (the mark) is **failed**: grade F, and like
+osu! the score and replay aren't kept. A play from a start point never fails on HP.
+
+| | Mod | What it does |
+|---|---|---|
+| EZ | Easy | OD ×0.5, notes 0.8× as fast, a kinder HP bar (score ×0.5) |
+| NF | No Fail | can't fail (×0.5) |
+| HT / DC | Half Time / Daycore | 0.75× speed, same pitch / lower pitch (×0.3) |
+| HA | Half Notes | every other don/kat removed (×0.5) |
+| NB | No Finishers | big notes become normal ones |
+| HR | Hard Rock | OD ×1.4, notes 1.87× as fast (osu!lazer's taiko factor), a stricter HP bar (×1.06) |
+| SD / PF | Sudden Death / Perfect | the first miss / anything but a GREAT fails the play at once |
+| DT / NC | Double Time / Nightcore | 1.5× speed, same pitch / higher pitch (×1.12) |
+| HD | Hidden | notes fade out over the first 37.5% of their way in, like osu!lazer (×1.06) |
+| FL | Flashlight | only a circle around the drum is lit; smaller at 100 and 200 combo (×1.12) |
+| PR | Precise | OD +2 |
+| GN | Great or Nothing | an OK counts as a miss |
+| RX | Relax | colours don't matter: any key hits any note (not saved) |
+| AT | Autoplay | the map plays itself (not saved) |
+| SW / RD | Swap / Random | dons ↔ kats / every note a random colour (the same each play) |
+| CS | Constant Speed | every note scrolls at the map's usual speed: no SV changes |
+| AL | Alternate | the same hand can't hit twice in a row (a 2 s pause frees it) |
+| WU / WD | Wind Up / Wind Down | the song speeds up to 1.5× / slows down to 0.75× of your speed from the first note to the last |
+| AB | All Big | every don and kat is big |
+| AC / BR | Accel / Brake | notes start slow and rush in near the drum / fly in fast and brake |
+| WV | Wave | note speed swells and falls along the song (±35%) |
+| PU / ST | Pulse / Stutter | far notes jump forward on every beat / hold for half a beat, then catch up (each still reaches the drum exactly on time) |
+| CH | SV Chaos | every note its own speed (±30%): they overtake each other |
+| CR | Combo Rush | +5% note speed per 50 combo, back to normal on a miss |
+| KB | Kiai Boost | notes in kiai time 1.3× as fast |
+| FN | Finale | the last 15% of the map 1.5× as fast |
+| SU | Sudden | notes only show up close to the drum |
+| BL | Blink | approaching notes vanish on the second half of every beat |
+| BO | Blackout | kiai time turns the lights off but around the drum |
+| SP | Spotlight | a Flashlight that breathes with the beat |
+| CL | Colorless | dons and kats look the same |
+| MM | Memory | notes only shown for the first 15 seconds |
+| MR | Mirror | the lane is flipped: notes come from the left |
+| DK / EQ / ZM | Drunk / Earthquake / Zoom | the lane sways / shakes on big hits / pulses bigger on the beat |
+
+The scroll and visual mods only change where and how notes are drawn; judging always uses the
+real note times. In multiplayer the host's mods (F1 in the lobby) apply to everyone; replays,
+spectating and friends watching you play use the mods the play had.
 
 ## Playfield size and speed
 
@@ -302,7 +356,9 @@ Ctrl+Up/Down step through them). With no text, newest ranked first. Each result 
 status, number of taiko difficulties and star range. Enter, or the *Download* button, fetches the `.osz` with a progress bar and unpacks it into
 your Songs folder as `<set id> <artist> - <title>/` (the first folder being scanned, else
 `~/.local/share/taiko-rs/Songs` / `%APPDATA%\taiko-rs\Songs`, which is scanned at startup). The set
-shows up in the song list right away and is selected; sets you already have say *installed*.
+shows up in the song list right away and is selected; sets you already have say *installed*. A
+mirror that's busy (osu.direct's passing 503s, catboy.best's rate limit) is asked again a few
+seconds later, up to three times; one that doesn't have the set (404) isn't.
 
 Before downloading, the selected result is previewed on the right like in song select: its cover
 as the background, details, star rating, difficulty timeline and the autoplay, with osu!'s ~10 s
@@ -358,7 +414,16 @@ When the players skip the intro, the spectator skips it too. Spectating always u
 
 While logged in (MULTIPLAYER → ONLINE), **F9** (or the *friends* chip top right in the menus)
 opens a translucent overlay over whatever screen is up, including while spectating or watching
-(never over your own play):
+(never over your own play). It has three tabs (Tab / Shift+Tab or click), and the top right corner
+shows how many players are online on the server (green dot; also on the chip):
+
+- **FRIENDS:** your friends, requests and conversations (below).
+- **PLAYERS:** everyone online, with what they're doing. Type to search by name; **+ friend** /
+  Enter sends a friend request, **accept** takes theirs, **chat** opens the conversation with a
+  friend.
+- **CHAT:** the global chat, with everyone online (the last 100 lines are kept on the server while
+  it runs and shown when you connect). Wheel or PgUp / PgDn scrolls back. New lines count on the
+  tab; a line with your name in it also pops up a notification.
 
 - **Add friend:** type a name on the first row and press Enter. They get a request (notification
   and a row in their list) to accept or decline; once both agree you're friends.
@@ -386,12 +451,15 @@ Its protocol is `src/online.rs`: one JSON request line and one reply per connect
 
 ```sh
 cd server && cargo run --release -- --port 7800 --data ./data          # locally
-server/deploy/deploy.sh user@host [ssh port]                            # static build + Docker
+server/deploy/deploy.sh user@host [ssh port] [jump host]                # static build + Docker
 ```
 
 `deploy.sh` builds a static (musl) binary (`rustup target add x86_64-unknown-linux-musl` once),
 copies it with `server/deploy/Dockerfile` and `docker-compose.yml` to `~/taiko-server` and runs
-it with `restart: unless-stopped`. TCP port 7800 must be reachable.
+it with `restart: unless-stopped`. TCP port 7800 must be reachable. The binary it replaces stays as
+`~/taiko-server/taiko-server.bak` to roll back to. When the server's ssh port isn't reachable
+directly, a jump host (`ssh -J`, e.g. an alias from `~/.ssh/config`) goes through it:
+`deploy.sh user@host 1337 vps`.
 
 ## Discord status
 
@@ -438,7 +506,8 @@ spins so frames stay evenly spaced.
 | `src/beatmap.rs` | `.osu` parser, timing/SV control points, taiko conversion, barlines |
 | `src/audio.rs` | decode (symphonia) + resample, cpal/PipeWire output, mixer, built-in hitsounds |
 | `src/clock.rs` | audio-slaved smooth game clock |
-| `src/game.rs` | judging, scoring, playfield drawing |
+| `src/game.rs` | judging, scoring, HP, playfield drawing (and what the mods do to them) |
+| `src/mods.rs` | the mods: list, conflicts, multipliers, speed changes (Wind Up/Down time map) |
 | `src/render.rs` | wgpu SDF shape renderer, skin images, text, present mode handling |
 | `src/ui.rs` | song select and results screens |
 | `src/settings.rs` | settings tab items and layout, tab bar |
@@ -452,6 +521,6 @@ spins so frames stay evenly spaced.
 | `src/skin.rs` | osu! skins: listing, `.osk` unpacking, note image atlas, hitsounds |
 | `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
 | `src/discord.rs` | Discord Rich Presence over the local IPC socket / pipe |
-| `src/download.rs` | mirror search and `.osz` downloads (catboy.best, osu.direct) |
+| `src/download.rs` | mirror search and `.osz` downloads (osu.direct, catboy.best) |
 | `src/browse.rs` | the Download tab |
 | `vendor/cpal` | cpal 0.18.2 with one fix: WASAPI counted the stream latency twice in its playback timestamps (Windows players needed a much lower offset) |

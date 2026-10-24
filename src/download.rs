@@ -1,4 +1,4 @@
-//! Beatmap downloads from public osu! mirrors (catboy.best, then osu.direct): searching for
+//! Beatmap downloads from public osu! mirrors (osu.direct, then catboy.best): searching for
 //! sets and fetching `.osz` archives into the Songs folder, on background threads.
 
 use std::io::{Read, Write};
@@ -21,13 +21,12 @@ struct Mirror {
     download: &'static str,
 }
 
+/// In the order they're tried. osu.direct first: it can sort searches on its side, and
+/// catboy.best rate-limits downloads per IP (425) after a handful of sets.
 const MIRRORS: [Mirror; 2] = [
-    Mirror { name: "catboy.best", search: "https://catboy.best/api/v2/search", query_key: "q", amount_key: "limit", download: "https://catboy.best/d/" },
     Mirror { name: "osu.direct", search: "https://osu.direct/api/v2/search", query_key: "query", amount_key: "amount", download: "https://osu.direct/api/d/" },
+    Mirror { name: "catboy.best", search: "https://catboy.best/api/v2/search", query_key: "q", amount_key: "limit", download: "https://catboy.best/d/" },
 ];
-
-/// Which mirror searches first: osu.direct can sort on its side, catboy.best can't.
-const SEARCH_ORDER: [usize; 2] = [1, 0];
 
 /// Search categories, like the osu! website's (beatmap status filters).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -250,8 +249,7 @@ fn parse_sets(json: &str) -> Result<Vec<SetInfo>, String> {
 /// One status (or any) from the first mirror that answers.
 fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Option<(&str, bool)>) -> Result<Vec<SetInfo>, String> {
     let mut errors = Vec::new();
-    for &k in &SEARCH_ORDER {
-        let m = &MIRRORS[k];
+    for m in &MIRRORS {
         let mut req = agent.get(m.search).header("User-Agent", USER_AGENT).query(m.query_key, query).query("mode", "1").query(m.amount_key, "50");
         if let Some(st) = status {
             req = req.query("status", st.to_string());
@@ -356,35 +354,57 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     Job { set, done, total, rx }
 }
 
+/// Passes over the mirrors before a download gives up: osu.direct often answers 503 for a
+/// moment and catboy.best rate-limits (425), and the next try usually works.
+const ROUNDS: u64 = 3;
+
 fn fetch(id: u32, name: &str, songs: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<PathBuf, String> {
     std::fs::create_dir_all(songs).map_err(|e| format!("{}: {e}", songs.display()))?;
     let dest = songs.join(name);
     let archive = songs.join(format!("{name}.osz.part"));
-    let mut errors = Vec::new();
-    for m in &MIRRORS {
-        done.store(0, Ordering::Relaxed);
-        total.store(0, Ordering::Relaxed);
-        match download_to(&format!("{}{id}", m.download), &archive, done, total) {
-            Ok(()) => {
-                let result = extract(&archive, &dest);
-                let _ = std::fs::remove_file(&archive);
-                match result {
-                    Ok(()) => return Ok(dest),
-                    Err(e) => errors.push(format!("{}: {e}", m.name)),
-                }
+    let mut errors: [Option<String>; MIRRORS.len()] = Default::default();
+    // A mirror that doesn't have the set (404) isn't asked again.
+    let mut gone = [false; MIRRORS.len()];
+    for round in 0..ROUNDS {
+        if gone.iter().all(|&g| g) {
+            break;
+        }
+        if round > 0 {
+            // osu.direct's 503s ask for up to 30 s.
+            std::thread::sleep(Duration::from_secs(5 * round));
+        }
+        for (k, m) in MIRRORS.iter().enumerate() {
+            if gone[k] {
+                continue;
             }
-            Err(e) => {
-                let _ = std::fs::remove_file(&archive);
-                errors.push(format!("{}: {e}", m.name));
+            done.store(0, Ordering::Relaxed);
+            total.store(0, Ordering::Relaxed);
+            match download_to(&format!("{}{id}", m.download), &archive, done, total) {
+                Ok(()) => {
+                    let result = extract(&archive, &dest);
+                    let _ = std::fs::remove_file(&archive);
+                    match result {
+                        Ok(()) => return Ok(dest),
+                        Err(e) => (errors[k], gone[k]) = (Some(e), true),
+                    }
+                }
+                Err((e, retry)) => {
+                    let _ = std::fs::remove_file(&archive);
+                    (errors[k], gone[k]) = (Some(e), !retry);
+                }
             }
         }
     }
-    Err(errors.join("; "))
+    Err(MIRRORS.iter().zip(errors).filter_map(|(m, e)| Some(format!("{}: {}", m.name, e?))).collect::<Vec<_>>().join("; "))
 }
 
-fn download_to(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<(), String> {
+/// Errors say whether trying again later could help (not for a set the mirror doesn't have).
+fn download_to(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<(), (String, bool)> {
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_connect(Some(Duration::from_secs(15))).build().into();
-    let mut response = agent.get(url).header("User-Agent", USER_AGENT).call().map_err(|e| e.to_string())?;
+    let mut response = agent.get(url).header("User-Agent", USER_AGENT).call().map_err(|e| match e {
+        ureq::Error::StatusCode(404) => ("doesn't have this set".to_string(), false),
+        e => (e.to_string(), true),
+    })?;
     let body = response.body_mut();
     if let Some(len) = body.content_length() {
         total.store(len, Ordering::Relaxed);
@@ -392,20 +412,21 @@ fn download_to(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> R
     // A mirror that has no such set answers with a small JSON error instead of an archive.
     if body.mime_type().is_some_and(|m| m.contains("json") || m.contains("html")) {
         let text = body.read_to_string().unwrap_or_default();
-        return Err(if text.is_empty() { "no archive".into() } else { text.chars().take(120).collect() });
+        return Err((if text.is_empty() { "no archive".into() } else { text.chars().take(120).collect() }, false));
     }
     let mut reader = body.with_config().limit(512 << 20).reader();
-    let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut file = std::fs::File::create(path).map_err(|e| (e.to_string(), false))?;
     let mut buf = vec![0u8; 64 * 1024];
     loop {
-        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+        // A dropped transfer is worth another try.
+        let n = reader.read(&mut buf).map_err(|e| (e.to_string(), true))?;
         if n == 0 {
             break;
         }
-        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        file.write_all(&buf[..n]).map_err(|e| (e.to_string(), false))?;
         done.fetch_add(n as u64, Ordering::Relaxed);
     }
-    file.flush().map_err(|e| e.to_string())?;
+    file.flush().map_err(|e| (e.to_string(), false))?;
     Ok(())
 }
 
@@ -594,22 +615,28 @@ pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
     };
     let osu = dir.join(format!("{beatmap}.osu"));
     if !osu.is_file() {
-        let urls = [format!("https://osu.direct/api/osu/{beatmap}"), format!("https://catboy.best/osu/{beatmap}")];
-        let mut last = String::new();
+        // osu! itself serves any difficulty's .osu without a login; the mirrors are the fallback
+        // (catboy.best answers 425 once it rate-limits us, which browsing quickly did).
+        let sources = [
+            ("osu.ppy.sh", format!("https://osu.ppy.sh/osu/{beatmap}")),
+            ("osu.direct", format!("https://osu.direct/api/osu/{beatmap}")),
+            ("catboy.best", format!("https://catboy.best/osu/{beatmap}")),
+        ];
+        let mut errors = Vec::new();
         let mut saved = false;
-        for url in &urls {
+        for (name, url) in &sources {
             match get(url) {
                 Ok((bytes, _)) if bytes.starts_with(b"osu file format") || bytes.windows(15).take(64).any(|w| w == b"osu file format") => {
                     std::fs::write(&osu, bytes).map_err(|e| e.to_string())?;
                     saved = true;
                     break;
                 }
-                Ok(_) => last = "not a beatmap".into(),
-                Err(e) => last = e,
+                Ok(_) => errors.push(format!("{name}: not a beatmap")),
+                Err(e) => errors.push(format!("{name}: {e}")),
             }
         }
         if !saved {
-            return Err(format!("difficulty: {last}"));
+            return Err(format!("difficulty: {}", errors.join("; ")));
         }
     }
     let have_clip = std::fs::read_dir(&dir).map(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().starts_with(CLIP_PREFIX))).unwrap_or(false);

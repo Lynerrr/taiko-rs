@@ -14,6 +14,7 @@ use crate::beatmap::Beatmap;
 use crate::game::{self, Game};
 use crate::layout::{Area, Grip};
 use crate::render::{rgba, Canvas, Hit, VIRTUAL_HEIGHT};
+use crate::mods::Speed;
 use crate::scores::Replay;
 use winit::keyboard::KeyCode;
 
@@ -41,7 +42,7 @@ pub const FRAME_VW: f32 = VIRTUAL_HEIGHT * 16.0 / 9.0;
 
 /// A replay game with no audio, at its start.
 pub fn replay_game(map: &Beatmap, track: &Arc<Track>, r: &Replay) -> Game {
-    let mut g = Game::new(map.clone(), track.clone(), None);
+    let mut g = Game::with_mods(map.clone(), track.clone(), None, crate::mods::Mods::from_list(&r.mods));
     g.replay = Some((r.inputs.clone(), 0));
     g.anti_mash = r.anti_mash;
     g.mute_hits = true;
@@ -263,9 +264,9 @@ pub fn find_ffmpeg() -> Option<PathBuf> {
 
 /// The music of [start, end] (map ms) with the hitsounds mixed in, as 16-bit stereo at `sr`.
 #[allow(clippy::too_many_arguments)]
-pub fn mix_audio(track: &Track, sr: u32, rate: f64, start: f64, end: f64, music: f32, sfx: &[(f64, Sfx, f32)], sounds: &Sounds, fx: f32) -> Vec<i16> {
-    // The track plays `rate` map ms per ms; frame 0 is map time 0.
-    let frame_of = |map_ms: f64| (map_ms / rate / 1000.0 * sr as f64).round() as i64;
+pub fn mix_audio(track: &Track, sr: u32, speed: &Speed, start: f64, end: f64, music: f32, sfx: &[(f64, Sfx, f32)], sounds: &Sounds, fx: f32) -> Vec<i16> {
+    // Frame 0 is map time 0; the speed may change along the song (Wind Up / Down).
+    let frame_of = |map_ms: f64| (speed.track(map_ms) / 1000.0 * sr as f64).round() as i64;
     let (f0, f1) = (frame_of(start), frame_of(end));
     let n = (f1 - f0).max(0) as usize;
     let mut out = vec![0f32; n * 2];
@@ -365,8 +366,8 @@ pub fn start_encoder(ffmpeg: &Path, (w, h): (u32, u32), fps: u32, (cw, ch, cx, c
 /// An export in progress: the replay stepped one frame at a time.
 pub struct Export {
     pub game: Box<Game>,
+    /// Song ms of the next frame, and song ms per frame (map time is `game.speed().map(t)`).
     pub t: f64,
-    /// Map ms per frame.
     pub step: f64,
     pub size: (u32, u32),
     pub encoder: Encoder,
@@ -398,7 +399,7 @@ mod tests {
         let sounds = [vec![0.5; 10], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1]];
         // Cut 1500..3000 map ms = 1000..2000 track ms; a don at map 2250 ms = track frame 1500,
         // at its timing point's 50% volume (on top of the 0.25 music: 0.25 + 0.5 * 0.5).
-        let out = mix_audio(&track, sr, 1.5, 1500.0, 3000.0, 1.0, &[(2250.0, Sfx::Don, 0.5)], &sounds, 1.0);
+        let out = mix_audio(&track, sr, &Speed::constant(1.5), 1500.0, 3000.0, 1.0, &[(2250.0, Sfx::Don, 0.5)], &sounds, 1.0);
         assert_eq!(out.len(), 1000 * 2);
         let at = |i: usize| out[i * 2] as f32 / 32767.0;
         assert!((at(0) - 0.25).abs() < 1e-3);

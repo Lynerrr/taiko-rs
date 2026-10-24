@@ -6,10 +6,24 @@ use std::path::PathBuf;
 use winit::keyboard::KeyCode;
 
 use crate::layout::Area;
+use crate::mods::Mods;
 use crate::render::PresentChoice;
 
 pub const RATE_RANGE: (f64, f64) = (0.5, 2.0);
 pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
+/// What scroll speed 1.0 was before it matched osu!, in today's terms (at 16:9: 0.7 virtual
+/// units per osu!px across a 639-unit lane, where osu! takes its 693-unit one at 1.0).
+const OLD_SCROLL_SPEED: f64 = 0.7 * 693.333 / 639.333;
+/// F3 / F4 and the settings change scroll speed in steps of this.
+const SCROLL_STEP: f64 = 0.05;
+
+/// Scroll speed one step up (`d` = 1) or down (-1). A speed between steps goes to the nearest
+/// step in that direction first, so 1.01 goes down to 1.00 and up to 1.05.
+pub fn step_scroll_speed(speed: f64, d: f64) -> f64 {
+    let k = speed / SCROLL_STEP;
+    let k = if d > 0.0 { (k + 1e-6).floor() + 1.0 } else { (k - 1e-6).ceil() - 1.0 };
+    (k * SCROLL_STEP).clamp(0.3, 4.0)
+}
 
 /// Order of the four touch columns, left to right (K = rim / kat, D = centre / don), for the
 /// kddk and kkdd playstyles and their mirrors.
@@ -86,6 +100,8 @@ pub struct Config {
     pub show_offset_hint: bool,
     /// The map's name and the offset/UR line during play (Tab hides them).
     pub show_map_info: bool,
+    /// Mods picked in the mod select (F1 on song select).
+    pub mods: Mods,
     /// Multiplayer: display name, port to host on, last address joined.
     pub mp_name: String,
     pub mp_port: u16,
@@ -150,6 +166,7 @@ impl Default for Config {
             rate_keep_pitch: true,
             show_offset_hint: true,
             show_map_info: true,
+            mods: Mods::NONE,
             mp_name: std::env::var("USER")
                 .or_else(|_| std::env::var("USERNAME"))
                 .ok()
@@ -186,6 +203,10 @@ impl Default for Config {
 /// Per-user taiko-rs directory: settings (`cache == false`) or disposable data like extracted
 /// `.osz` files (`cache == true`).
 pub fn user_dir(cache: bool) -> Option<PathBuf> {
+    // Tests never read or write the player's own settings, scores or replays.
+    if cfg!(test) {
+        return None;
+    }
     #[cfg(windows)]
     {
         let var = if cache { "LOCALAPPDATA" } else { "APPDATA" };
@@ -261,6 +282,7 @@ impl Config {
         let mut cfg = Config::default();
         let Some(path) = config_path() else { return cfg };
         let Ok(text) = std::fs::read_to_string(&path) else { return cfg };
+        let mut osu_scroll_speed = false;
         for line in text.lines() {
             let line = line.trim();
             if line.starts_with('#') {
@@ -271,6 +293,7 @@ impl Config {
             match k {
                 "offset_ms" => cfg.offset_ms = v.parse().unwrap_or(cfg.offset_ms),
                 "scroll_speed" => cfg.scroll_speed = v.parse::<f64>().unwrap_or(cfg.scroll_speed).clamp(0.3, 4.0),
+                "scroll_speed_osu" => osu_scroll_speed = v == "true",
                 "master_volume" => cfg.master_volume = v.parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0),
                 "music_volume" => cfg.music_volume = v.parse::<f32>().unwrap_or(cfg.music_volume).clamp(0.0, 1.0),
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
@@ -296,6 +319,7 @@ impl Config {
                 "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "show_map_info" => cfg.show_map_info = v != "false",
+                "mods" => cfg.mods = Mods::parse(v),
                 "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
                 "mp_port" => cfg.mp_port = v.parse().unwrap_or(cfg.mp_port),
                 "mp_address" => cfg.mp_address = v.to_string(),
@@ -323,6 +347,11 @@ impl Config {
                 _ => {}
             }
         }
+        // Scroll speed 1.0 used to be ~0.76x of osu!'s (at 16:9). Left at 1.0 it now simply
+        // becomes osu!'s; a speed someone picked on purpose keeps looking (about) the same.
+        if !osu_scroll_speed && (cfg.scroll_speed - 1.0).abs() > 1e-3 {
+            cfg.scroll_speed = ((cfg.scroll_speed * OLD_SCROLL_SPEED / SCROLL_STEP).round() * SCROLL_STEP).clamp(0.3, 4.0);
+        }
         cfg
     }
 
@@ -344,7 +373,9 @@ impl Config {
              # your own playfield sizes (preset list, in this order)\n\
              saved_presets = {}\n\
              offset_ms = {}\n\
+             # 1.00 = osu!'s scroll speed\n\
              scroll_speed = {:.2}\n\
+             scroll_speed_osu = true\n\
              master_volume = {:.2}\n\
              music_volume = {:.2}\n\
              fx_volume = {:.2}\n\
@@ -379,7 +410,9 @@ impl Config {
              show_offset_hint = {}\n\
              offset_hint_ur_scaled = {}\n\
              # map name and UR line during play (Tab toggles)\n\
-             show_map_info = {}\n",
+             show_map_info = {}\n\
+             # mods picked on song select (F1), e.g. HD,HR\n\
+             mods = {}\n",
             keys.join(", "),
             self.preset_keys.iter().map(|k| key_name(*k)).collect::<Vec<_>>().join(", "),
             self.touch_layout.name(),
@@ -411,6 +444,7 @@ impl Config {
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
             self.show_map_info,
+            self.mods.to_config(),
         );
         out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
         out.push_str(&format!(
@@ -453,5 +487,18 @@ mod tests {
             assert_eq!(TouchLayout::parse(&layout.name().to_lowercase()), Some(layout));
         }
         assert_eq!(TouchLayout::Kddk.step(-1), TouchLayout::Ddkk);
+    }
+
+    #[test]
+    fn scroll_speed_steps_land_on_the_grid() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(close(step_scroll_speed(1.01, -1.0), 1.0));
+        assert!(close(step_scroll_speed(1.01, 1.0), 1.05));
+        assert!(close(step_scroll_speed(1.0, -1.0), 0.95));
+        assert!(close(step_scroll_speed(1.0, 1.0), 1.05));
+        // Floating-point sums of 0.05 don't skip a step.
+        assert!(close(step_scroll_speed(0.05 * 21.0, -1.0), 1.0));
+        assert!(close(step_scroll_speed(0.3, -1.0), 0.3));
+        assert!(close(step_scroll_speed(4.0, 1.0), 4.0));
     }
 }

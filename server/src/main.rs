@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
-use online::{Activity, ChatLine, Down, Envelope, Friend, Reply, Request, RoomInfo, SoloPlay, Up};
+use online::{Activity, ChatLine, Down, Envelope, Friend, OnlinePlayer, Reply, Request, RoomInfo, SoloPlay, Up};
 use serde::{Deserialize, Serialize};
 
 /// Sessions last this long without logging in again.
@@ -48,12 +48,16 @@ struct User {
 }
 
 const MAX_FRIENDS: usize = 200;
-/// Chat lines kept per pair of friends (in memory only).
+/// Chat lines kept per pair of friends, and of the global chat (in memory only).
 const CHAT_HISTORY: usize = 100;
+/// How often a changed online list goes out to everyone.
+const PLAYERS_EVERY: Duration = Duration::from_secs(2);
 
 /// One open social connection (a player can have several, e.g. two PCs).
 struct Conn {
     id: u64,
+    /// The account's name as written.
+    name: String,
     tx: mpsc::Sender<Down>,
     activity: Activity,
     /// Whose solo play this connection watches (lowercased name).
@@ -77,6 +81,9 @@ struct Hub {
     plays: HashMap<String, Play>,
     /// By (a, b) with a < b.
     history: HashMap<(String, String), VecDeque<ChatLine>>,
+    global: VecDeque<ChatLine>,
+    /// Someone came, left or changed what they're doing since the online list last went out.
+    players_changed: bool,
     next_conn: u64,
 }
 
@@ -95,6 +102,33 @@ impl Hub {
 
     fn conn(&mut self, key: &str, id: u64) -> Option<&mut Conn> {
         self.conns.get_mut(key)?.iter_mut().find(|c| c.id == id)
+    }
+
+    fn send_to_all(&self, d: &Down) {
+        for c in self.conns.values().flatten() {
+            let _ = c.tx.send(d.clone());
+        }
+    }
+
+    /// Everyone online, as `Down::Players`.
+    fn players(&self) -> Down {
+        let mut players: Vec<OnlinePlayer> = self.conns.values().filter_map(|v| v.last()).map(|c| OnlinePlayer { name: c.name.clone(), activity: c.activity.clone() }).collect();
+        players.sort_by_key(|p| p.name.to_lowercase());
+        let count = players.len() as u32;
+        players.truncate(online::MAX_LISTED);
+        Down::Players { count, players }
+    }
+
+    /// False (and a notice) when this connection is chatting too fast.
+    fn chat_allowed(&mut self, key: &str, id: u64) -> bool {
+        let Some(c) = self.conn(key, id) else { return true };
+        c.chat_times.retain(|t| t.elapsed() < Duration::from_secs(5));
+        if c.chat_times.len() >= 8 {
+            let _ = c.tx.send(Down::Notice("slow down a little".into()));
+            return false;
+        }
+        c.chat_times.push_back(Instant::now());
+        true
     }
 }
 
@@ -409,8 +443,15 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String)
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(90)));
     let Ok(mut writer) = reader.get_ref().try_clone() else { return };
     let (tx, rx) = mpsc::channel::<Down>();
+    // A quiet connection gets a Pong every 20 s anyway: games that only ping while they send
+    // nothing else went 70 s without hearing from us during a solo play and dropped the link.
     std::thread::spawn(move || {
-        for d in rx {
+        loop {
+            let d = match rx.recv_timeout(Duration::from_secs(20)) {
+                Ok(d) => d,
+                Err(mpsc::RecvTimeoutError::Timeout) => Down::Pong,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
             if online::write_line(&mut writer, &d).is_err() {
                 break;
             }
@@ -421,7 +462,12 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String)
         let mut hub = state.hub.lock().unwrap();
         hub.next_conn += 1;
         let id = hub.next_conn;
-        hub.conns.entry(key.clone()).or_default().push(Conn { id, tx: tx.clone(), activity: Activity::Menus, watching: None, chat_times: VecDeque::new() });
+        hub.conns.entry(key.clone()).or_default().push(Conn { id, name: name.clone(), tx: tx.clone(), activity: Activity::Menus, watching: None, chat_times: VecDeque::new() });
+        hub.players_changed = true;
+        let _ = tx.send(hub.players());
+        for line in &hub.global {
+            let _ = tx.send(Down::GlobalChat(line.clone()));
+        }
         id
     };
     state.push_friends(&key);
@@ -447,6 +493,7 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String)
                 hub.conns.remove(&key);
             }
         }
+        hub.players_changed = true;
         if hub.plays.get(&key).is_some_and(|p| p.conn == id) {
             hub.plays.remove(&key);
             hub.send_to_watchers(&key, &Down::WatchEnd { player: name.clone() });
@@ -461,8 +508,12 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
             let _ = tx.send(Down::Pong);
         }
         Up::Status(activity) => {
-            if let Some(c) = state.hub.lock().unwrap().conn(key, id) {
-                c.activity = activity;
+            {
+                let mut hub = state.hub.lock().unwrap();
+                if let Some(c) = hub.conn(key, id) {
+                    c.activity = activity;
+                }
+                hub.players_changed = true;
             }
             state.tell_friends(key);
         }
@@ -536,13 +587,8 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
             }
             let to_name = state.display_name(&to);
             let mut hub = state.hub.lock().unwrap();
-            if let Some(c) = hub.conn(key, id) {
-                c.chat_times.retain(|t| t.elapsed() < Duration::from_secs(5));
-                if c.chat_times.len() >= 8 {
-                    let _ = c.tx.send(Down::Notice("slow down a little".into()));
-                    return;
-                }
-                c.chat_times.push_back(Instant::now());
+            if !hub.chat_allowed(key, id) {
+                return;
             }
             let line = ChatLine { from: name.to_string(), to: to_name, text, at: now_secs() };
             let log = hub.history.entry(pair(key, &to)).or_default();
@@ -553,6 +599,22 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
             let d = Down::Chat(line);
             hub.send_to(key, &d);
             hub.send_to(&to, &d);
+        }
+        Up::GlobalChat(text) => {
+            let text = net::clean_chat(&text);
+            if text.is_empty() {
+                return;
+            }
+            let mut hub = state.hub.lock().unwrap();
+            if !hub.chat_allowed(key, id) {
+                return;
+            }
+            let line = ChatLine { from: name.to_string(), to: String::new(), text, at: now_secs() };
+            hub.global.push_back(line.clone());
+            if hub.global.len() > CHAT_HISTORY {
+                hub.global.pop_front();
+            }
+            hub.send_to_all(&Down::GlobalChat(line));
         }
         Up::Watch(other) => {
             let other = other.trim().to_ascii_lowercase();
@@ -626,6 +688,18 @@ fn reaper(state: Arc<State>) {
     }
 }
 
+/// Sends the online list to everyone when it has changed.
+fn announcer(state: Arc<State>) {
+    loop {
+        std::thread::sleep(PLAYERS_EVERY);
+        let mut hub = state.hub.lock().unwrap();
+        if std::mem::take(&mut hub.players_changed) {
+            let d = hub.players();
+            hub.send_to_all(&d);
+        }
+    }
+}
+
 fn main() {
     let mut port = online::DEFAULT_PORT;
     let mut data = PathBuf::from(".");
@@ -645,6 +719,10 @@ fn main() {
     {
         let state = state.clone();
         std::thread::spawn(move || reaper(state));
+    }
+    {
+        let state = state.clone();
+        std::thread::spawn(move || announcer(state));
     }
     // IPv6 and IPv4 (on Linux `::` is usually dual-stack and the second bind just fails).
     let mut listeners = Vec::new();

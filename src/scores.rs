@@ -24,6 +24,9 @@ pub struct Replay {
     #[serde(default)]
     pub keep_pitch: bool,
     pub anti_mash: bool,
+    /// Mods played with (acronyms); `rate` already includes DT/HT.
+    #[serde(default)]
+    pub mods: Vec<String>,
     pub score: u64,
     pub accuracy: f64,
     pub max_combo: u32,
@@ -47,6 +50,8 @@ pub struct ScoreRow {
     pub rate: f64,
     pub player: String,
     pub file: PathBuf,
+    /// Mods, as "HDHR" ("" without).
+    pub mods: String,
 }
 
 fn dir() -> Option<PathBuf> {
@@ -77,6 +82,7 @@ pub fn load_index() -> Vec<ScoreRow> {
                 rate: f[6].parse().ok()?,
                 player: f[7].to_string(),
                 file: base.join(f[8]),
+                mods: f.get(9).unwrap_or(&"").to_string(),
             })
         })
         .filter(|r| r.file.is_file())
@@ -91,9 +97,10 @@ pub fn save(replay: &Replay) -> Result<ScoreRow, String> {
     let file = dir.join(&name);
     std::fs::write(&file, serde_json::to_vec(replay).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let player: String = replay.player.chars().filter(|c| *c != '\t' && *c != '\n').collect();
+    let mods = crate::mods::Mods::from_list(&replay.mods).label();
     let line = format!(
-        "{:016x}\t{}\t{}\t{:.6}\t{}\t{}\t{:.2}\t{}\t{}\n",
-        replay.map_hash, replay.date, replay.score, replay.accuracy, replay.max_combo, replay.miss, replay.rate, player, name
+        "{:016x}\t{}\t{}\t{:.6}\t{}\t{}\t{:.2}\t{}\t{}\t{}\n",
+        replay.map_hash, replay.date, replay.score, replay.accuracy, replay.max_combo, replay.miss, replay.rate, player, name, mods
     );
     let index = index_path().ok_or("no data folder")?;
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(index).map_err(|e| e.to_string())?;
@@ -108,6 +115,7 @@ pub fn save(replay: &Replay) -> Result<ScoreRow, String> {
         rate: replay.rate,
         player,
         file,
+        mods,
     })
 }
 

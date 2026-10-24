@@ -266,7 +266,10 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
         match value {
             Some((v, placeholder)) => {
                 c.text(x + 14.0, y + h / 2.0 - 4.5, 9.0, rgba(0x9a9ab0, 1.0), label);
+                // The value keeps clear of the label: a long one shows its end (where you type).
+                let room = col - 38.0 - Canvas::text_width(9.0, label);
                 let shown = if sel { format!("{v}_") } else { v.to_string() };
+                let shown = if placeholder { Canvas::fit(9.0, room, &shown) } else { Canvas::fit_end(9.0, room, &shown) };
                 let colour = if placeholder && !sel { 0x55556a } else { 0xffffff };
                 c.text_right(x + col - 14.0, y + h / 2.0 - 4.5, 9.0, rgba(colour, 1.0), &shown);
             }
@@ -281,7 +284,8 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
         Some(Err(_)) => ("offline", 0xFF4B4B),
         None => ("connecting...", 0x8a8aa0),
     };
-    c.text_right(left + col, 62.0, 8.0, rgba(colour, 1.0), &format!("{}  {state}", server_label(server)));
+    let room = col - Canvas::text_width(9.0, "ONLINE") - 12.0;
+    c.text_right(left + col, 62.0, 8.0, rgba(colour, 1.0), &Canvas::fit(8.0, room, &format!("{}  {state}", server_label(server))));
     let mut y = 80.0;
     let lobby_rows: Vec<(usize, usize)> = rows.iter().enumerate().filter_map(|(i, r)| if let Row::Lobby(k) = r { Some((i, *k)) } else { None }).collect();
     // The visible window of lobbies follows the cursor.
@@ -304,12 +308,14 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
             Row::Register => {
                 row(c, i, left, y, 30.0, "CREATE ACCOUNT", None);
                 y += 38.0;
-                c.text_centered(left + col / 2.0, y + 4.0, 7.0, rgba(0x6f6f86, 1.0), "An account is only needed for online lobbies.");
-                c.text_centered(left + col / 2.0, y + 18.0, 7.0, rgba(0x6f6f86, 1.0), "Direct play on the right works without one.");
+                for (k, line) in ["An account is only needed for online lobbies.", "Direct play on the right works without one."].iter().enumerate() {
+                    let size = Canvas::fit_size(7.0, 6.0, col, line);
+                    c.text_centered(left + col / 2.0, y + 4.0 + 14.0 * k as f32, size, rgba(0x6f6f86, 1.0), &Canvas::fit(size, col, line));
+                }
             }
             Row::HostOnline => {
                 let who = menu.account.as_deref().unwrap_or("");
-                c.text(left, y - 2.0, 8.0, rgba(0x9a9ab0, 1.0), &format!("logged in as {who}"));
+                c.text(left, y - 2.0, 8.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(8.0, col, &format!("logged in as {who}")));
                 y += 12.0;
                 row(c, i, left, y, 30.0, "HOST AN ONLINE LOBBY", None);
                 y += 42.0;
@@ -320,7 +326,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                         Some(Err(e)) => format!("server unreachable ({e}): use direct play"),
                         _ => "nobody is hosting right now".into(),
                     };
-                    c.text(left + 4.0, y + 4.0, 7.0, rgba(0x6f6f86, 1.0), &msg);
+                    c.text(left + 4.0, y + 4.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, col - 8.0, &msg));
                     y += 22.0;
                 }
             }
@@ -335,16 +341,16 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                 let bg = if !sel && c.hovered(left, y, col, 32.0) { 0x262634 } else { bg };
                 c.round_rect(left, y, col, 32.0, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
                 c.hit(left, y, col, 32.0, Hit::MpRow(i));
-                c.text(left + 12.0, y + 6.0, 9.0, rgba(0xffffff, 1.0), &r.title);
+                let state = if r.in_match { "in a match" } else { "in the lobby" };
+                c.text(left + 12.0, y + 6.0, 9.0, rgba(0xffffff, 1.0), &Canvas::fit(9.0, col - 32.0 - Canvas::text_width(8.0, state), &r.title));
                 let players = format!("{} player{}", r.players, if r.players == 1 { "" } else { "s" });
-                c.text_right(left + col - 12.0, y + 6.0, 8.0, rgba(if r.in_match { 0x438EAD } else { 0x86E05A }, 1.0), if r.in_match { "in a match" } else { "in the lobby" });
+                c.text_right(left + col - 12.0, y + 6.0, 8.0, rgba(if r.in_match { 0x438EAD } else { 0x86E05A }, 1.0), state);
                 let mut info = format!("host {}   {players}", r.host);
                 if let Some(m) = &r.map {
                     info.push_str("   ");
                     info.push_str(m);
                 }
-                let info: String = info.chars().take(((col - 24.0) / 4.6) as usize).collect();
-                c.text(left + 12.0, y + 20.0, 6.5, rgba(0x8a8aa0, 1.0), &info);
+                c.text(left + 12.0, y + 20.0, 6.5, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.5, col - 24.0, &info));
                 y += 36.0;
             }
             Row::LogOut => {
@@ -361,7 +367,10 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
 
     // Direct play.
     c.text(right, 62.0, 9.0, rgba(0xEB452C, 1.0), "DIRECT (P2P)");
-    c.text_right(right + col, 62.0, 8.0, rgba(0x6f6f86, 1.0), "no account or server needed");
+    let room = col - Canvas::text_width(9.0, "DIRECT (P2P)") - 12.0;
+    let note = "no account or server needed";
+    let size = Canvas::fit_size(8.0, 6.0, room, note);
+    c.text_right(right + col, 62.0 + (8.0 - size) / 2.0, size, rgba(0x6f6f86, 1.0), &Canvas::fit(size, room, note));
     let mut y = 80.0;
     for (i, r) in rows.iter().enumerate() {
         match *r {
@@ -377,13 +386,18 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
         }
         y += 38.0;
     }
-    c.text_centered(right + col / 2.0, y + 4.0, 7.0, rgba(0x6f6f86, 1.0), "Hosting: friends join with your public IP and");
-    c.text_centered(right + col / 2.0, y + 16.0, 7.0, rgba(0x6f6f86, 1.0), "this port (it must be reachable).");
+    for (k, line) in ["Hosting: friends join with your public IP and", "this port (it must be reachable)."].iter().enumerate() {
+        let size = Canvas::fit_size(7.0, 6.0, col, line);
+        c.text_centered(right + col / 2.0, y + 4.0 + 12.0 * k as f32, size, rgba(0x6f6f86, 1.0), &Canvas::fit(size, col, line));
+    }
 
     let msg = if busy { "connecting..." } else { status };
-    c.text_centered(w / 2.0, 432.0, 9.0, rgba(0xFFD34D, 1.0), msg);
-    c.text_centered(w / 2.0, 450.0, 8.0, rgba(0x8a8aa0, 1.0), "Everyone needs the same map in their Songs folder (or gets it from the host).");
-    c.text_centered(w / 2.0, 464.0, 8.0, rgba(0x55556a, 1.0), "Up/Down select   Left/Right column   type to edit   Enter   F5 refresh   Tab or Esc back");
+    let room = w - 48.0;
+    c.text_centered(w / 2.0, 432.0, 9.0, rgba(0xFFD34D, 1.0), &Canvas::fit(9.0, room, msg));
+    let note = "Everyone needs the same map in their Songs folder (or gets it from the host).";
+    let size = Canvas::fit_size(8.0, 6.5, room, note);
+    c.text_centered(w / 2.0, 450.0, size, rgba(0x8a8aa0, 1.0), &Canvas::fit(size, room, note));
+    c.text_centered(w / 2.0, 464.0, 8.0, rgba(0x55556a, 1.0), &Canvas::fit_hints(8.0, room, "Up/Down select   Left/Right column   type to edit   Enter   F5 refresh   Tab or Esc back"));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -418,14 +432,14 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         c.text_right(x0 + col - 14.0, 70.0, 7.0, rgba(0x6f6f86, 1.0), "click to preview");
     }
     c.text(x0 + 14.0, 70.0, 8.0, rgba(0xEB452C, 1.0), "MAP");
+    let note_room = col - 38.0 - Canvas::text_width(8.0, "MAP");
     match &s.map {
         Some(m) => {
-            let label = m.label();
-            c.text(x0 + 14.0, 86.0, 10.0, rgba(0xffffff, 1.0), &label);
+            c.text(x0 + 14.0, 86.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, col - 28.0, &m.label()));
             if let Some(d) = &download {
-                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFFD34D, 1.0), d);
+                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFFD34D, 1.0), &Canvas::fit(8.0, note_room, d));
             } else if !have_map {
-                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFF4B4B, 1.0), "not in your Songs folder - D: get it from the host");
+                c.text_right(x0 + col - 14.0, 70.0, 8.0, rgba(0xFF4B4B, 1.0), &Canvas::fit(8.0, note_room, "not in your Songs folder - D: get it from the host"));
             }
         }
         None => {
@@ -440,11 +454,14 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         let y = 136.0 + i as f32 * 26.0;
         let me = Some(p.id) == my_id;
         c.round_rect(x0, y, col, 22.0, 6.0, rgba(if me { 0x2b2b3d } else { 0x1d1d27 }, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+        // The name gets what the status (and the host's "make host" button) leave.
+        let mut name_end = x0 + col - 110.0;
         if s.is_host() && !me && !s.in_match {
             // Hand the host role over.
             let label = "make host";
             let bw = Canvas::text_width(7.0, label) + 14.0;
-            c.button(x0 + col - 110.0 - bw, y + 4.0, bw, 14.0, label, 7.0, Hit::GiveHost(p.id), false);
+            name_end -= bw;
+            c.button(name_end, y + 4.0, bw, 14.0, label, 7.0, Hit::GiveHost(p.id), false);
         }
         let mut name = p.name.clone();
         if p.host {
@@ -453,7 +470,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         if me {
             name.push_str("  (you)");
         }
-        c.text(x0 + 12.0, y + 7.0, 9.0, rgba(0xffffff, 1.0), &name);
+        c.text(x0 + 12.0, y + 7.0, 9.0, rgba(0xffffff, 1.0), &Canvas::fit(9.0, name_end - 8.0 - (x0 + 12.0), &name));
         let (st, color) = status_text(p, s.map.is_some());
         c.text_right(x0 + col - 12.0, y + 7.0, 9.0, rgba(color, 1.0), st);
     }
@@ -464,8 +481,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         let lines = ((428.0 - top) / 11.0).max(0.0) as usize;
         c.text(x0, top, 7.0, rgba(0x4fb4ff, 1.0), "LOBBY CHAT  (F9 to write)");
         for (k, (from, text)) in s.chat.iter().skip(s.chat.len().saturating_sub(lines.saturating_sub(1))).enumerate() {
-            let line: String = format!("{from}: {text}").chars().take(((col - 8.0) / 4.4) as usize).collect();
-            c.text(x0 + 4.0, top + 12.0 + k as f32 * 11.0, 6.5, rgba(0xdedeea, 1.0), &line);
+            c.text(x0 + 4.0, top + 12.0 + k as f32 * 11.0, 6.5, rgba(0xdedeea, 1.0), &Canvas::fit(6.5, col - 8.0, &format!("{from}: {text}")));
         }
     }
     let ready = s.players.iter().filter(|p| p.ready && p.has_map).count();
@@ -475,7 +491,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
     let spectate_label = if me_spectator { "Play instead  (S)" } else { "Spectate  (S)" };
     let start_label = format!("Start  (Enter, {ready} ready)");
     if s.in_match {
-        c.text_centered(w / 2.0, 428.0, 8.0, rgba(0x9a9ab0, 1.0), "A match is in progress; you'll join the next one.");
+        c.text_centered(w / 2.0, 428.0, 8.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(8.0, w - 48.0, "A match is in progress; you'll join the next one."));
         let me_playing = s.me().is_some_and(|p| p.status != Status::Lobby);
         if !me_playing && have_map {
             c.button_row(440.0, &[("Spectate  (S)", Hit::Key(KeyCode::KeyS), true), ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false)]);
@@ -488,8 +504,8 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             (&start_label, Hit::Key(KeyCode::Enter), true),
             (if s.owns_room() { "Close room  (Esc)" } else { "Leave  (Esc)" }, Hit::Key(KeyCode::Escape), false),
         ]);
-        let hint = if me_spectator { "you'll watch the match   S: play instead   [ ] match rate   Tab songs" } else { "S: spectate instead   [ ] match rate   Tab songs" };
-        c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x6f6f86, 1.0), hint);
+        let hint = if me_spectator { "you'll watch the match   S: play instead   [ ] match rate   F1 mods (host)   Tab songs" } else { "S: spectate instead   [ ] match rate   F1 mods (host)   Tab songs" };
+        c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hint));
     } else {
         let missing = s.map.is_some() && !have_map;
         if missing {
@@ -523,7 +539,8 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             } else {
                 format!("Last match winner: {} with {top:08} ({acc:.2}%)", winners[0])
             };
-            c.text_centered(w / 2.0, 428.0, 9.0, rgba(0xFFD34D, 1.0), &text);
+            let size = Canvas::fit_size(9.0, 7.0, w - 48.0, &text);
+            c.text_centered(w / 2.0, 428.0 + (9.0 - size) / 2.0, size, rgba(0xFFD34D, 1.0), &Canvas::fit(size, w - 48.0, &text));
         }
     }
 }
@@ -535,7 +552,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
 pub fn draw_waiting(c: &mut Canvas, s: &Session, start: Option<Instant>, loaded: bool, now: Instant) {
     let w = c.width;
     if let Some(m) = &s.map {
-        c.text_centered(w / 2.0, 120.0, 11.0, rgba(0x9a9ab0, 1.0), &m.label());
+        c.text_centered(w / 2.0, 120.0, 11.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(11.0, w - 48.0, &m.label()));
     }
     let big = match start {
         Some(at) if at > now => format!("{}", (at - now).as_secs_f64().ceil() as u32),
@@ -547,7 +564,7 @@ pub fn draw_waiting(c: &mut Canvas, s: &Session, start: Option<Instant>, loaded:
     c.text_centered(w / 2.0, 180.0, size, rgba(0xffffff, 1.0), &big);
     for (i, p) in s.players.iter().filter(|p| p.status != Status::Lobby).enumerate().take(10) {
         let (st, color) = status_text(p, true);
-        c.text_centered(w / 2.0, 270.0 + i as f32 * 16.0, 9.0, rgba(color, 1.0), &format!("{}  -  {st}", p.name));
+        c.text_centered(w / 2.0, 270.0 + i as f32 * 16.0, 9.0, rgba(color, 1.0), &Canvas::fit(9.0, w - 48.0, &format!("{}  -  {st}", p.name)));
     }
 }
 
@@ -585,7 +602,7 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
     let title = if final_results.is_some() { "MATCH RESULTS" } else { "waiting for other players to finish..." };
     c.text_centered(w / 2.0, 50.0, 14.0, rgba(0xffffff, 1.0), title);
     if let Some(m) = &s.map {
-        c.text_centered(w / 2.0, 76.0, 9.0, rgba(0x9a9ab0, 1.0), &m.label());
+        c.text_centered(w / 2.0, 76.0, 9.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(9.0, w - 48.0, &m.label()));
     }
     let mut rows: Vec<PlayerInfo> = match final_results {
         Some(r) => r.clone(),

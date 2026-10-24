@@ -431,7 +431,7 @@ impl SkinPicker {
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.55));
         let n = self.names.len();
-        let (bw, max_h) = (320.0, 380.0);
+        let (bw, max_h) = ((w - 48.0).min(420.0), 380.0);
         let bh = (n as f32 * ROW + 56.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
@@ -450,8 +450,9 @@ impl SkinPicker {
                 c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
             }
             c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::SkinRow(i));
-            let label: String = if name.is_empty() { "built-in".into() } else { name.chars().take(38).collect() };
-            c.text(bx + 20.0, y + 5.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &label);
+            let label = if name.is_empty() { "built-in" } else { name.as_str() };
+            let room = bw - 40.0 - if name == current { Canvas::text_width(7.0, "current") + 8.0 } else { 0.0 };
+            c.text(bx + 20.0, y + 5.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &Canvas::fit(7.0, room, label));
             if name == current {
                 c.text_right(bx + bw - 20.0, y + 5.0, 7.0, rgba(0x86E05A, 1.0), "current");
             }
@@ -524,12 +525,14 @@ impl SettingsUi {
             c.round_rect(cx, y, col, ROW - 4.0, 6.0, rgba(bg, 0.95), rgba(0x2a2a38, 1.0), 1.0);
             c.hit(cx, y - 2.0, col, ROW, Hit::SettingRow(*i));
             c.text(cx + 12.0, y + 9.5, 8.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
+            // The value gets what the label leaves, and is cut short past that.
+            let room = col - 36.0 - Canvas::text_width(8.0, item.label());
             let v = if selected && self.binding.is_some() {
                 "press a key...".to_string()
             } else if selected && !matches!(item, Item::Key(_) | Item::PresetKey(_)) {
-                format!("<  {}  >", value(*item))
+                format!("<  {}  >", Canvas::fit(8.0, room - Canvas::text_width(8.0, "<    >"), &value(*item)))
             } else {
-                value(*item)
+                Canvas::fit(8.0, room, &value(*item))
             };
             let v_col = if selected && self.binding.is_some() { 0xFFD34D } else { 0xffffff };
             c.text_right(cx + col - 12.0, y + 9.5, 8.0, rgba(v_col, 1.0), &v);
@@ -550,7 +553,7 @@ impl SettingsUi {
         let (line1, line2) = split_help(help, max);
         c.text(cx + 10.0, help_y + 6.0, 7.0, rgba(0x9a9ab0, 1.0), &line1);
         c.text(cx + 10.0, help_y + 17.0, 7.0, rgba(0x9a9ab0, 1.0), &line2);
-        c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), footer);
+        c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), &Canvas::fit_hints(8.0, w - 48.0, footer));
     }
 }
 
@@ -560,7 +563,8 @@ fn split_help(text: &str, max: usize) -> (String, String) {
         return (text.to_string(), String::new());
     }
     let cut = text.char_indices().take_while(|(i, _)| *i <= max).filter(|(_, ch)| *ch == ' ').map(|(i, _)| i).last().unwrap_or(max.min(text.len()));
-    let rest: String = text[cut..].trim_start().chars().take(max).collect();
+    let rest = text[cut..].trim_start();
+    let rest = if rest.chars().count() > max { format!("{}...", rest.chars().take(max.saturating_sub(3)).collect::<String>().trim_end()) } else { rest.to_string() };
     (text[..cut].to_string(), rest)
 }
 
@@ -614,5 +618,13 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
         x += tw + 28.0;
     }
     c.text(x + 4.0, 27.0, 8.0, rgba(0x55556a, 1.0), "Tab");
-    c.text_right(c.width - 24.0, 28.0, 8.0, rgba(0x9a9ab0, 1.0), right_text);
+    // Beside the tabs when there's room, else in small print under them (narrow screens),
+    // clear of the friends chip in the top-right corner.
+    let right = c.width - 24.0;
+    let room = right - (x + 4.0 + Canvas::text_width(8.0, "Tab") + 16.0);
+    if Canvas::text_width(8.0, right_text) <= room {
+        c.text_right(right, 28.0, 8.0, rgba(0x9a9ab0, 1.0), right_text);
+    } else {
+        c.text(x0 + 2.0, 45.0, 6.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(6.0, c.width - 110.0 - x0, right_text));
+    }
 }
