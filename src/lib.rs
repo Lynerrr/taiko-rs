@@ -1070,6 +1070,15 @@ impl State {
         match item {
             Item::ScrollSpeed => format!("{:.2}x", c.scroll_speed),
             Item::Offset => format!("{:+.0} ms", c.offset_ms),
+            Item::VisualOffset => format!("{:+.0} ms", c.visual_offset_ms),
+            Item::UpdateChannel => {
+                let picked = self.updater.channel();
+                if picked == update::BUILD_CHANNEL {
+                    picked.name().into()
+                } else {
+                    format!("{} (running {})", picked.name(), update::BUILD_CHANNEL.name())
+                }
+            }
             Item::Key(i) => config::key_name(c.keys[i]),
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
             Item::TouchLayout => c.touch_layout.name().into(),
@@ -1139,6 +1148,18 @@ impl State {
         match item {
             Item::ScrollSpeed => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, d),
             Item::Offset => self.cfg.offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
+            Item::VisualOffset => self.cfg.visual_offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
+            Item::UpdateChannel => {
+                let channel = match self.updater.channel() {
+                    update::Channel::Stable => update::Channel::Dev,
+                    update::Channel::Dev => update::Channel::Stable,
+                };
+                self.updater.set_channel(channel);
+                if update::BUILD.is_none() {
+                    self.toast("a local build doesn't update itself".into());
+                }
+                return;
+            }
             Item::Key(_) | Item::PresetKey(_) => {
                 self.settings_ui.binding = Some(item);
                 return;
@@ -1732,6 +1753,13 @@ impl State {
         let step = if self.modifiers_shift { 5.0 } else { 1.0 };
         match key {
             KeyCode::Minus | KeyCode::Equal if matches!(self.scene, Scene::Select) && !self.select.filter.is_empty() => return false,
+            KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd if self.modifiers_ctrl => {
+                let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) { -step } else { step };
+                self.cfg.visual_offset_ms += d;
+                self.cfg.save();
+                self.toast(format!("visual offset {:+.0} ms (notes drawn earlier)", self.cfg.visual_offset_ms));
+                return true;
+            }
             KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd => {
                 let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) { -step } else { step };
                 match self.song_entry() {
@@ -4347,6 +4375,7 @@ impl State {
                     game.anti_mash = self.cfg.anti_mash;
                 }
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
+                game.visual_offset = self.cfg.visual_offset_ms;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
                 });
@@ -4527,6 +4556,7 @@ impl State {
                     game.anti_mash = self.cfg.anti_mash;
                 }
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
+                game.visual_offset = self.cfg.visual_offset_ms;
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
@@ -4684,6 +4714,7 @@ impl State {
                     game.autoplay(self.audio.as_ref());
                 }
                 let offset = self.cfg.offset_ms;
+                game.visual_offset = self.cfg.visual_offset_ms;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
                 });

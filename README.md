@@ -109,6 +109,12 @@ new build, swaps it in (on Windows the running exe is moved aside to `taiko-rs.e
 the next start) and restarts into it. *Check at startup* turns the check off. Builds made with
 `cargo build` don't know their commit and never update themselves.
 
+**Dev builds.** Pushes to the `dev` branch publish test builds as the `dev` pre-release. Settings →
+Updates → **Build channel** switches to them (or back to stable): the next *Update* installs that
+channel's build, which keeps updating from its own channel. To install one directly, set
+`TAIKO_RS_CHANNEL=dev` for the install script (`$env:TAIKO_RS_CHANNEL="dev"; irm … | iex` on
+Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
+
 ## Controls
 
 | Key | Action |
@@ -136,6 +142,7 @@ the next start) and restarts into it. *Check at startup* turns the check off. Bu
 | `` ` `` or Ctrl+R | restart map (Ctrl+R also works paused and on the results screen) |
 | Esc (song select) | clear search / quit |
 | - / = (Shift: ×5) | offset −/+ 1 ms: this map's own during a song or on its results, else the global one |
+| Ctrl + - / = (Shift: ×5) | visual offset −/+ 1 ms (notes drawn later / earlier; judging unchanged) |
 | F3 / F4 | scroll speed (1.00x = osu!'s) |
 | F7 | gameplay present mode: vsync → mailbox → immediate (menus stay on vsync by default) |
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
@@ -334,8 +341,15 @@ config folder. In menus, - / = change the global offset.
 Where music timing could differ from osu!: map audio is decoded to the same sample as BASS (the
 library osu! uses) for MP3s with a LAME header and for OGG; MP3s without one start where BASS's
 "old gaps" mode puts them (what osu!lazer uses to match osu!stable). Old maps (`osu file format`
-v4 and below) get osu!'s implicit +24 ms. Calibration is by ear, while maps are also played by
-eye, so display latency, and each mapper's own timing, are what per-map offsets are for.
+v4 and below) get osu!'s implicit +24 ms. Each mapper's own timing is what per-map offsets are for.
+
+**Visual offset.** The game clock follows the music as you hear it (the audio device's latency is
+measured and taken off), but a frame still takes a while to reach your eyes (compositor, monitor),
+so without help notes reach the drum a bit after the beat. osu! compensates neither, and its two
+lags roughly cancel out. Settings → Offset → **Visual offset** (or **Ctrl + - / =** in a song)
+draws the lane that many ms ahead, so notes cross the drum on the beat. Judging stays on the
+audio. Calibrate the audio offset by ear first (**H** hides the notes), then raise the visual
+offset until notes land on the clicks.
 
 ## Skins
 

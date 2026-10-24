@@ -182,6 +182,9 @@ pub struct Game {
     pub show_map_info: bool,
     /// Kiai time tints the lane and pulses the hit target.
     pub kiai_effects: bool,
+    /// Display latency to make up for (real ms): the lane is drawn as it will be this much later,
+    /// when the frame reaches the screen. Judging stays on the audio clock.
+    pub visual_offset: f64,
     /// osu!'s mash penalty: a wrong-colour or too-early hit on the next note is a miss. Off,
     /// such presses are ignored (only a note that passes unhit misses).
     pub anti_mash: bool,
@@ -455,6 +458,7 @@ impl Game {
             show_offset_hint: false,
             show_map_info: true,
             kiai_effects: true,
+            visual_offset: 0.0,
             anti_mash: false,
             record: false,
             log_inputs: false,
@@ -1071,13 +1075,16 @@ impl Game {
     /// Lane, barlines, notes, drum, combo and judgements, laid out as if `c` were the window (the
     /// caller maps it into the playfield area). The scroll and visual mods apply here.
     pub fn draw_playfield(&mut self, c: &mut Canvas, scroll_speed: f64) {
+        // Notes, barlines and the beat pulse are drawn at `vt`, where they'll be once the frame is
+        // on screen; animations of what already happened (hits, presses) run on `t`.
         let t = self.time;
+        let vt = self.visual_time();
         let w = c.width;
         let start_shape = c.shapes.len();
         let mods = self.mods;
         let lane_top = LANE_Y - LANE_H / 2.0;
-        let cp = beatmap::control_point_at(&self.map.control_points, t);
-        let beat_phase = cp.beat_phase(t) as f32;
+        let cp = beatmap::control_point_at(&self.map.control_points, vt);
+        let beat_phase = cp.beat_phase(vt) as f32;
         let pulse = (1.0 - beat_phase).powi(3);
         let kiai = cp.kiai && self.kiai_effects;
         let in_kiai = cp.kiai;
@@ -1087,9 +1094,9 @@ impl Game {
         let dt = (t - self.rush_t).clamp(0.0, 1000.0);
         self.rush += (rush_target - self.rush) * (dt / 250.0).min(1.0);
         self.rush_t = t;
-        let warp = beat_warp(mods, cp, t);
+        let warp = beat_warp(mods, cp, vt);
         let scroll = Scroll {
-            t,
+            t: vt,
             speed: osu_speed_scale(w) * scroll_speed * mods.scroll(),
             lane: (w - HIT_X) as f64,
             mods,
@@ -1104,7 +1111,7 @@ impl Game {
         let lookahead = ((w - HIT_X + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs()).min(30_000.0);
         // How visible an approaching note at `x` is under the visual mods.
         let lane_len = w - HIT_X;
-        let memory_over = mods.has(Mod::Memory) && t > self.first_note + 15_000.0;
+        let memory_over = mods.has(Mod::Memory) && vt > self.first_note + 15_000.0;
         let note_alpha = |x: f32| -> f32 {
             let u = (x - HIT_X) / lane_len;
             let mut a = 1.0f32;
@@ -1136,10 +1143,10 @@ impl Game {
         }
 
         // Barlines.
-        let first_bar = self.map.barlines.partition_point(|b| b.time < t - 3000.0);
+        let first_bar = self.map.barlines.partition_point(|b| b.time < vt - 3000.0);
         let bars = if self.hide_notes { &[][..] } else { &self.map.barlines[first_bar..] };
         for b in bars {
-            if b.time - t > lookahead {
+            if b.time - vt > lookahead {
                 break;
             }
             let x = x_of(b.time, b.velocity);
@@ -1162,14 +1169,14 @@ impl Game {
         }
 
         // Notes: collect visible, draw back to front so earlier notes sit on top.
-        let start = self.map.notes.partition_point(|n| n.time < t - 20_000.0);
+        let start = self.map.notes.partition_point(|n| n.time < vt.min(t) - 20_000.0);
         self.visible.clear();
         for i in start..self.map.notes.len() {
             let n = &self.map.notes[i];
-            if n.time - t > lookahead {
+            if n.time - vt > lookahead {
                 break;
             }
-            if n.end_time < t - 3000.0 && n.kind != Kind::Swell {
+            if n.end_time < vt.min(t) - 3000.0 && n.kind != Kind::Swell {
                 continue;
             }
             self.visible.push(i);
@@ -1234,7 +1241,7 @@ impl Game {
                         }
                         continue;
                     }
-                    if t < n.time {
+                    if vt < n.time {
                         let x = x_of(n.time, n.velocity);
                         let a = note_alpha(x);
                         if x < w + r && a > 0.01 {
@@ -1320,6 +1327,11 @@ impl Game {
             let anchor = [if mirror { w - HIT_X } else { HIT_X }, LANE_Y];
             c.transform_since(start_shape, anchor, zoom, dx, dy);
         }
+    }
+
+    /// Map time the lane is drawn at: `time`, `visual_offset` real ms ahead.
+    fn visual_time(&self) -> f64 {
+        if self.visual_offset == 0.0 { self.time } else { self.speed.map(self.raw_time - self.offset + self.visual_offset) }
     }
 
     /// Score, accuracy, progress, hit error meter, offset advice, map info, skip hint and the pause
@@ -1568,6 +1580,22 @@ mod tests {
                 t += 2.0;
             }
         }
+    }
+
+    #[test]
+    fn visual_offset_moves_the_lane_not_the_judging() {
+        for rate in [1.0, 1.5] {
+            let map = beatmap::calibration_map(500.0, 0, 64);
+            let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate }), None);
+            g.visual_offset = 30.0;
+            g.set_time(2000.0);
+            // Real milliseconds: at 1.5x, 30 ms of song is 45 ms of map.
+            assert!((g.visual_time() - (2000.0 + 30.0 * rate)).abs() < 1e-6, "{rate}x: {}", g.visual_time());
+        }
+        let mut g = modded("");
+        g.visual_offset = 30.0;
+        play_all(&mut g, 0.0);
+        assert!(g.stats.great == 64 && g.stats.mean_error().abs() < 1e-9);
     }
 
     #[test]
