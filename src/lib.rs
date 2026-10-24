@@ -38,6 +38,8 @@ mod stars;
 mod ui;
 mod update;
 mod video;
+#[cfg(target_os = "linux")]
+mod wayland_dnd;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
@@ -203,6 +205,8 @@ struct State {
     scene: Scene,
     audio: Option<Engine>,
     toast: Option<Toast>,
+    /// Since when files are being dragged over the window.
+    drag_hover: Option<Instant>,
     stats: FrameStats,
     status: String,
     modifiers_shift: bool,
@@ -1531,6 +1535,42 @@ impl State {
             self.mapinfo_sorted = false;
         }
         self.select.refilter(&self.library);
+    }
+
+    /// Files dragged over the window and dropped on it: .osz maps are unpacked into the Songs
+    /// folder (the file itself stays where it was) and join the list.
+    fn file_drag(&mut self, drag: FileDrag) {
+        match drag {
+            FileDrag::Hover => {
+                self.drag_hover.get_or_insert_with(Instant::now);
+            }
+            FileDrag::Left => self.drag_hover = None,
+            FileDrag::Drop(paths) => {
+                self.drag_hover = None;
+                for path in paths {
+                    let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("osz")) {
+                        self.toast(format!("importing {name}..."));
+                        self.downloads.push(download::import(path, &name, self.songs_dir.clone(), false));
+                    } else {
+                        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        self.toast(format!("{file} isn't a map: drop .osz files"));
+                    }
+                }
+            }
+        }
+    }
+
+    /// While files are dragged over the window: where they go when dropped.
+    fn draw_drag_hover(&self, canvas: &mut Canvas, now: Instant) {
+        let Some(since) = self.drag_hover else { return };
+        let a = (now.saturating_duration_since(since).as_secs_f32() / 0.12).min(1.0);
+        let (w, h) = (canvas.width, render::VIRTUAL_HEIGHT);
+        canvas.rect(0.0, 0.0, w, h, rgba(0x000000, 0.6 * a));
+        canvas.round_rect(24.0, 24.0, w - 48.0, h - 48.0, 16.0, rgba(0x000000, 0.0), rgba(accent(), 0.9 * a), 2.5);
+        canvas.text_centered(w / 2.0, h / 2.0 - 22.0, 18.0, rgba(0xffffff, a), "Drop .osz maps to add them");
+        let to = Canvas::fit(9.0, w - 96.0, &format!("into {}", self.songs_dir.display()));
+        canvas.text_centered(w / 2.0, h / 2.0 + 14.0, 9.0, rgba(0x9a9ab0, a), &to);
     }
 
     /// Keeps the Discord status in line with what's on screen (checked about once a second).
@@ -5068,6 +5108,7 @@ impl State {
             }
         }
         self.draw_update(canvas);
+        self.draw_drag_hover(canvas, now);
         if self.splash.is_some() {
             let boot = self.boot_log();
             // Some window managers never report focus: don't wait forever.
@@ -5267,7 +5308,7 @@ impl State {
             self.imports_checked = Instant::now();
             for (archive, name) in android::take_imports() {
                 self.toast(format!("importing {name}..."));
-                self.downloads.push(download::import(archive, &name, self.songs_dir.clone()));
+                self.downloads.push(download::import(archive, &name, self.songs_dir.clone(), true));
             }
         }
         if let Some(rx) = &self.lobby_lookup {
@@ -5336,6 +5377,7 @@ impl State {
         }
         let text = lobby_note.unwrap_or_else(|| match set.artist.is_empty() {
             // An imported .osz: only its file name is known.
+            true if n == 0 => format!("{} is already in the list", set.title),
             true => format!("imported {} ({n} maps)", set.title),
             false => format!("downloaded {} - {}", set.artist, set.title),
         });
@@ -5565,6 +5607,16 @@ enum UserEvent {
     Stopped,
     /// Gameplay wants the pointer hidden (it's been still a second) or back.
     HideCursor(bool),
+    /// Files dragged over the window, on Wayland (winit reports them itself elsewhere).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    FileDrag(FileDrag),
+}
+
+/// Files dragged over the window, or dropped on it.
+pub(crate) enum FileDrag {
+    Hover,
+    Left,
+    Drop(Vec<PathBuf>),
 }
 
 fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoopProxy<UserEvent>) {
@@ -5801,6 +5853,16 @@ impl ApplicationHandler<UserEvent> for App {
             attrs = attrs.with_name("taiko-rs", "taiko-rs");
         }
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
+        #[cfg(target_os = "linux")]
+        {
+            use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+            if let Ok(RawDisplayHandle::Wayland(h)) = window.display_handle().map(|h| h.as_raw()) {
+                let proxy = self.proxy.clone();
+                wayland_dnd::start(h.display.as_ptr(), move |drag| {
+                    let _ = proxy.send_event(UserEvent::FileDrag(drag));
+                });
+            }
+        }
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
             event_loop.owned_display_handle(),
         )));
@@ -5872,6 +5934,7 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Stopped => event_loop.exit(),
+            UserEvent::FileDrag(drag) => lock(&self.state).file_drag(drag),
             UserEvent::HideCursor(hide) => {
                 if hide != self.cursor_hidden {
                     self.cursor_hidden = hide;
@@ -5894,6 +5957,9 @@ impl ApplicationHandler<UserEvent> for App {
         }
         match event {
             WindowEvent::CloseRequested => lock(&self.state).quit = true,
+            WindowEvent::HoveredFile(_) => lock(&self.state).file_drag(FileDrag::Hover),
+            WindowEvent::HoveredFileCancelled => lock(&self.state).file_drag(FileDrag::Left),
+            WindowEvent::DroppedFile(path) => lock(&self.state).file_drag(FileDrag::Drop(vec![path])),
             WindowEvent::Resized(size) => {
                 let mut s = lock(&self.state);
                 s.want_size = Some((size.width, size.height));
@@ -6034,6 +6100,7 @@ impl State {
             scene: Scene::Select,
             audio,
             toast: None,
+            drag_hover: None,
             stats: FrameStats {
                 last: Instant::now(),
                 frames: 0,

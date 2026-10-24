@@ -2578,6 +2578,8 @@ dependencies = [
  "serde_json",
  "symphonia",
  "ureq",
+ "wayland-backend",
+ "wayland-client",
  "wgpu",
  "winit",
  "zip",

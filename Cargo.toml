@@ -19,6 +19,12 @@ wgpu = "30"
 winit = "0.30"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
+# Drag and drop on Wayland, which winit 0.30 doesn't do: a data device of our own on winit's
+# connection (src/wayland_dnd.rs). The versions winit already uses.
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 # The APK is a plain NativeActivity (no Java): see android/build-apk.sh.
 winit = { version = "0.30", features = ["android-native-activity"] }
