@@ -531,6 +531,14 @@ enum RailShape {
     Elbow,
 }
 
+/// Loop: how far from the hit target it starts, its radius, and the angle the lane into it comes
+/// up at (short of a full turn by that): as steep as it gets while passing right of the hit error
+/// meter on a 16:9 screen.
+const LOOP_AT: f32 = 400.0;
+const LOOP_R: f32 = 110.0;
+const LOOP_EXIT: f32 = 0.6;
+const LOOP_TURN: f32 = std::f32::consts::TAU - LOOP_EXIT;
+
 /// Shapeshift's order, 16 bars each.
 const SHAPESHIFT: [RailShape; 6] = [RailShape::Zigzag, RailShape::UTurn, RailShape::Spiral, RailShape::Loop, RailShape::Elbow, RailShape::Straight];
 
@@ -544,7 +552,7 @@ impl RailShape {
 
     /// Curvature (radians per unit, anticlockwise) `s` along the lane.
     fn bend(self, s: f32) -> f32 {
-        use std::f32::consts::{PI, TAU};
+        use std::f32::consts::PI;
         // Turning by `angle` over `len` units from `at`.
         let turn = |at: f32, len: f32, angle: f32| if (at..at + len).contains(&s) { angle / len } else { 0.0 };
         match self {
@@ -564,21 +572,24 @@ impl RailShape {
             RailShape::Spiral => {
                 if s < 340.0 { 0.0 } else { 1.0 / (90.0 + 0.15 * (s - 340.0)) }
             }
-            RailShape::Loop => turn(260.0, TAU * 110.0, TAU),
+            // All the way round but for `LOOP_EXIT`: the lane coming in crosses the straight to
+            // the drum at that angle, not along it (notes a second apart side by side).
+            RailShape::Loop => turn(LOOP_AT, LOOP_TURN * LOOP_R, LOOP_TURN),
             RailShape::Elbow => turn(220.0, PI * 40.0, PI / 2.0),
         }
     }
 
     /// How long the lane is on a canvas `w` wide.
     fn length(self, w: f32) -> f32 {
-        use std::f32::consts::{PI, TAU};
+        use std::f32::consts::PI;
         match self {
             RailShape::Straight => w - HIT_X,
             RailShape::Zigzag => (w - HIT_X) * 1.15,
             // Back along the top to the left edge.
             RailShape::UTurn => 240.0 + PI * 100.0 + HIT_X + 240.0,
             RailShape::Spiral => 1320.0,
-            RailShape::Loop => w - HIT_X + TAU * 110.0,
+            // On out of the bottom right of the screen.
+            RailShape::Loop => LOOP_AT + LOOP_TURN * LOOP_R + 500.0,
             RailShape::Elbow => 220.0 + PI * 40.0 + 300.0,
         }
     }
@@ -590,7 +601,7 @@ impl RailShape {
             RailShape::Zigzag => 35.0,
             RailShape::UTurn => 150.0,
             RailShape::Spiral => 105.0,
-            RailShape::Loop => 140.0,
+            RailShape::Loop => 100.0,
             RailShape::Elbow => 200.0,
         }
     }
@@ -603,11 +614,20 @@ impl RailShape {
             RailShape::Straight | RailShape::Zigzag => return 1.0,
             RailShape::UTurn => 560.0,
             RailShape::Spiral => 660.0,
-            RailShape::Loop => 590.0,
+            RailShape::Loop => HIT_X + LOOP_AT + LOOP_R + LANE_H / 2.0,
             RailShape::Elbow => 520.0,
         };
         let tall: f32 = if self == RailShape::Spiral { 0.85 } else { 1.0 };
-        tall.min((w - 8.0 - HIT_X) / (right - HIT_X)).max(0.3)
+        let mut fit = (w - 8.0 - HIT_X) / (right - HIT_X);
+        if self == RailShape::Loop {
+            // On screen, and clear of the HP bar: all of it left of the bar, or its top under it
+            // (narrow screens).
+            let height = 2.0 * LOOP_R + LANE_H / 2.0 + 3.0;
+            let left_of_bar = (hp_bar_x(w) - 8.0 - HIT_X) / (right - HIT_X);
+            let under_bar = (LANE_Y + self.drop() - HP_BAR_Y - 16.0) / height;
+            fit = fit.min((LANE_Y + self.drop() - 8.0) / height).min(left_of_bar.max(under_bar));
+        }
+        tall.min(fit).max(0.3)
     }
 }
 
@@ -1934,16 +1954,39 @@ impl Game {
         }
         // 16 bars a shape; the first 2 bars of each morph into it from the last.
         let bars = &self.map.barlines;
-        let (from, to, m) = match bar_at(bars, t, 2000.0) {
+        let (from, to, u) = match bar_at(bars, t, 2000.0) {
             None => (RailShape::Straight, RailShape::Straight, 1.0),
             Some((i, ..)) => {
                 let section = i / 16;
                 let prev = if section == 0 { RailShape::Straight } else { SHAPESHIFT[(section - 1) % SHAPESHIFT.len()] };
                 let start = bars[section * 16].time;
                 let end = bars.get(section * 16 + 2).map_or(start + 4000.0, |b| b.time);
-                (prev, SHAPESHIFT[section % SHAPESHIFT.len()], smooth(start, end, t) as f32)
+                (prev, SHAPESHIFT[section % SHAPESHIFT.len()], ((t - start) / (end - start)).clamp(0.0, 1.0) as f32)
             }
         };
+        let ease = |x: f32| smooth(0.0, 1.0, x as f64) as f32;
+        // The Loop can't be bent into or out of: half way its lane would swing round across the
+        // drum and the HUD. So the other shape straightens out over the first half of the morph and
+        // the loop slides in whole from off the right of the screen over the second (the other way
+        // round on the way out). The lane's length doesn't jump in between.
+        let lp = RailShape::Loop;
+        if (from == lp) != (to == lp) {
+            let other = if to == lp { from } else { to };
+            // 0: the other shape, 1: straight with the loop off screen, 2: the loop in place.
+            let p = 2.0 * if to == lp { u } else { 1.0 - u };
+            let away = 1.5 * (w - HIT_X);
+            if p < 1.0 {
+                let k = ease(p);
+                let mix = |a: f32, b: f32| a + (b - a) * k;
+                let len = mix(other.length(w), lp.length(w) + away);
+                return (Some(Rail::build(|s| other.bend(s) * (1.0 - k), len)), len, other.drop() * (1.0 - k), mix(other.zoom(w), 1.0));
+            }
+            let k = ease(p - 1.0);
+            let shift = (1.0 - k) * away;
+            let len = lp.length(w) + shift;
+            return (Some(Rail::build(|s| lp.bend(s - shift), len)), len, lp.drop() * k, 1.0 + (lp.zoom(w) - 1.0) * k);
+        }
+        let m = ease(u);
         let mix = |a: f32, b: f32| a + (b - a) * m;
         let len = mix(from.length(w), to.length(w));
         (Some(Rail::build(|s| mix(from.bend(s), to.bend(s)), len)), len, mix(from.drop(), to.drop()), mix(from.zoom(w), to.zoom(w)))
@@ -2727,8 +2770,8 @@ impl Game {
         // HP: has to be at least half full at the end (the mark), like osu!taiko.
         if self.show_hp {
             // Under the score, accuracy and mods (the top-left corner is the FPS overlay's).
-            let hw = (w * 0.25).min(180.0);
-            let (hx, hy) = (w - 18.0 - hw, 88.0);
+            let (hx, hy) = (hp_bar_x(w), HP_BAR_Y);
+            let hw = w - 18.0 - hx;
             let hp = self.hp as f32;
             c.round_rect(hx, hy, hw, 8.0, 3.0, rgba(0x15151d, 0.85), rgba(0x3a3a4e, 1.0), 1.0);
             let fill = if hp >= 0.5 { 0xFFD34D } else { 0xEB452C };
@@ -2844,6 +2887,12 @@ impl Game {
 
 /// Overtime's animatronic bear lunging at the screen, `p` (0-1) of the way through, shaking
 /// with map time `t`. Drawn from shapes, centred on a canvas `c.width` wide.
+/// The HP bar's top and left end (it is 8 tall and ends 18 from the right).
+const HP_BAR_Y: f32 = 88.0;
+fn hp_bar_x(w: f32) -> f32 {
+    w - 18.0 - (w * 0.25).min(180.0)
+}
+
 fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
     let w = c.width;
     let start = c.shapes.len();
@@ -3512,6 +3561,38 @@ mod tests {
                 assert!((0.9..=1.01).contains(&step), "{shape:?} at {k}: {step}");
                 prev = p;
             }
+        }
+    }
+
+    #[test]
+    fn the_loop_crosses_the_lane_at_an_angle_and_keeps_clear_of_the_hud() {
+        let shape = RailShape::Loop;
+        for w in [853.3, 600.0] {
+            let (len, zoom, drop) = (shape.length(w), shape.zoom(w), shape.drop());
+            let rail = Rail::build(|s| shape.bend(s), len);
+            // Where `s` along, `side` off the middle, ends up on screen.
+            let at = |s: f32, side: f32| {
+                let (x, y, a) = rail.at(s);
+                let (x, y) = (x - a.sin() * side, y - a.cos() * side);
+                (HIT_X + zoom * (x - HIT_X), LANE_Y + drop + zoom * (y - LANE_Y))
+            };
+            let mut s = 0.0;
+            while s < len {
+                for side in [-62.0, 0.0, 62.0] {
+                    let (x, y) = at(s, side);
+                    if x > w + 10.0 || y > VIRTUAL_HEIGHT + 10.0 {
+                        continue;
+                    }
+                    assert!(y > 4.0, "{w}: off the top at {s}");
+                    let hp_bar = x > hp_bar_x(w) && y < HP_BAR_Y + 12.0;
+                    let meter = (x - w / 2.0).abs() < 158.0 && y > 405.0;
+                    assert!(!hp_bar && !meter, "{w}: over the HUD at {s} ({x}, {y})");
+                }
+                s += 2.0;
+            }
+            // The lane into the loop comes up across the straight, not along it.
+            let after = rail.at(LOOP_AT + LOOP_TURN * LOOP_R + 10.0).2;
+            assert!((after - LOOP_TURN).abs() < 0.05, "{w}: heading {after}");
         }
     }
 
