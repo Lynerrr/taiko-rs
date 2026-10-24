@@ -241,8 +241,10 @@ impl Browse {
         let x0 = 24.0;
         crate::settings::tab_bar(c, 3, "maps from catboy.best / osu.direct");
         let busy = self.search.is_some() || self.edited.is_some();
-        let text = if self.query.is_empty() { "type to search (artist, title, mapper)...".to_string() } else { format!("{}_", self.query) };
         c.round_rect(x0, 54.0, col, 24.0, 6.0, rgba(0x23232f, 0.95), rgba(0x3a3a4e, 1.0), 1.0);
+        // The query keeps clear of "searching..." on the right.
+        let room = col - 20.0 - if busy { Canvas::text_width(8.0, "searching...") + 10.0 } else { 0.0 };
+        let text = if self.query.is_empty() { Canvas::fit(10.0, room, "type to search (artist, title, mapper)...") } else { Canvas::fit_end(10.0, room, &format!("{}_", self.query)) };
         c.text(x0 + 10.0, 61.0, 10.0, rgba(if self.query.is_empty() { 0x6f6f86 } else { 0xffffff }, 1.0), &text);
         if busy {
             c.text_right(x0 + col - 10.0, 62.0, 8.0, rgba(0xFFD34D, 1.0), "searching...");
@@ -257,30 +259,39 @@ impl Browse {
             c.hit(x, y, w, 15.0, hit);
             w + 3.0
         };
-        let mut x = x0;
-        c.text(x, 88.0, 6.0, rgba(0x8a8aa0, 1.0), "STATUS");
-        x += 32.0;
-        for (i, cat) in Category::ALL.iter().enumerate() {
-            x += chip(c, x, 84.0, cat.name(), *cat == self.category, Hit::DlCategory(i));
-        }
-        let mut x = x0;
-        c.text(x, 107.0, 6.0, rgba(0x8a8aa0, 1.0), "SORT");
-        x += 32.0;
-        for (i, key) in SortKey::ALL.iter().enumerate() {
-            let on = *key == self.sort;
-            let label = if on && *key != SortKey::Relevance { format!("{} {}", key.name(), if self.desc { "v" } else { "^" }) } else { key.name().to_string() };
-            x += chip(c, x, 103.0, &label, on, Hit::DlSort(i));
-        }
+        // Each group on its own line, wrapping onto more when the column is narrow; the list
+        // starts under them.
+        let mut y = 84.0;
+        let group = |c: &mut Canvas, y: &mut f32, title: &str, chips: Vec<(String, bool, Hit)>| {
+            c.text(x0, *y + 4.0, 6.0, rgba(0x8a8aa0, 1.0), title);
+            let mut x = x0 + 32.0;
+            for (label, on, hit) in chips {
+                if x > x0 + 32.0 && x + Canvas::text_width(6.0, &label) + 8.0 > x0 + col {
+                    x = x0 + 32.0;
+                    *y += 18.0;
+                }
+                x += chip(c, x, *y, &label, on, hit);
+            }
+            *y += 19.0;
+        };
+        let cats = Category::ALL.iter().enumerate().map(|(i, cat)| (cat.name().to_string(), *cat == self.category, Hit::DlCategory(i))).collect();
+        group(c, &mut y, "STATUS", cats);
+        let sorts = SortKey::ALL
+            .iter()
+            .enumerate()
+            .map(|(i, key)| {
+                let on = *key == self.sort;
+                let label = if on && *key != SortKey::Relevance { format!("{} {}", key.name(), if self.desc { "v" } else { "^" }) } else { key.name().to_string() };
+                (label, on, Hit::DlSort(i))
+            })
+            .collect();
+        group(c, &mut y, "SORT", sorts);
 
         const ROW: f32 = 40.0;
-        let (top, bottom) = (124.0, 436.0);
+        let (top, bottom) = (y + 2.0, 436.0);
         let view = bottom - top;
         let target = (self.cursor as f32 * ROW - view * 0.4).clamp(0.0, (self.results.len() as f32 * ROW - view).max(0.0));
         approach(&mut self.scroll, target, c.dt_ms, 50.0);
-        let fit = |s: &str, size: f32, room: f32| -> String {
-            let max = (room / (size / 7.0 * 6.0)).max(4.0) as usize;
-            if s.chars().count() > max { s.chars().take(max.saturating_sub(3)).collect::<String>() + "..." } else { s.to_string() }
-        };
         let list_start = c.shapes.len();
         let hits_start = c.hits.len();
         for (i, set) in self.results.iter().enumerate() {
@@ -302,7 +313,7 @@ impl Browse {
             };
             // Right side: star range and the download state / button.
             let right = x0 + col - 10.0;
-            let action_w = 92.0;
+            let action_w = if col < 420.0 { 64.0 } else { 92.0 };
             match state {
                 RowState::Installed => c.text_right(right, y + 13.0, 8.0, rgba(0x86E05A, 1.0), "installed"),
                 RowState::Downloading(f) => {
@@ -320,13 +331,14 @@ impl Browse {
             let hi = set.diffs.last().map(|d| d.stars).unwrap_or(0.0);
             let pill_right = right - action_w - 10.0;
             let pill = crate::stars::draw_pill(c, pill_right, y + 13.0, 7.0, Some(hi));
-            let range = if (hi - lo).abs() < 0.05 { String::new() } else { format!("{lo:.2} -") };
+            // The low end of the star range only when the title keeps room.
+            let range = if (hi - lo).abs() < 0.05 || col < 420.0 { String::new() } else { format!("{lo:.2} -") };
             c.text_right(pill_right - pill - 4.0, y + 13.0, 7.0, rgba(0x8a8aa0, 1.0), &range);
-            let text_room = pill_right - pill - 70.0 - x0;
-            c.text(x0 + 12.0, y + 7.0, 9.0, rgba(0xffffff, 1.0), &fit(&format!("{} - {}", set.artist, set.title), 9.0, text_room));
+            let text_room = pill_right - pill - Canvas::text_width(7.0, &range) - 16.0 - (x0 + 12.0);
+            c.text(x0 + 12.0, y + 7.0, 9.0, rgba(0xffffff, 1.0), &Canvas::fit(9.0, text_room, &format!("{} - {}", set.artist, set.title)));
             let n = set.diffs.len();
             let sub = format!("mapped by {}  |  {}  |  {n} taiko diff{}", set.creator, set.status, if n == 1 { "" } else { "s" });
-            c.text(x0 + 12.0, y + 22.0, 7.0, rgba(0x9a9ab0, 1.0), &fit(&sub, 7.0, text_room));
+            c.text(x0 + 12.0, y + 22.0, 7.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(7.0, text_room, &sub));
         }
         c.clip_since(list_start, x0 - 4.0, top - 2.0, col + 8.0, bottom - top + 4.0);
         for h in &mut c.hits[hits_start..] {
@@ -336,13 +348,13 @@ impl Browse {
         }
         if self.results.is_empty() || !self.status.is_empty() {
             let msg = if self.status.is_empty() { "no results" } else { self.status.as_str() };
-            c.text_centered(x0 + col / 2.0, if self.results.is_empty() { 220.0 } else { 440.0 }, 9.0, rgba(0xc8c8d8, 1.0), &fit(msg, 9.0, col));
+            c.text_centered(x0 + col / 2.0, if self.results.is_empty() { 220.0 } else { 440.0 }, 9.0, rgba(0xc8c8d8, 1.0), &Canvas::fit(9.0, col, msg));
         }
-        let _ = w;
         let active = jobs.len();
         let footer = if active > 0 { format!("{active} downloading  |  saving to {songs_dir}") } else { format!("saving to {songs_dir}") };
-        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Up/Down select   Left/Right difficulty   Enter download   Ctrl+Left/Right status   Ctrl+Up/Down sort   Esc clear / back");
-        c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), &footer);
+        let hints = "Up/Down select   Left/Right difficulty   Enter download   Ctrl+Left/Right status   Ctrl+Up/Down sort   Esc clear / back";
+        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hints));
+        c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), &Canvas::fit(7.0, w - 48.0, &footer));
     }
 }
 

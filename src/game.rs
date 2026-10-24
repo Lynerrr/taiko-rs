@@ -1395,8 +1395,8 @@ impl Game {
         let info_y = lane_top + LANE_H + 22.0;
         let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("   {:.2}x", self.rate) } else { String::new() };
         if show_info {
-            c.text(18.0, info_y, 10.0, rgba(0x9a9ab0, 1.0), &format!("{} - {}", m.artist, m.title));
-            c.text(18.0, info_y + 16.0, 10.0, rgba(0x6f6f86, 1.0), &format!("[{}]  OD {:.1}{rate}", m.version, m.od));
+            c.text(18.0, info_y, 10.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(10.0, w - 36.0, &format!("{} - {}", m.artist, m.title)));
+            c.text(18.0, info_y + 16.0, 10.0, rgba(0x6f6f86, 1.0), &Canvas::fit(10.0, w - 36.0, &format!("[{}]  OD {:.1}{rate}", m.version, m.od)));
         }
 
         if self.can_skip() && self.paused.is_none() && !self.mute_hits && !self.watched {

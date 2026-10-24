@@ -143,6 +143,10 @@ impl Default for Config {
 /// Per-user taiko-rs directory: settings (`cache == false`) or disposable data like extracted
 /// `.osz` files (`cache == true`).
 pub fn user_dir(cache: bool) -> Option<PathBuf> {
+    // Tests never read or write the player's own settings, scores or replays.
+    if cfg!(test) {
+        return None;
+    }
     #[cfg(windows)]
     {
         let var = if cache { "LOCALAPPDATA" } else { "APPDATA" };
