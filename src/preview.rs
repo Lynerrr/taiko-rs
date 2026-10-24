@@ -472,15 +472,18 @@ impl Preview {
         let Some(i) = self.seen.filter(|&i| i < library.len()) else { return None };
         let e = &library[i];
         let fit = |s: &str, size: f32| -> String {
-            let max = ((w - 28.0) / (size / 7.0 * 6.0)) as usize;
+            let max = ((w - 28.0) / Canvas::char_width(size)) as usize;
             if s.chars().count() > max { s.chars().take(max.saturating_sub(3)).collect::<String>() + "..." } else { s.to_string() }
         };
         c.text(x + 14.0, y + 14.0, 12.0, rgba(0xffffff, 1.0), &fit(&e.meta.title, 12.0));
         c.text(x + 14.0, y + 32.0, 9.0, rgba(0xc8c8d8, 1.0), &fit(&e.meta.artist, 9.0));
-        c.text(x + 14.0, y + 46.0, 8.0, rgba(0x8a8aa0, 1.0), &fit(&format!("mapped by {}", e.meta.creator), 8.0));
+        // Centred at y + 50; smaller when the artist above came out taller (text grid).
+        let artist_bottom = 36.5 + Canvas::text_height(9.0) / 2.0;
+        let size = Canvas::fit_height(8.0, 2.0 * (50.0 - artist_bottom - 1.5));
+        c.text(x + 14.0, y + 46.0 + (8.0 - size) / 2.0, size, rgba(0x8a8aa0, 1.0), &fit(&format!("mapped by {}", e.meta.creator), size));
         let pill = crate::stars::draw_pill(c, x + w - 12.0, y + 64.0, 9.0, stars);
         let version = fit(&format!("[{}]", e.meta.version), 9.0);
-        let room = ((w - 40.0 - pill) / (9.0 / 7.0 * 6.0)) as usize;
+        let room = ((w - 40.0 - pill) / Canvas::char_width(9.0)) as usize;
         let version = if version.chars().count() > room { version.chars().take(room.saturating_sub(3)).collect::<String>() + "..." } else { version };
         c.text(x + 14.0, y + 64.0, 9.0, rgba(0xEB452C, 1.0), &version);
         // Map details, the autoplay and the timeline appear together, once the map's music plays.

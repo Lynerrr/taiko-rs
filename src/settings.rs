@@ -23,6 +23,7 @@ pub enum Item {
     Key(usize),
     /// Previous (0) / next (1) playfield preset key.
     PresetKey(usize),
+    TouchLayout,
     ShowPlayfieldSize,
     KiaiEffects,
     ShowConverts,
@@ -34,6 +35,7 @@ pub enum Item {
     BackgroundDim,
     PresentMode,
     MenuVsync,
+    HalfResolution,
     FpsCap,
     ShowFps,
     Animations,
@@ -46,7 +48,7 @@ pub enum Item {
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 40] = [
+pub const ITEMS: [(&str, Item); 42] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -66,6 +68,7 @@ pub const ITEMS: [(&str, Item); 40] = [
     ("INPUT", Item::Key(3)),
     ("INPUT", Item::PresetKey(0)),
     ("INPUT", Item::PresetKey(1)),
+    ("INPUT", Item::TouchLayout),
     ("OFFSET", Item::Offset),
     ("OFFSET", Item::Calibrate),
     ("OFFSET", Item::CalibrationBpm),
@@ -77,6 +80,7 @@ pub const ITEMS: [(&str, Item); 40] = [
     ("AUDIO", Item::AudioBuffer),
     ("VIDEO", Item::PresentMode),
     ("VIDEO", Item::MenuVsync),
+    ("VIDEO", Item::HalfResolution),
     ("VIDEO", Item::FpsCap),
     ("VIDEO", Item::ShowFps),
     ("VIDEO", Item::Fullscreen),
@@ -93,7 +97,7 @@ pub const ITEMS: [(&str, Item); 40] = [
 pub const SECTIONS: [(&str, &str); 8] = [
     ("GAMEPLAY", "speed, rate, resume"),
     ("PLAYFIELD", "size, position"),
-    ("INPUT", "drum and preset keys"),
+    ("INPUT", "drum keys, touch layout"),
     ("OFFSET", "audio offset, calibration"),
     ("AUDIO", "volume, latency"),
     ("VIDEO", "frame pacing, display, Discord"),
@@ -127,6 +131,7 @@ impl Item {
             Item::Key(i) => KEY_LABELS[i],
             Item::PresetKey(0) => "Previous preset key",
             Item::PresetKey(_) => "Next preset key",
+            Item::TouchLayout => "Touch layout",
             Item::ShowPlayfieldSize => "Show playfield size",
             Item::KiaiEffects => "Kiai effects",
             Item::ShowConverts => "Show osu!standard converts",
@@ -138,6 +143,7 @@ impl Item {
             Item::BackgroundDim => "Background dim",
             Item::PresentMode => "Present mode (gameplay)",
             Item::MenuVsync => "Menus use vsync",
+            Item::HalfResolution => "Half resolution",
             Item::FpsCap => "FPS cap",
             Item::ShowFps => "FPS overlay",
             Item::Animations => "UI animations",
@@ -168,6 +174,7 @@ impl Item {
             Item::AntiMash => "osu!'s mash penalty: a wrong-colour or too-early hit misses the note. Off: such hits are ignored.",
             Item::Key(_) => "Enter, then press the new key. Esc cancels.",
             Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key.",
+            Item::TouchLayout => "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
             Item::HiddenMaps => "Right-click a song to hide it here (files stay). Enter lists them all again.",
@@ -178,6 +185,7 @@ impl Item {
             Item::BackgroundDim => "How dark the map background is during play. 100% hides it.",
             Item::PresentMode => "Used during songs. vsync is smoothest on Wayland; mailbox/immediate add judder.",
             Item::MenuVsync => "Song select (and its autoplay preview), settings and results always use vsync.",
+            Item::HalfResolution => "Draw at half resolution, scaled up exactly 2x: chunky, crisp pixels and a quarter of the GPU work. For high-DPI screens.",
             Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
@@ -320,8 +328,9 @@ impl Dropdown {
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         self.bounds = [bx, by, bw, bh];
         c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
-        c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "Playfield preset");
-        c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &format!("screen {}x{}", native.0, native.1));
+        let title_w = c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "Playfield preset");
+        let screen = format!("screen {}x{}", native.0, native.1);
+        c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, bw - 28.0 - title_w - 10.0, &screen));
         let save_label = format!("+ Save current {}x{}", playfield.0, playfield.1);
         let bw0 = self.button(c, bx + 14.0, by + 28.0, &save_label, PresetAction::SaveCurrent);
         self.button(c, bx + 20.0 + bw0, by + 28.0, "+ Add size", PresetAction::Add);
@@ -496,7 +505,7 @@ impl SettingsUi {
             c.round_rect(x0, y, side_w, 34.0, 7.0, rgba(bg, 0.95), rgba(if on { 0xEB452C } else { 0x2a2a38 }, 1.0), if on { 1.5 } else { 1.0 });
             c.hit(x0, y, side_w, 34.0, Hit::SettingsSection(i));
             c.text(x0 + 12.0, y + 7.0, 9.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), name);
-            c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), about);
+            c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 20.0, about));
         }
 
         // The section's settings.
@@ -543,12 +552,17 @@ impl SettingsUi {
 
         // What the selected setting does.
         let help_y = list_top + rows.len() as f32 * ROW + 10.0;
-        c.round_rect(cx, help_y, col, 30.0, 6.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        // Two lines, spaced for however tall the text comes out (taller on a text grid).
+        let glyph_h = Canvas::text_height(7.0);
+        let line_h = glyph_h + 4.0;
+        c.round_rect(cx, help_y, col, line_h * 2.0 + 8.0, 6.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
         let help = self.item().help();
-        let max = ((col - 20.0) / (7.0 / 7.0 * 6.0)) as usize;
+        let max = ((col - 20.0) / Canvas::char_width(7.0)) as usize;
         let (line1, line2) = split_help(help, max);
-        c.text(cx + 10.0, help_y + 6.0, 7.0, rgba(0x9a9ab0, 1.0), &line1);
-        c.text(cx + 10.0, help_y + 17.0, 7.0, rgba(0x9a9ab0, 1.0), &line2);
+        // `text` centres taller glyphs on the line; this puts their top 6 below the box's.
+        let first = help_y + 6.0 + (glyph_h - 7.0) / 2.0;
+        c.text(cx + 10.0, first, 7.0, rgba(0x9a9ab0, 1.0), &line1);
+        c.text(cx + 10.0, first + line_h, 7.0, rgba(0x9a9ab0, 1.0), &line2);
         c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), &Canvas::fit_hints(8.0, w - 48.0, footer));
     }
 }

@@ -25,7 +25,53 @@ pub fn step_scroll_speed(speed: f64, d: f64) -> f64 {
     (k * SCROLL_STEP).clamp(0.3, 4.0)
 }
 
+/// Order of the four touch columns, left to right (K = rim / kat, D = centre / don), for the
+/// kddk and kkdd playstyles and their mirrors.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TouchLayout {
+    Kddk,
+    Kkdd,
+    Dkkd,
+    Ddkk,
+}
+
+impl TouchLayout {
+    const ALL: [TouchLayout; 4] = [TouchLayout::Kddk, TouchLayout::Kkdd, TouchLayout::Dkkd, TouchLayout::Ddkk];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TouchLayout::Kddk => "KDDK",
+            TouchLayout::Kkdd => "KKDD",
+            TouchLayout::Dkkd => "DKKD",
+            TouchLayout::Ddkk => "DDKK",
+        }
+    }
+
+    fn parse(s: &str) -> Option<TouchLayout> {
+        TouchLayout::ALL.into_iter().find(|l| l.name().eq_ignore_ascii_case(s))
+    }
+
+    /// The layout `dir` steps away (wrapping).
+    pub fn step(self, dir: i32) -> TouchLayout {
+        let i = TouchLayout::ALL.iter().position(|&l| l == self).unwrap_or(0) as i32;
+        TouchLayout::ALL[(i + dir).rem_euclid(4) as usize]
+    }
+
+    /// The drum key (0 left rim, 1 left centre, 2 right centre, 3 right rim) of each column.
+    /// Two columns of one colour always map to different hands, so hitting both is a big hit.
+    pub fn keys(self) -> [usize; 4] {
+        match self {
+            TouchLayout::Kddk => [0, 1, 2, 3],
+            TouchLayout::Kkdd => [0, 3, 1, 2],
+            TouchLayout::Dkkd => [1, 0, 3, 2],
+            TouchLayout::Ddkk => [1, 2, 0, 3],
+        }
+    }
+}
+
 pub struct Config {
+    /// Columns of the touch drum, left to right.
+    pub touch_layout: TouchLayout,
     /// Positive when your audio reaches you late; notes are shifted later by this much.
     pub offset_ms: f64,
     pub scroll_speed: f64,
@@ -35,6 +81,9 @@ pub struct Config {
     pub fx_volume: f32,
     /// Present mode during songs.
     pub present: PresentChoice,
+    /// Draw at half resolution and scale up exactly 2x (default on Android: high-DPI screens,
+    /// mobile GPUs).
+    pub half_resolution: bool,
     /// Menus (song select and its preview, settings, results) always use vsync.
     pub menu_vsync: bool,
     /// 0 = uncapped. Only applies to mailbox/immediate; vsync paces itself.
@@ -104,12 +153,14 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            touch_layout: TouchLayout::Kddk,
             offset_ms: 0.0,
             scroll_speed: 1.0,
             master_volume: 1.0,
             music_volume: 0.7,
             fx_volume: 1.0,
             present: PresentChoice::Fifo,
+            half_resolution: cfg!(target_os = "android"),
             menu_vsync: true,
             fps_cap: 0,
             calibration_bpm: 120.0,
@@ -252,6 +303,7 @@ impl Config {
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "menu_vsync" => cfg.menu_vsync = v != "false",
+                "half_resolution" => cfg.half_resolution = v == "true",
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
                 "playfield_area" => cfg.playfield_area = Area::parse(v).unwrap_or(Area::FULL),
                 "bg_dim" => cfg.bg_dim = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
@@ -292,6 +344,7 @@ impl Config {
                         cfg.preset_keys = k;
                     }
                 }
+                "touch_layout" => cfg.touch_layout = TouchLayout::parse(v).unwrap_or(cfg.touch_layout),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
                 "skin" => cfg.skin = v.to_string(),
@@ -319,6 +372,8 @@ impl Config {
              keys = {}\n\
              # previous / next playfield resolution preset\n\
              preset_keys = {}\n\
+             # touch columns left to right: KDDK, KKDD, DKKD or DDKK (K = rim, D = centre)\n\
+             touch_layout = {}\n\
              show_playfield_size = {}\n\
              # your own playfield sizes (preset list, in this order)\n\
              saved_presets = {}\n\
@@ -333,6 +388,8 @@ impl Config {
              present_mode = {}\n\
              # menus always use vsync (gameplay uses present_mode)\n\
              menu_vsync = {}\n\
+             # draw at half resolution, scaled up exactly 2x (crisp pixels, faster)\n\
+             half_resolution = {}\n\
              # mailbox/immediate only; 0 = uncapped\n\
              fps_cap = {}\n\
              calibration_bpm = {}\n\
@@ -365,6 +422,7 @@ impl Config {
              mods = {}\n",
             keys.join(", "),
             self.preset_keys.iter().map(|k| key_name(*k)).collect::<Vec<_>>().join(", "),
+            self.touch_layout.name(),
             self.show_playfield_size,
             self.saved_presets.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(", "),
             self.offset_ms,
@@ -374,6 +432,7 @@ impl Config {
             self.fx_volume,
             self.present.name(),
             self.menu_vsync,
+            self.half_resolution,
             self.fps_cap,
             self.calibration_bpm,
             self.playfield_area.to_config(),
@@ -416,6 +475,27 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn touch_layouts_match_their_names_and_split_hands() {
+        for layout in TouchLayout::ALL {
+            let keys = layout.keys();
+            // Each drum key exactly once.
+            let mut sorted = keys;
+            sorted.sort();
+            assert_eq!(sorted, [0, 1, 2, 3], "{}", layout.name());
+            // Columns read like the name (K = rims 0/3, D = centres 1/2).
+            let read: String = keys.iter().map(|&k| if k == 0 || k == 3 { 'K' } else { 'D' }).collect();
+            assert_eq!(read, layout.name());
+            // Both columns of a colour are different hands, so together they make a big hit.
+            for kat in [true, false] {
+                let hands: Vec<bool> = keys.iter().filter(|&&k| (k == 0 || k == 3) == kat).map(|&k| k < 2).collect();
+                assert_ne!(hands[0], hands[1], "{}", layout.name());
+            }
+            assert_eq!(TouchLayout::parse(&layout.name().to_lowercase()), Some(layout));
+        }
+        assert_eq!(TouchLayout::Kddk.step(-1), TouchLayout::Ddkk);
+    }
 
     #[test]
     fn scroll_speed_steps_land_on_the_grid() {

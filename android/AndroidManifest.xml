@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- versionCode / versionName and the SDK levels are filled in by build-apk.sh. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.lynerrr.taiko">
+
+    <!-- Map downloads, multiplayer and the online features. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- wgpu prefers Vulkan and falls back to OpenGL ES. -->
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400003" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen.multitouch.distinct" android:required="false" />
+
+    <application
+        android:label="taiko-rs"
+        android:icon="@mipmap/ic_launcher"
+        android:hasCode="true"
+        android:isGame="true"
+        android:appCategory="game"
+        android:extractNativeLibs="true"
+        android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+
+        <!-- singleTask: opening another .osz while the game runs reaches this activity
+             (onNewIntent) instead of starting a second game. -->
+        <activity
+            android:name=".TaikoActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:resizeableActivity="false"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density">
+            <meta-data android:name="android.app.lib_name" android:value="taiko_rs" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- "Open with" for beatmap archives. File managers and browsers label .osz files
+                 inconsistently, so this takes the types osu!lazer's Android app accepts. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/x-osu-beatmap-archive" />
+                <data android:mimeType="application/x-osu-archive" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/download" />
+            </intent-filter>
+
+            <!-- Sharing one or more archives to the game. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/x-osu-beatmap-archive" />
+                <data android:mimeType="application/x-osu-archive" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/download" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

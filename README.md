@@ -1,6 +1,6 @@
 # taiko-rs
 
-A small, fast osu!taiko client in Rust, built for Linux/Wayland, with a Windows build.
+A small, fast osu!taiko client in Rust, built for Linux/Wayland, with Windows and Android builds.
 
 - **Native Wayland** via winit (falls back to X11 automatically), **Vulkan** via wgpu.
 - **Smooth scrolling**: the game clock free-runs on the monotonic clock and is gently
@@ -57,6 +57,48 @@ into `%LOCALAPPDATA%\Programs\taiko-rs`, adds Start menu and desktop shortcuts a
 Maps come from your osu! stable Songs folder (`%LOCALAPPDATA%\osu!\Songs`); without osu!, drop
 `.osz` files into `%APPDATA%\taiko-rs\Songs`. Settings live in `%APPDATA%\taiko-rs\config.txt`.
 Both builds are produced by GitHub Actions on every push.
+
+## Android
+
+Install `taiko-rs-android.apk` from the [releases](https://github.com/Lynerrr/taiko-rs/releases/tag/latest)
+(Android 8.0+, 64-bit ARM; allow installing from your browser or file manager when asked). To
+update, install the new APK over the old one.
+
+- **Maps**: open an `.osz` with taiko-rs (from a file manager, your browser's downloads, Telegram...)
+  or share it to taiko-rs, and it is imported; or get maps in **DOWNLOAD**. They live in
+  `Android/data/io.github.lynerrr.taiko/files/taiko-rs/Songs` (reachable over USB), with the
+  settings, scores and skins next to them. Uninstalling the app deletes that folder.
+- **Touch**: during a song the screen is four columns, each a drum key, marked along the bottom.
+  Settings → Input → *Touch layout* picks their order for your playstyle: **KDDK** (rim, centre,
+  centre, rim), **KKDD**, **DKKD** or **DDKK** (K = rim / kat, D = centre / don). Two columns of the
+  same colour always count as different hands, so hitting both is a big note. Everywhere else a
+  finger works as the mouse (tap to click, drag the song list). **Back** pauses, closes menus and
+  goes back, like Esc. A keyboard or gamepad with keys works as on desktop.
+- Audio uses AAudio's low-latency path; set the offset with Settings → Offset → *Offset calibration*.
+- Settings → Video → *Half resolution* (on by default on Android, off on desktop): the game is drawn
+  at half the screen's resolution and scaled up exactly 2x, so every pixel is a crisp 2x2 block and
+  the GPU does a quarter of the work.
+- Not on Android: the self-updater (install new APKs instead), video export (needs ffmpeg) and
+  Discord status.
+
+Build it yourself with the Android SDK and NDK, a JDK, `cargo install cargo-ndk` and
+`rustup target add aarch64-linux-android`:
+
+```sh
+android/build-apk.sh             # -> target/android/taiko-rs.apk
+android/build-apk.sh --install   # and adb install it on the connected device
+```
+
+Releases are signed with the key in the `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASS` and
+`ANDROID_KEY_ALIAS` repository secrets. With that key at `~/.android/taiko-rs-release.jks` (its
+password in `taiko-rs-release.pass` next to it), local builds are signed with it too, so either
+installs over the other; otherwise they use the SDK debug key, and switching between the two means
+uninstalling first (which deletes the app's songs). Keep a backup of the key: a new one can't update
+installed copies.
+
+The game is this crate's library started from `android_main` in a NativeActivity, with one small
+Java class (`android/java`) for importing opened files; no Gradle. Logs go to logcat (`adb logcat
+-s taiko-rs`).
 
 ### Updates
 

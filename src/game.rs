@@ -26,8 +26,8 @@ const HIT_ANIM_MS: f64 = 160.0;
 /// music without being jarring.
 const COMBO_BREAK_GAIN: f32 = 1.2;
 
-const DON: u32 = 0xEB452C;
-const KAT: u32 = 0x438EAD;
+pub const DON: u32 = 0xEB452C;
+pub const KAT: u32 = 0x438EAD;
 const ROLL: u32 = 0xFCB806;
 const SWELL: u32 = 0xF39A2B;
 const WHITE: u32 = 0xFFFFFF;

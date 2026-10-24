@@ -86,7 +86,8 @@ struct Globals {
 }
 
 pub struct Renderer {
-    surface: wgpu::Surface<'static>,
+    /// None while there is no window to draw to (Android destroys it in the background).
+    surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -116,7 +117,41 @@ pub struct Renderer {
     pub bg_brightness: f32,
     pub present: PresentChoice,
     pub adapter_name: String,
+    /// 2: draw at half the screen's resolution, then scale up exactly 2x (crisp pixels, a
+    /// quarter of the work); 1: full resolution.
+    pub pixel_scale: u32,
+    /// The half-resolution image and its bind group for the upscale, sized for the screen.
+    low: Option<LowRes>,
+    upscale_layout: wgpu::BindGroupLayout,
+    upscale_pipeline: wgpu::RenderPipeline,
 }
+
+/// The image a frame is drawn into before it is scaled up to the screen.
+struct LowRes {
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    width: u32,
+    height: u32,
+}
+
+/// Integer upscale: each screen pixel copies texel (pixel / 2), so every texel becomes a sharp
+/// 2x2 block (no filtering).
+const UPSCALE_SHADER: &str = r#"
+@group(0) @binding(0) var image: texture_2d<f32>;
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    // One triangle covering the viewport.
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let texel = min(vec2<u32>(pos.xy) / 2u, textureDimensions(image) - 1u);
+    return textureLoad(image, texel, 0);
+}
+"#;
 
 /// A background image on the GPU.
 struct BgLayer {
@@ -417,9 +452,46 @@ impl Renderer {
         });
         let capacity = 4096;
         let instances = Self::make_instance_buffer(&device, capacity);
+        let upscale_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("upscale"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let upscale_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("upscale"),
+            source: wgpu::ShaderSource::Wgsl(UPSCALE_SHADER.into()),
+        });
+        let upscale_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("upscale"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&upscale_layout)],
+                immediate_size: 0,
+            })),
+            vertex: wgpu::VertexState { module: &upscale_shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &upscale_shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let mut r = Renderer {
-            surface,
+            surface: Some(surface),
             device,
             queue,
             config,
@@ -443,6 +515,10 @@ impl Renderer {
             bg_brightness: 0.0,
             present,
             adapter_name,
+            pixel_scale: 1,
+            low: None,
+            upscale_layout,
+            upscale_pipeline,
         };
         r.set_present(present);
         Ok(r)
@@ -573,7 +649,7 @@ impl Renderer {
         self.config.present_mode = to_wgpu(chosen);
         // One frame in flight for the uncapped modes keeps input-to-photon latency minimal.
         self.config.desired_maximum_frame_latency = if chosen == PresentChoice::Fifo { 2 } else { 1 };
-        self.surface.configure(&self.device, &self.config);
+        self.configure();
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -582,7 +658,30 @@ impl Renderer {
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        self.configure();
+    }
+
+    /// Swaps in a surface for a new window (or drops it with `None` when the window goes away),
+    /// keeping everything else on the GPU.
+    pub fn set_surface(&mut self, surface: Option<wgpu::Surface<'static>>, width: u32, height: u32) {
+        self.surface = surface;
+        if width > 0 && height > 0 {
+            self.config.width = width;
+            self.config.height = height;
+        }
+        self.configure();
+    }
+
+    fn configure(&self) {
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
+    }
+
+    /// Render pixels per virtual unit for crisp text (`set_text_grid`) when drawing at half
+    /// resolution.
+    pub fn text_grid(&self) -> Option<f32> {
+        (self.pixel_scale > 1).then(|| (self.config.height / self.pixel_scale).max(1) as f32 / VIRTUAL_HEIGHT)
     }
 
     /// Canvas width in virtual units.
@@ -593,10 +692,10 @@ impl Renderer {
     /// Waits for a swapchain image. Under vsync this is where the frame may block, so callers
     /// should sample the game clock only after it returns.
     pub fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
-        match self.surface.get_current_texture() {
+        match self.surface.as_ref()?.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                self.configure();
                 None
             }
             _ => None,
@@ -615,13 +714,23 @@ impl Renderer {
         capture: bool,
         clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
     ) -> Option<(u32, u32, Vec<u8>)> {
+        // What the shapes are drawn at: the screen, or half of it to be scaled up after.
+        let scaled = self.pixel_scale > 1;
+        let (w, h) = if scaled {
+            ((self.config.width / self.pixel_scale).max(1), (self.config.height / self.pixel_scale).max(1))
+        } else {
+            (self.config.width, self.config.height)
+        };
+        if scaled {
+            self.ensure_low(w, h);
+        }
         // Clipped shape ranges (rects as fractions of the screen) -> pixel scissors, in order,
         // without overlaps.
         let mut clip: Vec<(std::ops::Range<usize>, [u32; 4])> = clips
             .into_iter()
             .filter(|(range, _)| range.start < range.end && range.end <= shapes.len())
             .map(|(range, r)| {
-                let (sw, sh) = (self.config.width as f32, self.config.height as f32);
+                let (sw, sh) = (w as f32, h as f32);
                 let x = (r[0] * sw).floor().clamp(0.0, sw - 1.0);
                 let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
                 let w = (r[2] * sw).ceil().clamp(1.0, sw - x);
@@ -642,11 +751,7 @@ impl Renderer {
             self.capacity = shapes.len().next_power_of_two();
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
-        let globals = Globals {
-            screen_px: [self.config.width as f32, self.config.height as f32],
-            px_per_unit: self.config.height as f32 / VIRTUAL_HEIGHT,
-            _pad: 0.0,
-        };
+        let globals = Globals { screen_px: [w as f32, h as f32], px_per_unit: h as f32 / VIRTUAL_HEIGHT, _pad: 0.0 };
         self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !shapes.is_empty() {
             self.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
@@ -657,7 +762,7 @@ impl Renderer {
         // The old background stays opaque under the new one (or fades out if there's none).
         let mix = self.bg_mix.clamp(0.0, 1.0);
         let prev_alpha = if self.bg.is_some() { 1.0 } else { 1.0 - mix };
-        let screen = self.config.width as f32 / self.config.height.max(1) as f32;
+        let screen = w as f32 / h.max(1) as f32;
         for (layer, alpha) in [(&self.bg_prev, prev_alpha), (&self.bg, mix)] {
             if let Some(l) = layer {
                 // "Cover" fit: crop the image's long side so it fills the screen without stretching.
@@ -668,9 +773,15 @@ impl Renderer {
         }
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.encode_pass(&mut encoder, &view, false, shapes.len(), clear, &clip);
+        match self.low.as_ref().filter(|_| scaled) {
+            Some(low) => {
+                self.encode_pass(&mut encoder, &low.view, false, shapes.len(), clear, &clip, (w, h));
+                self.encode_upscale(&mut encoder, &view, low, clear);
+            }
+            None => self.encode_pass(&mut encoder, &view, false, shapes.len(), clear, &clip, (w, h)),
+        }
 
-        let (w, h) = (self.config.width, self.config.height);
+        // Screenshots are taken at the size the frame was drawn at.
         let readback = capture.then(|| {
             let target = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("capture"),
@@ -683,7 +794,7 @@ impl Renderer {
                 view_formats: &[],
             });
             let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-            self.encode_pass(&mut encoder, &target_view, true, shapes.len(), clear, &clip);
+            self.encode_pass(&mut encoder, &target_view, true, shapes.len(), clear, &clip, (w, h));
             let bpr = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("capture"),
@@ -761,7 +872,7 @@ impl Renderer {
         });
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.encode_pass(&mut encoder, &view, true, shapes.len(), clear, &clip);
+        self.encode_pass(&mut encoder, &view, true, shapes.len(), clear, &clip, (w, h));
         self.bg_prev = prev;
         let bpr = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -786,6 +897,55 @@ impl Renderer {
         Some(rgba)
     }
 
+    /// (Re)creates the half-resolution image when the screen size changed.
+    fn ensure_low(&mut self, width: u32, height: u32) {
+        if self.low.as_ref().is_some_and(|l| (l.width, l.height) == (width, height)) {
+            return;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("half resolution"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // The screen's format, so the same pipelines draw into it.
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("half resolution"),
+            layout: &self.upscale_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }],
+        });
+        self.low = Some(LowRes { view, bind_group, width, height });
+    }
+
+    /// Scales the half-resolution image up to the screen, exactly 2x. An odd last row or column
+    /// of the screen keeps the clear colour.
+    fn encode_upscale(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, low: &LowRes, clear: [f64; 3]) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("upscale"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r: clear[0], g: clear[1], b: clear[2], a: 1.0 }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_viewport(0.0, 0.0, (low.width * 2) as f32, (low.height * 2) as f32, 0.0, 1.0);
+        pass.set_pipeline(&self.upscale_pipeline);
+        pass.set_bind_group(0, &low.bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// Draws the background and shapes into `view`, which is `size` pixels.
+    #[allow(clippy::too_many_arguments)]
     fn encode_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -794,6 +954,7 @@ impl Renderer {
         count: usize,
         clear: [f64; 3],
         clips: &[(std::ops::Range<usize>, [u32; 4])],
+        size: (u32, u32),
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -826,13 +987,43 @@ impl Renderer {
             }
             pass.set_scissor_rect(*x, *y, *w, *h);
             pass.draw(0..4, range.start as u32..range.end as u32);
-            pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
+            pass.set_scissor_rect(0, 0, size.0, size.1);
             at = range.end as u32;
         }
         if (count as u32) > at {
             pass.draw(0..4, at..count as u32);
         }
     }
+}
+
+thread_local! {
+    /// Render pixels per virtual unit when text snaps to whole pixels, else 0 (`set_text_grid`).
+    static TEXT_GRID: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Half resolution: text is laid on a grid of `px_per_unit` render pixels per virtual unit, each
+/// font pixel a whole number of them (rounded up, so small text gets bigger) and each glyph on a
+/// pixel boundary, so it stays crisp after the 2x scale. `None`: text at its exact size. Per
+/// thread: the render thread sets it before building each frame.
+pub fn set_text_grid(px_per_unit: Option<f32>) {
+    TEXT_GRID.with(|g| g.set(px_per_unit.filter(|p| *p > 0.0).unwrap_or(0.0)));
+}
+
+/// One font pixel (in virtual units) of text `size` units tall.
+fn font_px(size: f32) -> f32 {
+    let grid = TEXT_GRID.with(std::cell::Cell::get);
+    if grid > 0.0 {
+        // A hair of slack so 2.01 pixels stays 2.
+        (size / 7.0 * grid - 0.05).ceil().max(1.0) / grid
+    } else {
+        size / 7.0
+    }
+}
+
+/// `v` moved onto the text grid (unchanged without one).
+fn snap_to_grid(v: f32) -> f32 {
+    let grid = TEXT_GRID.with(std::cell::Cell::get);
+    if grid > 0.0 { (v * grid).round() / grid } else { v }
 }
 
 static ANIMATIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -1120,8 +1311,12 @@ impl Canvas {
     }
 
     /// Draws text with the built-in 5x7 font; `size` is the glyph height. Returns the advance width.
+    /// On a text grid (`set_text_grid`) the glyphs may come out bigger: they stay centred on the
+    /// line `size` would have taken.
     pub fn text(&mut self, x: f32, y: f32, size: f32, color: [f32; 4], s: &str) -> f32 {
-        let px = size / 7.0;
+        let px = font_px(size);
+        let x = snap_to_grid(x);
+        let y = snap_to_grid(y + (size - px * 7.0) / 2.0);
         let mut cx = x;
         let first = self.shapes.len();
         for ch in s.chars() {
@@ -1157,7 +1352,28 @@ impl Canvas {
     }
 
     pub fn text_width(size: f32, s: &str) -> f32 {
-        s.chars().count() as f32 * size / 7.0 * 6.0
+        s.chars().count() as f32 * Self::char_width(size)
+    }
+
+    /// The advance of one character of text `size` tall.
+    pub fn char_width(size: f32) -> f32 {
+        font_px(size) * 6.0
+    }
+
+    /// How tall text `size` comes out (`size`, or more on a text grid).
+    pub fn text_height(size: f32) -> f32 {
+        font_px(size) * 7.0
+    }
+
+    /// The size to draw text at so it comes out at most `max_h` tall: `size`, or on a text grid
+    /// (where it may grow) the biggest whole-pixel size that fits. For secondary lines that
+    /// would crowd the line above when everything grows.
+    pub fn fit_height(size: f32, max_h: f32) -> f32 {
+        if Self::text_height(size) <= max_h {
+            return size;
+        }
+        let grid = TEXT_GRID.with(std::cell::Cell::get);
+        if grid > 0.0 { (max_h / 7.0 * grid).floor().max(1.0) / grid * 7.0 } else { max_h }
     }
 
     pub fn text_centered(&mut self, cx: f32, y: f32, size: f32, color: [f32; 4], s: &str) {
@@ -1175,7 +1391,7 @@ impl Canvas {
         if Self::text_width(size, s) <= max_w {
             return s.to_string();
         }
-        let room = (max_w / (size / 7.0 * 6.0)).floor() as usize;
+        let room = (max_w / (font_px(size) * 6.0)).floor() as usize;
         if room <= 3 {
             return String::new();
         }
@@ -1187,7 +1403,7 @@ impl Canvas {
         if Self::text_width(size, s) <= max_w {
             return s.to_string();
         }
-        let room = (max_w / (size / 7.0 * 6.0)).floor() as usize;
+        let room = (max_w / (font_px(size) * 6.0)).floor() as usize;
         if room <= 3 {
             return String::new();
         }
@@ -1216,6 +1432,15 @@ impl Canvas {
     /// The size to draw `s` at so it is at most `max_w` wide: `size`, or smaller down to `min`.
     pub fn fit_size(size: f32, min: f32, max_w: f32, s: &str) -> f32 {
         let w = Self::text_width(size, s);
-        if w <= max_w { size } else { (size * max_w / w).max(min) }
+        if w <= max_w {
+            return size;
+        }
+        let grid = TEXT_GRID.with(std::cell::Cell::get);
+        if grid > 0.0 {
+            // Font pixels come in whole render pixels: the biggest that fits.
+            let per_char = max_w / s.chars().count().max(1) as f32 / 6.0;
+            return ((per_char * grid).floor().max(1.0) / grid * 7.0).max(min);
+        }
+        (size * max_w / w).max(min)
     }
 }

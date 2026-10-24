@@ -19,6 +19,13 @@ wgpu = "30"
 winit = "0.30"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
+[target.'cfg(target_os = "android")'.dependencies]
+# The APK is a plain NativeActivity (no Java): see android/build-apk.sh.
+winit = { version = "0.30", features = ["android-native-activity"] }
+libc = "0.2"
+# AAudio's low-latency mode (and a real-time audio thread); without it hitsounds lag by tens of ms.
+cpal = { version = "0.18", features = ["realtime"] }
+
 [features]
 default = ["pipewire"]
 # Native PipeWire output (lower latency than going through the ALSA plugin). Set TAIKO_ALSA=1 to bypass at runtime.
