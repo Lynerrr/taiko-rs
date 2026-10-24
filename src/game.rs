@@ -265,6 +265,9 @@ pub struct Game {
     next_scare: usize,
 }
 
+/// Decoy: how opaque the fake notes are next to real ones.
+const DECOY_ALPHA: f32 = 0.6;
+
 /// Overtime: how long (ms) he stays on screen.
 const SCARE_MS: f64 = 900.0;
 
@@ -2000,7 +2003,8 @@ impl Game {
                     break;
                 }
                 let s = s_of(n.time, n.velocity);
-                let a = note_alpha(s) * smooth(0.22, 0.38, (s / lane_len) as f64) as f32;
+                // A little see-through, so a careful eye can tell them apart.
+                let a = DECOY_ALPHA * note_alpha(s) * smooth(0.22, 0.38, (s / lane_len) as f64) as f32;
                 if a > 0.01 && s < lane_len + BIG_R {
                     draw_hit(c, s, n, k, self.decoy_flows[k], if n.kind == Kind::Don { don } else { kat }, a);
                 }
