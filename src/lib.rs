@@ -59,7 +59,7 @@ use game::{Game, PAUSE_ITEMS};
 use layout::{Area, Grip};
 use winit::window::CursorIcon;
 use library::Entry;
-use render::{rgba, Canvas, PresentChoice, Renderer};
+use render::{accent, rgba, themed, Canvas, PresentChoice, Renderer};
 use settings::{Dropdown, Item, PresetAction, SettingsUi};
 use mods::Mods;
 use ui::{Results, Select, SelectAction};
@@ -409,9 +409,9 @@ fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool) -> [f32; 4] {
     c.text(18.0, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &label);
     c.text(x, y + 9.0, 6.0, rgba(0x6f6f86, 1.0), "Left/Right or drag: seek");
     c.rect(x, y - th / 2.0, bw, th, rgba(0x2a2a38, 1.0));
-    c.rect(x, y - th / 2.0, bw * f, th, rgba(0xEB452C, 1.0));
+    c.rect(x, y - th / 2.0, bw * f, th, rgba(accent(), 1.0));
     let k = if hover { 5.0 } else { 3.5 };
-    c.round_rect(x + bw * f - k, y - k, k * 2.0, k * 2.0, 1.0, rgba(0xffffff, 1.0), rgba(0xEB452C, 1.0), 1.5);
+    c.round_rect(x + bw * f - k, y - k, k * 2.0, k * 2.0, 1.0, rgba(0xffffff, 1.0), rgba(accent(), 1.0), 1.5);
     rect
 }
 
@@ -443,7 +443,7 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
 
 /// Local scores for the selected map, under the song select panel.
 fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow]) {
-    let label_w = c.text(x + 4.0, y + 2.0, 7.0, rgba(0xEB452C, 1.0), "LOCAL SCORES");
+    let label_w = c.text(x + 4.0, y + 2.0, 7.0, rgba(accent(), 1.0), "LOCAL SCORES");
     if rows.is_empty() {
         let at = x + 4.0 + label_w + 14.0;
         c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, "none yet - finish a play to set one"));
@@ -495,7 +495,7 @@ fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32, slide: f32) {
     let (bx, by, bw) = (x + 12.0, y + 26.0, w - 24.0);
     c.round_rect(bx, by, bw, 6.0, 3.0, rgba(0x2a2a38, a), rgba(0, 0.0), 0.0);
     if cfg.master_volume > 0.0 {
-        c.round_rect(bx, by, (bw * cfg.master_volume).max(6.0), 6.0, 3.0, rgba(0xEB452C, a), rgba(0, 0.0), 0.0);
+        c.round_rect(bx, by, (bw * cfg.master_volume).max(6.0), 6.0, 3.0, rgba(accent(), a), rgba(0, 0.0), 0.0);
     }
     let detail = format!("music {:.0}%   hitsounds {:.0}%", cfg.music_volume * 100.0, cfg.fx_volume * 100.0);
     c.text(x + 12.0, y + 40.0, 7.0, rgba(0x9a9ab0, a), &detail);
@@ -1172,6 +1172,8 @@ impl State {
             Item::Skin if c.skin.is_empty() => "built-in".into(),
             Item::Skin => c.skin.clone(),
             Item::SkinFolder => "Enter to open".into(),
+            Item::Accent => render::accent_name(c.accent),
+            Item::AccentHue => format!("#{:06x}", c.accent),
         }
     }
 
@@ -1197,6 +1199,17 @@ impl State {
                 return;
             }
             Item::TouchLayout => self.cfg.touch_layout = self.cfg.touch_layout.step(dir),
+            Item::Accent => {
+                let n = render::ACCENTS.len() as i32;
+                // A colour of your own goes to the first (or last) preset.
+                let next = match render::ACCENTS.iter().position(|a| a.1 == self.cfg.accent) {
+                    Some(i) => (i as i32 + dir).rem_euclid(n),
+                    None if dir > 0 => 0,
+                    None => n - 1,
+                };
+                self.cfg.accent = render::ACCENTS[next as usize].1;
+            }
+            Item::AccentHue => self.cfg.accent = render::rotate_hue(self.cfg.accent, 10.0 * d as f32),
             Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
@@ -4169,6 +4182,7 @@ impl State {
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
         render::set_animations(self.cfg.animations);
+        render::set_accent(self.cfg.accent);
         game::set_hide_great(self.cfg.hide_great);
         // Screen changes fade in.
         let kind = std::mem::discriminant(&self.scene);
@@ -4375,7 +4389,7 @@ impl State {
                 }
                 if self.picking_lobby_map {
                     let w = canvas.width;
-                    canvas.round_rect(24.0, 438.0, w - 48.0, 34.0, 8.0, rgba(0x2b1a17, 1.0), rgba(0xEB452C, 1.0), 1.5);
+                    canvas.round_rect(24.0, 438.0, w - 48.0, 34.0, 8.0, rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0), rgba(accent(), 1.0), 1.5);
                     canvas.text_centered(w / 2.0, 450.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, w - 64.0, "Picking the lobby map: Enter to choose, Esc to cancel"));
                 }
                 self.select.draw_popups(canvas, &self.library);
@@ -4803,7 +4817,7 @@ impl State {
                 layout::draw_frame(canvas, area, true);
                 let w = canvas.width;
                 let bw = (w - 32.0).min(660.0);
-                canvas.round_rect(w / 2.0 - bw / 2.0, 440.0, bw, 34.0, 8.0, rgba(0x000000, 0.75), rgba(0xEB452C, 0.6), 1.0);
+                canvas.round_rect(w / 2.0 - bw / 2.0, 440.0, bw, 34.0, 8.0, rgba(0x000000, 0.75), rgba(accent(), 0.6), 1.0);
                 let room = bw - 16.0;
                 canvas.text_centered(w / 2.0, 446.0, 8.0, rgba(0xffffff, 1.0), &Canvas::fit(8.0, room, &format!("Playfield area: {}", area.describe())));
                 let help = "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done";
@@ -5483,7 +5497,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 .iter()
                 .map(|(r, [x, y, cw, ch])| (r.clone(), [x / vw, y / render::VIRTUAL_HEIGHT, cw / vw, ch / render::VIRTUAL_HEIGHT]))
                 .collect();
-            let frame = renderer.render_offscreen(&export_canvas.shapes, &clips, w, h, [0.071, 0.071, 0.098]);
+            let frame = renderer.render_offscreen(&export_canvas.shapes, &clips, w, h, render::clear_colour());
             renderer.bg_brightness = shown;
             let Some(px) = frame else { break };
             if tx.send(px).is_err() {
@@ -5532,7 +5546,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         let mut clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clip.into_iter().map(|(range, a)| (range, [a.x, a.y, a.w, a.h])).collect();
         clips.extend(canvas.clips.drain(..).map(|(range, r)| (range, to_fraction(r))));
         let t1 = timing.then(Instant::now);
-        let shot = renderer.submit(frame, &canvas.shapes, [0.071, 0.071, 0.098], capture.is_some(), clips, opaque);
+        let shot = renderer.submit(frame, &canvas.shapes, render::clear_colour(), capture.is_some(), clips, opaque);
         if let (Some(t0), Some(t1)) = (t0, t1) {
             let presented = Instant::now();
             // Clock-sample-to-next-refresh: approximates how stale the previous frame was when shown.
@@ -5601,6 +5615,8 @@ struct App {
     cursor: CursorIcon,
     /// The pixel pointer (None if the platform refused it: the system one is used).
     cursors: Option<cursor::Cursors>,
+    /// The accent `cursors` were made in.
+    cursor_accent: u32,
     cursor_hidden: bool,
     window: Option<Arc<Window>>,
     /// Kept to make a surface for each new window (Android, after coming back from the background).
@@ -5694,6 +5710,7 @@ impl ApplicationHandler<UserEvent> for App {
         // Input only wakes this thread when there is something to do.
         event_loop.set_control_flow(ControlFlow::Wait);
         self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
+        self.cursor_accent = render::accent();
         self.window = Some(window);
         self.instance = Some(instance);
         self.set_cursor(self.cursor);
@@ -5731,6 +5748,14 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // A new UI colour: the pointer is drawn in it too.
+        if self.cursors.is_some() && self.cursor_accent != render::accent() {
+            if let Some(window) = &self.window {
+                self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
+                self.cursor_accent = render::accent();
+                self.set_cursor(self.cursor);
+            }
+        }
         match event {
             WindowEvent::CloseRequested => lock(&self.state).quit = true,
             WindowEvent::Resized(size) => {
@@ -6061,6 +6086,7 @@ fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEv
         state: Arc::new(Mutex::new(state)),
         cursor: CursorIcon::Default,
         cursors: None,
+        cursor_accent: render::DEFAULT_ACCENT,
         cursor_hidden: false,
         window: None,
         instance: None,

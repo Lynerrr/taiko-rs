@@ -5,7 +5,7 @@
 
 use winit::window::CursorIcon;
 
-use crate::render::{rgba, Canvas, VIRTUAL_HEIGHT};
+use crate::render::{accent, rgba, Canvas, VIRTUAL_HEIGHT};
 
 /// Smallest area, as a fraction of the screen in each direction.
 const MIN_SIZE: f32 = 0.2;
@@ -301,9 +301,9 @@ pub fn draw_frame(c: &mut Canvas, area: Area, strong: bool) {
     let (x, y) = (area.x * c.width, area.y * VIRTUAL_HEIGHT);
     let (w, h) = (area.w * c.width, area.h * VIRTUAL_HEIGHT);
     let a = if strong { 0.9 } else { 0.45 };
-    c.round_rect(x, y, w, h, 3.0, rgba(0, 0.0), rgba(0xEB452C, a), 1.5);
+    c.round_rect(x, y, w, h, 3.0, rgba(0, 0.0), rgba(accent(), a), 1.5);
     for (hx, hy) in [(x, y), (x + w, y), (x, y + h), (x + w, y + h)] {
-        c.round_rect(hx - 4.0, hy - 4.0, 8.0, 8.0, 2.0, rgba(0xEB452C, a), rgba(0xffffff, a), 1.0);
+        c.round_rect(hx - 4.0, hy - 4.0, 8.0, 8.0, 2.0, rgba(accent(), a), rgba(0xffffff, a), 1.0);
     }
 }
 

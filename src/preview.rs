@@ -11,7 +11,7 @@ use crate::beatmap::{self, Beatmap, Kind};
 use crate::difficulty::{self, Graph};
 use crate::game::{self, Game};
 use crate::library::Entry;
-use crate::render::{rgba, Canvas, VIRTUAL_HEIGHT};
+use crate::render::{accent, rgba, Canvas, VIRTUAL_HEIGHT};
 
 /// While scrolling, wait this long after the selection settles before loading, so scrolling
 /// stays cheap. A single change after a quiet moment loads at once.
@@ -485,7 +485,7 @@ impl Preview {
         let version = fit(&format!("[{}]", e.meta.version), 9.0);
         let room = ((w - 40.0 - pill) / Canvas::char_width(9.0)) as usize;
         let version = if version.chars().count() > room { version.chars().take(room.saturating_sub(3)).collect::<String>() + "..." } else { version };
-        c.text(x + 14.0, y + 64.0, 9.0, rgba(0xEB452C, 1.0), &version);
+        c.text(x + 14.0, y + 64.0, 9.0, rgba(accent(), 1.0), &version);
         // Map details, the autoplay and the timeline appear together, once the map's music plays.
         let ready = self.ready(library, i) || (self.ready_for == Some(i) && self.map.as_ref().is_some_and(|(mi, ..)| *mi == i));
         if ready && self.ready_for != Some(i) {

@@ -3,7 +3,7 @@
 
 use std::cell::Cell;
 
-use crate::render::{approach, rgba, Canvas, Hit};
+use crate::render::{accent, approach, rgba, Canvas, Hit};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
@@ -55,9 +55,11 @@ pub enum Item {
     DiscordPresence,
     Skin,
     SkinFolder,
+    Accent,
+    AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 51] = [
+pub const ITEMS: [(&str, Item); 53] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -99,6 +101,8 @@ pub const ITEMS: [(&str, Item); 51] = [
     ("VIDEO", Item::Splash),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinFolder),
+    ("SKIN", Item::Accent),
+    ("SKIN", Item::AccentHue),
     ("ONLINE", Item::ChatFilter),
     ("ONLINE", Item::MessageSound),
     ("ONLINE", Item::NotifyMessages),
@@ -119,7 +123,7 @@ pub const SECTIONS: [(&str, &str); 9] = [
     ("OFFSET", "audio offset, calibration"),
     ("AUDIO", "volume, latency"),
     ("VIDEO", "frame pacing, display, Discord"),
-    ("SKIN", "notes, hitsounds"),
+    ("SKIN", "notes, hitsounds, colour"),
     ("ONLINE", "chat filter, notifications"),
     ("UPDATES", "new versions"),
 ];
@@ -182,6 +186,8 @@ impl Item {
             Item::DiscordPresence => "Discord status",
             Item::Skin => "Skin",
             Item::SkinFolder => "Skins folder",
+            Item::Accent => "UI colour",
+            Item::AccentHue => "UI colour: fine tune",
         }
     }
 
@@ -233,6 +239,8 @@ impl Item {
             Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",
             Item::Skin => "Enter opens the list. osu! skins from osu!'s or taiko-rs's Skins folder.",
             Item::SkinFolder => "Enter: open taiko-rs's Skins folder. Drop .osk files there, then pick them above.",
+            Item::Accent => "The interface's accent; any but red tints the greys too. Left/Right: presets (or #rrggbb in the config).",
+            Item::AccentHue => "Left/Right: turn the UI colour round the colour wheel, for any colour in between.",
         }
     }
 }
@@ -364,7 +372,7 @@ impl Dropdown {
         let bh = (y + 8.0 + 78.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         self.bounds = [bx, by, bw, bh];
-        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
+        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         let title_w = c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "Playfield preset");
         let screen = format!("screen {}x{}", native.0, native.1);
         c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, bw - 28.0 - title_w - 10.0, &screen));
@@ -394,7 +402,7 @@ impl Dropdown {
             }
             match line {
                 Line::Head(name) => {
-                    c.text(bx + 14.0, ry + 5.0, 7.0, rgba(0xEB452C, 1.0), name);
+                    c.text(bx + 14.0, ry + 5.0, 7.0, rgba(accent(), 1.0), name);
                 }
                 Line::Hint => {
                     c.text(bx + 22.0, ry + 3.5, 6.0, rgba(0x6f6f86, 1.0), "none yet: S saves the playfield's size, A adds one");
@@ -413,7 +421,7 @@ impl Dropdown {
                     }
                     let selected = i == self.cursor && self.editing.is_none();
                     if selected {
-                        c.round_rect(bx + 8.0, ry, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(0xEB452C, 1.0), 1.0);
+                        c.round_rect(bx + 8.0, ry, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(accent(), 1.0), 1.0);
                     }
                     self.rows.push((i, [bx + 8.0, ry, bw - 16.0, ROW - 2.0]));
                     c.text(bx + 22.0, ry + 3.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &format!("{rw} x {rh}"));
@@ -476,7 +484,7 @@ impl SkinPicker {
         let (bw, max_h) = ((w - 48.0).min(420.0), 380.0);
         let bh = (n as f32 * ROW + 56.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
-        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
+        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "Skin");
         c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &format!("{} installed", n - 1));
         let (top, view) = (by + 32.0, bh - 50.0);
@@ -489,7 +497,7 @@ impl SkinPicker {
             let selected = i == self.cursor;
             let hover = c.hovered(bx + 8.0, y, bw - 16.0, ROW - 2.0);
             if selected || hover {
-                c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
+                c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { accent() } else { 0x3a3a4e }, 1.0), 1.0);
             }
             c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::SkinRow(i));
             let label = if name.is_empty() { "built-in" } else { name.as_str() };
@@ -539,7 +547,7 @@ impl SettingsUi {
             let on = i == section;
             let hover = !on && c.hovered(x0, y, side_w, 34.0);
             let bg = if on { 0x2b1a17 } else if hover { 0x262634 } else { 0x1d1d27 };
-            c.round_rect(x0, y, side_w, 34.0, 7.0, rgba(bg, 0.95), rgba(if on { 0xEB452C } else { 0x2a2a38 }, 1.0), if on { 1.5 } else { 1.0 });
+            c.round_rect(x0, y, side_w, 34.0, 7.0, rgba(bg, 0.95), rgba(if on { accent() } else { 0x2a2a38 }, 1.0), if on { 1.5 } else { 1.0 });
             c.hit(x0, y, side_w, 34.0, Hit::SettingsSection(i));
             c.text(x0 + 12.0, y + 7.0, 9.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), name);
             c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 20.0, about));
@@ -547,7 +555,7 @@ impl SettingsUi {
 
         // The section's settings.
         let rows: Vec<(usize, Item)> = ITEMS.iter().enumerate().filter(|(_, (sec, _))| *sec == SECTIONS[section].0).map(|(i, (_, it))| (i, *it)).collect();
-        c.text(cx, TOP - 2.0, 11.0, rgba(0xEB452C, 1.0), SECTIONS[section].0);
+        c.text(cx, TOP - 2.0, 11.0, rgba(accent(), 1.0), SECTIONS[section].0);
         let first = rows.first().map(|r| r.0).unwrap_or(0);
         let target = (self.cursor - first) as f32 * ROW;
         // The highlight glides within a section and jumps when the section changes.
@@ -585,7 +593,7 @@ impl SettingsUi {
                 c.hit(cx + col - 26.0, y, 24.0, ROW - 4.0, Hit::SettingStep(*i, 1));
             }
         }
-        c.round_rect(cx, list_top + hl, col, ROW - 4.0, 6.0, rgba(0, 0.0), rgba(0xEB452C, 1.0), 1.5);
+        c.round_rect(cx, list_top + hl, col, ROW - 4.0, 6.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
 
         // What the selected setting does.
         let help_y = list_top + rows.len() as f32 * ROW + 10.0;
@@ -657,7 +665,7 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
     approach(&mut px, target.0, c.dt_ms, 40.0);
     approach(&mut pw, target.1, c.dt_ms, 40.0);
     PILL.with(|p| p.set((px, pw)));
-    c.round_rect(px, 20.0, pw, 22.0, 6.0, rgba(0xEB452C, 1.0), rgba(0xEB452C, 1.0), 1.0);
+    c.round_rect(px, 20.0, pw, 22.0, 6.0, rgba(accent(), 1.0), rgba(accent(), 1.0), 1.0);
     let mut x = x0;
     for (i, name) in names.iter().enumerate() {
         let tw = Canvas::text_width(9.0, name);

@@ -4,7 +4,7 @@ use winit::keyboard::KeyCode;
 
 use crate::game::{Stats, Windows};
 use crate::library::Entry;
-use crate::render::{progress, rgba, Canvas, Hit};
+use crate::render::{accent, progress, rgba, Canvas, Hit};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SortMode {
@@ -879,7 +879,7 @@ impl Select {
         // The selection outline moves with the same transition.
         let oy = outline;
         if !self.visible.is_empty() && oy > top - DIFF_H && oy < bottom {
-            c.round_rect(44.0, oy, lw - 20.0, DIFF_H - 3.0, 5.0, rgba(0, 0.0), rgba(0xEB452C, 1.0), 1.5);
+            c.round_rect(44.0, oy, lw - 20.0, DIFF_H - 3.0, 5.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
         }
         // Rows scrolling past the edges slide under them instead of over the search row.
         c.clip_since(list_start, 20.0, top - 2.0, lw + 8.0, bottom - top + 4.0);
@@ -930,7 +930,7 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
     let w = c.width;
     c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.72));
     let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
-    c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
+    c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
     c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "MODS");
     c.text(px + 70.0, py + 16.0, 6.0, rgba(0x6f6f86, 1.0), "arrows + Space toggle   R shuffles   Backspace clears   F1 / Esc closes");
     let mult = mods.multiplier();
@@ -951,7 +951,7 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
                 hovered = Some(m);
             }
             let bg = if i == cursor { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
-            let border = if i == cursor { 0xEB452C } else if on { *accent } else { 0x2a2a38 };
+            let border = if i == cursor { crate::render::accent() } else if on { *accent } else { 0x2a2a38 };
             c.round_rect(x, y, col_w - 6.0, ROW - 4.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if i == cursor { 1.5 } else { 1.0 });
             c.round_rect(x + 4.0, y + 4.0, 22.0, ROW - 12.0, 3.0, rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
             c.text_centered(x + 15.0, y + 8.0, 7.0, rgba(if on { 0x15151d } else { *accent }, 1.0), m.acronym());
@@ -1060,11 +1060,11 @@ impl Select {
         let bh = items.len() as f32 * ROW + 26.0;
         let x = m.x.min(c.width - bw - 8.0).max(8.0);
         let y = m.y.min(480.0 - bh - 8.0).max(8.0);
-        c.round_rect(x, y, bw, bh, 6.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
+        c.round_rect(x, y, bw, bh, 6.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         for (k, (label, _)) in items.iter().enumerate() {
             let ry = y + 6.0 + k as f32 * ROW;
             if c.hovered(x + 4.0, ry, bw - 8.0, ROW - 2.0) {
-                c.round_rect(x + 4.0, ry, bw - 8.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(0xEB452C, 1.0), 1.0);
+                c.round_rect(x + 4.0, ry, bw - 8.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(accent(), 1.0), 1.0);
             }
             c.hit(x + 4.0, ry, bw - 8.0, ROW - 2.0, Hit::SongMenu(k));
             c.text(x + 12.0, ry + 5.0, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, bw - 20.0, label));
@@ -1083,7 +1083,7 @@ impl Select {
         let (bw, max_h) = (320.0, 380.0);
         let bh = (rows.len() as f32 * ROW + 56.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
-        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
+        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "osu! collections");
         let (top, view) = (by + 32.0, bh - 50.0);
         let scroll = (cursor as f32 * ROW - view / 2.0).clamp(0.0, (rows.len() as f32 * ROW - view).max(0.0));
@@ -1096,7 +1096,7 @@ impl Select {
             let current = (i == 0 && self.collection.is_none()) || self.collection.is_some_and(|c| c + 1 == i);
             let hover = c.hovered(bx + 8.0, y, bw - 16.0, ROW - 2.0);
             if selected || hover {
-                c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
+                c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { accent() } else { 0x3a3a4e }, 1.0), 1.0);
             }
             c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::PickRow(i));
             let shown_w = if current { Canvas::text_width(7.0, "shown") + 10.0 } else { 0.0 };

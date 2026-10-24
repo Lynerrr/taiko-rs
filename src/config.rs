@@ -123,6 +123,8 @@ pub struct Config {
     pub kiai_effects: bool,
     /// GREAT hits without their flash and label (only OKs and misses show).
     pub hide_great: bool,
+    /// The interface's accent colour (`render::ACCENTS`, or any other).
+    pub accent: u32,
     /// Show what you're doing in your Discord status.
     pub discord_presence: bool,
     /// Star out swear words in chats.
@@ -208,6 +210,7 @@ impl Default for Config {
             sort: "artist".into(),
             kiai_effects: true,
             hide_great: true,
+            accent: crate::render::DEFAULT_ACCENT,
             discord_presence: true,
             discord_app_id: String::new(),
             chat_filter: true,
@@ -343,6 +346,7 @@ impl Config {
                 "sort" => cfg.sort = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
                 "hide_great" => cfg.hide_great = v != "false",
+                "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
                 "discord_presence" => cfg.discord_presence = v != "false",
                 "chat_filter" => cfg.chat_filter = v != "false",
                 "message_sound" => cfg.message_sound = v != "false",
@@ -490,6 +494,10 @@ impl Config {
             self.mods.to_config(),
         );
         out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
+        out.push_str(&format!(
+            "# interface colour: red (the default), pink, purple, blue, teal, green, yellow, orange or #rrggbb\naccent = {}\n",
+            crate::render::accent_name(self.accent)
+        ));
         out.push_str(&format!(
             "# Discord status (\"Playing taiko-rs\"); app id empty = the built-in one\ndiscord_presence = {}\ndiscord_app_id = {}\n",
             self.discord_presence, self.discord_app_id

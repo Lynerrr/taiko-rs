@@ -1510,7 +1510,117 @@ pub struct Canvas {
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
+    let acc = accent();
+    if acc != DEFAULT_ACCENT {
+        if let Some([r, g, b]) = tint_grey(hex, acc) {
+            return [r, g, b, a];
+        }
+    }
     [((hex >> 16) & 0xff) as f32 / 255.0, ((hex >> 8) & 0xff) as f32 / 255.0, (hex & 0xff) as f32 / 255.0, a]
+}
+
+/// The interface's red, and the accents it can have instead (Settings -> Skin -> UI colour).
+pub const DEFAULT_ACCENT: u32 = 0xEB452C;
+pub const ACCENTS: [(&str, u32); 8] = [
+    ("red", DEFAULT_ACCENT),
+    ("pink", 0xFF5FA2),
+    ("purple", 0xC77DFF),
+    ("blue", 0x4FB4FF),
+    ("teal", 0x5EE6C8),
+    ("green", 0x86E05A),
+    ("yellow", 0xFFD34D),
+    ("orange", 0xFF8A3D),
+];
+
+static ACCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(DEFAULT_ACCENT);
+
+pub fn set_accent(hex: u32) {
+    ACCENT.store(hex, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The interface's accent: borders of what's selected, headings, sliders.
+pub fn accent() -> u32 {
+    ACCENT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `default` with the default accent; with another, that accent mixed `t` of the way to `toward`
+/// (for darker or lighter shades of it).
+pub fn themed(default: u32, toward: u32, t: f32) -> u32 {
+    let acc = accent();
+    if acc == DEFAULT_ACCENT {
+        return default;
+    }
+    let ch = |hex: u32, s: u32| ((hex >> s) & 0xff) as f32;
+    [16, 8, 0].into_iter().fold(0, |out, s| out | (((ch(acc, s) + (ch(toward, s) - ch(acc, s)) * t).round() as u32) << s))
+}
+
+/// The interface's greys all have the same slight blue cast (equal red and green, a little more
+/// blue). With an accent other than the default, the cast takes the accent's hue instead, a bit
+/// stronger, at the same brightness: the whole interface leans that colour.
+fn tint_grey(hex: u32, acc: u32) -> Option<[f32; 3]> {
+    let (r, g, b) = ((hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff);
+    if r != g || b <= r || b - r > 0x20 {
+        return None;
+    }
+    let a = [(acc >> 16) & 0xff, (acc >> 8) & 0xff, acc & 0xff].map(|c| c as f32 / 255.0);
+    let (lo, hi) = (a[0].min(a[1]).min(a[2]), a[0].max(a[1]).max(a[2]));
+    // Same brightness as the original, which is grey plus a third of its cast.
+    let cast = (b - r) as f32 / 255.0;
+    let mean = r as f32 / 255.0 + cast / 3.0;
+    if hi - lo < 0.01 {
+        return Some([mean; 3]);
+    }
+    let dir = a.map(|c| (c - lo) / (hi - lo));
+    let dir_mean = (dir[0] + dir[1] + dir[2]) / 3.0;
+    let k = cast * 1.8;
+    Some(dir.map(|d| (mean + k * (d - dir_mean)).clamp(0.0, 1.0)))
+}
+
+/// `hex` turned `degrees` round the colour wheel (same saturation and brightness).
+pub fn rotate_hue(hex: u32, degrees: f32) -> u32 {
+    let [r, g, b] = [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff].map(|c| c as f32 / 255.0);
+    let (hi, lo) = (r.max(g).max(b), r.min(g).min(b));
+    let d = hi - lo;
+    let h = if d == 0.0 {
+        0.0
+    } else if hi == r {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if hi == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    let h = (h + degrees).rem_euclid(360.0);
+    let x = d * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (d, x, 0.0),
+        1 => (x, d, 0.0),
+        2 => (0.0, d, x),
+        3 => (0.0, x, d),
+        4 => (x, 0.0, d),
+        _ => (d, 0.0, x),
+    };
+    [r, g, b].into_iter().fold(0, |out, c| (out << 8) | ((c + lo) * 255.0).round() as u32)
+}
+
+/// What the window is cleared to under everything (a grey, so it follows the accent too).
+pub fn clear_colour() -> [f64; 3] {
+    let [r, g, b, _] = rgba(0x121219, 1.0);
+    [r as f64, g as f64, b as f64]
+}
+
+/// An accent as the config and settings write it: a preset's name, else "#rrggbb".
+pub fn accent_name(hex: u32) -> String {
+    ACCENTS.iter().find(|a| a.1 == hex).map_or_else(|| format!("#{hex:06x}"), |a| a.0.to_string())
+}
+
+/// `accent_name`'s inverse.
+pub fn parse_accent(s: &str) -> Option<u32> {
+    let s = s.trim();
+    ACCENTS.iter().find(|a| a.0.eq_ignore_ascii_case(s)).map(|a| a.1).or_else(|| {
+        let h = s.strip_prefix('#')?;
+        (h.len() == 6).then(|| u32::from_str_radix(h, 16).ok()).flatten()
+    })
 }
 
 const CLEAR: [f32; 4] = [0.0; 4];
@@ -1573,8 +1683,8 @@ impl Canvas {
     pub fn button(&mut self, x: f32, y: f32, w: f32, h: f32, label: &str, size: f32, hit: Hit, accent: bool) {
         let hover = self.hovered(x, y, w, h);
         let (bg, border) = match (accent, hover) {
-            (true, false) => (0x2b1a17, 0xEB452C),
-            (true, true) => (0x4a221b, 0xFF6A50),
+            (true, false) => (themed(0x2b1a17, 0x15151d, 0.84), crate::render::accent()),
+            (true, true) => (themed(0x4a221b, 0x15151d, 0.7), themed(0xFF6A50, 0xffffff, 0.2)),
             (false, false) => (0x23232f, 0x3a3a4e),
             (false, true) => (0x34344a, 0x6a6a88),
         };
@@ -1900,6 +2010,27 @@ impl Canvas {
 #[cfg(test)]
 mod tests {
     use wgpu::naga;
+
+    #[test]
+    fn accents_tint_the_greys_and_round_trip() {
+        use super::*;
+        // Pink: the blue cast turns pink, brightness stays.
+        let [r, g, b] = tint_grey(0x6f6f86, 0xFF5FA2).unwrap();
+        assert!(r > b && b > g, "{r} {g} {b}");
+        assert!(((r + g + b) / 3.0 - (0x6f as f32 + 0x17 as f32 / 3.0) / 255.0).abs() < 0.01);
+        // White, black, notes and other colours aren't the greys.
+        for hex in [0xffffff, 0x000000, 0x438EAD, 0xFFD34D, 0x2b2433] {
+            assert!(tint_grey(hex, 0xFF5FA2).is_none(), "{hex:06x}");
+        }
+        for (_, hex) in ACCENTS {
+            assert_eq!(parse_accent(&accent_name(hex)), Some(hex));
+            assert_eq!(rotate_hue(hex, 360.0), hex);
+        }
+        assert_eq!(parse_accent("#12ab9F"), Some(0x12ab9f));
+        assert_eq!(accent_name(0x12ab9f), "#12ab9f");
+        assert_eq!(parse_accent("#12ab9"), None);
+        assert_eq!(rotate_hue(0xff0000, 120.0), 0x00ff00);
+    }
 
     #[test]
     fn shaders_compile() {

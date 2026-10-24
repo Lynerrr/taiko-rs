@@ -23,7 +23,7 @@ use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
 use crate::mods::{Mod, Mods, Speed};
-use crate::render::{progress, rgba, Canvas, Hit, Shape, Sprite, VIRTUAL_HEIGHT};
+use crate::render::{accent, progress, rgba, Canvas, Hit, Shape, Sprite, VIRTUAL_HEIGHT};
 
 /// The drum on the left: lazer's input drum (180 of a 768-tall screen, in our 480 units).
 pub const PANEL_W: f32 = 112.5;
@@ -2341,7 +2341,7 @@ impl Game {
             let n = 48;
             for k in 0..((left / total * n as f32).ceil() as usize).min(n) {
                 let a = -std::f32::consts::FRAC_PI_2 + k as f32 / n as f32 * std::f32::consts::TAU;
-                c.circle(cx + a.cos() * 26.0, cy + a.sin() * 26.0, 2.2, rgba(DON, 1.0), rgba(DON, 1.0), 0.0);
+                c.circle(cx + a.cos() * 26.0, cy + a.sin() * 26.0, 2.2, rgba(accent(), 1.0), rgba(accent(), 1.0), 0.0);
             }
             c.text_centered(cx, cy - 7.0, 14.0, rgba(WHITE, 1.0), &format!("{:.1}", left));
             c.text_centered(cx, cy + 36.0, 8.0, rgba(0x9a9ab0, 1.0), "get ready   (Esc: back to menu)");
@@ -2361,7 +2361,7 @@ impl Game {
                 let ti = progress(self.paused_at + std::time::Duration::from_millis(25 * i as u64), 180.0);
                 let y = 170.0 + i as f32 * 38.0 + (1.0 - ti) * 18.0;
                 let selected = i == cursor;
-                let (bg, border) = if selected { (0x34344a, DON) } else { (0x1d1d27, 0x2a2a38) };
+                let (bg, border) = if selected { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
                 c.round_rect(w / 2.0 - 140.0, y, 280.0, 32.0, 8.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 2.0 } else { 1.0 });
                 c.hit(w / 2.0 - 140.0, y, 280.0, 32.0, Hit::PauseItem(i));
                 c.text_centered(w / 2.0, y + 10.0, 12.0, rgba(if selected { WHITE } else { 0xc8c8d8 }, 1.0), item);

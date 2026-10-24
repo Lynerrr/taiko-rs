@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::download::{self, Category, Diff, Job, SetInfo, SortKey};
 use crate::library::Entry;
-use crate::render::{approach, rgba, Canvas, Hit};
+use crate::render::{accent, approach, rgba, Canvas, Hit};
 
 /// Search this long after the last keystroke.
 const TYPE_DELAY: Duration = Duration::from_millis(450);
@@ -253,8 +253,8 @@ impl Browse {
         let chip = |c: &mut Canvas, x: f32, y: f32, label: &str, on: bool, hit: Hit| -> f32 {
             let w = Canvas::text_width(6.0, label) + 8.0;
             let hover = !on && c.hovered(x, y, w, 15.0);
-            let bg = if on { 0xEB452C } else if hover { 0x34344a } else { 0x23232f };
-            c.round_rect(x, y, w, 15.0, 5.0, rgba(bg, 1.0), rgba(if on { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
+            let bg = if on { accent() } else if hover { 0x34344a } else { 0x23232f };
+            c.round_rect(x, y, w, 15.0, 5.0, rgba(bg, 1.0), rgba(if on { accent() } else { 0x3a3a4e }, 1.0), 1.0);
             c.text(x + 4.0, y + 4.5, 6.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
             c.hit(x, y, w, 15.0, hit);
             w + 3.0
@@ -301,7 +301,7 @@ impl Browse {
             }
             let selected = i == self.cursor;
             let hover = !selected && c.hovered(x0, y, col, ROW - 4.0);
-            let (bg, border) = if selected { (0x2b2b3d, 0xEB452C) } else if hover { (0x262634, 0x2a2a38) } else { (0x1d1d27, 0x2a2a38) };
+            let (bg, border) = if selected { (0x2b2b3d, accent()) } else if hover { (0x262634, 0x2a2a38) } else { (0x1d1d27, 0x2a2a38) };
             c.round_rect(x0, y, col, ROW - 4.0, 7.0, rgba(bg, 0.95), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
             c.hit(x0, y, col, ROW, Hit::DlRow(i));
             let state = if installed.contains(&set.id) {

@@ -1,6 +1,7 @@
 //! Every screen drawn at the aspect ratios people play at, with long names everywhere: no text
 //! may leave the screen, stick out of its box, get cut off or land on other text.
-//! `TAIKO_LAYOUT_SHOTS=<dir>` also saves each frame as a PNG (drawn on the CPU) to look at.
+//! `TAIKO_LAYOUT_SHOTS=<dir>` also saves each frame as a PNG (drawn on the CPU) to look at,
+//! in the UI colour `TAIKO_LAYOUT_ACCENT` (a preset name or #rrggbb) if set.
 
 use super::*;
 
@@ -43,6 +44,9 @@ fn state() -> State {
     cfg.animations = false;
     // Nothing to connect to: the menus show the server as offline instead of asking it.
     cfg.online_server = "127.0.0.1:9".into();
+    if let Some(a) = std::env::var("TAIKO_LAYOUT_ACCENT").ok().and_then(|a| render::parse_accent(&a)) {
+        cfg.accent = a;
+    }
     let (tx, rx) = mpsc::channel();
     let library: Vec<Entry> = (0..12).flat_map(|s| (0..3).map(move |d| entry(s, d, s % 2 == 0))).collect();
     tx.send(library).unwrap();

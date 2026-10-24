@@ -6,7 +6,7 @@ use std::time::Instant;
 use crate::game::{Game, Stats};
 use crate::net::{self, Client, Final, Live, MapInfo, PlayerInfo, Server, Status};
 use crate::online;
-use crate::render::{rgba, Canvas, Hit};
+use crate::render::{accent, rgba, Canvas, Hit};
 use winit::keyboard::KeyCode;
 
 pub struct Session {
@@ -259,7 +259,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
     // One row: a text field (label left, value right) or an action (centred).
     let row = |c: &mut Canvas, i: usize, x: f32, y: f32, h: f32, label: &str, value: Option<(&str, bool)>| {
         let sel = i == cursor;
-        let (bg, border) = if sel { (0x34344a, 0xEB452C) } else { (0x1d1d27, 0x2a2a38) };
+        let (bg, border) = if sel { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
         let bg = if !sel && c.hovered(x, y, col, h) { 0x262634 } else { bg };
         c.round_rect(x, y, col, h, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
         c.hit(x, y, col, h, Hit::MpRow(i));
@@ -278,7 +278,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
     };
 
     // Online.
-    c.text(left, 62.0, 9.0, rgba(0xEB452C, 1.0), "ONLINE");
+    c.text(left, 62.0, 9.0, rgba(accent(), 1.0), "ONLINE");
     let (state, colour) = match &menu.online {
         Some(Ok(())) => ("online", 0x86E05A),
         Some(Err(_)) => ("offline", 0xFF4B4B),
@@ -319,7 +319,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                 y += 12.0;
                 row(c, i, left, y, 30.0, "HOST AN ONLINE LOBBY", None);
                 y += 42.0;
-                c.text(left, y, 8.0, rgba(0xEB452C, 1.0), &format!("LOBBIES ({})", menu.rooms.len()));
+                c.text(left, y, 8.0, rgba(accent(), 1.0), &format!("LOBBIES ({})", menu.rooms.len()));
                 y += 14.0;
                 if menu.rooms.is_empty() {
                     let msg = match &menu.online {
@@ -337,7 +337,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                 }
                 let Some(r) = menu.rooms.get(k) else { continue };
                 let sel = i == cursor;
-                let (bg, border) = if sel { (0x34344a, 0xEB452C) } else { (0x1d1d27, 0x2a2a38) };
+                let (bg, border) = if sel { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
                 let bg = if !sel && c.hovered(left, y, col, 32.0) { 0x262634 } else { bg };
                 c.round_rect(left, y, col, 32.0, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
                 c.hit(left, y, col, 32.0, Hit::MpRow(i));
@@ -366,7 +366,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
     }
 
     // Direct play.
-    c.text(right, 62.0, 9.0, rgba(0xEB452C, 1.0), "DIRECT (P2P)");
+    c.text(right, 62.0, 9.0, rgba(accent(), 1.0), "DIRECT (P2P)");
     let room = col - Canvas::text_width(9.0, "DIRECT (P2P)") - 12.0;
     let note = "no account or server needed";
     let size = Canvas::fit_size(8.0, 6.0, room, note);
@@ -431,7 +431,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         c.hit(x0, 62.0, col, 46.0, Hit::Key(KeyCode::KeyP));
         c.text_right(x0 + col - 14.0, 70.0, 7.0, rgba(0x6f6f86, 1.0), "click to preview");
     }
-    c.text(x0 + 14.0, 70.0, 8.0, rgba(0xEB452C, 1.0), "MAP");
+    c.text(x0 + 14.0, 70.0, 8.0, rgba(accent(), 1.0), "MAP");
     let note_room = col - 38.0 - Canvas::text_width(8.0, "MAP");
     match &s.map {
         Some(m) => {
@@ -449,7 +449,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
     }
 
     let my_id = s.client.id;
-    c.text(x0, 122.0, 8.0, rgba(0xEB452C, 1.0), &format!("PLAYERS ({})", s.players.len()));
+    c.text(x0, 122.0, 8.0, rgba(accent(), 1.0), &format!("PLAYERS ({})", s.players.len()));
     for (i, p) in s.players.iter().enumerate().take(10) {
         let y = 136.0 + i as f32 * 26.0;
         let me = Some(p.id) == my_id;
