@@ -382,7 +382,16 @@ When the players skip the intro, the spectator skips it too. Spectating always u
 
 While logged in (MULTIPLAYER → ONLINE), **F9** (or the *friends* chip top right in the menus)
 opens a translucent overlay over whatever screen is up, including while spectating or watching
-(never over your own play):
+(never over your own play). It has three tabs (Tab / Shift+Tab or click), and the top right corner
+shows how many players are online on the server (green dot; also on the chip):
+
+- **FRIENDS:** your friends, requests and conversations (below).
+- **PLAYERS:** everyone online, with what they're doing. Type to search by name; **+ friend** /
+  Enter sends a friend request, **accept** takes theirs, **chat** opens the conversation with a
+  friend.
+- **CHAT:** the global chat, with everyone online (the last 100 lines are kept on the server while
+  it runs and shown when you connect). Wheel or PgUp / PgDn scrolls back. New lines count on the
+  tab; a line with your name in it also pops up a notification.
 
 - **Add friend:** type a name on the first row and press Enter. They get a request (notification
   and a row in their list) to accept or decline; once both agree you're friends.

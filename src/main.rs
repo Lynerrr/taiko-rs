@@ -2040,6 +2040,15 @@ impl State {
         if notches == 0 {
             return;
         }
+        if self.social.open && !self.modifiers_alt {
+            let (vx, vy) = self.mouse_virtual();
+            let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
+            let [px, py, pw, ph] = social::panel_rect(width);
+            if vx >= px && vx <= px + pw && vy >= py && vy <= py + ph {
+                self.social.wheel(notches, vy, self.mp.is_some());
+                return;
+            }
+        }
         if let Some(cur) = self.mod_select.filter(|_| !self.modifiers_alt) {
             self.mod_select = Some(mods::step(cur, 0, -notches));
             return;
@@ -3052,6 +3061,9 @@ impl State {
         let row = self.social.row(in_lobby);
         match code {
             KeyCode::Escape => self.social.open = false,
+            KeyCode::Tab => self.social.cycle_tab(self.modifiers_shift),
+            KeyCode::PageUp => self.social.wheel(5, f32::MAX, in_lobby),
+            KeyCode::PageDown => self.social.wheel(-5, f32::MAX, in_lobby),
             KeyCode::ArrowUp => self.social.cursor = self.social.cursor.min(rows - 1).saturating_sub(1),
             KeyCode::ArrowDown => self.social.cursor = (self.social.cursor + 1).min(rows - 1),
             KeyCode::Backspace => {
@@ -3091,14 +3103,34 @@ impl State {
                         }
                         self.social.input.clear();
                     }
+                    Row::Global if !text.is_empty() => {
+                        if let Some(c) = self.social.conn.as_ref().filter(|_| self.social.connected) {
+                            c.send(online::Up::GlobalChat(text));
+                            self.social.input.clear();
+                            self.social.chat_scroll = 0;
+                        } else {
+                            self.toast("not connected to the server".into());
+                        }
+                    }
+                    Row::Player(k) => {
+                        let name = self.social.players.as_ref().and_then(|v| v.get(k)).map(|p| p.name.clone()).unwrap_or_default();
+                        match self.social.standing(&name) {
+                            social::Standing::Stranger => self.social_action(social::Action::Add),
+                            social::Standing::AsksUs => self.social_action(social::Action::Accept),
+                            social::Standing::Friend => self.social_action(social::Action::Chat),
+                            _ => {}
+                        }
+                    }
                     _ => {}
                 }
             }
             _ => {
                 let Some(text) = text else { return };
+                let searching = self.social.tab == social::Tab::Players;
                 for ch in text.chars().filter(|c| net::drawable_char(*c)) {
                     let len = self.social.input.chars().count();
                     let ok = match row {
+                        _ if searching => len < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
                         Row::AddFriend => len < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
                         _ => len < 200,
                     };
@@ -3125,6 +3157,18 @@ impl State {
                 let Some(name) = self.social.requests.get(k).cloned() else { return };
                 if let Some(c) = &self.social.conn {
                     c.send(if action == Action::Accept { online::Up::AddFriend(name) } else { online::Up::RemoveFriend(name) });
+                }
+            }
+            (Row::Player(k), Action::Add | Action::Accept | Action::Chat) => {
+                let Some(name) = self.social.players.as_ref().and_then(|v| v.get(k)).map(|p| p.name.clone()) else { return };
+                if action == Action::Chat {
+                    self.social.select_friend(&name, in_lobby);
+                    self.social.mark_read(in_lobby);
+                } else if let Some(c) = self.social.conn.as_ref().filter(|_| self.social.connected) {
+                    // Accepting is the same request: the server sees they asked first.
+                    c.send(online::Up::AddFriend(name));
+                } else {
+                    self.toast("not connected to the server".into());
                 }
             }
             (Row::Friend(k), Action::Watch) => {
@@ -3206,6 +3250,8 @@ impl State {
                     self.social.me = Some(name);
                     // The server resends the friend list and recent chat.
                     self.social.chats.clear();
+                    self.social.global.clear();
+                    self.social.players = None;
                     self.social.have_list = false;
                     self.social.sent_activity = None;
                     self.stream = None;
@@ -3221,6 +3267,7 @@ impl State {
                         self.social.notify("offline", "lost the connection to the server", 0xFF4B4B, social::NoteAction::None);
                     }
                     self.social.connected = false;
+                    self.social.players = None;
                     for f in &mut self.social.friends {
                         f.activity = None;
                     }
@@ -3300,6 +3347,32 @@ impl State {
                 }
             }
             Down::Notice(text) => self.social.notify("taiko-rs", text, 0x9a9ab0, NoteAction::None),
+            Down::Players { count, players } => {
+                self.social.online_total = count as usize;
+                self.social.players = Some(players);
+                let rows = self.social.rows(self.mp.is_some()).len();
+                self.social.cursor = self.social.cursor.min(rows - 1);
+            }
+            Down::GlobalChat(line) => {
+                let mine = self.social.me.as_deref().is_some_and(|me| key(me) == key(&line.from));
+                let fresh = line.at + 10 >= discord::unix_now();
+                let viewing = self.social.open && self.social.tab == social::Tab::Chat;
+                if !mine && fresh && !viewing {
+                    self.social.global_unread += 1;
+                    // Only lines that call us by name pop up: the rest just count.
+                    if self.social.mentions_me(&line.text) {
+                        self.social.notify(format!("{} in chat", line.from), line.text.clone(), 0x4fb4ff, NoteAction::Global);
+                    }
+                }
+                // Scrolled back, the view stays on the same lines.
+                if self.social.chat_scroll > 0 && viewing {
+                    self.social.chat_scroll += social::wrap(&format!("{}: {}", line.from, line.text), social::CHAT_WIDTH).len();
+                }
+                self.social.global.push(line);
+                if self.social.global.len() > 200 {
+                    self.social.global.remove(0);
+                }
+            }
             Down::WatchStart { player, play, t, paused, inputs } => {
                 if let Scene::Watch(v) = &mut self.scene {
                     if key(&v.player) == key(&player) {
@@ -4992,6 +5065,10 @@ impl State {
             }
             Hit::SocialToggle => self.toggle_social(),
             Hit::SocialPanel => {}
+            Hit::SocialTab(tab) => {
+                self.social.set_tab(tab);
+                self.social.mark_read(self.mp.is_some());
+            }
             Hit::SocialRow(i) => {
                 self.social.cursor = i;
                 self.social.mark_read(self.mp.is_some());
@@ -5011,10 +5088,16 @@ impl State {
                         }
                         social::NoteAction::Requests => {
                             self.open_social();
+                            self.social.set_tab(social::Tab::Friends);
                             let in_lobby = self.mp.is_some();
                             if let Some(r) = self.social.rows(in_lobby).iter().position(|r| matches!(r, social::Row::Request(_))) {
                                 self.social.cursor = r;
                             }
+                        }
+                        social::NoteAction::Global => {
+                            self.open_social();
+                            self.social.set_tab(social::Tab::Chat);
+                            self.social.mark_read(self.mp.is_some());
                         }
                         social::NoteAction::Watch(name) => self.watch(name),
                         social::NoteAction::None => {}

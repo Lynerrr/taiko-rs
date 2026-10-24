@@ -77,6 +77,16 @@ pub struct ChatLine {
     pub at: u64,
 }
 
+/// Someone connected to the server right now.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct OnlinePlayer {
+    pub name: String,
+    pub activity: Activity,
+}
+
+/// The most players `Down::Players` lists (its count is everyone).
+pub const MAX_LISTED: usize = 300;
+
 /// A solo play being streamed to friends.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SoloPlay {
@@ -100,6 +110,8 @@ pub enum Up {
     PlayFrame { t: f64, paused: bool, inputs: Vec<(f64, u8)> },
     PlayEnd,
     Ping,
+    /// A line in the global chat (everyone online sees it).
+    GlobalChat(String),
 }
 
 /// Server -> game on the social connection.
@@ -117,6 +129,11 @@ pub enum Down {
     /// Watching isn't possible (any more): why.
     WatchStopped(String),
     Pong,
+    /// Everyone online (sorted by name, at most `MAX_LISTED`) and how many that is. Sent on
+    /// connecting and then whenever it changes (at most every couple of seconds).
+    Players { count: u32, players: Vec<OnlinePlayer> },
+    /// A global chat line (the recent ones again on connecting).
+    GlobalChat(ChatLine),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -377,5 +394,9 @@ mod tests {
         write_line(&mut buf, &Reply::Joined { room: 3, title: "x".into(), host_token: Some(7) }).unwrap();
         let line = read_line(&mut &buf[..]).unwrap();
         assert!(matches!(serde_json::from_str::<Reply>(&line).unwrap(), Reply::Joined { host_token: Some(7), .. }));
+        let d = Down::Players { count: 2, players: vec![OnlinePlayer { name: "a".into(), activity: Activity::Lobby { room: Some(1), title: "x".into() } }] };
+        let back: Down = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert!(matches!(back, Down::Players { count: 2, ref players } if players.len() == 1));
+        assert!(matches!(serde_json::from_str::<Up>(&serde_json::to_string(&Up::GlobalChat("hi".into())).unwrap()).unwrap(), Up::GlobalChat(t) if t == "hi"));
     }
 }
