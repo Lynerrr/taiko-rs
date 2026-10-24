@@ -129,6 +129,16 @@ pub struct Config {
     pub chat_filter: bool,
     /// A chime when a friend messages you.
     pub message_sound: bool,
+    /// Pop-ups when a friend starts a map (off by default: busy friend lists spam them).
+    pub notify_playing: bool,
+    /// Pop-ups when a friend comes online.
+    pub notify_online: bool,
+    /// Pop-ups for friends' messages.
+    pub notify_messages: bool,
+    /// Pop-ups for global chat lines that mention you.
+    pub notify_mentions: bool,
+    /// Pop-ups for friend requests.
+    pub notify_requests: bool,
     /// Discord application whose name the status shows (empty = the built-in one).
     pub discord_app_id: String,
     /// Song select order (ui::SortMode name).
@@ -202,6 +212,11 @@ impl Default for Config {
             discord_app_id: String::new(),
             chat_filter: true,
             message_sound: true,
+            notify_playing: false,
+            notify_online: true,
+            notify_messages: true,
+            notify_mentions: true,
+            notify_requests: true,
             anti_mash: false,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
@@ -331,6 +346,11 @@ impl Config {
                 "discord_presence" => cfg.discord_presence = v != "false",
                 "chat_filter" => cfg.chat_filter = v != "false",
                 "message_sound" => cfg.message_sound = v != "false",
+                "notify_playing" => cfg.notify_playing = v == "true",
+                "notify_online" => cfg.notify_online = v != "false",
+                "notify_messages" => cfg.notify_messages = v != "false",
+                "notify_mentions" => cfg.notify_mentions = v != "false",
+                "notify_requests" => cfg.notify_requests = v != "false",
                 "discord_app_id" => cfg.discord_app_id = v.to_string(),
                 "anti_mash" => cfg.anti_mash = v == "true",
                 "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
@@ -477,6 +497,10 @@ impl Config {
         out.push_str(&format!(
             "# chats: star out swear words; a chime when a friend messages you\nchat_filter = {}\nmessage_sound = {}\n",
             self.chat_filter, self.message_sound
+        ));
+        out.push_str(&format!(
+            "# pop-ups: a friend starts a map / comes online / messages you, a global chat line mentions you, friend requests\nnotify_playing = {}\nnotify_online = {}\nnotify_messages = {}\nnotify_mentions = {}\nnotify_requests = {}\n",
+            self.notify_playing, self.notify_online, self.notify_messages, self.notify_mentions, self.notify_requests
         ));
         out.push_str(&format!("# multiplayer\nmp_name = {}\nmp_port = {}\nmp_address = {}\n", self.mp_name, self.mp_port, self.mp_address));
         out.push_str(&format!(

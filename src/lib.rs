@@ -1113,6 +1113,11 @@ impl State {
             Item::DiscordPresence => on(c.discord_presence),
             Item::ChatFilter => on(c.chat_filter),
             Item::MessageSound => on(c.message_sound),
+            Item::NotifyPlaying => on(c.notify_playing),
+            Item::NotifyOnline => on(c.notify_online),
+            Item::NotifyMessages => on(c.notify_messages),
+            Item::NotifyMentions => on(c.notify_mentions),
+            Item::NotifyRequests => on(c.notify_requests),
             Item::AntiMash => on(c.anti_mash),
             Item::ShowConverts => on(self.select.show_converts),
             Item::HiddenMaps => self.select.hidden.describe(),
@@ -1204,6 +1209,11 @@ impl State {
                 }
             }
             Item::MessageSound => self.cfg.message_sound = !self.cfg.message_sound,
+            Item::NotifyPlaying => self.cfg.notify_playing = !self.cfg.notify_playing,
+            Item::NotifyOnline => self.cfg.notify_online = !self.cfg.notify_online,
+            Item::NotifyMessages => self.cfg.notify_messages = !self.cfg.notify_messages,
+            Item::NotifyMentions => self.cfg.notify_mentions = !self.cfg.notify_mentions,
+            Item::NotifyRequests => self.cfg.notify_requests = !self.cfg.notify_requests,
             Item::AntiMash => self.cfg.anti_mash = !self.cfg.anti_mash,
             Item::ShowConverts => {
                 self.select.show_converts = !self.select.show_converts;
@@ -3464,15 +3474,17 @@ impl State {
                         let was_online = old.is_none_or(|o| o.activity.is_some());
                         let was_playing = old.is_some_and(|o| matches!(o.activity, Some(Activity::Playing { .. })));
                         match &f.activity {
-                            Some(Activity::Playing { map }) if !was_playing => {
+                            Some(Activity::Playing { map }) if !was_playing && self.cfg.notify_playing => {
                                 self.social.notify(format!("{} is playing", f.name), map.clone(), 0x438EAD, NoteAction::Watch(f.name.clone()))
                             }
-                            Some(a) if !was_online => self.social.notify(format!("{} is online", f.name), a.describe(), 0x86E05A, NoteAction::Chat(f.name.clone())),
+                            Some(a) if !was_online && self.cfg.notify_online => {
+                                self.social.notify(format!("{} is online", f.name), a.describe(), 0x86E05A, NoteAction::Chat(f.name.clone()))
+                            }
                             _ => {}
                         }
                     }
                     for r in &requests {
-                        if !self.social.requests.contains(r) {
+                        if !self.social.requests.contains(r) && self.cfg.notify_requests {
                             self.social.notify("friend request", format!("{r} wants to be friends"), 0xFFD34D, NoteAction::Requests);
                         }
                     }
@@ -3508,7 +3520,9 @@ impl State {
                 }
                 if !mine && fresh && !viewing {
                     *self.social.unread.entry(key(&other)).or_default() += 1;
-                    self.social.notify(line.from.clone(), line.text.clone(), 0x4fb4ff, NoteAction::Chat(line.from.clone()));
+                    if self.cfg.notify_messages {
+                        self.social.notify(line.from.clone(), line.text.clone(), 0x4fb4ff, NoteAction::Chat(line.from.clone()));
+                    }
                 }
             }
             Down::Notice(text) => self.social.notify("taiko-rs", text, 0x9a9ab0, NoteAction::None),
@@ -3528,7 +3542,7 @@ impl State {
                 if !mine && fresh && !viewing {
                     self.social.global_unread += 1;
                     // Only lines that call us by name pop up: the rest just count.
-                    if self.social.mentions_me(&line.text) {
+                    if self.cfg.notify_mentions && self.social.mentions_me(&line.text) {
                         self.social.notify(format!("{} in chat", line.from), line.text.clone(), 0x4fb4ff, NoteAction::Global);
                     }
                 }
