@@ -46,11 +46,13 @@ pub fn default_song_dirs() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     #[cfg(windows)]
     {
-        // osu! stable installs per-user here by default.
+        // osu! stable installs per-user here by default, but can go anywhere: osu:// links and
+        // .osz files are registered to wherever it is.
         if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
-            candidates.push(local.join("osu!").join("Songs"));
+            candidates.push(install_songs(&local.join("osu!")));
         }
-        candidates.push(PathBuf::from(r"C:\osu!\Songs"));
+        candidates.push(install_songs(Path::new(r"C:\osu!")));
+        candidates.extend(registered_osu().map(|dir| install_songs(&dir)));
         if let Some(cfg) = crate::config::user_dir(false) {
             candidates.push(cfg.join("Songs"));
         }
@@ -73,6 +75,47 @@ pub fn default_song_dirs() -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// The Songs folder of an osu! stable install: the one its settings name (`BeatmapDirectory` in
+/// osu!.<user>.cfg) if it exists, else `Songs` next to osu!.exe.
+pub fn install_songs(install: &Path) -> PathBuf {
+    let user_cfg = |p: &Path| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("osu!.") && n.ends_with(".cfg") && n != "osu!.cfg");
+    let beatmap_dir = |text: String| text.lines().find_map(|l| Some(l.strip_prefix("BeatmapDirectory")?.trim_start().strip_prefix('=')?.trim().to_string()));
+    std::fs::read_dir(install)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| user_cfg(p))
+        .find_map(|p| beatmap_dir(std::fs::read_to_string(p).ok()?))
+        .filter(|d| !d.is_empty())
+        // A relative one is relative to the install; an absolute one replaces it.
+        .map(|d| install.join(d))
+        .filter(|d| d.is_dir())
+        .unwrap_or_else(|| install.join("Songs"))
+}
+
+/// What to scan for a folder picked in Settings: the Songs folder of an osu! install, else the
+/// folder itself.
+pub fn picked_songs(picked: &Path) -> PathBuf {
+    let install = picked.join("osu!.exe").is_file() || picked.join("osu!.db").is_file();
+    let songs = install_songs(picked);
+    if install && songs.is_dir() { songs } else { picked.to_path_buf() }
+}
+
+/// The osu! stable install the registry opens osu:// links / .osz files with.
+#[cfg(windows)]
+fn registered_osu() -> Option<PathBuf> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    [r"HKCR\osu\shell\open\command", r"HKCR\osustable.File.osz\shell\open\command"].iter().find_map(|key| {
+        let out = std::process::Command::new("reg").args(["query", key, "/ve"]).creation_flags(CREATE_NO_WINDOW).output().ok()?;
+        // (Default)    REG_SZ    "C:\...\osu!.exe" "%1"
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let dir = Path::new(text.split('"').nth(1)?).parent()?.to_path_buf();
+        dir.is_dir().then_some(dir)
+    })
 }
 
 fn cache_dir() -> PathBuf {
@@ -162,4 +205,25 @@ pub fn scan(inputs: &[PathBuf], found: &AtomicUsize) -> Vec<Entry> {
         key(a).cmp(&key(b)).then(a.size.cmp(&b.size))
     });
     entries
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picking_an_osu_install_scans_its_songs_folder() {
+        let root = std::env::temp_dir().join(format!("taiko-rs-pick-{}", std::process::id()));
+        let install = root.join("osu!");
+        std::fs::create_dir_all(install.join("Songs")).unwrap();
+        std::fs::write(install.join("osu!.db"), b"").unwrap();
+        assert_eq!(picked_songs(&install), install.join("Songs"));
+        // A Songs folder moved in osu!'s settings.
+        std::fs::create_dir_all(root.join("Maps")).unwrap();
+        std::fs::write(install.join("osu!.player.cfg"), format!("Skin = Default\nBeatmapDirectory = {}\n", root.join("Maps").display())).unwrap();
+        assert_eq!(picked_songs(&install), root.join("Maps"));
+        // Any other folder is scanned as it is.
+        assert_eq!(picked_songs(&root.join("Maps")), root.join("Maps"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
