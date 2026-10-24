@@ -41,6 +41,7 @@ pub enum Item {
     Animations,
     Splash,
     CheckUpdates,
+    UpdateChannel,
     Update,
     Fullscreen,
     DiscordPresence,
@@ -48,7 +49,7 @@ pub enum Item {
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 42] = [
+pub const ITEMS: [(&str, Item); 43] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -89,6 +90,7 @@ pub const ITEMS: [(&str, Item); 42] = [
     ("VIDEO", Item::Splash),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinFolder),
+    ("UPDATES", Item::UpdateChannel),
     ("UPDATES", Item::Update),
     ("UPDATES", Item::CheckUpdates),
 ];
@@ -148,6 +150,7 @@ impl Item {
             Item::ShowFps => "FPS overlay",
             Item::Animations => "UI animations",
             Item::Splash => "Startup splash",
+            Item::UpdateChannel => "Build channel",
             Item::Update => "Update",
             Item::CheckUpdates => "Check at startup",
             Item::Fullscreen => "Fullscreen",
@@ -190,6 +193,7 @@ impl Item {
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
             Item::Splash => "The animated intro when taiko-rs starts (any key or click skips it).",
+            Item::UpdateChannel => "dev: test builds that haven't reached everyone yet (may break). Switch, then Update installs that channel's build.",
             Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko-rs restarts into it.",
             Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",
             Item::Fullscreen => "Shortcut: F11.",

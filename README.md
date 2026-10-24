@@ -109,6 +109,12 @@ new build, swaps it in (on Windows the running exe is moved aside to `taiko-rs.e
 the next start) and restarts into it. *Check at startup* turns the check off. Builds made with
 `cargo build` don't know their commit and never update themselves.
 
+**Dev builds.** Pushes to the `dev` branch publish test builds as the `dev` pre-release. Settings →
+Updates → **Build channel** switches to them (or back to stable): the next *Update* installs that
+channel's build, which keeps updating from its own channel. To install one directly, set
+`TAIKO_RS_CHANNEL=dev` for the install script (`$env:TAIKO_RS_CHANNEL="dev"; irm … | iex` on
+Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
+
 ## Controls
 
 | Key | Action |

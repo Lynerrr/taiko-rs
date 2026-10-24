@@ -4,10 +4,15 @@
 #   curl -fsSL https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.sh | sh
 #
 # Options (after `sh -s --` when piped): --no-launch (don't start it afterwards), --uninstall.
+# TAIKO_RS_CHANNEL=dev installs the latest test build instead (`| TAIKO_RS_CHANNEL=dev sh`).
 # TAIKO_RS_URL overrides the download (any URL curl understands, e.g. file:// for testing).
 set -eu
 
-url="${TAIKO_RS_URL:-https://github.com/Lynerrr/taiko-rs/releases/download/latest/taiko-rs-linux-x64.tar.gz}"
+case "${TAIKO_RS_CHANNEL:-}" in
+    dev) tag=dev ;;
+    *) tag=latest ;;
+esac
+url="${TAIKO_RS_URL:-https://github.com/Lynerrr/taiko-rs/releases/download/$tag/taiko-rs-linux-x64.tar.gz}"
 bin_dir="$HOME/.local/bin"
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
 exe="$bin_dir/taiko-rs"

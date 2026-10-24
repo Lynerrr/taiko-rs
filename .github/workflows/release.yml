@@ -1,16 +1,21 @@
 name: Release build
 
 # Builds taiko-rs for Windows and Linux on every push to the main branch and publishes both as
-# the rolling "latest" release, which install.ps1 / install.sh download. Pull requests get the
-# same builds, tests and a Linux install test, without publishing anything.
+# the rolling "latest" release, which install.ps1 / install.sh download. Pushes to `dev` publish
+# the "dev" pre-release instead (test builds; the game's Build channel setting switches to them).
+# Pull requests get the same builds, tests and a Linux install test, without publishing anything.
 on:
   push:
-    branches: [worktree-taiko-client]
+    branches: [worktree-taiko-client, dev]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
+
+env:
+  # The update channel the game is built for (src/update.rs).
+  TAIKO_CHANNEL: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'stable' }}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -138,7 +143,7 @@ jobs:
 
   publish:
     needs: [windows, linux, linux-install-check, android]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/worktree-taiko-client'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/worktree-taiko-client' || github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -146,6 +151,7 @@ jobs:
           merge-multiple: true
 
       - name: Publish "latest" release
+        if: github.ref == 'refs/heads/worktree-taiko-client'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -156,10 +162,22 @@ jobs:
           notes=$(printf 'Build of %s.\n\nInstall or update on Windows (PowerShell):\n```powershell\nirm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | sh\n```\n\nOn Android (8.0+, 64-bit ARM): install `taiko-rs-android.apk`.' "$GITHUB_SHA" "$raw" "$raw")
           gh release create latest taiko-rs-windows-x64.zip taiko-rs-linux-x64.tar.gz taiko-rs-android.apk --title "taiko-rs (latest build)" --notes "$notes" --target "$GITHUB_SHA"
 
+      - name: Publish "dev" pre-release
+        if: github.ref == 'refs/heads/dev'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete dev --yes --cleanup-tag || true
+          raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/worktree-taiko-client"
+          notes=$(printf 'Test build of %s (the `dev` branch); it may be broken.\n\nIn the game: Settings -> Updates -> Build channel: dev, then Update. Or install it directly on Windows (PowerShell):\n```powershell\n$env:TAIKO_RS_CHANNEL="dev"; irm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | TAIKO_RS_CHANNEL=dev sh\n```' "$GITHUB_SHA" "$raw" "$raw")
+          gh release create dev taiko-rs-windows-x64.zip taiko-rs-linux-x64.tar.gz taiko-rs-android.apk --title "taiko-rs (dev build)" --notes "$notes" --target "$GITHUB_SHA" --prerelease --latest=false
+
   # Runs the same one-line install command users run, on a fresh machine, against the release
   # that was just published.
   install-test:
     needs: publish
+    if: github.ref == 'refs/heads/worktree-taiko-client'
     runs-on: windows-latest
     steps:
       - name: Install with the published command
@@ -181,6 +199,7 @@ jobs:
 
   install-test-linux:
     needs: publish
+    if: github.ref == 'refs/heads/worktree-taiko-client'
     runs-on: ubuntu-24.04
     steps:
       - name: Install with the published command

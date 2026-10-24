@@ -1070,6 +1070,14 @@ impl State {
         match item {
             Item::ScrollSpeed => format!("{:.2}x", c.scroll_speed),
             Item::Offset => format!("{:+.0} ms", c.offset_ms),
+            Item::UpdateChannel => {
+                let picked = self.updater.channel();
+                if picked == update::BUILD_CHANNEL {
+                    picked.name().into()
+                } else {
+                    format!("{} (running {})", picked.name(), update::BUILD_CHANNEL.name())
+                }
+            }
             Item::Key(i) => config::key_name(c.keys[i]),
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
             Item::TouchLayout => c.touch_layout.name().into(),
@@ -1139,6 +1147,17 @@ impl State {
         match item {
             Item::ScrollSpeed => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, d),
             Item::Offset => self.cfg.offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
+            Item::UpdateChannel => {
+                let channel = match self.updater.channel() {
+                    update::Channel::Stable => update::Channel::Dev,
+                    update::Channel::Dev => update::Channel::Stable,
+                };
+                self.updater.set_channel(channel);
+                if update::BUILD.is_none() {
+                    self.toast("a local build doesn't update itself".into());
+                }
+                return;
+            }
             Item::Key(_) | Item::PresetKey(_) => {
                 self.settings_ui.binding = Some(item);
                 return;
