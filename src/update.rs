@@ -1,4 +1,6 @@
-//! Self-update from the rolling "latest" GitHub release that CI publishes on every push.
+//! Self-update from the rolling GitHub release that CI publishes on every push: "latest" from the
+//! main branch, "dev" (test builds) from the `dev` branch. A build updates from the channel it was
+//! built for; switching channels installs the other channel's build.
 //!
 //! A build knows the commit it was built from (`GITHUB_SHA`, set by GitHub Actions) and the
 //! release says which commit it was built from, so different = newer. Local builds have no
@@ -19,11 +21,40 @@ const REPO: &str = match option_env!("GITHUB_REPOSITORY") {
     Some(r) => r,
     None => "Lynerrr/taiko-rs",
 };
+/// The channel this binary was built for (`TAIKO_CHANNEL` in CI).
+pub const BUILD_CHANNEL: Channel = match option_env!("TAIKO_CHANNEL") {
+    // (`str` can't be matched in a const.)
+    Some(c) if matches!(c.as_bytes(), [b'd', b'e', b'v']) => Channel::Dev,
+    _ => Channel::Stable,
+};
 const USER_AGENT: &str = concat!("taiko-rs/", env!("CARGO_PKG_VERSION"), " (updater)");
 #[cfg(windows)]
 const ASSET: &str = "taiko-rs-windows-x64.zip";
 #[cfg(not(windows))]
 const ASSET: &str = "taiko-rs-linux-x64.tar.gz";
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Channel {
+    Stable,
+    Dev,
+}
+
+impl Channel {
+    pub fn name(self) -> &'static str {
+        match self {
+            Channel::Stable => "stable",
+            Channel::Dev => "dev",
+        }
+    }
+
+    /// The release it's published as.
+    fn tag(self) -> &'static str {
+        match self {
+            Channel::Stable => "latest",
+            Channel::Dev => "dev",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
@@ -31,7 +62,7 @@ pub enum Status {
     Off,
     Checking,
     UpToDate,
-    /// A newer build: its commit, the archive's URL and size.
+    /// A newer build (or the other channel's): its commit, the archive's URL and size.
     Available { commit: String, url: String, size: u64 },
     Downloading,
     /// Swapped in: restart into it.
@@ -41,6 +72,8 @@ pub enum Status {
 
 pub struct Updater {
     status: Arc<Mutex<Status>>,
+    /// The channel checked and installed from.
+    channel: Arc<Mutex<Channel>>,
     /// Download progress: bytes so far and in total.
     done: Arc<AtomicU64>,
     total: Arc<AtomicU64>,
@@ -54,7 +87,12 @@ pub fn short(commit: &str) -> &str {
 impl Updater {
     /// Checks for a newer build in the background when `check` (and this is a CI build).
     pub fn new(check: bool) -> Updater {
-        let u = Updater { status: Arc::new(Mutex::new(Status::Off)), done: Arc::default(), total: Arc::default() };
+        let u = Updater {
+            status: Arc::new(Mutex::new(Status::Off)),
+            channel: Arc::new(Mutex::new(BUILD_CHANNEL)),
+            done: Arc::default(),
+            total: Arc::default(),
+        };
         // An APK can't replace itself; Android installs updates.
         if check && !cfg!(target_os = "android") {
             u.check();
@@ -72,16 +110,41 @@ impl Updater {
         (self.done.load(Ordering::Relaxed) as f32 / total as f32).min(1.0)
     }
 
+    pub fn channel(&self) -> Channel {
+        *self.channel.lock().unwrap()
+    }
+
+    /// Switches to `channel` and looks for its build (unless one is being installed).
+    pub fn set_channel(&self, channel: Channel) {
+        if matches!(self.status(), Status::Downloading | Status::Installed) {
+            return;
+        }
+        *self.channel.lock().unwrap() = channel;
+        if matches!(self.status(), Status::Checking) {
+            // The check under way is for the other channel; let it know it's stale.
+            *self.status.lock().unwrap() = Status::Off;
+        }
+        self.check();
+    }
+
     pub fn check(&self) {
         let Some(build) = BUILD else { return };
         if matches!(self.status(), Status::Checking | Status::Downloading | Status::Installed) {
             return;
         }
         *self.status.lock().unwrap() = Status::Checking;
-        let status = self.status.clone();
+        let (status, current) = (self.status.clone(), self.channel.clone());
+        let channel = self.channel();
         std::thread::spawn(move || {
-            let result = latest().map(|(commit, url, size)| if commit == build { Status::UpToDate } else { Status::Available { commit, url, size } });
-            *status.lock().unwrap() = result.unwrap_or_else(|e| {
+            let result = release(channel).map(|(commit, url, size)| {
+                if commit == build && channel == BUILD_CHANNEL { Status::UpToDate } else { Status::Available { commit, url, size } }
+            });
+            let mut status = status.lock().unwrap();
+            // The channel was switched meanwhile: that check reports instead.
+            if *current.lock().unwrap() != channel {
+                return;
+            }
+            *status = result.unwrap_or_else(|e| {
                 eprintln!("update check: {e}");
                 Status::Failed(e)
             });
@@ -142,8 +205,8 @@ fn agent() -> ureq::Agent {
     ureq::Agent::config_builder().timeout_connect(Some(Duration::from_secs(10))).build().into()
 }
 
-/// The "latest" release's commit and this platform's archive (URL, size).
-fn latest() -> Result<(String, String, u64), String> {
+/// The channel's release: its commit and this platform's archive (URL, size).
+fn release(channel: Channel) -> Result<(String, String, u64), String> {
     #[derive(serde::Deserialize)]
     struct Asset {
         name: String,
@@ -155,7 +218,7 @@ fn latest() -> Result<(String, String, u64), String> {
         target_commitish: String,
         assets: Vec<Asset>,
     }
-    let url = format!("https://api.github.com/repos/{REPO}/releases/tags/latest");
+    let url = format!("https://api.github.com/repos/{REPO}/releases/tags/{}", channel.tag());
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(15))).build().into();
     let text = agent
         .get(&url)
@@ -167,7 +230,7 @@ fn latest() -> Result<(String, String, u64), String> {
         .read_to_string()
         .map_err(|e| e.to_string())?;
     let release: Release = serde_json::from_str(&text).map_err(|e| format!("release: {e}"))?;
-    let asset = release.assets.into_iter().find(|a| a.name == ASSET).ok_or_else(|| format!("no {ASSET} in the release"))?;
+    let asset = release.assets.into_iter().find(|a| a.name == ASSET).ok_or_else(|| format!("no {ASSET} in the {} release", channel.name()))?;
     Ok((release.target_commitish, asset.browser_download_url, asset.size))
 }
 

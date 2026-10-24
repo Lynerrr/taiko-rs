@@ -2,11 +2,13 @@
 #
 #   irm https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.ps1 | iex
 #
+# $env:TAIKO_RS_CHANNEL = 'dev' first installs the latest test build instead.
 $ErrorActionPreference = 'Stop'
 # The progress bar makes Invoke-WebRequest many times slower.
 $ProgressPreference = 'SilentlyContinue'
 
-$url = 'https://github.com/Lynerrr/taiko-rs/releases/download/latest/taiko-rs-windows-x64.zip'
+$tag = if ($env:TAIKO_RS_CHANNEL -eq 'dev') { 'dev' } else { 'latest' }
+$url = "https://github.com/Lynerrr/taiko-rs/releases/download/$tag/taiko-rs-windows-x64.zip"
 $dir = Join-Path $env:LOCALAPPDATA 'Programs\taiko-rs'
 $exe = Join-Path $dir 'taiko-rs.exe'
 $zip = Join-Path $env:TEMP 'taiko-rs-windows-x64.zip'
