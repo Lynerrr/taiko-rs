@@ -6,6 +6,17 @@ use super::*;
 
 /// Virtual canvas widths (the canvas is 480 tall): 5:4, 4:3, 16:10, 16:9, 21:9.
 const WIDTHS: [f32; 5] = [600.0, 640.0, 768.0, 853.3, 1120.0];
+/// Phones (half resolution, text on the pixel grid): 16:9, 19.5:9, 20:9.
+const PHONE_WIDTHS: [f32; 3] = [853.3, 1040.0, 1066.7];
+
+thread_local! {
+    /// Checking the phone layout (`PHONE_WIDTHS`) instead of `WIDTHS`.
+    static PHONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn widths() -> &'static [f32] {
+    if PHONE.with(std::cell::Cell::get) { &PHONE_WIDTHS } else { &WIDTHS }
+}
 
 fn entry(set: usize, diff: usize, long: bool) -> Entry {
     let meta = beatmap::Meta {
@@ -49,7 +60,7 @@ fn check(s: &mut State, what: &str, out: &mut Vec<String>) {
     if what != "toast" {
         s.toast = None;
     }
-    for w in WIDTHS {
+    for &w in widths() {
         let mut c = Canvas { audit: true, ..Default::default() };
         s.build_frame(&mut c, Instant::now(), w);
         s.scene_since = Instant::now() - Duration::from_secs(5);
@@ -67,7 +78,7 @@ fn check(s: &mut State, what: &str, out: &mut Vec<String>) {
 
 /// Like `check`, for something drawn on its own.
 fn check_draw(what: &str, out: &mut Vec<String>, mut draw: impl FnMut(&mut Canvas)) {
-    for w in WIDTHS {
+    for &w in widths() {
         let mut c = Canvas { audit: true, ..Default::default() };
         c.clear(w);
         c.mouse = (-1000.0, -1000.0);
@@ -122,6 +133,19 @@ fn session() -> multiplayer::Session {
 
 #[test]
 fn every_screen_fits_at_every_aspect_ratio() {
+    assert_every_screen_fits();
+}
+
+/// Android's default: half resolution on a 1080 px tall phone, where text snaps to whole pixels
+/// (and so mostly grows).
+#[test]
+fn every_screen_fits_on_a_phone_at_half_resolution() {
+    PHONE.with(|p| p.set(true));
+    render::set_text_grid(Some(540.0 / render::VIRTUAL_HEIGHT));
+    assert_every_screen_fits();
+}
+
+fn assert_every_screen_fits() {
     let mut out = Vec::new();
     let mut s = state();
     // The first frame takes in the library.

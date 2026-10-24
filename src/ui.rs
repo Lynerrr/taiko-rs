@@ -829,7 +829,7 @@ impl Select {
         }
         let list_start = c.shapes.len();
         let hits_start = c.hits.len();
-        let max_chars = |size: f32, room: f32| (room / (size / 7.0 * 6.0)).max(4.0) as usize;
+        let max_chars = |size: f32, room: f32| (room / Canvas::char_width(size)).max(4.0) as usize;
         let fit = |s: String, n: usize| if s.chars().count() > n { s.chars().take(n.saturating_sub(3)).collect::<String>() + "..." } else { s };
         for (row, ry, rh, alpha) in &rows {
             let y = top + ry - self.scroll;
@@ -850,7 +850,12 @@ impl Select {
                     c.round_rect(32.0, y + 8.0, 5.0, rh - 20.0, 2.5, rgba(tag, 1.0), rgba(tag, 1.0), 0.0);
                     c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &fit(e.meta.title.clone(), max_chars(10.0, lw - 110.0)));
                     let sub = format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator);
-                    c.text(44.0, y + 20.0, 7.0, rgba(0x9a9ab0, 1.0), &fit(sub, max_chars(7.0, lw - 110.0)));
+                    // Centred at y + 23.5, in what's left between the title (taller on a text
+                    // grid) and the bottom of the box, so the two never touch.
+                    let title_bottom = 11.0 + Canvas::text_height(10.0) / 2.0;
+                    let room = 2.0 * (23.5 - title_bottom - 1.5).min(rh - 4.0 - 1.5 - 23.5);
+                    let sub_size = Canvas::fit_height(7.0, room);
+                    c.text(44.0, y + 20.0 + (7.0 - sub_size) / 2.0, sub_size, rgba(0x9a9ab0, 1.0), &fit(sub, max_chars(sub_size, lw - 110.0)));
                     let n = g.len();
                     c.text_right(24.0 + lw - 12.0, y + 11.0, 8.0, rgba(0x8a8aa0, 1.0), &format!("{n} diff{}", if n == 1 { "" } else { "s" }));
                 }
@@ -885,7 +890,9 @@ impl Select {
         }
         let hints = "Enter play  Up/Down difficulty  Left/Right song  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit";
         c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hints));
-        c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), &Canvas::fit(7.0, w - 48.0, status));
+        // The status line gives way (smaller) when the hints above come out taller.
+        let status_size = Canvas::fit_height(7.0, 2.0 * (469.5 - (455.5 + Canvas::text_height(7.0) / 2.0) - 3.0));
+        c.text(24.0, 466.0 + (7.0 - status_size) / 2.0, status_size, rgba(0x55556a, 1.0), &Canvas::fit(status_size, w - 48.0, status));
     }
 
     /// The collection picker and the right-click menu, over everything else on the screen
@@ -1059,7 +1066,7 @@ impl Select {
                 c.round_rect(x + 4.0, ry, bw - 8.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(0xEB452C, 1.0), 1.0);
             }
             c.hit(x + 4.0, ry, bw - 8.0, ROW - 2.0, Hit::SongMenu(k));
-            c.text(x + 12.0, ry + 5.0, 7.0, rgba(0xffffff, 1.0), label);
+            c.text(x + 12.0, ry + 5.0, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, bw - 20.0, label));
         }
         c.text(x + 12.0, y + bh - 14.0, 6.0, rgba(0x6f6f86, 1.0), "only in taiko-rs; files stay");
     }
@@ -1091,8 +1098,8 @@ impl Select {
                 c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { 0xEB452C } else { 0x3a3a4e }, 1.0), 1.0);
             }
             c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::PickRow(i));
-            let text: String = label.chars().take(40).collect();
-            c.text(bx + 20.0, y + 5.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &text);
+            let shown_w = if current { Canvas::text_width(7.0, "shown") + 10.0 } else { 0.0 };
+            c.text(bx + 20.0, y + 5.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &Canvas::fit(7.0, bw - 40.0 - shown_w, label));
             if current {
                 c.text_right(bx + bw - 20.0, y + 5.0, 7.0, rgba(0x86E05A, 1.0), "shown");
             }

@@ -443,9 +443,10 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
 
 /// Local scores for the selected map, under the song select panel.
 fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow]) {
-    c.text(x + 4.0, y + 2.0, 7.0, rgba(0xEB452C, 1.0), "LOCAL SCORES");
+    let label_w = c.text(x + 4.0, y + 2.0, 7.0, rgba(0xEB452C, 1.0), "LOCAL SCORES");
     if rows.is_empty() {
-        c.text(x + 90.0, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, w - 94.0, "none yet - finish a play to set one"));
+        let at = x + 4.0 + label_w + 14.0;
+        c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, "none yet - finish a play to set one"));
         return;
     }
     let room = w - 20.0 - Canvas::text_width(7.0, "LOCAL SCORES");
@@ -548,7 +549,8 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
     c.text(ax + 16.0, by + 4.5, 7.0, rgba(0x0c1a28, 1.0), badge);
 
     c.round_rect(24.0, 10.0, c.width - 48.0, 34.0, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
-    c.round_rect(32.0, 18.0, 62.0, 18.0, 9.0, rgba(0x173049, 1.0), rgba(blue, 1.0), 1.0);
+    let tag_w = Canvas::text_width(8.0, "PREVIEW") + 18.0;
+    c.round_rect(32.0, 18.0, tag_w, 18.0, 9.0, rgba(0x173049, 1.0), rgba(blue, 1.0), 1.0);
     c.text(41.0, 23.0, 8.0, rgba(0xffffff, 1.0), "PREVIEW");
     let pill = stars::draw_pill(c, c.width - 36.0, 22.0, 8.0, stars);
     let back = if lobby { "Lobby  (Esc)" } else { "Back  (Esc)" };
@@ -558,7 +560,7 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
     // Right to left: the size button, the hints and the title share what's left. On a narrow
     // screen the hints go first, then the size button gets shorter, so the title keeps TITLE_MIN.
     const TITLE_MIN: f32 = 120.0;
-    let title_x = 104.0;
+    let title_x = 32.0 + tag_w + 10.0;
     let short_size = size_label.split(" (").next().unwrap_or(size_label);
     let presets = [format!("{size_label}  (F5/F6)"), size_label.to_string(), short_size.to_string()]
         .into_iter()
@@ -3462,7 +3464,7 @@ impl State {
                 }
                 // Scrolled back, the view stays on the same lines.
                 if self.social.chat_scroll > 0 && viewing {
-                    self.social.chat_scroll += social::wrap(&format!("{}: {}", line.from, line.text), social::CHAT_WIDTH).len();
+                    self.social.chat_scroll += social::wrap(&format!("{}: {}", line.from, line.text), social::chat_width()).len();
                 }
                 self.social.global.push(line);
                 if self.social.global.len() > 200 {
@@ -5402,7 +5404,10 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 renderer.set_sprites(&atlas);
                 canvas.sprites = atlas.sprites.map(|s| s.map(|(_, size)| size));
             }
+            // Video export frames above are drawn without the grid; the screen's frame with it.
+            render::set_text_grid(renderer.text_grid());
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
+            render::set_text_grid(None);
             if canvas.audit {
                 for p in debug::layout_problems(&canvas) {
                     if layout_seen.insert(p.clone()) {

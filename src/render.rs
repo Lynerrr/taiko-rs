@@ -678,6 +678,12 @@ impl Renderer {
         }
     }
 
+    /// Render pixels per virtual unit for crisp text (`set_text_grid`) when drawing at half
+    /// resolution.
+    pub fn text_grid(&self) -> Option<f32> {
+        (self.pixel_scale > 1).then(|| (self.config.height / self.pixel_scale).max(1) as f32 / VIRTUAL_HEIGHT)
+    }
+
     /// Canvas width in virtual units.
     pub fn virtual_width(&self) -> f32 {
         VIRTUAL_HEIGHT * self.config.width as f32 / self.config.height.max(1) as f32
@@ -990,6 +996,36 @@ impl Renderer {
     }
 }
 
+thread_local! {
+    /// Render pixels per virtual unit when text snaps to whole pixels, else 0 (`set_text_grid`).
+    static TEXT_GRID: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Half resolution: text is laid on a grid of `px_per_unit` render pixels per virtual unit, each
+/// font pixel a whole number of them (rounded up, so small text gets bigger) and each glyph on a
+/// pixel boundary, so it stays crisp after the 2x scale. `None`: text at its exact size. Per
+/// thread: the render thread sets it before building each frame.
+pub fn set_text_grid(px_per_unit: Option<f32>) {
+    TEXT_GRID.with(|g| g.set(px_per_unit.filter(|p| *p > 0.0).unwrap_or(0.0)));
+}
+
+/// One font pixel (in virtual units) of text `size` units tall.
+fn font_px(size: f32) -> f32 {
+    let grid = TEXT_GRID.with(std::cell::Cell::get);
+    if grid > 0.0 {
+        // A hair of slack so 2.01 pixels stays 2.
+        (size / 7.0 * grid - 0.05).ceil().max(1.0) / grid
+    } else {
+        size / 7.0
+    }
+}
+
+/// `v` moved onto the text grid (unchanged without one).
+fn snap_to_grid(v: f32) -> f32 {
+    let grid = TEXT_GRID.with(std::cell::Cell::get);
+    if grid > 0.0 { (v * grid).round() / grid } else { v }
+}
+
 static ANIMATIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// UI animations on or off (Settings -> Video). Off, every animation shows its end state.
@@ -1275,8 +1311,12 @@ impl Canvas {
     }
 
     /// Draws text with the built-in 5x7 font; `size` is the glyph height. Returns the advance width.
+    /// On a text grid (`set_text_grid`) the glyphs may come out bigger: they stay centred on the
+    /// line `size` would have taken.
     pub fn text(&mut self, x: f32, y: f32, size: f32, color: [f32; 4], s: &str) -> f32 {
-        let px = size / 7.0;
+        let px = font_px(size);
+        let x = snap_to_grid(x);
+        let y = snap_to_grid(y + (size - px * 7.0) / 2.0);
         let mut cx = x;
         let first = self.shapes.len();
         for ch in s.chars() {
@@ -1312,7 +1352,28 @@ impl Canvas {
     }
 
     pub fn text_width(size: f32, s: &str) -> f32 {
-        s.chars().count() as f32 * size / 7.0 * 6.0
+        s.chars().count() as f32 * Self::char_width(size)
+    }
+
+    /// The advance of one character of text `size` tall.
+    pub fn char_width(size: f32) -> f32 {
+        font_px(size) * 6.0
+    }
+
+    /// How tall text `size` comes out (`size`, or more on a text grid).
+    pub fn text_height(size: f32) -> f32 {
+        font_px(size) * 7.0
+    }
+
+    /// The size to draw text at so it comes out at most `max_h` tall: `size`, or on a text grid
+    /// (where it may grow) the biggest whole-pixel size that fits. For secondary lines that
+    /// would crowd the line above when everything grows.
+    pub fn fit_height(size: f32, max_h: f32) -> f32 {
+        if Self::text_height(size) <= max_h {
+            return size;
+        }
+        let grid = TEXT_GRID.with(std::cell::Cell::get);
+        if grid > 0.0 { (max_h / 7.0 * grid).floor().max(1.0) / grid * 7.0 } else { max_h }
     }
 
     pub fn text_centered(&mut self, cx: f32, y: f32, size: f32, color: [f32; 4], s: &str) {
@@ -1330,7 +1391,7 @@ impl Canvas {
         if Self::text_width(size, s) <= max_w {
             return s.to_string();
         }
-        let room = (max_w / (size / 7.0 * 6.0)).floor() as usize;
+        let room = (max_w / (font_px(size) * 6.0)).floor() as usize;
         if room <= 3 {
             return String::new();
         }
@@ -1342,7 +1403,7 @@ impl Canvas {
         if Self::text_width(size, s) <= max_w {
             return s.to_string();
         }
-        let room = (max_w / (size / 7.0 * 6.0)).floor() as usize;
+        let room = (max_w / (font_px(size) * 6.0)).floor() as usize;
         if room <= 3 {
             return String::new();
         }
@@ -1371,6 +1432,15 @@ impl Canvas {
     /// The size to draw `s` at so it is at most `max_w` wide: `size`, or smaller down to `min`.
     pub fn fit_size(size: f32, min: f32, max_w: f32, s: &str) -> f32 {
         let w = Self::text_width(size, s);
-        if w <= max_w { size } else { (size * max_w / w).max(min) }
+        if w <= max_w {
+            return size;
+        }
+        let grid = TEXT_GRID.with(std::cell::Cell::get);
+        if grid > 0.0 {
+            // Font pixels come in whole render pixels: the biggest that fits.
+            let per_char = max_w / s.chars().count().max(1) as f32 / 6.0;
+            return ((per_char * grid).floor().max(1.0) / grid * 7.0).max(min);
+        }
+        (size * max_w / w).max(min)
     }
 }

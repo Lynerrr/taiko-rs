@@ -328,8 +328,9 @@ impl Dropdown {
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         self.bounds = [bx, by, bw, bh];
         c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(0xEB452C, 0.8), 1.5);
-        c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "Playfield preset");
-        c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &format!("screen {}x{}", native.0, native.1));
+        let title_w = c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "Playfield preset");
+        let screen = format!("screen {}x{}", native.0, native.1);
+        c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, bw - 28.0 - title_w - 10.0, &screen));
         let save_label = format!("+ Save current {}x{}", playfield.0, playfield.1);
         let bw0 = self.button(c, bx + 14.0, by + 28.0, &save_label, PresetAction::SaveCurrent);
         self.button(c, bx + 20.0 + bw0, by + 28.0, "+ Add size", PresetAction::Add);
@@ -504,7 +505,7 @@ impl SettingsUi {
             c.round_rect(x0, y, side_w, 34.0, 7.0, rgba(bg, 0.95), rgba(if on { 0xEB452C } else { 0x2a2a38 }, 1.0), if on { 1.5 } else { 1.0 });
             c.hit(x0, y, side_w, 34.0, Hit::SettingsSection(i));
             c.text(x0 + 12.0, y + 7.0, 9.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), name);
-            c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), about);
+            c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 20.0, about));
         }
 
         // The section's settings.
@@ -551,12 +552,17 @@ impl SettingsUi {
 
         // What the selected setting does.
         let help_y = list_top + rows.len() as f32 * ROW + 10.0;
-        c.round_rect(cx, help_y, col, 30.0, 6.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        // Two lines, spaced for however tall the text comes out (taller on a text grid).
+        let glyph_h = Canvas::text_height(7.0);
+        let line_h = glyph_h + 4.0;
+        c.round_rect(cx, help_y, col, line_h * 2.0 + 8.0, 6.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
         let help = self.item().help();
-        let max = ((col - 20.0) / (7.0 / 7.0 * 6.0)) as usize;
+        let max = ((col - 20.0) / Canvas::char_width(7.0)) as usize;
         let (line1, line2) = split_help(help, max);
-        c.text(cx + 10.0, help_y + 6.0, 7.0, rgba(0x9a9ab0, 1.0), &line1);
-        c.text(cx + 10.0, help_y + 17.0, 7.0, rgba(0x9a9ab0, 1.0), &line2);
+        // `text` centres taller glyphs on the line; this puts their top 6 below the box's.
+        let first = help_y + 6.0 + (glyph_h - 7.0) / 2.0;
+        c.text(cx + 10.0, first, 7.0, rgba(0x9a9ab0, 1.0), &line1);
+        c.text(cx + 10.0, first + line_h, 7.0, rgba(0x9a9ab0, 1.0), &line2);
         c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), &Canvas::fit_hints(8.0, w - 48.0, footer));
     }
 }

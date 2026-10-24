@@ -52,14 +52,11 @@ pub fn estimate(errors: &[f64], current_offset: f64) -> Option<Estimate> {
 
 pub fn draw_overlay(c: &mut Canvas, game: &Game, current_offset: f64, hide_notes: bool) {
     let w = c.width;
-    c.round_rect(w / 2.0 - 250.0, 26.0, 500.0, 70.0, 10.0, rgba(0x000000, 0.6), rgba(0xEB452C, 0.8), 1.5);
-    c.text_centered(w / 2.0, 36.0, 12.0, rgba(0xffffff, 1.0), "OFFSET CALIBRATION");
     let line = if hide_notes {
         "Notes hidden: hit centre (F/J) on every click, by ear"
     } else {
         "Hit centre (F/J) on every click. Follow the sound, not the notes"
     };
-    c.text_centered(w / 2.0, 56.0, 8.0, rgba(0xc8c8d8, 1.0), line);
     let status = match estimate(&game.stats.errors, current_offset) {
         Some(e) => {
             let dir = if e.error_ms >= 0.0 { "late" } else { "early" };
@@ -73,7 +70,16 @@ pub fn draw_overlay(c: &mut Canvas, game: &Game, current_offset: f64, hide_notes
         }
         None => format!("current offset {current_offset:+.0} ms   waiting for hits..."),
     };
-    c.text_centered(w / 2.0, 74.0, 9.0, rgba(0xFFD34D, 1.0), &status);
+    // Wide enough for its lines (wider when text comes out bigger), within the screen.
+    let widest = Canvas::text_width(8.0, line).max(Canvas::text_width(9.0, &status)) + 40.0;
+    let bw = widest.max(500.0).min(w - 32.0);
+    c.round_rect(w / 2.0 - bw / 2.0, 26.0, bw, 70.0, 10.0, rgba(0x000000, 0.6), rgba(0xEB452C, 0.8), 1.5);
+    c.text_centered(w / 2.0, 36.0, 12.0, rgba(0xffffff, 1.0), "OFFSET CALIBRATION");
+    let room = bw - 24.0;
+    let size = Canvas::fit_size(8.0, 6.0, room, line);
+    c.text_centered(w / 2.0, 56.0, size, rgba(0xc8c8d8, 1.0), &Canvas::fit(size, room, line));
+    let size = Canvas::fit_size(9.0, 6.0, room, &status);
+    c.text_centered(w / 2.0, 74.0, size, rgba(0xFFD34D, 1.0), &Canvas::fit(size, room, &status));
     // Above the playfield size readout in the bottom-right corner.
     c.text_centered(w / 2.0, 448.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(8.0, w - 48.0, "H hide/show notes    Enter finish early    Esc cancel"));
 }

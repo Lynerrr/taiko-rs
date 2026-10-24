@@ -586,13 +586,21 @@ pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
     rows.sort_by(|a, b| b.1.score.cmp(&a.1.score));
     let x = 18.0;
     let h = 16.0;
-    c.round_rect(x - 6.0, y0 - 6.0, 300.0, rows.len().min(8) as f32 * h + 10.0, 6.0, rgba(0x000000, 0.45), rgba(0, 0.0), 0.0);
-    for (i, (name, live, me, quit)) in rows.iter().enumerate().take(8) {
-        let y = y0 + i as f32 * h;
-        let color = if *me { 0xFFD34D } else if *quit { 0x6f6f86 } else { 0xc8c8d8 };
-        let name: String = name.chars().take(12).collect();
-        let line = format!("{}. {:<12} {:08} {:6.2}% {:>4}x", i + 1, name, live.score, live.accuracy * 100.0, live.combo);
-        c.text(x, y, 8.0, rgba(color, 1.0), &line);
+    let lines: Vec<(String, u32)> = rows
+        .iter()
+        .enumerate()
+        .take(8)
+        .map(|(i, (name, live, me, quit))| {
+            let color = if *me { 0xFFD34D } else if *quit { 0x6f6f86 } else { 0xc8c8d8 };
+            let name: String = name.chars().take(12).collect();
+            (format!("{}. {:<12} {:08} {:6.2}% {:>4}x", i + 1, name, live.score, live.accuracy * 100.0, live.combo), color)
+        })
+        .collect();
+    // As wide as its longest line (wider when text comes out bigger).
+    let bw = lines.iter().map(|(l, _)| Canvas::text_width(8.0, l) + 12.0).fold(300.0, f32::max);
+    c.round_rect(x - 6.0, y0 - 6.0, bw, lines.len() as f32 * h + 10.0, 6.0, rgba(0x000000, 0.45), rgba(0, 0.0), 0.0);
+    for (i, (line, color)) in lines.iter().enumerate() {
+        c.text(x, y0 + i as f32 * h, 8.0, rgba(*color, 1.0), line);
     }
 }
 

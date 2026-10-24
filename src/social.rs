@@ -331,7 +331,9 @@ const PANEL_W: f32 = 290.0;
 const CHAT_TOP: f32 = 236.0;
 const GREEN: u32 = 0x86E05A;
 /// Characters per chat line (drawn at 6.5 between 4 px margins in the panel's 8 px padding).
-pub const CHAT_WIDTH: usize = ((PANEL_W - 24.0) / (6.5 * 6.0 / 7.0)) as usize;
+pub fn chat_width() -> usize {
+    ((PANEL_W - 24.0) / Canvas::char_width(6.5)) as usize
+}
 
 /// The overlay: a translucent panel on the right over whatever screen is showing.
 /// `lobby`: the room's chat when in one (name, line).
@@ -372,11 +374,15 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
         tx += tw + 18.0;
     }
     if s.connected && s.players.is_some() {
-        let label = format!("{} online", s.online_total);
         let right = x + PANEL_W - 12.0;
-        c.text_right(right, y + 10.0, 7.0, rgba(0xc8c8d8, a), &label);
-        let dot = right - Canvas::text_width(7.0, &label) - 6.0;
-        c.circle(dot, y + 13.5, 3.0, rgba(GREEN, a), rgba(0x000000, 0.0), 0.0);
+        // What fits after the tabs (and their badges): "1234 online", "1234" or nothing.
+        let room = right - (tx - 18.0 + 14.0) - 10.0;
+        let label = [format!("{} online", s.online_total), s.online_total.to_string()].into_iter().find(|l| Canvas::text_width(7.0, l) <= room);
+        if let Some(label) = label {
+            c.text_right(right, y + 10.0, 7.0, rgba(0xc8c8d8, a), &label);
+            let dot = right - Canvas::text_width(7.0, &label) - 6.0;
+            c.circle(dot, y + 13.5, 3.0, rgba(GREEN, a), rgba(0x000000, 0.0), 0.0);
+        }
     }
     if !s.connected {
         c.text(inner + 4.0, y + 28.0, 7.0, rgba(0x9a9ab0, a), "connecting to the server...");
@@ -386,7 +392,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
     let cursor = s.cursor.min(rows.len() - 1);
     let selected = rows[cursor];
     let input_y = y + h - 40.0;
-    let width = CHAT_WIDTH;
+    let width = chat_width();
     let list_top = y + 28.0 + if s.connected { 0.0 } else { 14.0 };
     let me = s.me.as_deref().map(key);
 
@@ -422,7 +428,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
             if matches!(selected, Row::Friend(_) | Row::Lobby) {
                 message_box(c, s, inner, iw, input_y, "type a message, Enter to send", a);
             }
-            c.text_centered(x + PANEL_W / 2.0, y + h - 14.0, 6.0, rgba(0x55556a, a), "Tab  Up/Down  Ctrl+W watch  Ctrl+J join  Del remove  Esc");
+            c.text_centered(x + PANEL_W / 2.0, y + h - 14.0, 6.0, rgba(0x55556a, a), &Canvas::fit_hints(6.0, iw, "Tab  Up/Down  Ctrl+W watch  Ctrl+J join  Del remove  Esc"));
         }
         Tab::Players => {
             let ry = draw_rows(c, s, &rows, cursor, inner, iw, list_top, y + h - 24.0, lobby_unread, a);
@@ -431,7 +437,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
             } else if rows.len() == 1 && s.connected {
                 c.text(inner + 4.0, ry + 4.0, 7.0, rgba(0x6f6f86, a), "nobody online by that name");
             }
-            c.text_centered(x + PANEL_W / 2.0, y + h - 14.0, 6.0, rgba(0x55556a, a), "Tab  type to search  Up/Down  Enter add friend  Esc");
+            c.text_centered(x + PANEL_W / 2.0, y + h - 14.0, 6.0, rgba(0x55556a, a), &Canvas::fit_hints(6.0, iw, "Tab  type to search  Up/Down  Enter add friend  Esc"));
         }
         Tab::Chat => {
             let lines: Vec<(String, String, bool)> = s.global.iter().map(|l| (l.from.clone(), l.text.clone(), Some(key(&l.from)) == me)).collect();
@@ -441,7 +447,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
             }
             chat_lines(c, s, &lines, inner, list_top + 12.0, input_y, width, a);
             message_box(c, s, inner, iw, input_y, "message everyone online, Enter to send", a);
-            c.text_centered(x + PANEL_W / 2.0, y + h - 14.0, 6.0, rgba(0x55556a, a), "Tab  Enter send  wheel or PgUp/PgDn scroll  Esc");
+            c.text_centered(x + PANEL_W / 2.0, y + h - 14.0, 6.0, rgba(0x55556a, a), &Canvas::fit_hints(6.0, iw, "Tab  Enter send  wheel or PgUp/PgDn scroll  Esc"));
         }
     }
 }
@@ -478,16 +484,15 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
             }
             Row::Request(k) => {
                 let name = s.requests.get(k).map(String::as_str).unwrap_or("");
-                c.text(inner + 8.0, ty, 7.0, rgba(0xFFD34D, a), &format!("{name} wants to be friends"));
                 let bx = inner + iw - 4.0;
                 let bx = button(c, bx, ry + 3.0, "decline", Hit::SocialAction(i, Action::Decline), a);
-                button(c, bx - 4.0, ry + 3.0, "accept", Hit::SocialAction(i, Action::Accept), a);
+                let bx = button(c, bx - 4.0, ry + 3.0, "accept", Hit::SocialAction(i, Action::Accept), a);
+                c.text(inner + 8.0, ty, 7.0, rgba(0xFFD34D, a), &Canvas::fit(7.0, bx - inner - 14.0, &format!("{name} wants to be friends")));
             }
             Row::Friend(k) => {
                 let Some(f) = s.friends.get(k) else { continue };
                 let online = f.activity.is_some();
                 c.circle(inner + 10.0, ry + 8.0, 3.0, rgba(if online { GREEN } else { 0x55556a }, a), rgba(0x000000, 0.0), 0.0);
-                c.text(inner + 18.0, ry + 4.5, 8.0, rgba(if online { 0xffffff } else { 0x8a8aa0 }, a), &f.name);
                 let what = f.activity.as_ref().map(Activity::describe).unwrap_or_else(|| "offline".into());
                 let mut bx = inner + iw - 4.0;
                 bx = match &f.activity {
@@ -495,6 +500,7 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
                     Some(Activity::Lobby { room: Some(_), .. }) => button(c, bx, ry + 3.0, "join", Hit::SocialAction(i, Action::Join), a) - 4.0,
                     _ => bx,
                 };
+                c.text(inner + 18.0, ry + 4.5, 8.0, rgba(if online { 0xffffff } else { 0x8a8aa0 }, a), &Canvas::fit(8.0, bx - inner - 22.0, &f.name));
                 c.text(inner + 18.0, ry + 15.5, 6.0, rgba(0x8a8aa0, a), &Canvas::fit(6.0, bx - inner - 22.0, &what));
                 badge(c, bx - 8.0, ry + 8.0, s.unread.get(&key(&f.name)).copied().unwrap_or(0), a);
             }
@@ -511,7 +517,6 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
             Row::Player(k) => {
                 let Some(p) = s.players.as_ref().and_then(|v| v.get(k)) else { continue };
                 c.circle(inner + 10.0, ry + 8.0, 3.0, rgba(GREEN, a), rgba(0x000000, 0.0), 0.0);
-                c.text(inner + 18.0, ry + 4.5, 8.0, rgba(0xffffff, a), &p.name);
                 let right = inner + iw - 4.0;
                 let bx = match s.standing(&p.name) {
                     Standing::Me => tag(c, right, ry + 3.0, "you", a),
@@ -520,6 +525,7 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
                     Standing::Asked => tag(c, right, ry + 3.0, "request sent", a),
                     Standing::Stranger => button(c, right, ry + 3.0, "+ friend", Hit::SocialAction(i, Action::Add), a),
                 } - 4.0;
+                c.text(inner + 18.0, ry + 4.5, 8.0, rgba(0xffffff, a), &Canvas::fit(8.0, bx - inner - 22.0, &p.name));
                 c.text(inner + 18.0, ry + 15.5, 6.0, rgba(0x8a8aa0, a), &Canvas::fit(6.0, bx - inner - 22.0, &p.activity.describe()));
             }
             Row::Global => {}
