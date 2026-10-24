@@ -38,7 +38,7 @@ fn entry(set: usize, diff: usize, long: bool) -> Entry {
 fn state() -> State {
     let mut cfg = Config::default();
     cfg.check_updates = false;
-    cfg.mods = Mods::parse("HD,HR,DT,FL,PR,AC,WV,KB,SU,DK");
+    cfg.mods = Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR");
     cfg.master_volume = 0.0;
     cfg.animations = false;
     // Nothing to connect to: the menus show the server as offline instead of asking it.
@@ -109,7 +109,7 @@ fn session() -> multiplayer::Session {
         rate: 1.5,
         from: Some(61_000.0),
         set_id: Some(1),
-        mods: Mods::parse("HD,HR,DT,FL,PR,AC,WV,KB,SU,DK").list(),
+        mods: Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR").list(),
     });
     let live = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
     let result = net::Final { score: 1_234_567, accuracy: 0.9876, max_combo: 1290, great: 1234, ok: 56, miss: 7, ur: 123.4, quit: false };
