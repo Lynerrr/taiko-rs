@@ -28,6 +28,8 @@ pub enum Item {
     ShowPlayfieldSize,
     KiaiEffects,
     HideGreat,
+    ChatFilter,
+    MessageSound,
     ShowConverts,
     HiddenMaps,
     MasterVolume,
@@ -51,7 +53,7 @@ pub enum Item {
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 45] = [
+pub const ITEMS: [(&str, Item); 47] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -94,13 +96,15 @@ pub const ITEMS: [(&str, Item); 45] = [
     ("VIDEO", Item::Splash),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinFolder),
+    ("ONLINE", Item::ChatFilter),
+    ("ONLINE", Item::MessageSound),
     ("UPDATES", Item::UpdateChannel),
     ("UPDATES", Item::Update),
     ("UPDATES", Item::CheckUpdates),
 ];
 
 /// The sections in order, with a one-line summary for the sidebar.
-pub const SECTIONS: [(&str, &str); 8] = [
+pub const SECTIONS: [(&str, &str); 9] = [
     ("GAMEPLAY", "speed, rate, resume"),
     ("PLAYFIELD", "size, position"),
     ("INPUT", "drum keys, touch layout"),
@@ -108,6 +112,7 @@ pub const SECTIONS: [(&str, &str); 8] = [
     ("AUDIO", "volume, latency"),
     ("VIDEO", "frame pacing, display, Discord"),
     ("SKIN", "notes, hitsounds"),
+    ("ONLINE", "chat filter, message sound"),
     ("UPDATES", "new versions"),
 ];
 
@@ -142,6 +147,8 @@ impl Item {
             Item::ShowPlayfieldSize => "Show playfield size",
             Item::KiaiEffects => "Kiai effects",
             Item::HideGreat => "Hide GREAT splash",
+            Item::ChatFilter => "Chat filter",
+            Item::MessageSound => "Message sound",
             Item::ShowConverts => "Show osu!standard converts",
             Item::HiddenMaps => "Hidden maps",
             Item::MasterVolume => "Master volume",
@@ -189,6 +196,8 @@ impl Item {
             Item::HiddenMaps => "Right-click a song to hide it here (files stay). Enter lists them all again.",
             Item::KiaiEffects => "During kiai time, tint the lane and pulse the hit target with the beat.",
             Item::HideGreat => "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",
+            Item::ChatFilter => "Stars out swear words in friends' messages, the global chat and lobby chats.",
+            Item::MessageSound => "A soft chime when a friend messages you (not while you're playing).",
             Item::MasterVolume => "Scales music and hitsounds. Anywhere: hold Alt and scroll the mouse wheel.",
             Item::MusicVolume | Item::FxVolume => "Left / Right to adjust.",
             Item::AudioBuffer => "Smaller = less audio latency; raise it if you hear crackling.",

@@ -601,7 +601,8 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
             hub.send_to(&to, &d);
         }
         Up::GlobalChat(text) => {
-            let text = net::clean_chat(&text);
+            // The global chat is public: starred out for everyone, old clients included.
+            let text = net::censor(&net::clean_chat(&text));
             if text.is_empty() {
                 return;
             }
