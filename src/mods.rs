@@ -83,19 +83,20 @@ pub enum Mod {
     FlipFlop,
     Shatter,
     Cracked,
+    Crumble,
     Portal,
     Multiverse,
 }
 
 use Mod::*;
 
-pub const ALL: [Mod; 72] = [
+pub const ALL: [Mod; 73] = [
     Easy, NoFail, HalfTime, Daycore, Half, NoFinishers, HardRock, SuddenDeath, Perfect, DoubleTime, Nightcore, Hidden,
     Flashlight, Precise, GreatOrNothing, Relax, Autoplay, Swap, Random, ConstantSpeed, Alternate, WindUp, WindDown, AllBig,
     Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette, AntiSv, HyperSv, Even, Split, Swing,
     Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed, Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy,
     Party, Overtime, Liar, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop,
-    Shatter, Cracked, Portal, Multiverse,
+    Shatter, Cracked, Crumble, Portal, Multiverse,
 ];
 
 /// Mod select columns: (title, accent colour, mods).
@@ -107,7 +108,7 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
     ("SV LAB", 0xFF8A3D, &[AntiSv, HyperSv, Even, Split, Swing, Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed]),
     ("VISUAL", 0xc77dff, &[Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Party, Overtime, Liar]),
     ("RAILS", 0x5ee6c8, &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake]),
-    ("PLAYFIELD", 0xff5fa2, &[Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Portal, Multiverse]),
+    ("PLAYFIELD", 0xff5fa2, &[Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal, Multiverse]),
 ];
 
 /// Mod select keyboard navigation: the mod `dx` columns and `dy` rows from `index` (into `ALL`).
@@ -193,6 +194,7 @@ impl Mod {
             FlipFlop => "FF",
             Shatter => "SH",
             Cracked => "CK",
+            Crumble => "CR",
             Portal => "PT",
             Multiverse => "MV",
         }
@@ -270,6 +272,7 @@ impl Mod {
             FlipFlop => "Flip Flop",
             Shatter => "Shatter",
             Cracked => "Cracked",
+            Crumble => "Crumble",
             Portal => "Portal",
             Multiverse => "Multiverse",
         }
@@ -347,6 +350,7 @@ impl Mod {
             FlipFlop => "Every 8 bars the lane flips over to the other side.",
             Shatter => "The lane breaks into pieces that slide apart and back; further where streams are.",
             Cracked => "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
+            Crumble => "Every hit knocks a piece out of the lane: crumbs for streams, chunks for slow notes.",
             Portal => "Notes dive into one portal and come out of another; they move every 8 bars.",
             Multiverse => "Five playfields drift and swap places, two mirrored; every 2 bars another is in colour.",
         }
@@ -410,6 +414,8 @@ impl Mod {
             Multiverse => &[
                 Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Colorless, Flashlight, Spotlight, Blackout,
             ],
+            Cracked => &[Crumble],
+            Crumble => &[Cracked],
             _ => &[],
         }
     }

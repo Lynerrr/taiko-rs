@@ -248,6 +248,8 @@ pub struct Game {
     /// Cracked: the misses that cracked the lane (map time) and how many notes had been hit
     /// then (it mends over the next 50).
     cracks: Vec<(f64, u32)>,
+    /// Crumble: the pieces of the lane hits have knocked out, until they settle back.
+    crumbs: Vec<Crumb>,
     /// Panic / Mercy: map times of the latest misses.
     misses: VecDeque<f64>,
     /// Drop / Barrel Roll: where each kiai starts (map ms) and the beat length there.
@@ -572,6 +574,28 @@ impl RailShape {
     }
 }
 
+/// Crumble: a piece of the lane a hit knocked out of line.
+#[derive(Clone, Copy, Debug)]
+struct Crumb {
+    /// Map time of the hit.
+    at: f64,
+    /// How long it stays out (ms).
+    life: f64,
+    /// 1 for a 1/1 note, smaller for faster rhythms.
+    size: f32,
+    /// Where it starts, as a part of the lane's length, and how long it is (px).
+    start: f32,
+    len: f32,
+    /// Sideways shift at its furthest.
+    shift: f32,
+}
+
+/// Crumble: pieces only break off this part of the lane (as parts of its length), so notes
+/// reach the drum where they're expected.
+const CRUMBLE_SPAN: (f32, f32) = (0.25, 0.92);
+/// Crumble: the most the knocked-out pieces at one spot add up to sideways.
+const CRUMBLE_MAX_SHIFT: f32 = 40.0;
+
 /// Where things on the lane go this frame: the rail, and how Shatter and Cracked knock pieces
 /// of it sideways. `s` is the distance ahead of the hit target.
 struct LaneGeo {
@@ -579,8 +603,9 @@ struct LaneGeo {
     len: f32,
     /// Shatter: the sideways shift of each quarter of the lane (the first stays put).
     shatter: [f32; 4],
-    /// Cracked: (start, length, sideways shift) of each knocked-out piece.
-    cracks: Vec<(f32, f32, f32)>,
+    /// Cracked and Crumble: (start, length, sideways shift, seam opacity) of each knocked-out
+    /// piece.
+    cracks: Vec<(f32, f32, f32, f32)>,
 }
 
 impl LaneGeo {
@@ -594,12 +619,13 @@ impl LaneGeo {
         if s > 0.0 {
             d += self.shatter[((s / self.len * 4.0) as usize).min(3)];
         }
-        for &(a, l, o) in &self.cracks {
+        let mut cracks = 0.0;
+        for &(a, l, o, _) in &self.cracks {
             if (a..a + l).contains(&s) {
-                d += o;
+                cracks += o;
             }
         }
-        d
+        d + cracks.clamp(-CRUMBLE_MAX_SHIFT, CRUMBLE_MAX_SHIFT)
     }
 
     /// Point and heading `s` along the lane, `side` units off its middle (down on a plain lane).
@@ -1085,6 +1111,7 @@ impl Game {
             last_hand: None,
             quake_at: f64::NEG_INFINITY,
             cracks: Vec::new(),
+            crumbs: Vec::new(),
             misses: VecDeque::new(),
             kiai_starts,
             sections,
@@ -1382,6 +1409,7 @@ impl Game {
         self.failed = None;
         self.misses.clear();
         self.cracks.clear();
+        self.crumbs.clear();
         self.next_scare = 0;
         if let Some((_, next)) = &mut self.replay {
             *next = 0;
@@ -1486,6 +1514,9 @@ impl Game {
         }
         if judge != Judge::Miss && self.map.notes[i].big {
             self.quake_at = t;
+        }
+        if self.mods.has(Mod::Crumble) {
+            self.crumble(i, judge, t);
         }
         let s = &mut self.stats;
         match judge {
@@ -1824,9 +1855,43 @@ impl Game {
         out
     }
 
+    /// Crumble: note `i` judged at `t` knocks a piece out of the lane. The slower its rhythm the
+    /// bigger the piece, the further out and the longer it stays (a miss knocks out the biggest);
+    /// it goes where it overlaps the pieces still out the least.
+    fn crumble(&mut self, i: usize, judge: Judge, t: f64) {
+        let n = &self.map.notes[i];
+        let size = if judge == Judge::Miss { 1.2 } else { (self.flows[i].max(1) as f32).powf(-0.75) * if n.big { 1.25 } else { 1.0 } };
+        self.crumbs.retain(|c| c.at <= t && t < c.at + c.life);
+        if self.crumbs.len() >= 24 {
+            self.crumbs.remove(0);
+        }
+        // Lengths as parts of a typical lane, to compare with where the others start.
+        let len = 20.0 + 110.0 * size;
+        let part = len / 900.0;
+        let (lo, hi) = CRUMBLE_SPAN;
+        let overlap = |a: f32| -> f32 { self.crumbs.iter().map(|c| ((a + part).min(c.start + c.len / 900.0) - a.max(c.start)).max(0.0)).sum() };
+        let start = (0..5)
+            .map(|k| lo + (hi - lo - part).max(0.0) * hash01(n.time + k as f64 * 3.7 + 0.19) as f32)
+            .min_by(|&a, &b| overlap(a).total_cmp(&overlap(b)))
+            .unwrap_or(lo);
+        let side = if hash01(n.time + 0.71) < 0.5 { -1.0 } else { 1.0 };
+        let shift = side * (4.0 + 30.0 * size) * (0.8 + 0.2 * hash01(n.time + 0.53) as f32);
+        self.crumbs.push(Crumb { at: t, life: 350.0 + 1850.0 * size as f64, size, start, len, shift });
+    }
+
+    /// Crumble's knocked-out pieces at map time `t` on a lane `len` long, like `cracks_at`'s:
+    /// each snaps out and holds, then settles back over the rest of its life.
+    fn crumbs_at(&self, t: f64, len: f32) -> impl Iterator<Item = (f32, f32, f32, f32)> + '_ {
+        self.crumbs.iter().filter(move |c| c.at <= t && t < c.at + c.life).map(move |c| {
+            let x = (t - c.at) / c.life;
+            let m = (smooth(0.0, 70.0 / c.life, x) * (1.0 - smooth(0.35, 1.0, x))) as f32;
+            (c.start * len, c.len, c.shift * m, 0.9 * m)
+        })
+    }
+
     /// Cracked's knocked-out pieces at map time `t` on a lane `len` long: (start, length,
-    /// sideways shift), each fading back as the next 50 notes are hit.
-    fn cracks_at(&self, t: f64, len: f32) -> Vec<(f32, f32, f32)> {
+    /// sideways shift, seam opacity), each fading back as the next 50 notes are hit.
+    fn cracks_at(&self, t: f64, len: f32) -> Vec<(f32, f32, f32, f32)> {
         let hit = self.stats.great + self.stats.ok;
         self.cracks
             .iter()
@@ -1839,8 +1904,9 @@ impl Game {
                 let snap = ((t - at) / 120.0).min(1.0) as f32;
                 let side = if hash01(at + 0.37) < 0.5 { -1.0 } else { 1.0 };
                 let shift = side * (18.0 + 22.0 * hash01(at + 0.41) as f32) * mend * snap;
-                Some((len * (0.3 + 0.55 * hash01(at + 0.11) as f32), 50.0 + 80.0 * hash01(at + 0.23) as f32, shift))
+                Some((len * (0.3 + 0.55 * hash01(at + 0.11) as f32), 50.0 + 80.0 * hash01(at + 0.23) as f32, shift, 0.9))
             })
+            .chain(self.crumbs_at(t, len))
             .collect()
     }
 
@@ -2141,14 +2207,31 @@ impl Game {
                 }
             }
             // Cracks: dark seams where the knocked-out pieces start and end.
-            for &(a, l, _) in &geo.cracks {
+            for &(a, l, _, seam) in &geo.cracks {
                 for s in [a, a + l] {
-                    lane_rect(c, geo.at(s, 0.0), 3.0, LANE_H + 6.0, rgba(0x08080b, 0.9));
+                    lane_rect(c, geo.at(s, 0.0), 3.0, LANE_H + 6.0, rgba(0x08080b, seam));
                 }
             }
         } else {
             let (lane_x, lane_w) = if turns { (-w, 3.0 * w) } else { (0.0, w) };
             draw_lane(c, lane_x, lane_w, lane_col, edge_col);
+        }
+        // Crumble: crumbs fly off the edge each piece moves out to and fall away.
+        for cr in &self.crumbs {
+            let age = ((t - cr.at) / 1000.0) as f32;
+            if !(0.0..0.7).contains(&age) {
+                continue;
+            }
+            for k in 0..1 + (4.0 * cr.size).round() as usize {
+                let h = |j: f64| hash01(cr.at + k as f64 * 5.3 + j) as f32;
+                let s = cr.start * lane_len + cr.len * h(0.1);
+                let (x, y, a) = geo.at(s, cr.shift.signum() * (LANE_H / 2.0 + 3.0));
+                let (vx, vy) = ((h(0.2) * 2.0 - 1.0) * 70.0, cr.shift.signum() * (30.0 + 60.0 * h(0.3)));
+                let p = (x + vx * age, y + vy * age + 700.0 * age * age, a + (h(0.4) * 2.0 - 1.0) * 8.0 * age);
+                let side = 3.0 + 6.0 * cr.size * h(0.5);
+                let col = tint(edge_col, WHITE, 0.3);
+                lane_rect(c, p, side, side, [col[0], col[1], col[2], col[3] * (1.0 - age / 0.7)]);
+            }
         }
         // Portal: the entry (orange) and the exit (blue), across the lane.
         if let Some((entry, exit)) = portal {
@@ -3159,9 +3242,14 @@ mod tests {
                 crate::debug::write_png(&dir.join(format!("{}-{t}.png", m.acronym())), w, h, &rgb).unwrap();
             }
             // Streams and triplets, for the mods that go by rhythm.
-            if ["SK", "PY", "LI", "DY", "SH", "SR"].contains(&m.acronym()) {
+            if ["SK", "PY", "LI", "DY", "SH", "SR", "CR"].contains(&m.acronym()) {
                 let mut g = rhythm_game(m.acronym());
-                for t in [2000.0, 5600.0] {
+                for t in [2000.0, 5600.0, 7400.0] {
+                    // Every note so far hit on time (Crumble breaks the lane by them).
+                    let times: Vec<f64> = g.map.notes.iter().map(|n| n.time).take_while(|&n| n < t).collect();
+                    for n in times {
+                        g.press_at(1, n, None);
+                    }
                     g.time = t;
                     c.clear(853.3);
                     g.draw_playfield(&mut c, 1.0);
@@ -3221,6 +3309,30 @@ mod tests {
         }
         assert!(g.cracks_at(times[51], 700.0).is_empty());
     }
+    #[test]
+    fn every_hit_crumbles_the_lane_by_its_rhythm_and_it_settles_back() {
+        let mut g = kiai_game("CR");
+        let times: Vec<f64> = g.map.notes.iter().map(|n| n.time).collect();
+        // A 1/1 note knocks out a bigger piece, further, for longer, than a 1/4 one.
+        g.flows[0] = 1;
+        g.flows[1] = 4;
+        g.press_at(1, times[0], None);
+        g.press_at(1, times[1], None);
+        assert_eq!(g.crumbs.len(), 2);
+        let (slow, fast) = (g.crumbs[0], g.crumbs[1]);
+        assert!(slow.len > fast.len && slow.shift.abs() > fast.shift.abs() && slow.life > fast.life);
+        // Never near the drum, and never further out than the cap however many pile up.
+        for &t in &times[2..40] {
+            g.press_at(1, t, None);
+            let geo = LaneGeo { rail: None, len: 700.0, shatter: [0.0; 4], cracks: g.cracks_at(t + 80.0, 700.0) };
+            for s in (0..700).step_by(5) {
+                assert!(geo.shift(s as f32).abs() <= CRUMBLE_MAX_SHIFT);
+            }
+            assert!(geo.cracks.iter().all(|&(a, ..)| a >= 700.0 * CRUMBLE_SPAN.0 - 0.01));
+        }
+        assert!(g.cracks_at(times[39] + 3000.0, 700.0).is_empty());
+    }
+
     #[test]
     fn overtime_screams_once_per_scare() {
         let mut g = kiai_game("OT");
