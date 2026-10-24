@@ -33,6 +33,8 @@ pub const LANE_Y: f32 = 160.0;
 pub const LANE_H: f32 = 118.0;
 const NOTE_R: f32 = 31.0;
 const BIG_R: f32 = 46.0;
+/// A spinner being hit: its circle over the drum (a skin's 128 px spinner image at this radius).
+const SPIN_R: f32 = 50.0;
 /// Second key of a big note must land within this window of the first.
 const STRONG_WINDOW: f64 = 30.0;
 const HIT_ANIM_MS: f64 = 160.0;
@@ -2058,6 +2060,13 @@ impl Game {
                                 }
                             }
                         }
+                    } else if let Some([_, sy]) = c.sprite_size(Sprite::RollMiddle) {
+                        // The skin's body stretched from the head to the end, its cap just past that.
+                        let (x0, x1) = (HIT_X + s0, HIT_X + s1);
+                        c.sprite_box(Sprite::RollMiddle, (x0 + x1) / 2.0, LANE_Y, (x1 - x0) / 2.0, r * sy, rgba(ROLL, a));
+                        if let Some([ex, ey]) = c.sprite_size(Sprite::RollEnd) {
+                            c.sprite_box(Sprite::RollEnd, x1 + r * ex, LANE_Y, r * ex, r * ey, rgba(ROLL, a));
+                        }
                     } else {
                         c.capsule(HIT_X + s0, HIT_X + s1, LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
                     }
@@ -2069,7 +2078,9 @@ impl Game {
                         }
                     }
                     let (x, y, _, size) = place(s0, 0.0);
-                    c.circle(x, y, r * size, rgba(ROLL, a), rgba(WHITE, a), r * size * 0.1);
+                    if !skin_note(c, x, y, r * size, n.big, ROLL, a) {
+                        c.circle(x, y, r * size, rgba(ROLL, a), rgba(WHITE, a), r * size * 0.1);
+                    }
                 }
                 Kind::Swell => {
                     if st.finished {
@@ -2087,13 +2098,21 @@ impl Game {
                         if s < lane_len + r && a > 0.01 {
                             let (x, y, _, size) = place(s, 0.0);
                             let r = r * size;
-                            c.circle(x, y, r, rgba(SWELL, a), rgba(WHITE, a), r * 0.1);
-                            c.ring(x, y, r * 0.55, rgba(WHITE, 0.8 * a), 3.0);
+                            if !c.sprite(Sprite::SpinnerWarning, x, y, r, rgba(WHITE, a)) {
+                                c.circle(x, y, r, rgba(SWELL, a), rgba(WHITE, a), r * 0.1);
+                                c.ring(x, y, r * 0.55, rgba(WHITE, 0.8 * a), 3.0);
+                            }
                         }
+                    } else if c.sprite(Sprite::SpinnerCircle, HIT_X, LANE_Y, SPIN_R, rgba(WHITE, 1.0)) {
+                        // The skin's ring closes in on its circle as the time to hit it runs out.
+                        let left = 1.0 - ((t - n.time) / (n.end_time - n.time).max(1.0)).clamp(0.0, 1.0) as f32;
+                        c.sprite(Sprite::SpinnerApproach, HIT_X, LANE_Y, SPIN_R * (1.0 + 1.5 * left), rgba(WHITE, 1.0));
+                        let left = n.required_hits.saturating_sub(st.hits);
+                        texts.push((HIT_X, LANE_Y - 12.0, 24.0, rgba(WHITE, 1.0), left.to_string()));
                     } else {
                         let progress = st.hits as f32 / n.required_hits.max(1) as f32;
-                        c.circle(HIT_X, LANE_Y, 50.0, rgba(SWELL, 0.95), rgba(WHITE, 1.0), 4.0);
-                        c.ring(HIT_X, LANE_Y, 54.0 + 14.0 * progress, rgba(SWELL, 0.6), 3.0);
+                        c.circle(HIT_X, LANE_Y, SPIN_R, rgba(SWELL, 0.95), rgba(WHITE, 1.0), 4.0);
+                        c.ring(HIT_X, LANE_Y, SPIN_R + 4.0 + 14.0 * progress, rgba(SWELL, 0.6), 3.0);
                         let left = n.required_hits.saturating_sub(st.hits);
                         texts.push((HIT_X, LANE_Y - 12.0, 24.0, rgba(WHITE, 1.0), left.to_string()));
                     }

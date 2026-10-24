@@ -36,10 +36,31 @@ pub enum Sprite {
     HitCircleOverlay,
     BigCircle,
     BigCircleOverlay,
+    /// A drumroll's body, stretched along it.
+    RollMiddle,
+    /// A drumroll's end cap, just past its end.
+    RollEnd,
+    /// A spinner on its way in.
+    SpinnerWarning,
+    /// A spinner being hit, over the drum.
+    SpinnerCircle,
+    /// A ring closing in on the spinner circle until time runs out.
+    SpinnerApproach,
 }
 
-pub const SPRITES: usize = 4;
+/// How many `Sprite`s there are (the shader's `sprites` array is this long too).
+pub const SPRITES: usize = 9;
 const SPRITE_BASE: f32 = 10.0;
+
+/// What a shape needs, besides its position, to come out mirrored left to right: half circles
+/// swap sides, and a drumroll's end cap turns around (the other sprites are round).
+fn flip_x(sh: &mut Shape) {
+    if (0.5..2.5).contains(&sh.params[3]) {
+        sh.params[3] = 3.0 - sh.params[3];
+    } else if sh.params[3] == SPRITE_BASE + Sprite::RollEnd as usize as f32 {
+        sh.angle += std::f32::consts::PI;
+    }
+}
 
 /// Skin images side by side (premultiplied RGBA8), each with its UV rect and its size relative
 /// to the note radius. The default (no images) brings back the drawn notes.
@@ -355,7 +376,7 @@ fn fs(i: V) -> @location(0) vec4<f32> {
 const SHADER: &str = r#"
 struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32 };
 @group(0) @binding(0) var<uniform> g: Globals;
-@group(0) @binding(1) var<uniform> sprites: array<vec4<f32>, 4>;
+@group(0) @binding(1) var<uniform> sprites: array<vec4<f32>, 9>;
 @group(0) @binding(2) var atlas: texture_2d<f32>;
 @group(0) @binding(3) var samp: sampler;
 @group(0) @binding(4) var font: texture_2d<f32>;
@@ -442,7 +463,7 @@ fn shade(in: VOut) -> vec4<f32> {
     }
     if (in.params.w > 9.5) {
         // A skin image (premultiplied), tinted by fill.
-        let rect = sprites[min(u32(in.params.w - 9.5), 3u)];
+        let rect = sprites[min(u32(in.params.w - 9.5), 8u)];
         let uv = in.local / (2.0 * in.half) + 0.5;
         let t = textureSampleLevel(atlas, samp, rect.xy + clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)) * rect.zw, 0.0);
         let inside = select(0.0, 1.0, all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0)));
@@ -1639,8 +1660,19 @@ impl Canvas {
     /// (nothing drawn) when the skin doesn't have it.
     pub fn sprite(&mut self, sprite: Sprite, x: f32, y: f32, r: f32, tint: [f32; 4]) -> bool {
         let Some([sx, sy]) = self.sprites[sprite as usize] else { return false };
-        self.shapes.push(Shape { center: [x, y], half: [r * sx, r * sy], fill: tint, border: tint, params: [0.0, 0.0, 0.0, SPRITE_BASE + sprite as usize as f32], angle: 0.0 });
+        self.sprite_box(sprite, x, y, r * sx, r * sy, tint);
         true
+    }
+
+    /// The skin image's size relative to the radius of what it's drawn for (`sprite`), if the
+    /// skin has it.
+    pub fn sprite_size(&self, sprite: Sprite) -> Option<[f32; 2]> {
+        self.sprites[sprite as usize]
+    }
+
+    /// A skin image stretched over the box centred on (`x`, `y`), `hw` by `hh` either side.
+    pub fn sprite_box(&mut self, sprite: Sprite, x: f32, y: f32, hw: f32, hh: f32, tint: [f32; 4]) {
+        self.shapes.push(Shape { center: [x, y], half: [hw, hh], fill: tint, border: tint, params: [0.0, 0.0, 0.0, SPRITE_BASE + sprite as usize as f32], angle: 0.0 });
     }
 
     /// Scales every shape drawn since `start` about `anchor`, then moves it by (`dx`, `dy`). Radii,
@@ -1680,8 +1712,8 @@ impl Canvas {
         for sh in &mut self.shapes[start..] {
             sh.center[0] = cx + (sh.center[0] - cx) * fx;
             sh.half[0] *= fx.abs();
-            if fx < 0.0 && (0.5..2.5).contains(&sh.params[3]) {
-                sh.params[3] = 3.0 - sh.params[3];
+            if fx < 0.0 {
+                flip_x(sh);
             }
         }
     }
@@ -1700,10 +1732,7 @@ impl Canvas {
     pub fn mirror_since(&mut self, start: usize, w: f32) {
         for sh in &mut self.shapes[start..] {
             sh.center[0] = w - sh.center[0];
-            // Half circles swap sides; other values there mark sprites.
-            if (0.5..2.5).contains(&sh.params[3]) {
-                sh.params[3] = 3.0 - sh.params[3];
-            }
+            flip_x(sh);
         }
     }
 
@@ -1865,5 +1894,20 @@ impl Canvas {
             return ((per_char * grid).floor().max(1.0) / grid * 7.0).max(min);
         }
         (size * max_w / w).max(min)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use wgpu::naga;
+
+    #[test]
+    fn shaders_compile() {
+        for (name, src) in [("shapes", super::SHADER), ("background", super::BG_SHADER), ("upscale", super::UPSCALE_SHADER)] {
+            let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default())
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        }
     }
 }
