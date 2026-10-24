@@ -1,550 +1,73 @@
+<div align="center">
+
+<img src="assets/taiko-rs.png" width="112" alt="taiko-rs logo">
+
 # taiko-rs
 
-A small, fast osu!taiko client in Rust, built for Linux/Wayland, with Windows and Android builds.
+**A small, fast osu!taiko client written in Rust.**
 
-- **Native Wayland** via winit (falls back to X11 automatically), **Vulkan** via wgpu.
-- **Smooth scrolling**: the game clock free-runs on the monotonic clock and is gently
-  steered toward the audio device position, so notes never step or jitter even though audio
-  arrives in buffer-sized chunks. Every note position is computed from that clock each frame
-  (no accumulated motion), drawn as analytically anti-aliased SDF shapes in a single
-  instanced draw call — sub-pixel accurate at any resolution and refresh rate.
-- **Low latency**: native **PipeWire** output with a 256-frame buffer, hitsounds mixed directly
-  in the audio callback, and a dedicated render thread so key presses are handled and
-  timestamped the instant they arrive — even while a vsync'd frame is waiting on the display.
-- Plays native taiko maps and osu!standard converts (lazer's conversion rules: split
-  sliders, drumrolls, swells, big notes), with lazer hit windows.
+Linux (Wayland) · Windows · Android
 
-## Linux
+[![Download](https://img.shields.io/badge/download-latest-EB452C?style=flat-square)](https://github.com/Lynerrr/taiko-rs/releases/tag/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/Lynerrr/taiko-rs/release.yml?branch=worktree-taiko-client&style=flat-square&label=build)](https://github.com/Lynerrr/taiko-rs/actions/workflows/release.yml)
+[![Downloads](https://img.shields.io/github/downloads/Lynerrr/taiko-rs/total?style=flat-square&color=438EAD)](https://github.com/Lynerrr/taiko-rs/releases)
+![Rust](https://img.shields.io/badge/made%20with-Rust-FCB806?style=flat-square)
 
-Install or update with one command (no root needed):
+<img src="assets/readme/rails.png" alt="The Spiral, U-Turn and Mania mods" width="100%">
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.sh | sh
-```
+</div>
 
-It downloads the latest x86_64 build from the [releases](https://github.com/Lynerrr/taiko-rs/releases/tag/latest)
-to `~/.local/bin/taiko-rs`, adds it to the app menu (with an icon) and launches it. Run it again to
-update; `sh -s -- --no-launch` installs without starting it and `sh -s -- --uninstall` removes it
-(settings and maps are kept). The build needs glibc 2.39+ (Ubuntu 24.04+, Debian 13+, Fedora
-40+, Arch...; older systems can build from source) and uses the system's PipeWire and ALSA libraries; the installer names the package to
-install if one is missing. Maps come from your osu! Songs folder (osu-winello / Wine installs are
-found on their own); without osu!, drop `.osz` files into `~/.local/share/taiko-rs/Songs`.
+## Install
 
-## Build & run
+| Platform | |
+| --- | --- |
+| 🐧 **Linux** | `curl -fsSL https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.sh \| sh` |
+| 🪟 **Windows** | `irm https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.ps1 \| iex` |
+| 🤖 **Android** | grab `taiko-rs-android.apk` from the [latest release](https://github.com/Lynerrr/taiko-rs/releases/tag/latest) (8.0+, arm64) |
+
+No root or admin needed. It finds your osu! Songs folder (osu-winello and Wine too), or you can
+drop `.osz` files in. The game updates itself (**Ctrl+U**). Dev builds are one switch away in
+Settings → Updates.
+
+## Highlights
+
+- **Smooth and accurate.** The game clock is steered by the audio device, keys are timestamped on
+  their own thread, and everything is drawn in one GPU call. Audio goes out through PipeWire,
+  WASAPI or AAudio with low latency.
+- **Your osu! library.** Taiko maps and osu!standard converts, lazer's conversion and hit windows,
+  osu!'s star ratings, and collections and play history from osu!stable.
+- **71 mods.** osu!'s and lazer's mods, plus taiko-rs's own: scroll and SV experiments, visual
+  tricks, lanes bent into rails, a moving playfield. Press **R** in the mod select for a playable
+  random set.
+- **Online.** Lobbies on the taiko-rs server or direct P2P, live scoreboards, spectating, friends,
+  chat, and watching friends' solo plays.
+- **Everything else.** osu! skins, map downloads from mirrors, local replays with video export,
+  offset calibration, a custom playfield size, UI colours and Discord status.
+
+## Keys
+
+| | | | |
+| --- | --- | --- | --- |
+| `D` `F` `J` `K` | rim · don · don · rim | `F1` | mods |
+| `Esc` | pause | `F2` | random song |
+| `` ` `` / `Ctrl+R` | restart | `[` `]` | speed −/+ |
+| `Space` | skip intro | `F3` `F4` | scroll speed |
+| `Tab` | songs ⇄ settings | `F9` | friends & chat |
+
+Everything is clickable too. The drum keys can be rebound in Settings → Input, and on touch
+screens the screen becomes four drum columns.
+
+## Build
 
 ```sh
 cargo build --release
-./target/release/taiko-rs                       # scans your osu! stable Songs folder (osu-winello / Wine)
-./target/release/taiko-rs ~/Downloads/*.osz     # or any Songs folder, map folder, .osz, or .osu
-./target/release/taiko-rs map.osu               # a single .osu starts immediately
-./target/release/taiko-rs --auto map.osu        # autoplay
-./target/release/taiko-rs --info map.osu        # print converted map stats (headless)
+./target/release/taiko-rs              # your osu! Songs folder
+./target/release/taiko-rs map.osz      # or any .osz / .osu / folder
 ```
 
-Build needs `clang` and PipeWire headers for the default `pipewire` feature; build with
-`--no-default-features` to use ALSA only, or set `TAIKO_ALSA=1` at runtime.
-
-## Windows
-
-Install or update with one PowerShell command (no admin needed):
-
-```powershell
-irm https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.ps1 | iex
-```
-
-It downloads the latest build from the [releases](https://github.com/Lynerrr/taiko-rs/releases/tag/latest)
-into `%LOCALAPPDATA%\Programs\taiko-rs`, adds Start menu and desktop shortcuts and launches it.
-Maps come from your osu! stable Songs folder (`%LOCALAPPDATA%\osu!\Songs`); without osu!, drop
-`.osz` files into `%APPDATA%\taiko-rs\Songs`. Settings live in `%APPDATA%\taiko-rs\config.txt`.
-Both builds are produced by GitHub Actions on every push.
-
-## Android
-
-Install `taiko-rs-android.apk` from the [releases](https://github.com/Lynerrr/taiko-rs/releases/tag/latest)
-(Android 8.0+, 64-bit ARM; allow installing from your browser or file manager when asked). To
-update, install the new APK over the old one.
-
-- **Maps**: open an `.osz` with taiko-rs (from a file manager, your browser's downloads, Telegram...)
-  or share it to taiko-rs, and it is imported; or get maps in **DOWNLOAD**. They live in
-  `Android/data/io.github.lynerrr.taiko/files/taiko-rs/Songs` (reachable over USB), with the
-  settings, scores and skins next to them. Uninstalling the app deletes that folder.
-- **Touch**: during a song the screen is four columns, each a drum key, marked along the bottom.
-  Settings → Input → *Touch layout* picks their order for your playstyle: **KDDK** (rim, centre,
-  centre, rim), **KKDD**, **DKKD** or **DDKK** (K = rim / kat, D = centre / don). Two columns of the
-  same colour always count as different hands, so hitting both is a big note. Everywhere else a
-  finger works as the mouse (tap to click, drag the song list). **Back** pauses, closes menus and
-  goes back, like Esc. A keyboard or gamepad with keys works as on desktop.
-- Audio uses AAudio's low-latency path; set the offset with Settings → Offset → *Offset calibration*.
-- Settings → Video → *Half resolution* (on by default on Android, off on desktop): the game is drawn
-  at half the screen's resolution and scaled up exactly 2x, so every pixel is a crisp 2x2 block and
-  the GPU does a quarter of the work.
-- Not on Android: the self-updater (install new APKs instead), video export (needs ffmpeg) and
-  Discord status.
-
-Build it yourself with the Android SDK and NDK, a JDK, `cargo install cargo-ndk` and
-`rustup target add aarch64-linux-android`:
-
-```sh
-android/build-apk.sh             # -> target/android/taiko-rs.apk
-android/build-apk.sh --install   # and adb install it on the connected device
-```
-
-Releases are signed with the key in the `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASS` and
-`ANDROID_KEY_ALIAS` repository secrets. With that key at `~/.android/taiko-rs-release.jks` (its
-password in `taiko-rs-release.pass` next to it), local builds are signed with it too, so either
-installs over the other; otherwise they use the SDK debug key, and switching between the two means
-uninstalling first (which deletes the app's songs). Keep a backup of the key: a new one can't update
-installed copies.
-
-The game is this crate's library started from `android_main` in a NativeActivity, with one small
-Java class (`android/java`) for importing opened files; no Gradle. Logs go to logcat (`adb logcat
--s taiko-rs`).
-
-### Updates
-
-Installed builds update themselves: at startup taiko-rs asks GitHub whether the `latest` release
-was built from a newer commit than it was, and if so a green **update** badge appears top right in
-the menus. Click it or press **Ctrl+U** (or Settings → Updates → *Update*) and it downloads the
-new build, swaps it in (on Windows the running exe is moved aside to `taiko-rs.exe.old`, deleted on
-the next start) and restarts into it. *Check at startup* turns the check off. Builds made with
-`cargo build` don't know their commit and never update themselves.
-
-**Dev builds.** Pushes to the `dev` branch publish test builds as the `dev` pre-release. Settings →
-Updates → **Build channel** switches to them (or back to stable): the next *Update* installs that
-channel's build, which keeps updating from its own channel. To install one directly, set
-`TAIKO_RS_CHANNEL=dev` for the install script (`$env:TAIKO_RS_CHANNEL="dev"; irm … | iex` on
-Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
-
-## Controls
-
-| Key | Action |
-| --- | --- |
-| D / F / J / K | left rim (kat) / left centre (don) / right centre / right rim |
-| Enter, ↑/↓, ←/→ | play, select difficulty, jump between sets |
-| type, Backspace | search |
-| Tab | switch between the SONGS and SETTINGS tabs |
-| F1 / the Mods button | mod select (song select; the host in a multiplayer lobby) |
-| [ / ] (Shift: ×5) | speed (rate) −/+ 0.05× on song select; host sets the match rate in the lobby |
-| F5 / F6 (rebindable) | previous / next playfield resolution preset, anywhere |
-| right mouse (hold and move, song select) | fly through the song list like osu!: the pointer's height over the list picks the song that far through it |
-| right click on a song / difficulty | menu: hide that difficulty or the whole song from the list (only in taiko-rs, files stay; Settings → *Hidden maps* brings them all back) |
-| left mouse (hold and drag, song select) | drag the song list up and down; a click without dragging selects / plays as before |
-| mouse (in game) | drag inside the playfield to move it, drag its edges/corners to resize it, wheel to scale it |
-| Space | skip intro |
-| Tab (in game) | hide / show the map's name and the offset/UR line (remembered) |
-| Esc (in game) | pause menu: continue, retry, playfield size, settings, quit; Esc again resumes after a short countdown (Settings → *Resume delay*, 0–3 s) |
-| F2 / Shift+F2 | random song / back to the previous random pick (song select) |
-| Ctrl+← / → | seek the song select preview ±5 s |
-| Shift+Enter | play the selected map from the start point picked on its timeline |
-| Ctrl+Enter / click the autoplay box | fullscreen preview (song select); P in the multiplayer lobby |
-| Alt + wheel | master volume (anywhere) |
-| O (in game or pause menu) | apply the live offset suggestion to this map (Shift+O: to the global offset) |
-| `` ` `` or Ctrl+R | restart map (Ctrl+R also works paused and on the results screen) |
-| Esc (song select) | clear search / quit |
-| - / = (Shift: ×5) | offset −/+ 1 ms: this map's own during a song or on its results, else the global one |
-| Ctrl + - / = (Shift: ×5) | visual offset −/+ 1 ms (notes drawn later / earlier; judging unchanged) |
-| F3 / F4 | scroll speed (1.00x = osu!'s) |
-| F7 | gameplay present mode: vsync → mailbox → immediate (menus stay on vsync by default) |
-| F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
-| F10 / F11 | FPS overlay / fullscreen (the game starts fullscreen; F11 is remembered) |
-
-**Mouse:** everything can also be clicked. The top tabs switch screens; in the song list the
-first click selects a song or difficulty and clicking the selected difficulty plays it; settings
-rows select on the first click and toggle/open on the second, and `<` / `>` step values; the pause
-menu follows the pointer; results, calibration and the multiplayer menu, lobby and results have
-buttons (each shows its key). The pointer is a small pixel arrowhead in the game's colours (it turns
-red over anything clickable); during play it hides itself after a second without moving.
-
-**Animations** (Settings → Video → *UI animations*, on by default): screens fade in, the tab and
-selection highlights glide, a song's difficulties slide open, settings scroll smoothly, the pause
-menu slides in, results count up with the grade popping in, toasts and the volume overlay slide,
-and the preview fades in on a new map. Gameplay itself is never animated or delayed by this.
-
-At startup a short **splash** plays (about 2.5 s), timed to its own voice clip: the screen powers
-on like a CRT, a boot log types out what is really starting (GPU, audio device, songs found, skin),
-a pixel portrait (one of nine, picked at random each start) assembles from don/kat coloured pixels and takes drum hits on the voice, *taiko-rs*
-drops in syllable by syllable, the hiss glitches the picture, a loading bar fills to READY and the
-screen powers off into song select, whose preview music waits until then. Effects follow the clip's
-loudness. Any key or click skips it; Settings → Video → *Startup splash* turns it off.
-
-Everything is adjustable in the **Settings** tab, split into sections in a sidebar (Gameplay, Playfield, Input, Offset, Audio, Video, Skin; PgUp/PgDn or click to switch) (scroll speed, offset, key bindings, converts,
-volumes, audio buffer, present mode, FPS cap, overlay, fullscreen) and saved
-immediately to `~/.config/taiko-rs/config.txt` (Windows: `%APPDATA%\taiko-rs\config.txt`). Losing window focus mid-song pauses the game. The results screen shows UR and mean hit error and tells
-you which way to move the offset.
-
-## Song select
-
-Songs are grouped: each beatmap set is one row, and the selected set expands to its difficulties,
-ordered by star rating. Star ratings are osu!'s own (via [rosu-pp](https://github.com/MaxOhn/rosu-pp),
-a precise port of lazer's calculator, converts included) at the current speed rate, coloured like
-osu!'s spectrum and calculated in the background for the selected song. Up/Down (and the wheel) move through the
-selected song's difficulties and on into the next or previous song; Left/Right, PgUp/PgDn (5 songs)
-and Home/End jump between songs. A song opens on the difficulty you last picked in it, else its
-hardest. Hold the right mouse button to fly through the list like osu!. The selected map's background fills the screen behind the menu, its music plays from the
-map's preview point (looping), and the panel on the right shows its details (OD, BPM, length,
-note counts) above a live autoplay preview synced to that music, and a difficulty timeline like
-lazer's song progress graph: osu!'s strain over the whole map (kiai tinted, preview point and
-playhead marked, densest second called out). Click or drag on it, use the wheel over it, or
-Ctrl+←/→ to seek the music and autoplay to any part of the map. Wherever you last scrolled to is
-remembered (a blue flag): **Play from 1:23** under the timeline (or Shift+Enter) starts the map there,
-with the music two seconds earlier and only the notes from that point on counting; retry keeps the
-start point. F2 picks a random song; the game also starts on a random one. Text is drawn with a
-built-in pixel font covering ASCII and Cyrillic, so Russian song titles (from `TitleUnicode` /
-`ArtistUnicode`), names, search and chat show as they are.
-
-**Local scores and replays:** every finished play (not autoplay or a play from a start point) is
-saved as a replay in `replays/` in the config folder. The results screen tells you where it
-ranks among your scores on that map and has **Watch replay (R)**; song select lists the map's
-best local scores under the preview panel, and clicking one plays its replay. Replays store the
-map time each hit was judged at (plus the speed and the mash setting), so watching one
-reproduces the play exactly, whatever the offset. While watching, a timeline along the bottom
-of the screen jumps anywhere in the play (click or drag it), and Left/Right skip 5 seconds back
-or forward (Shift: 15).
-
-**Replay videos:** *Export video (V)* on the results screen, or the *video* button on a score in
-song select's leaderboard (no need to watch it first), opens a video editor for that play:
-the replay at the timeline cursor (Space plays it with sound, click/drag the timeline or
-Left/Right to move), **I** / **O** set where the video starts and ends, the crop is dragged on
-the frame (edges resize) or picked with **C** (full, lane, square, vertical), **Z** the frame size
-(720p/1080p/1440p), **F** the frame rate, **H** hitsounds. **Enter** renders it frame by frame
-offscreen (with the music and the hitsounds as they were judged) into an MP4 in the `videos`
-folder next to the config; once it's saved, **Show in folder (S)** opens the file manager with
-the video selected. Needs [ffmpeg](https://ffmpeg.org) on the PATH (Windows:
-`winget install ffmpeg`).
-
-**Sorting and collections:** the *Sort* button next to the search box (or Ctrl+S, Shift for
-backwards) orders songs by artist, title, difficulty, length, BPM, recently played or date added;
-a song goes by its hardest / longest / most recently played difficulty. Difficulty, length and BPM
-come from a background pass over the library (osu!'s star ratings via rosu-pp, like the pills)
-that is cached, so only new maps are analysed on later starts; the header shows its progress.
-"Recently played" combines plays in taiko-rs with osu! stable's own history from `osu!.db`. If
-an osu! stable install owns the Songs folder, its collections (`collection.db`) are listed under
-the *Collection* button (or Ctrl+L) to show just one of them.
-
-**Fullscreen preview:** click the autoplay box (or Ctrl+Enter) to watch the autoplay over the
-whole screen, drawn in your playfield area so you can move and resize it right there (drag, drag
-the edges, wheel; F5/F6 or the *Playfield* button for presets) and see how it will look. It is marked as a preview (blue frame,
-PREVIEW header, no score) and has the full-width timeline: click to seek and pick a start point,
-then Enter or **Play from 1:23**. Esc goes back. Both previews play at the selected speed rate
-(music and autoplay; changing it carries on from the same point), and the match rate in the lobby. In a multiplayer lobby, P opens the same preview
-of the lobby map; the host's button is **Start the match from 1:23**, which sets where everyone's
-match starts (shown next to the map; players re-ready, as after a rate change). The lobby also
-plays the lobby map's music. The background also shows behind
-the lane during play, darkened by Settings → *Background dim*.
-
-## Mods
-
-**F1** (or the *Mods* button next to *Sort*) on song select opens the mod select: five columns of
-mods to switch on and off (click, or arrows + Space; Backspace clears them, F1 / Esc closes). The
-picked mods stay on until you change them (`mods =` in the config), show on the Mods button, in
-play under the accuracy, on the results screen and on your local scores. Mods that can't go
-together switch each other off (EZ/HR, DT/HT/NC/DC/WU/WD, SD/PF/NF, HD/Sudden/Memory, ...).
-
-**HP:** like osu!lazer's taiko, the HP bar (under the score) starts empty, fills as you hit and
-drains on misses; a play that ends with it under half (the mark) is **failed**: grade F, and like
-osu! the score and replay aren't kept. A play from a start point never fails on HP.
-
-| | Mod | What it does |
-|---|---|---|
-| EZ | Easy | OD ×0.5, notes 0.8× as fast, a kinder HP bar (score ×0.5) |
-| NF | No Fail | can't fail (×0.5) |
-| HT / DC | Half Time / Daycore | 0.75× speed, same pitch / lower pitch (×0.3) |
-| HA | Half Notes | every other don/kat removed (×0.5) |
-| NB | No Finishers | big notes become normal ones |
-| HR | Hard Rock | OD ×1.4, notes 1.87× as fast (osu!lazer's taiko factor), a stricter HP bar (×1.06) |
-| SD / PF | Sudden Death / Perfect | the first miss / anything but a GREAT fails the play at once |
-| DT / NC | Double Time / Nightcore | 1.5× speed, same pitch / higher pitch (×1.12) |
-| HD | Hidden | notes fade out over the first 37.5% of their way in, like osu!lazer (×1.06) |
-| FL | Flashlight | only a circle around the drum is lit; smaller at 100 and 200 combo (×1.12) |
-| PR | Precise | OD +2 |
-| GN | Great or Nothing | an OK counts as a miss |
-| RX | Relax | colours don't matter: any key hits any note (not saved) |
-| AT | Autoplay | the map plays itself (not saved) |
-| SW / RD | Swap / Random | dons ↔ kats / every note a random colour (the same each play) |
-| CS | Constant Speed | every note scrolls at the map's usual speed: no SV changes |
-| AL | Alternate | the same hand can't hit twice in a row (a 2 s pause frees it) |
-| WU / WD | Wind Up / Wind Down | the song speeds up to 1.5× / slows down to 0.75× of your speed from the first note to the last |
-| AB | All Big | every don and kat is big |
-| AC / BR | Accel / Brake | notes start slow and rush in near the drum / fly in fast and brake |
-| WV | Wave | note speed swells and falls along the song (±35%) |
-| PU / ST | Pulse / Stutter | far notes jump forward on every beat / hold for half a beat, then catch up (each still reaches the drum exactly on time) |
-| CH | SV Chaos | every note its own speed (±30%): they overtake each other |
-| CR | Combo Rush | +5% note speed per 50 combo, back to normal on a miss |
-| KB | Kiai Boost | notes in kiai time 1.3× as fast |
-| FN | Finale | the last 15% of the map 1.5× as fast |
-| SU | Sudden | notes only show up close to the drum |
-| BL | Blink | approaching notes vanish on the second half of every beat |
-| BO | Blackout | kiai time turns the lights off but around the drum |
-| SP | Spotlight | a Flashlight that breathes with the beat |
-| CL | Colorless | dons and kats look the same |
-| MM | Memory | notes only shown for the first 15 seconds |
-| MR | Mirror | the lane is flipped: notes come from the left |
-| DK / EQ / ZM | Drunk / Earthquake / Zoom | the lane sways / shakes on big hits / pulses bigger on the beat |
-
-The scroll and visual mods only change where and how notes are drawn; judging always uses the
-real note times. In multiplayer the host's mods (F1 in the lobby) apply to everyone; replays,
-spectating and friends watching you play use the mods the play had.
-
-## Playfield size and speed
-
-- **Playfield area:** gameplay can run in a smaller "window" inside a fullscreen game, handy on big
-  monitors. The lane, notes and drum are laid out inside the area as if it were the window, and
-  clipped to it; the HUD (score, accuracy, hit error meter, map info, pause menu, multiplayer
-  scoreboard) stays where it is on the screen, so moving or resizing the area never touches it. During play, drag inside it to move it,
-  drag an edge or corner to resize it (the cursor changes like on a window frame) and use the
-  wheel to scale it. Settings → *Playfield area* opens an editor with a sample playfield (mouse,
-  or arrows to move / Shift+arrows to resize, R for full screen); *Reset playfield area* restores
-  full screen. While dragging, the area snaps to the screen's edges and centre lines (guides are
-  shown; hold Shift to place freely). *Playfield preset* (Enter opens a list grouped by aspect
-  ratio, largest first; or F5/F6 anywhere, `[` / `]` in the editor) sizes it like a window of a
-  given resolution, centred: your monitor's modes plus common ones such as 1280x720, 1024x768 and
-  800x600. The playfield's resolution is shown in the bottom-right corner during play (Settings →
-  *Show playfield size*); click it, or choose *Playfield size* in the pause menu, to pick a preset
-  from the same list mid-game. Your own sizes go in its **Saved** group at the top: **S** (or
-  *+ Save current*) saves the playfield's current size, e.g. one you dragged it to, **A** (*+ Add
-  size*) types one in (`1280x720`), and on a saved size **E** edits it, **Del** deletes it and
-  **Shift+Up/Down** moves it (or the *up* / *down* / *edit* / *del* buttons on the row). They're kept in
-  that order in `saved_presets` in the config and come first for F5/F6 too; one bigger than the
-  window says *too big*.
-- **Speed (rate):** 0.50×–2.00× in 0.05× steps (`[` / `]` on song select, Shift for 0.25×, or
-  Settings → *Speed*). With *Rate keeps pitch* on (default) the music is time-stretched (WSOLA) so
-  it sounds normal, like osu!'s DT/HT; off, it is resampled and the pitch follows the speed
-  (nightcore-style). As in osu!, hit windows stay in map time, so faster is harder; offset, UR
-  and the offset suggestion stay in real milliseconds. In multiplayer the host's rate applies to
-  the match.
-
-## Offset calibration
-
-Settings → **Offset calibration** plays a generated click track (tempo set by **Calibration tempo**,
-60–240 BPM) with a centre note exactly on every click, sample-accurate. Hit F/J along with the
-clicks; your own hitsounds are muted so you sync to the click, and **H** hides the notes to
-calibrate purely by ear. The overlay shows your average error and the suggested offset live; at
-the end (or **Enter** to finish early) you get the result, using a median-filtered average that
-ignores stray taps, with **Enter** to apply, **R** to retry (Left/Right changes the tempo) and
-**Esc** to discard.
-
-You can also skip calibration: while playing any map, the line under the hit error meter shows
-your average error with its 95% margin, your current UR, and a suggested offset. It is scaled to
-your consistency: the window grows until the average is known to about ±3 ms (≈40 hits at UR 100,
-≈100 at UR 150, up to 200), it only flags an offset problem when the error exceeds that margin,
-and noisy estimates suggest a proportionally smaller change. Press **O**
-to apply it on the spot; hits recorded before the change are re-expressed under the new offset,
-so the suggestion settles instead of overshooting. Toggle it with Settings → Live offset suggestion.
-
-**Per-map offsets.** The offset from calibration (and Settings → Audio offset) is global. Each map
-can have its own offset on top, like osu!'s local offset: during a song or on its results, **-** /
-**=** (Shift ×5) change that map's offset, and **O** applies the live suggestion to it
-(**Shift+O** applies it to the global offset instead, for when every map suggests the same). The
-map's offset shows in song select next to its length; they're saved in `map_offsets.tsv` in the
-config folder. In menus, - / = change the global offset.
-
-Where music timing could differ from osu!: map audio is decoded to the same sample as BASS (the
-library osu! uses) for MP3s with a LAME header and for OGG; MP3s without one start where BASS's
-"old gaps" mode puts them (what osu!lazer uses to match osu!stable). Old maps (`osu file format`
-v4 and below) get osu!'s implicit +24 ms. Each mapper's own timing is what per-map offsets are for.
-
-**Visual offset.** The game clock follows the music as you hear it (the audio device's latency is
-measured and taken off), but a frame still takes a while to reach your eyes (compositor, monitor),
-so without help notes reach the drum a bit after the beat. osu! compensates neither, and its two
-lags roughly cancel out. Settings → Offset → **Visual offset** (or **Ctrl + - / =** in a song)
-draws the lane that many ms ahead, so notes cross the drum on the beat. Judging stays on the
-audio. Calibrate the audio offset by ear first (**H** hides the notes), then raise the visual
-offset until notes land on the clicks.
-
-## Skins
-
-Settings → Skin → **Skin** (Enter or click opens a list of every installed skin; Left/Right step through them) picks an osu! skin from osu!'s `Skins` folder (next to its
-Songs folder) or from taiko-rs's own, `~/.local/share/taiko-rs/Skins` / `%APPDATA%\taiko-rs\Skins`
-(*Skins folder* opens it; `.osk` files dropped there are unpacked on their own).
-
-Its notes replace the drawn ones: `taikohitcircle` / `taikobigcircle` tinted red or blue with
-`taikohitcircleoverlay` / `taikobigcircleoverlay` on top (`@2x` preferred), packed into one
-texture so a frame is still a single draw call. Its taiko hitsounds replace the built-in ones: `taiko-normal-hitnormal` (don), `taiko-normal-hitclap` or
-`-hitwhistle` (kat) and `taiko-normal-hitfinish`, played on top for big notes, and `combobreak`,
-played (loud, well above the hitsounds) when a miss breaks a combo of 20 or more. Anything the skin doesn't have stays built-in (the
-built-in sounds come from the quassbot v2 skin); an empty file mutes that sound, like in osu!.
-
-Hitsounds play at the volume of the map's timing point (red or green line) at the moment of the
-hit, like in osu!, times the hitsound volume setting.
-
-## Downloading maps
-
-The **DOWNLOAD** tab (or Ctrl+D on song select) searches the public osu! mirrors
-[osu.direct](https://osu.direct) and [catboy.best](https://catboy.best) (the second is tried when
-the first fails) for taiko maps (sets with taiko difficulties; only those are shown): type an
-artist, title or mapper. Like the osu! website, a **status** row picks *Has leaderboard* (ranked,
-approved, qualified and loved; the default), *Ranked*, *Qualified*, *Loved*, *Pending*, *WIP*,
-*Graveyard* or *Any*, and a **sort** row orders by relevance, title, artist, difficulty, ranked
-date, rating, plays or favourites (click the active one to flip the direction; Ctrl+Left/Right and
-Ctrl+Up/Down step through them). With no text, newest ranked first. Each result shows its mapper,
-status, number of taiko difficulties and star range. Enter, or the *Download* button, fetches the `.osz` with a progress bar and unpacks it into
-your Songs folder as `<set id> <artist> - <title>/` (the first folder being scanned, else
-`~/.local/share/taiko-rs/Songs` / `%APPDATA%\taiko-rs\Songs`, which is scanned at startup). The set
-shows up in the song list right away and is selected; sets you already have say *installed*. A
-mirror that's busy (osu.direct's passing 503s, catboy.best's rate limit) is asked again a few
-seconds later, up to three times; one that doesn't have the set (404) isn't.
-
-Before downloading, the selected result is previewed on the right like in song select: its cover
-as the background, details, star rating, difficulty timeline and the autoplay, with osu!'s ~10 s
-music clip from the preview point (so the autoplay is in sync there). Left/Right switches between
-the set's taiko difficulties (the hardest is shown first). Only that difficulty's `.osu`, the clip
-and the cover are fetched, and cached.
-
-## Multiplayer
-
-The **MULTIPLAYER** tab has two columns: **ONLINE** (lobbies on the taiko-rs server, no open
-port needed) and **DIRECT (P2P)** (one player hosts on their own port), which still works when
-the server is down.
-
-**Online:** create an account (username: 3-16 letters, digits, `_` or `-`; password: at least
-6 characters) or log in; the game remembers the session. Then *HOST AN ONLINE LOBBY*, or pick
-one of the listed lobbies (title, host, players, map, whether a match is on; refreshed every few
-seconds, **F5** to refresh now) and press Enter or click it. In online lobbies everyone shows
-up under their account name; everything else (map transfer from the host, make host,
-spectating, results) works as below. A lobby closes once it has been empty for 20 s. The
-server is `online_server` in the config (default `jashincraft.space:7800`); accounts are only
-used for multiplayer for now.
-
-**Direct** (default port **7777**):
-
-- **Host:** set your name and port, choose *HOST A GAME*. Friends need your public IP and the
-  port must be reachable (port-forwarded / open). In the lobby press **M** to pick the map from
-  your song list, **Space** to ready up, **Enter** to start once players are ready.
-- **Join:** type the host's `ip` or `ip:port` and choose *JOIN GAME*; **Space** to ready up.
-- **Make host:** the host can click *make host* on another player's row to hand over the host
-  role (picking the map, rate and start point, starting the match). If that player leaves, the
-  role goes back to whoever opened the room; only the room's owner closes it with Esc.
-- **Spectator:** in the lobby, **S** switches you between playing and spectating; a spectator
-  isn't readied and watches every match from its start.
-
-Maps are matched by a hash of the `.osu` file, so everyone needs the same difficulty in their
-Songs folder (players without it show "no map"). A player missing the map gets a **Get it from
-the host (D)** button in the lobby: it copies the host's own set folder through the room
-connection (fast, and works for unsubmitted or edited maps too; lobby only). If the host can't
-send it, or with **From the mirrors (M)** / Shift+D, the set is fetched from the mirrors instead
-(by its set ID, else by searching for it). Each client syncs its clock to the host with
-pings, and the song starts at a shared instant 3 s after everyone has loaded. During the match a
-live scoreboard shows everyone's score, accuracy and combo; there is no pause (Esc twice
-forfeits). Results show score, accuracy, max combo, judgements and UR for everyone.
-
-**Spectating:** spectators (see above) start watching when the match starts; when a match is
-already running, anyone in the lobby who has the map can press **Spectate (S)** to join it. Players stream the presses they're judged on to the room, which keeps the
-match's log, so a spectator joining late catches up; the spectator plays the map 1.5 s behind
-live with every player's presses fed in (judged with that player's mash setting). Left/Right
-switches between players, A shows everyone stacked with their scores, Esc goes back to the lobby.
-When the players skip the intro, the spectator skips it too. Spectating always uses vsync.
-
-### Friends, chat and watching
-
-While logged in (MULTIPLAYER → ONLINE), **F9** (or the *friends* chip top right in the menus)
-opens a translucent overlay over whatever screen is up, including while spectating or watching
-(never over your own play). It has three tabs (Tab / Shift+Tab or click), and the top right corner
-shows how many players are online on the server (green dot; also on the chip):
-
-- **FRIENDS:** your friends, requests and conversations (below).
-- **PLAYERS:** everyone online, with what they're doing. Type to search by name; **+ friend** /
-  Enter sends a friend request, **accept** takes theirs, **chat** opens the conversation with a
-  friend.
-- **CHAT:** the global chat, with everyone online (the last 100 lines are kept on the server while
-  it runs and shown when you connect). Wheel or PgUp / PgDn scrolls back. New lines count on the
-  tab; a line with your name in it also pops up a notification.
-
-- **Add friend:** type a name on the first row and press Enter. They get a request (notification
-  and a row in their list) to accept or decline; once both agree you're friends.
-- **Friends** are listed online first, with what they're doing (in the menus, playing a map, in
-  a lobby, in a match, watching someone). **watch** / Ctrl+W on a friend playing solo, **join** /
-  Ctrl+J on a friend in an online lobby, Del removes a friend.
-- **Chat:** select a friend and type; Enter sends. No lobby needed; messages reach them on any
-  screen (the last 100 per friend are kept on the server while it runs and shown when you come
-  online). In a lobby there's also **# lobby chat**, whose latest lines show on the lobby screen.
-- **Notifications** (top right, a few seconds, held back during songs): new messages, friend
-  requests, a friend coming online, a friend starting a map (click to watch). Unread counts show
-  on the chip.
-- **Watching a solo play:** your presses stream to the server while you play (friends only can
-  watch). The watcher plays the map 2 s behind you, holds while you pause, follows skips and
-  retries, and downloads the map from the mirrors first if they don't have it. Esc stops.
-
-Everything typed can be Cyrillic, except account names (Latin letters, digits, `_`, `-`).
-
-### Running the online server
-
-`server/` is a separate small crate (`taiko-server`): accounts (argon2 password hashes, session
-tokens) in `DATA/accounts.json`, and lobbies that run the game's own room code (`src/net.rs`).
-Its protocol is `src/online.rs`: one JSON request line and one reply per connection; after
-`Joined` the same connection speaks the room protocol.
-
-```sh
-cd server && cargo run --release -- --port 7800 --data ./data          # locally
-server/deploy/deploy.sh user@host [ssh port] [jump host]                # static build + Docker
-```
-
-`deploy.sh` builds a static (musl) binary (`rustup target add x86_64-unknown-linux-musl` once),
-copies it with `server/deploy/Dockerfile` and `docker-compose.yml` to `~/taiko-server` and runs
-it with `restart: unless-stopped`. TCP port 7800 must be reachable. The binary it replaces stays as
-`~/taiko-server/taiko-server.bak` to roll back to. When the server's ssh port isn't reachable
-directly, a jump host (`ssh -J`, e.g. an alias from `~/.ssh/config`) goes through it:
-`deploy.sh user@host 1337 vps`.
-
-## Discord status
-
-While Discord is running, your status shows *Playing taiko-rs* with what you're doing: the map
-(with stars and speed) while playing, paused or watching a replay; the multiplayer lobby, match
-or who you're spectating; song select, downloads, settings or the video editor; and how long
-you've been at it. It talks to Discord's local IPC socket directly (the desktop app, Flatpak,
-Snap and Vesktop are found), reconnects if Discord starts later, and clears the status when the
-game closes. Turn it off in Settings → Video → *Discord status* (`discord_presence = false`);
-`discord_app_id` points it at your own Discord application.
-
-## Frame pacing on Wayland
-
-Settings → *Present mode (gameplay)* applies during songs; with *Menus use vsync* (default) song
-select, its autoplay preview, settings and results always use vsync.
-
-**Use vsync (the default).** A Wayland compositor shows exactly one frame per refresh no matter
-how many you render, so mailbox/immediate don't put more frames on screen: the compositor picks
-whichever frame finished last, whose age is random each refresh (visible judder), and thousands
-of buffer commits per second compete with the compositor for the GPU — especially on an iGPU.
-Immediate only tears (the one real latency win) in fullscreen.
-
-Judging never depends on the frame rate: keys are timestamped on their own thread and audio is
-the clock, so vsync costs no accuracy.
-
-If you do use mailbox, cap it (F8) to a few times your refresh rate; the limiter sleeps and then
-spins so frames stay evenly spaced.
-
-## Diagnostics
-
-- `TAIKO_STATS=1` prints frame-time percentiles, clock-vs-wall-time jitter, clock-vs-audio
-  drift and how long each frame blocked in acquire/present after each play.
-- `TAIKO_PROFILE=1` prints the frame rate, CPU time to build a frame, submit time and shape
-  count every 2 seconds, in any screen (try with menus off vsync to see the uncapped rate).
-- `TAIKO_SHOTS=/dir:1000,5000` saves PNG screenshots at those gameplay times (plus the select
-  and results screens); `TAIKO_EXIT_AFTER=1` quits after the results screenshot.
-- `TAIKO_INPUT=2000:Tab,3000:Enter` injects key presses and `TAIKO_WALL_SHOTS=1500,2500` takes
-  screenshots at wall-clock ms after launch, for scripted UI tests.
-
-## Layout
-
-| File | |
-| --- | --- |
-| `src/beatmap.rs` | `.osu` parser, timing/SV control points, taiko conversion, barlines |
-| `src/audio.rs` | decode (symphonia) + resample, cpal/PipeWire output, mixer, built-in hitsounds |
-| `src/clock.rs` | audio-slaved smooth game clock |
-| `src/game.rs` | judging, scoring, HP, playfield drawing (and what the mods do to them) |
-| `src/mods.rs` | the mods: list, conflicts, multipliers, speed changes (Wind Up/Down time map) |
-| `src/render.rs` | wgpu SDF shape renderer, skin images, text, present mode handling |
-| `src/ui.rs` | song select and results screens |
-| `src/settings.rs` | settings tab items and layout, tab bar |
-| `src/calibrate.rs` | offset calibration: estimate, overlay and result screen |
-| `src/net.rs` | multiplayer protocol, room server, client with clock sync |
-| `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
-| `src/online.rs` | online server protocol (accounts, lobby list) and the game's side of it |
-| `server/` | `taiko-server`: accounts and server-hosted lobbies (deploy files in `server/deploy/`) |
-| `src/library.rs` | Songs folder / `.osz` scanning |
-| `src/logo.rs` | the logo: window icon, top bar |
-| `src/skin.rs` | osu! skins: listing, `.osk` unpacking, note image atlas, hitsounds |
-| `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
-| `src/discord.rs` | Discord Rich Presence over the local IPC socket / pipe |
-| `src/download.rs` | mirror search and `.osz` downloads (osu.direct, catboy.best) |
-| `src/browse.rs` | the Download tab |
-| `vendor/cpal` | cpal 0.18.2 with one fix: WASAPI counted the stream latency twice in its playback timestamps (Windows players needed a much lower offset) |
+You'll need `clang` and the PipeWire headers (or build with `--no-default-features` for ALSA
+only). The APK is built with `android/build-apk.sh`, and the online server lives in `server/`.
+
+<div align="center">
+<sub>📖 The <a href="README1.md">full guide</a> covers every setting, mod and screen.</sub>
+</div>

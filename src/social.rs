@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::online::{self, Activity, ChatLine, Friend, OnlinePlayer};
-use crate::render::{rgba, Canvas, Hit};
+use crate::render::{accent, rgba, Canvas, Hit};
 
 /// The overlay's tabs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -347,7 +347,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
     let inner = x + 8.0;
     let iw = PANEL_W - 16.0;
     if !logged_in {
-        c.text(x + 12.0, y + 9.0, 9.0, rgba(0xEB452C, a), "FRIENDS");
+        c.text(x + 12.0, y + 9.0, 9.0, rgba(accent(), a), "FRIENDS");
         c.text_right(x + PANEL_W - 12.0, y + 10.0, 7.0, rgba(0x8a8aa0, a), "F9");
         c.text(inner + 4.0, y + 34.0, 7.0, rgba(0x9a9ab0, a), "Log in under MULTIPLAYER > ONLINE");
         c.text(inner + 4.0, y + 46.0, 7.0, rgba(0x9a9ab0, a), "to add friends and chat.");
@@ -360,9 +360,9 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
         let tw = Canvas::text_width(8.0, label);
         let sel = tab == s.tab;
         let hover = c.hovered(tx - 4.0, y + 4.0, tw + 8.0, 16.0);
-        c.text(tx, y + 9.0, 8.0, rgba(if sel { 0xEB452C } else if hover { 0xdedeea } else { 0x8a8aa0 }, a), label);
+        c.text(tx, y + 9.0, 8.0, rgba(if sel { accent() } else if hover { 0xdedeea } else { 0x8a8aa0 }, a), label);
         if sel {
-            c.rect(tx, y + 19.0, tw, 1.5, rgba(0xEB452C, a));
+            c.rect(tx, y + 19.0, tw, 1.5, rgba(accent(), a));
         }
         c.hit(tx - 4.0, y + 4.0, tw + 8.0, 16.0, Hit::SocialTab(tab));
         let unread = match tab {
@@ -469,7 +469,7 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
         let sel = i == cursor;
         let hover = c.hovered(inner, ry, iw, rh - 3.0);
         let bg = if sel { 0x2b2b3d } else if hover { 0x1d1d27 } else { 0x15151d };
-        c.round_rect(inner, ry, iw, rh - 3.0, 5.0, rgba(bg, 0.85 * a), rgba(if sel { 0xEB452C } else { 0x2a2a38 }, a), 1.0);
+        c.round_rect(inner, ry, iw, rh - 3.0, 5.0, rgba(bg, 0.85 * a), rgba(if sel { accent() } else { 0x2a2a38 }, a), 1.0);
         c.hit(inner, ry, iw, rh - 3.0, Hit::SocialRow(i));
         let ty = ry + (rh - 3.0) / 2.0 - 3.5;
         match *r {
@@ -598,7 +598,7 @@ fn badge(c: &mut Canvas, cx: f32, cy: f32, n: usize, a: f32) {
     }
     let label = if n > 9 { "9+".to_string() } else { n.to_string() };
     let w = Canvas::text_width(6.0, &label) + 6.0;
-    c.round_rect(cx - w / 2.0, cy - 5.0, w, 10.0, 5.0, rgba(0xEB452C, a), rgba(0xEB452C, a), 0.0);
+    c.round_rect(cx - w / 2.0, cy - 5.0, w, 10.0, 5.0, rgba(accent(), a), rgba(accent(), a), 0.0);
     c.text_centered(cx, cy - 3.0, 6.0, rgba(0xffffff, a), &label);
 }
 

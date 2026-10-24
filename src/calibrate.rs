@@ -2,7 +2,7 @@
 //! errors into a suggested offset.
 
 use crate::game::Game;
-use crate::render::{rgba, Canvas, Hit};
+use crate::render::{accent, rgba, Canvas, Hit};
 use winit::keyboard::KeyCode;
 
 /// Clicks before the first note, so the pulse is established before you have to hit.
@@ -73,7 +73,7 @@ pub fn draw_overlay(c: &mut Canvas, game: &Game, current_offset: f64, hide_notes
     // Wide enough for its lines (wider when text comes out bigger), within the screen.
     let widest = Canvas::text_width(8.0, line).max(Canvas::text_width(9.0, &status)) + 40.0;
     let bw = widest.max(500.0).min(w - 32.0);
-    c.round_rect(w / 2.0 - bw / 2.0, 26.0, bw, 70.0, 10.0, rgba(0x000000, 0.6), rgba(0xEB452C, 0.8), 1.5);
+    c.round_rect(w / 2.0 - bw / 2.0, 26.0, bw, 70.0, 10.0, rgba(0x000000, 0.6), rgba(accent(), 0.8), 1.5);
     c.text_centered(w / 2.0, 36.0, 12.0, rgba(0xffffff, 1.0), "OFFSET CALIBRATION");
     let room = bw - 24.0;
     let size = Canvas::fit_size(8.0, 6.0, room, line);

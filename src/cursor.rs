@@ -1,5 +1,5 @@
-//! The pointer: a pixel-art arrowhead in the interface's colours (light with a red edge, red with
-//! a light edge over something clickable), scaled up with hard pixels like the LCD font.
+//! The pointer: a pixel-art arrowhead in the interface's colours (light with an accent edge,
+//! accent with a light edge over something clickable), scaled up with hard pixels like the LCD font.
 
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Cursor, CursorIcon, CustomCursor};
@@ -24,12 +24,13 @@ const ARROW: [&str; 13] = [
 
 const OUTLINE: [u8; 4] = [0x12, 0x12, 0x19, 0xff];
 const WHITE: [u8; 4] = [0xe8, 0xe8, 0xf2, 0xff];
-const ACCENT: [u8; 4] = [0xeb, 0x45, 0x2c, 0xff];
 
 /// RGBA pixels of the arrow, each art pixel `scale` x `scale`; `hover` swaps body and edge.
 fn arrow_rgba(scale: usize, hover: bool) -> (Vec<u8>, usize, usize) {
     let (w, h) = (ARROW[0].len() * scale, ARROW.len() * scale);
-    let (body, edge) = if hover { (ACCENT, WHITE) } else { (WHITE, ACCENT) };
+    let a = crate::render::accent();
+    let accent = [(a >> 16) as u8, (a >> 8) as u8, a as u8, 0xff];
+    let (body, edge) = if hover { (accent, WHITE) } else { (WHITE, accent) };
     let mut px = vec![0u8; w * h * 4];
     for (y, row) in ARROW.iter().enumerate() {
         for (x, ch) in row.bytes().enumerate() {
@@ -57,6 +58,7 @@ pub struct Cursors {
 
 impl Cursors {
     /// Art pixels are 2 screen pixels at 100% scaling, more on HiDPI screens.
+    /// In the current `render::accent`; make them again when it changes.
     pub fn new(event_loop: &ActiveEventLoop, scale_factor: f64) -> Option<Cursors> {
         let scale = (2.0 * scale_factor).round().clamp(1.0, 8.0) as usize;
         let make = |hover| {

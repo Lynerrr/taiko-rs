@@ -13,7 +13,7 @@ use crate::audio::{Sfx, Sounds, Track};
 use crate::beatmap::Beatmap;
 use crate::game::{self, Game};
 use crate::layout::{Area, Grip};
-use crate::render::{rgba, Canvas, Hit, VIRTUAL_HEIGHT};
+use crate::render::{accent, rgba, Canvas, Hit, VIRTUAL_HEIGHT};
 use crate::mods::Speed;
 use crate::scores::Replay;
 use winit::keyboard::KeyCode;
@@ -202,7 +202,7 @@ impl Editor {
         let x_of = |t: f64| tx + (((t - self.first) / span).clamp(0.0, 1.0) as f32) * tw;
         c.round_rect(tx, ty, tw, th, 4.0, rgba(0x15151d, 0.95), rgba(0x2a2a38, 1.0), 1.0);
         let (sx, ex) = (x_of(self.start), x_of(self.end));
-        c.rect(sx, ty + 1.0, (ex - sx).max(1.0), th - 2.0, rgba(0xEB452C, 0.35));
+        c.rect(sx, ty + 1.0, (ex - sx).max(1.0), th - 2.0, rgba(accent(), 0.35));
         c.rect(sx - 1.0, ty - 3.0, 2.0, th + 6.0, rgba(0x86E05A, 1.0));
         c.rect(ex - 1.0, ty - 3.0, 2.0, th + 6.0, rgba(0xFF4B4B, 1.0));
         let cx = x_of(self.cursor);
@@ -246,7 +246,7 @@ impl Editor {
             let (bw, bx, by) = (360.0, (w - 360.0) / 2.0, 220.0);
             c.text_centered(w / 2.0, by - 22.0, 11.0, rgba(0xffffff, 1.0), &format!("Exporting...  {:.0}%", p * 100.0));
             c.round_rect(bx, by, bw, 12.0, 6.0, rgba(0x15151d, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
-            c.round_rect(bx + 1.0, by + 1.0, (bw - 2.0) * p.clamp(0.0, 1.0), 10.0, 5.0, rgba(0xEB452C, 1.0), rgba(0, 0.0), 0.0);
+            c.round_rect(bx + 1.0, by + 1.0, (bw - 2.0) * p.clamp(0.0, 1.0), 10.0, 5.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
             c.text_centered(w / 2.0, by + 22.0, 7.0, rgba(0x9a9ab0, 1.0), "Esc: cancel");
         }
     }

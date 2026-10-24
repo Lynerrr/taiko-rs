@@ -112,19 +112,26 @@ impl Files {
     }
 }
 
-/// The note images osu!taiko uses: circles (tinted red or blue) and the overlays drawn on top.
+/// The images osu!taiko uses: circles (tinted red or blue) and the overlays drawn on top,
+/// drumroll bodies and ends (tinted yellow), and the spinner on its way in, its circle and its
+/// closing ring.
 const NOTE_IMAGES: [(Sprite, &[&str]); SPRITES] = [
     (Sprite::HitCircle, &["taikohitcircle"]),
     (Sprite::HitCircleOverlay, &["taikohitcircleoverlay", "taikohitcircleoverlay-0"]),
     (Sprite::BigCircle, &["taikobigcircle"]),
     (Sprite::BigCircleOverlay, &["taikobigcircleoverlay", "taikobigcircleoverlay-0"]),
+    (Sprite::RollMiddle, &["taiko-roll-middle"]),
+    (Sprite::RollEnd, &["taiko-roll-end"]),
+    (Sprite::SpinnerWarning, &["spinner-warning"]),
+    (Sprite::SpinnerCircle, &["spinner-circle"]),
+    (Sprite::SpinnerApproach, &["spinner-approachcircle"]),
 ];
 
 /// Packs the skin's note images into one atlas. Images are premultiplied (so filtering doesn't
-/// darken their edges) and capped in size: notes are never drawn bigger than that.
+/// darken their edges) and capped in size: nothing is drawn bigger than that. Rows wrap at
+/// 2048 px, the smallest texture size every GPU takes.
 fn note_atlas(files: &Files) -> Atlas {
-    const MAX: u32 = 256;
-    const GAP: u32 = 2;
+    const ROW: u32 = 2048;
     let mut images = Vec::new();
     for (sprite, stems) in NOTE_IMAGES {
         let Some((path, hd)) = files.image(stems) else { continue };
@@ -144,7 +151,9 @@ fn note_atlas(files: &Files) -> Atlas {
                 *c = ((*c as u32 * a + 127) / 255) as u8;
             }
         }
-        let scale = (MAX as f32 / img.width().max(img.height()) as f32).min(1.0);
+        // The spinner's circles are drawn bigger than notes.
+        let max = if matches!(sprite, Sprite::SpinnerCircle | Sprite::SpinnerApproach) { 512 } else { 256 };
+        let scale = (max as f32 / img.width().max(img.height()) as f32).min(1.0);
         if scale < 1.0 {
             let (w, h) = (((img.width() as f32 * scale).round() as u32).max(1), ((img.height() as f32 * scale).round() as u32).max(1));
             img = image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle);
@@ -154,20 +163,36 @@ fn note_atlas(files: &Files) -> Atlas {
     // The circle is what makes a skinned note; overlays alone stay unused.
     let has = |s: Sprite| images.iter().any(|(i, _, _)| *i as usize == s as usize);
     if !has(Sprite::HitCircle) && !has(Sprite::BigCircle) {
+        images.retain(|(i, _, _)| !matches!(i, Sprite::HitCircleOverlay | Sprite::BigCircleOverlay));
+    }
+    if images.is_empty() {
         return Atlas::default();
     }
-    let width = images.iter().map(|(_, i, _)| i.width() + GAP).sum::<u32>();
-    let height = images.iter().map(|(_, i, _)| i.height()).max().unwrap_or(1);
-    let mut atlas = Atlas { width, height, rgba: vec![0; (width * height * 4) as usize], ..Default::default() };
-    let mut x = 0;
-    for (sprite, img, size) in images {
-        for (row, line) in img.as_raw().chunks_exact(img.width() as usize * 4).enumerate() {
-            let at = ((row as u32 * width + x) * 4) as usize;
-            atlas.rgba[at..at + line.len()].copy_from_slice(line);
+    // Each image sits in a cell one pixel bigger all round, filled with copies of its edge, so
+    // filtering at the edge (or across a stretched roll body) never picks up a neighbour.
+    let mut cells = Vec::new();
+    let (mut x, mut y, mut row_h, mut width) = (0, 0, 0, 0);
+    for (_, img, _) in &images {
+        let (cw, ch) = (img.width() + 2, img.height() + 2);
+        if x > 0 && x + cw > ROW {
+            (x, y, row_h) = (0, y + row_h, 0);
         }
-        let uv = [x as f32 / width as f32, 0.0, img.width() as f32 / width as f32, img.height() as f32 / height as f32];
+        cells.push((x, y));
+        (x, row_h, width) = (x + cw, row_h.max(ch), width.max(x + cw));
+    }
+    let height = y + row_h;
+    let mut atlas = Atlas { width, height, rgba: vec![0; (width * height * 4) as usize], ..Default::default() };
+    for ((sprite, img, size), (cx, cy)) in images.into_iter().zip(cells) {
+        let (iw, ih) = (img.width(), img.height());
+        for py in 0..ih + 2 {
+            for px in 0..iw + 2 {
+                let p = img.get_pixel(px.saturating_sub(1).min(iw - 1), py.saturating_sub(1).min(ih - 1));
+                let at = (((cy + py) * width + cx + px) * 4) as usize;
+                atlas.rgba[at..at + 4].copy_from_slice(&p.0);
+            }
+        }
+        let uv = [(cx + 1) as f32 / width as f32, (cy + 1) as f32 / height as f32, iw as f32 / width as f32, ih as f32 / height as f32];
         atlas.sprites[sprite as usize] = Some((uv, size));
-        x += img.width() + GAP;
     }
     atlas
 }
@@ -232,5 +257,50 @@ mod tests {
         // Extracted once: a second call reuses the folder.
         assert_eq!(super::extract_osk(&osk).unwrap(), skin);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn atlas_packs_rolls_and_spinners_with_their_edges_copied() {
+        use crate::render::Sprite;
+        let dir = std::env::temp_dir().join(format!("taiko-rs-atlas-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let save = |name: &str, w: u32, h: u32, px: [u8; 4]| image::RgbaImage::from_pixel(w, h, image::Rgba(px)).save(dir.join(name)).unwrap();
+        // Overlays without a circle under them are left out.
+        save("taikohitcircleoverlay.png", 128, 128, [255, 255, 255, 128]);
+        save("spinner-warning.png", 128, 128, [255, 0, 0, 255]);
+        let atlas = super::note_atlas(&super::Files::read(&dir));
+        assert!(atlas.sprites[Sprite::HitCircleOverlay as usize].is_none() && atlas.sprites[Sprite::SpinnerWarning as usize].is_some());
+
+        // A 1 px wide roll body, and a full skin too wide for one 2048 px row.
+        save("taiko-roll-middle.png", 1, 128, [255, 255, 255, 255]);
+        save("Spinner-Circle@2x.png", 1024, 1024, [0, 255, 0, 255]);
+        save("spinner-approachcircle.png", 600, 600, [0, 0, 255, 255]);
+        for name in ["taikohitcircle", "taikobigcircle", "taikobigcircleoverlay", "taiko-roll-end"] {
+            save(&format!("{name}@2x.png"), 512, 512, [200, 200, 200, 255]);
+        }
+        let atlas = super::note_atlas(&super::Files::read(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(atlas.width <= 2048 && atlas.height > 514, "{}x{}", atlas.width, atlas.height);
+        // osu! sizes: 128 SD px is the radius it's drawn for, @2x counts half.
+        assert_eq!(atlas.sprites[Sprite::SpinnerCircle as usize].unwrap().1, [4.0, 4.0]);
+        assert_eq!(atlas.sprites[Sprite::RollMiddle as usize].unwrap().1, [1.0 / 128.0, 1.0]);
+        assert!(atlas.sprites.iter().all(Option::is_some));
+        // Around each image, its edge is repeated: the roll body is white on both sides.
+        let (uv, _) = atlas.sprites[Sprite::RollMiddle as usize].unwrap();
+        let (x, y) = ((uv[0] * atlas.width as f32).round() as u32, (uv[1] * atlas.height as f32).round() as u32);
+        for px in [x - 1, x, x + 1] {
+            let at = ((y + 64) * atlas.width + px) as usize * 4;
+            assert_eq!(&atlas.rgba[at..at + 4], &[255, 255, 255, 255], "x = {px}");
+        }
+        // Every image is inside the atlas and none overlap.
+        let rects: Vec<[f32; 4]> = atlas.sprites.iter().flatten().map(|(uv, _)| *uv).collect();
+        for (i, a) in rects.iter().enumerate() {
+            assert!(a[0] >= 0.0 && a[1] >= 0.0 && a[0] + a[2] <= 1.0 && a[1] + a[3] <= 1.0);
+            for b in &rects[i + 1..] {
+                assert!(a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1]);
+            }
+        }
     }
 }

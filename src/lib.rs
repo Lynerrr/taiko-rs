@@ -59,7 +59,7 @@ use game::{Game, PAUSE_ITEMS};
 use layout::{Area, Grip};
 use winit::window::CursorIcon;
 use library::Entry;
-use render::{rgba, Canvas, PresentChoice, Renderer};
+use render::{accent, rgba, themed, Canvas, PresentChoice, Renderer};
 use settings::{Dropdown, Item, PresetAction, SettingsUi};
 use mods::Mods;
 use ui::{Results, Select, SelectAction};
@@ -409,9 +409,9 @@ fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool) -> [f32; 4] {
     c.text(18.0, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &label);
     c.text(x, y + 9.0, 6.0, rgba(0x6f6f86, 1.0), "Left/Right or drag: seek");
     c.rect(x, y - th / 2.0, bw, th, rgba(0x2a2a38, 1.0));
-    c.rect(x, y - th / 2.0, bw * f, th, rgba(0xEB452C, 1.0));
+    c.rect(x, y - th / 2.0, bw * f, th, rgba(accent(), 1.0));
     let k = if hover { 5.0 } else { 3.5 };
-    c.round_rect(x + bw * f - k, y - k, k * 2.0, k * 2.0, 1.0, rgba(0xffffff, 1.0), rgba(0xEB452C, 1.0), 1.5);
+    c.round_rect(x + bw * f - k, y - k, k * 2.0, k * 2.0, 1.0, rgba(0xffffff, 1.0), rgba(accent(), 1.0), 1.5);
     rect
 }
 
@@ -443,7 +443,7 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
 
 /// Local scores for the selected map, under the song select panel.
 fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow]) {
-    let label_w = c.text(x + 4.0, y + 2.0, 7.0, rgba(0xEB452C, 1.0), "LOCAL SCORES");
+    let label_w = c.text(x + 4.0, y + 2.0, 7.0, rgba(accent(), 1.0), "LOCAL SCORES");
     if rows.is_empty() {
         let at = x + 4.0 + label_w + 14.0;
         c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, "none yet - finish a play to set one"));
@@ -495,7 +495,7 @@ fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32, slide: f32) {
     let (bx, by, bw) = (x + 12.0, y + 26.0, w - 24.0);
     c.round_rect(bx, by, bw, 6.0, 3.0, rgba(0x2a2a38, a), rgba(0, 0.0), 0.0);
     if cfg.master_volume > 0.0 {
-        c.round_rect(bx, by, (bw * cfg.master_volume).max(6.0), 6.0, 3.0, rgba(0xEB452C, a), rgba(0, 0.0), 0.0);
+        c.round_rect(bx, by, (bw * cfg.master_volume).max(6.0), 6.0, 3.0, rgba(accent(), a), rgba(0, 0.0), 0.0);
     }
     let detail = format!("music {:.0}%   hitsounds {:.0}%", cfg.music_volume * 100.0, cfg.fx_volume * 100.0);
     c.text(x + 12.0, y + 40.0, 7.0, rgba(0x9a9ab0, a), &detail);
@@ -1022,7 +1022,15 @@ impl State {
                 let cached = cached.filter(|_| speed.is_constant());
                 let track = match (cached, rate) {
                     (Some(track), _) => track,
-                    (None, Some(rate)) => Arc::new(audio::change_speed(audio::decode(&audio_path, rate)?, rate, &speed, keep_pitch)),
+                    (None, Some(rate)) => {
+                        // Shared with the preview's full decode if that is still running.
+                        let track = audio::decode_shared(&audio_path, rate)?;
+                        if speed.is_constant() {
+                            audio::with_rate(track, rate, speed.r0, keep_pitch)
+                        } else {
+                            Arc::new(audio::change_speed(Track { samples: track.samples.clone(), rate: track.rate }, rate, &speed, keep_pitch))
+                        }
+                    }
                     (None, None) => Arc::new(Track { samples: Vec::new(), rate: 1.0 }),
                 };
                 Ok((map, track))
@@ -1106,6 +1114,11 @@ impl State {
             Item::DiscordPresence => on(c.discord_presence),
             Item::ChatFilter => on(c.chat_filter),
             Item::MessageSound => on(c.message_sound),
+            Item::NotifyPlaying => on(c.notify_playing),
+            Item::NotifyOnline => on(c.notify_online),
+            Item::NotifyMessages => on(c.notify_messages),
+            Item::NotifyMentions => on(c.notify_mentions),
+            Item::NotifyRequests => on(c.notify_requests),
             Item::AntiMash => on(c.anti_mash),
             Item::ShowConverts => on(self.select.show_converts),
             Item::HiddenMaps => self.select.hidden.describe(),
@@ -1160,6 +1173,8 @@ impl State {
             Item::Skin if c.skin.is_empty() => "built-in".into(),
             Item::Skin => c.skin.clone(),
             Item::SkinFolder => "Enter to open".into(),
+            Item::Accent => render::accent_name(c.accent),
+            Item::AccentHue => format!("#{:06x}", c.accent),
         }
     }
 
@@ -1186,6 +1201,17 @@ impl State {
                 return;
             }
             Item::TouchLayout => self.cfg.touch_layout = self.cfg.touch_layout.step(dir),
+            Item::Accent => {
+                let n = render::ACCENTS.len() as i32;
+                // A colour of your own goes to the first (or last) preset.
+                let next = match render::ACCENTS.iter().position(|a| a.1 == self.cfg.accent) {
+                    Some(i) => (i as i32 + dir).rem_euclid(n),
+                    None if dir > 0 => 0,
+                    None => n - 1,
+                };
+                self.cfg.accent = render::ACCENTS[next as usize].1;
+            }
+            Item::AccentHue => self.cfg.accent = render::rotate_hue(self.cfg.accent, 10.0 * d as f32),
             Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
@@ -1198,6 +1224,11 @@ impl State {
                 }
             }
             Item::MessageSound => self.cfg.message_sound = !self.cfg.message_sound,
+            Item::NotifyPlaying => self.cfg.notify_playing = !self.cfg.notify_playing,
+            Item::NotifyOnline => self.cfg.notify_online = !self.cfg.notify_online,
+            Item::NotifyMessages => self.cfg.notify_messages = !self.cfg.notify_messages,
+            Item::NotifyMentions => self.cfg.notify_mentions = !self.cfg.notify_mentions,
+            Item::NotifyRequests => self.cfg.notify_requests = !self.cfg.notify_requests,
             Item::AntiMash => self.cfg.anti_mash = !self.cfg.anti_mash,
             Item::ShowConverts => {
                 self.select.show_converts = !self.select.show_converts;
@@ -3161,12 +3192,17 @@ impl State {
                 self.cfg.mods = Mods::NONE;
                 self.mods_changed();
             }
+            KeyCode::KeyR => {
+                let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+                self.cfg.mods = Mods::shuffle(seed);
+                self.mods_changed();
+            }
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
         }
     }
 
-    /// Tab in play: hides (or shows again) the map's name and the offset / UR line.
+    /// Tab in play: hides (or shows again) the offset / UR line.
     fn toggle_map_info(&mut self) {
         self.cfg.show_map_info = !self.cfg.show_map_info;
         self.cfg.save();
@@ -3465,15 +3501,17 @@ impl State {
                         let was_online = old.is_none_or(|o| o.activity.is_some());
                         let was_playing = old.is_some_and(|o| matches!(o.activity, Some(Activity::Playing { .. })));
                         match &f.activity {
-                            Some(Activity::Playing { map }) if !was_playing => {
+                            Some(Activity::Playing { map }) if !was_playing && self.cfg.notify_playing => {
                                 self.social.notify(format!("{} is playing", f.name), map.clone(), 0x438EAD, NoteAction::Watch(f.name.clone()))
                             }
-                            Some(a) if !was_online => self.social.notify(format!("{} is online", f.name), a.describe(), 0x86E05A, NoteAction::Chat(f.name.clone())),
+                            Some(a) if !was_online && self.cfg.notify_online => {
+                                self.social.notify(format!("{} is online", f.name), a.describe(), 0x86E05A, NoteAction::Chat(f.name.clone()))
+                            }
                             _ => {}
                         }
                     }
                     for r in &requests {
-                        if !self.social.requests.contains(r) {
+                        if !self.social.requests.contains(r) && self.cfg.notify_requests {
                             self.social.notify("friend request", format!("{r} wants to be friends"), 0xFFD34D, NoteAction::Requests);
                         }
                     }
@@ -3509,7 +3547,9 @@ impl State {
                 }
                 if !mine && fresh && !viewing {
                     *self.social.unread.entry(key(&other)).or_default() += 1;
-                    self.social.notify(line.from.clone(), line.text.clone(), 0x4fb4ff, NoteAction::Chat(line.from.clone()));
+                    if self.cfg.notify_messages {
+                        self.social.notify(line.from.clone(), line.text.clone(), 0x4fb4ff, NoteAction::Chat(line.from.clone()));
+                    }
                 }
             }
             Down::Notice(text) => self.social.notify("taiko-rs", text, 0x9a9ab0, NoteAction::None),
@@ -3529,7 +3569,7 @@ impl State {
                 if !mine && fresh && !viewing {
                     self.social.global_unread += 1;
                     // Only lines that call us by name pop up: the rest just count.
-                    if self.social.mentions_me(&line.text) {
+                    if self.cfg.notify_mentions && self.social.mentions_me(&line.text) {
                         self.social.notify(format!("{} in chat", line.from), line.text.clone(), 0x4fb4ff, NoteAction::Global);
                     }
                 }
@@ -4151,6 +4191,7 @@ impl State {
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
         render::set_animations(self.cfg.animations);
+        render::set_accent(self.cfg.accent);
         game::set_hide_great(self.cfg.hide_great);
         // Screen changes fade in.
         let kind = std::mem::discriminant(&self.scene);
@@ -4357,7 +4398,7 @@ impl State {
                 }
                 if self.picking_lobby_map {
                     let w = canvas.width;
-                    canvas.round_rect(24.0, 438.0, w - 48.0, 34.0, 8.0, rgba(0x2b1a17, 1.0), rgba(0xEB452C, 1.0), 1.5);
+                    canvas.round_rect(24.0, 438.0, w - 48.0, 34.0, 8.0, rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0), rgba(accent(), 1.0), 1.5);
                     canvas.text_centered(w / 2.0, 450.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, w - 64.0, "Picking the lobby map: Enter to choose, Esc to cancel"));
                 }
                 self.select.draw_popups(canvas, &self.library);
@@ -4414,7 +4455,6 @@ impl State {
                 }
                 // Offset advice is for live play (and its line would sit on the replay timeline).
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
-                game.show_map_info = self.cfg.show_map_info;
                 game.kiai_effects = self.cfg.kiai_effects;
                 if game.replay.is_none() {
                     game.anti_mash = self.cfg.anti_mash;
@@ -4595,7 +4635,6 @@ impl State {
                     game.autoplay(self.audio.as_ref());
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
-                game.show_map_info = self.cfg.show_map_info;
                 game.kiai_effects = self.cfg.kiai_effects;
                 if game.replay.is_none() {
                     game.anti_mash = self.cfg.anti_mash;
@@ -4790,7 +4829,7 @@ impl State {
                 layout::draw_frame(canvas, area, true);
                 let w = canvas.width;
                 let bw = (w - 32.0).min(660.0);
-                canvas.round_rect(w / 2.0 - bw / 2.0, 440.0, bw, 34.0, 8.0, rgba(0x000000, 0.75), rgba(0xEB452C, 0.6), 1.0);
+                canvas.round_rect(w / 2.0 - bw / 2.0, 440.0, bw, 34.0, 8.0, rgba(0x000000, 0.75), rgba(accent(), 0.6), 1.0);
                 let room = bw - 16.0;
                 canvas.text_centered(w / 2.0, 446.0, 8.0, rgba(0xffffff, 1.0), &Canvas::fit(8.0, room, &format!("Playfield area: {}", area.describe())));
                 let help = "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done";
@@ -5414,6 +5453,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     let mut cursor_hidden = false;
     // TAIKO_PROFILE=1: every 2 s, print where frame time goes (build = CPU under the state lock).
     let profile = std::env::var_os("TAIKO_PROFILE").is_some();
+    // The waits are only measured for the profile and the smoothness report: reading the clock
+    // can cost microseconds a time (HPET).
+    let timing = profile || std::env::var_os("TAIKO_STATS").is_some();
     let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) = (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
     // TAIKO_LAYOUT=1: print each text that doesn't fit (once), see `debug::layout_problems`.
     canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
@@ -5448,7 +5490,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             (s.present, s.cfg.fps_cap)
         };
 
-        let t0 = Instant::now();
+        let t0 = timing.then(Instant::now);
         let Some(frame) = renderer.acquire() else {
             std::thread::sleep(Duration::from_millis(2));
             continue;
@@ -5467,7 +5509,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 .iter()
                 .map(|(r, [x, y, cw, ch])| (r.clone(), [x / vw, y / render::VIRTUAL_HEIGHT, cw / vw, ch / render::VIRTUAL_HEIGHT]))
                 .collect();
-            let frame = renderer.render_offscreen(&export_canvas.shapes, &clips, w, h, [0.071, 0.071, 0.098]);
+            let frame = renderer.render_offscreen(&export_canvas.shapes, &clips, w, h, render::clear_colour());
             renderer.bg_brightness = shown;
             let Some(px) = frame else { break };
             if tx.send(px).is_err() {
@@ -5482,7 +5524,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             }
             // Video export frames above are drawn without the grid; the screen's frame with it.
             render::set_text_grid(renderer.text_grid());
+            render::set_frame_time(Some(now));
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
+            render::set_frame_time(None);
             render::set_text_grid(None);
             if canvas.audit {
                 for p in debug::layout_problems(&canvas) {
@@ -5507,29 +5551,52 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         };
         // The playfield / preview clip (fractions) plus the lists' (virtual units).
         let vw = canvas.width.max(1.0);
+        let to_fraction = |[x, y, w, h]: [f32; 4]| [x / vw, y / render::VIRTUAL_HEIGHT, w / vw, h / render::VIRTUAL_HEIGHT];
+        let opaque = canvas
+            .opaque_rect(clip.as_ref().map(|(range, a)| (range, [a.x * vw, a.y * render::VIRTUAL_HEIGHT, a.w * vw, a.h * render::VIRTUAL_HEIGHT])))
+            .map(to_fraction);
         let mut clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clip.into_iter().map(|(range, a)| (range, [a.x, a.y, a.w, a.h])).collect();
-        clips.extend(canvas.clips.drain(..).map(|(range, [x, y, w, h])| (range, [x / vw, y / render::VIRTUAL_HEIGHT, w / vw, h / render::VIRTUAL_HEIGHT])));
-        let t1 = Instant::now();
-        let shot = renderer.submit(frame, &canvas.shapes, [0.071, 0.071, 0.098], capture.is_some(), clips);
-        let presented = Instant::now();
-        if profile {
-            prof_n += 1;
-            prof_build += (t1 - now).as_secs_f64() * 1000.0;
-            prof_submit += (presented - t1).as_secs_f64() * 1000.0;
-            prof_shapes = prof_shapes.max(canvas.shapes.len());
-            if prof_start.elapsed() >= Duration::from_secs(2) {
-                let n = prof_n.max(1) as f64;
-                eprintln!(
-                    "profile: {:.0} fps  build {:.2} ms  submit {:.2} ms  shapes {}",
-                    n / prof_start.elapsed().as_secs_f64(), prof_build / n, prof_submit / n, prof_shapes
-                );
-                (prof_start, prof_n, prof_build, prof_submit, prof_shapes) = (Instant::now(), 0, 0.0, 0.0, 0);
+        clips.extend(canvas.clips.drain(..).map(|(range, r)| (range, to_fraction(r))));
+        let t1 = timing.then(Instant::now);
+        let shot = renderer.submit(frame, &canvas.shapes, render::clear_colour(), capture.is_some(), clips, opaque);
+        if let (Some(t0), Some(t1)) = (t0, t1) {
+            let presented = Instant::now();
+            // Clock-sample-to-next-refresh: approximates how stale the previous frame was when shown.
+            let sample_age = last_sample.map(|s| (acquired - s).as_secs_f64() * 1000.0).unwrap_or(0.0);
+            last_sample = Some(now);
+            waits = ((acquired - t0).as_secs_f64() * 1000.0, (presented - t1).as_secs_f64() * 1000.0, sample_age);
+            if profile {
+                prof_n += 1;
+                prof_build += (t1 - now).as_secs_f64() * 1000.0;
+                prof_submit += (presented - t1).as_secs_f64() * 1000.0;
+                prof_shapes = prof_shapes.max(canvas.shapes.len());
+                if prof_start.elapsed() >= Duration::from_secs(2) {
+                    let n = prof_n.max(1) as f64;
+                    let gpu = renderer.take_gpu_ms().map(|ms| format!("  gpu {ms:.2} ms")).unwrap_or_default();
+                    // Overdraw: the pixels this frame's quads cover, in screens (TAIKO_PROFILE=shapes
+                    // also lists the biggest).
+                    let ppu = renderer.size().1 as f32 / render::VIRTUAL_HEIGHT;
+                    let area = |sh: &render::Shape| {
+                        let pad = 1.5 + sh.params[2] * ppu;
+                        (sh.half[0] * ppu + pad) * 2.0 * (sh.half[1] * ppu + pad) * 2.0
+                    };
+                    let screen = (renderer.size().0 * renderer.size().1).max(1) as f32;
+                    let cover: f32 = canvas.shapes.iter().map(area).sum::<f32>() / screen;
+                    eprintln!(
+                        "profile: {:.0} fps  build {:.2} ms  submit {:.2} ms  shapes {}{gpu}  cover {cover:.2}",
+                        n / prof_start.elapsed().as_secs_f64(), prof_build / n, prof_submit / n, prof_shapes
+                    );
+                    if std::env::var("TAIKO_PROFILE").is_ok_and(|v| v == "shapes") {
+                        let mut big: Vec<&render::Shape> = canvas.shapes.iter().collect();
+                        big.sort_by(|a, b| area(b).total_cmp(&area(a)));
+                        for sh in big.iter().take(12) {
+                            eprintln!("  {:.3}  c {:?} h {:?} fill {:?} border {:?} p {:?}", area(sh) / screen, sh.center, sh.half, sh.fill, sh.border, sh.params);
+                        }
+                    }
+                    (prof_start, prof_n, prof_build, prof_submit, prof_shapes) = (Instant::now(), 0, 0.0, 0.0, 0);
+                }
             }
         }
-        // Clock-sample-to-next-refresh: approximates how stale the previous frame was when shown.
-        let sample_age = last_sample.map(|s| (acquired - s).as_secs_f64() * 1000.0).unwrap_or(0.0);
-        last_sample = Some(now);
-        waits = ((acquired - t0).as_secs_f64() * 1000.0, (presented - t1).as_secs_f64() * 1000.0, sample_age);
         if let (Some(name), Some((w, h, rgb))) = (capture, shot) {
             if let Some(dir) = lock(&state).shots.as_ref().map(|p| p.dir.clone()) {
                 let path = dir.join(name);
@@ -5544,8 +5611,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             // Fixed grid so frames are evenly spaced; resync if we fell behind.
             let period = Duration::from_secs_f64(1.0 / cap as f64);
             next_frame += period;
-            if next_frame < Instant::now() {
-                next_frame = Instant::now() + period;
+            let late = Instant::now();
+            if next_frame < late {
+                next_frame = late + period;
             }
             sleep_until(next_frame);
         }
@@ -5559,6 +5627,8 @@ struct App {
     cursor: CursorIcon,
     /// The pixel pointer (None if the platform refused it: the system one is used).
     cursors: Option<cursor::Cursors>,
+    /// The accent `cursors` were made in.
+    cursor_accent: u32,
     cursor_hidden: bool,
     window: Option<Arc<Window>>,
     /// Kept to make a surface for each new window (Android, after coming back from the background).
@@ -5652,6 +5722,7 @@ impl ApplicationHandler<UserEvent> for App {
         // Input only wakes this thread when there is something to do.
         event_loop.set_control_flow(ControlFlow::Wait);
         self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
+        self.cursor_accent = render::accent();
         self.window = Some(window);
         self.instance = Some(instance);
         self.set_cursor(self.cursor);
@@ -5689,6 +5760,14 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // A new UI colour: the pointer is drawn in it too.
+        if self.cursors.is_some() && self.cursor_accent != render::accent() {
+            if let Some(window) = &self.window {
+                self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
+                self.cursor_accent = render::accent();
+                self.set_cursor(self.cursor);
+            }
+        }
         match event {
             WindowEvent::CloseRequested => lock(&self.state).quit = true,
             WindowEvent::Resized(size) => {
@@ -6019,6 +6098,7 @@ fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEv
         state: Arc::new(Mutex::new(state)),
         cursor: CursorIcon::Default,
         cursors: None,
+        cursor_accent: render::DEFAULT_ACCENT,
         cursor_hidden: false,
         window: None,
         instance: None,

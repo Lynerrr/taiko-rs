@@ -103,7 +103,7 @@ pub struct Config {
     pub rate_keep_pitch: bool,
     /// Show a live offset suggestion during play.
     pub show_offset_hint: bool,
-    /// The map's name and the offset/UR line during play (Tab hides them).
+    /// The offset/UR line during play (Tab hides it).
     pub show_map_info: bool,
     /// Mods picked in the mod select (F1 on song select).
     pub mods: Mods,
@@ -125,12 +125,24 @@ pub struct Config {
     pub kiai_effects: bool,
     /// GREAT hits without their flash and label (only OKs and misses show).
     pub hide_great: bool,
+    /// The interface's accent colour (`render::ACCENTS`, or any other).
+    pub accent: u32,
     /// Show what you're doing in your Discord status.
     pub discord_presence: bool,
     /// Star out swear words in chats.
     pub chat_filter: bool,
     /// A chime when a friend messages you.
     pub message_sound: bool,
+    /// Pop-ups when a friend starts a map (off by default: busy friend lists spam them).
+    pub notify_playing: bool,
+    /// Pop-ups when a friend comes online.
+    pub notify_online: bool,
+    /// Pop-ups for friends' messages.
+    pub notify_messages: bool,
+    /// Pop-ups for global chat lines that mention you.
+    pub notify_mentions: bool,
+    /// Pop-ups for friend requests.
+    pub notify_requests: bool,
     /// Discord application whose name the status shows (empty = the built-in one).
     pub discord_app_id: String,
     /// Song select order (ui::SortMode name).
@@ -200,11 +212,17 @@ impl Default for Config {
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
             kiai_effects: true,
-            hide_great: false,
+            hide_great: true,
+            accent: crate::render::DEFAULT_ACCENT,
             discord_presence: true,
             discord_app_id: String::new(),
             chat_filter: true,
             message_sound: true,
+            notify_playing: false,
+            notify_online: true,
+            notify_messages: true,
+            notify_mentions: true,
+            notify_requests: true,
             anti_mash: false,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
@@ -331,10 +349,16 @@ impl Config {
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
-                "hide_great" => cfg.hide_great = v == "true",
+                "hide_great" => cfg.hide_great = v != "false",
+                "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
                 "discord_presence" => cfg.discord_presence = v != "false",
                 "chat_filter" => cfg.chat_filter = v != "false",
                 "message_sound" => cfg.message_sound = v != "false",
+                "notify_playing" => cfg.notify_playing = v == "true",
+                "notify_online" => cfg.notify_online = v != "false",
+                "notify_messages" => cfg.notify_messages = v != "false",
+                "notify_mentions" => cfg.notify_mentions = v != "false",
+                "notify_requests" => cfg.notify_requests = v != "false",
                 "discord_app_id" => cfg.discord_app_id = v.to_string(),
                 "anti_mash" => cfg.anti_mash = v == "true",
                 "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
@@ -436,7 +460,7 @@ impl Config {
              anti_mash = {}\n\
              show_offset_hint = {}\n\
              offset_hint_ur_scaled = {}\n\
-             # map name and UR line during play (Tab toggles)\n\
+             # offset/UR line during play (Tab toggles)\n\
              show_map_info = {}\n\
              # mods picked on song select (F1), e.g. HD,HR\n\
              mods = {}\n",
@@ -478,12 +502,20 @@ impl Config {
         );
         out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
         out.push_str(&format!(
+            "# interface colour: red (the default), pink, purple, blue, teal, green, yellow, orange or #rrggbb\naccent = {}\n",
+            crate::render::accent_name(self.accent)
+        ));
+        out.push_str(&format!(
             "# Discord status (\"Playing taiko-rs\"); app id empty = the built-in one\ndiscord_presence = {}\ndiscord_app_id = {}\n",
             self.discord_presence, self.discord_app_id
         ));
         out.push_str(&format!(
             "# chats: star out swear words; a chime when a friend messages you\nchat_filter = {}\nmessage_sound = {}\n",
             self.chat_filter, self.message_sound
+        ));
+        out.push_str(&format!(
+            "# pop-ups: a friend starts a map / comes online / messages you, a global chat line mentions you, friend requests\nnotify_playing = {}\nnotify_online = {}\nnotify_messages = {}\nnotify_mentions = {}\nnotify_requests = {}\n",
+            self.notify_playing, self.notify_online, self.notify_messages, self.notify_mentions, self.notify_requests
         ));
         out.push_str(&format!("# multiplayer\nmp_name = {}\nmp_port = {}\nmp_address = {}\n", self.mp_name, self.mp_port, self.mp_address));
         out.push_str(&format!(

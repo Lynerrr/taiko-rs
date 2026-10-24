@@ -637,6 +637,38 @@ pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
     decode_part(path, rate, None).map(|(track, _)| track)
 }
 
+/// Full decode like `decode`, but when another thread is already decoding the same file at the
+/// same rate it waits for that result instead of decoding it again (starting a song while its
+/// preview is still being decoded).
+pub fn decode_shared(path: &Path, rate: u32) -> Result<Arc<Track>, String> {
+    type Slot = Arc<std::sync::OnceLock<Result<Arc<Track>, String>>>;
+    static IN_FLIGHT: Mutex<Vec<(std::path::PathBuf, u32, Slot)>> = Mutex::new(Vec::new());
+    let (slot, mine) = {
+        let mut v = IN_FLIGHT.lock().unwrap();
+        match v.iter().find(|(p, r, _)| p == path && *r == rate) {
+            Some((_, _, s)) => (s.clone(), false),
+            None => {
+                let s: Slot = Arc::default();
+                v.push((path.to_path_buf(), rate, s.clone()));
+                (s, true)
+            }
+        }
+    };
+    let result = slot.get_or_init(|| decode(path, rate).map(Arc::new)).clone();
+    if mine {
+        IN_FLIGHT.lock().unwrap().retain(|(_, _, s)| !Arc::ptr_eq(s, &slot));
+    }
+    result
+}
+
+/// `track` for a speed modifier (see `change_rate`); the same track at normal speed.
+pub fn with_rate(track: Arc<Track>, sample_rate: u32, rate: f64, keep_pitch: bool) -> Arc<Track> {
+    if (rate - 1.0).abs() < 1e-6 {
+        return track;
+    }
+    Arc::new(change_rate(Track { samples: track.samples.clone(), rate: track.rate }, sample_rate, rate, keep_pitch))
+}
+
 /// Decodes `len_ms` of audio starting at (or just before) `from_ms`, or the whole file with
 /// `None`. Also returns the device-rate frame the first sample belongs at: the samples are
 /// identical to the same stretch of a full decode, so one can be swapped for the other mid-song.
