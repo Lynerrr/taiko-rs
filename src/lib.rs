@@ -1087,6 +1087,7 @@ impl State {
             }
             Item::PresentMode => c.present.name().to_string(),
             Item::MenuVsync => on(c.menu_vsync),
+            Item::HalfResolution => on(c.half_resolution),
             Item::FpsCap => {
                 if c.fps_cap == 0 {
                     "unlimited".into()
@@ -1178,6 +1179,7 @@ impl State {
                 self.cfg.present = if dir > 0 { self.cfg.present.next() } else { self.cfg.present.next().next() };
             }
             Item::MenuVsync => self.cfg.menu_vsync = !self.cfg.menu_vsync,
+            Item::HalfResolution => self.cfg.half_resolution = !self.cfg.half_resolution,
             Item::FpsCap => {
                 let i = FPS_CAPS.iter().position(|&c| c == self.cfg.fps_cap).unwrap_or(0) as i32;
                 self.cfg.fps_cap = FPS_CAPS[(i + dir).rem_euclid(FPS_CAPS.len() as i32) as usize];
@@ -5364,6 +5366,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                     sm.sample_waits(waits.0, waits.1, waits.2);
                 }
             }
+            renderer.pixel_scale = if s.cfg.half_resolution { 2 } else { 1 };
             (s.present, s.cfg.fps_cap)
         };
 

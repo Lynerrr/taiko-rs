@@ -81,6 +81,9 @@ pub struct Config {
     pub fx_volume: f32,
     /// Present mode during songs.
     pub present: PresentChoice,
+    /// Draw at half resolution and scale up exactly 2x (default on Android: high-DPI screens,
+    /// mobile GPUs).
+    pub half_resolution: bool,
     /// Menus (song select and its preview, settings, results) always use vsync.
     pub menu_vsync: bool,
     /// 0 = uncapped. Only applies to mailbox/immediate; vsync paces itself.
@@ -157,6 +160,7 @@ impl Default for Config {
             music_volume: 0.7,
             fx_volume: 1.0,
             present: PresentChoice::Fifo,
+            half_resolution: cfg!(target_os = "android"),
             menu_vsync: true,
             fps_cap: 0,
             calibration_bpm: 120.0,
@@ -299,6 +303,7 @@ impl Config {
                 "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "menu_vsync" => cfg.menu_vsync = v != "false",
+                "half_resolution" => cfg.half_resolution = v == "true",
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
                 "playfield_area" => cfg.playfield_area = Area::parse(v).unwrap_or(Area::FULL),
                 "bg_dim" => cfg.bg_dim = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
@@ -383,6 +388,8 @@ impl Config {
              present_mode = {}\n\
              # menus always use vsync (gameplay uses present_mode)\n\
              menu_vsync = {}\n\
+             # draw at half resolution, scaled up exactly 2x (crisp pixels, faster)\n\
+             half_resolution = {}\n\
              # mailbox/immediate only; 0 = uncapped\n\
              fps_cap = {}\n\
              calibration_bpm = {}\n\
@@ -425,6 +432,7 @@ impl Config {
             self.fx_volume,
             self.present.name(),
             self.menu_vsync,
+            self.half_resolution,
             self.fps_cap,
             self.calibration_bpm,
             self.playfield_area.to_config(),

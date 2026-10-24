@@ -75,6 +75,9 @@ update, install the new APK over the old one.
   finger works as the mouse (tap to click, drag the song list). **Back** pauses, closes menus and
   goes back, like Esc. A keyboard or gamepad with keys works as on desktop.
 - Audio uses AAudio's low-latency path; set the offset with Settings → Offset → *Offset calibration*.
+- Settings → Video → *Half resolution* (on by default on Android, off on desktop): the game is drawn
+  at half the screen's resolution and scaled up exactly 2x, so every pixel is a crisp 2x2 block and
+  the GPU does a quarter of the work.
 - Not on Android: the self-updater (install new APKs instead), video export (needs ffmpeg) and
   Discord status.
 

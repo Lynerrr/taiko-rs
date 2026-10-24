@@ -35,6 +35,7 @@ pub enum Item {
     BackgroundDim,
     PresentMode,
     MenuVsync,
+    HalfResolution,
     FpsCap,
     ShowFps,
     Animations,
@@ -47,7 +48,7 @@ pub enum Item {
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 41] = [
+pub const ITEMS: [(&str, Item); 42] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -79,6 +80,7 @@ pub const ITEMS: [(&str, Item); 41] = [
     ("AUDIO", Item::AudioBuffer),
     ("VIDEO", Item::PresentMode),
     ("VIDEO", Item::MenuVsync),
+    ("VIDEO", Item::HalfResolution),
     ("VIDEO", Item::FpsCap),
     ("VIDEO", Item::ShowFps),
     ("VIDEO", Item::Fullscreen),
@@ -141,6 +143,7 @@ impl Item {
             Item::BackgroundDim => "Background dim",
             Item::PresentMode => "Present mode (gameplay)",
             Item::MenuVsync => "Menus use vsync",
+            Item::HalfResolution => "Half resolution",
             Item::FpsCap => "FPS cap",
             Item::ShowFps => "FPS overlay",
             Item::Animations => "UI animations",
@@ -182,6 +185,7 @@ impl Item {
             Item::BackgroundDim => "How dark the map background is during play. 100% hides it.",
             Item::PresentMode => "Used during songs. vsync is smoothest on Wayland; mailbox/immediate add judder.",
             Item::MenuVsync => "Song select (and its autoplay preview), settings and results always use vsync.",
+            Item::HalfResolution => "Draw at half resolution, scaled up exactly 2x: chunky, crisp pixels and a quarter of the GPU work. For high-DPI screens.",
             Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
