@@ -11,8 +11,10 @@ use crate::clock::GameClock;
 use crate::mods::{Mod, Mods, Speed};
 use crate::render::{progress, rgba, Canvas, Hit, Sprite, VIRTUAL_HEIGHT};
 
-pub const PANEL_W: f32 = 150.0;
-pub const HIT_X: f32 = PANEL_W + 64.0;
+/// The drum on the left: lazer's input drum (180 of a 768-tall screen, in our 480 units).
+pub const PANEL_W: f32 = 112.5;
+/// Centre of the hit target: x = 160 of osu!'s 480-tall gamefield, as in stable and lazer.
+pub const HIT_X: f32 = 160.0;
 pub const LANE_Y: f32 = 160.0;
 pub const LANE_H: f32 = 118.0;
 const NOTE_R: f32 = 31.0;
@@ -236,8 +238,8 @@ pub struct Game {
 /// osu!px per ms -> virtual units per ms at scroll speed 1.0, so that a note stays on screen
 /// exactly as long as in osu!. Stable scrolls notes at their velocity across a 480-tall gamefield
 /// (the same units as ours) from its right edge to the hit target at x = 160; lazer copies that as
-/// a time range, with the aspect ratio clamped to 5:4..16:9. Our hit target sits at `HIT_X`, so
-/// the speed is scaled by how much shorter or longer our lane is.
+/// a time range, with the aspect ratio clamped to 5:4..16:9. Our hit target is osu!'s too, so this
+/// is 1.0 except outside that aspect range, where the lane is longer or shorter than osu!'s.
 fn osu_speed_scale(w: f32) -> f64 {
     let aspect = (w / VIRTUAL_HEIGHT).clamp(5.0 / 4.0, 16.0 / 9.0) as f64;
     (w - HIT_X).max(1.0) as f64 / (aspect * VIRTUAL_HEIGHT as f64 - 160.0)
