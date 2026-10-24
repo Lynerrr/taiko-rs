@@ -304,19 +304,22 @@ impl Social {
                     if !alive.load(Ordering::Relaxed) {
                         break;
                     }
-                    let up = match out.recv_timeout(Duration::from_millis(300)) {
-                        Ok(up) => Some(up),
-                        Err(mpsc::RecvTimeoutError::Timeout) if last_ping.elapsed() > Duration::from_secs(25) => Some(Up::Ping),
-                        Err(mpsc::RecvTimeoutError::Timeout) => None,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                    };
-                    if let Some(up) = up {
-                        if matches!(up, Up::Ping) {
-                            last_ping = std::time::Instant::now();
-                        }
-                        if write_line(&mut stream, &up).is_err() {
+                    // Ping on a clock, not only when idle: a solo play streams a frame every
+                    // 100 ms, and without pings the server has nothing to answer, so the reader
+                    // timed out ~70 s into every map.
+                    if last_ping.elapsed() > Duration::from_secs(25) {
+                        last_ping = std::time::Instant::now();
+                        if write_line(&mut stream, &Up::Ping).is_err() {
                             break;
                         }
+                    }
+                    let up = match out.recv_timeout(Duration::from_millis(300)) {
+                        Ok(up) => up,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    };
+                    if write_line(&mut stream, &up).is_err() {
+                        break;
                     }
                 }
                 let _ = stream.shutdown(std::net::Shutdown::Both);
