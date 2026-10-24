@@ -325,7 +325,7 @@ impl Mod {
             Spotlight => "Flashlight whose circle breathes with the beat.",
             Colorless => "Dons and kats look the same. Play by ear and memory.",
             Memory => "Notes are only shown for the first 15 seconds.",
-            Decoy => "Fake notes fly in between the real ones (now and then inside streams) and vanish.",
+            Decoy => "See-through fake notes fly in between the real ones and vanish before the drum.",
             Overtime => "It's me.",
             Liar => "Far off, triplets are spaced like 1/4s; their real spacing shows near the drum.",
             Party => "Everything flashy at once; notes pulse to their own rhythm, 1/4s four times a beat.",
