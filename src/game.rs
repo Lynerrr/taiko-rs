@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-static HIDE_GREAT: AtomicBool = AtomicBool::new(false);
+static HIDE_GREAT: AtomicBool = AtomicBool::new(true);
 
 /// GREAT hits without their splash (no flash on the hit target, no "GREAT"), like osu! skins
 /// with an empty taiko-hit300: only OKs and misses stand out (Settings -> Playfield).
