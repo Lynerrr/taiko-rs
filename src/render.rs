@@ -949,6 +949,12 @@ pub struct Canvas {
     pub clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
     /// Size (relative to the radius) of each skin image the renderer has; None = not in the skin.
     pub sprites: [Option<[f32; 2]>; SPRITES],
+    /// Layout checks (`debug::layout_problems`): record every text and rounded box drawn.
+    pub audit: bool,
+    /// Texts drawn while auditing: their glyph shapes and the string.
+    pub texts: Vec<(std::ops::Range<usize>, String)>,
+    /// Rounded boxes drawn while auditing (shape indices): the frames text should stay inside.
+    pub boxes: Vec<usize>,
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
@@ -962,6 +968,8 @@ impl Canvas {
         self.shapes.clear();
         self.hits.clear();
         self.clips.clear();
+        self.texts.clear();
+        self.boxes.clear();
         self.width = width;
     }
 
@@ -995,7 +1003,10 @@ impl Canvas {
             (false, true) => (0x34344a, 0x6a6a88),
         };
         self.round_rect(x, y, w, h, 6.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
-        self.text_centered(x + w / 2.0, y + (h - size) / 2.0, size, rgba(0xffffff, 1.0), label);
+        // A label too long for the button shrinks a little, then gets cut short.
+        let room = w - 8.0;
+        let size = Self::fit_size(size, size * 0.8, room, label);
+        self.text_centered(x + w / 2.0, y + (h - size) / 2.0, size, rgba(0xffffff, 1.0), &Self::fit(size, room, label));
         self.hit(x, y, w, h, hit);
     }
 
@@ -1003,8 +1014,21 @@ impl Canvas {
     pub fn button_row(&mut self, y: f32, buttons: &[(&str, Hit, bool)]) {
         const SIZE: f32 = 8.0;
         const GAP: f32 = 8.0;
-        let widths: Vec<f32> = buttons.iter().map(|(l, _, _)| Canvas::text_width(SIZE, l) + 28.0).collect();
-        let total = widths.iter().sum::<f32>() + GAP * (buttons.len().saturating_sub(1)) as f32;
+        let gaps = GAP * (buttons.len().saturating_sub(1)) as f32;
+        let room = self.width - 32.0 - gaps;
+        // Too wide for the screen: less padding, then every button narrower alike (labels
+        // shrink and get cut in `button`).
+        let text: Vec<f32> = buttons.iter().map(|(l, _, _)| Canvas::text_width(SIZE, l)).collect();
+        let padded = |pad: f32| text.iter().map(|t| t + pad).collect::<Vec<f32>>();
+        let mut widths = padded(28.0);
+        if widths.iter().sum::<f32>() > room {
+            widths = padded(14.0);
+            let sum = widths.iter().sum::<f32>();
+            if sum > room {
+                widths.iter_mut().for_each(|w| *w *= room / sum);
+            }
+        }
+        let total = widths.iter().sum::<f32>() + gaps;
         let mut x = (self.width - total) / 2.0;
         for ((label, hit, accent), w) in buttons.iter().zip(widths) {
             self.button(x, y, w, 20.0, label, SIZE, *hit, *accent);
@@ -1017,6 +1041,9 @@ impl Canvas {
     }
 
     pub fn round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
+        if self.audit {
+            self.boxes.push(self.shapes.len());
+        }
         self.shapes.push(Shape {
             center: [x + w / 2.0, y + h / 2.0],
             half: [w / 2.0, h / 2.0],
@@ -1095,6 +1122,7 @@ impl Canvas {
     pub fn text(&mut self, x: f32, y: f32, size: f32, color: [f32; 4], s: &str) -> f32 {
         let px = size / 7.0;
         let mut cx = x;
+        let first = self.shapes.len();
         for ch in s.chars() {
             let cols = font::glyph(ch);
             for (c, bits) in cols.iter().enumerate() {
@@ -1121,6 +1149,9 @@ impl Canvas {
             }
             cx += px * 6.0;
         }
+        if self.audit {
+            self.texts.push((first..self.shapes.len(), s.to_string()));
+        }
         cx - x
     }
 
@@ -1136,5 +1167,54 @@ impl Canvas {
     pub fn text_right(&mut self, right: f32, y: f32, size: f32, color: [f32; 4], s: &str) {
         let w = Self::text_width(size, s);
         self.text(right - w, y, size, color, s);
+    }
+
+    /// `s` as it fits in `max_w` at `size`: whole, or cut short with "...".
+    pub fn fit(size: f32, max_w: f32, s: &str) -> String {
+        if Self::text_width(size, s) <= max_w {
+            return s.to_string();
+        }
+        let room = (max_w / (size / 7.0 * 6.0)).floor() as usize;
+        if room <= 3 {
+            return String::new();
+        }
+        format!("{}...", s.chars().take(room - 3).collect::<String>().trim_end())
+    }
+
+    /// Like `fit`, but keeps the end (what is being typed) and cuts the start.
+    pub fn fit_end(size: f32, max_w: f32, s: &str) -> String {
+        if Self::text_width(size, s) <= max_w {
+            return s.to_string();
+        }
+        let room = (max_w / (size / 7.0 * 6.0)).floor() as usize;
+        if room <= 3 {
+            return String::new();
+        }
+        let n = s.chars().count();
+        format!("...{}", s.chars().skip(n + 3 - room).collect::<String>())
+    }
+
+    /// A line of key hints ("Enter play  Esc back"; items apart by two or more spaces) as it
+    /// fits in `max_w`: the first items that fit, whole.
+    pub fn fit_hints(size: f32, max_w: f32, s: &str) -> String {
+        if Self::text_width(size, s) <= max_w {
+            return s.to_string();
+        }
+        let gap = s.find("  ").map(|i| s[i..].len() - s[i..].trim_start().len()).unwrap_or(2);
+        let mut out = String::new();
+        for item in s.split("  ").map(str::trim).filter(|i| !i.is_empty()) {
+            let next = if out.is_empty() { item.to_string() } else { format!("{out}{}{item}", " ".repeat(gap)) };
+            if Self::text_width(size, &next) > max_w {
+                break;
+            }
+            out = next;
+        }
+        out
+    }
+
+    /// The size to draw `s` at so it is at most `max_w` wide: `size`, or smaller down to `min`.
+    pub fn fit_size(size: f32, min: f32, max_w: f32, s: &str) -> f32 {
+        let w = Self::text_width(size, s);
+        if w <= max_w { size } else { (size * max_w / w).max(min) }
     }
 }

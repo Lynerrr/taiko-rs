@@ -679,28 +679,54 @@ impl Select {
         crate::settings::tab_bar(c, 0, &format!("{} songs, {} maps  |  {mode}{}{}", groups.len(), self.visible.len(), self.rate_label, self.info_progress));
 
         let lw = Self::list_width(w);
-        // Sort and collection buttons share the search row.
-        let sort_label = format!("Sort: {}", self.sort.name());
-        let coll_label = match self.collection.and_then(|c| self.collections.get(c)) {
-            Some((name, _)) => format!("Collection: {}", name.chars().take(18).collect::<String>()),
-            None => "Collection: all".to_string(),
+        // Mods, sort and collection buttons share the search row, right to left. On a narrow
+        // screen the widest of them switches to a shorter label until the search box gets at
+        // least SEARCH_MIN; past that the widest give up room (their labels get cut).
+        const SEARCH_MIN: f32 = 140.0;
+        let mods = if self.mods_label.is_empty() {
+            vec!["Mods".to_string()]
+        } else {
+            vec![format!("Mods: {}", self.mods_label), format!("Mods ({})", self.mods_label.len() / 2)]
         };
-        let sw = Canvas::text_width(7.0, &sort_label) + 20.0;
-        let cw = if self.collections.is_empty() { 0.0 } else { Canvas::text_width(7.0, &coll_label) + 20.0 };
-        let mods_label = if self.mods_label.is_empty() { "Mods".to_string() } else { format!("Mods: {}", self.mods_label) };
-        let mw = Canvas::text_width(7.0, &mods_label) + 20.0;
-        let mut bx = 24.0 + lw - mw;
-        c.button(bx, 56.0, mw, 20.0, &mods_label, 7.0, Hit::ModsButton, !self.mods_label.is_empty());
-        bx -= sw + 6.0;
-        c.button(bx, 56.0, sw, 20.0, &sort_label, 7.0, Hit::SortCycle, false);
-        if cw > 0.0 {
-            bx -= cw + 6.0;
-            c.button(bx, 56.0, cw, 20.0, &coll_label, 7.0, Hit::CollectionPick, self.collection.is_some());
+        let sort = self.sort.name();
+        let mut buttons = vec![(mods, Hit::ModsButton, !self.mods_label.is_empty()), (vec![format!("Sort: {sort}"), sort.to_string()], Hit::SortCycle, false)];
+        if !self.collections.is_empty() {
+            let name = self.collection.and_then(|c| self.collections.get(c)).map_or("all", |(name, _)| name.as_str());
+            buttons.push((vec![format!("Collection: {name}"), name.to_string()], Hit::CollectionPick, self.collection.is_some()));
         }
-        let search_w = bx - 24.0 - 6.0;
-        let search = if self.filter.is_empty() { "type to search...".to_string() } else { format!("search: {}_", self.filter) };
+        let width = |label: &str| Canvas::text_width(7.0, label) + 20.0;
+        let budget = lw - SEARCH_MIN - 6.0 * buttons.len() as f32;
+        let mut pick = vec![0; buttons.len()];
+        loop {
+            let widths: Vec<f32> = buttons.iter().zip(&pick).map(|((labels, ..), &k)| width(&labels[k])).collect();
+            if widths.iter().sum::<f32>() <= budget {
+                break;
+            }
+            let shorter = (0..buttons.len()).filter(|&i| pick[i] + 1 < buttons[i].0.len()).max_by(|&a, &b| widths[a].total_cmp(&widths[b]));
+            let Some(i) = shorter else { break };
+            pick[i] += 1;
+        }
+        let labels: Vec<&str> = buttons.iter().zip(&pick).map(|((labels, ..), &k)| labels[k].as_str()).collect();
+        let natural: Vec<f32> = labels.iter().map(|l| width(l)).collect();
+        let cap = shared_cap(&natural, budget);
+        let mut bx = 24.0 + lw;
+        for ((label, (_, hit, accent)), nw) in labels.iter().zip(&buttons).zip(natural) {
+            let bw = nw.min(cap);
+            bx -= bw;
+            c.button(bx, 56.0, bw, 20.0, label, 7.0, *hit, *accent);
+            bx -= 6.0;
+        }
+        let search_w = bx - 24.0;
         c.round_rect(24.0, 54.0, search_w, 24.0, 6.0, rgba(0x23232f, 0.9), rgba(0x3a3a4e, 1.0), 1.0);
-        let search_col = if self.filter.is_empty() { 0x6f6f86 } else { 0xffffff };
+        let room = search_w - 20.0;
+        let (search, search_col) = if self.filter.is_empty() {
+            let hint = if Canvas::text_width(10.0, "type to search...") <= room { "type to search..." } else { "search..." };
+            (Canvas::fit(10.0, room, hint), 0x6f6f86)
+        } else {
+            let full = format!("search: {}_", self.filter);
+            let text = if Canvas::text_width(10.0, &full) <= room { full } else { Canvas::fit_end(10.0, room, &format!("{}_", self.filter)) };
+            (text, 0xffffff)
+        };
         c.text(34.0, 61.0, 10.0, rgba(search_col, 1.0), &search);
 
         if let Some(n) = self.scanning {
@@ -708,7 +734,9 @@ impl Select {
             c.text_centered(24.0 + lw / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("{n} files read"));
         } else if self.visible.is_empty() {
             c.text_centered(24.0 + lw / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "No maps found.");
-            c.text_centered(24.0 + lw / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), "Run: taiko-rs <Songs folder | map.osz | map.osu>");
+            let hint = "Run: taiko-rs <Songs folder | map.osz | map.osu>";
+            let size = Canvas::fit_size(10.0, 7.0, lw, hint);
+            c.text_centered(24.0 + lw / 2.0, 222.0, size, rgba(0x8a8aa0, 1.0), &Canvas::fit(size, lw, hint));
         }
 
         // Rows: one per song, plus the selected song's difficulties under it.
@@ -851,15 +879,37 @@ impl Select {
             let (y0, y1) = (y.max(top - 2.0), (*y + *hh).min(bottom + 2.0));
             (*y, *hh) = (y0, (y1 - y0).max(0.0));
         }
-        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), "Enter play  Up/Down difficulty  Left/Right song  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit");
+        let hints = "Enter play  Up/Down difficulty  Left/Right song  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit";
+        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hints));
+        c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), &Canvas::fit(7.0, w - 48.0, status));
+    }
+
+    /// The collection picker and the right-click menu, over everything else on the screen
+    /// (call after the map panel is drawn).
+    pub fn draw_popups(&self, c: &mut Canvas, library: &[Entry]) {
         if let Some(cursor) = self.picker {
             self.draw_picker(c, cursor);
         }
         if self.menu.is_some() {
             self.draw_menu(c, library);
         }
-        c.text(24.0, 466.0, 7.0, rgba(0x55556a, 1.0), status);
     }
+}
+
+/// The largest width each of `widths` may take (narrow ones keep theirs) so they add up to at
+/// most `total`; infinite if they already fit.
+fn shared_cap(widths: &[f32], total: f32) -> f32 {
+    let mut sorted = widths.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let mut left = total.max(0.0);
+    for (i, &w) in sorted.iter().enumerate() {
+        let n = (sorted.len() - i) as f32;
+        if w * n > left {
+            return left / n;
+        }
+        left -= w;
+    }
+    f32::INFINITY
 }
 
 /// The mod select (F1): a column per group, each mod a chip to switch on or off. `cursor` is
@@ -1070,7 +1120,8 @@ impl Results {
     pub fn draw(&self, c: &mut Canvas) {
         let w = c.width;
         let cx = w / 2.0;
-        c.text_centered(cx, 40.0, 12.0, rgba(0x9a9ab0, 1.0), &self.title);
+        let size = Canvas::fit_size(12.0, 9.0, w - 48.0, &self.title);
+        c.text_centered(cx, 40.0 + (12.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, w - 48.0, &self.title));
         let s = &self.stats;
         let acc = s.accuracy() * 100.0;
         let grade = if s.miss == 0 && s.ok == 0 {

@@ -16,6 +16,8 @@ mod download;
 mod font;
 mod game;
 mod layout;
+#[cfg(test)]
+mod layout_tests;
 mod library;
 mod logo;
 mod mapinfo;
@@ -429,10 +431,11 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
 fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow]) {
     c.text(x + 4.0, y + 2.0, 7.0, rgba(0xEB452C, 1.0), "LOCAL SCORES");
     if rows.is_empty() {
-        c.text(x + 90.0, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), "none yet - finish a play to set one");
+        c.text(x + 90.0, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, w - 94.0, "none yet - finish a play to set one"));
         return;
     }
-    c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), "click: watch the replay   video: export it");
+    let room = w - 20.0 - Canvas::text_width(7.0, "LOCAL SCORES");
+    c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, room, "click: watch the replay   video: export it"));
     for (k, r) in rows.iter().enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
         let hover = c.hovered(x, ry, w, 16.0);
@@ -440,13 +443,16 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         c.hit(x, ry, w, 16.0, render::Hit::ScoreRow(k));
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods) };
-        let left = format!("#{}  {:08}  {:.2}%  {}x{}{}", k + 1, r.score, r.accuracy * 100.0, r.max_combo, rate, mods);
-        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &left);
+        let core = format!("#{}  {:08}  {:.2}%  {}x", k + 1, r.score, r.accuracy * 100.0, r.max_combo);
         // The video button sits on top of the row (drawn after it, so it wins the click).
         let bw = Canvas::text_width(6.0, "video") + 12.0;
         let bx = x + w - bw - 3.0;
+        // Room goes to the score first, then the player and age on the right, then rate and mods.
+        let room = bx - 6.0 - (x + 8.0);
+        let right = Canvas::fit(6.5, room - Canvas::text_width(6.5, &core) - 12.0, &format!("{}  {} miss  {}", r.player, r.miss, scores::age(r.date)));
+        let left_room = room - if right.is_empty() { 0.0 } else { Canvas::text_width(6.5, &right) + 8.0 };
+        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
         c.button(bx, ry + 2.0, bw, 12.0, "video", 6.0, render::Hit::ScoreVideo(k), false);
-        let right = format!("{}  {} miss  {}", r.player, r.miss, scores::age(r.date));
         c.text_right(bx - 6.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
 }
@@ -535,20 +541,26 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
     let bw = Canvas::text_width(8.0, back) + 24.0;
     let bx = c.width - 44.0 - pill - bw;
     c.button(bx, 17.0, bw, 20.0, back, 8.0, render::Hit::Key(KeyCode::Escape), false);
-    let presets = format!("{size_label}  (F5/F6)");
+    // Right to left: the size button, the hints and the title share what's left. On a narrow
+    // screen the hints go first, then the size button gets shorter, so the title keeps TITLE_MIN.
+    const TITLE_MIN: f32 = 120.0;
+    let title_x = 104.0;
+    let short_size = size_label.split(" (").next().unwrap_or(size_label);
+    let presets = [format!("{size_label}  (F5/F6)"), size_label.to_string(), short_size.to_string()]
+        .into_iter()
+        .find(|p| bx - 8.0 - (Canvas::text_width(8.0, p) + 24.0) - title_x - 12.0 >= TITLE_MIN)
+        .unwrap_or_else(|| short_size.to_string());
     let pw = Canvas::text_width(8.0, &presets) + 24.0;
     let px = bx - 8.0 - pw;
     c.button(px, 17.0, pw, 20.0, &presets, 8.0, render::Hit::Presets, false);
     let hints = if lobby { "drag / wheel: playfield" } else { "Enter play   drag / wheel: playfield" };
-    let hw = Canvas::text_width(7.0, hints) + bw + pw + 20.0;
-    c.text_right(px - 12.0, 24.0, 7.0, rgba(0x8a8aa0, 1.0), hints);
-    let room = c.width - 48.0 - 110.0 - hw - pill - 24.0;
-    let mut title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
-    let max = (room / (10.0 / 7.0 * 6.0)).max(4.0) as usize;
-    if title.chars().count() > max {
-        title = title.chars().take(max.saturating_sub(3)).collect::<String>() + "...";
+    let mut title_end = px - 12.0;
+    if title_end - Canvas::text_width(7.0, hints) - 12.0 - title_x >= TITLE_MIN + 60.0 {
+        c.text_right(title_end, 24.0, 7.0, rgba(0x8a8aa0, 1.0), hints);
+        title_end -= Canvas::text_width(7.0, hints) + 12.0;
     }
-    c.text(104.0, 22.0, 10.0, rgba(0xffffff, 1.0), &title);
+    let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
+    c.text(title_x, 22.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, title_end - title_x, &title));
 }
 
 /// How a map is named to other players (lobby map, a solo play friends watch).
@@ -1086,7 +1098,6 @@ impl State {
             Item::Rate => format!("{:.2}x", c.rate),
             Item::RateKeepPitch => on(c.rate_keep_pitch),
             Item::Skin if c.skin.is_empty() => "built-in".into(),
-            Item::Skin if c.skin.chars().count() > 24 => c.skin.chars().take(21).collect::<String>() + "...",
             Item::Skin => c.skin.clone(),
             Item::SkinFolder => "Enter to open".into(),
         }
@@ -4114,12 +4125,13 @@ impl State {
                 if self.picking_lobby_map {
                     let w = canvas.width;
                     canvas.round_rect(24.0, 438.0, w - 48.0, 34.0, 8.0, rgba(0x2b1a17, 1.0), rgba(0xEB452C, 1.0), 1.5);
-                    canvas.text_centered(w / 2.0, 450.0, 10.0, rgba(0xffffff, 1.0), "Picking the lobby map: Enter to choose, Esc to cancel");
+                    canvas.text_centered(w / 2.0, 450.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, w - 64.0, "Picking the lobby map: Enter to choose, Esc to cancel"));
                 }
+                self.select.draw_popups(canvas, &self.library);
             }
             Scene::Loading { rx, label, entry, from } => {
                 canvas.text_centered(canvas.width / 2.0, 200.0, 14.0, rgba(0xffffff, 1.0), "Loading");
-                canvas.text_centered(canvas.width / 2.0, 226.0, 10.0, rgba(0x9a9ab0, 1.0), label);
+                canvas.text_centered(canvas.width / 2.0, 226.0, 10.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(10.0, canvas.width - 48.0, label));
                 match rx.try_recv() {
                     Ok(Ok((map, track))) => {
                         let mods = std::mem::take(&mut self.pending_mods);
@@ -4541,9 +4553,13 @@ impl State {
                 let area = self.cfg.playfield_area;
                 layout::draw_frame(canvas, area, true);
                 let w = canvas.width;
-                canvas.round_rect(w / 2.0 - 330.0, 440.0, 660.0, 34.0, 8.0, rgba(0x000000, 0.75), rgba(0xEB452C, 0.6), 1.0);
-                canvas.text_centered(w / 2.0, 446.0, 8.0, rgba(0xffffff, 1.0), &format!("Playfield area: {}", area.describe()));
-                canvas.text_centered(w / 2.0, 460.0, 7.0, rgba(0x9a9ab0, 1.0), "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done");
+                let bw = (w - 32.0).min(660.0);
+                canvas.round_rect(w / 2.0 - bw / 2.0, 440.0, bw, 34.0, 8.0, rgba(0x000000, 0.75), rgba(0xEB452C, 0.6), 1.0);
+                let room = bw - 16.0;
+                canvas.text_centered(w / 2.0, 446.0, 8.0, rgba(0xffffff, 1.0), &Canvas::fit(8.0, room, &format!("Playfield area: {}", area.describe())));
+                let help = "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done";
+                let size = Canvas::fit_size(7.0, 5.5, room, help);
+                canvas.text_centered(w / 2.0, 460.0 + (7.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, room, help));
             }
         }
         if self.grip.is_some() {
@@ -4631,10 +4647,14 @@ impl State {
             if now < t.until {
                 let a = (t.until.duration_since(now).as_secs_f32() / 0.3).min(1.0);
                 let rise = (1.0 - render::progress(t.until - Duration::from_millis(1500), 160.0)) * 14.0;
-                let tw = Canvas::text_width(12.0, &t.text);
+                // Long messages get smaller print, then are cut short.
+                let room = canvas.width - 72.0;
+                let size = Canvas::fit_size(12.0, 8.0, room, &t.text);
+                let text = Canvas::fit(size, room, &t.text);
+                let tw = Canvas::text_width(size, &text);
                 let x = canvas.width / 2.0 - tw / 2.0;
                 canvas.round_rect(x - 12.0, 380.0 + rise, tw + 24.0, 28.0, 8.0, rgba(0x000000, 0.7 * a), rgba(0xffffff, 0.2 * a), 1.0);
-                canvas.text(x, 388.0 + rise, 12.0, rgba(0xffffff, a), &t.text);
+                canvas.text(x, 394.0 - size / 2.0 + rise, size, rgba(0xffffff, a), &text);
             } else {
                 self.toast = None;
             }
@@ -5134,6 +5154,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     // TAIKO_PROFILE=1: every 2 s, print where frame time goes (build = CPU under the state lock).
     let profile = std::env::var_os("TAIKO_PROFILE").is_some();
     let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) = (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
+    // TAIKO_LAYOUT=1: print each text that doesn't fit (once), see `debug::layout_problems`.
+    canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
+    let mut layout_seen = std::collections::HashSet::new();
     loop {
         let (present, cap) = {
             let mut s = lock(&state);
@@ -5193,6 +5216,13 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 canvas.sprites = atlas.sprites.map(|s| s.map(|(_, size)| size));
             }
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
+            if canvas.audit {
+                for p in debug::layout_problems(&canvas) {
+                    if layout_seen.insert(p.clone()) {
+                        eprintln!("layout: {p}");
+                    }
+                }
+            }
             let hide = s.cursor_hidden(now);
             if hide != cursor_hidden {
                 cursor_hidden = hide;
@@ -5463,9 +5493,131 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+impl State {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        cfg: Config,
+        audio: Option<Engine>,
+        splash: Option<splash::Splash>,
+        songs_dir: PathBuf,
+        song_dirs: Vec<PathBuf>,
+        scan: Option<(Receiver<Vec<Entry>>, Arc<AtomicUsize>)>,
+        play_when_scanned: bool,
+        auto: bool,
+    ) -> State {
+        let library = Vec::new();
+        let mut select = Select::new(&library);
+        select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
+        select.mods_label = cfg.mods.label();
+        select.played = load_plays();
+        let updater = update::Updater::new(cfg.check_updates);
+        let present = cfg.present;
+        let fullscreen = cfg.fullscreen;
+        State {
+            cfg,
+            library,
+            select,
+            scene: Scene::Select,
+            audio,
+            toast: None,
+            stats: FrameStats {
+                last: Instant::now(),
+                frames: 0,
+                window_start: Instant::now(),
+                fps: 0.0,
+                worst_ms: 0.0,
+                worst_acc: 0.0,
+            },
+            status: String::new(),
+            modifiers_shift: false,
+            modifiers_ctrl: false,
+            modifiers_alt: false,
+            volume_shown: None,
+            splash,
+            updater,
+            volume_since: None,
+            hits: Vec::new(),
+            browse: browse::Browse::default(),
+            downloads: Vec::new(),
+            songs_dir,
+            installed_sets: None,
+            lobby_lookup: None,
+            preview_remote: false,
+            host_transfer: None,
+            scores: scores::load_index(),
+            pending_replay: None,
+            pending_mods: Mods::NONE,
+            mod_select: None,
+            leaderboard: Vec::new(),
+            export: None,
+            video_status: String::new(),
+            last_video: None,
+            bg_changed: None,
+            sprites_upload: None,
+            focused: true,
+            right_scroll: false,
+            right_press: None,
+            list_drag: None,
+            focus_seen: false,
+            mapinfo: None,
+            mapinfo_sorted: false,
+            song_dirs,
+            osudb_rx: None,
+            scene_kind: None,
+            scene_since: Instant::now(),
+            scrubbing: None,
+            auto,
+            shots: debug::ShotPlan::from_env(),
+            pending_screen_shots: vec!["select", "results"],
+            exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
+            quit: false,
+            smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
+            started: Instant::now(),
+            want_size: None,
+            present,
+            refresh_hz: 60.0,
+            settings_ui: SettingsUi::default(),
+            fullscreen,
+            adapter: String::new(),
+            input_script: debug::InputScript::from_env(),
+            wall_shots: debug::wall_shots_from_env(),
+            mp: None,
+            mp_connecting: None,
+            mp_menu: multiplayer::Menu::default(),
+            mp_status: String::new(),
+            picking_lobby_map: false,
+            discord: None,
+            map_offsets: config::load_map_offsets(),
+            play_offset: 0.0,
+            social: social::Social::default(),
+            stream: None,
+            presence: None,
+            presence_at: None,
+            scan,
+            play_when_scanned,
+            wheel_acc: 0.0,
+            mouse: (0.0, 0.0),
+            grip: None,
+            hover: None,
+            window_w: 1280.0,
+            window_h: 720.0,
+            frame_clip: None,
+            guides: Vec::new(),
+            readout_rect: None,
+            replay_bar: None,
+            replay_scrub: None,
+            mouse_moved_at: Instant::now(),
+            preview: preview::Preview::default(),
+            stars: stars::Stars::default(),
+            bg_brightness: 0.0,
+            resolutions: Vec::new(),
+            monitor_modes: Vec::new(),
+        }
+    }
+}
+
 fn main() {
     let cfg = Config::load();
-    let start_fullscreen = cfg.fullscreen;
     let mut args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let auto = args.iter().any(|a| a == "--auto");
     args.retain(|a| a != "--auto");
@@ -5517,11 +5669,6 @@ fn main() {
     };
     cfg.save();
 
-    let library = Vec::new();
-    let mut select = Select::new(&library);
-    select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
-    select.mods_label = cfg.mods.label();
-    select.played = load_plays();
     // A single .osu on the command line goes straight into gameplay.
     let play_when_scanned = args.len() == 1 && args[0].extension().is_some_and(|e| e == "osu");
     // No splash before a map given on the command line, or in scripted runs (TAIKO_SPLASH=1 forces it).
@@ -5529,108 +5676,7 @@ fn main() {
     let want_splash = std::env::var_os("TAIKO_SPLASH").is_some() || (cfg.splash && !play_when_scanned && !scripted);
     let splash = if want_splash { splash::Splash::new(audio.as_ref().map(|a| a.rate)) } else { None };
     update::cleanup();
-    let updater = update::Updater::new(cfg.check_updates);
-    let present = cfg.present;
-    let mut state = State {
-        cfg,
-        library,
-        select,
-        scene: Scene::Select,
-        audio,
-        toast: None,
-        stats: FrameStats {
-            last: Instant::now(),
-            frames: 0,
-            window_start: Instant::now(),
-            fps: 0.0,
-            worst_ms: 0.0,
-            worst_acc: 0.0,
-        },
-        status: String::new(),
-        modifiers_shift: false,
-        modifiers_ctrl: false,
-        modifiers_alt: false,
-        volume_shown: None,
-        splash,
-        updater,
-        volume_since: None,
-        hits: Vec::new(),
-        browse: browse::Browse::default(),
-        downloads: Vec::new(),
-        songs_dir,
-        installed_sets: None,
-        lobby_lookup: None,
-        preview_remote: false,
-        host_transfer: None,
-        scores: scores::load_index(),
-        pending_replay: None,
-        pending_mods: Mods::NONE,
-        mod_select: None,
-        leaderboard: Vec::new(),
-        export: None,
-        video_status: String::new(),
-        last_video: None,
-        bg_changed: None,
-        sprites_upload: None,
-        focused: true,
-        right_scroll: false,
-        right_press: None,
-        list_drag: None,
-        focus_seen: false,
-        mapinfo: None,
-        mapinfo_sorted: false,
-        song_dirs: songs_dirs_for_db,
-        osudb_rx: None,
-        scene_kind: None,
-        scene_since: Instant::now(),
-        scrubbing: None,
-        auto,
-        shots: debug::ShotPlan::from_env(),
-        pending_screen_shots: vec!["select", "results"],
-        exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
-        quit: false,
-        smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
-        started: Instant::now(),
-        want_size: None,
-        present,
-        refresh_hz: 60.0,
-        settings_ui: SettingsUi::default(),
-        fullscreen: start_fullscreen,
-        adapter: String::new(),
-        input_script: debug::InputScript::from_env(),
-        wall_shots: debug::wall_shots_from_env(),
-        mp: None,
-        mp_connecting: None,
-        mp_menu: multiplayer::Menu::default(),
-        mp_status: String::new(),
-        picking_lobby_map: false,
-        discord: None,
-        map_offsets: config::load_map_offsets(),
-        play_offset: 0.0,
-        social: social::Social::default(),
-        stream: None,
-        presence: None,
-        presence_at: None,
-        scan: Some((scan_rx, found)),
-        play_when_scanned,
-        wheel_acc: 0.0,
-        mouse: (0.0, 0.0),
-        grip: None,
-        hover: None,
-        window_w: 1280.0,
-        window_h: 720.0,
-        frame_clip: None,
-        guides: Vec::new(),
-        readout_rect: None,
-        replay_bar: None,
-        replay_scrub: None,
-        mouse_moved_at: Instant::now(),
-        preview: preview::Preview::default(),
-        stars: stars::Stars::default(),
-        bg_brightness: 0.0,
-        resolutions: Vec::new(),
-        monitor_modes: Vec::new(),
-    };
+    let mut state = State::new(cfg, audio, splash, songs_dir, songs_dirs_for_db, Some((scan_rx, found)), play_when_scanned, auto);
     state.load_skin();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
     let mut app = App {

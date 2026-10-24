@@ -74,7 +74,8 @@ pub fn draw_overlay(c: &mut Canvas, game: &Game, current_offset: f64, hide_notes
         None => format!("current offset {current_offset:+.0} ms   waiting for hits..."),
     };
     c.text_centered(w / 2.0, 74.0, 9.0, rgba(0xFFD34D, 1.0), &status);
-    c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x6f6f86, 1.0), "H hide/show notes    Enter finish early    Esc cancel");
+    // Above the playfield size readout in the bottom-right corner.
+    c.text_centered(w / 2.0, 448.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(8.0, w - 48.0, "H hide/show notes    Enter finish early    Esc cancel"));
 }
 
 pub fn draw_result(c: &mut Canvas, e: &Estimate, current_offset: f64, bpm: f64) {

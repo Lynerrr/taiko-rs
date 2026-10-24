@@ -358,9 +358,8 @@ pub fn draw_notes(c: &mut Canvas, s: &Social) {
         let hover = c.hovered(x, y, w, h);
         c.round_rect(x + slide, y, w, h, 6.0, rgba(if hover { 0x1d1d27 } else { 0x0b0b12 }, 0.86 * a), rgba(n.colour, a), 1.0);
         c.rect(x + slide + 1.0, y + 4.0, 2.0, h - 8.0, rgba(n.colour, a));
-        c.text(x + slide + 9.0, y + 6.0, 7.0, rgba(n.colour, a), &n.title);
-        let body: String = n.body.chars().take(44).collect();
-        c.text(x + slide + 9.0, y + 17.0, 6.5, rgba(0xdedeea, a), &body);
+        c.text(x + slide + 9.0, y + 6.0, 7.0, rgba(n.colour, a), &Canvas::fit(7.0, w - 15.0, &n.title));
+        c.text(x + slide + 9.0, y + 17.0, 6.5, rgba(0xdedeea, a), &Canvas::fit(6.5, w - 15.0, &n.body));
         if n.action != NoteAction::None {
             c.hit(x, y, w, h, Hit::SocialNote(i));
         }

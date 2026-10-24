@@ -281,3 +281,132 @@ pub fn wall_shots_from_env() -> Vec<f64> {
     v.sort_by(|a, b| b.total_cmp(a));
     v
 }
+
+/// Text that doesn't fit, as readable lines: off screen, sticking out of the rounded box it sits
+/// in, cut off by a clip, or drawn over other text. The canvas must have been drawn with `audit`.
+pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
+    type Rect = [f32; 4]; // x0, y0, x1, y1
+    const EPS: f32 = 0.6;
+    let bounds = |i: usize| -> Rect {
+        let s = &c.shapes[i];
+        [s.center[0] - s.half[0], s.center[1] - s.half[1], s.center[0] + s.half[0], s.center[1] + s.half[1]]
+    };
+    let contains = |r: Rect, x: f32, y: f32| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
+    let inside = |a: Rect, b: Rect| a[0] >= b[0] - EPS && a[2] <= b[2] + EPS && a[1] >= b[1] - EPS && a[3] <= b[3] + EPS;
+    let clip_of = |i: usize| -> Option<Rect> {
+        c.clips.iter().filter(|(r, _)| r.contains(&i)).fold(None, |acc: Option<Rect>, (_, [x, y, w, h])| {
+            let r = [*x, *y, x + w, y + h];
+            Some(match acc {
+                Some(a) => [a[0].max(r[0]), a[1].max(r[1]), a[2].min(r[2]), a[3].min(r[3])],
+                None => r,
+            })
+        })
+    };
+    let fmt = |r: Rect| format!("{:.0}..{:.0} x {:.0}..{:.0}", r[0], r[2], r[1], r[3]);
+    let short = |s: &str| if s.chars().count() > 48 { format!("{}...", s.chars().take(45).collect::<String>()) } else { s.to_string() };
+
+    // Visible texts: (first shape, last shape + 1, ink rect, visible part, string).
+    let mut texts: Vec<(usize, usize, Rect, Rect, &str)> = Vec::new();
+    let mut out = Vec::new();
+    for (range, s) in &c.texts {
+        if range.is_empty() || c.shapes[range.start].fill[3] < 0.15 {
+            continue;
+        }
+        let ink = range.clone().map(bounds).fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+        let mut seen = ink;
+        if let Some(clip) = clip_of(range.start) {
+            seen = [ink[0].max(clip[0]), ink[1].max(clip[1]), ink[2].min(clip[2]), ink[3].min(clip[3])];
+            if seen[0] >= seen[2] || seen[1] >= seen[3] {
+                continue;
+            }
+            if ink[0] < clip[0] - EPS || ink[2] > clip[2] + EPS {
+                out.push(format!("cut off: \"{}\" {} by its clip {}", short(s), fmt(ink), fmt(clip)));
+            }
+        }
+        if ink[0] < -EPS || ink[2] > c.width + EPS || ink[1] < -EPS || ink[3] > crate::render::VIRTUAL_HEIGHT + EPS {
+            out.push(format!("off screen: \"{}\" {} (width {:.0})", short(s), fmt(ink), c.width));
+        }
+        // The box under the text's start and under its middle (centred labels): the topmost
+        // visible rounded box drawn before it.
+        let mid_y = (ink[1] + ink[3]) / 2.0;
+        for x in [ink[0] + 1.0, (ink[0] + ink[2]) / 2.0] {
+            let holder = c.boxes.iter().rev().filter(|&&b| b < range.start).find(|&&b| {
+                let sh = &c.shapes[b];
+                let visible = sh.fill[3] > 0.1 || (sh.border[3] > 0.1 && sh.params[1] > 0.0);
+                visible && contains(bounds(b), x, mid_y)
+            });
+            if let Some(&b) = holder {
+                if !inside(seen, bounds(b)) {
+                    out.push(format!("sticks out: \"{}\" {} past its box {}", short(s), fmt(seen), fmt(bounds(b))));
+                    break;
+                }
+            }
+        }
+        texts.push((range.start, range.end, ink, seen, s));
+    }
+    for (i, a) in texts.iter().enumerate() {
+        for b in &texts[i + 1..] {
+            let r = [a.3[0].max(b.3[0]), a.3[1].max(b.3[1]), a.3[2].min(b.3[2]), a.3[3].min(b.3[3])];
+            if r[2] - r[0] < 1.0 || r[3] - r[1] < 1.0 {
+                continue;
+            }
+            // A drop shadow: the same text a pixel or two away.
+            if a.4 == b.4 && (a.2[0] - b.2[0]).abs() <= 2.5 && (a.2[1] - b.2[1]).abs() <= 2.5 {
+                continue;
+            }
+            // Something opaque drawn in between hides the first one there (a dialog over a screen).
+            let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+            let covered = (a.1..b.0).any(|k| {
+                let sh = &c.shapes[k];
+                sh.fill[3] >= 0.6 && sh.half[0] >= 3.0 && sh.half[1] >= 3.0 && sh.params[3] < 0.5 && contains(bounds(k), cx, cy)
+            });
+            if !covered {
+                out.push(format!("overlap: \"{}\" {} and \"{}\" {}", short(a.4), fmt(a.3), short(b.4), fmt(b.3)));
+            }
+        }
+    }
+    out
+}
+
+/// Draws a canvas on the CPU into an RGB image `scale` pixels per virtual unit: boxes, circles
+/// and text, no glows or skin images. For looking at test frames without a window.
+#[cfg(test)]
+pub fn rasterize(c: &crate::render::Canvas, scale: f32) -> (u32, u32, Vec<u8>) {
+    let (w, h) = ((c.width * scale).round() as u32, (crate::render::VIRTUAL_HEIGHT * scale).round() as u32);
+    let mut px = vec![[0.071f32, 0.071, 0.098]; (w * h) as usize];
+    for (i, sh) in c.shapes.iter().enumerate() {
+        if sh.params[2] > 0.0 || sh.params[3] >= 9.5 {
+            continue;
+        }
+        let clip = c.clips.iter().filter(|(r, _)| r.contains(&i)).fold([0.0, 0.0, f32::MAX, f32::MAX], |a: [f32; 4], (_, [x, y, cw, ch])| {
+            [a[0].max(*x), a[1].max(*y), a[2].min(x + cw), a[3].min(y + ch)]
+        });
+        let (hx, hy) = (sh.half[0].abs(), sh.half[1].abs());
+        let radius = sh.params[0].min(hx).min(hy);
+        let border = sh.params[1];
+        let x0 = ((sh.center[0] - hx).max(clip[0]) * scale).floor().max(0.0) as u32;
+        let x1 = ((sh.center[0] + hx).min(clip[2]) * scale).ceil().clamp(0.0, w as f32) as u32;
+        let y0 = ((sh.center[1] - hy).max(clip[1]) * scale).floor().max(0.0) as u32;
+        let y1 = ((sh.center[1] + hy).min(clip[3]) * scale).ceil().clamp(0.0, h as f32) as u32;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (vx, vy) = ((x as f32 + 0.5) / scale, (y as f32 + 0.5) / scale);
+                if (sh.params[3] == 1.0 && vx > sh.center[0]) || (sh.params[3] == 2.0 && vx < sh.center[0]) {
+                    continue;
+                }
+                // Signed distance to the rounded rect.
+                let (qx, qy) = ((vx - sh.center[0]).abs() - hx + radius, (vy - sh.center[1]).abs() - hy + radius);
+                let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius;
+                if d > 0.0 {
+                    continue;
+                }
+                let col = if border > 0.0 && d > -border { sh.border } else { sh.fill };
+                let p = &mut px[(y * w + x) as usize];
+                for k in 0..3 {
+                    p[k] += (col[k] - p[k]) * col[3];
+                }
+            }
+        }
+    }
+    (w, h, px.iter().flat_map(|p| p.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8)).collect())
+}
