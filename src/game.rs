@@ -263,9 +263,8 @@ pub struct Game {
     /// Overtime: when (map ms) he shows up, and the next one due.
     scares: Vec<f64>,
     next_scare: usize,
-    /// Multiverse: when the focus moves to another playfield (map ms), which one it goes to,
-    /// and the beat length there.
-    focus_switches: Vec<(f64, usize, f64)>,
+    /// Multiverse: where the focus moves to another playfield.
+    focus_switches: Vec<FocusSwitch>,
 }
 
 /// Decoy: how opaque the fake notes are next to real ones.
@@ -279,18 +278,39 @@ const MANIA_LANE: f32 = 340.0;
 /// Spin: how long the lane is as it turns about the middle of the screen.
 const SPIN_LANE: f32 = 300.0;
 
-/// Multiverse: where each playfield floats, top to bottom: its left edge (a part of the
-/// screen's width), the middle of its lane (virtual units) and how far it leans out of focus
-/// (radians). Staggered, so they read as separate windows.
-const FIELDS: [(f32, f32, f32); 3] = [(0.03, 140.0, -0.035), (0.13, 248.0, 0.03), (0.06, 356.0, -0.02)];
-/// Multiverse: a playfield's size out of focus and in it. In focus it reaches 97% across.
-const FIELD_ZOOM: (f32, f32) = (0.5, 0.7);
-/// Multiverse: the playfield that has the focus first (the middle one).
-const FIRST_FOCUS: usize = 1;
+/// Multiverse: how many playfields there are.
+const FIELD_COUNT: usize = 5;
+/// Multiverse: the spots the playfields float about, top to bottom: the left edge (a part of
+/// the screen's width), the middle of the lane (virtual units) and how far a playfield there
+/// leans out of focus (radians). Staggered, so they read as separate windows.
+const SLOTS: [(f32, f32, f32); FIELD_COUNT] =
+    [(0.0, 66.0, -0.03), (0.15, 138.0, 0.025), (0.05, 210.0, -0.02), (0.18, 282.0, 0.03), (0.08, 354.0, -0.025)];
+/// Multiverse: how much of the screen's width a playfield spans in focus.
+const FIELD_W: f32 = 0.78;
+/// Multiverse: a playfield's size out of focus and in it.
+const FIELD_ZOOM: (f32, f32) = (0.42, 0.6);
+/// Multiverse: the playfields drawn the other way round (notes come from the left).
+const MIRRORED: [bool; FIELD_COUNT] = [false, true, false, true, false];
+/// Multiverse: the playfield that has the focus first (in the middle spot).
+const FIRST_FOCUS: usize = 2;
 /// Multiverse: the colour of the focus (its halo, frame and burst).
 const FOCUS_COL: u32 = 0xbfe9ff;
 /// Multiverse: how long (ms) the burst lasts as a playfield takes the focus.
 const FOCUS_BURST_MS: f64 = 600.0;
+
+/// Multiverse: the focus moving to another playfield.
+#[derive(Clone, Copy, Debug)]
+struct FocusSwitch {
+    /// The bar it lands on (map ms).
+    at: f64,
+    /// The playfield that gets it.
+    field: usize,
+    /// The beat length there.
+    beat: f64,
+    /// Each playfield's spot (index into `SLOTS`) from then on: the ones neither losing nor
+    /// taking the focus swap places.
+    slots: [usize; FIELD_COUNT],
+}
 
 /// Multiverse: how a playfield looks this frame.
 #[derive(Clone, Copy, Default)]
@@ -303,11 +323,15 @@ struct Focus {
     call: f32,
     /// How far its burst has spread (0-1), just after it took the focus.
     burst: Option<f32>,
+    /// Where it floats: like `SLOTS`, gliding from one to another as it changes places.
+    spot: (f32, f32, f32),
+    /// Drawn the other way round.
+    mirrored: bool,
 }
 
 impl Focus {
     /// The one playfield there is without Multiverse.
-    const FULL: Focus = Focus { focus: 1.0, grow: 1.0, call: 0.0, burst: None };
+    const FULL: Focus = Focus { focus: 1.0, grow: 1.0, call: 0.0, burst: None, spot: (0.0, 0.0, 0.0), mirrored: false };
 }
 
 /// osu!px per ms -> virtual units per ms at scroll speed 1.0, so that a note stays on screen
@@ -680,21 +704,29 @@ fn roulette_sections(map: &Beatmap) -> Vec<(f64, f64)> {
     out
 }
 
-/// Multiverse: where the focus moves to another playfield (map ms), which one, and the beat
-/// length there. Every 4 bars, every 2 in kiai time, from the first note to the last; never
-/// back to the one it just left.
-fn focus_switches(map: &Beatmap) -> Vec<(f64, usize, f64)> {
+/// Multiverse: where the focus moves to another playfield. Every 2 bars, every bar in kiai
+/// time, from the first note to the last, to any playfield but the one that has it; the rest
+/// change places round a circle, so where each one is can't be learnt.
+fn focus_switches(map: &Beatmap) -> Vec<FocusSwitch> {
     let first = map.notes.first().map_or(0.0, |n| n.time);
     let last = map.notes.iter().map(|n| n.end_time).fold(f64::NEG_INFINITY, f64::max);
     let mut focus = FIRST_FOCUS;
+    let mut slots: [usize; FIELD_COUNT] = std::array::from_fn(|f| f);
     let mut out = Vec::new();
     for (i, b) in map.barlines.iter().enumerate().skip(1) {
         let cp = beatmap::control_point_at(&map.control_points, b.time);
-        if i % if cp.kiai { 2 } else { 4 } != 0 || b.time <= first + 1000.0 || b.time >= last {
+        if i % if cp.kiai { 1 } else { 2 } != 0 || b.time <= first + 1000.0 || b.time >= last {
             continue;
         }
-        focus = (focus + 1 + (hash01(b.time + 0.83) < 0.5) as usize) % FIELDS.len();
-        out.push((b.time, focus, cp.beat_length));
+        let next = (focus + 1 + (hash01(b.time + 0.83) * (FIELD_COUNT - 1) as f64) as usize % (FIELD_COUNT - 1)) % FIELD_COUNT;
+        let rest: Vec<usize> = (0..FIELD_COUNT).filter(|&f| f != focus && f != next).collect();
+        let spots: Vec<usize> = rest.iter().map(|&f| slots[f]).collect();
+        let turn = 1 + (hash01(b.time + 0.29) * (rest.len() - 1) as f64) as usize % (rest.len() - 1);
+        for (k, &f) in rest.iter().enumerate() {
+            slots[f] = spots[(k + turn) % rest.len()];
+        }
+        focus = next;
+        out.push(FocusSwitch { at: b.time, field: next, beat: cp.beat_length, slots });
     }
     out
 }
@@ -1836,18 +1868,31 @@ impl Game {
 
     /// Multiverse at map time `t`, for each playfield (see `Focus`). The focus slides across over
     /// the last three quarters of a beat before its bar; the playfield it goes to is called on
-    /// each of the two beats before that.
-    fn multiverse_at(&self, t: f64) -> [Focus; 3] {
-        let mut out = [Focus::default(); 3];
+    /// each of the two beats before that. The others change places over the beat after it.
+    fn multiverse_at(&self, t: f64) -> [Focus; FIELD_COUNT] {
+        let mut out = [Focus::default(); FIELD_COUNT];
         let sw = &self.focus_switches;
-        let i = sw.partition_point(|s| s.0 <= t);
-        let now = i.checked_sub(1).map_or(FIRST_FOCUS, |i| sw[i].1);
+        let i = sw.partition_point(|s| s.at <= t);
+        let home: [usize; FIELD_COUNT] = std::array::from_fn(|f| f);
+        let (now, before, after, glide) = match i.checked_sub(1) {
+            None => (FIRST_FOCUS, home, home, 1.0),
+            Some(k) => {
+                let s = &sw[k];
+                let before = k.checked_sub(1).map_or(home, |k| sw[k].slots);
+                (s.field, before, s.slots, smooth(s.at, s.at + s.beat.max(100.0), t) as f32)
+            }
+        };
+        for (f, o) in out.iter_mut().enumerate() {
+            let (a, b) = (SLOTS[before[f]], SLOTS[after[f]]);
+            o.spot = (a.0 + (b.0 - a.0) * glide, a.1 + (b.1 - a.1) * glide, a.2 + (b.2 - a.2) * glide);
+            o.mirrored = MIRRORED[f];
+        }
         out[now].focus = 1.0;
         out[now].grow = 1.0;
-        if let Some(&(at, field, _)) = i.checked_sub(1).map(|i| &sw[i]).filter(|s| t - s.0 < FOCUS_BURST_MS) {
-            out[field].burst = Some(((t - at) / FOCUS_BURST_MS) as f32);
+        if let Some(s) = i.checked_sub(1).map(|i| &sw[i]).filter(|s| t - s.at < FOCUS_BURST_MS) {
+            out[s.field].burst = Some(((t - s.at) / FOCUS_BURST_MS) as f32);
         }
-        if let Some(&(at, next, beat)) = sw.get(i) {
+        if let Some(&FocusSwitch { at, field: next, beat, .. }) = sw.get(i) {
             let beat = beat.max(100.0);
             let fade = (0.75 * beat).clamp(150.0, 450.0);
             let x = ((t - (at - fade)) / fade).clamp(0.0, 1.0);
@@ -1863,9 +1908,9 @@ impl Game {
         out
     }
 
-    /// Multiverse: the playfield three times over, each a window floating about its spot. The
-    /// one in focus is big, bright, in colour and steady; the others small, dim, colourless and
-    /// adrift.
+    /// Multiverse: the playfield five times over, each a window floating about its spot, two of
+    /// them the other way round. The one in focus is big, bright, in colour and steady; the
+    /// others small, dim, colourless and adrift.
     fn draw_multiverse(&mut self, c: &mut Canvas, scroll_speed: f64) {
         let t = self.time;
         let w = c.width;
@@ -1873,22 +1918,22 @@ impl Game {
         let cp = beatmap::control_point_at(&self.map.control_points, t);
         let pulse = (1.0 - cp.beat_phase(t) as f32).powi(3);
         // Out of focus first, so the one in focus is drawn over them.
-        let mut order = [0, 1, 2];
+        let mut order: [usize; FIELD_COUNT] = std::array::from_fn(|f| f);
         order.sort_by(|&a, &b| looks[a].focus.total_cmp(&looks[b].focus));
         for i in order {
-            let (left, mid, lean) = FIELDS[i];
             let l = looks[i];
+            let (left, mid, lean) = l.spot;
             let start = c.shapes.len();
             // Drawn at its size in focus, so it reaches as far ahead in time whatever its zoom.
-            c.width = (0.97 - left) * w / FIELD_ZOOM.1;
+            c.width = FIELD_W * w / FIELD_ZOOM.1;
             self.draw_field(c, scroll_speed, l);
             c.width = w;
             // Adrift: out of focus it bobs about and leans; in focus it holds still and breathes
             // with the beat.
             let calm = 1.0 - 0.8 * l.focus;
             let ph = i as f64 * 2.1;
-            let dx = 10.0 * calm * (t * 0.00063 + ph * 1.3).sin() as f32;
-            let dy = 7.0 * calm * (t * 0.00097 + ph).sin() as f32;
+            let dx = 8.0 * calm * (t * 0.00063 + ph * 1.3).sin() as f32;
+            let dy = 5.0 * calm * (t * 0.00097 + ph).sin() as f32;
             let angle = calm * (lean + 0.012 * (t * 0.00081 + ph * 0.7).sin() as f32);
             let zoom = (FIELD_ZOOM.0 + (FIELD_ZOOM.1 - FIELD_ZOOM.0) * l.grow) * (1.0 + 0.015 * pulse * l.focus);
             c.fade_since(start, 0.5 + 0.5 * l.focus + 0.3 * l.call * (1.0 - l.focus), 0.8 + 0.2 * l.focus);
@@ -2330,7 +2375,7 @@ impl Game {
 
         // Whole-playfield moves: Mirror and Flip Flop turn it over, the rest move it about the
         // hit target (`pivot`), which lands on `dest`.
-        let mirror = mods.has(Mod::Mirror);
+        let mirror = mods.has(Mod::Mirror) != look.mirrored;
         if mirror {
             c.mirror_since(start_shape, w);
         }
@@ -3028,28 +3073,44 @@ mod tests {
     }
 
     #[test]
-    fn multiverse_moves_the_focus_on_bars_and_slides_it_across() {
+    fn multiverse_moves_the_focus_on_bars_and_shuffles_the_rest() {
         let g = kiai_game("MV");
-        // 2 s bars, kiai from 8 s: every 2 bars from there (4 bars before it would be 8 s too).
-        let times: Vec<f64> = g.focus_switches.iter().map(|s| s.0).collect();
-        assert_eq!(times, [8000.0, 12_000.0, 16_000.0, 20_000.0, 24_000.0, 28_000.0]);
-        let mut prev = FIRST_FOCUS;
-        for &(_, f, _) in &g.focus_switches {
-            assert!(f != prev && f < FIELDS.len());
-            prev = f;
+        // 2 s bars, kiai from 8 s: every 2 bars before it, every bar in it.
+        let times: Vec<f64> = g.focus_switches.iter().map(|s| s.at).collect();
+        let want: Vec<f64> = std::iter::once(4000.0).chain((4..16).map(|i| i as f64 * 2000.0)).collect();
+        assert_eq!(times, want);
+        let home: [usize; FIELD_COUNT] = std::array::from_fn(|f| f);
+        let (mut focus, mut slots) = (FIRST_FOCUS, home);
+        for s in &g.focus_switches {
+            assert!(s.field != focus && s.field < FIELD_COUNT);
+            // The playfields losing and taking the focus stay put; one spot each still.
+            assert!(s.slots[focus] == slots[focus] && s.slots[s.field] == slots[s.field]);
+            let mut taken = s.slots;
+            taken.sort();
+            assert_eq!(taken, home);
+            (focus, slots) = (s.field, s.slots);
         }
-        let next = g.focus_switches[0].1;
+        let first = g.focus_switches[0];
+        let next = first.field;
         let at = |t: f64| g.multiverse_at(t);
-        assert_eq!(at(6000.0)[FIRST_FOCUS].focus, 1.0);
+        assert_eq!(at(2000.0)[FIRST_FOCUS].focus, 1.0);
         // Called on the two beats before, then sliding across over the last 375 ms.
-        assert!(at(6900.0)[next].call == 0.0 && at(7010.0)[next].call > 0.9 && at(7510.0)[next].call > 0.9);
-        let mid = at(7812.5);
+        assert!(at(2900.0)[next].call == 0.0 && at(3010.0)[next].call > 0.9 && at(3510.0)[next].call > 0.9);
+        let mid = at(3812.5);
         assert!((mid[next].focus - 0.5).abs() < 1e-6 && (mid[FIRST_FOCUS].focus - 0.5).abs() < 1e-6);
-        let done = at(8000.0);
+        let done = at(4000.0);
         assert!(done[next].focus == 1.0 && done[FIRST_FOCUS].focus == 0.0 && done[next].burst == Some(0.0));
         // It overshoots its size on the way in and settles.
-        assert!(at(7950.0)[next].grow > 1.0 && (done[next].grow - 1.0).abs() < 1e-6);
+        assert!(at(3950.0)[next].grow > 1.0 && (done[next].grow - 1.0).abs() < 1e-6);
+        // The rest glide to their new spots over the beat after.
+        let moved = (0..FIELD_COUNT).find(|&f| first.slots[f] != f).unwrap();
+        let mid_of = |t: f64| at(t)[moved].spot.1;
+        assert_eq!(mid_of(4000.0), SLOTS[moved].1);
+        assert!((mid_of(4500.0) - SLOTS[first.slots[moved]].1).abs() < 1e-3);
+        assert!(mid_of(4250.0) != mid_of(4000.0) && mid_of(4250.0) != mid_of(4500.0));
+        assert!(done[1].mirrored && done[3].mirrored && !done[2].mirrored);
     }
+
     /// `TAIKO_MOD_SHOTS=<dir>`: a few frames of every mod as PNGs (drawn on the CPU), to look at.
     #[test]
     fn mod_shots() {
