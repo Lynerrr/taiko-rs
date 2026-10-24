@@ -610,6 +610,7 @@ fn decode_source(
     part: Option<(f64, f64)>,
 ) -> Result<(Track, i64), String> {
     use symphonia::core::codecs::audio::AudioDecoderOptions;
+    use symphonia::core::codecs::audio::well_known::CODEC_ID_MP3;
     use symphonia::core::errors::Error;
     use symphonia::core::formats::probe::Hint;
     use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo, TrackType};
@@ -629,6 +630,10 @@ fn decode_source(
     let track_id = track.id;
     let time_base = track.time_base;
     let params = track.codec_params.as_ref().and_then(|p| p.audio()).ok_or("no audio codec params")?;
+    // An MP3 decoder's output starts with 529 frames of its own delay. Symphonia trims it (with the
+    // encoder's) only when a LAME/Info header says how long the encoder's is; BASS, which osu!
+    // plays maps with, trims it from MP3s without that header too, or they'd play 11-12 ms late.
+    let skip = if params.codec == CODEC_ID_MP3 && track.delay.is_none() { 529 } else { 0 };
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(params, &AudioDecoderOptions::default())
         .map_err(|e| format!("decoder: {e}"))?;
@@ -686,9 +691,14 @@ fn decode_source(
             }
         }
     }
-    let Some(src_start) = src_start.filter(|_| !stereo.is_empty() && src_rate != 0) else {
+    let mut src_start = src_start.unwrap_or(0) - skip;
+    if src_start < 0 {
+        stereo.drain(..(-src_start as usize * 2).min(stereo.len()));
+        src_start = 0;
+    }
+    if stereo.is_empty() || src_rate == 0 {
         return Err("audio file decoded to nothing".into());
-    };
+    }
     if src_rate == rate {
         return Ok((Track { samples: stereo, rate: 1.0 }, src_start));
     }
