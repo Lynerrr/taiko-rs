@@ -125,6 +125,10 @@ pub struct Config {
     pub hide_great: bool,
     /// Show what you're doing in your Discord status.
     pub discord_presence: bool,
+    /// Star out swear words in chats.
+    pub chat_filter: bool,
+    /// A chime when a friend messages you.
+    pub message_sound: bool,
     /// Discord application whose name the status shows (empty = the built-in one).
     pub discord_app_id: String,
     /// Song select order (ui::SortMode name).
@@ -196,6 +200,8 @@ impl Default for Config {
             hide_great: true,
             discord_presence: true,
             discord_app_id: String::new(),
+            chat_filter: true,
+            message_sound: true,
             anti_mash: false,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
@@ -323,6 +329,8 @@ impl Config {
                 "kiai_effects" => cfg.kiai_effects = v != "false",
                 "hide_great" => cfg.hide_great = v != "false",
                 "discord_presence" => cfg.discord_presence = v != "false",
+                "chat_filter" => cfg.chat_filter = v != "false",
+                "message_sound" => cfg.message_sound = v != "false",
                 "discord_app_id" => cfg.discord_app_id = v.to_string(),
                 "anti_mash" => cfg.anti_mash = v == "true",
                 "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
@@ -465,6 +473,10 @@ impl Config {
         out.push_str(&format!(
             "# Discord status (\"Playing taiko-rs\"); app id empty = the built-in one\ndiscord_presence = {}\ndiscord_app_id = {}\n",
             self.discord_presence, self.discord_app_id
+        ));
+        out.push_str(&format!(
+            "# chats: star out swear words; a chime when a friend messages you\nchat_filter = {}\nmessage_sound = {}\n",
+            self.chat_filter, self.message_sound
         ));
         out.push_str(&format!("# multiplayer\nmp_name = {}\nmp_port = {}\nmp_address = {}\n", self.mp_name, self.mp_port, self.mp_address));
         out.push_str(&format!(

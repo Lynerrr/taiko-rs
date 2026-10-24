@@ -35,10 +35,12 @@ pub enum Sfx {
     ComboBreak,
     /// Overtime's jumpscare.
     Scream,
+    /// A friend's message.
+    Message,
 }
 
 /// One sound per `Sfx`.
-pub type Sounds = [Vec<f32>; 6];
+pub type Sounds = [Vec<f32>; 7];
 
 enum Cmd {
     /// `base`: the song frame the track's first sample belongs at (a partial decode).
@@ -549,7 +551,7 @@ pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
     let kat = custom.kat.unwrap_or_else(|| built_in(1, rate));
     let finish = custom.finish.unwrap_or_else(|| built_in(2, rate));
     let combobreak = custom.combobreak.unwrap_or_else(|| built_in(3, rate));
-    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak, screech(rate)]
+    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak, screech(rate), chime(rate)]
 }
 
 /// Overtime's scream, made up rather than sampled: detuned saws sweeping up with a fast
@@ -575,6 +577,24 @@ fn screech(rate: u32) -> Vec<f32> {
             (x * 2.5).tanh() * 0.7 * env
         })
         .collect()
+}
+
+/// A friend's message: two soft bell notes going up a fourth (E6, A6), made up rather than
+/// sampled.
+fn chime(rate: u32) -> Vec<f32> {
+    use std::f32::consts::TAU;
+    let sr = rate as f32;
+    let mut out = vec![0.0f32; (sr * 0.6) as usize];
+    for (start, freq) in [(0.0, 1318.5), (0.09, 1760.0)] {
+        let from = (start * sr) as usize;
+        for (i, o) in out[from..].iter_mut().enumerate() {
+            let t = i as f32 / sr;
+            // A quick swell in, a bell-like fade out; a little of the octave for shimmer.
+            let env = (t / 0.004).min(1.0) * (-t * 9.0).exp();
+            *o += env * 0.22 * ((t * freq * TAU).sin() + 0.25 * (t * freq * 2.0 * TAU).sin());
+        }
+    }
+    out
 }
 
 /// Two mono sounds played together.
