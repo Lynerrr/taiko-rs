@@ -9,7 +9,7 @@ use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
 use crate::mods::{Mod, Mods, Speed};
-use crate::render::{progress, rgba, Canvas, Hit, Sprite};
+use crate::render::{progress, rgba, Canvas, Hit, Sprite, VIRTUAL_HEIGHT};
 
 pub const PANEL_W: f32 = 150.0;
 pub const HIT_X: f32 = PANEL_W + 64.0;
@@ -17,8 +17,6 @@ pub const LANE_Y: f32 = 160.0;
 pub const LANE_H: f32 = 118.0;
 const NOTE_R: f32 = 31.0;
 const BIG_R: f32 = 46.0;
-/// osu!px per ms -> virtual units per ms at scroll speed 1.0.
-const SPEED_SCALE: f64 = 0.7;
 /// Second key of a big note must land within this window of the first.
 const STRONG_WINDOW: f64 = 30.0;
 const HIT_ANIM_MS: f64 = 160.0;
@@ -233,6 +231,16 @@ pub struct Game {
     rush_t: f64,
     /// Earthquake: map time of the last big hit.
     quake_at: f64,
+}
+
+/// osu!px per ms -> virtual units per ms at scroll speed 1.0, so that a note stays on screen
+/// exactly as long as in osu!. Stable scrolls notes at their velocity across a 480-tall gamefield
+/// (the same units as ours) from its right edge to the hit target at x = 160; lazer copies that as
+/// a time range, with the aspect ratio clamped to 5:4..16:9. Our hit target sits at `HIT_X`, so
+/// the speed is scaled by how much shorter or longer our lane is.
+fn osu_speed_scale(w: f32) -> f64 {
+    let aspect = (w / VIRTUAL_HEIGHT).clamp(5.0 / 4.0, 16.0 / 9.0) as f64;
+    (w - HIT_X).max(1.0) as f64 / (aspect * VIRTUAL_HEIGHT as f64 - 160.0)
 }
 
 /// What bends note positions this frame: drawing only, judging always uses real time.
@@ -1075,7 +1083,7 @@ impl Game {
         };
         let scroll = Scroll {
             t,
-            speed: SPEED_SCALE * scroll_speed * mods.scroll(),
+            speed: osu_speed_scale(w) * scroll_speed * mods.scroll(),
             lane: (w - HIT_X) as f64,
             mods,
             constant: self.constant_velocity,
@@ -1506,6 +1514,18 @@ mod tests {
     fn game() -> Game {
         let map = beatmap::calibration_map(500.0, 0, 64);
         Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None)
+    }
+
+    #[test]
+    fn notes_stay_on_screen_as_long_as_in_osu() {
+        // A 180 BPM map at SV 1 and SliderMultiplier 1.4 (taiko's 1.4x on top).
+        let v = 1.4 * 1.4 * 100.0 / (60_000.0 / 180.0);
+        for (aspect, osu_aspect) in [(16.0 / 9.0, 16.0 / 9.0), (4.0 / 3.0, 4.0 / 3.0), (21.0 / 9.0, 16.0 / 9.0)] {
+            let w = aspect as f32 * VIRTUAL_HEIGHT;
+            let ours = (w - HIT_X) as f64 / (osu_speed_scale(w) * v);
+            let osu = (osu_aspect * 480.0 - 160.0) / v;
+            assert!((ours - osu).abs() < 0.01, "{aspect}: {ours} vs {osu}");
+        }
     }
 
     fn modded(mods: &str) -> Game {
