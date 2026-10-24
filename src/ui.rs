@@ -699,7 +699,12 @@ impl Select {
             c.text_centered(24.0 + lw / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("{n} files read"));
         } else if self.visible.is_empty() {
             c.text_centered(24.0 + lw / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "No maps found.");
-            c.text_centered(24.0 + lw / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), "Run: taiko-rs <Songs folder | map.osz | map.osu>");
+            let hint = if cfg!(target_os = "android") {
+                "Open .osz files with taiko-rs, or get maps in DOWNLOAD"
+            } else {
+                "Run: taiko-rs <Songs folder | map.osz | map.osu>"
+            };
+            c.text_centered(24.0 + lw / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), hint);
         }
 
         // Rows: one per song, plus the selected song's difficulties under it.

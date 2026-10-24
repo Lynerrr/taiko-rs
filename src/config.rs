@@ -11,7 +11,53 @@ use crate::render::PresentChoice;
 pub const RATE_RANGE: (f64, f64) = (0.5, 2.0);
 pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
 
+/// Order of the four touch columns, left to right (K = rim / kat, D = centre / don), for the
+/// kddk and kkdd playstyles and their mirrors.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TouchLayout {
+    Kddk,
+    Kkdd,
+    Dkkd,
+    Ddkk,
+}
+
+impl TouchLayout {
+    const ALL: [TouchLayout; 4] = [TouchLayout::Kddk, TouchLayout::Kkdd, TouchLayout::Dkkd, TouchLayout::Ddkk];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TouchLayout::Kddk => "KDDK",
+            TouchLayout::Kkdd => "KKDD",
+            TouchLayout::Dkkd => "DKKD",
+            TouchLayout::Ddkk => "DDKK",
+        }
+    }
+
+    fn parse(s: &str) -> Option<TouchLayout> {
+        TouchLayout::ALL.into_iter().find(|l| l.name().eq_ignore_ascii_case(s))
+    }
+
+    /// The layout `dir` steps away (wrapping).
+    pub fn step(self, dir: i32) -> TouchLayout {
+        let i = TouchLayout::ALL.iter().position(|&l| l == self).unwrap_or(0) as i32;
+        TouchLayout::ALL[(i + dir).rem_euclid(4) as usize]
+    }
+
+    /// The drum key (0 left rim, 1 left centre, 2 right centre, 3 right rim) of each column.
+    /// Two columns of one colour always map to different hands, so hitting both is a big hit.
+    pub fn keys(self) -> [usize; 4] {
+        match self {
+            TouchLayout::Kddk => [0, 1, 2, 3],
+            TouchLayout::Kkdd => [0, 3, 1, 2],
+            TouchLayout::Dkkd => [1, 0, 3, 2],
+            TouchLayout::Ddkk => [1, 2, 0, 3],
+        }
+    }
+}
+
 pub struct Config {
+    /// Columns of the touch drum, left to right.
+    pub touch_layout: TouchLayout,
     /// Positive when your audio reaches you late; notes are shifted later by this much.
     pub offset_ms: f64,
     pub scroll_speed: f64,
@@ -88,6 +134,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            touch_layout: TouchLayout::Kddk,
             offset_ms: 0.0,
             scroll_speed: 1.0,
             master_volume: 1.0,
@@ -268,6 +315,7 @@ impl Config {
                         cfg.preset_keys = k;
                     }
                 }
+                "touch_layout" => cfg.touch_layout = TouchLayout::parse(v).unwrap_or(cfg.touch_layout),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
                 "skin" => cfg.skin = v.to_string(),
@@ -290,6 +338,8 @@ impl Config {
              keys = {}\n\
              # previous / next playfield resolution preset\n\
              preset_keys = {}\n\
+             # touch columns left to right: KDDK, KKDD, DKKD or DDKK (K = rim, D = centre)\n\
+             touch_layout = {}\n\
              show_playfield_size = {}\n\
              # your own playfield sizes (preset list, in this order)\n\
              saved_presets = {}\n\
@@ -332,6 +382,7 @@ impl Config {
              show_map_info = {}\n",
             keys.join(", "),
             self.preset_keys.iter().map(|k| key_name(*k)).collect::<Vec<_>>().join(", "),
+            self.touch_layout.name(),
             self.show_playfield_size,
             self.saved_presets.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(", "),
             self.offset_ms,
@@ -376,5 +427,31 @@ impl Config {
             out.push_str(&format!("songs = {}\n", s.display()));
         }
         let _ = std::fs::write(path, out);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn touch_layouts_match_their_names_and_split_hands() {
+        for layout in TouchLayout::ALL {
+            let keys = layout.keys();
+            // Each drum key exactly once.
+            let mut sorted = keys;
+            sorted.sort();
+            assert_eq!(sorted, [0, 1, 2, 3], "{}", layout.name());
+            // Columns read like the name (K = rims 0/3, D = centres 1/2).
+            let read: String = keys.iter().map(|&k| if k == 0 || k == 3 { 'K' } else { 'D' }).collect();
+            assert_eq!(read, layout.name());
+            // Both columns of a colour are different hands, so together they make a big hit.
+            for kat in [true, false] {
+                let hands: Vec<bool> = keys.iter().filter(|&&k| (k == 0 || k == 3) == kat).map(|&k| k < 2).collect();
+                assert_ne!(hands[0], hands[1], "{}", layout.name());
+            }
+            assert_eq!(TouchLayout::parse(&layout.name().to_lowercase()), Some(layout));
+        }
+        assert_eq!(TouchLayout::Kddk.step(-1), TouchLayout::Ddkk);
     }
 }

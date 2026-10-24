@@ -55,7 +55,9 @@ pub fn default_song_dirs() -> Vec<PathBuf> {
             candidates.push(cfg.join("Songs"));
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "android")]
+    candidates.extend(crate::android::songs_dir());
+    #[cfg(not(any(windows, target_os = "android")))]
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         // osu-winello records the install path here.
         if let Ok(p) = std::fs::read_to_string(home.join(".local/share/osuconfig/osupath")) {

@@ -535,6 +535,36 @@ pub fn receive(set: SetInfo, name: String, total: u64, songs: PathBuf) -> (Job, 
     (Job { set, done, total: total_bytes, rx }, feed)
 }
 
+/// Imports an `.osz` that is already on disk (opened with the game on Android) like a download:
+/// unpacked into `songs/<name>/` on a background thread, then the archive is removed.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn import(archive: PathBuf, name: &str, songs: PathBuf) -> Job {
+    let name = safe_folder_name(name);
+    let set = SetInfo {
+        // osu! names its exports "<set id> <artist> - <title>.osz".
+        id: name.split(' ').next().and_then(|n| n.parse().ok()).unwrap_or(0),
+        artist: String::new(),
+        title: name.clone(),
+        creator: String::new(),
+        status: String::new(),
+        diffs: Vec::new(),
+        play_count: 0,
+        favourite_count: 0,
+        rating: 0.0,
+        ranked_date: String::new(),
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = std::fs::create_dir_all(&songs).map_err(|e| e.to_string()).and_then(|_| {
+            let dest = songs.join(&name);
+            extract(&archive, &dest).map(|_| dest)
+        });
+        let _ = std::fs::remove_file(&archive);
+        let _ = tx.send(result);
+    });
+    Job { set, done: Arc::default(), total: Arc::default(), rx }
+}
+
 /// Unpacks an `.osz` into `dest` (via a temporary folder, so a half-extracted set never shows up).
 fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;

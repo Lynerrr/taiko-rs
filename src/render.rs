@@ -86,7 +86,8 @@ struct Globals {
 }
 
 pub struct Renderer {
-    surface: wgpu::Surface<'static>,
+    /// None while there is no window to draw to (Android destroys it in the background).
+    surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -419,7 +420,7 @@ impl Renderer {
         let instances = Self::make_instance_buffer(&device, capacity);
 
         let mut r = Renderer {
-            surface,
+            surface: Some(surface),
             device,
             queue,
             config,
@@ -573,7 +574,7 @@ impl Renderer {
         self.config.present_mode = to_wgpu(chosen);
         // One frame in flight for the uncapped modes keeps input-to-photon latency minimal.
         self.config.desired_maximum_frame_latency = if chosen == PresentChoice::Fifo { 2 } else { 1 };
-        self.surface.configure(&self.device, &self.config);
+        self.configure();
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -582,7 +583,24 @@ impl Renderer {
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        self.configure();
+    }
+
+    /// Swaps in a surface for a new window (or drops it with `None` when the window goes away),
+    /// keeping everything else on the GPU.
+    pub fn set_surface(&mut self, surface: Option<wgpu::Surface<'static>>, width: u32, height: u32) {
+        self.surface = surface;
+        if width > 0 && height > 0 {
+            self.config.width = width;
+            self.config.height = height;
+        }
+        self.configure();
+    }
+
+    fn configure(&self) {
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
     }
 
     /// Canvas width in virtual units.
@@ -593,10 +611,10 @@ impl Renderer {
     /// Waits for a swapchain image. Under vsync this is where the frame may block, so callers
     /// should sample the game clock only after it returns.
     pub fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
-        match self.surface.get_current_texture() {
+        match self.surface.as_ref()?.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                self.configure();
                 None
             }
             _ => None,

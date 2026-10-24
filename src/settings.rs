@@ -23,6 +23,7 @@ pub enum Item {
     Key(usize),
     /// Previous (0) / next (1) playfield preset key.
     PresetKey(usize),
+    TouchLayout,
     ShowPlayfieldSize,
     KiaiEffects,
     ShowConverts,
@@ -46,7 +47,7 @@ pub enum Item {
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 40] = [
+pub const ITEMS: [(&str, Item); 41] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -66,6 +67,7 @@ pub const ITEMS: [(&str, Item); 40] = [
     ("INPUT", Item::Key(3)),
     ("INPUT", Item::PresetKey(0)),
     ("INPUT", Item::PresetKey(1)),
+    ("INPUT", Item::TouchLayout),
     ("OFFSET", Item::Offset),
     ("OFFSET", Item::Calibrate),
     ("OFFSET", Item::CalibrationBpm),
@@ -93,7 +95,7 @@ pub const ITEMS: [(&str, Item); 40] = [
 pub const SECTIONS: [(&str, &str); 8] = [
     ("GAMEPLAY", "speed, rate, resume"),
     ("PLAYFIELD", "size, position"),
-    ("INPUT", "drum and preset keys"),
+    ("INPUT", "drum keys, touch layout"),
     ("OFFSET", "audio offset, calibration"),
     ("AUDIO", "volume, latency"),
     ("VIDEO", "frame pacing, display, Discord"),
@@ -127,6 +129,7 @@ impl Item {
             Item::Key(i) => KEY_LABELS[i],
             Item::PresetKey(0) => "Previous preset key",
             Item::PresetKey(_) => "Next preset key",
+            Item::TouchLayout => "Touch layout",
             Item::ShowPlayfieldSize => "Show playfield size",
             Item::KiaiEffects => "Kiai effects",
             Item::ShowConverts => "Show osu!standard converts",
@@ -168,6 +171,7 @@ impl Item {
             Item::AntiMash => "osu!'s mash penalty: a wrong-colour or too-early hit misses the note. Off: such hits are ignored.",
             Item::Key(_) => "Enter, then press the new key. Esc cancels.",
             Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key.",
+            Item::TouchLayout => "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
             Item::HiddenMaps => "Right-click a song to hide it here (files stay). Enter lists them all again.",

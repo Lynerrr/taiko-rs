@@ -55,7 +55,8 @@ impl Updater {
     /// Checks for a newer build in the background when `check` (and this is a CI build).
     pub fn new(check: bool) -> Updater {
         let u = Updater { status: Arc::new(Mutex::new(Status::Off)), done: Arc::default(), total: Arc::default() };
-        if check {
+        // An APK can't replace itself; Android installs updates.
+        if check && !cfg!(target_os = "android") {
             u.check();
         }
         u
