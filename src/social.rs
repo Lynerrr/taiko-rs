@@ -399,8 +399,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
                 ry += 14.0;
             }
             if !s.sent.is_empty() && ry + 10.0 < list_bottom {
-                let waiting: String = format!("waiting for: {}", s.sent.join(", ")).chars().take(60).collect();
-                c.text(inner + 4.0, ry + 3.0, 6.0, rgba(0x6f6f86, a), &waiting);
+                c.text(inner + 4.0, ry + 3.0, 6.0, rgba(0x6f6f86, a), &Canvas::fit(6.0, iw - 8.0, &format!("waiting for: {}", s.sent.join(", "))));
             }
             // The conversation.
             let chat_top = y + CHAT_TOP;
@@ -469,7 +468,8 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
         let ty = ry + (rh - 3.0) / 2.0 - 3.5;
         match *r {
             Row::AddFriend => {
-                let text = if sel { format!("add friend: {}_", s.input) } else { "+ add a friend (type their name)".into() };
+                // While typing, the end of the name stays in view.
+                let text = if sel { Canvas::fit_end(7.0, iw - 16.0, &format!("add friend: {}_", s.input)) } else { Canvas::fit(7.0, iw - 16.0, "+ add a friend (type their name)") };
                 c.text(inner + 8.0, ty, 7.0, rgba(if sel { 0xffffff } else { 0x8a8aa0 }, a), &text);
             }
             Row::Lobby => {
@@ -495,16 +495,16 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
                     Some(Activity::Lobby { room: Some(_), .. }) => button(c, bx, ry + 3.0, "join", Hit::SocialAction(i, Action::Join), a) - 4.0,
                     _ => bx,
                 };
-                let max = ((bx - inner - 22.0) / Canvas::text_width(6.0, "x")).max(4.0) as usize;
-                let what: String = what.chars().take(max).collect();
-                c.text(inner + 18.0, ry + 15.5, 6.0, rgba(0x8a8aa0, a), &what);
+                c.text(inner + 18.0, ry + 15.5, 6.0, rgba(0x8a8aa0, a), &Canvas::fit(6.0, bx - inner - 22.0, &what));
                 badge(c, bx - 8.0, ry + 8.0, s.unread.get(&key(&f.name)).copied().unwrap_or(0), a);
             }
             Row::Search => {
                 let text = format!("search: {}{}", if s.input.is_empty() && !sel { "type a name" } else { &s.input }, if sel { "_" } else { "" });
-                c.text(inner + 8.0, ty, 7.0, rgba(if sel || !s.input.is_empty() { 0xffffff } else { 0x8a8aa0 }, a), &text);
-                if s.online_total > s.players.as_ref().map_or(0, Vec::len) {
-                    let more = format!("first {} listed", online::MAX_LISTED);
+                let more = format!("first {} listed", online::MAX_LISTED);
+                let capped = s.online_total > s.players.as_ref().map_or(0, Vec::len);
+                let room = iw - 16.0 - if capped { Canvas::text_width(6.0, &more) + 8.0 } else { 0.0 };
+                c.text(inner + 8.0, ty, 7.0, rgba(if sel || !s.input.is_empty() { 0xffffff } else { 0x8a8aa0 }, a), &Canvas::fit_end(7.0, room, &text));
+                if capped {
                     c.text_right(inner + iw - 8.0, ty + 0.5, 6.0, rgba(0x6f6f86, a), &more);
                 }
             }
@@ -520,9 +520,7 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
                     Standing::Asked => tag(c, right, ry + 3.0, "request sent", a),
                     Standing::Stranger => button(c, right, ry + 3.0, "+ friend", Hit::SocialAction(i, Action::Add), a),
                 } - 4.0;
-                let max = ((bx - inner - 22.0) / Canvas::text_width(6.0, "x")).max(4.0) as usize;
-                let what: String = p.activity.describe().chars().take(max).collect();
-                c.text(inner + 18.0, ry + 15.5, 6.0, rgba(0x8a8aa0, a), &what);
+                c.text(inner + 18.0, ry + 15.5, 6.0, rgba(0x8a8aa0, a), &Canvas::fit(6.0, bx - inner - 22.0, &p.activity.describe()));
             }
             Row::Global => {}
         }
