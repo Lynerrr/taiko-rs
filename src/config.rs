@@ -12,7 +12,7 @@ use crate::render::PresentChoice;
 pub const RATE_RANGE: (f64, f64) = (0.5, 2.0);
 pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
 /// What scroll speed 1.0 was before it matched osu!, in today's terms (at 16:9: 0.7 virtual
-/// units per osu!px against the 639/693 lane ratio `game::osu_speed_scale` gives).
+/// units per osu!px across a 639-unit lane, where osu! takes its 693-unit one at 1.0).
 const OLD_SCROLL_SPEED: f64 = 0.7 * 693.333 / 639.333;
 /// F3 / F4 and the settings change scroll speed in steps of this.
 const SCROLL_STEP: f64 = 0.05;
