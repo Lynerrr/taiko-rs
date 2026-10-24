@@ -14,6 +14,16 @@ pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
 /// What scroll speed 1.0 was before it matched osu!, in today's terms (at 16:9: 0.7 virtual
 /// units per osu!px against the 639/693 lane ratio `game::osu_speed_scale` gives).
 const OLD_SCROLL_SPEED: f64 = 0.7 * 693.333 / 639.333;
+/// F3 / F4 and the settings change scroll speed in steps of this.
+const SCROLL_STEP: f64 = 0.05;
+
+/// Scroll speed one step up (`d` = 1) or down (-1). A speed between steps goes to the nearest
+/// step in that direction first, so 1.01 goes down to 1.00 and up to 1.05.
+pub fn step_scroll_speed(speed: f64, d: f64) -> f64 {
+    let k = speed / SCROLL_STEP;
+    let k = if d > 0.0 { (k + 1e-6).floor() + 1.0 } else { (k - 1e-6).ceil() - 1.0 };
+    (k * SCROLL_STEP).clamp(0.3, 4.0)
+}
 
 pub struct Config {
     /// Positive when your audio reaches you late; notes are shifted later by this much.
@@ -290,9 +300,9 @@ impl Config {
             }
         }
         // Scroll speed 1.0 used to be ~0.76x of osu!'s (at 16:9). Left at 1.0 it now simply
-        // becomes osu!'s; a speed someone picked on purpose keeps looking the same.
+        // becomes osu!'s; a speed someone picked on purpose keeps looking (about) the same.
         if !osu_scroll_speed && (cfg.scroll_speed - 1.0).abs() > 1e-3 {
-            cfg.scroll_speed = (cfg.scroll_speed * OLD_SCROLL_SPEED).clamp(0.3, 4.0);
+            cfg.scroll_speed = ((cfg.scroll_speed * OLD_SCROLL_SPEED / SCROLL_STEP).round() * SCROLL_STEP).clamp(0.3, 4.0);
         }
         cfg
     }
@@ -400,5 +410,23 @@ impl Config {
             out.push_str(&format!("songs = {}\n", s.display()));
         }
         let _ = std::fs::write(path, out);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scroll_speed_steps_land_on_the_grid() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(close(step_scroll_speed(1.01, -1.0), 1.0));
+        assert!(close(step_scroll_speed(1.01, 1.0), 1.05));
+        assert!(close(step_scroll_speed(1.0, -1.0), 0.95));
+        assert!(close(step_scroll_speed(1.0, 1.0), 1.05));
+        // Floating-point sums of 0.05 don't skip a step.
+        assert!(close(step_scroll_speed(0.05 * 21.0, -1.0), 1.0));
+        assert!(close(step_scroll_speed(0.3, -1.0), 0.3));
+        assert!(close(step_scroll_speed(4.0, 1.0), 4.0));
     }
 }
