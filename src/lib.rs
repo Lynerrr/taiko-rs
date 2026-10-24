@@ -3165,7 +3165,7 @@ impl State {
         }
     }
 
-    /// Tab in play: hides (or shows again) the map's name and the offset / UR line.
+    /// Tab in play: hides (or shows again) the offset / UR line.
     fn toggle_map_info(&mut self) {
         self.cfg.show_map_info = !self.cfg.show_map_info;
         self.cfg.save();
@@ -4413,7 +4413,6 @@ impl State {
                 }
                 // Offset advice is for live play (and its line would sit on the replay timeline).
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
-                game.show_map_info = self.cfg.show_map_info;
                 game.kiai_effects = self.cfg.kiai_effects;
                 if game.replay.is_none() {
                     game.anti_mash = self.cfg.anti_mash;
@@ -4593,7 +4592,6 @@ impl State {
                     game.autoplay(self.audio.as_ref());
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
-                game.show_map_info = self.cfg.show_map_info;
                 game.kiai_effects = self.cfg.kiai_effects;
                 if game.replay.is_none() {
                     game.anti_mash = self.cfg.anti_mash;

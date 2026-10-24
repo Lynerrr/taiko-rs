@@ -101,7 +101,7 @@ pub struct Config {
     pub rate_keep_pitch: bool,
     /// Show a live offset suggestion during play.
     pub show_offset_hint: bool,
-    /// The map's name and the offset/UR line during play (Tab hides them).
+    /// The offset/UR line during play (Tab hides it).
     pub show_map_info: bool,
     /// Mods picked in the mod select (F1 on song select).
     pub mods: Mods,
@@ -430,7 +430,7 @@ impl Config {
              anti_mash = {}\n\
              show_offset_hint = {}\n\
              offset_hint_ur_scaled = {}\n\
-             # map name and UR line during play (Tab toggles)\n\
+             # offset/UR line during play (Tab toggles)\n\
              show_map_info = {}\n\
              # mods picked on song select (F1), e.g. HD,HR\n\
              mods = {}\n",

@@ -192,8 +192,6 @@ pub struct Game {
     pub mute_hits: bool,
     /// Show the live offset suggestion under the hit error meter.
     pub show_offset_hint: bool,
-    /// Show the map's artist, title and difficulty under the lane.
-    pub show_map_info: bool,
     /// Kiai time tints the lane and pulses the hit target.
     pub kiai_effects: bool,
     /// osu!'s mash penalty: a wrong-colour or too-early hit on the next note is a miss. Off,
@@ -957,7 +955,6 @@ impl Game {
             show_hp: true,
             mute_hits: false,
             show_offset_hint: false,
-            show_map_info: true,
             kiai_effects: true,
             anti_mash: false,
             record: false,
@@ -2229,12 +2226,11 @@ impl Game {
         }
     }
 
-    /// Score, accuracy, progress, hit error meter, offset advice, map info, skip hint and the pause
-    /// menu, at fixed screen positions: resizing the playfield area never moves them.
+    /// Score, accuracy, progress, hit error meter, offset advice, skip hint and the pause menu (with
+    /// the map's name), at fixed screen positions: resizing the playfield area never moves them.
     pub fn draw_hud(&self, c: &mut Canvas) {
         let t = self.time;
         let w = c.width;
-        let lane_top = LANE_Y - LANE_H / 2.0;
         if let Some(text) = &self.banner {
             let tw = Canvas::text_width(9.0, &text);
             c.round_rect(w / 2.0 - tw / 2.0 - 12.0, 14.0, tw + 24.0, 20.0, 10.0, rgba(0x173049, 0.9), rgba(0x4fb4ff, 1.0), 1.0);
@@ -2306,16 +2302,6 @@ impl Game {
             }
         }
 
-        // Map info.
-        let m = &self.map.meta;
-        let show_info = self.show_map_info;
-        let info_y = lane_top + LANE_H + 22.0;
-        let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("   {:.2}x", self.rate) } else { String::new() };
-        if show_info {
-            c.text(18.0, info_y, 10.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(10.0, w - 36.0, &format!("{} - {}", m.artist, m.title)));
-            c.text(18.0, info_y + 16.0, 10.0, rgba(0x6f6f86, 1.0), &Canvas::fit(10.0, w - 36.0, &format!("[{}]  OD {:.1}{rate}", m.version, m.od)));
-        }
-
         // Overtime: he's here, over everything but the pause menu.
         if let Some(&at) = self.scares.iter().find(|&&at| (at..at + SCARE_MS).contains(&t)) {
             draw_scare(c, ((t - at) / SCARE_MS) as f32, t);
@@ -2343,7 +2329,14 @@ impl Game {
         } else if let Some(cursor) = self.paused.filter(|_| !self.watched) {
             let t = progress(self.paused_at, 180.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78 * t));
-            c.text_centered(w / 2.0, 120.0 - (1.0 - t) * 12.0, 32.0, rgba(WHITE, t), "PAUSED");
+            let rise = (1.0 - t) * 12.0;
+            c.text_centered(w / 2.0, 98.0 - rise, 32.0, rgba(WHITE, t), "PAUSED");
+            // The map's name lives here rather than under the lane, where moved lanes ran into it.
+            let m = &self.map.meta;
+            let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("   {:.2}x", self.rate) } else { String::new() };
+            let fit = (w - 80.0).min(520.0);
+            c.text_centered(w / 2.0, 140.0 - rise, 9.0, rgba(0x9a9ab0, t), &Canvas::fit(9.0, fit, &format!("{} - {}", m.artist, m.title)));
+            c.text_centered(w / 2.0, 153.0 - rise, 9.0, rgba(0x6f6f86, t), &Canvas::fit(9.0, fit, &format!("[{}]  OD {:.1}{rate}", m.version, m.od)));
             for (i, item) in PAUSE_ITEMS.iter().enumerate() {
                 // Items slide up one after another.
                 let ti = progress(self.paused_at + std::time::Duration::from_millis(25 * i as u64), 180.0);
