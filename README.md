@@ -382,7 +382,16 @@ When the players skip the intro, the spectator skips it too. Spectating always u
 
 While logged in (MULTIPLAYER → ONLINE), **F9** (or the *friends* chip top right in the menus)
 opens a translucent overlay over whatever screen is up, including while spectating or watching
-(never over your own play):
+(never over your own play). It has three tabs (Tab / Shift+Tab or click), and the top right corner
+shows how many players are online on the server (green dot; also on the chip):
+
+- **FRIENDS:** your friends, requests and conversations (below).
+- **PLAYERS:** everyone online, with what they're doing. Type to search by name; **+ friend** /
+  Enter sends a friend request, **accept** takes theirs, **chat** opens the conversation with a
+  friend.
+- **CHAT:** the global chat, with everyone online (the last 100 lines are kept on the server while
+  it runs and shown when you connect). Wheel or PgUp / PgDn scrolls back. New lines count on the
+  tab; a line with your name in it also pops up a notification.
 
 - **Add friend:** type a name on the first row and press Enter. They get a request (notification
   and a row in their list) to accept or decline; once both agree you're friends.
@@ -410,12 +419,15 @@ Its protocol is `src/online.rs`: one JSON request line and one reply per connect
 
 ```sh
 cd server && cargo run --release -- --port 7800 --data ./data          # locally
-server/deploy/deploy.sh user@host [ssh port]                            # static build + Docker
+server/deploy/deploy.sh user@host [ssh port] [jump host]                # static build + Docker
 ```
 
 `deploy.sh` builds a static (musl) binary (`rustup target add x86_64-unknown-linux-musl` once),
 copies it with `server/deploy/Dockerfile` and `docker-compose.yml` to `~/taiko-server` and runs
-it with `restart: unless-stopped`. TCP port 7800 must be reachable.
+it with `restart: unless-stopped`. TCP port 7800 must be reachable. The binary it replaces stays as
+`~/taiko-server/taiko-server.bak` to roll back to. When the server's ssh port isn't reachable
+directly, a jump host (`ssh -J`, e.g. an alias from `~/.ssh/config`) goes through it:
+`deploy.sh user@host 1337 vps`.
 
 ## Discord status
 
