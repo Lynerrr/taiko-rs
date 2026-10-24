@@ -294,8 +294,6 @@ const SLOTS: [(f32, f32, f32); FIELD_COUNT] =
 const FIELD_W: f32 = 0.78;
 /// Multiverse: a playfield's size out of focus and in it.
 const FIELD_ZOOM: (f32, f32) = (0.42, 0.6);
-/// Multiverse: the playfields drawn the other way round (notes come from the left).
-const MIRRORED: [bool; FIELD_COUNT] = [false, true, false, true, false];
 /// Multiverse: the playfield that has the focus first (in the middle spot).
 const FIRST_FOCUS: usize = 2;
 /// Multiverse: the colour of the focus (its halo, frame and burst).
@@ -330,13 +328,11 @@ struct Focus {
     burst: Option<f32>,
     /// Where it floats: like `SLOTS`, gliding from one to another as it changes places.
     spot: (f32, f32, f32),
-    /// Drawn the other way round.
-    mirrored: bool,
 }
 
 impl Focus {
     /// The one playfield there is without Multiverse.
-    const FULL: Focus = Focus { focus: 1.0, grow: 1.0, call: 0.0, burst: None, spot: (0.0, 0.0, 0.0), mirrored: false };
+    const FULL: Focus = Focus { focus: 1.0, grow: 1.0, call: 0.0, burst: None, spot: (0.0, 0.0, 0.0) };
 }
 
 /// osu!px per ms -> virtual units per ms at scroll speed 1.0, so that a note stays on screen
@@ -1955,7 +1951,6 @@ impl Game {
         for (f, o) in out.iter_mut().enumerate() {
             let (a, b) = (SLOTS[before[f]], SLOTS[after[f]]);
             o.spot = (a.0 + (b.0 - a.0) * glide, a.1 + (b.1 - a.1) * glide, a.2 + (b.2 - a.2) * glide);
-            o.mirrored = MIRRORED[f];
         }
         out[now].focus = 1.0;
         out[now].grow = 1.0;
@@ -1978,9 +1973,9 @@ impl Game {
         out
     }
 
-    /// Multiverse: the playfield five times over, each a window floating about its spot, two of
-    /// them the other way round. The one in focus is big, bright, in colour and steady; the
-    /// others small, dim, colourless and adrift.
+    /// Multiverse: the playfield five times over, each a window floating about its spot. The one
+    /// in focus is big, bright, in colour and steady; the others small, dim, colourless and
+    /// adrift.
     fn draw_multiverse(&mut self, c: &mut Canvas, scroll_speed: f64) {
         // On the beat as it'll be seen, like the notes (see `draw_field`).
         let t = self.visual_time();
@@ -2466,7 +2461,7 @@ impl Game {
 
         // Whole-playfield moves: Mirror and Flip Flop turn it over, the rest move it about the
         // hit target (`pivot`), which lands on `dest`.
-        let mirror = mods.has(Mod::Mirror) != look.mirrored;
+        let mirror = mods.has(Mod::Mirror);
         if mirror {
             c.mirror_since(start_shape, w);
         }
@@ -3220,7 +3215,6 @@ mod tests {
         assert_eq!(mid_of(4000.0), SLOTS[moved].1);
         assert!((mid_of(4500.0) - SLOTS[first.slots[moved]].1).abs() < 1e-3);
         assert!(mid_of(4250.0) != mid_of(4000.0) && mid_of(4250.0) != mid_of(4500.0));
-        assert!(done[1].mirrored && done[3].mirrored && !done[2].mirrored);
     }
 
     /// `TAIKO_MOD_SHOTS=<dir>`: a few frames of every mod as PNGs (drawn on the CPU), to look at.
