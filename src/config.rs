@@ -121,6 +121,8 @@ pub struct Config {
     pub anti_mash: bool,
     /// Kiai time effects on the lane (tint, pulsing glow).
     pub kiai_effects: bool,
+    /// GREAT hits without their flash and label (only OKs and misses show).
+    pub hide_great: bool,
     /// Show what you're doing in your Discord status.
     pub discord_presence: bool,
     /// Discord application whose name the status shows (empty = the built-in one).
@@ -191,6 +193,7 @@ impl Default for Config {
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
             kiai_effects: true,
+            hide_great: false,
             discord_presence: true,
             discord_app_id: String::new(),
             anti_mash: false,
@@ -318,6 +321,7 @@ impl Config {
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
+                "hide_great" => cfg.hide_great = v == "true",
                 "discord_presence" => cfg.discord_presence = v != "false",
                 "discord_app_id" => cfg.discord_app_id = v.to_string(),
                 "anti_mash" => cfg.anti_mash = v == "true",
@@ -412,6 +416,8 @@ impl Config {
              # song select order: artist, title, difficulty, length, bpm, recently played, date added\n\
              sort = {}\n\
              kiai_effects = {}\n\
+             # GREAT hits without their flash and label (only OKs and misses show)\n\
+             hide_great = {}\n\
              # wrong-colour / too-early hits count as misses (osu!'s mash penalty)\n\
              anti_mash = {}\n\
              show_offset_hint = {}\n\
@@ -448,6 +454,7 @@ impl Config {
             self.resume_delay_ms,
             self.sort,
             self.kiai_effects,
+            self.hide_great,
             self.anti_mash,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
