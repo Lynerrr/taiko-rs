@@ -22,6 +22,8 @@ pub struct Shape {
     /// or a skin image (`SPRITE_BASE` + `Sprite`, tinted by `fill`) or a character of the font
     /// (`GLYPH_BASE` + `font::index`, in `fill`, filling the quad's 5x7 font pixels).
     pub params: [f32; 4],
+    /// Rotation (radians, clockwise on screen) about the centre; 0 for nearly everything.
+    pub angle: f32,
 }
 
 /// Text: one quad per character, its pixels read from the font image in the shader.
@@ -364,6 +366,7 @@ struct Inst {
     @location(2) fill: vec4<f32>,
     @location(3) border: vec4<f32>,
     @location(4) params: vec4<f32>,
+    @location(5) angle: f32,
 };
 
 struct VOut {
@@ -383,7 +386,9 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     let pad = 1.5 + inst.params.z * g.px_per_unit;
     let local = corner * (half_px + vec2<f32>(pad));
     let center_px = inst.center * g.px_per_unit;
-    let p = center_px + local;
+    // Rotated shapes turn their quad; the fragment works in the shape's own (unrotated) frame.
+    let cs = vec2<f32>(cos(inst.angle), sin(inst.angle));
+    let p = center_px + vec2<f32>(local.x * cs.x - local.y * cs.y, local.x * cs.y + local.y * cs.x);
     var out: VOut;
     out.pos = vec4<f32>(p.x / g.screen_px.x * 2.0 - 1.0, 1.0 - p.y / g.screen_px.y * 2.0, 0.0, 1.0);
     out.local = local;
@@ -584,7 +589,7 @@ impl Renderer {
             bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
-        let attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4];
+        let attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32];
         let make_pipeline = |format: wgpu::TextureFormat| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("shapes"),
@@ -1506,11 +1511,11 @@ impl Canvas {
     }
 
     /// Where the `opaque` rect ended up (virtual units, after transforms and clips), if it is
-    /// still a plain opaque rect.
+    /// still a plain, unrotated opaque rect.
     pub fn opaque_rect(&self, frame_clip: Option<(&std::ops::Range<usize>, [f32; 4])>) -> Option<[f32; 4]> {
         let i = self.opaque?;
         let sh = self.shapes.get(i)?;
-        if sh.fill[3] < 1.0 || sh.params != [0.0; 4] || sh.border != sh.fill {
+        if sh.fill[3] < 1.0 || sh.params != [0.0; 4] || sh.border != sh.fill || sh.angle != 0.0 {
             return None;
         }
         let (mut x0, mut y0) = (sh.center[0] - sh.half[0], sh.center[1] - sh.half[1]);
@@ -1587,7 +1592,7 @@ impl Canvas {
     }
 
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, fill: [f32; 4]) {
-        self.shapes.push(Shape { center: [x + w / 2.0, y + h / 2.0], half: [w / 2.0, h / 2.0], fill, border: fill, params: [0.0; 4] });
+        self.shapes.push(Shape { center: [x + w / 2.0, y + h / 2.0], half: [w / 2.0, h / 2.0], fill, border: fill, params: [0.0; 4], angle: 0.0 });
     }
 
     pub fn round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
@@ -1600,11 +1605,12 @@ impl Canvas {
             fill,
             border,
             params: [radius, border_w, 0.0, 0.0],
+            angle: 0.0,
         });
     }
 
     pub fn circle(&mut self, x: f32, y: f32, r: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
-        self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, 0.0] });
+        self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, 0.0], angle: 0.0 });
     }
 
     pub fn ring(&mut self, x: f32, y: f32, r: f32, color: [f32; 4], width: f32) {
@@ -1620,19 +1626,20 @@ impl Canvas {
             fill,
             border,
             params: [r, border_w, 0.0, 0.0],
+            angle: 0.0,
         });
     }
 
     /// Left (`side` 1) or right (`side` 2) half of a circle.
     pub fn half_circle(&mut self, x: f32, y: f32, r: f32, side: u8, fill: [f32; 4], border: [f32; 4], border_w: f32) {
-        self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, side as f32] });
+        self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, side as f32], angle: 0.0 });
     }
 
     /// A skin image centred on (`x`, `y`) for something of radius `r`, tinted by `tint`. False
     /// (nothing drawn) when the skin doesn't have it.
     pub fn sprite(&mut self, sprite: Sprite, x: f32, y: f32, r: f32, tint: [f32; 4]) -> bool {
         let Some([sx, sy]) = self.sprites[sprite as usize] else { return false };
-        self.shapes.push(Shape { center: [x, y], half: [r * sx, r * sy], fill: tint, border: tint, params: [0.0, 0.0, 0.0, SPRITE_BASE + sprite as usize as f32] });
+        self.shapes.push(Shape { center: [x, y], half: [r * sx, r * sy], fill: tint, border: tint, params: [0.0, 0.0, 0.0, SPRITE_BASE + sprite as usize as f32], angle: 0.0 });
         true
     }
 
@@ -1652,6 +1659,42 @@ impl Canvas {
         }
     }
 
+    /// Turns every shape drawn since `start` by `angle` (radians, clockwise on screen) and scales
+    /// it by `scale` about `pivot`, which lands on `dest`. Hit areas aren't moved.
+    pub fn rotate_since(&mut self, start: usize, pivot: [f32; 2], angle: f32, scale: f32, dest: [f32; 2]) {
+        let (sin, cos) = angle.sin_cos();
+        for sh in &mut self.shapes[start..] {
+            let (x, y) = ((sh.center[0] - pivot[0]) * scale, (sh.center[1] - pivot[1]) * scale);
+            sh.center = [dest[0] + x * cos - y * sin, dest[1] + x * sin + y * cos];
+            sh.half = [sh.half[0] * scale, sh.half[1] * scale];
+            sh.params[0] *= scale;
+            sh.params[1] *= scale;
+            sh.params[2] *= scale;
+            sh.angle += angle;
+        }
+    }
+
+    /// Squeezes every shape drawn since `start` horizontally towards x = `cx` by `fx`; a negative
+    /// `fx` flips them over (half circles swap sides).
+    pub fn squash_x_since(&mut self, start: usize, cx: f32, fx: f32) {
+        for sh in &mut self.shapes[start..] {
+            sh.center[0] = cx + (sh.center[0] - cx) * fx;
+            sh.half[0] *= fx.abs();
+            if fx < 0.0 && (0.5..2.5).contains(&sh.params[3]) {
+                sh.params[3] = 3.0 - sh.params[3];
+            }
+        }
+    }
+
+    /// Stretches every shape drawn since `start` by (`sx`, `sy`) about `at`: circles become
+    /// stadiums (used for squishy notes).
+    pub fn stretch_since(&mut self, start: usize, at: [f32; 2], sx: f32, sy: f32) {
+        for sh in &mut self.shapes[start..] {
+            sh.center = [at[0] + (sh.center[0] - at[0]) * sx, at[1] + (sh.center[1] - at[1]) * sy];
+            sh.half = [sh.half[0] * sx, sh.half[1] * sy];
+        }
+    }
+
     /// Flips every shape drawn since `start` left to right across a canvas `w` wide (Mirror
     /// mod; text drawn this way would read backwards, so it is drawn afterwards).
     pub fn mirror_since(&mut self, start: usize, w: f32) {
@@ -1665,7 +1708,7 @@ impl Canvas {
     }
 
     pub fn glow(&mut self, x: f32, y: f32, r: f32, softness: f32, color: [f32; 4]) {
-        self.shapes.push(Shape { center: [x, y], half: [r, r], fill: color, border: color, params: [r, 0.0, softness, 0.0] });
+        self.shapes.push(Shape { center: [x, y], half: [r, r], fill: color, border: color, params: [r, 0.0, softness, 0.0], angle: 0.0 });
     }
 
     /// Draws text with the built-in 5x7 font; `size` is the glyph height. Returns the advance width.
@@ -1690,6 +1733,7 @@ impl Canvas {
                         fill: color,
                         border: color,
                         params: [0.0, 0.0, 0.0, GLYPH_BASE + i as f32],
+                        angle: 0.0,
                     });
                 }
                 cx += px * 6.0;
@@ -1715,6 +1759,7 @@ impl Canvas {
                             fill: color,
                             border: color,
                             params: [0.0; 4],
+                            angle: 0.0,
                         });
                     } else {
                         row += 1;

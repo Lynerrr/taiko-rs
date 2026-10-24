@@ -33,10 +33,12 @@ pub enum Sfx {
     BigKat,
     /// A combo of 20 or more broken by a miss.
     ComboBreak,
+    /// Overtime's jumpscare.
+    Scream,
 }
 
 /// One sound per `Sfx`.
-pub type Sounds = [Vec<f32>; 5];
+pub type Sounds = [Vec<f32>; 6];
 
 enum Cmd {
     /// `base`: the song frame the track's first sample belongs at (a partial decode).
@@ -547,7 +549,32 @@ pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
     let kat = custom.kat.unwrap_or_else(|| built_in(1, rate));
     let finish = custom.finish.unwrap_or_else(|| built_in(2, rate));
     let combobreak = custom.combobreak.unwrap_or_else(|| built_in(3, rate));
-    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak]
+    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak, screech(rate)]
+}
+
+/// Overtime's scream, made up rather than sampled: detuned saws sweeping up with a fast
+/// wobble, ring-modulated, over noise, then driven into clipping.
+fn screech(rate: u32) -> Vec<f32> {
+    use std::f32::consts::TAU;
+    const LEN: f32 = 1.3;
+    let sr = rate as f32;
+    let mut noise = Noise(0x5eed_f00d);
+    let mut phase = [0.0f32; 3];
+    (0..(sr * LEN) as usize)
+        .map(|i| {
+            let t = i as f32 / sr;
+            let env = (t / 0.012).min(1.0) * (1.0 - t / LEN).max(0.0).powf(0.6);
+            let f = 380.0 + 260.0 * t + 90.0 * (t * 11.0 * TAU).sin();
+            let mut saw = 0.0;
+            for (p, k) in phase.iter_mut().zip([1.0, 1.49, 2.03]) {
+                *p = (*p + f * k / sr).fract();
+                saw += *p * 2.0 - 1.0;
+            }
+            let ring = (t * 57.0 * TAU).sin();
+            let x = saw * 0.5 * (0.6 + 0.4 * ring) + noise.next() * 0.45;
+            (x * 2.5).tanh() * 0.7 * env
+        })
+        .collect()
 }
 
 /// Two mono sounds played together.
