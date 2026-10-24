@@ -254,6 +254,12 @@ pub struct Game {
     sections: Vec<(f64, f64, f64)>,
     /// Decoy: the fake notes (never judged).
     decoys: Vec<beatmap::Note>,
+    /// Each note's rhythm: the stream it's part of (see `flows`).
+    flows: Vec<u8>,
+    /// Decoy: the rhythm each fake note pretends to be part of (the note before it's).
+    decoy_flows: Vec<u8>,
+    /// Liar: the map time each note is drawn at far off (its own, or a 1/4's for a triplet).
+    lies: Vec<f64>,
     /// Overtime: when (map ms) he shows up, and the next one due.
     scares: Vec<f64>,
     next_scare: usize,
@@ -698,8 +704,17 @@ fn bake_speeds(map: &mut Beatmap, mods: Mods) {
         g.sort_by(f64::total_cmp);
         g.get(g.len() / 2).copied().unwrap_or(250.0)
     };
+    let flow = flows(map);
     for (k, &i) in hits.iter().enumerate() {
         let n = &mut map.notes[i];
+        if mods.has(Mod::SnapSpeed) {
+            n.velocity *= match flow[i] {
+                3 => 0.8,
+                6 | 12 => 1.25,
+                8 | 16 => 1.1,
+                _ => 1.0,
+            };
+        }
         if mods.has(Mod::Split) {
             n.velocity *= if n.kind == Kind::Don { 1.2 } else { 0.85 };
         }
@@ -715,16 +730,80 @@ fn bake_speeds(map: &mut Beatmap, mods: Mods) {
 /// Decoy's fake notes: in about half the gaps between notes, one halfway, of a random colour.
 fn decoys(map: &Beatmap) -> Vec<beatmap::Note> {
     let hits: Vec<&beatmap::Note> = map.notes.iter().filter(|n| matches!(n.kind, Kind::Don | Kind::Kat)).collect();
-    hits.windows(2)
-        .filter(|p| p[1].time - p[0].time >= 120.0 && hash01(p[0].time + 0.25) < 0.5)
-        .map(|p| {
-            let mut n = p[0].clone();
-            n.time = (p[0].time + p[1].time) / 2.0;
-            n.end_time = n.time;
-            n.kind = if hash01(n.time + 0.75) < 0.5 { Kind::Don } else { Kind::Kat };
-            n.big = hash01(n.time + 0.6) < 0.12;
-            n.velocity *= 0.9 + 0.2 * hash01(n.time + 0.1);
-            n
+    let mut out = Vec::new();
+    // Inside streams (gaps under 120 ms) only now and then, and never in two gaps running, so
+    // they stay readable.
+    let mut last_in_stream = false;
+    for p in hits.windows(2) {
+        let gap = p[1].time - p[0].time;
+        let stream = gap < 120.0;
+        let chance = if !stream { 0.5 } else if gap >= 40.0 && !last_in_stream { 0.12 } else { 0.0 };
+        if hash01(p[0].time + 0.25) >= chance {
+            last_in_stream = false;
+            continue;
+        }
+        last_in_stream = stream;
+        let mut n = p[0].clone();
+        n.time = (p[0].time + p[1].time) / 2.0;
+        n.end_time = n.time;
+        n.kind = if hash01(n.time + 0.75) < 0.5 { Kind::Don } else { Kind::Kat };
+        n.big = !stream && hash01(n.time + 0.6) < 0.12;
+        n.velocity *= 0.9 + 0.2 * hash01(n.time + 0.1);
+        out.push(n);
+    }
+    out
+}
+
+/// The rhythm of a note at map time `t`: the smallest of 1, 2, 3, 4, 6, 8, 12 and 16 whose 1/n
+/// beat grid (from its red line) it sits on, within 3 ms; 0 when on none.
+fn snap_of(cps: &[beatmap::ControlPoint], t: f64) -> u8 {
+    let cp = beatmap::control_point_at(cps, t);
+    let beats = (t - cp.beat_origin) / cp.beat_length;
+    [1u8, 2, 3, 4, 6, 8, 12, 16]
+        .into_iter()
+        .find(|&d| {
+            let x = beats * d as f64;
+            (x - x.round()).abs() * cp.beat_length / d as f64 <= 3.0
+        })
+        .unwrap_or(0)
+}
+
+/// The rhythm each note is part of: how far it is from its nearest neighbour, as the 1/n of a
+/// beat that gap is closest to (1, 2, 3, 4, 6, 8, 12 or 16). Every note of a 1/4 stream gets 4,
+/// of a triplet run 3, a lone note 1 or 2. 0 for rolls and swells.
+fn flows(map: &Beatmap) -> Vec<u8> {
+    let hits: Vec<usize> = (0..map.notes.len()).filter(|&i| matches!(map.notes[i].kind, Kind::Don | Kind::Kat)).collect();
+    let mut out = vec![0u8; map.notes.len()];
+    for (k, &i) in hits.iter().enumerate() {
+        let t = map.notes[i].time;
+        let prev = k.checked_sub(1).map(|j| t - map.notes[hits[j]].time);
+        let next = hits.get(k + 1).map(|&j| map.notes[j].time - t);
+        let Some(gap) = [prev, next].into_iter().flatten().reduce(f64::min) else { continue };
+        let beats = gap / beatmap::control_point_at(&map.control_points, t).beat_length;
+        out[i] = [1u8, 2, 3, 4, 6, 8, 12, 16].into_iter().min_by(|&a, &b| (beats * a as f64 - 1.0).abs().total_cmp(&(beats * b as f64 - 1.0).abs())).unwrap_or(1);
+    }
+    out
+}
+
+/// Liar's far-off times: each triplet note (1/3, 1/6, 1/12) moved to the nearest 1/4 (1/8,
+/// 1/16) of the beat, unless a real note is already there; other notes keep their own.
+fn lies(map: &Beatmap) -> Vec<f64> {
+    let hit_at = |t: f64| {
+        let i = map.notes.partition_point(|n| n.time < t - 5.0);
+        map.notes[i..].iter().take_while(|n| n.time < t + 5.0).any(|n| matches!(n.kind, Kind::Don | Kind::Kat))
+    };
+    map.notes
+        .iter()
+        .map(|n| {
+            let d = snap_of(&map.control_points, n.time);
+            if !matches!(n.kind, Kind::Don | Kind::Kat) || d == 0 || d % 3 != 0 {
+                return n.time;
+            }
+            let cp = beatmap::control_point_at(&map.control_points, n.time);
+            let grid = (d / 3 * 4) as f64;
+            let beats = (n.time - cp.beat_origin) / cp.beat_length;
+            let lie = cp.beat_origin + (beats * grid).round() / grid * cp.beat_length;
+            if hit_at(lie) { n.time } else { lie }
         })
         .collect()
 }
@@ -832,6 +911,9 @@ impl Game {
             Vec::new()
         };
         let decoys = if mods.has(Mod::Decoy) { decoys(&map) } else { Vec::new() };
+        let flows = flows(&map);
+        let decoy_flows = decoys.iter().map(|d| map.notes.partition_point(|n| n.time < d.time).checked_sub(1).map_or(1, |i| flows[i])).collect();
+        let lies = if mods.has(Mod::Liar) { lies(&map) } else { Vec::new() };
         // Overtime: once, plus once more per 75 s of map, anywhere from 8 s in to 4 s before the end.
         let scares = if mods.has(Mod::Overtime) {
             let span = (end_time - first_note - 12_000.0).max(0.0);
@@ -902,6 +984,9 @@ impl Game {
             kiai_starts,
             sections,
             decoys,
+            flows,
+            decoy_flows,
+            lies,
             scares,
             next_scare: 0,
         }
@@ -1690,9 +1775,7 @@ impl Game {
         // The lane's shape. Shapes with less (or more) room for it keep notes on it for the
         // usual time.
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(t, w);
-        let geo = LaneGeo { rail, len: lane_len, shatter: self.shatter_at(t), cracks: self.cracks_at(t, lane_len) };
         let portal = self.portal_at(t, lane_len);
-        let bent = geo.bent() || portal.is_some();
         let scroll = Scroll {
             t,
             speed: osu_speed_scale(w) * scroll_speed * mods.scroll() * (lane_len / (w - HIT_X)) as f64,
@@ -1703,6 +1786,55 @@ impl Game {
         };
         // Distance along the lane of something at map time `time` scrolling at `vel`.
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
+        let lookahead = ((lane_len + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs()).min(30_000.0);
+
+        // Notes on screen, nearest first.
+        let start = self.map.notes.partition_point(|n| n.time < t - 20_000.0);
+        self.visible.clear();
+        for i in start..self.map.notes.len() {
+            let n = &self.map.notes[i];
+            if n.time - t > lookahead {
+                break;
+            }
+            if n.end_time < t - 3000.0 && n.kind != Kind::Swell {
+                continue;
+            }
+            self.visible.push(i);
+        }
+        if self.hide_notes {
+            self.visible.clear();
+        }
+        // Distance along the lane of note `i`. Liar: far off, a triplet sits where a 1/4 would,
+        // sliding to its real place on the way in.
+        let note_s = |i: usize| -> f32 {
+            let n = &self.map.notes[i];
+            let s = s_of(n.time, n.velocity);
+            match self.lies.get(i) {
+                Some(&lie) if lie != n.time => {
+                    let fake = s_of(lie, n.velocity);
+                    s + (fake - s) * smooth(0.3, 0.55, (s / lane_len) as f64) as f32
+                }
+                _ => s,
+            }
+        };
+        // Shatter: pieces of the lane with streams on them slide further.
+        let mut shatter = self.shatter_at(t);
+        if mods.has(Mod::Shatter) {
+            let mut on = [[0u32; 2]; 4];
+            for &i in &self.visible {
+                let s = note_s(i);
+                if matches!(self.map.notes[i].kind, Kind::Don | Kind::Kat) && s > 0.0 && s < lane_len {
+                    let piece = &mut on[((s / lane_len * 4.0) as usize).min(3)];
+                    piece[0] += 1;
+                    piece[1] += (self.flows[i] >= 3) as u32;
+                }
+            }
+            for (d, [all, streams]) in shatter.iter_mut().zip(on) {
+                *d *= 0.6 + 0.8 * streams as f32 / all.max(1) as f32;
+            }
+        }
+        let geo = LaneGeo { rail, len: lane_len, shatter, cracks: self.cracks_at(t, lane_len) };
+        let bent = geo.bent() || portal.is_some();
         // Where on screen something `s` along the lane is drawn, `side` off its middle: through
         // the portal, onto the (bent, broken) lane. Also its heading and size.
         let place = |s: f32, side: f32| -> (f32, f32, f32, f32) {
@@ -1710,7 +1842,6 @@ impl Game {
             let (x, y, a) = geo.at(s, side);
             (x, y, a, size)
         };
-        let lookahead = ((lane_len + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs()).min(30_000.0);
         // How visible an approaching note `s` along the lane is under the visual mods.
         let memory_over = mods.has(Mod::Memory) && t > self.first_note + 15_000.0;
         let note_alpha = |s: f32| -> f32 {
@@ -1731,22 +1862,32 @@ impl Game {
             }
             a
         };
-        // A don or kat `s` along the lane (`k`th drawn): Snake swings it sideways, Party pumps
-        // and squishes it. Nothing changes at the drum.
-        let draw_hit = |c: &mut Canvas, s: f32, n: &beatmap::Note, k: usize, col: u32, a: f32| {
+        // A don or kat `s` along the lane (`k`th drawn, in a 1/`flow` stream): Snake swings it
+        // sideways, Party pumps and squishes it. Nothing changes at the drum.
+        let draw_hit = |c: &mut Canvas, s: f32, n: &beatmap::Note, k: usize, flow: u8, col: u32, a: f32| {
             let mut side = 0.0;
             if mods.has(Mod::Snake) {
+                // Streams swing the most, triplets the other way, notes on the beat not at all.
+                let (amp, flip) = match flow {
+                    1 => (0.0, 0.0),
+                    2 => (0.45, 0.0),
+                    0 => (0.6, 0.0),
+                    d if d % 3 == 0 => (1.0, PI),
+                    _ => (1.0, 0.0),
+                };
                 // The wave jolts forward on each beat.
                 let u = (s / lane_len).max(0.0);
                 let f = smooth(0.0, 0.3, u as f64) as f32;
                 let jolt = beats.floor() + 1.0 - (1.0 - beat_phase).powi(3);
-                side += 30.0 * f * (0.8 + 0.4 * pulse) * (TAU * 1.3 * u - PI * jolt).sin();
+                side += 32.0 * amp * f * (0.8 + 0.4 * pulse) * (TAU * 1.3 * u - PI * jolt + flip).sin();
             }
             let (x, y, _, mut size) = place(s, side);
             let mut squish = 1.0;
             if party {
-                size *= 1.0 + 0.22 * pulse;
-                squish = 1.0 + 0.3 * pulse * if k % 2 == 0 { 1.0 } else { -1.0 };
+                // Each note pulses on its own grid: a 1/4 four times a beat.
+                let own = (1.0 - (beats * flow.clamp(1, 8) as f32).rem_euclid(1.0)).powi(3);
+                size *= 1.0 + 0.22 * own;
+                squish = 1.0 + 0.3 * own * if k % 2 == 0 { 1.0 } else { -1.0 };
             }
             let r = if n.big { BIG_R } else { NOTE_R } * size;
             let first = c.shapes.len();
@@ -1861,27 +2002,12 @@ impl Game {
                 let s = s_of(n.time, n.velocity);
                 let a = note_alpha(s) * smooth(0.22, 0.38, (s / lane_len) as f64) as f32;
                 if a > 0.01 && s < lane_len + BIG_R {
-                    draw_hit(c, s, n, k, if n.kind == Kind::Don { don } else { kat }, a);
+                    draw_hit(c, s, n, k, self.decoy_flows[k], if n.kind == Kind::Don { don } else { kat }, a);
                 }
             }
         }
 
-        // Notes: collect visible, draw back to front so earlier notes sit on top.
-        let start = self.map.notes.partition_point(|n| n.time < t - 20_000.0);
-        self.visible.clear();
-        for i in start..self.map.notes.len() {
-            let n = &self.map.notes[i];
-            if n.time - t > lookahead {
-                break;
-            }
-            if n.end_time < t - 3000.0 && n.kind != Kind::Swell {
-                continue;
-            }
-            self.visible.push(i);
-        }
-        if self.hide_notes {
-            self.visible.clear();
-        }
+        // Notes, back to front so earlier notes sit on top.
         let on_lane = |s: f32, r: f32| s > -HIT_X - r && s < lane_len + r;
         for &i in self.visible.iter().rev() {
             let n = &self.map.notes[i];
@@ -1902,11 +2028,11 @@ impl Game {
                             }
                         }
                         judged => {
-                            let s = s_of(n.time, n.velocity);
+                            let s = note_s(i);
                             if on_lane(s, r) {
                                 let a = if judged.is_some() { 0.4 } else { note_alpha(s) };
                                 if a > 0.01 {
-                                    draw_hit(c, s, n, i, col, a);
+                                    draw_hit(c, s, n, i, self.flows[i], col, a);
                                 }
                             }
                         }
@@ -2725,6 +2851,17 @@ mod tests {
                 let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
                 crate::debug::write_png(&dir.join(format!("{}-{t}.png", m.acronym())), w, h, &rgb).unwrap();
             }
+            // Streams and triplets, for the mods that go by rhythm.
+            if ["SK", "PY", "LI", "DY", "SH", "SR"].contains(&m.acronym()) {
+                let mut g = rhythm_game(m.acronym());
+                for t in [2000.0, 5600.0] {
+                    g.time = t;
+                    c.clear(853.3);
+                    g.draw_playfield(&mut c, 1.0);
+                    let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
+                    crate::debug::write_png(&dir.join(format!("{}-rhythm-{t}.png", m.acronym())), w, h, &rgb).unwrap();
+                }
+            }
             if let Some(&at) = g.scares.first() {
                 g.time = at + 300.0;
                 c.clear(853.3);
@@ -2794,5 +2931,44 @@ mod tests {
         g.sfx_log = Some(Vec::new());
         g.set_time(at + 5000.0);
         assert_eq!(screams(&g), 0);
+    }
+    /// 1/4s from 0 ms, triplets from 2880 ms and 1/6s from 6720 ms, at 125 BPM.
+    fn rhythm_game(mods: &str) -> Game {
+        let mut map = beatmap::calibration_map(480.0, 0, 64);
+        for (k, n) in map.notes.iter_mut().enumerate() {
+            n.time = match k {
+                0..24 => k as f64 * 120.0,
+                24..48 => 2880.0 + (k - 24) as f64 * 160.0,
+                _ => 6720.0 + (k - 48) as f64 * 80.0,
+            };
+            n.end_time = n.time;
+        }
+        Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse(mods))
+    }
+
+    #[test]
+    fn snaps_and_liar() {
+        let g = rhythm_game("LI");
+        let snaps: Vec<u8> = g.map.notes.iter().map(|n| snap_of(&g.map.control_points, n.time)).collect();
+        assert_eq!(&snaps[..4], &[1, 4, 2, 4]);
+        assert_eq!(&snaps[24..27], &[1, 3, 3]);
+        assert_eq!(&snaps[48..51], &[1, 6, 3]);
+        // A 1/3 pretends to be the 1/4 next to it; 1/4s and notes on the beat tell the truth.
+        assert_eq!(g.lies[25], 3000.0);
+        assert_eq!(g.lies[1], g.map.notes[1].time);
+        assert_eq!(g.lies[24], g.map.notes[24].time);
+        // Snap Speed: triplets slower, 1/6s faster.
+        let v = rhythm_game("SR").map.notes.iter().map(|n| n.velocity).collect::<Vec<_>>();
+        assert!(v[25] < v[1] && v[49] > v[1] && v[0] == v[1] && v[26] == v[25]);
+        assert_eq!((g.flows[0], g.flows[2], g.flows[25], g.flows[26], g.flows[50]), (4, 4, 3, 3, 6));
+    }
+
+    #[test]
+    fn decoys_get_into_streams_but_never_twice_running() {
+        let g = rhythm_game("DY");
+        let in_stream: Vec<f64> = g.decoys.iter().map(|n| n.time).filter(|&t| t > 6720.0).collect();
+        assert!(!in_stream.is_empty() && in_stream.len() <= 5, "{in_stream:?}");
+        assert!(in_stream.windows(2).all(|p| p[1] - p[0] > 100.0), "{in_stream:?}");
+        assert!(g.decoys.iter().filter(|n| n.time > 6720.0).all(|n| !n.big));
     }
 }
