@@ -17,9 +17,11 @@
 #   TAIKO_ABIS           ABIs to include (default "arm64-v8a"; e.g. "arm64-v8a x86_64")
 #   TAIKO_VERSION_CODE   versionCode (default: the number of commits)
 #   ANDROID_KEYSTORE, ANDROID_KEYSTORE_PASS, ANDROID_KEY_ALIAS
-#                        signing key (default: the SDK debug key ~/.android/debug.keystore,
-#                        created if missing). Updates only install over an APK signed with the
-#                        same key.
+#                        signing key. Default: the release key ~/.android/taiko-rs-release.jks
+#                        (password in taiko-rs-release.pass next to it, alias taiko-rs) if it is
+#                        there, the one CI signs with; else the SDK debug key
+#                        ~/.android/debug.keystore, created if missing. Updates only install
+#                        over an APK signed with the same key.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -99,9 +101,17 @@ EOF
 
 echo "== align and sign"
 "$tools/zipalign" -f -p 4 "$stage/unsigned.apk" "$stage/aligned.apk"
-keystore=${ANDROID_KEYSTORE:-$HOME/.android/debug.keystore}
-pass=${ANDROID_KEYSTORE_PASS:-android}
-alias=${ANDROID_KEY_ALIAS:-androiddebugkey}
+release="$HOME/.android/taiko-rs-release.jks"
+if [ -z "${ANDROID_KEYSTORE:-}" ] && [ -f "$release" ] && [ -f "${release%.jks}.pass" ]; then
+    # The release key (as in CI), so local builds install over published ones and back.
+    keystore=$release
+    pass=$(cat "${release%.jks}.pass")
+    alias=taiko-rs
+else
+    keystore=${ANDROID_KEYSTORE:-$HOME/.android/debug.keystore}
+    pass=${ANDROID_KEYSTORE_PASS:-android}
+    alias=${ANDROID_KEY_ALIAS:-androiddebugkey}
+fi
 if [ ! -f "$keystore" ] && [ -z "${ANDROID_KEYSTORE:-}" ]; then
     mkdir -p "$(dirname "$keystore")"
     keytool -genkeypair -keystore "$keystore" -storepass android -keypass android -alias androiddebugkey \

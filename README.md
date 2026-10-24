@@ -89,6 +89,13 @@ android/build-apk.sh             # -> target/android/taiko-rs.apk
 android/build-apk.sh --install   # and adb install it on the connected device
 ```
 
+Releases are signed with the key in the `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASS` and
+`ANDROID_KEY_ALIAS` repository secrets. With that key at `~/.android/taiko-rs-release.jks` (its
+password in `taiko-rs-release.pass` next to it), local builds are signed with it too, so either
+installs over the other; otherwise they use the SDK debug key, and switching between the two means
+uninstalling first (which deletes the app's songs). Keep a backup of the key: a new one can't update
+installed copies.
+
 The game is this crate's library started from `android_main` in a NativeActivity, with one small
 Java class (`android/java`) for importing opened files; no Gradle. Logs go to logcat (`adb logcat
 -s taiko-rs`).
