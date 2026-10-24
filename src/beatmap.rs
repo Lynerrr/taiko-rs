@@ -184,6 +184,13 @@ fn read_background(reader: &mut impl std::io::BufRead) -> Option<String> {
     None
 }
 
+/// How much earlier osu! plays a map's music against its note times than the music's exact
+/// samples. Maps are timed by ear in osu!, so played sample-exact (as here) the music came late:
+/// in 79 taiko maps (MP3 with and without a LAME header, OGG alike) the drum hits landed a median
+/// 23 ms after their notes, against 0 for a click track. Loaded maps move this much later, so an
+/// offset calibrated on the click track fits real maps too.
+pub const OSU_TIMING_MS: f64 = 23.0;
+
 pub fn load(path: &Path) -> Result<Beatmap, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (meta, body) = parse_sections(&text, false);
@@ -195,7 +202,26 @@ pub fn load(path: &Path) -> Result<Beatmap, String> {
     if map.notes.is_empty() {
         return Err("beatmap has no hit objects".into());
     }
+    map.shift(OSU_TIMING_MS);
     Ok(map)
+}
+
+impl Beatmap {
+    /// Moves every map time (notes, barlines, timing) `ms` later. Audio positions (the preview
+    /// point) and durations stay.
+    pub fn shift(&mut self, ms: f64) {
+        for n in &mut self.notes {
+            n.time += ms;
+            n.end_time += ms;
+        }
+        for b in &mut self.barlines {
+            b.time += ms;
+        }
+        for cp in &mut self.control_points {
+            cp.time += ms;
+            cp.beat_origin += ms;
+        }
+    }
 }
 
 struct Body<'a> {
@@ -513,6 +539,25 @@ SliderTickRate:1
         let mut map = Beatmap { meta, notes: Vec::new(), barlines: Vec::new(), control_points: Vec::new() };
         convert(&mut map, body);
         map
+    }
+
+    #[test]
+    fn loaded_maps_move_to_where_osu_plays_their_music() {
+        let text = "osu file format v14\n\n[General]\nAudioFilename: a.mp3\nMode: 1\n\n[Difficulty]\nOverallDifficulty:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n1000,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n256,192,1500,1,2,0:0:0:0:\n";
+        let dir = std::env::temp_dir().join(format!("taiko-rs-shift-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("map.osu");
+        std::fs::write(&path, text).unwrap();
+        let (file, raw) = (load(&path).unwrap(), parse(text));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (a, b) in file.notes.iter().zip(&raw.notes) {
+            assert_eq!(a.time, b.time + OSU_TIMING_MS);
+        }
+        assert_eq!(file.control_points[0].beat_origin, raw.control_points[0].beat_origin + OSU_TIMING_MS);
+        assert_eq!(file.barlines[0].time, raw.barlines[0].time + OSU_TIMING_MS);
+        // Beat phase is unchanged at the shifted note times.
+        let (cf, cr) = (&file.control_points[0], &raw.control_points[0]);
+        assert!((cf.beat_phase(file.notes[1].time) - cr.beat_phase(raw.notes[1].time)).abs() < 1e-9);
     }
 
     #[test]
