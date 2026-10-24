@@ -379,6 +379,15 @@ fn osu_speed_scale(w: f32) -> f64 {
     (w - HIT_X).max(1.0) as f64 / (aspect * VIRTUAL_HEIGHT as f64 - 160.0)
 }
 
+/// How much faster than on a plain lane notes go along a lane `len` long on a canvas `w` wide.
+/// Rails only bend the lane: notes cross the screen at the usual speed, so a long rail (a
+/// spiral, a loop) shows more of the map ahead rather than rushing it in, and only the
+/// playfield shrinking to fit the shape (`zoom`) is made up for. Mania's and Spin's shorter
+/// lanes keep notes on them for the usual time.
+fn lane_stretch(rail: bool, len: f32, w: f32, zoom: f32) -> f64 {
+    if rail { 1.0 / zoom as f64 } else { (len / (w - HIT_X)) as f64 }
+}
+
 /// What bends note positions this frame: drawing only, judging always uses real time.
 struct Scroll {
     t: f64,
@@ -2184,13 +2193,12 @@ impl Game {
         let in_kiai = cp.kiai;
 
         let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp);
-        // The lane's shape. Shapes with less (or more) room for it keep notes on it for the
-        // usual time.
+        // The lane's shape, and how fast notes go along it (see `lane_stretch`).
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w);
         let portal = self.portal_at(vt, lane_len);
         let scroll = Scroll {
             t: vt,
-            speed: osu_speed_scale(w) * scroll_speed * mods.scroll() * (lane_len / (w - HIT_X)) as f64,
+            speed: osu_speed_scale(w) * scroll_speed * mods.scroll() * lane_stretch(rail.is_some(), lane_len, w, rail_zoom),
             lane: lane_len as f64,
             mods,
             warp,
@@ -3511,6 +3519,24 @@ mod tests {
                 assert!((0.9..=1.01).contains(&step), "{shape:?} at {k}: {step}");
                 prev = p;
             }
+        }
+    }
+
+    #[test]
+    fn rails_bend_the_lane_without_speeding_notes_up() {
+        // On screen (after the playfield shrinks to fit the shape), notes cross at the usual
+        // speed whatever the shape and the screen.
+        for w in [853.3, 600.0] {
+            for mods in ["ZZ", "UT", "SI", "LP", "EB", "SS"] {
+                let g = kiai_game(mods);
+                for t in [0.0, 20_000.0] {
+                    let (rail, len, _, zoom) = g.rail_at(t, w);
+                    let on_screen = lane_stretch(rail.is_some(), len, w, zoom) * zoom as f64;
+                    assert!((on_screen - 1.0).abs() < 1e-6, "{mods} at {w}: {on_screen}");
+                }
+            }
+            // Plain lanes are as they were.
+            assert_eq!(lane_stretch(false, w - HIT_X, w, 1.0), 1.0);
         }
     }
 
