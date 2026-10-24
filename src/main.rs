@@ -1107,7 +1107,7 @@ impl State {
     fn adjust_setting(&mut self, item: Item, dir: i32, window: Option<&Window>) {
         let d = dir as f64;
         match item {
-            Item::ScrollSpeed => self.cfg.scroll_speed = (self.cfg.scroll_speed + 0.05 * d).clamp(0.3, 4.0),
+            Item::ScrollSpeed => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, d),
             Item::Offset => self.cfg.offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
             Item::Key(_) | Item::PresetKey(_) => {
                 self.settings_ui.binding = Some(item);
@@ -1718,8 +1718,8 @@ impl State {
                 }
                 return true;
             }
-            KeyCode::F3 => self.cfg.scroll_speed = (self.cfg.scroll_speed - 0.05).max(0.3),
-            KeyCode::F4 => self.cfg.scroll_speed = (self.cfg.scroll_speed + 0.05).min(4.0),
+            KeyCode::F3 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, -1.0),
+            KeyCode::F4 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, 1.0),
             KeyCode::F7 => {
                 self.cfg.present = self.cfg.present.next();
                 self.cfg.save();
