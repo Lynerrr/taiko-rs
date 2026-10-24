@@ -141,8 +141,8 @@ pub enum ClientMsg {
     RequestMap,
     /// Host: a piece of the map set archive for player `to`.
     MapFile { to: u32, part: MapPart },
-    /// During a match: presses judged since the last batch (map time, key), and whether the
-    /// player has the mash penalty on (spectators judge the same way).
+    /// During a match: presses judged since the last batch (map time, key). `anti_mash` is
+    /// older builds' setting, always sent on (judging is `Mash::Nearest` now).
     Inputs { inputs: Vec<(f64, u8)>, anti_mash: bool },
     /// Start / stop watching the match in progress.
     Spectate(bool),

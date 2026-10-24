@@ -196,7 +196,7 @@ built-in pixel font covering ASCII and Cyrillic, so Russian song titles (from `T
 saved as a replay in `replays/` in the config folder. The results screen tells you where it
 ranks among your scores on that map and has **Watch replay (R)**; song select lists the map's
 best local scores under the preview panel, and clicking one plays its replay. Replays store the
-map time each hit was judged at (plus the speed and the mash setting), so watching one
+map time each hit was judged at (plus the speed), so watching one
 reproduces the play exactly, whatever the offset. While watching, a timeline along the bottom
 of the screen jumps anywhere in the play (click or drag it), and Left/Right skip 5 seconds back
 or forward (Shift: 15).
@@ -430,7 +430,7 @@ forfeits). Results show score, accuracy, max combo, judgements and UR for everyo
 **Spectating:** spectators (see above) start watching when the match starts; when a match is
 already running, anyone in the lobby who has the map can press **Spectate (S)** to join it. Players stream the presses they're judged on to the room, which keeps the
 match's log, so a spectator joining late catches up; the spectator plays the map 1.5 s behind
-live with every player's presses fed in (judged with that player's mash setting). Left/Right
+live with every player's presses fed in. Left/Right
 switches between players, A shows everyone stacked with their scores, Esc goes back to the lobby.
 When the players skip the intro, the spectator skips it too. Spectating always uses vsync.
 

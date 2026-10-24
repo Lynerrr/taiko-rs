@@ -119,8 +119,6 @@ pub struct Config {
     pub offset_hint_ur_scaled: bool,
     pub audio_buffer: u32,
     pub show_fps: bool,
-    /// osu!'s mash penalty (wrong-colour / too-early hits miss).
-    pub anti_mash: bool,
     /// Kiai time effects on the lane (tint, pulsing glow).
     pub kiai_effects: bool,
     /// GREAT hits without their flash and label (only OKs and misses show).
@@ -223,7 +221,6 @@ impl Default for Config {
             notify_messages: true,
             notify_mentions: true,
             notify_requests: true,
-            anti_mash: false,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             show_playfield_size: true,
@@ -360,7 +357,6 @@ impl Config {
                 "notify_mentions" => cfg.notify_mentions = v != "false",
                 "notify_requests" => cfg.notify_requests = v != "false",
                 "discord_app_id" => cfg.discord_app_id = v.to_string(),
-                "anti_mash" => cfg.anti_mash = v == "true",
                 "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "show_map_info" => cfg.show_map_info = v != "false",
@@ -456,8 +452,6 @@ impl Config {
              kiai_effects = {}\n\
              # GREAT hits without their flash and label (only OKs and misses show)\n\
              hide_great = {}\n\
-             # wrong-colour / too-early hits count as misses (osu!'s mash penalty)\n\
-             anti_mash = {}\n\
              show_offset_hint = {}\n\
              offset_hint_ur_scaled = {}\n\
              # offset/UR line during play (Tab toggles)\n\
@@ -494,7 +488,6 @@ impl Config {
             self.sort,
             self.kiai_effects,
             self.hide_great,
-            self.anti_mash,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
             self.show_map_info,

@@ -91,6 +91,7 @@ pub const MAX_LISTED: usize = 300;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SoloPlay {
     pub map: crate::net::MapInfo,
+    /// Older builds' mash penalty setting; always sent on (judging is `Mash::Nearest` now).
     pub anti_mash: bool,
 }
 

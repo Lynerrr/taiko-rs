@@ -20,7 +20,6 @@ pub enum Item {
     LiveOffset,
     LiveOffsetUr,
     ResumeDelay,
-    AntiMash,
     Key(usize),
     /// Previous (0) / next (1) playfield preset key.
     PresetKey(usize),
@@ -60,12 +59,11 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 54] = [
+pub const ITEMS: [(&str, Item); 53] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::ResumeDelay),
-    ("GAMEPLAY", Item::AntiMash),
     ("GAMEPLAY", Item::ShowConverts),
     ("GAMEPLAY", Item::HiddenMaps),
     ("PLAYFIELD", Item::PlayfieldArea),
@@ -153,7 +151,6 @@ impl Item {
             Item::LiveOffset => "Live offset suggestion",
             Item::LiveOffsetUr => "Scale suggestion to UR",
             Item::ResumeDelay => "Resume delay",
-            Item::AntiMash => "Early / wrong hits miss",
             Item::Key(i) => KEY_LABELS[i],
             Item::PresetKey(0) => "Previous preset key",
             Item::PresetKey(_) => "Next preset key",
@@ -208,7 +205,6 @@ impl Item {
             Item::LiveOffset => "While playing, suggest an offset from your recent hits; press O to apply it.",
             Item::LiveOffsetUr => "On: more hits and a +- margin when your UR is high. Off: plain average of the last 40 hits.",
             Item::ResumeDelay => "Countdown before the song continues after the pause menu (0 = at once).",
-            Item::AntiMash => "osu!'s mash penalty: a wrong-colour or too-early hit misses the note. Off: such hits are ignored.",
             Item::Key(_) => "Enter, then press the new key. Esc cancels.",
             Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key.",
             Item::TouchLayout => "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",

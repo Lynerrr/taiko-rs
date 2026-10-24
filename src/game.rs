@@ -148,6 +148,24 @@ pub struct OffsetHint {
     pub significant: bool,
 }
 
+/// How presses that don't make a hit are judged (the mash penalty).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mash {
+    /// The rule: a press goes to the nearest note (see `judge_nearest`).
+    Nearest,
+    /// Replays from before it (version 1), judged the way they were played: such presses
+    /// leave the note alone (`Ignore`), or always miss the next note (`Strict`, osu!'s).
+    Ignore,
+    Strict,
+}
+
+impl Mash {
+    /// A version 1 replay's `anti_mash` setting.
+    pub fn legacy(anti_mash: bool) -> Mash {
+        if anti_mash { Mash::Strict } else { Mash::Ignore }
+    }
+}
+
 struct StrongPending {
     note: usize,
     kat: bool,
@@ -199,9 +217,10 @@ pub struct Game {
     /// Display latency to make up for (real ms): the lane is drawn as it will be this much later,
     /// when the frame reaches the screen. Judging stays on the audio clock.
     pub visual_offset: f64,
-    /// osu!'s mash penalty: a wrong-colour or too-early hit on the next note is a miss. Off,
-    /// such presses are ignored (only a note that passes unhit misses).
-    pub anti_mash: bool,
+    /// How presses that don't make a hit are judged.
+    pub mash: Mash,
+    /// Presses let off as extra hits since a note was last judged (`judge_nearest`).
+    extra_taps: u32,
     /// Record presses (map time judged at, key) for a replay.
     pub record: bool,
     /// Also keep `inputs` without saving a replay (a solo play streamed to watching friends).
@@ -1083,7 +1102,8 @@ impl Game {
             show_offset_hint: false,
             kiai_effects: true,
             visual_offset: 0.0,
-            anti_mash: false,
+            mash: Mash::Nearest,
+            extra_taps: 0,
             record: false,
             log_inputs: false,
             watched: false,
@@ -1489,6 +1509,7 @@ impl Game {
     fn apply(&mut self, i: usize, judge: Judge, t: f64, error: Option<f64>) {
         // Great or Nothing: an OK is as good as a miss.
         let judge = if judge == Judge::Ok && self.mods.has(Mod::GreatOrNothing) { Judge::Miss } else { judge };
+        self.extra_taps = 0;
         let st = &mut self.state[i];
         st.judged = Some(judge);
         st.judged_at = t;
@@ -1677,20 +1698,19 @@ impl Game {
         }
 
         if let Some(i) = self.next_hittable(t) {
-            let n = &self.map.notes[i];
-            let err = t - n.time;
-            let wrong = (n.kind == Kind::Kat) != kat;
-            let judge = if wrong || err.abs() > self.windows.ok {
-                Judge::Miss
-            } else if err.abs() <= self.windows.great {
-                Judge::Great
-            } else {
-                Judge::Ok
+            let hit = match self.mash {
+                Mash::Nearest => self.judge_nearest(i, kat, t),
+                legacy => {
+                    let n = &self.map.notes[i];
+                    let wrong = (n.kind == Kind::Kat) != kat;
+                    let judge = if wrong { Judge::Miss } else { self.timing(t - n.time) };
+                    (judge != Judge::Miss || legacy == Mash::Strict).then_some((i, judge))
+                }
             };
-            // Without the mash penalty a press that would miss leaves the note alone.
-            if judge != Judge::Miss || self.anti_mash {
+            if let Some((i, judge)) = hit {
+                let n = &self.map.notes[i];
                 let is_big = n.big;
-                self.apply(i, judge, t, Some(err));
+                self.apply(i, judge, t, Some(t - n.time));
                 if judge != Judge::Miss && is_big {
                     self.strong = Some(StrongPending { note: i, kat, key, at: t });
                     return big;
@@ -1712,6 +1732,81 @@ impl Game {
             }
         }
         normal
+    }
+
+    /// Great, OK or Miss for a press `err` ms off its note, whatever the colour.
+    fn timing(&self, err: f64) -> Judge {
+        if err.abs() <= self.windows.great {
+            Judge::Great
+        } else if err.abs() <= self.windows.ok {
+            Judge::Ok
+        } else {
+            Judge::Miss
+        }
+    }
+
+    /// The mash penalty, made so one slip in a stream costs one note: the note this press is
+    /// judged on and how, or None when it leaves the notes alone. `i` is the next note.
+    ///
+    /// - A press that hits `i` (its colour, inside the OK window) counts for it.
+    /// - A press that would hit the note after it instead, and is nearer that one, means `i`
+    ///   was skipped: `i` misses and the press counts for the later note.
+    /// - Else a press nearer a note already judged is an extra hit on that one: ignored, once
+    ///   between two notes (a slip). Mashing presses more than that, and the rest count.
+    /// - Else it was aimed at `i`: the wrong colour inside the OK window, or the right colour
+    ///   too early, misses it. A wrong colour further off is a stray and is ignored.
+    ///
+    /// osu! gives every press to the next note, so after one extra or skipped hit every press
+    /// after it is a note off, and alternating colours turn the rest of a stream into misses.
+    fn judge_nearest(&mut self, i: usize, kat: bool, t: f64) -> Option<(usize, Judge)> {
+        let notes = &self.map.notes;
+        let colour = |k: usize| (notes[k].kind == Kind::Kat) == kat;
+        let err = |k: usize| t - notes[k].time;
+        let ok = self.windows.ok;
+        if colour(i) && err(i).abs() <= ok {
+            return Some((i, self.timing(err(i))));
+        }
+        let skipped_to = self.next_unjudged(i, t).filter(|&j| colour(j) && err(j).abs() <= ok && err(j).abs() < err(i).abs());
+        let extra = self.prev_judged(i, t).is_some_and(|p| err(p).abs() < err(i).abs());
+        let aimed = colour(i) || err(i).abs() <= ok;
+        if let Some(j) = skipped_to {
+            let judge = self.timing(err(j));
+            self.apply(i, Judge::Miss, t, None);
+            return Some((j, judge));
+        }
+        if extra && self.extra_taps == 0 {
+            self.extra_taps += 1;
+            return None;
+        }
+        aimed.then_some((i, Judge::Miss))
+    }
+
+    /// The first unjudged don/kat after note `i` whose miss window has opened.
+    fn next_unjudged(&self, i: usize, t: f64) -> Option<usize> {
+        for k in i + 1..self.map.notes.len() {
+            let n = &self.map.notes[k];
+            if n.time - t > self.windows.miss {
+                return None;
+            }
+            if matches!(n.kind, Kind::Don | Kind::Kat) && self.state[k].judged.is_none() {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    /// The last judged don/kat before note `i`, if it was recent enough to matter.
+    fn prev_judged(&self, i: usize, t: f64) -> Option<usize> {
+        for k in (0..i).rev() {
+            let n = &self.map.notes[k];
+            if t - n.time > 2.0 * self.windows.miss {
+                return None;
+            }
+            if matches!(n.kind, Kind::Don | Kind::Kat) && self.state[k].judged.is_some() {
+                return Some(k);
+            }
+        }
+        None
     }
 
     /// First unjudged don/kat whose miss window has opened.
@@ -3028,12 +3123,13 @@ mod tests {
     }
 
     #[test]
-    fn mash_penalty_is_optional() {
+    fn version_1_replays_keep_their_mash_setting() {
         let mut g = game();
         let first = g.map.notes.iter().position(|n| matches!(n.kind, Kind::Don | Kind::Kat)).unwrap();
         let (t0, kat) = (g.map.notes[first].time, g.map.notes[first].kind == Kind::Kat);
         let early = t0 - (g.windows.ok + g.windows.miss) / 2.0;
-        // Off (default): too early or the wrong colour does nothing, the right hit still counts.
+        // Off: too early or the wrong colour does nothing, the right hit still counts.
+        g.mash = Mash::legacy(false);
         g.judge_press(1, kat, early);
         g.judge_press(1, !kat, t0);
         assert_eq!((g.stats.miss, g.state[first].judged), (0, None));
@@ -3041,9 +3137,86 @@ mod tests {
         assert_eq!(g.state[first].judged, Some(Judge::Great));
         // On: the early hit is a miss, like osu!.
         let mut g = game();
-        g.anti_mash = true;
+        g.mash = Mash::legacy(true);
         g.judge_press(1, kat, early);
         assert_eq!((g.stats.miss, g.state[first].judged), (1, Some(Judge::Miss)));
+    }
+
+    /// A stream of alternating dons and kats, `spacing` ms apart, at OD 5.
+    fn stream(spacing: f64) -> Game {
+        let notes = (0..24)
+            .map(|k| beatmap::Note {
+                time: 2000.0 + k as f64 * spacing,
+                end_time: 2000.0 + k as f64 * spacing,
+                kind: if k % 2 == 0 { Kind::Don } else { Kind::Kat },
+                big: false,
+                velocity: 0.5,
+                tick_spacing: 0.0,
+                required_hits: 0,
+            })
+            .collect();
+        let mut map = beatmap::calibration_map(500.0, 4, 1);
+        map.notes = notes;
+        map.meta.od = 5.0;
+        Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::NONE)
+    }
+
+    fn play(g: &mut Game, presses: &[(f64, bool)]) {
+        for &(t, kat) in presses {
+            g.judge_press(if kat { 0 } else { 1 }, kat, t);
+        }
+        g.set_time(g.map.notes.last().unwrap().time + 1000.0);
+    }
+
+    #[test]
+    fn one_slip_in_a_stream_costs_at_most_one_note() {
+        for spacing in [60.0, 75.0, 90.0, 110.0] {
+            let notes: Vec<(f64, bool)> = stream(spacing).map.notes.iter().map(|n| (n.time, n.kind == Kind::Kat)).collect();
+            // An extra tap of the same colour right after the 5th note.
+            let mut g = stream(spacing);
+            let mut presses = notes.clone();
+            presses.insert(5, (notes[4].0 + 12.0, notes[4].1));
+            play(&mut g, &presses);
+            assert_eq!((g.stats.miss, g.stats.great), (0, 24), "extra tap @{spacing}");
+            // An extra tap of the other colour: still nothing, it's nearer the note just hit.
+            let mut g = stream(spacing);
+            let mut presses = notes.clone();
+            presses.insert(5, (notes[4].0 + 12.0, !notes[4].1));
+            play(&mut g, &presses);
+            assert_eq!(g.stats.miss, 0, "extra wrong tap @{spacing}");
+            // The 5th note skipped: that one misses, the rest are hit.
+            let mut g = stream(spacing);
+            let mut presses = notes.clone();
+            presses.remove(4);
+            play(&mut g, &presses);
+            assert_eq!((g.stats.miss, g.stats.great), (1, 23), "skipped note @{spacing}");
+            // The 5th note hit with the wrong colour, on time: that one misses.
+            let mut g = stream(spacing);
+            let mut presses = notes.clone();
+            presses[4].1 = !presses[4].1;
+            play(&mut g, &presses);
+            assert_eq!((g.stats.miss, g.stats.great), (1, 23), "wrong colour @{spacing}");
+        }
+    }
+
+    #[test]
+    fn mashing_is_still_punished() {
+        // Both colours as fast as possible all through a stream.
+        let mut g = stream(90.0);
+        let end = g.map.notes.last().unwrap().time;
+        let presses: Vec<(f64, bool)> = (0..).map(|k| (1950.0 + k as f64 * 20.0, k % 2 == 1)).take_while(|p| p.0 < end + 50.0).collect();
+        play(&mut g, &presses);
+        // No GREATs, some misses: worse than presses that would just be ignored (all OKs).
+        let mut ignored = stream(90.0);
+        ignored.mash = Mash::Ignore;
+        play(&mut ignored, &presses);
+        assert!(g.stats.great == 0 && g.stats.miss >= 4, "{:?}", (g.stats.great, g.stats.ok, g.stats.miss));
+        assert!(g.stats.accuracy() < ignored.stats.accuracy() - 0.05);
+        // A right colour too early, with nothing else near, misses like osu!.
+        let mut g = stream(200.0);
+        let t0 = g.map.notes[0].time;
+        g.judge_press(1, false, t0 - (g.windows.ok + g.windows.miss) / 2.0);
+        assert_eq!(g.state[0].judged, Some(Judge::Miss));
     }
 
     #[test]

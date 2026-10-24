@@ -116,7 +116,7 @@ struct SpectateView {
     /// The player shown, or None for everyone at once.
     focus: Option<usize>,
     /// Presses that arrived before the games existed.
-    pending: std::collections::HashMap<u32, (Vec<(f64, u8)>, bool)>,
+    pending: std::collections::HashMap<u32, Vec<(f64, u8)>>,
     /// Players who skipped the intro; once all have, so does the view.
     skipped: std::collections::HashSet<u32>,
     skip_done: bool,
@@ -1119,7 +1119,6 @@ impl State {
             Item::NotifyMessages => on(c.notify_messages),
             Item::NotifyMentions => on(c.notify_mentions),
             Item::NotifyRequests => on(c.notify_requests),
-            Item::AntiMash => on(c.anti_mash),
             Item::ShowConverts => on(self.select.show_converts),
             Item::HiddenMaps => self.select.hidden.describe(),
             Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
@@ -1229,7 +1228,6 @@ impl State {
             Item::NotifyMessages => self.cfg.notify_messages = !self.cfg.notify_messages,
             Item::NotifyMentions => self.cfg.notify_mentions = !self.cfg.notify_mentions,
             Item::NotifyRequests => self.cfg.notify_requests = !self.cfg.notify_requests,
-            Item::AntiMash => self.cfg.anti_mash = !self.cfg.anti_mash,
             Item::ShowConverts => {
                 self.select.show_converts = !self.select.show_converts;
                 self.select.refilter(&self.library);
@@ -3654,7 +3652,7 @@ impl State {
             }
             game.log_inputs = true;
             let Some(e) = self.library.get(*entry) else { return };
-            conn.send(online::Up::PlayStart(online::SoloPlay { map: map_info(e, game.rate, game.mods), anti_mash: game.anti_mash }));
+            conn.send(online::Up::PlayStart(online::SoloPlay { map: map_info(e, game.rate, game.mods), anti_mash: true }));
             self.stream = Some((id, 0, Instant::now() - Duration::from_secs(1)));
         }
         let Some((_, sent, last)) = self.stream.as_mut() else { return };
@@ -3694,12 +3692,10 @@ impl State {
             match rx.try_recv() {
                 Ok(Ok((map, track))) => {
                     v.rx = None;
-                    let anti_mash = v.play.as_ref().is_some_and(|p| p.anti_mash);
                     let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
                     let mods = v.play.as_ref().map(|p| Mods::from_list(&p.map.mods)).unwrap_or_default();
                     let mut g = Game::with_mods(map, track, self.audio.as_ref(), mods);
                     g.replay = Some((std::mem::take(&mut v.inputs), 0));
-                    g.anti_mash = anti_mash;
                     g.watched = true;
                     g.banner = Some(format!("WATCHING  -  {}", v.player));
                     let target = v.their_time() - WATCH_DELAY_MS * rate;
@@ -3849,19 +3845,16 @@ impl State {
                     v.follow_skip(self.audio.as_ref(), self.play_offset);
                 }
             }
-            ServerMsg::Inputs { from, inputs, anti_mash } => {
+            ServerMsg::Inputs { from, inputs, .. } => {
                 if let Scene::Spectate(v) = &mut self.scene {
                     match v.games.iter_mut().find(|(id, _)| *id == from) {
                         Some((_, g)) => {
-                            g.anti_mash = anti_mash;
                             if let Some((list, _)) = &mut g.replay {
                                 list.extend_from_slice(&inputs);
                             }
                         }
                         None => {
-                            let e = v.pending.entry(from).or_default();
-                            e.0.extend_from_slice(&inputs);
-                            e.1 = anti_mash;
+                            v.pending.entry(from).or_default().extend_from_slice(&inputs);
                         }
                     }
                 }
@@ -4415,7 +4408,7 @@ impl State {
                         }
                         match self.pending_replay.take() {
                             Some(r) => {
-                                game.anti_mash = r.anti_mash;
+                                game.mash = r.mash();
                                 game.replay_of = Some(r.player.clone());
                                 game.banner = Some(format!("REPLAY  -  {}", r.player));
                                 game.replay = Some((r.inputs, 0));
@@ -4456,9 +4449,6 @@ impl State {
                 // Offset advice is for live play (and its line would sit on the replay timeline).
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
                 game.kiai_effects = self.cfg.kiai_effects;
-                if game.replay.is_none() {
-                    game.anti_mash = self.cfg.anti_mash;
-                }
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.visual_offset = self.cfg.visual_offset_ms;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
@@ -4510,7 +4500,7 @@ impl State {
                             date: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
                             rate: game.rate,
                             keep_pitch: self.cfg.rate_keep_pitch,
-                            anti_mash: game.anti_mash,
+                            anti_mash: true,
                             mods: game.mods.list(),
                             score: st.score,
                             accuracy: st.accuracy(),
@@ -4636,9 +4626,6 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
                 game.kiai_effects = self.cfg.kiai_effects;
-                if game.replay.is_none() {
-                    game.anti_mash = self.cfg.anti_mash;
-                }
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.visual_offset = self.cfg.visual_offset_ms;
                 let live = multiplayer::live_from(game);
@@ -4657,7 +4644,7 @@ impl State {
                         if game.inputs.len() > s.inputs_sent {
                             let inputs = game.inputs[s.inputs_sent..].to_vec();
                             s.inputs_sent = game.inputs.len();
-                            s.client.send(net::ClientMsg::Inputs { inputs, anti_mash: game.anti_mash });
+                            s.client.send(net::ClientMsg::Inputs { inputs, anti_mash: true });
                         }
                     }
                     if done {
@@ -4704,8 +4691,7 @@ impl State {
                             if let Some(t) = v.from {
                                 g.skip_to(t);
                             }
-                            let (inputs, mash) = v.pending.remove(id).unwrap_or_default();
-                            g.anti_mash = mash;
+                            let inputs = v.pending.remove(id).unwrap_or_default();
                             g.replay = Some((inputs, 0));
                             g.banner = Some(format!("SPECTATING  -  {name}  ({}/{})", k + 1, v.players.len()));
                             g.watched = true;

@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-const REPLAY_VERSION: u32 = 1;
+/// 2: judged with `Mash::Nearest` (1: with the `anti_mash` setting).
+const REPLAY_VERSION: u32 = 2;
 
 /// A recorded play: the map time each drum key was judged at, plus what the judging depended
 /// on. Playing the inputs back through the same map reproduces the play exactly.
@@ -23,6 +24,7 @@ pub struct Replay {
     pub rate: f64,
     #[serde(default)]
     pub keep_pitch: bool,
+    /// Version 1 only: the mash penalty setting the play had (see `mash`).
     pub anti_mash: bool,
     /// Mods played with (acronyms); `rate` already includes DT/HT.
     #[serde(default)]
@@ -126,6 +128,13 @@ pub fn load_replay(path: &Path) -> Result<Replay, String> {
         return Err("replay from a newer version".into());
     }
     Ok(r)
+}
+
+impl Replay {
+    /// How the play's presses are judged.
+    pub fn mash(&self) -> crate::game::Mash {
+        if self.version >= 2 { crate::game::Mash::Nearest } else { crate::game::Mash::legacy(self.anti_mash) }
+    }
 }
 
 pub fn new_version() -> u32 {

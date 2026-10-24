@@ -44,7 +44,7 @@ pub const FRAME_VW: f32 = VIRTUAL_HEIGHT * 16.0 / 9.0;
 pub fn replay_game(map: &Beatmap, track: &Arc<Track>, r: &Replay) -> Game {
     let mut g = Game::with_mods(map.clone(), track.clone(), None, crate::mods::Mods::from_list(&r.mods));
     g.replay = Some((r.inputs.clone(), 0));
-    g.anti_mash = r.anti_mash;
+    g.mash = r.mash();
     g.mute_hits = true;
     g
 }
