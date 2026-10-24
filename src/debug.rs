@@ -384,18 +384,22 @@ pub fn rasterize(c: &crate::render::Canvas, scale: f32) -> (u32, u32, Vec<u8>) {
         let (hx, hy) = (sh.half[0].abs(), sh.half[1].abs());
         let radius = sh.params[0].min(hx).min(hy);
         let border = sh.params[1];
-        let x0 = ((sh.center[0] - hx).max(clip[0]) * scale).floor().max(0.0) as u32;
-        let x1 = ((sh.center[0] + hx).min(clip[2]) * scale).ceil().clamp(0.0, w as f32) as u32;
-        let y0 = ((sh.center[1] - hy).max(clip[1]) * scale).floor().max(0.0) as u32;
-        let y1 = ((sh.center[1] + hy).min(clip[3]) * scale).ceil().clamp(0.0, h as f32) as u32;
+        // A turned shape is looked at in its own frame, within the circle around it.
+        let (sin, cos) = sh.angle.sin_cos();
+        let (ex, ey) = if sh.angle == 0.0 { (hx, hy) } else { (hx.hypot(hy), hx.hypot(hy)) };
+        let x0 = ((sh.center[0] - ex).max(clip[0]) * scale).floor().max(0.0) as u32;
+        let x1 = ((sh.center[0] + ex).min(clip[2]) * scale).ceil().clamp(0.0, w as f32) as u32;
+        let y0 = ((sh.center[1] - ey).max(clip[1]) * scale).floor().max(0.0) as u32;
+        let y1 = ((sh.center[1] + ey).min(clip[3]) * scale).ceil().clamp(0.0, h as f32) as u32;
         for y in y0..y1 {
             for x in x0..x1 {
-                let (vx, vy) = ((x as f32 + 0.5) / scale, (y as f32 + 0.5) / scale);
-                if (sh.params[3] == 1.0 && vx > sh.center[0]) || (sh.params[3] == 2.0 && vx < sh.center[0]) {
+                let (dx, dy) = ((x as f32 + 0.5) / scale - sh.center[0], (y as f32 + 0.5) / scale - sh.center[1]);
+                let (lx, ly) = (dx * cos + dy * sin, -dx * sin + dy * cos);
+                if (sh.params[3] == 1.0 && lx > 0.0) || (sh.params[3] == 2.0 && lx < 0.0) {
                     continue;
                 }
                 // Signed distance to the rounded rect.
-                let (qx, qy) = ((vx - sh.center[0]).abs() - hx + radius, (vy - sh.center[1]).abs() - hy + radius);
+                let (qx, qy) = (lx.abs() - hx + radius, ly.abs() - hy + radius);
                 let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius;
                 if d > 0.0 {
                     continue;

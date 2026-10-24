@@ -937,13 +937,14 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
     let rank = if mods.unranked() { "  (not saved)" } else { "" };
     c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &format!("score x{mult:.2}{rank}"));
     let col_w = (pw - 24.0) / GROUPS.len() as f32;
-    const ROW: f32 = 27.0;
+    // Room for the longest column between the header and the description.
+    const ROW: f32 = 23.0;
     let mut hovered = None;
     for (g, (title, accent, list)) in GROUPS.iter().enumerate() {
         let x = px + 12.0 + g as f32 * col_w;
-        c.text(x + 4.0, py + 38.0, 7.0, rgba(*accent, 1.0), title);
+        c.text(x + 4.0, py + 38.0, 7.0, rgba(*accent, 1.0), &Canvas::fit(7.0, col_w - 8.0, title));
         for (r, &m) in list.iter().enumerate() {
-            let y = py + 52.0 + r as f32 * ROW;
+            let y = py + 50.0 + r as f32 * ROW;
             let i = ALL.iter().position(|&x| x == m).unwrap_or(0);
             let on = mods.has(m);
             let hover = c.hovered(x, y, col_w - 6.0, ROW - 4.0);
@@ -953,11 +954,11 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
             let bg = if i == cursor { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
             let border = if i == cursor { 0xEB452C } else if on { *accent } else { 0x2a2a38 };
             c.round_rect(x, y, col_w - 6.0, ROW - 4.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if i == cursor { 1.5 } else { 1.0 });
-            c.round_rect(x + 4.0, y + 4.0, 22.0, ROW - 12.0, 3.0, rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
-            c.text_centered(x + 15.0, y + 8.0, 7.0, rgba(if on { 0x15151d } else { *accent }, 1.0), m.acronym());
-            let room = ((col_w - 40.0) / 6.0).max(3.0) as usize;
-            let name: String = if m.name().chars().count() > room { m.name().chars().take(room.saturating_sub(1)).collect::<String>() + "." } else { m.name().into() };
-            c.text(x + 31.0, y + 8.5, 6.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), &name);
+            c.round_rect(x + 3.0, y + 3.0, 22.0, ROW - 10.0, 3.0, rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
+            c.text_centered(x + 14.0, y + 6.0, 7.0, rgba(if on { 0x15151d } else { *accent }, 1.0), m.acronym());
+            // Narrow columns show just the acronym; the name is in the description below.
+            let name = Canvas::fit(6.0, col_w - 38.0, m.name());
+            c.text(x + 29.0, y + 6.5, 6.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), &name);
             c.hit(x, y, col_w - 6.0, ROW - 4.0, Hit::ModToggle(i));
         }
     }
@@ -966,9 +967,9 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
     let dy = py + ph - 46.0;
     c.text(px + 16.0, dy, 8.0, rgba(0xffffff, 1.0), &format!("{} ({})", shown.name(), shown.acronym()));
     c.text(px + 16.0, dy + 13.0, 7.0, rgba(0x9a9ab0, 1.0), shown.description());
-    let active = if mods.is_empty() { "none".to_string() } else { mods.iter().map(|m| m.acronym()).collect::<Vec<_>>().join(" ") };
-    c.text(px + 16.0, py + ph - 16.0, 7.0, rgba(0xc8c8d8, 1.0), &format!("on: {active}"));
     let bw = 60.0;
+    let active = if mods.is_empty() { "none".to_string() } else { mods.iter().map(|m| m.acronym()).collect::<Vec<_>>().join(" ") };
+    c.text(px + 16.0, py + ph - 16.0, 7.0, rgba(0xc8c8d8, 1.0), &Canvas::fit(7.0, pw - 2.0 * bw - 52.0, &format!("on: {active}")));
     c.button(px + pw - bw - 12.0, py + ph - 24.0, bw, 16.0, "Close", 7.0, Hit::Key(KeyCode::F1), true);
     c.button(px + pw - 2.0 * bw - 18.0, py + ph - 24.0, bw, 16.0, "Clear", 7.0, Hit::Key(KeyCode::Backspace), false);
 }

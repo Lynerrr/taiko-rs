@@ -1084,6 +1084,7 @@ impl State {
             Item::TouchLayout => c.touch_layout.name().into(),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::KiaiEffects => on(c.kiai_effects),
+            Item::HideGreat => on(c.hide_great),
             Item::DiscordPresence => on(c.discord_presence),
             Item::AntiMash => on(c.anti_mash),
             Item::ShowConverts => on(self.select.show_converts),
@@ -1167,6 +1168,7 @@ impl State {
             Item::TouchLayout => self.cfg.touch_layout = self.cfg.touch_layout.step(dir),
             Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
+            Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
             Item::AntiMash => self.cfg.anti_mash = !self.cfg.anti_mash,
             Item::ShowConverts => {
@@ -4107,6 +4109,7 @@ impl State {
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
         render::set_animations(self.cfg.animations);
+        game::set_hide_great(self.cfg.hide_great);
         // Screen changes fade in.
         let kind = std::mem::discriminant(&self.scene);
         if self.scene_kind != Some(kind) {

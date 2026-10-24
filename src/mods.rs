@@ -1,5 +1,5 @@
 //! Mods: osu!'s (EZ, HR, HD, FL, DT...), lazer's taiko extras and taiko-rs's own (scroll speed
-//! tricks, visual tricks). A set of them is a bit mask; each has a two-letter acronym used in
+//! tricks, SV experiments, visual tricks, note paths, playfield moves). A set of them is a bit mask; each has a two-letter acronym used in
 //! the config, replays and multiplayer.
 
 /// Every mod, in the order the mod select shows them.
@@ -42,6 +42,24 @@ pub enum Mod {
     ComboRush,
     KiaiBoost,
     Finale,
+    Crescendo,
+    Drop,
+    Gearbox,
+    Roulette,
+    // SV experiments.
+    AntiSv,
+    HyperSv,
+    Even,
+    Split,
+    Heavy,
+    Swing,
+    Leapfrog,
+    Recoil,
+    Panic,
+    Mercy,
+    LagSpike,
+    Moonwalk,
+    Step,
     // Visual tricks.
     Sudden,
     Blink,
@@ -49,28 +67,52 @@ pub enum Mod {
     Spotlight,
     Colorless,
     Memory,
+    Decoy,
+    Rave,
+    Pump,
+    // Note paths.
+    Snake,
+    Bounce,
+    Orbit,
+    Fork,
+    Meteor,
+    Depth,
+    Jelly,
+    // Playfield moves.
     Mirror,
     Drunk,
     Earthquake,
     Zoom,
+    Headbang,
+    Tilt,
+    Spin,
+    Mania,
+    BarrelRoll,
+    FlipFlop,
+    Glitch,
 }
 
 use Mod::*;
 
-pub const ALL: [Mod; 43] = [
+pub const ALL: [Mod; 77] = [
     Easy, NoFail, HalfTime, Daycore, Half, NoFinishers, HardRock, SuddenDeath, Perfect, DoubleTime, Nightcore, Hidden,
     Flashlight, Precise, GreatOrNothing, Relax, Autoplay, Swap, Random, ConstantSpeed, Alternate, WindUp, WindDown, AllBig,
-    Accel, Brake, Wave, Pulse, Stutter, SvChaos, ComboRush, KiaiBoost, Finale, Sudden, Blink, Blackout, Spotlight, Colorless,
-    Memory, Mirror, Drunk, Earthquake, Zoom,
+    Accel, Brake, Wave, Pulse, Stutter, SvChaos, ComboRush, KiaiBoost, Finale, Crescendo, Drop, Gearbox, Roulette, AntiSv,
+    HyperSv, Even, Split, Heavy, Swing, Leapfrog, Recoil, Panic, Mercy, LagSpike, Moonwalk, Step, Sudden, Blink, Blackout,
+    Spotlight, Colorless, Memory, Decoy, Rave, Pump, Snake, Bounce, Orbit, Fork, Meteor, Depth, Jelly, Mirror, Drunk,
+    Earthquake, Zoom, Headbang, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Glitch,
 ];
 
 /// Mod select columns: (title, accent colour, mods).
-pub const GROUPS: [(&str, u32, &[Mod]); 5] = [
+pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
     ("REDUCTION", 0x86E05A, &[Easy, NoFail, HalfTime, Daycore, Half, NoFinishers]),
     ("INCREASE", 0xEB452C, &[HardRock, SuddenDeath, Perfect, DoubleTime, Nightcore, Hidden, Flashlight, Precise, GreatOrNothing]),
     ("CONVERSION", 0x4fb4ff, &[Relax, Autoplay, Swap, Random, ConstantSpeed, Alternate, WindUp, WindDown, AllBig]),
-    ("SCROLL", 0xFFD34D, &[Accel, Brake, Wave, Pulse, Stutter, SvChaos, ComboRush, KiaiBoost, Finale]),
-    ("VISUAL", 0xc77dff, &[Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Mirror, Drunk, Earthquake, Zoom]),
+    ("SCROLL", 0xFFD34D, &[Accel, Brake, Wave, Pulse, Stutter, SvChaos, ComboRush, KiaiBoost, Finale, Crescendo, Drop, Gearbox, Roulette]),
+    ("SV LAB", 0xFF8A3D, &[AntiSv, HyperSv, Even, Split, Heavy, Swing, Leapfrog, Recoil, Panic, Mercy, LagSpike, Moonwalk, Step]),
+    ("VISUAL", 0xc77dff, &[Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Rave, Pump]),
+    ("PATHS", 0x5ee6c8, &[Snake, Bounce, Orbit, Fork, Meteor, Depth, Jelly]),
+    ("PLAYFIELD", 0xff5fa2, &[Mirror, Drunk, Earthquake, Zoom, Headbang, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Glitch]),
 ];
 
 /// Mod select keyboard navigation: the mod `dx` columns and `dy` rows from `index` (into `ALL`).
@@ -119,16 +161,50 @@ impl Mod {
             ComboRush => "CR",
             KiaiBoost => "KB",
             Finale => "FN",
+            Crescendo => "CC",
+            Drop => "DR",
+            Gearbox => "GB",
+            Roulette => "RL",
+            AntiSv => "AS",
+            HyperSv => "HS",
+            Even => "EV",
+            Split => "SL",
+            Heavy => "HV",
+            Swing => "SG",
+            Leapfrog => "LF",
+            Recoil => "RC",
+            Panic => "PN",
+            Mercy => "MC",
+            LagSpike => "LG",
+            Moonwalk => "MW",
+            Step => "SE",
             Sudden => "SU",
             Blink => "BL",
             Blackout => "BO",
             Spotlight => "SP",
             Colorless => "CL",
             Memory => "MM",
+            Decoy => "DY",
+            Rave => "RV",
+            Pump => "PM",
+            Snake => "SK",
+            Bounce => "BN",
+            Orbit => "OR",
+            Fork => "FK",
+            Meteor => "MT",
+            Depth => "DP",
+            Jelly => "JL",
             Mirror => "MR",
             Drunk => "DK",
             Earthquake => "EQ",
             Zoom => "ZM",
+            Headbang => "HB",
+            Tilt => "TL",
+            Spin => "SN",
+            Mania => "MN",
+            BarrelRoll => "BA",
+            FlipFlop => "FF",
+            Glitch => "GL",
         }
     }
 
@@ -167,16 +243,50 @@ impl Mod {
             ComboRush => "Combo Rush",
             KiaiBoost => "Kiai Boost",
             Finale => "Finale",
+            Crescendo => "Crescendo",
+            Drop => "Drop",
+            Gearbox => "Gearbox",
+            Roulette => "Roulette",
+            AntiSv => "Anti-SV",
+            HyperSv => "Hyper SV",
+            Even => "Even",
+            Split => "Split",
+            Heavy => "Heavy",
+            Swing => "Swing",
+            Leapfrog => "Leapfrog",
+            Recoil => "Recoil",
+            Panic => "Panic",
+            Mercy => "Mercy",
+            LagSpike => "Lag Spike",
+            Moonwalk => "Moonwalk",
+            Step => "Step",
             Sudden => "Sudden",
             Blink => "Blink",
             Blackout => "Blackout",
             Spotlight => "Spotlight",
             Colorless => "Colorless",
             Memory => "Memory",
+            Decoy => "Decoy",
+            Rave => "Rave",
+            Pump => "Pump",
+            Snake => "Snake",
+            Bounce => "Bounce",
+            Orbit => "Orbit",
+            Fork => "Fork",
+            Meteor => "Meteor",
+            Depth => "Depth",
+            Jelly => "Jelly",
             Mirror => "Mirror",
             Drunk => "Drunk",
             Earthquake => "Earthquake",
             Zoom => "Zoom",
+            Headbang => "Headbang",
+            Tilt => "Tilt",
+            Spin => "Spin",
+            Mania => "Mania",
+            BarrelRoll => "Barrel Roll",
+            FlipFlop => "Flip Flop",
+            Glitch => "Glitch",
         }
     }
 
@@ -215,16 +325,50 @@ impl Mod {
             ComboRush => "+5% note speed every 50 combo, back to normal on a miss.",
             KiaiBoost => "Notes in kiai time are 1.3x faster.",
             Finale => "The last 15% of the map is 1.5x faster.",
+            Crescendo => "Notes speed up steadily over the map, from 0.8x to 1.6x.",
+            Drop => "Notes freeze two beats before every kiai, then slam in 1.4x faster.",
+            Gearbox => "Every beat of a bar shifts up a gear (+15%); the next bar starts over.",
+            Roulette => "Every 4 bars a random speed (0.5x-2x); a marker shows where it changes.",
+            AntiSv => "The map's speed changes are turned upside down: 2x becomes 0.5x.",
+            HyperSv => "The map's speed changes are exaggerated: 1.5x becomes 2.25x.",
+            Even => "Notes are evenly spaced: bursts fly in fast, slow parts crawl. Play by ear.",
+            Split => "Dons are 20% faster and kats 15% slower: colours overtake each other.",
+            Heavy => "Big notes are 30% slower: small ones fly past them.",
+            Swing => "Notes on the beat are faster, notes between beats slower.",
+            Leapfrog => "Every other note is faster: pairs swap places on the way in.",
+            Recoil => "Every hit knocks the incoming notes back for a moment.",
+            Panic => "Every miss makes notes 15% faster for 4 seconds; misses stack.",
+            Mercy => "Every miss slows notes down for a few seconds.",
+            LagSpike => "The lane freezes now and then, then skips ahead. Like a bad stream.",
+            Moonwalk => "On every bar the notes slide backwards for a moment.",
+            Step => "Far notes move in jumps; near the drum they glide.",
             Sudden => "Notes only show up close to the drum.",
             Blink => "Approaching notes vanish on the second half of every beat.",
             Blackout => "Kiai time turns the lights off: only the drum stays lit.",
             Spotlight => "Flashlight whose circle breathes with the beat.",
             Colorless => "Dons and kats look the same. Play by ear and memory.",
             Memory => "Notes are only shown for the first 15 seconds.",
+            Decoy => "Fake notes fly in between the real ones and vanish before the drum.",
+            Rave => "The lane flashes a new colour on every beat.",
+            Pump => "Notes swell on every beat.",
+            Snake => "Notes slither in on a wave that jolts forward on every beat.",
+            Bounce => "Notes hop along the lane, touching down once a beat.",
+            Orbit => "Notes circle around their path on the way in.",
+            Fork => "Dons come in from above, kats from below; they meet at the drum.",
+            Meteor => "Notes fall in from the top of the screen.",
+            Depth => "Far notes are small and high up, as if coming from a horizon.",
+            Jelly => "Notes squash and stretch to the beat.",
             Mirror => "The lane is flipped: notes come from the left.",
             Drunk => "The lane sways up and down.",
             Earthquake => "Big notes shake the lane.",
             Zoom => "The lane pulses bigger on every beat.",
+            Headbang => "The lane nods down on every beat.",
+            Tilt => "The lane rocks from side to side with the beat.",
+            Spin => "The lane moves to the middle and turns full circle every 24 seconds.",
+            Mania => "The lane stands up: notes fall down onto the drum.",
+            BarrelRoll => "Every kiai starts with a full spin of the lane.",
+            FlipFlop => "Every 8 bars the lane flips over to the other side.",
+            Glitch => "The lane glitches on random beats: it jumps and splits in colours.",
         }
     }
 
@@ -270,11 +414,20 @@ impl Mod {
             Memory => &[Hidden, Sudden],
             Flashlight => &[Spotlight],
             Spotlight => &[Flashlight],
+            // The map's own speeds are what these bend, so they don't mix with each other or
+            // with one speed for everything.
+            ConstantSpeed => &[AntiSv, HyperSv],
+            AntiSv => &[HyperSv, ConstantSpeed],
+            HyperSv => &[AntiSv, ConstantSpeed],
+            Panic => &[Mercy],
+            Mercy => &[Panic],
+            Spin => &[Mania],
+            Mania => &[Spin],
             _ => &[],
         }
     }
 
-    fn bit(self) -> u64 {
+    fn bit(self) -> u128 {
         1 << ALL.iter().position(|&m| m == self).unwrap_or(0)
     }
 
@@ -285,7 +438,7 @@ impl Mod {
 
 /// A set of mods.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct Mods(u64);
+pub struct Mods(u128);
 
 impl Mods {
     pub const NONE: Mods = Mods(0);
@@ -506,6 +659,17 @@ mod tests {
         assert!(m.has(Hidden) && m.has(HardRock));
         assert_eq!(Mods::parse(&m.to_config()), m);
         assert!(GROUPS.iter().map(|g| g.2.len()).sum::<usize>() == ALL.len());
+    }
+
+    #[test]
+    fn conflicts_go_both_ways_and_descriptions_fit_the_mod_select() {
+        for m in ALL {
+            for &c in m.conflicts() {
+                assert!(c == m || c.conflicts().contains(&m), "{} -> {}", m.acronym(), c.acronym());
+            }
+            // The mod select's description line at 5:4 (600 wide).
+            assert!(crate::render::Canvas::text_width(7.0, m.description()) <= 600.0 - 64.0, "{}", m.name());
+        }
     }
 
     #[test]
