@@ -221,6 +221,7 @@ fn every_screen_fits_at_every_aspect_ratio() {
     check(&mut s, "multiplayer menu", &mut out);
     s.scene = Scene::Select;
 
+    s.mp_menu.account = Some("MyOwnAccountName".into());
     s.social.open = true;
     s.social.connected = true;
     s.social.me = Some("MyOwnAccountName".into());
@@ -236,8 +237,23 @@ fn every_screen_fits_at_every_aspect_ratio() {
     s.social.cursor = 0;
     s.social.input = "a message being typed that is longer than the input box can show".into();
     check(&mut s, "friends chat", &mut out);
+    s.social.input.clear();
+    s.social.tab = social::Tab::Players;
+    s.social.online_total = 1234;
+    s.social.players = Some(
+        (0..40)
+            .map(|i| online::OnlinePlayer { name: format!("{LONG_NAME}{i}"), activity: online::Activity::Playing { map: entry(0, 0, true).label() } })
+            .collect(),
+    );
+    check(&mut s, "friends players", &mut out);
+    s.social.tab = social::Tab::Chat;
+    s.social.global = (0..40).map(|i| line(&format!("{LONG_NAME}{i}"), "")).collect();
+    s.social.global_unread = 12;
+    s.social.input = "a message being typed that is longer than the input box can show".into();
+    check(&mut s, "global chat", &mut out);
+    s.social.tab = social::Tab::Friends;
+    s.social.input.clear();
     s.social.open = false;
-    s.mp_menu.account = Some("MyOwnAccountName".into());
     s.social.notes = vec![social::Note {
         title: format!("{LONG_NAME} sent you a message"),
         body: "a pretty long chat message that should wrap or get cut somewhere sensible".into(),
