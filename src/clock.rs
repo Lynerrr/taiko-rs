@@ -17,11 +17,15 @@ pub struct GameClock {
     synced: bool,
     /// Hold still until the first audio position arrives instead of running ahead and snapping back.
     wait_for_audio: bool,
+    /// The error of a reading too far off to steer toward, waiting for the next to confirm it. A
+    /// lone bad timestamp (some Windows drivers report them) would otherwise throw the clock
+    /// seconds ahead, and every note on the way would be missed before it came on screen.
+    jump: Option<f64>,
 }
 
 impl GameClock {
     pub fn new(start_ms: f64, wait_for_audio: bool) -> Self {
-        GameClock { time: start_ms, at: Instant::now(), synced: false, wait_for_audio }
+        GameClock { time: start_ms, at: Instant::now(), synced: false, wait_for_audio, jump: None }
     }
 
     /// Advances to `now`, nudging toward the audio position if one is known.
@@ -32,9 +36,13 @@ impl GameClock {
         self.time = match audio_ms {
             Some(audio) => {
                 let err = audio - predicted;
-                if !self.synced || err.abs() > SNAP_THRESHOLD_MS {
+                let confirmed = self.jump.take().is_some_and(|e| (err - e).abs() <= SNAP_THRESHOLD_MS);
+                if !self.synced || (err.abs() > SNAP_THRESHOLD_MS && confirmed) {
                     self.synced = true;
                     audio
+                } else if err.abs() > SNAP_THRESHOLD_MS {
+                    self.jump = Some(err);
+                    predicted
                 } else {
                     let k = 1.0 - (-dt / CORRECTION_TIME_CONSTANT_MS).exp();
                     // Never step backwards: a frame that shows notes moving the wrong way is worse
@@ -62,5 +70,26 @@ impl GameClock {
             -self.at.duration_since(instant).as_secs_f64()
         };
         self.time + delta * 1000.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn a_lone_bad_reading_is_ignored_but_a_real_jump_is_taken() {
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut c = GameClock::new(0.0, true);
+        c.at = start;
+        assert_eq!(c.update(at(10), Some(10.0)), 10.0);
+        // One reading a minute ahead (e.g. the previous song's position): not believed.
+        assert!((c.update(at(20), Some(60_000.0)) - 20.0).abs() < 1.0);
+        assert!((c.update(at(30), Some(30.0)) - 30.0).abs() < 1.0);
+        // Two that agree (a seek, or the audio carried on through a stall): snapped to.
+        assert!((c.update(at(40), Some(5_040.0)) - 40.0).abs() < 1.0);
+        assert_eq!(c.update(at(50), Some(5_050.0)), 5_050.0);
     }
 }

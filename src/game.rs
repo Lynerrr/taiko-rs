@@ -198,8 +198,6 @@ pub struct Game {
     pub last_audio_ms: Option<f64>,
     pub raw_time: f64,
     auto_key: usize,
-    /// After a seek the audio thread still reports the old position until its next callback.
-    ignore_audio_until: Option<Instant>,
     /// Pause menu cursor while paused.
     pub paused: Option<usize>,
     paused_at: Instant,
@@ -1125,7 +1123,6 @@ impl Game {
             last_audio_ms: None,
             raw_time: track_start,
             auto_key: 0,
-            ignore_audio_until: None,
             paused: None,
             paused_at: Instant::now(),
             resuming: None,
@@ -1215,8 +1212,7 @@ impl Game {
             self.time = self.speed.map(self.raw_time - offset);
             return false;
         }
-        let stale = self.ignore_audio_until.is_some_and(|u| now < u);
-        let audio_ms = audio.and_then(|a| a.position_ms(now)).filter(|_| !stale);
+        let audio_ms = audio.and_then(|a| a.position_ms(now));
         let raw = self.clock.update(now, audio_ms);
         self.last_audio_ms = audio_ms;
         self.raw_time = raw;
@@ -1417,7 +1413,6 @@ impl Game {
             a.seek(target);
         }
         self.clock = GameClock::new(target, audio.is_some());
-        self.ignore_audio_until = Some(Instant::now() + std::time::Duration::from_millis(80));
         self.raw_time = target;
         self.time = start;
         self.skip_to(t);
@@ -1437,7 +1432,6 @@ impl Game {
             a.seek(target);
         }
         self.clock = GameClock::new(target, audio.is_some());
-        self.ignore_audio_until = Some(Instant::now() + std::time::Duration::from_millis(80));
         self.raw_time = target;
     }
 
@@ -1484,8 +1478,7 @@ impl Game {
                 a.seek(target);
             }
             self.clock = GameClock::new(target, audio.is_some());
-            self.ignore_audio_until = Some(Instant::now() + std::time::Duration::from_millis(80));
-        }
+            }
         skipped
     }
 

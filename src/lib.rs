@@ -622,6 +622,14 @@ impl State {
         matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. } | Scene::Spectate(_) | Scene::Watch(_))
     }
 
+    /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
+    /// uncapped, its near-empty frame runs at thousands of fps and the GPU whines.
+    fn frame_cap(&self) -> u32 {
+        let menu = matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_some() && game.resuming.is_none());
+        let screen = (self.refresh_hz.round() as u32).max(30);
+        if menu && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > screen) { screen } else { self.cfg.fps_cap }
+    }
+
     /// The present mode this frame should use.
     fn wanted_present(&self) -> PresentChoice {
         // Watching someone else play needs no low input latency: always vsync (smoothest).
@@ -5473,7 +5481,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 }
             }
             renderer.pixel_scale = if s.cfg.half_resolution { 2 } else { 1 };
-            (s.present, s.cfg.fps_cap)
+            (s.present, s.frame_cap())
         };
 
         let t0 = timing.then(Instant::now);
