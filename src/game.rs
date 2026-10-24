@@ -1,8 +1,22 @@
 //! Gameplay: judging, scoring and drawing the playfield.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+static HIDE_GREAT: AtomicBool = AtomicBool::new(false);
+
+/// GREAT hits without their splash (no flash on the hit target, no "GREAT"), like osu! skins
+/// with an empty taiko-hit300: only OKs and misses stand out (Settings -> Playfield).
+pub fn set_hide_great(on: bool) {
+    HIDE_GREAT.store(on, Ordering::Relaxed);
+}
+
+/// Whether `j` gets its flash and label.
+fn splashes(j: Judge) -> bool {
+    !(j == Judge::Great && HIDE_GREAT.load(Ordering::Relaxed))
+}
 
 use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, Beatmap, Kind};
@@ -1156,7 +1170,7 @@ impl Game {
         }
         if let Some((j, at)) = self.last_judge {
             let a = (1.0 - (t - at) / 220.0).clamp(0.0, 1.0) as f32;
-            if a > 0.0 && j != Judge::Miss {
+            if a > 0.0 && j != Judge::Miss && splashes(j) {
                 c.glow(HIT_X, LANE_Y, NOTE_R + 2.0, 26.0, rgba(j.color(), 0.55 * a));
             }
         }
@@ -1284,7 +1298,7 @@ impl Game {
         }
 
         // Judgement text.
-        if let Some((j, at)) = self.last_judge {
+        if let Some((j, at)) = self.last_judge.filter(|&(j, _)| splashes(j)) {
             let age = (t - at) as f32;
             if age < 450.0 {
                 let a = (1.0 - age / 450.0).min(1.0);

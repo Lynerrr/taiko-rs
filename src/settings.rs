@@ -26,6 +26,7 @@ pub enum Item {
     TouchLayout,
     ShowPlayfieldSize,
     KiaiEffects,
+    HideGreat,
     ShowConverts,
     HiddenMaps,
     MasterVolume,
@@ -49,7 +50,7 @@ pub enum Item {
     SkinFolder,
 }
 
-pub const ITEMS: [(&str, Item); 43] = [
+pub const ITEMS: [(&str, Item); 44] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -63,6 +64,7 @@ pub const ITEMS: [(&str, Item); 43] = [
     ("PLAYFIELD", Item::ShowPlayfieldSize),
     ("PLAYFIELD", Item::BackgroundDim),
     ("PLAYFIELD", Item::KiaiEffects),
+    ("PLAYFIELD", Item::HideGreat),
     ("INPUT", Item::Key(0)),
     ("INPUT", Item::Key(1)),
     ("INPUT", Item::Key(2)),
@@ -136,6 +138,7 @@ impl Item {
             Item::TouchLayout => "Touch layout",
             Item::ShowPlayfieldSize => "Show playfield size",
             Item::KiaiEffects => "Kiai effects",
+            Item::HideGreat => "Hide GREAT splash",
             Item::ShowConverts => "Show osu!standard converts",
             Item::HiddenMaps => "Hidden maps",
             Item::MasterVolume => "Master volume",
@@ -182,6 +185,7 @@ impl Item {
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
             Item::HiddenMaps => "Right-click a song to hide it here (files stay). Enter lists them all again.",
             Item::KiaiEffects => "During kiai time, tint the lane and pulse the hit target with the beat.",
+            Item::HideGreat => "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",
             Item::MasterVolume => "Scales music and hitsounds. Anywhere: hold Alt and scroll the mouse wheel.",
             Item::MusicVolume | Item::FxVolume => "Left / Right to adjust.",
             Item::AudioBuffer => "Smaller = less audio latency; raise it if you hear crackling.",
