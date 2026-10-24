@@ -213,6 +213,137 @@ pub fn clean_chat(text: &str) -> String {
     t.trim().to_string()
 }
 
+/// A chat line with its swear words starred out (same length, so the line reads the same).
+/// Catches Russian and English swearing and slurs, also spelled with look-alike Latin letters
+/// or digits ("xуй", "6ля") or stretched out ("бляяя", "fuuuck"); leaves ordinary words that
+/// happen to contain one ("корабля", "застрахую", "хлеб") alone.
+pub fn censor(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if swear_word(word) {
+            out.extend(word.chars().map(|_| '*'));
+        } else {
+            out.push_str(word);
+        }
+        word.clear();
+    };
+    for c in text.chars() {
+        // Digits and a few symbols stand in for letters ("п1зда", "f*ck", "@ss").
+        if c.is_alphanumeric() || matches!(c, '@' | '$' | '*') {
+            word.push(c);
+        } else {
+            flush(&mut word, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+/// Whether one word (letters, digits and stand-ins) is a swear word.
+fn swear_word(word: &str) -> bool {
+    if word.chars().count() < 3 {
+        return false;
+    }
+    let lower = word.to_lowercase().replace('ё', "е");
+    // As Cyrillic: Latin look-alikes and digits turned into the letters they stand for.
+    let cyr: String = lower
+        .chars()
+        .filter_map(|c| {
+            Some(match c {
+                'a' | '@' => 'а',
+                'b' => 'в',
+                'c' => 'с',
+                'e' => 'е',
+                'h' => 'н',
+                'k' => 'к',
+                'm' => 'м',
+                'o' | '0' => 'о',
+                'p' => 'р',
+                't' => 'т',
+                'x' => 'х',
+                'y' | 'u' => 'у',
+                '3' => 'з',
+                '6' => 'б',
+                '4' => 'ч',
+                '1' | 'i' => 'и',
+                '*' => return None,
+                c => c,
+            })
+        })
+        .collect();
+    // As Latin: digits and symbols turned into letters.
+    let lat: String = lower
+        .chars()
+        .filter_map(|c| {
+            Some(match c {
+                '@' | '4' => 'a',
+                '$' | '5' => 's',
+                '0' => 'o',
+                '1' | '!' => 'i',
+                '3' => 'e',
+                '*' => return None,
+                c => c,
+            })
+        })
+        .collect();
+    [cyr.clone(), squeeze(&cyr)].iter().any(|w| russian_swear(w)) || [lat.clone(), squeeze(&lat)].iter().any(|w| english_swear(w))
+}
+
+/// Runs of three or more of one letter cut to one ("бляяя" -> "бля"); pairs stay ("shiite").
+fn squeeze(w: &str) -> String {
+    let chars: Vec<char> = w.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let run = chars[i..].iter().take_while(|&&c| c == chars[i]).count();
+        let keep = if run >= 3 { 1 } else { run };
+        out.extend(std::iter::repeat_n(chars[i], keep));
+        i += run;
+    }
+    out
+}
+
+fn russian_swear(w: &str) -> bool {
+    // Roots that are swearing wherever they turn up.
+    const ANYWHERE: [&str; 7] = ["пизд", "пидор", "мудак", "мудил", "залуп", "гандон", "шлюх"];
+    if ANYWHERE.iter().any(|r| w.contains(r)) {
+        return true;
+    }
+    // At the start only: "скипидар", "спидран", "лапидарный" stay.
+    if ["пидар", "пидр"].iter().any(|r| w.starts_with(r)) {
+        return true;
+    }
+    // хуй, хуе, хуя, хуи anywhere but in "страхуй"; хую only at the start ("тихую", "плохую",
+    // "психую").
+    if ["хуй", "хуе", "хуя", "хуи"].iter().any(|r| w.match_indices(r).any(|(i, _)| !w[..i].ends_with("стра"))) || w.starts_with("хую") {
+        return true;
+    }
+    // бля, блядь, блять: at the start of a word only ("корабля", "рубля"), not "бляха", "бляшка",
+    // "блямба".
+    if w.strip_prefix("бля").is_some_and(|rest| !rest.starts_with(['х', 'ш', 'м'])) {
+        return true;
+    }
+    // сука and сучка in their forms, not "сукно" or "сучок" (a knot).
+    const FORMS: [&str; 16] = ["сука", "суки", "суке", "суку", "сукой", "сучий", "сукин", "сукины", "сучка", "сучки", "сучке", "сучку", "сучкой", "сучара", "сучары", "сучье"];
+    if FORMS.contains(&w) {
+        return true;
+    }
+    // еб-: after a prefix ("заебал", "уебок", "долбоеб"), never inside a word ("хлеб", "небо",
+    // "себе").
+    const PREFIXES: [&str; 22] = [
+        "", "за", "у", "вы", "на", "до", "от", "отъ", "про", "раз", "разъ", "рас", "по", "съ", "об", "объ", "подъ", "при", "пере", "недо", "долбо", "долба",
+    ];
+    PREFIXES.iter().any(|p| w.strip_prefix(p).is_some_and(|rest| rest.starts_with("еб") && !rest.starts_with("ебони")))
+}
+
+fn english_swear(w: &str) -> bool {
+    const ANYWHERE: [&str; 11] = ["fuck", "shit", "bitch", "cunt", "nigger", "faggot", "whore", "asshole", "motherf", "blyat", "pizd"];
+    const WHOLE: [&str; 18] = ["fck", "fuk", "fag", "fags", "slut", "sluts", "nigga", "niggas", "niggaz", "pussy", "retard", "retards", "suka", "huy", "hui", "xuy", "xyu", "xui"];
+    ANYWHERE.iter().any(|r| w.contains(r)) || WHOLE.contains(&w) || ["nahui", "nahuy", "blyad", "ebat", "pidor", "pidar"].iter().any(|r| w.starts_with(r))
+}
+
 /// Keeps what the built-in font can draw and caps the length.
 fn clean_name(name: &str) -> String {
     let n: String = name.chars().filter(|c| drawable_char(*c)).take(20).collect();
@@ -515,7 +646,8 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         continue;
                     }
                     ClientMsg::Chat(text) => {
-                        let text = clean_chat(&text);
+                        // A room's chat is public: starred out for everyone.
+                        let text = censor(&clean_chat(&text));
                         let Some(name) = players.iter().find(|p| p.info.id == id && p.hello).map(|p| p.info.name.clone()) else { continue };
                         // At most 5 lines per 3 s each.
                         let times = chat_times.entry(id).or_default();
@@ -859,6 +991,31 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn censor_stars_swearing_and_leaves_words_alone() {
+        use super::censor;
+        assert_eq!(censor("бля, ну ты и сука"), "***, ну ты и ****");
+        assert_eq!(censor("ПИЗДЕЦ!!! нахуй это"), "******!!! ***** это");
+        assert_eq!(censor("заебал уже, долбоёб"), "****** уже, *******");
+        assert_eq!(censor("xуй 6ляяя п1зда"), "*** ***** *****");
+        assert_eq!(censor("what the fuuuck, sh1t"), "what the ******, ****");
+        assert_eq!(censor("f*ck you"), "**** you");
+        // Ordinary words with a swear inside stay.
+        for ok in ["корабля", "рубля", "застрахую", "хлеб", "небо", "себе", "сукно", "бляха", "бляшка", "спидран", "скипидар", "плохую", "тихую", "психую", "сучок", "оскорблять", "команда", "hello there", "shiitake"] {
+            assert_eq!(censor(ok), ok);
+        }
+        assert_eq!(censor(""), "");
+        // `TAIKO_CENSOR_WORDS=<file>`: print the words of a word list (one a line) it stars out.
+        if let Some(f) = std::env::var_os("TAIKO_CENSOR_WORDS") {
+            for w in std::fs::read_to_string(f).unwrap().lines() {
+                if censor(w) != w {
+                    println!("starred: {w}");
+                }
+            }
+        }
+        assert_eq!(censor("gg wp 300x"), "gg wp 300x");
+    }
+
     use super::*;
 
     #[test]

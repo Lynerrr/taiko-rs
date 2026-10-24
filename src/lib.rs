@@ -1064,6 +1064,24 @@ impl State {
         }
     }
 
+    /// A play (or calibration) is running, not paused.
+    fn playing(&self) -> bool {
+        matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_none())
+    }
+
+    /// Stars out the swear words already in the chats (the chat filter was just switched on).
+    fn censor_chats(&mut self) {
+        let lines = self.social.chats.values_mut().flatten().chain(self.social.global.iter_mut());
+        for line in lines {
+            line.text = net::censor(&line.text);
+        }
+        if let Some(s) = &mut self.mp {
+            for (_, text) in &mut s.chat {
+                *text = net::censor(text);
+            }
+        }
+    }
+
     fn setting_value(&self, item: Item) -> String {
         let c = &self.cfg;
         let on = |b: bool| if b { "on" } else { "off" }.to_string();
@@ -1085,6 +1103,8 @@ impl State {
             Item::KiaiEffects => on(c.kiai_effects),
             Item::HideGreat => on(c.hide_great),
             Item::DiscordPresence => on(c.discord_presence),
+            Item::ChatFilter => on(c.chat_filter),
+            Item::MessageSound => on(c.message_sound),
             Item::AntiMash => on(c.anti_mash),
             Item::ShowConverts => on(self.select.show_converts),
             Item::HiddenMaps => self.select.hidden.describe(),
@@ -1168,6 +1188,14 @@ impl State {
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
+            Item::ChatFilter => {
+                self.cfg.chat_filter = !self.cfg.chat_filter;
+                // Switched on: what's already in the chats gets cleaned up too.
+                if self.cfg.chat_filter {
+                    self.censor_chats();
+                }
+            }
+            Item::MessageSound => self.cfg.message_sound = !self.cfg.message_sound,
             Item::AntiMash => self.cfg.anti_mash = !self.cfg.anti_mash,
             Item::ShowConverts => {
                 self.select.show_converts = !self.select.show_converts;
@@ -3448,7 +3476,10 @@ impl State {
                 let rows = self.social.rows(self.mp.is_some()).len();
                 self.social.cursor = self.social.cursor.min(rows - 1);
             }
-            Down::Chat(line) => {
+            Down::Chat(mut line) => {
+                if self.cfg.chat_filter {
+                    line.text = net::censor(&line.text);
+                }
                 let me = self.social.me.clone().unwrap_or_default();
                 let mine = key(&line.from) == key(&me);
                 let other = if mine { line.to.clone() } else { line.from.clone() };
@@ -3460,6 +3491,13 @@ impl State {
                     log.remove(0);
                 }
                 let viewing = self.social.open && matches!(self.social.row(self.mp.is_some()), social::Row::Friend(k) if self.social.friends.get(k).is_some_and(|f| key(&f.name) == key(&other)));
+                // A chime for every fresh message from a friend, unless it would land in the middle
+                // of a play.
+                if !mine && fresh && self.cfg.message_sound && !self.playing() {
+                    if let Some(a) = &self.audio {
+                        a.sfx_at(audio::Sfx::Message, 1.0);
+                    }
+                }
                 if !mine && fresh && !viewing {
                     *self.social.unread.entry(key(&other)).or_default() += 1;
                     self.social.notify(line.from.clone(), line.text.clone(), 0x4fb4ff, NoteAction::Chat(line.from.clone()));
@@ -3472,7 +3510,10 @@ impl State {
                 let rows = self.social.rows(self.mp.is_some()).len();
                 self.social.cursor = self.social.cursor.min(rows - 1);
             }
-            Down::GlobalChat(line) => {
+            Down::GlobalChat(mut line) => {
+                if self.cfg.chat_filter {
+                    line.text = net::censor(&line.text);
+                }
                 let mine = self.social.me.as_deref().is_some_and(|me| key(me) == key(&line.from));
                 let fresh = line.at + 10 >= discord::unix_now();
                 let viewing = self.social.open && self.social.tab == social::Tab::Chat;
@@ -3798,6 +3839,7 @@ impl State {
                 }
             }
             ServerMsg::Chat { from, text } => {
+                let text = if self.cfg.chat_filter { net::censor(&text) } else { text };
                 if let Some(s) = &mut self.mp {
                     s.chat.push((from, text));
                     if s.chat.len() > 200 {
