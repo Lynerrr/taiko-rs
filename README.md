@@ -324,7 +324,9 @@ Ctrl+Up/Down step through them). With no text, newest ranked first. Each result 
 status, number of taiko difficulties and star range. Enter, or the *Download* button, fetches the `.osz` with a progress bar and unpacks it into
 your Songs folder as `<set id> <artist> - <title>/` (the first folder being scanned, else
 `~/.local/share/taiko-rs/Songs` / `%APPDATA%\taiko-rs\Songs`, which is scanned at startup). The set
-shows up in the song list right away and is selected; sets you already have say *installed*.
+shows up in the song list right away and is selected; sets you already have say *installed*. A
+mirror that's busy (osu.direct's passing 503s, catboy.best's rate limit) is asked again a few
+seconds later, up to three times; one that doesn't have the set (404) isn't.
 
 Before downloading, the selected result is previewed on the right like in song select: its cover
 as the background, details, star rating, difficulty timeline and the autoplay, with osu!'s ~10 s

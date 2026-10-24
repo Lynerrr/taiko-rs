@@ -409,8 +409,15 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String)
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(90)));
     let Ok(mut writer) = reader.get_ref().try_clone() else { return };
     let (tx, rx) = mpsc::channel::<Down>();
+    // A quiet connection gets a Pong every 20 s anyway: games that only ping while they send
+    // nothing else went 70 s without hearing from us during a solo play and dropped the link.
     std::thread::spawn(move || {
-        for d in rx {
+        loop {
+            let d = match rx.recv_timeout(Duration::from_secs(20)) {
+                Ok(d) => d,
+                Err(mpsc::RecvTimeoutError::Timeout) => Down::Pong,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
             if online::write_line(&mut writer, &d).is_err() {
                 break;
             }

@@ -356,35 +356,56 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     Job { set, done, total, rx }
 }
 
+/// Passes over the mirrors before a download gives up: osu.direct often answers 503 for a
+/// moment and catboy.best rate-limits (425), and the next try usually works.
+const ROUNDS: u64 = 3;
+
 fn fetch(id: u32, name: &str, songs: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<PathBuf, String> {
     std::fs::create_dir_all(songs).map_err(|e| format!("{}: {e}", songs.display()))?;
     let dest = songs.join(name);
     let archive = songs.join(format!("{name}.osz.part"));
-    let mut errors = Vec::new();
-    for m in &MIRRORS {
-        done.store(0, Ordering::Relaxed);
-        total.store(0, Ordering::Relaxed);
-        match download_to(&format!("{}{id}", m.download), &archive, done, total) {
-            Ok(()) => {
-                let result = extract(&archive, &dest);
-                let _ = std::fs::remove_file(&archive);
-                match result {
-                    Ok(()) => return Ok(dest),
-                    Err(e) => errors.push(format!("{}: {e}", m.name)),
-                }
+    let mut errors: [Option<String>; MIRRORS.len()] = Default::default();
+    // A mirror that doesn't have the set (404) isn't asked again.
+    let mut gone = [false; MIRRORS.len()];
+    for round in 0..ROUNDS {
+        if gone.iter().all(|&g| g) {
+            break;
+        }
+        if round > 0 {
+            std::thread::sleep(Duration::from_secs(2 * round));
+        }
+        for (k, m) in MIRRORS.iter().enumerate() {
+            if gone[k] {
+                continue;
             }
-            Err(e) => {
-                let _ = std::fs::remove_file(&archive);
-                errors.push(format!("{}: {e}", m.name));
+            done.store(0, Ordering::Relaxed);
+            total.store(0, Ordering::Relaxed);
+            match download_to(&format!("{}{id}", m.download), &archive, done, total) {
+                Ok(()) => {
+                    let result = extract(&archive, &dest);
+                    let _ = std::fs::remove_file(&archive);
+                    match result {
+                        Ok(()) => return Ok(dest),
+                        Err(e) => (errors[k], gone[k]) = (Some(e), true),
+                    }
+                }
+                Err((e, retry)) => {
+                    let _ = std::fs::remove_file(&archive);
+                    (errors[k], gone[k]) = (Some(e), !retry);
+                }
             }
         }
     }
-    Err(errors.join("; "))
+    Err(MIRRORS.iter().zip(errors).filter_map(|(m, e)| Some(format!("{}: {}", m.name, e?))).collect::<Vec<_>>().join("; "))
 }
 
-fn download_to(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<(), String> {
+/// Errors say whether trying again later could help (not for a set the mirror doesn't have).
+fn download_to(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<(), (String, bool)> {
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_connect(Some(Duration::from_secs(15))).build().into();
-    let mut response = agent.get(url).header("User-Agent", USER_AGENT).call().map_err(|e| e.to_string())?;
+    let mut response = agent.get(url).header("User-Agent", USER_AGENT).call().map_err(|e| match e {
+        ureq::Error::StatusCode(404) => ("doesn't have this set".to_string(), false),
+        e => (e.to_string(), true),
+    })?;
     let body = response.body_mut();
     if let Some(len) = body.content_length() {
         total.store(len, Ordering::Relaxed);
@@ -392,20 +413,21 @@ fn download_to(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> R
     // A mirror that has no such set answers with a small JSON error instead of an archive.
     if body.mime_type().is_some_and(|m| m.contains("json") || m.contains("html")) {
         let text = body.read_to_string().unwrap_or_default();
-        return Err(if text.is_empty() { "no archive".into() } else { text.chars().take(120).collect() });
+        return Err((if text.is_empty() { "no archive".into() } else { text.chars().take(120).collect() }, false));
     }
     let mut reader = body.with_config().limit(512 << 20).reader();
-    let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut file = std::fs::File::create(path).map_err(|e| (e.to_string(), false))?;
     let mut buf = vec![0u8; 64 * 1024];
     loop {
-        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+        // A dropped transfer is worth another try.
+        let n = reader.read(&mut buf).map_err(|e| (e.to_string(), true))?;
         if n == 0 {
             break;
         }
-        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        file.write_all(&buf[..n]).map_err(|e| (e.to_string(), false))?;
         done.fetch_add(n as u64, Ordering::Relaxed);
     }
-    file.flush().map_err(|e| e.to_string())?;
+    file.flush().map_err(|e| (e.to_string(), false))?;
     Ok(())
 }
 
