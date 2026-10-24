@@ -14,6 +14,7 @@ pub enum Item {
     Rate,
     RateKeepPitch,
     Offset,
+    VisualOffset,
     Calibrate,
     CalibrationBpm,
     LiveOffset,
@@ -59,7 +60,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 53] = [
+pub const ITEMS: [(&str, Item); 54] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -82,6 +83,7 @@ pub const ITEMS: [(&str, Item); 53] = [
     ("INPUT", Item::PresetKey(1)),
     ("INPUT", Item::TouchLayout),
     ("OFFSET", Item::Offset),
+    ("OFFSET", Item::VisualOffset),
     ("OFFSET", Item::Calibrate),
     ("OFFSET", Item::CalibrationBpm),
     ("OFFSET", Item::LiveOffset),
@@ -145,6 +147,7 @@ impl Item {
             Item::Rate => "Speed (rate)",
             Item::RateKeepPitch => "Rate keeps pitch",
             Item::Offset => "Audio offset",
+            Item::VisualOffset => "Visual offset",
             Item::Calibrate => "Offset calibration",
             Item::CalibrationBpm => "Calibration tempo",
             Item::LiveOffset => "Live offset suggestion",
@@ -232,6 +235,7 @@ impl Item {
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
             Item::Splash => "The animated intro when taiko-rs starts (any key or click skips it).",
+            Item::VisualOffset => "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
             Item::UpdateChannel => "dev: test builds that haven't reached everyone yet (may break). Switch, then Update installs that channel's build.",
             Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko-rs restarts into it.",
             Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",

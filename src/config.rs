@@ -74,6 +74,8 @@ pub struct Config {
     pub touch_layout: TouchLayout,
     /// Positive when your audio reaches you late; notes are shifted later by this much.
     pub offset_ms: f64,
+    /// Notes are drawn this many ms ahead to make up for display latency (judging is unaffected).
+    pub visual_offset_ms: f64,
     pub scroll_speed: f64,
     /// Scales both volumes below (Alt + mouse wheel anywhere).
     pub master_volume: f32,
@@ -173,6 +175,7 @@ impl Default for Config {
         Config {
             touch_layout: TouchLayout::Kddk,
             offset_ms: 0.0,
+            visual_offset_ms: 0.0,
             scroll_speed: 1.0,
             master_volume: 1.0,
             music_volume: 0.7,
@@ -323,6 +326,7 @@ impl Config {
             let (k, v) = (k.trim(), v.trim());
             match k {
                 "offset_ms" => cfg.offset_ms = v.parse().unwrap_or(cfg.offset_ms),
+                "visual_offset_ms" => cfg.visual_offset_ms = v.parse().unwrap_or(cfg.visual_offset_ms),
                 "scroll_speed" => cfg.scroll_speed = v.parse::<f64>().unwrap_or(cfg.scroll_speed).clamp(0.3, 4.0),
                 "scroll_speed_osu" => osu_scroll_speed = v == "true",
                 "master_volume" => cfg.master_volume = v.parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0),
@@ -414,6 +418,8 @@ impl Config {
              # your own playfield sizes (preset list, in this order)\n\
              saved_presets = {}\n\
              offset_ms = {}\n\
+             # notes drawn this many ms early to make up for display latency (judging is unaffected)\n\
+             visual_offset_ms = {}\n\
              # 1.00 = osu!'s scroll speed\n\
              scroll_speed = {:.2}\n\
              scroll_speed_osu = true\n\
@@ -464,6 +470,7 @@ impl Config {
             self.show_playfield_size,
             self.saved_presets.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(", "),
             self.offset_ms,
+            self.visual_offset_ms,
             self.scroll_speed,
             self.master_volume,
             self.music_volume,

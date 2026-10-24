@@ -1,5 +1,5 @@
 //! Mods: osu!'s (EZ, HR, HD, FL, DT...), lazer's taiko extras and taiko-rs's own (scroll speed
-//! tricks, SV experiments, visual tricks, note paths, playfield moves). A set of them is a bit mask; each has a two-letter acronym used in
+//! tricks, SV experiments, visual tricks, note paths, playfield moves and copies). A set of them is a bit mask; each has a two-letter acronym used in
 //! the config, replays and multiplayer.
 
 /// Every mod, in the order the mod select shows them.
@@ -83,18 +83,20 @@ pub enum Mod {
     FlipFlop,
     Shatter,
     Cracked,
+    Crumble,
     Portal,
+    Multiverse,
 }
 
 use Mod::*;
 
-pub const ALL: [Mod; 71] = [
+pub const ALL: [Mod; 73] = [
     Easy, NoFail, HalfTime, Daycore, Half, NoFinishers, HardRock, SuddenDeath, Perfect, DoubleTime, Nightcore, Hidden,
     Flashlight, Precise, GreatOrNothing, Relax, Autoplay, Swap, Random, ConstantSpeed, Alternate, WindUp, WindDown, AllBig,
     Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette, AntiSv, HyperSv, Even, Split, Swing,
     Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed, Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy,
     Party, Overtime, Liar, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop,
-    Shatter, Cracked, Portal,
+    Shatter, Cracked, Crumble, Portal, Multiverse,
 ];
 
 /// Mod select columns: (title, accent colour, mods).
@@ -106,7 +108,7 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
     ("SV LAB", 0xFF8A3D, &[AntiSv, HyperSv, Even, Split, Swing, Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed]),
     ("VISUAL", 0xc77dff, &[Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Party, Overtime, Liar]),
     ("RAILS", 0x5ee6c8, &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake]),
-    ("PLAYFIELD", 0xff5fa2, &[Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Portal]),
+    ("PLAYFIELD", 0xff5fa2, &[Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal, Multiverse]),
 ];
 
 /// Mod select keyboard navigation: the mod `dx` columns and `dy` rows from `index` (into `ALL`).
@@ -192,7 +194,9 @@ impl Mod {
             FlipFlop => "FF",
             Shatter => "SH",
             Cracked => "CK",
+            Crumble => "CR",
             Portal => "PT",
+            Multiverse => "MV",
         }
     }
 
@@ -268,7 +272,9 @@ impl Mod {
             FlipFlop => "Flip Flop",
             Shatter => "Shatter",
             Cracked => "Cracked",
+            Crumble => "Crumble",
             Portal => "Portal",
+            Multiverse => "Multiverse",
         }
     }
 
@@ -344,7 +350,9 @@ impl Mod {
             FlipFlop => "Every 8 bars the lane flips over to the other side.",
             Shatter => "The lane breaks into pieces that slide apart and back; further where streams are.",
             Cracked => "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
+            Crumble => "Every hit knocks a piece out of the lane: crumbs for streams, chunks for slow notes.",
             Portal => "Notes dive into one portal and come out of another; they move every 8 bars.",
+            Multiverse => "Five playfields drift and swap places, two mirrored; every 2 bars another is in colour.",
         }
     }
 
@@ -388,8 +396,8 @@ impl Mod {
             Hidden => &[Sudden, Memory],
             Sudden => &[Hidden, Memory],
             Memory => &[Hidden, Sudden],
-            Flashlight => &[Spotlight],
-            Spotlight => &[Flashlight],
+            Flashlight => &[Spotlight, Multiverse],
+            Spotlight => &[Flashlight, Multiverse],
             // The map's own speeds are what these bend, so they don't mix with each other or
             // with one speed for everything.
             ConstantSpeed => &[AntiSv, HyperSv],
@@ -397,9 +405,17 @@ impl Mod {
             HyperSv => &[AntiSv, ConstantSpeed],
             Panic => &[Mercy],
             Mercy => &[Panic],
-            Spin => &[Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift],
-            Mania => &[Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift],
-            Zigzag | UTurn | Spiral | Loop | Elbow | Shapeshift => &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Mania, Spin],
+            Spin => &[Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse],
+            Mania => &[Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse],
+            Zigzag | UTurn | Spiral | Loop | Elbow | Shapeshift => &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Mania, Spin, Multiverse],
+            // Its playfields are small windows side by side: nothing may move them off their
+            // spots, light only one of them or take its colours away.
+            Tilt | BarrelRoll | Colorless | Blackout => &[Multiverse],
+            Multiverse => &[
+                Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Colorless, Flashlight, Spotlight, Blackout,
+            ],
+            Cracked => &[Crumble],
+            Crumble => &[Cracked],
             _ => &[],
         }
     }
@@ -416,14 +432,14 @@ impl Mod {
             DoubleTime | Nightcore | Flashlight | Spotlight | Colorless => 3,
             HardRock | Hidden | Sudden | Blink | Decoy | Random | Alternate | WindUp => 2,
             Stutter | SvChaos | Roulette | HyperSv | Even | Split | Leapfrog | Panic | LagSpike | Moonwalk => 2,
-            Spiral | Shapeshift | Spin | FlipFlop | Portal => 2,
+            Spiral | Shapeshift | Spin | FlipFlop | Portal | Multiverse => 2,
             _ => 1,
         })
     }
 
     /// Mods that hide or disguise notes: one of them at a time is plenty.
     fn obscures(self) -> bool {
-        matches!(self, Hidden | Sudden | Flashlight | Spotlight | Blink | Colorless | Decoy | Liar)
+        matches!(self, Hidden | Sudden | Flashlight | Spotlight | Blink | Colorless | Decoy | Liar | Multiverse)
     }
 
     /// Mods that change where and how fast notes travel.
