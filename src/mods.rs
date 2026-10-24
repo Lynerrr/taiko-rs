@@ -348,7 +348,7 @@ impl Mod {
             Shatter => "The lane breaks into pieces that slide apart and back; further where streams are.",
             Cracked => "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
             Portal => "Notes dive into one portal and come out of another; they move every 8 bars.",
-            Multiverse => "Three playfields drift about, only one in colour; every 4 bars it's another.",
+            Multiverse => "Five playfields drift and swap places, two mirrored; every 2 bars another is in colour.",
         }
     }
 
