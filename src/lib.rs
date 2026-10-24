@@ -3170,6 +3170,11 @@ impl State {
                 self.cfg.mods = Mods::NONE;
                 self.mods_changed();
             }
+            KeyCode::KeyR => {
+                let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+                self.cfg.mods = Mods::shuffle(seed);
+                self.mods_changed();
+            }
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
         }
