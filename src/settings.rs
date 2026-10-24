@@ -36,6 +36,7 @@ pub enum Item {
     NotifyRequests,
     ShowConverts,
     HiddenMaps,
+    SongsFolder,
     MasterVolume,
     MusicVolume,
     FxVolume,
@@ -59,13 +60,14 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 53] = [
+pub const ITEMS: [(&str, Item); 54] = [
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::ResumeDelay),
     ("GAMEPLAY", Item::ShowConverts),
     ("GAMEPLAY", Item::HiddenMaps),
+    ("GAMEPLAY", Item::SongsFolder),
     ("PLAYFIELD", Item::PlayfieldArea),
     ("PLAYFIELD", Item::PlayfieldPreset),
     ("PLAYFIELD", Item::PlayfieldReset),
@@ -117,7 +119,7 @@ pub const ITEMS: [(&str, Item); 53] = [
 
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 9] = [
-    ("GAMEPLAY", "speed, rate, resume"),
+    ("GAMEPLAY", "speed, rate, songs"),
     ("PLAYFIELD", "size, position"),
     ("INPUT", "drum keys, touch layout"),
     ("OFFSET", "audio offset, calibration"),
@@ -167,6 +169,7 @@ impl Item {
             Item::NotifyPlaying => "Notify: friend playing",
             Item::ShowConverts => "Show osu!standard converts",
             Item::HiddenMaps => "Hidden maps",
+            Item::SongsFolder => "Songs folder",
             Item::MasterVolume => "Master volume",
             Item::MusicVolume => "Music volume",
             Item::FxVolume => "Hitsound volume",
@@ -211,6 +214,7 @@ impl Item {
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
             Item::HiddenMaps => "Right-click a song to hide it here (files stay). Enter lists them all again.",
+            Item::SongsFolder => "Enter: pick your osu! Songs folder (or the osu! folder itself); its maps join the list.",
             Item::KiaiEffects => "During kiai time, tint the lane and pulse the hit target with the beat.",
             Item::HideGreat => "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",
             Item::ChatFilter => "Stars out swear words in friends' messages, the global chat and lobby chats.",

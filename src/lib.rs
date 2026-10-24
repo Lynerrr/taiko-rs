@@ -267,6 +267,9 @@ struct State {
     mapinfo_sorted: bool,
     /// Folders being scanned (where osu!.db / collection.db are looked for).
     song_dirs: Vec<PathBuf>,
+    /// Settings' Songs folder: the folder dialog, then the scan of what was picked.
+    songs_pick: Option<Receiver<Result<Option<PathBuf>, String>>>,
+    songs_add: Option<(PathBuf, Receiver<Vec<Entry>>)>,
     osudb_rx: Option<Receiver<Option<osudb::OsuDb>>>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
     lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
@@ -518,6 +521,58 @@ fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
 
 /// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
 /// Only those few candidates are hashed, so this stays cheap with a huge library.
+/// A path for a settings row: its last two folders.
+fn short_path(dir: &std::path::Path) -> String {
+    let parts: Vec<_> = dir.components().collect();
+    if parts.len() <= 3 {
+        return dir.display().to_string();
+    }
+    let tail: PathBuf = parts[parts.len() - 2..].iter().collect();
+    format!("...{}{}", std::path::MAIN_SEPARATOR, tail.display())
+}
+
+/// The system's folder dialog: Ok(None) when cancelled, Err when there is none to show.
+fn pick_folder(title: &str) -> Result<Option<PathBuf>, String> {
+    use std::process::Command;
+    let manual = "no folder dialog here: add `songs = <folder>` to config.txt";
+    let chosen = |out: std::process::Output| {
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !path.is_empty()).then(|| PathBuf::from(path))
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // A topmost owner keeps the dialog in front of a fullscreen game.
+        let script = format!(
+            "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; \
+             $owner = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true}}; \
+             $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = '{title}'; $d.ShowNewFolderButton = $false; \
+             if ($d.ShowDialog($owner) -eq 'OK') {{ $d.SelectedPath }}"
+        );
+        let out = Command::new("powershell").args(["-NoProfile", "-STA", "-Command", &script]).creation_flags(CREATE_NO_WINDOW).output();
+        return out.map(chosen).map_err(|_| manual.to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!("POSIX path of (choose folder with prompt \"{title}\")");
+        return Command::new("osascript").args(["-e", &script]).output().map(chosen).map_err(|_| manual.to_string());
+    }
+    #[allow(unreachable_code)]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let tries: [&[&str]; 2] = [
+            &["zenity", "--file-selection", "--directory", "--title", title],
+            &["kdialog", "--getexistingdirectory", &home, "--title", title],
+        ];
+        if cfg!(target_os = "android") {
+            return Err(manual.to_string());
+        }
+        // The first that runs; cancelling it is an answer, not a reason to try the next.
+        tries.iter().find_map(|c| Command::new(c[0]).args(&c[1..]).output().ok()).map(chosen).ok_or_else(|| manual.to_string())
+    }
+}
+
 /// Where downloaded maps go: the first Songs folder being scanned, else taiko-rs's own (which
 /// is scanned at startup when it exists).
 fn download_dir(inputs: &[PathBuf]) -> PathBuf {
@@ -620,6 +675,14 @@ impl State {
     /// Scenes that use the gameplay present mode; everything else is a menu.
     fn in_song(&self) -> bool {
         matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. } | Scene::Spectate(_) | Scene::Watch(_))
+    }
+
+    /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
+    /// uncapped, its near-empty frame runs at thousands of fps and the GPU whines.
+    fn frame_cap(&self) -> u32 {
+        let menu = matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_some() && game.resuming.is_none());
+        let screen = (self.refresh_hz.round() as u32).max(30);
+        if menu && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > screen) { screen } else { self.cfg.fps_cap }
     }
 
     /// The present mode this frame should use.
@@ -1121,6 +1184,12 @@ impl State {
             Item::NotifyRequests => on(c.notify_requests),
             Item::ShowConverts => on(self.select.show_converts),
             Item::HiddenMaps => self.select.hidden.describe(),
+            Item::SongsFolder if self.songs_pick.is_some() => "picking...".into(),
+            Item::SongsFolder if self.songs_add.is_some() => "scanning...".into(),
+            Item::SongsFolder => match c.songs.first().or(self.song_dirs.first()) {
+                Some(dir) => short_path(dir),
+                None => "none found, Enter to pick".into(),
+            },
             Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
             Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
             Item::FxVolume => format!("{:.0}%", c.fx_volume * 100.0),
@@ -1233,8 +1302,8 @@ impl State {
                 self.select.refilter(&self.library);
                 return;
             }
-            // Acts on Enter in `settings_key`.
-            Item::HiddenMaps => return,
+            // Act on Enter in `settings_key`.
+            Item::HiddenMaps | Item::SongsFolder => return,
             Item::MasterVolume => self.cfg.master_volume = (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::MusicVolume => self.cfg.music_volume = (self.cfg.music_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::FxVolume => self.cfg.fx_volume = (self.cfg.fx_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
@@ -1389,6 +1458,79 @@ impl State {
         if std::process::Command::new(opener).arg(&dir).spawn().is_err() {
             self.toast(format!("skins go in {}", dir.display()));
         }
+    }
+
+    /// Settings' Songs folder: asks for a folder (the system's folder dialog, on its own thread so
+    /// the game keeps drawing).
+    fn pick_songs_folder(&mut self) {
+        if self.songs_pick.is_some() || self.songs_add.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(pick_folder("Pick your osu! Songs folder (or the osu! folder)"));
+        });
+        self.songs_pick = Some(rx);
+    }
+
+    /// The picked folder becomes the configured one and is scanned; its maps are added to the list
+    /// (appended, so nothing else's place in it moves).
+    fn poll_songs_folder(&mut self) {
+        if let Some(rx) = &self.songs_pick {
+            let picked = match rx.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => return,
+                Ok(r) => r,
+                Err(mpsc::TryRecvError::Disconnected) => Ok(None),
+            };
+            self.songs_pick = None;
+            match picked {
+                Ok(Some(dir)) => {
+                    let dir = library::picked_songs(&dir);
+                    self.cfg.songs = vec![dir.clone()];
+                    self.cfg.save();
+                    if !self.song_dirs.contains(&dir) {
+                        self.song_dirs.push(dir.clone());
+                    }
+                    self.toast(format!("scanning {}", short_path(&dir)));
+                    let (tx, rx) = mpsc::channel();
+                    let scan = dir.clone();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(library::scan(&[scan], &AtomicUsize::new(0)));
+                    });
+                    self.songs_add = Some((dir, rx));
+                }
+                Ok(None) => {}
+                Err(e) => self.toast(e),
+            }
+        }
+        let Some((dir, rx)) = &self.songs_add else { return };
+        let found = match rx.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => return,
+            Ok(found) => found,
+            Err(mpsc::TryRecvError::Disconnected) => Vec::new(),
+        };
+        let dir = dir.clone();
+        self.songs_add = None;
+        let known: std::collections::HashSet<&PathBuf> = self.library.iter().map(|e| &e.path).collect();
+        let fresh: Vec<Entry> = found.into_iter().filter(|e| !known.contains(&e.path)).collect();
+        let n = fresh.len();
+        self.append_maps(fresh);
+        self.toast(match n {
+            0 if self.library.iter().any(|e| e.path.starts_with(&dir)) => format!("{} is already in the list", short_path(&dir)),
+            0 => format!("no maps in {}", short_path(&dir)),
+            n => format!("added {n} maps from {}", short_path(&dir)),
+        });
+    }
+
+    /// Adds maps to the end of the library, so the indices already handed out stay valid.
+    fn append_maps(&mut self, fresh: Vec<Entry>) {
+        let start = self.library.len();
+        self.library.extend(fresh);
+        if let Some(info) = &self.mapinfo {
+            info.extend(self.library[start..].iter().enumerate().map(|(k, e)| (start + k, e.path.clone(), e.modified, e.size)).collect());
+            self.mapinfo_sorted = false;
+        }
+        self.select.refilter(&self.library);
     }
 
     /// Keeps the Discord status in line with what's on screen (checked about once a second).
@@ -1577,6 +1719,7 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldArea => self.open_layout_editor(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldPreset => self.open_dropdown(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => self.open_skins_folder(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SongsFolder => self.pick_songs_folder(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::HiddenMaps => {
                 if self.select.hidden.is_empty() {
                     self.toast("nothing is hidden: right-click a song in the list to hide it".into());
@@ -4194,6 +4337,7 @@ impl State {
         }
         self.frame_clip = None;
         self.poll_scan();
+        self.poll_songs_folder();
         {
             // The Download tab previews remote maps through the same preview.
             let browsing = matches!(self.scene, Scene::Download);
@@ -5169,13 +5313,7 @@ impl State {
         let fresh: Vec<Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0)).into_iter().filter(|e| !known.contains(&e.path)).collect();
         let first = fresh.iter().find(|e| e.meta.mode == 1).or(fresh.first()).map(|e| e.path.clone());
         let n = fresh.len();
-        let start = self.library.len();
-        self.library.extend(fresh);
-        if let Some(info) = &self.mapinfo {
-            info.extend(self.library[start..].iter().enumerate().map(|(k, e)| (start + k, e.path.clone(), e.modified, e.size)).collect());
-            self.mapinfo_sorted = false;
-        }
-        self.select.refilter(&self.library);
+        self.append_maps(fresh);
         self.installed_sets().insert(set.id);
         eprintln!("downloaded set {} into {} ({n} maps)", set.id, folder.display());
         // Lobby: the map we were missing may be here now.
@@ -5473,7 +5611,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 }
             }
             renderer.pixel_scale = if s.cfg.half_resolution { 2 } else { 1 };
-            (s.present, s.cfg.fps_cap)
+            (s.present, s.frame_cap())
         };
 
         let t0 = timing.then(Instant::now);
@@ -5940,6 +6078,8 @@ impl State {
             mapinfo: None,
             mapinfo_sorted: false,
             song_dirs,
+            songs_pick: None,
+            songs_add: None,
             osudb_rx: None,
             scene_kind: None,
             scene_since: Instant::now(),
