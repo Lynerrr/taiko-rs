@@ -1846,6 +1846,19 @@ impl Canvas {
         }
     }
 
+    /// Fades every shape drawn since `start` to `alpha` of its opacity and darkens it to `dim`
+    /// of its brightness (the Multiverse playfields out of focus).
+    pub fn fade_since(&mut self, start: usize, alpha: f32, dim: f32) {
+        for sh in &mut self.shapes[start..] {
+            for col in [&mut sh.fill, &mut sh.border] {
+                col[0] *= dim;
+                col[1] *= dim;
+                col[2] *= dim;
+                col[3] *= alpha;
+            }
+        }
+    }
+
     pub fn glow(&mut self, x: f32, y: f32, r: f32, softness: f32, color: [f32; 4]) {
         self.shapes.push(Shape { center: [x, y], half: [r, r], fill: color, border: color, params: [r, 0.0, softness, 0.0], angle: 0.0 });
     }
