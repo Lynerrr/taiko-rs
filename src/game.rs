@@ -238,8 +238,6 @@ pub struct Game {
     hp_exempt: bool,
     /// Failed by Sudden Death / Perfect: map time and when (the play ends a moment later).
     failed: Option<(f64, Instant)>,
-    /// Constant Speed: the speed every note scrolls at.
-    constant_velocity: Option<f64>,
     /// Alternate: the hand of the last accepted press (true = left) and when.
     last_hand: Option<(bool, f64)>,
     /// Combo Rush's current speed factor (eases toward its target).
@@ -247,7 +245,21 @@ pub struct Game {
     rush_t: f64,
     /// Earthquake: map time of the last big hit.
     quake_at: f64,
+    /// Panic / Mercy: map times of the latest misses.
+    misses: VecDeque<f64>,
+    /// Drop / Barrel Roll: where each kiai starts (map ms) and the beat length there.
+    kiai_starts: Vec<(f64, f64)>,
+    /// Roulette: where each 4-bar section starts (map ms), its speed, and the velocity its
+    /// marker scrolls at.
+    sections: Vec<(f64, f64, f64)>,
+    /// Decoy: the fake notes (never judged).
+    decoys: Vec<beatmap::Note>,
 }
+
+/// Mania: how much of the lane stands above the drum (virtual units).
+const MANIA_LANE: f32 = 340.0;
+/// Spin: how long the lane is as it turns about the middle of the screen.
+const SPIN_LANE: f32 = 300.0;
 
 /// osu!px per ms -> virtual units per ms at scroll speed 1.0, so that a note stays on screen
 /// exactly as long as in osu!. Stable scrolls notes at their velocity across a 480-tall gamefield
@@ -267,19 +279,19 @@ struct Scroll<'a> {
     /// Length of the lane ahead of the hit target.
     lane: f64,
     mods: Mods,
-    constant: Option<f64>,
     first: f64,
     end: f64,
     cps: &'a [beatmap::ControlPoint],
-    /// Pulse / Stutter: how far (ms) far-away notes are shifted in time right now.
+    /// Pulse, Stutter, Drop, Recoil...: how far (ms) far-away notes are shifted in time right now.
     warp: f64,
-    rush: f64,
+    /// Speed factor of every note right now (Combo Rush, Panic, Mercy).
+    live: f64,
 }
 
 impl Scroll<'_> {
     /// Speed factor of a note at map time `time` from the scroll mods.
     fn factor(&self, time: f64) -> f64 {
-        let mut k = self.rush;
+        let mut k = self.live;
         if self.mods.has(Mod::Wave) {
             k *= 1.0 + 0.35 * (std::f64::consts::TAU * time / 4000.0).sin();
         }
@@ -297,7 +309,7 @@ impl Scroll<'_> {
 
     /// The smallest factor `factor` can give, to know how far ahead notes may still be on screen.
     fn min_factor(&self) -> f64 {
-        let mut k = 1.0;
+        let mut k = self.live.min(1.0);
         if self.mods.has(Mod::Wave) {
             k *= 0.65;
         }
@@ -309,7 +321,7 @@ impl Scroll<'_> {
 
     /// Screen x of something at map time `time` scrolling at `velocity`.
     fn x(&self, time: f64, velocity: f64) -> f32 {
-        let v = self.constant.unwrap_or(velocity) * self.speed * self.factor(time);
+        let v = velocity * self.speed * self.factor(time);
         // Pulse / Stutter shift the time of far notes; near the drum the shift fades out, so
         // a note always reaches it exactly on time.
         let near = ((time - self.t) * v / self.lane).clamp(0.0, 1.0);
@@ -320,6 +332,13 @@ impl Scroll<'_> {
             1.6 * u - 0.6 * u * u
         } else if self.mods.has(Mod::Brake) {
             0.4 * u + 0.6 * u * u
+        } else {
+            u
+        };
+        let u = if self.mods.has(Mod::Step) && u > 0.0 {
+            // Far away a note snaps to sixths of the lane; near the drum it glides.
+            let q = ((u * 6.0).floor() + 0.5) / 6.0;
+            u + (q - u) * smooth(0.2, 0.4, u)
         } else {
             u
         };
@@ -339,6 +358,175 @@ fn beat_warp(mods: Mods, cp: &beatmap::ControlPoint, t: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+/// 0 below `e0`, 1 above `e1`, smoothly in between.
+fn smooth(e0: f64, e1: f64, x: f64) -> f64 {
+    let x = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// The bar map time `t` is in: its barline's index, start and length (the last bar is
+/// `fallback` long). None before the first barline.
+fn bar_at(bars: &[beatmap::Barline], t: f64, fallback: f64) -> Option<(usize, f64, f64)> {
+    let i = bars.partition_point(|b| b.time <= t + 1.0).checked_sub(1)?;
+    let start = bars[i].time;
+    let len = bars.get(i + 1).map_or(fallback, |b| b.time - start).max(1.0);
+    Some((i, start, len))
+}
+
+/// Flip Flop's horizontal scale at map time `t`: 1, or -1 on every other 8-bar section, turning
+/// over (through 0) in the first 350 ms of each.
+fn flip_flop(bars: &[beatmap::Barline], t: f64) -> f32 {
+    let Some((i, ..)) = bar_at(bars, t, 1.0) else { return 1.0 };
+    let section = i / 8;
+    if section == 0 {
+        return 1.0;
+    }
+    let side = if section % 2 == 1 { -1.0 } else { 1.0 };
+    let turn = ((t - bars[section * 8].time) / 350.0).clamp(0.0, 1.0);
+    (-side * (std::f64::consts::PI * turn).cos()) as f32
+}
+
+/// A fully saturated colour of hue `h` (0-1), for Rave.
+fn hue(h: f64) -> u32 {
+    let h = h.rem_euclid(1.0) * 6.0;
+    let x = ((1.0 - (h % 2.0 - 1.0).abs()) * 255.0) as u32;
+    let (r, g, b) = match h as u32 {
+        0 => (255, x, 0),
+        1 => (x, 255, 0),
+        2 => (0, 255, x),
+        3 => (0, x, 255),
+        4 => (x, 0, 255),
+        _ => (255, 0, x),
+    };
+    r << 16 | g << 8 | b
+}
+
+/// Roulette's 4-bar sections: where each starts (map ms) and its speed. The first is 1x; no
+/// two in a row are alike.
+fn roulette_sections(map: &Beatmap) -> Vec<(f64, f64)> {
+    const SPEEDS: [f64; 5] = [0.5, 0.75, 1.0, 1.5, 2.0];
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for b in map.barlines.iter().step_by(4) {
+        let mut k = (hash01(b.time + 0.4) * SPEEDS.len() as f64) as usize % SPEEDS.len();
+        let prev = out.last().map_or(1.0, |s| s.1);
+        if out.is_empty() {
+            k = 2;
+        } else if SPEEDS[k] == prev {
+            k = (k + 1) % SPEEDS.len();
+        }
+        out.push((b.time, SPEEDS[k]));
+    }
+    out
+}
+
+/// The speed most notes have: Constant Speed's, and what Anti-SV / Hyper SV bend around.
+fn main_velocity(map: &Beatmap) -> f64 {
+    // Counted to 4 decimals; the first exact velocity of the most common one is the answer.
+    let mut counts: std::collections::HashMap<i64, (usize, f64)> = std::collections::HashMap::new();
+    for n in &map.notes {
+        counts.entry((n.velocity * 10_000.0).round() as i64).or_insert((0, n.velocity)).0 += 1;
+    }
+    counts.into_iter().max_by_key(|&(v, (c, _))| (c, v)).map(|(_, (_, v))| v).unwrap_or(1.0).max(0.01)
+}
+
+/// The scroll speed mods that only depend on the map change the notes' (and barlines') own
+/// velocities, so drawing needs nothing more for them.
+fn bake_speeds(map: &mut Beatmap, mods: Mods) {
+    let main = main_velocity(map);
+    let first = map.notes.first().map(|n| n.time).unwrap_or(0.0);
+    let end = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
+    let sections = roulette_sections(map);
+    let bars = map.barlines.clone();
+    let cps = map.control_points.clone();
+    // By map time, for notes and barlines alike.
+    let at = |v: f64, t: f64| -> f64 {
+        let mut v = if mods.has(Mod::ConstantSpeed) { main } else { v };
+        if mods.has(Mod::AntiSv) {
+            v = (main * main / v).clamp(main / 10.0, main * 10.0);
+        }
+        if mods.has(Mod::HyperSv) {
+            v = (v * v / main).clamp(main / 10.0, main * 10.0);
+        }
+        let cp = beatmap::control_point_at(&cps, t);
+        if mods.has(Mod::Crescendo) {
+            v *= 0.8 + 0.8 * ((t - first) / (end - first).max(1.0)).clamp(0.0, 1.0);
+        }
+        if mods.has(Mod::Drop) && cp.kiai {
+            v *= 1.4;
+        }
+        if mods.has(Mod::Gearbox) {
+            if let Some((_, start, _)) = bar_at(&bars, t, 1.0) {
+                v *= 1.0 + 0.15 * ((t - start) / cp.beat_length + 0.01).floor().clamp(0.0, 7.0);
+            }
+        }
+        if mods.has(Mod::Roulette) {
+            let i = sections.partition_point(|s| s.0 <= t + 1.0);
+            v *= i.checked_sub(1).map_or(1.0, |i| sections[i].1);
+        }
+        if mods.has(Mod::Swing) {
+            v *= 1.0 + 0.15 * (std::f64::consts::TAU * cp.beat_phase(t)).cos();
+        }
+        v
+    };
+    for b in &mut map.barlines {
+        b.velocity = at(b.velocity, b.time);
+    }
+    for n in &mut map.notes {
+        n.velocity = at(n.velocity, n.time);
+    }
+    // Per note: dons and kats only.
+    let hits: Vec<usize> = (0..map.notes.len()).filter(|&i| matches!(map.notes[i].kind, Kind::Don | Kind::Kat)).collect();
+    // Even: the closer a note is to its neighbours, the faster, so they end up evenly spaced.
+    let gaps: Vec<f64> = (0..hits.len())
+        .map(|k| {
+            let prev = k.checked_sub(1).map(|j| map.notes[hits[k]].time - map.notes[hits[j]].time);
+            let next = hits.get(k + 1).map(|&j| map.notes[j].time - map.notes[hits[k]].time);
+            match (prev, next) {
+                (Some(a), Some(b)) => a.min(b),
+                (a, b) => a.or(b).unwrap_or(250.0),
+            }
+            .clamp(15.0, 4000.0)
+        })
+        .collect();
+    let typical = {
+        let mut g = gaps.clone();
+        g.sort_by(f64::total_cmp);
+        g.get(g.len() / 2).copied().unwrap_or(250.0)
+    };
+    for (k, &i) in hits.iter().enumerate() {
+        let n = &mut map.notes[i];
+        if mods.has(Mod::Split) {
+            n.velocity *= if n.kind == Kind::Don { 1.2 } else { 0.85 };
+        }
+        if mods.has(Mod::Heavy) && n.big {
+            n.velocity *= 0.7;
+        }
+        if mods.has(Mod::Leapfrog) {
+            n.velocity *= if k % 2 == 0 { 1.25 } else { 0.8 };
+        }
+        if mods.has(Mod::Even) {
+            n.velocity *= (typical / gaps[k]).clamp(0.4, 2.5);
+        }
+    }
+}
+
+/// Decoy's fake notes: in about half the gaps between notes, one halfway, of a random colour.
+fn decoys(map: &Beatmap) -> Vec<beatmap::Note> {
+    let hits: Vec<&beatmap::Note> = map.notes.iter().filter(|n| matches!(n.kind, Kind::Don | Kind::Kat)).collect();
+    hits.windows(2)
+        .filter(|p| p[1].time - p[0].time >= 120.0 && hash01(p[0].time + 0.25) < 0.5)
+        .map(|p| {
+            let mut n = p[0].clone();
+            n.time = (p[0].time + p[1].time) / 2.0;
+            n.end_time = n.time;
+            n.kind = if hash01(n.time + 0.75) < 0.5 { Kind::Don } else { Kind::Kat };
+            n.big = hash01(n.time + 0.6) < 0.12;
+            n.velocity *= 0.9 + 0.2 * hash01(n.time + 0.1);
+            n
+        })
+        .collect()
 }
 
 /// A repeatable pseudo-random 0-1 for a map time (SV Chaos, Random).
@@ -390,6 +578,7 @@ fn apply_to_map(map: &mut Beatmap, mods: Mods) {
             n.big = true;
         }
     }
+    bake_speeds(map, mods);
 }
 
 impl Game {
@@ -429,15 +618,21 @@ impl Game {
         let hp_drain = mods.hp(map.meta.hp);
         let hp_hit = 1.0 / (3.0 * hits * beatmap::difficulty_range(hp_drain, 0.5, 0.75, 0.98));
         let hp_miss = beatmap::difficulty_range(hp_drain, 0.0018, 0.0075, 0.0120);
-        // Constant Speed: the speed most notes have.
-        let constant_velocity = mods.has(Mod::ConstantSpeed).then(|| {
-            let mut counts: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
-            for n in &map.notes {
-                *counts.entry((n.velocity * 10_000.0).round() as i64).or_default() += 1;
+        let mut kiai_starts = Vec::new();
+        let mut was_kiai = false;
+        for cp in &map.control_points {
+            if cp.kiai && !was_kiai {
+                kiai_starts.push((cp.time, cp.beat_length));
             }
-            counts.into_iter().max_by_key(|&(v, c)| (c, v)).map(|(v, _)| v as f64 / 10_000.0).unwrap_or(min_velocity)
-        });
-        let min_velocity = constant_velocity.unwrap_or(min_velocity);
+            was_kiai = cp.kiai;
+        }
+        let sections = if mods.has(Mod::Roulette) {
+            roulette_sections(&map).into_iter().zip(map.barlines.iter().step_by(4)).map(|((t, k), b)| (t, k, b.velocity)).collect()
+        } else {
+            Vec::new()
+        };
+        let decoys = if mods.has(Mod::Decoy) { decoys(&map) } else { Vec::new() };
+        let min_velocity = decoys.iter().map(|n| n.velocity).fold(min_velocity, f64::min);
         Game {
             windows: Windows::new(mods.od(map.meta.od)),
             map,
@@ -490,11 +685,14 @@ impl Game {
             hp_miss,
             hp_exempt: false,
             failed: None,
-            constant_velocity,
             last_hand: None,
             rush: 1.0,
             rush_t: f64::NEG_INFINITY,
             quake_at: f64::NEG_INFINITY,
+            misses: VecDeque::new(),
+            kiai_starts,
+            sections,
+            decoys,
         }
     }
 
@@ -761,6 +959,7 @@ impl Game {
         self.combo_break = None;
         self.hp = 0.0;
         self.failed = None;
+        self.misses.clear();
         if let Some((_, next)) = &mut self.replay {
             *next = 0;
         }
@@ -877,6 +1076,10 @@ impl Game {
             }
             Judge::Miss => {
                 s.miss += 1;
+                self.misses.push_back(t);
+                if self.misses.len() > 32 {
+                    self.misses.pop_front();
+                }
                 // Like osu!, losing a combo of 20 or more gets the combo break sound.
                 if s.combo >= 20 {
                     self.combo_break = Some(t);
@@ -1082,9 +1285,72 @@ impl Game {
         None
     }
 
+    /// Panic / Mercy's speed factor at map time `t`: each recent miss fades in over 250 ms and
+    /// out over its span.
+    fn miss_factor(&self, t: f64) -> f64 {
+        let weight = |span: f64| -> f64 {
+            self.misses.iter().map(|&at| t - at).filter(|age| (0.0..span).contains(age)).map(|age| (age / 250.0).min(1.0) * (1.0 - age / span)).sum()
+        };
+        if self.mods.has(Mod::Panic) {
+            (1.0 + 0.15 * weight(4000.0)).min(2.0)
+        } else if self.mods.has(Mod::Mercy) {
+            1.0 / (1.0 + 0.25 * weight(3000.0)).min(2.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// The warp (see `Scroll::warp`) of Recoil, Drop, Lag Spike and Moonwalk at map time `t`.
+    fn extra_warp(&self, t: f64, cp: &beatmap::ControlPoint) -> f64 {
+        let mods = self.mods;
+        let mut warp = 0.0;
+        if mods.has(Mod::Recoil) {
+            // Each hit of the last 350 ms pushes far notes back by up to 45 ms.
+            let push: f64 = self
+                .recent_errors
+                .iter()
+                .map(|&(_, at, _)| t - at)
+                .filter(|age| (0.0..350.0).contains(age))
+                .map(|age| (age / 40.0).min(1.0) * 45.0 * (1.0 - age / 350.0).powi(2))
+                .sum();
+            warp -= push.min(180.0);
+        }
+        if mods.has(Mod::Drop) {
+            // Two beats before a kiai: held still for one and a half, then a rush to catch up.
+            let i = self.kiai_starts.partition_point(|&(k, _)| k <= t);
+            if let Some(&(k, b)) = self.kiai_starts.get(i) {
+                let s = t - (k - 2.0 * b);
+                if s >= 0.0 {
+                    warp += if s < 1.5 * b { s } else { 1.5 * b * (1.0 - smooth(0.0, 1.0, (s - 1.5 * b) / (0.5 * b))) };
+                }
+            }
+        }
+        if mods.has(Mod::LagSpike) {
+            // In 40% of 1.5 s slots, one freeze of 150-370 ms, then a jump to where notes should be.
+            let slot = (t / 1500.0).floor();
+            if hash01(slot * 1.37 + 0.31) < 0.4 {
+                let at = slot * 1500.0 + 200.0 + 900.0 * hash01(slot * 2.11 + 0.17);
+                let len = 150.0 + 220.0 * hash01(slot * 3.7 + 0.53);
+                if (at..at + len).contains(&t) {
+                    warp += t - at;
+                }
+            }
+        }
+        if mods.has(Mod::Moonwalk) {
+            // The first eighth of a bar the notes back away, the rest of it they make up for it.
+            if let Some((_, start, len)) = bar_at(&self.map.barlines, t, cp.beat_length * 4.0) {
+                let back = 0.125 * len;
+                let s = t - start;
+                warp -= if s < back { 2.0 * s } else { 2.0 * back * (1.0 - (s - back) / (len - back)).max(0.0) };
+            }
+        }
+        warp
+    }
+
     /// Lane, barlines, notes, drum, combo and judgements, laid out as if `c` were the window (the
     /// caller maps it into the playfield area). The scroll and visual mods apply here.
     pub fn draw_playfield(&mut self, c: &mut Canvas, scroll_speed: f64) {
+        use std::f32::consts::{PI, TAU};
         let t = self.time;
         let w = c.width;
         let start_shape = c.shapes.len();
@@ -1092,6 +1358,8 @@ impl Game {
         let lane_top = LANE_Y - LANE_H / 2.0;
         let cp = beatmap::control_point_at(&self.map.control_points, t);
         let beat_phase = cp.beat_phase(t) as f32;
+        // Beats since the red line, for the mods that move with the beat.
+        let beats = ((t - cp.beat_origin) / cp.beat_length) as f32;
         let pulse = (1.0 - beat_phase).powi(3);
         let kiai = cp.kiai && self.kiai_effects;
         let in_kiai = cp.kiai;
@@ -1101,23 +1369,29 @@ impl Game {
         let dt = (t - self.rush_t).clamp(0.0, 1000.0);
         self.rush += (rush_target - self.rush) * (dt / 250.0).min(1.0);
         self.rush_t = t;
-        let warp = beat_warp(mods, cp, t);
+        let warp = beat_warp(mods, cp, t) + self.extra_warp(t, cp);
+        // Mania and Spin have less room for the lane: notes cover it in the usual time.
+        let lane_len = if mods.has(Mod::Mania) {
+            MANIA_LANE
+        } else if mods.has(Mod::Spin) {
+            SPIN_LANE
+        } else {
+            w - HIT_X
+        };
         let scroll = Scroll {
             t,
-            speed: osu_speed_scale(w) * scroll_speed * mods.scroll(),
-            lane: (w - HIT_X) as f64,
+            speed: osu_speed_scale(w) * scroll_speed * mods.scroll() * (lane_len / (w - HIT_X)) as f64,
+            lane: lane_len as f64,
             mods,
-            constant: self.constant_velocity,
             first: self.first_note,
             end: self.end_time,
             cps: &self.map.control_points,
             warp,
-            rush: self.rush,
+            live: self.rush * self.miss_factor(t),
         };
         let x_of = |time: f64, vel: f64| scroll.x(time, vel);
-        let lookahead = ((w - HIT_X + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs()).min(30_000.0);
+        let lookahead = ((lane_len + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs()).min(30_000.0);
         // How visible an approaching note at `x` is under the visual mods.
-        let lane_len = w - HIT_X;
         let memory_over = mods.has(Mod::Memory) && t > self.first_note + 15_000.0;
         let note_alpha = |x: f32| -> f32 {
             let u = (x - HIT_X) / lane_len;
@@ -1137,16 +1411,75 @@ impl Game {
             }
             a
         };
+        // Note paths: where a note at lane position `x` (hit at map time `time`, `k`th drawn)
+        // is drawn instead, how big and how squished. Nothing changes at the drum.
+        let path = |x: f32, time: f64, kat: bool, k: usize| -> (f32, f32, f32, f32) {
+            let u = ((x - HIT_X) / lane_len).max(0.0);
+            let f = smooth(0.0, 0.3, u as f64) as f32;
+            let ahead = ((time - t) / cp.beat_length) as f32;
+            let (mut px, mut py, mut size, mut squish) = (x, LANE_Y, 1.0f32, 1.0f32);
+            if mods.has(Mod::Snake) {
+                // The wave jolts forward on each beat.
+                let jolt = beats.floor() + 1.0 - (1.0 - beat_phase).powi(3);
+                py += 30.0 * f * (0.8 + 0.4 * pulse) * (TAU * 1.3 * u - PI * jolt).sin();
+            }
+            if mods.has(Mod::Bounce) {
+                py -= 56.0 * f * (PI * ahead).sin().abs();
+            }
+            if mods.has(Mod::Orbit) {
+                px += 36.0 * f * (PI * ahead).cos();
+                py += 36.0 * f * (PI * ahead).sin();
+            }
+            if mods.has(Mod::Fork) {
+                py += if kat { 44.0 } else { -44.0 } * smooth(0.03, 0.45, u as f64) as f32;
+            }
+            if mods.has(Mod::Meteor) {
+                py -= 320.0 * u * u;
+            }
+            if mods.has(Mod::Depth) {
+                size *= 1.0 - 0.6 * u.min(1.0);
+                py -= 46.0 * u.min(1.2);
+            }
+            if mods.has(Mod::Pump) {
+                size *= 1.0 + 0.22 * pulse;
+            }
+            if mods.has(Mod::Jelly) {
+                squish = 1.0 + 0.3 * pulse * if k % 2 == 0 { 1.0 } else { -1.0 };
+            }
+            (px, py, size, squish)
+        };
+        // A don or kat on its path.
+        let draw_hit = |c: &mut Canvas, x: f32, n: &beatmap::Note, k: usize, col: u32, a: f32| {
+            let (px, py, size, squish) = path(x, n.time, n.kind == Kind::Kat, k);
+            let r = if n.big { BIG_R } else { NOTE_R } * size;
+            let first = c.shapes.len();
+            if !skin_note(c, px, py, r, n.big, col, a) {
+                c.circle(px, py, r + 2.0, rgba(0x000000, 0.35 * a), rgba(0x000000, 0.0), 0.0);
+                c.circle(px, py, r, rgba(col, a), rgba(WHITE, a), r * 0.1);
+            }
+            if squish != 1.0 {
+                c.stretch_since(first, [px, py], squish, 1.0 / squish);
+            }
+        };
         let (don, kat) = if mods.has(Mod::Colorless) { (GREY, GREY) } else { (DON, KAT) };
         // Text is drawn last, after Mirror flips the rest (letters must stay readable).
         let mut texts: Vec<(f32, f32, f32, [f32; 4], String)> = Vec::new();
 
-        // Lane.
+        // Lane. When it turns, it reaches past the screen so its ends never show.
+        let turns = mods.has(Mod::Tilt) || mods.has(Mod::Spin) || mods.has(Mod::Mania) || mods.has(Mod::BarrelRoll);
+        let (lane_x, lane_w) = if turns { (-w, 3.0 * w) } else { (0.0, w) };
         let lane_col = if kiai { rgba(0x2b2433, 1.0) } else { rgba(0x20202b, 1.0) };
-        c.rect(0.0, lane_top - 3.0, w, LANE_H + 6.0, rgba(0x3a3a4e, 1.0));
-        c.rect(0.0, lane_top, w, LANE_H, lane_col);
+        c.rect(lane_x, lane_top - 3.0, lane_w, LANE_H + 6.0, rgba(0x3a3a4e, 1.0));
+        c.rect(lane_x, lane_top, lane_w, LANE_H, lane_col);
         if kiai {
-            c.rect(PANEL_W, lane_top, w - PANEL_W, LANE_H, rgba(0xff8a3d, 0.05 + 0.06 * pulse));
+            c.rect(PANEL_W, lane_top, lane_x + lane_w - PANEL_W, LANE_H, rgba(0xff8a3d, 0.05 + 0.06 * pulse));
+        }
+        if mods.has(Mod::Rave) {
+            let col = hue(hash01(beats.floor() as f64 * 2.7 + 0.3));
+            let a = (0.07 + 0.16 * pulse) * if in_kiai { 1.6 } else { 1.0 };
+            c.rect(lane_x, lane_top - 3.0, lane_w, 3.0, rgba(col, 0.9));
+            c.rect(lane_x, lane_top + LANE_H, lane_w, 3.0, rgba(col, 0.9));
+            c.rect(PANEL_W, lane_top, lane_x + lane_w - PANEL_W, LANE_H, rgba(col, a));
         }
 
         // Barlines.
@@ -1161,6 +1494,19 @@ impl Game {
                 c.rect(x - 0.8, lane_top, 1.6, LANE_H, rgba(WHITE, 0.28));
             }
         }
+        // Roulette: where the speed changes, and to what.
+        let first_section = self.sections.partition_point(|s| s.0 < t - 3000.0);
+        for &(time, k, vel) in &self.sections[first_section..] {
+            if time - t > lookahead || self.hide_notes {
+                break;
+            }
+            let x = x_of(time, vel);
+            if x > PANEL_W && x < w + 30.0 {
+                let col = if k > 1.0 { 0xff5a3d } else if k < 1.0 { 0x4fb4ff } else { WHITE };
+                c.rect(x - 2.0, lane_top, 4.0, LANE_H, rgba(col, 0.8));
+                texts.push((x + 18.0, lane_top + 6.0, 8.0, rgba(col, 1.0), format!("x{k}")));
+            }
+        }
 
         // Hit target.
         c.circle(HIT_X, LANE_Y, BIG_R, rgba(WHITE, 0.03), rgba(WHITE, 0.12), 2.0);
@@ -1172,6 +1518,21 @@ impl Game {
             let a = (1.0 - (t - at) / 220.0).clamp(0.0, 1.0) as f32;
             if a > 0.0 && j != Judge::Miss && splashes(j) {
                 c.glow(HIT_X, LANE_Y, NOTE_R + 2.0, 26.0, rgba(j.color(), 0.55 * a));
+            }
+        }
+
+        // Decoys, under the real notes: gone before they'd have to be hit.
+        if !self.hide_notes {
+            let first = self.decoys.partition_point(|n| n.time < t);
+            for (k, n) in self.decoys.iter().enumerate().skip(first) {
+                if n.time - t > lookahead {
+                    break;
+                }
+                let x = x_of(n.time, n.velocity);
+                let a = note_alpha(x) * smooth(0.22, 0.38, ((x - HIT_X) / lane_len) as f64) as f32;
+                if a > 0.01 && x < w + BIG_R {
+                    draw_hit(c, x, n, k, if n.kind == Kind::Don { don } else { kat }, a);
+                }
             }
         }
 
@@ -1213,9 +1574,8 @@ impl Game {
                             let x = x_of(n.time, n.velocity);
                             if x > -r && x < w + r {
                                 let a = if judged.is_some() { 0.4 } else { note_alpha(x) };
-                                if a > 0.01 && !skin_note(c, x, LANE_Y, r, n.big, col, a) {
-                                    c.circle(x, LANE_Y, r + 2.0, rgba(0x000000, 0.35 * a), rgba(0x000000, 0.0), 0.0);
-                                    c.circle(x, LANE_Y, r, rgba(col, a), rgba(WHITE, a), r * 0.1);
+                                if a > 0.01 {
+                                    draw_hit(c, x, n, i, col, a);
                                 }
                             }
                         }
@@ -1252,8 +1612,10 @@ impl Game {
                         let x = x_of(n.time, n.velocity);
                         let a = note_alpha(x);
                         if x < w + r && a > 0.01 {
-                            c.circle(x, LANE_Y, r, rgba(SWELL, a), rgba(WHITE, a), r * 0.1);
-                            c.ring(x, LANE_Y, r * 0.55, rgba(WHITE, 0.8 * a), 3.0);
+                            let (px, py, size, _) = path(x, n.time, false, i);
+                            let r = r * size;
+                            c.circle(px, py, r, rgba(SWELL, a), rgba(WHITE, a), r * 0.1);
+                            c.ring(px, py, r * 0.55, rgba(WHITE, 0.8 * a), 3.0);
                         }
                     } else {
                         let progress = st.hits as f32 / n.required_hits.max(1) as f32;
@@ -1306,17 +1668,19 @@ impl Game {
             }
         }
 
+        // Whole-playfield moves: Mirror and Flip Flop turn it over, the rest move it about the
+        // hit target (`pivot`), which lands on `dest`.
         let mirror = mods.has(Mod::Mirror);
         if mirror {
             c.mirror_since(start_shape, w);
         }
-        for (x, y, size, color, text) in texts {
-            c.text_centered(if mirror { w - x } else { x }, y, size, color, &text);
+        let fx = if mods.has(Mod::FlipFlop) { flip_flop(&self.map.barlines, t) } else { 1.0 };
+        if fx != 1.0 {
+            c.squash_x_since(start_shape, w / 2.0, fx);
         }
-
-        // Whole-lane motion: Drunk sways, Earthquake shakes after big hits, Zoom pulses.
-        let mut dy = 0.0;
-        let mut dx = 0.0;
+        let flip_x = |x: f32| w / 2.0 + ((if mirror { w - x } else { x }) - w / 2.0) * fx;
+        let pivot = [flip_x(HIT_X), LANE_Y];
+        let (mut angle, mut zoom, mut dx, mut dy) = (0.0f32, 1.0f32, 0.0f32, 0.0f32);
         if mods.has(Mod::Drunk) {
             dy += 14.0 * (t / 650.0).sin() as f32;
             dx += 6.0 * (t / 1100.0).cos() as f32;
@@ -1329,10 +1693,69 @@ impl Game {
                 dy += amp * (age * 1.3).cos();
             }
         }
-        let zoom = if mods.has(Mod::Zoom) { 1.0 + 0.07 * pulse } else { 1.0 };
-        if dx != 0.0 || dy != 0.0 || zoom != 1.0 {
-            let anchor = [if mirror { w - HIT_X } else { HIT_X }, LANE_Y];
-            c.transform_since(start_shape, anchor, zoom, dx, dy);
+        if mods.has(Mod::Zoom) {
+            zoom *= 1.0 + 0.07 * pulse;
+        }
+        if mods.has(Mod::Headbang) {
+            dy += 16.0 * pulse;
+            zoom *= 1.0 + 0.025 * pulse;
+        }
+        if mods.has(Mod::Tilt) {
+            angle += 0.11 * (PI * beats).cos();
+        }
+        if mods.has(Mod::Spin) {
+            angle += TAU * (t / 24_000.0).rem_euclid(1.0) as f32;
+        }
+        if mods.has(Mod::BarrelRoll) {
+            let i = self.kiai_starts.partition_point(|&(k, _)| k <= t);
+            if let Some(&(k, b)) = i.checked_sub(1).and_then(|i| self.kiai_starts.get(i)) {
+                if t - k < 2.0 * b {
+                    angle += TAU * smooth(0.0, 2.0 * b, t - k) as f32;
+                }
+            }
+        }
+        let beat_no = beats.floor() as f64;
+        let glitch = mods.has(Mod::Glitch) && beat_phase < 0.18 && hash01(beat_no * 3.1 + 0.7) < 0.35;
+        if glitch {
+            dx += (hash01(beat_no * 5.3 + 0.1) as f32 - 0.5) * 44.0;
+            dy += (hash01(beat_no * 6.1 + 0.2) as f32 - 0.5) * 12.0;
+        }
+        let mut dest = pivot;
+        if mods.has(Mod::Spin) {
+            dest = [w / 2.0, 240.0];
+        }
+        if mods.has(Mod::Mania) {
+            // Upright, the drum at the bottom (clear of the hit error meter).
+            angle -= PI / 2.0;
+            zoom *= 0.85;
+            dest = [w / 2.0, 290.0];
+        }
+        let dest = [dest[0] + dx, dest[1] + dy];
+        if angle != 0.0 || zoom != 1.0 || dest != pivot {
+            c.rotate_since(start_shape, pivot, angle, zoom, dest);
+        }
+        // Texts go where the playfield took them, but stay upright and readable.
+        let (sin, cos) = angle.sin_cos();
+        for (x, y, size, color, text) in texts {
+            let (rx, ry) = ((flip_x(x) - pivot[0]) * zoom, (y + size / 2.0 - pivot[1]) * zoom);
+            let (x, y) = (dest[0] + rx * cos - ry * sin, dest[1] + rx * sin + ry * cos);
+            c.text_centered(x, y - size * zoom / 2.0, size * zoom, color, &text);
+        }
+        // Glitch: colour-split ghosts of everything but the big backdrops.
+        if glitch {
+            let end = c.shapes.len();
+            for (tint, off) in [([1.0, 0.15, 0.3], -5.0), ([0.1, 0.9, 1.0], 5.0)] {
+                for i in start_shape..end {
+                    let mut sh = c.shapes[i];
+                    if sh.half[0] > 150.0 {
+                        continue;
+                    }
+                    sh.center[0] += off;
+                    sh.fill = [tint[0], tint[1], tint[2], sh.fill[3] * 0.3];
+                    sh.border = [tint[0], tint[1], tint[2], sh.border[3] * 0.3];
+                    c.shapes.push(sh);
+                }
+            }
         }
     }
 
@@ -1575,7 +1998,7 @@ mod tests {
             let mut t = 6000.0;
             while t < 10_000.0 {
                 let warp = beat_warp(mods, beatmap::control_point_at(&cps, t), t);
-                let s = Scroll { t, speed: osu_speed_scale(640.0 + HIT_X), lane: 640.0, mods, constant: None, first: 0.0, end: 20_000.0, cps: &cps, warp, rush: 1.0 };
+                let s = Scroll { t, speed: osu_speed_scale(640.0 + HIT_X), lane: 640.0, mods, first: 0.0, end: 20_000.0, cps: &cps, warp, live: 1.0 };
                 let x = s.x(10_000.0, 0.5);
                 assert!(x <= last + 1e-3, "{mods:?} at {t}: {last} -> {x}");
                 last = x;
@@ -1812,5 +2235,102 @@ mod tests {
         let h = g.offset_suggestion(30.0).unwrap();
         assert_eq!(h.estimate.suggested_offset, 30.0);
         assert!(!h.significant);
+    }
+    /// The calibration map with a kiai from 8 s, for the mods that wait for one.
+    fn kiai_game(mods: &str) -> Game {
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let cp = map.control_points[0];
+        map.control_points.push(beatmap::ControlPoint { time: 8000.0, kiai: true, ..cp });
+        Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse(mods))
+    }
+
+    #[test]
+    fn every_mod_draws_a_sane_playfield_and_judges_the_same() {
+        let all: Vec<&str> = crate::mods::ALL.iter().map(|m| m.acronym()).collect();
+        let mut sets: Vec<String> = all.iter().map(|a| a.to_string()).collect();
+        // And every one at once, as far as conflicts let them.
+        sets.push(all.join(","));
+        for mods in &sets {
+            let mut g = kiai_game(mods);
+            let mut c = Canvas::default();
+            for k in 0..400 {
+                g.time = -2000.0 + k as f64 * 87.3;
+                g.press_at(k % 4, g.time, None);
+                c.clear(853.3);
+                g.draw_playfield(&mut c, 1.0);
+                for sh in &c.shapes {
+                    let v = [sh.center[0], sh.center[1], sh.half[0], sh.half[1], sh.angle];
+                    assert!(v.iter().all(|x| x.is_finite()), "{mods} at {}: {v:?}", g.time);
+                }
+            }
+            // Judging doesn't care how notes are drawn.
+            if ["AT", "HA", "SW", "RD"].contains(&mods.as_str()) || mods.contains(',') {
+                continue;
+            }
+            let mut g = kiai_game(mods);
+            play_all(&mut g, 0.0);
+            assert_eq!(g.stats.great, 64, "{mods}");
+        }
+    }
+
+    #[test]
+    fn baked_speeds_bend_the_maps_own() {
+        let v = |mods: &str| kiai_game(mods).map.notes.iter().map(|n| n.velocity).collect::<Vec<_>>();
+        let plain = v("");
+        // One speed throughout: Anti-SV and Hyper SV leave it, Crescendo ramps it up.
+        assert_eq!(v("AS"), plain);
+        assert_eq!(v("HS"), plain);
+        let c = v("CC");
+        assert!(c[0] < plain[0] && c[63] > plain[63] && c.windows(2).all(|p| p[1] >= p[0]));
+        // Leapfrog alternates; Drop speeds up the kiai.
+        let l = v("LF");
+        assert!(l[0] > plain[0] && l[1] < plain[1]);
+        let d = v("DR");
+        assert!(d[0] == plain[0] && d[63] > plain[63]);
+        // Roulette changes every 4 bars, and never to the same speed.
+        let g = kiai_game("RL");
+        assert!(g.sections.len() > 2 && g.sections[0].1 == 1.0 && g.sections.windows(2).all(|p| p[0].1 != p[1].1));
+        // Even: evenly spaced notes keep their speed.
+        assert_eq!(v("EV"), plain);
+    }
+
+    #[test]
+    fn drop_freezes_far_notes_and_releases_them_by_the_kiai() {
+        let g = kiai_game("DR");
+        let cp = g.map.control_points[0];
+        // Held from two beats before (8000 - 1000) for a beat and a half, back to 0 at the kiai.
+        assert_eq!(g.extra_warp(6900.0, &cp), 0.0);
+        assert!((g.extra_warp(7500.0, &cp) - 500.0).abs() < 1e-9);
+        assert!(g.extra_warp(7999.0, &cp) < 1.0);
+        assert_eq!(g.extra_warp(8100.0, &cp), 0.0);
+    }
+
+    #[test]
+    fn flip_flop_turns_over_every_8_bars() {
+        let g = kiai_game("FF");
+        let bars = &g.map.barlines;
+        assert_eq!(flip_flop(bars, bars[3].time), 1.0);
+        assert_eq!(flip_flop(bars, bars[9].time), -1.0);
+        assert!(flip_flop(bars, bars[8].time + 175.0).abs() < 1e-3);
+    }
+    /// `TAIKO_MOD_SHOTS=<dir>`: a few frames of every mod as PNGs (drawn on the CPU), to look at.
+    #[test]
+    fn mod_shots() {
+        let Some(dir) = std::env::var_os("TAIKO_MOD_SHOTS") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for m in crate::mods::ALL {
+            let mut g = kiai_game(m.acronym());
+            let mut c = Canvas::default();
+            for t in [5000.0, 5200.0, 7400.0, 8300.0] {
+                g.set_time(t - 400.0);
+                g.press_at(1, t - 400.0, None);
+                g.time = t;
+                c.clear(853.3);
+                g.draw_playfield(&mut c, 1.0);
+                let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
+                crate::debug::write_png(&dir.join(format!("{}-{t}.png", m.acronym())), w, h, &rgb).unwrap();
+            }
+        }
     }
 }
