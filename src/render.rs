@@ -80,6 +80,9 @@ pub enum PresentChoice {
 }
 
 impl PresentChoice {
+    /// In the order the settings list shows them.
+    pub const ALL: [PresentChoice; 3] = [PresentChoice::Fifo, PresentChoice::Mailbox, PresentChoice::Immediate];
+
     pub fn next(self) -> Self {
         match self {
             PresentChoice::Mailbox => PresentChoice::Immediate,
@@ -1444,8 +1447,10 @@ pub enum Hit {
     SortCycle,
     CollectionPick,
     PickRow(usize),
-    /// A row of the settings skin list.
-    SkinRow(usize),
+    /// A row of a setting's list of choices.
+    ChoiceRow(usize),
+    /// Song select with no maps: choose the Songs folder.
+    SongsFolder,
     /// A settings sidebar section.
     SettingsSection(usize),
     /// The update badge: install the new build.

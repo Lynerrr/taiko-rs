@@ -63,6 +63,8 @@ pub struct Select {
     pub info_progress: String,
     /// Files read so far while the library is still being scanned.
     pub scanning: Option<usize>,
+    /// The folder dialog is open (from the button shown when there are no maps at all).
+    pub picking_folder: bool,
     /// Speed modifier shown in the header ("" at 1.0x).
     pub rate_label: String,
     /// The mods picked ("HDHR"), shown on the Mods button.
@@ -163,6 +165,7 @@ impl Select {
             picker: None,
             info_progress: String::new(),
             scanning: None,
+            picking_folder: false,
             rate_label: String::new(),
             mods_label: String::new(),
             show_converts: !has_taiko,
@@ -732,6 +735,18 @@ impl Select {
         if let Some(n) = self.scanning {
             c.text_centered(24.0 + lw / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "Scanning your Songs folder...");
             c.text_centered(24.0 + lw / 2.0, 222.0, 10.0, rgba(0x8a8aa0, 1.0), &format!("{n} files read"));
+        } else if library.is_empty() && !cfg!(target_os = "android") {
+            // Most likely osu! lives somewhere it wasn't looked for.
+            let cx = 24.0 + lw / 2.0;
+            c.text_centered(cx, 190.0, 12.0, rgba(0xc8c8d8, 1.0), "No maps found.");
+            let hint = "Show taiko-rs where your osu! Songs folder is, or get maps in DOWNLOAD.";
+            let size = Canvas::fit_size(10.0, 7.0, lw, hint);
+            c.text_centered(cx, 212.0, size, rgba(0x8a8aa0, 1.0), &Canvas::fit(size, lw, hint));
+            let label = if self.picking_folder { "Choosing in the folder dialog..." } else { "Choose Songs folder" };
+            let bw = (Canvas::text_width(9.0, label) + 32.0).min(lw);
+            c.button(cx - bw / 2.0, 234.0, bw, 26.0, label, 9.0, Hit::SongsFolder, true);
+            let later = "or press Enter. Change it later in Settings > Library.";
+            c.text_centered(cx, 268.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, lw, later));
         } else if self.visible.is_empty() {
             c.text_centered(24.0 + lw / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "No maps found.");
             let hint = if cfg!(target_os = "android") {

@@ -36,6 +36,7 @@ pub enum Item {
     NotifyRequests,
     ShowConverts,
     HiddenMaps,
+    SongsFolder,
     MasterVolume,
     MusicVolume,
     FxVolume,
@@ -59,13 +60,14 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 53] = [
+pub const ITEMS: [(&str, Item); 54] = [
+    ("LIBRARY", Item::SongsFolder),
+    ("LIBRARY", Item::ShowConverts),
+    ("LIBRARY", Item::HiddenMaps),
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::ResumeDelay),
-    ("GAMEPLAY", Item::ShowConverts),
-    ("GAMEPLAY", Item::HiddenMaps),
     ("PLAYFIELD", Item::PlayfieldArea),
     ("PLAYFIELD", Item::PlayfieldPreset),
     ("PLAYFIELD", Item::PlayfieldReset),
@@ -116,7 +118,8 @@ pub const ITEMS: [(&str, Item); 53] = [
 ];
 
 /// The sections in order, with a one-line summary for the sidebar.
-pub const SECTIONS: [(&str, &str); 9] = [
+pub const SECTIONS: [(&str, &str); 10] = [
+    ("LIBRARY", "Songs folder, converts"),
     ("GAMEPLAY", "speed, rate, resume"),
     ("PLAYFIELD", "size, position"),
     ("INPUT", "drum keys, touch layout"),
@@ -131,6 +134,21 @@ pub const SECTIONS: [(&str, &str); 9] = [
 /// First item of section `s`.
 pub fn section_start(s: usize) -> usize {
     ITEMS.iter().position(|(sec, _)| *sec == SECTIONS[s].0).unwrap_or(0)
+}
+
+/// What Enter does to a setting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// Opens a list to pick from.
+    List,
+    /// Types a value.
+    Value,
+    /// Flips it on / off.
+    Toggle,
+    /// Waits for a key to bind.
+    Key,
+    /// Does something (opens an editor, starts calibration, ...).
+    Action,
 }
 
 const KEY_LABELS: [&str; 4] = ["Left rim (kat)", "Left centre (don)", "Right centre (don)", "Right rim (kat)"];
@@ -167,6 +185,7 @@ impl Item {
             Item::NotifyPlaying => "Notify: friend playing",
             Item::ShowConverts => "Show osu!standard converts",
             Item::HiddenMaps => "Hidden maps",
+            Item::SongsFolder => "Songs folder",
             Item::MasterVolume => "Master volume",
             Item::MusicVolume => "Music volume",
             Item::FxVolume => "Hitsound volume",
@@ -191,6 +210,55 @@ impl Item {
         }
     }
 
+    pub fn kind(self) -> Kind {
+        match self {
+            Item::ScrollSpeed
+            | Item::Rate
+            | Item::Offset
+            | Item::VisualOffset
+            | Item::CalibrationBpm
+            | Item::ResumeDelay
+            | Item::MasterVolume
+            | Item::MusicVolume
+            | Item::FxVolume
+            | Item::BackgroundDim
+            | Item::FpsCap
+            | Item::AccentHue => Kind::Value,
+            Item::PlayfieldPreset
+            | Item::TouchLayout
+            | Item::AudioBuffer
+            | Item::PresentMode
+            | Item::UpdateChannel
+            | Item::Skin
+            | Item::Accent
+            | Item::SongsFolder => Kind::List,
+            Item::RateKeepPitch
+            | Item::LiveOffset
+            | Item::LiveOffsetUr
+            | Item::ShowPlayfieldSize
+            | Item::KiaiEffects
+            | Item::HideGreat
+            | Item::ChatFilter
+            | Item::MessageSound
+            | Item::NotifyPlaying
+            | Item::NotifyOnline
+            | Item::NotifyMessages
+            | Item::NotifyMentions
+            | Item::NotifyRequests
+            | Item::ShowConverts
+            | Item::MenuVsync
+            | Item::HalfResolution
+            | Item::ShowFps
+            | Item::Animations
+            | Item::Splash
+            | Item::CheckUpdates
+            | Item::Fullscreen
+            | Item::DiscordPresence => Kind::Toggle,
+            Item::Key(_) | Item::PresetKey(_) => Kind::Key,
+            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::HiddenMaps | Item::Update | Item::SkinFolder => Kind::Action,
+        }
+    }
+
     pub fn help(self) -> &'static str {
         match self {
             Item::ScrollSpeed => "How fast notes travel. Shortcut: F3 / F4.",
@@ -211,6 +279,7 @@ impl Item {
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
             Item::HiddenMaps => "Right-click a song to hide it here (files stay). Enter lists them all again.",
+            Item::SongsFolder => "The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.",
             Item::KiaiEffects => "During kiai time, tint the lane and pulse the hit target with the beat.",
             Item::HideGreat => "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",
             Item::ChatFilter => "Stars out swear words in friends' messages, the global chat and lobby chats.",
@@ -252,8 +321,10 @@ pub struct SettingsUi {
     pub binding: Option<Item>,
     /// Open resolution dropdown.
     pub dropdown: Option<Dropdown>,
-    /// Open skin list.
-    pub skins: Option<SkinPicker>,
+    /// Open list of a setting's choices.
+    pub choices: Option<Choices>,
+    /// Typing a value for a setting.
+    pub editing: Option<Edit>,
     /// The section last drawn and the animated highlight position in it.
     scroll: Cell<f32>,
     highlight: Cell<f32>,
@@ -458,25 +529,65 @@ impl Dropdown {
     }
 }
 
-/// Every installed skin in one list, so picking one isn't stepping through them all.
-pub struct SkinPicker {
-    /// Skin names, "" (built-in) first.
+/// A value being typed into a setting's row.
+pub struct Edit {
+    pub item: Item,
+    pub text: String,
+    /// Still the value it opened with: the first key typed replaces it.
+    pub fresh: bool,
+}
+
+impl Edit {
+    pub fn new(item: Item, text: String) -> Edit {
+        Edit { item, text, fresh: true }
+    }
+
+    /// Adds typed text (control characters dropped), up to `max` characters.
+    pub fn type_text(&mut self, typed: &str, max: usize) {
+        if self.fresh {
+            self.text.clear();
+            self.fresh = false;
+        }
+        for ch in typed.chars().filter(|ch| !ch.is_control()) {
+            if self.text.chars().count() < max {
+                self.text.push(ch);
+            }
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if self.fresh {
+            self.text.clear();
+            self.fresh = false;
+        } else {
+            self.text.pop();
+        }
+    }
+}
+
+/// A setting's choices in one list (skins, present modes, ...), so picking one isn't stepping
+/// through them all.
+pub struct Choices {
+    pub item: Item,
     pub names: Vec<String>,
+    /// The one in use, marked "current".
+    pub current: Option<usize>,
+    /// Top right: how many skins are installed, the folder in use, ...
+    pub note: String,
     pub cursor: usize,
 }
 
-impl SkinPicker {
-    /// Opens on the skin in use.
-    pub fn new(names: Vec<String>, current: &str) -> SkinPicker {
-        let cursor = names.iter().position(|n| n == current).unwrap_or(0);
-        SkinPicker { names, cursor }
+impl Choices {
+    /// Opens on the choice in use.
+    pub fn new(item: Item, names: Vec<String>, current: Option<usize>, note: String) -> Choices {
+        Choices { item, names, current, note, cursor: current.unwrap_or(0) }
     }
 
     pub fn move_cursor(&mut self, delta: i32) {
         self.cursor = (self.cursor as i32 + delta).clamp(0, self.names.len() as i32 - 1) as usize;
     }
 
-    pub fn draw(&self, c: &mut Canvas, current: &str) {
+    pub fn draw(&self, c: &mut Canvas) {
         const ROW: f32 = 18.0;
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.55));
@@ -485,8 +596,8 @@ impl SkinPicker {
         let bh = (n as f32 * ROW + 56.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
-        c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "Skin");
-        c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &format!("{} installed", n - 1));
+        let title_w = c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), self.item.label());
+        c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_end(7.0, bw - 38.0 - title_w, &self.note));
         let (top, view) = (by + 32.0, bh - 50.0);
         let scroll = (self.cursor as f32 * ROW - view / 2.0).clamp(0.0, (n as f32 * ROW - view).max(0.0));
         for (i, name) in self.names.iter().enumerate() {
@@ -499,11 +610,11 @@ impl SkinPicker {
             if selected || hover {
                 c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { accent() } else { 0x3a3a4e }, 1.0), 1.0);
             }
-            c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::SkinRow(i));
-            let label = if name.is_empty() { "built-in" } else { name.as_str() };
-            let room = bw - 40.0 - if name == current { Canvas::text_width(7.0, "current") + 8.0 } else { 0.0 };
-            c.text(bx + 20.0, y + 5.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &Canvas::fit(7.0, room, label));
-            if name == current {
+            c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::ChoiceRow(i));
+            let current = self.current == Some(i);
+            let room = bw - 40.0 - if current { Canvas::text_width(7.0, "current") + 8.0 } else { 0.0 };
+            c.text(bx + 20.0, y + 5.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &Canvas::fit(7.0, room, name));
+            if current {
                 c.text_right(bx + bw - 20.0, y + 5.0, 7.0, rgba(0x86E05A, 1.0), "current");
             }
         }
@@ -522,6 +633,7 @@ impl SettingsUi {
 
     pub fn move_cursor(&mut self, delta: i32) {
         self.cursor = (self.cursor as i32 + delta).clamp(0, ITEMS.len() as i32 - 1) as usize;
+        self.editing = None;
     }
 
     /// Section of the selected item.
@@ -577,6 +689,20 @@ impl SettingsUi {
             c.text(cx + 12.0, y + 9.5, 8.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
             // The value gets what the label leaves, and is cut short past that.
             let room = col - 36.0 - Canvas::text_width(8.0, item.label());
+            if let Some(edit) = self.editing.as_ref().filter(|e| selected && e.item == *item) {
+                // A text box in place of the value; the old value shows selected until typed over.
+                let text = Canvas::fit_end(8.0, room - 24.0, &edit.text);
+                let tw = Canvas::text_width(8.0, &text);
+                let bw = (tw + 24.0).max(90.0).min(room);
+                let right = cx + col - 12.0;
+                c.round_rect(right + 6.0 - bw, y + 4.0, bw, ROW - 12.0, 4.0, rgba(0x15151d, 1.0), rgba(0xFFD34D, 1.0), 1.0);
+                if edit.fresh && !text.is_empty() {
+                    c.rect(right - 7.0 - tw, y + 7.0, tw + 2.0, ROW - 18.0, rgba(accent(), 0.45));
+                }
+                c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
+                c.text(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), "_");
+                continue;
+            }
             let v = if selected && self.binding.is_some() {
                 "press a key...".to_string()
             } else if selected && !matches!(item, Item::Key(_) | Item::PresetKey(_)) {

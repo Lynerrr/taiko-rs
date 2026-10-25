@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 use crate::beatmap::{self, Meta};
 
@@ -38,6 +38,75 @@ pub fn file_stats(path: &Path) -> (u64, u64) {
     let Ok(md) = std::fs::metadata(path) else { return (0, 0) };
     let modified = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
     (md.len(), modified)
+}
+
+/// The Songs folder picked in settings (None = look in the usual places).
+static SONGS_FOLDER: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+pub fn set_songs_folder(dir: Option<PathBuf>) {
+    *SONGS_FOLDER.write().unwrap_or_else(|e| e.into_inner()) = dir;
+}
+
+/// The Songs folders to scan: the one picked in settings, else the osu! installs found.
+pub fn song_dirs() -> Vec<PathBuf> {
+    match SONGS_FOLDER.read().unwrap_or_else(|e| e.into_inner()).clone() {
+        Some(dir) => vec![dir],
+        None => default_song_dirs(),
+    }
+}
+
+/// The Songs folder meant by a picked folder: an osu! install's own when that is what was
+/// picked.
+pub fn songs_folder_in(dir: &Path) -> PathBuf {
+    let inner = dir.join("Songs");
+    if inner.is_dir() { inner } else { dir.to_path_buf() }
+}
+
+/// Asks for a folder with the system's folder dialog, starting in `start`. Blocks until it
+/// closes: Ok(None) when cancelled, Err when there is no dialog to show.
+pub fn pick_folder(start: &Path) -> Result<Option<PathBuf>, String> {
+    use std::process::Command;
+    const TITLE: &str = "Choose your osu! Songs folder";
+    #[cfg_attr(target_os = "android", allow(unused_mut))]
+    let mut tries: Vec<Command> = Vec::new();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let start = start.display().to_string().replace('\'', "''");
+        let script = format!(
+            "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; \
+             $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = '{TITLE}'; $d.SelectedPath = '{start}'; \
+             $top = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true}}; \
+             if ($d.ShowDialog($top) -eq 'OK') {{ [Console]::Out.Write($d.SelectedPath) }}"
+        );
+        let mut ps = Command::new("powershell");
+        // No console window flashing up behind the dialog.
+        ps.args(["-NoProfile", "-STA", "-Command", &script]).creation_flags(0x0800_0000);
+        tries.push(ps);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut osa = Command::new("osascript");
+        osa.args(["-e", &format!("POSIX path of (choose folder with prompt \"{TITLE}\")")]);
+        tries.push(osa);
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
+    {
+        let mut zenity = Command::new("zenity");
+        zenity.args(["--file-selection", "--directory", &format!("--title={TITLE}")]).arg(format!("--filename={}/", start.display()));
+        let mut kdialog = Command::new("kdialog");
+        kdialog.arg("--getexistingdirectory").arg(start).args(["--title", TITLE]);
+        // KDE's own dialog on KDE, GNOME's elsewhere.
+        let kde = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.to_ascii_uppercase().contains("KDE"));
+        tries.extend(if kde { [kdialog, zenity] } else { [zenity, kdialog] });
+    }
+    let _ = start;
+    for mut cmd in tries {
+        let Ok(out) = cmd.stderr(std::process::Stdio::null()).output() else { continue };
+        let path = String::from_utf8_lossy(&out.stdout).trim_end_matches(['\r', '\n']).to_string();
+        return Ok((out.status.success() && !path.is_empty()).then(|| PathBuf::from(path)));
+    }
+    Err("no folder dialog to show".into())
 }
 
 /// Default osu! stable install locations that have a Songs folder.

@@ -22,7 +22,7 @@ pub fn own_dir() -> Option<PathBuf> {
 
 /// Folders holding skins: osu!'s next to each Songs folder it has, then taiko-rs's own.
 fn skin_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = crate::library::default_song_dirs().iter().filter_map(|s| Some(s.parent()?.join("Skins"))).collect();
+    let mut dirs: Vec<PathBuf> = crate::library::song_dirs().iter().filter_map(|s| Some(s.parent()?.join("Skins"))).collect();
     dirs.extend(own_dir());
     dirs.retain(|d| d.is_dir());
     dirs.dedup();

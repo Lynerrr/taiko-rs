@@ -20,6 +20,8 @@ mod game;
 mod layout;
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod settings_tests;
 mod library;
 mod logo;
 mod mapinfo;
@@ -60,7 +62,7 @@ use layout::{Area, Grip};
 use winit::window::CursorIcon;
 use library::Entry;
 use render::{accent, rgba, themed, Canvas, PresentChoice, Renderer};
-use settings::{Dropdown, Item, PresetAction, SettingsUi};
+use settings::{Choices, Dropdown, Edit, Item, Kind, PresetAction, SettingsUi};
 use mods::Mods;
 use ui::{Results, Select, SelectAction};
 
@@ -322,6 +324,9 @@ struct State {
     presence_at: Option<Instant>,
     /// Background library scan: result channel and files-read counter.
     scan: Option<(Receiver<Vec<Entry>>, Arc<AtomicUsize>)>,
+    /// The Songs folder dialog while it is open: the folder picked (None = cancelled), or why
+    /// there is no dialog.
+    folder_pick: Option<Receiver<Result<Option<PathBuf>, String>>>,
     /// A single .osu was given on the command line: play it once the scan finishes.
     play_when_scanned: bool,
     /// Mouse: fractional wheel notches (touchpads), left-button drag of the playfield, window
@@ -611,6 +616,63 @@ fn size_char(code: KeyCode) -> Option<char> {
 }
 
 const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
+
+/// A typed setting value as a number: units after it ("ms", "%", "x") are fine, a comma works
+/// as the decimal point, and "off" / "unlimited" are 0.
+fn parse_number(text: &str) -> Option<f64> {
+    let t = text.trim().to_ascii_lowercase();
+    if ["off", "unlimited", "none"].contains(&t.as_str()) {
+        return Some(0.0);
+    }
+    let num: String = t.chars().take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '+' | '-')).map(|c| if c == ',' { '.' } else { c }).collect();
+    num.parse().ok().filter(|n: &f64| n.is_finite())
+}
+
+/// The clipboard's text, from the system's own tool (there is no clipboard library here).
+fn paste() -> Option<String> {
+    use std::process::{Command, Stdio};
+    let tries: &[(&str, &[&str])] = if cfg!(windows) {
+        &[("powershell", &["-NoProfile", "-Command", "Get-Clipboard -Raw"])]
+    } else if cfg!(target_os = "macos") {
+        &[("pbpaste", &[])]
+    } else {
+        &[("wl-paste", &["--no-newline"]), ("xclip", &["-o", "-selection", "clipboard"]), ("xsel", &["-ob"])]
+    };
+    tries.iter().find_map(|(cmd, args)| {
+        let mut c = Command::new(cmd);
+        c.args(*args).stdin(Stdio::null()).stderr(Stdio::null());
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000);
+        let out = c.output().ok().filter(|o| o.status.success())?;
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    })
+}
+
+/// What to scan without arguments: the Songs folder (picked in settings, else osu!'s), plus the
+/// config's extra `songs =` lines.
+fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
+    let mut inputs = library::song_dirs();
+    inputs.extend(cfg.songs.iter().cloned());
+    inputs
+}
+
+/// Scans `inputs` on a background thread so the window appears at once, even with a huge
+/// library.
+fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Vec<Entry>>, Arc<AtomicUsize>) {
+    let found = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = mpsc::channel();
+    let counter = found.clone();
+    std::thread::Builder::new()
+        .name("library".into())
+        .spawn(move || {
+            let started = Instant::now();
+            let library = library::scan(&inputs, &counter);
+            eprintln!("scanned {} files in {:.0} ms", counter.load(Ordering::Relaxed), started.elapsed().as_secs_f64() * 1000.0);
+            let _ = tx.send(library);
+        })
+        .expect("spawn library scan");
+    (rx, found)
+}
 
 impl State {
     fn toast(&mut self, text: String) {
@@ -1063,7 +1125,8 @@ impl State {
         let prev = std::mem::replace(&mut self.scene, Scene::Select);
         self.scene = Scene::Settings { prev: Box::new(prev) };
         self.settings_ui.binding = None;
-        self.settings_ui.skins = None;
+        self.settings_ui.choices = None;
+        self.settings_ui.editing = None;
     }
 
     fn close_settings(&mut self) {
@@ -1121,6 +1184,11 @@ impl State {
             Item::NotifyRequests => on(c.notify_requests),
             Item::ShowConverts => on(self.select.show_converts),
             Item::HiddenMaps => self.select.hidden.describe(),
+            Item::SongsFolder => match (&c.songs_folder, self.song_dirs.first()) {
+                (Some(dir), _) => dir.display().to_string(),
+                (None, Some(dir)) => format!("found {}", dir.display()),
+                (None, None) => "not found".into(),
+            },
             Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
             Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
             Item::FxVolume => format!("{:.0}%", c.fx_volume * 100.0),
@@ -1189,10 +1257,7 @@ impl State {
                     update::Channel::Stable => update::Channel::Dev,
                     update::Channel::Dev => update::Channel::Stable,
                 };
-                self.updater.set_channel(channel);
-                if update::BUILD.is_none() {
-                    self.toast("a local build doesn't update itself".into());
-                }
+                self.set_update_channel(channel);
                 return;
             }
             Item::Key(_) | Item::PresetKey(_) => {
@@ -1233,29 +1298,14 @@ impl State {
                 self.select.refilter(&self.library);
                 return;
             }
-            // Acts on Enter in `settings_key`.
-            Item::HiddenMaps => return,
+            // Act on Enter in `settings_key`.
+            Item::HiddenMaps | Item::SongsFolder => return,
             Item::MasterVolume => self.cfg.master_volume = (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::MusicVolume => self.cfg.music_volume = (self.cfg.music_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::FxVolume => self.cfg.fx_volume = (self.cfg.fx_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::AudioBuffer => {
-                if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
-                    self.toast("change the audio buffer from song select".into());
-                    return;
-                }
                 let i = AUDIO_BUFFERS.iter().position(|&b| b >= self.cfg.audio_buffer).unwrap_or(2);
-                self.cfg.audio_buffer = AUDIO_BUFFERS[(i as i32 + dir).clamp(0, AUDIO_BUFFERS.len() as i32 - 1) as usize];
-                // Reopen the device with the new buffer size; the old stream must close first.
-                self.audio = None;
-                self.audio = match Engine::new(self.cfg.audio_buffer) {
-                    Ok(a) => Some(a),
-                    Err(e) => {
-                        self.toast(format!("audio failed: {e}"));
-                        None
-                    }
-                };
-                self.load_skin();
-                self.refresh_status();
+                self.set_audio_buffer(AUDIO_BUFFERS[(i as i32 + dir).clamp(0, AUDIO_BUFFERS.len() as i32 - 1) as usize]);
             }
             Item::PresentMode => {
                 self.cfg.present = if dir > 0 { self.cfg.present.next() } else { self.cfg.present.next().next() };
@@ -1310,18 +1360,272 @@ impl State {
         self.cfg.save();
     }
 
-    /// Uses row `i` of the open skin list and closes it.
-    fn pick_skin(&mut self, i: usize) {
-        let Some(p) = self.settings_ui.skins.take() else { return };
-        let Some(name) = p.names.get(i) else { return };
-        if *name != self.cfg.skin {
-            self.cfg.skin = name.clone();
-            self.load_skin();
-            self.cfg.save();
+    fn set_update_channel(&mut self, channel: update::Channel) {
+        self.updater.set_channel(channel);
+        if update::BUILD.is_none() {
+            self.toast("a local build doesn't update itself".into());
         }
-        if let Some(a) = &self.audio {
-            a.sfx(audio::Sfx::Don);
+    }
+
+    /// Reopens the audio device with a buffer of `frames` (not during a song).
+    fn set_audio_buffer(&mut self, frames: u32) {
+        if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
+            self.toast("change the audio buffer from song select".into());
+            return;
         }
+        self.cfg.audio_buffer = frames;
+        // The old stream must close before the new one opens.
+        self.audio = None;
+        self.audio = match Engine::new(self.cfg.audio_buffer) {
+            Ok(a) => Some(a),
+            Err(e) => {
+                self.toast(format!("audio failed: {e}"));
+                None
+            }
+        };
+        self.load_skin();
+        self.refresh_status();
+    }
+
+    /// Opens the list of a list setting's choices.
+    fn open_choices(&mut self, item: Item) {
+        let c = &self.cfg;
+        let strings = |v: &mut dyn Iterator<Item = &str>| v.map(str::to_string).collect::<Vec<_>>();
+        let (names, current, note) = match item {
+            Item::TouchLayout => {
+                let all = config::TouchLayout::ALL;
+                (strings(&mut all.iter().map(|l| l.name())), all.iter().position(|&l| l == c.touch_layout), String::new())
+            }
+            Item::PresentMode => {
+                let all = PresentChoice::ALL;
+                (strings(&mut all.iter().map(|p| p.name())), all.iter().position(|&p| p == c.present), "during songs".into())
+            }
+            Item::AudioBuffer => {
+                let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
+                let names = AUDIO_BUFFERS.iter().map(|&b| format!("{b} frames ({:.1} ms)", b as f64 / rate as f64 * 1000.0)).collect();
+                (names, AUDIO_BUFFERS.iter().position(|&b| b == c.audio_buffer), format!("{rate} Hz"))
+            }
+            Item::UpdateChannel => {
+                let all = [update::Channel::Stable, update::Channel::Dev];
+                (strings(&mut all.iter().map(|ch| ch.name())), all.iter().position(|&ch| ch == self.updater.channel()), format!("running {}", update::BUILD_CHANNEL.name()))
+            }
+            Item::Accent => (strings(&mut render::ACCENTS.iter().map(|a| a.0)), render::ACCENTS.iter().position(|a| a.1 == c.accent), String::new()),
+            Item::Skin => {
+                let skins = skin::list();
+                let note = format!("{} installed", skins.len());
+                let names: Vec<String> = std::iter::once("built-in".to_string()).chain(skins.into_iter().map(|(n, _)| n)).collect();
+                let current = if c.skin.is_empty() { Some(0) } else { names.iter().skip(1).position(|n| *n == c.skin).map(|i| i + 1) };
+                (names, current, note)
+            }
+            Item::SongsFolder => {
+                let mut names = vec!["Type a path".to_string(), "Find osu!'s Songs folder automatically".to_string()];
+                if !cfg!(target_os = "android") {
+                    names.insert(0, "Browse...".into());
+                }
+                (names, None, self.setting_value(item))
+            }
+            _ => return,
+        };
+        self.settings_ui.choices = Some(Choices::new(item, names, current, note));
+    }
+
+    /// Uses row `i` of the open list of choices and closes it.
+    fn pick_choice(&mut self, i: usize) {
+        let Some(list) = self.settings_ui.choices.take() else { return };
+        let Some(name) = list.names.get(i) else { return };
+        match list.item {
+            Item::TouchLayout => self.cfg.touch_layout = config::TouchLayout::ALL[i],
+            Item::PresentMode => self.cfg.present = PresentChoice::ALL[i],
+            Item::AudioBuffer if Some(i) != list.current => self.set_audio_buffer(AUDIO_BUFFERS[i]),
+            Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
+            Item::Accent => self.cfg.accent = render::ACCENTS[i].1,
+            Item::Skin => {
+                let skin = if i == 0 { String::new() } else { name.clone() };
+                if skin != self.cfg.skin {
+                    self.cfg.skin = skin;
+                    self.load_skin();
+                }
+                if let Some(a) = &self.audio {
+                    a.sfx(audio::Sfx::Don);
+                }
+            }
+            Item::SongsFolder => {
+                // Without the "Browse..." row (Android) the others move up one.
+                let i = if cfg!(target_os = "android") { i + 1 } else { i };
+                match i {
+                    0 => self.browse_songs_folder(),
+                    1 => self.start_edit(Item::SongsFolder),
+                    _ => {
+                        if let Err(e) = self.set_songs_folder(None) {
+                            self.toast(e);
+                        }
+                    }
+                }
+                return;
+            }
+            _ => return,
+        }
+        self.cfg.save();
+    }
+
+    /// Starts typing a value for `item`, beginning with the one it has.
+    fn start_edit(&mut self, item: Item) {
+        let c = &self.cfg;
+        let text = match item {
+            Item::ScrollSpeed => format!("{:.2}", c.scroll_speed),
+            Item::Rate => format!("{:.2}", c.rate),
+            Item::Offset => format!("{:.0}", c.offset_ms),
+            Item::VisualOffset => format!("{:.0}", c.visual_offset_ms),
+            Item::CalibrationBpm => format!("{:.0}", c.calibration_bpm),
+            Item::ResumeDelay => format!("{:.2}", c.resume_delay_ms / 1000.0),
+            Item::MasterVolume => format!("{:.0}", c.master_volume * 100.0),
+            Item::MusicVolume => format!("{:.0}", c.music_volume * 100.0),
+            Item::FxVolume => format!("{:.0}", c.fx_volume * 100.0),
+            Item::BackgroundDim => format!("{:.0}", c.bg_dim * 100.0),
+            Item::FpsCap => c.fps_cap.to_string(),
+            Item::AccentHue => format!("#{:06x}", c.accent),
+            Item::SongsFolder => c.songs_folder.as_ref().or(self.song_dirs.first()).map(|d| d.display().to_string()).unwrap_or_default(),
+            _ => return,
+        };
+        if let Some(i) = settings::ITEMS.iter().position(|(_, it)| *it == item) {
+            self.settings_ui.cursor = i;
+        }
+        self.settings_ui.editing = Some(Edit::new(item, text));
+    }
+
+    /// Keys while typing a setting's value: Enter sets it, Esc leaves it as it was.
+    fn edit_key(&mut self, code: KeyCode, text: Option<&str>) {
+        let ctrl = self.modifiers_ctrl;
+        let Some(edit) = &mut self.settings_ui.editing else { return };
+        let max = if edit.item == Item::SongsFolder { 400 } else { 12 };
+        match code {
+            KeyCode::Escape => self.settings_ui.editing = None,
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let Some(edit) = self.settings_ui.editing.take() else { return };
+                if let Err(e) = self.apply_typed(edit.item, &edit.text) {
+                    self.toast(e);
+                    self.settings_ui.editing = Some(Edit { fresh: false, ..edit });
+                }
+            }
+            KeyCode::Backspace => edit.backspace(),
+            KeyCode::KeyV if ctrl => {
+                if let Some(clip) = paste() {
+                    edit.type_text(&clip, max);
+                }
+            }
+            _ if ctrl => {}
+            _ => {
+                if let Some(text) = text {
+                    edit.type_text(text, max);
+                }
+            }
+        }
+    }
+
+    /// Sets `item` to a typed value.
+    fn apply_typed(&mut self, item: Item, text: &str) -> Result<(), String> {
+        let number = || parse_number(text).ok_or_else(|| "type a number".to_string());
+        let percent = || number().map(|n| (n / 100.0).clamp(0.0, 1.0) as f32);
+        let c = &mut self.cfg;
+        match item {
+            Item::ScrollSpeed => c.scroll_speed = ((number()? * 100.0).round() / 100.0).clamp(0.3, 4.0),
+            Item::Rate => c.rate = ((number()? * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
+            Item::Offset => c.offset_ms = number()?.round().clamp(-1000.0, 1000.0),
+            Item::VisualOffset => c.visual_offset_ms = number()?.round().clamp(-1000.0, 1000.0),
+            Item::CalibrationBpm => c.calibration_bpm = number()?.round().clamp(calibrate::BPM_RANGE.0, calibrate::BPM_RANGE.1),
+            Item::ResumeDelay => c.resume_delay_ms = (number()? * 1000.0).round().clamp(0.0, 3000.0),
+            Item::MasterVolume => c.master_volume = percent()?,
+            Item::MusicVolume => c.music_volume = percent()?,
+            Item::FxVolume => c.fx_volume = percent()?,
+            Item::BackgroundDim => c.bg_dim = percent()?,
+            Item::FpsCap => {
+                let fps = number()?.round();
+                c.fps_cap = if fps <= 0.0 { 0 } else { fps.clamp(30.0, 10000.0) as u32 };
+            }
+            Item::AccentHue => {
+                let t = text.trim();
+                let hex = if t.starts_with('#') { t.to_string() } else { format!("#{t}") };
+                c.accent = render::parse_accent(t).or_else(|| render::parse_accent(&hex)).ok_or("type a colour like #ff8800")?;
+            }
+            Item::SongsFolder => {
+                let t = text.trim().trim_matches('"');
+                let path = match (t.strip_prefix("~/"), std::env::var_os("HOME")) {
+                    (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+                    _ => PathBuf::from(t),
+                };
+                return self.set_songs_folder(Some(path));
+            }
+            _ => return Ok(()),
+        }
+        self.apply_volume();
+        self.cfg.save();
+        Ok(())
+    }
+
+    /// Opens the system's folder dialog for the Songs folder (on its own thread: it blocks).
+    /// With no dialog to show, the path is typed in settings instead.
+    fn browse_songs_folder(&mut self) {
+        if self.folder_pick.is_some() {
+            return;
+        }
+        let start = self.cfg.songs_folder.clone().or_else(|| self.song_dirs.first().cloned()).or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_default();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(library::pick_folder(&start));
+        });
+        self.folder_pick = Some(rx);
+        self.select.picking_folder = true;
+    }
+
+    fn poll_folder_pick(&mut self) {
+        let Some(rx) = &self.folder_pick else { return };
+        let picked = match rx.try_recv() {
+            Ok(picked) => picked,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Ok(None),
+        };
+        self.folder_pick = None;
+        self.select.picking_folder = false;
+        match picked {
+            Ok(Some(dir)) => {
+                if let Err(e) = self.set_songs_folder(Some(dir)) {
+                    self.toast(e);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                if !matches!(self.scene, Scene::Settings { .. }) {
+                    self.open_settings();
+                }
+                self.start_edit(Item::SongsFolder);
+                self.toast(format!("{e}: type the folder's path"));
+            }
+        }
+    }
+
+    /// Scans `folder` for maps from now on (None: look for osu!'s again) and rescans the library.
+    fn set_songs_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
+        if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
+            return Err("change the Songs folder from song select".into());
+        }
+        let folder = folder.map(|f| library::songs_folder_in(&f));
+        if let Some(f) = folder.as_ref().filter(|f| !f.is_dir()) {
+            return Err(format!("{} isn't a folder", f.display()));
+        }
+        self.cfg.songs_folder = folder.clone();
+        self.cfg.save();
+        library::set_songs_folder(folder);
+        let inputs = song_inputs(&self.cfg);
+        self.songs_dir = download_dir(&inputs);
+        self.song_dirs = inputs.iter().filter(|p| p.is_dir()).cloned().collect();
+        self.toast(match (&self.cfg.songs_folder, self.song_dirs.first()) {
+            (Some(dir), _) => format!("scanning {}", dir.display()),
+            (None, Some(dir)) => format!("found {}", dir.display()),
+            (None, None) => "no osu! Songs folder found".into(),
+        });
+        self.scan = Some(start_scan(inputs));
+        self.select.scanning = Some(0);
+        Ok(())
     }
 
     /// Installs the newer build when there is one, else looks for one.
@@ -1510,7 +1814,7 @@ impl State {
     }
 
     fn settings_key(&mut self, code: KeyCode, window: Option<&Window>) {
-        if let Some(p) = &mut self.settings_ui.skins {
+        if let Some(p) = &mut self.settings_ui.choices {
             match code {
                 KeyCode::ArrowUp => p.move_cursor(-1),
                 KeyCode::ArrowDown => p.move_cursor(1),
@@ -1520,9 +1824,9 @@ impl State {
                 KeyCode::End => p.move_cursor(p.names.len() as i32),
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
                     let i = p.cursor;
-                    self.pick_skin(i);
+                    self.pick_choice(i);
                 }
-                KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab => self.settings_ui.skins = None,
+                KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab => self.settings_ui.choices = None,
                 _ => {}
             }
             return;
@@ -1586,10 +1890,8 @@ impl State {
                     self.toast(format!("{what} back in the song list"));
                 }
             }
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Skin => {
-                let names = std::iter::once(String::new()).chain(skin::list().into_iter().map(|(n, _)| n)).collect();
-                self.settings_ui.skins = Some(settings::SkinPicker::new(names, &self.cfg.skin));
-            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::List => self.open_choices(item),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::Value => self.start_edit(item),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Update => self.update_now(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
                 self.cfg.playfield_area = Area::FULL;
@@ -2234,8 +2536,8 @@ impl State {
                     dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
                 }
             }
-            Scene::Settings { .. } if self.settings_ui.skins.is_some() => {
-                if let Some(p) = &mut self.settings_ui.skins {
+            Scene::Settings { .. } if self.settings_ui.choices.is_some() => {
+                if let Some(p) = &mut self.settings_ui.choices {
                     p.move_cursor(-notches);
                 }
             }
@@ -2614,8 +2916,12 @@ impl State {
                 self.list_drag = Some(ListDrag { from_y: vy, hit: h, moved: false });
                 return;
             }
-            if self.settings_ui.skins.is_some() && !matches!(hit, Some(render::Hit::SkinRow(_))) {
-                self.settings_ui.skins = None;
+            if self.settings_ui.choices.is_some() && !matches!(hit, Some(render::Hit::ChoiceRow(_))) {
+                self.settings_ui.choices = None;
+                return;
+            }
+            // Clicking anywhere while typing a value leaves it as it was.
+            if self.settings_ui.editing.take().is_some() {
                 return;
             }
             if let Some(hit) = hit {
@@ -3940,6 +4246,12 @@ impl State {
                 return;
             }
         }
+        if self.settings_ui.editing.is_some() && matches!(self.scene, Scene::Settings { .. }) {
+            if !repeat || !matches!(code, KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape) {
+                self.edit_key(code, text);
+            }
+            return;
+        }
         if self.settings_ui.binding.is_some() && matches!(self.scene, Scene::Settings { .. }) {
             if !repeat {
                 self.settings_key(code, window);
@@ -4103,6 +4415,9 @@ impl State {
                 let pitch = if self.cfg.rate_keep_pitch { "keeps pitch" } else { "pitch shifts" };
                 self.toast(format!("speed {:.2}x ({pitch})", self.cfg.rate));
             }
+            Scene::Select if self.library.is_empty() && self.scan.is_none() && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) && !cfg!(target_os = "android") => {
+                self.browse_songs_folder();
+            }
             Scene::Select => match self.select.key(code, &self.library) {
                 SelectAction::Play(i) if self.picking_lobby_map => self.pick_lobby_map(i),
                 SelectAction::Play(i) => self.start_loading(i),
@@ -4194,6 +4509,7 @@ impl State {
         }
         self.frame_clip = None;
         self.poll_scan();
+        self.poll_folder_pick();
         {
             // The Download tab previews remote maps through the same preview.
             let browsing = matches!(self.scene, Scene::Download);
@@ -4797,15 +5113,25 @@ impl State {
             Scene::Settings { prev } => {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
-                let footer = if from_game {
-                    "Up/Down select   PgUp/PgDn section   Left/Right change   Enter toggle / rebind   Esc back to pause menu"
+                let footer = if self.settings_ui.editing.as_ref().is_some_and(|e| e.item == Item::SongsFolder) {
+                    "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
+                } else if self.settings_ui.editing.is_some() {
+                    "type a value   Enter set   Esc cancel".to_string()
                 } else {
-                    "Up/Down select   PgUp/PgDn section   Left/Right change   Enter toggle / rebind   Esc or Tab back"
+                    let enter = match self.settings_ui.item().kind() {
+                        Kind::List => "Enter list",
+                        Kind::Value => "Enter type a value",
+                        Kind::Toggle => "Enter toggle",
+                        Kind::Key => "Enter rebind",
+                        Kind::Action => "Enter go",
+                    };
+                    let back = if from_game { "Esc back to pause menu" } else { "Esc or Tab back" };
+                    format!("Up/Down select   PgUp/PgDn section   Left/Right change   {enter}   {back}")
                 };
                 let this = &*self;
-                this.settings_ui.draw(canvas, &|item| this.setting_value(item), footer);
-                if let Some(p) = &self.settings_ui.skins {
-                    p.draw(canvas, &self.cfg.skin);
+                this.settings_ui.draw(canvas, &|item| this.setting_value(item), &footer);
+                if let Some(p) = &self.settings_ui.choices {
+                    p.draw(canvas);
                 }
             }
             Scene::LayoutEdit { .. } => {
@@ -5351,7 +5677,8 @@ impl State {
             }
             Hit::CollectionPick => self.open_collections(),
             Hit::PickRow(i) => self.select.pick_collection(i, &self.library),
-            Hit::SkinRow(i) => self.pick_skin(i),
+            Hit::ChoiceRow(i) => self.pick_choice(i),
+            Hit::SongsFolder => self.browse_songs_folder(),
             Hit::DlRow(i) if i == self.browse.cursor => self.download_key(KeyCode::Enter, None, window),
             Hit::DlRow(i) => self.browse.cursor = i,
             Hit::DlGet(i) => {
@@ -5976,6 +6303,7 @@ impl State {
             presence: None,
             presence_at: None,
             scan,
+            folder_pick: None,
             play_when_scanned,
             wheel_acc: 0.0,
             mouse: (0.0, 0.0),
@@ -6035,27 +6363,11 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 /// Scans the library, opens audio and runs the game until it quits. `args`: songs folders, map
 /// folders, .osz or a single .osu to play; empty = the usual song folders.
 fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEvent>) {
-    let mut inputs = if args.is_empty() { library::default_song_dirs() } else { args.clone() };
-    if args.is_empty() {
-        inputs.extend(cfg.songs.iter().cloned());
-    }
+    library::set_songs_folder(cfg.songs_folder.clone());
+    let inputs = if args.is_empty() { song_inputs(&cfg) } else { args.clone() };
     let songs_dir = download_dir(&inputs);
     let songs_dirs_for_db: Vec<PathBuf> = inputs.iter().filter(|p| p.is_dir()).cloned().collect();
-    // Scan on a background thread so the window appears at once, even with a huge library.
-    let found = Arc::new(AtomicUsize::new(0));
-    let (scan_tx, scan_rx) = mpsc::channel();
-    {
-        let found = found.clone();
-        std::thread::Builder::new()
-            .name("library".into())
-            .spawn(move || {
-                let started = Instant::now();
-                let library = library::scan(&inputs, &found);
-                eprintln!("scanned {} files in {:.0} ms", found.load(Ordering::Relaxed), started.elapsed().as_secs_f64() * 1000.0);
-                let _ = scan_tx.send(library);
-            })
-            .expect("spawn library scan");
-    }
+    let scan = start_scan(inputs);
 
     let audio = match Engine::new(cfg.audio_buffer) {
         Ok(a) => {
@@ -6078,7 +6390,7 @@ fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEv
     let want_splash = std::env::var_os("TAIKO_SPLASH").is_some() || (cfg.splash && !play_when_scanned && !scripted);
     let splash = if want_splash { splash::Splash::new(audio.as_ref().map(|a| a.rate)) } else { None };
     update::cleanup();
-    let mut state = State::new(cfg, audio, splash, songs_dir, songs_dirs_for_db, Some((scan_rx, found)), play_when_scanned, auto);
+    let mut state = State::new(cfg, audio, splash, songs_dir, songs_dirs_for_db, Some(scan), play_when_scanned, auto);
     state.load_skin();
     let mut app = App {
         state: Arc::new(Mutex::new(state)),

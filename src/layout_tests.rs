@@ -36,7 +36,7 @@ fn entry(set: usize, diff: usize, long: bool) -> Entry {
     Entry::new(PathBuf::from(format!("/nonexistent/{set} set/{diff}.osu")), meta)
 }
 
-fn state() -> State {
+pub(crate) fn state() -> State {
     let mut cfg = Config::default();
     cfg.check_updates = false;
     cfg.mods = Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR");
@@ -206,9 +206,24 @@ fn assert_every_screen_fits() {
             check(&mut s, &format!("settings {section}"), &mut out);
         }
     }
-    s.settings_ui.skins = Some(settings::SkinPicker::new(vec![String::new(), s.cfg.skin.clone(), "- Rafis 2017 Remake (Taiko HD) by somebody".into()], &s.cfg.skin));
+    let skins = vec!["built-in".into(), s.cfg.skin.clone(), "- Rafis 2017 Remake (Taiko HD) by somebody".into()];
+    s.settings_ui.choices = Some(settings::Choices::new(Item::Skin, skins, Some(1), "2 installed".into()));
     check(&mut s, "skin picker", &mut out);
-    s.settings_ui.skins = None;
+    s.settings_ui.choices = None;
+    for item in [Item::PresentMode, Item::AudioBuffer, Item::Accent, Item::SongsFolder] {
+        s.open_choices(item);
+        check(&mut s, &format!("{item:?} list"), &mut out);
+        s.settings_ui.choices = None;
+    }
+    s.cfg.songs_folder = Some(PathBuf::from("/home/someone/.local/share/osu-wine/A Very Long Folder Name For The osu! Install/Songs"));
+    for item in [Item::SongsFolder, Item::ScrollSpeed] {
+        s.start_edit(item);
+        check(&mut s, &format!("typing {item:?}"), &mut out);
+        s.settings_ui.editing.as_mut().unwrap().type_text("1", 400);
+        check(&mut s, &format!("typed {item:?}"), &mut out);
+        s.settings_ui.editing = None;
+    }
+    s.cfg.songs_folder = None;
     s.open_dropdown();
     check(&mut s, "playfield presets", &mut out);
     s.settings_ui.dropdown = None;
@@ -321,6 +336,15 @@ fn assert_every_screen_fits() {
     s.scene = Scene::Results { results: results(true), entry: 0, from: None };
     check(&mut s, "results failed", &mut out);
     s.scene = Scene::Select;
+
+    // No maps anywhere: the Songs folder button.
+    let library = std::mem::take(&mut s.library);
+    s.select = Select::new(&s.library);
+    check(&mut s, "no maps", &mut out);
+    s.select.picking_folder = true;
+    check(&mut s, "no maps, choosing", &mut out);
+    s.library = library;
+    s.select = Select::new(&s.library);
 
     let room = session();
     let player = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
