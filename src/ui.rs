@@ -1202,6 +1202,8 @@ pub struct Results {
     pub watched: Option<String>,
     /// Failed: Sudden Death / Perfect, or the HP bar under half at the end.
     pub failed: bool,
+    /// The play's performance points (kept plays only).
+    pub pp: Option<f64>,
 }
 
 impl Results {
@@ -1239,6 +1241,9 @@ impl Results {
         }
         c.text_centered(cx, 170.0, 28.0, rgba(0xffffff, 1.0), &format!("{:.2}%", acc * count as f64));
         c.text_centered(cx, 212.0, 16.0, rgba(0xc8c8d8, 1.0), &format!("{:08}", (s.score as f64 * count as f64) as u64));
+        if let Some(pp) = self.pp {
+            c.text_centered(cx, 236.0, 10.0, rgba(0xff8ad8, 1.0), &format!("{:.0} pp", pp * count as f64));
+        }
 
         let lines = [
             (0xFFD34D, format!("GREAT  {}", s.great)),

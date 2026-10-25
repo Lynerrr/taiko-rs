@@ -182,6 +182,7 @@ fn assert_every_screen_fits() {
             player: LONG_NAME.into(),
             file: PathBuf::from("/nonexistent/replay.json"),
             mods: "HDHRDTFLPRACWVKBSUDK".into(),
+            pp: Some(1234.56),
         })
         .collect();
     check(&mut s, "select with scores", &mut out);
@@ -374,6 +375,7 @@ fn assert_every_screen_fits() {
         rank: (!failed).then_some((1, 12)),
         watched: (!failed).then(|| LONG_NAME.to_string()),
         failed,
+        pp: (!failed).then_some(456.7),
     };
     s.scene = Scene::Results { results: results(false), entry: 0, from: None };
     check(&mut s, "results", &mut out);

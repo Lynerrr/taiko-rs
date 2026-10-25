@@ -30,6 +30,7 @@ mod multiverse;
 mod multiplayer;
 mod net;
 mod osudb;
+mod pp;
 mod preview;
 mod render;
 mod scores;
@@ -241,6 +242,9 @@ struct State {
     host_transfer: Option<std::sync::mpsc::Sender<Option<Vec<u8>>>>,
     /// Local scores (index of saved replays).
     scores: Vec<scores::ScoreRow>,
+    /// Working out the pp of scores saved before pp (started once, on the first frame).
+    pp_backfill: Option<Receiver<Vec<(PathBuf, f64)>>>,
+    pp_backfill_started: bool,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
     /// Mods of the play being loaded.
@@ -462,15 +466,18 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
     }
 }
 
-/// Local scores for the selected map, under the song select panel.
-fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow]) {
-    let label_w = c.text(x + 4.0, y + 2.0, 7.0, rgba(accent(), 1.0), "LOCAL SCORES");
+/// Local scores for the selected map, under the song select panel, and the player's pp total.
+fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow], total_pp: f64) {
+    let mut label_w = c.text(x + 4.0, y + 2.0, 7.0, rgba(accent(), 1.0), "LOCAL SCORES");
+    if total_pp > 0.0 {
+        label_w += 10.0 + c.text(x + 14.0 + label_w, y + 2.5, 6.0, rgba(0xff8ad8, 1.0), &format!("{total_pp:.0} pp total"));
+    }
     if rows.is_empty() {
         let at = x + 4.0 + label_w + 14.0;
         c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, "none yet - finish a play to set one"));
         return;
     }
-    let room = w - 20.0 - Canvas::text_width(7.0, "LOCAL SCORES");
+    let room = w - 20.0 - label_w;
     c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, room, "click: watch the replay   video: export it"));
     for (k, r) in rows.iter().enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
@@ -479,7 +486,8 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         c.hit(x, ry, w, 16.0, render::Hit::ScoreRow(k));
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods) };
-        let core = format!("#{}  {:08}  {:.2}%  {}x", k + 1, r.score, r.accuracy * 100.0, r.max_combo);
+        let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
+        let core = format!("#{}  {:08}  {:.2}%  {}x{pp}", k + 1, r.score, r.accuracy * 100.0, r.max_combo);
         // The video button sits on top of the row (drawn after it, so it wins the click).
         let bw = Canvas::text_width(6.0, "video") + 12.0;
         let bx = x + w - bw - 3.0;
@@ -5060,7 +5068,7 @@ impl State {
                             let hash = self.library[i].hash();
                             let rows = scores::top(&self.scores, hash, fits);
                             self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
-                            draw_leaderboard(canvas, x, top, pw, &rows);
+                            draw_leaderboard(canvas, x, top, pw, &rows, scores::total_pp(&self.scores));
                         }
                     }
                 }
@@ -5162,6 +5170,7 @@ impl State {
                         rank: None,
                         watched: game.replay_of.clone(),
                         failed,
+                        pp: None,
                     };
                     // Failed plays aren't kept, like osu!.
                     if game.record && !failed {
@@ -5187,7 +5196,9 @@ impl State {
                             ur: st.unstable_rate(),
                             inputs: std::mem::take(&mut game.inputs),
                         };
-                        match scores::save(&replay) {
+                        let pp = pp::play_pp(&e.path, &replay.pp_play());
+                        results.pp = pp;
+                        match scores::save(&replay, pp) {
                             Ok(row) => {
                                 results.replay = Some(row.file.clone());
                                 self.scores.push(row);
@@ -5814,7 +5825,34 @@ impl State {
         })
     }
 
+    /// Scores saved before pp get theirs worked out in the background, once, and the index is
+    /// written again with them.
+    fn poll_pp_backfill(&mut self) {
+        if !self.pp_backfill_started {
+            self.pp_backfill_started = true;
+            let missing: Vec<PathBuf> = self.scores.iter().filter(|r| r.pp.is_none()).map(|r| r.file.clone()).collect();
+            if !missing.is_empty() {
+                self.pp_backfill = Some(scores::backfill_pp(missing));
+            }
+        }
+        let Some(found) = self.pp_backfill.as_ref().and_then(|rx| rx.try_recv().ok()) else { return };
+        self.pp_backfill = None;
+        if found.is_empty() {
+            return;
+        }
+        let found: std::collections::HashMap<PathBuf, f64> = found.into_iter().collect();
+        for row in &mut self.scores {
+            if let Some(&pp) = found.get(&row.file) {
+                row.pp = Some(pp);
+            }
+        }
+        if let Err(e) = scores::rewrite_index(&self.scores) {
+            eprintln!("couldn't save the scores' pp: {e}");
+        }
+    }
+
     fn poll_downloads(&mut self) {
+        self.poll_pp_backfill();
         #[cfg(target_os = "android")]
         if self.imports_checked.elapsed() >= Duration::from_secs(1) {
             self.imports_checked = Instant::now();
@@ -6697,6 +6735,8 @@ impl State {
             preview_remote: false,
             host_transfer: None,
             scores: scores::load_index(),
+            pp_backfill: None,
+            pp_backfill_started: false,
             pending_replay: None,
             pending_mods: Mods::NONE,
             mod_select: None,

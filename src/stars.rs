@@ -13,7 +13,7 @@ use crate::render::{rgba, Canvas};
 /// Section length of lazer's strain skills (in rate-adjusted time).
 const SECTION_MS: f64 = 400.0;
 
-fn load(path: &Path) -> Option<Beatmap> {
+pub(crate) fn load(path: &Path) -> Option<Beatmap> {
     let map = Beatmap::from_path(path).ok()?;
     // Maps built to break calculators (absurd density/length) are skipped, as osu! would time out.
     map.check_suspicion().ok()?;
