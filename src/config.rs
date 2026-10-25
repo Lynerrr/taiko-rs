@@ -1,7 +1,7 @@
 //! Settings persisted as a plain `key = value` file: `$XDG_CONFIG_HOME/taiko-rs/config.txt` on
 //! Linux, `%APPDATA%\taiko-rs\config.txt` on Windows.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use winit::keyboard::KeyCode;
 
@@ -159,6 +159,10 @@ pub struct Config {
     pub check_updates: bool,
     /// Start in (borderless) fullscreen; F11 toggles and remembers it.
     pub fullscreen: bool,
+    /// The window's size out of fullscreen (pixels), as last left; None = the default.
+    pub window_size: Option<(u32, u32)>,
+    /// Where the game's data was moved to (see `data_folder()`); None = the usual places.
+    pub data_folder: Option<PathBuf>,
     /// Left rim, left centre, right centre, right rim.
     pub keys: [KeyCode; 4],
     /// Previous / next playfield resolution preset.
@@ -224,6 +228,8 @@ impl Default for Config {
             audio_buffer: 256,
             show_fps: true,
             fullscreen: true,
+            window_size: None,
+            data_folder: None,
             animations: true,
             splash: true,
             check_updates: true,
@@ -280,10 +286,155 @@ pub fn user_dir(cache: bool) -> Option<PathBuf> {
     }
 }
 
+/// The folder the player moved the game's data to (`data_folder` in config.txt, which itself
+/// stays where it is); None: the usual places.
+static DATA_FOLDER: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+pub fn set_data_folder(dir: Option<PathBuf>) {
+    *DATA_FOLDER.write().unwrap_or_else(|e| e.into_inner()) = dir;
+}
+
+pub fn data_folder() -> Option<PathBuf> {
+    DATA_FOLDER.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Where replays, scores, videos, play history and the like are kept: the data folder, else
+/// next to config.txt.
+pub fn data_dir() -> Option<PathBuf> {
+    data_folder().or_else(|| user_dir(false))
+}
+
+/// Where disposable data goes (extracted `.osz` files, map analysis, previews).
+pub fn cache_dir() -> Option<PathBuf> {
+    data_folder().map(|d| d.join("cache")).or_else(|| user_dir(true))
+}
+
+/// taiko-rs's own folder `name` ("Songs", "Skins"): in the data folder, else next to config.txt
+/// on Windows and in ~/.local/share/taiko-rs elsewhere.
+pub fn own_dir(name: &str) -> Option<PathBuf> {
+    own_dir_in(data_folder().as_deref(), name)
+}
+
+fn own_dir_in(folder: Option<&Path>, name: &str) -> Option<PathBuf> {
+    if let Some(d) = folder {
+        return Some(d.join(name));
+    }
+    #[cfg(windows)]
+    let dir = user_dir(false);
+    #[cfg(not(windows))]
+    let dir = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .map(|d| d.join("taiko-rs"));
+    Some(dir?.join(name))
+}
+
+/// The game's data with the data folder `folder` (None: the usual places), each where it'd be:
+/// the files next to config.txt, its own Songs and Skins, and the cache.
+fn data_paths(folder: Option<&Path>) -> Vec<Option<PathBuf>> {
+    let base = folder.map(Path::to_path_buf).or_else(|| user_dir(false));
+    let mut out: Vec<Option<PathBuf>> = ["replays", "videos", "map_offsets.tsv", "plays.tsv", "hidden.tsv"].iter().map(|n| base.as_ref().map(|b| b.join(n))).collect();
+    out.push(own_dir_in(folder, "Songs"));
+    out.push(own_dir_in(folder, "Skins"));
+    out.push(folder.map(|d| d.join("cache")).or_else(|| user_dir(true)));
+    out
+}
+
+/// Moves the game's data from the data folder `from` to `to` (None: the usual places): renamed
+/// where they're on the same drive, else copied and the originals removed once everything has
+/// copied. Nothing is overwritten; on any failure what had moved goes back. `done` / `total`
+/// count bytes for a progress bar.
+pub fn move_data(from: Option<&Path>, to: Option<&Path>, done: &std::sync::atomic::AtomicU64, total: &std::sync::atomic::AtomicU64) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    let pairs: Vec<(PathBuf, PathBuf)> = data_paths(from)
+        .into_iter()
+        .zip(data_paths(to))
+        .filter_map(|(a, b)| Some((a?, b?)))
+        .filter(|(a, b)| a.exists() && a != b)
+        .collect();
+    for (a, b) in &pairs {
+        if b.exists() {
+            return Err(format!("{} is already there: pick an empty folder", b.display()));
+        }
+        if b.starts_with(a) {
+            return Err(format!("can't move {} into itself", a.display()));
+        }
+    }
+    total.store(pairs.iter().map(|(a, _)| size_of(a)).sum(), Ordering::Relaxed);
+    // Moved so far: (from, to, copied rather than renamed).
+    let mut moved: Vec<(&Path, &Path, bool)> = Vec::new();
+    let mut failed = None;
+    for (a, b) in &pairs {
+        if let Some(parent) = b.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            failed = Some(format!("{}: {e}", parent.display()));
+            break;
+        }
+        if std::fs::rename(a, b).is_ok() {
+            done.fetch_add(size_of(b), Ordering::Relaxed);
+            moved.push((a, b, false));
+            continue;
+        }
+        // Another drive: copy now, remove the originals at the end.
+        match copy_all(a, b, done) {
+            Ok(()) => moved.push((a, b, true)),
+            Err(e) => {
+                let _ = remove_all(b);
+                failed = Some(format!("{}: {e}", a.display()));
+                break;
+            }
+        }
+    }
+    if let Some(e) = failed {
+        for &(a, b, copied) in moved.iter().rev() {
+            if copied {
+                let _ = remove_all(b);
+            } else {
+                let _ = std::fs::rename(b, a);
+            }
+        }
+        return Err(e);
+    }
+    for &(a, _, copied) in &moved {
+        if copied {
+            let _ = remove_all(a);
+        }
+    }
+    Ok(())
+}
+
+fn size_of(p: &Path) -> u64 {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.is_dir() => std::fs::read_dir(p).into_iter().flatten().flatten().map(|e| size_of(&e.path())).sum(),
+        Ok(m) => m.len(),
+        Err(_) => 0,
+    }
+}
+
+fn copy_all(from: &Path, to: &Path, done: &std::sync::atomic::AtomicU64) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(from)?.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for e in std::fs::read_dir(from)? {
+            let e = e?;
+            copy_all(&e.path(), &to.join(e.file_name()), done)?;
+        }
+        Ok(())
+    } else {
+        let n = std::fs::copy(from, to)?;
+        done.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+fn remove_all(p: &Path) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(p)?.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) }
+}
+
 /// Each map's own offset (on top of the global one), by the .osu's content hash:
 /// `map_offsets.tsv` in the config folder, one `hash<TAB>ms` per line.
 pub fn load_map_offsets() -> std::collections::HashMap<u64, f64> {
-    let Some(text) = user_dir(false).and_then(|d| std::fs::read_to_string(d.join("map_offsets.tsv")).ok()) else { return Default::default() };
+    let Some(text) = data_dir().and_then(|d| std::fs::read_to_string(d.join("map_offsets.tsv")).ok()) else { return Default::default() };
     text.lines()
         .filter_map(|l| {
             let (h, ms) = l.split_once('\t')?;
@@ -293,7 +444,7 @@ pub fn load_map_offsets() -> std::collections::HashMap<u64, f64> {
 }
 
 pub fn save_map_offsets(offsets: &std::collections::HashMap<u64, f64>) {
-    let Some(dir) = user_dir(false) else { return };
+    let Some(dir) = data_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);
     let mut lines: Vec<String> = offsets.iter().map(|(h, ms)| format!("{h:016x}\t{ms}")).collect();
     lines.sort();
@@ -370,6 +521,8 @@ impl Config {
                 "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
                 "show_fps" => cfg.show_fps = v == "true",
                 "fullscreen" => cfg.fullscreen = v != "false",
+                "window_size" => cfg.window_size = crate::layout::parse_size(v),
+                "data_folder" => cfg.data_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
                 "animations" => cfg.animations = v != "false",
                 "splash" => cfg.splash = v != "false",
                 "check_updates" => cfg.check_updates = v != "false",
@@ -557,6 +710,12 @@ impl Config {
             "# with vsync, draw notes where they'll be once the frame is on screen; ms added to that\nvsync_compensation = {}\nvsync_tune_ms = {:.0}\n",
             self.vsync_compensation, self.vsync_tune_ms
         ));
+        let window = self.window_size.map(|(w, h)| format!("{w}x{h}")).unwrap_or_default();
+        out.push_str(&format!("# the window's size out of fullscreen (empty = 1280x720)\nwindow_size = {window}\n"));
+        let data = self.data_folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+        out.push_str(&format!(
+            "# where replays, scores, videos, taiko-rs's Songs and Skins and caches are (empty = the usual places); move it from Settings\ndata_folder = {data}\n"
+        ));
         out.push_str(&self.video.config_lines());
         out.push_str(&format!(
             "# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (C in the mod select)\nmultiverse = {}\n",
@@ -624,5 +783,52 @@ mod tests {
         assert!(close(step_scroll_speed(0.05 * 21.0, -1.0), 1.0));
         assert!(close(step_scroll_speed(0.3, -1.0), 0.3));
         assert!(close(step_scroll_speed(4.0, 1.0), 4.0));
+    }
+
+    #[test]
+    fn game_data_moves_to_another_folder_and_nothing_is_overwritten() {
+        use std::sync::atomic::AtomicU64;
+        let root = std::env::temp_dir().join(format!("taiko-rs-data-test-{}", std::process::id()));
+        let (from, to) = (root.join("old"), root.join("new"));
+        let _ = std::fs::remove_dir_all(&root);
+        let file = |p: PathBuf, text: &str| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        file(from.join("replays/1.json"), "replay");
+        file(from.join("plays.tsv"), "plays");
+        file(from.join("Songs/1 map/map.osu"), "osu");
+        file(from.join("Skins/mine/skin.ini"), "skin");
+        file(from.join("cache/osz/x/y.osu"), "cache");
+        let (done, total) = (AtomicU64::new(0), AtomicU64::new(0));
+        move_data(Some(&from), Some(&to), &done, &total).unwrap();
+        for (path, text) in [("replays/1.json", "replay"), ("plays.tsv", "plays"), ("Songs/1 map/map.osu", "osu"), ("Skins/mine/skin.ini", "skin"), ("cache/osz/x/y.osu", "cache")] {
+            assert_eq!(std::fs::read_to_string(to.join(path)).unwrap(), text, "{path}");
+            assert!(!from.join(path).exists(), "{path} still in the old folder");
+        }
+        assert_eq!(done.load(std::sync::atomic::Ordering::Relaxed), total.load(std::sync::atomic::Ordering::Relaxed));
+        // Back, onto a folder that has replays of its own: refused, nothing touched.
+        file(from.join("replays/other.json"), "other");
+        assert!(move_data(Some(&to), Some(&from), &done, &total).is_err());
+        assert!(to.join("replays/1.json").exists() && from.join("replays/other.json").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn copying_to_another_drive_copies_everything_then_removes_it() {
+        use std::sync::atomic::AtomicU64;
+        let root = std::env::temp_dir().join(format!("taiko-rs-copy-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::write(root.join("a/b/c.txt"), "hello").unwrap();
+        std::fs::write(root.join("a/d.txt"), "hi").unwrap();
+        let done = AtomicU64::new(0);
+        copy_all(&root.join("a"), &root.join("z"), &done).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("z/b/c.txt")).unwrap(), "hello");
+        assert_eq!(done.load(std::sync::atomic::Ordering::Relaxed), 7);
+        assert_eq!(size_of(&root.join("z")), 7);
+        remove_all(&root.join("a")).unwrap();
+        assert!(!root.join("a").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

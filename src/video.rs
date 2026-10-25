@@ -697,7 +697,7 @@ impl Blend {
 
 /// Where exported videos go.
 pub fn videos_dir() -> Option<PathBuf> {
-    Some(crate::config::user_dir(false)?.join("videos"))
+    Some(crate::config::data_dir()?.join("videos"))
 }
 
 /// A file name for a replay video.

@@ -71,7 +71,7 @@ impl ScoreRow {
 }
 
 fn dir() -> Option<PathBuf> {
-    Some(crate::config::user_dir(false)?.join("replays"))
+    Some(crate::config::data_dir()?.join("replays"))
 }
 
 fn index_path() -> Option<PathBuf> {

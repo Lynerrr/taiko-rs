@@ -315,6 +315,9 @@ struct State {
     /// With vsync, how much later (ms) than its image was handed out the frame's notes are drawn
     /// for, to keep them on the refresh grid (`clock::VsyncPacer`).
     pace_shift_ms: f64,
+    /// The refresh interval (ms) the frames were seen to come at with vsync (the window system's
+    /// `refresh_hz` can be another screen's, or a guess).
+    seen_refresh_ms: Option<f64>,
     started: Instant,
     /// Requests from the input thread that only the render thread can apply.
     want_size: Option<(u32, u32)>,
@@ -358,6 +361,10 @@ struct State {
     /// The Songs folder dialog while it is open: the folder picked (None = cancelled), or why
     /// there is no dialog.
     folder_pick: Option<Receiver<Result<Option<PathBuf>, String>>>,
+    /// What the folder dialog is for: the Songs folder or the game data folder.
+    folder_pick_for: Item,
+    /// The game's data being moved to another folder (`config::move_data`).
+    data_move: Option<DataMove>,
     /// A single .osu was given on the command line: play it once the scan finishes.
     play_when_scanned: bool,
     /// Mouse: fractional wheel notches (touchpads), left-button drag of the playfield, window
@@ -391,6 +398,12 @@ struct State {
     /// Playfield presets (resolutions that fit the window), filled when the window opens.
     resolutions: Vec<(u32, u32)>,
     monitor_modes: Vec<(u32, u32)>,
+    /// The screen the window is on (pixels).
+    monitor_size: (u32, u32),
+    /// A window size picked in settings, for the window thread to apply.
+    window_request: Option<(u32, u32)>,
+    /// The window was resized by hand: its size is saved once it settles.
+    window_resized_at: Option<Instant>,
 }
 
 /// Draws gameplay (via `f`) into the playfield area, records the shapes to clip, and shows the
@@ -612,7 +625,7 @@ fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32, slide: f32) {
 /// When each map was last played in taiko-rs (`plays.tsv`: Unix seconds, tab, path).
 fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
     let mut out = std::collections::HashMap::new();
-    let Some(text) = config::user_dir(false).and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok()) else { return out };
+    let Some(text) = config::data_dir().and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok()) else { return out };
     for line in text.lines() {
         if let Some((t, path)) = line.split_once('\t') {
             if let Ok(t) = t.parse::<u64>() {
@@ -636,6 +649,14 @@ fn short_path(dir: &std::path::Path) -> String {
     format!("...{}{}", std::path::MAIN_SEPARATOR, tail.display())
 }
 
+/// The game's data on its way to another folder: the result, bytes moved of all, and where to.
+struct DataMove {
+    rx: Receiver<Result<(), String>>,
+    done: Arc<std::sync::atomic::AtomicU64>,
+    total: Arc<std::sync::atomic::AtomicU64>,
+    to: Option<PathBuf>,
+}
+
 /// One view of a video frame to render offscreen: its size, where the frame goes, the
 /// background's brightness, and with motion blur whether it is blended and the frame's last.
 struct ExportView {
@@ -652,14 +673,7 @@ fn download_dir(inputs: &[PathBuf]) -> PathBuf {
     if let Some(dir) = inputs.iter().find(|p| p.is_dir()) {
         return dir.clone();
     }
-    #[cfg(windows)]
-    let own = config::user_dir(false).map(|d| d.join("Songs"));
-    #[cfg(not(windows))]
-    let own = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .map(|d| d.join("taiko-rs").join("Songs"));
-    own.unwrap_or_else(|| PathBuf::from("Songs"))
+    config::own_dir("Songs").unwrap_or_else(|| PathBuf::from("Songs"))
 }
 
 /// Marks the fullscreen preview as a preview: a blue frame and badge on the playfield area, and
@@ -739,6 +753,9 @@ fn size_char(code: KeyCode) -> Option<char> {
 }
 
 const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
+
+/// The smallest the window goes (logical pixels): smaller, the menus no longer fit.
+const MIN_WINDOW: (f64, f64) = (640.0, 360.0);
 
 /// Frames on their way to the screen with vsync (the swapchain's frame latency for it, see
 /// `Renderer::set_present`).
@@ -835,7 +852,13 @@ impl State {
         if !self.cfg.vsync_compensation || self.present != PresentChoice::Fifo {
             return 0.0;
         }
-        VSYNC_FRAMES * 1000.0 / self.refresh_hz.clamp(24.0, 1000.0) + self.cfg.vsync_tune_ms
+        VSYNC_FRAMES * self.refresh_ms() + self.cfg.vsync_tune_ms
+    }
+
+    /// The screen's refresh interval (ms): as the frames came with vsync, else as the window
+    /// system says.
+    fn refresh_ms(&self) -> f64 {
+        self.seen_refresh_ms.unwrap_or(1000.0 / self.refresh_hz.clamp(24.0, 1000.0))
     }
 
     fn stop_audio(&mut self) {
@@ -1390,7 +1413,13 @@ impl State {
             Item::NotifyRequests => on(c.notify_requests),
             Item::ShowConverts => on(self.select.show_converts),
             Item::HiddenMaps => self.select.hidden.describe(),
-            Item::SongsFolder if self.folder_pick.is_some() => "picking...".into(),
+            Item::SongsFolder if self.folder_pick.is_some() && self.folder_pick_for == Item::SongsFolder => "picking...".into(),
+            Item::DataFolder if self.folder_pick.is_some() && self.folder_pick_for == Item::DataFolder => "picking...".into(),
+            Item::DataFolder if self.data_move.is_some() => "moving...".into(),
+            Item::DataFolder => match &c.data_folder {
+                Some(dir) => short_path(dir),
+                None => "the usual places".into(),
+            },
             Item::SongsFolder if self.scan.is_some() => "scanning...".into(),
             Item::SongsFolder => match (&c.songs_folder, self.song_dirs.first()) {
                 (Some(dir), _) => short_path(dir),
@@ -1433,13 +1462,15 @@ impl State {
                 }
             }
             Item::Fullscreen => on(self.fullscreen),
+            Item::WindowSize if self.fullscreen => format!("fullscreen ({:.0}x{:.0})", self.window_w, self.window_h),
+            Item::WindowSize => format!("{:.0}x{:.0}", self.window_w, self.window_h),
             Item::Calibrate => "Enter to start".into(),
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
             Item::LiveOffset => on(c.show_offset_hint),
             Item::LiveOffsetUr => on(c.offset_hint_ur_scaled),
             Item::VsyncCompensation if !c.vsync_compensation => "off".into(),
             Item::VsyncCompensation => {
-                let lead = VSYNC_FRAMES * 1000.0 / self.refresh_hz.clamp(24.0, 1000.0) + c.vsync_tune_ms;
+                let lead = VSYNC_FRAMES * self.refresh_ms() + c.vsync_tune_ms;
                 if c.present == PresentChoice::Fifo { format!("on: notes {lead:.0} ms ahead") } else { format!("on ({lead:.0} ms once gameplay uses vsync)") }
             }
             Item::VsyncTune => format!("{:+.0} ms", c.vsync_tune_ms),
@@ -1523,7 +1554,7 @@ impl State {
                 return;
             }
             // Act on Enter in `settings_key`.
-            Item::HiddenMaps | Item::SongsFolder => return,
+            Item::HiddenMaps | Item::SongsFolder | Item::DataFolder => return,
             Item::MasterVolume => self.cfg.master_volume = (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::MusicVolume => self.cfg.music_volume = (self.cfg.music_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
             Item::FxVolume => self.cfg.fx_volume = (self.cfg.fx_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
@@ -1547,6 +1578,28 @@ impl State {
             // Acts on Enter in `settings_key`.
             Item::Update => return,
             Item::Fullscreen => self.toggle_fullscreen(window),
+            Item::WindowSize => {
+                // The next size up or down from the window's, in its aspect ratio while there is
+                // one.
+                let sizes = self.window_sizes();
+                let area = (self.window_w * self.window_h) as u64;
+                let aspect = layout::aspect_name(self.window_w as u32, self.window_h as u32);
+                let step = |same: bool| {
+                    let near = sizes.iter().filter(|&&(w, h)| !same || layout::aspect_name(w, h) == aspect).map(|&(w, h)| ((w * h) as u64, (w, h)));
+                    if dir > 0 {
+                        near.filter(|&(a, _)| a > area).min_by_key(|&(a, _)| a).map(|(_, s)| s)
+                    } else {
+                        near.filter(|&(a, _)| a < area).max_by_key(|&(a, _)| a).map(|(_, s)| s)
+                    }
+                };
+                let next = step(true).or_else(|| step(false));
+                let next = next.as_ref();
+                match next {
+                    Some(&size) => self.window_request = Some(size),
+                    None => self.toast(if dir > 0 { "the largest size that fits this screen".into() } else { "the smallest size there is".into() }),
+                }
+                return;
+            }
             // Started with Enter in `settings_key`; arrows do nothing.
             Item::Calibrate => return,
             Item::LiveOffset => self.cfg.show_offset_hint = !self.cfg.show_offset_hint,
@@ -1639,6 +1692,13 @@ impl State {
                 (strings(&mut all.iter().map(|ch| ch.name())), all.iter().position(|&ch| ch == self.updater.channel()), format!("running {}", update::BUILD_CHANNEL.name()))
             }
             Item::Accent => (strings(&mut render::ACCENTS.iter().map(|a| a.0)), render::ACCENTS.iter().position(|a| a.1 == c.accent), String::new()),
+            Item::WindowSize => {
+                let sizes = self.window_sizes();
+                let now = (self.window_w as u32, self.window_h as u32);
+                let names = std::iter::once("Type a size".to_string()).chain(sizes.iter().map(|&(w, h)| format!("{w} x {h}   {}", layout::aspect_name(w, h)))).collect();
+                let current = sizes.iter().position(|&s| s == now && !self.fullscreen).map(|i| i + 1);
+                (names, current, format!("screen {}x{}", self.monitor_size.0, self.monitor_size.1))
+            }
             Item::NoteColours => {
                 let own = c.note_colours.custom;
                 let names = multiverse::PALETTES.iter().map(|p| p.0.to_string()).chain(std::iter::once(format!("custom  #{:06x} / #{:06x}", own[0], own[1]))).collect();
@@ -1663,6 +1723,13 @@ impl State {
                 };
                 (names, None, note)
             }
+            Item::DataFolder => {
+                let mut names = vec!["Type a path".to_string(), "Back to the usual places".to_string()];
+                if !cfg!(target_os = "android") {
+                    names.insert(0, "Browse...".into());
+                }
+                (names, None, config::data_dir().map(|d| d.display().to_string()).unwrap_or_default())
+            }
             _ => return,
         };
         self.settings_ui.choices = Some(Choices::new(item, names, current, note));
@@ -1679,6 +1746,14 @@ impl State {
             Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
             Item::Accent => self.cfg.accent = render::ACCENTS[i].1,
             Item::NoteColours => self.cfg.note_colours.palette = i,
+            Item::WindowSize if i == 0 => {
+                self.start_edit(Item::WindowSize);
+                return;
+            }
+            Item::WindowSize => {
+                self.window_request = self.window_sizes().get(i - 1).copied();
+                return;
+            }
             Item::Skin => {
                 let skin = if i == 0 { String::new() } else { name.clone() };
                 if skin != self.cfg.skin {
@@ -1689,11 +1764,24 @@ impl State {
                     a.sfx(audio::Sfx::Don);
                 }
             }
+            Item::DataFolder => {
+                let i = if cfg!(target_os = "android") { i + 1 } else { i };
+                match i {
+                    0 => self.browse_folder(Item::DataFolder),
+                    1 => self.start_edit(Item::DataFolder),
+                    _ => {
+                        if let Err(e) = self.move_data_to(None) {
+                            self.toast(e);
+                        }
+                    }
+                }
+                return;
+            }
             Item::SongsFolder => {
                 // Without the "Browse..." row (Android) the others move up one.
                 let i = if cfg!(target_os = "android") { i + 1 } else { i };
                 match i {
-                    0 => self.browse_songs_folder(),
+                    0 => self.browse_folder(Item::SongsFolder),
                     1 => self.start_edit(Item::SongsFolder),
                     _ => {
                         if let Err(e) = self.set_songs_folder(None) {
@@ -1728,7 +1816,9 @@ impl State {
             Item::AccentHue => format!("#{:06x}", c.accent),
             Item::DonColour => format!("#{:06x}", c.note_colours.don()),
             Item::KatColour => format!("#{:06x}", c.note_colours.kat()),
+            Item::WindowSize => format!("{:.0}x{:.0}", self.window_w, self.window_h),
             Item::SongsFolder => c.songs_folder.as_ref().or(self.song_dirs.first()).map(|d| d.display().to_string()).unwrap_or_default(),
+            Item::DataFolder => config::data_dir().map(|d| d.display().to_string()).unwrap_or_default(),
             _ => return,
         };
         if let Some(i) = settings::ITEMS.iter().position(|(_, it)| *it == item) {
@@ -1741,7 +1831,7 @@ impl State {
     fn edit_key(&mut self, code: KeyCode, text: Option<&str>) {
         let ctrl = self.modifiers_ctrl;
         let Some(edit) = &mut self.settings_ui.editing else { return };
-        let max = if edit.item == Item::SongsFolder { 400 } else { 12 };
+        let max = if matches!(edit.item, Item::SongsFolder | Item::DataFolder) { 400 } else { 12 };
         match code {
             KeyCode::Escape => self.settings_ui.editing = None,
             KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -1792,18 +1882,27 @@ impl State {
                 let hex = if t.starts_with('#') { t.to_string() } else { format!("#{t}") };
                 c.accent = render::parse_accent(t).or_else(|| render::parse_accent(&hex)).ok_or("type a colour like #ff8800")?;
             }
+            Item::WindowSize => {
+                let (w, h) = layout::parse_size(text).ok_or("type a size like 1280x720")?;
+                let (mw, mh) = self.monitor_size;
+                if w > mw || h > mh {
+                    return Err(format!("{w}x{h} is bigger than the screen ({mw}x{mh})"));
+                }
+                self.window_request = Some((w, h));
+                return Ok(());
+            }
             Item::DonColour | Item::KatColour => {
                 let typed = multiverse::parse_hex(text).ok_or("type a colour like #eb452c")?;
                 let (don, kat) = (c.note_colours.don(), c.note_colours.kat());
                 c.note_colours = if item == Item::DonColour { multiverse::Colours::own(typed, kat) } else { multiverse::Colours::own(don, typed) };
             }
-            Item::SongsFolder => {
+            Item::SongsFolder | Item::DataFolder => {
                 let t = text.trim().trim_matches('"');
                 let path = match (t.strip_prefix("~/"), std::env::var_os("HOME")) {
                     (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
                     _ => PathBuf::from(t),
                 };
-                return self.set_songs_folder(Some(path));
+                return if item == Item::SongsFolder { self.set_songs_folder(Some(path)) } else { self.move_data_to(Some(path)) };
             }
             _ => return Ok(()),
         }
@@ -1813,13 +1912,19 @@ impl State {
         Ok(())
     }
 
-    /// Opens the system's folder dialog for the Songs folder (on its own thread: it blocks).
-    /// With no dialog to show, the path is typed in settings instead.
     fn browse_songs_folder(&mut self) {
+        self.browse_folder(Item::SongsFolder);
+    }
+
+    /// Opens the system's folder dialog for the Songs folder or the game data folder (on its
+    /// own thread: it blocks). With no dialog to show, the path is typed in settings instead.
+    fn browse_folder(&mut self, item: Item) {
         if self.folder_pick.is_some() {
             return;
         }
-        let start = self.cfg.songs_folder.clone().or_else(|| self.song_dirs.first().cloned()).or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_default();
+        self.folder_pick_for = item;
+        let current = if item == Item::DataFolder { config::data_dir() } else { self.cfg.songs_folder.clone().or_else(|| self.song_dirs.first().cloned()) };
+        let start = current.or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_default();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(library::pick_folder(&start));
@@ -1837,9 +1942,11 @@ impl State {
         };
         self.folder_pick = None;
         self.select.picking_folder = false;
+        let item = self.folder_pick_for;
         match picked {
             Ok(Some(dir)) => {
-                if let Err(e) = self.set_songs_folder(Some(dir)) {
+                let done = if item == Item::DataFolder { self.move_data_to(Some(dir)) } else { self.set_songs_folder(Some(dir)) };
+                if let Err(e) = done {
                     self.toast(e);
                 }
             }
@@ -1848,9 +1955,68 @@ impl State {
                 if !matches!(self.scene, Scene::Settings { .. }) {
                     self.open_settings();
                 }
-                self.start_edit(Item::SongsFolder);
+                self.start_edit(item);
                 self.toast(format!("{e}: type the folder's path"));
             }
+        }
+    }
+
+    /// Moves the game's data (replays, scores, videos, taiko-rs's own Songs and Skins, caches)
+    /// into `target` (into a taiko-rs folder there, unless it is one; None: back to the usual
+    /// places), on its own thread. `poll_data_move` takes it from there.
+    fn move_data_to(&mut self, target: Option<PathBuf>) -> Result<(), String> {
+        if matches!(&self.scene, Scene::Settings { prev } if !matches!(**prev, Scene::Select)) {
+            return Err("move the game data from song select".into());
+        }
+        if self.data_move.is_some() {
+            return Err("the game data is already on its way".into());
+        }
+        let target = target.map(|t| if t.file_name().is_some_and(|n| n == "taiko-rs") { t } else { t.join("taiko-rs") });
+        if target == self.cfg.data_folder {
+            return Err("the game data is there already".into());
+        }
+        if let Some(t) = &target {
+            if !t.parent().is_some_and(std::path::Path::is_dir) {
+                return Err(format!("{} isn't a folder", t.parent().unwrap_or(t).display()));
+            }
+            std::fs::create_dir_all(t).map_err(|e| format!("{}: {e}", t.display()))?;
+        }
+        let (done, total) = (Arc::new(std::sync::atomic::AtomicU64::new(0)), Arc::new(std::sync::atomic::AtomicU64::new(0)));
+        let (tx, rx) = mpsc::channel();
+        let (from, to) = (self.cfg.data_folder.clone(), target.clone());
+        let (d, t) = (done.clone(), total.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(config::move_data(from.as_deref(), to.as_deref(), &d, &t));
+        });
+        self.data_move = Some(DataMove { rx, done, total, to: target });
+        Ok(())
+    }
+
+    /// While the game data moves: its progress; once it has, the game uses it there (and finds
+    /// the maps downloaded into its Songs folder there).
+    fn poll_data_move(&mut self) {
+        let Some(m) = &self.data_move else { return };
+        let result = match m.rx.try_recv() {
+            Ok(r) => r,
+            Err(mpsc::TryRecvError::Empty) => {
+                let (done, total) = (m.done.load(Ordering::Relaxed) as f64, m.total.load(Ordering::Relaxed) as f64);
+                let mb = |b: f64| b / 1e6;
+                self.toast(format!("moving the game data: {:.0} of {:.0} MB", mb(done), mb(total)));
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => Err("the move stopped".into()),
+        };
+        let Some(m) = self.data_move.take() else { return };
+        match result {
+            Ok(()) => {
+                self.cfg.data_folder = m.to;
+                config::set_data_folder(self.cfg.data_folder.clone());
+                self.cfg.save();
+                let _ = self.set_songs_folder(self.cfg.songs_folder.clone());
+                let at = config::data_dir().map(|d| d.display().to_string()).unwrap_or_default();
+                self.toast(format!("game data moved to {at}"));
+            }
+            Err(e) => self.toast(format!("couldn't move the game data: {e}")),
         }
     }
 
@@ -2623,6 +2789,15 @@ impl State {
             let p = layout::preset_area(w, h, self.window_w, self.window_h);
             (p.w - a.w).abs() * self.window_w < 1.5 && (p.h - a.h).abs() * self.window_h < 1.5
         })
+    }
+
+    /// Window sizes offered: the usual ones and the screen's own modes that fit on it with room
+    /// for a title bar, largest first.
+    fn window_sizes(&self) -> Vec<(u32, u32)> {
+        let (mw, mh) = self.monitor_size;
+        let sizes = layout::presets(&self.monitor_modes, mw, mh.saturating_sub(60));
+        // Grouped like the playfield presets: the screen's aspect ratio first, largest first.
+        layout::group_presets(&sizes, self.monitor_size).into_iter().flat_map(|(_, l)| l).collect()
     }
 
     fn screen_size(&self) -> (u32, u32) {
@@ -3821,7 +3996,7 @@ impl State {
     fn record_play(&mut self, entry: usize) {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let path = self.library[entry].path.clone();
-        if let Some(file) = config::user_dir(false).map(|d| d.join("plays.tsv")) {
+        if let Some(file) = config::data_dir().map(|d| d.join("plays.tsv")) {
             use std::io::Write;
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file) {
                 let _ = writeln!(f, "{now}\t{}", path.display());
@@ -4962,6 +5137,10 @@ impl State {
     /// should be captured.
     fn build_frame(&mut self, canvas: &mut Canvas, now: Instant, width: f32) -> Option<String> {
         self.refresh_play_offset();
+        if self.window_resized_at.is_some_and(|t| now.saturating_duration_since(t) > Duration::from_secs(1)) {
+            self.window_resized_at = None;
+            self.cfg.save();
+        }
         // Notes are drawn this far ahead: the player's visual offset and, with vsync, the time
         // until the frame is on screen.
         let visual_offset = self.cfg.visual_offset_ms + self.vsync_lead() + self.pace_shift_ms;
@@ -4993,6 +5172,7 @@ impl State {
         self.frame_clip = None;
         self.poll_scan();
         self.poll_folder_pick();
+        self.poll_data_move();
         {
             // The Download tab previews remote maps through the same preview.
             let browsing = matches!(self.scene, Scene::Download);
@@ -5635,7 +5815,7 @@ impl State {
             Scene::Settings { prev } => {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
-                let footer = if self.settings_ui.editing.as_ref().is_some_and(|e| e.item == Item::SongsFolder) {
+                let footer = if self.settings_ui.editing.as_ref().is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder)) {
                     "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
                 } else if self.settings_ui.editing.is_some() {
                     "type a value   Enter set   Esc cancel".to_string()
@@ -6392,6 +6572,8 @@ enum UserEvent {
     /// Files dragged over the window, on Wayland (winit reports them itself elsewhere).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     FileDrag(FileDrag),
+    /// A window size was picked (`State::window_request`).
+    WindowRequest,
 }
 
 /// Files dragged over the window, or dropped on it.
@@ -6509,6 +6691,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             render::set_frame_time(Some(now));
             s.frame_acquired = Some(acquired);
             s.pace_shift_ms = pace_shift_ms;
+            s.seen_refresh_ms = pacer.refresh_ms();
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
             render::set_frame_time(None);
             render::set_text_grid(None);
@@ -6518,6 +6701,10 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                         eprintln!("layout: {p}");
                     }
                 }
+            }
+            // Picked from a scripted key or a frame: the window thread applies it.
+            if s.window_request.is_some() {
+                let _ = proxy.send_event(UserEvent::WindowRequest);
             }
             let hide = s.cursor_hidden(now);
             if hide != cursor_hidden {
@@ -6629,132 +6816,30 @@ impl App {
             None => w.set_cursor(icon),
         }
     }
+
+    /// The screen the window is on: its size, modes and refresh. Read again as the window is
+    /// resized, moved or focused: on Wayland it isn't known until the window is on screen, and
+    /// the window can go to another one.
+    fn read_monitor(&self) {
+        let Some(m) = self.window.as_ref().and_then(|w| w.current_monitor()) else { return };
+        let mut s = lock(&self.state);
+        s.monitor_size = (m.size().width, m.size().height);
+        let modes: Vec<(u32, u32)> = m.video_modes().map(|v| (v.size().width, v.size().height)).collect();
+        if !modes.is_empty() {
+            s.monitor_modes = modes;
+        }
+        if let Some(hz) = m.refresh_rate_millihertz().map(|mhz| mhz as f64 / 1000.0).filter(|&hz| hz >= 24.0)
+            && (hz - s.refresh_hz).abs() > 0.01
+        {
+            eprintln!("screen refresh {hz:.2} Hz");
+            s.refresh_hz = hz;
+            s.refresh_status();
+        }
+    }
 }
 
-impl ApplicationHandler<UserEvent> for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(window) = &self.window {
-            // Back from the background (Android): the old window is gone, draw into the new one.
-            let Some(instance) = &self.instance else { return };
-            let size = window.inner_size();
-            match instance.create_surface(window.clone()) {
-                Ok(surface) => {
-                    let mut s = lock(&self.state);
-                    s.surface_swap = Some((Some(surface), size.width, size.height));
-                    s.window_w = size.width as f32;
-                    s.window_h = size.height as f32;
-                    s.set_background(false);
-                }
-                Err(e) => eprintln!("can't draw to the new window: {e}"),
-            }
-            return;
-        }
-        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
-        let mut attrs = Window::default_attributes()
-            .with_title("taiko-rs")
-            .with_window_icon(logo::window_icon())
-            .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
-            .with_fullscreen(lock(&self.state).cfg.fullscreen.then_some(Fullscreen::Borderless(None)));
-        #[cfg(target_os = "linux")]
-        {
-            use winit::platform::wayland::WindowAttributesExtWayland;
-            attrs = attrs.with_name("taiko-rs", "taiko-rs");
-        }
-        let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-        #[cfg(target_os = "linux")]
-        {
-            use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
-            if let Ok(RawDisplayHandle::Wayland(h)) = window.display_handle().map(|h| h.as_raw()) {
-                let proxy = self.proxy.clone();
-                wayland_dnd::start(h.display.as_ptr(), move |drag| {
-                    let _ = proxy.send_event(UserEvent::FileDrag(drag));
-                });
-            }
-        }
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
-            event_loop.owned_display_handle(),
-        )));
-        let present = lock(&self.state).cfg.present;
-        let renderer = match Renderer::new(&instance, window.clone(), present) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("failed to initialise GPU: {e}");
-                event_loop.exit();
-                return;
-            }
-        };
-        let refresh_hz = window
-            .current_monitor()
-            .and_then(|m| m.refresh_rate_millihertz())
-            .map(|mhz| mhz as f64 / 1000.0)
-            .unwrap_or(60.0);
-        {
-            let mut s = lock(&self.state);
-            s.adapter = renderer.adapter_name.clone();
-            s.window_w = window.inner_size().width as f32;
-            s.window_h = window.inner_size().height as f32;
-            s.monitor_modes = window
-                .current_monitor()
-                .map(|m| m.video_modes().map(|v| (v.size().width, v.size().height)).collect())
-                .unwrap_or_default();
-            s.refresh_presets();
-            s.refresh_hz = refresh_hz;
-            s.refresh_status();
-            eprintln!("renderer: {}, present: {}, refresh {refresh_hz:.2} Hz", renderer.adapter_name, renderer.present.name());
-            s.present = renderer.present;
-            s.cfg.present = renderer.present;
-            s.refresh_hz = refresh_hz;
-        }
-        let state = self.state.clone();
-        let proxy = self.proxy.clone();
-        self.render_thread = Some(
-            std::thread::Builder::new()
-                .name("render".into())
-                .spawn(move || render_loop(state, renderer, proxy))
-                .expect("spawn render thread"),
-        );
-        // Input only wakes this thread when there is something to do.
-        event_loop.set_control_flow(ControlFlow::Wait);
-        self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
-        self.cursor_accent = render::accent();
-        self.window = Some(window);
-        self.instance = Some(instance);
-        self.set_cursor(self.cursor);
-    }
-
-    /// Android only: the window is about to be destroyed. The render thread must let go of its
-    /// surface first, so wait (briefly) until it has.
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        {
-            let mut s = lock(&self.state);
-            s.surface_swap = Some((None, 0, 0));
-            s.set_background(true);
-        }
-        let deadline = Instant::now() + Duration::from_millis(1000);
-        while self.render_thread.as_ref().is_some_and(|t| !t.is_finished())
-            && lock(&self.state).surface_swap.is_some()
-            && Instant::now() < deadline
-        {
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    }
-
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
-        match event {
-            UserEvent::Stopped => event_loop.exit(),
-            UserEvent::FileDrag(drag) => lock(&self.state).file_drag(drag),
-            UserEvent::HideCursor(hide) => {
-                if hide != self.cursor_hidden {
-                    self.cursor_hidden = hide;
-                    if let Some(w) = &self.window {
-                        w.set_cursor_visible(!hide);
-                    }
-                }
-            }
-        }
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+impl App {
+    fn handle_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         // A new UI colour: the pointer is drawn in it too.
         if self.cursors.is_some() && self.cursor_accent != render::accent() {
             if let Some(window) = &self.window {
@@ -6768,13 +6853,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::HoveredFile(_) => lock(&self.state).file_drag(FileDrag::Hover),
             WindowEvent::HoveredFileCancelled => lock(&self.state).file_drag(FileDrag::Left),
             WindowEvent::DroppedFile(path) => lock(&self.state).file_drag(FileDrag::Drop(vec![path])),
-            WindowEvent::Resized(size) => {
-                let mut s = lock(&self.state);
-                s.want_size = Some((size.width, size.height));
-                s.window_w = size.width as f32;
-                s.window_h = size.height as f32;
-                s.refresh_presets();
-            }
+            WindowEvent::Resized(size) => self.resized(size),
             WindowEvent::KeyboardInput { event, is_synthetic, .. } => {
                 // Timestamp before anything else, including taking the lock.
                 let at = Instant::now();
@@ -6798,7 +6877,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 s.key(code, event.repeat, event.text.as_deref(), at, self.window.as_deref());
             }
+            WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } => self.read_monitor(),
             WindowEvent::Focused(true) => {
+                self.read_monitor();
                 let mut s = lock(&self.state);
                 s.focused = true;
                 s.focus_seen = true;
@@ -6862,6 +6943,179 @@ impl ApplicationHandler<UserEvent> for App {
         if self.render_thread.is_none() && lock(&self.state).quit {
             event_loop.exit();
         }
+    }
+
+    /// The window's new size (a resize event, or a size requested and granted at once).
+    fn resized(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+        self.read_monitor();
+        let mut s = lock(&self.state);
+        s.want_size = Some((size.width, size.height));
+        s.window_w = size.width as f32;
+        s.window_h = size.height as f32;
+        s.refresh_presets();
+        // Out of fullscreen, the size is remembered for the next start (saved once it stops
+        // changing: dragging an edge resizes many times a second).
+        if !s.fullscreen && size.width > 0 && size.height > 0 {
+            s.cfg.window_size = Some((size.width, size.height));
+            s.window_resized_at = Some(Instant::now());
+        }
+    }
+
+    /// A window size picked in settings: out of fullscreen if need be, then that size.
+    fn apply_window_request(&mut self) {
+        let Some(window) = &self.window else { return };
+        let mut s = lock(&self.state);
+        let Some((w, h)) = s.window_request.take() else { return };
+        if window.fullscreen().is_some() {
+            window.set_fullscreen(None);
+            s.fullscreen = false;
+            s.cfg.fullscreen = false;
+        }
+        let granted = window.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
+        s.cfg.window_size = Some((w, h));
+        s.cfg.save();
+        drop(s);
+        // Granted at once (Wayland): no resize event comes for it.
+        if let Some(size) = granted {
+            self.resized(size);
+        }
+    }
+}
+
+impl ApplicationHandler<UserEvent> for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(window) = &self.window {
+            // Back from the background (Android): the old window is gone, draw into the new one.
+            let Some(instance) = &self.instance else { return };
+            let size = window.inner_size();
+            match instance.create_surface(window.clone()) {
+                Ok(surface) => {
+                    let mut s = lock(&self.state);
+                    s.surface_swap = Some((Some(surface), size.width, size.height));
+                    s.window_w = size.width as f32;
+                    s.window_h = size.height as f32;
+                    s.set_background(false);
+                }
+                Err(e) => eprintln!("can't draw to the new window: {e}"),
+            }
+            return;
+        }
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut attrs = Window::default_attributes()
+            .with_title("taiko-rs")
+            .with_window_icon(logo::window_icon())
+            .with_min_inner_size(winit::dpi::LogicalSize::new(MIN_WINDOW.0, MIN_WINDOW.1))
+            .with_fullscreen(lock(&self.state).cfg.fullscreen.then_some(Fullscreen::Borderless(None)));
+        #[cfg(target_os = "linux")]
+        {
+            use winit::platform::wayland::WindowAttributesExtWayland;
+            attrs = attrs.with_name("taiko-rs", "taiko-rs");
+        }
+        let attrs = match lock(&self.state).cfg.window_size {
+            Some((w, h)) => attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h)),
+            None => attrs.with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0)),
+        };
+        let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
+        #[cfg(target_os = "linux")]
+        {
+            use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+            if let Ok(RawDisplayHandle::Wayland(h)) = window.display_handle().map(|h| h.as_raw()) {
+                let proxy = self.proxy.clone();
+                wayland_dnd::start(h.display.as_ptr(), move |drag| {
+                    let _ = proxy.send_event(UserEvent::FileDrag(drag));
+                });
+            }
+        }
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
+            event_loop.owned_display_handle(),
+        )));
+        let present = lock(&self.state).cfg.present;
+        let renderer = match Renderer::new(&instance, window.clone(), present) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("failed to initialise GPU: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+        let refresh_hz = window
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz())
+            .map(|mhz| mhz as f64 / 1000.0)
+            .unwrap_or(60.0);
+        {
+            let mut s = lock(&self.state);
+            s.adapter = renderer.adapter_name.clone();
+            s.window_w = window.inner_size().width as f32;
+            s.window_h = window.inner_size().height as f32;
+            s.monitor_modes = window
+                .current_monitor()
+                .map(|m| m.video_modes().map(|v| (v.size().width, v.size().height)).collect())
+                .unwrap_or_default();
+            if let Some(m) = window.current_monitor() {
+                s.monitor_size = (m.size().width, m.size().height);
+            }
+            s.refresh_presets();
+            s.refresh_hz = refresh_hz;
+            s.refresh_status();
+            eprintln!("renderer: {}, present: {}, refresh {refresh_hz:.2} Hz", renderer.adapter_name, renderer.present.name());
+            s.present = renderer.present;
+            s.cfg.present = renderer.present;
+            s.refresh_hz = refresh_hz;
+        }
+        let state = self.state.clone();
+        let proxy = self.proxy.clone();
+        self.render_thread = Some(
+            std::thread::Builder::new()
+                .name("render".into())
+                .spawn(move || render_loop(state, renderer, proxy))
+                .expect("spawn render thread"),
+        );
+        // Input only wakes this thread when there is something to do.
+        event_loop.set_control_flow(ControlFlow::Wait);
+        self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
+        self.cursor_accent = render::accent();
+        self.window = Some(window);
+        self.instance = Some(instance);
+        self.set_cursor(self.cursor);
+    }
+
+    /// Android only: the window is about to be destroyed. The render thread must let go of its
+    /// surface first, so wait (briefly) until it has.
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        {
+            let mut s = lock(&self.state);
+            s.surface_swap = Some((None, 0, 0));
+            s.set_background(true);
+        }
+        let deadline = Instant::now() + Duration::from_millis(1000);
+        while self.render_thread.as_ref().is_some_and(|t| !t.is_finished())
+            && lock(&self.state).surface_swap.is_some()
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::Stopped => event_loop.exit(),
+            UserEvent::FileDrag(drag) => lock(&self.state).file_drag(drag),
+            UserEvent::WindowRequest => self.apply_window_request(),
+            UserEvent::HideCursor(hide) => {
+                if hide != self.cursor_hidden {
+                    self.cursor_hidden = hide;
+                    if let Some(w) = &self.window {
+                        w.set_cursor_visible(!hide);
+                    }
+                }
+            }
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        self.handle_window_event(event_loop, event);
+        self.apply_window_request();
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
@@ -6974,6 +7228,7 @@ impl State {
             smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
             frame_acquired: None,
             pace_shift_ms: 0.0,
+            seen_refresh_ms: None,
             started: Instant::now(),
             want_size: None,
             touch_used: false,
@@ -7001,6 +7256,8 @@ impl State {
             presence_at: None,
             scan,
             folder_pick: None,
+            folder_pick_for: Item::SongsFolder,
+            data_move: None,
             play_when_scanned,
             wheel_acc: 0.0,
             mouse: (0.0, 0.0),
@@ -7019,6 +7276,9 @@ impl State {
             bg_brightness: 0.0,
             resolutions: Vec::new(),
             monitor_modes: Vec::new(),
+            monitor_size: (1920, 1080),
+            window_request: None,
+            window_resized_at: None,
         }
     }
 }
@@ -7060,6 +7320,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 /// Scans the library, opens audio and runs the game until it quits. `args`: songs folders, map
 /// folders, .osz or a single .osu to play; empty = the usual song folders.
 fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEvent>) {
+    config::set_data_folder(cfg.data_folder.clone());
     library::set_songs_folder(cfg.songs_folder.clone());
     multiverse::set(cfg.universes);
     shapeshift::set(cfg.shapeshift);
