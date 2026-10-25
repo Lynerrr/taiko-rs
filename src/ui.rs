@@ -947,7 +947,7 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
     let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
     c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
     c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "MODS");
-    c.text(px + 70.0, py + 16.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit(6.0, pw - 180.0, "arrows + Space toggle   R shuffles   Backspace clears   M Multiverse setup   F1 / Esc closes"));
+    c.text(px + 70.0, py + 16.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit(6.0, pw - 180.0, "arrows + Space toggle   R shuffles   Backspace clears   C customize (Multiverse, Shapeshift)   F1 / Esc closes"));
     let mult = mods.multiplier();
     let rank = if mods.unranked() { "  (not saved)" } else { "" };
     c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &format!("score x{mult:.2}{rank}"));
@@ -987,8 +987,29 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
     c.button(px + pw - bw - 12.0, py + ph - 24.0, bw, 16.0, "Close", 7.0, Hit::Key(KeyCode::F1), true);
     c.button(px + pw - 2.0 * bw - 18.0, py + ph - 24.0, bw, 16.0, "Clear", 7.0, Hit::Key(KeyCode::Backspace), false);
     c.button(px + pw - 3.0 * bw - 24.0, py + ph - 24.0, bw, 16.0, "Shuffle", 7.0, Hit::Key(KeyCode::KeyR), false);
-    // Multiverse's universes: their own colours, shapes, speeds and mods.
-    c.button(px + pw - 4.0 * bw - 30.0, py + ph - 24.0, bw, 16.0, "Multiverse", 7.0, Hit::Key(KeyCode::KeyM), mods.has(crate::mods::Mod::Multiverse));
+    // The settings of the mods that have some (Multiverse's universes, Shapeshift's shapes),
+    // only while one of them is on.
+    if !crate::mods::customizable(mods).is_empty() {
+        c.button(px + pw - 4.0 * bw - 30.0, py + ph - 24.0, bw, 16.0, "Customize", 7.0, Hit::Key(KeyCode::KeyC), true);
+    }
+}
+
+/// The mod customization's tabs, above its panel: one per customizable mod that's on.
+pub fn draw_customization_tabs(c: &mut Canvas, tabs: &[crate::mods::Mod], open: crate::mods::Mod) {
+    let (y, h) = (20.0, 18.0);
+    let mut x = 16.0 + c.text(16.0, y + 4.0, 9.0, rgba(0xffffff, 1.0), "MOD CUSTOMIZATION") + 12.0;
+    for (i, &m) in tabs.iter().enumerate() {
+        let name = m.name().to_uppercase();
+        let tw = Canvas::text_width(7.0, &name) + 20.0;
+        let on = m == open;
+        c.round_rect(x, y, tw, h, 5.0, rgba(if on { 0x34344a } else { 0x1d1d27 }, 1.0), rgba(if on { accent() } else { 0x3a3a4e }, 1.0), if on { 1.5 } else { 1.0 });
+        c.text_centered(x + tw / 2.0, y + 5.5, 7.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), &name);
+        c.hit(x, y, tw, h, Hit::CustomTab(i));
+        x += tw + 6.0;
+    }
+    if tabs.len() > 1 {
+        c.text(x + 4.0, y + 6.0, 6.0, rgba(0x6f6f86, 1.0), "Tab: next");
+    }
 }
 
 /// Maps hidden from the song list in taiko-rs only (osu! and the Songs folder are untouched):

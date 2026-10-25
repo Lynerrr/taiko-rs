@@ -34,6 +34,7 @@ mod preview;
 mod render;
 mod scores;
 mod settings;
+mod shapeshift;
 mod skin;
 mod social;
 mod splash;
@@ -246,8 +247,10 @@ struct State {
     pending_mods: Mods,
     /// The mod select is open: the mod the keyboard is on (index into `mods::ALL`).
     mod_select: Option<usize>,
-    /// The Multiverse setup, over the mod select.
+    /// The mod customization over the mod select: the Multiverse tab or the Shapeshift tab (at
+    /// most one is open).
     universe_setup: Option<multiverse::Setup>,
+    shapeshift_setup: Option<shapeshift::Setup>,
     /// Replay files of the leaderboard rows drawn this frame.
     leaderboard: Vec<PathBuf>,
     /// A video export in progress, and the editor's last message.
@@ -3046,8 +3049,12 @@ impl State {
             if pressed {
                 let (vx, vy) = self.mouse_virtual();
                 let hit = self.hit_at(vx, vy);
-                let ours = if self.universe_setup.is_some() {
-                    matches!(hit, Some(render::Hit::UniverseCell(..) | render::Hit::UniversePreset(_) | render::Hit::UniversePresetDelete(_) | render::Hit::Key(_)))
+                let ours = if self.customization_tab().is_some() {
+                    use render::Hit as H;
+                    matches!(
+                        hit,
+                        Some(H::UniverseCell(..) | H::UniversePreset(_) | H::UniversePresetDelete(_) | H::ShapeshiftCell(..) | H::ShapeshiftMove(_) | H::CustomTab(_) | H::Key(_))
+                    )
                 } else {
                     matches!(hit, Some(render::Hit::ModToggle(_) | render::Hit::Key(_)))
                 };
@@ -3769,10 +3776,59 @@ impl State {
                 self.cfg.mods = Mods::shuffle(seed);
                 self.mods_changed();
             }
-            KeyCode::KeyM => self.universe_setup = Some(multiverse::Setup::new(game::FIRST_FOCUS, 0)),
+            KeyCode::KeyC | KeyCode::KeyM => match mods::customizable(self.cfg.mods).first() {
+                Some(&m) => self.open_customization(m),
+                None => self.toast("switch on Multiverse or Shapeshift to customize it".to_string()),
+            },
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
         }
+    }
+
+    /// Opens the mod customization on mod `m`'s tab.
+    fn open_customization(&mut self, m: mods::Mod) {
+        self.universe_setup = (m == mods::Mod::Multiverse).then(|| multiverse::Setup::new(game::FIRST_FOCUS, 0));
+        self.shapeshift_setup = (m == mods::Mod::Shapeshift).then(shapeshift::Setup::default);
+    }
+
+    /// The mod customization's open tab.
+    fn customization_tab(&self) -> Option<mods::Mod> {
+        if self.universe_setup.is_some() {
+            Some(mods::Mod::Multiverse)
+        } else {
+            self.shapeshift_setup.is_some().then_some(mods::Mod::Shapeshift)
+        }
+    }
+
+    /// Keys in the mod customization: Tab goes to the next tab (closes it with only one), the
+    /// rest go to the open one.
+    fn customization_key(&mut self, code: KeyCode, text: Option<&str>, repeat: bool) {
+        let typing = self.universe_setup.as_ref().is_some_and(|s| s.typing.is_some());
+        let tabs = mods::customizable(self.cfg.mods);
+        if code == KeyCode::Tab && !typing && tabs.len() > 1 {
+            let at = tabs.iter().position(|&m| Some(m) == self.customization_tab()).unwrap_or(0);
+            self.open_customization(tabs[(at + 1) % tabs.len()]);
+            return;
+        }
+        let arrows = matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight);
+        if repeat && !typing && !arrows {
+            return;
+        }
+        if let Some(setup) = &mut self.universe_setup {
+            let action = setup.key(code, text, self.modifiers_shift, &mut self.cfg.universes, &mut self.cfg.universe_presets, game::FIRST_FOCUS);
+            self.universe_action(action);
+        } else if let Some(setup) = &mut self.shapeshift_setup {
+            if matches!(code, KeyCode::Escape | KeyCode::F1 | KeyCode::Backspace | KeyCode::Tab) {
+                self.shapeshift_setup = None;
+            } else if setup.key(code, self.modifiers_shift, &mut self.cfg.shapeshift) {
+                self.shapeshift_changed();
+            }
+        }
+    }
+
+    fn shapeshift_changed(&mut self) {
+        shapeshift::set(self.cfg.shapeshift);
+        self.cfg.save();
     }
 
     /// After a key or click in the Multiverse setup: the universes are saved and drawn with, or
@@ -4507,12 +4563,8 @@ impl State {
             }
             return;
         }
-        if let Some(setup) = &mut self.universe_setup {
-            let typing = setup.typing.is_some();
-            if !repeat || typing || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-                let action = setup.key(code, text, self.modifiers_shift, &mut self.cfg.universes, &mut self.cfg.universe_presets, game::FIRST_FOCUS);
-                self.universe_action(action);
-            }
+        if self.customization_tab().is_some() {
+            self.customization_key(code, text, repeat);
             return;
         }
         if self.mod_select.is_some() {
@@ -5463,6 +5515,12 @@ impl State {
             if let Some(setup) = &self.universe_setup {
                 setup.draw(canvas, &self.cfg.universes, &self.cfg.universe_presets, game::FIRST_FOCUS);
             }
+            if let Some(setup) = &self.shapeshift_setup {
+                setup.draw_panel(canvas, &self.cfg.shapeshift, game::rail_outline);
+            }
+            if let Some(tab) = self.customization_tab() {
+                ui::draw_customization_tabs(canvas, &mods::customizable(self.cfg.mods), tab);
+            }
         }
         if self.settings_ui.dropdown.is_some() {
             let (groups, current, screen) = (self.preset_groups(), self.current_preset(), self.screen_size());
@@ -5989,6 +6047,23 @@ impl State {
                 let dir = if self.modifiers_shift { -1 } else { 1 };
                 multiverse::Setup::change(&mut self.cfg.universes, row, col, dir);
                 self.universe_action(multiverse::Action::Changed);
+            }
+            Hit::ShapeshiftCell(row, col) => {
+                self.shapeshift_setup = Some(shapeshift::Setup { row, col });
+                shapeshift::Setup::pick(&mut self.cfg.shapeshift, row, col);
+                self.shapeshift_changed();
+            }
+            Hit::ShapeshiftMove(dir) => {
+                if let Some(setup) = &mut self.shapeshift_setup {
+                    if setup.move_shape(&mut self.cfg.shapeshift, dir) {
+                        self.shapeshift_changed();
+                    }
+                }
+            }
+            Hit::CustomTab(i) => {
+                if let Some(&m) = mods::customizable(self.cfg.mods).get(i) {
+                    self.open_customization(m);
+                }
             }
             Hit::UniversePreset(i) => {
                 let action = multiverse::Setup::load(&mut self.cfg.universes, &self.cfg.universe_presets, i);
@@ -6612,6 +6687,7 @@ impl State {
             pending_mods: Mods::NONE,
             mod_select: None,
             universe_setup: None,
+            shapeshift_setup: None,
             leaderboard: Vec::new(),
             export: None,
             video_status: String::new(),
@@ -6726,6 +6802,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEvent>) {
     library::set_songs_folder(cfg.songs_folder.clone());
     multiverse::set(cfg.universes);
+    shapeshift::set(cfg.shapeshift);
     multiverse::set_note_colours(cfg.note_colours);
     let inputs = if args.is_empty() { song_inputs(&cfg) } else { args.clone() };
     let songs_dir = download_dir(&inputs);

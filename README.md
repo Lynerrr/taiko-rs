@@ -38,7 +38,8 @@ Settings → Updates.
   osu!'s star ratings, and collections and play history from osu!stable.
 - **73 mods.** osu!'s and lazer's mods, plus taiko-rs's own: scroll and SV experiments, visual
   tricks, lanes bent into rails, a moving playfield, and Multiverse's eight playfields, each with
-  its own note colours, shapes, speed and mods (**M** in the mod select sets them up). Press **R**
+  its own note colours, shapes, speed and mods. **C** in the mod select customizes the mods that have
+  settings (Multiverse, Shapeshift) while they are on. Press **R**
   in the mod select for a playable random set.
 - **Online.** Lobbies on the taiko-rs server or direct P2P, live scoreboards, spectating, friends,
   chat, and watching friends' solo plays.

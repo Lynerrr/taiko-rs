@@ -195,6 +195,16 @@ fn assert_every_screen_fits() {
 
     s.open_mod_select();
     check(&mut s, "mod select", &mut out);
+    // A customizable mod on: the Customize button and its tab (Multiverse and the rails conflict).
+    let mods_before = s.cfg.mods;
+    s.cfg.mods = mods::Mods::parse("MV,SS");
+    check(&mut s, "mod select, customizable mod on", &mut out);
+    s.open_customization(mods::Mod::Shapeshift);
+    check(&mut s, "shapeshift setup", &mut out);
+    s.cfg.shapeshift.shapes[2].1 = false;
+    s.shapeshift_setup = Some(shapeshift::Setup { row: 3, col: 4 });
+    check(&mut s, "shapeshift setup, shapes row", &mut out);
+    s.shapeshift_setup = None;
     s.universe_setup = Some(multiverse::Setup::new(3, 7));
     check(&mut s, "multiverse setup", &mut out);
     // Presets with long names (more than fit), one of them the universes now, and own colours
@@ -210,6 +220,8 @@ fn assert_every_screen_fits() {
     s.universe_setup = None;
     s.cfg.universe_presets.clear();
     s.mod_select = None;
+    s.cfg.mods = mods_before;
+    s.cfg.shapeshift = Default::default();
 
     s.open_collections();
     check(&mut s, "collections", &mut out);

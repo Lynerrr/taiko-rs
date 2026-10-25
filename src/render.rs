@@ -1451,6 +1451,11 @@ pub enum Hit {
     ChoiceRow(usize),
     /// Multiverse setup: a universe's (row) colours, shape, speed or a mod (column).
     UniverseCell(usize, usize),
+    /// Shapeshift setup: a choice (row, column) / move the selected shape earlier or later.
+    ShapeshiftCell(usize, usize),
+    ShapeshiftMove(i32),
+    /// Mod customization: a tab (index into the customizable mods that are on).
+    CustomTab(usize),
     /// Multiverse setup: load a preset / delete one of the player's.
     UniversePreset(usize),
     UniversePresetDelete(usize),

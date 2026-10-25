@@ -111,6 +111,14 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
     ("PLAYFIELD", 0xff5fa2, &[Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal, Multiverse]),
 ];
 
+/// The mods with settings of their own, in the order of the mod customization's tabs.
+const CUSTOMIZABLE: [Mod; 2] = [Mod::Multiverse, Mod::Shapeshift];
+
+/// The tabs of the mod customization: the mods with settings that are on (only those show).
+pub fn customizable(mods: Mods) -> Vec<Mod> {
+    CUSTOMIZABLE.into_iter().filter(|&m| mods.has(m)).collect()
+}
+
 /// Mod select keyboard navigation: the mod `dx` columns and `dy` rows from `index` (into `ALL`).
 pub fn step(index: usize, dx: i32, dy: i32) -> usize {
     let m = ALL[index.min(ALL.len() - 1)];
@@ -340,7 +348,7 @@ impl Mod {
             Spiral => "The lane coils into a spiral; notes wind their way in.",
             Loop => "The lane has a loop-the-loop in the middle.",
             Elbow => "Notes fall from the top and turn into the lane at a corner.",
-            Shapeshift => "Every 16 bars the lane bends into another rails shape.",
+            Shapeshift => "Every few bars the lane bends into another rails shape (C: how often, which order).",
             Snake => "Streams slither along the lane, triplets the other way; 1/1 notes fly straight.",
             Mirror => "The lane is flipped: notes come from the left.",
             Tilt => "The lane rocks from side to side with the beat.",
