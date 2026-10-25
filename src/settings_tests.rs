@@ -99,6 +99,17 @@ fn vsync_draws_notes_ahead_by_the_frames_on_their_way_plus_the_fine_tune() {
 }
 
 #[test]
+fn vsync_lead_goes_by_the_refresh_the_frames_came_at() {
+    // Told 60 Hz (no screen read yet, on Wayland), frames seen coming at 180 Hz: two of its
+    // refreshes ahead (11 ms), not two of 60 Hz's (33 ms).
+    let mut s = layout_tests::state();
+    s.refresh_hz = 60.0;
+    s.present = PresentChoice::Fifo;
+    s.seen_refresh_ms = Some(1000.0 / 180.0);
+    assert!((s.vsync_lead() - 2000.0 / 180.0).abs() < 1e-9);
+}
+
+#[test]
 fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
     let mut s = layout_tests::state();
     s.cfg.offset_ms = 12.0;

@@ -315,6 +315,9 @@ struct State {
     /// With vsync, how much later (ms) than its image was handed out the frame's notes are drawn
     /// for, to keep them on the refresh grid (`clock::VsyncPacer`).
     pace_shift_ms: f64,
+    /// The refresh interval (ms) the frames were seen to come at with vsync (the window system's
+    /// `refresh_hz` can be another screen's, or a guess).
+    seen_refresh_ms: Option<f64>,
     started: Instant,
     /// Requests from the input thread that only the render thread can apply.
     want_size: Option<(u32, u32)>,
@@ -835,7 +838,13 @@ impl State {
         if !self.cfg.vsync_compensation || self.present != PresentChoice::Fifo {
             return 0.0;
         }
-        VSYNC_FRAMES * 1000.0 / self.refresh_hz.clamp(24.0, 1000.0) + self.cfg.vsync_tune_ms
+        VSYNC_FRAMES * self.refresh_ms() + self.cfg.vsync_tune_ms
+    }
+
+    /// The screen's refresh interval (ms): as the frames came with vsync, else as the window
+    /// system says.
+    fn refresh_ms(&self) -> f64 {
+        self.seen_refresh_ms.unwrap_or(1000.0 / self.refresh_hz.clamp(24.0, 1000.0))
     }
 
     fn stop_audio(&mut self) {
@@ -1439,7 +1448,7 @@ impl State {
             Item::LiveOffsetUr => on(c.offset_hint_ur_scaled),
             Item::VsyncCompensation if !c.vsync_compensation => "off".into(),
             Item::VsyncCompensation => {
-                let lead = VSYNC_FRAMES * 1000.0 / self.refresh_hz.clamp(24.0, 1000.0) + c.vsync_tune_ms;
+                let lead = VSYNC_FRAMES * self.refresh_ms() + c.vsync_tune_ms;
                 if c.present == PresentChoice::Fifo { format!("on: notes {lead:.0} ms ahead") } else { format!("on ({lead:.0} ms once gameplay uses vsync)") }
             }
             Item::VsyncTune => format!("{:+.0} ms", c.vsync_tune_ms),
@@ -6509,6 +6518,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             render::set_frame_time(Some(now));
             s.frame_acquired = Some(acquired);
             s.pace_shift_ms = pace_shift_ms;
+            s.seen_refresh_ms = pacer.refresh_ms();
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
             render::set_frame_time(None);
             render::set_text_grid(None);
@@ -6627,6 +6637,25 @@ impl App {
         match &self.cursors {
             Some(c) => w.set_cursor(c.get(icon)),
             None => w.set_cursor(icon),
+        }
+    }
+
+    /// The screen the window is on: its modes and refresh. Read again as the window is resized,
+    /// moved or focused: on Wayland it isn't known until the window is on screen, and the window
+    /// can go to another one.
+    fn read_monitor(&self) {
+        let Some(m) = self.window.as_ref().and_then(|w| w.current_monitor()) else { return };
+        let mut s = lock(&self.state);
+        let modes: Vec<(u32, u32)> = m.video_modes().map(|v| (v.size().width, v.size().height)).collect();
+        if !modes.is_empty() {
+            s.monitor_modes = modes;
+        }
+        if let Some(hz) = m.refresh_rate_millihertz().map(|mhz| mhz as f64 / 1000.0).filter(|&hz| hz >= 24.0)
+            && (hz - s.refresh_hz).abs() > 0.01
+        {
+            eprintln!("screen refresh {hz:.2} Hz");
+            s.refresh_hz = hz;
+            s.refresh_status();
         }
     }
 }
@@ -6769,6 +6798,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::HoveredFileCancelled => lock(&self.state).file_drag(FileDrag::Left),
             WindowEvent::DroppedFile(path) => lock(&self.state).file_drag(FileDrag::Drop(vec![path])),
             WindowEvent::Resized(size) => {
+                self.read_monitor();
                 let mut s = lock(&self.state);
                 s.want_size = Some((size.width, size.height));
                 s.window_w = size.width as f32;
@@ -6798,7 +6828,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 s.key(code, event.repeat, event.text.as_deref(), at, self.window.as_deref());
             }
+            WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } => self.read_monitor(),
             WindowEvent::Focused(true) => {
+                self.read_monitor();
                 let mut s = lock(&self.state);
                 s.focused = true;
                 s.focus_seen = true;
@@ -6974,6 +7006,7 @@ impl State {
             smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
             frame_acquired: None,
             pace_shift_ms: 0.0,
+            seen_refresh_ms: None,
             started: Instant::now(),
             want_size: None,
             touch_used: false,
