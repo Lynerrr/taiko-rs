@@ -364,18 +364,28 @@ impl Mod {
         }
     }
 
-    /// Score multiplier (osu!'s for its mods).
+    /// Score multiplier: osu!'s for its mods, and on the same scale for taiko-rs's own by how
+    /// much harder they make a map to read or play (HR's 1.06 is "clearly harder", DT's 1.12
+    /// "a lot"). Mods that help score below 1; ones that only look different stay at 1.
     pub fn multiplier(self) -> f64 {
         match self {
             Easy | NoFail => 0.5,
             HalfTime | Daycore => 0.3,
             Half => 0.5,
-            NoFinishers => 0.9,
-            HardRock | Hidden => 1.06,
-            DoubleTime | Nightcore | Flashlight => 1.12,
-            Precise => 1.06,
-            ConstantSpeed => 0.9,
+            NoFinishers | ConstantSpeed | Mercy => 0.9,
+            WindDown => 0.85,
+            HardRock | Hidden | Precise => 1.06,
+            DoubleTime | Nightcore | Flashlight | Multiverse => 1.12,
             Spotlight | Blackout | Memory | Colorless => 1.1,
+            // Hard to read or to play: notes that lie about where or when they'll arrive.
+            SvChaos | Even => 1.08,
+            Sudden | Blink | Decoy | Liar | Alternate | WindUp | Stutter | Roulette | HyperSv | Split | Leapfrog | LagSpike | Moonwalk => 1.06,
+            Spiral | Shapeshift | Spin | Portal => 1.06,
+            // Noticeably harder.
+            GreatOrNothing | Random | Accel | Brake | Pulse | Crescendo | Drop | Gearbox | AntiSv | Swing | Panic | SnapSpeed => 1.04,
+            UTurn | Loop | Snake | FlipFlop | Shatter | Crumble => 1.04,
+            // A little harder: the lane moves or bends, the notes read as usual.
+            AllBig | Wave | Zigzag | Elbow | Mirror | Tilt | Mania | BarrelRoll | Cracked | Party => 1.02,
             _ => 1.0,
         }
     }
@@ -748,6 +758,25 @@ impl Speed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multipliers_follow_how_hard_a_mod_is() {
+        for m in ALL {
+            let x = m.multiplier();
+            let ok = match m.shuffle_cost() {
+                Some(c) if c < 0 => x < 1.0,
+                Some(0) => x <= 1.0,
+                Some(1) => (1.0..=1.1).contains(&x),
+                Some(2) => (1.04..=1.12).contains(&x),
+                Some(_) => x >= 1.1,
+                None => true,
+            };
+            assert!(ok, "{}: x{x} for a shuffle cost of {:?}", m.name(), m.shuffle_cost());
+        }
+        // A heavy custom set adds up, but stays in reach of osu!'s HDHRDTFL (x1.42).
+        let set = Mods::parse("CH,EV,SS,SU,ST");
+        assert!((1.3..1.5).contains(&set.multiplier()), "{}", set.multiplier());
+    }
 
     #[test]
     fn favourites_keep_conflicting_mods_and_round_trip() {
