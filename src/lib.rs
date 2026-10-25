@@ -235,6 +235,9 @@ struct State {
     /// Android: when the folder of .osz files opened with the game was last looked at.
     #[cfg(target_os = "android")]
     imports_checked: Instant,
+    /// Android: the on-screen keyboard (see `update_keyboard`).
+    #[cfg(target_os = "android")]
+    keyboard: android::Keyboard,
     /// Where downloaded sets go.
     songs_dir: PathBuf,
     /// Beatmap set IDs in the library (built when first needed).
@@ -3193,6 +3196,8 @@ impl State {
             TouchPhase::Started if self.touch_mouse.is_none() => {
                 self.touch_mouse = Some(id);
                 self.mouse_moved(x, y);
+                #[cfg(target_os = "android")]
+                self.keyboard_tap();
                 self.mouse_button(true, window);
             }
             TouchPhase::Moved if self.touch_mouse == Some(id) => {
@@ -4251,6 +4256,129 @@ impl State {
             || self.settings_ui.editing.is_some()
             || self.universe_setup.as_ref().is_some_and(|u| u.typing.is_some())
             || (self.mod_select.is_none() && matches!(self.scene, Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby))
+    }
+
+    /// Android: something is being typed that took the keys by itself (not a field that was
+    /// tapped): the on-screen keyboard comes up for it.
+    #[cfg(target_os = "android")]
+    fn typing_on_its_own(&self) -> bool {
+        (self.settings_ui.editing.is_some() && matches!(self.scene, Scene::Settings { .. }))
+            || self.settings_ui.dropdown.as_ref().is_some_and(|d| d.editing.is_some())
+            || self.universe_setup.as_ref().is_some_and(|u| u.typing.is_some())
+    }
+
+    /// Android: whether tapping `hit` is tapping a text field.
+    #[cfg(target_os = "android")]
+    fn is_text_field(&self, hit: render::Hit) -> bool {
+        use render::Hit;
+        match hit {
+            Hit::TextField => true,
+            Hit::MpRow(i) => matches!(self.scene, Scene::MpMenu) && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action()),
+            Hit::SocialRow(i) => matches!(self.social.rows(self.mp.is_some()).get(i), Some(social::Row::AddFriend | social::Row::Search)),
+            _ => false,
+        }
+    }
+
+    /// Android: a tap brings the on-screen keyboard up on a text field (again, if the player put
+    /// it away), and anywhere else puts it away.
+    #[cfg(target_os = "android")]
+    fn keyboard_tap(&mut self) {
+        let (vx, vy) = self.mouse_virtual();
+        let field = self.hit_at(vx, vy).is_some_and(|h| self.is_text_field(h));
+        self.keyboard.asked = field;
+        if field {
+            // Asked for anew, so it starts afresh on this field.
+            self.keyboard.wanted = false;
+        }
+    }
+
+    /// Android: shows the on-screen keyboard while it's wanted (something typing by itself, or a
+    /// tapped text field that still takes text) and hides it after.
+    #[cfg(target_os = "android")]
+    fn update_keyboard(&mut self) {
+        let field = self.keyboard.asked && self.takes_text() && !(matches!(self.scene, Scene::MpMenu) && self.mp_menu.row().is_action());
+        if !field {
+            // Not again by itself when coming back to the screen.
+            self.keyboard.asked = false;
+        }
+        let want = field || self.typing_on_its_own();
+        if want != self.keyboard.wanted {
+            self.keyboard.wanted = want;
+            self.keyboard.up = want;
+            android::keyboard(want);
+        }
+    }
+
+    /// Android: what the on-screen keyboard typed, as presses of those keys.
+    #[cfg(target_os = "android")]
+    fn soft_keyboard(&mut self, typed: android::Typed, window: Option<&Window>) {
+        let at = Instant::now();
+        match typed {
+            android::Typed::Keys(keys) => {
+                for (code, text) in keys {
+                    let text = Some(text.as_str()).filter(|t| !t.chars().any(char::is_control));
+                    self.key(code, false, text, at, window);
+                }
+            }
+            android::Typed::Key(code) => self.key(code, false, None, at, window),
+            android::Typed::Shown(up) => {
+                self.keyboard.up = up;
+                if !up {
+                    // Put away by the player: back on a tap.
+                    self.keyboard.asked = false;
+                }
+            }
+        }
+    }
+
+    /// Android: what's being typed (what it is, and the text), for showing above the on-screen
+    /// keyboard, which may cover where it is. None for the search boxes, which are above it.
+    #[cfg(target_os = "android")]
+    fn typing_line(&self) -> Option<(String, String)> {
+        if let Some((_, text)) = self.settings_ui.dropdown.as_ref().and_then(|d| d.editing.as_ref()) {
+            return Some(("Size".into(), text.clone()));
+        }
+        if let Some(e) = self.settings_ui.editing.as_ref().filter(|_| matches!(self.scene, Scene::Settings { .. })) {
+            return Some((e.item.label().into(), e.text.clone()));
+        }
+        if let Some(t) = self.universe_setup.as_ref().and_then(|u| u.typing.as_ref()) {
+            return Some(match t {
+                multiverse::Typing::Colours(s) => ("Colours".into(), s.clone()),
+                multiverse::Typing::Name(s) => ("Preset name".into(), s.clone()),
+            });
+        }
+        if self.social.open {
+            let label = match self.social.row(self.mp.is_some()) {
+                social::Row::AddFriend => "Add friend",
+                social::Row::Search => "Search players",
+                _ => "Message",
+            };
+            return Some((label.into(), self.social.input.clone()));
+        }
+        if matches!(self.scene, Scene::MpMenu) {
+            use multiplayer::Row;
+            return match self.mp_menu.row() {
+                Row::User => Some(("Username".into(), self.mp_menu.user.clone())),
+                Row::Password => Some(("Password".into(), "*".repeat(self.mp_menu.password.chars().count()))),
+                Row::Name => Some(("Your name".into(), self.cfg.mp_name.clone())),
+                Row::Port => Some(("Host on port".into(), self.cfg.mp_port.to_string())),
+                Row::Address => Some(("Join address".into(), self.cfg.mp_address.clone())),
+                _ => None,
+            };
+        }
+        None
+    }
+
+    /// Android: the text being typed in a strip along the top, clear of the on-screen keyboard.
+    #[cfg(target_os = "android")]
+    fn draw_typing(&self, c: &mut Canvas) {
+        let Some((label, text)) = self.typing_line() else { return };
+        c.rect(0.0, 0.0, c.width, 30.0, rgba(0x15151d, 1.0));
+        c.rect(0.0, 30.0, c.width, 1.0, rgba(render::accent(), 1.0));
+        let lw = c.text(16.0, 10.5, 9.0, rgba(render::accent(), 1.0), &label);
+        let x = 16.0 + lw + 12.0;
+        c.text(x, 10.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit_end(10.0, c.width - x - 16.0, &format!("{text}_")));
+        c.hit(0.0, 0.0, c.width, 31.0, render::Hit::TextField);
     }
 
     /// What Ctrl+C copies here: the text being typed, else the map or set picked.
@@ -5420,6 +5548,8 @@ impl State {
             self.scene_since = now;
         }
         self.frame_clip = None;
+        #[cfg(target_os = "android")]
+        self.update_keyboard();
         self.poll_scan();
         self.poll_folder_pick();
         self.poll_data_move();
@@ -6204,6 +6334,10 @@ impl State {
         if let Some(p) = &self.profile {
             p.draw(canvas);
         }
+        #[cfg(target_os = "android")]
+        if self.keyboard.up {
+            self.draw_typing(canvas);
+        }
         if let Some(t) = &self.toast {
             if now < t.until {
                 let a = (t.until.duration_since(now).as_secs_f32() / 0.3).min(1.0);
@@ -6654,7 +6788,8 @@ impl State {
                 }
             }
             Hit::SocialToggle => self.toggle_social(),
-            Hit::SocialPanel => {}
+            // Tapped: brings up the on-screen keyboard (`keyboard_tap`); the keys type there anyway.
+            Hit::SocialPanel | Hit::TextField => {}
             Hit::SocialTab(tab) => {
                 self.social.set_tab(tab);
                 self.social.mark_read(self.mp.is_some());
@@ -6834,6 +6969,9 @@ enum UserEvent {
     FileDrag(FileDrag),
     /// A window size was picked (`State::window_request`).
     WindowRequest,
+    /// Android: the on-screen keyboard typed something (or came up or went away).
+    #[cfg(target_os = "android")]
+    Typed(android::Typed),
 }
 
 /// Files dragged over the window, or dropped on it.
@@ -7366,6 +7504,8 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Stopped => event_loop.exit(),
             UserEvent::FileDrag(drag) => lock(&self.state).file_drag(drag),
             UserEvent::WindowRequest => self.apply_window_request(),
+            #[cfg(target_os = "android")]
+            UserEvent::Typed(typed) => lock(&self.state).soft_keyboard(typed, self.window.as_deref()),
             UserEvent::HideCursor(hide) => {
                 if hide != self.cursor_hidden {
                     self.cursor_hidden = hide;
@@ -7452,6 +7592,8 @@ impl State {
             downloads: Vec::new(),
             #[cfg(target_os = "android")]
             imports_checked: Instant::now(),
+            #[cfg(target_os = "android")]
+            keyboard: android::Keyboard::default(),
             songs_dir,
             installed_sets: None,
             lobby_lookup: None,
@@ -7588,6 +7730,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     android::setup(&app);
     let cfg = Config::load();
     let event_loop = EventLoop::<UserEvent>::with_user_event().with_android_app(app).build().expect("event loop");
+    android::set_proxy(event_loop.create_proxy());
     run(cfg, Vec::new(), false, event_loop);
 }
 

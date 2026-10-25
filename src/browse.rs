@@ -281,6 +281,7 @@ impl Browse {
         let room = col - 20.0 - if busy { Canvas::text_width(8.0, "searching...") + 10.0 } else { 0.0 };
         let text = if self.query.is_empty() { Canvas::fit(10.0, room, "type to search (artist, title, mapper)...") } else { Canvas::fit_end(10.0, room, &format!("{}_", self.query)) };
         c.text(x0 + 10.0, 61.0, 10.0, rgba(if self.query.is_empty() { 0x6f6f86 } else { 0xffffff }, 1.0), &text);
+        c.hit(x0, 54.0, col, 24.0, Hit::TextField);
         if busy {
             c.text_right(x0 + col - 10.0, 62.0, 8.0, rgba(0xFFD34D, 1.0), "searching...");
         }

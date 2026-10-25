@@ -33,6 +33,9 @@ arboard = { version = "3.7", default-features = false, features = ["wayland-data
 # The APK is a plain NativeActivity (no Java): see android/build-apk.sh.
 winit = { version = "0.30", features = ["android-native-activity"] }
 libc = "0.2"
+# The on-screen keyboard: showing it and taking what's typed, through the Java activity. The
+# version winit's android-activity already uses.
+jni = "0.22"
 # AAudio's low-latency mode (and a real-time audio thread); without it hitsounds lag by tens of ms.
 cpal = { version = "0.18", features = ["realtime"] }
 

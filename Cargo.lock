@@ -2660,6 +2660,7 @@ dependencies = [
  "cpal",
  "flate2",
  "image",
+ "jni",
  "libc",
  "pollster",
  "rosu-pp",

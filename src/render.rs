@@ -1668,6 +1668,9 @@ pub enum Hit {
     SocialRow(usize),
     SocialAction(usize, crate::social::Action),
     SocialNote(usize),
+    /// A text field (a search box, the message box): on Android, tapping it brings up the
+    /// on-screen keyboard.
+    TextField,
 }
 
 #[derive(Clone, Copy, Debug)]

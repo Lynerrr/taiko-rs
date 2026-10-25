@@ -731,6 +731,7 @@ impl Select {
             (text, 0xffffff)
         };
         c.text(34.0, 61.0, 10.0, rgba(search_col, 1.0), &search);
+        c.hit(24.0, 54.0, search_w, 24.0, Hit::TextField);
 
         if let Some(n) = self.scanning {
             c.text_centered(24.0 + lw / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "Scanning your Songs folder...");

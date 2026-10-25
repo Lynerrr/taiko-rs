@@ -572,6 +572,7 @@ fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hi
     let width = ((iw - 12.0) / Canvas::text_width(7.0, "x")) as usize;
     let shown: String = text.chars().rev().take(width).collect::<Vec<_>>().into_iter().rev().collect();
     c.text(inner + 6.0, input_y + 5.5, 7.0, rgba(if s.input.is_empty() { 0x55556a } else { 0xffffff }, a), &shown);
+    c.hit(inner, input_y, iw, 18.0, Hit::TextField);
 }
 
 /// A label shaped like a button but inert, ending at `right`; returns its left edge.
