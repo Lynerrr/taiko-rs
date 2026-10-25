@@ -80,8 +80,9 @@ enum Scene {
     /// Settings tab; `prev` is restored on exit (song select, or a paused game).
     Settings { prev: Box<Scene> },
     /// Offset calibration run; `back` is where to return (the settings tab).
-    Calibrate { game: Box<Game>, back: Box<Scene> },
-    CalibrateDone { estimate: calibrate::Estimate, back: Box<Scene> },
+    /// Offset calibration (by ear), or with `vsync` the vsync compensation's (by sight).
+    Calibrate { game: Box<Game>, back: Box<Scene>, vsync: bool },
+    CalibrateDone { estimate: calibrate::Estimate, back: Box<Scene>, vsync: bool },
     /// Full-screen editor for the playfield area, opened from settings.
     LayoutEdit { back: Box<Scene> },
     /// The autoplay preview over the whole screen (in the playfield area, which can be moved
@@ -644,6 +645,10 @@ fn size_char(code: KeyCode) -> Option<char> {
 
 const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 
+/// Frames on their way to the screen with vsync (the swapchain's frame latency for it, see
+/// `Renderer::set_present`).
+const VSYNC_FRAMES: f64 = 2.0;
+
 /// A typed setting value as a number: units after it ("ms", "%", "x") are fine, a comma works
 /// as the decimal point, and "off" / "unlimited" are 0.
 fn parse_number(text: &str) -> Option<f64> {
@@ -722,10 +727,20 @@ impl State {
     /// The present mode this frame should use.
     fn wanted_present(&self) -> PresentChoice {
         // Watching someone else play needs no low input latency: always vsync (smoothest).
-        if matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_)) {
+        if matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_) | Scene::Calibrate { vsync: true, .. }) {
             return PresentChoice::Fifo;
         }
         if self.cfg.menu_vsync && !self.in_song() { PresentChoice::Fifo } else { self.cfg.present }
+    }
+
+    /// How far ahead (real ms) notes are drawn for vsync: with it, a frame reaches the screen
+    /// `VSYNC_FRAMES` refreshes after it's drawn (unlimited fps shows one at once), plus the
+    /// player's fine tune. 0 without vsync or with the compensation off.
+    fn vsync_lead(&self) -> f64 {
+        if !self.cfg.vsync_compensation || self.present != PresentChoice::Fifo {
+            return 0.0;
+        }
+        VSYNC_FRAMES * 1000.0 / self.refresh_hz.clamp(24.0, 1000.0) + self.cfg.vsync_tune_ms
     }
 
     fn stop_audio(&mut self) {
@@ -1327,6 +1342,13 @@ impl State {
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
             Item::LiveOffset => on(c.show_offset_hint),
             Item::LiveOffsetUr => on(c.offset_hint_ur_scaled),
+            Item::VsyncCompensation if !c.vsync_compensation => "off".into(),
+            Item::VsyncCompensation => {
+                let lead = VSYNC_FRAMES * 1000.0 / self.refresh_hz.clamp(24.0, 1000.0) + c.vsync_tune_ms;
+                if c.present == PresentChoice::Fifo { format!("on: notes {lead:.0} ms ahead") } else { format!("on ({lead:.0} ms once gameplay uses vsync)") }
+            }
+            Item::VsyncTune => format!("{:+.0} ms", c.vsync_tune_ms),
+            Item::VsyncCalibrate => "Enter to start".into(),
             Item::ResumeDelay if c.resume_delay_ms <= 0.0 => "off".into(),
             Item::ResumeDelay => format!("{:.2} s", c.resume_delay_ms / 1000.0),
             Item::PlayfieldArea => c.playfield_area.describe(),
@@ -1434,6 +1456,10 @@ impl State {
             Item::Calibrate => return,
             Item::LiveOffset => self.cfg.show_offset_hint = !self.cfg.show_offset_hint,
             Item::LiveOffsetUr => self.cfg.offset_hint_ur_scaled = !self.cfg.offset_hint_ur_scaled,
+            Item::VsyncCompensation => self.cfg.vsync_compensation = !self.cfg.vsync_compensation,
+            Item::VsyncTune => self.cfg.vsync_tune_ms = (self.cfg.vsync_tune_ms + d * if self.modifiers_shift { 5.0 } else { 1.0 }).clamp(-200.0, 200.0),
+            // Started with Enter in `settings_key`.
+            Item::VsyncCalibrate => return,
             Item::ResumeDelay => self.cfg.resume_delay_ms = (self.cfg.resume_delay_ms + 250.0 * d).clamp(0.0, 3000.0),
             // Both act on Enter in `settings_key`.
             Item::PlayfieldArea | Item::PlayfieldReset => return,
@@ -1596,6 +1622,7 @@ impl State {
             Item::Rate => format!("{:.2}", c.rate),
             Item::Offset => format!("{:.0}", c.offset_ms),
             Item::VisualOffset => format!("{:.0}", c.visual_offset_ms),
+            Item::VsyncTune => format!("{:.0}", c.vsync_tune_ms),
             Item::CalibrationBpm => format!("{:.0}", c.calibration_bpm),
             Item::ResumeDelay => format!("{:.2}", c.resume_delay_ms / 1000.0),
             Item::MasterVolume => format!("{:.0}", c.master_volume * 100.0),
@@ -1654,6 +1681,7 @@ impl State {
             Item::Rate => c.rate = ((number()? * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
             Item::Offset => c.offset_ms = number()?.round().clamp(-1000.0, 1000.0),
             Item::VisualOffset => c.visual_offset_ms = number()?.round().clamp(-1000.0, 1000.0),
+            Item::VsyncTune => c.vsync_tune_ms = number()?.round().clamp(-200.0, 200.0),
             Item::CalibrationBpm => c.calibration_bpm = number()?.round().clamp(calibrate::BPM_RANGE.0, calibrate::BPM_RANGE.1),
             Item::ResumeDelay => c.resume_delay_ms = (number()? * 1000.0).round().clamp(0.0, 3000.0),
             Item::MasterVolume => c.master_volume = percent()?,
@@ -1946,7 +1974,7 @@ impl State {
             Scene::MpMenu => ("Multiplayer menu".into(), String::new()),
             Scene::Download => ("Looking for new maps".into(), String::new()),
             Scene::Settings { .. } | Scene::LayoutEdit { .. } => ("Tweaking settings".into(), String::new()),
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => ("Calibrating the offset".into(), String::new()),
+            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => ("Calibrating".into(), String::new()),
             _ => ("Choosing a song".into(), self.select.selected().and_then(|i| self.library.get(i)).map(|e| e.label()).unwrap_or_default()),
         })
     }
@@ -2052,7 +2080,8 @@ impl State {
             }
             KeyCode::ArrowLeft => self.adjust_setting(item, -1, window),
             KeyCode::ArrowRight => self.adjust_setting(item, 1, window),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => self.start_calibration(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => self.start_calibration_as(false),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::VsyncCalibrate => self.start_calibration_as(true),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldArea => self.open_layout_editor(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldPreset => self.open_dropdown(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => self.open_skins_folder(),
@@ -2082,7 +2111,15 @@ impl State {
         }
     }
 
+    /// Offset calibration, or again the kind just finished (Retry).
     fn start_calibration(&mut self) {
+        let vsync = matches!(self.scene, Scene::CalibrateDone { vsync: true, .. });
+        self.start_calibration_as(vsync);
+    }
+
+    /// Offset calibration, or with `vsync` the vsync compensation's: the same notes, in vsync and
+    /// with no sound, hit by sight.
+    fn start_calibration_as(&mut self, vsync: bool) {
         if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
             self.toast("quit the song first to calibrate".into());
             return;
@@ -2096,19 +2133,26 @@ impl State {
         let beats = calibrate::total_beats(beat_ms);
         let map = beatmap::calibration_map(beat_ms, calibrate::COUNT_IN_BEATS, beats);
         let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
-        let track = Arc::new(audio::metronome(rate, beat_ms, beats, 2000.0));
+        let mut track = audio::metronome(rate, beat_ms, beats, 2000.0);
+        if vsync {
+            // Silence the length of the click track: only the notes to go by.
+            track.samples.iter_mut().for_each(|s| *s = 0.0);
+        }
+        let track = Arc::new(track);
         let mut game = Game::new(map, track, self.audio.as_ref());
         // Your own hitsounds would let you sync to yourself instead of to the click.
         game.mute_hits = true;
         game.show_hp = false;
-        self.scene = Scene::Calibrate { game: Box::new(game), back: Box::new(back) };
+        self.scene = Scene::Calibrate { game: Box::new(game), back: Box::new(back), vsync };
     }
 
     fn finish_calibration(&mut self) {
-        let Scene::Calibrate { game, back } = std::mem::replace(&mut self.scene, Scene::Select) else { return };
+        let Scene::Calibrate { game, back, vsync } = std::mem::replace(&mut self.scene, Scene::Select) else { return };
         self.stop_audio();
-        match calibrate::estimate(&game.stats.errors, self.cfg.offset_ms) {
-            Some(estimate) if estimate.hits >= 4 => self.scene = Scene::CalibrateDone { estimate, back },
+        // By sight in vsync, hitting late means the frames reach the screen later than assumed.
+        let current = if vsync { self.cfg.vsync_tune_ms } else { self.cfg.offset_ms };
+        match calibrate::estimate(&game.stats.errors, current) {
+            Some(estimate) if estimate.hits >= 4 => self.scene = Scene::CalibrateDone { estimate, back, vsync },
             _ => {
                 self.scene = *back;
                 self.toast("calibration needs more hits".into());
@@ -2120,8 +2164,12 @@ impl State {
         self.stop_audio();
         match std::mem::replace(&mut self.scene, Scene::Select) {
             Scene::Calibrate { back, .. } => self.scene = *back,
-            Scene::CalibrateDone { estimate, back } => {
-                if apply {
+            Scene::CalibrateDone { estimate, back, vsync } => {
+                if apply && vsync {
+                    self.cfg.vsync_tune_ms = estimate.suggested_offset.clamp(-200.0, 200.0);
+                    self.cfg.save();
+                    self.toast(format!("vsync compensation fine tune set to {:+.0} ms", self.cfg.vsync_tune_ms));
+                } else if apply {
                     self.cfg.offset_ms = estimate.suggested_offset;
                     self.cfg.save();
                     self.toast(format!("offset set to {:+.0} ms", estimate.suggested_offset));
@@ -2133,7 +2181,7 @@ impl State {
     }
 
     fn calibration_key(&mut self, code: KeyCode, repeat: bool, at: Instant, window: Option<&Window>) {
-        if let Scene::Calibrate { game, .. } = &mut self.scene {
+        if let Scene::Calibrate { game, vsync, .. } = &mut self.scene {
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
                 if !repeat {
                     game.press(k, at, self.audio.as_ref(), self.play_offset);
@@ -2144,7 +2192,8 @@ impl State {
                 return;
             }
             match code {
-                KeyCode::KeyH => game.hide_notes = !game.hide_notes,
+                // By sight (vsync), hiding the notes would leave nothing to go by.
+                KeyCode::KeyH if !*vsync => game.hide_notes = !game.hide_notes,
                 KeyCode::Enter | KeyCode::NumpadEnter => self.finish_calibration(),
                 KeyCode::Escape => self.leave_calibration(false),
                 KeyCode::F11 => self.toggle_fullscreen(window),
@@ -4686,6 +4735,9 @@ impl State {
     /// should be captured.
     fn build_frame(&mut self, canvas: &mut Canvas, now: Instant, width: f32) -> Option<String> {
         self.refresh_play_offset();
+        // Notes are drawn this far ahead: the player's visual offset and, with vsync, the time
+        // until the frame is on screen.
+        let visual_offset = self.cfg.visual_offset_ms + self.vsync_lead();
         let dt = now.duration_since(self.stats.last).as_secs_f64() * 1000.0;
         self.stats.last = now;
         self.stats.frames += 1;
@@ -4970,7 +5022,7 @@ impl State {
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                game.visual_offset = self.cfg.visual_offset_ms;
+                game.visual_offset = visual_offset;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
                 });
@@ -5147,7 +5199,7 @@ impl State {
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                game.visual_offset = self.cfg.visual_offset_ms;
+                game.visual_offset = visual_offset;
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
@@ -5296,23 +5348,24 @@ impl State {
                 Some(s) => multiplayer::draw_results(canvas, s),
                 None => next = Some(Scene::MpMenu),
             },
-            Scene::Calibrate { game, .. } => {
+            Scene::Calibrate { game, vsync, .. } => {
                 if game.update(now, self.audio.as_ref(), self.play_offset) {
                     finish_calibration = true;
                 }
                 if self.auto {
                     game.autoplay(self.audio.as_ref());
                 }
-                let offset = self.cfg.offset_ms;
-                game.visual_offset = self.cfg.visual_offset_ms;
+                let offset = if *vsync { self.cfg.vsync_tune_ms } else { self.cfg.offset_ms };
+                game.visual_offset = visual_offset;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
                 });
                 game.draw_hud(canvas);
-                calibrate::draw_overlay(canvas, game, offset, game.hide_notes);
+                calibrate::draw_overlay(canvas, game, offset, game.hide_notes, *vsync);
             }
-            Scene::CalibrateDone { estimate, .. } => {
-                calibrate::draw_result(canvas, estimate, self.cfg.offset_ms, self.cfg.calibration_bpm);
+            Scene::CalibrateDone { estimate, vsync, .. } => {
+                let current = if *vsync { self.cfg.vsync_tune_ms } else { self.cfg.offset_ms };
+                calibrate::draw_result(canvas, estimate, current, self.cfg.calibration_bpm, *vsync);
             }
             Scene::Settings { prev } => {
                 let from_game = matches!(**prev, Scene::Play { .. });

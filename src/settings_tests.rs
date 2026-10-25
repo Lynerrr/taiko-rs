@@ -79,3 +79,40 @@ fn typed_note_colours_become_your_own_keeping_the_other() {
     assert_eq!((s.cfg.note_colours.don(), s.cfg.note_colours.kat()), (0x102030, 0xa0b0c0));
     assert!(s.apply_typed(Item::DonColour, "red").is_err());
 }
+
+#[test]
+fn vsync_draws_notes_ahead_by_the_frames_on_their_way_plus_the_fine_tune() {
+    let mut s = layout_tests::state();
+    s.refresh_hz = 60.0;
+    s.present = PresentChoice::Fifo;
+    assert!((s.vsync_lead() - 2000.0 / 60.0).abs() < 1e-9);
+    s.cfg.vsync_tune_ms = -5.0;
+    assert!((s.vsync_lead() - (2000.0 / 60.0 - 5.0)).abs() < 1e-9);
+    s.refresh_hz = 144.0;
+    assert!((s.vsync_lead() - (2000.0 / 144.0 - 5.0)).abs() < 1e-9);
+    // Without vsync frames show at once; and it can be switched off.
+    s.present = PresentChoice::Mailbox;
+    assert_eq!(s.vsync_lead(), 0.0);
+    s.present = PresentChoice::Fifo;
+    s.cfg.vsync_compensation = false;
+    assert_eq!(s.vsync_lead(), 0.0);
+}
+
+#[test]
+fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
+    let mut s = layout_tests::state();
+    s.cfg.offset_ms = 12.0;
+    s.cfg.vsync_tune_ms = 3.0;
+    s.start_calibration_as(true);
+    assert!(matches!(s.scene, Scene::Calibrate { vsync: true, .. }), "not calibrating by sight");
+    assert_eq!(s.wanted_present(), PresentChoice::Fifo);
+    // H would hide the notes: not here.
+    s.calibration_key(KeyCode::KeyH, false, Instant::now(), None);
+    let Scene::Calibrate { game, .. } = &mut s.scene else { unreachable!() };
+    assert!(!game.hide_notes);
+    // Hit 8 ms late by sight on average: the frames show 8 ms later than the fine tune assumes.
+    game.stats.errors = vec![8.0; 20];
+    s.finish_calibration();
+    s.leave_calibration(true);
+    assert_eq!((s.cfg.vsync_tune_ms, s.cfg.offset_ms), (11.0, 12.0));
+}

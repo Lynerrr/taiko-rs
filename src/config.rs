@@ -76,6 +76,10 @@ pub struct Config {
     pub offset_ms: f64,
     /// Notes are drawn this many ms ahead to make up for display latency (judging is unaffected).
     pub visual_offset_ms: f64,
+    /// With vsync, notes drawn where they'll be when the frame is shown (`State::vsync_lead`),
+    /// and the player's adjustment of that (ms, on top).
+    pub vsync_compensation: bool,
+    pub vsync_tune_ms: f64,
     pub scroll_speed: f64,
     /// Scales both volumes below (Alt + mouse wheel anywhere).
     pub master_volume: f32,
@@ -184,6 +188,8 @@ impl Default for Config {
             touch_layout: TouchLayout::Kddk,
             offset_ms: 0.0,
             visual_offset_ms: 0.0,
+            vsync_compensation: true,
+            vsync_tune_ms: 0.0,
             scroll_speed: 1.0,
             master_volume: 1.0,
             music_volume: 0.7,
@@ -339,6 +345,8 @@ impl Config {
             match k {
                 "offset_ms" => cfg.offset_ms = v.parse().unwrap_or(cfg.offset_ms),
                 "visual_offset_ms" => cfg.visual_offset_ms = v.parse().unwrap_or(cfg.visual_offset_ms),
+                "vsync_compensation" => cfg.vsync_compensation = v != "false",
+                "vsync_tune_ms" => cfg.vsync_tune_ms = v.parse::<f64>().unwrap_or(cfg.vsync_tune_ms).clamp(-200.0, 200.0),
                 "scroll_speed" => cfg.scroll_speed = v.parse::<f64>().unwrap_or(cfg.scroll_speed).clamp(0.3, 4.0),
                 "scroll_speed_osu" => osu_scroll_speed = v == "true",
                 "master_volume" => cfg.master_volume = v.parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0),
@@ -536,6 +544,10 @@ impl Config {
         out.push_str(&format!(
             "# online server (accounts, lobbies) and your saved login there\nonline_server = {}\nonline_user = {}\nonline_token = {}\n",
             self.online_server, self.online_user, self.online_token
+        ));
+        out.push_str(&format!(
+            "# with vsync, draw notes where they'll be once the frame is on screen; ms added to that\nvsync_compensation = {}\nvsync_tune_ms = {:.0}\n",
+            self.vsync_compensation, self.vsync_tune_ms
         ));
         out.push_str(&self.video.config_lines());
         out.push_str(&format!(

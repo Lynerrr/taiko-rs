@@ -50,52 +50,60 @@ pub fn estimate(errors: &[f64], current_offset: f64) -> Option<Estimate> {
     })
 }
 
-pub fn draw_overlay(c: &mut Canvas, game: &Game, current_offset: f64, hide_notes: bool) {
+/// `vsync`: the vsync calibration (by sight, no sound; `current_offset` is the fine tune).
+pub fn draw_overlay(c: &mut Canvas, game: &Game, current_offset: f64, hide_notes: bool, vsync: bool) {
     let w = c.width;
-    let line = if hide_notes {
+    let line = if vsync {
+        "Hit centre (F/J) as notes reach the drum, by sight (no sound)"
+    } else if hide_notes {
         "Notes hidden: hit centre (F/J) on every click, by ear"
     } else {
         "Hit centre (F/J) on every click. Follow the sound, not the notes"
     };
+    let what = if vsync { "fine tune" } else { "offset" };
     let status = match estimate(&game.stats.errors, current_offset) {
         Some(e) => {
             let dir = if e.error_ms >= 0.0 { "late" } else { "early" };
             format!(
-                "{} hits   {:.1} ms {dir}   suggested offset {:+.0} ms{}",
+                "{} hits   {:.1} ms {dir}   suggested {what} {:+.0} ms{}",
                 e.hits,
                 e.error_ms.abs(),
                 e.suggested_offset,
                 if e.hits < MIN_HITS { "  (keep going)" } else { "" }
             )
         }
-        None => format!("current offset {current_offset:+.0} ms   waiting for hits..."),
+        None => format!("current {what} {current_offset:+.0} ms   waiting for hits..."),
     };
     // Wide enough for its lines (wider when text comes out bigger), within the screen.
     let widest = Canvas::text_width(8.0, line).max(Canvas::text_width(9.0, &status)) + 40.0;
     let bw = widest.max(500.0).min(w - 32.0);
     c.round_rect(w / 2.0 - bw / 2.0, 26.0, bw, 70.0, 10.0, rgba(0x000000, 0.6), rgba(accent(), 0.8), 1.5);
-    c.text_centered(w / 2.0, 36.0, 12.0, rgba(0xffffff, 1.0), "OFFSET CALIBRATION");
+    c.text_centered(w / 2.0, 36.0, 12.0, rgba(0xffffff, 1.0), if vsync { "VSYNC CALIBRATION" } else { "OFFSET CALIBRATION" });
     let room = bw - 24.0;
     let size = Canvas::fit_size(8.0, 6.0, room, line);
     c.text_centered(w / 2.0, 56.0, size, rgba(0xc8c8d8, 1.0), &Canvas::fit(size, room, line));
     let size = Canvas::fit_size(9.0, 6.0, room, &status);
     c.text_centered(w / 2.0, 74.0, size, rgba(0xFFD34D, 1.0), &Canvas::fit(size, room, &status));
     // Above the playfield size readout in the bottom-right corner.
-    c.text_centered(w / 2.0, 448.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(8.0, w - 48.0, "H hide/show notes    Enter finish early    Esc cancel"));
+    let hints = if vsync { "Enter finish early    Esc cancel" } else { "H hide/show notes    Enter finish early    Esc cancel" };
+    c.text_centered(w / 2.0, 448.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(8.0, w - 48.0, hints));
 }
 
-pub fn draw_result(c: &mut Canvas, e: &Estimate, current_offset: f64, bpm: f64) {
+/// `vsync`: the result of the vsync calibration (`current_offset` is the fine tune).
+pub fn draw_result(c: &mut Canvas, e: &Estimate, current_offset: f64, bpm: f64, vsync: bool) {
     let w = c.width;
     let cx = w / 2.0;
-    c.text_centered(cx, 70.0, 14.0, rgba(0x9a9ab0, 1.0), "OFFSET CALIBRATION");
+    c.text_centered(cx, 70.0, 14.0, rgba(0x9a9ab0, 1.0), if vsync { "VSYNC CALIBRATION" } else { "OFFSET CALIBRATION" });
     let dir = if e.error_ms >= 0.0 { "late" } else { "early" };
     c.text_centered(cx, 120.0, 16.0, rgba(0xffffff, 1.0), &format!("You hit {:.1} +-{:.1} ms {dir} on average", e.error_ms.abs(), e.margin_ms));
     c.text_centered(cx, 170.0, 40.0, rgba(0xFFD34D, 1.0), &format!("{:+.0} ms", e.suggested_offset));
-    c.text_centered(cx, 228.0, 10.0, rgba(0xc8c8d8, 1.0), &format!("suggested offset (currently {current_offset:+.0} ms)"));
+    let what = if vsync { "vsync compensation fine tune" } else { "offset" };
+    c.text_centered(cx, 228.0, 10.0, rgba(0xc8c8d8, 1.0), &format!("suggested {what} (currently {current_offset:+.0} ms)"));
     let consistency = match e.ur {
         u if u < 100.0 => "very consistent",
         u if u < 160.0 => "consistent",
         u if u < 240.0 => "a bit loose - retry for a more reliable value",
+        _ if vsync => "inconsistent - retry and focus on the drum",
         _ => "inconsistent - retry and focus on the click",
     };
     c.text_centered(cx, 270.0, 10.0, rgba(0x9a9ab0, 1.0), &format!("{} hits, UR {:.0} ({consistency})", e.hits, e.ur));

@@ -19,6 +19,9 @@ pub enum Item {
     CalibrationBpm,
     LiveOffset,
     LiveOffsetUr,
+    VsyncCompensation,
+    VsyncTune,
+    VsyncCalibrate,
     ResumeDelay,
     Key(usize),
     /// Previous (0) / next (1) playfield preset key.
@@ -63,7 +66,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 57] = [
+pub const ITEMS: [(&str, Item); 60] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -91,6 +94,9 @@ pub const ITEMS: [(&str, Item); 57] = [
     ("OFFSET", Item::CalibrationBpm),
     ("OFFSET", Item::LiveOffset),
     ("OFFSET", Item::LiveOffsetUr),
+    ("OFFSET", Item::VsyncCompensation),
+    ("OFFSET", Item::VsyncTune),
+    ("OFFSET", Item::VsyncCalibrate),
     ("AUDIO", Item::MasterVolume),
     ("AUDIO", Item::MusicVolume),
     ("AUDIO", Item::FxVolume),
@@ -174,6 +180,9 @@ impl Item {
             Item::CalibrationBpm => "Calibration tempo",
             Item::LiveOffset => "Live offset suggestion",
             Item::LiveOffsetUr => "Scale suggestion to UR",
+            Item::VsyncCompensation => "Vsync compensation",
+            Item::VsyncTune => "Vsync compensation: fine tune",
+            Item::VsyncCalibrate => "Vsync calibration",
             Item::ResumeDelay => "Resume delay",
             Item::Key(i) => KEY_LABELS[i],
             Item::PresetKey(0) => "Previous preset key",
@@ -233,6 +242,7 @@ impl Item {
             | Item::BackgroundDim
             | Item::FpsCap
             | Item::AccentHue
+            | Item::VsyncTune
             | Item::DonColour
             | Item::KatColour => Kind::Value,
             Item::PlayfieldPreset
@@ -247,6 +257,7 @@ impl Item {
             Item::RateKeepPitch
             | Item::LiveOffset
             | Item::LiveOffsetUr
+            | Item::VsyncCompensation
             | Item::ShowPlayfieldSize
             | Item::KiaiEffects
             | Item::HideGreat
@@ -267,7 +278,7 @@ impl Item {
             | Item::Fullscreen
             | Item::DiscordPresence => Kind::Toggle,
             Item::Key(_) | Item::PresetKey(_) => Kind::Key,
-            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::HiddenMaps | Item::Update | Item::SkinFolder => Kind::Action,
+            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::SkinFolder => Kind::Action,
         }
     }
 
@@ -284,6 +295,9 @@ impl Item {
             Item::CalibrationBpm => "Tempo of the calibration click track. Pick one close to the maps you play.",
             Item::LiveOffset => "While playing, suggest an offset from your recent hits; press O to apply it.",
             Item::LiveOffsetUr => "On: more hits and a +- margin when your UR is high. Off: plain average of the last 40 hits.",
+            Item::VsyncCompensation => "With vsync, notes are drawn where they'll be once the frame is on screen, as with unlimited fps.",
+            Item::VsyncTune => "Added to the vsync compensation: raise it if you hit late by sight with vsync. Vsync calibration finds it.",
+            Item::VsyncCalibrate => "Enter: hit notes by sight, sound off, in vsync; it sets the fine tune. Calibrate the offset first.",
             Item::ResumeDelay => "Countdown before the song continues after the pause menu (0 = at once).",
             Item::Key(_) => "Enter, then press the new key. Esc cancels.",
             Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key.",

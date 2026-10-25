@@ -258,8 +258,13 @@ fn assert_every_screen_fits() {
     s.start_calibration();
     check(&mut s, "calibration", &mut out);
     let estimate = calibrate::Estimate { hits: 123, error_ms: -12.3, ur: 150.0, margin_ms: 2.5, suggested_offset: -45.0 };
-    s.scene = Scene::CalibrateDone { estimate, back: Box::new(Scene::Select) };
+    s.scene = Scene::CalibrateDone { estimate, back: Box::new(Scene::Select), vsync: false };
     check(&mut s, "calibration result", &mut out);
+    s.scene = Scene::Select;
+    s.start_calibration_as(true);
+    check(&mut s, "vsync calibration", &mut out);
+    s.scene = Scene::CalibrateDone { estimate, back: Box::new(Scene::Select), vsync: true };
+    check(&mut s, "vsync calibration result", &mut out);
     s.scene = Scene::Select;
 
     // Not `open_download`, which would search the mirrors.
