@@ -1213,15 +1213,14 @@ pub struct Detail {
     pub replay: Option<Result<std::path::PathBuf, String>>,
 }
 
-/// The player's pp total after a play, and what it was before (unknown: no change shown).
+/// The player's online pp total after a play, and what it was before (unknown: no change
+/// shown).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Total {
     pub before: Option<f64>,
     pub after: f64,
-    /// Their place by pp, online.
+    /// Their place by pp.
     pub rank: Option<u32>,
-    /// The server's total, not the local scores'.
-    pub online: bool,
 }
 
 /// A score opened from a leaderboard (not one just played).
@@ -1261,8 +1260,9 @@ pub struct Results {
     pub job: Option<std::sync::mpsc::Receiver<Detail>>,
     /// Why an online score's replay couldn't be had.
     pub replay_error: Option<String>,
-    /// What the play did to the player's pp total.
+    /// What the play did to the player's online pp total, and whether the server is yet to say.
     pub total: Option<Total>,
+    pub total_due: bool,
 }
 
 /// Width of the pp panel on the right.
@@ -1289,6 +1289,7 @@ impl Results {
             job: None,
             replay_error: None,
             total: None,
+            total_due: false,
         }
     }
 
@@ -1447,13 +1448,14 @@ impl Results {
             c.text(x + 12.0, ry, 7.0, label, name);
             c.text_right(x + pw - 12.0, ry, 7.0, value, v);
         }
-        // What it did to the player's total.
+        // What it did to the player's online total (sent plays only).
+        if self.total.is_none() && !self.total_due {
+            return;
+        }
         c.rect(x + 12.0, y + 190.0, pw - 24.0, 1.0, rgba(0x2a2a38, 1.0));
         let Some(t) = self.total else {
-            if self.opened.is_none() && !self.failed && self.watched.is_none() {
-                c.text(x + 12.0, y + 200.0, 7.0, label, "Total");
-                c.text_right(x + pw - 12.0, y + 200.0, 7.0, label, "...");
-            }
+            c.text(x + 12.0, y + 200.0, 7.0, label, "Total");
+            c.text_right(x + pw - 12.0, y + 200.0, 7.0, label, "...");
             return;
         };
         let gain = t.before.map(|b| t.after - b);
@@ -1462,11 +1464,7 @@ impl Results {
             Some(_) => ("none".to_string(), 0x8a8aa0),
             None => ("-".to_string(), 0x8a8aa0),
         };
-        let place = match (t.online, t.rank) {
-            (true, Some(rank)) => format!("#{rank} online"),
-            (true, None) => "online".into(),
-            (false, _) => "local scores".into(),
-        };
+        let place = t.rank.map(|r| format!("#{r}")).unwrap_or_else(|| "-".into());
         let rows = [("Total", format!("{:.0} pp", t.after), 0xffffff), ("Change", change, col), ("Rank", place, 0xc8c8d8)];
         for (i, (name, v, col)) in rows.iter().enumerate() {
             let ry = y + 200.0 + i as f32 * 18.0;

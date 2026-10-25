@@ -193,6 +193,7 @@ pub const MAP_SCORES: usize = 50;
 
 /// A player's pp total from their pp on each map (best per map): highest first, each counting
 /// 5% less than the one before, like osu!.
+#[allow(dead_code)] // used by the online server (server/)
 pub fn weighted_pp(mut best: Vec<f64>) -> f64 {
     best.sort_by(|a, b| b.total_cmp(a));
     best.iter().enumerate().map(|(i, pp)| pp * 0.95f64.powi(i as i32)).sum()

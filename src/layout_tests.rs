@@ -435,7 +435,7 @@ fn assert_every_screen_fits() {
         r.failed = failed;
         r.pp = (!failed).then_some(456.7);
         r.no_pp = failed.then_some("failed plays get no pp");
-        r.total = (!failed).then_some(ui::Total { before: Some(12_333.3), after: 12_345.6, rank: Some(99_999), online: true });
+        r.total = (!failed).then_some(ui::Total { before: Some(12_333.3), after: 12_345.6, rank: Some(99_999) });
         r.breakdown = (!failed).then_some(pp::Breakdown {
             pp: 456.7,
             difficulty: 1234.5,

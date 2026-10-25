@@ -571,12 +571,9 @@ fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option
     }
 }
 
-/// Local scores for the selected map, under the song select panel, and the player's pp total.
-fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow], total_pp: f64) {
-    let mut label_w = board_tabs(c, x + 4.0, y + 1.0, false);
-    if total_pp > 0.0 {
-        label_w += 10.0 + c.text(x + 14.0 + label_w, y + 2.5, 6.0, rgba(0xff8ad8, 1.0), &format!("{total_pp:.0} pp total"));
-    }
+/// Local scores for the selected map, under the song select panel.
+fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow]) {
+    let label_w = board_tabs(c, x + 4.0, y + 1.0, false);
     if rows.is_empty() {
         let at = x + 4.0 + label_w + 14.0;
         c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, "none yet - finish a play to set one"));
@@ -6106,7 +6103,7 @@ impl State {
                             } else {
                                 let rows = scores::top(&self.scores, hash, fits);
                                 self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
-                                draw_leaderboard(canvas, x, top, pw, &rows, scores::total_pp(&self.scores));
+                                draw_leaderboard(canvas, x, top, pw, &rows);
                             }
                         }
                     }
@@ -6283,17 +6280,13 @@ impl State {
                                 stars: stars::star_rating(&e.path, replay.rate),
                             };
                             self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
+                            results.total_due = true;
                             self.online_boards.remove(&replay.map_hash);
                         }
-                        let before = scores::total_pp(&self.scores);
                         match scores::save(&replay, pp) {
                             Ok(row) => {
                                 results.replay = Some(row.file.clone());
                                 self.scores.push(row);
-                                if pp.is_some() {
-                                    let after = scores::total_pp(&self.scores);
-                                    results.total = Some(ui::Total { before: Some(before), after, rank: None, online: false });
-                                }
                                 let all = scores::top(&self.scores, replay.map_hash, usize::MAX);
                                 let rank = all.iter().position(|r| r.date == replay.date && r.score == replay.score).map(|p| p + 1);
                                 results.rank = rank.map(|r| (r, all.len()));
@@ -7000,7 +6993,7 @@ impl State {
                     self.me = Some((pp, rank));
                     if let Scene::Results { results, .. } = &mut self.scene {
                         if results.opened.is_none() && results.replay.is_some() {
-                            results.total = Some(ui::Total { before, after: pp, rank, online: true });
+                            results.total = Some(ui::Total { before, after: pp, rank });
                         }
                     }
                     let place = map_rank.map(|r| format!("#{r} on this map")).unwrap_or_else(|| "sent (not your best here)".into());

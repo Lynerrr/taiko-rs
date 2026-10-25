@@ -187,13 +187,6 @@ impl Live {
     }
 }
 
-/// A player's total: their best pp per map, highest first, each counting 5% less than the one
-/// before (osu!'s weighting).
-pub fn total(best: Vec<f64>) -> f64 {
-    // The server's formula, so local and online totals agree.
-    crate::online::weighted_pp(best)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,12 +196,6 @@ mod tests {
         assert_eq!(custom_factor(Mods::parse("HD,HR,DT,NF")), 1.0);
         assert!((custom_factor(Mods::parse("HD,CH")) - Mod::SvChaos.multiplier()).abs() < 1e-12);
         assert!(custom_factor(Mods::parse("HA")) < 1.0, "Half removes notes: less pp");
-    }
-
-    #[test]
-    fn totals_weight_the_best_plays_most() {
-        assert_eq!(total(vec![]), 0.0);
-        assert!((total(vec![100.0, 200.0]) - (200.0 + 95.0)).abs() < 1e-9);
     }
 
     #[test]

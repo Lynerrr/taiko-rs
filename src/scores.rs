@@ -235,18 +235,6 @@ pub fn top(rows: &[ScoreRow], map_hash: u64, n: usize) -> Vec<&ScoreRow> {
     v
 }
 
-/// The pp total of the local scores: the best pp on each map, weighted like osu!.
-pub fn total_pp(rows: &[ScoreRow]) -> f64 {
-    let mut best: std::collections::HashMap<u64, f64> = std::collections::HashMap::new();
-    for r in rows {
-        if let Some(pp) = r.pp {
-            let b = best.entry(r.map_hash).or_insert(0.0);
-            *b = b.max(pp);
-        }
-    }
-    crate::pp::total(best.into_values().collect())
-}
-
 /// "3 d ago" style age of a Unix time.
 pub fn age(date: u64) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
