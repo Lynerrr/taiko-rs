@@ -26,6 +26,10 @@ pub enum Item {
     Interface,
     InterfaceHides,
     InterfaceKey,
+    /// Which skin each part of the playfield and interface comes from.
+    SkinParts,
+    /// The choices for one of them (`skin::Part::ALL[i]`): the list it opens, not a row.
+    SkinPart(usize),
     Key(usize),
     /// Previous (0) / next (1) playfield preset key.
     PresetKey(usize),
@@ -72,7 +76,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 66] = [
+pub const ITEMS: [(&str, Item); 67] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -123,6 +127,7 @@ pub const ITEMS: [(&str, Item); 66] = [
     ("VIDEO", Item::DiscordPresence),
     ("VIDEO", Item::Splash),
     ("SKIN", Item::Skin),
+    ("SKIN", Item::SkinParts),
     ("SKIN", Item::SkinFolder),
     ("SKIN", Item::NoteColours),
     ("SKIN", Item::DonColour),
@@ -237,6 +242,8 @@ impl Item {
             Item::WindowSize => "Window size",
             Item::DiscordPresence => "Discord status",
             Item::Skin => "Skin",
+            Item::SkinParts => "Skin parts",
+            Item::SkinPart(i) => crate::skin::Part::ALL.get(i).map_or("Skin part", |p| p.label()),
             Item::SkinFolder => "Skins folder",
             Item::Accent => "UI colour",
             Item::AccentHue => "UI colour: fine tune",
@@ -269,6 +276,8 @@ impl Item {
             | Item::PresentMode
             | Item::UpdateChannel
             | Item::Skin
+            | Item::SkinParts
+            | Item::SkinPart(_)
             | Item::NoteColours
             | Item::InterfaceHides
             | Item::WindowSize
@@ -362,6 +371,7 @@ impl Item {
             Item::WindowSize => "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
             Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",
             Item::Skin => "Enter opens the list. osu! skins from osu!'s or taiko-rs's Skins folder.",
+            Item::SkinParts | Item::SkinPart(_) => "What's drawn from a skin, and which: the skin above, built-in, or any other (mix them). Enter opens the list.",
             Item::SkinFolder => "Enter: open taiko-rs's Skins folder. Drop .osk files there, then pick them above.",
             Item::Accent => "The interface's accent; any but red tints the greys too. Left/Right: presets (or #rrggbb in the config).",
             Item::AccentHue => "Left/Right: turn the UI colour round the colour wheel, for any colour in between.",

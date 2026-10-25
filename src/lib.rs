@@ -988,7 +988,7 @@ impl State {
         sim.sfx_log = Some(Vec::new());
         sim.set_time(ed.end);
         let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.settings.hitsounds { sim.sfx_log.take().unwrap_or_default() } else { Vec::new() };
-        let sounds = audio::hitsound_set(sr, skin::load(&self.cfg.skin, Some(sr)).hitsounds);
+        let sounds = audio::hitsound_set(sr, skin::hitsounds(&self.cfg.skin, &self.cfg.skin_parts, sr));
         let (music, fx) = self.cfg.volumes();
         let speed = sim.speed();
         let samples = video::mix_audio(track, sr, &speed, ed.start, ed.end, music.max(0.05), &sfx, &sounds, fx);
@@ -1394,6 +1394,11 @@ impl State {
             Item::RateKeepPitch => on(c.rate_keep_pitch),
             Item::Skin if c.skin.is_empty() => "built-in".into(),
             Item::Skin => c.skin.clone(),
+            Item::SkinParts => {
+                let changed = skin::Part::ALL.iter().filter(|&&p| *c.skin_parts.get(p) != p.default_source()).count();
+                if changed == 0 { "notes from the skin".into() } else { format!("{changed} changed") }
+            }
+            Item::SkinPart(i) => skin::Part::ALL.get(i).map(|&p| self.skin_source_name(c.skin_parts.get(p))).unwrap_or_default(),
             Item::SkinFolder => "Enter to open".into(),
             Item::Accent => render::accent_name(c.accent),
             Item::AccentHue => format!("#{:06x}", c.accent),
@@ -1423,8 +1428,8 @@ impl State {
                 return;
             }
             Item::Interface => self.cfg.interface_hidden = !self.cfg.interface_hidden,
-            // Opens its list on Enter.
-            Item::InterfaceHides => return,
+            // Open their lists on Enter.
+            Item::InterfaceHides | Item::SkinParts | Item::SkinPart(_) => return,
             Item::TouchLayout => self.cfg.touch_layout = self.cfg.touch_layout.step(dir),
             Item::Accent => {
                 let n = render::ACCENTS.len() as i32;
@@ -1621,6 +1626,22 @@ impl State {
                 let names = multiverse::PALETTES.iter().map(|p| p.0.to_string()).chain(std::iter::once(format!("custom  #{:06x} / #{:06x}", own[0], own[1]))).collect();
                 (names, Some(c.note_colours.palette), "don / kat".into())
             }
+            Item::SkinParts => {
+                let names = skin::Part::ALL.iter().map(|&p| format!("{}:  {}", p.label(), self.skin_source_name(c.skin_parts.get(p)))).collect();
+                (names, None, "Enter: where it comes from".into())
+            }
+            Item::SkinPart(i) => {
+                let Some(&part) = skin::Part::ALL.get(i) else { return };
+                let skins: Vec<String> = skin::list().into_iter().map(|(n, _)| n).collect();
+                let main = if c.skin.is_empty() { "built-in".to_string() } else { c.skin.clone() };
+                let names: Vec<String> = [format!("The skin picked ({main})"), "Built-in".into()].into_iter().chain(skins.iter().cloned()).collect();
+                let current = match c.skin_parts.get(part) {
+                    skin::Source::Main => Some(0),
+                    skin::Source::BuiltIn => Some(1),
+                    skin::Source::Skin(n) => skins.iter().position(|s| s == n).map(|k| k + 2),
+                };
+                (names, current, "Esc: back to the parts".into())
+            }
             Item::Skin => {
                 let skins = skin::list();
                 let note = format!("{} installed", skins.len());
@@ -1681,6 +1702,26 @@ impl State {
             }
             Item::WindowSize => {
                 self.window_request = self.window_sizes().get(i - 1).copied();
+                return;
+            }
+            Item::SkinParts => {
+                self.open_choices(Item::SkinPart(i));
+                return;
+            }
+            Item::SkinPart(p) => {
+                let source = match i {
+                    0 => skin::Source::Main,
+                    1 => skin::Source::BuiltIn,
+                    _ => skin::Source::Skin(name.clone()),
+                };
+                if let Some(&part) = skin::Part::ALL.get(p)
+                    && *self.cfg.skin_parts.get(part) != source
+                {
+                    self.cfg.skin_parts.set(part, source);
+                    self.load_skin();
+                }
+                self.cfg.save();
+                self.reopen_skin_parts(p);
                 return;
             }
             Item::Skin => {
@@ -2019,9 +2060,27 @@ impl State {
 
     /// Loads the configured skin: its note images go to the renderer, its hitsounds to the audio
     /// engine.
+    /// How the settings name where a skin part comes from.
+    fn skin_source_name(&self, source: &skin::Source) -> String {
+        match source {
+            skin::Source::Main if self.cfg.skin.is_empty() => "the skin (built-in)".into(),
+            skin::Source::Main => format!("the skin ({})", self.cfg.skin),
+            skin::Source::BuiltIn => "built-in".into(),
+            skin::Source::Skin(name) => name.clone(),
+        }
+    }
+
+    /// The list of skin parts, open at part `i`.
+    fn reopen_skin_parts(&mut self, i: usize) {
+        self.open_choices(Item::SkinParts);
+        if let Some(ch) = &mut self.settings_ui.choices {
+            ch.cursor = i;
+        }
+    }
+
     fn load_skin(&mut self) {
-        let skin = skin::load(&self.cfg.skin, self.audio.as_ref().map(|a| a.rate));
-        self.sprites_upload = Some(skin.notes);
+        let skin = skin::load(&self.cfg.skin, &self.cfg.skin_parts, self.audio.as_ref().map(|a| a.rate));
+        self.sprites_upload = Some(skin.images);
         if let Some(a) = &self.audio {
             a.set_hitsounds(skin.hitsounds);
         }
@@ -2214,6 +2273,8 @@ impl State {
                     let i = p.cursor;
                     self.pick_choice(i);
                 }
+                // From one part's skins, back to the parts.
+                KeyCode::Escape | KeyCode::Backspace if let Item::SkinPart(i) = p.item => self.reopen_skin_parts(i),
                 KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab => self.settings_ui.choices = None,
                 _ => {}
             }
@@ -6506,7 +6567,11 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             let mut s = lock(&state);
             if let Some(atlas) = s.sprites_upload.take() {
                 renderer.set_sprites(&atlas);
-                canvas.sprites = atlas.sprites.map(|s| s.map(|(_, size)| size));
+                // The video export draws with the skin too.
+                for c in [&mut canvas, &mut export_canvas] {
+                    c.sprites = render::PerSprite(atlas.sprites.map(|s| s.map(|(_, size)| size)));
+                    c.skin_layout = atlas.layout;
+                }
             }
             // Video export frames above are drawn without the grid; the screen's frame with it.
             render::set_text_grid(renderer.text_grid());

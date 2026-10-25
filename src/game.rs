@@ -25,7 +25,7 @@ use crate::clock::GameClock;
 use crate::mods::{Mod, Mods, Speed};
 use crate::hud::Part;
 use crate::multiverse::{self, Shape as NoteShape, Universe};
-use crate::render::{accent, progress, rgba, Canvas, Hit, Shape, Sprite, VIRTUAL_HEIGHT};
+use crate::render::{accent, progress, rgba, Canvas, Font, Hit, Shape, Sprite, VIRTUAL_HEIGHT};
 
 /// The drum on the left: lazer's input drum (180 of a 768-tall screen, in our 480 units).
 pub const PANEL_W: f32 = 112.5;
@@ -2373,8 +2373,10 @@ impl Game {
             }
         };
         let (don, kat) = if mods.has(Mod::Colorless) { (GREY, GREY) } else { (mix(uni.idle(), uni.don(), look.colour), mix(uni.idle(), uni.kat(), look.colour)) };
-        // Text is drawn last, after Mirror flips the rest (letters must stay readable).
+        // Text is drawn last, after Mirror flips the rest (letters must stay readable), and so
+        // are the skin's numbers and judgements (centre x, top, height).
         let mut texts: Vec<(f32, f32, f32, [f32; 4], String)> = Vec::new();
+        let mut upright: Vec<(f32, f32, f32, [f32; 4], Upright)> = Vec::new();
 
         // Multiverse: a halo round the window, for the focus (breathing with the beat) and for
         // the call (glowing, flaring on each beat).
@@ -2390,6 +2392,7 @@ impl Game {
         let turns = mods.has(Mod::Tilt) || mods.has(Mod::Spin) || mods.has(Mod::Mania) || mods.has(Mod::BarrelRoll);
         let mut lane_col = if kiai { rgba(0x2b2433, 1.0) } else { rgba(0x20202b, 1.0) };
         let mut edge_col = rgba(0x3a3a4e, 1.0);
+        let mut skin_lane_tint = rgba(WHITE, 1.0);
         if kiai {
             lane_col = tint(lane_col, 0xff8a3d, 0.05 + 0.06 * pulse);
         }
@@ -2398,6 +2401,7 @@ impl Game {
             let col = hue(hash01(beats.floor() as f64 * 2.7 + 0.3));
             lane_col = tint(lane_col, col, (0.07 + 0.16 * pulse) * if in_kiai { 1.6 } else { 1.0 });
             edge_col = rgba(col, 0.9);
+            skin_lane_tint = tint(skin_lane_tint, col, 0.15 + 0.25 * pulse);
         }
         if geo.bent() {
             // In short pieces along the way: edges first, so the lane's inside covers their joins.
@@ -2421,7 +2425,10 @@ impl Game {
             }
         } else {
             let (lane_x, lane_w) = if turns { (-w, 3.0 * w) } else { (0.0, w) };
-            draw_lane(c, lane_x, lane_w, lane_col, edge_col);
+            let glow = if kiai { 0.75 + 0.25 * pulse } else { 0.0 };
+            if !skin_lane(c, lane_x, lane_w, skin_lane_tint, glow) {
+                draw_lane(c, lane_x, lane_w, lane_col, edge_col);
+            }
         }
         // Crumble: crumbs fly off the edge each piece moves out to and fall away.
         for cr in &self.crumbs {
@@ -2459,7 +2466,14 @@ impl Game {
             let s = s_of(b.time, b.velocity);
             if s > PANEL_W - HIT_X && s < lane_len + 2.0 {
                 let (x, y, a, _) = place(s, 0.0);
-                lane_rect(c, (x, y, a), 1.6, LANE_H, rgba(WHITE, 0.28));
+                if let Some([bw, bh]) = c.sprite_size(Sprite::Barline) {
+                    c.sprite_box(Sprite::Barline, x, y, (bw * LANE_PX / 2.0).max(0.6), bh * LANE_PX / 2.0, rgba(WHITE, 1.0));
+                    if let Some(sh) = c.shapes.last_mut() {
+                        sh.angle = -a;
+                    }
+                } else {
+                    lane_rect(c, (x, y, a), 1.6, LANE_H, rgba(WHITE, 0.28));
+                }
             }
         }
         // Roulette: where the speed changes, and to what.
@@ -2479,8 +2493,7 @@ impl Game {
         }
 
         // Hit target.
-        c.circle(HIT_X, LANE_Y, BIG_R, rgba(WHITE, 0.03), rgba(WHITE, 0.12), 2.0);
-        c.circle(HIT_X, LANE_Y, NOTE_R + 1.0, rgba(WHITE, 0.06), rgba(WHITE, 0.4), 2.5);
+        draw_hit_target(c);
         if kiai {
             c.glow(HIT_X, LANE_Y, NOTE_R, 30.0, rgba(0xffb347, 0.25 * pulse));
         }
@@ -2508,6 +2521,8 @@ impl Game {
         }
 
         // Notes, back to front so earlier notes sit on top. A window's leave it under the drum.
+        // Hit ones fly out of the drum over its panel, so they're drawn after it.
+        let mut flying: Vec<(f32, bool, u32)> = Vec::new();
         let behind = |r: f32| if boxed { r - HIT_X } else { -HIT_X - r };
         let on_lane = |s: f32, r: f32| s > behind(r) && s < lane_len + r;
         for &i in self.visible.iter().rev() {
@@ -2523,13 +2538,7 @@ impl Game {
                         Some(Judge::Great | Judge::Ok) => {
                             let p = ((t - st.judged_at) / HIT_ANIM_MS).clamp(0.0, 1.0) as f32;
                             if p < 1.0 {
-                                let y = LANE_Y - 80.0 * p * (2.0 - p);
-                                let r = r * (1.0 + 0.15 * p);
-                                if uni.shape != NoteShape::Round {
-                                    multiverse::note(c, uni.shape, HIT_X, y, r, col, 1.0 - p);
-                                } else if !skin_note(c, HIT_X, y, r, n.big, col, 1.0 - p) {
-                                    c.circle(HIT_X, y, r, rgba(col, 1.0 - p), rgba(WHITE, 1.0 - p), 3.0);
-                                }
+                                flying.push((p, n.big, col));
                             }
                         }
                         judged => {
@@ -2578,7 +2587,9 @@ impl Game {
                         let ts = s_of(n.time + k as f64 * n.tick_spacing, n.velocity);
                         if !hit && ts > s0 && ts < lane_len {
                             let (x, y, ..) = place(ts, 0.0);
-                            c.circle(x, y, 4.0, rgba(WHITE, 0.85 * a), rgba(WHITE, 0.0), 0.0);
+                            if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(WHITE, a)) {
+                                c.circle(x, y, 4.0, rgba(WHITE, 0.85 * a), rgba(WHITE, 0.0), 0.0);
+                            }
                         }
                     }
                     let (x, y, _, size) = place(s0, 0.0);
@@ -2640,20 +2651,26 @@ impl Game {
         }
 
         // Drum panel on top so passed notes slide underneath it.
-        c.rect(0.0, lane_top, PANEL_W, LANE_H, rgba(0x191921, 1.0));
-        let drum_x = PANEL_W / 2.0;
         let flash = |at: f64| ((1.0 - (t - at) / 130.0).clamp(0.0, 1.0) * 0.95) as f32;
-        c.circle(drum_x, LANE_Y, 46.0, rgba(0x2f2f3e, 1.0), rgba(0x4a4a60, 1.0), 2.0);
-        let (drum_don, drum_kat) = (uni.don(), uni.kat());
-        c.half_circle(drum_x, LANE_Y, 46.0, 1, rgba(drum_kat, flash(self.presses[0])), rgba(drum_kat, 0.0), 0.0);
-        c.half_circle(drum_x, LANE_Y, 46.0, 2, rgba(drum_kat, flash(self.presses[3])), rgba(drum_kat, 0.0), 0.0);
-        c.circle(drum_x, LANE_Y, 32.0, rgba(0xe9dcc3, 1.0), rgba(0x8a7b63, 1.0), 2.0);
-        c.half_circle(drum_x, LANE_Y, 32.0, 1, rgba(drum_don, flash(self.presses[1])), rgba(drum_don, 0.0), 0.0);
-        c.half_circle(drum_x, LANE_Y, 32.0, 2, rgba(drum_don, flash(self.presses[2])), rgba(drum_don, 0.0), 0.0);
+        let drum_x = draw_drum(c, self.presses.map(flash), uni.don(), uni.kat());
+        for (p, big, col) in flying {
+            let y = LANE_Y - 80.0 * p * (2.0 - p);
+            let r = if big { BIG_R } else { NOTE_R } * (1.0 + 0.15 * p);
+            if uni.shape != NoteShape::Round {
+                multiverse::note(c, uni.shape, HIT_X, y, r, col, 1.0 - p);
+            } else if !skin_note(c, HIT_X, y, r, big, col, 1.0 - p) {
+                c.circle(HIT_X, y, r, rgba(col, 1.0 - p), rgba(WHITE, 1.0 - p), 3.0);
+            }
+        }
         if self.stats.combo >= 2 && !self.hidden.has(Part::Combo) {
             let s = self.stats.combo.to_string();
-            let size = if s.len() > 3 { 12.0 } else { 16.0 };
-            texts.push((drum_x, LANE_Y - size / 2.0, size, rgba(0x1d1d26, 1.0), s));
+            let skin_size = if s.len() > 3 { 17.0 } else { 22.0 };
+            if c.number_width(Font::Combo, skin_size, &s).is_some() {
+                upright.push((drum_x, LANE_Y - skin_size / 2.0, skin_size, rgba(WHITE, 1.0), Upright::Number(Font::Combo, s)));
+            } else {
+                let size = if s.len() > 3 { 12.0 } else { 16.0 };
+                texts.push((drum_x, LANE_Y - size / 2.0, size, rgba(0x1d1d26, 1.0), s));
+            }
         }
 
         // Judgement text.
@@ -2661,7 +2678,18 @@ impl Game {
             let age = (t - at) as f32;
             if age < 450.0 {
                 let a = (1.0 - age / 450.0).min(1.0);
-                texts.push((HIT_X, lane_top - 30.0 - age * 0.02, 15.0, rgba(j.color(), a), j.label().to_string()));
+                let sprite = match j {
+                    Judge::Great => Sprite::JudgeGreat,
+                    Judge::Ok => Sprite::JudgeOk,
+                    Judge::Miss => Sprite::JudgeMiss,
+                };
+                // The skin's sits in the hit target, popping a little as it shows.
+                if let Some([_, sh]) = c.sprite_size(sprite) {
+                    let h = 2.0 * NOTE_R * sh * (1.0 + 0.12 * (1.0 - age / 90.0).max(0.0));
+                    upright.push((HIT_X, LANE_Y - h / 2.0 - age * 0.02, h, rgba(WHITE, a), Upright::Image(sprite)));
+                } else {
+                    texts.push((HIT_X, lane_top - 30.0 - age * 0.02, 15.0, rgba(j.color(), a), j.label().to_string()));
+                }
             }
         }
 
@@ -2741,12 +2769,31 @@ impl Game {
         if angle != 0.0 || zoom != 1.0 || dest != pivot {
             c.rotate_since(start_shape, pivot, angle, zoom, dest);
         }
-        // Texts go where the playfield took them, but stay upright and readable.
+        // Texts go where the playfield took them, but stay upright and readable: their centre x,
+        // top and height there.
         let (sin, cos) = angle.sin_cos();
-        for (x, y, size, color, text) in texts {
+        let moved = |x: f32, y: f32, size: f32| {
             let (rx, ry) = ((flip_x(x) - pivot[0]) * zoom, (y + size / 2.0 - pivot[1]) * zoom);
-            let (x, y) = (dest[0] + rx * cos - ry * sin, dest[1] + rx * sin + ry * cos);
-            c.text_centered(x, y - size * zoom / 2.0, size * zoom, color, &text);
+            (dest[0] + rx * cos - ry * sin, dest[1] + rx * sin + ry * cos - size * zoom / 2.0, size * zoom)
+        };
+        for (x, y, size, color, what) in upright {
+            let (x, y, size) = moved(x, y, size);
+            match what {
+                Upright::Number(font, s) => {
+                    if let Some(nw) = c.number_width(font, size, &s) {
+                        c.number(font, x - nw / 2.0, y, size, color, &s);
+                    }
+                }
+                Upright::Image(sprite) => {
+                    if let Some([sw, sh]) = c.sprite_size(sprite) {
+                        c.sprite_box(sprite, x, y + size / 2.0, size / 2.0 * sw / sh, size / 2.0, color);
+                    }
+                }
+            }
+        }
+        for (x, y, size, color, text) in texts {
+            let (x, y, size) = moved(x, y, size);
+            c.text_centered(x, y, size, color, &text);
         }
         // Glitch: colour-split ghosts of everything but the big backdrops.
         if glitch {
@@ -2784,11 +2831,18 @@ impl Game {
 
         let shown = |p: Part| !self.hidden.has(p);
         // Score / accuracy.
+        // In the skin's score font if it has one.
+        let number = |c: &mut Canvas, y: f32, size: f32, col: u32, s: &str| match c.number_width(Font::Score, size, s) {
+            Some(nw) => {
+                c.number(Font::Score, w - 18.0 - nw, y, size, rgba(WHITE, 1.0), s);
+            }
+            None => c.text_right(w - 18.0, y, size, rgba(col, 1.0), s),
+        };
         if shown(Part::Score) {
-            c.text_right(w - 18.0, 18.0, 24.0, rgba(WHITE, 1.0), &format!("{:08}", self.stats.score));
+            number(c, 18.0, 24.0, WHITE, &format!("{:08}", self.stats.score));
         }
         if shown(Part::Accuracy) {
-            c.text_right(w - 18.0, 50.0, 14.0, rgba(0xc8c8d8, 1.0), &format!("{:.2}%", self.stats.accuracy() * 100.0));
+            number(c, 50.0, 14.0, 0xc8c8d8, &format!("{:.2}%", self.stats.accuracy() * 100.0));
         }
         // Progress bar.
         if shown(Part::Progress) {
@@ -2800,12 +2854,25 @@ impl Game {
             let (hx, hy) = (hp_bar_x(w), HP_BAR_Y);
             let hw = w - 18.0 - hx;
             let hp = self.hp as f32;
-            c.round_rect(hx, hy, hw, 8.0, 3.0, rgba(0x15151d, 0.85), rgba(0x3a3a4e, 1.0), 1.0);
-            let fill = if hp >= 0.5 { 0xFFD34D } else { 0xEB452C };
-            if hp > 0.0 {
-                c.round_rect(hx + 1.0, hy + 1.0, (hw - 2.0) * hp, 6.0, 2.5, rgba(fill, 0.95), rgba(0, 0.0), 0.0);
+            if let (Some([bw, bh]), Some([fw, fh])) = (c.sprite_size(Sprite::HealthBg), c.sprite_size(Sprite::HealthFill)) {
+                // The skin's bar where osu! has it, in the top left at its own size (some are a
+                // frame round the whole screen); the fill on it 5, 16 px in, cut off at the HP.
+                let k = HUD_PX * 128.0;
+                let (bg_w, bg_h) = (bw * k, bh * k);
+                c.sprite_box(Sprite::HealthBg, bg_w / 2.0, bg_h / 2.0, bg_w / 2.0, bg_h / 2.0, rgba(WHITE, 1.0));
+                let (fx, fy, fill_w, fill_h) = (5.0 * HUD_PX, 16.0 * HUD_PX, fw * k, fh * k);
+                let start = c.shapes.len();
+                c.sprite_box(Sprite::HealthFill, fx + fill_w / 2.0, fy + fill_h / 2.0, fill_w / 2.0, fill_h / 2.0, rgba(WHITE, 1.0));
+                c.clip_since(start, fx, fy, fill_w * hp, fill_h);
+                c.rect(fx + fill_w / 2.0 - 0.75, fy - 2.0, 1.5, fill_h + 4.0, rgba(WHITE, 0.8));
+            } else {
+                c.round_rect(hx, hy, hw, 8.0, 3.0, rgba(0x15151d, 0.85), rgba(0x3a3a4e, 1.0), 1.0);
+                let fill = if hp >= 0.5 { 0xFFD34D } else { 0xEB452C };
+                if hp > 0.0 {
+                    c.round_rect(hx + 1.0, hy + 1.0, (hw - 2.0) * hp, 6.0, 2.5, rgba(fill, 0.95), rgba(0, 0.0), 0.0);
+                }
+                c.rect(hx + hw / 2.0 - 0.75, hy - 2.0, 1.5, 12.0, rgba(WHITE, 0.8));
             }
-            c.rect(hx + hw / 2.0 - 0.75, hy - 2.0, 1.5, 12.0, rgba(WHITE, 0.8));
         }
         if !self.mods.is_empty() && shown(Part::Mods) {
             let label = self.mods.iter().map(|m| m.acronym()).collect::<Vec<_>>().join(" ");
@@ -2998,6 +3065,94 @@ fn skin_note(c: &mut Canvas, x: f32, y: f32, r: f32, big: bool, col: u32, alpha:
     true
 }
 
+/// Units per sprite size unit (128 SD px) of osu!'s playfield images: its bar is 200 px tall.
+const LANE_PX: f32 = LANE_H / 200.0 * 128.0;
+
+/// Units per SD px of osu!'s interface images: its screen is 768 px tall.
+const HUD_PX: f32 = VIRTUAL_HEIGHT / 768.0;
+
+/// Drawn upright after the playfield's moves, like text.
+enum Upright {
+    /// A number in the skin's font.
+    Number(Font, String),
+    /// A skin image.
+    Image(Sprite),
+}
+
+/// The skin's lane over `x`..`x + w` (stretched across, like osu!), its kiai glow over it at
+/// `glow`. False (nothing drawn) when the skin has none.
+fn skin_lane(c: &mut Canvas, x: f32, w: f32, tint: [f32; 4], glow: f32) -> bool {
+    if c.sprite_size(Sprite::LaneBar).is_none() {
+        return false;
+    }
+    c.sprite_box(Sprite::LaneBar, x + w / 2.0, LANE_Y, w / 2.0, LANE_H / 2.0, tint);
+    if glow > 0.0 && c.sprite_size(Sprite::LaneKiai).is_some() {
+        c.sprite_box(Sprite::LaneKiai, x + w / 2.0, LANE_Y, w / 2.0, LANE_H / 2.0, rgba(WHITE, glow));
+    }
+    true
+}
+
+/// The hit target: the skin's (osu!'s approach circle, and its big circle faintly round it, as
+/// see-through as lazer has them) or the built-in rings.
+fn draw_hit_target(c: &mut Canvas) {
+    let big = c.sprite(Sprite::HitTargetBig, HIT_X, LANE_Y, BIG_R, rgba(WHITE, 0.22));
+    let ring = c.sprite(Sprite::HitTarget, HIT_X, LANE_Y, NOTE_R, rgba(WHITE, 0.47));
+    if !big && !ring {
+        c.circle(HIT_X, LANE_Y, BIG_R, rgba(WHITE, 0.03), rgba(WHITE, 0.12), 2.0);
+        c.circle(HIT_X, LANE_Y, NOTE_R + 1.0, rgba(WHITE, 0.06), rgba(WHITE, 0.4), 2.5);
+    }
+}
+
+/// The drum panel and the drum, its halves lit by `flash` (left rim, left centre, right centre,
+/// right rim: 0-1) in `don` / `kat` (the built-in drum; a skin's lights are its own). Returns
+/// the drum's centre x.
+fn draw_drum(c: &mut Canvas, flash: [f32; 4], don: u32, kat: u32) -> f32 {
+    let lane_top = LANE_Y - LANE_H / 2.0;
+    // The skin's panel at its own size (osu!'s is 181 x 200 SD px, but some reach out round the
+    // hit target), as tall as the lane.
+    let k = LANE_PX / 128.0;
+    let panel = c.sprite_size(Sprite::DrumPanel);
+    let skinned_panel = panel.is_some();
+    if let Some([pw, _]) = panel {
+        let hw = pw * LANE_PX / 2.0;
+        c.sprite_box(Sprite::DrumPanel, hw, LANE_Y, hw, LANE_H / 2.0, rgba(WHITE, 1.0));
+    } else {
+        c.rect(0.0, lane_top, PANEL_W, LANE_H, rgba(0x191921, 1.0));
+    }
+    if c.sprite_size(Sprite::DrumInner).is_some() || c.sprite_size(Sprite::DrumOuter).is_some() {
+        // Where each half's top-left goes (SD px into the panel): skins from before version 2.1
+        // have smaller halves round a drum a little further left.
+        let legacy = c.skin_layout.legacy_drum;
+        let (centre, place) = if legacy {
+            (85.5, [(Sprite::DrumOuterFlipped, 13.0, 37.0), (Sprite::DrumInner, 29.0, 50.0), (Sprite::DrumInnerFlipped, 86.0, 50.0), (Sprite::DrumOuter, 85.0, 37.0)])
+        } else {
+            (90.0, [(Sprite::DrumOuterFlipped, 0.0, 0.0), (Sprite::DrumInner, 0.0, 0.0), (Sprite::DrumInnerFlipped, 90.0, 0.0), (Sprite::DrumOuter, 90.0, 0.0)])
+        };
+        for ((sprite, x, y), a) in place.into_iter().zip(flash) {
+            if let Some([sw, sh]) = c.sprite_size(sprite).filter(|_| a > 0.0) {
+                let (hw, hh) = (sw * LANE_PX / 2.0, sh * LANE_PX / 2.0);
+                c.sprite_box(sprite, x * k + hw, lane_top + y * k + hh, hw, hh, rgba(WHITE, a));
+            }
+        }
+        return centre * k;
+    }
+    let drum_x = PANEL_W / 2.0;
+    if skinned_panel {
+        // The panel has its drum drawn on: light it the built-in way.
+        for (side, r, col, a) in [(1, 46.0, kat, flash[0]), (2, 46.0, kat, flash[3]), (1, 32.0, don, flash[1]), (2, 32.0, don, flash[2])] {
+            c.half_circle(drum_x, LANE_Y, r, side, rgba(col, a * 0.7), rgba(col, 0.0), 0.0);
+        }
+        return drum_x;
+    }
+    c.circle(drum_x, LANE_Y, 46.0, rgba(0x2f2f3e, 1.0), rgba(0x4a4a60, 1.0), 2.0);
+    c.half_circle(drum_x, LANE_Y, 46.0, 1, rgba(kat, flash[0]), rgba(kat, 0.0), 0.0);
+    c.half_circle(drum_x, LANE_Y, 46.0, 2, rgba(kat, flash[3]), rgba(kat, 0.0), 0.0);
+    c.circle(drum_x, LANE_Y, 32.0, rgba(0xe9dcc3, 1.0), rgba(0x8a7b63, 1.0), 2.0);
+    c.half_circle(drum_x, LANE_Y, 32.0, 1, rgba(don, flash[1]), rgba(don, 0.0), 0.0);
+    c.half_circle(drum_x, LANE_Y, 32.0, 2, rgba(don, flash[2]), rgba(don, 0.0), 0.0);
+    drum_x
+}
+
 /// The lane and its border. The border is two strips rather than a rect under the whole lane
 /// (they reach a unit under the lane, so its edge blends into border colour just the same), and
 /// the background isn't drawn under the lane at all (`mark_opaque`).
@@ -3012,10 +3167,10 @@ fn draw_lane(c: &mut Canvas, x: f32, w: f32, color: [f32; 4], border: [f32; 4]) 
 /// A still playfield (lane, drum, a few notes) for the playfield area editor.
 pub fn draw_preview(c: &mut Canvas) {
     let w = c.width;
-    let lane_top = LANE_Y - LANE_H / 2.0;
-    draw_lane(c, 0.0, w, rgba(0x20202b, 1.0), rgba(0x3a3a4e, 1.0));
-    c.circle(HIT_X, LANE_Y, BIG_R, rgba(WHITE, 0.03), rgba(WHITE, 0.12), 2.0);
-    c.circle(HIT_X, LANE_Y, NOTE_R + 1.0, rgba(WHITE, 0.06), rgba(WHITE, 0.4), 2.5);
+    if !skin_lane(c, 0.0, w, rgba(WHITE, 1.0), 0.0) {
+        draw_lane(c, 0.0, w, rgba(0x20202b, 1.0), rgba(0x3a3a4e, 1.0));
+    }
+    draw_hit_target(c);
     // Back to front, like gameplay.
     c.capsule(HIT_X + 560.0, HIT_X + 760.0, LANE_Y, NOTE_R * 0.86, rgba(ROLL, 1.0), rgba(WHITE, 1.0), 2.5);
     c.circle(HIT_X + 560.0, LANE_Y, NOTE_R, rgba(ROLL, 1.0), rgba(WHITE, 1.0), NOTE_R * 0.1);
@@ -3026,9 +3181,7 @@ pub fn draw_preview(c: &mut Canvas) {
             c.circle(HIT_X + dx, LANE_Y, r, rgba(col, 1.0), rgba(WHITE, 1.0), r * 0.1);
         }
     }
-    c.rect(0.0, lane_top, PANEL_W, LANE_H, rgba(0x191921, 1.0));
-    c.circle(PANEL_W / 2.0, LANE_Y, 46.0, rgba(0x2f2f3e, 1.0), rgba(0x4a4a60, 1.0), 2.0);
-    c.circle(PANEL_W / 2.0, LANE_Y, 32.0, rgba(0xe9dcc3, 1.0), rgba(0x8a7b63, 1.0), 2.0);
+    draw_drum(c, [0.0; 4], colours.don(), colours.kat());
     c.text_centered(w / 2.0, 300.0, 14.0, rgba(WHITE, 0.85), "drag to move, edges to resize");
 }
 

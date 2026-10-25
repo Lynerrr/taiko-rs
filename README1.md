@@ -364,6 +364,30 @@ texture so a frame is still a single draw call. Its taiko hitsounds replace the 
 played (loud, well above the hitsounds) when a miss breaks a combo of 20 or more. Anything the skin doesn't have stays built-in (the
 built-in sounds come from the quassbot v2 skin); an empty file mutes that sound, like in osu!.
 
+Everything else on the playfield and the interface can come from the skin too. **Skin parts**
+(Settings → Skin) lists them, and each can come from the skin picked above, the built-in look, or
+any other installed skin, so skins mix: one skin's notes with another's drum and a third's
+hitsounds. By default only the notes, drumrolls, swells and hitsounds follow the skin; the rest
+stays built-in until it's switched over. The parts and the images they use:
+
+| Part | Images |
+| --- | --- |
+| Notes | `taikohitcircle`, `taikobigcircle` and their overlays |
+| Drumrolls | `taiko-roll-middle`, `taiko-roll-end`, `sliderscorepoint` (ticks) |
+| Swells | `spinner-warning`, `spinner-circle`, `spinner-approachcircle` |
+| Hit target | `approachcircle`, `taikobigcircle` |
+| Lane and barlines | `taiko-bar-right`, `taiko-bar-right-glow` (kiai), `taiko-barline` |
+| Drum | `taiko-bar-left`, `taiko-drum-inner`, `taiko-drum-outer` (mirrored for the other half; skins older than version 2.1 get their older layout) |
+| Judgements | `taiko-hit300`, `taiko-hit100`, `taiko-hit0`, in the hit target |
+| Score and accuracy | the score font (`ScorePrefix` and `ScoreOverlap` in skin.ini, digits, `-percent`, `-dot`) |
+| Combo | the combo font (`ComboPrefix`, `ComboOverlap`), on the drum |
+| Health bar | `scorebar-bg`, `scorebar-colour`, top left at their own size like osu! |
+| Hitsounds | as above |
+
+Each image the chosen skin lacks is drawn the built-in way, and a font missing a digit isn't used.
+In the config these are `skin_part = <part> = <skin folder>` lines (`<main>` for the skin picked,
+`<built-in>` for none), written only for parts not where they'd be by default.
+
 Hitsounds play at the volume of the map's timing point (red or green line) at the moment of the
 hit, like in osu!, times the hitsound volume setting.
 
@@ -542,7 +566,7 @@ spins so frames stay evenly spaced.
 | `server/` | `taiko-server`: accounts and server-hosted lobbies (deploy files in `server/deploy/`) |
 | `src/library.rs` | Songs folder / `.osz` scanning |
 | `src/logo.rs` | the logo: window icon, top bar |
-| `src/skin.rs` | osu! skins: listing, `.osk` unpacking, note image atlas, hitsounds |
+| `src/skin.rs` | osu! skins: listing, `.osk` unpacking, skin parts and where each comes from, the image atlas, fonts, hitsounds |
 | `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
 | `src/discord.rs` | Discord Rich Presence over the local IPC socket / pipe |
 | `src/download.rs` | mirror search and `.osz` downloads (osu.direct, catboy.best) |

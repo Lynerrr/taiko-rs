@@ -180,6 +180,8 @@ pub struct Config {
     pub saved_presets: Vec<(u32, u32)>,
     /// Name of the osu! skin in use (its folder name); empty = built-in.
     pub skin: String,
+    /// Where each part of the skin comes from: that skin, the built-in look or another skin.
+    pub skin_parts: crate::skin::Sources,
     /// The Songs folder picked in settings, scanned instead of looking for osu! installs.
     pub songs_folder: Option<PathBuf>,
     /// Multiverse's universes: each playfield's colours, note shape, speed and mods.
@@ -259,6 +261,7 @@ impl Default for Config {
             show_playfield_size: true,
             saved_presets: Vec::new(),
             skin: String::new(),
+            skin_parts: Default::default(),
             songs_folder: None,
             universes: crate::multiverse::defaults(),
             universe_presets: Vec::new(),
@@ -588,6 +591,7 @@ impl Config {
                 }
                 "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
                 "skin" => cfg.skin = v.to_string(),
+                "skin_part" => cfg.skin_parts.parse(v),
                 "songs_folder" => cfg.songs_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
                 "multiverse" => cfg.universes = crate::multiverse::parse(v),
                 "multiverse_preset" => cfg.universe_presets.extend(crate::multiverse::Preset::parse(v)),
@@ -705,6 +709,10 @@ impl Config {
             self.mods.to_config(),
         );
         out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
+        out.push_str("# parts of the skin from elsewhere: skin_part = <part> = <skin folder name> (or <built-in>)\n");
+        for line in self.skin_parts.to_config() {
+            out.push_str(&format!("skin_part = {line}\n"));
+        }
         out.push_str(&format!(
             "# interface colour: red (the default), pink, purple, blue, teal, green, yellow, orange or #rrggbb\naccent = {}\n",
             crate::render::accent_name(self.accent)

@@ -30,7 +30,7 @@ pub struct Shape {
 const GLYPH_BASE: f32 = 100.0;
 
 /// Skin images, packed into one texture so they draw in the same instanced call as the shapes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sprite {
     HitCircle,
     HitCircleOverlay,
@@ -46,30 +46,196 @@ pub enum Sprite {
     SpinnerCircle,
     /// A ring closing in on the spinner circle until time runs out.
     SpinnerApproach,
+    /// A drumroll's tick.
+    RollTick,
+    /// The lane, and its glow in kiai time.
+    LaneBar,
+    LaneKiai,
+    Barline,
+    /// The hit target: the ring notes are hit in, and the big one around it.
+    HitTarget,
+    HitTargetBig,
+    /// The panel the drum sits in, and the drum's halves lit when hit: as the skin has them (the
+    /// inner one's left, the outer one's right), and their mirror images.
+    DrumPanel,
+    DrumInner,
+    DrumInnerFlipped,
+    DrumOuter,
+    DrumOuterFlipped,
+    /// GREAT / OK / MISS.
+    JudgeGreat,
+    JudgeOk,
+    JudgeMiss,
+    /// The score font's digits, % and decimal point (score and accuracy).
+    Score0,
+    Score1,
+    Score2,
+    Score3,
+    Score4,
+    Score5,
+    Score6,
+    Score7,
+    Score8,
+    Score9,
+    ScorePercent,
+    ScoreDot,
+    /// The combo font's digits (the combo on the drum).
+    Combo0,
+    Combo1,
+    Combo2,
+    Combo3,
+    Combo4,
+    Combo5,
+    Combo6,
+    Combo7,
+    Combo8,
+    Combo9,
+    /// The health bar: behind, and the fill.
+    HealthBg,
+    HealthFill,
 }
 
 /// How many `Sprite`s there are (the shader's `sprites` array is this long too).
-pub const SPRITES: usize = 9;
+pub const SPRITES: usize = 47;
+
+impl Sprite {
+    /// Every sprite, in order.
+    pub const ALL: [Sprite; SPRITES] = [
+        Sprite::HitCircle,
+        Sprite::HitCircleOverlay,
+        Sprite::BigCircle,
+        Sprite::BigCircleOverlay,
+        Sprite::RollMiddle,
+        Sprite::RollEnd,
+        Sprite::SpinnerWarning,
+        Sprite::SpinnerCircle,
+        Sprite::SpinnerApproach,
+        Sprite::RollTick,
+        Sprite::LaneBar,
+        Sprite::LaneKiai,
+        Sprite::Barline,
+        Sprite::HitTarget,
+        Sprite::HitTargetBig,
+        Sprite::DrumPanel,
+        Sprite::DrumInner,
+        Sprite::DrumInnerFlipped,
+        Sprite::DrumOuter,
+        Sprite::DrumOuterFlipped,
+        Sprite::JudgeGreat,
+        Sprite::JudgeOk,
+        Sprite::JudgeMiss,
+        Sprite::Score0,
+        Sprite::Score1,
+        Sprite::Score2,
+        Sprite::Score3,
+        Sprite::Score4,
+        Sprite::Score5,
+        Sprite::Score6,
+        Sprite::Score7,
+        Sprite::Score8,
+        Sprite::Score9,
+        Sprite::ScorePercent,
+        Sprite::ScoreDot,
+        Sprite::Combo0,
+        Sprite::Combo1,
+        Sprite::Combo2,
+        Sprite::Combo3,
+        Sprite::Combo4,
+        Sprite::Combo5,
+        Sprite::Combo6,
+        Sprite::Combo7,
+        Sprite::Combo8,
+        Sprite::Combo9,
+        Sprite::HealthBg,
+        Sprite::HealthFill,
+    ];
+
+    /// The score font's glyph for `ch` (digits, '%' and '.').
+    pub fn score_glyph(ch: char) -> Option<Sprite> {
+        match ch {
+            '0'..='9' => Some(Sprite::ALL[Sprite::Score0 as usize + ch as usize - '0' as usize]),
+            '%' => Some(Sprite::ScorePercent),
+            '.' => Some(Sprite::ScoreDot),
+            _ => None,
+        }
+    }
+
+    /// The combo font's glyph for `ch` (digits).
+    pub fn combo_glyph(ch: char) -> Option<Sprite> {
+        ch.to_digit(10).map(|d| Sprite::ALL[Sprite::Combo0 as usize + d as usize])
+    }
+}
 const SPRITE_BASE: f32 = 10.0;
 
 /// What a shape needs, besides its position, to come out mirrored left to right: half circles
 /// swap sides, and a drumroll's end cap turns around (the other sprites are round).
 fn flip_x(sh: &mut Shape) {
+    let sprite = |s: Sprite| SPRITE_BASE + s as usize as f32;
+    // The drum's halves have their mirror images in the atlas.
+    let pairs = [(Sprite::DrumInner, Sprite::DrumInnerFlipped), (Sprite::DrumOuter, Sprite::DrumOuterFlipped)];
     if (0.5..2.5).contains(&sh.params[3]) {
         sh.params[3] = 3.0 - sh.params[3];
-    } else if sh.params[3] == SPRITE_BASE + Sprite::RollEnd as usize as f32 {
+    } else if sh.params[3] == sprite(Sprite::RollEnd) {
         sh.angle += std::f32::consts::PI;
+    } else if let Some(&(a, b)) = pairs.iter().find(|&&(a, b)| sh.params[3] == sprite(a) || sh.params[3] == sprite(b)) {
+        sh.params[3] = if sh.params[3] == sprite(a) { sprite(b) } else { sprite(a) };
+    }
+}
+
+/// What a skin says about laying its images out, besides their sizes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SkinLayout {
+    /// How far (SD px) each digit of the score and combo fonts overlaps the one before.
+    pub score_overlap: f32,
+    pub combo_overlap: f32,
+    /// The drum skin is older than version 2.1: its halves are smaller and sit elsewhere.
+    pub legacy_drum: bool,
+}
+
+/// A glyph of a skin font and its size (relative, like `Canvas::sprites`).
+type Glyph = (Sprite, [f32; 2]);
+
+/// A skin's number fonts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Font {
+    /// Score and accuracy (digits, % and .).
+    Score,
+    /// The combo (digits).
+    Combo,
+}
+
+/// Something for each `Sprite` (indexed by `sprite as usize`), defaulting to `T`'s default.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PerSprite<T>(pub [T; SPRITES]);
+
+impl<T: Default + Copy> Default for PerSprite<T> {
+    fn default() -> Self {
+        PerSprite([T::default(); SPRITES])
+    }
+}
+
+impl<T> std::ops::Deref for PerSprite<T> {
+    type Target = [T; SPRITES];
+    fn deref(&self) -> &[T; SPRITES] {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for PerSprite<T> {
+    fn deref_mut(&mut self) -> &mut [T; SPRITES] {
+        &mut self.0
     }
 }
 
 /// Skin images side by side (premultiplied RGBA8), each with its UV rect and its size relative
-/// to the note radius. The default (no images) brings back the drawn notes.
+/// to the note radius. The default (no images) brings back the drawn look.
 #[derive(Default)]
 pub struct Atlas {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
-    pub sprites: [Option<([f32; 4], [f32; 2])>; SPRITES],
+    pub sprites: PerSprite<Option<([f32; 4], [f32; 2])>>,
+    pub layout: SkinLayout,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -378,10 +544,15 @@ fn fs(i: V) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// The shapes shader, its `sprites` array as long as there are sprites.
+fn shape_shader() -> String {
+    SHADER.replace("SPRITE_COUNT", &SPRITES.to_string()).replace("SPRITE_LAST", &(SPRITES - 1).to_string())
+}
+
 const SHADER: &str = r#"
 struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32 };
 @group(0) @binding(0) var<uniform> g: Globals;
-@group(0) @binding(1) var<uniform> sprites: array<vec4<f32>, 9>;
+@group(0) @binding(1) var<uniform> sprites: array<vec4<f32>, SPRITE_COUNT>;
 @group(0) @binding(2) var atlas: texture_2d<f32>;
 @group(0) @binding(3) var samp: sampler;
 @group(0) @binding(4) var font: texture_2d<f32>;
@@ -468,7 +639,7 @@ fn shade(in: VOut) -> vec4<f32> {
     }
     if (in.params.w > 9.5) {
         // A skin image (premultiplied), tinted by fill.
-        let rect = sprites[min(u32(in.params.w - 9.5), 8u)];
+        let rect = sprites[min(u32(in.params.w - 9.5), SPRITE_LASTu)];
         let uv = in.local / (2.0 * in.half) + 0.5;
         let t = textureSampleLevel(atlas, samp, rect.xy + clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)) * rect.zw, 0.0);
         let inside = select(0.0, 1.0, all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0)));
@@ -530,7 +701,7 @@ impl Renderer {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shapes"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(shape_shader().into()),
         });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
@@ -1521,7 +1692,8 @@ pub struct Canvas {
     /// Shape ranges clipped to a rect (virtual units), e.g. scrolling lists.
     pub clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
     /// Size (relative to the radius) of each skin image the renderer has; None = not in the skin.
-    pub sprites: [Option<[f32; 2]>; SPRITES],
+    pub sprites: PerSprite<Option<[f32; 2]>>,
+    pub skin_layout: SkinLayout,
     /// Layout checks (`debug::layout_problems`): record every text and rounded box drawn.
     pub audit: bool,
     /// Texts drawn while auditing: their glyph shapes and the string.
@@ -1804,6 +1976,38 @@ impl Canvas {
         self.sprites[sprite as usize]
     }
 
+    /// `s` in the skin's `font`: each glyph's sprite, the overlap, and the scale (units per
+    /// sprite size unit) that makes a `0` `h` tall. None when the font lacks a glyph `s` needs.
+    fn glyphs(&self, font: Font, h: f32, s: &str) -> Option<(Vec<Glyph>, f32, f32)> {
+        let (glyph, zero, overlap): (fn(char) -> Option<Sprite>, Sprite, f32) = match font {
+            Font::Score => (Sprite::score_glyph, Sprite::Score0, self.skin_layout.score_overlap),
+            Font::Combo => (Sprite::combo_glyph, Sprite::Combo0, self.skin_layout.combo_overlap),
+        };
+        let k = h / self.sprites[zero as usize]?[1];
+        let glyphs = s.chars().map(|ch| glyph(ch).and_then(|g| Some((g, self.sprites[g as usize]?)))).collect::<Option<Vec<_>>>()?;
+        Some((glyphs, overlap / 128.0 * k, k))
+    }
+
+    /// How wide `s` is in the skin's `font` with a `0` `h` tall. None when the skin has no such
+    /// font (or not every glyph `s` needs).
+    pub fn number_width(&self, font: Font, h: f32, s: &str) -> Option<f32> {
+        let (glyphs, overlap, k) = self.glyphs(font, h, s)?;
+        Some(glyphs.iter().map(|(_, [w, _])| w * k).sum::<f32>() - overlap * glyphs.len().saturating_sub(1) as f32)
+    }
+
+    /// `s` in the skin's `font`, its left edge at `x` and a `0`'s top at `y`, `h` tall; glyphs
+    /// sit on the same baseline. False (nothing drawn) when the skin can't draw it.
+    pub fn number(&mut self, font: Font, x: f32, y: f32, h: f32, tint: [f32; 4], s: &str) -> bool {
+        let Some((glyphs, overlap, k)) = self.glyphs(font, h, s) else { return false };
+        let mut x = x;
+        for (g, [w, gh]) in glyphs {
+            let (w, gh) = (w * k, gh * k);
+            self.sprite_box(g, x + w / 2.0, y + h - gh / 2.0, w / 2.0, gh / 2.0, tint);
+            x += w - overlap;
+        }
+        true
+    }
+
     /// A skin image stretched over the box centred on (`x`, `y`), `hw` by `hh` either side.
     pub fn sprite_box(&mut self, sprite: Sprite, x: f32, y: f32, hw: f32, hh: f32, tint: [f32; 4]) {
         self.shapes.push(Shape { center: [x, y], half: [hw, hh], fill: tint, border: tint, params: [0.0, 0.0, 0.0, SPRITE_BASE + sprite as usize as f32], angle: 0.0 });
@@ -2071,7 +2275,8 @@ mod tests {
 
     #[test]
     fn shaders_compile() {
-        for (name, src) in [("shapes", super::SHADER), ("background", super::BG_SHADER), ("upscale", super::UPSCALE_SHADER)] {
+        let shapes = super::shape_shader();
+        for (name, src) in [("shapes", shapes.as_str()), ("background", super::BG_SHADER), ("upscale", super::UPSCALE_SHADER)] {
             let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
             naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default())
                 .validate(&module)

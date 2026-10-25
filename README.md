@@ -42,7 +42,7 @@ Settings → Updates.
   in the mod select for a playable random set.
 - **Online.** Lobbies on the taiko-rs server or direct P2P, live scoreboards, spectating, friends,
   chat, and watching friends' solo plays.
-- **Everything else.** osu! skins, map downloads from mirrors, local replays with video export,
+- **Everything else.** osu! skins (every part of the playfield, mixed from several if you like), map downloads from mirrors, local replays with video export,
   offset calibration, a custom playfield size, UI colours and Discord status.
 
 ## Keys
