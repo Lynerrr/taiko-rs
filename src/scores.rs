@@ -54,6 +54,20 @@ pub struct ScoreRow {
     pub file: PathBuf,
     /// Mods, as "HDHR" ("" without).
     pub mods: String,
+    /// Performance points (None: not worked out yet, or Autoplay / Relax).
+    pub pp: Option<f64>,
+}
+
+impl ScoreRow {
+    /// Its line in the index.
+    fn line(&self) -> String {
+        let pp = self.pp.map(|p| format!("{p:.2}")).unwrap_or_default();
+        let name = self.file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        format!(
+            "{:016x}\t{}\t{}\t{:.6}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{pp}\n",
+            self.map_hash, self.date, self.score, self.accuracy, self.max_combo, self.miss, self.rate, self.player, name, self.mods
+        )
+    }
 }
 
 fn dir() -> Option<PathBuf> {
@@ -85,29 +99,21 @@ pub fn load_index() -> Vec<ScoreRow> {
                 player: f[7].to_string(),
                 file: base.join(f[8]),
                 mods: f.get(9).unwrap_or(&"").to_string(),
+                pp: f.get(10).and_then(|p| p.parse().ok()),
             })
         })
         .filter(|r| r.file.is_file())
         .collect()
 }
 
-/// Saves a replay and adds it to the index.
-pub fn save(replay: &Replay) -> Result<ScoreRow, String> {
+/// Saves a replay and adds it to the index, with its pp.
+pub fn save(replay: &Replay, pp: Option<f64>) -> Result<ScoreRow, String> {
     let dir = dir().ok_or("no data folder")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let name = format!("{}-{:016x}.json", replay.date, replay.map_hash);
     let file = dir.join(&name);
     std::fs::write(&file, serde_json::to_vec(replay).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    let player: String = replay.player.chars().filter(|c| *c != '\t' && *c != '\n').collect();
-    let mods = crate::mods::Mods::from_list(&replay.mods).label();
-    let line = format!(
-        "{:016x}\t{}\t{}\t{:.6}\t{}\t{}\t{:.2}\t{}\t{}\t{}\n",
-        replay.map_hash, replay.date, replay.score, replay.accuracy, replay.max_combo, replay.miss, replay.rate, player, name, mods
-    );
-    let index = index_path().ok_or("no data folder")?;
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(index).map_err(|e| e.to_string())?;
-    f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(ScoreRow {
+    let row = ScoreRow {
         map_hash: replay.map_hash,
         date: replay.date,
         score: replay.score,
@@ -115,10 +121,56 @@ pub fn save(replay: &Replay) -> Result<ScoreRow, String> {
         max_combo: replay.max_combo,
         miss: replay.miss,
         rate: replay.rate,
-        player,
+        player: replay.player.chars().filter(|c| *c != '\t' && *c != '\n').collect(),
         file,
-        mods,
-    })
+        mods: crate::mods::Mods::from_list(&replay.mods).label(),
+        pp,
+    };
+    let index = index_path().ok_or("no data folder")?;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(index).map_err(|e| e.to_string())?;
+    f.write_all(row.line().as_bytes()).map_err(|e| e.to_string())?;
+    Ok(row)
+}
+
+impl Replay {
+    /// What pp needs to know about the play.
+    pub fn pp_play(&self) -> crate::pp::Play {
+        crate::pp::Play {
+            great: self.great,
+            ok: self.ok,
+            miss: self.miss,
+            max_combo: self.max_combo,
+            rate: self.rate,
+            mods: crate::mods::Mods::from_list(&self.mods),
+        }
+    }
+}
+
+/// Works out the pp of saved scores from before pp (on a background thread): (replay file, pp)
+/// for each whose map is still there.
+pub fn backfill_pp(files: Vec<PathBuf>) -> std::sync::mpsc::Receiver<Vec<(PathBuf, f64)>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let found = files
+            .into_iter()
+            .filter_map(|file| {
+                let r = load_replay(&file).ok()?;
+                let pp = crate::pp::play_pp(Path::new(&r.map_path), &r.pp_play())?;
+                Some((file, pp))
+            })
+            .collect();
+        let _ = tx.send(found);
+    });
+    rx
+}
+
+/// Writes the whole index again (after the pp of old scores were worked out).
+pub fn rewrite_index(rows: &[ScoreRow]) -> Result<(), String> {
+    let index = index_path().ok_or("no data folder")?;
+    let text: String = rows.iter().map(ScoreRow::line).collect();
+    let tmp = index.with_extension("tsv.tmp");
+    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &index).map_err(|e| e.to_string())
 }
 
 pub fn load_replay(path: &Path) -> Result<Replay, String> {
@@ -147,6 +199,18 @@ pub fn top(rows: &[ScoreRow], map_hash: u64, n: usize) -> Vec<&ScoreRow> {
     v.sort_by(|a, b| b.score.cmp(&a.score).then(b.date.cmp(&a.date)));
     v.truncate(n);
     v
+}
+
+/// The pp total of the local scores: the best pp on each map, weighted like osu!.
+pub fn total_pp(rows: &[ScoreRow]) -> f64 {
+    let mut best: std::collections::HashMap<u64, f64> = std::collections::HashMap::new();
+    for r in rows {
+        if let Some(pp) = r.pp {
+            let b = best.entry(r.map_hash).or_insert(0.0);
+            *b = b.max(pp);
+        }
+    }
+    crate::pp::total(best.into_values().collect())
 }
 
 /// "3 d ago" style age of a Unix time.

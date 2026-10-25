@@ -25,6 +25,7 @@ use crate::clock::GameClock;
 use crate::mods::{Mod, Mods, Speed};
 use crate::hud::Part;
 use crate::multiverse::{self, Shape as NoteShape, Universe};
+use crate::shapeshift;
 use crate::render::{accent, progress, rgba, Canvas, Hit, Shape, Sprite, VIRTUAL_HEIGHT};
 
 /// The drum on the left: lazer's input drum (180 of a 768-tall screen, in our 480 units).
@@ -291,6 +292,9 @@ pub struct Game {
     next_scare: usize,
     /// Multiverse: where the focus moves to another playfield.
     focus_switches: Vec<FocusSwitch>,
+    /// Shapeshift: its setup and the shape of each section (index into `SHAPESHIFT`).
+    shapeshift: shapeshift::Config,
+    shape_order: Vec<u8>,
 }
 
 /// Decoy: how opaque the fake notes are next to real ones.
@@ -551,8 +555,17 @@ const LOOP_R: f32 = 110.0;
 const LOOP_EXIT: f32 = 0.6;
 const LOOP_TURN: f32 = std::f32::consts::TAU - LOOP_EXIT;
 
-/// Shapeshift's order, 16 bars each.
+/// Shapeshift's shapes, by the index `shapeshift::SHAPES` names them with.
 const SHAPESHIFT: [RailShape; 6] = [RailShape::Zigzag, RailShape::UTurn, RailShape::Spiral, RailShape::Loop, RailShape::Elbow, RailShape::Straight];
+
+/// Shapeshift shape `k`'s lane on a 16:9 screen, as points along its middle (for the setup's
+/// thumbnails).
+pub fn rail_outline(k: usize) -> Vec<(f32, f32)> {
+    let shape = SHAPESHIFT[k % SHAPESHIFT.len()];
+    let w = 853.3;
+    let rail = Rail::build(|s| shape.bend(s), shape.length(w));
+    rail.pts.iter().step_by(3).map(|&(x, y, _)| (x, y)).collect()
+}
 
 impl RailShape {
     fn of(mods: Mods) -> Option<RailShape> {
@@ -1125,6 +1138,15 @@ impl Game {
         };
         let min_velocity = decoys.iter().map(|n| n.velocity).fold(min_velocity, f64::min);
         let focus_switches = if mods.has(Mod::Multiverse) { focus_switches(&map) } else { Vec::new() };
+        let shapeshift = shapeshift::get();
+        let shape_order = if mods.has(Mod::Shapeshift) {
+            // Each map its own shuffle, the same every time it's played.
+            let m = &map.meta;
+            let seed = crate::net::map_hash(format!("{}\n{}\n{}\n{}", m.artist, m.title, m.creator, m.version).as_bytes());
+            shapeshift.sequence(map.barlines.len() / shapeshift.bars() + 1, seed)
+        } else {
+            Vec::new()
+        };
         Game {
             windows: Windows::new(mods.od(map.meta.od)),
             map,
@@ -1192,6 +1214,8 @@ impl Game {
             scares,
             next_scare: 0,
             focus_switches,
+            shapeshift,
+            shape_order,
         }
     }
 
@@ -1956,16 +1980,25 @@ impl Game {
             };
             return (None, len, 0.0, 1.0);
         }
-        // 16 bars a shape; the first 2 bars of each morph into it from the last.
+        // A shape every so many bars (the player's setup), in the map's order; the first bars of
+        // each morph into it from the last.
         let bars = &self.map.barlines;
+        let (every, morph) = (self.shapeshift.bars(), self.shapeshift.morph_bars());
+        let shape = |section: usize| SHAPESHIFT[self.shape_order.get(section).map_or(SHAPESHIFT.len() - 1, |&k| k as usize % SHAPESHIFT.len())];
         let (from, to, u) = match bar_at(bars, t, 2000.0) {
             None => (RailShape::Straight, RailShape::Straight, 1.0),
             Some((i, ..)) => {
-                let section = i / 16;
-                let prev = if section == 0 { RailShape::Straight } else { SHAPESHIFT[(section - 1) % SHAPESHIFT.len()] };
-                let start = bars[section * 16].time;
-                let end = bars.get(section * 16 + 2).map_or(start + 4000.0, |b| b.time);
-                (prev, SHAPESHIFT[section % SHAPESHIFT.len()], ((t - start) / (end - start)).clamp(0.0, 1.0) as f32)
+                let section = i / every;
+                let prev = if section == 0 { RailShape::Straight } else { shape(section - 1) };
+                let first = section * every;
+                let start = bars[first].time;
+                // The morph ends part way into a bar (half a bar), or on a barline.
+                let whole = morph.floor() as usize;
+                let at = |k: usize| bars.get(first + k).map(|b| b.time);
+                let base = at(whole).unwrap_or(start + 2000.0 * whole as f64);
+                let bar_len = at(whole + 1).map_or(2000.0, |next| next - base);
+                let end = base + (morph - whole as f64) * bar_len;
+                (prev, shape(section), ((t - start) / (end - start).max(1.0)).clamp(0.0, 1.0) as f32)
             }
         };
         let ease = |x: f32| smooth(0.0, 1.0, x as f64) as f32;
@@ -2408,8 +2441,12 @@ impl Game {
             for (thick, col) in [(LANE_H + 6.0, edge_col), (LANE_H, lane_col)] {
                 for k in 0..n {
                     let s = from + (k as f32 + 0.5) * PIECE;
-                    // Longer by how much the outside of a bend is longer than the middle.
-                    let turn = (geo.at(s + PIECE / 2.0, 0.0).2 - geo.at(s - PIECE / 2.0, 0.0).2).abs();
+                    // Longer by how much the outside of a bend is longer than the middle, by the
+                    // sharper turn to either neighbour: where a corner starts or ends (Zigzag's
+                    // are tight) the turn within the piece is less than to the next one, and the
+                    // outer edge tore there.
+                    let a = |s: f32| geo.at(s, 0.0).2;
+                    let turn = (a(s + PIECE) - a(s)).abs().max((a(s) - a(s - PIECE)).abs());
                     lane_rect(c, geo.at(s, 0.0), PIECE + 1.0 + turn * thick / 2.0, thick, col);
                 }
             }

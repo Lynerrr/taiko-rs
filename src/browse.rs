@@ -26,7 +26,12 @@ pub struct Browse {
     pub cursor: usize,
     scroll: f32,
     pub status: String,
-    search: Option<Receiver<Result<Vec<SetInfo>, String>>>,
+    /// The search on its way and the page (from 0) it fetches: 0 replaces the results, later
+    /// pages add to them.
+    search: Option<(usize, Receiver<Result<(Vec<SetInfo>, bool), String>>)>,
+    /// The last page shown, and whether the mirrors may have more.
+    page: usize,
+    more: bool,
     edited: Option<Instant>,
     /// The query the shown results are for (None: nothing searched yet).
     searched: Option<String>,
@@ -54,6 +59,8 @@ impl Default for Browse {
             scroll: 0.0,
             status: String::new(),
             search: None,
+            page: 0,
+            more: false,
             edited: None,
             searched: None,
             remote: Vec::new(),
@@ -81,12 +88,26 @@ impl Browse {
         self.searched = Some(query.clone());
         self.edited = None;
         self.status = if query.is_empty() { format!("loading {} taiko maps...", self.category.name().to_lowercase()) } else { format!("searching \"{query}\"...") };
+        self.more = false;
+        self.fetch(query, 0);
+    }
+
+    fn fetch(&mut self, query: String, page: usize) {
         let (tx, rx) = mpsc::channel();
         let (category, sort, desc) = (self.category, self.sort, self.desc);
         std::thread::spawn(move || {
-            let _ = tx.send(download::search(&query, category, sort, desc));
+            let _ = tx.send(download::search(&query, category, sort, desc, page));
         });
-        self.search = Some(rx);
+        self.search = Some((page, rx));
+    }
+
+    /// Fetches the next page of results once the selection gets near the end of the list.
+    fn load_more_near_end(&mut self) {
+        if self.more && self.search.is_none() && self.edited.is_none() && self.cursor + 10 >= self.results.len() {
+            if let Some(query) = self.searched.clone() {
+                self.fetch(query, self.page + 1);
+            }
+        }
     }
 
     pub fn set_category(&mut self, c: Category) {
@@ -191,19 +212,33 @@ impl Browse {
         if self.edited.is_some_and(|t| now - t >= TYPE_DELAY) && self.searched.as_deref() != Some(self.query.trim()) {
             self.search_now();
         }
-        if let Some(rx) = &self.search {
+        if let Some((page, rx)) = &self.search {
+            let page = *page;
             if let Ok(result) = rx.try_recv() {
                 self.search = None;
                 match result {
-                    Ok(sets) => {
+                    Ok((sets, more)) if page == 0 => {
                         self.status = if sets.is_empty() { "no taiko maps found".into() } else { String::new() };
                         self.results = sets;
                         self.cursor = 0;
+                        (self.page, self.more) = (0, more);
                     }
-                    Err(e) => self.status = format!("search failed: {e}"),
+                    Ok((sets, more)) => {
+                        // Sets that moved between pages meanwhile are listed once.
+                        let known: HashSet<u32> = self.results.iter().map(|s| s.id).collect();
+                        self.results.extend(sets.into_iter().filter(|s| !known.contains(&s.id)));
+                        (self.page, self.more) = (page, more);
+                    }
+                    Err(e) if page == 0 => self.status = format!("search failed: {e}"),
+                    Err(e) => {
+                        // No more paging until the next search.
+                        self.status = format!("couldn't load more: {e}");
+                        self.more = false;
+                    }
                 }
             }
         }
+        self.load_more_near_end();
     }
 
     pub fn type_text(&mut self, text: &str) {
@@ -240,7 +275,7 @@ impl Browse {
         let w = c.width;
         let x0 = 24.0;
         crate::settings::tab_bar(c, 3, "maps from catboy.best / osu.direct");
-        let busy = self.search.is_some() || self.edited.is_some();
+        let busy = self.search.as_ref().is_some_and(|s| s.0 == 0) || self.edited.is_some();
         c.round_rect(x0, 54.0, col, 24.0, 6.0, rgba(0x23232f, 0.95), rgba(0x3a3a4e, 1.0), 1.0);
         // The query keeps clear of "searching..." on the right.
         let room = col - 20.0 - if busy { Canvas::text_width(8.0, "searching...") + 10.0 } else { 0.0 };
@@ -290,7 +325,9 @@ impl Browse {
         const ROW: f32 = 40.0;
         let (top, bottom) = (y + 2.0, 436.0);
         let view = bottom - top;
-        let target = (self.cursor as f32 * ROW - view * 0.4).clamp(0.0, (self.results.len() as f32 * ROW - view).max(0.0));
+        // A last row says whether more are coming.
+        let rows = self.results.len() + usize::from(!self.results.is_empty());
+        let target = (self.cursor as f32 * ROW - view * 0.4).clamp(0.0, (rows as f32 * ROW - view).max(0.0));
         approach(&mut self.scroll, target, c.dt_ms, 50.0);
         let list_start = c.shapes.len();
         let hits_start = c.hits.len();
@@ -339,6 +376,18 @@ impl Browse {
             let n = set.diffs.len();
             let sub = format!("mapped by {}  |  {}  |  {n} taiko diff{}", set.creator, set.status, if n == 1 { "" } else { "s" });
             c.text(x0 + 12.0, y + 22.0, 7.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(7.0, text_room, &sub));
+        }
+        if !self.results.is_empty() {
+            let y = top + self.results.len() as f32 * ROW - self.scroll;
+            let n = self.results.len();
+            let end = if self.search.is_some() {
+                "loading more...".to_string()
+            } else if self.more {
+                format!("{n} maps so far: scroll on for more")
+            } else {
+                format!("all {n} map{} listed", if n == 1 { "" } else { "s" })
+            };
+            c.text_centered(x0 + col / 2.0, y + 13.0, 8.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(8.0, col, &end));
         }
         c.clip_since(list_start, x0 - 4.0, top - 2.0, col + 8.0, bottom - top + 4.0);
         for h in &mut c.hits[hits_start..] {

@@ -1463,6 +1463,11 @@ pub enum Hit {
     ChoiceRow(usize),
     /// Multiverse setup: a universe's (row) colours, shape, speed or a mod (column).
     UniverseCell(usize, usize),
+    /// Shapeshift setup: a choice (row, column) / move the selected shape earlier or later.
+    ShapeshiftCell(usize, usize),
+    ShapeshiftMove(i32),
+    /// Mod customization: a tab (index into the customizable mods that are on).
+    CustomTab(usize),
     /// Multiverse setup: load a preset / delete one of the player's.
     UniversePreset(usize),
     UniversePresetDelete(usize),
@@ -1480,6 +1485,8 @@ pub enum Hit {
     /// A row of the song select leaderboard (watches that replay) / its video button.
     ScoreRow(usize),
     ScoreVideo(usize),
+    /// The leaderboard's tabs: local (false) or online (true).
+    BoardTab(bool),
     /// Lobby: give the host role to this player.
     GiveHost(u32),
     /// The friends overlay: its chip, its panel (swallows clicks), a tab, a row, a row's button, and a

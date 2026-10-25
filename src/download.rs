@@ -217,10 +217,12 @@ fn agent() -> ureq::Agent {
     ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).build().into()
 }
 
-/// Parses a mirror's search response (osu! API v2 beatmapset objects).
-fn parse_sets(json: &str) -> Result<Vec<SetInfo>, String> {
+/// Parses a mirror's search response (osu! API v2 beatmapset objects): the sets with taiko
+/// difficulties, and how many sets the reply had (a full page means there may be more).
+fn parse_sets(json: &str) -> Result<(Vec<SetInfo>, usize), String> {
     let sets: Vec<ApiSet> = serde_json::from_str(json).map_err(|e| format!("unexpected reply: {e}"))?;
-    Ok(sets
+    let count = sets.len();
+    let sets = sets
         .into_iter()
         .filter_map(|s| {
             let mut diffs: Vec<Diff> = s
@@ -243,14 +245,24 @@ fn parse_sets(json: &str) -> Result<Vec<SetInfo>, String> {
                 ranked_date: s.ranked_date.unwrap_or_default(),
             })
         })
-        .collect())
+        .collect();
+    Ok((sets, count))
 }
 
-/// One status (or any) from the first mirror that answers.
-fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Option<(&str, bool)>) -> Result<Vec<SetInfo>, String> {
+/// Sets a search asks each mirror for at a time.
+pub const PAGE: usize = 50;
+
+/// Page `page` of one status (or any) from the first mirror that answers.
+fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Option<(&str, bool)>, page: usize) -> Result<(Vec<SetInfo>, usize), String> {
     let mut errors = Vec::new();
     for m in &MIRRORS {
-        let mut req = agent.get(m.search).header("User-Agent", USER_AGENT).query(m.query_key, query).query("mode", "1").query(m.amount_key, "50");
+        let mut req = agent
+            .get(m.search)
+            .header("User-Agent", USER_AGENT)
+            .query(m.query_key, query)
+            .query("mode", "1")
+            .query(m.amount_key, PAGE.to_string())
+            .query("offset", (page * PAGE).to_string());
         if let Some(st) = status {
             req = req.query("status", st.to_string());
         }
@@ -295,24 +307,28 @@ pub fn set_status(set: u32) -> Result<String, String> {
 }
 
 /// Searches the mirrors for taiko sets matching `query` in `category`, ordered by `sort`
-/// (descending if `desc`). Categories spanning several statuses are fetched per status and
-/// merged.
-pub fn search(query: &str, category: Category, sort: SortKey, desc: bool) -> Result<Vec<SetInfo>, String> {
+/// (descending if `desc`): page `page` (from 0) of the results. Categories spanning several
+/// statuses are fetched per status and merged. Also says whether there may be another page.
+pub fn search(query: &str, category: Category, sort: SortKey, desc: bool, page: usize) -> Result<(Vec<SetInfo>, bool), String> {
     let agent = agent();
     // With no text, "relevance" means newest ranked first, as on the website.
     let (sort, desc) = if sort == SortKey::Relevance && query.trim().is_empty() { (SortKey::Ranked, true) } else { (sort, desc) };
     let server = sort.server().map(|k| (k, desc));
     let statuses: Vec<Option<i32>> = if category.statuses().is_empty() { vec![None] } else { category.statuses().iter().map(|&s| Some(s)).collect() };
-    let results: Vec<Result<Vec<SetInfo>, String>> = std::thread::scope(|s| {
-        let handles: Vec<_> = statuses.iter().map(|&st| { let agent = &agent; s.spawn(move || search_status(agent, query, st, server)) }).collect();
+    let results: Vec<Result<(Vec<SetInfo>, usize), String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = statuses.iter().map(|&st| { let agent = &agent; s.spawn(move || search_status(agent, query, st, server, page)) }).collect();
         handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("search failed".into()))).collect()
     });
     let mut errors = Vec::new();
     let mut sets: Vec<SetInfo> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut more = false;
     for r in results {
         match r {
-            Ok(found) => sets.extend(found.into_iter().filter(|s| seen.insert(s.id))),
+            Ok((found, count)) => {
+                more |= count >= PAGE;
+                sets.extend(found.into_iter().filter(|s| seen.insert(s.id)));
+            }
             Err(e) => errors.push(e),
         }
     }
@@ -320,8 +336,7 @@ pub fn search(query: &str, category: Category, sort: SortKey, desc: bool) -> Res
         return Err(errors.join("; "));
     }
     sort_sets(&mut sets, sort, desc);
-    sets.truncate(50);
-    Ok(sets)
+    Ok((sets, more))
 }
 
 /// Orders merged results (and does the sorts no mirror can do).
@@ -355,6 +370,9 @@ pub struct Job {
     pub done: Arc<AtomicU64>,
     pub total: Arc<AtomicU64>,
     pub rx: Receiver<Result<PathBuf, String>>,
+    /// Content hashes of the difficulties an import brings (empty for downloads), so the same
+    /// set dropped twice isn't unpacked twice.
+    pub maps: Vec<u64>,
 }
 
 impl Job {
@@ -375,7 +393,7 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     std::thread::spawn(move || {
         let _ = tx.send(fetch(id, &name, &songs, &d, &t));
     });
-    Job { set, done, total, rx }
+    Job { set, done, total, rx, maps: Vec::new() }
 }
 
 /// Passes over the mirrors before a download gives up: osu.direct often answers 503 for a
@@ -577,14 +595,14 @@ pub fn receive(set: SetInfo, name: String, total: u64, songs: PathBuf) -> (Job, 
         })();
         let _ = tx.send(result);
     });
-    (Job { set, done, total: total_bytes, rx }, feed)
+    (Job { set, done, total: total_bytes, rx, maps: Vec::new() }, feed)
 }
 
-/// Imports an `.osz` that is already on disk (opened with the game on Android) like a download:
-/// unpacked into `songs/<name>/` on a background thread, then the archive is removed.
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+/// Imports an `.osz` that is already on disk (dropped on the window, opened with the game on
+/// Android) like a download: unpacked into `songs/<name>/` on a background thread.
 /// `remove`: delete the archive once unpacked (a temporary copy, not the player's own file).
-pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool) -> Job {
+/// `maps`: the content hashes of its difficulties ([`archive_maps`]).
+pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool, maps: Vec<u64>) -> Job {
     let name = safe_folder_name(name);
     let set = SetInfo {
         // osu! names its exports "<set id> <artist> - <title>.osz".
@@ -610,7 +628,25 @@ pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool) -> Job
         }
         let _ = tx.send(result);
     });
-    Job { set, done: Arc::default(), total: Arc::default(), rx }
+    Job { set, done: Arc::default(), total: Arc::default(), rx, maps }
+}
+
+/// The difficulties in an `.osz`: each `.osu`'s header and content hash (the same hash as
+/// `Entry::hash`), to tell whether the set is already in the list before unpacking it.
+pub fn archive_maps(archive: &Path) -> Result<Vec<(crate::beatmap::Meta, u64)>, String> {
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("not a beatmap archive ({e})"))?;
+    let mut maps = Vec::new();
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        if !entry.is_file() || !entry.name().is_ok_and(|n| n.to_ascii_lowercase().ends_with(".osu")) {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        entry.by_ref().take(16 << 20).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+        maps.push((crate::beatmap::read_meta(&String::from_utf8_lossy(&bytes)), crate::net::map_hash(&bytes)));
+    }
+    Ok(maps)
 }
 
 /// Unpacks an `.osz` into `dest` (via a temporary folder, so a half-extracted set never shows up).
@@ -729,7 +765,8 @@ mod tests {
             {"version": "Kantan", "mode": "taiko", "mode_int": 1, "difficulty_rating": 1.2},
             {"version": "Insane", "mode": "osu", "mode_int": 0, "difficulty_rating": 5.0}]},
             {"id": 8, "beatmaps": [{"version": "4K", "mode": "mania", "mode_int": 3, "difficulty_rating": 2.0}]}]"#;
-        let sets = parse_sets(json).unwrap();
+        let (sets, count) = parse_sets(json).unwrap();
+        assert_eq!(count, 2, "the reply's own count, for paging");
         assert_eq!(sets.len(), 1, "sets without taiko difficulties are dropped");
         let names: Vec<(&str, f32)> = sets[0].diffs.iter().map(|d| (d.version.as_str(), d.stars)).collect();
         assert_eq!(names, vec![("Kantan", 1.2), ("Oni", 4.5)]);
@@ -768,6 +805,8 @@ mod tests {
         assert_eq!(std::fs::read(dest.join("map [Oni].osu")).unwrap(), b"new");
         assert_eq!(std::fs::read(dest.join("map [My Inner Oni].osu")).unwrap(), b"mine");
         assert!(!dest.with_extension("partial").exists());
+        let maps = archive_maps(&archive).unwrap();
+        assert_eq!(maps.iter().map(|m| m.1).collect::<Vec<_>>(), [crate::net::map_hash(b"new")]);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

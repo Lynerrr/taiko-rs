@@ -64,6 +64,8 @@ pub enum Action {
     Add,
     /// Opens the conversation with a friend from the players tab.
     Chat,
+    /// Shows the player's profile.
+    Profile,
 }
 
 /// Where a player in the online list stands with us.
@@ -428,7 +430,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
             if matches!(selected, Row::Friend(_) | Row::Lobby) {
                 message_box(c, s, inner, iw, input_y, "type a message, Enter to send", a);
             }
-            c.text_centered(x + PANEL_W / 2.0, y + h - 14.0, 6.0, rgba(0x55556a, a), &Canvas::fit_hints(6.0, iw, "Tab  Up/Down  Ctrl+W watch  Ctrl+J join  Del remove  Esc"));
+            c.text_centered(x + PANEL_W / 2.0, y + h - 14.0, 6.0, rgba(0x55556a, a), &Canvas::fit_hints(6.0, iw, "Tab  Up/Down  Ctrl+W watch  Ctrl+J join  Ctrl+P profile  Del remove  Esc"));
         }
         Tab::Players => {
             let ry = draw_rows(c, s, &rows, cursor, inner, iw, list_top, y + h - 24.0, lobby_unread, a);
@@ -494,7 +496,7 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
                 let online = f.activity.is_some();
                 c.circle(inner + 10.0, ry + 8.0, 3.0, rgba(if online { GREEN } else { 0x55556a }, a), rgba(0x000000, 0.0), 0.0);
                 let what = f.activity.as_ref().map(Activity::describe).unwrap_or_else(|| "offline".into());
-                let mut bx = inner + iw - 4.0;
+                let mut bx = button(c, inner + iw - 4.0, ry + 3.0, "profile", Hit::SocialAction(i, Action::Profile), a) - 4.0;
                 bx = match &f.activity {
                     Some(Activity::Playing { .. }) => button(c, bx, ry + 3.0, "watch", Hit::SocialAction(i, Action::Watch), a) - 4.0,
                     Some(Activity::Lobby { room: Some(_), .. }) => button(c, bx, ry + 3.0, "join", Hit::SocialAction(i, Action::Join), a) - 4.0,
@@ -517,7 +519,7 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
             Row::Player(k) => {
                 let Some(p) = s.players.as_ref().and_then(|v| v.get(k)) else { continue };
                 c.circle(inner + 10.0, ry + 8.0, 3.0, rgba(GREEN, a), rgba(0x000000, 0.0), 0.0);
-                let right = inner + iw - 4.0;
+                let right = button(c, inner + iw - 4.0, ry + 3.0, "profile", Hit::SocialAction(i, Action::Profile), a) - 4.0;
                 let bx = match s.standing(&p.name) {
                     Standing::Me => tag(c, right, ry + 3.0, "you", a),
                     Standing::Friend => button(c, right, ry + 3.0, "chat", Hit::SocialAction(i, Action::Chat), a),

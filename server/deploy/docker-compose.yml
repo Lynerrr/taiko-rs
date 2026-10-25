@@ -1,4 +1,4 @@
-# taiko-rs online server (accounts and lobbies). `docker compose up -d --build` in this folder.
+# taiko-rs online server (accounts, lobbies, scores and the website). `docker compose up -d --build` in this folder.
 # Accounts are kept in ./data/accounts.json (owned by uid 1000, the deploy user).
 services:
   taiko-server:
@@ -9,5 +9,7 @@ services:
     user: "1000:1000"
     ports:
       - "7800:7800"
+      # The website (rankings, profiles): only for the German VPS's tunnel, which serves it.
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./data:/data
