@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::online::{self, OnlineScore, Profile, ScoreSubmit};
+use crate::online::{self, OnlineScore, Profile, ScoreSubmit, Stats};
 
 /// Plays one account may send per minute.
 const SUBMITS_PER_MINUTE: usize = 20;
@@ -102,6 +102,10 @@ impl Scores {
                 mods: m.mods.iter().map(|a| online::clean_text(a, 4)).take(40).collect(),
                 pp: play.pp,
                 date: now,
+                great: play.great,
+                ok: play.ok,
+                set_id: m.set_id,
+                stars: play.stars.filter(|s| s.is_finite() && (0.0..50.0).contains(s)),
             },
         };
         if let Some(dir) = &self.replays {
@@ -161,30 +165,72 @@ impl Scores {
         per.into_iter().map(|(p, v)| (p, online::weighted_pp(v))).collect()
     }
 
-    /// Everyone with pp, highest first: (name as written, pp total, plays).
-    pub fn rankings(&self, limit: usize) -> Vec<(String, f64, u32)> {
-        let mut names: HashMap<&str, (&str, u32)> = HashMap::new();
+    /// Everyone with pp, highest first, with osu!'s ranking columns.
+    pub fn rankings(&self, limit: usize) -> Vec<Ranked> {
+        let mut per: HashMap<&str, Vec<&Stored>> = HashMap::new();
         for s in &self.all {
-            let e = names.entry(s.player.as_str()).or_insert((s.score.player.as_str(), 0));
-            *e = (s.score.player.as_str(), e.1 + 1);
+            per.entry(s.player.as_str()).or_default().push(s);
         }
-        let mut out: Vec<(String, f64, u32)> = self
-            .totals()
-            .into_iter()
-            .filter(|&(_, pp)| pp > 0.0)
-            .map(|(p, pp)| {
-                let (name, plays) = names.get(p).copied().unwrap_or((p, 0));
-                (name.to_string(), pp, plays)
+        let mut out: Vec<Ranked> = per
+            .values()
+            .filter_map(|plays| {
+                let (stats, pp) = stats_of(plays);
+                (pp > 0.0).then(|| Ranked {
+                    rank: 0,
+                    name: plays.last().map(|s| s.score.player.clone()).unwrap_or_default(),
+                    pp,
+                    accuracy: stats.accuracy,
+                    plays: plays.len() as u32,
+                    ss: stats.ss,
+                    s: stats.s,
+                    a: stats.a,
+                })
             })
             .collect();
-        out.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out.sort_by(|a, b| b.pp.total_cmp(&a.pp).then_with(|| a.name.cmp(&b.name)));
         out.truncate(limit);
+        for (i, r) in out.iter_mut().enumerate() {
+            r.rank = i as u32 + 1;
+        }
         out
     }
 
-    /// The name of the map with this hash, from a play on it.
-    pub fn map_name(&self, map: u64) -> Option<String> {
-        self.all.iter().find(|s| s.score.map_hash == map).map(|s| s.score.map.clone())
+    /// Plays sent, all told.
+    pub fn play_count(&self) -> usize {
+        self.all.len()
+    }
+
+    /// A map someone has played: its name, cover, stars, and how much it's played.
+    pub fn map(&self, map: u64) -> Option<MapRow> {
+        self.maps(usize::MAX).into_iter().find(|m| m.hash == map)
+    }
+
+    /// The maps played, the most lately played first.
+    pub fn maps(&self, limit: usize) -> Vec<MapRow> {
+        let mut rows: HashMap<u64, (MapRow, Vec<&str>)> = HashMap::new();
+        for s in &self.all {
+            let sc = &s.score;
+            let (row, players) = rows.entry(sc.map_hash).or_insert_with(|| {
+                (MapRow { hash: sc.map_hash, name: sc.map.clone(), set_id: None, stars: None, plays: 0, players: 0, last: 0 }, Vec::new())
+            });
+            row.plays += 1;
+            row.last = row.last.max(sc.date);
+            row.set_id = sc.set_id.or(row.set_id);
+            // Stars at 1.0x, if anyone played it so.
+            if (sc.rate - 1.0).abs() < 1e-6 {
+                row.stars = sc.stars.or(row.stars);
+            }
+            if !players.contains(&s.player.as_str()) {
+                players.push(&s.player);
+            }
+        }
+        let mut out: Vec<MapRow> = rows.into_values().map(|(mut r, p)| {
+            r.players = p.len() as u32;
+            r
+        }).collect();
+        out.sort_by(|a, b| b.last.cmp(&a.last));
+        out.truncate(limit);
+        out
     }
 
     /// A player's pp total and rank among everyone with pp.
@@ -211,8 +257,90 @@ impl Scores {
         top.truncate(PROFILE_PLAYS);
         let recent = mine.iter().rev().take(PROFILE_PLAYS).map(|s| s.score.clone()).collect();
         let (pp, rank) = self.standing(player);
-        Profile { name: name.to_string(), joined, plays: mine.len() as u32, pp, rank, top, recent }
+        let (stats, _) = stats_of(&mine);
+        // First places: maps where theirs is the best score.
+        let mut maps: Vec<u64> = mine.iter().map(|s| s.score.map_hash).collect();
+        maps.sort_unstable();
+        maps.dedup();
+        let mut firsts: Vec<OnlineScore> =
+            maps.into_iter().filter_map(|m| self.best_on(m).first().filter(|s| s.player == player).map(|s| s.score.clone())).collect();
+        firsts.sort_by(|a, b| b.date.cmp(&a.date));
+        firsts.truncate(PROFILE_PLAYS);
+        Profile { name: name.to_string(), joined, plays: mine.len() as u32, pp, rank, top, recent, stats, firsts, online: false }
     }
+}
+
+/// A row of the rankings.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Ranked {
+    pub rank: u32,
+    pub name: String,
+    pub pp: f64,
+    pub accuracy: f64,
+    pub plays: u32,
+    pub ss: u32,
+    pub s: u32,
+    pub a: u32,
+}
+
+/// A map someone has played.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct MapRow {
+    pub hash: u64,
+    /// "Artist - Title [Version]".
+    pub name: String,
+    pub set_id: Option<u32>,
+    /// At 1.0x (None if nobody played it so, or older clients).
+    pub stars: Option<f64>,
+    pub plays: u32,
+    pub players: u32,
+    /// When it was last played (Unix seconds).
+    pub last: u64,
+}
+
+/// One player's totals from their plays, and their pp total.
+fn stats_of(plays: &[&Stored]) -> (Stats, f64) {
+    let mut st = Stats::default();
+    // Best score and best pp on each map.
+    let mut by_score: HashMap<u64, &OnlineScore> = HashMap::new();
+    let mut by_pp: HashMap<u64, &OnlineScore> = HashMap::new();
+    for s in plays {
+        let sc = &s.score;
+        st.total_score += sc.score;
+        st.total_hits += (sc.great + sc.ok) as u64;
+        st.max_combo = st.max_combo.max(sc.max_combo);
+        let b = by_score.entry(sc.map_hash).or_insert(sc);
+        if sc.score > b.score {
+            *b = sc;
+        }
+        if sc.pp.is_some() {
+            let b = by_pp.entry(sc.map_hash).or_insert(sc);
+            if sc.pp > b.pp {
+                *b = sc;
+            }
+        }
+    }
+    for sc in by_score.values() {
+        st.ranked_score += sc.score;
+        match sc.grade() {
+            "SS" => st.ss += 1,
+            "S" => st.s += 1,
+            "A" => st.a += 1,
+            _ => {}
+        }
+    }
+    // Accuracy as osu! has it: the best plays' (by pp), each counting 5% less than the last.
+    let mut best: Vec<&OnlineScore> = if by_pp.is_empty() { by_score.into_values().collect() } else { by_pp.into_values().collect() };
+    best.sort_by(|a, b| b.pp.unwrap_or(0.0).total_cmp(&a.pp.unwrap_or(0.0)));
+    let (mut sum, mut weight) = (0.0, 0.0);
+    for (i, sc) in best.iter().enumerate() {
+        let w = 0.95f64.powi(i as i32);
+        sum += sc.accuracy * w;
+        weight += w;
+    }
+    st.accuracy = if weight > 0.0 { sum / weight } else { 0.0 };
+    let pp = online::weighted_pp(best.iter().filter_map(|s| s.pp).collect());
+    (st, pp)
 }
 
 #[cfg(test)]
@@ -232,6 +360,7 @@ mod tests {
             date: 0,
             replay_version: 2,
             inputs: vec![(1000.0, 1)],
+            stars: Some(5.0),
         }
     }
 
@@ -252,8 +381,9 @@ mod tests {
         assert_eq!(p.top[0].pp, Some(150.0));
         assert_eq!(p.recent[0].map_hash, 8);
         let ranks = s.rankings(10);
-        assert_eq!(ranks.iter().map(|r| (r.0.as_str(), r.2)).collect::<Vec<_>>(), [("A", 3), ("B", 1)]);
-        assert_eq!(s.map_name(7).as_deref(), Some("A - T [Oni]"));
+        assert_eq!(ranks.iter().map(|r| (r.name.as_str(), r.plays, r.rank)).collect::<Vec<_>>(), [("A", 3, 1), ("B", 1, 2)]);
+        assert_eq!(s.map(7).map(|m| (m.name, m.plays, m.players)), Some(("A - T [Oni]".into(), 3, 2)));
+        assert_eq!((p.stats.ranked_score, p.stats.total_score, p.firsts.len()), (500 + 100, 500 + 400 + 100, 1));
     }
 
     #[test]

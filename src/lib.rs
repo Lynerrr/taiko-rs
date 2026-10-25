@@ -5343,6 +5343,7 @@ impl State {
                                 date: replay.date,
                                 replay_version: replay.version,
                                 inputs: replay.inputs.clone(),
+                                stars: stars::star_rating(&e.path, replay.rate),
                             };
                             self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
                             self.online_boards.remove(&replay.map_hash);

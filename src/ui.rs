@@ -1214,19 +1214,7 @@ impl Results {
         c.text_centered(cx, 40.0 + (12.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, w - 48.0, &self.title));
         let s = &self.stats;
         let acc = s.accuracy() * 100.0;
-        let grade = if s.miss == 0 && s.ok == 0 {
-            "SS"
-        } else if acc >= 95.0 && s.miss == 0 {
-            "S"
-        } else if acc >= 90.0 {
-            "A"
-        } else if acc >= 80.0 {
-            "B"
-        } else if acc >= 70.0 {
-            "C"
-        } else {
-            "D"
-        };
+        let grade = crate::online::grade(s.great, s.ok, s.miss, s.accuracy());
         // A failed play gets F, and says so.
         let grade = if self.failed { "F" } else { grade };
         let count = progress(self.shown, 700.0);

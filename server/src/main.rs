@@ -16,6 +16,7 @@ mod net;
 #[path = "../../src/online.rs"]
 mod online;
 mod scores;
+mod pages;
 mod web;
 
 use std::collections::{HashMap, VecDeque};
@@ -418,7 +419,9 @@ impl State {
     fn profile(&self, name: &str) -> Option<online::Profile> {
         let key = name.trim().to_ascii_lowercase();
         let (name, joined) = self.accounts.lock().unwrap().users.get(&key).map(|u| (u.name.clone(), u.created))?;
-        Some(self.scores.lock().unwrap().profile(&key, &name, joined))
+        let mut p = self.scores.lock().unwrap().profile(&key, &name, joined);
+        p.online = self.hub.lock().unwrap().conns.contains_key(&key);
+        Some(p)
     }
 
     fn display_name(&self, key: &str) -> String {

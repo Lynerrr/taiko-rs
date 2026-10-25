@@ -201,6 +201,7 @@ fn assert_every_screen_fits() {
             mods: ["HD", "HR", "DT", "FL", "PR", "AC", "WV", "SU"].iter().map(|m| m.to_string()).collect(),
             pp: Some(456.7),
             date: 1_700_000_000,
+            ..Default::default()
         })
         .collect();
     s.cfg.online_user = "player2".into();
@@ -265,8 +266,9 @@ fn assert_every_screen_fits() {
         mods: ["HD", "HR", "DT", "FL", "PR", "AC", "WV", "SU"].iter().map(|m| m.to_string()).collect(),
         pp: Some(1234.5 - i as f64),
         date: 1_700_000_000,
+        ..Default::default()
     };
-    let loaded = online::Profile { name: LONG_NAME.into(), joined: 1_700_000_000, plays: 12_345, pp: 12_345.6, rank: Some(1234), top: (0..20).map(play).collect(), recent: (0..20).map(play).collect() };
+    let loaded = online::Profile { name: LONG_NAME.into(), joined: 1_700_000_000, plays: 12_345, pp: 12_345.6, rank: Some(1234), top: (0..20).map(play).collect(), recent: (0..20).map(play).collect(), ..Default::default() };
     let (_, rx) = std::sync::mpsc::channel();
     s.profile = Some(profile::View { name: LONG_NAME.into(), state: profile::State::Loading(rx) });
     check(&mut s, "profile loading", &mut out);
