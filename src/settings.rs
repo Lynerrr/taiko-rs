@@ -69,6 +69,8 @@ pub enum Item {
     Update,
     /// Opens what's new.
     Changelog,
+    /// Only for krokodil_koban: closes taiko-rs and starts osu!stable.
+    KrokodilKoban,
     Fullscreen,
     WindowSize,
     DiscordPresence,
@@ -81,7 +83,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 101] = [
+pub const ITEMS: [(&str, Item); 102] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -179,6 +181,7 @@ pub const ITEMS: [(&str, Item); 101] = [
     ("ONLINE", Item::NotifyRequests),
     ("ONLINE", Item::NotifyOnline),
     ("ONLINE", Item::NotifyPlaying),
+    ("ONLINE", Item::KrokodilKoban),
     ("UPDATES", Item::UpdateChannel),
     ("UPDATES", Item::Update),
     ("UPDATES", Item::Changelog),
@@ -279,6 +282,7 @@ impl Item {
             Item::UpdateChannel => "Build channel",
             Item::Update => "Update",
             Item::Changelog => "What's new",
+            Item::KrokodilKoban => "krokodil_koban mode",
             Item::CheckUpdates => "Check at startup",
             Item::Fullscreen => "Fullscreen",
             Item::WindowSize => "Window size",
@@ -353,7 +357,7 @@ impl Item {
             | Item::Fullscreen
             | Item::DiscordPresence => Kind::Toggle,
             Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => Kind::Key,
-            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::SkinFolder => Kind::Action,
+            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SkinFolder => Kind::Action,
         }
     }
 
@@ -411,6 +415,7 @@ impl Item {
             Item::VisualOffset => "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
             Item::UpdateChannel => "dev: test builds that haven't reached everyone yet (may break). Switch, then Update installs that channel's build.",
             Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko-rs restarts into it.",
+            Item::KrokodilKoban => "Enter: closes taiko-rs and starts osu!stable. For krokodil_koban only.",
             Item::Changelog => "Enter: the latest changes. They also show by themselves after an update.",
             Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",
             Item::Fullscreen => "Shortcut: F11.",
@@ -432,6 +437,8 @@ pub struct SettingsUi {
     pub cursor: usize,
     /// Waiting for a key press for this item (a drum key or a preset key).
     pub binding: Option<Item>,
+    /// Logged in as krokodil_koban: their own setting shows.
+    pub krokodil: bool,
     /// Open resolution dropdown.
     pub dropdown: Option<Dropdown>,
     /// Open list of a setting's choices.
@@ -747,8 +754,22 @@ impl SettingsUi {
     }
 
     pub fn move_cursor(&mut self, delta: i32) {
+        let start = self.cursor;
         self.cursor = (self.cursor as i32 + delta).clamp(0, ITEMS.len() as i32 - 1) as usize;
+        // Past a row that isn't shown, or back where it was at the end of the list.
+        while !self.shows(ITEMS[self.cursor].1) {
+            let next = self.cursor as i32 + delta.signum();
+            self.cursor = if (0..ITEMS.len() as i32).contains(&next) && delta != 0 { next as usize } else { start };
+            if self.cursor == start {
+                break;
+            }
+        }
         self.editing = None;
+    }
+
+    /// Whether `item` is in the list (krokodil_koban mode is only for them).
+    pub fn shows(&self, item: Item) -> bool {
+        item != Item::KrokodilKoban || self.krokodil
     }
 
     /// Section of the selected item.
@@ -781,7 +802,7 @@ impl SettingsUi {
         }
 
         // The section's settings.
-        let rows: Vec<(usize, Item)> = ITEMS.iter().enumerate().filter(|(_, (sec, _))| *sec == SECTIONS[section].0).map(|(i, (_, it))| (i, *it)).collect();
+        let rows: Vec<(usize, Item)> = ITEMS.iter().enumerate().filter(|(_, (sec, it))| *sec == SECTIONS[section].0 && self.shows(*it)).map(|(i, (_, it))| (i, *it)).collect();
         c.text(cx, TOP - 2.0, 11.0, rgba(accent(), 1.0), SECTIONS[section].0);
         let first = rows.first().map(|r| r.0).unwrap_or(0);
         // A long section (the hotkeys) scrolls to keep the cursor in sight, leaving room for the

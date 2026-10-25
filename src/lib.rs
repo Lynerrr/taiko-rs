@@ -1484,6 +1484,12 @@ impl State {
         self.settings_ui.binding = None;
         self.settings_ui.choices = None;
         self.settings_ui.editing = None;
+        self.settings_ui.krokodil = self.is_krokodil();
+    }
+
+    /// Logged in as krokodil_koban (their settings row shows).
+    fn is_krokodil(&self) -> bool {
+        self.mp_menu.account.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("krokodil_koban"))
     }
 
     fn close_settings(&mut self) {
@@ -1593,6 +1599,7 @@ impl State {
                 }
             }
             Item::Changelog => "Enter to read".into(),
+            Item::KrokodilKoban => "Enter: to osu!".into(),
             Item::Fullscreen => on(self.fullscreen),
             Item::WindowSize if self.fullscreen => format!("fullscreen ({:.0}x{:.0})", self.window_w, self.window_h),
             Item::WindowSize => format!("{:.0}x{:.0}", self.window_w, self.window_h),
@@ -1724,7 +1731,7 @@ impl State {
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::CheckUpdates => self.cfg.check_updates = !self.cfg.check_updates,
             // Acts on Enter in `settings_key`.
-            Item::Update | Item::Changelog => return,
+            Item::Update | Item::Changelog | Item::KrokodilKoban => return,
             Item::Fullscreen => self.toggle_fullscreen(window),
             Item::WindowSize => {
                 // The next size up or down from the window's, in its aspect ratio while there is
@@ -2685,6 +2692,10 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::List => self.open_choices(item),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::Value => self.start_edit(item),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Update => self.update_now(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::KrokodilKoban && self.settings_ui.krokodil => match library::launch_osu() {
+                Ok(()) => self.quit = true,
+                Err(e) => self.toast(e),
+            },
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Changelog => self.changelog = Some(changelog::View::recent(false)),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
                 self.cfg.playfield_area = Area::FULL;
@@ -6498,6 +6509,7 @@ impl State {
             }
             Scene::Settings { prev } => {
                 let from_game = matches!(**prev, Scene::Play { .. });
+                self.settings_ui.krokodil = self.is_krokodil();
                 settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
                 let footer = if self.settings_ui.editing.as_ref().is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder)) {
                     "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()

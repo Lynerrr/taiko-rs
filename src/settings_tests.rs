@@ -307,3 +307,20 @@ fn hotkeys_can_be_moved_and_removed() {
     s.key(KeyCode::Backspace, false, None, now, None);
     assert_eq!(s.cfg.keys[0], KeyCode::KeyD);
 }
+
+#[test]
+fn krokodil_koban_mode_is_only_for_krokodil_koban() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.open_settings();
+    let row = settings::ITEMS.iter().position(|(_, it)| *it == Item::KrokodilKoban).unwrap();
+    s.settings_ui.cursor = row - 1;
+    s.settings_ui.move_cursor(1);
+    assert_ne!(s.settings_ui.item(), Item::KrokodilKoban, "skipped for anyone else");
+    s.mp_menu.account = Some("Krokodil_Koban".into());
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(s.settings_ui.krokodil);
+    s.settings_ui.cursor = row - 1;
+    s.settings_ui.move_cursor(1);
+    assert_eq!(s.settings_ui.item(), Item::KrokodilKoban);
+}

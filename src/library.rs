@@ -55,6 +55,49 @@ pub fn song_dirs() -> Vec<PathBuf> {
     }
 }
 
+/// osu!'s own exe beside a Songs folder being used, else where osu! installs by default.
+#[cfg(not(target_os = "android"))]
+fn osu_exe() -> Option<PathBuf> {
+    let beside = song_dirs().into_iter().filter_map(|d| d.parent().map(|p| p.join("osu!.exe")));
+    #[cfg(windows)]
+    let beside = beside.chain(std::env::var_os("LOCALAPPDATA").map(|l| PathBuf::from(l).join("osu!").join("osu!.exe")));
+    beside.into_iter().find(|p| p.is_file())
+}
+
+/// Starts osu!stable, on its own (krokodil_koban mode): osu-winello's `osu-wine` on Linux,
+/// else its osu!.exe (through Wine off Windows).
+pub fn launch_osu() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        Err("osu!stable doesn't run on Android".into())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        use std::process::{Command, Stdio};
+        let quiet = |mut c: Command| c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(drop);
+        #[cfg(not(windows))]
+        {
+            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+            for launcher in [home.join(".local/bin/osu-wine"), PathBuf::from("osu-wine")] {
+                if quiet(Command::new(&launcher)).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        let exe = osu_exe().ok_or("couldn't find osu!")?;
+        #[cfg(windows)]
+        let mut c = Command::new(&exe);
+        #[cfg(not(windows))]
+        let mut c = {
+            let mut c = Command::new("wine");
+            c.arg(&exe);
+            c
+        };
+        c.current_dir(exe.parent().unwrap_or(Path::new(".")));
+        quiet(c).map_err(|e| format!("couldn't start osu!: {e}"))
+    }
+}
+
 /// Asks for a folder with the system's folder dialog, starting in `start`. Blocks until it
 /// closes: Ok(None) when cancelled, Err when there is no dialog to show.
 pub fn pick_folder(start: &Path) -> Result<Option<PathBuf>, String> {
