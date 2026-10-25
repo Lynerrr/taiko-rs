@@ -415,7 +415,8 @@ impl Item {
             Item::VisualOffset => "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
             Item::UpdateChannel => "dev: test builds that haven't reached everyone yet (may break). Switch, then Update installs that channel's build.",
             Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko-rs restarts into it.",
-            Item::KrokodilKoban => "Enter: closes taiko-rs and starts osu!stable. For krokodil_koban only.",
+            // No explanation: krokodil_koban knows.
+            Item::KrokodilKoban => "",
             Item::Changelog => "Enter: the latest changes. They also show by themselves after an update.",
             Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",
             Item::Fullscreen => "Shortcut: F11.",

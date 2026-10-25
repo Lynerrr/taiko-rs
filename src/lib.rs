@@ -1601,7 +1601,7 @@ impl State {
                 }
             }
             Item::Changelog => "Enter to read".into(),
-            Item::KrokodilKoban => "Enter: to osu!".into(),
+            Item::KrokodilKoban => String::new(),
             Item::Fullscreen => on(self.fullscreen),
             Item::WindowSize if self.fullscreen => format!("fullscreen ({:.0}x{:.0})", self.window_w, self.window_h),
             Item::WindowSize => format!("{:.0}x{:.0}", self.window_w, self.window_h),
