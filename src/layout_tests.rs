@@ -341,6 +341,25 @@ fn assert_every_screen_fits() {
     check(&mut s, "results failed", &mut out);
     s.scene = Scene::Select;
 
+    // The video editor (its map still loading): quality, a target size being typed, exporting.
+    let json = format!(r#"{{"version":1,"map_hash":1,"map_path":"","map_label":"{}","player":"{LONG_NAME}","date":0,"rate":1.0,"anti_mash":false,"score":0,"accuracy":1.0,"max_combo":0,"great":0,"ok":0,"miss":0,"ur":0.0,"inputs":[]}}"#, entry(0, 0, true).label());
+    let (_video_tx, video_rx) = mpsc::channel();
+    let settings = video::Settings { size: 4, fps: 3, blur: 2, speed: 1, ..Default::default() };
+    s.scene = Scene::VideoEdit(Box::new(video::Editor::new(serde_json::from_str(&json).unwrap(), video_rx, settings)));
+    check(&mut s, "video editor", &mut out);
+    if let Scene::VideoEdit(ed) = &mut s.scene {
+        ed.settings.quality = video::QUALITIES.len() - 1;
+        ed.typing = Some("1234.5".into());
+    }
+    check(&mut s, "video editor target size", &mut out);
+    if let Scene::VideoEdit(ed) = &mut s.scene {
+        ed.typing = None;
+    }
+    s.video_status = "saved \"Camellia feat. Hatsune Miku - Extremely Long Song Title.mp4\" in the videos folder".into();
+    check(&mut s, "video editor saved", &mut out);
+    s.video_status.clear();
+    s.scene = Scene::Select;
+
     // No maps anywhere: the Songs folder button.
     let library = std::mem::take(&mut s.library);
     s.select = Select::new(&s.library);

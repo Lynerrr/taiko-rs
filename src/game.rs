@@ -467,6 +467,13 @@ fn smooth(e0: f64, e1: f64, x: f64) -> f64 {
     x * x * (3.0 - 2.0 * x)
 }
 
+/// Multiverse's breath, 0 to 1 over a beat `beat_ms` long at `phase`: it swells over the first
+/// 90 ms (less of a fast beat) and eases out by the next, so no frame jumps on the beat.
+fn breath(phase: f64, beat_ms: f64) -> f32 {
+    let rise = (90.0 / beat_ms.max(1.0)).min(0.4);
+    if phase < rise { smooth(0.0, rise, phase) as f32 } else { (1.0 - smooth(rise, 1.0, phase)) as f32 }
+}
+
 /// The bar map time `t` is in: its barline's index, start and length (the last bar is
 /// `fallback` long). None before the first barline.
 fn bar_at(bars: &[beatmap::Barline], t: f64, fallback: f64) -> Option<(usize, f64, f64)> {
@@ -2148,7 +2155,7 @@ impl Game {
         let inner = FIELD_W * w / FIELD_ZOOM.1;
         let looks = self.multiverse_at(t);
         let cp = beatmap::control_point_at(&self.map.control_points, t);
-        let pulse = (1.0 - cp.beat_phase(t) as f32).powi(3);
+        let pulse = breath(cp.beat_phase(t), cp.beat_length);
         // Out of focus first, then the one it's heading for, then the one in focus on top.
         let mut order: [usize; FIELD_COUNT] = std::array::from_fn(|f| f);
         let rank = |f: usize| 2.0 * looks[f].focus + looks[f].aim;
@@ -2174,7 +2181,12 @@ impl Game {
             let circling = (left * w + ORBIT.0 * turn.cos(), mid + ORBIT.1 * turn.sin());
             let (x, y) = (parked.0 + (circling.0 - parked.0) * loose, parked.1 + (circling.1 - parked.1) * loose);
             let angle = loose * (lean + 0.08 * (1.5 * turn).sin());
-            let zoom = (FIELD_ZOOM.0 + (FIELD_ZOOM.1 - FIELD_ZOOM.0) * l.grow) * (1.0 + 0.015 * pulse * l.focus);
+            let size = FIELD_ZOOM.0 + (FIELD_ZOOM.1 - FIELD_ZOOM.0) * l.grow;
+            let swell = 0.015 * pulse * l.focus;
+            let zoom = size * (1.0 + swell);
+            // It breathes about its drum, not the lane's left end, so its notes keep their pace.
+            let k = size * swell * drum_x;
+            let (x, y) = (x - k * angle.cos(), y - k * angle.sin());
             let lit = l.aim * (1.0 - l.focus);
             c.fade_since(start, 0.45 + 0.55 * l.focus + 0.4 * lit, 0.75 + 0.25 * l.focus + 0.2 * lit);
             c.rotate_since(start, [0.0, LANE_Y], angle, zoom, [x, y]);
@@ -3052,6 +3064,23 @@ mod tests {
                 assert!(x <= last + 1e-3, "{mods:?} at {t}: {last} -> {x}");
                 last = x;
                 t += 2.0;
+            }
+        }
+    }
+
+    #[test]
+    fn multiverse_breathes_without_a_jump_on_the_beat() {
+        // From 300 BPM to 60 BPM, a 60 fps frame never moves the breath more than a third of
+        // the way (it used to jump all the way on every beat).
+        for beat in [200.0, 300.0, 500.0, 1000.0] {
+            let mut last = breath(0.0, beat);
+            let mut t = 16.7;
+            while t < 4.0 * beat {
+                let b = breath((t / beat).rem_euclid(1.0), beat);
+                assert!((0.0..=1.0).contains(&b));
+                assert!((b - last).abs() < 0.34, "beat {beat} ms at {t}: {last} -> {b}");
+                last = b;
+                t += 16.7;
             }
         }
     }

@@ -537,6 +537,16 @@ fn short_path(dir: &std::path::Path) -> String {
     format!("...{}{}", std::path::MAIN_SEPARATOR, tail.display())
 }
 
+/// One view of a video frame to render offscreen: its size, where the frame goes, the
+/// background's brightness, and with motion blur whether it is blended and the frame's last.
+struct ExportView {
+    size: (u32, u32),
+    tx: std::sync::mpsc::SyncSender<Vec<u8>>,
+    brightness: f32,
+    blended: bool,
+    last: bool,
+}
+
 /// Where downloaded maps go: the first Songs folder being scanned, else taiko-rs's own (which
 /// is scanned at startup when it exists).
 fn download_dir(inputs: &[PathBuf]) -> PathBuf {
@@ -800,28 +810,65 @@ impl State {
             "ffmpeg wasn't found: install it to export (Windows: winget install ffmpeg; Linux: your package manager)".into()
         };
         self.last_video = None;
-        self.scene = Scene::VideoEdit(Box::new(video::Editor::new(r, rx)));
+        self.scene = Scene::VideoEdit(Box::new(video::Editor::new(r, rx, self.cfg.video)));
     }
 
     fn video_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
         if self.export.is_some() {
             if code == KeyCode::Escape && !repeat {
-                // Dropping the encoder's input ends ffmpeg early; the partial file is removed.
+                // Ending ffmpeg's input (or stopping a pass) ends it early; the encoder removes
+                // what it made.
                 if let Some(ex) = self.export.take() {
-                    drop(ex.encoder);
-                    let out = ex.out;
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_millis(1500));
-                        let _ = std::fs::remove_file(out);
-                    });
+                    ex.encoder.cancel.store(true, Ordering::Relaxed);
                 }
                 self.video_status = "export cancelled".into();
             }
             return;
         }
         let Scene::VideoEdit(ed) = &mut self.scene else { return };
+        // Typing the target size takes the keys until Enter or Esc.
+        if let Some(text) = &mut ed.typing {
+            match code {
+                KeyCode::Enter | KeyCode::NumpadEnter => {
+                    match text.parse::<f64>().ok().filter(|mb| mb.is_finite() && *mb >= 1.0) {
+                        Some(mb) => {
+                            ed.settings.target_mb = (mb.min(4000.0) * 10.0).round() / 10.0;
+                            ed.typing = None;
+                        }
+                        None => self.video_status = "type a size of at least 1 MB, like 10 or 25".into(),
+                    }
+                }
+                KeyCode::Escape => ed.typing = None,
+                KeyCode::Backspace => {
+                    text.pop();
+                }
+                KeyCode::KeyQ => {
+                    ed.typing = None;
+                    ed.settings.quality = 0;
+                }
+                _ => {
+                    let ch = match code {
+                        KeyCode::Period | KeyCode::Comma | KeyCode::NumpadDecimal | KeyCode::NumpadComma => Some('.'),
+                        _ => size_char(code).filter(|c| c.is_ascii_digit()),
+                    };
+                    if let Some(ch) = ch.filter(|_| text.len() < 6) {
+                        text.push(ch);
+                    }
+                }
+            }
+            if ed.typing.is_none() {
+                self.video_status.clear();
+            }
+            self.cfg.video = ed.settings;
+            self.cfg.save();
+            return;
+        }
         let rate = ed.replay.rate;
         let step = if self.modifiers_shift { 5000.0 } else { 1000.0 } * rate;
+        // Shift steps back through a setting's choices.
+        let dir = if self.modifiers_shift { -1 } else { 1 };
+        let cycle = |i: usize, n: usize| (i as i32 + dir).rem_euclid(n as i32) as usize;
+        let before = ed.settings;
         match code {
             KeyCode::ArrowLeft | KeyCode::ArrowRight => {
                 let t = ed.cursor + if code == KeyCode::ArrowRight { step } else { -step };
@@ -850,9 +897,18 @@ impl State {
                 let i = presets.iter().position(|(n, _)| *n == ed.crop_name).map(|i| i + 1).unwrap_or(0) % presets.len();
                 (ed.crop_name, ed.crop) = presets[i];
             }
-            KeyCode::KeyZ => ed.size = (ed.size + 1) % video::SIZES.len(),
-            KeyCode::KeyF => ed.fps = (ed.fps + 1) % video::FRAME_RATES.len(),
-            KeyCode::KeyH => ed.hitsounds = !ed.hitsounds,
+            KeyCode::KeyZ => ed.settings.size = cycle(ed.settings.size, video::SIZES.len()),
+            KeyCode::KeyF => ed.settings.fps = cycle(ed.settings.fps, video::FRAME_RATES.len()),
+            KeyCode::KeyB => ed.settings.blur = cycle(ed.settings.blur, video::BLURS.len()),
+            KeyCode::KeyQ => ed.settings.quality = cycle(ed.settings.quality, video::QUALITIES.len()),
+            KeyCode::KeyT => {
+                // Aiming at a size, and typing it.
+                ed.settings.quality = video::QUALITIES.len() - 1;
+                ed.typing = Some(String::new());
+            }
+            KeyCode::KeyE => ed.settings.speed = cycle(ed.settings.speed, video::SPEEDS.len()),
+            KeyCode::KeyU => ed.settings.hud = !ed.settings.hud,
+            KeyCode::KeyH => ed.settings.hitsounds = !ed.settings.hitsounds,
             KeyCode::Enter | KeyCode::NumpadEnter => self.start_export(),
             KeyCode::KeyS => {
                 if let Some(path) = self.last_video.clone() {
@@ -865,6 +921,14 @@ impl State {
             _ => {
                 self.handle_global_key(code, window);
             }
+        }
+        // Remembered for the next video.
+        if let Scene::VideoEdit(ed) = &self.scene
+            && ed.settings != before
+        {
+            self.video_status.clear();
+            self.cfg.video = ed.settings;
+            self.cfg.save();
         }
     }
 
@@ -885,7 +949,7 @@ impl State {
         let mut sim = video::replay_game(map, track, &ed.replay);
         sim.sfx_log = Some(Vec::new());
         sim.set_time(ed.end);
-        let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.hitsounds { sim.sfx_log.take().unwrap_or_default() } else { Vec::new() };
+        let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.settings.hitsounds { sim.sfx_log.take().unwrap_or_default() } else { Vec::new() };
         let sounds = audio::hitsound_set(sr, skin::load(&self.cfg.skin, Some(sr)).hitsounds);
         let (music, fx) = self.cfg.volumes();
         let speed = sim.speed();
@@ -897,27 +961,32 @@ impl State {
             self.video_status = format!("can't write the audio: {e}");
             return;
         }
-        let out = dir.join(video::file_name(&ed.replay));
-        let size = video::SIZES[ed.size];
-        let fps = video::FRAME_RATES[ed.fps];
-        match video::start_encoder(&ffmpeg, size, fps, ed.crop_px(), &wav, &out) {
+        let out = video::free_path(&dir, &video::file_name(&ed.replay));
+        let settings = ed.settings;
+        let size = video::SIZES[settings.size];
+        let fps = video::FRAME_RATES[settings.fps];
+        // Frames are evenly spaced in song time (what the video's audio follows).
+        let step = 1000.0 / fps as f64;
+        let (t0, t1) = (speed.track(ed.start), speed.track(ed.end));
+        let frames = ((t1 - t0) / step).ceil().max(1.0) as u64;
+        let job = video::Job { size, fps, crop: ed.crop_px(), settings, seconds: frames as f64 / fps as f64, wav: wav.clone(), out: out.clone() };
+        match video::start_encoder(&ffmpeg, job) {
             Ok(encoder) => {
                 let mut game = Box::new(video::replay_game(map, track, &ed.replay));
                 game.set_time(ed.start);
-                // Frames are evenly spaced in song time (what the video's audio follows).
-                let step = 1000.0 / fps as f64;
-                let (t0, t1) = (speed.track(ed.start), speed.track(ed.end));
-                let frames = ((t1 - t0) / step).ceil().max(1.0) as u64;
-                self.export = Some(video::Export { game, t: t0, step, size, encoder, frame: 0, frames, out });
+                self.export = Some(video::Export { game, t: t0, step, t0, sub: 0, settings, size, encoder, frame: 0, frames });
                 self.video_status = String::new();
             }
-            Err(e) => self.video_status = e,
+            Err(e) => {
+                let _ = std::fs::remove_file(&wav);
+                self.video_status = e;
+            }
         }
     }
 
-    /// Render thread: the next video frame's shapes, its size, where to send it and the
-    /// background brightness; None when there's nothing (more) to render.
-    fn export_frame(&mut self, c: &mut Canvas) -> Option<(u32, u32, std::sync::mpsc::SyncSender<Vec<u8>>, f32)> {
+    /// Render thread: the shapes of the next view of a video frame (one, or several blended
+    /// with motion blur); None when there's nothing (more) to render.
+    fn export_frame(&mut self, c: &mut Canvas) -> Option<ExportView> {
         let scroll = self.cfg.scroll_speed;
         let kiai = self.cfg.kiai_effects;
         let brightness = if self.preview.has_background { 1.0 - self.cfg.bg_dim } else { 0.0 };
@@ -930,14 +999,16 @@ impl State {
         let tx = ex.encoder.tx.clone()?;
         let (w, h) = ex.size;
         ex.game.kiai_effects = kiai;
-        let t = ex.game.speed().map(ex.t);
+        let t = ex.game.speed().map(ex.view_time());
         ex.game.set_time(t);
         c.clear(render::VIRTUAL_HEIGHT * w as f32 / h as f32);
         ex.game.draw_playfield(c, scroll);
-        ex.game.draw_hud(c);
-        ex.t += ex.step;
-        ex.frame += 1;
-        Some((w, h, tx, brightness))
+        if ex.settings.hud {
+            ex.game.draw_hud(c);
+        }
+        let blended = ex.views() > 1;
+        let last = ex.advance();
+        Some(ExportView { size: (w, h), tx, brightness, blended, last })
     }
 
     /// Loads the map of a saved replay and plays it back.
@@ -5158,7 +5229,7 @@ impl State {
                         }
                     }
                 }
-                let progress = self.export.as_ref().map(|ex| ex.frame as f32 / ex.frames.max(1) as f32);
+                let progress = self.export.as_ref().map(|ex| ex.progress());
                 if let Some(g) = &mut ed.game {
                     g.kiai_effects = self.cfg.kiai_effects;
                 }
@@ -5841,6 +5912,7 @@ pub(crate) enum FileDrag {
 fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoopProxy<UserEvent>) {
     let mut canvas = Canvas::default();
     let mut export_canvas = Canvas::default();
+    let mut blend = video::Blend::default();
     let mut next_frame = Instant::now();
     let mut last_sample: Option<Instant> = None;
     let mut requested_present: Option<PresentChoice> = None;
@@ -5892,10 +5964,11 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         };
         let acquired = Instant::now();
         let now = acquired;
-        // A video export renders a few frames offscreen per UI frame (which shows its progress).
-        for _ in 0..3 {
+        // A video export renders offscreen for a while each UI frame (which shows its progress).
+        let exporting = Instant::now();
+        while exporting.elapsed() < Duration::from_millis(30) {
             let job = lock(&state).export_frame(&mut export_canvas);
-            let Some((w, h, tx, brightness)) = job else { break };
+            let Some(ExportView { size: (w, h), tx, brightness, blended, last }) = job else { break };
             let shown = renderer.bg_brightness;
             renderer.bg_brightness = brightness;
             let vw = export_canvas.width.max(1.0);
@@ -5907,6 +5980,16 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             let frame = renderer.render_offscreen(&export_canvas.shapes, &clips, w, h, render::clear_colour());
             renderer.bg_brightness = shown;
             let Some(px) = frame else { break };
+            // Motion blur: the frame is the average of its views.
+            let px = if blended {
+                blend.add(&px);
+                if !last {
+                    continue;
+                }
+                blend.take()
+            } else {
+                px
+            };
             if tx.send(px).is_err() {
                 break;
             }

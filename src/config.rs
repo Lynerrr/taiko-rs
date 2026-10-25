@@ -167,6 +167,8 @@ pub struct Config {
     pub skin: String,
     /// The Songs folder picked in settings, scanned instead of looking for osu! installs.
     pub songs_folder: Option<PathBuf>,
+    /// How replay videos are exported.
+    pub video: crate::video::Settings,
     pub songs: Vec<PathBuf>,
 }
 
@@ -229,6 +231,7 @@ impl Default for Config {
             saved_presets: Vec::new(),
             skin: String::new(),
             songs_folder: None,
+            video: Default::default(),
             songs: Vec::new(),
         }
     }
@@ -388,6 +391,9 @@ impl Config {
                 "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
                 "skin" => cfg.skin = v.to_string(),
                 "songs_folder" => cfg.songs_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
+                k if k.starts_with("video_") => {
+                    cfg.video.parse(k, v);
+                }
                 "songs" => cfg.songs.push(PathBuf::from(v)),
                 _ => {}
             }
@@ -519,6 +525,7 @@ impl Config {
             "# online server (accounts, lobbies) and your saved login there\nonline_server = {}\nonline_user = {}\nonline_token = {}\n",
             self.online_server, self.online_user, self.online_token
         ));
+        out.push_str(&self.video.config_lines());
         let folder = self.songs_folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
         out.push_str(&format!("# Songs folder to scan instead of finding osu!'s (empty = find it)\nsongs_folder = {folder}\n"));
         out.push_str("# extra song folders / .osz files, one per line\n");
