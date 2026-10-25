@@ -26,7 +26,7 @@ Linux (Wayland) · Windows · Android
 | 🤖 **Android** | grab `taiko-rs-android.apk` from the [latest release](https://github.com/Lynerrr/taiko-rs/releases/tag/latest) (8.0+, arm64) |
 
 No root or admin needed. It finds your osu! Songs folder (osu-winello and Wine too); if yours is
-somewhere else, point it there in Settings → Library. You can also drop `.osz` files in. The game updates itself (**Ctrl+U**). Dev builds are one switch away in
+somewhere else, point it there in Settings → Library. You can also drop `.osz` files in. The game updates itself (**Ctrl+U**) and shows what's new. Dev builds are one switch away in
 Settings → Updates.
 
 ## Highlights
@@ -42,7 +42,10 @@ Settings → Updates.
   settings (Multiverse, Shapeshift) while they are on. Press **R**
   in the mod select for a playable random set.
 - **Online.** Lobbies on the taiko-rs server or direct P2P, live scoreboards, spectating, friends,
-  chat, and watching friends' solo plays.
+  chat, watching friends' solo plays, and everyone's replays from the online leaderboards.
+- **pp like osu!.** A live pp counter while you play, and a results screen with osu!'s
+  performance breakdown (and the song playing on). Click any score, local or online, for its
+  results, its replay and a video of it.
 - **Everything else.** osu! skins (every part of the playfield, mixed from several if you like), map downloads from mirrors, local replays with video export,
   offset calibration, a custom playfield size, UI colours and Discord status.
 
@@ -57,8 +60,8 @@ Settings → Updates.
 | `Tab` | songs ⇄ settings | `F9` | friends & chat |
 | `Shift+Tab` | hide the interface in a song | `Ctrl+C` `Ctrl+V` | copy · paste |
 
-Everything is clickable too. The drum keys can be rebound in Settings → Input, and on touch
-screens the screen becomes four drum columns.
+Everything is clickable too. Every key here can be moved (Ctrl, Alt and Shift included) or taken
+away in Settings → Input, and on touch screens the screen becomes four drum columns.
 
 ## Build
 

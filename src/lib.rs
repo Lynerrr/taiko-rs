@@ -23,6 +23,8 @@ mod layout;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
+mod results_tests;
+#[cfg(test)]
 mod settings_tests;
 mod library;
 mod logo;

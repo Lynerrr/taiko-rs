@@ -206,9 +206,11 @@ pub fn simulate(map_path: &Path, r: &Replay) -> Option<(crate::game::Stats, crat
     Some((g.stats.clone(), g.windows))
 }
 
-/// Where online replays are kept once fetched (outside the score index).
+/// Where online replays are kept once fetched (outside the score index; in the temporary
+/// folder without a data folder).
 pub fn online_replay_path(id: u64) -> Option<PathBuf> {
-    Some(dir()?.join("online").join(format!("{id}.json")))
+    let dir = dir().map(|d| d.join("online")).unwrap_or_else(|| std::env::temp_dir().join("taiko-rs-online-replays"));
+    Some(dir.join(format!("{id}.json")))
 }
 
 /// Saves a replay fetched from the server where `online_replay_path` says.
