@@ -335,22 +335,50 @@ fn download_cta(os: Os, on_download_page: bool) -> String {
 /// 6 s in all.
 const PATTERN: &str = "dkdd_kkd_DdkdkK_dd_kdk_d";
 
-/// The drum's flashes for the bar: its face red on every don, its rim blue on every kat, the
-/// moment the note lands (in step with `notes`).
-fn drum_flashes() -> String {
-    let mut don = String::new();
-    let mut kat = String::new();
-    for (i, c) in PATTERN.chars().enumerate() {
-        let p = i as f64 * 0.25 / 6.0 * 100.0;
-        let frames = format!("{p:.2}%{{opacity:1}}{:.2}%{{opacity:0}}", p + 2.0);
-        match c {
-            'd' | 'D' => don += &frames,
-            'k' | 'K' => kat += &frames,
-            _ => {}
+/// Bars the combo counts up through before it starts again from 0.
+const COMBO_BARS: usize = 20;
+
+/// The drum, as the game draws the keys being pressed: a don lights one half of its face red,
+/// a kat one half of its rim blue, the hands taking turns; a finisher lights both halves. And
+/// the combo, one more on every note. All in step with `notes`: (keyframes, markup).
+fn drum() -> (String, String) {
+    let hits: Vec<(f64, char)> = PATTERN.chars().enumerate().filter(|(_, c)| *c != '_').map(|(i, c)| (i as f64 * 0.25, c)).collect();
+    // Which halves each hit lights: L, R, or both for a finisher.
+    // Two bars, so the hands keep taking turns when the bar (an odd number of notes) loops.
+    let mut tracks: [(&str, String); 4] = [("donl", String::new()), ("donr", String::new()), ("katl", String::new()), ("katr", String::new())];
+    let two_bars = hits.iter().map(|&(t, c)| (t, c)).chain(hits.iter().map(|&(t, c)| (t + 6.0, c)));
+    for (n, (t, c)) in two_bars.enumerate() {
+        let p = t / 12.0 * 100.0;
+        let frames = format!("{p:.2}%{{opacity:1}}{:.2}%{{opacity:0}}", p + 1.0);
+        let (don, both) = (c.eq_ignore_ascii_case(&'d'), c.is_ascii_uppercase());
+        let left = n % 2 == 0;
+        for (i, (_, track)) in tracks.iter_mut().enumerate() {
+            let (is_don, is_left) = (i < 2, i % 2 == 0);
+            if is_don == don && (both || is_left == left) {
+                *track += &frames;
+            }
         }
     }
-    let start = |track: &str| if track.starts_with("0.00%") { "" } else { "0%{opacity:0}" };
-    format!("<style>@keyframes donflash{{{}{don}}}@keyframes katflash{{{}{kat}}}</style>", start(&don), start(&kat))
+    let mut css: String = tracks
+        .iter()
+        .map(|(name, track)| format!("@keyframes {name}{{{}{track}}}", if track.starts_with("0.00%") { "" } else { "0%{opacity:0}" }))
+        .collect();
+    // The combo: a strip of numbers, moved one up on every hit.
+    let total = COMBO_BARS as f64 * 6.0;
+    let mut combo = String::from("@keyframes combo{0%{transform:translateY(0)}");
+    let mut n = 0;
+    for bar in 0..COMBO_BARS {
+        for &(t, _) in &hits {
+            n += 1;
+            combo += &format!("{:.3}%{{transform:translateY(-{}em)}}", (bar as f64 * 6.0 + t) / total * 100.0, n as f64 * 3.25);
+        }
+    }
+    css += &(combo + "}");
+    let digits: String = (0..=n).map(|i| format!("<span>{i}</span>")).collect();
+    let markup = format!(
+        "<div class=drum><b class=\"fl rim l\"></b><b class=\"fl rim r\"></b><span class=face><b class=\"fl don l\"></b><b class=\"fl don r\"></b><span class=combo><span class=digits>{digits}</span></span></span></div>"
+    );
+    (format!("<style>{css}</style>"), markup)
 }
 
 /// The home page's lane: a bar of dons, kats, finishers and gaps, a quarter beat each. Every
@@ -377,11 +405,11 @@ fn notes() -> String {
 /// off it, with the game's HUD (filled in with the server's own numbers) around it.
 fn stage(players: usize, plays: usize, online: usize, bg: &str, cta: &str) -> String {
     let notes = notes();
+    let (flashes, drum) = drum();
     let lane = |class: &str| {
         let segs: String = (0..10i32).map(|i| format!("<b class=seg style=\"--dy:{};--r:{}\"></b>", (i * 37) % 9 - 4, (i * 53) % 7 - 3)).collect();
-        format!("<div class=\"lane {class}\"><div class=segs>{segs}</div><div class=drum><span class=combo></span></div><div class=judge></div><div class=track>{notes}</div></div>")
+        format!("<div class=\"lane {class}\"><div class=segs>{segs}</div>{drum}<div class=judge></div><div class=track>{notes}</div></div>")
     };
-    let flashes = drum_flashes();
     let mods = ["NM no mod", "TL tilt", "WV wave", "BA barrel roll", "MR mirror", "MV multiverse", "SH shatter"];
     let labels: String = mods.iter().chain(&mods[..1]).map(|m| format!("<span>{m}</span>")).collect();
     format!(
@@ -982,13 +1010,13 @@ background:linear-gradient(0deg,var(--bg),transparent 30%),linear-gradient(rgba(
 .segs{position:absolute;inset:16px 0;display:flex}.seg{flex:1;background:#1b1b26;border-top:2px solid var(--line2);border-bottom:2px solid var(--line2);
 transform:translateY(calc(var(--sh) * var(--dy) * 9px)) rotate(calc(var(--sh) * var(--r) * 2deg))}
 .seg:first-child{flex:0 0 160px;background:var(--panel);border-right:2px solid var(--line2)}
-/* The drum: its face flashes red on dons, its rim blue on kats; the combo counts up. */
+/* The drum: a don lights half its face red, a kat half its rim blue; the combo counts up. */
 .drum{position:absolute;left:44px;top:34px;width:72px;height:72px;border-radius:50%;background:#3a3a4e;box-shadow:0 0 0 6px #262634,0 0 0 8px var(--line2);display:grid;place-items:center}
-.drum:before{content:"";position:absolute;inset:0;border-radius:50%;background:var(--katl);opacity:0;animation:katflash 6s step-end infinite}
-.combo{position:relative;background:#f5ecdc;color:#15151d;border-radius:50%;width:52px;height:52px;display:grid;place-items:center;font-size:16px;overflow:hidden;animation:combo 600s steps(1600) infinite}
-.combo:before{content:"";position:absolute;inset:0;background:var(--don);opacity:0;animation:donflash 6s step-end infinite}
-.combo:after{position:relative;counter-reset:c var(--combo);content:counter(c)}
-@property --combo{syntax:"<integer>";inherits:false;initial-value:0}@keyframes combo{to{--combo:1600}}
+.fl{position:absolute;inset:0;border-radius:50%;opacity:0;animation:12s step-end infinite}.fl.l{clip-path:inset(0 50% 0 0)}.fl.r{clip-path:inset(0 0 0 50%)}
+.rim{background:var(--katl)}.rim.l{animation-name:katl}.rim.r{animation-name:katr}.don{background:var(--don)}.don.l{animation-name:donl}.don.r{animation-name:donr}
+.face{position:relative;width:52px;height:52px;border-radius:50%;background:#f5ecdc;overflow:hidden;box-shadow:0 0 0 2px #262634}
+.combo{position:absolute;inset:0;overflow:hidden;color:#15151d;font-size:16px}.digits{display:block;animation:combo 120s step-end infinite}
+.digits span{display:block;height:3.25em;line-height:3.25em;text-align:center}
 .judge{position:absolute;left:188px;top:38px;width:64px;height:64px;border-radius:50%;border:4px solid #4a4a60;box-shadow:inset 0 0 0 4px #1b1b26}
 .track{position:absolute;left:160px;right:0;top:0;height:140px;overflow:hidden}
 /* Each note: 6 s from off the right edge to the judgement circle, then a hit burst. */
