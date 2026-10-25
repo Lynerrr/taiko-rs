@@ -580,7 +580,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     let corner = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u)) * 2.0 - 1.0;
     // Everything below is in physical pixels so anti-aliasing is exactly one pixel wide.
     let half_px = inst.half * g.px_per_unit;
-    let pad = 1.5 + inst.params.z * g.px_per_unit;
+    let pad = 1.5 + max(inst.params.z, 0.0) * g.px_per_unit;
     let local = corner * (half_px + vec2<f32>(pad));
     let center_px = inst.center * g.px_per_unit;
     // Rotated shapes turn their quad; the fragment works in the shape's own (unrotated) frame.
@@ -610,7 +610,7 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     let c = shade(in);
     // Pixels that wouldn't change anything (corners, ring holes, glow tails, the gaps in letters)
     // skip blending, which would read and write the screen for nothing.
-    if (c.a < 0.001) {
+    if (c.a < 0.001 && max(c.r, max(c.g, c.b)) < 0.001) {
         discard;
     }
     return c;
@@ -643,6 +643,10 @@ fn shade(in: VOut) -> vec4<f32> {
         let uv = in.local / (2.0 * in.half) + 0.5;
         let t = textureSampleLevel(atlas, samp, rect.xy + clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)) * rect.zw, 0.0);
         let inside = select(0.0, 1.0, all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0)));
+        if (in.params.z < -0.5) {
+            // Light (`Canvas::light`): fill added over the image's shape, alpha 0 so it adds.
+            return vec4<f32>(in.fill.rgb * t.a * in.fill.a * inside, 0.0);
+        }
         return vec4<f32>(t.rgb * in.fill.rgb, t.a) * in.fill.a * inside;
     }
     let r = min(in.params.x, min(in.half.x, in.half.y));
@@ -664,6 +668,9 @@ fn shade(in: VOut) -> vec4<f32> {
     if (side > 0.5) {
         let dir = select(-1.0, 1.0, side > 1.5);
         color.a *= clamp(0.5 + in.local.x * dir, 0.0, 1.0);
+    }
+    if (glow < -0.5) {
+        return vec4<f32>(color.rgb * color.a, 0.0);
     }
     return vec4<f32>(color.rgb * color.a, color.a);
 }
@@ -2023,6 +2030,18 @@ impl Canvas {
             x += w - overlap;
         }
         true
+    }
+
+    /// Adds `color` (its alpha the strength) over skin image `sprite`'s shape centred on (`x`,
+    /// `y`) for something of radius `r`, or a disc without it. Light, like osu!'s kiai flash: a
+    /// stack of them brightens what's under it instead of covering it.
+    pub fn light(&mut self, sprite: Sprite, x: f32, y: f32, r: f32, color: [f32; 4]) {
+        let start = self.shapes.len();
+        if !self.sprite(sprite, x, y, r, color) {
+            self.circle(x, y, r, color, CLEAR, 0.0);
+        }
+        // Negative where a glow's softness goes; big, so scaling the playfield keeps it below -0.5.
+        self.shapes[start].params[2] = -1.0e6;
     }
 
     /// A skin image stretched over the box centred on (`x`, `y`), `hw` by `hh` either side.

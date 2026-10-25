@@ -28,7 +28,19 @@ pub struct Note {
     pub tick_spacing: f64,
     /// Hits needed to clear a swell.
     pub required_hits: u32,
+    /// A fake slider (a drumroll with a negative length, a gimmick map staple): how many ms of
+    /// scroll its body reaches right of its head, and its cap left of it. Only drawn; it plays
+    /// as the zero-length roll it is. 0 for everything else.
+    pub fake_len: f64,
+    /// A fake slider shorter than `FAKE_LINGER_LENGTH`: its body fades as it reaches the drum
+    /// instead of vanishing.
+    pub fake_fades: bool,
 }
+
+/// A fake slider this long (osu! px) or longer loses its body the instant it reaches the drum;
+/// a shorter one fades out over 250 ms. Stable, by eye.
+// ponytail: the cutoff is "somewhere before -200"; measure it if a map disagrees.
+pub const FAKE_LINGER_LENGTH: f64 = 200.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Barline {
@@ -69,7 +81,7 @@ impl ControlPoint {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Meta {
     pub title: String,
     pub artist: String,
@@ -360,10 +372,8 @@ fn convert(map: &mut Beatmap, mut body: Body) {
     let native = meta.mode == 1;
     let sm = meta.slider_multiplier * TAIKO_VELOCITY_MULTIPLIER;
     let tick_rate = meta.slider_tick_rate;
-    let velocity_at = |t: f64| {
-        let cp = control_point_at(&cps, t);
-        sm * 100.0 * cp.sv / cp.beat_length
-    };
+    let scroll = scroll_table(&body.timing, sm);
+    let velocity_at = |t: f64| scroll[scroll.partition_point(|&(at, _)| at <= t).saturating_sub(1)].1;
     let swell_hit_multiplier = difficulty_range(meta.od, 3.0, 5.0, 7.5) * 1.65;
 
     let mut notes = Vec::with_capacity(body.objects.len());
@@ -381,12 +391,17 @@ fn convert(map: &mut Beatmap, mut body: Body) {
         if ty & 2 != 0 && f.len() >= 8 {
             // Slider: drumroll, or a stream of hits for short standard sliders.
             let spans = f[6].trim().parse::<u32>().unwrap_or(1).max(1);
-            let length = f[7].trim().parse::<f64>().unwrap_or(0.0).max(0.0);
+            let raw_length = f[7].trim().parse::<f64>().unwrap_or(0.0);
+            let length = raw_length.max(0.0);
             let cp = control_point_at(&cps, time);
             let distance = length * TAIKO_VELOCITY_MULTIPLIER * spans as f64;
             let sv_beat_length = cp.beat_length / cp.sv;
             let taiko_velocity = 100.0 * sm;
             let duration = (distance / taiko_velocity * sv_beat_length).floor();
+            // The duration a negative length works out to, made positive: osu! still draws that
+            // much body ahead of the head (taiko_arranger's gameplay preview, `_draw_fake_slider`).
+            // Not floored: the canonical -0.0001 is a fraction of a ms and stays just a head.
+            let fake_len = if raw_length < 0.0 { -raw_length * TAIKO_VELOCITY_MULTIPLIER * spans as f64 / taiko_velocity * sv_beat_length } else { 0.0 };
 
             let mut split = None;
             if !native {
@@ -422,6 +437,8 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                     velocity,
                     tick_spacing: cp.beat_length / roll_tick_rate,
                     required_hits: 0,
+                    fake_len,
+                    fake_fades: raw_length < 0.0 && raw_length > -FAKE_LINGER_LENGTH,
                 });
             }
         } else if ty & 8 != 0 {
@@ -435,6 +452,8 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                 velocity,
                 tick_spacing: 0.0,
                 required_hits: required,
+                fake_len: 0.0,
+                fake_fades: false,
             });
         } else if ty & 1 != 0 {
             notes.push(hit(time, sound, velocity));
@@ -482,30 +501,60 @@ fn hit(time: f64, sound: u32, velocity: f64) -> Note {
         velocity,
         tick_spacing: 0.0,
         required_hits: 0,
+        fake_len: 0.0,
+        fake_fades: false,
     }
 }
 
+/// Scroll velocity from each timing point's ms on, worked out like taiko_arranger's preview: the
+/// raw beat length and SV, floored at 1e-4 ms and 0.01x and never capped, because gimmick maps
+/// (barline notes, hidden notes) depend on going far past the limits gameplay timing is clamped
+/// to. A green line on a red line's ms wins over the red line's 1x reset. `raw` sorted by time.
+fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
+    let mut beat = raw.iter().find(|p| p.uninherited && p.beat_length > 0.0).map_or(500.0, |p| p.beat_length);
+    let mut out = Vec::new();
+    for group in raw.chunk_by(|a, b| a.time == b.time) {
+        let mut sv = 1.0;
+        for p in group {
+            if p.uninherited && p.beat_length > 0.0 {
+                beat = p.beat_length;
+            }
+        }
+        if let Some(p) = group.iter().rev().find(|p| !p.uninherited && p.beat_length < 0.0) {
+            sv = -100.0 / p.beat_length;
+        }
+        out.push((group[0].time, sm * 100.0 * f64::max(sv, 0.01) / beat.max(1e-4)));
+    }
+    if out.is_empty() {
+        out.push((0.0, sm * 100.0 / beat));
+    }
+    out
+}
+
+/// One barline at every red line (unless it omits its first) and every measure after it, up to
+/// the next red line. A section whose measure is under a millisecond (a gimmick line) gives only
+/// its first: the rest would scroll by too fast to see.
 fn build_barlines(raw: &[RawTimingPoint], end: f64, velocity_at: &dyn Fn(f64) -> f64) -> Vec<Barline> {
     let timing: Vec<&RawTimingPoint> = raw.iter().filter(|p| p.uninherited && p.beat_length > 0.0).collect();
     let mut out = Vec::new();
     for (i, p) in timing.iter().enumerate() {
         let until = timing.get(i + 1).map(|n| n.time).unwrap_or(end + 1.0);
-        let step = p.beat_length * p.meter as f64;
-        if step < 1.0 {
-            continue;
-        }
+        let step = p.beat_length * p.meter.max(1) as f64;
         let mut t = p.time;
         let mut first = true;
-        // Stop just short of the next timing point so barlines don't double up there.
-        while t < until - 1.0 {
+        // Per section, so one runaway section can't take every barline after it with it.
+        for _ in 0..100_000 {
+            if t >= until {
+                break;
+            }
             if !(first && p.effects & 8 != 0) {
                 out.push(Barline { time: t, velocity: velocity_at(t) });
             }
+            if step < 1.0 {
+                break;
+            }
             first = false;
             t += step;
-            if out.len() > 100_000 {
-                return out;
-            }
         }
     }
     out
@@ -589,6 +638,37 @@ SliderTickRate:1
         assert_eq!(swell.required_hits, 16);
         // Velocity doubles under the 2x SV point.
         assert!((roll.velocity / map.notes[0].velocity - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_barline_note_draws_its_bars_and_hides_its_note() {
+        // taiko_arranger's barline note: a gimmick red line on the note (omitting its own bar),
+        // restores either side that each draw one bar, 1 ms from the next red line.
+        let map = parse("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n999,500,4,1,0,100,1,0\n1000,0.000000001,4,1,0,100,1,8\n1001,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0\n256,192,1001,1,0\n256,192,4000,1,0\n");
+        let bars: Vec<f64> = map.barlines.iter().map(|b| b.time).collect();
+        assert!(bars.contains(&999.0) && bars.contains(&1001.0) && !bars.contains(&1000.0), "{bars:?}");
+        // The bars scroll at the chart's speed, the note in the gimmick section far too fast to see.
+        let normal = map.notes[1].velocity;
+        assert!(map.barlines.iter().all(|b| b.velocity == normal));
+        assert!(map.notes[0].velocity > normal * 1e6);
+        // And the measures after the structure are all still there.
+        assert!(bars.contains(&3001.0));
+    }
+
+    #[test]
+    fn a_negative_length_slider_draws_a_body_but_plays_as_a_bare_head() {
+        let map = parse("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,2,0,L|356:192,1,-70\n256,192,2000,2,0,L|356:192,1,-0.0001\n256,192,3000,2,0,L|356:192,1,70\n256,192,4000,2,0,L|356:192,1,-300\n");
+        let rolls: Vec<(f64, f64)> = map.notes.iter().map(|n| (n.end_time - n.time, n.fake_len)).collect();
+        // Short ones fade at the drum, long ones vanish.
+        let fades: Vec<bool> = map.notes.iter().map(|n| n.fake_fades).collect();
+        assert_eq!(fades, [true, true, false, false]);
+        // -70px at 1.4 SM is half a beat (250 ms) of body; it lasts no time at all.
+        assert_eq!(rolls[0].0, 0.0);
+        assert!((rolls[0].1 - 250.0).abs() < 1e-9);
+        // The canonical gimmick value: a head and next to no body.
+        assert!(rolls[1].1 > 0.0 && rolls[1].1 < 0.01);
+        // A real roll has no fake body.
+        assert_eq!(rolls[2], (250.0, 0.0));
     }
 
     #[test]

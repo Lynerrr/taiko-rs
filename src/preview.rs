@@ -116,6 +116,10 @@ pub struct Preview {
     pub has_background: bool,
     /// Passed on to the autoplay preview (the kiai effects setting).
     pub kiai_effects: bool,
+    /// The list is being dragged through (scrollbar, right-click scrolling): the selection
+    /// races past songs, so nothing loads until it is let go. Loading each song paused on
+    /// (decoding its music, parsing it) is what made dragging stutter.
+    pub hold: bool,
     /// The selected map's own offset, shown with its details.
     pub map_offset: f64,
     /// Bottom of the song select panel as last drawn (virtual units).
@@ -210,7 +214,7 @@ impl Preview {
             self.changed_at = Some(if quiet { now.checked_sub(DEBOUNCE).unwrap_or(now) } else { now });
         }
         // Start loads once the selection has settled.
-        if self.seen != self.requested && self.changed_at.is_some_and(|t| now - t >= DEBOUNCE) {
+        if self.seen != self.requested && !self.hold && self.changed_at.is_some_and(|t| now - t >= DEBOUNCE) {
             self.requested = self.seen;
             self.requested_rate = rate;
             self.game = None;
@@ -464,41 +468,16 @@ impl Preview {
         let k = (w - 20.0) / 640.0;
         let preview_h = band_h * k + 12.0;
         const GRAPH_H: f32 = 40.0;
-        let h = h.min(114.0 + preview_h + 8.0 + GRAPH_H + 44.0);
-        self.panel_bottom = y + h;
         self.graph_rect = None;
         self.play_rect = None;
         self.box_rect = None;
-        c.round_rect(x, y, w, h, 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
-        let Some(i) = self.seen.filter(|&i| i < library.len()) else { return None };
+        let below = preview_h + 8.0 + GRAPH_H + 44.0;
+        let Some(i) = self.seen.filter(|&i| i < library.len()) else {
+            self.panel_bottom = y + h.min(110.0 + below);
+            c.round_rect(x, y, w, h.min(110.0 + below), 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
+            return None;
+        };
         let e = &library[i];
-        let fit = |s: &str, size: f32| -> String {
-            let max = ((w - 28.0) / Canvas::char_width(size)) as usize;
-            if s.chars().count() > max { s.chars().take(max.saturating_sub(3)).collect::<String>() + "..." } else { s.to_string() }
-        };
-        c.text(x + 14.0, y + 14.0, 12.0, rgba(0xffffff, 1.0), &fit(&e.meta.title, 12.0));
-        c.text(x + 14.0, y + 32.0, 9.0, rgba(0xc8c8d8, 1.0), &fit(&e.meta.artist, 9.0));
-        // Centred at y + 50; smaller when the artist above came out taller (text grid).
-        let artist_bottom = 36.5 + Canvas::text_height(9.0) / 2.0;
-        let size = Canvas::fit_height(8.0, 2.0 * (50.0 - artist_bottom - 1.5));
-        // The status on osu! at the right of the mapper's line.
-        let status_w = match status.filter(|s| !s.0.is_empty()) {
-            Some((label, col)) => {
-                let lw = Canvas::text_width(7.0, label) + 12.0;
-                let (sx, sy) = (x + w - 12.0 - lw, y + 44.0);
-                c.round_rect(sx, sy, lw, 13.0, 6.5, rgba(col, 0.15), rgba(col, 0.9), 1.0);
-                c.text_centered(sx + lw / 2.0, sy + 3.0, 7.0, rgba(col, 1.0), label);
-                lw + 8.0
-            }
-            None => 0.0,
-        };
-        let mapper = Canvas::fit(size, w - 28.0 - status_w, &format!("mapped by {}", e.meta.creator));
-        c.text(x + 14.0, y + 46.0 + (8.0 - size) / 2.0, size, rgba(0x8a8aa0, 1.0), &mapper);
-        let pill = crate::stars::draw_pill(c, x + w - 12.0, y + 64.0, 9.0, stars);
-        let version = fit(&format!("[{}]", e.meta.version), 9.0);
-        let room = ((w - 40.0 - pill) / Canvas::char_width(9.0)) as usize;
-        let version = if version.chars().count() > room { version.chars().take(room.saturating_sub(3)).collect::<String>() + "..." } else { version };
-        c.text(x + 14.0, y + 64.0, 9.0, rgba(accent(), 1.0), &version);
         // Map details, the autoplay and the timeline appear together, once the map's music plays.
         let ready = self.ready(library, i) || (self.ready_for == Some(i) && self.map.as_ref().is_some_and(|(mi, ..)| *mi == i));
         if ready && self.ready_for != Some(i) {
@@ -507,27 +486,108 @@ impl Preview {
         }
         let fade = self.ready_at.filter(|_| ready).map(|t| crate::render::progress(t, 180.0)).unwrap_or(0.0);
         let loaded = self.map.as_ref().filter(|(mi, _, _, _)| *mi == i && ready);
-        let line = match loaded {
-            Some((_, _, d, _)) => {
-                // At the speed played (DT, HT, the rate): as fast and as long as it'll be.
-                let speed = self.requested_rate.0.max(0.01);
-                let bpm = if (d.bpm.1 - d.bpm.0).abs() < 0.5 { format!("{:.0} BPM", d.bpm.0 * speed) } else { format!("{:.0}-{:.0} BPM", d.bpm.0 * speed, d.bpm.1 * speed) };
-                let secs = (d.length_ms / speed / 1000.0).max(0.0) as u64;
-                let offset = if self.map_offset != 0.0 { format!("   offset {:+.0} ms", self.map_offset) } else { String::new() };
-                format!("OD {:.1}   {bpm}   {}:{:02}{offset}", e.meta.od, secs / 60, secs % 60)
-            }
-            None => format!("OD {:.1}", e.meta.od),
-        };
-        let _ = fade;
-        c.text(x + 14.0, y + 80.0, 8.0, rgba(0xc8c8d8, 1.0), &line);
+
+        // Text sits on a 14 unit inset; long names wrap onto a second line before they are cut.
+        let (lx, iw) = (x + 14.0, w - 28.0);
+        let (th_title, th_body, th_small) = (Canvas::text_height(12.0), Canvas::text_height(9.0), Canvas::text_height(8.0));
+        let title = wrap(12.0, iw, &e.meta.title, 2);
+        let artist = wrap(9.0, iw, &e.meta.artist, 2);
+        // The star pill is about this wide; the difficulty name wraps beside it.
+        let pill_w = Canvas::text_width(9.0, "0.00") + 9.0 * 1.6 + 6.0;
+        let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
+        // Stats as label + value, flowed left to right; the first group is the map's, the second its notes.
+        let mut stats: [Vec<(&str, String, f32)>; 2] = [vec![("OD", format!("{:.1}", e.meta.od), 1.0)], Vec::new()];
         if let Some((_, _, d, _)) = loaded {
-            let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
-            let notes = format!("{} ({}/{} don/kat)  {}  {}", plural(d.dons + d.kats, "note"), d.dons, d.kats, plural(d.rolls, "roll"), plural(d.swells, "swell"));
-            c.text(x + 14.0, y + 94.0, 8.0, rgba(0x8a8aa0, fade), &fit(&notes, 8.0));
+            // At the speed played (DT, HT, the rate): as fast and as long as it'll be.
+            let speed = self.requested_rate.0.max(0.01);
+            let bpm = if (d.bpm.1 - d.bpm.0).abs() < 0.5 { format!("{:.0}", d.bpm.0 * speed) } else { format!("{:.0}-{:.0}", d.bpm.0 * speed, d.bpm.1 * speed) };
+            stats[0].push(("BPM", bpm, fade));
+            stats[0].push(("Length", fmt_time(d.length_ms / speed), fade));
+            if self.map_offset != 0.0 {
+                stats[0].push(("Offset", format!("{:+.0} ms", self.map_offset), fade));
+            }
+            stats[1].push(("Notes", (d.dons + d.kats).to_string(), fade));
+            stats[1].push(("Don", d.dons.to_string(), fade));
+            stats[1].push(("Kat", d.kats.to_string(), fade));
+            if d.rolls > 0 {
+                stats[1].push(("Rolls", d.rolls.to_string(), fade));
+            }
+            if d.swells > 0 {
+                stats[1].push(("Swells", d.swells.to_string(), fade));
+            }
         }
+        let cell_w = |(label, value, _): &(&str, String, f32)| Canvas::text_width(8.0, &format!("{label} {value}"));
+        let rows: Vec<Vec<Vec<&(&str, String, f32)>>> = stats
+            .iter()
+            .map(|group| {
+                let mut rows: Vec<Vec<&(&str, String, f32)>> = vec![Vec::new()];
+                let mut used = 0.0;
+                for cell in group {
+                    let cw = cell_w(cell);
+                    if used > 0.0 && used + STAT_GAP + cw > iw {
+                        rows.push(Vec::new());
+                        used = 0.0;
+                    }
+                    used += if used > 0.0 { STAT_GAP } else { 0.0 } + cw;
+                    rows.last_mut().unwrap().push(cell);
+                }
+                rows
+            })
+            .collect();
+        // Two rows are always kept, so the panel doesn't jump when the details arrive.
+        let stat_rows = rows.iter().map(Vec::len).sum::<usize>().max(2);
+        let (title_step, body_step, row_h) = (th_title + 4.0, th_body + 3.0, th_small + 4.0);
+        let head = 12.0 + title.len() as f32 * title_step + 3.0 + artist.len() as f32 * body_step + 4.0 + 13.0 + 6.0 + (version.len() as f32 * body_step).max(15.0) + 6.0 + stat_rows as f32 * row_h + 6.0;
+        let h = h.min(head + below);
+        self.panel_bottom = y + h;
+        c.round_rect(x, y, w, h, 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
+
+        let mut cy = y + 12.0;
+        for line in &title {
+            c.text(lx, cy, 12.0, rgba(0xffffff, 1.0), line);
+            cy += title_step;
+        }
+        cy += 3.0;
+        for line in &artist {
+            c.text(lx, cy, 9.0, rgba(0xc8c8d8, 1.0), line);
+            cy += body_step;
+        }
+        cy += 4.0;
+        // The status on osu! at the right of the mapper's line.
+        let status_w = match status.filter(|s| !s.0.is_empty()) {
+            Some((label, col)) => {
+                let lw = Canvas::text_width(7.0, label) + 12.0;
+                let sx = x + w - 14.0 - lw;
+                c.round_rect(sx, cy, lw, 13.0, 6.5, rgba(col, 0.15), rgba(col, 0.9), 1.0);
+                c.text_centered(sx + lw / 2.0, cy + 3.0, 7.0, rgba(col, 1.0), label);
+                lw + 8.0
+            }
+            None => 0.0,
+        };
+        let mapper = Canvas::fit(8.0, iw - status_w, &format!("mapped by {}", e.meta.creator));
+        c.text(lx, cy + (13.0 - th_small) / 2.0, 8.0, rgba(0x8a8aa0, 1.0), &mapper);
+        cy += 13.0 + 6.0;
+        crate::stars::draw_pill(c, x + w - 14.0, cy + 3.0, 9.0, stars);
+        for line in &version {
+            c.text(lx, cy + 3.0, 9.0, rgba(accent(), 1.0), line);
+            cy += body_step;
+        }
+        cy += (15.0 - version.len() as f32 * body_step).max(0.0) + 6.0;
+        // Muted labels, bright values.
+        for group in &rows {
+            for row in group {
+                let mut sx = lx;
+                for (label, value, alpha) in row.iter().copied() {
+                    sx += c.text(sx, cy, 8.0, rgba(0x8a8aa0, *alpha), &format!("{label} "));
+                    sx += c.text(sx, cy, 8.0, rgba(0xe8e8f4, *alpha), value) + STAT_GAP;
+                }
+                cy += row_h;
+            }
+        }
+        cy = cy.max(y + 12.0) + (stat_rows.saturating_sub(rows.iter().map(Vec::len).sum()) as f32) * row_h + 6.0;
 
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
-        let (bx, by, bw, bh) = (x + 10.0, y + 114.0, w - 20.0, preview_h);
+        let (bx, by, bw, bh) = (x + 10.0, cy, w - 20.0, preview_h);
         c.round_rect(bx, by, bw, bh, 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
         self.box_rect = Some([bx, by, bw, bh]);
         let loaded = loaded.is_some();
@@ -559,6 +619,36 @@ impl Preview {
         let clip = crate::layout::Area { x: bx / full_w, y: by / VIRTUAL_HEIGHT, w: bw / full_w, h: bh / VIRTUAL_HEIGHT };
         Some((start..c.shapes.len(), clip))
     }
+}
+
+/// Space between the stats in the details.
+const STAT_GAP: f32 = 10.0;
+
+/// `s` as up to `lines` lines of text `size` tall within `max_w`, broken at spaces (or mid-word
+/// when a word alone is too long); what still doesn't fit ends the last line with "...".
+fn wrap(size: f32, max_w: f32, s: &str, lines: usize) -> Vec<String> {
+    let per_line = ((max_w / Canvas::char_width(size)) as usize).max(4);
+    let mut out: Vec<String> = Vec::new();
+    let mut rest: Vec<char> = s.chars().collect();
+    while !rest.is_empty() && out.len() < lines {
+        if rest.len() <= per_line {
+            out.push(rest.drain(..).collect());
+            break;
+        }
+        // Break after the last space that keeps the line within the width, else at the width.
+        let at = rest[..=per_line].iter().rposition(|&ch| ch == ' ').filter(|&p| p > 0).unwrap_or(per_line);
+        out.push(rest[..at].iter().collect::<String>().trim_end().to_string());
+        rest.drain(..at);
+        while rest.first() == Some(&' ') {
+            rest.remove(0);
+        }
+    }
+    if !rest.is_empty() {
+        if let Some(last) = out.last_mut() {
+            *last = Canvas::fit(size, max_w, &format!("{last} {}", rest.iter().collect::<String>()));
+        }
+    }
+    out
 }
 
 fn fmt_time(ms: f64) -> String {

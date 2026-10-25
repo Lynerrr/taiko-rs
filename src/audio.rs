@@ -25,7 +25,14 @@ impl Track {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+/// How many times one sound rings at once; a new play fades the oldest out. osu! does the same
+/// (osu-framework's `Sample.PlaybackConcurrency`), so mashing a finisher stays one loud hit
+/// rather than copies piling up into clipping.
+pub const SFX_CONCURRENCY: usize = 2;
+/// How long (frames) a sound cut off that way takes to fade, so the cut doesn't click.
+pub const CHOKE_FRAMES: usize = 128;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sfx {
     Don,
     Kat,
@@ -235,6 +242,19 @@ struct Voice {
     sound: Sfx,
     pos: usize,
     volume: f32,
+    /// Frames left of its fade out once cut off (`SFX_CONCURRENCY`); 0 while it plays on.
+    fade: usize,
+}
+
+/// Starts `sound`, fading out its oldest play if it already rings `SFX_CONCURRENCY` times.
+fn start_voice(voices: &mut Vec<Voice>, sound: Sfx, volume: f32) {
+    let ringing = voices.iter().filter(|v| v.sound == sound && v.fade == 0).count();
+    if let Some(oldest) = voices.iter_mut().filter(|v| v.sound == sound && v.fade == 0).max_by_key(|v| v.pos).filter(|_| ringing >= SFX_CONCURRENCY) {
+        oldest.fade = CHOKE_FRAMES;
+    }
+    if voices.len() < voices.capacity() {
+        voices.push(Voice { sound, pos: 0, volume, fade: 0 });
+    }
 }
 
 struct Mixer {
@@ -251,6 +271,7 @@ struct Mixer {
     paused: bool,
     voices: Vec<Voice>,
     sounds: Arc<Sounds>,
+    limiter: Limiter,
 }
 
 impl Mixer {
@@ -263,7 +284,7 @@ impl Mixer {
         channels: usize,
     ) -> Mixer {
         let sounds = Arc::new(hitsound_set(rate, Custom::default()));
-        Mixer { rx, gc, stamp, volume, channels, track: None, base: 0, frame: 0, epoch: 0, paused: false, voices: Vec::with_capacity(64), sounds }
+        Mixer { rx, gc, stamp, volume, channels, track: None, base: 0, frame: 0, epoch: 0, paused: false, voices: Vec::with_capacity(64), sounds, limiter: Limiter::new(rate) }
     }
 
     fn render<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T], info: &OutputCallbackInfo) {
@@ -296,11 +317,7 @@ impl Mixer {
                     Cmd::Sounds(sounds) => {
                         let _ = self.gc.send(Garbage::Sounds(std::mem::replace(&mut self.sounds, sounds)));
                     }
-                    Cmd::Sfx(sound, volume) => {
-                        if self.voices.len() < self.voices.capacity() {
-                            self.voices.push(Voice { sound, pos: 0, volume });
-                        }
-                    }
+                    Cmd::Sfx(sound, volume) => start_voice(&mut self.voices, sound, volume),
                 }
             }
         }
@@ -327,13 +344,20 @@ impl Mixer {
             }
             for v in &mut self.voices {
                 let buf = &self.sounds[v.sound as usize];
+                let fade = if v.fade == 0 { 1.0 } else { v.fade as f32 / CHOKE_FRAMES as f32 };
                 if let Some(s) = buf.get(v.pos) {
-                    l += s * fx_vol * v.volume;
-                    r += s * fx_vol * v.volume;
+                    l += s * fx_vol * v.volume * fade;
+                    r += s * fx_vol * v.volume * fade;
                 }
                 v.pos += 1;
+                if v.fade > 0 {
+                    v.fade -= 1;
+                    if v.fade == 0 {
+                        v.pos = buf.len();
+                    }
+                }
             }
-            let (l, r) = (soft_clip(l), soft_clip(r));
+            let (l, r) = self.limiter.apply(l, r);
             match ch {
                 1 => frame[0] = T::from_sample((l + r) * 0.5),
                 _ => {
@@ -350,13 +374,61 @@ impl Mixer {
     }
 }
 
-fn soft_clip(x: f32) -> f32 {
-    if x.abs() < 0.9 { x } else { x.signum() * (0.9 + 0.1 * ((x.abs() - 0.9) * 10.0).tanh()) }
+/// The mix's ceiling. A hit landing on a loud chorus turns the whole mix down at once and lets it
+/// back up over ~150 ms, instead of bending the waveform past 0.9 (a soft clip did that here,
+/// and it's what made finishers, and every hit in a kiai, sound distorted).
+pub struct Limiter {
+    gain: f32,
+    release: f32,
+}
+
+impl Limiter {
+    pub const CEILING: f32 = 0.95;
+
+    pub fn new(rate: u32) -> Limiter {
+        Limiter { gain: 1.0, release: 1.0 - (-1.0 / (0.15 * rate as f32)).exp() }
+    }
+
+    pub fn apply(&mut self, l: f32, r: f32) -> (f32, f32) {
+        let peak = l.abs().max(r.abs());
+        let target = if peak > Self::CEILING { Self::CEILING / peak } else { 1.0 };
+        self.gain = if target < self.gain { target } else { self.gain + (target - self.gain) * self.release };
+        (l * self.gain, r * self.gain)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loud_mix_is_turned_down_whole_not_bent() {
+        // A finisher (peak 1.56) on a chorus at full scale: 2.5 at the top of a sine.
+        let mut lim = super::Limiter::new(48000);
+        let wave: Vec<f32> = (0..9600).map(|i| 2.5 * (i as f32 * 0.0576).sin()).collect();
+        let out: Vec<f32> = wave.iter().map(|&x| lim.apply(x, x).0).collect();
+        assert!(out.iter().all(|y| y.abs() <= super::Limiter::CEILING + 1e-6));
+        // Once it has caught the peak, the shape is the input's, only quieter.
+        let ratios: Vec<f32> = wave.iter().zip(&out).skip(200).filter(|(x, _)| x.abs() > 0.5).map(|(x, y)| y / x).collect();
+        let (lo, hi) = ratios.iter().fold((f32::MAX, 0f32), |(lo, hi), &r| (lo.min(r), hi.max(r)));
+        assert!(hi / lo < 1.02, "{lo}..{hi}");
+    }
+
+    #[test]
+    fn mashing_a_sound_rings_it_twice_at_most() {
+        let mut voices = Vec::with_capacity(64);
+        for _ in 0..6 {
+            start_voice(&mut voices, Sfx::BigDon, 1.0);
+            for v in &mut voices {
+                v.pos += 100;
+            }
+        }
+        start_voice(&mut voices, Sfx::Kat, 1.0);
+        let ringing = |s: Sfx| voices.iter().filter(|v| v.sound == s && v.fade == 0).count();
+        assert_eq!((ringing(Sfx::BigDon), ringing(Sfx::Kat)), (2, 1));
+        // The two playing on are the newest.
+        assert!(voices.iter().filter(|v| v.fade == 0 && v.sound == Sfx::BigDon).all(|v| v.pos <= 200));
+    }
 
     #[test]
     fn built_in_hitsounds_decode() {

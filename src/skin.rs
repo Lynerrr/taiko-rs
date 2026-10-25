@@ -512,15 +512,31 @@ fn read_skins(main: &str, parts: &Sources) -> (Vec<Loaded>, [Option<usize>; PART
     (loaded.into_iter().map(|(_, l)| l).collect(), of_part)
 }
 
+/// Whether the map folder `dir` carries any skin images of its own (a beatmap skin).
+pub fn map_has_images(dir: &Path) -> bool {
+    let map = Loaded::read(dir);
+    Sprite::ALL.iter().any(|&s| map.files.image(&image_names(s, &map.ini)).is_some())
+}
+
 /// Loads the skin called `main` (built-in for "" or one that isn't installed), each part from
 /// where `parts` says. `rate`: the audio device's sample rate, or None to skip the sounds.
-pub fn load(main: &str, parts: &Sources, rate: Option<u32>) -> Skin {
+/// `map_dir`: the playing map's folder, whose images win over the skin's like osu!'s beatmap
+/// skins (gimmick maps hide the roll body / spinner with see-through ones).
+pub fn load(main: &str, parts: &Sources, rate: Option<u32>, map_dir: Option<&Path>) -> Skin {
     let (skins, of_part) = read_skins(main, parts);
     let skin_of = |p: Part| of_part[p as usize].map(|i| &skins[i]);
+    let map = map_dir.map(Loaded::read);
     let mut from = [None; SPRITES];
     for part in Part::ALL {
         for &s in part.sprites() {
             from[s as usize] = skin_of(part);
+        }
+    }
+    if let Some(map) = &map {
+        for s in Sprite::ALL {
+            if map.files.image(&image_names(s, &map.ini)).is_some() {
+                from[s as usize] = Some(map);
+            }
         }
     }
     let hitsounds = match (rate, skin_of(Part::Hitsounds)) {
@@ -574,6 +590,21 @@ mod tests {
     fn atlas_of(dir: &std::path::Path) -> Atlas {
         let skin = Loaded::read(dir);
         super::atlas(&[Some(&skin); SPRITES])
+    }
+
+    #[test]
+    fn a_maps_own_images_skin_it_over_the_built_in_look() {
+        let dir = std::env::temp_dir().join(format!("taiko-rs-map-skin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!super::map_has_images(&dir));
+        image::RgbaImage::new(2, 2).save(dir.join("Taiko-Roll-End.png")).unwrap();
+        assert!(super::map_has_images(&dir));
+        let built_in = Sources(std::array::from_fn(|_| Source::BuiltIn));
+        let skin = super::load("", &built_in, None, Some(&dir));
+        assert!(skin.images.sprites[Sprite::RollEnd as usize].is_some());
+        assert!(skin.images.sprites[Sprite::RollMiddle as usize].is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
