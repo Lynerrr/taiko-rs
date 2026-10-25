@@ -886,7 +886,8 @@ mod tests {
             .collect();
         let text = serde_json::to_string_pretty(&groups).unwrap() + "\n";
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("server/site/mods.json");
-        if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+        // Line endings aside: a Windows checkout may have turned them into CRLF.
+        if std::fs::read_to_string(&path).ok().map(|t| t.replace("\r\n", "\n")).as_deref() != Some(text.as_str()) {
             std::fs::write(&path, &text).unwrap();
             panic!("{} was out of date and has been rewritten: commit it", path.display());
         }
