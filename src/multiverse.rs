@@ -12,18 +12,19 @@ use crate::render::{accent, rgba, Canvas, Hit};
 /// How many universes (playfields) there are.
 pub const COUNT: usize = 8;
 
-/// Note colours: (name, don, kat).
+/// Note colours: (name, don, kat). Dons are always the darker of the two, as in the classic
+/// colours, so they tell apart by brightness too.
 pub const PALETTES: [(&str, u32, u32); 10] = [
     ("classic", crate::game::DON, crate::game::KAT),
     ("neon", 0xff3fb4, 0x2fe0ff),
-    ("sunset", 0xff7a2f, 0x8e5cff),
-    ("ice", 0x9fe8ff, 0x2f5fd0),
-    ("forest", 0xe8c547, 0x2fa86a),
+    ("sunset", 0x8e5cff, 0xff7a2f),
+    ("ice", 0x2f5fd0, 0x9fe8ff),
+    ("forest", 0x2fa86a, 0xe8c547),
     ("candy", 0xff6f91, 0x5fd4a8),
     ("ember", 0xff4a2a, 0xffb02f),
-    ("mono", 0xf2f2f2, 0x5c5c78),
-    ("toxic", 0xb8ff3a, 0xc04dff),
-    ("swapped", crate::game::KAT, crate::game::DON),
+    ("mono", 0x5c5c78, 0xf2f2f2),
+    ("toxic", 0xc04dff, 0xb8ff3a),
+    ("swapped", 0x2f6f96, 0xff7a5c),
 ];
 
 /// Grey with no colour in it: notes out of focus (and Colorless).
@@ -363,6 +364,18 @@ impl Setup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dons_are_darker_than_kats_in_every_palette() {
+        // How bright a colour looks (0-255), by the eye's weighting of red, green and blue.
+        let brightness = |hex: u32| {
+            let ch = |s: u32| ((hex >> s) & 0xff) as f32;
+            0.2126 * ch(16) + 0.7152 * ch(8) + 0.0722 * ch(0)
+        };
+        for (name, don, kat) in PALETTES {
+            assert!(brightness(don) + 20.0 < brightness(kat), "{name}: don {} kat {}", brightness(don), brightness(kat));
+        }
+    }
 
     #[test]
     fn universes_round_trip_through_the_config() {
