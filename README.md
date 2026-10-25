@@ -4,7 +4,7 @@
 
 # taiko-rs
 
-**A small, fast osu!taiko client written in Rust.**
+**A small, fast taiko client for osu! beatmaps, written in Rust.**
 
 Linux (Wayland) · Windows · Android
 
@@ -69,6 +69,12 @@ cargo build --release
 
 You'll need `clang` and the PipeWire headers (or build with `--no-default-features` for ALSA
 only). The APK is built with `android/build-apk.sh`, and the online server lives in `server/`.
+
+## License
+
+MIT, see [LICENSE](LICENSE); libraries and assets in [THIRD-PARTY.md](THIRD-PARTY.md). taiko-rs is
+not affiliated with or endorsed by ppy Pty Ltd ("osu!" is their trademark). It plays the beatmaps
+and skins you already have and bundles none of osu!'s.
 
 <div align="center">
 <sub>📖 The <a href="README1.md">full guide</a> covers every setting, mod and screen.</sub>

@@ -13,7 +13,7 @@ use crate::scores::{Extras, MapRow, Ranked};
 const REPO: &str = "https://github.com/Lynerrr/taiko-rs";
 /// Where the site lives, for the absolute links link previews need.
 const SITE: &str = "https://rstaiko.auneu.space";
-const TAGLINE: &str = "osu!taiko, rebuilt, with 73 mods that bend, break and multiply the lane. Rankings, profiles, chat and downloads.";
+const TAGLINE: &str = "A taiko client for osu! beatmaps, with 73 mods that bend, break and multiply the lane. Rankings, profiles, chat and downloads.";
 const RAW: &str = "https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client";
 
 /// A clip of taiko-rs's own mods: what it shows, the mods on, its file under /clips/, and the
@@ -458,7 +458,7 @@ fn stage(players: usize, plays: usize, online: usize, bg: &str, cta: &str) -> St
          <div class=hud-tl>{online} online &middot; {players} ranked &middot; server up</div>\
          <div class=hud-tr aria-hidden=true><div class=hud-score>{:08}</div><div class=hp><i></i></div><div class=modname><div class=ticker>{labels}</div></div></div>\
          <div class=intro><h1 class=glitch data-text=\"TAIKO-RS\">TA<span class=narrow>I</span>KO-RS</h1>\
-           <p>osu!taiko, rebuilt, with <em>{} mods</em> that bend, break and multiply the lane.</p></div>\
+           <p>A taiko client for osu! beatmaps, with <em>{} mods</em> that bend, break and multiply the lane.</p></div>\
          <div class=field aria-hidden=true>{}{}{}{}<div class=hit-great>GREAT</div></div>\
          <div class=stage-cta>{}</div><div class=errbar aria-hidden=true><i></i><i></i><i></i><i></i><i></i></div></section>",
         plays,
@@ -1003,7 +1003,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
 <link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style></head>
 <body><nav><div class=inner><a class=logo href="/" aria-label="taiko-rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO-RS</a><div class=links>{links}</div>
 <form action="/u" role=search><input name=name placeholder="find a player" maxlength=16 aria-label="Find a player"></form><div class=account>{account}</div></div></nav>
-<main>{}</main><footer><div class=inner><span class=brand>TAIKO-RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><span class=dim>map covers from osu!</span></div></footer></body></html>"#,
+<main>{}</main><footer><div class=inner><span class=brand>TAIKO-RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
         esc(title),
         body
     )

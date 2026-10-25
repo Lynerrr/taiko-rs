@@ -383,7 +383,7 @@ fn route(state: &State, req: &Req) -> Reply {
             drop(scores);
             let (online, rooms) = (state.online_players(), state.rooms());
             let live = pages::Live { online: &online, rooms: &rooms, latest: &latest };
-            req.page(200, "osu!taiko, rebuilt", "", pages::home(&ranked, &maps, ranked.len(), plays, req.os, live)).per_visitor()
+            req.page(200, "a taiko client for osu! beatmaps", "", pages::home(&ranked, &maps, ranked.len(), plays, req.os, live)).per_visitor()
         }
         ["rankings"] => req.page(200, "Performance Ranking", "rankings", pages::rankings(&state.scores.lock().unwrap().rankings(RANKINGS))),
         ["api", "rankings"] => Reply::json(&state.scores.lock().unwrap().rankings(RANKINGS)),
