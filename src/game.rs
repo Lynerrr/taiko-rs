@@ -23,6 +23,7 @@ use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
 use crate::mods::{Mod, Mods, Speed};
+use crate::hud::Part;
 use crate::multiverse::{self, Shape as NoteShape, Universe};
 use crate::render::{accent, progress, rgba, Canvas, Hit, Shape, Sprite, VIRTUAL_HEIGHT};
 
@@ -213,6 +214,8 @@ pub struct Game {
     pub show_offset_hint: bool,
     /// Kiai time tints the lane and pulses the hit target.
     pub kiai_effects: bool,
+    /// Interface parts hidden (the interface toggle).
+    pub hidden: crate::hud::Parts,
     /// Display latency to make up for (real ms): the lane is drawn as it will be this much later,
     /// when the frame reaches the screen. Judging stays on the audio clock.
     pub visual_offset: f64,
@@ -1151,6 +1154,7 @@ impl Game {
             mute_hits: false,
             show_offset_hint: false,
             kiai_effects: true,
+            hidden: crate::hud::Parts::NONE,
             visual_offset: 0.0,
             mash: Mash::Nearest,
             extra_taps: 0,
@@ -2480,7 +2484,7 @@ impl Game {
         if kiai {
             c.glow(HIT_X, LANE_Y, NOTE_R, 30.0, rgba(0xffb347, 0.25 * pulse));
         }
-        if let Some((j, at)) = self.last_judge {
+        if let Some((j, at)) = self.last_judge.filter(|_| !self.hidden.has(Part::Judgements)) {
             let a = (1.0 - (t - at) / 220.0).clamp(0.0, 1.0) as f32;
             if a > 0.0 && j != Judge::Miss && splashes(j) {
                 c.glow(HIT_X, LANE_Y, NOTE_R + 2.0, 26.0, rgba(j.color(), 0.55 * a));
@@ -2514,6 +2518,8 @@ impl Game {
                 Kind::Don | Kind::Kat => {
                     let col = if n.kind == Kind::Don { don } else { kat };
                     match st.judged {
+                        // Hit: the note flies up out of the drum (unless the interface toggle hides it).
+                        Some(Judge::Great | Judge::Ok) if self.hidden.has(Part::HitAnimation) => {}
                         Some(Judge::Great | Judge::Ok) => {
                             let p = ((t - st.judged_at) / HIT_ANIM_MS).clamp(0.0, 1.0) as f32;
                             if p < 1.0 {
@@ -2644,14 +2650,14 @@ impl Game {
         c.circle(drum_x, LANE_Y, 32.0, rgba(0xe9dcc3, 1.0), rgba(0x8a7b63, 1.0), 2.0);
         c.half_circle(drum_x, LANE_Y, 32.0, 1, rgba(drum_don, flash(self.presses[1])), rgba(drum_don, 0.0), 0.0);
         c.half_circle(drum_x, LANE_Y, 32.0, 2, rgba(drum_don, flash(self.presses[2])), rgba(drum_don, 0.0), 0.0);
-        if self.stats.combo >= 2 {
+        if self.stats.combo >= 2 && !self.hidden.has(Part::Combo) {
             let s = self.stats.combo.to_string();
             let size = if s.len() > 3 { 12.0 } else { 16.0 };
             texts.push((drum_x, LANE_Y - size / 2.0, size, rgba(0x1d1d26, 1.0), s));
         }
 
         // Judgement text.
-        if let Some((j, at)) = self.last_judge.filter(|&(j, _)| splashes(j)) {
+        if let Some((j, at)) = self.last_judge.filter(|&(j, _)| splashes(j) && !self.hidden.has(Part::Judgements)) {
             let age = (t - at) as f32;
             if age < 450.0 {
                 let a = (1.0 - age / 450.0).min(1.0);
@@ -2776,13 +2782,20 @@ impl Game {
             c.text_centered(w / 2.0, 19.5, 9.0, rgba(WHITE, 1.0), text);
         }
 
+        let shown = |p: Part| !self.hidden.has(p);
         // Score / accuracy.
-        c.text_right(w - 18.0, 18.0, 24.0, rgba(WHITE, 1.0), &format!("{:08}", self.stats.score));
-        c.text_right(w - 18.0, 50.0, 14.0, rgba(0xc8c8d8, 1.0), &format!("{:.2}%", self.stats.accuracy() * 100.0));
+        if shown(Part::Score) {
+            c.text_right(w - 18.0, 18.0, 24.0, rgba(WHITE, 1.0), &format!("{:08}", self.stats.score));
+        }
+        if shown(Part::Accuracy) {
+            c.text_right(w - 18.0, 50.0, 14.0, rgba(0xc8c8d8, 1.0), &format!("{:.2}%", self.stats.accuracy() * 100.0));
+        }
         // Progress bar.
-        c.rect(0.0, 0.0, w * self.progress() as f32, 3.0, rgba(WHITE, 0.45));
+        if shown(Part::Progress) {
+            c.rect(0.0, 0.0, w * self.progress() as f32, 3.0, rgba(WHITE, 0.45));
+        }
         // HP: has to be at least half full at the end (the mark), like osu!taiko.
-        if self.show_hp {
+        if self.show_hp && shown(Part::Health) {
             // Under the score, accuracy and mods (the top-left corner is the FPS overlay's).
             let (hx, hy) = (hp_bar_x(w), HP_BAR_Y);
             let hw = w - 18.0 - hx;
@@ -2794,7 +2807,7 @@ impl Game {
             }
             c.rect(hx + hw / 2.0 - 0.75, hy - 2.0, 1.5, 12.0, rgba(WHITE, 0.8));
         }
-        if !self.mods.is_empty() {
+        if !self.mods.is_empty() && shown(Part::Mods) {
             let label = self.mods.iter().map(|m| m.acronym()).collect::<Vec<_>>().join(" ");
             c.text_right(w - 18.0, 72.0, 9.0, rgba(0xc8c8d8, 0.9), &label);
         }
@@ -2802,6 +2815,7 @@ impl Game {
         // Hit error meter.
         let cx = w / 2.0;
         let my = 430.0;
+        if shown(Part::HitError) {
         let scale = 150.0 / self.windows.miss as f32;
         let wnd = |ms: f64| ms as f32 * scale;
         c.round_rect(cx - wnd(self.windows.miss), my - 3.0, wnd(self.windows.miss) * 2.0, 6.0, 3.0, rgba(Judge::Miss.color(), 0.25), rgba(0, 0.0), 0.0);
@@ -2820,24 +2834,26 @@ impl Game {
             c.circle(cx + mean as f32 * scale, my - 18.0, 3.5, rgba(WHITE, 0.9), rgba(WHITE, 0.0), 0.0);
         }
         c.rect(cx - 1.0, my - 14.0, 2.0, 28.0, rgba(WHITE, 0.9));
-        if self.show_offset_hint {
-            if let Some(h) = self.offset_suggestion(self.offset) {
-                let e = &h.estimate;
-                let building = if e.hits < h.needed { format!("  confidence {}/{}", e.hits, h.needed) } else { String::new() };
-                let stats = format!("UR {:.0}, {} hits", e.ur, e.hits);
-                if h.significant {
-                    let dir = if e.error_ms > 0.0 { "late" } else { "early" };
-                    let text = format!(
-                        "{:.1} +-{:.1} ms {dir} ({stats})  |  suggested offset {:+.0} ms  |  O: this map  Shift+O: all{building}",
-                        e.error_ms.abs(),
-                        e.margin_ms,
-                        e.suggested_offset
-                    );
-                    c.text_centered(cx, my + 20.0, 8.0, rgba(0xFFD34D, 0.95), &text);
-                } else {
-                    let text = format!("offset looks good: {:+.1} +-{:.1} ms ({stats}){building}", e.error_ms, e.margin_ms);
-                    c.text_centered(cx, my + 20.0, 8.0, rgba(0x86E05A, 0.9), &text);
-                }
+        }
+        if self.show_offset_hint
+            && shown(Part::OffsetHint)
+            && let Some(h) = self.offset_suggestion(self.offset)
+        {
+            let e = &h.estimate;
+            let building = if e.hits < h.needed { format!("  confidence {}/{}", e.hits, h.needed) } else { String::new() };
+            let stats = format!("UR {:.0}, {} hits", e.ur, e.hits);
+            if h.significant {
+                let dir = if e.error_ms > 0.0 { "late" } else { "early" };
+                let text = format!(
+                    "{:.1} +-{:.1} ms {dir} ({stats})  |  suggested offset {:+.0} ms  |  O: this map  Shift+O: all{building}",
+                    e.error_ms.abs(),
+                    e.margin_ms,
+                    e.suggested_offset
+                );
+                c.text_centered(cx, my + 20.0, 8.0, rgba(0xFFD34D, 0.95), &text);
+            } else {
+                let text = format!("offset looks good: {:+.1} +-{:.1} ms ({stats}){building}", e.error_ms, e.margin_ms);
+                c.text_centered(cx, my + 20.0, 8.0, rgba(0x86E05A, 0.9), &text);
             }
         }
 

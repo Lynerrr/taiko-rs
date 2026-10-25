@@ -233,7 +233,7 @@ fn assert_every_screen_fits() {
     s.settings_ui.choices = Some(settings::Choices::new(Item::Skin, skins, Some(1), "2 installed".into()));
     check(&mut s, "skin picker", &mut out);
     s.settings_ui.choices = None;
-    for item in [Item::PresentMode, Item::AudioBuffer, Item::Accent, Item::SongsFolder, Item::WindowSize, Item::DataFolder] {
+    for item in [Item::PresentMode, Item::AudioBuffer, Item::Accent, Item::SongsFolder, Item::WindowSize, Item::DataFolder, Item::InterfaceHides] {
         s.open_choices(item);
         check(&mut s, &format!("{item:?} list"), &mut out);
         s.settings_ui.choices = None;

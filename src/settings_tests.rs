@@ -176,3 +176,70 @@ fn window_sizes_fit_the_screen_and_step_within_the_aspect_ratio() {
     assert_eq!(s.window_request, Some((1600, 900)));
     assert!(s.apply_typed(Item::WindowSize, "3840x2160").is_err());
 }
+
+#[test]
+fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
+    let mut s = layout_tests::state();
+    // The first frame takes in the library (and with it whatever it starts).
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.play_when_scanned = false;
+    let map = beatmap::calibration_map(500.0, 4, 64);
+    s.scene = Scene::Play { game: Box::new(Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None)), entry: 0, from: None };
+    let info = s.cfg.show_map_info;
+    s.modifiers_shift = true;
+    s.key(KeyCode::Tab, false, None, Instant::now(), None);
+    assert!(s.cfg.interface_hidden);
+    s.modifiers_shift = false;
+    s.key(KeyCode::Tab, false, None, Instant::now(), None);
+    assert!(s.cfg.interface_hidden, "plain Tab isn't the interface key");
+    assert_ne!(s.cfg.show_map_info, info);
+    // What's hidden reaches the game drawn.
+    let mut c = Canvas { width: 853.3, ..Default::default() };
+    s.build_frame(&mut c, Instant::now(), 853.3);
+    let Scene::Play { game, .. } = &s.scene else { panic!() };
+    assert_eq!(game.hidden, hud::Parts::ALL);
+}
+
+#[test]
+fn ctrl_c_copies_what_is_typed_or_picked_and_paste_goes_only_where_text_does() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    assert!(s.takes_text());
+    let picked = s.select.selected().map(|i| s.library[i].label());
+    assert!(picked.is_some());
+    assert_eq!(s.copy_text(), picked);
+    s.open_settings();
+    s.start_edit(Item::ScrollSpeed);
+    assert_eq!(s.copy_text().as_deref(), Some("1.00"));
+    // A pasted line arrives as typed text (Ctrl let go of).
+    s.key(KeyCode::KeyV, false, Some("1.5x"), Instant::now(), None);
+    assert_eq!(s.settings_ui.editing.as_ref().unwrap().text, "1.5x");
+    // Not into a song (V could be a drum).
+    s.settings_ui.editing = None;
+    let map = beatmap::calibration_map(500.0, 4, 64);
+    s.scene = Scene::Play { game: Box::new(Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None)), entry: 0, from: None };
+    assert!(!s.takes_text());
+}
+
+#[test]
+fn ctrl_backspace_clears_the_search() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.play_when_scanned = false;
+    s.scene = Scene::Select;
+    s.select.filter = "camellia".into();
+    s.modifiers_ctrl = true;
+    s.key(KeyCode::Backspace, false, None, Instant::now(), None);
+    assert!(s.select.filter.is_empty());
+}
+
+#[test]
+fn ticking_interface_parts_keeps_the_list_open() {
+    let mut s = layout_tests::state();
+    s.open_choices(Item::InterfaceHides);
+    s.pick_choice(9);
+    assert!(!s.cfg.interface_hides.has(hud::Part::HitAnimation));
+    assert_eq!(s.settings_ui.choices.as_ref().map(|c| c.cursor), Some(9));
+    assert!(s.settings_ui.choices.as_ref().unwrap().names[9].starts_with("[ ]"));
+}

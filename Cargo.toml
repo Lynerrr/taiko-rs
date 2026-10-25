@@ -25,6 +25,10 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# The clipboard (Ctrl+C / Ctrl+V): Windows, macOS, X11 and Wayland compositors with data-control.
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 # The APK is a plain NativeActivity (no Java): see android/build-apk.sh.
 winit = { version = "0.30", features = ["android-native-activity"] }

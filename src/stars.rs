@@ -21,8 +21,21 @@ fn load(path: &Path) -> Option<Beatmap> {
 }
 
 pub fn star_rating(path: &Path, rate: f64) -> Option<f64> {
+    star_rating_with(path, rate, 0)
+}
+
+/// With mods (osu!'s bits, `mod_bits`): osu!taiko's star rating counts Hard Rock and Easy (their
+/// scroll speed and hit windows) and Relax, besides the speed.
+pub fn star_rating_with(path: &Path, rate: f64, mods: u32) -> Option<f64> {
     let map = load(path)?;
-    Difficulty::new().clock_rate(rate).calculate_for_mode::<Taiko>(&map).ok().map(|a| a.stars)
+    Difficulty::new().mods(mods).clock_rate(rate).calculate_for_mode::<Taiko>(&map).ok().map(|a| a.stars)
+}
+
+/// The mods of `mods` osu!taiko's star rating counts, as osu!'s mod bits (the speed is passed as
+/// a rate).
+pub fn mod_bits(mods: crate::mods::Mods) -> u32 {
+    use crate::mods::Mod;
+    [(Mod::Easy, 2), (Mod::HardRock, 16), (Mod::Relax, 128)].into_iter().filter(|(m, _)| mods.has(*m)).map(|(_, b)| b).sum()
 }
 
 /// Combined skill strain per section, the map time the first section starts at, and the
@@ -43,49 +56,56 @@ fn rate_key(rate: f64) -> u32 {
     (rate * 100.0).round() as u32
 }
 
-/// Background star rating calculator with a cache keyed by library index and rate.
+/// Background star rating calculator with a cache keyed by library index, rate and mods.
 pub struct Stars {
-    tx: Sender<(usize, PathBuf, f64)>,
-    rx: Receiver<(usize, u32, Option<f32>)>,
-    cache: HashMap<(usize, u32), Option<f32>>,
-    requested: HashSet<(usize, u32)>,
+    tx: Sender<(usize, PathBuf, f64, u32)>,
+    rx: Receiver<((usize, u32, u32), Option<f32>)>,
+    cache: HashMap<(usize, u32, u32), Option<f32>>,
+    requested: HashSet<(usize, u32, u32)>,
+    /// The mods ratings are for now (`mod_bits`).
+    mods: u32,
 }
 
 impl Default for Stars {
     fn default() -> Self {
-        let (tx, jobs) = mpsc::channel::<(usize, PathBuf, f64)>();
+        let (tx, jobs) = mpsc::channel::<(usize, PathBuf, f64, u32)>();
         let (done, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("stars".into())
             .spawn(move || {
-                for (i, path, rate) in jobs {
-                    let stars = std::panic::catch_unwind(|| star_rating(&path, rate)).ok().flatten().map(|s| s as f32);
-                    if done.send((i, rate_key(rate), stars)).is_err() {
+                for (i, path, rate, mods) in jobs {
+                    let stars = std::panic::catch_unwind(|| star_rating_with(&path, rate, mods)).ok().flatten().map(|s| s as f32);
+                    if done.send(((i, rate_key(rate), mods), stars)).is_err() {
                         return;
                     }
                 }
             })
             .expect("spawn star worker");
-        Stars { tx, rx, cache: HashMap::new(), requested: HashSet::new() }
+        Stars { tx, rx, cache: HashMap::new(), requested: HashSet::new(), mods: 0 }
     }
 }
 
 impl Stars {
     /// Queues a calculation unless it is cached or already queued.
+    /// Ratings from now on are with `mods` (the ones osu!taiko's rating counts).
+    pub fn set_mods(&mut self, mods: crate::mods::Mods) {
+        self.mods = mod_bits(mods);
+    }
+
     pub fn request(&mut self, index: usize, path: &Path, rate: f64) {
-        if self.requested.insert((index, rate_key(rate))) {
-            let _ = self.tx.send((index, path.to_path_buf(), rate));
+        if self.requested.insert((index, rate_key(rate), self.mods)) {
+            let _ = self.tx.send((index, path.to_path_buf(), rate, self.mods));
         }
     }
 
     pub fn poll(&mut self) {
-        while let Ok((i, key, stars)) = self.rx.try_recv() {
-            self.cache.insert((i, key), stars);
+        while let Ok((key, stars)) = self.rx.try_recv() {
+            self.cache.insert(key, stars);
         }
     }
 
     pub fn get(&self, index: usize, rate: f64) -> Option<f32> {
-        self.cache.get(&(index, rate_key(rate))).copied().flatten()
+        self.cache.get(&(index, rate_key(rate), self.mods)).copied().flatten()
     }
 
     /// Library indices changed (rescan): forget everything.
@@ -143,6 +163,27 @@ pub fn draw_pill(c: &mut Canvas, right: f32, y: f32, size: f32, stars: Option<f3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hard_rock_and_easy_change_the_star_rating_like_in_osu() {
+        // A short taiko map: a 1/4 stream of dons and kats at 180 BPM.
+        let mut osu = String::from(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nHPDrainRate:5\nCircleSize:5\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n0,333.333,4,1,0,100,1,0\n\n[HitObjects]\n",
+        );
+        for k in 0..400 {
+            let sound = if k % 3 == 0 { 2 } else { 0 };
+            osu.push_str(&format!("256,192,{},1,{sound},0:0:0:0:\n", 1000 + k * 83));
+        }
+        let path = std::env::temp_dir().join(format!("taiko-rs-stars-{}.osu", std::process::id()));
+        std::fs::write(&path, osu).unwrap();
+        let nomod = star_rating(&path, 1.0).unwrap();
+        let hr = star_rating_with(&path, 1.0, mod_bits(crate::mods::Mods::parse("HR"))).unwrap();
+        let ez = star_rating_with(&path, 1.0, mod_bits(crate::mods::Mods::parse("EZ"))).unwrap();
+        assert!(hr > nomod && ez < nomod, "nomod {nomod} HR {hr} EZ {ez}");
+        // Mods the rating doesn't count don't change it.
+        assert_eq!(mod_bits(crate::mods::Mods::parse("HD,FL,PF")), 0);
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn spectrum_runs_blue_to_black() {

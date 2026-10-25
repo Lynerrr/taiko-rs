@@ -1468,6 +1468,8 @@ pub enum Hit {
     UniversePresetDelete(usize),
     /// Song select with no maps: choose the Songs folder.
     SongsFolder,
+    /// The song list's scroll bar.
+    SongScrollbar,
     /// A settings sidebar section.
     SettingsSection(usize),
     /// The update badge: install the new build.

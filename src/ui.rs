@@ -903,6 +903,20 @@ impl Select {
             let (y0, y1) = (y.max(top - 2.0), (*y + *hh).min(bottom + 2.0));
             (*y, *hh) = (y0, (y1 - y0).max(0.0));
         }
+        // The scroll bar (after the list's clip, outside it), in the margin left of the list: where the list is, clicked or dragged
+        // to go somewhere (`scroll_to`, like right-dragging).
+        if groups.len() > 1 {
+            let (track_x, track_w) = (8.0, 8.0);
+            let track = bottom - top;
+            let hover = c.hovered(track_x - 4.0, top, track_w + 12.0, track);
+            c.round_rect(track_x, top, track_w, track, 4.0, rgba(0x15151d, if hover { 0.9 } else { 0.6 }), rgba(0x2a2a38, 1.0), 1.0);
+            let total = final_y.max(view);
+            let thumb = (track * view / total).clamp(18.0, track);
+            let pos = (scroll / (total - view).max(1.0)).clamp(0.0, 1.0);
+            c.round_rect(track_x + 1.0, top + pos * (track - thumb), track_w - 2.0, thumb, 3.0, rgba(if hover { accent() } else { 0x8a8aa8 }, 0.95), rgba(0, 0.0), 0.0);
+            c.hit(track_x - 4.0, top, track_w + 12.0, track, Hit::SongScrollbar);
+        }
+
         let hints = "Enter play  Up/Down difficulty  Left/Right song  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit";
         c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hints));
         // The status line gives way (smaller) when the hints above come out taller.

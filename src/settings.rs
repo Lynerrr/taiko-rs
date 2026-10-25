@@ -23,11 +23,15 @@ pub enum Item {
     VsyncTune,
     VsyncCalibrate,
     ResumeDelay,
+    Interface,
+    InterfaceHides,
+    InterfaceKey,
     Key(usize),
     /// Previous (0) / next (1) playfield preset key.
     PresetKey(usize),
     TouchLayout,
     ShowPlayfieldSize,
+    WheelResize,
     KiaiEffects,
     HideGreat,
     ChatFilter,
@@ -68,7 +72,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 62] = [
+pub const ITEMS: [(&str, Item); 66] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -77,10 +81,14 @@ pub const ITEMS: [(&str, Item); 62] = [
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::ResumeDelay),
+    ("GAMEPLAY", Item::Interface),
+    ("GAMEPLAY", Item::InterfaceHides),
+    ("GAMEPLAY", Item::InterfaceKey),
     ("PLAYFIELD", Item::PlayfieldArea),
     ("PLAYFIELD", Item::PlayfieldPreset),
     ("PLAYFIELD", Item::PlayfieldReset),
     ("PLAYFIELD", Item::ShowPlayfieldSize),
+    ("PLAYFIELD", Item::WheelResize),
     ("PLAYFIELD", Item::BackgroundDim),
     ("PLAYFIELD", Item::KiaiEffects),
     ("PLAYFIELD", Item::HideGreat),
@@ -136,7 +144,7 @@ pub const ITEMS: [(&str, Item); 62] = [
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 10] = [
     ("LIBRARY", "Songs folder, game data"),
-    ("GAMEPLAY", "speed, rate, resume"),
+    ("GAMEPLAY", "speed, rate, interface"),
     ("PLAYFIELD", "size, position"),
     ("INPUT", "drum keys, touch layout"),
     ("OFFSET", "audio offset, calibration"),
@@ -188,11 +196,15 @@ impl Item {
             Item::VsyncTune => "Vsync compensation: fine tune",
             Item::VsyncCalibrate => "Vsync calibration",
             Item::ResumeDelay => "Resume delay",
+            Item::Interface => "Interface",
+            Item::InterfaceHides => "Interface toggle hides",
+            Item::InterfaceKey => "Interface toggle key",
             Item::Key(i) => KEY_LABELS[i],
             Item::PresetKey(0) => "Previous preset key",
             Item::PresetKey(_) => "Next preset key",
             Item::TouchLayout => "Touch layout",
             Item::ShowPlayfieldSize => "Show playfield size",
+            Item::WheelResize => "Wheel resizes playfield",
             Item::KiaiEffects => "Kiai effects",
             Item::HideGreat => "Hide GREAT splash",
             Item::ChatFilter => "Chat filter",
@@ -258,6 +270,7 @@ impl Item {
             | Item::UpdateChannel
             | Item::Skin
             | Item::NoteColours
+            | Item::InterfaceHides
             | Item::WindowSize
             | Item::Accent
             | Item::SongsFolder
@@ -267,6 +280,8 @@ impl Item {
             | Item::LiveOffsetUr
             | Item::VsyncCompensation
             | Item::ShowPlayfieldSize
+            | Item::WheelResize
+            | Item::Interface
             | Item::KiaiEffects
             | Item::HideGreat
             | Item::ChatFilter
@@ -285,7 +300,7 @@ impl Item {
             | Item::CheckUpdates
             | Item::Fullscreen
             | Item::DiscordPresence => Kind::Toggle,
-            Item::Key(_) | Item::PresetKey(_) => Kind::Key,
+            Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey => Kind::Key,
             Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::SkinFolder => Kind::Action,
         }
     }
@@ -293,7 +308,7 @@ impl Item {
     pub fn help(self) -> &'static str {
         match self {
             Item::ScrollSpeed => "How fast notes travel. Shortcut: F3 / F4.",
-            Item::PlayfieldArea => "Enter: edit where gameplay is drawn. In game: drag to move, drag edges to resize, wheel to scale.",
+            Item::PlayfieldArea => "Enter: edit where gameplay is drawn (drag, its edges, the wheel). In game: drag it about too.",
             Item::PlayfieldReset => "Enter: make gameplay fill the whole screen again.",
             Item::PlayfieldPreset => "Enter: pick from a list (grouped by aspect ratio). Left/Right: previous/next.",
             Item::Rate => "Song speed like DT (1.50x) / HT (0.75x). Song select: [ and ] (Shift = 0.25x steps).",
@@ -307,10 +322,14 @@ impl Item {
             Item::VsyncTune => "Added to the vsync compensation: raise it if you hit late by sight with vsync. Vsync calibration finds it.",
             Item::VsyncCalibrate => "Enter: hit notes by sight, sound off, in vsync; it sets the fine tune. Calibrate the offset first.",
             Item::ResumeDelay => "Countdown before the song continues after the pause menu (0 = at once).",
+            Item::Interface => "Score, accuracy, bars and more during play. Its key (Shift+Tab unless changed below) toggles it in a song.",
+            Item::InterfaceHides => "What hiding the interface hides. Enter opens the list; Enter or a click ticks a part on or off.",
+            Item::InterfaceKey => "Enter, then press the key (with Shift or not) that shows / hides the interface in a song.",
             Item::Key(_) => "Enter, then press the new key. Esc cancels.",
             Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key.",
             Item::TouchLayout => "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
+            Item::WheelResize => "During play, the mouse wheel makes the playfield bigger or smaller (it always does in its editor).",
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
             Item::HiddenMaps => "Right-click a song to hide it here (files stay). Enter lists them all again.",
             Item::SongsFolder => "The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.",
@@ -743,14 +762,14 @@ impl SettingsUi {
             }
             let v = if selected && self.binding.is_some() {
                 "press a key...".to_string()
-            } else if selected && !matches!(item, Item::Key(_) | Item::PresetKey(_)) {
+            } else if selected && !matches!(item, Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey) {
                 format!("<  {}  >", Canvas::fit(8.0, room - Canvas::text_width(8.0, "<    >"), &value(*item)))
             } else {
                 Canvas::fit(8.0, room, &value(*item))
             };
             let v_col = if selected && self.binding.is_some() { 0xFFD34D } else { 0xffffff };
             c.text_right(cx + col - 12.0, y + 9.5, 8.0, rgba(v_col, 1.0), &v);
-            if selected && self.binding.is_none() && !matches!(item, Item::Key(_) | Item::PresetKey(_)) {
+            if selected && self.binding.is_none() && !matches!(item, Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey) {
                 // The "<" and ">" around the value step it.
                 let tw = Canvas::text_width(8.0, &v);
                 c.hit(cx + col - 12.0 - tw - 6.0, y, 20.0, ROW - 4.0, Hit::SettingStep(*i, -1));

@@ -92,6 +92,13 @@ pub struct Config {
     pub half_resolution: bool,
     /// Menus (song select and its preview, settings, results) always use vsync.
     pub menu_vsync: bool,
+    /// The mouse wheel resizes the playfield during play (it always does in its editor).
+    pub wheel_resizes_playfield: bool,
+    /// The interface during play is hidden (the toggle), and what that hides.
+    pub interface_hidden: bool,
+    pub interface_hides: crate::hud::Parts,
+    /// The interface toggle's key, with Shift or not.
+    pub interface_key: (bool, KeyCode),
     /// 0 = uncapped. Only applies to mailbox/immediate; vsync paces itself.
     pub fps_cap: u32,
     /// Vsync only: wait this long after the previous frame before drawing the next, so the frame is
@@ -198,9 +205,13 @@ impl Default for Config {
             master_volume: 1.0,
             music_volume: 0.7,
             fx_volume: 1.0,
-            present: PresentChoice::Fifo,
+            present: PresentChoice::Immediate,
             half_resolution: cfg!(target_os = "android"),
             menu_vsync: true,
+            wheel_resizes_playfield: false,
+            interface_hidden: false,
+            interface_hides: crate::hud::Parts::ALL,
+            interface_key: (true, KeyCode::Tab),
             fps_cap: 0,
             calibration_bpm: 120.0,
             playfield_area: Area::FULL,
@@ -466,6 +477,11 @@ const KEY_NAMES: &[KeyCode] = &[
     KeyCode::Equal, KeyCode::PageUp, KeyCode::PageDown, KeyCode::Home, KeyCode::End, KeyCode::Insert, KeyCode::Delete,
 ];
 
+/// "Shift+Tab".
+pub fn interface_key_name((shift, k): (bool, KeyCode)) -> String {
+    format!("{}{}", if shift { "Shift+" } else { "" }, key_name(k))
+}
+
 pub fn key_name(k: KeyCode) -> String {
     let s = format!("{k:?}");
     s.strip_prefix("Key").or_else(|| s.strip_prefix("Digit")).map(str::to_owned).unwrap_or(s)
@@ -558,6 +574,18 @@ impl Config {
                 }
                 "touch_layout" => cfg.touch_layout = TouchLayout::parse(v).unwrap_or(cfg.touch_layout),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
+                "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
+                "interface_hidden" => cfg.interface_hidden = v == "true",
+                "interface_hides" => cfg.interface_hides = crate::hud::Parts::parse(v),
+                "interface_key" => {
+                    let (shift, name) = match v.strip_prefix("Shift+") {
+                        Some(rest) => (true, rest),
+                        None => (false, v),
+                    };
+                    if let Some(k) = parse_key(name) {
+                        cfg.interface_key = (shift, k);
+                    }
+                }
                 "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
                 "skin" => cfg.skin = v.to_string(),
                 "songs_folder" => cfg.songs_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
@@ -707,6 +735,13 @@ impl Config {
         let data = self.data_folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
         out.push_str(&format!(
             "# where replays, scores, videos, taiko-rs's Songs and Skins and caches are (empty = the usual places); move it from Settings\ndata_folder = {data}\n"
+        ));
+        out.push_str(&format!("# the mouse wheel resizes the playfield during play\nwheel_resizes_playfield = {}\n", self.wheel_resizes_playfield));
+        out.push_str(&format!(
+            "# the interface during play: hidden or not, what hiding it hides (score, accuracy, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
+            self.interface_hidden,
+            self.interface_hides.format(),
+            interface_key_name(self.interface_key)
         ));
         out.push_str(&self.video.config_lines());
         out.push_str(&format!(

@@ -19,29 +19,70 @@ pub struct Activity {
     pub start: u64,
 }
 
-/// Handle to the presence thread; dropping it closes the connection (Discord clears the status).
+/// What the presence thread is asked to do.
+enum Msg {
+    Show(Option<Activity>),
+    /// Clear the status and close the connection, then stop.
+    Quit,
+}
+
+/// Handle to the presence thread. Dropping it clears the status and closes the connection
+/// properly, waiting a moment for that: left to the socket closing as the game exits, some
+/// clients (and Windows' pipes) kept showing it.
 pub struct Presence {
-    tx: Sender<Option<Activity>>,
+    tx: Sender<Msg>,
+    stopped: mpsc::Receiver<()>,
+}
+
+impl Drop for Presence {
+    fn drop(&mut self) {
+        if self.tx.send(Msg::Quit).is_ok() {
+            let _ = self.stopped.recv_timeout(Duration::from_millis(1000));
+        }
+    }
 }
 
 impl Presence {
     pub fn start(app_id: String) -> Presence {
-        let (tx, rx) = mpsc::channel::<Option<Activity>>();
+        let (tx, rx) = mpsc::channel::<Msg>();
+        let (stopped_tx, stopped) = mpsc::channel();
         std::thread::spawn(move || {
+            // Told when this thread ends, however it does.
+            struct Stopped(Sender<()>);
+            impl Drop for Stopped {
+                fn drop(&mut self) {
+                    let _ = self.0.send(());
+                }
+            }
+            let _stopped = Stopped(stopped_tx);
             let mut want: Option<Activity> = None;
             // What Discord shows now (None = nothing sent on this connection yet).
             let mut shown: Option<Option<Activity>> = None;
             let mut conn: Option<Conn> = None;
             let mut next_try = Instant::now();
             let mut last_send: Option<Instant> = None;
+            let mut quit = false;
             loop {
                 match rx.recv_timeout(Duration::from_millis(500)) {
-                    Ok(a) => want = a,
+                    Ok(Msg::Show(a)) => want = a,
+                    Ok(Msg::Quit) | Err(RecvTimeoutError::Disconnected) => quit = true,
                     Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => return,
                 }
-                while let Ok(a) = rx.try_recv() {
-                    want = a;
+                while let Ok(m) = rx.try_recv() {
+                    match m {
+                        Msg::Show(a) => want = a,
+                        Msg::Quit => quit = true,
+                    }
+                }
+                if quit {
+                    // Nothing shown, then a goodbye: the status goes at once.
+                    if let Some(c) = &mut conn {
+                        if shown.as_ref().is_some_and(|s| s.is_some()) {
+                            let _ = c.set(None);
+                        }
+                        c.close();
+                    }
+                    return;
                 }
                 if conn.is_none() && Instant::now() >= next_try {
                     next_try = Instant::now() + Duration::from_secs(15);
@@ -60,11 +101,11 @@ impl Presence {
                 }
             }
         });
-        Presence { tx }
+        Presence { tx, stopped }
     }
 
     pub fn set(&self, activity: Option<Activity>) {
-        let _ = self.tx.send(activity);
+        let _ = self.tx.send(Msg::Show(activity));
     }
 }
 
@@ -146,6 +187,12 @@ impl Conn {
         self.recv().map(|_| ())
     }
 
+    /// Says goodbye (opcode 2), so Discord drops the status right away rather than when it
+    /// notices the socket closed.
+    fn close(&mut self) {
+        let _ = self.send(2, &serde_json::json!({}));
+    }
+
     /// One frame: opcode, payload length (both little-endian u32), JSON.
     fn send(&mut self, op: u32, v: &serde_json::Value) -> std::io::Result<()> {
         let body = v.to_string();
@@ -212,15 +259,22 @@ mod tests {
             c.send(1, &serde_json::json!({ "cmd": "DISPATCH", "evt": "READY" })).unwrap();
             let (_, set) = c.recv().unwrap();
             c.send(1, &serde_json::json!({ "cmd": "SET_ACTIVITY", "evt": null })).unwrap();
-            set
+            // Leaving: the status cleared, then a goodbye (opcode 2, which `recv` reports).
+            let (_, cleared) = c.recv().unwrap();
+            c.send(1, &serde_json::json!({ "cmd": "SET_ACTIVITY", "evt": null })).unwrap();
+            (set, cleared, c.recv().is_err())
         });
         let s = Stream::connect(&path).unwrap();
         let mut c = Conn { s, nonce: 0 };
         c.send(0, &serde_json::json!({ "v": 1, "client_id": "123" })).unwrap();
         assert!(c.recv().unwrap().1.contains("READY"));
         c.set(Some(&Activity { details: "Artist - Title [Oni]".into(), state: "Playing".into(), start: 5 })).unwrap();
-        let set = server.join().unwrap();
+        c.set(None).unwrap();
+        c.close();
+        let (set, cleared, goodbye) = server.join().unwrap();
         assert!(set.contains("SET_ACTIVITY") && set.contains("Artist - Title [Oni]") && set.contains("\"start\":5"));
+        assert!(cleared.contains("\"activity\":null"), "{cleared}");
+        assert!(goodbye);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

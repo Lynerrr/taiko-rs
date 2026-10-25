@@ -54,6 +54,7 @@ Settings → Updates.
 | `` ` `` / `Ctrl+R` | restart | `[` `]` | speed −/+ |
 | `Space` | skip intro | `F3` `F4` | scroll speed |
 | `Tab` | songs ⇄ settings | `F9` | friends & chat |
+| `Shift+Tab` | hide the interface in a song | `Ctrl+C` `Ctrl+V` | copy · paste |
 
 Everything is clickable too. The drum keys can be rebound in Settings → Input, and on touch
 screens the screen becomes four drum columns.

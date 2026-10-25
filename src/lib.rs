@@ -8,6 +8,7 @@ mod beatmap;
 mod browse;
 mod calibrate;
 mod clock;
+mod clipboard;
 mod config;
 mod cursor;
 mod debug;
@@ -25,6 +26,7 @@ mod settings_tests;
 mod library;
 mod logo;
 mod mapinfo;
+mod hud;
 mod mods;
 mod multiverse;
 mod multiplayer;
@@ -263,6 +265,8 @@ struct State {
     focused: bool,
     /// The right button is held on song select (scrolling through the list).
     right_scroll: bool,
+    /// The song list's scroll bar is held.
+    scrollbar_drag: bool,
     /// Right button pressed on song select and not moved yet (virtual units, what's under it):
     /// released there it opens the row's menu; moved, it becomes right-click scrolling.
     right_press: Option<(f32, f32, Option<render::Hit>)>,
@@ -680,26 +684,6 @@ fn parse_number(text: &str) -> Option<f64> {
     }
     let num: String = t.chars().take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '+' | '-')).map(|c| if c == ',' { '.' } else { c }).collect();
     num.parse().ok().filter(|n: &f64| n.is_finite())
-}
-
-/// The clipboard's text, from the system's own tool (there is no clipboard library here).
-fn paste() -> Option<String> {
-    use std::process::{Command, Stdio};
-    let tries: &[(&str, &[&str])] = if cfg!(windows) {
-        &[("powershell", &["-NoProfile", "-Command", "Get-Clipboard -Raw"])]
-    } else if cfg!(target_os = "macos") {
-        &[("pbpaste", &[])]
-    } else {
-        &[("wl-paste", &["--no-newline"]), ("xclip", &["-o", "-selection", "clipboard"]), ("xsel", &["-ob"])]
-    };
-    tries.iter().find_map(|(cmd, args)| {
-        let mut c = Command::new(cmd);
-        c.args(*args).stdin(Stdio::null()).stderr(Stdio::null());
-        #[cfg(windows)]
-        std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000);
-        let out = c.output().ok().filter(|o| o.status.success())?;
-        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    })
 }
 
 /// What to scan without arguments: the Songs folder (picked in settings, else osu!'s), plus the
@@ -1311,6 +1295,7 @@ impl State {
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
             Item::TouchLayout => c.touch_layout.name().into(),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
+            Item::WheelResize => on(c.wheel_resizes_playfield),
             Item::KiaiEffects => on(c.kiai_effects),
             Item::HideGreat => on(c.hide_great),
             Item::DiscordPresence => on(c.discord_presence),
@@ -1385,6 +1370,12 @@ impl State {
             }
             Item::VsyncTune => format!("{:+.0} ms", c.vsync_tune_ms),
             Item::VsyncCalibrate => "Enter to start".into(),
+            Item::Interface if c.interface_hidden => format!("hidden ({})", config::interface_key_name(c.interface_key)),
+            Item::Interface => "shown".into(),
+            Item::InterfaceHides if c.interface_hides == hud::Parts::ALL => "everything".into(),
+            Item::InterfaceHides if c.interface_hides == hud::Parts::NONE => "nothing".into(),
+            Item::InterfaceHides => format!("{} of {}", c.interface_hides.len(), hud::Part::ALL.len()),
+            Item::InterfaceKey => config::interface_key_name(c.interface_key),
             Item::ResumeDelay if c.resume_delay_ms <= 0.0 => "off".into(),
             Item::ResumeDelay => format!("{:.2} s", c.resume_delay_ms / 1000.0),
             Item::PlayfieldArea => c.playfield_area.describe(),
@@ -1419,10 +1410,13 @@ impl State {
                 self.set_update_channel(channel);
                 return;
             }
-            Item::Key(_) | Item::PresetKey(_) => {
+            Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey => {
                 self.settings_ui.binding = Some(item);
                 return;
             }
+            Item::Interface => self.cfg.interface_hidden = !self.cfg.interface_hidden,
+            // Opens its list on Enter.
+            Item::InterfaceHides => return,
             Item::TouchLayout => self.cfg.touch_layout = self.cfg.touch_layout.step(dir),
             Item::Accent => {
                 let n = render::ACCENTS.len() as i32;
@@ -1442,6 +1436,7 @@ impl State {
                 self.cfg.note_colours = if item == Item::DonColour { multiverse::Colours::own(turn(don), kat) } else { multiverse::Colours::own(don, turn(kat)) };
             }
             Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
+            Item::WheelResize => self.cfg.wheel_resizes_playfield = !self.cfg.wheel_resizes_playfield,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
@@ -1609,6 +1604,10 @@ impl State {
                 let current = sizes.iter().position(|&s| s == now && !self.fullscreen).map(|i| i + 1);
                 (names, current, format!("screen {}x{}", self.monitor_size.0, self.monitor_size.1))
             }
+            Item::InterfaceHides => {
+                let names = hud::Part::ALL.iter().map(|&p| format!("{}  {}", if c.interface_hides.has(p) { "[x]" } else { "[ ]" }, p.label())).collect();
+                (names, None, "hidden when toggled off".into())
+            }
             Item::NoteColours => {
                 let own = c.note_colours.custom;
                 let names = multiverse::PALETTES.iter().map(|p| p.0.to_string()).chain(std::iter::once(format!("custom  #{:06x} / #{:06x}", own[0], own[1]))).collect();
@@ -1656,6 +1655,18 @@ impl State {
             Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
             Item::Accent => self.cfg.accent = render::ACCENTS[i].1,
             Item::NoteColours => self.cfg.note_colours.palette = i,
+            Item::InterfaceHides => {
+                // A tick on or off; the list stays open there.
+                if let Some(&p) = hud::Part::ALL.get(i) {
+                    self.cfg.interface_hides.toggle(p);
+                }
+                self.cfg.save();
+                self.open_choices(Item::InterfaceHides);
+                if let Some(ch) = &mut self.settings_ui.choices {
+                    ch.cursor = i;
+                }
+                return;
+            }
             Item::WindowSize if i == 0 => {
                 self.start_edit(Item::WindowSize);
                 return;
@@ -1752,11 +1763,6 @@ impl State {
                 }
             }
             KeyCode::Backspace => edit.backspace(),
-            KeyCode::KeyV if ctrl => {
-                if let Some(clip) = paste() {
-                    edit.type_text(&clip, max);
-                }
-            }
             _ if ctrl => {}
             _ => {
                 if let Some(text) = text {
@@ -2206,8 +2212,24 @@ impl State {
             return;
         }
         if let Some(item) = self.settings_ui.binding.take() {
+            let modifier = matches!(
+                code,
+                KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::ControlLeft | KeyCode::ControlRight | KeyCode::AltLeft | KeyCode::AltRight | KeyCode::SuperLeft | KeyCode::SuperRight
+            );
+            if item == Item::InterfaceKey && modifier {
+                // Shift is held for the key to come.
+                self.settings_ui.binding = Some(item);
+                return;
+            }
             if code != KeyCode::Escape {
                 match item {
+                    Item::InterfaceKey => {
+                        if self.cfg.keys.contains(&code) && !self.modifiers_shift {
+                            self.toast(format!("{} is a drum key", config::key_name(code)));
+                            return;
+                        }
+                        self.cfg.interface_key = (self.modifiers_shift, code);
+                    }
                     Item::Key(slot) => {
                         if self.cfg.preset_keys.contains(&code) {
                             self.toast(format!("{} is a playfield preset key", config::key_name(code)));
@@ -2913,7 +2935,7 @@ impl State {
                 return;
             }
         }
-        if self.area_editable() {
+        if self.area_editable() && (self.cfg.wheel_resizes_playfield || matches!(self.scene, Scene::LayoutEdit { .. })) {
             self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
             self.cfg.save();
             let text = format!("playfield: {}", self.cfg.playfield_area.describe());
@@ -3041,6 +3063,14 @@ impl State {
                 self.select.drag_to(dy);
                 return CursorIcon::NsResize;
             }
+        }
+        if self.scrollbar_drag {
+            if matches!(self.scene, Scene::Select) {
+                let (_, vy) = self.mouse_virtual();
+                self.select.scroll_to(vy, &self.library);
+                return CursorIcon::NsResize;
+            }
+            self.scrollbar_drag = false;
         }
         if self.right_scroll {
             if matches!(self.scene, Scene::Select) {
@@ -3302,6 +3332,7 @@ impl State {
             return;
         }
         if !pressed {
+            self.scrollbar_drag = false;
             if let Some(d) = self.list_drag.take() {
                 if d.moved {
                     self.select.drag_end(&self.library);
@@ -3323,6 +3354,11 @@ impl State {
                 return;
             }
             // A row acts on release, unless the press turns into dragging the list.
+            if let (Scene::Select, Some(render::Hit::SongScrollbar)) = (&self.scene, hit) {
+                self.scrollbar_drag = true;
+                self.select.scroll_to(vy, &self.library);
+                return;
+            }
             if let (Scene::Select, Some(h @ (render::Hit::SongRow(_) | render::Hit::SongHeader(_)))) = (&self.scene, hit) {
                 self.list_drag = Some(ListDrag { from_y: vy, hit: h, moved: false });
                 return;
@@ -3932,6 +3968,30 @@ impl State {
     }
 
     /// Tab in play: hides (or shows again) the offset / UR line.
+    /// Somewhere text can be typed now (Ctrl+V pastes there).
+    fn takes_text(&self) -> bool {
+        self.social.open
+            || self.settings_ui.editing.is_some()
+            || self.universe_setup.as_ref().is_some_and(|u| u.typing.is_some())
+            || (self.mod_select.is_none() && matches!(self.scene, Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby))
+    }
+
+    /// What Ctrl+C copies here: the text being typed, else the map or set picked.
+    fn copy_text(&self) -> Option<String> {
+        if let Some(e) = &self.settings_ui.editing {
+            return Some(e.text.clone()).filter(|t| !t.is_empty());
+        }
+        if self.social.open {
+            return Some(self.social.input.clone()).filter(|t| !t.is_empty());
+        }
+        match &self.scene {
+            Scene::Select if !self.select.filter.is_empty() && self.select.selected().is_none() => Some(self.select.filter.clone()),
+            Scene::Select => self.select.selected().and_then(|i| self.library.get(i)).map(Entry::label),
+            Scene::Download => self.browse.selected().map(|s| format!("{} - {}  https://osu.ppy.sh/beatmapsets/{}", s.artist, s.title, s.id)),
+            _ => None,
+        }
+    }
+
     fn toggle_map_info(&mut self) {
         self.cfg.show_map_info = !self.cfg.show_map_info;
         self.cfg.save();
@@ -4634,6 +4694,31 @@ impl State {
             }
             return;
         }
+        // Ctrl+V: the clipboard's text, typed into whatever takes text here.
+        if self.modifiers_ctrl && code == KeyCode::KeyV && self.takes_text() {
+            if !repeat {
+                let text = clipboard::get().map(|t| clipboard::one_line(&t)).unwrap_or_default();
+                if !text.is_empty() {
+                    self.modifiers_ctrl = false;
+                    self.key(KeyCode::KeyV, false, Some(&text), at, window);
+                    self.modifiers_ctrl = true;
+                }
+            }
+            return;
+        }
+        // Ctrl+C: what's being typed, else what's picked.
+        if self.modifiers_ctrl
+            && code == KeyCode::KeyC
+            && !repeat
+            && let Some(text) = self.copy_text()
+        {
+            if clipboard::set(&text) {
+                self.toast(format!("copied: {text}"));
+            } else {
+                self.toast("no clipboard to copy to".into());
+            }
+            return;
+        }
         // The friends overlay: F9 anywhere outside songs; while open it takes the keyboard
         // (function keys still work).
         if code == KeyCode::F9 && !repeat {
@@ -4683,6 +4768,11 @@ impl State {
             if !repeat || !matches!(code, KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape) {
                 self.edit_key(code, text);
             }
+            return;
+        }
+        if !repeat && self.in_song() && self.settings_ui.binding.is_none() && (self.modifiers_shift, code) == self.cfg.interface_key && !(self.cfg.keys.contains(&code) && !self.modifiers_shift) {
+            self.cfg.interface_hidden = !self.cfg.interface_hidden;
+            self.cfg.save();
             return;
         }
         if self.settings_ui.binding.is_some() && matches!(self.scene, Scene::Settings { .. }) {
@@ -4851,6 +4941,10 @@ impl State {
             Scene::Select if self.library.is_empty() && self.scan.is_none() && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) && !cfg!(target_os = "android") => {
                 self.browse_songs_folder();
             }
+            Scene::Select if self.modifiers_ctrl && code == KeyCode::Backspace => {
+                self.select.filter.clear();
+                self.select.refilter(&self.library);
+            }
             Scene::Select => match self.select.key(code, &self.library) {
                 SelectAction::Play(i) if self.picking_lobby_map => self.pick_lobby_map(i),
                 SelectAction::Play(i) => self.start_loading(i),
@@ -4922,6 +5016,8 @@ impl State {
         // Notes are drawn this far ahead: the player's visual offset and, with vsync, the time
         // until the frame is on screen.
         let visual_offset = self.cfg.visual_offset_ms + self.vsync_lead() + self.pace_shift_ms;
+        // The interface toggle: what it hides, while it's off.
+        let hidden = if self.cfg.interface_hidden { self.cfg.interface_hides } else { hud::Parts::NONE };
         let dt = now.duration_since(self.stats.last).as_secs_f64() * 1000.0;
         self.stats.last = now;
         self.stats.frames += 1;
@@ -4969,6 +5065,7 @@ impl State {
             let in_menu = in_menu && self.splash.is_none();
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.play_offset, rate);
             self.stars.poll();
+            self.stars.set_mods(self.cfg.mods);
             let play_rate = self.play_speed().0;
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
                 self.stars.request(i, &self.library[i].path, play_rate);
@@ -5125,7 +5222,7 @@ impl State {
                     String::new()
                 };
                 let (stars, rate) = (&self.stars, self.play_speed().0);
-                self.select.instant = self.right_scroll;
+                self.select.instant = self.right_scroll || self.scrollbar_drag;
                 self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate));
                 let x = 24.0 + Select::list_width(canvas.width) + 12.0;
                 let pw = canvas.width - x - 24.0;
@@ -5207,6 +5304,7 @@ impl State {
                 // Offset advice is for live play (and its line would sit on the replay timeline).
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
                 game.kiai_effects = self.cfg.kiai_effects;
+                game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.visual_offset = visual_offset;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
@@ -5384,6 +5482,7 @@ impl State {
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
                 game.kiai_effects = self.cfg.kiai_effects;
+                game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.visual_offset = visual_offset;
                 let live = multiplayer::live_from(game);
@@ -5467,6 +5566,7 @@ impl State {
                     // Only the player watched (or the first one) is heard.
                     g.mute_hits = v.focus.unwrap_or(0) != k;
                     g.kiai_effects = self.cfg.kiai_effects;
+                    g.hidden = hidden;
                     g.update(now, self.audio.as_ref(), self.play_offset);
                 }
                 match v.focus {
@@ -5487,6 +5587,7 @@ impl State {
                 match &mut v.game {
                     Some(g) => {
                         g.kiai_effects = self.cfg.kiai_effects;
+                        g.hidden = hidden;
                         g.update(now, self.audio.as_ref(), self.play_offset);
                         draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                             g.draw_playfield(c, scroll);
@@ -5994,6 +6095,7 @@ impl State {
                     self.start_download(set);
                 }
             }
+            KeyCode::Backspace if self.modifiers_ctrl => self.browse.clear(),
             KeyCode::Backspace => self.browse.backspace(),
             KeyCode::Escape if !self.browse.query.is_empty() => self.browse.clear(),
             KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
@@ -6121,6 +6223,8 @@ impl State {
             Hit::PickRow(i) => self.select.pick_collection(i, &self.library),
             Hit::ChoiceRow(i) => self.pick_choice(i),
             Hit::SongsFolder => self.browse_songs_folder(),
+            // Taken when pressed (`mouse_button`).
+            Hit::SongScrollbar => {}
             Hit::DlRow(i) if i == self.browse.cursor => self.download_key(KeyCode::Enter, None, window),
             Hit::DlRow(i) => self.browse.cursor = i,
             Hit::DlGet(i) => {
@@ -6761,6 +6865,9 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         lock(&self.state).quit = true;
+        // The Discord status goes with the game (dropping it clears it and says goodbye).
+        let discord = lock(&self.state).discord.take();
+        drop(discord);
         if let Some(t) = self.render_thread.take() {
             // A vsync'd present can block indefinitely while the window is minimised; don't let
             // that keep the game from closing.
@@ -6843,6 +6950,7 @@ impl State {
             sprites_upload: None,
             focused: true,
             right_scroll: false,
+            scrollbar_drag: false,
             right_press: None,
             list_drag: None,
             focus_seen: false,
