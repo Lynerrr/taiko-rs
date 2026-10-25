@@ -2404,8 +2404,12 @@ impl Game {
             for (thick, col) in [(LANE_H + 6.0, edge_col), (LANE_H, lane_col)] {
                 for k in 0..n {
                     let s = from + (k as f32 + 0.5) * PIECE;
-                    // Longer by how much the outside of a bend is longer than the middle.
-                    let turn = (geo.at(s + PIECE / 2.0, 0.0).2 - geo.at(s - PIECE / 2.0, 0.0).2).abs();
+                    // Longer by how much the outside of a bend is longer than the middle, by the
+                    // sharper turn to either neighbour: where a corner starts or ends (Zigzag's
+                    // are tight) the turn within the piece is less than to the next one, and the
+                    // outer edge tore there.
+                    let a = |s: f32| geo.at(s, 0.0).2;
+                    let turn = (a(s + PIECE) - a(s)).abs().max((a(s) - a(s - PIECE)).abs());
                     lane_rect(c, geo.at(s, 0.0), PIECE + 1.0 + turn * thick / 2.0, thick, col);
                 }
             }
