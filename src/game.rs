@@ -23,6 +23,7 @@ use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
 use crate::mods::{Mod, Mods, Speed};
+use crate::multiverse::{self, Shape as NoteShape, Universe};
 use crate::render::{accent, progress, rgba, Canvas, Hit, Shape, Sprite, VIRTUAL_HEIGHT};
 
 /// The drum on the left: lazer's input drum (180 of a 768-tall screen, in our 480 units).
@@ -323,7 +324,7 @@ const FIELD_W: f32 = 0.78;
 /// Multiverse: a playfield's size out of focus and in it.
 const FIELD_ZOOM: (f32, f32) = (0.36, 0.6);
 /// Multiverse: the playfield that has the focus first (near the middle).
-const FIRST_FOCUS: usize = 4;
+pub(crate) const FIRST_FOCUS: usize = 4;
 /// Multiverse: the colour of the focus (its halo, frame and burst).
 const FOCUS_COL: u32 = 0xbfe9ff;
 /// Multiverse: how long (ms) the burst lasts as a playfield takes the focus.
@@ -740,7 +741,7 @@ fn tint(base: [f32; 4], over: u32, a: f32) -> [f32; 4] {
 }
 
 /// `a` mixed `t` of the way to `b`.
-fn mix(a: u32, b: u32, t: f32) -> u32 {
+pub(crate) fn mix(a: u32, b: u32, t: f32) -> u32 {
     let ch = |hex: u32, s: u32| ((hex >> s) & 0xff) as f32;
     [16, 8, 0].into_iter().fold(0, |out, s| out | (((ch(a, s) + (ch(b, s) - ch(a, s)) * t).round() as u32) << s))
 }
@@ -2099,7 +2100,7 @@ impl Game {
         if self.mods.has(Mod::Multiverse) {
             self.draw_multiverse(c, scroll_speed);
         } else {
-            self.draw_field(c, scroll_speed, Focus::FULL);
+            self.draw_field(c, scroll_speed, Focus::FULL, &Universe::CLASSIC);
         }
     }
 
@@ -2163,13 +2164,18 @@ impl Game {
         // Where each drum ends up on screen, for the sparks.
         let drum_x = if self.mods.has(Mod::Mirror) { inner - HIT_X } else { HIT_X };
         let mut drums = [(0.0f32, 0.0f32); FIELD_COUNT];
+        let universes = multiverse::get();
+        let base = self.mods;
         for i in order {
             let l = looks[i];
             let (left, mid, lean) = HOMES[i];
             let start = c.shapes.len();
-            // Drawn at its size in focus, so it reaches as far ahead in time whatever its zoom.
+            // Drawn at its size in focus, so it reaches as far ahead in time whatever its zoom,
+            // with its universe's mods on top of the play's for just as long.
             c.width = inner;
-            self.draw_field(c, scroll_speed, l);
+            self.mods = base.plus(universes[i].mods);
+            self.draw_field(c, scroll_speed, l, &universes[i]);
+            self.mods = base;
             c.width = w;
             // Out of focus it circles its home, each its own way round and at its own pace,
             // leaning and rocking. Called or in focus it parks where it fits on screen, holds
@@ -2209,9 +2215,10 @@ impl Game {
         }
     }
 
-    /// One playfield (see `draw_playfield`). Multiverse's are windows, framed and lit by `look`;
-    /// out of colour, dons and kats look alike.
-    fn draw_field(&mut self, c: &mut Canvas, scroll_speed: f64, look: Focus) {
+    /// One playfield (see `draw_playfield`). Multiverse's are windows, framed and lit by `look`,
+    /// each in its universe's colours, note shape and speed; out of colour, dons and kats look
+    /// alike.
+    fn draw_field(&mut self, c: &mut Canvas, scroll_speed: f64, look: Focus, uni: &Universe) {
         use std::f32::consts::{PI, TAU};
         // Notes, barlines and the beat pulse are drawn at `vt`, where they'll be once the frame is
         // on screen; animations of what already happened (hits, presses) run on `t`.
@@ -2238,7 +2245,7 @@ impl Game {
         let portal = self.portal_at(vt, lane_len);
         let scroll = Scroll {
             t: vt,
-            speed: osu_speed_scale(w) * scroll_speed * mods.scroll() * lane_stretch(rail.is_some(), lane_len, w),
+            speed: osu_speed_scale(w) * scroll_speed * uni.speed() * mods.scroll() * lane_stretch(rail.is_some(), lane_len, w),
             lane: lane_len as f64,
             mods,
             warp,
@@ -2353,15 +2360,14 @@ impl Game {
             }
             let r = if n.big { BIG_R } else { NOTE_R } * size;
             let first = c.shapes.len();
-            if !skin_note(c, x, y, r, n.big, col, a) {
-                c.circle(x, y, r + 2.0, rgba(0x000000, 0.35 * a), rgba(0x000000, 0.0), 0.0);
-                c.circle(x, y, r, rgba(col, a), rgba(WHITE, a), r * 0.1);
+            if uni.shape != NoteShape::Round || !skin_note(c, x, y, r, n.big, col, a) {
+                multiverse::note(c, uni.shape, x, y, r, col, a);
             }
             if squish != 1.0 {
                 c.stretch_since(first, [x, y], squish, 1.0 / squish);
             }
         };
-        let (don, kat) = if mods.has(Mod::Colorless) { (GREY, GREY) } else { (mix(GREY, DON, look.colour), mix(GREY, KAT, look.colour)) };
+        let (don, kat) = if mods.has(Mod::Colorless) { (GREY, GREY) } else { (mix(uni.idle(), uni.don(), look.colour), mix(uni.idle(), uni.kat(), look.colour)) };
         // Text is drawn last, after Mirror flips the rest (letters must stay readable).
         let mut texts: Vec<(f32, f32, f32, [f32; 4], String)> = Vec::new();
 
@@ -2512,7 +2518,9 @@ impl Game {
                             if p < 1.0 {
                                 let y = LANE_Y - 80.0 * p * (2.0 - p);
                                 let r = r * (1.0 + 0.15 * p);
-                                if !skin_note(c, HIT_X, y, r, n.big, col, 1.0 - p) {
+                                if uni.shape != NoteShape::Round {
+                                    multiverse::note(c, uni.shape, HIT_X, y, r, col, 1.0 - p);
+                                } else if !skin_note(c, HIT_X, y, r, n.big, col, 1.0 - p) {
                                     c.circle(HIT_X, y, r, rgba(col, 1.0 - p), rgba(WHITE, 1.0 - p), 3.0);
                                 }
                             }
@@ -2629,11 +2637,12 @@ impl Game {
         let drum_x = PANEL_W / 2.0;
         let flash = |at: f64| ((1.0 - (t - at) / 130.0).clamp(0.0, 1.0) * 0.95) as f32;
         c.circle(drum_x, LANE_Y, 46.0, rgba(0x2f2f3e, 1.0), rgba(0x4a4a60, 1.0), 2.0);
-        c.half_circle(drum_x, LANE_Y, 46.0, 1, rgba(KAT, flash(self.presses[0])), rgba(KAT, 0.0), 0.0);
-        c.half_circle(drum_x, LANE_Y, 46.0, 2, rgba(KAT, flash(self.presses[3])), rgba(KAT, 0.0), 0.0);
+        let (drum_don, drum_kat) = (uni.don(), uni.kat());
+        c.half_circle(drum_x, LANE_Y, 46.0, 1, rgba(drum_kat, flash(self.presses[0])), rgba(drum_kat, 0.0), 0.0);
+        c.half_circle(drum_x, LANE_Y, 46.0, 2, rgba(drum_kat, flash(self.presses[3])), rgba(drum_kat, 0.0), 0.0);
         c.circle(drum_x, LANE_Y, 32.0, rgba(0xe9dcc3, 1.0), rgba(0x8a7b63, 1.0), 2.0);
-        c.half_circle(drum_x, LANE_Y, 32.0, 1, rgba(DON, flash(self.presses[1])), rgba(DON, 0.0), 0.0);
-        c.half_circle(drum_x, LANE_Y, 32.0, 2, rgba(DON, flash(self.presses[2])), rgba(DON, 0.0), 0.0);
+        c.half_circle(drum_x, LANE_Y, 32.0, 1, rgba(drum_don, flash(self.presses[1])), rgba(drum_don, 0.0), 0.0);
+        c.half_circle(drum_x, LANE_Y, 32.0, 2, rgba(drum_don, flash(self.presses[2])), rgba(drum_don, 0.0), 0.0);
         if self.stats.combo >= 2 {
             let s = self.stats.combo.to_string();
             let size = if s.len() > 3 { 12.0 } else { 16.0 };
@@ -3484,6 +3493,36 @@ mod tests {
         assert_eq!(flip_flop(bars, bars[3].time), 1.0);
         assert_eq!(flip_flop(bars, bars[9].time), -1.0);
         assert!(flip_flop(bars, bars[8].time + 175.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn multiverse_universes_draw_with_their_own_mods_only_while_drawn() {
+        multiverse::set(multiverse::defaults());
+        for t in [2000.0, 3600.0, 9000.0] {
+            let mut g = kiai_game("MV,HD");
+            g.set_time(t);
+            let mut c = Canvas { width: 853.3, ..Default::default() };
+            g.draw_playfield(&mut c, 1.0);
+            assert_eq!(g.mods, Mods::parse("MV,HD"));
+            assert!(!c.shapes.is_empty());
+        }
+        // Sudden in a universe would hide every note with the play's Hidden: it's left out.
+        assert_eq!(Mods::parse("HD").plus(Mods::parse("SU,SK")), Mods::parse("HD,SK"));
+    }
+
+    #[test]
+    fn a_faster_universe_shows_its_notes_further_out() {
+        let mut g = kiai_game("");
+        g.set_time(1000.0);
+        let mut far = Vec::new();
+        for speed in [2, 4] {
+            let uni = Universe { speed, ..Universe::CLASSIC };
+            let mut c = Canvas { width: 853.3, ..Default::default() };
+            g.draw_field(&mut c, 1.0, Focus::FULL, &uni);
+            far.push(g.visible.len());
+        }
+        // Faster notes cross the lane sooner: fewer of the map's are on it at once.
+        assert!(far[1] < far[0], "notes on the lane at 1x and 1.5x: {far:?}");
     }
 
     #[test]

@@ -947,7 +947,7 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
     let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
     c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
     c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "MODS");
-    c.text(px + 70.0, py + 16.0, 6.0, rgba(0x6f6f86, 1.0), "arrows + Space toggle   R shuffles   Backspace clears   F1 / Esc closes");
+    c.text(px + 70.0, py + 16.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit(6.0, pw - 180.0, "arrows + Space toggle   R shuffles   Backspace clears   M Multiverse setup   F1 / Esc closes"));
     let mult = mods.multiplier();
     let rank = if mods.unranked() { "  (not saved)" } else { "" };
     c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &format!("score x{mult:.2}{rank}"));
@@ -983,10 +983,12 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
     c.text(px + 16.0, dy + 13.0, 7.0, rgba(0x9a9ab0, 1.0), shown.description());
     let bw = 60.0;
     let active = if mods.is_empty() { "none".to_string() } else { mods.iter().map(|m| m.acronym()).collect::<Vec<_>>().join(" ") };
-    c.text(px + 16.0, py + ph - 16.0, 7.0, rgba(0xc8c8d8, 1.0), &Canvas::fit(7.0, pw - 3.0 * bw - 58.0, &format!("on: {active}")));
+    c.text(px + 16.0, py + ph - 16.0, 7.0, rgba(0xc8c8d8, 1.0), &Canvas::fit(7.0, pw - 4.0 * bw - 64.0, &format!("on: {active}")));
     c.button(px + pw - bw - 12.0, py + ph - 24.0, bw, 16.0, "Close", 7.0, Hit::Key(KeyCode::F1), true);
     c.button(px + pw - 2.0 * bw - 18.0, py + ph - 24.0, bw, 16.0, "Clear", 7.0, Hit::Key(KeyCode::Backspace), false);
     c.button(px + pw - 3.0 * bw - 24.0, py + ph - 24.0, bw, 16.0, "Shuffle", 7.0, Hit::Key(KeyCode::KeyR), false);
+    // Multiverse's universes: their own colours, shapes, speeds and mods.
+    c.button(px + pw - 4.0 * bw - 30.0, py + ph - 24.0, bw, 16.0, "Multiverse", 7.0, Hit::Key(KeyCode::KeyM), mods.has(crate::mods::Mod::Multiverse));
 }
 
 /// Maps hidden from the song list in taiko-rs only (osu! and the Songs folder are untouched):

@@ -190,6 +190,9 @@ fn assert_every_screen_fits() {
 
     s.open_mod_select();
     check(&mut s, "mod select", &mut out);
+    s.universe_setup = Some(multiverse::Setup { row: 3, col: 7 });
+    check(&mut s, "multiverse setup", &mut out);
+    s.universe_setup = None;
     s.mod_select = None;
 
     s.open_collections();

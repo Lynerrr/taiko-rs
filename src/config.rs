@@ -167,6 +167,8 @@ pub struct Config {
     pub skin: String,
     /// The Songs folder picked in settings, scanned instead of looking for osu! installs.
     pub songs_folder: Option<PathBuf>,
+    /// Multiverse's universes: each playfield's colours, note shape, speed and mods.
+    pub universes: [crate::multiverse::Universe; crate::multiverse::COUNT],
     /// How replay videos are exported.
     pub video: crate::video::Settings,
     pub songs: Vec<PathBuf>,
@@ -231,6 +233,7 @@ impl Default for Config {
             saved_presets: Vec::new(),
             skin: String::new(),
             songs_folder: None,
+            universes: crate::multiverse::defaults(),
             video: Default::default(),
             songs: Vec::new(),
         }
@@ -391,6 +394,7 @@ impl Config {
                 "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
                 "skin" => cfg.skin = v.to_string(),
                 "songs_folder" => cfg.songs_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
+                "multiverse" => cfg.universes = crate::multiverse::parse(v),
                 k if k.starts_with("video_") => {
                     cfg.video.parse(k, v);
                 }
@@ -526,6 +530,10 @@ impl Config {
             self.online_server, self.online_user, self.online_token
         ));
         out.push_str(&self.video.config_lines());
+        out.push_str(&format!(
+            "# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (M in the mod select)\nmultiverse = {}\n",
+            crate::multiverse::format(&self.universes)
+        ));
         let folder = self.songs_folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
         out.push_str(&format!("# Songs folder to scan instead of finding osu!'s (empty = find it)\nsongs_folder = {folder}\n"));
         out.push_str("# extra song folders / .osz files, one per line\n");

@@ -352,7 +352,7 @@ impl Mod {
             Cracked => "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
             Crumble => "Hits knock pieces out of the lane, harder as the combo grows; a miss puts them back.",
             Portal => "Notes dive into one portal and come out of another; they move every 8 bars.",
-            Multiverse => "Eight playfields circle about; the next lights up, then takes the colour every 2 bars.",
+            Multiverse => "Eight playfields circle about, each with its own look and mods (M sets them up).",
         }
     }
 
@@ -485,6 +485,18 @@ impl Mods {
             }
             self.0 |= m.bit();
         }
+    }
+
+    /// `self` with `extra`'s mods added, but not those that clash with one of `self`'s (a
+    /// Multiverse universe's mods on top of the play's).
+    pub fn plus(self, extra: Mods) -> Mods {
+        let mut out = self;
+        for m in extra.iter() {
+            if !m.conflicts().iter().any(|&c| self.has(c)) {
+                out.0 |= m.bit();
+            }
+        }
+        out
     }
 
     /// From "HD,HR" (unknown acronyms are skipped, conflicts resolved in order).

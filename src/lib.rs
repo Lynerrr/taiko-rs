@@ -26,6 +26,7 @@ mod library;
 mod logo;
 mod mapinfo;
 mod mods;
+mod multiverse;
 mod multiplayer;
 mod net;
 mod osudb;
@@ -244,6 +245,8 @@ struct State {
     pending_mods: Mods,
     /// The mod select is open: the mod the keyboard is on (index into `mods::ALL`).
     mod_select: Option<usize>,
+    /// The Multiverse setup, over the mod select.
+    universe_setup: Option<multiverse::Setup>,
     /// Replay files of the leaderboard rows drawn this frame.
     leaderboard: Vec<PathBuf>,
     /// A video export in progress, and the editor's last message.
@@ -2930,7 +2933,13 @@ impl State {
             // Only the mod select's own chips and buttons; nothing under it.
             if pressed {
                 let (vx, vy) = self.mouse_virtual();
-                if let Some(hit @ (render::Hit::ModToggle(_) | render::Hit::Key(_))) = self.hit_at(vx, vy) {
+                let hit = self.hit_at(vx, vy);
+                let ours = if self.universe_setup.is_some() {
+                    matches!(hit, Some(render::Hit::UniverseCell(..) | render::Hit::Key(_)))
+                } else {
+                    matches!(hit, Some(render::Hit::ModToggle(_) | render::Hit::Key(_)))
+                };
+                if let Some(hit) = hit.filter(|_| ours) {
                     self.click(hit, window);
                 }
             }
@@ -3648,8 +3657,22 @@ impl State {
                 self.cfg.mods = Mods::shuffle(seed);
                 self.mods_changed();
             }
+            KeyCode::KeyM => self.universe_setup = Some(multiverse::Setup { row: game::FIRST_FOCUS, col: 0 }),
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
+        }
+    }
+
+    /// After a key or click in the Multiverse setup: the universes are saved and drawn with, or
+    /// it closes (back to the mod select).
+    fn universe_action(&mut self, action: multiverse::Action) {
+        match action {
+            multiverse::Action::Changed => {
+                multiverse::set(self.cfg.universes);
+                self.cfg.save();
+            }
+            multiverse::Action::Close => self.universe_setup = None,
+            multiverse::Action::None => {}
         }
     }
 
@@ -4369,6 +4392,13 @@ impl State {
             );
             if !(function_key && self.handle_global_key(code, window)) {
                 self.social_key(code, text);
+            }
+            return;
+        }
+        if let Some(setup) = &mut self.universe_setup {
+            if !repeat || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+                let action = setup.key(code, self.modifiers_shift, &mut self.cfg.universes, game::FIRST_FOCUS);
+                self.universe_action(action);
             }
             return;
         }
@@ -5312,6 +5342,9 @@ impl State {
         }
         if let Some(cur) = self.mod_select {
             ui::draw_mod_select(canvas, self.cfg.mods, cur);
+            if let Some(setup) = &self.universe_setup {
+                setup.draw(canvas, &self.cfg.universes, game::FIRST_FOCUS);
+            }
         }
         if self.settings_ui.dropdown.is_some() {
             let (groups, current, screen) = (self.preset_groups(), self.current_preset(), self.screen_size());
@@ -5833,6 +5866,12 @@ impl State {
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
                 self.toggle_mod(mods::ALL[i]);
+            }
+            Hit::UniverseCell(row, col) => {
+                self.universe_setup = Some(multiverse::Setup { row, col });
+                let dir = if self.modifiers_shift { -1 } else { 1 };
+                multiverse::Setup::change(&mut self.cfg.universes, row, col, dir);
+                self.universe_action(multiverse::Action::Changed);
             }
             Hit::SongMenu(k) => {
                 let action = self.select.menu_items(&self.library).get(k).map(|(_, a)| *a);
@@ -6433,6 +6472,7 @@ impl State {
             pending_replay: None,
             pending_mods: Mods::NONE,
             mod_select: None,
+            universe_setup: None,
             leaderboard: Vec::new(),
             export: None,
             video_status: String::new(),
@@ -6544,6 +6584,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 /// folders, .osz or a single .osu to play; empty = the usual song folders.
 fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEvent>) {
     library::set_songs_folder(cfg.songs_folder.clone());
+    multiverse::set(cfg.universes);
     let inputs = if args.is_empty() { song_inputs(&cfg) } else { args.clone() };
     let songs_dir = download_dir(&inputs);
     let songs_dirs_for_db: Vec<PathBuf> = inputs.iter().filter(|p| p.is_dir()).cloned().collect();

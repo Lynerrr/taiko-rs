@@ -36,9 +36,10 @@ Settings → Updates.
   WASAPI or AAudio with low latency.
 - **Your osu! library.** Taiko maps and osu!standard converts, lazer's conversion and hit windows,
   osu!'s star ratings, and collections and play history from osu!stable.
-- **71 mods.** osu!'s and lazer's mods, plus taiko-rs's own: scroll and SV experiments, visual
-  tricks, lanes bent into rails, a moving playfield. Press **R** in the mod select for a playable
-  random set.
+- **73 mods.** osu!'s and lazer's mods, plus taiko-rs's own: scroll and SV experiments, visual
+  tricks, lanes bent into rails, a moving playfield, and Multiverse's eight playfields, each with
+  its own note colours, shapes, speed and mods (**M** in the mod select sets them up). Press **R**
+  in the mod select for a playable random set.
 - **Online.** Lobbies on the taiko-rs server or direct P2P, live scoreboards, spectating, friends,
   chat, and watching friends' solo plays.
 - **Everything else.** osu! skins, map downloads from mirrors, local replays with video export,

@@ -1449,6 +1449,8 @@ pub enum Hit {
     PickRow(usize),
     /// A row of a setting's list of choices.
     ChoiceRow(usize),
+    /// Multiverse setup: a universe's (row) colours, shape, speed or a mod (column).
+    UniverseCell(usize, usize),
     /// Song select with no maps: choose the Songs folder.
     SongsFolder,
     /// A settings sidebar section.
