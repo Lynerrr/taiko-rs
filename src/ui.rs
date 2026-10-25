@@ -1060,7 +1060,7 @@ pub struct Hidden {
 
 impl Hidden {
     fn file() -> Option<std::path::PathBuf> {
-        crate::config::user_dir(false).map(|d| d.join("hidden.tsv"))
+        crate::config::data_dir().map(|d| d.join("hidden.tsv"))
     }
 
     /// Lines of `song<TAB>folder` or `map<TAB>file`.

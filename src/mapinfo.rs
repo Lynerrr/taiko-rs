@@ -28,7 +28,7 @@ pub struct MapInfo {
 }
 
 fn cache_path() -> Option<PathBuf> {
-    Some(crate::config::user_dir(true)?.join("mapinfo-v1.tsv"))
+    Some(crate::config::cache_dir()?.join("mapinfo-v1.tsv"))
 }
 
 /// (mtime, size, info) per path, as last saved.

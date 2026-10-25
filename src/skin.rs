@@ -10,14 +10,7 @@ use crate::render::{Atlas, Sprite, SPRITES};
 /// taiko-rs's own Skins folder, next to its Songs folder. `.osk` files dropped here are
 /// extracted into a folder of the same name.
 pub fn own_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let dir = crate::config::user_dir(false);
-    #[cfg(not(windows))]
-    let dir = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .map(|d| d.join("taiko-rs"));
-    Some(dir?.join("Skins"))
+    crate::config::own_dir("Skins")
 }
 
 /// Folders holding skins: osu!'s next to each Songs folder it has, then taiko-rs's own.
