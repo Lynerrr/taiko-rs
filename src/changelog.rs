@@ -220,8 +220,13 @@ fn commits(path: &str) -> Result<Vec<Change>, String> {
 }
 
 /// A commit as a change: its first line, and its "- " lines (continued by indented lines)
-/// without the trailers. None for merges.
+/// without the trailers. None for merges, and for what isn't for everyone: a `Changelog: skip`
+/// line, or a player's own secret.
 pub fn parse(message: &str, date: &str) -> Option<Change> {
+    let lower = message.to_ascii_lowercase();
+    if lower.lines().any(|l| l.trim() == "changelog: skip") || lower.contains("krokodil") {
+        return None;
+    }
     let mut lines = message.lines();
     let title = lines.next()?.trim().to_string();
     if title.is_empty() || title.starts_with("Merge ") {
@@ -257,6 +262,8 @@ mod tests {
         assert_eq!(c.date, "2026-10-26");
         assert_eq!(c.points, vec!["Live pp counter in the HUD".to_string(), "Results: the song plays on, back to the preview point".into()]);
         assert!(parse("Merge remote-tracking branch 'origin/x'", "2026-10-26").is_none());
+        assert!(parse("A quiet one\n\nChangelog: skip\n", "2026-10-26").is_none());
+        assert!(parse("Krokodil_Koban mode: something\n", "2026-10-26").is_none());
     }
 
     #[test]
