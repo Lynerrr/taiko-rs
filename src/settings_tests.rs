@@ -243,3 +243,18 @@ fn ticking_interface_parts_keeps_the_list_open() {
     assert_eq!(s.settings_ui.choices.as_ref().map(|c| c.cursor), Some(9));
     assert!(s.settings_ui.choices.as_ref().unwrap().names[9].starts_with("[ ]"));
 }
+
+#[test]
+fn a_maps_status_comes_from_the_mirror_else_osu_db() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // No set id: never submitted.
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("NOT SUBMITTED"));
+    s.library[0].meta.set_id = Some(2400428);
+    assert_eq!(s.map_status(0), None, "nothing known yet");
+    s.db_status.insert(s.library[0].path.clone(), 2);
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("PENDING"));
+    // The mirror can tell pending from graveyard.
+    s.set_status.insert(2400428, Some("graveyard".into()));
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("GRAVEYARD"));
+}

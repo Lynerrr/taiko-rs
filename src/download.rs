@@ -270,6 +270,30 @@ fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Op
     Err(errors.join("; "))
 }
 
+/// A set's status on osu! ("ranked", "loved", "graveyard"...), from the mirrors.
+pub fn set_status(set: u32) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct Set {
+        status: String,
+    }
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(8))).build().into();
+    let mut errors = Vec::new();
+    for base in ["https://osu.direct/api/v2/s/", "https://catboy.best/api/v2/s/"] {
+        let result = agent
+            .get(&format!("{base}{set}"))
+            .header("User-Agent", USER_AGENT)
+            .call()
+            .map_err(|e| e.to_string())
+            .and_then(|mut r| r.body_mut().read_to_string().map_err(|e| e.to_string()))
+            .and_then(|body| serde_json::from_str::<Set>(&body).map_err(|e| e.to_string()));
+        match result {
+            Ok(s) => return Ok(s.status),
+            Err(e) => errors.push(e),
+        }
+    }
+    Err(errors.join("; "))
+}
+
 /// Searches the mirrors for taiko sets matching `query` in `category`, ordered by `sort`
 /// (descending if `desc`). Categories spanning several statuses are fetched per status and
 /// merged.

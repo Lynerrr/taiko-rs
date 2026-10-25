@@ -282,6 +282,14 @@ struct State {
     /// Folders being scanned (where osu!.db / collection.db are looked for).
     song_dirs: Vec<PathBuf>,
     osudb_rx: Option<Receiver<Option<osudb::OsuDb>>>,
+    /// Maps' status from osu!.db (by path), and sets' from the mirrors (by set id; None while
+    /// asking or if they couldn't say).
+    db_status: std::collections::HashMap<PathBuf, u8>,
+    set_status: std::collections::HashMap<u32, Option<String>>,
+    set_status_tx: mpsc::Sender<(u32, Option<String>)>,
+    set_status_rx: Receiver<(u32, Option<String>)>,
+    /// The selected set and since when: asked about once the selection rests.
+    status_wait: Option<(u32, Instant)>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
     lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
     /// Which screen was drawn last and since when, for the fade between screens.
@@ -3868,6 +3876,11 @@ impl State {
             })
             .collect();
         let entry_of = |md5: &str| db.by_md5.get(md5).and_then(|m| index.get(&key(&m.folder, &m.file)).copied());
+        for m in db.by_md5.values() {
+            if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
+                self.db_status.insert(self.library[i].path.clone(), m.status);
+            }
+        }
         for m in db.by_md5.values().filter(|m| m.last_played > 0) {
             if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
                 let t = self.select.played.entry(self.library[i].path.clone()).or_insert(0);
@@ -3990,6 +4003,68 @@ impl State {
             Scene::Download => self.browse.selected().map(|s| format!("{} - {}  https://osu.ppy.sh/beatmapsets/{}", s.artist, s.title, s.id)),
             _ => None,
         }
+    }
+
+    /// The status on osu! of library map `i`, as (label, colour): the mirrors' when known,
+    /// else osu!.db's (which can't tell graveyard from pending).
+    fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
+        let e = self.library.get(i)?;
+        let Some(set) = e.meta.set_id else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
+        if let Some(Some(s)) = self.set_status.get(&set) {
+            return Some(match s.as_str() {
+                "ranked" => ("RANKED", 0xb3ff66),
+                "approved" => ("APPROVED", 0xb3ff66),
+                "qualified" => ("QUALIFIED", 0x66ccff),
+                "loved" => ("LOVED", 0xff66aa),
+                "pending" => ("PENDING", 0xffd966),
+                "wip" => ("WIP", 0xffd966),
+                "graveyard" => ("GRAVEYARD", 0x8a8aa0),
+                _ => return None,
+            });
+        }
+        Some(match self.db_status.get(&e.path)? {
+            4 => ("RANKED", 0xb3ff66),
+            5 => ("APPROVED", 0xb3ff66),
+            6 => ("QUALIFIED", 0x66ccff),
+            7 => ("LOVED", 0xff66aa),
+            2 => ("PENDING", 0xffd966),
+            1 => ("NOT SUBMITTED", 0x8a8aa0),
+            _ => return None,
+        })
+    }
+
+    /// Asks the mirrors for the selected set's status once the selection has rested a moment
+    /// (scrolling past sets asks about none of them), and takes in what they say.
+    fn poll_set_status(&mut self, now: Instant) {
+        while let Ok((set, status)) = self.set_status_rx.try_recv() {
+            self.set_status.insert(set, status);
+        }
+        let set = self.select.selected().and_then(|i| self.library.get(i)).and_then(|e| e.meta.set_id);
+        let Some(set) = set.filter(|s| !self.set_status.contains_key(s)) else {
+            self.status_wait = None;
+            return;
+        };
+        match self.status_wait {
+            Some((s, since)) if s == set => {
+                if now.saturating_duration_since(since) < Duration::from_millis(500) {
+                    return;
+                }
+            }
+            _ => {
+                self.status_wait = Some((set, now));
+                return;
+            }
+        }
+        self.status_wait = None;
+        self.set_status.insert(set, None);
+        // Tests don't ask the internet.
+        if cfg!(test) {
+            return;
+        }
+        let tx = self.set_status_tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send((set, download::set_status(set).ok()));
+        });
     }
 
     fn toggle_map_info(&mut self) {
@@ -5071,6 +5146,7 @@ impl State {
                 self.stars.request(i, &self.library[i].path, play_rate);
             }
             if matches!(self.scene, Scene::Select) {
+                self.poll_set_status(now);
                 for i in self.select.selected_set() {
                     self.stars.request(i, &self.library[i].path, play_rate);
                 }
@@ -5229,7 +5305,8 @@ impl State {
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
                 self.leaderboard.clear();
                 if pw > 160.0 {
-                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, 380.0, self.cfg.scroll_speed, selected_stars, Some(("Play from", "Shift+Enter"))) {
+                    let status = self.select.selected().and_then(|i| self.map_status(i));
+                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, 380.0, self.cfg.scroll_speed, selected_stars, Some(("Play from", "Shift+Enter")), status) {
                         self.frame_clip = Some(clip);
                     }
                     if let Some(i) = self.select.selected() {
@@ -5393,7 +5470,7 @@ impl State {
                 let pw = canvas.width - x - 24.0;
                 let stars = self.browse.selected_diff().map(|d| d.stars);
                 if pw > 160.0 && self.browse.selected().is_some() {
-                    match self.preview.draw_panel(canvas, &self.browse.remote, x, 54.0, pw, 380.0, self.cfg.scroll_speed, stars, None) {
+                    match self.preview.draw_panel(canvas, &self.browse.remote, x, 54.0, pw, 380.0, self.cfg.scroll_speed, stars, None, None) {
                         Some(clip) => self.frame_clip = Some(clip),
                         None if self.browse.shown.is_none() => {
                             canvas.text_centered(x + pw / 2.0, 160.0, 8.0, rgba(0x8a8aa0, 1.0), "loading preview...");
@@ -6897,6 +6974,7 @@ impl State {
     ) -> State {
         let library = Vec::new();
         let mut select = Select::new(&library);
+        let (set_status_tx, set_status_rx) = mpsc::channel();
         select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
         select.mods_label = cfg.mods.label();
         select.played = load_plays();
@@ -6958,6 +7036,11 @@ impl State {
             mapinfo_sorted: false,
             song_dirs,
             osudb_rx: None,
+            db_status: Default::default(),
+            set_status: Default::default(),
+            set_status_tx,
+            set_status_rx,
+            status_wait: None,
             scene_kind: None,
             scene_since: Instant::now(),
             scrubbing: None,

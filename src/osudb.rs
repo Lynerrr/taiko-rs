@@ -16,6 +16,9 @@ pub struct DbMap {
     pub file: String,
     /// Unix seconds, 0 if never played.
     pub last_played: u64,
+    /// osu!stable's ranked status: 4 ranked, 5 approved, 6 qualified, 7 loved, 2 pending (or
+    /// graveyard / WIP: stable doesn't tell them apart), 1 not submitted, 0 unknown.
+    pub status: u8,
 }
 
 #[derive(Default)]
@@ -101,7 +104,7 @@ fn parse_osu_db(b: &[u8]) -> Option<HashMap<String, DbMap>> {
         r.string()?; // audio file
         let md5 = r.string()?;
         let file = r.string()?;
-        r.u8()?; // ranked status
+        let status = r.u8()?;
         r.skip(6)?; // circles, sliders, spinners
         r.i64()?; // last modified
         if version < FLOAT_DIFF_VERSION {
@@ -141,7 +144,7 @@ fn parse_osu_db(b: &[u8]) -> Option<HashMap<String, DbMap>> {
         r.i32()?; // last modification (?)
         r.u8()?; // mania scroll speed
         if !md5.is_empty() {
-            out.insert(md5, DbMap { folder, file, last_played: ticks_to_unix(last_played) });
+            out.insert(md5, DbMap { folder, file, last_played: ticks_to_unix(last_played), status });
         }
     }
     Some(out)

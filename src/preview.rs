@@ -456,7 +456,8 @@ impl Preview {
     /// shape range to clip and the clip area.
     #[allow(clippy::too_many_arguments)]
     /// `button`: the action under the timeline as (verb, key hint), e.g. ("Play from", "Shift+Enter").
-    pub fn draw_panel(&mut self, c: &mut Canvas, library: &[Entry], x: f32, y: f32, w: f32, h: f32, scroll_speed: f64, stars: Option<f32>, button: Option<(&str, &str)>) -> Option<(std::ops::Range<usize>, crate::layout::Area)> {
+    /// `status`: the map's on osu! (label, colour), shown by the mapper's name.
+    pub fn draw_panel(&mut self, c: &mut Canvas, library: &[Entry], x: f32, y: f32, w: f32, h: f32, scroll_speed: f64, stars: Option<f32>, button: Option<(&str, &str)>, status: Option<(&str, u32)>) -> Option<(std::ops::Range<usize>, crate::layout::Area)> {
         // The preview shows ~640 units of lane (several notes ahead), so its height follows the
         // panel width; the panel shrinks to fit instead of leaving empty space.
         let (band_top, band_h) = game::lane_band();
@@ -480,7 +481,19 @@ impl Preview {
         // Centred at y + 50; smaller when the artist above came out taller (text grid).
         let artist_bottom = 36.5 + Canvas::text_height(9.0) / 2.0;
         let size = Canvas::fit_height(8.0, 2.0 * (50.0 - artist_bottom - 1.5));
-        c.text(x + 14.0, y + 46.0 + (8.0 - size) / 2.0, size, rgba(0x8a8aa0, 1.0), &fit(&format!("mapped by {}", e.meta.creator), size));
+        // The status on osu! at the right of the mapper's line.
+        let status_w = match status.filter(|s| !s.0.is_empty()) {
+            Some((label, col)) => {
+                let lw = Canvas::text_width(7.0, label) + 12.0;
+                let (sx, sy) = (x + w - 12.0 - lw, y + 44.0);
+                c.round_rect(sx, sy, lw, 13.0, 6.5, rgba(col, 0.15), rgba(col, 0.9), 1.0);
+                c.text_centered(sx + lw / 2.0, sy + 3.0, 7.0, rgba(col, 1.0), label);
+                lw + 8.0
+            }
+            None => 0.0,
+        };
+        let mapper = Canvas::fit(size, w - 28.0 - status_w, &format!("mapped by {}", e.meta.creator));
+        c.text(x + 14.0, y + 46.0 + (8.0 - size) / 2.0, size, rgba(0x8a8aa0, 1.0), &mapper);
         let pill = crate::stars::draw_pill(c, x + w - 12.0, y + 64.0, 9.0, stars);
         let version = fit(&format!("[{}]", e.meta.version), 9.0);
         let room = ((w - 40.0 - pill) / Canvas::char_width(9.0)) as usize;
@@ -496,8 +509,10 @@ impl Preview {
         let loaded = self.map.as_ref().filter(|(mi, _, _, _)| *mi == i && ready);
         let line = match loaded {
             Some((_, _, d, _)) => {
-                let bpm = if (d.bpm.1 - d.bpm.0).abs() < 0.5 { format!("{:.0} BPM", d.bpm.0) } else { format!("{:.0}-{:.0} BPM", d.bpm.0, d.bpm.1) };
-                let secs = (d.length_ms / 1000.0).max(0.0) as u64;
+                // At the speed played (DT, HT, the rate): as fast and as long as it'll be.
+                let speed = self.requested_rate.0.max(0.01);
+                let bpm = if (d.bpm.1 - d.bpm.0).abs() < 0.5 { format!("{:.0} BPM", d.bpm.0 * speed) } else { format!("{:.0}-{:.0} BPM", d.bpm.0 * speed, d.bpm.1 * speed) };
+                let secs = (d.length_ms / speed / 1000.0).max(0.0) as u64;
                 let offset = if self.map_offset != 0.0 { format!("   offset {:+.0} ms", self.map_offset) } else { String::new() };
                 format!("OD {:.1}   {bpm}   {}:{:02}{offset}", e.meta.od, secs / 60, secs % 60)
             }
