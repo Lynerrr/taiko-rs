@@ -938,43 +938,81 @@ fn shared_cap(widths: &[f32], total: f32) -> f32 {
     f32::INFINITY
 }
 
-/// The mod select (F1): a column per group, each mod a chip to switch on or off. `cursor` is
-/// the keyboard selection (index into `mods::ALL`).
-pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, cursor: usize) {
+/// The mod select (F1): a column per group, each mod a chip to switch on or off, and a row of
+/// the player's favourites. `cursor` is the keyboard selection (index into `mods::ALL`).
+pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, favourites: crate::mods::Mods, cursor: usize) {
     use crate::mods::{ALL, GROUPS};
+    const GOLD: u32 = 0xffd34d;
     let w = c.width;
     c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.72));
     let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
     c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
     c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "MODS");
-    c.text(px + 70.0, py + 16.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit(6.0, pw - 180.0, "arrows + Space toggle   R shuffles   Backspace clears   C customize (Multiverse, Shapeshift)   F1 / Esc closes"));
     let mult = mods.multiplier();
     let rank = if mods.unranked() { "  (not saved)" } else { "" };
-    c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &format!("score x{mult:.2}{rank}"));
+    let score = format!("score x{mult:.2}{rank}");
+    c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &score);
+    let hint = "arrows + Space toggle   F / right-click favourite   R shuffles   Backspace clears   C customize (Multiverse, Shapeshift)   F1 / Esc closes";
+    let room = pw - 70.0 - 16.0 - Canvas::text_width(8.0, &score) - 16.0;
+    c.text(px + 70.0, py + 16.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit(6.0, room, hint));
     let col_w = (pw - 24.0) / GROUPS.len() as f32;
-    const ROW: f32 = 27.0;
+    // The favourites' row goes under the longest column.
+    let fav_y = py + ph - 76.0;
+    let rows = GROUPS.iter().map(|g| g.2.len()).max().unwrap_or(1) as f32;
+    let row_h = ((fav_y - 4.0 - (py + 52.0)) / rows).min(27.0);
     let mut hovered = None;
     for (g, (title, accent, list)) in GROUPS.iter().enumerate() {
         let x = px + 12.0 + g as f32 * col_w;
         c.text(x + 4.0, py + 38.0, 7.0, rgba(*accent, 1.0), &Canvas::fit(7.0, col_w - 8.0, title));
         for (r, &m) in list.iter().enumerate() {
-            let y = py + 52.0 + r as f32 * ROW;
+            let y = py + 52.0 + r as f32 * row_h;
             let i = ALL.iter().position(|&x| x == m).unwrap_or(0);
             let on = mods.has(m);
-            let hover = c.hovered(x, y, col_w - 6.0, ROW - 4.0);
+            let h = row_h - 4.0;
+            let hover = c.hovered(x, y, col_w - 6.0, h);
             if hover {
                 hovered = Some(m);
             }
             let bg = if i == cursor { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
             let border = if i == cursor { crate::render::accent() } else if on { *accent } else { 0x2a2a38 };
-            c.round_rect(x, y, col_w - 6.0, ROW - 4.0, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if i == cursor { 1.5 } else { 1.0 });
-            c.round_rect(x + 4.0, y + 4.0, 22.0, ROW - 12.0, 3.0, rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
-            c.text_centered(x + 15.0, y + 8.0, 7.0, rgba(if on { 0x15151d } else { *accent }, 1.0), m.acronym());
+            c.round_rect(x, y, col_w - 6.0, h, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if i == cursor { 1.5 } else { 1.0 });
+            c.round_rect(x + 4.0, y + 4.0, 22.0, h - 8.0, 3.0, rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
+            c.text_centered(x + 15.0, y + h / 2.0 - 3.5, 7.0, rgba(if on { 0x15151d } else { *accent }, 1.0), m.acronym());
+            let fav = favourites.has(m);
+            if fav {
+                c.text(x + col_w - 15.0, y + 3.0, 7.0, rgba(GOLD, 1.0), "*");
+            }
             // Narrow columns show just the acronym; the name is in the description below.
-            let name = Canvas::fit(6.0, col_w - 40.0, m.name());
-            c.text(x + 31.0, y + 8.5, 6.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), &name);
-            c.hit(x, y, col_w - 6.0, ROW - 4.0, Hit::ModToggle(i));
+            let name = Canvas::fit(6.0, col_w - if fav { 48.0 } else { 40.0 }, m.name());
+            c.text(x + 31.0, y + h / 2.0 - 3.0, 6.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), &name);
+            c.hit(x, y, col_w - 6.0, h, Hit::ModToggle(i));
         }
+    }
+    // Favourites: one click away, lit while on.
+    let label_w = c.text(px + 16.0, fav_y + 4.5, 7.0, rgba(GOLD, 1.0), "* FAVOURITES");
+    let mut fx = px + 28.0 + label_w;
+    if favourites.is_empty() {
+        c.text(fx, fav_y + 5.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit(6.0, px + pw - 16.0 - fx, "right-click a mod (or F on it) to keep it here"));
+    }
+    let favs: Vec<crate::mods::Mod> = favourites.iter().collect();
+    for (k, &m) in favs.iter().enumerate() {
+        let i = ALL.iter().position(|&x| x == m).unwrap_or(0);
+        let col = GROUPS.iter().find(|g| g.2.contains(&m)).map_or(0x9a9ab0, |g| g.1);
+        let on = mods.has(m);
+        let text = format!("{} {}", m.acronym(), m.name());
+        let cw = Canvas::text_width(6.0, &text) + 14.0;
+        if fx + cw > px + pw - 16.0 {
+            c.text(fx, fav_y + 5.0, 7.0, rgba(0x8a8aa0, 1.0), &format!("+{}", favs.len() - k));
+            break;
+        }
+        if c.hovered(fx, fav_y, cw, 16.0) {
+            hovered = Some(m);
+        }
+        let border = if i == cursor { crate::render::accent() } else { col };
+        c.round_rect(fx, fav_y, cw, 16.0, 4.0, rgba(if on { col } else { 0x1d1d27 }, if on { 0.9 } else { 1.0 }), rgba(border, 1.0), 1.0);
+        c.text(fx + 7.0, fav_y + 5.0, 6.0, rgba(if on { 0x15151d } else { 0xc8c8d8 }, 1.0), &text);
+        c.hit(fx, fav_y, cw, 16.0, Hit::ModToggle(i));
+        fx += cw + 5.0;
     }
     // What the pointed-at (else the selected) mod does.
     let shown = hovered.unwrap_or(ALL[cursor.min(ALL.len() - 1)]);

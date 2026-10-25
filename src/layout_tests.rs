@@ -195,6 +195,10 @@ fn assert_every_screen_fits() {
 
     s.open_mod_select();
     check(&mut s, "mod select", &mut out);
+    // Favourites: more than fit in their row.
+    s.cfg.favourite_mods = mods::ALL.iter().step_by(3).fold(mods::Mods::NONE, |f, &m| f.flip(m));
+    check(&mut s, "mod select favourites", &mut out);
+    s.cfg.favourite_mods = mods::Mods::NONE;
     // A customizable mod on: the Customize button and its tab (Multiverse and the rails conflict).
     let mods_before = s.cfg.mods;
     s.cfg.mods = mods::Mods::parse("MV,SS");

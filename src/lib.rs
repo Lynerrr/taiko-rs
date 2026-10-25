@@ -3002,6 +3002,14 @@ impl State {
     /// Released without moving, it opens the row's menu (or, off the rows, jumps there).
     fn right_button(&mut self, pressed: bool) {
         if self.mod_select.is_some() {
+            // Right-clicking a mod makes it a favourite (or not any more).
+            if pressed && self.customization_tab().is_none() {
+                let (vx, vy) = self.mouse_virtual();
+                if let Some(render::Hit::ModToggle(i)) = self.hit_at(vx, vy) {
+                    self.mod_select = Some(i);
+                    self.toggle_favourite(mods::ALL[i]);
+                }
+            }
             return;
         }
         let free = self.splash.is_none() && self.select.picker.is_none() && self.settings_ui.dropdown.is_none();
@@ -3776,6 +3784,7 @@ impl State {
                 self.cfg.mods = Mods::shuffle(seed);
                 self.mods_changed();
             }
+            KeyCode::KeyF => self.toggle_favourite(mods::ALL[cur]),
             KeyCode::KeyC | KeyCode::KeyM => match mods::customizable(self.cfg.mods).first() {
                 Some(&m) => self.open_customization(m),
                 None => self.toast("switch on Multiverse or Shapeshift to customize it".to_string()),
@@ -3783,6 +3792,11 @@ impl State {
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
         }
+    }
+
+    fn toggle_favourite(&mut self, m: mods::Mod) {
+        self.cfg.favourite_mods = self.cfg.favourite_mods.flip(m);
+        self.cfg.save();
     }
 
     /// Opens the mod customization on mod `m`'s tab.
@@ -5511,7 +5525,7 @@ impl State {
             self.readout_rect = None;
         }
         if let Some(cur) = self.mod_select {
-            ui::draw_mod_select(canvas, self.cfg.mods, cur);
+            ui::draw_mod_select(canvas, self.cfg.mods, self.cfg.favourite_mods, cur);
             if let Some(setup) = &self.universe_setup {
                 setup.draw(canvas, &self.cfg.universes, &self.cfg.universe_presets, game::FIRST_FOCUS);
             }

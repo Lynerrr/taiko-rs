@@ -518,6 +518,16 @@ impl Mods {
         out
     }
 
+    /// Just a set of mods, conflicting ones too (the favourites): "HD,HR,EZ".
+    pub fn parse_set(s: &str) -> Mods {
+        Mods(s.split([',', ' ']).filter_map(Mod::from_acronym).fold(0, |bits, m| bits | m.bit()))
+    }
+
+    /// `self` with `m` added or taken out, conflicts or not.
+    pub fn flip(self, m: Mod) -> Mods {
+        Mods(self.0 ^ m.bit())
+    }
+
     pub fn from_list(list: &[String]) -> Mods {
         Mods::parse(&list.join(","))
     }
@@ -738,6 +748,17 @@ impl Speed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn favourites_keep_conflicting_mods_and_round_trip() {
+        // Easy and Hard Rock conflict, but both can be favourites.
+        let favs = Mods::NONE.flip(Mod::Easy).flip(Mod::HardRock).flip(Mod::Hidden);
+        assert!(favs.has(Mod::Easy) && favs.has(Mod::HardRock));
+        assert_eq!(Mods::parse_set(&favs.to_config()), favs);
+        assert!(!favs.flip(Mod::Hidden).has(Mod::Hidden));
+        assert_eq!(customizable(Mods::parse("SS")), [Mod::Shapeshift]);
+        assert!(customizable(Mods::parse("HD")).is_empty());
+    }
 
     #[test]
     fn acronyms_are_unique_and_parse_back() {
