@@ -27,6 +27,7 @@ mod library;
 mod logo;
 mod mapinfo;
 mod hud;
+mod keys;
 mod mods;
 mod multiverse;
 mod multiplayer;
@@ -271,8 +272,9 @@ struct State {
     /// most one is open).
     universe_setup: Option<multiverse::Setup>,
     shapeshift_setup: Option<shapeshift::Setup>,
-    /// Replay files of the leaderboard rows drawn this frame.
+    /// Replay files of the leaderboard rows drawn this frame, and the online rows.
     leaderboard: Vec<PathBuf>,
+    online_leaderboard: Vec<online::OnlineScore>,
     /// A video export in progress, and the editor's last message.
     export: Option<video::Export>,
     video_status: String,
@@ -535,10 +537,14 @@ fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option
         return;
     }
     let Some(Ok(rows)) = board else { return };
+    c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, w - 20.0 - tabs_w, "click: results and replay"));
     for (k, r) in rows.iter().take(fits).enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
         let mine = r.player.eq_ignore_ascii_case(me);
-        c.round_rect(x, ry, w, 16.0, 5.0, rgba(if mine { 0x23232f } else { 0x15151d }, 0.9), rgba(if mine { accent() } else { 0x2a2a38 }, 1.0), 1.0);
+        let hover = c.hovered(x, ry, w, 16.0);
+        let bg = if hover { 0x262634 } else if mine { 0x23232f } else { 0x15151d };
+        c.round_rect(x, ry, w, 16.0, 5.0, rgba(bg, 0.9), rgba(if mine { accent() } else { 0x2a2a38 }, 1.0), 1.0);
+        c.hit(x, ry, w, 16.0, render::Hit::OnlineScoreRow(k));
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods.concat()) };
         let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
@@ -563,7 +569,7 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         return;
     }
     let room = w - 20.0 - label_w;
-    c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, room, "click: watch the replay   video: export it"));
+    c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, room, "click: results and replay   video: export it"));
     for (k, r) in rows.iter().enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
         let hover = c.hovered(x, ry, w, 16.0);
@@ -593,6 +599,85 @@ fn submit_score(server: String, token: String, play: online::ScoreSubmit) -> Rec
         let _ = tx.send(online::call(&server, online::Request::SubmitScore { token, play: Box::new(play) }));
     });
     rx
+}
+
+/// "Artist - Title [Version]  1.10x  +HDHR  from 1:23" for a results screen.
+fn results_title(m: &beatmap::Meta, rate: f64, mods: Mods, from: Option<f64>) -> String {
+    let rate = if (rate - 1.0).abs() > 1e-6 && mods.rate_override().is_none() { format!("  {rate:.2}x") } else { String::new() };
+    let part = from.map(|t| format!("  from {}", fmt_time(t))).unwrap_or_default();
+    let mods = if mods.is_empty() { String::new() } else { format!("  +{}", mods.label()) };
+    format!("{} - {} [{}]{rate}{mods}{part}", m.artist, m.title, m.version)
+}
+
+/// A results screen's background work (`ui::Detail`): the pp breakdown of `play` on the map at
+/// `path`; with a replay file, the whole play's stats from it; with an online score id, its
+/// replay fetched from `server` first (and saved, see `scores::save_online`).
+fn results_job(path: PathBuf, play: pp::Play, local: Option<PathBuf>, online: Option<(String, online::OnlineScore, String)>) -> Receiver<ui::Detail> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut d = ui::Detail { breakdown: pp::breakdown(&path, &play), ..Default::default() };
+        let replay = match (local, online) {
+            (Some(file), _) => scores::load_replay(&file).ok(),
+            (None, Some((server, score, label))) => match fetch_replay(&server, &score, &path, label) {
+                Ok((file, r)) => {
+                    d.replay = Some(Ok(file));
+                    Some(r)
+                }
+                Err(e) => {
+                    d.replay = Some(Err(e));
+                    None
+                }
+            },
+            (None, None) => None,
+        };
+        d.stats = replay.and_then(|r| scores::simulate(&path, &r));
+        let _ = tx.send(d);
+    });
+    rx
+}
+
+/// Gets an online score's replay from the server and keeps it as a replay file of our own.
+fn fetch_replay(server: &str, score: &online::OnlineScore, map_path: &std::path::Path, map_label: String) -> Result<(PathBuf, scores::Replay), String> {
+    if score.id == 0 {
+        return Err("the server doesn't keep replays yet".into());
+    }
+    if let Some(file) = scores::online_replay_path(score.id).filter(|f| f.is_file()) {
+        if let Ok(r) = scores::load_replay(&file) {
+            return Ok((file, r));
+        }
+    }
+    let got = match online::call(server, online::Request::Replay { id: score.id }) {
+        Ok(online::Reply::Replay(r)) => *r,
+        Ok(_) => return Err("odd reply from the server".into()),
+        // Servers from before replays don't know the request.
+        Err(e) if e == "bad request" => return Err("the server doesn't hand out replays yet".into()),
+        Err(e) => return Err(e),
+    };
+    if got.version > scores::new_version() {
+        return Err("replay from a newer version".into());
+    }
+    let replay = scores::Replay {
+        version: got.version,
+        map_hash: score.map_hash,
+        map_path: map_path.to_string_lossy().into_owned(),
+        map_label,
+        player: score.player.clone(),
+        date: score.date,
+        rate: score.rate,
+        keep_pitch: true,
+        anti_mash: true,
+        mods: score.mods.clone(),
+        score: score.score,
+        accuracy: score.accuracy,
+        max_combo: score.max_combo,
+        great: score.great,
+        ok: score.ok,
+        miss: score.miss,
+        ur: 0.0,
+        inputs: got.inputs,
+    };
+    let file = scores::save_online(score.id, &replay)?;
+    Ok((file, replay))
 }
 
 /// Fetches a map's online leaderboard on a background thread.
@@ -1171,6 +1256,49 @@ impl State {
         self.scene = Scene::Loading { rx, label, entry, from: None };
     }
 
+    /// The results screen of a local score on the selected map (its leaderboard row).
+    fn open_local_score(&mut self, file: &std::path::Path) {
+        let Some(entry) = self.select.selected() else { return };
+        let r = match scores::load_replay(file) {
+            Ok(r) => r,
+            Err(e) => {
+                self.toast(format!("can't open the replay: {e}"));
+                return;
+            }
+        };
+        let stats = game::Stats { great: r.great, ok: r.ok, miss: r.miss, max_combo: r.max_combo, score: r.score, ..Default::default() };
+        let mods = Mods::from_list(&r.mods);
+        let e = &self.library[entry];
+        let mut results = Results::new(results_title(&e.meta, r.rate, mods, None), stats, game::Windows::new(e.meta.od));
+        results.replay = Some(file.to_path_buf());
+        results.partial = true;
+        results.pp = self.scores.iter().find(|row| row.file == file).and_then(|row| row.pp);
+        results.no_pp = mods.unranked().then_some("Autoplay and Relax get no pp");
+        results.opened = Some(ui::Opened { player: r.player.clone(), date: r.date, online: false });
+        let all = scores::top(&self.scores, r.map_hash, usize::MAX);
+        results.rank = all.iter().position(|row| row.file == file).map(|p| (p + 1, all.len()));
+        results.job = Some(results_job(e.path.clone(), r.pp_play(), Some(file.to_path_buf()), None));
+        self.scene = Scene::Results { results, entry, from: None };
+    }
+
+    /// The results screen of an online score on the selected map; its replay is fetched
+    /// meanwhile.
+    fn open_online_score(&mut self, score: online::OnlineScore) {
+        let Some(entry) = self.select.selected() else { return };
+        let stats = game::Stats { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, score: score.score, ..Default::default() };
+        let mods = Mods::from_list(&score.mods);
+        let e = &self.library[entry];
+        let mut results = Results::new(results_title(&e.meta, score.rate, mods, None), stats, game::Windows::new(e.meta.od));
+        results.partial = true;
+        results.pp = score.pp;
+        results.no_pp = mods.unranked().then_some("Autoplay and Relax get no pp");
+        results.opened = Some(ui::Opened { player: score.player.clone(), date: score.date, online: true });
+        let play = pp::Play { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, rate: score.rate, mods };
+        let online = (self.cfg.online_server.clone(), score, e.label());
+        results.job = Some(results_job(e.path.clone(), play, None, Some(online)));
+        self.scene = Scene::Results { results, entry, from: None };
+    }
+
     fn start_loading_from(&mut self, entry: usize, from: Option<f64>) {
         self.pending_replay = None;
         self.record_play(entry);
@@ -1396,6 +1524,7 @@ impl State {
             }
             Item::Key(i) => config::key_name(c.keys[i]),
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
+            Item::Hotkey(i) => c.hotkeys.get(keys::Hotkey::ALL[i]).map(keys::Chord::name).unwrap_or_else(|| "none".into()),
             Item::TouchLayout => c.touch_layout.name().into(),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::WheelResize => on(c.wheel_resizes_playfield),
@@ -1519,7 +1648,7 @@ impl State {
                 self.set_update_channel(channel);
                 return;
             }
-            Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey => {
+            Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => {
                 self.settings_ui.binding = Some(item);
                 return;
             }
@@ -2414,13 +2543,38 @@ impl State {
                 code,
                 KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::ControlLeft | KeyCode::ControlRight | KeyCode::AltLeft | KeyCode::AltRight | KeyCode::SuperLeft | KeyCode::SuperRight
             );
-            if item == Item::InterfaceKey && modifier {
-                // Shift is held for the key to come.
+            if matches!(item, Item::InterfaceKey | Item::Hotkey(_)) && modifier {
+                // Held for the key to come.
                 self.settings_ui.binding = Some(item);
+                return;
+            }
+            if code == KeyCode::Delete {
+                match item {
+                    Item::Key(slot) => self.cfg.keys[slot] = config::NO_KEY,
+                    Item::PresetKey(slot) => self.cfg.preset_keys[slot] = config::NO_KEY,
+                    Item::InterfaceKey => self.cfg.interface_key = (false, config::NO_KEY),
+                    Item::Hotkey(i) => {
+                        self.cfg.hotkeys.set(keys::Hotkey::ALL[i], None);
+                    }
+                    _ => {}
+                }
+                self.toast(format!("{}: no key", item.label()));
+                self.cfg.save();
                 return;
             }
             if code != KeyCode::Escape {
                 match item {
+                    Item::Hotkey(i) => {
+                        let h = keys::Hotkey::ALL[i];
+                        let chord = keys::Chord { key: code, ctrl: self.modifiers_ctrl, shift: self.modifiers_shift, alt: self.modifiers_alt };
+                        if self.cfg.keys.contains(&code) && !chord.ctrl && !chord.alt && h.places().iter().any(|p| matches!(p, keys::Place::Play | keys::Place::Paused)) {
+                            self.toast(format!("{} is a drum key", config::key_name(code)));
+                            return;
+                        }
+                        if let Some(other) = self.cfg.hotkeys.set(h, Some(chord)) {
+                            self.toast(format!("{} now has no key ({} was its)", other.label(), chord.name()));
+                        }
+                    }
                     Item::InterfaceKey => {
                         if self.cfg.keys.contains(&code) && !self.modifiers_shift {
                             self.toast(format!("{} is a drum key", config::key_name(code)));
@@ -2460,6 +2614,29 @@ impl State {
             return;
         }
         let item = self.settings_ui.item();
+        if code == KeyCode::Backspace && item.kind() == settings::Kind::Key {
+            let d = Config::default();
+            match item {
+                Item::Key(slot) => {
+                    let key = d.keys[slot];
+                    if let Some(other) = self.cfg.keys.iter().position(|&k| k == key) {
+                        self.cfg.keys[other] = self.cfg.keys[slot];
+                    }
+                    self.cfg.keys[slot] = key;
+                }
+                Item::PresetKey(slot) => self.cfg.preset_keys[slot] = d.preset_keys[slot],
+                Item::InterfaceKey => self.cfg.interface_key = d.interface_key,
+                Item::Hotkey(i) => {
+                    let h = keys::Hotkey::ALL[i];
+                    if let Some(other) = self.cfg.hotkeys.set(h, Some(h.default())) {
+                        self.toast(format!("{} now has no key", other.label()));
+                    }
+                }
+                _ => {}
+            }
+            self.cfg.save();
+            return;
+        }
         match code {
             KeyCode::ArrowUp => self.settings_ui.move_cursor(-1),
             KeyCode::ArrowDown => self.settings_ui.move_cursor(1),
@@ -4987,6 +5164,7 @@ impl State {
                     let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
                     let mods = v.play.as_ref().map(|p| Mods::from_list(&p.map.mods)).unwrap_or_default();
                     let mut g = Game::with_mods(map, track, self.audio.as_ref(), mods);
+                    g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods));
                     g.replay = Some((std::mem::take(&mut v.inputs), 0));
                     g.watched = true;
                     g.banner = Some(format!("WATCHING  -  {}", v.player));
@@ -5186,7 +5364,48 @@ impl State {
         }
     }
 
+    /// A key press: the player's own hotkeys (`keys::Bindings`) turned into the keys the game
+    /// knows them by, then `key_inner`.
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        let pressed = keys::Chord { key: code, ctrl: self.modifiers_ctrl, shift: self.modifiers_shift, alt: self.modifiers_alt };
+        match self.hotkey_place(code).map(|place| self.cfg.hotkeys.resolve(pressed, place)) {
+            None | Some(keys::Resolved::Same) => self.key_inner(code, repeat, text, at, window),
+            Some(keys::Resolved::Nothing) => {}
+            Some(keys::Resolved::As(c)) => {
+                let held = (self.modifiers_ctrl, self.modifiers_shift, self.modifiers_alt);
+                (self.modifiers_ctrl, self.modifiers_shift, self.modifiers_alt) = (c.ctrl, c.shift, c.alt);
+                self.key_inner(c.key, repeat, None, at, window);
+                (self.modifiers_ctrl, self.modifiers_shift, self.modifiers_alt) = held;
+            }
+        }
+    }
+
+    /// Where hotkeys are pressed now, or None where every key is taken as it is: something being
+    /// typed or bound, a list or the mod select open, a drum key in a song, a letter typed into
+    /// a search.
+    fn hotkey_place(&self, code: KeyCode) -> Option<keys::Place> {
+        let busy = self.splash.is_some()
+            || self.profile.is_some()
+            || self.settings_ui.binding.is_some()
+            || self.settings_ui.editing.is_some()
+            || self.settings_ui.dropdown.is_some()
+            || self.settings_ui.choices.is_some()
+            || self.mod_select.is_some()
+            || self.customization_tab().is_some();
+        let plain = !self.modifiers_ctrl && !self.modifiers_alt;
+        if busy || (plain && self.in_song() && self.cfg.keys.contains(&code)) || (plain && self.takes_text() && keys::types_text(code)) {
+            return None;
+        }
+        Some(match &self.scene {
+            Scene::Select if self.select.picker.is_none() && self.select.menu.is_none() => keys::Place::Select,
+            Scene::Play { game, .. } if game.paused.is_some() => keys::Place::Paused,
+            Scene::Play { .. } => keys::Place::Play,
+            Scene::Results { .. } => keys::Place::Results,
+            _ => keys::Place::Other,
+        })
+    }
+
+    fn key_inner(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
         self.refresh_play_offset();
         if let Some(s) = &mut self.splash {
             // Any key skips the splash and does nothing else.
@@ -5208,7 +5427,7 @@ impl State {
                 let text = clipboard::get().map(|t| clipboard::one_line(&t)).unwrap_or_default();
                 if !text.is_empty() {
                     self.modifiers_ctrl = false;
-                    self.key(KeyCode::KeyV, false, Some(&text), at, window);
+                    self.key_inner(KeyCode::KeyV, false, Some(&text), at, window);
                     self.modifiers_ctrl = true;
                 }
             }
@@ -5489,9 +5708,18 @@ impl State {
                     self.open_video_editor(&file);
                 }
             }
-            Scene::Results { results, .. } if code == KeyCode::KeyR && results.replay.is_some() => {
+            // A leaderboard score's results: Enter watches it too.
+            Scene::Results { results, .. }
+                if results.replay.is_some() && (code == KeyCode::KeyR || (results.opened.is_some() && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter))) =>
+            {
                 if let Some(file) = results.replay.clone() {
                     self.watch_replay(&file);
+                }
+            }
+            // Back to song select, the music playing on.
+            Scene::Results { results, .. } if results.opened.is_some() => {
+                if matches!(code, KeyCode::Escape | KeyCode::Backspace) {
+                    self.scene = Scene::Select;
                 }
             }
             Scene::Results { entry, from, .. } => match code {
@@ -5562,6 +5790,7 @@ impl State {
             }
             let in_select = matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download);
             let in_menu = in_select
+                || matches!(&self.scene, Scene::Results { results, .. } if results.opened.is_some() && results.music.is_none())
                 || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby))
                 || matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::Download);
             let (entries, selected) = if browsing { (&self.browse.remote, self.browse.shown) } else { (&self.library, self.preview_target()) };
@@ -5748,6 +5977,10 @@ impl State {
                             if self.board_online {
                                 let board = self.online_board(hash).cloned();
                                 draw_online_leaderboard(canvas, x, top, pw, board.as_ref(), &self.cfg.online_user, fits);
+                                self.online_leaderboard = match board {
+                                    Some(Ok(rows)) => rows.into_iter().take(fits).collect(),
+                                    _ => Vec::new(),
+                                };
                             } else {
                                 let rows = scores::top(&self.scores, hash, fits);
                                 self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
@@ -5770,6 +6003,7 @@ impl State {
                     Ok(Ok((map, track))) => {
                         let mods = std::mem::take(&mut self.pending_mods);
                         let mut game = Game::with_mods(map, track, self.audio.as_ref(), mods);
+                        game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods);
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
@@ -5834,11 +6068,7 @@ impl State {
                     }
                 }
                 if done {
-                    let m = &game.map.meta;
-                    let rate = if (game.rate - 1.0).abs() > 1e-6 && game.mods.rate_override().is_none() { format!("  {:.2}x", game.rate) } else { String::new() };
-                    let part = from.map(|t| format!("  from {}", fmt_time(t))).unwrap_or_default();
-                    let mods = if game.mods.is_empty() { String::new() } else { format!("  +{}", game.mods.label()) };
-                    let title = format!("{} - {} [{}]{rate}{mods}{part}", m.artist, m.title, m.version);
+                    let title = results_title(&game.map.meta, game.rate, game.mods, *from);
                     let failed = game.failed();
                     if game.failed_early() {
                         if let Some(a) = &self.audio {
@@ -5846,16 +6076,34 @@ impl State {
                         }
                         self.preview.invalidate_audio();
                     }
-                    let mut results = Results {
-                        shown: Instant::now(),
-                        title,
-                        stats: game.stats.clone(),
-                        windows: game.windows,
-                        replay: None,
-                        rank: None,
-                        watched: game.replay_of.clone(),
-                        failed,
-                        pp: None,
+                    let mut results = Results::new(title, game.stats.clone(), game.windows);
+                    results.watched = game.replay_of.clone();
+                    results.failed = failed;
+                    // The song plays on under the results (not after a fail that stopped it),
+                    // from the preview point again once it ends.
+                    if !game.failed_early() && self.audio.is_some() {
+                        let preview = game.map.meta.preview_time;
+                        let again = if preview >= 0.0 { game.track_at(preview) } else { game.track_at(game.end_time()) * 0.4 };
+                        results.music = Some((game.track.clone(), again.max(0.0)));
+                    }
+                    let e = &self.library[*entry];
+                    let play = pp::Play {
+                        great: game.stats.great,
+                        ok: game.stats.ok,
+                        miss: game.stats.miss,
+                        max_combo: game.stats.max_combo,
+                        rate: game.rate,
+                        mods: game.mods,
+                    };
+                    results.no_pp = if game.mods.unranked() {
+                        Some("Autoplay and Relax get no pp")
+                    } else if failed {
+                        Some("failed plays get no pp")
+                    } else if from.is_some() {
+                        Some("plays from a start point get no pp")
+                    } else {
+                        results.job = Some(results_job(e.path.clone(), play, None, None));
+                        None
                     };
                     // Failed plays aren't kept, like osu!.
                     if game.record && !failed {
@@ -5883,6 +6131,9 @@ impl State {
                         };
                         let pp = pp::play_pp(&e.path, &replay.pp_play());
                         results.pp = pp;
+                        if pp.is_none() && results.no_pp.is_none() {
+                            results.no_pp = Some("the map couldn't be rated");
+                        }
                         // Whole plays go to the online leaderboards too, when logged in.
                         if from.is_none() && !self.cfg.online_token.is_empty() && !game.mods.unranked() {
                             let m = &game.map.meta;
@@ -5926,7 +6177,17 @@ impl State {
                     next = Some(Scene::Results { results, entry: *entry, from: *from });
                 }
             }
-            Scene::Results { results, .. } => results.draw(canvas),
+            Scene::Results { results, .. } => {
+                results.poll();
+                // Back to the preview point when the song ends, like osu!.
+                if let (Some((track, again)), Some(a)) = (&results.music, &self.audio) {
+                    let end = track.frames() as f64 / a.rate as f64 * 1000.0;
+                    if a.position_ms(now).is_some_and(|p| p > end - 30.0) {
+                        a.play(track.clone(), *again);
+                    }
+                }
+                results.draw(canvas);
+            }
             Scene::Download => {
                 let installed = self.installed_sets.take().unwrap_or_default();
                 let dir = self.songs_dir.display().to_string();
@@ -6006,6 +6267,9 @@ impl State {
                 if start.is_some_and(|at| now >= at) {
                     if let Some((map, track)) = loaded.take() {
                         let mut game = Game::with_mods(map, track, self.audio.as_ref(), self.pending_mods);
+                        if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
+                            game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods);
+                        }
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
@@ -6275,7 +6539,10 @@ impl State {
             self.finish_calibration();
         }
         if let Some(s) = next {
-            if matches!(s, Scene::Results { .. } | Scene::Select) {
+            let music_on = matches!(&s, Scene::Results { results, .. } if results.music.is_some());
+            if music_on {
+                self.preview.invalidate_audio();
+            } else if matches!(s, Scene::Results { .. } | Scene::Select) {
                 self.stop_audio();
                 if let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene) {
                     eprintln!("--- smoothness ({}) ---\n{}", self.present.name(), sm.report());
@@ -6778,13 +7045,18 @@ impl State {
     fn click(&mut self, hit: render::Hit, window: Option<&Window>) {
         use render::Hit;
         match hit {
-            Hit::Key(code) => self.key(code, false, None, Instant::now(), window),
+            Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::Presets => self.open_dropdown(),
             Hit::Update => self.update_now(),
             Hit::ScoreRow(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
-                    self.watch_replay(&file);
+                    self.open_local_score(&file);
+                }
+            }
+            Hit::OnlineScoreRow(k) => {
+                if let Some(score) = self.online_leaderboard.get(k).cloned() {
+                    self.open_online_score(score);
                 }
             }
             Hit::SocialToggle => self.toggle_social(),
@@ -6908,7 +7180,7 @@ impl State {
                 }
             }
             // Like osu!: the first click selects, clicking the selected difficulty plays it.
-            Hit::SongRow(row) if row == self.select.cursor() => self.key(KeyCode::Enter, false, None, Instant::now(), window),
+            Hit::SongRow(row) if row == self.select.cursor() => self.key_inner(KeyCode::Enter, false, None, Instant::now(), window),
             // A song's own row picks its remembered (or hardest) difficulty.
             Hit::SongRow(row) if self.select.is_song_start(row) && !self.select.in_open_song(row) => self.select.enter_song(row, &self.library),
             Hit::SongRow(row) => self.select.set_cursor(row),
@@ -7613,6 +7885,7 @@ impl State {
             universe_setup: None,
             shapeshift_setup: None,
             leaderboard: Vec::new(),
+            online_leaderboard: Vec::new(),
             export: None,
             video_status: String::new(),
             last_video: None,

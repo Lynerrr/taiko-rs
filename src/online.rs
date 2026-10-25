@@ -42,6 +42,8 @@ pub enum Request {
     MapScores { map: u64 },
     /// A player's profile (`Reply::Profile`).
     Profile { name: String },
+    /// The presses of an online score, by its `OnlineScore::id` (`Reply::Replay`).
+    Replay { id: u64 },
 }
 
 /// A play sent to the server: what the leaderboards show, and the replay's presses (kept so
@@ -90,6 +92,19 @@ pub struct OnlineScore {
     pub set_id: Option<u32>,
     #[serde(default)]
     pub stars: Option<f64>,
+    /// The server's number for the play, to ask for its replay by (0 from servers before
+    /// replays).
+    #[serde(default)]
+    pub id: u64,
+}
+
+/// An online score's replay: its presses, the map they were played on and how they are judged
+/// (`scores::Replay::version`).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OnlineReplay {
+    pub version: u32,
+    pub map: crate::net::MapInfo,
+    pub inputs: Vec<(f64, u8)>,
 }
 
 impl OnlineScore {
@@ -295,6 +310,7 @@ pub enum Reply {
     Submitted { map_rank: Option<u32>, pp: f64, rank: Option<u32> },
     Scores(Vec<OnlineScore>),
     Profile(Box<Profile>),
+    Replay(Box<OnlineReplay>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

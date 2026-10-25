@@ -33,6 +33,8 @@ pub enum Item {
     Key(usize),
     /// Previous (0) / next (1) playfield preset key.
     PresetKey(usize),
+    /// `keys::Hotkey::ALL[i]`'s key.
+    Hotkey(usize),
     TouchLayout,
     ShowPlayfieldSize,
     WheelResize,
@@ -77,7 +79,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 68] = [
+pub const ITEMS: [(&str, Item); 100] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -105,6 +107,38 @@ pub const ITEMS: [(&str, Item); 68] = [
     ("INPUT", Item::PresetKey(0)),
     ("INPUT", Item::PresetKey(1)),
     ("INPUT", Item::TouchLayout),
+    ("INPUT", Item::Hotkey(0)),
+    ("INPUT", Item::Hotkey(1)),
+    ("INPUT", Item::Hotkey(2)),
+    ("INPUT", Item::Hotkey(3)),
+    ("INPUT", Item::Hotkey(4)),
+    ("INPUT", Item::Hotkey(5)),
+    ("INPUT", Item::Hotkey(6)),
+    ("INPUT", Item::Hotkey(7)),
+    ("INPUT", Item::Hotkey(8)),
+    ("INPUT", Item::Hotkey(9)),
+    ("INPUT", Item::Hotkey(10)),
+    ("INPUT", Item::Hotkey(11)),
+    ("INPUT", Item::Hotkey(12)),
+    ("INPUT", Item::Hotkey(13)),
+    ("INPUT", Item::Hotkey(14)),
+    ("INPUT", Item::Hotkey(15)),
+    ("INPUT", Item::Hotkey(16)),
+    ("INPUT", Item::Hotkey(17)),
+    ("INPUT", Item::Hotkey(18)),
+    ("INPUT", Item::Hotkey(19)),
+    ("INPUT", Item::Hotkey(20)),
+    ("INPUT", Item::Hotkey(21)),
+    ("INPUT", Item::Hotkey(22)),
+    ("INPUT", Item::Hotkey(23)),
+    ("INPUT", Item::Hotkey(24)),
+    ("INPUT", Item::Hotkey(25)),
+    ("INPUT", Item::Hotkey(26)),
+    ("INPUT", Item::Hotkey(27)),
+    ("INPUT", Item::Hotkey(28)),
+    ("INPUT", Item::Hotkey(29)),
+    ("INPUT", Item::Hotkey(30)),
+    ("INPUT", Item::Hotkey(31)),
     ("OFFSET", Item::Offset),
     ("OFFSET", Item::VisualOffset),
     ("OFFSET", Item::Calibrate),
@@ -153,7 +187,7 @@ pub const SECTIONS: [(&str, &str); 10] = [
     ("LIBRARY", "Songs folder, game data"),
     ("GAMEPLAY", "speed, rate, interface"),
     ("PLAYFIELD", "size, position"),
-    ("INPUT", "drum keys, touch layout"),
+    ("INPUT", "drum keys, hotkeys, touch"),
     ("OFFSET", "audio offset, calibration"),
     ("AUDIO", "volume, latency"),
     ("VIDEO", "frame pacing, display, Discord"),
@@ -209,6 +243,7 @@ impl Item {
             Item::Key(i) => KEY_LABELS[i],
             Item::PresetKey(0) => "Previous preset key",
             Item::PresetKey(_) => "Next preset key",
+            Item::Hotkey(i) => crate::keys::Hotkey::ALL[i].label(),
             Item::TouchLayout => "Touch layout",
             Item::ShowPlayfieldSize => "Show playfield size",
             Item::WheelResize => "Wheel resizes playfield",
@@ -313,7 +348,7 @@ impl Item {
             | Item::CheckUpdates
             | Item::Fullscreen
             | Item::DiscordPresence => Kind::Toggle,
-            Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey => Kind::Key,
+            Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => Kind::Key,
             Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::SkinFolder => Kind::Action,
         }
     }
@@ -337,9 +372,10 @@ impl Item {
             Item::ResumeDelay => "Countdown before the song continues after the pause menu (0 = at once).",
             Item::Interface => "Score, accuracy, bars and more during play. Its key (Shift+Tab unless changed below) toggles it in a song.",
             Item::InterfaceHides => "What hiding the interface hides. Enter opens the list; Enter or a click ticks a part on or off.",
-            Item::InterfaceKey => "Enter, then press the key (with Shift or not) that shows / hides the interface in a song.",
-            Item::Key(_) => "Enter, then press the new key. Esc cancels.",
-            Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key.",
+            Item::InterfaceKey => "Enter, then press the key (with Shift or not) that shows / hides the interface in a song. Delete: none.",
+            Item::Key(_) => "Enter, then press the new key (Delete: none, Esc: cancel). Backspace: back to the default.",
+            Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key. Delete: none.",
+            Item::Hotkey(_) => "Enter, then press the new key, Ctrl / Alt / Shift too (Delete: none, Esc: cancel). Backspace: the default.",
             Item::TouchLayout => "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
             Item::WheelResize => "During play, the mouse wheel makes the playfield bigger or smaller (it always does in its editor).",
@@ -400,6 +436,8 @@ pub struct SettingsUi {
     /// The section last drawn and the animated highlight position in it.
     scroll: Cell<f32>,
     highlight: Cell<f32>,
+    /// The first row shown of a section longer than the screen.
+    first_row: Cell<usize>,
 }
 
 /// The playfield preset dropdown: a cursor over the flattened list, plus where each row was
@@ -741,7 +779,19 @@ impl SettingsUi {
         let rows: Vec<(usize, Item)> = ITEMS.iter().enumerate().filter(|(_, (sec, _))| *sec == SECTIONS[section].0).map(|(i, (_, it))| (i, *it)).collect();
         c.text(cx, TOP - 2.0, 11.0, rgba(accent(), 1.0), SECTIONS[section].0);
         let first = rows.first().map(|r| r.0).unwrap_or(0);
-        let target = (self.cursor - first) as f32 * ROW;
+        // A long section (the hotkeys) scrolls to keep the cursor in sight, leaving room for the
+        // help underneath.
+        let fits = ((crate::render::VIRTUAL_HEIGHT - (TOP + 18.0) - 60.0) / ROW).floor().max(1.0) as usize;
+        let at = self.cursor - first;
+        let mut top_row = if self.scroll.get() != section as f32 { 0 } else { self.first_row.get() };
+        if at < top_row {
+            top_row = at;
+        } else if at >= top_row + fits {
+            top_row = at + 1 - fits;
+        }
+        top_row = top_row.min(rows.len().saturating_sub(fits));
+        self.first_row.set(top_row);
+        let target = (at - top_row) as f32 * ROW;
         // The highlight glides within a section and jumps when the section changes.
         let mut hl = self.highlight.get();
         if self.scroll.get() != section as f32 || !hl.is_finite() {
@@ -751,7 +801,15 @@ impl SettingsUi {
         approach(&mut hl, target, c.dt_ms, 35.0);
         self.highlight.set(hl);
         let list_top = TOP + 18.0;
-        for (k, (i, item)) in rows.iter().enumerate() {
+        if rows.len() > fits {
+            // Where the rows shown are in the whole list.
+            let (bar_h, all_h) = (fits as f32 * ROW - 4.0, rows.len() as f32 * ROW);
+            let (from, len) = (top_row as f32 * ROW / all_h * bar_h, (fits as f32 * ROW / all_h * bar_h).max(12.0));
+            c.round_rect(cx + col + 4.0, list_top, 3.0, bar_h, 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+            c.round_rect(cx + col + 4.0, list_top + from, 3.0, len, 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
+        }
+        let rows_shown = rows.len().min(fits);
+        for (k, (i, item)) in rows.iter().skip(top_row).take(fits).enumerate() {
             let y = list_top + k as f32 * ROW;
             let selected = *i == self.cursor;
             let hover = !selected && c.hovered(cx, y, col, ROW - 4.0);
@@ -777,14 +835,14 @@ impl SettingsUi {
             }
             let v = if selected && self.binding.is_some() {
                 "press a key...".to_string()
-            } else if selected && !matches!(item, Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey) {
+            } else if selected && item.kind() != Kind::Key {
                 format!("<  {}  >", Canvas::fit(8.0, room - Canvas::text_width(8.0, "<    >"), &value(*item)))
             } else {
                 Canvas::fit(8.0, room, &value(*item))
             };
             let v_col = if selected && self.binding.is_some() { 0xFFD34D } else { 0xffffff };
             c.text_right(cx + col - 12.0, y + 9.5, 8.0, rgba(v_col, 1.0), &v);
-            if selected && self.binding.is_none() && !matches!(item, Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey) {
+            if selected && self.binding.is_none() && item.kind() != Kind::Key {
                 // The "<" and ">" around the value step it.
                 let tw = Canvas::text_width(8.0, &v);
                 c.hit(cx + col - 12.0 - tw - 6.0, y, 20.0, ROW - 4.0, Hit::SettingStep(*i, -1));
@@ -794,7 +852,7 @@ impl SettingsUi {
         c.round_rect(cx, list_top + hl, col, ROW - 4.0, 6.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
 
         // What the selected setting does.
-        let help_y = list_top + rows.len() as f32 * ROW + 10.0;
+        let help_y = list_top + rows_shown as f32 * ROW + 10.0;
         // Two lines, spaced for however tall the text comes out (taller on a text grid).
         let glyph_h = Canvas::text_height(7.0);
         let line_h = glyph_h + 4.0;

@@ -189,6 +189,8 @@ pub struct Game {
     start: f64,
     end_time: f64,
     track_ms: f64,
+    /// The song as it plays (the results screen plays it on).
+    pub track: Arc<Track>,
     first_note: f64,
     /// Game time of the last press per key: left rim, left centre, right centre, right rim.
     presses: [f64; 4],
@@ -235,6 +237,9 @@ pub struct Game {
     /// Playing a replay back: its presses and the next one due; and whose it is.
     pub replay: Option<(Vec<(f64, u8)>, usize)>,
     pub replay_of: Option<String>,
+    /// The pp counter: works out the play's pp so far (`pp::Live`), and its latest answer.
+    pub live_pp: Option<crate::pp::Live>,
+    live_pp_value: Option<f64>,
     /// Text shown at the top ("REPLAY - x", "SPECTATING - x").
     pub banner: Option<String>,
     /// When set, every hitsound played is logged (map time, sound, volume), e.g. for video audio.
@@ -1089,7 +1094,7 @@ impl Game {
         // The pre-roll is in map time; the track plays `rate` map-ms per ms.
         let track_start = speed.track(start);
         if let Some(a) = audio {
-            a.play(track, track_start);
+            a.play(track.clone(), track_start);
         }
         let state = map
             .notes
@@ -1158,6 +1163,7 @@ impl Game {
             start,
             end_time,
             track_ms,
+            track,
             first_note,
             presses: [f64::NEG_INFINITY; 4],
             last_judge: None,
@@ -1186,6 +1192,8 @@ impl Game {
             inputs: Vec::new(),
             replay: None,
             replay_of: None,
+            live_pp: None,
+            live_pp_value: None,
             banner: None,
             sfx_log: None,
             combo_break: None,
@@ -1252,6 +1260,10 @@ impl Game {
     /// Advances the clock. Returns true once the map is over.
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>, offset: f64) -> bool {
         self.offset = offset;
+        if let Some(live) = &mut self.live_pp {
+            let st = &self.stats;
+            self.live_pp_value = live.update(st.great, st.ok, st.miss, st.max_combo);
+        }
         if self.resuming.is_some_and(|(_, end)| now >= end) {
             self.resume(audio);
         }
@@ -2878,8 +2890,21 @@ impl Game {
         if shown(Part::Score) {
             number(c, 18.0, 24.0, WHITE, &format!("{:08}", self.stats.score));
         }
+        let acc = format!("{:.2}%", self.stats.accuracy() * 100.0);
         if shown(Part::Accuracy) {
-            number(c, 50.0, 14.0, 0xc8c8d8, &format!("{:.2}%", self.stats.accuracy() * 100.0));
+            number(c, 50.0, 14.0, 0xc8c8d8, &acc);
+        }
+        // The pp counter, on the accuracy's line, left of it.
+        if let Some(pp) = self.live_pp_value.filter(|_| shown(Part::Pp)) {
+            let acc_w = if shown(Part::Accuracy) { c.number_width(Font::Score, 14.0, &acc).unwrap_or_else(|| Canvas::text_width(14.0, &acc)) + 14.0 } else { 0.0 };
+            let text = format!("{pp:.0}pp");
+            let right = w - 18.0 - acc_w;
+            match c.number_width(Font::Score, 14.0, &text) {
+                Some(nw) => {
+                    c.number(Font::Score, right - nw, 50.0, 14.0, rgba(0xff8ad8, 1.0), &text);
+                }
+                None => c.text_right(right, 50.0, 14.0, rgba(0xff8ad8, 1.0), &text),
+            }
         }
         // Progress bar.
         if shown(Part::Progress) {

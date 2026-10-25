@@ -68,6 +68,11 @@ impl Scores {
             .and_then(|f| std::fs::read_to_string(f).ok())
             .map(|text| text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
             .unwrap_or_default();
+        let mut all = all;
+        // Lines from before scores carried their id.
+        for s in &mut all {
+            s.score.id = s.id;
+        }
         let next_id = all.iter().map(|s| s.id + 1).max().unwrap_or(1);
         if let Some(f) = &file {
             println!("{} scores ({})", all.len(), f.display());
@@ -108,6 +113,7 @@ impl Scores {
                 ok: play.ok,
                 set_id: m.set_id,
                 stars: play.stars.filter(|s| s.is_finite() && (0.0..50.0).contains(s)),
+                id,
             },
         };
         if let Some(dir) = &self.replays {
@@ -145,6 +151,13 @@ impl Scores {
         let mut v: Vec<&Stored> = best.into_values().collect();
         v.sort_by(|a, b| b.score.score.cmp(&a.score.score).then(a.id.cmp(&b.id)));
         v
+    }
+
+    /// The presses of score `id`, as they were sent in.
+    pub fn replay(&self, id: u64) -> Option<online::OnlineReplay> {
+        let dir = self.replays.as_ref()?;
+        self.all.iter().any(|s| s.id == id).then_some(())?;
+        serde_json::from_slice(&std::fs::read(dir.join(format!("{id}.json"))).ok()?).ok()
     }
 
     pub fn map_scores(&self, map: u64) -> Vec<OnlineScore> {
@@ -475,6 +488,11 @@ mod tests {
         let mut s = Scores::load(Some(dir.clone()));
         s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
         assert!(dir.join("replays/1.json").is_file());
+        let again = Scores::load(Some(dir.clone()));
+        assert_eq!(again.map_scores(7)[0].id, 1, "scores carry their id to ask for the replay by");
+        let r = again.replay(1).unwrap();
+        assert_eq!((r.version, r.inputs.clone()), (2, vec![(1000.0, 1)]));
+        assert!(again.replay(99).is_none());
         let again = Scores::load(Some(dir.clone()));
         assert_eq!(again.map_scores(7).len(), 1);
         assert_eq!(again.next_id, 2);

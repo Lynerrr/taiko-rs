@@ -238,10 +238,11 @@ fn ctrl_backspace_clears_the_search() {
 fn ticking_interface_parts_keeps_the_list_open() {
     let mut s = layout_tests::state();
     s.open_choices(Item::InterfaceHides);
-    s.pick_choice(9);
+    let k = hud::Part::ALL.iter().position(|&p| p == hud::Part::HitAnimation).unwrap();
+    s.pick_choice(k);
     assert!(!s.cfg.interface_hides.has(hud::Part::HitAnimation));
-    assert_eq!(s.settings_ui.choices.as_ref().map(|c| c.cursor), Some(9));
-    assert!(s.settings_ui.choices.as_ref().unwrap().names[9].starts_with("[ ]"));
+    assert_eq!(s.settings_ui.choices.as_ref().map(|c| c.cursor), Some(k));
+    assert!(s.settings_ui.choices.as_ref().unwrap().names[k].starts_with("[ ]"));
 }
 
 #[test]
@@ -257,4 +258,52 @@ fn a_maps_status_comes_from_the_mirror_else_osu_db() {
     // The mirror can tell pending from graveyard.
     s.set_status.insert(2400428, Some("graveyard".into()));
     assert_eq!(s.map_status(0).map(|x| x.0), Some("GRAVEYARD"));
+}
+
+#[test]
+fn hotkeys_can_be_moved_and_removed() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let now = Instant::now();
+    // Pause on P: Esc no longer pauses, P does.
+    s.cfg.hotkeys.set(keys::Hotkey::Pause, Some(keys::Chord::plain(KeyCode::KeyP)));
+    let map = beatmap::calibration_map(500.0, 4, 64);
+    s.scene = Scene::Play { game: Box::new(Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None)), entry: 0, from: None };
+    s.key(KeyCode::Escape, false, None, now, None);
+    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused.is_none()));
+    s.key(KeyCode::KeyP, false, None, now, None);
+    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused.is_some()));
+
+    // Scroll speed up taken away: F4 does nothing.
+    s.scene = Scene::Select;
+    let speed = s.cfg.scroll_speed;
+    s.cfg.hotkeys.set(keys::Hotkey::ScrollFaster, None);
+    s.key(KeyCode::F4, false, None, now, None);
+    assert_eq!(s.cfg.scroll_speed, speed);
+
+    // Bound in settings: Enter on its row, then Ctrl+K; Delete takes it away, Backspace brings
+    // the default back.
+    s.open_settings();
+    let h = keys::Hotkey::ScrollSlower;
+    let i = keys::Hotkey::ALL.iter().position(|&k| k == h).unwrap();
+    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::Hotkey(i)).unwrap();
+    s.key(KeyCode::Enter, false, None, now, None);
+    s.modifiers_ctrl = true;
+    s.key(KeyCode::ControlLeft, false, None, now, None);
+    s.key(KeyCode::KeyK, false, None, now, None);
+    s.modifiers_ctrl = false;
+    assert_eq!(s.cfg.hotkeys.get(h), Some(keys::Chord { key: KeyCode::KeyK, ctrl: true, shift: false, alt: false }));
+    s.key(KeyCode::Enter, false, None, now, None);
+    s.key(KeyCode::Delete, false, None, now, None);
+    assert_eq!(s.cfg.hotkeys.get(h), None);
+    s.key(KeyCode::Backspace, false, None, now, None);
+    assert_eq!(s.cfg.hotkeys.get(h), Some(h.default()));
+
+    // A drum key can be taken away too.
+    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::Key(0)).unwrap();
+    s.key(KeyCode::Enter, false, None, now, None);
+    s.key(KeyCode::Delete, false, None, now, None);
+    assert_eq!(s.cfg.keys[0], config::NO_KEY);
+    s.key(KeyCode::Backspace, false, None, now, None);
+    assert_eq!(s.cfg.keys[0], KeyCode::KeyD);
 }

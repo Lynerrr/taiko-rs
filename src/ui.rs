@@ -1204,6 +1204,23 @@ impl Select {
     }
 }
 
+/// What a results screen works out in the background: a leaderboard score's whole stats (its
+/// replay played through), the pp breakdown, and an online score's replay.
+#[derive(Default)]
+pub struct Detail {
+    pub stats: Option<(Stats, Windows)>,
+    pub breakdown: Option<crate::pp::Breakdown>,
+    pub replay: Option<Result<std::path::PathBuf, String>>,
+}
+
+/// A score opened from a leaderboard (not one just played).
+pub struct Opened {
+    pub player: String,
+    /// Unix seconds.
+    pub date: u64,
+    pub online: bool,
+}
+
 pub struct Results {
     pub shown: std::time::Instant,
     pub title: String,
@@ -1219,14 +1236,85 @@ pub struct Results {
     pub failed: bool,
     /// The play's performance points (kept plays only).
     pub pp: Option<f64>,
+    /// The pp taken apart, like osu!'s performance breakdown (once worked out).
+    pub breakdown: Option<crate::pp::Breakdown>,
+    /// Why the play has no pp, said in the pp panel.
+    pub no_pp: Option<&'static str>,
+    /// Opened from a leaderboard: whose score it is.
+    pub opened: Option<Opened>,
+    /// Hit errors, drumrolls and big notes aren't known yet (a leaderboard score, until its
+    /// replay has been played through).
+    pub partial: bool,
+    /// The song plays on, like osu!: the play's track, and the track ms it starts over at.
+    pub music: Option<(std::sync::Arc<crate::audio::Track>, f64)>,
+    pub job: Option<std::sync::mpsc::Receiver<Detail>>,
+    /// Why an online score's replay couldn't be had.
+    pub replay_error: Option<String>,
 }
 
+/// Width of the pp panel on the right.
+const PP_PANEL_W: f32 = 222.0;
+
 impl Results {
+    /// A results screen with nothing but the essentials filled in.
+    pub fn new(title: String, stats: Stats, windows: Windows) -> Results {
+        Results {
+            shown: std::time::Instant::now(),
+            title,
+            stats,
+            windows,
+            replay: None,
+            rank: None,
+            watched: None,
+            failed: false,
+            pp: None,
+            breakdown: None,
+            no_pp: None,
+            opened: None,
+            partial: false,
+            music: None,
+            job: None,
+            replay_error: None,
+        }
+    }
+
+    /// Takes in what the background work found.
+    pub fn poll(&mut self) {
+        let Some(rx) = &self.job else { return };
+        let d = match rx.try_recv() {
+            Ok(d) => d,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.job = None;
+                return;
+            }
+        };
+        self.job = None;
+        if let Some((st, windows)) = d.stats {
+            // The counts stay the leaderboard's; the replay adds what it doesn't keep.
+            let s = &mut self.stats;
+            (s.errors, s.error_offsets, s.roll_ticks, s.swells, s.strong) = (st.errors, st.error_offsets, st.roll_ticks, st.swells, st.strong);
+            self.windows = windows;
+            self.partial = false;
+        }
+        if let Some(b) = d.breakdown {
+            self.breakdown = Some(b);
+            self.pp.get_or_insert(b.pp);
+        }
+        match d.replay {
+            Some(Ok(file)) => self.replay = Some(file),
+            Some(Err(e)) => self.replay_error = Some(e),
+            None => {}
+        }
+    }
+
     pub fn draw(&self, c: &mut Canvas) {
         let w = c.width;
-        let cx = w / 2.0;
+        let panel_x = w - 24.0 - PP_PANEL_W;
+        // The play's numbers in the middle of what the pp panel leaves.
+        let cx = panel_x / 2.0 + 6.0;
         let size = Canvas::fit_size(12.0, 9.0, w - 48.0, &self.title);
-        c.text_centered(cx, 40.0 + (12.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, w - 48.0, &self.title));
+        c.text_centered(w / 2.0, 30.0 + (12.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, w - 48.0, &self.title));
         let s = &self.stats;
         let acc = s.accuracy() * 100.0;
         let grade = crate::online::grade(s.great, s.ok, s.miss, s.accuracy());
@@ -1257,33 +1345,91 @@ impl Results {
         for (i, (col, text)) in lines.iter().enumerate() {
             c.text(cx - 170.0, 260.0 + i as f32 * 24.0, 12.0, rgba(*col, 1.0), text);
         }
-        let right = [
-            format!("UR      {:.1}", s.unstable_rate()),
-            format!("MEAN    {:+.1} ms", s.mean_error()),
-            format!("DRUMROLL {}", s.roll_ticks),
-            format!("BIG x2  {}", s.strong),
-        ];
+        let right = if self.partial {
+            ["UR      -".to_string(), "MEAN    -".into(), "DRUMROLL -".into(), "BIG x2  -".into()]
+        } else {
+            [
+                format!("UR      {:.1}", s.unstable_rate()),
+                format!("MEAN    {:+.1} ms", s.mean_error()),
+                format!("DRUMROLL {}", s.roll_ticks),
+                format!("BIG x2  {}", s.strong),
+            ]
+        };
         for (i, text) in right.iter().enumerate() {
             c.text(cx + 30.0, 260.0 + i as f32 * 24.0, 12.0, rgba(0xc8c8d8, 1.0), text);
         }
-        let hint = if s.errors.len() >= 20 && s.mean_error().abs() > 5.0 {
+        self.draw_pp_panel(c, panel_x, 52.0, count as f64);
+
+        let hint = if let Some(o) = &self.opened {
+            let place = if o.online { "online" } else { "local" };
+            format!("{place} score by {}, {} ago", o.player, crate::scores::age(o.date))
+        } else if s.errors.len() >= 20 && s.mean_error().abs() > 5.0 {
             let dir = if s.mean_error() > 0.0 { "late" } else { "early" };
             format!("You hit {:.0} ms {dir} on average; press {} a few times to adjust this map's offset.", s.mean_error().abs(), if s.mean_error() > 0.0 { "=" } else { "-" })
         } else {
             format!("Windows: great +-{:.0}  ok +-{:.0} ms", self.windows.great, self.windows.ok)
         };
-        c.text_centered(cx, 380.0, 9.0, rgba(0x8a8aa0, 1.0), &hint);
-        if let Some(who) = &self.watched {
-            c.text_centered(cx, 404.0, 9.0, rgba(0x4fb4ff, 1.0), &format!("replay of {who}"));
+        c.text_centered(w / 2.0, 380.0, 9.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(9.0, w - 48.0, &hint));
+        if let Some(e) = &self.replay_error {
+            c.text_centered(w / 2.0, 404.0, 9.0, rgba(0xEB452C, 1.0), &Canvas::fit(9.0, w - 48.0, &format!("no replay: {e}")));
+        } else if self.opened.as_ref().is_some_and(|o| o.online) && self.replay.is_none() {
+            c.text_centered(w / 2.0, 404.0, 9.0, rgba(0x4fb4ff, 1.0), "getting the replay...");
+        } else if let Some(who) = &self.watched {
+            c.text_centered(w / 2.0, 404.0, 9.0, rgba(0x4fb4ff, 1.0), &format!("replay of {who}"));
         } else if let Some((rank, of)) = self.rank {
-            c.text_centered(cx, 404.0, 9.0, rgba(0xFFD34D, 1.0), &format!("#{rank} of {of} local scores on this map"));
+            c.text_centered(w / 2.0, 404.0, 9.0, rgba(0xFFD34D, 1.0), &format!("#{rank} of {of} local scores on this map"));
         }
-        let mut buttons = vec![("Retry  (Enter)", Hit::Key(KeyCode::Enter), true)];
+        let mut buttons = Vec::new();
+        if self.opened.is_none() {
+            buttons.push(("Retry  (Enter)", Hit::Key(KeyCode::Enter), true));
+        }
         if self.replay.is_some() {
-            buttons.push(("Watch replay  (R)", Hit::Key(KeyCode::KeyR), false));
+            buttons.push(("Watch replay  (R)", Hit::Key(KeyCode::KeyR), self.opened.is_some()));
             buttons.push(("Export video  (V)", Hit::Key(KeyCode::KeyV), false));
         }
-        buttons.push(("Song select  (Esc)", Hit::Key(KeyCode::Escape), false));
+        let back = if self.opened.is_some() { "Back  (Esc)" } else { "Song select  (Esc)" };
+        buttons.push((back, Hit::Key(KeyCode::Escape), false));
         c.button_row(424.0, &buttons);
+    }
+
+    /// osu!'s performance breakdown: the pp, the difficulty and accuracy parts measured against
+    /// an SS's, and what a full combo and an SS would give. `count` (0-1) counts the numbers up.
+    fn draw_pp_panel(&self, c: &mut Canvas, x: f32, y: f32, count: f64) {
+        let (pw, h) = (PP_PANEL_W, 232.0);
+        let (label, value) = (rgba(0x8a8aa0, 1.0), rgba(0xffffff, 1.0));
+        c.round_rect(x, y, pw, h, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        c.text(x + 12.0, y + 12.0, 7.0, label, "PERFORMANCE");
+        let Some(b) = self.breakdown else {
+            let note = if self.job.is_some() { "working it out..." } else { self.no_pp.unwrap_or("no pp for this play") };
+            c.text_centered(x + pw / 2.0, y + h / 2.0 - 4.0, 8.0, label, &Canvas::fit(8.0, pw - 24.0, note));
+            return;
+        };
+        crate::stars::draw_pill(c, x + pw - 10.0, y + 9.0, 7.0, Some(b.stars as f32));
+        let big = c.text(x + 12.0, y + 26.0, 22.0, rgba(0xff8ad8, 1.0), &format!("{:.0}", b.pp * count));
+        c.text(x + 16.0 + big, y + 38.0, 9.0, rgba(0xff8ad8, 1.0), "pp");
+        let of_ss = if b.if_ss > 0.0 { b.pp / b.if_ss * 100.0 } else { 0.0 };
+        c.text(x + 12.0, y + 56.0, 6.0, label, &format!("{of_ss:.0}% of an SS"));
+        for (i, (name, v, max)) in [("Difficulty", b.difficulty, b.ss_difficulty), ("Accuracy", b.accuracy, b.ss_accuracy)].into_iter().enumerate() {
+            let by = y + 74.0 + i as f32 * 32.0;
+            c.text(x + 12.0, by, 8.0, rgba(0xc8c8d8, 1.0), name);
+            c.text_right(x + pw - 12.0, by, 8.0, value, &format!("{:.0}", v * count));
+            let bw = pw - 24.0;
+            c.round_rect(x + 12.0, by + 13.0, bw, 5.0, 2.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+            let f = if max > 0.0 { ((v / max).clamp(0.0, 1.0) * count) as f32 } else { 0.0 };
+            if f > 0.0 {
+                c.round_rect(x + 12.0, by + 13.0, (bw * f).max(5.0), 5.0, 2.5, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
+            }
+        }
+        c.rect(x + 12.0, y + 144.0, pw - 24.0, 1.0, rgba(0x2a2a38, 1.0));
+        let rows = [
+            ("Full combo", format!("{:.0} pp", b.if_fc)),
+            ("SS", format!("{:.0} pp", b.if_ss)),
+            ("Combo", format!("{} / {}", self.stats.max_combo, b.max_combo)),
+        ];
+        for (i, (name, v)) in rows.iter().enumerate() {
+            let ry = y + 156.0 + i as f32 * 22.0;
+            c.text(x + 12.0, ry, 7.0, label, name);
+            c.text_right(x + pw - 12.0, ry, 7.0, value, v);
+        }
     }
 }

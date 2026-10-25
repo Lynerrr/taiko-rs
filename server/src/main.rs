@@ -378,6 +378,10 @@ fn handle(state: &State, stream: TcpStream) {
             }
         }
         Request::MapScores { map } => Reply::Scores(state.scores.lock().unwrap().map_scores(map)),
+        Request::Replay { id } => match state.scores.lock().unwrap().replay(id) {
+            Some(r) => Reply::Replay(Box::new(r)),
+            None => Reply::Error("that replay isn't on the server".into()),
+        },
         Request::Profile { name } => match state.profile(&name) {
             Some(p) => Reply::Profile(Box::new(p)),
             None => Reply::Error("no such player".into()),

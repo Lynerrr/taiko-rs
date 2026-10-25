@@ -189,6 +189,38 @@ impl Replay {
     }
 }
 
+/// Plays a replay through its map, silently, for everything the results screen shows that the
+/// replay doesn't keep (hit errors, drumrolls, big notes) and the hit windows. None if the map
+/// can't be read.
+pub fn simulate(map_path: &Path, r: &Replay) -> Option<(crate::game::Stats, crate::game::Windows)> {
+    let map = crate::beatmap::load(map_path).ok()?;
+    let track = std::sync::Arc::new(crate::audio::Track { samples: Vec::new(), rate: r.rate });
+    let mut g = crate::video::replay_game(&map, &track, r);
+    // Frame by frame, as it was played.
+    let end = g.end_time() + 2000.0;
+    let mut t = g.time;
+    while t < end {
+        t = (t + 8.0).min(end);
+        g.set_time(t);
+    }
+    Some((g.stats.clone(), g.windows))
+}
+
+/// Where online replays are kept once fetched (outside the score index).
+pub fn online_replay_path(id: u64) -> Option<PathBuf> {
+    Some(dir()?.join("online").join(format!("{id}.json")))
+}
+
+/// Saves a replay fetched from the server where `online_replay_path` says.
+pub fn save_online(id: u64, replay: &Replay) -> Result<PathBuf, String> {
+    let path = online_replay_path(id).ok_or("no data folder")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, serde_json::to_vec(replay).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 pub fn new_version() -> u32 {
     REPLAY_VERSION
 }

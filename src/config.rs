@@ -177,6 +177,8 @@ pub struct Config {
     pub keys: [KeyCode; 4],
     /// Previous / next playfield resolution preset.
     pub preset_keys: [KeyCode; 2],
+    /// Every other shortcut's key (`keys::Hotkey`).
+    pub hotkeys: crate::keys::Bindings,
     /// Show the playfield's resolution in a corner during play.
     pub show_playfield_size: bool,
     /// The player's own playfield sizes, first in the preset list, in their order.
@@ -266,6 +268,7 @@ impl Default for Config {
             notify_requests: true,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
+            hotkeys: crate::keys::Bindings::default(),
             show_playfield_size: true,
             saved_presets: Vec::new(),
             skin: String::new(),
@@ -488,7 +491,13 @@ const KEY_NAMES: &[KeyCode] = &[
     KeyCode::Numpad8, KeyCode::Numpad9, KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4, KeyCode::F5,
     KeyCode::F6, KeyCode::F7, KeyCode::F8, KeyCode::F9, KeyCode::F10, KeyCode::F11, KeyCode::F12, KeyCode::Minus,
     KeyCode::Equal, KeyCode::PageUp, KeyCode::PageDown, KeyCode::Home, KeyCode::End, KeyCode::Insert, KeyCode::Delete,
+    KeyCode::Escape, KeyCode::Backspace, KeyCode::NumpadAdd, KeyCode::NumpadSubtract, KeyCode::NumpadMultiply,
+    KeyCode::NumpadDivide, KeyCode::NumpadDecimal, KeyCode::NumpadEnter, KeyCode::Pause, KeyCode::ScrollLock,
+    KeyCode::ContextMenu, KeyCode::IntlBackslash, NO_KEY,
 ];
+
+/// A key taken away: nothing presses it.
+pub const NO_KEY: KeyCode = KeyCode::F35;
 
 /// "Shift+Tab".
 pub fn interface_key_name((shift, k): (bool, KeyCode)) -> String {
@@ -496,11 +505,17 @@ pub fn interface_key_name((shift, k): (bool, KeyCode)) -> String {
 }
 
 pub fn key_name(k: KeyCode) -> String {
+    if k == NO_KEY {
+        return "none".into();
+    }
     let s = format!("{k:?}");
     s.strip_prefix("Key").or_else(|| s.strip_prefix("Digit")).map(str::to_owned).unwrap_or(s)
 }
 
 pub fn parse_key(s: &str) -> Option<KeyCode> {
+    if s.eq_ignore_ascii_case("none") {
+        return Some(NO_KEY);
+    }
     KEY_NAMES.iter().copied().find(|k| format!("{k:?}").eq_ignore_ascii_case(s) || key_name(*k).eq_ignore_ascii_case(s))
 }
 
@@ -590,7 +605,14 @@ impl Config {
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
                 "interface_hidden" => cfg.interface_hidden = v == "true",
-                "interface_hides" => cfg.interface_hides = crate::hud::Parts::parse(v),
+                "interface_hides" => {
+                    let mut parts = crate::hud::Parts::parse(v);
+                    // Saved before the pp counter, "everything" still means everything.
+                    if !v.split(',').any(|k| k.trim() == "pp") && parts.len() == crate::hud::Part::ALL.len() - 1 {
+                        parts = crate::hud::Parts::ALL;
+                    }
+                    cfg.interface_hides = parts;
+                }
                 "interface_key" => {
                     let (shift, name) = match v.strip_prefix("Shift+") {
                         Some(rest) => (true, rest),
@@ -600,6 +622,7 @@ impl Config {
                         cfg.interface_key = (shift, k);
                     }
                 }
+                k if k.starts_with("hotkey.") => cfg.hotkeys.parse_line(&k["hotkey.".len()..], v),
                 "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
                 "skin" => cfg.skin = v.to_string(),
                 "skin_part" => cfg.skin_parts.parse(v),
@@ -765,6 +788,7 @@ impl Config {
             self.interface_hides.format(),
             interface_key_name(self.interface_key)
         ));
+        out.push_str(&self.hotkeys.config_lines());
         out.push_str(&self.video.config_lines());
         out.push_str(&format!(
             "# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (C in the mod select)\nmultiverse = {}\n",

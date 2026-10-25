@@ -5,6 +5,7 @@
 pub enum Part {
     Score,
     Accuracy,
+    Pp,
     Combo,
     Progress,
     Health,
@@ -16,9 +17,10 @@ pub enum Part {
 }
 
 impl Part {
-    pub const ALL: [Part; 10] = [
+    pub const ALL: [Part; 11] = [
         Part::Score,
         Part::Accuracy,
+        Part::Pp,
         Part::Combo,
         Part::Progress,
         Part::Health,
@@ -34,6 +36,7 @@ impl Part {
         match self {
             Part::Score => "Score",
             Part::Accuracy => "Accuracy",
+            Part::Pp => "pp counter",
             Part::Combo => "Combo (on the drum)",
             Part::Progress => "Progress bar",
             Part::Health => "Health bar",
@@ -50,6 +53,7 @@ impl Part {
         match self {
             Part::Score => "score",
             Part::Accuracy => "accuracy",
+            Part::Pp => "pp",
             Part::Combo => "combo",
             Part::Progress => "progress",
             Part::Health => "health",

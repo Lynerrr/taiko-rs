@@ -416,21 +416,39 @@ fn assert_every_screen_fits() {
     s.key(KeyCode::Escape, false, None, Instant::now(), None);
     check(&mut s, "pause", &mut out);
 
-    let results = |failed: bool| ui::Results {
-        shown: Instant::now() - Duration::from_secs(10),
-        title: entry(0, 0, true).label(),
-        stats: game::Stats { great: 1234, ok: 56, miss: if failed { 300 } else { 7 }, max_combo: 1290, score: 1_234_567, ..Default::default() },
-        windows: game::Windows::new(5.0),
-        replay: (!failed).then(|| PathBuf::from("/nonexistent/replay.json")),
-        rank: (!failed).then_some((1, 12)),
-        watched: (!failed).then(|| LONG_NAME.to_string()),
-        failed,
-        pp: (!failed).then_some(456.7),
+    let results = |failed: bool| {
+        let stats = game::Stats { great: 1234, ok: 56, miss: if failed { 300 } else { 7 }, max_combo: 1290, score: 1_234_567, ..Default::default() };
+        let mut r = ui::Results::new(entry(0, 0, true).label(), stats, game::Windows::new(5.0));
+        r.shown = Instant::now() - Duration::from_secs(10);
+        r.replay = (!failed).then(|| PathBuf::from("/nonexistent/replay.json"));
+        r.rank = (!failed).then_some((1, 12));
+        r.watched = (!failed).then(|| LONG_NAME.to_string());
+        r.failed = failed;
+        r.pp = (!failed).then_some(456.7);
+        r.no_pp = failed.then_some("failed plays get no pp");
+        r.breakdown = (!failed).then_some(pp::Breakdown {
+            pp: 456.7,
+            difficulty: 1234.5,
+            accuracy: 345.6,
+            if_fc: 1500.2,
+            if_ss: 1888.8,
+            ss_difficulty: 1500.0,
+            ss_accuracy: 500.0,
+            stars: 12.34,
+            max_combo: 12345,
+        });
+        r
     };
     s.scene = Scene::Results { results: results(false), entry: 0, from: None };
     check(&mut s, "results", &mut out);
     s.scene = Scene::Results { results: results(true), entry: 0, from: None };
     check(&mut s, "results failed", &mut out);
+    let mut opened = results(false);
+    (opened.watched, opened.rank, opened.replay, opened.partial) = (None, None, None, true);
+    opened.opened = Some(ui::Opened { player: LONG_NAME.to_string(), date: 0, online: true });
+    opened.replay_error = Some("that replay isn't on the server".into());
+    s.scene = Scene::Results { results: opened, entry: 0, from: None };
+    check(&mut s, "results of an online score", &mut out);
     s.scene = Scene::Select;
 
     // The video editor (its map still loading): quality, a target size being typed, exporting.

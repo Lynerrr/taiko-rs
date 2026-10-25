@@ -1653,9 +1653,11 @@ pub enum Hit {
     /// Download tab status category / sort chips.
     DlCategory(usize),
     DlSort(usize),
-    /// A row of the song select leaderboard (watches that replay) / its video button.
+    /// A row of the song select leaderboard (opens its results) / its video button, and a row
+    /// of the online leaderboard.
     ScoreRow(usize),
     ScoreVideo(usize),
+    OnlineScoreRow(usize),
     /// The leaderboard's tabs: local (false) or online (true).
     BoardTab(bool),
     /// Lobby: give the host role to this player.
