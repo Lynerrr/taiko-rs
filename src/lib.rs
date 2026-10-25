@@ -1880,8 +1880,7 @@ impl State {
                 for path in paths {
                     let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("osz")) {
-                        self.toast(format!("importing {name}..."));
-                        self.downloads.push(download::import(path, &name, self.songs_dir.clone(), false));
+                        self.import_osz(path, &name, false);
                     } else {
                         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                         self.toast(format!("{file} isn't a map: drop .osz files"));
@@ -1889,6 +1888,39 @@ impl State {
                 }
             }
         }
+    }
+
+    /// Unpacks an `.osz` into the Songs folder, unless everything in it is already in the list or
+    /// on its way (the same file dropped twice). A set that's partly here (a new difficulty) is
+    /// unpacked into its own folder when that's in the Songs folder. `remove`: delete the
+    /// archive afterwards (a temporary copy).
+    fn import_osz(&mut self, archive: PathBuf, name: &str, remove: bool) {
+        let maps = match download::archive_maps(&archive) {
+            Ok(maps) if !maps.is_empty() => maps,
+            result => {
+                if remove {
+                    let _ = std::fs::remove_file(&archive);
+                }
+                self.toast(match result {
+                    Err(e) => format!("{name}: {e}"),
+                    Ok(_) => format!("{name} has no maps in it"),
+                });
+                return;
+            }
+        };
+        let pending: std::collections::HashSet<u64> = self.downloads.iter().flat_map(|j| j.maps.iter().copied()).collect();
+        let (fresh, home) = library::osz_news(&self.library, &pending, &maps);
+        if fresh == 0 {
+            if remove {
+                let _ = std::fs::remove_file(&archive);
+            }
+            self.toast(format!("{name} is already in your songs"));
+            return;
+        }
+        let folder = home.filter(|d| d.parent() == Some(self.songs_dir.as_path())).and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned());
+        self.toast(format!("importing {name}..."));
+        let job = download::import(archive, folder.as_deref().unwrap_or(name), self.songs_dir.clone(), remove, maps.into_iter().map(|m| m.1).collect());
+        self.downloads.push(job);
     }
 
     /// While files are dragged over the window: where they go when dropped.
@@ -5715,8 +5747,7 @@ impl State {
         if self.imports_checked.elapsed() >= Duration::from_secs(1) {
             self.imports_checked = Instant::now();
             for (archive, name) in android::take_imports() {
-                self.toast(format!("importing {name}..."));
-                self.downloads.push(download::import(archive, &name, self.songs_dir.clone(), true));
+                self.import_osz(archive, &name, true);
             }
         }
         if let Some(rx) = &self.lobby_lookup {

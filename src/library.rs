@@ -269,9 +269,59 @@ pub fn scan(inputs: &[PathBuf], found: &AtomicUsize) -> Vec<Entry> {
     entries
 }
 
+/// The same beatmap set: by set ID when both maps have one, else by artist, title and mapper.
+fn same_set(a: &Meta, b: &Meta) -> bool {
+    match (a.set_id.filter(|&id| id > 0), b.set_id.filter(|&id| id > 0)) {
+        (Some(x), Some(y)) => x == y,
+        _ => a.artist == b.artist && a.title == b.title && a.creator == b.creator,
+    }
+}
+
+/// What unpacking an `.osz` (its difficulties: header and content hash) would add: how many of
+/// its difficulties are neither in the list with the same content nor in `pending` (on their
+/// way already), and the folder of the set if some of it is here.
+pub fn osz_news<'a>(library: &'a [Entry], pending: &std::collections::HashSet<u64>, maps: &[(Meta, u64)]) -> (usize, Option<&'a Path>) {
+    let mut home = None;
+    let mut fresh = 0;
+    for (meta, hash) in maps {
+        let mut here = pending.contains(hash);
+        for e in library.iter().filter(|e| same_set(&e.meta, meta)) {
+            home = home.or(e.path.parent());
+            // Only same-named difficulties get hashed: reading every file would take a while.
+            here = here || (e.meta.version == meta.version && e.hash() == *hash);
+        }
+        fresh += usize::from(!here);
+    }
+    (fresh, home)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_osz_already_in_the_list_adds_nothing() {
+        let root = std::env::temp_dir().join(format!("taiko-rs-news-{}", std::process::id()));
+        let set = root.join("123 A - T");
+        std::fs::create_dir_all(&set).unwrap();
+        let meta = |version: &str, set_id| Meta { artist: "A".into(), title: "T".into(), creator: "c".into(), version: version.into(), set_id, ..Default::default() };
+        std::fs::write(set.join("oni.osu"), b"oni").unwrap();
+        let library = [Entry::new(set.join("oni.osu"), meta("Oni", Some(123)))];
+        let hash = |b: &[u8]| crate::net::map_hash(b);
+        let none = std::collections::HashSet::new();
+        // The same file: nothing new, and the set's folder is known.
+        assert_eq!(osz_news(&library, &none, &[(meta("Oni", Some(123)), hash(b"oni"))]), (0, Some(set.as_path())));
+        // One more difficulty, and an updated Oni.
+        let maps = [(meta("Oni", Some(123)), hash(b"oni v2")), (meta("Muzukashii", Some(123)), hash(b"muzu"))];
+        assert_eq!(osz_news(&library, &none, &maps).0, 2);
+        // Dropped twice: the first one is still unpacking.
+        let pending = maps.iter().map(|m| m.1).collect();
+        assert_eq!(osz_news(&library, &pending, &maps).0, 0);
+        // Unsubmitted maps (no set ID) match by artist, title and mapper.
+        assert_eq!(osz_news(&library, &none, &[(meta("Oni", None), hash(b"oni"))]), (0, Some(set.as_path())));
+        assert_eq!(osz_news(&library, &none, &[(Meta { creator: "d".into(), ..meta("Oni", None) }, hash(b"oni"))]), (1, None));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn picking_an_osu_install_scans_its_songs_folder() {

@@ -163,6 +163,11 @@ pub fn read_meta_file(path: &Path) -> Option<Meta> {
     Some(meta)
 }
 
+/// The header of a `.osu` already in memory (one inside an `.osz`).
+pub fn read_meta(text: &str) -> Meta {
+    parse_sections(text, true).0
+}
+
 /// The background is the first `0,0,"file",x,y` event, right at the top of [Events].
 fn read_background(reader: &mut impl std::io::BufRead) -> Option<String> {
     let mut line = Vec::new();

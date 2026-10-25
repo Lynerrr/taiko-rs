@@ -331,6 +331,9 @@ pub struct Job {
     pub done: Arc<AtomicU64>,
     pub total: Arc<AtomicU64>,
     pub rx: Receiver<Result<PathBuf, String>>,
+    /// Content hashes of the difficulties an import brings (empty for downloads), so the same
+    /// set dropped twice isn't unpacked twice.
+    pub maps: Vec<u64>,
 }
 
 impl Job {
@@ -351,7 +354,7 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     std::thread::spawn(move || {
         let _ = tx.send(fetch(id, &name, &songs, &d, &t));
     });
-    Job { set, done, total, rx }
+    Job { set, done, total, rx, maps: Vec::new() }
 }
 
 /// Passes over the mirrors before a download gives up: osu.direct often answers 503 for a
@@ -553,14 +556,14 @@ pub fn receive(set: SetInfo, name: String, total: u64, songs: PathBuf) -> (Job, 
         })();
         let _ = tx.send(result);
     });
-    (Job { set, done, total: total_bytes, rx }, feed)
+    (Job { set, done, total: total_bytes, rx, maps: Vec::new() }, feed)
 }
 
-/// Imports an `.osz` that is already on disk (opened with the game on Android) like a download:
-/// unpacked into `songs/<name>/` on a background thread, then the archive is removed.
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+/// Imports an `.osz` that is already on disk (dropped on the window, opened with the game on
+/// Android) like a download: unpacked into `songs/<name>/` on a background thread.
 /// `remove`: delete the archive once unpacked (a temporary copy, not the player's own file).
-pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool) -> Job {
+/// `maps`: the content hashes of its difficulties ([`archive_maps`]).
+pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool, maps: Vec<u64>) -> Job {
     let name = safe_folder_name(name);
     let set = SetInfo {
         // osu! names its exports "<set id> <artist> - <title>.osz".
@@ -586,7 +589,25 @@ pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool) -> Job
         }
         let _ = tx.send(result);
     });
-    Job { set, done: Arc::default(), total: Arc::default(), rx }
+    Job { set, done: Arc::default(), total: Arc::default(), rx, maps }
+}
+
+/// The difficulties in an `.osz`: each `.osu`'s header and content hash (the same hash as
+/// `Entry::hash`), to tell whether the set is already in the list before unpacking it.
+pub fn archive_maps(archive: &Path) -> Result<Vec<(crate::beatmap::Meta, u64)>, String> {
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("not a beatmap archive ({e})"))?;
+    let mut maps = Vec::new();
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        if !entry.is_file() || !entry.name().is_ok_and(|n| n.to_ascii_lowercase().ends_with(".osu")) {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        entry.by_ref().take(16 << 20).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+        maps.push((crate::beatmap::read_meta(&String::from_utf8_lossy(&bytes)), crate::net::map_hash(&bytes)));
+    }
+    Ok(maps)
 }
 
 /// Unpacks an `.osz` into `dest` (via a temporary folder, so a half-extracted set never shows up).
@@ -744,6 +765,8 @@ mod tests {
         assert_eq!(std::fs::read(dest.join("map [Oni].osu")).unwrap(), b"new");
         assert_eq!(std::fs::read(dest.join("map [My Inner Oni].osu")).unwrap(), b"mine");
         assert!(!dest.with_extension("partial").exists());
+        let maps = archive_maps(&archive).unwrap();
+        assert_eq!(maps.iter().map(|m| m.1).collect::<Vec<_>>(), [crate::net::map_hash(b"new")]);
         let _ = std::fs::remove_dir_all(&root);
     }
 }
