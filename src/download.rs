@@ -629,7 +629,7 @@ fn merge(from: &Path, into: &Path) -> std::io::Result<()> {
 /// set's ~10 s music clip (from its preview point) and its cover, cached per set. Returns the
 /// `.osu` path; the clip and cover sit next to it.
 pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
-    let dir = crate::config::user_dir(true).unwrap_or_else(|| std::env::temp_dir().join("taiko-rs")).join("previews").join(set.to_string());
+    let dir = crate::config::cache_dir().unwrap_or_else(|| std::env::temp_dir().join("taiko-rs")).join("previews").join(set.to_string());
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // Short timeout: a throttled mirror shouldn't hold the preview up.
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(8))).build().into();

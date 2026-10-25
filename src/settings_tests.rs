@@ -116,3 +116,52 @@ fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
     s.leave_calibration(true);
     assert_eq!((s.cfg.vsync_tune_ms, s.cfg.offset_ms), (11.0, 12.0));
 }
+
+#[test]
+fn moving_the_game_data_runs_in_the_background_then_switches_folders() {
+    let root = std::env::temp_dir().join(format!("taiko-rs-move-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let old = root.join("old/taiko-rs");
+    std::fs::create_dir_all(old.join("replays")).unwrap();
+    std::fs::write(old.join("replays/1.json"), "replay").unwrap();
+    std::fs::create_dir_all(root.join("drive")).unwrap();
+    let mut s = layout_tests::state();
+    s.cfg.data_folder = Some(old.clone());
+    // A drive or any folder: the data gets a taiko-rs folder of its own there.
+    s.move_data_to(Some(root.join("drive"))).unwrap();
+    assert!(s.move_data_to(Some(root.join("elsewhere"))).is_err(), "one move at a time");
+    let start = Instant::now();
+    while s.data_move.is_some() && start.elapsed() < Duration::from_secs(10) {
+        s.poll_data_move();
+    }
+    let new = root.join("drive/taiko-rs");
+    assert_eq!(s.cfg.data_folder, Some(new.clone()));
+    assert_eq!(config::data_dir(), Some(new.clone()));
+    assert_eq!(std::fs::read_to_string(new.join("replays/1.json")).unwrap(), "replay");
+    assert!(!old.join("replays").exists());
+    config::set_data_folder(None);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn window_sizes_fit_the_screen_and_step_within_the_aspect_ratio() {
+    let mut s = layout_tests::state();
+    s.monitor_size = (1920, 1080);
+    s.monitor_modes = vec![(1920, 1080), (1680, 1050), (1280, 1024)];
+    let sizes = s.window_sizes();
+    // The screen's aspect ratio first, largest first in each, all with room for a title bar.
+    assert_eq!(layout::aspect_name(sizes[0].0, sizes[0].1), "16:9");
+    let groups = layout::group_presets(&sizes, (1920, 1080));
+    assert!(groups.iter().all(|(_, l)| l.windows(2).all(|w| w[0].0 * w[0].1 >= w[1].0 * w[1].1)));
+    assert!(sizes.iter().all(|&(w, h)| w <= 1920 && h <= 1020));
+    // 1280x720 steps to 16:9 sizes.
+    (s.window_w, s.window_h) = (1280.0, 720.0);
+    s.adjust_setting(Item::WindowSize, 1, None);
+    assert_eq!(s.window_request, Some((1366, 768)));
+    s.adjust_setting(Item::WindowSize, -1, None);
+    assert_eq!(s.window_request, Some((1024, 576)));
+    // Typed: what fits the screen, nothing bigger.
+    s.apply_typed(Item::WindowSize, "1600x900").unwrap();
+    assert_eq!(s.window_request, Some((1600, 900)));
+    assert!(s.apply_typed(Item::WindowSize, "3840x2160").is_err());
+}

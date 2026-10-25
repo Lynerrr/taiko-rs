@@ -115,9 +115,7 @@ pub fn default_song_dirs() -> Vec<PathBuf> {
         }
         candidates.push(install_songs(Path::new(r"C:\osu!")));
         candidates.extend(registered_osu().map(|dir| install_songs(&dir)));
-        if let Some(cfg) = crate::config::user_dir(false) {
-            candidates.push(cfg.join("Songs"));
-        }
+        candidates.extend(crate::config::own_dir("Songs"));
     }
     #[cfg(target_os = "android")]
     candidates.extend(crate::android::songs_dir());
@@ -129,7 +127,7 @@ pub fn default_song_dirs() -> Vec<PathBuf> {
         }
         candidates.push(home.join(".local/share/osu-wine/osu!/Songs"));
         candidates.push(home.join("osu!/Songs"));
-        candidates.push(home.join(".local/share/taiko-rs/Songs"));
+        candidates.extend(crate::config::own_dir("Songs"));
     }
     for c in candidates {
         if c.is_dir() && !out.contains(&c) {
@@ -181,7 +179,7 @@ fn registered_osu() -> Option<PathBuf> {
 }
 
 fn cache_dir() -> PathBuf {
-    crate::config::user_dir(true).unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
+    crate::config::cache_dir().unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
 }
 
 /// Extracts an `.osz` once into the cache and returns the folder.

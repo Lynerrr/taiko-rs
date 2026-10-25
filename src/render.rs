@@ -153,6 +153,8 @@ pub struct Renderer {
     /// 2: draw at half the screen's resolution, then scale up exactly 2x (crisp pixels, a
     /// quarter of the work); 1: full resolution.
     pub pixel_scale: u32,
+    /// The last image came Suboptimal: configure the surface again before the next.
+    reconfigure: bool,
     /// The half-resolution image and its bind group for the upscale, sized for the screen.
     low: Option<LowRes>,
     upscale_layout: wgpu::BindGroupLayout,
@@ -788,6 +790,7 @@ impl Renderer {
             present,
             adapter_name,
             pixel_scale: 1,
+            reconfigure: false,
             low: None,
             upscale_layout,
             upscale_pipeline,
@@ -987,8 +990,17 @@ impl Renderer {
     /// Waits for a swapchain image. Under vsync this is where the frame may block, so callers
     /// should sample the game clock only after it returns.
     pub fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
+        if std::mem::take(&mut self.reconfigure) {
+            self.configure();
+        }
         match self.surface.as_ref()?.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
+            wgpu::CurrentSurfaceTexture::Success(f) => Some(f),
+            // Still drawable, but the window changed under it (resized, moved to another screen):
+            // this one is used, the next comes in the right size.
+            wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
+                self.reconfigure = true;
+                Some(f)
+            }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.configure();
                 None

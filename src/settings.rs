@@ -40,6 +40,7 @@ pub enum Item {
     ShowConverts,
     HiddenMaps,
     SongsFolder,
+    DataFolder,
     MasterVolume,
     MusicVolume,
     FxVolume,
@@ -56,6 +57,7 @@ pub enum Item {
     UpdateChannel,
     Update,
     Fullscreen,
+    WindowSize,
     DiscordPresence,
     Skin,
     SkinFolder,
@@ -66,10 +68,11 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 60] = [
+pub const ITEMS: [(&str, Item); 62] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
+    ("LIBRARY", Item::DataFolder),
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -107,6 +110,7 @@ pub const ITEMS: [(&str, Item); 60] = [
     ("VIDEO", Item::FpsCap),
     ("VIDEO", Item::ShowFps),
     ("VIDEO", Item::Fullscreen),
+    ("VIDEO", Item::WindowSize),
     ("VIDEO", Item::Animations),
     ("VIDEO", Item::DiscordPresence),
     ("VIDEO", Item::Splash),
@@ -131,7 +135,7 @@ pub const ITEMS: [(&str, Item); 60] = [
 
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 10] = [
-    ("LIBRARY", "Songs folder, converts"),
+    ("LIBRARY", "Songs folder, game data"),
     ("GAMEPLAY", "speed, rate, resume"),
     ("PLAYFIELD", "size, position"),
     ("INPUT", "drum keys, touch layout"),
@@ -201,6 +205,7 @@ impl Item {
             Item::ShowConverts => "Show osu!standard converts",
             Item::HiddenMaps => "Hidden maps",
             Item::SongsFolder => "Songs folder",
+            Item::DataFolder => "Game data folder",
             Item::MasterVolume => "Master volume",
             Item::MusicVolume => "Music volume",
             Item::FxVolume => "Hitsound volume",
@@ -217,6 +222,7 @@ impl Item {
             Item::Update => "Update",
             Item::CheckUpdates => "Check at startup",
             Item::Fullscreen => "Fullscreen",
+            Item::WindowSize => "Window size",
             Item::DiscordPresence => "Discord status",
             Item::Skin => "Skin",
             Item::SkinFolder => "Skins folder",
@@ -252,8 +258,10 @@ impl Item {
             | Item::UpdateChannel
             | Item::Skin
             | Item::NoteColours
+            | Item::WindowSize
             | Item::Accent
-            | Item::SongsFolder => Kind::List,
+            | Item::SongsFolder
+            | Item::DataFolder => Kind::List,
             Item::RateKeepPitch
             | Item::LiveOffset
             | Item::LiveOffsetUr
@@ -306,6 +314,7 @@ impl Item {
             Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
             Item::HiddenMaps => "Right-click a song to hide it here (files stay). Enter lists them all again.",
             Item::SongsFolder => "The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.",
+            Item::DataFolder => "Replays, scores, videos, downloaded maps, skins and caches. Enter: move them to another folder or drive.",
             Item::KiaiEffects => "During kiai time, tint the lane and pulse the hit target with the beat.",
             Item::HideGreat => "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",
             Item::ChatFilter => "Stars out swear words in friends' messages, the global chat and lobby chats.",
@@ -331,6 +340,7 @@ impl Item {
             Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko-rs restarts into it.",
             Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",
             Item::Fullscreen => "Shortcut: F11.",
+            Item::WindowSize => "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
             Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",
             Item::Skin => "Enter opens the list. osu! skins from osu!'s or taiko-rs's Skins folder.",
             Item::SkinFolder => "Enter: open taiko-rs's Skins folder. Drop .osk files there, then pick them above.",
