@@ -318,11 +318,32 @@ fn download_cta(os: Os, on_download_page: bool) -> String {
     }
 }
 
+/// The home page's bar: d/k a don or kat, D/K a finisher, _ a gap; a quarter of a second each,
+/// 6 s in all.
+const PATTERN: &str = "dkdd_kkd_DdkdkK_dd_kdk_d";
+
+/// The drum's flashes for the bar: its face red on every don, its rim blue on every kat, the
+/// moment the note lands (in step with `notes`).
+fn drum_flashes() -> String {
+    let mut don = String::new();
+    let mut kat = String::new();
+    for (i, c) in PATTERN.chars().enumerate() {
+        let p = i as f64 * 0.25 / 6.0 * 100.0;
+        let frames = format!("{p:.2}%{{opacity:1}}{:.2}%{{opacity:0}}", p + 2.0);
+        match c {
+            'd' | 'D' => don += &frames,
+            'k' | 'K' => kat += &frames,
+            _ => {}
+        }
+    }
+    let start = |track: &str| if track.starts_with("0.00%") { "" } else { "0%{opacity:0}" };
+    format!("<style>@keyframes donflash{{{}{don}}}@keyframes katflash{{{}{kat}}}</style>", start(&don), start(&kat))
+}
+
 /// The home page's lane: a bar of dons, kats, finishers and gaps, a quarter beat each. Every
 /// note flies in on its own and bursts on the judgement circle on its beat, like a hit in the
 /// game; the bar loops.
 fn notes() -> String {
-    const PATTERN: &str = "dkdd_kkd_DdkdkK_dd_kdk_d";
     PATTERN
         .chars()
         .enumerate()
@@ -345,12 +366,13 @@ fn stage(players: usize, plays: usize, online: usize, bg: &str, cta: &str) -> St
     let notes = notes();
     let lane = |class: &str| {
         let segs: String = (0..10i32).map(|i| format!("<b class=seg style=\"--dy:{};--r:{}\"></b>", (i * 37) % 9 - 4, (i * 53) % 7 - 3)).collect();
-        format!("<div class=\"lane {class}\"><div class=segs>{segs}</div><div class=drum><span class=combo>{plays}</span></div><div class=judge></div><div class=track>{notes}</div></div>")
+        format!("<div class=\"lane {class}\"><div class=segs>{segs}</div><div class=drum><span class=combo></span></div><div class=judge></div><div class=track>{notes}</div></div>")
     };
+    let flashes = drum_flashes();
     let mods = ["NM no mod", "TL tilt", "WV wave", "BA barrel roll", "MR mirror", "MV multiverse", "SH shatter"];
     let labels: String = mods.iter().chain(&mods[..1]).map(|m| format!("<span>{m}</span>")).collect();
     format!(
-        "<section class=stage{bg} aria-label=\"taiko-rs gameplay, switching mods\">\
+        "{flashes}<section class=stage{bg} aria-label=\"taiko-rs gameplay, switching mods\">\
          <div class=hud-tl>{online} online &middot; {players} ranked &middot; server up</div>\
          <div class=hud-tr aria-hidden=true><div class=hud-score>{:08}</div><div class=hp><i></i></div><div class=modname><div class=ticker>{labels}</div></div></div>\
          <div class=intro><h1 class=glitch data-text=\"TAIKO-RS\">TA<span class=narrow>I</span>KO-RS</h1>\
@@ -946,8 +968,13 @@ background:linear-gradient(0deg,var(--bg),transparent 30%),linear-gradient(rgba(
 .segs{position:absolute;inset:16px 0;display:flex}.seg{flex:1;background:#1b1b26;border-top:2px solid var(--line2);border-bottom:2px solid var(--line2);
 transform:translateY(calc(var(--sh) * var(--dy) * 9px)) rotate(calc(var(--sh) * var(--r) * 2deg))}
 .seg:first-child{flex:0 0 160px;background:var(--panel);border-right:2px solid var(--line2)}
-.drum{position:absolute;left:44px;top:34px;width:72px;height:72px;border-radius:50%;background:conic-gradient(var(--don) 0 50%,#f5ecdc 50% 100%);box-shadow:0 0 0 6px #262634,0 0 0 8px var(--line2);display:grid;place-items:center}
-.combo{background:#f5ecdc;color:#15151d;border-radius:50%;width:52px;height:52px;display:grid;place-items:center;font-size:16px}
+/* The drum: its face flashes red on dons, its rim blue on kats; the combo counts up. */
+.drum{position:absolute;left:44px;top:34px;width:72px;height:72px;border-radius:50%;background:#3a3a4e;box-shadow:0 0 0 6px #262634,0 0 0 8px var(--line2);display:grid;place-items:center}
+.drum:before{content:"";position:absolute;inset:0;border-radius:50%;background:var(--katl);opacity:0;animation:katflash 6s step-end infinite}
+.combo{position:relative;background:#f5ecdc;color:#15151d;border-radius:50%;width:52px;height:52px;display:grid;place-items:center;font-size:16px;overflow:hidden;animation:combo 600s steps(1600) infinite}
+.combo:before{content:"";position:absolute;inset:0;background:var(--don);opacity:0;animation:donflash 6s step-end infinite}
+.combo:after{position:relative;counter-reset:c var(--combo);content:counter(c)}
+@property --combo{syntax:"<integer>";inherits:false;initial-value:0}@keyframes combo{to{--combo:1600}}
 .judge{position:absolute;left:188px;top:38px;width:64px;height:64px;border-radius:50%;border:4px solid #4a4a60;box-shadow:inset 0 0 0 4px #1b1b26}
 .track{position:absolute;left:160px;right:0;top:0;height:140px;overflow:hidden}
 /* Each note: 6 s from off the right edge to the judgement circle, then a hit burst. */
