@@ -117,7 +117,12 @@ impl Req<'_> {
     }
 
     fn page(&self, status: u16, title: &str, nav: &str, body: String) -> Reply {
-        Reply::html(status, title, nav, self.viewer.as_deref(), body)
+        self.page_with(status, title, nav, &pages::Meta::default(), body)
+    }
+
+    /// A page with its own link preview.
+    fn page_with(&self, status: u16, title: &str, nav: &str, meta: &pages::Meta, body: String) -> Reply {
+        Reply::html(status, title, nav, self.viewer.as_deref(), meta, body)
     }
 
     fn not_found(&self, why: &str) -> Reply {
@@ -320,8 +325,8 @@ impl Reply {
     }
 
     /// A page; `nav` is the header link it's under ("" for none), `viewer` who's logged in.
-    fn html(status: u16, title: &str, nav: &str, viewer: Option<&str>, body: String) -> Reply {
-        Reply::new(status, "text/html; charset=utf-8", pages::page(title, nav, viewer, &body).into_bytes().into())
+    fn html(status: u16, title: &str, nav: &str, viewer: Option<&str>, meta: &pages::Meta, body: String) -> Reply {
+        Reply::new(status, "text/html; charset=utf-8", pages::page(title, nav, viewer, meta, &body).into_bytes().into())
     }
 
     fn json<T: serde::Serialize>(value: &T) -> Reply {
@@ -395,7 +400,7 @@ fn route(state: &State, req: &Req) -> Reply {
                 let (activity, friends) = (state.activity(&p.name), state.friends_online(&p.name));
                 let tie = req.key().map(|me| state.friendship(&me, &key)).unwrap_or(pages::Friendship::None);
                 let notice = req.arg("msg");
-                req.page(200, &p.name, "rankings", pages::profile(&p, &extras, activity.as_ref(), &friends, tie, notice.as_deref()))
+                req.page_with(200, &p.name, "rankings", &pages::profile_meta(&p), pages::profile(&p, &extras, activity.as_ref(), &friends, tie, notice.as_deref()))
             }
             None => req.not_found("There is no player by that name"),
         },
@@ -442,7 +447,7 @@ fn route(state: &State, req: &Req) -> Reply {
                 return Reply::json(&rows);
             }
             match scores.map(map) {
-                Some(m) => req.page(200, &m.name, "beatmaps", pages::map_page(&m, &rows)),
+                Some(m) => req.page_with(200, &m.name, "beatmaps", &pages::map_meta(&m, &rows), pages::map_page(&m, &rows)),
                 None => req.not_found("Nobody has sent a play on that map yet"),
             }
         }

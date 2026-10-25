@@ -1,0 +1,25 @@
+<!-- The link preview card (og.jpg): open in Chrome at 1200x630 and screenshot, e.g.
+     google-chrome --headless=new --window-size=1200,630 --screenshot=og.png og-card.html -->
+<!doctype html><meta charset=utf-8><style>
+@font-face{font-family:t;src:url(taiko5x7.woff2)}
+*{margin:0;box-sizing:border-box}html,body{width:1200px;height:630px;overflow:hidden}
+body{background:#0b0b10;font-family:t;color:#c8c8d8;-webkit-font-smoothing:none;position:relative}
+.bg{position:absolute;inset:0;background:linear-gradient(90deg,#0b0b10 30%,rgba(11,11,16,.55) 70%,rgba(11,11,16,.35)),url(clips/multiverse.jpg) right/cover}
+.scan{position:absolute;inset:0;background:repeating-linear-gradient(0deg,rgba(0,0,0,.25) 0 3px,transparent 3px 6px)}
+.logo{position:absolute;left:64px;top:64px;width:96px;height:96px;image-rendering:pixelated}
+.url{position:absolute;left:184px;top:96px;font-size:32px;color:#8a8aa0}
+h1{position:absolute;left:58px;top:190px;font-size:160px;line-height:160px;color:#fff;letter-spacing:6px;text-shadow:-6px 0 #EB452C,6px 0 #4fb4ff}
+.n{margin:0 -.125em}
+p{position:absolute;left:64px;top:372px;font-size:32px;line-height:44px;color:#c8c8d8;max-width:1080px}
+em{font-style:normal;color:#EB452C}
+.lane{position:absolute;left:0;right:0;bottom:56px;height:84px;background:#1b1b26;border-top:4px solid #3a3a4e;border-bottom:4px solid #3a3a4e}
+.lane i{position:absolute;top:50%;width:56px;height:56px;margin-top:-28px;border-radius:50%;background:radial-gradient(circle,#fff 0 12%,var(--c) 13% 64%,#fff 65% 74%,var(--c) 75%)}
+.d{--c:#EB452C}.k{--c:#438EAD}.big{width:76px!important;height:76px!important;margin-top:-38px!important}
+.judge{position:absolute;left:64px;top:50%;width:64px;height:64px;margin-top:-32px;border-radius:50%;border:5px solid #4a4a60}
+</style>
+<div class=bg></div><div class=scan></div>
+<img class=logo src=../../assets/icon-64.png><div class=url>rstaiko.auneu.space</div>
+<h1>TA<span class=n>I</span>KO-RS</h1>
+<p>osu!taiko, rebuilt, with <em>73 mods</em> that bend, break and multiply the lane.</p>
+<div class=lane><div class=judge></div>
+<i class=d style="left:150px"></i><i class=k style="left:230px"></i><i class=d style="left:310px"></i><i class="d big" style="left:420px"></i><i class=k style="left:540px"></i><i class=k style="left:620px"></i><i class=d style="left:700px"></i><i class=k style="left:820px"></i><i class=d style="left:900px"></i><i class="k big" style="left:1010px"></i><i class=d style="left:1130px"></i></div>

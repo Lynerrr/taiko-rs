@@ -11,6 +11,9 @@ use crate::online::{self, Activity, ChatLine, OnlinePlayer, OnlineScore, Profile
 use crate::scores::{Extras, MapRow, Ranked};
 
 const REPO: &str = "https://github.com/Lynerrr/taiko-rs";
+/// Where the site lives, for the absolute links link previews need.
+const SITE: &str = "https://rstaiko.auneu.space";
+const TAGLINE: &str = "osu!taiko, rebuilt, with 73 mods that bend, break and multiply the lane. Rankings, profiles, chat and downloads.";
 const RAW: &str = "https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client";
 
 /// A clip of taiko-rs's own mods: what it shows, the mods on, its file under /clips/, and the
@@ -33,7 +36,7 @@ const CLIPS: [Clip; 6] = [
 ];
 
 /// Files served under /clips/ and /site/ (`web.rs`).
-pub const STATIC_FILES: [(&str, &[u8]); 15] = [
+pub const STATIC_FILES: [(&str, &[u8]); 16] = [
     ("clips/multiverse.mp4", include_bytes!("../site/clips/multiverse.mp4")),
     ("clips/multiverse.jpg", include_bytes!("../site/clips/multiverse.jpg")),
     ("clips/loop.mp4", include_bytes!("../site/clips/loop.mp4")),
@@ -49,6 +52,7 @@ pub const STATIC_FILES: [(&str, &[u8]); 15] = [
     ("site/taiko5x7.woff2", include_bytes!("../site/taiko5x7.woff2")),
     ("site/logo.png", include_bytes!("../../assets/icon-64.png")),
     ("site/chat.js", include_bytes!("../site/chat.js")),
+    ("site/og.jpg", include_bytes!("../site/og.jpg")),
 ];
 
 /// A mod select column (server/site/mods.json, written by the game's tests from its own list).
@@ -111,6 +115,43 @@ pub struct Conversation {
     pub name: String,
     pub online: bool,
     pub last: Option<ChatLine>,
+}
+
+/// What a link to a page shows when pasted into Discord and the like (Open Graph).
+pub struct Meta {
+    pub description: String,
+    /// An absolute image URL; None: the site's own card.
+    pub image: Option<String>,
+}
+
+impl Default for Meta {
+    fn default() -> Meta {
+        Meta { description: TAGLINE.into(), image: None }
+    }
+}
+
+/// A profile's preview: rank, pp and the rest, over the cover of their best play.
+pub fn profile_meta(p: &Profile) -> Meta {
+    let rank = p.rank.map(|r| format!("#{r} · ")).unwrap_or_default();
+    Meta {
+        description: format!(
+            "{rank}{}pp · {:.2}% accuracy · {} plays · level {:.0}. taiko-rs player since {}.",
+            thousands(p.pp.round() as u64),
+            p.stats.accuracy * 100.0,
+            thousands(p.plays as u64),
+            online::level(p.stats.total_score).floor(),
+            month_year(p.joined)
+        ),
+        image: p.top.first().and_then(|s| cover(s.set_id, "cover@2x")),
+    }
+}
+
+/// A beatmap's preview: stars, plays and who holds #1, over its cover.
+pub fn map_meta(m: &MapRow, rows: &[OnlineScore]) -> Meta {
+    let (_, version) = split_map(&m.name);
+    let stars = m.stars.map(|s| format!("{s:.2}* ")).unwrap_or_default();
+    let top = rows.first().map(|r| format!(" #1: {} with {} ({:.2}%).", r.player, thousands(r.score), r.accuracy * 100.0)).unwrap_or_default();
+    Meta { description: format!("{stars}[{version}] · {} plays by {} players on taiko-rs.{top}", thousands(m.plays as u64), m.players), image: cover(m.set_id, "cover@2x") }
 }
 
 /// What's live on the server, for the home page.
@@ -929,7 +970,16 @@ pub fn not_found(why: &str) -> String {
 
 /// A whole page: `nav` is the header link to mark as the current one ("" for none); `viewer`
 /// the logged-in player, if any (their profile and chat in the header, else a log in button).
-pub fn page(title: &str, nav: &str, viewer: Option<&str>, body: &str) -> String {
+pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &str) -> String {
+    let image = meta.image.clone().unwrap_or_else(|| format!("{SITE}/site/og.jpg"));
+    let og = format!(
+        "<meta name=description content=\"{0}\"><meta property=og:site_name content=taiko-rs><meta property=og:type content=website>\
+         <meta property=og:title content=\"{1}\"><meta property=og:description content=\"{0}\"><meta property=og:image content=\"{2}\">\
+         <meta name=twitter:card content=summary_large_image><meta name=twitter:title content=\"{1}\"><meta name=twitter:description content=\"{0}\"><meta name=twitter:image content=\"{2}\">",
+        esc(&meta.description),
+        esc(title),
+        esc(&image)
+    );
     let account = match viewer {
         Some(me) => {
             let (name, pic, on) = (esc(me), avatar(me, "tiny"), if nav == "chat" { " on" } else { "" });
@@ -949,7 +999,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, body: &str) -> String 
         .collect();
     format!(
         r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{} · taiko-rs</title>
-<meta name=theme-color content=#0b0b10><meta name=color-scheme content=dark><link rel=icon href="/site/logo.png">
+<meta name=theme-color content=#EB452C><meta name=color-scheme content=dark><link rel=icon href="/site/logo.png">{og}
 <link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style></head>
 <body><nav><div class=inner><a class=logo href="/" aria-label="taiko-rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO-RS</a><div class=links>{links}</div>
 <form action="/u" role=search><input name=name placeholder="find a player" maxlength=16 aria-label="Find a player"></form><div class=account>{account}</div></div></nav>
@@ -1192,10 +1242,12 @@ mod tests {
     #[test]
     fn helpers() {
         assert_eq!(esc("<b>\"A&B'</b>"), "&lt;b&gt;&quot;A&amp;B&#39;&lt;/b&gt;");
-        assert!(page("<x>", "", None, "").contains("&lt;x&gt; · taiko-rs"));
-        assert!(page("Rankings", "rankings", None, "").contains("href=\"/rankings\" class=on"));
-        assert!(page("x", "", None, "").contains("href=\"/login\""));
-        let mine = page("x", "chat", Some("Ryuji"), "");
+        assert!(page("<x>", "", None, &Meta::default(), "").contains("&lt;x&gt; · taiko-rs"));
+        assert!(page("Rankings", "rankings", None, &Meta::default(), "").contains("href=\"/rankings\" class=on"));
+        assert!(page("x", "", None, &Meta::default(), "").contains("href=\"/login\""));
+        let card = page("A \"quote\"", "", None, &Meta { description: "d<b>".into(), image: None }, "");
+        assert!(card.contains("og:image content=\"https://rstaiko.auneu.space/site/og.jpg\"") && card.contains("og:title content=\"A &quot;quote&quot;\"") && card.contains("d&lt;b&gt;"));
+        let mine = page("x", "chat", Some("Ryuji"), &Meta::default(), "");
         assert!(mine.contains("href=\"/u/Ryuji\"") && mine.contains("action=\"/logout\"") && !mine.contains("href=\"/login\""));
         assert_eq!(thousands(1234567), "1,234,567");
         assert_eq!(thousands(12), "12");
