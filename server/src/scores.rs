@@ -14,6 +14,8 @@ use crate::online::{self, OnlineScore, Profile, ScoreSubmit, Stats};
 const SUBMITS_PER_MINUTE: usize = 20;
 /// Plays a profile lists (best and latest).
 const PROFILE_PLAYS: usize = 20;
+/// Most played maps a profile lists.
+const PROFILE_MAPS: usize = 6;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Stored {
@@ -241,6 +243,42 @@ impl Scores {
         (mine, Some(above as u32 + 1))
     }
 
+    /// The latest plays by anyone, newest first.
+    pub fn latest(&self, limit: usize) -> Vec<OnlineScore> {
+        self.all.iter().rev().take(limit).map(|s| s.score.clone()).collect()
+    }
+
+    /// `player`'s pp history, most played maps and mods (see `Extras`).
+    pub fn extras(&self, player: &str) -> Extras {
+        let mut mine: Vec<&Stored> = self.all.iter().filter(|s| s.player == player).collect();
+        mine.sort_by_key(|s| (s.score.date, s.id));
+        let mut best: HashMap<u64, f64> = HashMap::new();
+        let mut history: Vec<(u64, f64)> = Vec::new();
+        for s in &mine {
+            let Some(pp) = s.score.pp else { continue };
+            let b = best.entry(s.score.map_hash).or_insert(0.0);
+            if pp > *b {
+                *b = pp;
+                history.push((s.score.date, online::weighted_pp(best.values().copied().collect())));
+            }
+        }
+        let mut count: HashMap<u64, u32> = HashMap::new();
+        let mut mods: HashMap<&str, u32> = HashMap::new();
+        for s in &mine {
+            *count.entry(s.score.map_hash).or_default() += 1;
+            for m in &s.score.mods {
+                *mods.entry(m.as_str()).or_default() += 1;
+            }
+        }
+        let rows = self.maps(usize::MAX);
+        let mut most_played: Vec<(MapRow, u32)> = rows.into_iter().filter_map(|r| count.get(&r.hash).map(|&n| (r, n))).collect();
+        most_played.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.last.cmp(&a.0.last)));
+        most_played.truncate(PROFILE_MAPS);
+        let mut mods: Vec<(String, u32)> = mods.into_iter().map(|(m, n)| (m.to_string(), n)).collect();
+        mods.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Extras { history, most_played, mods }
+    }
+
     /// `player`'s profile (`name` as written, `joined` when the account was made).
     pub fn profile(&self, player: &str, name: &str, joined: u64) -> Profile {
         let mine: Vec<&Stored> = self.all.iter().filter(|s| s.player == player).collect();
@@ -268,6 +306,18 @@ impl Scores {
         firsts.truncate(PROFILE_PLAYS);
         Profile { name: name.to_string(), joined, plays: mine.len() as u32, pp, rank, top, recent, stats, firsts, online: false }
     }
+}
+
+/// What a profile page shows beyond `Profile`: how their pp grew, the maps they keep coming
+/// back to and the mods they play with.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Extras {
+    /// (when, pp total right after that play), one point per play that changed it.
+    pub history: Vec<(u64, f64)>,
+    /// Their most played maps, with how many times.
+    pub most_played: Vec<(MapRow, u32)>,
+    /// Mods by how many of their plays had them on.
+    pub mods: Vec<(String, u32)>,
 }
 
 /// A row of the rankings.
@@ -362,6 +412,22 @@ mod tests {
             inputs: vec![(1000.0, 1)],
             stars: Some(5.0),
         }
+    }
+
+    #[test]
+    fn extras_follow_the_pp_total_and_count_maps_and_mods() {
+        let mut s = Scores::load(None);
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        s.submit("a", "A", play(7, 400, 50.0), 2).unwrap();
+        s.submit("a", "A", play(8, 300, 100.0), 3).unwrap();
+        s.submit("b", "B", play(7, 900, 200.0), 4).unwrap();
+        let e = s.extras("a");
+        // The worse play on map 7 didn't move the total.
+        assert_eq!(e.history.len(), 2);
+        assert!((e.history[1].1 - (100.0 + 95.0)).abs() < 1e-9);
+        assert_eq!(e.most_played.iter().map(|(m, n)| (m.hash, *n)).collect::<Vec<_>>(), [(7, 2), (8, 1)]);
+        assert_eq!(e.mods, [("HD".to_string(), 3)]);
+        assert_eq!(s.latest(2).iter().map(|p| p.player.as_str()).collect::<Vec<_>>(), ["B", "A"]);
     }
 
     #[test]

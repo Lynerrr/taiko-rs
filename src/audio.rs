@@ -358,6 +358,16 @@ fn soft_clip(x: f32) -> f32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn built_in_hitsounds_decode() {
+        // don, kat, finisher, combo break (assets/hitsounds/synth.py): short, and not silent.
+        for i in 0..BUILT_IN.len() {
+            let s = built_in(i, 48_000);
+            let peak = s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+            assert!((4_800..48_000).contains(&s.len()) && peak > 0.5, "sound {i}: {} samples, peak {peak}", s.len());
+        }
+    }
+
     fn sine(freq: f32, seconds: f32, sr: u32) -> Vec<f32> {
         let n = (seconds * sr as f32) as usize;
         (0..n).flat_map(|i| {
