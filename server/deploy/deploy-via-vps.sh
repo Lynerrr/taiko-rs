@@ -11,12 +11,13 @@ bin="$here/../target/x86_64-unknown-linux-musl/release/taiko-server"
 cargo build --release --target x86_64-unknown-linux-musl --manifest-path "$here/../Cargo.toml"
 sum=$(sha256sum "$bin" | cut -d' ' -f1)
 scp -q "$bin" "$vps:/tmp/taiko-server.new"
+scp -q "$here/Dockerfile" "$here/docker-compose.yml" "$vps:/tmp/"
 # On the VPS: the account for the last hop is the one its tunnel service uses.
 ssh "$vps" sh -s "$sum" <<'EOF'
 set -e
 target=$(systemctl cat osu-timing-tunnel.service | grep -o "[^ ]*@jashincraft.space" | head -1)
 hop="ssh -F /dev/null -p 1337 -i $HOME/.ssh/xui_node -o IdentitiesOnly=yes"
-scp -q -F /dev/null -P 1337 -i ~/.ssh/xui_node -o IdentitiesOnly=yes /tmp/taiko-server.new "$target:taiko-server/taiko-server.new"
+scp -q -F /dev/null -P 1337 -i ~/.ssh/xui_node -o IdentitiesOnly=yes /tmp/taiko-server.new /tmp/Dockerfile /tmp/docker-compose.yml "$target:taiko-server/"
 $hop "$target" "sh -s $1" <<'REMOTE'
 set -e
 cd ~/taiko-server

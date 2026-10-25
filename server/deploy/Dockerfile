@@ -4,4 +4,5 @@
 FROM scratch
 COPY taiko-server /taiko-server
 EXPOSE 7800
-ENTRYPOINT ["/taiko-server", "--port", "7800", "--data", "/data"]
+# The website on 8080 (a port Cloudflare can proxy). Behind Cloudflare, add "--behind-proxy".
+ENTRYPOINT ["/taiko-server", "--port", "7800", "--data", "/data", "--http-port", "8080"]

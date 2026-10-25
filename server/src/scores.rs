@@ -161,6 +161,32 @@ impl Scores {
         per.into_iter().map(|(p, v)| (p, online::weighted_pp(v))).collect()
     }
 
+    /// Everyone with pp, highest first: (name as written, pp total, plays).
+    pub fn rankings(&self, limit: usize) -> Vec<(String, f64, u32)> {
+        let mut names: HashMap<&str, (&str, u32)> = HashMap::new();
+        for s in &self.all {
+            let e = names.entry(s.player.as_str()).or_insert((s.score.player.as_str(), 0));
+            *e = (s.score.player.as_str(), e.1 + 1);
+        }
+        let mut out: Vec<(String, f64, u32)> = self
+            .totals()
+            .into_iter()
+            .filter(|&(_, pp)| pp > 0.0)
+            .map(|(p, pp)| {
+                let (name, plays) = names.get(p).copied().unwrap_or((p, 0));
+                (name.to_string(), pp, plays)
+            })
+            .collect();
+        out.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out.truncate(limit);
+        out
+    }
+
+    /// The name of the map with this hash, from a play on it.
+    pub fn map_name(&self, map: u64) -> Option<String> {
+        self.all.iter().find(|s| s.score.map_hash == map).map(|s| s.score.map.clone())
+    }
+
     /// A player's pp total and rank among everyone with pp.
     fn standing(&self, player: &str) -> (f64, Option<u32>) {
         let totals = self.totals();
@@ -225,6 +251,9 @@ mod tests {
         assert_eq!((p.plays, p.rank, p.top.len()), (3, Some(1), 2));
         assert_eq!(p.top[0].pp, Some(150.0));
         assert_eq!(p.recent[0].map_hash, 8);
+        let ranks = s.rankings(10);
+        assert_eq!(ranks.iter().map(|r| (r.0.as_str(), r.2)).collect::<Vec<_>>(), [("A", 3), ("B", 1)]);
+        assert_eq!(s.map_name(7).as_deref(), Some("A - T [Oni]"));
     }
 
     #[test]

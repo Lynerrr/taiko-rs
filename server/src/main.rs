@@ -2,7 +2,10 @@
 //! players don't need an open port. Rooms run the game's own room code (`src/net.rs`); the
 //! protocol in front of them is `src/online.rs`.
 //!
-//!   taiko-server [--port 7800] [--data DIR]
+//!   taiko-server [--port 7800] [--data DIR] [--http-port 8080 [--behind-proxy]]
+//!
+//! With --http-port it also serves the website (`web.rs`); --behind-proxy takes the visitor's
+//! address from the proxy's header (Cloudflare), for the per-address limits.
 //!
 //! Accounts and sessions live in DIR/accounts.json (passwords as argon2 hashes).
 
@@ -13,6 +16,7 @@ mod net;
 #[path = "../../src/online.rs"]
 mod online;
 mod scores;
+mod web;
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, Read};
@@ -344,14 +348,10 @@ fn handle(state: &State, stream: TcpStream) {
             }
         }
         Request::MapScores { map } => Reply::Scores(state.scores.lock().unwrap().map_scores(map)),
-        Request::Profile { name } => {
-            let key = name.trim().to_ascii_lowercase();
-            let user = state.accounts.lock().unwrap().users.get(&key).map(|u| (u.name.clone(), u.created));
-            match user {
-                Some((name, joined)) => Reply::Profile(Box::new(state.scores.lock().unwrap().profile(&key, &name, joined))),
-                None => Reply::Error("no such player".into()),
-            }
-        }
+        Request::Profile { name } => match state.profile(&name) {
+            Some(p) => Reply::Profile(Box::new(p)),
+            None => Reply::Error("no such player".into()),
+        },
         Request::JoinRoom { token, room } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to join a lobby".into())) };
             let lobbies = state.lobbies.lock().unwrap();
@@ -414,6 +414,13 @@ fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
 }
 
 impl State {
+    /// A player's profile, by their name in any case.
+    fn profile(&self, name: &str) -> Option<online::Profile> {
+        let key = name.trim().to_ascii_lowercase();
+        let (name, joined) = self.accounts.lock().unwrap().users.get(&key).map(|u| (u.name.clone(), u.created))?;
+        Some(self.scores.lock().unwrap().profile(&key, &name, joined))
+    }
+
     fn display_name(&self, key: &str) -> String {
         self.accounts.lock().unwrap().users.get(key).map(|u| u.name.clone()).unwrap_or_else(|| key.to_string())
     }
@@ -730,19 +737,26 @@ fn announcer(state: Arc<State>) {
 fn main() {
     let mut port = online::DEFAULT_PORT;
     let mut data = PathBuf::from(".");
+    let mut http_port = 0;
+    let mut behind_proxy = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--port" => port = args.next().and_then(|p| p.parse().ok()).expect("--port N"),
             "--data" => data = PathBuf::from(args.next().expect("--data DIR")),
+            "--http-port" => http_port = args.next().and_then(|p| p.parse().ok()).expect("--http-port N"),
+            "--behind-proxy" => behind_proxy = true,
             _ => {
-                eprintln!("usage: taiko-server [--port 7800] [--data DIR]");
+                eprintln!("usage: taiko-server [--port 7800] [--data DIR] [--http-port 8080 [--behind-proxy]]");
                 std::process::exit(2);
             }
         }
     }
     std::fs::create_dir_all(&data).expect("data dir");
     let state = Arc::new(State::load(data.join("accounts.json")));
+    if http_port != 0 {
+        web::serve(state.clone(), http_port, behind_proxy);
+    }
     {
         let state = state.clone();
         std::thread::spawn(move || reaper(state));
