@@ -25,8 +25,8 @@ Linux (Wayland) · Windows · Android
 | 🪟 **Windows** | `irm https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.ps1 \| iex` |
 | 🤖 **Android** | grab `taiko-rs-android.apk` from the [latest release](https://github.com/Lynerrr/taiko-rs/releases/tag/latest) (8.0+, arm64) |
 
-No root or admin needed. It finds your osu! Songs folder (osu-winello and Wine too), or you can
-drop `.osz` files in. The game updates itself (**Ctrl+U**). Dev builds are one switch away in
+No root or admin needed. It finds your osu! Songs folder (osu-winello and Wine too); if yours is
+somewhere else, point it there in Settings → Library. You can also drop `.osz` files in. The game updates itself (**Ctrl+U**). Dev builds are one switch away in
 Settings → Updates.
 
 ## Highlights
