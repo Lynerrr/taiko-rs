@@ -324,3 +324,27 @@ fn krokodil_koban_mode_is_only_for_krokodil_koban() {
     s.settings_ui.move_cursor(1);
     assert_eq!(s.settings_ui.item(), Item::KrokodilKoban);
 }
+
+#[test]
+fn the_friends_overlay_closes_on_a_click_outside_it_and_slides_away() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.mp_menu.account = Some("me".into());
+    s.open_social();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // On the song list, far left (the window is 1920x1080: 2.25 px per virtual unit).
+    let cursor = s.select.cursor();
+    s.mouse = (60.0, 700.0);
+    s.mouse_button(true, None);
+    s.mouse_button(false, None);
+    assert!(!s.social.open);
+    // It slides away (at once here: the tests turn UI animations off).
+    assert!(s.social.closed_at.is_some());
+    assert_eq!(s.select.cursor(), cursor, "the click only closed it");
+    assert!(matches!(s.scene, Scene::Select));
+    // Drawn while closing, but takes no clicks.
+    let mut c = Canvas::default();
+    s.build_frame(&mut c, Instant::now(), 853.3);
+    assert!(!s.hits.iter().any(|h| matches!(h.hit, render::Hit::SocialPanel)));
+}

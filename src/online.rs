@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 pub const PROTOCOL: u32 = 1;
 pub const DEFAULT_PORT: u16 = 7800;
 pub const DEFAULT_SERVER: &str = "jashincraft.space:7800";
+/// The website (profiles at /u/<name>).
+pub const WEBSITE: &str = "https://rstaiko.auneu.space";
 /// Longest request or reply line (a lobby list of a few hundred rooms fits easily).
 const MAX_LINE: u64 = 1 << 20;
 

@@ -1213,6 +1213,17 @@ pub struct Detail {
     pub replay: Option<Result<std::path::PathBuf, String>>,
 }
 
+/// The player's pp total after a play, and what it was before (unknown: no change shown).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Total {
+    pub before: Option<f64>,
+    pub after: f64,
+    /// Their place by pp, online.
+    pub rank: Option<u32>,
+    /// The server's total, not the local scores'.
+    pub online: bool,
+}
+
 /// A score opened from a leaderboard (not one just played).
 pub struct Opened {
     pub player: String,
@@ -1250,6 +1261,8 @@ pub struct Results {
     pub job: Option<std::sync::mpsc::Receiver<Detail>>,
     /// Why an online score's replay couldn't be had.
     pub replay_error: Option<String>,
+    /// What the play did to the player's pp total.
+    pub total: Option<Total>,
 }
 
 /// Width of the pp panel on the right.
@@ -1275,6 +1288,7 @@ impl Results {
             music: None,
             job: None,
             replay_error: None,
+            total: None,
         }
     }
 
@@ -1314,7 +1328,8 @@ impl Results {
         // The play's numbers in the middle of what the pp panel leaves.
         let cx = panel_x / 2.0 + 6.0;
         let size = Canvas::fit_size(12.0, 9.0, w - 48.0, &self.title);
-        c.text_centered(w / 2.0, 30.0 + (12.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, w - 48.0, &self.title));
+        // Above the friends chip (top right, from y 41).
+        c.text_centered(w / 2.0, 24.0 + (12.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, w - 48.0, &self.title));
         let s = &self.stats;
         let acc = s.accuracy() * 100.0;
         let grade = crate::online::grade(s.great, s.ok, s.miss, s.accuracy());
@@ -1358,7 +1373,8 @@ impl Results {
         for (i, text) in right.iter().enumerate() {
             c.text(cx + 30.0, 260.0 + i as f32 * 24.0, 12.0, rgba(0xc8c8d8, 1.0), text);
         }
-        self.draw_pp_panel(c, panel_x, 52.0, count as f64);
+        // From the grade's top to the last stat row's bottom.
+        self.draw_pp_panel(c, panel_x, 80.0, count as f64);
 
         let hint = if let Some(o) = &self.opened {
             let place = if o.online { "online" } else { "local" };
@@ -1395,22 +1411,22 @@ impl Results {
     /// osu!'s performance breakdown: the pp, the difficulty and accuracy parts measured against
     /// an SS's, and what a full combo and an SS would give. `count` (0-1) counts the numbers up.
     fn draw_pp_panel(&self, c: &mut Canvas, x: f32, y: f32, count: f64) {
-        let (pw, h) = (PP_PANEL_W, 232.0);
+        let (pw, h) = (PP_PANEL_W, 268.0);
         let (label, value) = (rgba(0x8a8aa0, 1.0), rgba(0xffffff, 1.0));
         c.round_rect(x, y, pw, h, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
-        c.text(x + 12.0, y + 12.0, 7.0, label, "PERFORMANCE");
+        c.text(x + 12.0, y + 10.0, 7.0, label, "PERFORMANCE");
         let Some(b) = self.breakdown else {
             let note = if self.job.is_some() { "working it out..." } else { self.no_pp.unwrap_or("no pp for this play") };
             c.text_centered(x + pw / 2.0, y + h / 2.0 - 4.0, 8.0, label, &Canvas::fit(8.0, pw - 24.0, note));
             return;
         };
-        crate::stars::draw_pill(c, x + pw - 10.0, y + 9.0, 7.0, Some(b.stars as f32));
-        let big = c.text(x + 12.0, y + 26.0, 22.0, rgba(0xff8ad8, 1.0), &format!("{:.0}", b.pp * count));
-        c.text(x + 16.0 + big, y + 38.0, 9.0, rgba(0xff8ad8, 1.0), "pp");
+        crate::stars::draw_pill(c, x + pw - 10.0, y + 7.0, 7.0, Some(b.stars as f32));
+        let big = c.text(x + 12.0, y + 24.0, 22.0, rgba(0xff8ad8, 1.0), &format!("{:.0}", b.pp * count));
+        c.text(x + 16.0 + big, y + 36.0, 9.0, rgba(0xff8ad8, 1.0), "pp");
         let of_ss = if b.if_ss > 0.0 { b.pp / b.if_ss * 100.0 } else { 0.0 };
-        c.text(x + 12.0, y + 56.0, 6.0, label, &format!("{of_ss:.0}% of an SS"));
+        c.text_right(x + pw - 12.0, y + 36.0, 6.0, label, &format!("{of_ss:.0}% of an SS"));
         for (i, (name, v, max)) in [("Difficulty", b.difficulty, b.ss_difficulty), ("Accuracy", b.accuracy, b.ss_accuracy)].into_iter().enumerate() {
-            let by = y + 74.0 + i as f32 * 32.0;
+            let by = y + 62.0 + i as f32 * 30.0;
             c.text(x + 12.0, by, 8.0, rgba(0xc8c8d8, 1.0), name);
             c.text_right(x + pw - 12.0, by, 8.0, value, &format!("{:.0}", v * count));
             let bw = pw - 24.0;
@@ -1420,16 +1436,42 @@ impl Results {
                 c.round_rect(x + 12.0, by + 13.0, (bw * f).max(5.0), 5.0, 2.5, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
             }
         }
-        c.rect(x + 12.0, y + 144.0, pw - 24.0, 1.0, rgba(0x2a2a38, 1.0));
+        c.rect(x + 12.0, y + 122.0, pw - 24.0, 1.0, rgba(0x2a2a38, 1.0));
         let rows = [
             ("Full combo", format!("{:.0} pp", b.if_fc)),
             ("SS", format!("{:.0} pp", b.if_ss)),
             ("Combo", format!("{} / {}", self.stats.max_combo, b.max_combo)),
         ];
         for (i, (name, v)) in rows.iter().enumerate() {
-            let ry = y + 156.0 + i as f32 * 22.0;
+            let ry = y + 132.0 + i as f32 * 18.0;
             c.text(x + 12.0, ry, 7.0, label, name);
             c.text_right(x + pw - 12.0, ry, 7.0, value, v);
+        }
+        // What it did to the player's total.
+        c.rect(x + 12.0, y + 190.0, pw - 24.0, 1.0, rgba(0x2a2a38, 1.0));
+        let Some(t) = self.total else {
+            if self.opened.is_none() && !self.failed && self.watched.is_none() {
+                c.text(x + 12.0, y + 200.0, 7.0, label, "Total");
+                c.text_right(x + pw - 12.0, y + 200.0, 7.0, label, "...");
+            }
+            return;
+        };
+        let gain = t.before.map(|b| t.after - b);
+        let (change, col) = match gain {
+            Some(g) if g >= 0.05 => (format!("+{g:.1} pp"), 0x86E05A),
+            Some(_) => ("none".to_string(), 0x8a8aa0),
+            None => ("-".to_string(), 0x8a8aa0),
+        };
+        let place = match (t.online, t.rank) {
+            (true, Some(rank)) => format!("#{rank} online"),
+            (true, None) => "online".into(),
+            (false, _) => "local scores".into(),
+        };
+        let rows = [("Total", format!("{:.0} pp", t.after), 0xffffff), ("Change", change, col), ("Rank", place, 0xc8c8d8)];
+        for (i, (name, v, col)) in rows.iter().enumerate() {
+            let ry = y + 200.0 + i as f32 * 18.0;
+            c.text(x + 12.0, ry, 7.0, label, name);
+            c.text_right(x + pw - 12.0, ry, 7.0, rgba(*col, 1.0), v);
         }
     }
 }

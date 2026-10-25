@@ -435,6 +435,7 @@ fn assert_every_screen_fits() {
         r.failed = failed;
         r.pp = (!failed).then_some(456.7);
         r.no_pp = failed.then_some("failed plays get no pp");
+        r.total = (!failed).then_some(ui::Total { before: Some(12_333.3), after: 12_345.6, rank: Some(99_999), online: true });
         r.breakdown = (!failed).then_some(pp::Breakdown {
             pp: 456.7,
             difficulty: 1234.5,
@@ -448,6 +449,12 @@ fn assert_every_screen_fits() {
         });
         r
     };
+    // Logged in: the friends chip is drawn over the results too.
+    s.mp_menu.account = Some(LONG_NAME.to_string());
+    s.me = Some((12_345.6, Some(99_999)));
+    s.me_for = LONG_NAME.to_string();
+    s.scene = Scene::Select;
+    check(&mut s, "select logged in", &mut out);
     s.scene = Scene::Results { results: results(false), entry: 0, from: None };
     check(&mut s, "results", &mut out);
     s.scene = Scene::Results { results: results(true), entry: 0, from: None };
@@ -458,6 +465,8 @@ fn assert_every_screen_fits() {
     opened.replay_error = Some("that replay isn't on the server".into());
     s.scene = Scene::Results { results: opened, entry: 0, from: None };
     check(&mut s, "results of an online score", &mut out);
+    s.mp_menu.account = None;
+    s.me = None;
     s.scene = Scene::Select;
 
     // The video editor (its map still loading): quality, a target size being typed, exporting.

@@ -257,6 +257,11 @@ struct State {
     pp_backfill_started: bool,
     /// Plays on their way to the online leaderboards.
     submits: Vec<Receiver<Result<online::Reply, String>>>,
+    /// The logged-in player's own pp total and rank online (for the account badge and the
+    /// results' total), whose they are, and the fetch of them.
+    me: Option<(f64, Option<u32>)>,
+    me_for: String,
+    me_fetch: Option<Receiver<Result<online::Profile, String>>>,
     /// The song select leaderboard shows the server's scores, not the local ones.
     board_online: bool,
     /// A player's profile, over everything else.
@@ -696,6 +701,23 @@ fn fetch_board(server: String, map: u64) -> Receiver<Result<Vec<online::OnlineSc
         let _ = tx.send(rows);
     });
     rx
+}
+
+/// Opens a web page in the browser; false where that can't be done.
+fn open_url(url: &str) -> bool {
+    if cfg!(target_os = "android") {
+        return false;
+    }
+    let mut cmd = if cfg!(windows) {
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().is_ok()
 }
 
 /// `file://` URI for a local path.
@@ -2286,6 +2308,19 @@ impl State {
             c.round_rect(x, 3.0, w, 14.0, 4.0, rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95), rgba(0x3a3a4e, 1.0), 1.0);
             c.text(x + 7.0, 6.5, 7.0, rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
             c.hit(x, 3.0, w, 14.0, render::Hit::Changelog);
+            // Who's logged in and their pp, left of it: their profile on the website.
+            let (name, rest) = match (&self.mp_menu.account, self.me) {
+                (Some(name), Some((pp, rank))) => (name.clone(), format!("  {pp:.0} pp{}", rank.map(|r| format!("  #{r}")).unwrap_or_default())),
+                (Some(name), None) => (name.clone(), String::new()),
+                (None, _) => ("log in".to_string(), String::new()),
+            };
+            let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0;
+            let ax = x - 6.0 - aw;
+            let hover = c.hovered(ax, 3.0, aw, 14.0);
+            c.round_rect(ax, 3.0, aw, 14.0, 4.0, rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95), rgba(if self.mp_menu.account.is_some() { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+            let nw = c.text(ax + 7.0, 6.5, 7.0, rgba(0xffffff, 1.0), &name);
+            c.text(ax + 7.0 + nw, 6.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
+            c.hit(ax, 3.0, aw, 14.0, render::Hit::Account);
         }
         let text = match self.updater.status() {
             update::Status::Available { commit, .. } => format!("update {}  Ctrl+U", update::short(&commit)),
@@ -3630,6 +3665,10 @@ impl State {
                 }
                 return;
             }
+            if self.social.open {
+                self.social.close();
+                return;
+            }
         }
         if let Some(s) = &mut self.splash {
             if pressed {
@@ -4724,7 +4763,7 @@ impl State {
     /// F9: the friends overlay (not during songs).
     fn toggle_social(&mut self) {
         if self.social.open {
-            self.social.open = false;
+            self.social.close();
         } else if self.overlay_allowed() {
             self.open_social();
             self.social.mark_read(self.mp.is_some());
@@ -4737,7 +4776,7 @@ impl State {
         let rows = self.social.rows(in_lobby).len();
         let row = self.social.row(in_lobby);
         match code {
-            KeyCode::Escape => self.social.open = false,
+            KeyCode::Escape => self.social.close(),
             KeyCode::Tab => self.social.cycle_tab(self.modifiers_shift),
             KeyCode::PageUp => self.social.wheel(5, f32::MAX, in_lobby),
             KeyCode::PageDown => self.social.wheel(-5, f32::MAX, in_lobby),
@@ -4879,7 +4918,7 @@ impl State {
                     self.toast("leave your lobby first".into());
                     return;
                 }
-                self.social.open = false;
+                self.social.close();
                 self.mp_status = format!("joining {title}...");
                 self.scene = Scene::MpMenu;
                 let request = online::Request::JoinRoom { token: self.cfg.online_token.clone(), room };
@@ -4906,7 +4945,7 @@ impl State {
         };
         c.send(online::Up::Watch(name.clone()));
         self.stop_audio();
-        self.social.open = false;
+        self.social.close();
         self.scene = Scene::Watch(Box::new(WatchView::new(name)));
     }
 
@@ -6209,10 +6248,15 @@ impl State {
                             self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
                             self.online_boards.remove(&replay.map_hash);
                         }
+                        let before = scores::total_pp(&self.scores);
                         match scores::save(&replay, pp) {
                             Ok(row) => {
                                 results.replay = Some(row.file.clone());
                                 self.scores.push(row);
+                                if pp.is_some() {
+                                    let after = scores::total_pp(&self.scores);
+                                    results.total = Some(ui::Total { before: Some(before), after, rank: None, online: false });
+                                }
                                 let all = scores::top(&self.scores, replay.map_hash, usize::MAX);
                                 let rank = all.iter().position(|r| r.date == replay.date && r.score == replay.score).map(|p| p + 1);
                                 results.rank = rank.map(|r| (r, all.len()));
@@ -6640,6 +6684,15 @@ impl State {
             };
             if self.social.open {
                 social::draw(canvas, &self.social, logged_in, lobby, lobby_unread);
+            } else if let Some(p) = self.social.closing() {
+                let (start, hits) = (canvas.shapes.len(), canvas.hits.len());
+                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread);
+                canvas.hits.truncate(hits);
+                canvas.transform_since(start, [0.0, 0.0], 1.0, p * 30.0, 0.0);
+                for sh in &mut canvas.shapes[start..] {
+                    sh.fill[3] *= 1.0 - p;
+                    sh.border[3] *= 1.0 - p;
+                }
             } else if logged_in && !self.in_song() {
                 social::draw_chip(canvas, &self.social, lobby_unread);
             }
@@ -6906,6 +6959,13 @@ impl State {
         for r in done {
             let text = match r {
                 Ok(online::Reply::Submitted { map_rank, pp, rank }) => {
+                    let before = self.me.map(|(b, _)| b);
+                    self.me = Some((pp, rank));
+                    if let Scene::Results { results, .. } = &mut self.scene {
+                        if results.opened.is_none() && results.replay.is_some() {
+                            results.total = Some(ui::Total { before, after: pp, rank, online: true });
+                        }
+                    }
                     let place = map_rank.map(|r| format!("#{r} on this map")).unwrap_or_else(|| "sent (not your best here)".into());
                     let total = rank.map(|r| format!("  |  {pp:.0} pp, #{r} overall")).unwrap_or_default();
                     format!("online: {place}{total}")
@@ -6935,7 +6995,35 @@ impl State {
         self.online_boards.get(&hash).map(|(_, rows)| rows)
     }
 
+    /// The logged-in player's own pp and rank, fetched once per login.
+    fn poll_me(&mut self) {
+        let account = self.mp_menu.account.clone().unwrap_or_default();
+        if account != self.me_for {
+            self.me_for = account.clone();
+            self.me = None;
+            self.me_fetch = None;
+            if !account.is_empty() {
+                let (server, (tx, rx)) = (self.cfg.online_server.clone(), mpsc::channel());
+                std::thread::spawn(move || {
+                    let result = online::call(&server, online::Request::Profile { name: account }).and_then(|r| match r {
+                        online::Reply::Profile(p) => Ok(*p),
+                        _ => Err("odd reply from the server".to_string()),
+                    });
+                    let _ = tx.send(result);
+                });
+                self.me_fetch = Some(rx);
+            }
+        }
+        if let Some(Ok(result)) = self.me_fetch.as_ref().map(|rx| rx.try_recv()) {
+            self.me_fetch = None;
+            if let Ok(p) = result {
+                self.me = Some((p.pp, p.rank));
+            }
+        }
+    }
+
     fn poll_downloads(&mut self) {
+        self.poll_me();
         self.poll_pp_backfill();
         self.poll_online_scores();
         if let Some(p) = &mut self.profile {
@@ -7163,6 +7251,16 @@ impl State {
             }
             Hit::BoardTab(online) => self.board_online = online,
             Hit::Changelog => self.changelog = Some(changelog::View::recent(false)),
+            Hit::Account => match self.mp_menu.account.clone() {
+                Some(name) => {
+                    let url = format!("{}/u/{name}", online::WEBSITE);
+                    if !open_url(&url) {
+                        self.toast(url);
+                    }
+                }
+                // Logging in is in the multiplayer tab.
+                None => self.goto_tab(2),
+            },
             Hit::Overlay => {}
             Hit::ScoreVideo(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
@@ -7931,6 +8029,9 @@ impl State {
             pp_backfill: None,
             pp_backfill_started: false,
             submits: Vec::new(),
+            me: None,
+            me_for: String::new(),
+            me_fetch: None,
             board_online: false,
             profile: None,
             online_boards: std::collections::HashMap::new(),

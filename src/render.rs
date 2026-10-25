@@ -1660,6 +1660,8 @@ pub enum Hit {
     OnlineScoreRow(usize),
     /// The What's new chip, and an overlay over everything (takes clicks meant for underneath).
     Changelog,
+    /// The account badge: the website profile (or logging in).
+    Account,
     Overlay,
     /// The leaderboard's tabs: local (false) or online (true).
     BoardTab(bool),

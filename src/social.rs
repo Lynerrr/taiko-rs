@@ -130,6 +130,8 @@ pub struct Social {
     pub global_unread: usize,
     pub open: bool,
     pub opened_at: Option<Instant>,
+    /// When it last closed (it slides away).
+    pub closed_at: Option<Instant>,
     pub tab: Tab,
     /// The selected row of the shown tab.
     pub cursor: usize,
@@ -181,7 +183,24 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// How long the overlay takes to slide in or out (ms).
+pub const SLIDE_MS: f32 = 160.0;
+
 impl Social {
+    /// Closes the overlay; it slides away (`closing`).
+    pub fn close(&mut self) {
+        if self.open {
+            self.open = false;
+            self.closed_at = Some(Instant::now());
+        }
+    }
+
+    /// How far it has slid away (0-1) while closing.
+    pub fn closing(&self) -> Option<f32> {
+        let p = crate::render::progress(self.closed_at?, SLIDE_MS);
+        (!self.open && p < 1.0).then_some(p)
+    }
+
     pub fn notify(&mut self, title: impl Into<String>, body: impl Into<String>, colour: u32, action: NoteAction) {
         self.notes.push(Note { title: title.into(), body: body.into(), colour, action, at: Instant::now() });
         // The newest few.
@@ -340,7 +359,7 @@ pub fn chat_width() -> usize {
 /// The overlay: a translucent panel on the right over whatever screen is showing.
 /// `lobby`: the room's chat when in one (name, line).
 pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String, String)]>, lobby_unread: usize) {
-    let slide = s.opened_at.map(|t| crate::render::progress(t, 160.0)).unwrap_or(1.0);
+    let slide = s.opened_at.map(|t| crate::render::progress(t, SLIDE_MS)).unwrap_or(1.0);
     let x = c.width - PANEL_W - 6.0 + (1.0 - slide) * 30.0;
     let (y, h) = (24.0, 480.0 - 30.0);
     let a = slide;
