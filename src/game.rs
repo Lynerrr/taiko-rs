@@ -41,6 +41,13 @@ const SPIN_R: f32 = 50.0;
 /// Second key of a big note must land within this window of the first.
 const STRONG_WINDOW: f64 = 30.0;
 const HIT_ANIM_MS: f64 = 160.0;
+/// How long a short fake slider's body takes to fade once it reaches the drum.
+const FAKE_FADE_MS: f64 = 250.0;
+/// The kiai beat flash on each note: its strength on the beat (fading to 0 by the next), how
+/// much of it a circle takes, and the shortest beat that still counts as one.
+const KIAI_FLASH_ALPHA: f32 = 0.337;
+const CIRCLE_FLASH: f32 = 0.3;
+const KIAI_FLASH_MIN_BEAT_MS: f64 = 50.0;
 /// The combo break plays a little louder than a hitsound (about +1.6 dB): noticeable over the
 /// music without being jarring.
 const COMBO_BREAK_GAIN: f32 = 1.2;
@@ -281,6 +288,8 @@ pub struct Game {
     misses: VecDeque<f64>,
     /// Drop / Barrel Roll: where each kiai starts (map ms) and the beat length there.
     kiai_starts: Vec<(f64, f64)>,
+    /// Each kiai's (start, end) map ms; the last may run to infinity.
+    kiai_bands: Vec<(f64, f64)>,
     /// Roulette: where each 4-bar section starts (map ms), its speed, and the velocity its
     /// marker scrolls at.
     sections: Vec<(f64, f64, f64)>,
@@ -1115,10 +1124,14 @@ impl Game {
         let hp_hit = 1.0 / (3.0 * hits * beatmap::difficulty_range(hp_drain, 0.5, 0.75, 0.98));
         let hp_miss = beatmap::difficulty_range(hp_drain, 0.0018, 0.0075, 0.0120);
         let mut kiai_starts = Vec::new();
+        let mut kiai_bands: Vec<(f64, f64)> = Vec::new();
         let mut was_kiai = false;
         for cp in &map.control_points {
             if cp.kiai && !was_kiai {
                 kiai_starts.push((cp.time, cp.beat_length));
+                kiai_bands.push((cp.time, f64::INFINITY));
+            } else if !cp.kiai && was_kiai && let Some(band) = kiai_bands.last_mut() {
+                band.1 = cp.time;
             }
             was_kiai = cp.kiai;
         }
@@ -1214,6 +1227,7 @@ impl Game {
             crumbs: Vec::new(),
             misses: VecDeque::new(),
             kiai_starts,
+            kiai_bands,
             sections,
             decoys,
             flows,
@@ -2313,7 +2327,7 @@ impl Game {
             if n.time - vt > lookahead {
                 break;
             }
-            if n.end_time < vt.min(t) - 3000.0 && n.kind != Kind::Swell {
+            if n.end_time + n.fake_len < vt.min(t) - 3000.0 && n.kind != Kind::Swell {
                 continue;
             }
             self.visible.push(i);
@@ -2603,12 +2617,29 @@ impl Game {
                 }
                 Kind::Roll => {
                     let s0 = s_of(n.time, n.velocity);
-                    let s1 = s_of(n.end_time, n.velocity);
+                    // A fake slider, as stable draws it: body right of the head by its length,
+                    // cap *left* of it by the same. Head and cap are cut when the cap reaches the
+                    // drum; the body goes when it does (fading, if short). Nothing shows before the
+                    // head is on screen, so a long one is only ever body. Still drawn at the
+                    // head's speed, and gimmick sections run past the BPM / SV limits this game
+                    // clamps to, so long ones aren't exact.
+                    let fake = n.fake_len > 0.0;
+                    let mut fake_a = 1.0;
+                    if fake && vt >= n.time {
+                        let p = ((vt - n.time) / FAKE_FADE_MS) as f32;
+                        if !n.fake_fades || p >= 1.0 {
+                            continue;
+                        }
+                        fake_a = 1.0 - p;
+                    }
+                    let cut = fake && vt >= n.time - n.fake_len;
+                    let s_cap = s_of(n.time - n.fake_len, n.velocity);
+                    let s1 = s_of(n.end_time + n.fake_len, n.velocity);
                     if s1 < -HIT_X - r || s0 > lane_len + r {
                         continue;
                     }
                     let (s0, s1) = if boxed { (s0.max(behind(r)), s1.min(lane_len)) } else { (s0, s1) };
-                    let a = if memory_over { 0.0 } else { fade_in(s0) };
+                    let a = if memory_over { 0.0 } else { fade_in(s0) * fake_a };
                     let body_r = r * 0.86;
                     if bent {
                         // The body follows the lane in short pieces (none across a portal).
@@ -2626,11 +2657,18 @@ impl Game {
                         // The skin's body stretched from the head to the end, its cap just past that.
                         let (x0, x1) = (HIT_X + s0, HIT_X + s1);
                         c.sprite_box(Sprite::RollMiddle, (x0 + x1) / 2.0, LANE_Y, (x1 - x0) / 2.0, r * sy, rgba(ROLL, a));
-                        if let Some([ex, ey]) = c.sprite_size(Sprite::RollEnd) {
-                            c.sprite_box(Sprite::RollEnd, x1 + r * ex, LANE_Y, r * ex, r * ey, rgba(ROLL, a));
+                        if let Some([ex, ey]) = c.sprite_size(Sprite::RollEnd).filter(|_| !cut) {
+                            let xe = if fake { HIT_X + s_cap } else { x1 };
+                            c.sprite_box(Sprite::RollEnd, xe + r * ex, LANE_Y, r * ex, r * ey, rgba(ROLL, a));
                         }
                     } else {
                         c.capsule(HIT_X + s0, HIT_X + s1, LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
+                        if fake && !cut {
+                            c.circle(HIT_X + s_cap, LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
+                        }
+                    }
+                    if cut {
+                        continue;
                     }
                     for (k, hit) in st.ticks.iter().enumerate() {
                         let ts = s_of(n.time + k as f64 * n.tick_spacing, n.velocity);
@@ -2680,6 +2718,34 @@ impl Game {
                         let left = n.required_hits.saturating_sub(st.hits);
                         texts.push((HIT_X, LANE_Y - 12.0, 24.0, rgba(WHITE, 1.0), left.to_string()));
                     }
+                }
+            }
+        }
+
+        // Kiai: every head on screen takes its own flash on the beat, added over everything drawn,
+        // so a pile of fake sliders under one note (a "shiny") lights it brighter the deeper it
+        // is. A circle glows a little white, a roll head fully in its own yellow (taiko_arranger).
+        // Not on gimmick beats (60000 BPM lines), which would strobe.
+        let flash = if self.kiai_effects { self.kiai_flash(vt) * KIAI_FLASH_ALPHA } else { 0.0 };
+        if flash > 0.0 && !self.hide_notes {
+            for &i in &self.visible {
+                let n = &self.map.notes[i];
+                let r = if n.big { BIG_R } else { NOTE_R };
+                let sprite = if n.big { Sprite::BigCircle } else { Sprite::HitCircle };
+                let (s, col, a) = match n.kind {
+                    Kind::Don | Kind::Kat if self.state[i].judged.is_none() => {
+                        let s = note_s(i);
+                        (s, WHITE, CIRCLE_FLASH * note_alpha(s))
+                    }
+                    Kind::Roll if !(n.fake_len > 0.0 && vt >= n.time - n.fake_len) => {
+                        let s = s_of(n.time, n.velocity);
+                        (s, ROLL, if memory_over { 0.0 } else { fade_in(s) })
+                    }
+                    _ => continue,
+                };
+                if a > 0.01 && on_lane(s, r) {
+                    let (x, y, _, size) = place(s, 0.0);
+                    c.light(sprite, x, y, r * size, rgba(col, flash * a));
                 }
             }
         }
@@ -2859,6 +2925,33 @@ impl Game {
                     c.shapes.push(sh);
                 }
             }
+        }
+    }
+
+    /// The kiai flash at map time `t`, taiko_arranger's rule: 1 on each beat counted from the
+    /// kiai's start, fading linearly to 0 by the next. The beat is the last real one (gimmick
+    /// lines under `KIAI_FLASH_MIN_BEAT_MS` are skipped). Past the kiai's end only a beat over a
+    /// second long finishes fading; a faster one just stops, as a chorus ending should.
+    fn kiai_flash(&self, t: f64) -> f32 {
+        let i = self.kiai_bands.partition_point(|&(start, _)| start <= t);
+        let Some(&(start, end)) = i.checked_sub(1).and_then(|i| self.kiai_bands.get(i)) else { return 0.0 };
+        let cps = &self.map.control_points;
+        let beat_at = |t: f64| cps[..cps.partition_point(|c| c.time <= t)].iter().rev().map(|c| c.beat_length).find(|&b| b >= KIAI_FLASH_MIN_BEAT_MS);
+        if t >= end {
+            let Some(b) = beat_at(start).filter(|&b| b > 1000.0) else { return 0.0 };
+            if t >= start + ((end - start) / b).ceil() * b {
+                return 0.0;
+            }
+        }
+        let Some(beat) = beat_at(t) else { return 0.0 };
+        1.0 - ((t - start) / beat).rem_euclid(1.0) as f32
+    }
+
+    /// Sets `visual_offset`, except while paused: the vsync lead in it moves a little every frame,
+    /// and on a frozen clock that shook the stopped lane.
+    pub fn set_visual_offset(&mut self, ms: f64) {
+        if self.paused.is_none() {
+            self.visual_offset = ms;
         }
     }
 
@@ -3344,6 +3437,22 @@ mod tests {
     }
 
     #[test]
+    fn a_paused_lane_holds_still_however_the_vsync_lead_moves() {
+        let mut g = Game::new(beatmap::calibration_map(500.0, 0, 64), Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        g.set_visual_offset(30.0);
+        g.set_time(2000.0);
+        g.pause(None);
+        let frozen = g.visual_time();
+        for lead in [30.4, 29.7, 31.2] {
+            g.set_visual_offset(lead);
+            assert_eq!(g.visual_time(), frozen);
+        }
+        g.resume(None);
+        g.set_visual_offset(31.2);
+        assert!((g.visual_time() - (2000.0 + 31.2)).abs() < 1e-6);
+    }
+
+    #[test]
     fn hp_passes_a_clean_play_and_fails_an_empty_one() {
         let mut g = modded("");
         play_all(&mut g, 0.0);
@@ -3529,6 +3638,8 @@ mod tests {
                 velocity: 0.5,
                 tick_spacing: 0.0,
                 required_hits: 0,
+                fake_len: 0.0,
+                fake_fades: false,
             })
             .collect();
         let mut map = beatmap::calibration_map(500.0, 4, 1);
@@ -3656,6 +3767,49 @@ mod tests {
         let cp = map.control_points[0];
         map.control_points.push(beatmap::ControlPoint { time: 8000.0, kiai: true, ..cp });
         Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse(mods))
+    }
+
+    #[test]
+    fn in_kiai_each_fake_slider_under_a_note_adds_its_own_flash() {
+        // Lights drawn with `stack` fake sliders under the note at 10 s, at map time `at`.
+        let lights = |stack: usize, at: f64| {
+            let mut map = beatmap::calibration_map(500.0, 0, 64);
+            let cp = map.control_points[0];
+            map.control_points.push(beatmap::ControlPoint { time: 8000.0, kiai: true, ..cp });
+            let head = map.notes.iter().find(|n| n.time == 10000.0).unwrap().clone();
+            for _ in 0..stack {
+                map.notes.push(beatmap::Note { kind: Kind::Roll, fake_len: 0.0001, fake_fades: true, tick_spacing: 125.0, ..head.clone() });
+            }
+            map.notes.sort_by(|a, b| a.time.total_cmp(&b.time));
+            let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+            g.time = at;
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            g.draw_playfield(&mut c, 1.0);
+            c.shapes.iter().filter(|s| s.params[2] < -0.5).count()
+        };
+        // On a kiai beat, the deeper the pile the more light; outside kiai, none at all.
+        assert_eq!(lights(3, 9510.0) - lights(0, 9510.0), 3);
+        assert_eq!(lights(3, 5010.0), 0);
+    }
+
+    #[test]
+    fn the_kiai_flash_fades_over_each_beat_from_the_kiais_start() {
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let cp = map.control_points[0];
+        // Kiai 8100..9000 (off the red line's beats), then a gimmick line inside it.
+        map.control_points.push(beatmap::ControlPoint { time: 8100.0, kiai: true, ..cp });
+        map.control_points.push(beatmap::ControlPoint { time: 8600.0, kiai: true, beat_length: 6.0, ..cp });
+        map.control_points.push(beatmap::ControlPoint { time: 9000.0, kiai: false, ..cp });
+        let g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        let f = |t: f64| g.kiai_flash(t);
+        assert_eq!(f(8000.0), 0.0);
+        assert_eq!(f(8100.0), 1.0);
+        assert!((f(8350.0) - 0.5).abs() < 1e-6, "linear, from the kiai's start");
+        // The gimmick line's 6 ms beat is skipped for the real 500 ms one.
+        assert!((f(8725.0) - 0.75).abs() < 1e-6);
+        // A 120 BPM kiai ending mid-beat just stops.
+        assert_eq!(f(9000.0), 0.0);
     }
 
     #[test]

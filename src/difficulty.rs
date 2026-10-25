@@ -168,7 +168,7 @@ mod tests {
     use crate::beatmap::{Beatmap, ControlPoint, Meta, Note};
 
     fn note(time: f64, kat: bool) -> Note {
-        Note { time, end_time: time, kind: if kat { Kind::Kat } else { Kind::Don }, big: false, velocity: 0.5, tick_spacing: 0.0, required_hits: 0 }
+        Note { time, end_time: time, kind: if kat { Kind::Kat } else { Kind::Don }, big: false, velocity: 0.5, tick_spacing: 0.0, required_hits: 0, fake_len: 0.0, fake_fades: false }
     }
 
     fn map(notes: Vec<Note>) -> Beatmap {

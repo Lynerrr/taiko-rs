@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::audio::{Sfx, Sounds, Track};
+use crate::audio::{self, Sfx, Sounds, Track};
 use crate::beatmap::Beatmap;
 use crate::game::{self, Game};
 use crate::layout::{Area, Grip};
@@ -408,18 +408,35 @@ pub fn mix_audio(track: &Track, sr: u32, speed: &Speed, start: f64, end: f64, mu
             out[i * 2 + 1] = track.samples[src as usize * 2 + 1] * music;
         }
     }
-    for &(t, s, volume) in sfx {
+    // As the game plays them: a sound rings `SFX_CONCURRENCY` times at most, each cut off (fading)
+    // when the play that many after it starts.
+    let mut order: Vec<usize> = (0..sfx.len()).collect();
+    order.sort_by(|&a, &b| sfx[a].0.total_cmp(&sfx[b].0));
+    for (p, &e) in order.iter().enumerate() {
+        let (t, s, volume) = sfx[e];
         let at = frame_of(t) - f0;
+        let cut = order[p + 1..].iter().filter(|&&o| sfx[o].1 == s).nth(audio::SFX_CONCURRENCY - 1).map(|&o| frame_of(sfx[o].0) - f0 - at);
         let sound = &sounds[s as usize];
         for (k, v) in sound.iter().enumerate() {
+            let fade = match cut {
+                Some(c) if k as i64 >= c => 1.0 - (k as i64 - c) as f32 / audio::CHOKE_FRAMES as f32,
+                _ => 1.0,
+            };
+            if fade <= 0.0 {
+                break;
+            }
             let i = at + k as i64;
             if i >= 0 && (i as usize) < n {
-                out[i as usize * 2] += v * fx * volume;
-                out[i as usize * 2 + 1] += v * fx * volume;
+                out[i as usize * 2] += v * fx * volume * fade;
+                out[i as usize * 2 + 1] += v * fx * volume * fade;
             }
         }
     }
-    out.iter().map(|v| (v.clamp(-1.0, 1.0) * 32767.0) as i16).collect()
+    let mut limiter = audio::Limiter::new(sr);
+    out.chunks(2).flat_map(|f| {
+        let (l, r) = limiter.apply(f[0], f[1]);
+        [(l * 32767.0) as i16, (r * 32767.0) as i16]
+    }).collect()
 }
 
 pub fn write_wav(path: &Path, samples: &[i16], sr: u32) -> std::io::Result<()> {

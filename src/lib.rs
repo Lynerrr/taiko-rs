@@ -53,7 +53,7 @@ mod video;
 #[cfg(target_os = "linux")]
 mod wayland_dnd;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -294,6 +294,10 @@ struct State {
     bg_changed: Option<Instant>,
     /// A newly loaded skin's note images, for the render thread to upload.
     sprites_upload: Option<render::Atlas>,
+    /// The playing map's folder when it carries skin images (they're in the loaded skin), and
+    /// the folder last checked for them.
+    skin_map: Option<PathBuf>,
+    skin_map_seen: Option<PathBuf>,
     /// The window has keyboard focus.
     focused: bool,
     /// The right button is held on song select (scrolling through the list).
@@ -2369,10 +2373,34 @@ impl State {
     }
 
     fn load_skin(&mut self) {
-        let skin = skin::load(&self.cfg.skin, &self.cfg.skin_parts, self.audio.as_ref().map(|a| a.rate));
+        let skin = skin::load(&self.cfg.skin, &self.cfg.skin_parts, self.audio.as_ref().map(|a| a.rate), self.skin_map.as_deref());
         self.sprites_upload = Some(skin.images);
         if let Some(a) = &self.audio {
             a.set_hitsounds(skin.hitsounds);
+        }
+    }
+
+    /// Swaps the playing map's own skin images in, and out again after: only when it has some,
+    /// so ordinary maps never reload the skin.
+    // ponytail: Play only (and its settings); multiplayer / spectating keep your skin.
+    fn follow_map_skin(&mut self) {
+        let entry = match &self.scene {
+            Scene::Play { entry, .. } => Some(*entry),
+            Scene::Settings { prev } => match **prev {
+                Scene::Play { entry, .. } => Some(entry),
+                _ => None,
+            },
+            _ => None,
+        };
+        let dir = entry.and_then(|e| self.library.get(e)).and_then(|e| e.path.parent()).map(Path::to_path_buf);
+        if dir == self.skin_map_seen {
+            return;
+        }
+        self.skin_map_seen = dir.clone();
+        let want = dir.filter(|d| skin::map_has_images(d));
+        if want != self.skin_map {
+            self.skin_map = want;
+            self.load_skin();
         }
     }
 
@@ -2954,8 +2982,9 @@ impl State {
         let delay = Duration::from_millis(self.cfg.resume_delay_ms as u64);
         let cursor = game.paused.unwrap_or(0);
         match code {
-            KeyCode::ArrowUp => game.paused = Some(cursor.saturating_sub(1)),
-            KeyCode::ArrowDown => game.paused = Some((cursor + 1).min(PAUSE_ITEMS.len() - 1)),
+            // Wrapping: Up from Continue is Quit, so pause, Up, Enter leaves at once.
+            KeyCode::ArrowUp => game.paused = Some((cursor + PAUSE_ITEMS.len() - 1) % PAUSE_ITEMS.len()),
+            KeyCode::ArrowDown => game.paused = Some((cursor + 1) % PAUSE_ITEMS.len()),
             KeyCode::Escape => game.resume_after(delay, self.audio.as_ref()),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
                 0 => game.resume_after(delay, self.audio.as_ref()),
@@ -4713,6 +4742,11 @@ impl State {
         });
     }
 
+    /// Song select: the list is being dragged through by its scrollbar or right-click scrolling.
+    fn dragging_list(&self) -> bool {
+        matches!(self.scene, Scene::Select) && (self.scrollbar_drag || self.right_scroll)
+    }
+
     /// Showing a song, its background dimmed by the background dim setting.
     fn dims_background(&self) -> bool {
         matches!(
@@ -5826,6 +5860,7 @@ impl State {
     /// should be captured.
     fn build_frame(&mut self, canvas: &mut Canvas, now: Instant, width: f32) -> Option<String> {
         self.refresh_play_offset();
+        self.follow_map_skin();
         if self.window_resized_at.is_some_and(|t| now.saturating_duration_since(t) > Duration::from_secs(1)) {
             self.window_resized_at = None;
             self.cfg.save();
@@ -5881,6 +5916,7 @@ impl State {
             let (entries, selected) = if browsing { (&self.browse.remote, self.browse.shown) } else { (&self.library, self.preview_target()) };
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
+            self.preview.hold = self.dragging_list();
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.play_offset, rate);
@@ -5892,7 +5928,8 @@ impl State {
             }
             if matches!(self.scene, Scene::Select) {
                 self.poll_set_status(now);
-                for i in self.select.selected_set() {
+                let sets = if self.dragging_list() { Vec::new() } else { self.select.selected_set() };
+                for i in sets {
                     self.stars.request(i, &self.library[i].path, play_rate);
                 }
                 let (stars, rate) = (&self.stars, play_rate);
@@ -6138,7 +6175,7 @@ impl State {
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                game.visual_offset = visual_offset;
+                game.set_visual_offset(visual_offset);
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
                 });
@@ -6383,7 +6420,7 @@ impl State {
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                game.visual_offset = visual_offset;
+                game.set_visual_offset(visual_offset);
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
@@ -6542,7 +6579,7 @@ impl State {
                     game.autoplay(self.audio.as_ref());
                 }
                 let offset = if *vsync { self.cfg.vsync_tune_ms } else { self.cfg.offset_ms };
-                game.visual_offset = visual_offset;
+                game.set_visual_offset(visual_offset);
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
                     game.draw_playfield(c, self.cfg.scroll_speed);
                 });
@@ -6989,7 +7026,7 @@ impl State {
     /// The online leaderboard of map `hash` (fetched in the background; again after a minute).
     fn online_board(&mut self, hash: u64) -> Option<&Result<Vec<online::OnlineScore>, String>> {
         let stale = self.online_boards.get(&hash).is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(60));
-        if stale && self.board_fetch.is_none() {
+        if stale && self.board_fetch.is_none() && !self.dragging_list() {
             self.board_fetch = Some((hash, fetch_board(self.cfg.online_server.clone(), hash)));
         }
         self.online_boards.get(&hash).map(|(_, rows)| rows)
@@ -7575,7 +7612,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                     // also lists the biggest).
                     let ppu = renderer.size().1 as f32 / render::VIRTUAL_HEIGHT;
                     let area = |sh: &render::Shape| {
-                        let pad = 1.5 + sh.params[2] * ppu;
+                        let pad = 1.5 + sh.params[2].max(0.0) * ppu;
                         (sh.half[0] * ppu + pad) * 2.0 * (sh.half[1] * ppu + pad) * 2.0
                     };
                     let screen = (renderer.size().0 * renderer.size().1).max(1) as f32;
@@ -8049,6 +8086,8 @@ impl State {
             last_video: None,
             bg_changed: None,
             sprites_upload: None,
+            skin_map: None,
+            skin_map_seen: None,
             focused: true,
             right_scroll: false,
             scrollbar_drag: false,

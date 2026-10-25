@@ -242,11 +242,17 @@ fn extract_osz(path: &Path) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
+/// Whether a directory entry is a folder (or a link to one). From the listing itself: asking the
+/// file system about each of tens of thousands of maps again is slow on a hard drive.
+fn is_dir(e: &std::fs::DirEntry) -> bool {
+    e.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir()))
+}
+
 fn collect_osu(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
-        if p.is_dir() {
+        if is_dir(&e) {
             if depth > 0 {
                 collect_osu(&p, depth - 1, out);
             }
@@ -256,52 +262,143 @@ fn collect_osu(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// A map as the last scan read it.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct CachedMap {
+    path: PathBuf,
+    meta: Meta,
+    size: u64,
+    modified: u64,
+}
+
+/// A set folder as the last scan saw it: when it last changed (ns since 1970) and its maps, every
+/// one read (not only the playable ones, so a mania set isn't read again either).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedFolder {
+    dir: PathBuf,
+    modified: u128,
+    maps: Vec<CachedMap>,
+}
+
+fn library_cache() -> PathBuf {
+    cache_dir().join("library.json")
+}
+
+fn load_cache(path: &Path) -> std::collections::HashMap<PathBuf, CachedFolder> {
+    let folders: Vec<CachedFolder> = std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    folders.into_iter().map(|f| (f.dir.clone(), f)).collect()
+}
+
+fn save_cache(path: &Path, folders: Vec<CachedFolder>) {
+    let Ok(json) = serde_json::to_vec(&folders) else { return };
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
+    let tmp = path.with_extension("partial");
+    if std::fs::write(&tmp, json).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 /// Finds playable difficulties under `inputs`. `found` counts files read so far, for the UI.
+///
+/// A Songs folder of tens of thousands of maps took over a minute just to list on a hard drive,
+/// every launch. So each set folder's maps are kept in a cache with the folder's modified time,
+/// and a folder whose time hasn't moved isn't opened again: adding, removing or renaming a file
+/// in it moves it.
+// ponytail: a .osu rewritten in place (same name) doesn't move its folder's time, so its new
+// header shows after the folder next changes or the cache file is deleted.
 pub fn scan(inputs: &[PathBuf], found: &AtomicUsize) -> Vec<Entry> {
-    let mut files = Vec::new();
+    scan_cached(inputs, found, &library_cache())
+}
+
+fn scan_cached(inputs: &[PathBuf], found: &AtomicUsize, cache_path: &Path) -> Vec<Entry> {
+    let mut cache = load_cache(cache_path);
+    let mut kept: Vec<CachedFolder> = Vec::new();
+    // Files to read, with the set folder (index into `walked`) they are cached under, if any.
+    let mut files: Vec<(Option<usize>, PathBuf)> = Vec::new();
+    let mut walked: Vec<(PathBuf, u128)> = Vec::new();
+    let loose = |files: &mut Vec<(Option<usize>, PathBuf)>, dir: &Path| {
+        let mut found = Vec::new();
+        collect_osu(dir, 1, &mut found);
+        files.extend(found.into_iter().map(|p| (None, p)));
+    };
     for input in inputs {
         let ext = input.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
         match ext.as_deref() {
-            Some("osu") if input.is_file() => files.push(input.clone()),
+            Some("osu") if input.is_file() => files.push((None, input.clone())),
             Some("osz") if input.is_file() => match extract_osz(input) {
-                Ok(dir) => collect_osu(&dir, 1, &mut files),
+                Ok(dir) => loose(&mut files, &dir),
                 Err(e) => eprintln!("{}: {e}", input.display()),
             },
             _ if input.is_dir() => {
-                // A Songs folder: also pick up .osz files dropped into it.
-                if let Ok(rd) = std::fs::read_dir(input) {
-                    for e in rd.flatten() {
-                        let p = e.path();
-                        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osz")) {
-                            if let Ok(dir) = extract_osz(&p) {
-                                collect_osu(&dir, 1, &mut files);
+                let Ok(rd) = std::fs::read_dir(input) else { continue };
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if is_dir(&e) {
+                        // The folder's own time: the copy Windows lists with the parent lags it.
+                        let modified = std::fs::metadata(&p).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+                        match cache.remove(&p) {
+                            Some(f) if f.modified == modified && modified != 0 => {
+                                found.fetch_add(f.maps.len(), Ordering::Relaxed);
+                                kept.push(f);
                             }
+                            _ => {
+                                let mut found = Vec::new();
+                                collect_osu(&p, 1, &mut found);
+                                files.extend(found.into_iter().map(|f| (Some(walked.len()), f)));
+                                walked.push((p, modified));
+                            }
+                        }
+                    } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osu")) {
+                        files.push((None, p));
+                    } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osz")) {
+                        // A Songs folder: also pick up .osz files dropped into it.
+                        if let Ok(dir) = extract_osz(&p) {
+                            loose(&mut files, &dir);
                         }
                     }
                 }
-                collect_osu(input, 2, &mut files)
             }
             _ => eprintln!("skipping {}: not a .osu, .osz or folder", input.display()),
         }
     }
-    files.sort();
-    files.dedup();
+    files.sort_by(|a, b| a.1.cmp(&b.1));
+    files.dedup_by(|a, b| a.1 == b.1);
 
-    let read = |path: &PathBuf| -> Option<Entry> {
+    let read = |(dir, path): &(Option<usize>, PathBuf)| -> Option<(Option<usize>, CachedMap)> {
         // One malformed map must not take the whole scan down with it.
         let meta = std::panic::catch_unwind(|| beatmap::read_meta_file(path)).ok().flatten();
         found.fetch_add(1, Ordering::Relaxed);
-        let meta = meta?;
         let (size, modified) = file_stats(path);
-        meta.is_playable().then(|| Entry { path: path.clone(), meta, size, modified, hash: OnceLock::new() })
+        Some((*dir, CachedMap { path: path.clone(), meta: meta?, size, modified }))
     };
     // Reading headers is I/O-bound: spread it over a thread per core.
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 16);
     let chunk = files.len().div_ceil(threads).max(1);
-    let mut entries: Vec<Entry> = std::thread::scope(|s| {
+    let read: Vec<(Option<usize>, CachedMap)> = std::thread::scope(|s| {
         let handles: Vec<_> = files.chunks(chunk).map(|part| s.spawn(move || part.iter().filter_map(read).collect::<Vec<_>>())).collect();
         handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
     });
+
+    let mut fresh: Vec<CachedFolder> = walked.into_iter().map(|(dir, modified)| CachedFolder { dir, modified, maps: Vec::new() }).collect();
+    let mut maps: Vec<CachedMap> = kept.iter().flat_map(|f| f.maps.iter().cloned()).collect();
+    for (dir, map) in read {
+        if let Some(d) = dir {
+            fresh[d].maps.push(map.clone());
+        }
+        maps.push(map);
+    }
+    // Folders of other scans (another Songs folder, a single map) stay cached; ones gone from
+    // a folder just scanned are dropped.
+    let scanned = |dir: &Path| dir.parent().is_some_and(|p| inputs.iter().any(|i| i == p));
+    kept.extend(fresh);
+    kept.extend(cache.into_values().filter(|f| !scanned(&f.dir)));
+    save_cache(cache_path, kept);
+
+    let mut entries: Vec<Entry> = maps
+        .into_iter()
+        .filter(|m| m.meta.is_playable())
+        .map(|m| Entry { path: m.path, meta: m.meta, size: m.size, modified: m.modified, hash: OnceLock::new() })
+        .collect();
     entries.sort_by(|a, b| {
         // Same-named songs from different folders stay separate sets.
         let key = |e: &Entry| (e.meta.artist.to_lowercase(), e.meta.title.to_lowercase(), e.path.parent().map(|p| p.to_path_buf()));
@@ -361,6 +458,38 @@ mod tests {
         // Unsubmitted maps (no set ID) match by artist, title and mapper.
         assert_eq!(osz_news(&library, &none, &[(meta("Oni", None), hash(b"oni"))]), (0, Some(set.as_path())));
         assert_eq!(osz_news(&library, &none, &[(Meta { creator: "d".into(), ..meta("Oni", None) }, hash(b"oni"))]), (1, None));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_rescan_reads_only_the_folders_that_changed() {
+        let root = std::env::temp_dir().join(format!("taiko-rs-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let songs = root.join("Songs");
+        let osu = |title: &str, version: &str| format!("osu file format v14\n\n[General]\nMode: 1\n\n[Metadata]\nTitle:{title}\nVersion:{version}\n");
+        for set in ["1 A", "2 B", "4 D"] {
+            std::fs::create_dir_all(songs.join(set)).unwrap();
+            std::fs::write(songs.join(set).join("oni.osu"), osu(set, "Oni")).unwrap();
+        }
+        let cache = root.join("library.json");
+        let scan = || {
+            let found = AtomicUsize::new(0);
+            let mut v: Vec<(String, String)> = scan_cached(std::slice::from_ref(&songs), &found, &cache).into_iter().map(|e| (e.meta.title, e.meta.version)).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(scan().len(), 3);
+        // Rewritten in place, its folder unchanged: not read again (the cached header is shown).
+        std::fs::write(songs.join("1 A").join("oni.osu"), osu("renamed", "Oni")).unwrap();
+        // A new difficulty changes its folder, a new folder is read, a deleted one goes.
+        std::fs::write(songs.join("2 B").join("muzu.osu"), osu("2 B", "Muzukashii")).unwrap();
+        std::fs::create_dir_all(songs.join("3 C")).unwrap();
+        std::fs::write(songs.join("3 C").join("kantan.osu"), osu("3 C", "Kantan")).unwrap();
+        std::fs::remove_dir_all(songs.join("4 D")).unwrap();
+        let names: Vec<(String, String)> = [("1 A", "Oni"), ("2 B", "Muzukashii"), ("2 B", "Oni"), ("3 C", "Kantan")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+        assert_eq!(scan(), names);
+        // And again, all from the cache.
+        assert_eq!(scan(), names);
         let _ = std::fs::remove_dir_all(&root);
     }
 
