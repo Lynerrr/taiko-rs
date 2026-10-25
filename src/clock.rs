@@ -79,28 +79,43 @@ impl GameClock {
 /// for the moment the image was handed out move by uneven steps on even refreshes: stutter.
 /// This gives each frame a time on the refresh grid instead: one refresh after the last, whole
 /// refreshes more when it really came late, following the real clock slowly.
+///
+/// The refresh it goes by is the one it sees, not the one it's told: the window system can name
+/// another screen's (60 Hz while the window is on a 180 Hz one) or none at all (Wayland before
+/// the window is shown: 60), and a grid of the wrong refresh makes notes leap and snap back.
 pub struct VsyncPacer {
-    /// The refresh interval (ms), learned from the screen's (59.94 Hz isn't 60).
+    /// The refresh interval (ms): the told one at first, then what the images show (and 59.94 Hz
+    /// isn't 60).
     period: f64,
+    /// The refresh it was told last (another one starts over).
+    told_hz: f64,
     /// The last frame's time and when it got its image.
     last: Option<(Instant, Instant)>,
+    /// The latest steps (ms) between images.
+    steps: std::collections::VecDeque<f64>,
 }
 
 impl Default for VsyncPacer {
     fn default() -> Self {
-        VsyncPacer { period: 1000.0 / 60.0, last: None }
+        VsyncPacer { period: 1000.0 / 60.0, told_hz: 0.0, last: None, steps: Default::default() }
     }
 }
 
+/// How many steps between images it takes to judge the refresh, and how many it's judged by once
+/// there are (more average the jitter out finer).
+const PACE_STEPS: usize = 24;
+const PACE_STEPS_KEPT: usize = 120;
+
 impl VsyncPacer {
-    /// The time to draw a frame for that got its image at `acquired`, on a screen of
-    /// `refresh_hz`.
+    /// The time to draw a frame for that got its image at `acquired`, on a screen the window
+    /// system says is `refresh_hz`.
     pub fn frame_time(&mut self, acquired: Instant, refresh_hz: f64) -> Instant {
-        let nominal = 1000.0 / refresh_hz.clamp(24.0, 1000.0);
-        if (self.period - nominal).abs() > nominal * 0.1 {
+        if refresh_hz != self.told_hz {
             // Another screen or mode: start over.
-            self.period = nominal;
+            self.told_hz = refresh_hz;
+            self.period = 1000.0 / refresh_hz.clamp(24.0, 1000.0);
             self.last = None;
+            self.steps.clear();
         }
         let ms = |a: Instant, b: Instant| if a >= b { (a - b).as_secs_f64() * 1000.0 } else { -((b - a).as_secs_f64() * 1000.0) };
         let shift = |t: Instant, by: f64| if by >= 0.0 { t + Duration::from_secs_f64(by / 1000.0) } else { t - Duration::from_secs_f64(-by / 1000.0) };
@@ -108,10 +123,24 @@ impl VsyncPacer {
             self.last = Some((acquired, acquired));
             return acquired;
         };
-        // Learn the refresh from images handed out about one refresh apart.
         let step = ms(acquired, prev_acquired);
-        if (step - self.period).abs() < 0.15 * self.period {
-            self.period += (step - self.period) * 0.002;
+        if (0.5..250.0).contains(&step) {
+            self.steps.push_back(step);
+            if self.steps.len() > PACE_STEPS_KEPT {
+                self.steps.pop_front();
+            }
+        }
+        if let Some(seen) = self.seen_refresh() {
+            if (seen - self.period).abs() > 0.15 * self.period {
+                // The images come at another refresh than the one told: go by theirs, from
+                // here.
+                self.period = seen;
+                self.last = Some((acquired, acquired));
+                return acquired;
+            }
+            // And to the fraction of a millisecond (59.94 Hz isn't 60), gliding: what's seen
+            // moves a little with each image's jitter.
+            self.period += (seen - self.period) * 0.05;
         }
         let p = self.period;
         let mut t = shift(prev, p);
@@ -140,6 +169,30 @@ impl VsyncPacer {
         t
     }
 
+    /// The refresh (ms) the images come at, once there are enough steps between them: the mean
+    /// of those near their median (the median alone lands on one step's jitter; the mean of them
+    /// all would count slow frames).
+    fn seen_refresh(&self) -> Option<f64> {
+        if self.steps.len() < PACE_STEPS {
+            return None;
+        }
+        let mut sorted: Vec<f64> = self.steps.iter().copied().collect();
+        sorted.sort_by(f64::total_cmp);
+        let median = sorted[sorted.len() / 2];
+        // A slow frame (two refreshes or more) and the quick one after it are well outside; any
+        // jitter, however lopsided, inside.
+        let near: Vec<f64> = sorted.into_iter().filter(|s| (s - median).abs() < 0.5 * median).collect();
+        Some(near.iter().sum::<f64>() / near.len() as f64)
+    }
+
+    /// The refresh interval (ms) frames are paced to, once it's been seen (for the vsync
+    /// compensation: the told one can be wrong).
+    pub fn refresh_ms(&self) -> Option<f64> {
+        self.seen_refresh().map(|_| self.period)
+    }
+
+    /// Out of vsync (a song in mailbox, menus in vsync): starts over at the next frame, still
+    /// knowing the refresh it saw.
     pub fn reset(&mut self) {
         self.last = None;
     }
@@ -186,6 +239,60 @@ mod tests {
         // One step of two refreshes (the frame shown twice), all the rest one.
         assert_eq!(steps.iter().filter(|&&s| (s - 2.0).abs() < 0.05).count(), 1, "{steps:?}");
         assert!(steps.iter().all(|&s| (s - 1.0).abs() < 0.05 || (s - 2.0).abs() < 0.05), "{steps:?}");
+    }
+
+    /// Frame times (ms from the first) for images handed out at `acquired` (ms), told the screen
+    /// is `told_hz`.
+    fn paced_told(acquired: &[f64], told_hz: f64) -> (Vec<f64>, VsyncPacer) {
+        let start = Instant::now();
+        let mut p = VsyncPacer::default();
+        let t = acquired.iter().map(|&a| (p.frame_time(start + Duration::from_secs_f64(a / 1000.0), told_hz) - start).as_secs_f64() * 1000.0).collect();
+        (t, p)
+    }
+
+    #[test]
+    fn a_screen_other_than_the_one_told_still_steps_evenly() {
+        // The window on a 180 Hz screen, told 60 Hz (another screen's, or none read: 60), and
+        // the other way round: it used to leap a 60 Hz refresh a frame and snap back.
+        for (real, told) in [(180.0, 60.0), (60.0, 180.0), (144.0, 60.0), (240.0, 144.0)] {
+            let r = 1000.0 / real;
+            let jitter = [0.0, 0.4, -0.3, 0.6, -0.5, 0.2];
+            let acquired: Vec<f64> = (0..600).map(|k| k as f64 * r + jitter[k % jitter.len()]).collect();
+            let (t, p) = paced_told(&acquired, told);
+            // Once it has seen a few dozen frames, every step is one of its refreshes.
+            for (k, w) in t.windows(2).enumerate().skip(40) {
+                assert!((w[1] - w[0] - r).abs() < 0.2, "{real} Hz told {told}: step {k} is {}", w[1] - w[0]);
+            }
+            assert!((t[599] - acquired[599]).abs() < 2.0, "{real} Hz told {told}: drifted off");
+            assert!((p.refresh_ms().unwrap() - r).abs() < 0.05, "{real} Hz told {told}");
+        }
+    }
+
+    #[test]
+    fn a_game_drawing_every_other_refresh_still_steps_evenly() {
+        // A 240 Hz screen, frames every second refresh: shown 2 refreshes apart, evenly.
+        let r = 2.0 * 1000.0 / 240.0;
+        let acquired: Vec<f64> = (0..400).map(|k| k as f64 * r + if k % 2 == 0 { 0.3 } else { -0.3 }).collect();
+        let (t, _) = paced_told(&acquired, 240.0);
+        for w in t.windows(2).skip(40) {
+            assert!((w[1] - w[0] - r).abs() < 0.2, "step {}", w[1] - w[0]);
+        }
+    }
+
+    #[test]
+    fn the_refresh_it_saw_outlasts_a_spell_out_of_vsync() {
+        let r = 1000.0 / 180.0;
+        let start = Instant::now();
+        let at = |ms: f64| start + Duration::from_secs_f64(ms / 1000.0);
+        let mut p = VsyncPacer::default();
+        for k in 0..60 {
+            p.frame_time(at(k as f64 * r), 60.0);
+        }
+        // A song in mailbox, then vsync again: straight back on the 180 Hz grid.
+        p.reset();
+        let t0 = 10_000.0;
+        let t: Vec<f64> = (0..10).map(|k| (p.frame_time(at(t0 + k as f64 * r), 60.0) - start).as_secs_f64() * 1000.0).collect();
+        assert!(t.windows(2).all(|w| (w[1] - w[0] - r).abs() < 0.2), "{t:?}");
     }
 
     #[test]
