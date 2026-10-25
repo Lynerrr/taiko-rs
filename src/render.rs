@@ -1451,6 +1451,9 @@ pub enum Hit {
     ChoiceRow(usize),
     /// Multiverse setup: a universe's (row) colours, shape, speed or a mod (column).
     UniverseCell(usize, usize),
+    /// Multiverse setup: load a preset / delete one of the player's.
+    UniversePreset(usize),
+    UniversePresetDelete(usize),
     /// Song select with no maps: choose the Songs folder.
     SongsFolder,
     /// A settings sidebar section.

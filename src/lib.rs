@@ -1340,6 +1340,9 @@ impl State {
             Item::SkinFolder => "Enter to open".into(),
             Item::Accent => render::accent_name(c.accent),
             Item::AccentHue => format!("#{:06x}", c.accent),
+            Item::NoteColours => c.note_colours.name().into(),
+            Item::DonColour => format!("#{:06x}", c.note_colours.don()),
+            Item::KatColour => format!("#{:06x}", c.note_colours.kat()),
         }
     }
 
@@ -1374,6 +1377,12 @@ impl State {
                 self.cfg.accent = render::ACCENTS[next as usize].1;
             }
             Item::AccentHue => self.cfg.accent = render::rotate_hue(self.cfg.accent, 10.0 * d as f32),
+            Item::NoteColours => self.cfg.note_colours = self.cfg.note_colours.step(dir),
+            Item::DonColour | Item::KatColour => {
+                let (don, kat) = (self.cfg.note_colours.don(), self.cfg.note_colours.kat());
+                let turn = |c: u32| render::rotate_hue(c, 10.0 * d as f32);
+                self.cfg.note_colours = if item == Item::DonColour { multiverse::Colours::own(turn(don), kat) } else { multiverse::Colours::own(don, turn(kat)) };
+            }
             Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
@@ -1452,6 +1461,7 @@ impl State {
             }
         }
         self.apply_volume();
+        multiverse::set_note_colours(self.cfg.note_colours);
         if let (Some(a), Item::FxVolume | Item::Skin) = (&self.audio, item) {
             a.sfx(audio::Sfx::Don);
         }
@@ -1508,6 +1518,11 @@ impl State {
                 (strings(&mut all.iter().map(|ch| ch.name())), all.iter().position(|&ch| ch == self.updater.channel()), format!("running {}", update::BUILD_CHANNEL.name()))
             }
             Item::Accent => (strings(&mut render::ACCENTS.iter().map(|a| a.0)), render::ACCENTS.iter().position(|a| a.1 == c.accent), String::new()),
+            Item::NoteColours => {
+                let own = c.note_colours.custom;
+                let names = multiverse::PALETTES.iter().map(|p| p.0.to_string()).chain(std::iter::once(format!("custom  #{:06x} / #{:06x}", own[0], own[1]))).collect();
+                (names, Some(c.note_colours.palette), "don / kat".into())
+            }
             Item::Skin => {
                 let skins = skin::list();
                 let note = format!("{} installed", skins.len());
@@ -1542,6 +1557,7 @@ impl State {
             Item::AudioBuffer if Some(i) != list.current => self.set_audio_buffer(AUDIO_BUFFERS[i]),
             Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
             Item::Accent => self.cfg.accent = render::ACCENTS[i].1,
+            Item::NoteColours => self.cfg.note_colours.palette = i,
             Item::Skin => {
                 let skin = if i == 0 { String::new() } else { name.clone() };
                 if skin != self.cfg.skin {
@@ -1568,6 +1584,7 @@ impl State {
             }
             _ => return,
         }
+        multiverse::set_note_colours(self.cfg.note_colours);
         self.cfg.save();
     }
 
@@ -1587,6 +1604,8 @@ impl State {
             Item::BackgroundDim => format!("{:.0}", c.bg_dim * 100.0),
             Item::FpsCap => c.fps_cap.to_string(),
             Item::AccentHue => format!("#{:06x}", c.accent),
+            Item::DonColour => format!("#{:06x}", c.note_colours.don()),
+            Item::KatColour => format!("#{:06x}", c.note_colours.kat()),
             Item::SongsFolder => c.songs_folder.as_ref().or(self.song_dirs.first()).map(|d| d.display().to_string()).unwrap_or_default(),
             _ => return,
         };
@@ -1650,6 +1669,11 @@ impl State {
                 let hex = if t.starts_with('#') { t.to_string() } else { format!("#{t}") };
                 c.accent = render::parse_accent(t).or_else(|| render::parse_accent(&hex)).ok_or("type a colour like #ff8800")?;
             }
+            Item::DonColour | Item::KatColour => {
+                let typed = multiverse::parse_hex(text).ok_or("type a colour like #eb452c")?;
+                let (don, kat) = (c.note_colours.don(), c.note_colours.kat());
+                c.note_colours = if item == Item::DonColour { multiverse::Colours::own(typed, kat) } else { multiverse::Colours::own(don, typed) };
+            }
             Item::SongsFolder => {
                 let t = text.trim().trim_matches('"');
                 let path = match (t.strip_prefix("~/"), std::env::var_os("HOME")) {
@@ -1661,6 +1685,7 @@ impl State {
             _ => return Ok(()),
         }
         self.apply_volume();
+        multiverse::set_note_colours(self.cfg.note_colours);
         self.cfg.save();
         Ok(())
     }
@@ -2741,7 +2766,8 @@ impl State {
         let col_w = c.width / 4.0;
         let h = render::VIRTUAL_HEIGHT;
         for (col, key) in self.cfg.touch_layout.keys().into_iter().enumerate() {
-            let color = if key == 0 || key == 3 { game::KAT } else { game::DON };
+            let colours = multiverse::note_colours();
+            let color = if key == 0 || key == 3 { colours.kat() } else { colours.don() };
             let x = col as f32 * col_w;
             let flash = self.touch_flash[col].map(|t| 1.0 - (now.saturating_duration_since(t).as_secs_f32() / 0.15).min(1.0)).unwrap_or(0.0);
             if flash > 0.0 {
@@ -2935,7 +2961,7 @@ impl State {
                 let (vx, vy) = self.mouse_virtual();
                 let hit = self.hit_at(vx, vy);
                 let ours = if self.universe_setup.is_some() {
-                    matches!(hit, Some(render::Hit::UniverseCell(..) | render::Hit::Key(_)))
+                    matches!(hit, Some(render::Hit::UniverseCell(..) | render::Hit::UniversePreset(_) | render::Hit::UniversePresetDelete(_) | render::Hit::Key(_)))
                 } else {
                     matches!(hit, Some(render::Hit::ModToggle(_) | render::Hit::Key(_)))
                 };
@@ -3657,7 +3683,7 @@ impl State {
                 self.cfg.mods = Mods::shuffle(seed);
                 self.mods_changed();
             }
-            KeyCode::KeyM => self.universe_setup = Some(multiverse::Setup { row: game::FIRST_FOCUS, col: 0 }),
+            KeyCode::KeyM => self.universe_setup = Some(multiverse::Setup::new(game::FIRST_FOCUS, 0)),
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
         }
@@ -4396,8 +4422,9 @@ impl State {
             return;
         }
         if let Some(setup) = &mut self.universe_setup {
-            if !repeat || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-                let action = setup.key(code, self.modifiers_shift, &mut self.cfg.universes, game::FIRST_FOCUS);
+            let typing = setup.typing.is_some();
+            if !repeat || typing || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+                let action = setup.key(code, text, self.modifiers_shift, &mut self.cfg.universes, &mut self.cfg.universe_presets, game::FIRST_FOCUS);
                 self.universe_action(action);
             }
             return;
@@ -5343,7 +5370,7 @@ impl State {
         if let Some(cur) = self.mod_select {
             ui::draw_mod_select(canvas, self.cfg.mods, cur);
             if let Some(setup) = &self.universe_setup {
-                setup.draw(canvas, &self.cfg.universes, game::FIRST_FOCUS);
+                setup.draw(canvas, &self.cfg.universes, &self.cfg.universe_presets, game::FIRST_FOCUS);
             }
         }
         if self.settings_ui.dropdown.is_some() {
@@ -5868,10 +5895,18 @@ impl State {
                 self.toggle_mod(mods::ALL[i]);
             }
             Hit::UniverseCell(row, col) => {
-                self.universe_setup = Some(multiverse::Setup { row, col });
+                self.universe_setup = Some(multiverse::Setup::new(row, col));
                 let dir = if self.modifiers_shift { -1 } else { 1 };
                 multiverse::Setup::change(&mut self.cfg.universes, row, col, dir);
                 self.universe_action(multiverse::Action::Changed);
+            }
+            Hit::UniversePreset(i) => {
+                let action = multiverse::Setup::load(&mut self.cfg.universes, &self.cfg.universe_presets, i);
+                self.universe_action(action);
+            }
+            Hit::UniversePresetDelete(i) => {
+                let action = multiverse::Setup::delete(&mut self.cfg.universe_presets, i);
+                self.universe_action(action);
             }
             Hit::SongMenu(k) => {
                 let action = self.select.menu_items(&self.library).get(k).map(|(_, a)| *a);
@@ -6585,6 +6620,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEvent>) {
     library::set_songs_folder(cfg.songs_folder.clone());
     multiverse::set(cfg.universes);
+    multiverse::set_note_colours(cfg.note_colours);
     let inputs = if args.is_empty() { song_inputs(&cfg) } else { args.clone() };
     let songs_dir = download_dir(&inputs);
     let songs_dirs_for_db: Vec<PathBuf> = inputs.iter().filter(|p| p.is_dir()).cloned().collect();

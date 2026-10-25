@@ -102,8 +102,13 @@ const LONG_NAME: &str = "FriendWithAVeryLongName";
 
 /// A room hosted on this machine, filled with long names (its lobby, match and result screens).
 fn session() -> multiplayer::Session {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let mut s = multiplayer::start_host(port, LONG_NAME.into()).recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    // Another test can take the free port found here before the room listens on it: try again.
+    let mut s = (0..10)
+        .find_map(|_| {
+            let port = std::net::TcpListener::bind("127.0.0.1:0").ok()?.local_addr().ok()?.port();
+            multiplayer::start_host(port, LONG_NAME.into()).recv_timeout(Duration::from_secs(5)).ok()?.ok()
+        })
+        .expect("host a room on this machine");
     let e = entry(0, 0, true);
     s.map = Some(net::MapInfo {
         hash: 1,
@@ -190,9 +195,20 @@ fn assert_every_screen_fits() {
 
     s.open_mod_select();
     check(&mut s, "mod select", &mut out);
-    s.universe_setup = Some(multiverse::Setup { row: 3, col: 7 });
+    s.universe_setup = Some(multiverse::Setup::new(3, 7));
     check(&mut s, "multiverse setup", &mut out);
+    // Presets with long names (more than fit), one of them the universes now, and own colours
+    // being typed.
+    s.cfg.universe_presets = ["chaos but readable", "A Very Long Preset Name Indeed", "x", "tournament warmup set"]
+        .iter()
+        .enumerate()
+        .map(|(k, name)| multiverse::Preset { name: name.to_string(), universes: multiverse::shuffle(10 * k as u64 + 2, game::FIRST_FOCUS) })
+        .collect();
+    s.cfg.universes = s.cfg.universe_presets[1].universes;
+    s.universe_setup = Some(multiverse::Setup { typing: Some(multiverse::Typing::Colours("#ff4020 #40a0ff and some more".into())), ..multiverse::Setup::new(2, 0) });
+    check(&mut s, "multiverse setup presets", &mut out);
     s.universe_setup = None;
+    s.cfg.universe_presets.clear();
     s.mod_select = None;
 
     s.open_collections();

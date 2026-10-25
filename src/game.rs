@@ -2100,7 +2100,8 @@ impl Game {
         if self.mods.has(Mod::Multiverse) {
             self.draw_multiverse(c, scroll_speed);
         } else {
-            self.draw_field(c, scroll_speed, Focus::FULL, &Universe::CLASSIC);
+            let uni = Universe { colours: multiverse::note_colours(), ..Universe::CLASSIC };
+            self.draw_field(c, scroll_speed, Focus::FULL, &uni);
         }
     }
 
@@ -3002,7 +3003,8 @@ pub fn draw_preview(c: &mut Canvas) {
     // Back to front, like gameplay.
     c.capsule(HIT_X + 560.0, HIT_X + 760.0, LANE_Y, NOTE_R * 0.86, rgba(ROLL, 1.0), rgba(WHITE, 1.0), 2.5);
     c.circle(HIT_X + 560.0, LANE_Y, NOTE_R, rgba(ROLL, 1.0), rgba(WHITE, 1.0), NOTE_R * 0.1);
-    for (dx, col, big) in [(400.0, DON, true), (260.0, KAT, false), (150.0, DON, false)] {
+    let colours = multiverse::note_colours();
+    for (dx, col, big) in [(400.0, colours.don(), true), (260.0, colours.kat(), false), (150.0, colours.don(), false)] {
         let r = if big { BIG_R } else { NOTE_R };
         if !skin_note(c, HIT_X + dx, LANE_Y, r, big, col, 1.0) {
             c.circle(HIT_X + dx, LANE_Y, r, rgba(col, 1.0), rgba(WHITE, 1.0), r * 0.1);

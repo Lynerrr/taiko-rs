@@ -67,3 +67,15 @@ fn songs_folder_is_saved_scanned_and_found_inside_an_install() {
     assert_eq!(s.cfg.songs_folder, None);
     let _ = std::fs::remove_dir_all(&install);
 }
+
+#[test]
+fn typed_note_colours_become_your_own_keeping_the_other() {
+    let mut s = layout_tests::state();
+    s.cfg.note_colours = multiverse::Colours { palette: 1, ..multiverse::Colours::CLASSIC };
+    s.apply_typed(Item::KatColour, "#a0b0c0").unwrap();
+    // Neon's don stays; the kat is the typed one.
+    assert_eq!(s.cfg.note_colours, multiverse::Colours::own(multiverse::PALETTES[1].1, 0xa0b0c0));
+    s.apply_typed(Item::DonColour, "102030").unwrap();
+    assert_eq!((s.cfg.note_colours.don(), s.cfg.note_colours.kat()), (0x102030, 0xa0b0c0));
+    assert!(s.apply_typed(Item::DonColour, "red").is_err());
+}

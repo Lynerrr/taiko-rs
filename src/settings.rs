@@ -56,11 +56,14 @@ pub enum Item {
     DiscordPresence,
     Skin,
     SkinFolder,
+    NoteColours,
+    DonColour,
+    KatColour,
     Accent,
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 54] = [
+pub const ITEMS: [(&str, Item); 57] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -103,6 +106,9 @@ pub const ITEMS: [(&str, Item); 54] = [
     ("VIDEO", Item::Splash),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinFolder),
+    ("SKIN", Item::NoteColours),
+    ("SKIN", Item::DonColour),
+    ("SKIN", Item::KatColour),
     ("SKIN", Item::Accent),
     ("SKIN", Item::AccentHue),
     ("ONLINE", Item::ChatFilter),
@@ -207,6 +213,9 @@ impl Item {
             Item::SkinFolder => "Skins folder",
             Item::Accent => "UI colour",
             Item::AccentHue => "UI colour: fine tune",
+            Item::NoteColours => "Note colours",
+            Item::DonColour => "Don colour",
+            Item::KatColour => "Kat colour",
         }
     }
 
@@ -223,13 +232,16 @@ impl Item {
             | Item::FxVolume
             | Item::BackgroundDim
             | Item::FpsCap
-            | Item::AccentHue => Kind::Value,
+            | Item::AccentHue
+            | Item::DonColour
+            | Item::KatColour => Kind::Value,
             Item::PlayfieldPreset
             | Item::TouchLayout
             | Item::AudioBuffer
             | Item::PresentMode
             | Item::UpdateChannel
             | Item::Skin
+            | Item::NoteColours
             | Item::Accent
             | Item::SongsFolder => Kind::List,
             Item::RateKeepPitch
@@ -310,6 +322,8 @@ impl Item {
             Item::SkinFolder => "Enter: open taiko-rs's Skins folder. Drop .osk files there, then pick them above.",
             Item::Accent => "The interface's accent; any but red tints the greys too. Left/Right: presets (or #rrggbb in the config).",
             Item::AccentHue => "Left/Right: turn the UI colour round the colour wheel, for any colour in between.",
+            Item::NoteColours => "Dons' and kats' colours (Multiverse's universes have their own: M in the mod select).",
+            Item::DonColour | Item::KatColour => "Enter: type a colour like #eb452c. Left/Right turn it round the colour wheel. Makes the colours your own.",
         }
     }
 }
