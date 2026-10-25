@@ -1658,6 +1658,9 @@ pub enum Hit {
     ScoreRow(usize),
     ScoreVideo(usize),
     OnlineScoreRow(usize),
+    /// The What's new chip, and an overlay over everything (takes clicks meant for underneath).
+    Changelog,
+    Overlay,
     /// The leaderboard's tabs: local (false) or online (true).
     BoardTab(bool),
     /// Lobby: give the host role to this player.

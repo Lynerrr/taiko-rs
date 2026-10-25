@@ -7,6 +7,7 @@ mod audio;
 mod beatmap;
 mod browse;
 mod calibrate;
+mod changelog;
 mod clock;
 mod clipboard;
 mod config;
@@ -258,6 +259,8 @@ struct State {
     board_online: bool,
     /// A player's profile, over everything else.
     profile: Option<profile::View>,
+    /// What's new, over everything else.
+    changelog: Option<changelog::View>,
     /// Online leaderboards fetched (by map hash: when, and the rows or why not), and the one
     /// being fetched.
     online_boards: std::collections::HashMap<u64, (Instant, Result<Vec<online::OnlineScore>, String>)>,
@@ -1589,6 +1592,7 @@ impl State {
                     (update::Status::Failed(_), _) => "failed, Enter to retry".into(),
                 }
             }
+            Item::Changelog => "Enter to read".into(),
             Item::Fullscreen => on(self.fullscreen),
             Item::WindowSize if self.fullscreen => format!("fullscreen ({:.0}x{:.0})", self.window_w, self.window_h),
             Item::WindowSize => format!("{:.0}x{:.0}", self.window_w, self.window_h),
@@ -1720,7 +1724,7 @@ impl State {
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::CheckUpdates => self.cfg.check_updates = !self.cfg.check_updates,
             // Acts on Enter in `settings_key`.
-            Item::Update => return,
+            Item::Update | Item::Changelog => return,
             Item::Fullscreen => self.toggle_fullscreen(window),
             Item::WindowSize => {
                 // The next size up or down from the window's, in its aspect ratio while there is
@@ -2258,6 +2262,22 @@ impl State {
     /// The badge top right while there's an update to install (menus only), and the restart
     /// once it's installed.
     fn draw_update(&mut self, c: &mut Canvas) {
+        // What's new, top right in the menus (left of the update badge when there is one).
+        let menus = matches!(self.scene, Scene::Select | Scene::Settings { .. } | Scene::MpMenu | Scene::Download);
+        if menus && self.splash.is_none() && self.changelog.is_none() {
+            let badge = match self.updater.status() {
+                update::Status::Available { commit, .. } => Canvas::text_width(7.0, &format!("update {}  Ctrl+U", update::short(&commit))) + 20.0,
+                update::Status::Downloading => Canvas::text_width(7.0, "updating 100%") + 20.0,
+                _ => 0.0,
+            };
+            let label = "what's new";
+            let w = Canvas::text_width(7.0, label) + 14.0;
+            let x = c.width - 8.0 - badge - w;
+            let hover = c.hovered(x, 3.0, w, 14.0);
+            c.round_rect(x, 3.0, w, 14.0, 4.0, rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95), rgba(0x3a3a4e, 1.0), 1.0);
+            c.text(x + 7.0, 6.5, 7.0, rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
+            c.hit(x, 3.0, w, 14.0, render::Hit::Changelog);
+        }
         let text = match self.updater.status() {
             update::Status::Available { commit, .. } => format!("update {}  Ctrl+U", update::short(&commit)),
             update::Status::Downloading => format!("updating {:.0}%", self.updater.progress() * 100.0),
@@ -2665,6 +2685,7 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::List => self.open_choices(item),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::Value => self.start_edit(item),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Update => self.update_now(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Changelog => self.changelog = Some(changelog::View::recent(false)),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
                 self.cfg.playfield_area = Area::FULL;
                 self.cfg.save();
@@ -3271,6 +3292,10 @@ impl State {
     /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
     fn wheel(&mut self, notches: i32) {
         if notches == 0 {
+            return;
+        }
+        if let Some(view) = &mut self.changelog {
+            view.scroll_by(-notches * 3);
             return;
         }
         if self.social.open && !self.modifiers_alt {
@@ -5414,6 +5439,14 @@ impl State {
             }
             return;
         }
+        if let Some(view) = &mut self.changelog {
+            if !repeat || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown) {
+                if view.key(code) {
+                    self.changelog = None;
+                }
+            }
+            return;
+        }
         // A profile is over everything: any of these closes it, the rest do nothing.
         if self.profile.is_some() {
             if matches!(code, KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter) {
@@ -6601,6 +6634,9 @@ impl State {
         if let Some(p) = &self.profile {
             p.draw(canvas);
         }
+        if let Some(view) = &self.changelog {
+            view.draw(canvas);
+        }
         #[cfg(target_os = "android")]
         if self.keyboard.up {
             self.draw_typing(canvas);
@@ -6891,6 +6927,9 @@ impl State {
         if let Some(p) = &mut self.profile {
             p.poll();
         }
+        if let Some(view) = &mut self.changelog {
+            view.poll();
+        }
         #[cfg(target_os = "android")]
         if self.imports_checked.elapsed() >= Duration::from_secs(1) {
             self.imports_checked = Instant::now();
@@ -7109,6 +7148,8 @@ impl State {
                 }
             }
             Hit::BoardTab(online) => self.board_online = online,
+            Hit::Changelog => self.changelog = Some(changelog::View::recent(false)),
+            Hit::Overlay => {}
             Hit::ScoreVideo(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
                     self.open_video_editor(&file);
@@ -7817,7 +7858,7 @@ impl ApplicationHandler<UserEvent> for App {
 impl State {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        cfg: Config,
+        mut cfg: Config,
         audio: Option<Engine>,
         splash: Option<splash::Splash>,
         songs_dir: PathBuf,
@@ -7833,6 +7874,7 @@ impl State {
         select.mods_label = cfg.mods.label();
         select.played = load_plays();
         let updater = update::Updater::new(cfg.check_updates);
+        let changelog = whats_new(&mut cfg);
         let present = cfg.present;
         let fullscreen = cfg.fullscreen;
         State {
@@ -7880,6 +7922,7 @@ impl State {
             online_boards: std::collections::HashMap::new(),
             board_fetch: None,
             pending_replay: None,
+            changelog,
             pending_mods: Mods::NONE,
             mod_select: None,
             universe_setup: None,
@@ -7969,6 +8012,24 @@ impl State {
             window_request: None,
             window_resized_at: None,
         }
+    }
+}
+
+/// What's new after an update: the changes since the build last started (the latest ones when
+/// the build before didn't note itself). Notes this build as started.
+fn whats_new(cfg: &mut Config) -> Option<changelog::View> {
+    let build = update::BUILD?;
+    if cfg.last_build == build {
+        return None;
+    }
+    let old = std::mem::replace(&mut cfg.last_build, build.to_string());
+    cfg.save();
+    if !old.is_empty() {
+        Some(changelog::View::since(old))
+    } else if cfg.existed {
+        Some(changelog::View::recent(true))
+    } else {
+        None
     }
 }
 

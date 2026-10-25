@@ -177,6 +177,10 @@ pub struct Config {
     pub keys: [KeyCode; 4],
     /// Previous / next playfield resolution preset.
     pub preset_keys: [KeyCode; 2],
+    /// The commit of the build last started (what's new is shown when it changes), and whether
+    /// there was a config to read (not the first start).
+    pub last_build: String,
+    pub existed: bool,
     /// Every other shortcut's key (`keys::Hotkey`).
     pub hotkeys: crate::keys::Bindings,
     /// Show the playfield's resolution in a corner during play.
@@ -269,6 +273,8 @@ impl Default for Config {
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             hotkeys: crate::keys::Bindings::default(),
+            last_build: String::new(),
+            existed: false,
             show_playfield_size: true,
             saved_presets: Vec::new(),
             skin: String::new(),
@@ -529,6 +535,7 @@ impl Config {
         let mut cfg = Config::default();
         let Some(path) = config_path() else { return cfg };
         let Ok(text) = std::fs::read_to_string(&path) else { return cfg };
+        cfg.existed = true;
         let mut osu_scroll_speed = false;
         for line in text.lines() {
             let line = line.trim();
@@ -622,6 +629,7 @@ impl Config {
                         cfg.interface_key = (shift, k);
                     }
                 }
+                "last_build" => cfg.last_build = v.to_string(),
                 k if k.starts_with("hotkey.") => cfg.hotkeys.parse_line(&k["hotkey.".len()..], v),
                 "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
                 "skin" => cfg.skin = v.to_string(),
@@ -789,6 +797,7 @@ impl Config {
             interface_key_name(self.interface_key)
         ));
         out.push_str(&self.hotkeys.config_lines());
+        out.push_str(&format!("# the build last started (what's new shows after an update)\nlast_build = {}\n", self.last_build));
         out.push_str(&self.video.config_lines());
         out.push_str(&format!(
             "# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (C in the mod select)\nmultiverse = {}\n",

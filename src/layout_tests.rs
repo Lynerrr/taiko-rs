@@ -404,6 +404,15 @@ fn assert_every_screen_fits() {
     s.social.notes.clear();
     s.mp_menu.account = None;
 
+    let change = |k: usize| changelog::Change {
+        date: "2026-10-26".into(),
+        title: format!("{k}: pp counter, results screen with pp breakdown and music, online replays, every hotkey rebindable"),
+        points: vec!["Live pp counter in the HUD (rosu-pp's gradual calculation on its own thread), hideable".into(), "Clicking a local or online leaderboard score opens its results first".into()],
+    };
+    s.changelog = Some(changelog::View::loaded((0..12).map(change).collect()));
+    check(&mut s, "what's new", &mut out);
+    s.changelog = None;
+
     s.toast("a fairly long notification that tells you something went wrong with the download".into());
     check(&mut s, "toast", &mut out);
     s.toast = None;

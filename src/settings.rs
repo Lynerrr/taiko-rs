@@ -67,6 +67,8 @@ pub enum Item {
     CheckUpdates,
     UpdateChannel,
     Update,
+    /// Opens what's new.
+    Changelog,
     Fullscreen,
     WindowSize,
     DiscordPresence,
@@ -79,7 +81,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 100] = [
+pub const ITEMS: [(&str, Item); 101] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -179,6 +181,7 @@ pub const ITEMS: [(&str, Item); 100] = [
     ("ONLINE", Item::NotifyPlaying),
     ("UPDATES", Item::UpdateChannel),
     ("UPDATES", Item::Update),
+    ("UPDATES", Item::Changelog),
     ("UPDATES", Item::CheckUpdates),
 ];
 
@@ -275,6 +278,7 @@ impl Item {
             Item::Splash => "Startup splash",
             Item::UpdateChannel => "Build channel",
             Item::Update => "Update",
+            Item::Changelog => "What's new",
             Item::CheckUpdates => "Check at startup",
             Item::Fullscreen => "Fullscreen",
             Item::WindowSize => "Window size",
@@ -349,7 +353,7 @@ impl Item {
             | Item::Fullscreen
             | Item::DiscordPresence => Kind::Toggle,
             Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => Kind::Key,
-            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::SkinFolder => Kind::Action,
+            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::SkinFolder => Kind::Action,
         }
     }
 
@@ -407,6 +411,7 @@ impl Item {
             Item::VisualOffset => "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
             Item::UpdateChannel => "dev: test builds that haven't reached everyone yet (may break). Switch, then Update installs that channel's build.",
             Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko-rs restarts into it.",
+            Item::Changelog => "Enter: the latest changes. They also show by themselves after an update.",
             Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",
             Item::Fullscreen => "Shortcut: F11.",
             Item::WindowSize => "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",

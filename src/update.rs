@@ -47,6 +47,14 @@ impl Channel {
         }
     }
 
+    /// The branch its builds come from.
+    pub fn branch(self) -> &'static str {
+        match self {
+            Channel::Stable => "worktree-taiko-client",
+            Channel::Dev => "dev",
+        }
+    }
+
     /// The release it's published as.
     fn tag(self) -> &'static str {
         match self {
@@ -203,6 +211,21 @@ pub fn restart() -> Result<(), String> {
 
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder().timeout_connect(Some(Duration::from_secs(10))).build().into()
+}
+
+/// A GitHub API call about the repository (`path` after `repos/<repo>/`): the JSON it returns.
+pub fn api_get(path: &str) -> Result<String, String> {
+    let url = format!("https://api.github.com/repos/{REPO}/{path}");
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(15))).build().into();
+    agent
+        .get(&url)
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| e.to_string())
 }
 
 /// The channel's release: its commit and this platform's archive (URL, size).
