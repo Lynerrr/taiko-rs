@@ -17,9 +17,9 @@ pub const COUNT: usize = 8;
 pub const PALETTES: [(&str, u32, u32); 10] = [
     ("classic", crate::game::DON, crate::game::KAT),
     ("neon", 0xff3fb4, 0x2fe0ff),
-    ("sunset", 0x8e5cff, 0xff7a2f),
+    ("sunset", 0xd9541a, 0xa98bff),
     ("ice", 0x2f5fd0, 0x9fe8ff),
-    ("forest", 0x2fa86a, 0xe8c547),
+    ("forest", 0xb8901c, 0x6fe0a0),
     ("candy", 0xff6f91, 0x5fd4a8),
     ("ember", 0xff4a2a, 0xffb02f),
     ("mono", 0x5c5c78, 0xf2f2f2),
