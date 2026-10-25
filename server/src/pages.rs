@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
-use crate::online::{self, Activity, OnlinePlayer, OnlineScore, Profile, RoomInfo};
+use crate::online::{self, Activity, ChatLine, OnlinePlayer, OnlineScore, Profile, RoomInfo};
 use crate::scores::{Extras, MapRow, Ranked};
 
 const REPO: &str = "https://github.com/Lynerrr/taiko-rs";
@@ -33,7 +33,7 @@ const CLIPS: [Clip; 6] = [
 ];
 
 /// Files served under /clips/ and /site/ (`web.rs`).
-pub const STATIC_FILES: [(&str, &[u8]); 14] = [
+pub const STATIC_FILES: [(&str, &[u8]); 15] = [
     ("clips/multiverse.mp4", include_bytes!("../site/clips/multiverse.mp4")),
     ("clips/multiverse.jpg", include_bytes!("../site/clips/multiverse.jpg")),
     ("clips/loop.mp4", include_bytes!("../site/clips/loop.mp4")),
@@ -48,6 +48,7 @@ pub const STATIC_FILES: [(&str, &[u8]); 14] = [
     ("clips/shatter.jpg", include_bytes!("../site/clips/shatter.jpg")),
     ("site/taiko5x7.woff2", include_bytes!("../site/taiko5x7.woff2")),
     ("site/logo.png", include_bytes!("../../assets/icon-64.png")),
+    ("site/chat.js", include_bytes!("../site/chat.js")),
 ];
 
 /// A mod select column (server/site/mods.json, written by the game's tests from its own list).
@@ -77,6 +78,26 @@ fn mod_count() -> usize {
 /// A mod's column colour and name, by its acronym.
 fn mod_info(acronym: &str) -> Option<(&'static str, &'static str)> {
     groups().iter().find_map(|g| g.mods.iter().find(|m| m.acronym == acronym).map(|m| (g.colour.as_str(), m.name.as_str())))
+}
+
+/// How the one looking at a profile stands with its player.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Friendship {
+    /// Not logged in, or no tie.
+    None,
+    Me,
+    Friends,
+    /// The viewer has asked; waiting on them.
+    Asked,
+    /// They asked the viewer.
+    TheyAsked,
+}
+
+/// Someone the logged-in player can message, for the chat's list.
+pub struct Conversation {
+    pub name: String,
+    pub online: bool,
+    pub last: Option<ChatLine>,
 }
 
 /// What's live on the server, for the home page.
@@ -297,24 +318,25 @@ fn download_cta(os: Os, on_download_page: bool) -> String {
     }
 }
 
-/// A run of notes for the home page's lane: dons, kats, a finisher now and then, and gaps.
+/// The home page's lane: a bar of dons, kats, finishers and gaps, a quarter beat each. Every
+/// note flies in on its own and bursts on the judgement circle on its beat, like a hit in the
+/// game; the bar loops.
 fn notes() -> String {
-    const PATTERN: &str = "dkdd_kkd_DdkdkK_dd_kdk_ddkk_D_";
+    const PATTERN: &str = "dkdd_kkd_DdkdkK_dd_kdk_d";
     PATTERN
         .chars()
         .enumerate()
-        .map(|(i, c)| {
+        .filter_map(|(i, c)| {
             let class = match c {
                 'd' => "d",
                 'k' => "k",
                 'D' => "d big",
                 'K' => "k big",
-                _ => "gap",
+                _ => return None,
             };
-            format!("<i class=\"n {class}\" style=\"--i:{i}\"></i>")
+            Some(format!("<i class=\"n {class}\" style=\"--t:{}s\"></i>", i as f64 * 0.25))
         })
-        .collect::<String>()
-        .repeat(2)
+        .collect()
 }
 
 /// The home page's playfield: a lane of notes scrolling at the drum while mods switch on and
@@ -323,7 +345,7 @@ fn stage(players: usize, plays: usize, online: usize, bg: &str, cta: &str) -> St
     let notes = notes();
     let lane = |class: &str| {
         let segs: String = (0..10i32).map(|i| format!("<b class=seg style=\"--dy:{};--r:{}\"></b>", (i * 37) % 9 - 4, (i * 53) % 7 - 3)).collect();
-        format!("<div class=\"lane {class}\"><div class=segs>{segs}</div><div class=drum><span class=combo>{plays}</span></div><div class=judge></div><div class=track><div class=notes>{notes}</div></div></div>")
+        format!("<div class=\"lane {class}\"><div class=segs>{segs}</div><div class=drum><span class=combo>{plays}</span></div><div class=judge></div><div class=track>{notes}</div></div>")
     };
     let mods = ["NM no mod", "TL tilt", "WV wave", "BA barrel roll", "MR mirror", "MV multiverse", "SH shatter"];
     let labels: String = mods.iter().chain(&mods[..1]).map(|m| format!("<span>{m}</span>")).collect();
@@ -474,7 +496,7 @@ pub fn mods_page() -> String {
     let clips: String = CLIPS.iter().map(clip_card).collect();
     format!(
         "<div class=band><div class=inner><h1 class=glitch data-text=\"MODS\">MODS</h1><p class=dim>osu!'s mods, lazer's taiko extras and {} of taiko-rs's own. Stack as many as you like.</p></div></div>\
-         <div class=page>{}<div class=section-head><h2>WHAT THEY LOOK LIKE</h2><span class=dim>Real plays, recorded in the game.</span></div><div class=clips>{clips}</div></div>",
+         <div class=page><div class=section-head><h2>WHAT THEY LOOK LIKE</h2><span class=dim>Real plays, recorded in the game.</span></div><div class=clips>{clips}</div>{}</div>",
         mod_count().saturating_sub(24),
         mod_board()
     )
@@ -529,7 +551,7 @@ fn pp_chart(history: &[(u64, f64)]) -> String {
     )
 }
 
-pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friends: &[(String, bool)]) -> String {
+pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friends: &[(String, bool)], tie: Friendship, notice: Option<&str>) -> String {
     let st = &p.stats;
     let level = online::level(st.total_score);
     let cover = p.top.first().map(|s| cover_style(s.set_id, s.map_hash, "cover@2x")).unwrap_or_default();
@@ -539,6 +561,15 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
         None => "<span class=status>OFFLINE</span>".into(),
     };
     let rank = p.rank.map(|r| format!("#{}", thousands(r as u64))).unwrap_or_else(|| "-".into());
+    let befriend = |label: &str| format!("<form method=post action=\"/friend/{0}\"><button class=btn>{label}</button></form>", esc(&p.name));
+    let actions = match tie {
+        Friendship::Me => "<a class=btn href=\"/chat\">open chat</a>".to_string(),
+        Friendship::Friends => format!("<a class=\"btn hot small-hot\" href=\"/chat/{0}\">message</a><span class=\"tag live\">FRIENDS</span>", esc(&p.name)),
+        Friendship::TheyAsked => befriend("accept friend request"),
+        Friendship::Asked => "<span class=tag>FRIEND REQUEST SENT</span>".to_string(),
+        Friendship::None => befriend("add friend"),
+    };
+    let notice = notice.map(|n| format!("<div class=notice>{}</div>", esc(n))).unwrap_or_default();
     let hud = |k: &str, v: String| format!("<div class=hudstat><span>{k}</span><b>{v}</b></div>");
     let stats = [
         hud("RANKED SCORE", format!("{:08}", st.ranked_score)),
@@ -601,10 +632,10 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
     format!(
         "<div class=cover{cover}></div>\
          <div class=page><div class=\"panel head\">\
-           <div class=who>{}<div class=id><h1>{}</h1><div>{status}</div><div class=dim>joined {}</div></div></div>\
+           <div class=who>{}<div class=id><h1>{}</h1><div>{status}</div><div class=dim>joined {}</div><div class=actions>{actions}</div></div></div>\
            <div class=ranks><div class=bigstat><span>GLOBAL RANK</span><b>{rank}</b></div><div class=bigstat><span>PP</span><b class=pp>{}</b></div>\
              <div class=level><span>LEVEL <b>{}</b></span><div class=bar><i style=\"width:{:.0}%\"></i></div></div></div>\
-         </div>\
+         </div>{notice}\
          <div class=hudrow>{stats}</div>\
          <div class=cols-side><div class=main>\
              <section class=panel><div class=panel-head><h2>PP HISTORY</h2></div>{}</section>\
@@ -775,12 +806,76 @@ pub fn download(os: Os) -> String {
     )
 }
 
+/// The login form; accounts are made in the game.
+pub fn login(error: Option<&str>, name: &str) -> String {
+    let error = error.map(|e| format!("<div class=\"notice bad\">{}</div>", esc(e))).unwrap_or_default();
+    format!(
+        "<div class=page><section class=\"panel login\"><h1 class=glitch data-text=\"LOG IN\">LOG IN</h1>\
+         <p class=dim>The same name and password as in the game.</p>{error}\
+         <form method=post action=\"/login\"><label>name<input name=name value=\"{}\" maxlength=16 autocomplete=username required autofocus></label>\
+         <label>password<input name=password type=password maxlength=128 autocomplete=current-password required></label>\
+         <button class=\"btn hot\">log in</button></form>\
+         <p class=dim>No account yet? Make one in the game: Multiplayer, then \"create account\".</p></section></div>",
+        esc(name)
+    )
+}
+
+fn chat_line(l: &ChatLine) -> String {
+    let t = l.at % 86_400;
+    format!("<li><span class=time>{:02}:{:02}</span>{}<span class=text>{}</span></li>", t / 3600, t / 60 % 60, player_link(&l.from), esc(&l.text))
+}
+
+/// The chat, like osu!'s: channels on the left (the global one and every friend), the open one
+/// on the right with a box to type in. `with`: the friend open (None: the global chat);
+/// `can_send`: false when that's someone who isn't a friend.
+pub fn chat(me: &str, with: Option<&str>, lines: &[ChatLine], people: &[Conversation], can_send: bool, error: Option<&str>) -> String {
+    let channel = |href: &str, label: String, on: bool, extra: String| format!("<a class=\"chan{}\" href=\"{href}\">{label}{extra}</a>", if on { " on" } else { "" });
+    let mut list = channel("/chat", "<span class=hash>#</span>global".into(), with.is_none(), String::new());
+    for c in people {
+        let on = with.is_some_and(|w| w.eq_ignore_ascii_case(&c.name));
+        let last = c.last.as_ref().map(|l| format!("<span class=last>{}</span>", esc(&l.text))).unwrap_or_default();
+        list += &channel(&format!("/chat/{}", esc(&c.name)), format!("<span class=\"dot{}\"></span>{}<span class=cname>{}</span>", if c.online { "" } else { " off" }, avatar(&c.name, "tiny"), esc(&c.name)), on, last);
+    }
+    if people.is_empty() {
+        list += "<p class=\"dim small\">Add friends from their profiles to message them.</p>";
+    }
+    let (title, api, action) = match with {
+        Some(w) => (format!("{} {}", avatar(w, "tiny"), player_link(w)), format!("/api/chat/{}", esc(w)), format!("/chat/{}", esc(w))),
+        None => ("<span class=hash>#</span>global".to_string(), "/api/chat".to_string(), "/chat".to_string()),
+    };
+    let log: String = lines.iter().map(chat_line).collect();
+    let empty = if lines.is_empty() { "<li class=\"dim empty\">No messages yet. Say hi.</li>" } else { "" };
+    let error = error.map(|e| format!("<div class=\"notice bad\">{}</div>", esc(e))).unwrap_or_default();
+    let say = if can_send {
+        format!("<form class=say method=post action=\"{action}\"><input name=text maxlength=300 placeholder=\"type a message\" autocomplete=off required aria-label=\"Message\"><button class=\"btn hot\">send</button></form>")
+    } else {
+        format!("<div class=\"notice\">You can only message friends. <a href=\"/u/{0}\">Add {0} as a friend</a> first.</div>", esc(with.unwrap_or("")))
+    };
+    format!(
+        "<div class=page><div class=chat><aside class=\"panel chans\"><div class=panel-head><h2>CHAT</h2></div>{list}</aside>\
+         <section class=\"panel convo\" data-chat=\"{api}\" data-me=\"{}\"><div class=panel-head><h2>{title}</h2><span class=\"dim small\">also in the game (F9)</span></div>\
+         <ol class=log>{log}{empty}</ol>{error}{say}</section></div></div><script src=\"/site/chat.js\" defer></script>",
+        esc(me)
+    )
+}
+
 pub fn not_found(why: &str) -> String {
     format!("<div class=page><section class=\"panel lost\"><h1 class=glitch data-text=\"MISS\">MISS</h1><p class=dim>{}.</p><p><a class=btn href=\"/\">Back to the menu</a></p></section></div>", esc(why))
 }
 
-/// A whole page: `nav` is the header link to mark as the current one ("" for none).
-pub fn page(title: &str, nav: &str, body: &str) -> String {
+/// A whole page: `nav` is the header link to mark as the current one ("" for none); `viewer`
+/// the logged-in player, if any (their profile and chat in the header, else a log in button).
+pub fn page(title: &str, nav: &str, viewer: Option<&str>, body: &str) -> String {
+    let account = match viewer {
+        Some(me) => {
+            let (name, pic, on) = (esc(me), avatar(me, "tiny"), if nav == "chat" { " on" } else { "" });
+            format!(
+                "<a class=me href=\"/u/{name}\" title=\"my profile\">{pic}<span>{name}</span></a><a class=\"navbtn{on}\" href=\"/chat\">chat</a>\
+                 <form method=post action=\"/logout\"><button class=navbtn title=\"log out\" aria-label=\"log out\">x</button></form>"
+            )
+        }
+        None => "<a class=\"navbtn hot\" href=\"/login\">log in</a>".into(),
+    };
     let links: String = [("rankings", "/rankings"), ("beatmaps", "/beatmaps"), ("mods", "/mods"), ("download", "/download")]
         .iter()
         .map(|(name, href)| {
@@ -793,7 +888,7 @@ pub fn page(title: &str, nav: &str, body: &str) -> String {
 <meta name=theme-color content=#0b0b10><meta name=color-scheme content=dark><link rel=icon href="/site/logo.png">
 <link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style></head>
 <body><nav><div class=inner><a class=logo href="/" aria-label="taiko-rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO-RS</a><div class=links>{links}</div>
-<form action="/u" role=search><input name=name placeholder="find a player" maxlength=16 aria-label="Find a player"></form></div></nav>
+<form action="/u" role=search><input name=name placeholder="find a player" maxlength=16 aria-label="Find a player"></form><div class=account>{account}</div></div></nav>
 <main>{}</main><footer><div class=inner><span class=brand>TAIKO-RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><span class=dim>map covers from osu!</span></div></footer></body></html>"#,
         esc(title),
         body
@@ -854,13 +949,15 @@ transform:translateY(calc(var(--sh) * var(--dy) * 9px)) rotate(calc(var(--sh) * 
 .drum{position:absolute;left:44px;top:34px;width:72px;height:72px;border-radius:50%;background:conic-gradient(var(--don) 0 50%,#f5ecdc 50% 100%);box-shadow:0 0 0 6px #262634,0 0 0 8px var(--line2);display:grid;place-items:center}
 .combo{background:#f5ecdc;color:#15151d;border-radius:50%;width:52px;height:52px;display:grid;place-items:center;font-size:16px}
 .judge{position:absolute;left:188px;top:38px;width:64px;height:64px;border-radius:50%;border:4px solid #4a4a60;box-shadow:inset 0 0 0 4px #1b1b26}
-.track{position:absolute;left:220px;right:0;top:0;height:140px;overflow:hidden}
-.notes{display:flex;align-items:center;height:140px;width:max-content;animation:scroll 9s linear infinite}
-.n{flex:none;width:56px;height:56px;margin-right:22px;border-radius:50%;background:radial-gradient(circle,#fff 0 12%,var(--c) 13% 64%,#fff 65% 74%,var(--c) 75%);
-box-shadow:0 0 0 2px rgba(0,0,0,.35);animation:bob .9s ease-in-out infinite alternate;animation-delay:calc(var(--i) * -.13s)}
-.n.d{--c:var(--don)}.n.k{--c:var(--kat)}.n.big{width:80px;height:80px}.n.gap{background:none;box-shadow:none;width:40px}
+.track{position:absolute;left:160px;right:0;top:0;height:140px;overflow:hidden}
+/* Each note: 6 s from off the right edge to the judgement circle, then a hit burst. */
+.n{position:absolute;left:60px;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;background:radial-gradient(circle,#fff 0 12%,var(--c) 13% 64%,#fff 65% 74%,var(--c) 75%);
+box-shadow:0 0 0 2px rgba(0,0,0,.35);transform:translateX(max(100vw,1800px));animation:fly 6s linear infinite,bob .9s ease-in-out infinite alternate;animation-delay:calc(var(--t) - 5.76s),calc(var(--t) * -1)}
+.n:after{content:"";position:absolute;inset:-4px;border-radius:50%;border:4px solid #fff;opacity:0;animation:burst 6s linear infinite;animation-delay:calc(var(--t) - 5.76s)}
+.n.d{--c:var(--don)}.n.k{--c:var(--kat)}.n.big{width:80px;height:80px;margin:-40px 0 0 -40px}
+@keyframes fly{0%{transform:translateX(max(100vw,1800px));opacity:1;filter:none}96%{transform:translateX(0);opacity:1;filter:none}97.5%{transform:scale(1.18);opacity:1;filter:brightness(1.7)}100%{transform:scale(1.32);opacity:0;filter:brightness(2.2)}}
+@keyframes burst{0%,96%{opacity:0;transform:scale(1)}97%{opacity:1;transform:scale(1.1)}100%{opacity:0;transform:scale(1.8)}}
 @keyframes bob{from{translate:0 calc(var(--amp) * -1px)}to{translate:0 calc(var(--amp) * 1px)}}
-@keyframes scroll{to{transform:translateX(-50%)}}
 .ghost{opacity:calc(var(--mv) * .5);filter:saturate(.6)}.g1{transform:translate(34%,-130px) rotate(-4deg) scale(.55)}.g2{transform:translate(-6%,160px) rotate(3deg) scale(.66)}.g3{transform:translate(28%,100px) rotate(-7deg) scale(.5)}
 .main{transform:scale(calc(1 - var(--mv) * .25)) translateY(calc(var(--mv) * -18px));box-shadow:0 0 0 calc(var(--mv) * 3px) rgba(255,255,255,.55)}
 .hit-great{position:absolute;left:182px;top:-8px;color:var(--gold);font-size:24px;animation:great .9s steps(1) infinite}@keyframes great{0%,40%{opacity:1;transform:translateY(0)}41%,100%{opacity:0;transform:translateY(-8px)}}
@@ -973,6 +1070,30 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 .card .info{display:flex;flex-direction:column;gap:2px;padding:12px 16px;max-width:90%}
 .card .title{font-size:24px;line-height:28px;color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.card .artist{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card .meta{margin-top:6px}.card .foot{color:var(--dim2);margin-top:4px}
+/* Account, login and chat. */
+.account{display:flex;align-items:center;gap:8px}.account form{margin:0}
+.me{display:flex;align-items:center;gap:8px;height:36px;padding:0 10px 0 6px;border:2px solid var(--line2);background:var(--panel)}.me:hover{border-color:var(--acc);color:var(--white)}
+.me span{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.navbtn{display:inline-flex;align-items:center;height:36px;padding:0 12px;border:2px solid var(--line2);background:var(--panel);color:var(--dim);font:inherit;cursor:pointer}
+.navbtn:hover,.navbtn.on{border-color:var(--acc);color:var(--white)}.navbtn.hot{background:var(--acc);border-color:var(--acc);color:var(--white)}
+button.btn{font:inherit;cursor:pointer}.actions{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}.actions form{margin:0}.actions .btn{min-height:36px;padding:0 14px}
+.btn.hot.small-hot{font-size:16px;min-height:36px;padding:0 14px;box-shadow:3px 3px 0 #6b1d12}
+.notice{border:2px solid var(--gold);color:var(--gold);padding:8px 12px;margin:0 0 20px;background:rgba(255,211,77,.06)}.notice.bad{border-color:var(--acc);color:#ff8a78;background:rgba(235,69,44,.08)}
+.login{max-width:520px;margin:24px auto}.login h1{font-size:48px;line-height:56px;margin-bottom:8px}.login form{display:flex;flex-direction:column;gap:14px;margin:18px 0}
+.login label{display:flex;flex-direction:column;gap:6px;color:var(--dim)}
+.login input,.say input{font:inherit;height:44px;background:var(--bg2);border:2px solid var(--line2);color:var(--white);padding:0 12px}.login input:focus,.say input:focus{outline:none;border-color:var(--acc)}
+.login .btn{align-self:flex-start}
+.chat{display:grid;grid-template-columns:300px minmax(0,1fr);gap:20px;align-items:stretch}
+.chans{display:flex;flex-direction:column;gap:4px;max-height:640px;overflow-y:auto}
+.chan{display:grid;grid-template-columns:auto auto 1fr;align-items:center;gap:4px 8px;padding:8px 10px;border:2px solid transparent;color:var(--text)}
+.chan:hover{border-color:var(--line2);color:var(--white)}.chan.on{border-color:var(--acc);background:rgba(235,69,44,.1);color:var(--white)}
+.chan .last{grid-column:1/-1;color:var(--dim2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hash{color:var(--acc);margin-right:4px}
+.cname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.convo{display:flex;flex-direction:column;min-height:640px;margin-bottom:20px}
+.log{list-style:none;margin:0 0 14px;padding:0;flex:1;overflow-y:auto;max-height:520px;display:flex;flex-direction:column;gap:4px}
+.log li{display:flex;gap:10px;align-items:baseline;padding:2px 0}.log .time{color:var(--dim2);flex:none}.log .player{flex:none}.log .text{overflow-wrap:anywhere;color:var(--text)}
+.log li.mine .player{color:var(--acc)}.log .empty{justify-content:center;padding:40px 0}
+.say{display:flex;gap:10px}.say input{flex:1;min-width:0}.say .btn.hot{font-size:16px;min-height:44px;box-shadow:3px 3px 0 #6b1d12}
 /* Download. */
 .builds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.build{display:flex;flex-direction:column;align-items:flex-start}.build h2{font-size:32px}.build .btn{margin-top:auto}.build p{margin-bottom:18px}
 .build.mine{border-color:var(--acc)}.yours{font-size:16px;color:var(--acc)}
@@ -984,8 +1105,8 @@ footer{border-top:2px solid var(--line);background:var(--bg2);padding:24px 0}foo
 @media(max-width:700px){.inner,.page{padding:0 16px}.page{padding-top:16px}nav .inner{gap:4px}.links{overflow-x:auto;scrollbar-width:none}.links a{padding:0 8px;flex:none}nav form{display:none}.logo{font-size:0;gap:0}
 .stage{height:600px}.intro{top:116px;left:16px;right:16px}.intro h1{font-size:48px;line-height:56px}.intro p{font-size:16px;line-height:24px}
 .hud-tr{top:12px;right:16px}.errbar{display:none}.stage-cta{left:16px;right:16px;bottom:16px}.stage-cta .btn.hot{font-size:16px;min-height:44px}.hud-score{font-size:32px;line-height:32px}.hp{width:160px}.hud-tl{display:none}
-.field{top:300px;transform-origin:20% 50%}.n{width:40px;height:40px;margin-right:16px}.n.big{width:56px;height:56px}.seg:first-child{flex-basis:96px}.drum{left:14px;transform:scale(.8)}.judge{left:112px}.track{left:136px}.hit-great{left:106px}
-.clips{grid-template-columns:minmax(0,1fr)}.clips:not(.three) .clip:first-child{grid-column:auto;grid-row:auto}.clips:not(.three) .clip:first-child .frame{flex:none;aspect-ratio:16/9;min-height:0}
+.field{top:300px;transform-origin:20% 50%}.n{width:40px;height:40px;margin:-20px 0 0 -20px;left:48px}.n.big{width:56px;height:56px;margin:-28px 0 0 -28px}.seg:first-child{flex-basis:96px}.drum{left:14px;transform:scale(.8)}.judge{left:112px}.track{left:96px}.hit-great{left:106px}
+.chat{grid-template-columns:minmax(0,1fr)}.chans{max-height:240px}.convo{min-height:480px}.me span{display:none}.me{padding:0 6px}.clips{grid-template-columns:minmax(0,1fr)}.clips:not(.three) .clip:first-child{grid-column:auto;grid-row:auto}.clips:not(.three) .clip:first-child .frame{flex:none;aspect-ratio:16/9;min-height:0}
 .cols{grid-template-columns:minmax(0,1fr)}.board{padding-bottom:120px}.descbar,.chip .desc{min-height:80px}
 .panel{padding:14px}.play{gap:10px}.play .mods,.play .acc,.play .score,.weight{display:none}.play .pp{width:auto}.hudrow{grid-template-columns:repeat(2,minmax(0,1fr))}
 .avatar.big{width:88px;height:88px;font-size:64px}.who{gap:14px}.who h1{font-size:32px;line-height:40px;overflow-wrap:anywhere}.bigstat b{font-size:32px;line-height:32px}.ranks{gap:24px}
@@ -1000,8 +1121,11 @@ mod tests {
     #[test]
     fn helpers() {
         assert_eq!(esc("<b>\"A&B'</b>"), "&lt;b&gt;&quot;A&amp;B&#39;&lt;/b&gt;");
-        assert!(page("<x>", "", "").contains("&lt;x&gt; · taiko-rs"));
-        assert!(page("Rankings", "rankings", "").contains("href=\"/rankings\" class=on"));
+        assert!(page("<x>", "", None, "").contains("&lt;x&gt; · taiko-rs"));
+        assert!(page("Rankings", "rankings", None, "").contains("href=\"/rankings\" class=on"));
+        assert!(page("x", "", None, "").contains("href=\"/login\""));
+        let mine = page("x", "chat", Some("Ryuji"), "");
+        assert!(mine.contains("href=\"/u/Ryuji\"") && mine.contains("action=\"/logout\"") && !mine.contains("href=\"/login\""));
         assert_eq!(thousands(1234567), "1,234,567");
         assert_eq!(thousands(12), "12");
         assert_eq!(month_year(1_792_916_574), "October 2026");

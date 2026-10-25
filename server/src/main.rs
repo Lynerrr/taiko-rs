@@ -91,6 +91,8 @@ struct Hub {
     /// Someone came, left or changed what they're doing since the online list last went out.
     players_changed: bool,
     next_conn: u64,
+    /// Messages sent from the website lately, per account (its own rate limit).
+    web_chat: HashMap<String, VecDeque<Instant>>,
 }
 
 impl Hub {
@@ -114,6 +116,17 @@ impl Hub {
         for c in self.conns.values().flatten() {
             let _ = c.tx.send(d.clone());
         }
+    }
+
+    /// False when `key` is sending from the website too fast (the game's limit: 8 in 5 s).
+    fn web_chat_allowed(&mut self, key: &str) -> bool {
+        let times = self.web_chat.entry(key.to_string()).or_default();
+        times.retain(|t| t.elapsed() < Duration::from_secs(5));
+        if times.len() >= 8 {
+            return false;
+        }
+        times.push_back(Instant::now());
+        true
     }
 
     /// Everyone online, as `Down::Players`.
@@ -239,6 +252,22 @@ impl State {
         }
         if let Err(e) = std::fs::rename(&tmp, &self.path) {
             eprintln!("saving accounts: {e}");
+        }
+    }
+
+    /// Logs in from the website: the account's name as written and a new session token.
+    fn web_login(&self, ip: IpAddr, name: &str, password: &str) -> Result<(String, String), String> {
+        match login(self, ip, name, password) {
+            Reply::Account { name, token } => Ok((name, token)),
+            Reply::Error(e) => Err(e),
+            _ => Err("couldn't log in".into()),
+        }
+    }
+
+    fn logout(&self, token: &str) {
+        let mut a = self.accounts.lock().unwrap();
+        if a.sessions.remove(token).is_some() {
+            self.save(&a);
         }
     }
 
@@ -496,6 +525,145 @@ impl State {
     fn notice(&self, key: &str, text: String) {
         self.hub.lock().unwrap().send_to(key, &Down::Notice(text));
     }
+
+    /// Lines between `key` and `other`, oldest first.
+    fn chat_with(&self, key: &str, other: &str) -> Vec<ChatLine> {
+        let other = other.trim().to_ascii_lowercase();
+        self.hub.lock().unwrap().history.get(&pair(key, &other)).map(|l| l.iter().cloned().collect()).unwrap_or_default()
+    }
+
+    fn global_chat(&self) -> Vec<ChatLine> {
+        self.hub.lock().unwrap().global.iter().cloned().collect()
+    }
+
+    /// Who `key` can talk to: their friends, with whether each is online and their last line,
+    /// the latest conversations first.
+    fn conversations(&self, key: &str) -> Vec<pages::Conversation> {
+        let named: Vec<(String, String)> = self.friend_keys(key).into_iter().map(|k| (self.display_name(&k), k)).collect();
+        let hub = self.hub.lock().unwrap();
+        let mut out: Vec<pages::Conversation> = named
+            .into_iter()
+            .map(|(name, k)| {
+                let last = hub.history.get(&pair(key, &k)).and_then(|l| l.back().cloned());
+                pages::Conversation { online: hub.conns.contains_key(&k), name, last }
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            let at = |c: &pages::Conversation| c.last.as_ref().map(|l| l.at).unwrap_or(0);
+            at(b).cmp(&at(a)).then(b.online.cmp(&a.online)).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        out
+    }
+
+    /// How `viewer` and `other` (keys) stand.
+    fn friendship(&self, viewer: &str, other: &str) -> pages::Friendship {
+        let a = self.accounts.lock().unwrap();
+        let (Some(me), Some(them)) = (a.users.get(viewer), a.users.get(other)) else { return pages::Friendship::None };
+        if viewer == other {
+            pages::Friendship::Me
+        } else if me.friends.iter().any(|f| f == other) {
+            pages::Friendship::Friends
+        } else if me.requests.iter().any(|r| r == other) {
+            pages::Friendship::TheyAsked
+        } else if them.requests.iter().any(|r| r == viewer) {
+            pages::Friendship::Asked
+        } else {
+            pages::Friendship::None
+        }
+    }
+
+    /// `key` (`name` as written) asks `other` to be friends, or accepts their request. Tells
+    /// both what happened; the message for `key` either way.
+    fn add_friend(&self, key: &str, name: &str, other: &str) -> Result<String, String> {
+        let other = other.trim().to_ascii_lowercase();
+        let outcome = {
+            let mut a = self.accounts.lock().unwrap();
+            if other == key {
+                Err("that's you".to_string())
+            } else if !a.users.contains_key(&other) {
+                Err(format!("there's no player named {other}"))
+            } else if a.users[key].friends.contains(&other) {
+                Err(format!("{} is already your friend", a.users[&other].name))
+            } else if a.users[key].friends.len() >= MAX_FRIENDS {
+                Err("your friend list is full".to_string())
+            } else if a.users[key].requests.contains(&other) {
+                // They asked first: now friends.
+                let me = a.users.get_mut(key).unwrap();
+                me.requests.retain(|r| *r != other);
+                me.friends.push(other.clone());
+                a.users.get_mut(&other).unwrap().friends.push(key.to_string());
+                self.save(&a);
+                Ok((true, a.users[&other].name.clone()))
+            } else {
+                let them = a.users.get_mut(&other).unwrap();
+                if !them.requests.iter().any(|r| r == key) {
+                    them.requests.push(key.to_string());
+                }
+                self.save(&a);
+                Ok((false, a.users[&other].name.clone()))
+            }
+        };
+        self.push_friends(key);
+        self.push_friends(&other);
+        match outcome? {
+            (true, other_name) => {
+                self.notice(&other, format!("{name} accepted your friend request"));
+                Ok(format!("you and {other_name} are friends now"))
+            }
+            (false, other_name) => {
+                self.notice(&other, format!("{name} sent you a friend request"));
+                Ok(format!("friend request sent to {other_name}"))
+            }
+        }
+    }
+
+    /// A message from `key` (`name` as written) to their friend `to`, if `allowed` (the sender's
+    /// rate limit) lets it through: kept with their chat and sent to both, game and website.
+    fn post_chat(&self, key: &str, name: &str, to: &str, text: &str, allowed: impl FnOnce(&mut Hub) -> bool) -> Result<ChatLine, String> {
+        let to = to.trim().to_ascii_lowercase();
+        if !self.are_friends(key, &to) {
+            return Err("you can only message friends".into());
+        }
+        let text = net::clean_chat(text);
+        if text.is_empty() {
+            return Err("nothing to send".into());
+        }
+        let to_name = self.display_name(&to);
+        let mut hub = self.hub.lock().unwrap();
+        if !allowed(&mut hub) {
+            return Err("slow down a little".into());
+        }
+        let line = ChatLine { from: name.to_string(), to: to_name, text, at: now_secs() };
+        let log = hub.history.entry(pair(key, &to)).or_default();
+        log.push_back(line.clone());
+        if log.len() > CHAT_HISTORY {
+            log.pop_front();
+        }
+        let d = Down::Chat(line.clone());
+        hub.send_to(key, &d);
+        hub.send_to(&to, &d);
+        Ok(line)
+    }
+
+    /// A line in the global chat from `name`, if `allowed` lets it through.
+    fn post_global(&self, name: &str, text: &str, allowed: impl FnOnce(&mut Hub) -> bool) -> Result<ChatLine, String> {
+        // The global chat is public: starred out for everyone, old clients included.
+        let text = net::censor(&net::clean_chat(text));
+        if text.is_empty() {
+            return Err("nothing to send".into());
+        }
+        let mut hub = self.hub.lock().unwrap();
+        if !allowed(&mut hub) {
+            return Err("slow down a little".into());
+        }
+        let line = ChatLine { from: name.to_string(), to: String::new(), text, at: now_secs() };
+        hub.global.push_back(line.clone());
+        if hub.global.len() > CHAT_HISTORY {
+            hub.global.pop_front();
+        }
+        hub.send_to_all(&Down::GlobalChat(line.clone()));
+        Ok(line)
+    }
 }
 
 /// A player's social connection: friend list, chat, watching and streaming solo plays.
@@ -579,46 +747,8 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
             state.tell_friends(key);
         }
         Up::AddFriend(other) => {
-            let other = other.trim().to_ascii_lowercase();
-            let outcome = {
-                let mut a = state.accounts.lock().unwrap();
-                if other == key {
-                    Err("that's you".to_string())
-                } else if !a.users.contains_key(&other) {
-                    Err(format!("there's no player named {other}"))
-                } else if a.users[key].friends.contains(&other) {
-                    Err(format!("{} is already your friend", a.users[&other].name))
-                } else if a.users[key].friends.len() >= MAX_FRIENDS {
-                    Err("your friend list is full".to_string())
-                } else if a.users[key].requests.contains(&other) {
-                    // They asked first: now friends.
-                    let me = a.users.get_mut(key).unwrap();
-                    me.requests.retain(|r| *r != other);
-                    me.friends.push(other.clone());
-                    a.users.get_mut(&other).unwrap().friends.push(key.to_string());
-                    state.save(&a);
-                    Ok((true, a.users[&other].name.clone()))
-                } else {
-                    let them = a.users.get_mut(&other).unwrap();
-                    if !them.requests.iter().any(|r| r == key) {
-                        them.requests.push(key.to_string());
-                    }
-                    state.save(&a);
-                    Ok((false, a.users[&other].name.clone()))
-                }
-            };
-            match outcome {
-                Err(e) => state.notice(key, e),
-                Ok((true, other_name)) => {
-                    state.notice(key, format!("you and {other_name} are friends now"));
-                    state.notice(&other, format!("{name} accepted your friend request"));
-                }
-                Ok((false, other_name)) => {
-                    state.notice(key, format!("friend request sent to {other_name}"));
-                }
-            }
-            state.push_friends(key);
-            state.push_friends(&other);
+            let msg = state.add_friend(key, name, &other).unwrap_or_else(|e| e);
+            state.notice(key, msg);
         }
         Up::RemoveFriend(other) => {
             let other = other.trim().to_ascii_lowercase();
@@ -638,45 +768,12 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
             state.push_friends(&other);
         }
         Up::Chat { to, text } => {
-            let to = to.trim().to_ascii_lowercase();
-            if !state.are_friends(key, &to) {
-                return state.notice(key, "you can only message friends".into());
+            if let Err(e) = state.post_chat(key, name, &to, &text, |hub| hub.chat_allowed(key, id)) {
+                state.notice(key, e);
             }
-            let text = net::clean_chat(&text);
-            if text.is_empty() {
-                return;
-            }
-            let to_name = state.display_name(&to);
-            let mut hub = state.hub.lock().unwrap();
-            if !hub.chat_allowed(key, id) {
-                return;
-            }
-            let line = ChatLine { from: name.to_string(), to: to_name, text, at: now_secs() };
-            let log = hub.history.entry(pair(key, &to)).or_default();
-            log.push_back(line.clone());
-            if log.len() > CHAT_HISTORY {
-                log.pop_front();
-            }
-            let d = Down::Chat(line);
-            hub.send_to(key, &d);
-            hub.send_to(&to, &d);
         }
         Up::GlobalChat(text) => {
-            // The global chat is public: starred out for everyone, old clients included.
-            let text = net::censor(&net::clean_chat(&text));
-            if text.is_empty() {
-                return;
-            }
-            let mut hub = state.hub.lock().unwrap();
-            if !hub.chat_allowed(key, id) {
-                return;
-            }
-            let line = ChatLine { from: name.to_string(), to: String::new(), text, at: now_secs() };
-            hub.global.push_back(line.clone());
-            if hub.global.len() > CHAT_HISTORY {
-                hub.global.pop_front();
-            }
-            hub.send_to_all(&Down::GlobalChat(line));
+            let _ = state.post_global(name, &text, |hub| hub.chat_allowed(key, id));
         }
         Up::Watch(other) => {
             let other = other.trim().to_ascii_lowercase();
