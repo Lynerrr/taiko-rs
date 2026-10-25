@@ -277,14 +277,16 @@ pub fn preset_area(w: u32, h: u32, screen_w: f32, screen_h: f32) -> Area {
 /// area's own coordinate space (480 units tall, width from its aspect). Returns the first shape
 /// index and the full-screen width for `end`.
 /// With `see_through`, the area lets the map background show behind the lane.
-pub fn begin(c: &mut Canvas, area: Area, see_through: bool) -> (usize, f32) {
+pub fn begin(c: &mut Canvas, area: Area, see_through: bool, black: bool) -> (usize, f32) {
     let full = c.width;
+    // `black`: the dim and the area behind the playfield are black, not the interface's greys.
+    let (outside, inside) = if black { (0x000000, 0x000000) } else { (0x08080b, 0x121219) };
     if !area.is_full() {
-        c.rect(0.0, 0.0, full, VIRTUAL_HEIGHT, rgba(0x08080b, if see_through { 0.85 } else { 1.0 }));
+        c.rect(0.0, 0.0, full, VIRTUAL_HEIGHT, rgba(outside, if see_through { 0.85 } else { 1.0 }));
     }
     let start = c.shapes.len();
     c.width = full * area.w / area.h;
-    c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(0x121219, if see_through { 0.0 } else { 1.0 }));
+    c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(inside, if see_through { 0.0 } else { 1.0 }));
     (start, full)
 }
 

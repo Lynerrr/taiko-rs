@@ -230,7 +230,9 @@ then Enter or **Play from 1:23**. Esc goes back. Both previews play at the selec
 of the lobby map; the host's button is **Start the match from 1:23**, which sets where everyone's
 match starts (shown next to the map; players re-ready, as after a rate change). The lobby also
 plays the lobby map's music. The background also shows behind
-the lane during play, darkened by Settings → *Background dim*.
+the lane during play, darkened by Settings → *Background dim*. *Dim to black* (on by default)
+darkens it to pure black, and makes everything behind the playfield black when there's no
+background or a playfield area smaller than the screen; off, those take the interface's grey.
 
 ## Mods
 

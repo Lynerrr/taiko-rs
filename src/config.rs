@@ -94,6 +94,9 @@ pub struct Config {
     pub menu_vsync: bool,
     /// The mouse wheel resizes the playfield during play (it always does in its editor).
     pub wheel_resizes_playfield: bool,
+    /// During songs, the background dims to black (and is black without one), rather than to
+    /// the interface's grey.
+    pub bg_dim_black: bool,
     /// The interface during play is hidden (the toggle), and what that hides.
     pub interface_hidden: bool,
     pub interface_hides: crate::hud::Parts,
@@ -215,6 +218,7 @@ impl Default for Config {
             half_resolution: cfg!(target_os = "android"),
             menu_vsync: true,
             wheel_resizes_playfield: false,
+            bg_dim_black: true,
             interface_hidden: false,
             interface_hides: crate::hud::Parts::ALL,
             interface_key: (true, KeyCode::Tab),
@@ -584,6 +588,7 @@ impl Config {
                 "touch_layout" => cfg.touch_layout = TouchLayout::parse(v).unwrap_or(cfg.touch_layout),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
+                "bg_dim_black" => cfg.bg_dim_black = v == "true",
                 "interface_hidden" => cfg.interface_hidden = v == "true",
                 "interface_hides" => cfg.interface_hides = crate::hud::Parts::parse(v),
                 "interface_key" => {
@@ -753,6 +758,7 @@ impl Config {
             "# where replays, scores, videos, taiko-rs's Songs and Skins and caches are (empty = the usual places); move it from Settings\ndata_folder = {data}\n"
         ));
         out.push_str(&format!("# the mouse wheel resizes the playfield during play\nwheel_resizes_playfield = {}\n", self.wheel_resizes_playfield));
+        out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));
         out.push_str(&format!(
             "# the interface during play: hidden or not, what hiding it hides (score, accuracy, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
             self.interface_hidden,

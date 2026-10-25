@@ -430,7 +430,7 @@ fn draw_game_area(
     f: impl FnOnce(&mut Canvas),
 ) {
     let area = cfg.playfield_area;
-    let (start, full) = layout::begin(canvas, area, see_through);
+    let (start, full) = layout::begin(canvas, area, see_through, cfg.bg_dim_black);
     f(canvas);
     let range = layout::end(canvas, area, start, full);
     *clip = Some((range, area));
@@ -675,6 +675,8 @@ struct ExportView {
     size: (u32, u32),
     tx: std::sync::mpsc::SyncSender<Vec<u8>>,
     brightness: f32,
+    /// What's under the background (`App::backdrop`).
+    clear: [f64; 3],
     blended: bool,
     last: bool,
 }
@@ -1136,7 +1138,7 @@ impl State {
         }
         let blended = ex.views() > 1;
         let last = ex.advance();
-        Some(ExportView { size: (w, h), tx, brightness, blended, last })
+        Some(ExportView { size: (w, h), tx, brightness, clear: self.backdrop(true), blended, last })
     }
 
     /// Loads the map of a saved replay and plays it back.
@@ -1394,6 +1396,7 @@ impl State {
             Item::TouchLayout => c.touch_layout.name().into(),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::WheelResize => on(c.wheel_resizes_playfield),
+            Item::BackgroundDimBlack => on(c.bg_dim_black),
             Item::KiaiEffects => on(c.kiai_effects),
             Item::HideGreat => on(c.hide_great),
             Item::DiscordPresence => on(c.discord_presence),
@@ -1540,6 +1543,7 @@ impl State {
             }
             Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
             Item::WheelResize => self.cfg.wheel_resizes_playfield = !self.cfg.wheel_resizes_playfield,
+            Item::BackgroundDimBlack => self.cfg.bg_dim_black = !self.cfg.bg_dim_black,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
@@ -4327,6 +4331,20 @@ impl State {
         });
     }
 
+    /// Showing a song, its background dimmed by the background dim setting.
+    fn dims_background(&self) -> bool {
+        matches!(
+            self.scene,
+            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Loading { .. } | Scene::Preview { .. } | Scene::Spectate(_) | Scene::Watch(_) | Scene::VideoEdit(_)
+        )
+    }
+
+    /// What the window is cleared to under the background: black in a song when the background
+    /// dims to black, else the interface's grey.
+    fn backdrop(&self, in_song: bool) -> [f64; 3] {
+        if in_song && self.cfg.bg_dim_black { [0.0; 3] } else { render::clear_colour() }
+    }
+
     fn toggle_map_info(&mut self) {
         self.cfg.show_map_info = !self.cfg.show_map_info;
         self.cfg.save();
@@ -5440,7 +5458,7 @@ impl State {
             let has_bg = self.preview.has_background;
             self.bg_brightness = match self.scene {
                 _ if !has_bg => 0.0,
-                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Loading { .. } | Scene::Preview { .. } | Scene::Spectate(_) | Scene::Watch(_) | Scene::VideoEdit(_) => 1.0 - self.cfg.bg_dim,
+                _ if self.dims_background() => 1.0 - self.cfg.bg_dim,
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
@@ -6896,7 +6914,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         let exporting = Instant::now();
         while exporting.elapsed() < Duration::from_millis(30) {
             let job = lock(&state).export_frame(&mut export_canvas);
-            let Some(ExportView { size: (w, h), tx, brightness, blended, last }) = job else { break };
+            let Some(ExportView { size: (w, h), tx, brightness, clear, blended, last }) = job else { break };
             let shown = renderer.bg_brightness;
             renderer.bg_brightness = brightness;
             let vw = export_canvas.width.max(1.0);
@@ -6905,7 +6923,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 .iter()
                 .map(|(r, [x, y, cw, ch])| (r.clone(), [x / vw, y / render::VIRTUAL_HEIGHT, cw / vw, ch / render::VIRTUAL_HEIGHT]))
                 .collect();
-            let frame = renderer.render_offscreen(&export_canvas.shapes, &clips, w, h, render::clear_colour());
+            let frame = renderer.render_offscreen(&export_canvas.shapes, &clips, w, h, clear);
             renderer.bg_brightness = shown;
             let Some(px) = frame else { break };
             // Motion blur: the frame is the average of its views.
@@ -6922,7 +6940,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 break;
             }
         }
-        let (capture, clip) = {
+        let (capture, clip, backdrop) = {
             let mut s = lock(&state);
             if let Some(atlas) = s.sprites_upload.take() {
                 renderer.set_sprites(&atlas);
@@ -6964,7 +6982,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             renderer.bg_brightness = s.bg_brightness;
             // A new background cross-fades from the previous one.
             renderer.bg_mix = s.bg_changed.map(|t| render::progress(t, 300.0)).unwrap_or(1.0);
-            (capture, s.frame_clip.take())
+            (capture, s.frame_clip.take(), s.backdrop(s.dims_background()))
         };
         // The playfield / preview clip (fractions) plus the lists' (virtual units).
         let vw = canvas.width.max(1.0);
@@ -6975,7 +6993,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         let mut clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clip.into_iter().map(|(range, a)| (range, [a.x, a.y, a.w, a.h])).collect();
         clips.extend(canvas.clips.drain(..).map(|(range, r)| (range, to_fraction(r))));
         let t1 = timing.then(Instant::now);
-        let shot = renderer.submit(frame, &canvas.shapes, render::clear_colour(), capture.is_some(), clips, opaque);
+        let shot = renderer.submit(frame, &canvas.shapes, backdrop, capture.is_some(), clips, opaque);
         if let (Some(t0), Some(t1)) = (t0, t1) {
             let presented = Instant::now();
             // Clock-sample-to-next-refresh: approximates how stale the previous frame was when shown.
