@@ -217,10 +217,12 @@ fn agent() -> ureq::Agent {
     ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).build().into()
 }
 
-/// Parses a mirror's search response (osu! API v2 beatmapset objects).
-fn parse_sets(json: &str) -> Result<Vec<SetInfo>, String> {
+/// Parses a mirror's search response (osu! API v2 beatmapset objects): the sets with taiko
+/// difficulties, and how many sets the reply had (a full page means there may be more).
+fn parse_sets(json: &str) -> Result<(Vec<SetInfo>, usize), String> {
     let sets: Vec<ApiSet> = serde_json::from_str(json).map_err(|e| format!("unexpected reply: {e}"))?;
-    Ok(sets
+    let count = sets.len();
+    let sets = sets
         .into_iter()
         .filter_map(|s| {
             let mut diffs: Vec<Diff> = s
@@ -243,14 +245,24 @@ fn parse_sets(json: &str) -> Result<Vec<SetInfo>, String> {
                 ranked_date: s.ranked_date.unwrap_or_default(),
             })
         })
-        .collect())
+        .collect();
+    Ok((sets, count))
 }
 
-/// One status (or any) from the first mirror that answers.
-fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Option<(&str, bool)>) -> Result<Vec<SetInfo>, String> {
+/// Sets a search asks each mirror for at a time.
+pub const PAGE: usize = 50;
+
+/// Page `page` of one status (or any) from the first mirror that answers.
+fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Option<(&str, bool)>, page: usize) -> Result<(Vec<SetInfo>, usize), String> {
     let mut errors = Vec::new();
     for m in &MIRRORS {
-        let mut req = agent.get(m.search).header("User-Agent", USER_AGENT).query(m.query_key, query).query("mode", "1").query(m.amount_key, "50");
+        let mut req = agent
+            .get(m.search)
+            .header("User-Agent", USER_AGENT)
+            .query(m.query_key, query)
+            .query("mode", "1")
+            .query(m.amount_key, PAGE.to_string())
+            .query("offset", (page * PAGE).to_string());
         if let Some(st) = status {
             req = req.query("status", st.to_string());
         }
@@ -271,24 +283,28 @@ fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Op
 }
 
 /// Searches the mirrors for taiko sets matching `query` in `category`, ordered by `sort`
-/// (descending if `desc`). Categories spanning several statuses are fetched per status and
-/// merged.
-pub fn search(query: &str, category: Category, sort: SortKey, desc: bool) -> Result<Vec<SetInfo>, String> {
+/// (descending if `desc`): page `page` (from 0) of the results. Categories spanning several
+/// statuses are fetched per status and merged. Also says whether there may be another page.
+pub fn search(query: &str, category: Category, sort: SortKey, desc: bool, page: usize) -> Result<(Vec<SetInfo>, bool), String> {
     let agent = agent();
     // With no text, "relevance" means newest ranked first, as on the website.
     let (sort, desc) = if sort == SortKey::Relevance && query.trim().is_empty() { (SortKey::Ranked, true) } else { (sort, desc) };
     let server = sort.server().map(|k| (k, desc));
     let statuses: Vec<Option<i32>> = if category.statuses().is_empty() { vec![None] } else { category.statuses().iter().map(|&s| Some(s)).collect() };
-    let results: Vec<Result<Vec<SetInfo>, String>> = std::thread::scope(|s| {
-        let handles: Vec<_> = statuses.iter().map(|&st| { let agent = &agent; s.spawn(move || search_status(agent, query, st, server)) }).collect();
+    let results: Vec<Result<(Vec<SetInfo>, usize), String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = statuses.iter().map(|&st| { let agent = &agent; s.spawn(move || search_status(agent, query, st, server, page)) }).collect();
         handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("search failed".into()))).collect()
     });
     let mut errors = Vec::new();
     let mut sets: Vec<SetInfo> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut more = false;
     for r in results {
         match r {
-            Ok(found) => sets.extend(found.into_iter().filter(|s| seen.insert(s.id))),
+            Ok((found, count)) => {
+                more |= count >= PAGE;
+                sets.extend(found.into_iter().filter(|s| seen.insert(s.id)));
+            }
             Err(e) => errors.push(e),
         }
     }
@@ -296,8 +312,7 @@ pub fn search(query: &str, category: Category, sort: SortKey, desc: bool) -> Res
         return Err(errors.join("; "));
     }
     sort_sets(&mut sets, sort, desc);
-    sets.truncate(50);
-    Ok(sets)
+    Ok((sets, more))
 }
 
 /// Orders merged results (and does the sorts no mirror can do).
@@ -726,7 +741,8 @@ mod tests {
             {"version": "Kantan", "mode": "taiko", "mode_int": 1, "difficulty_rating": 1.2},
             {"version": "Insane", "mode": "osu", "mode_int": 0, "difficulty_rating": 5.0}]},
             {"id": 8, "beatmaps": [{"version": "4K", "mode": "mania", "mode_int": 3, "difficulty_rating": 2.0}]}]"#;
-        let sets = parse_sets(json).unwrap();
+        let (sets, count) = parse_sets(json).unwrap();
+        assert_eq!(count, 2, "the reply's own count, for paging");
         assert_eq!(sets.len(), 1, "sets without taiko difficulties are dropped");
         let names: Vec<(&str, f32)> = sets[0].diffs.iter().map(|d| (d.version.as_str(), d.stars)).collect();
         assert_eq!(names, vec![("Kantan", 1.2), ("Oni", 4.5)]);

@@ -5710,7 +5710,7 @@ impl State {
             None => {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let found = download::search(&format!("{} {}", m.artist, m.title), download::Category::Any, download::SortKey::Relevance, true).and_then(|sets| {
+                    let found = download::search(&format!("{} {}", m.artist, m.title), download::Category::Any, download::SortKey::Relevance, true, 0).and_then(|(sets, _)| {
                         sets.into_iter()
                             .find(|s| s.title.eq_ignore_ascii_case(&m.title) && s.diffs.iter().any(|d| d.version == m.version))
                             .ok_or_else(|| "not found on the mirrors".to_string())
