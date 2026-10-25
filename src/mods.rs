@@ -81,6 +81,7 @@ pub enum Mod {
     Mania,
     BarrelRoll,
     FlipFlop,
+    Crossfire,
     Shatter,
     Cracked,
     Crumble,
@@ -90,13 +91,13 @@ pub enum Mod {
 
 use Mod::*;
 
-pub const ALL: [Mod; 73] = [
+pub const ALL: [Mod; 74] = [
     Easy, NoFail, HalfTime, Daycore, Half, NoFinishers, HardRock, SuddenDeath, Perfect, DoubleTime, Nightcore, Hidden,
     Flashlight, Precise, GreatOrNothing, Relax, Autoplay, Swap, Random, ConstantSpeed, Alternate, WindUp, WindDown, AllBig,
     Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette, AntiSv, HyperSv, Even, Split, Swing,
     Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed, Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy,
     Party, Overtime, Liar, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop,
-    Shatter, Cracked, Crumble, Portal, Multiverse,
+    Crossfire, Shatter, Cracked, Crumble, Portal, Multiverse,
 ];
 
 /// Mod select columns: (title, accent colour, mods).
@@ -107,7 +108,7 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
     ("SCROLL", 0xFFD34D, &[Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette]),
     ("SV LAB", 0xFF8A3D, &[AntiSv, HyperSv, Even, Split, Swing, Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed]),
     ("VISUAL", 0xc77dff, &[Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Party, Overtime, Liar]),
-    ("RAILS", 0x5ee6c8, &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake]),
+    ("RAILS", 0x5ee6c8, &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Crossfire]),
     ("PLAYFIELD", 0xff5fa2, &[Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal, Multiverse]),
 ];
 
@@ -200,6 +201,7 @@ impl Mod {
             Mania => "MN",
             BarrelRoll => "BA",
             FlipFlop => "FF",
+            Crossfire => "XF",
             Shatter => "SH",
             Cracked => "CK",
             Crumble => "CR",
@@ -278,6 +280,7 @@ impl Mod {
             Mania => "Mania",
             BarrelRoll => "Barrel Roll",
             FlipFlop => "Flip Flop",
+            Crossfire => "Crossfire",
             Shatter => "Shatter",
             Cracked => "Cracked",
             Crumble => "Crumble",
@@ -356,6 +359,7 @@ impl Mod {
             Mania => "The lane stands up: notes fall down onto the drum.",
             BarrelRoll => "Every kiai starts with a full spin of the lane.",
             FlipFlop => "Every 8 bars the lane flips over to the other side.",
+            Crossfire => "The drum sits in the middle: kats come from the left, dons from the right.",
             Shatter => "The lane breaks into pieces that slide apart and back; further where streams are.",
             Cracked => "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
             Crumble => "Hits knock pieces out of the lane, harder as the combo grows; a miss puts them back.",
@@ -383,7 +387,7 @@ impl Mod {
             Spiral | Shapeshift | Spin | Portal => 1.06,
             // Noticeably harder.
             GreatOrNothing | Random | Accel | Brake | Pulse | Crescendo | Drop | Gearbox | AntiSv | Swing | Panic | SnapSpeed => 1.04,
-            UTurn | Loop | Snake | FlipFlop | Shatter | Crumble => 1.04,
+            UTurn | Loop | Snake | FlipFlop | Crossfire | Shatter | Crumble => 1.04,
             // A little harder: the lane moves or bends, the notes read as usual.
             AllBig | Wave | Zigzag | Elbow | Mirror | Tilt | Mania | BarrelRoll | Cracked | Party => 1.02,
             _ => 1.0,
@@ -423,17 +427,21 @@ impl Mod {
             HyperSv => &[AntiSv, ConstantSpeed],
             Panic => &[Mercy],
             Mercy => &[Panic],
-            Spin => &[Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse],
-            Mania => &[Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse],
-            Zigzag | UTurn | Spiral | Loop | Elbow | Shapeshift => &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Mania, Spin, Multiverse],
+            Spin => &[Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Crossfire],
+            Mania => &[Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Crossfire],
+            Zigzag | UTurn | Spiral | Loop | Elbow | Shapeshift => &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Mania, Spin, Multiverse, Crossfire],
+            // The drum in the middle, a lane each way: nothing else may move the drum, bend the
+            // lane or break it into pieces.
+            Crossfire => &[Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Shatter, Cracked, Crumble, Portal],
+            Shatter | Portal => &[Crossfire],
             // Its playfields are small windows side by side: nothing may move them off their
             // spots, light only one of them or take its colours away.
             Tilt | BarrelRoll | Colorless | Blackout => &[Multiverse],
             Multiverse => &[
-                Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Colorless, Flashlight, Spotlight, Blackout,
+                Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Colorless, Flashlight, Spotlight, Blackout, Crossfire,
             ],
-            Cracked => &[Crumble],
-            Crumble => &[Cracked],
+            Cracked => &[Crumble, Crossfire],
+            Crumble => &[Cracked, Crossfire],
             _ => &[],
         }
     }

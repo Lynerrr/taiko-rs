@@ -347,6 +347,11 @@
         "acronym": "SK",
         "description": "Streams slither along the lane, triplets the other way; 1/1 notes fly straight.",
         "name": "Snake"
+      },
+      {
+        "acronym": "XF",
+        "description": "The drum sits in the middle: kats come from the left, dons from the right.",
+        "name": "Crossfire"
       }
     ],
     "title": "RAILS"

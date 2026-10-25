@@ -36,7 +36,7 @@ Settings → Updates.
   WASAPI or AAudio with low latency.
 - **Your osu! library.** Taiko maps and osu!standard converts, lazer's conversion and hit windows,
   osu!'s star ratings, and collections and play history from osu!stable.
-- **73 mods.** osu!'s and lazer's mods, plus taiko-rs's own: scroll and SV experiments, visual
+- **74 mods.** osu!'s and lazer's mods, plus taiko-rs's own: scroll and SV experiments, visual
   tricks, lanes bent into rails, a moving playfield, and Multiverse's eight playfields, each with
   its own note colours, shapes, speed and mods. **C** in the mod select customizes the mods that have
   settings (Multiverse, Shapeshift) while they are on. Press **R**

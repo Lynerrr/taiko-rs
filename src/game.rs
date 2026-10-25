@@ -1999,6 +1999,9 @@ impl Game {
         if !mods.has(Mod::Shapeshift) {
             let len = if mods.has(Mod::Mania) {
                 MANIA_LANE
+            } else if mods.has(Mod::Crossfire) {
+                // From the drum in the middle to either edge.
+                w / 2.0
             } else if mods.has(Mod::Spin) {
                 SPIN_LANE
             } else {
@@ -2292,6 +2295,10 @@ impl Game {
         let start_shape = c.shapes.len();
         let mods = self.mods;
         let party = mods.has(Mod::Party);
+        // Crossfire: the drum in the middle, kats coming from the left (laid out here the other
+        // way along the lane from it), dons from the right.
+        let crossfire = mods.has(Mod::Crossfire);
+        let side_of = |kind: Kind, s: f32| if crossfire && kind == Kind::Kat { -s } else { s };
         // Multiverse: a window, not the whole screen. Nothing may stick out of it.
         let boxed = mods.has(Mod::Multiverse);
         let lane_top = LANE_Y - LANE_H / 2.0;
@@ -2414,7 +2421,7 @@ impl Game {
                 let jolt = beats.floor() + 1.0 - (1.0 - beat_phase).powi(3);
                 side += 32.0 * amp * f * (0.8 + 0.4 * pulse) * (TAU * 1.3 * u - PI * jolt + flip).sin();
             }
-            let (x, y, _, mut size) = place(s, side);
+            let (x, y, _, mut size) = place(side_of(n.kind, s), side);
             let mut squish = 1.0;
             if party {
                 // Each note pulses on its own grid: a 1/4 four times a beat.
@@ -2448,7 +2455,7 @@ impl Game {
         }
 
         // Lane. When it turns, it reaches past the screen so its ends never show.
-        let turns = mods.has(Mod::Tilt) || mods.has(Mod::Spin) || mods.has(Mod::Mania) || mods.has(Mod::BarrelRoll);
+        let turns = mods.has(Mod::Tilt) || mods.has(Mod::Spin) || mods.has(Mod::Mania) || mods.has(Mod::BarrelRoll) || crossfire;
         let mut lane_col = if kiai { rgba(0x2b2433, 1.0) } else { rgba(0x20202b, 1.0) };
         let mut edge_col = rgba(0x3a3a4e, 1.0);
         let mut skin_lane_tint = rgba(WHITE, 1.0);
@@ -2527,15 +2534,18 @@ impl Game {
                 break;
             }
             let s = s_of(b.time, b.velocity);
-            if s > PANEL_W - HIT_X && s < lane_len + 2.0 {
-                let (x, y, a, _) = place(s, 0.0);
-                if let Some([bw, bh]) = c.sprite_size(Sprite::Barline) {
-                    c.sprite_box(Sprite::Barline, x, y, (bw * LANE_PX / 2.0).max(0.6), bh * LANE_PX / 2.0, rgba(WHITE, 1.0));
-                    if let Some(sh) = c.shapes.last_mut() {
-                        sh.angle = -a;
+            let shown = if crossfire { s > 0.0 } else { s > PANEL_W - HIT_X };
+            if shown && s < lane_len + 2.0 {
+                for s in if crossfire { vec![s, -s] } else { vec![s] } {
+                    let (x, y, a, _) = place(s, 0.0);
+                    if let Some([bw, bh]) = c.sprite_size(Sprite::Barline) {
+                        c.sprite_box(Sprite::Barline, x, y, (bw * LANE_PX / 2.0).max(0.6), bh * LANE_PX / 2.0, rgba(WHITE, 1.0));
+                        if let Some(sh) = c.shapes.last_mut() {
+                            sh.angle = -a;
+                        }
+                    } else {
+                        lane_rect(c, (x, y, a), 1.6, LANE_H, rgba(WHITE, 0.28));
                     }
-                } else {
-                    lane_rect(c, (x, y, a), 1.6, LANE_H, rgba(WHITE, 0.28));
                 }
             }
         }
@@ -2744,7 +2754,7 @@ impl Game {
                     _ => continue,
                 };
                 if a > 0.01 && on_lane(s, r) {
-                    let (x, y, _, size) = place(s, 0.0);
+                    let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
                     c.light(sprite, x, y, r * size, rgba(col, flash * a));
                 }
             }
@@ -2767,7 +2777,19 @@ impl Game {
 
         // Drum panel on top so passed notes slide underneath it.
         let flash = |at: f64| ((1.0 - (t - at) / 130.0).clamp(0.0, 1.0) * 0.95) as f32;
-        let drum_x = draw_drum(c, self.presses.map(flash), uni.don(), uni.kat());
+        let drum_x = if crossfire {
+            for (k, f) in self.presses.map(flash).into_iter().enumerate() {
+                if f > 0.0 {
+                    let col = if k == 0 || k == 3 { uni.kat() } else { uni.don() };
+                    c.glow(HIT_X, LANE_Y, NOTE_R, 18.0, rgba(col, 0.5 * f));
+                }
+            }
+            HIT_X
+        } else {
+            draw_drum(c, self.presses.map(flash), uni.don(), uni.kat())
+        };
+        // The combo: on the drum, or with Crossfire under the hit target.
+        let combo_y = |h: f32| if crossfire { lane_top + LANE_H + 8.0 } else { LANE_Y - h / 2.0 };
         for (p, big, col) in flying {
             let y = LANE_Y - 80.0 * p * (2.0 - p);
             let r = if big { BIG_R } else { NOTE_R } * (1.0 + 0.15 * p);
@@ -2781,10 +2803,11 @@ impl Game {
             let s = self.stats.combo.to_string();
             let skin_size = if s.len() > 3 { 17.0 } else { 22.0 };
             if c.number_width(Font::Combo, skin_size, &s).is_some() {
-                upright.push((drum_x, LANE_Y - skin_size / 2.0, skin_size, rgba(WHITE, 1.0), Upright::Number(Font::Combo, s)));
+                upright.push((drum_x, combo_y(skin_size), skin_size, rgba(WHITE, 1.0), Upright::Number(Font::Combo, s)));
             } else {
                 let size = if s.len() > 3 { 12.0 } else { 16.0 };
-                texts.push((drum_x, LANE_Y - size / 2.0, size, rgba(0x1d1d26, 1.0), s));
+                let col = if crossfire { 0xe8e8f0 } else { 0x1d1d26 };
+                texts.push((drum_x, combo_y(size), size, rgba(col, 1.0), s));
             }
         }
 
@@ -2871,6 +2894,9 @@ impl Game {
             }
         }
         let mut dest = pivot;
+        if crossfire {
+            dest = [w / 2.0, LANE_Y];
+        }
         if mods.has(Mod::Spin) {
             dest = [w / 2.0, 240.0];
         }
