@@ -252,6 +252,30 @@ fn assert_every_screen_fits() {
     s.cfg.mods = mods_before;
     s.cfg.shapeshift = Default::default();
 
+    // A profile: long name, more plays than fit, long map names; then one that failed.
+    let play = |i: u64| online::OnlineScore {
+        player: LONG_NAME.into(),
+        map: "Camellia feat. Hatsune Miku & Some Other Very Long Artist Name - Extremely Long Song Title [Hyperdimensional Inner Oni]".into(),
+        map_hash: i,
+        score: 1_234_567,
+        accuracy: 0.9876,
+        max_combo: 1290,
+        miss: 12,
+        rate: 1.25,
+        mods: ["HD", "HR", "DT", "FL", "PR", "AC", "WV", "SU"].iter().map(|m| m.to_string()).collect(),
+        pp: Some(1234.5 - i as f64),
+        date: 1_700_000_000,
+    };
+    let loaded = online::Profile { name: LONG_NAME.into(), joined: 1_700_000_000, plays: 12_345, pp: 12_345.6, rank: Some(1234), top: (0..20).map(play).collect(), recent: (0..20).map(play).collect() };
+    let (_, rx) = std::sync::mpsc::channel();
+    s.profile = Some(profile::View { name: LONG_NAME.into(), state: profile::State::Loading(rx) });
+    check(&mut s, "profile loading", &mut out);
+    s.profile = Some(profile::View { name: LONG_NAME.into(), state: profile::State::Loaded(Box::new(loaded)) });
+    check(&mut s, "profile", &mut out);
+    s.profile = Some(profile::View { name: "x".into(), state: profile::State::Failed("the server doesn't have profiles yet".into()) });
+    check(&mut s, "profile failed", &mut out);
+    s.profile = None;
+
     s.open_collections();
     check(&mut s, "collections", &mut out);
     s.select.picker = None;

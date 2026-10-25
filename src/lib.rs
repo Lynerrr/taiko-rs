@@ -31,6 +31,7 @@ mod multiplayer;
 mod net;
 mod osudb;
 mod pp;
+mod profile;
 mod preview;
 mod render;
 mod scores;
@@ -249,6 +250,8 @@ struct State {
     submits: Vec<Receiver<Result<online::Reply, String>>>,
     /// The song select leaderboard shows the server's scores, not the local ones.
     board_online: bool,
+    /// A player's profile, over everything else.
+    profile: Option<profile::View>,
     /// Online leaderboards fetched (by map hash: when, and the rows or why not), and the one
     /// being fetched.
     online_boards: std::collections::HashMap<u64, (Instant, Result<Vec<online::OnlineScore>, String>)>,
@@ -511,7 +514,7 @@ fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods.concat()) };
         let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!("#{}  {}  {:08}  {:.2}%  {}x{pp}", k + 1, r.player, r.score, r.accuracy * 100.0, r.max_combo);
+        let core = format!("#{}  {}  {:08}  {:.2}%{pp}  {}x", k + 1, r.player, r.score, r.accuracy * 100.0, r.max_combo);
         let room = w - 16.0;
         let right = Canvas::fit(6.5, room - Canvas::text_width(6.5, &core) - 12.0, &format!("{} miss  {}", r.miss, scores::age(r.date)));
         let left_room = room - if right.is_empty() { 0.0 } else { Canvas::text_width(6.5, &right) + 8.0 };
@@ -541,7 +544,7 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods) };
         let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!("#{}  {:08}  {:.2}%  {}x{pp}", k + 1, r.score, r.accuracy * 100.0, r.max_combo);
+        let core = format!("#{}  {:08}  {:.2}%{pp}  {}x", k + 1, r.score, r.accuracy * 100.0, r.max_combo);
         // The video button sits on top of the row (drawn after it, so it wins the click).
         let bw = Canvas::text_width(6.0, "video") + 12.0;
         let bx = x + w - bw - 3.0;
@@ -3136,6 +3139,16 @@ impl State {
             }
             return;
         }
+        if self.profile.is_some() {
+            // Only its Back button.
+            if pressed {
+                let (vx, vy) = self.mouse_virtual();
+                if let Some(hit @ render::Hit::Key(_)) = self.hit_at(vx, vy) {
+                    self.click(hit, window);
+                }
+            }
+            return;
+        }
         if self.mod_select.is_some() {
             // Only the mod select's own chips and buttons; nothing under it.
             if pressed {
@@ -4012,6 +4025,7 @@ impl State {
                 _ => {}
             },
             KeyCode::KeyW if self.modifiers_ctrl => self.social_action(social::Action::Watch),
+            KeyCode::KeyP if self.modifiers_ctrl => self.social_action(social::Action::Profile),
             KeyCode::KeyJ if self.modifiers_ctrl => self.social_action(social::Action::Join),
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 let text = self.social.input.trim().to_string();
@@ -4103,6 +4117,21 @@ impl State {
                     self.toast("not connected to the server".into());
                 }
             }
+            (Row::Friend(k), Action::Profile) => {
+                if let Some(f) = self.social.friends.get(k) {
+                    self.open_profile(f.name.clone());
+                }
+            }
+            (Row::Player(k), Action::Profile) => {
+                if let Some(p) = self.social.players.as_ref().and_then(|v| v.get(k)) {
+                    self.open_profile(p.name.clone());
+                }
+            }
+            // Elsewhere: our own.
+            (_, Action::Profile) => match self.mp_menu.account.clone() {
+                Some(me) => self.open_profile(me),
+                None => self.toast("log in (F9) to have a profile".into()),
+            },
             (Row::Friend(k), Action::Watch) => {
                 if let Some(f) = self.social.friends.get(k).cloned() {
                     self.watch(f.name);
@@ -4127,6 +4156,10 @@ impl State {
             }
             _ => {}
         }
+    }
+
+    fn open_profile(&mut self, name: String) {
+        self.profile = Some(profile::View::open(self.cfg.online_server.clone(), name));
     }
 
     /// Starts watching a friend's solo plays.
@@ -4642,6 +4675,13 @@ impl State {
             // Any key skips the splash and does nothing else.
             if !repeat {
                 s.skip(at, self.audio.as_ref(), &format!("key {code:?}"));
+            }
+            return;
+        }
+        // A profile is over everything: any of these closes it, the rest do nothing.
+        if self.profile.is_some() {
+            if matches!(code, KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter) {
+                self.profile = None;
             }
             return;
         }
@@ -5723,6 +5763,9 @@ impl State {
             }
             social::draw_notes(canvas, &self.social);
         }
+        if let Some(p) = &self.profile {
+            p.draw(canvas);
+        }
         if let Some(t) = &self.toast {
             if now < t.until {
                 let a = (t.until.duration_since(now).as_secs_f32() / 0.3).min(1.0);
@@ -6006,6 +6049,9 @@ impl State {
     fn poll_downloads(&mut self) {
         self.poll_pp_backfill();
         self.poll_online_scores();
+        if let Some(p) = &mut self.profile {
+            p.poll();
+        }
         #[cfg(target_os = "android")]
         if self.imports_checked.elapsed() >= Duration::from_secs(1) {
             self.imports_checked = Instant::now();
@@ -6893,6 +6939,7 @@ impl State {
             pp_backfill_started: false,
             submits: Vec::new(),
             board_online: false,
+            profile: None,
             online_boards: std::collections::HashMap::new(),
             board_fetch: None,
             pending_replay: None,
