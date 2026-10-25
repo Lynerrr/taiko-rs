@@ -8,7 +8,9 @@
 //!   /u/<name>         a profile         /api/u/<name>
 //!   /beatmaps         maps played       /api/beatmaps
 //!   /m/<map hash>     a map's scores    /api/m/<map hash>
+//!   /clips/<file>     the home page's gameplay clips (with byte ranges, for video players)
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
@@ -88,6 +90,7 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     // Headers: the proxy's word for who's asking, and their browser (for the download button).
     let mut visitor = None;
     let mut agent = String::new();
+    let mut range = None;
     loop {
         let mut h = String::new();
         match reader.read_line(&mut h) {
@@ -99,6 +102,8 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
                         visitor = v.split(',').next().and_then(|ip| ip.trim().parse::<IpAddr>().ok());
                     } else if k.eq_ignore_ascii_case("user-agent") {
                         agent = v.trim().to_string();
+                    } else if k.eq_ignore_ascii_case("range") {
+                        range = Some(v.trim().to_string());
                     }
                 }
             }
@@ -107,39 +112,75 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let ip = if web.behind_proxy { visitor.unwrap_or(peer) } else { peer };
     let mut parts = line.split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
-    let reply = if !web.allow(ip) {
+    let mut reply = if !web.allow(ip) {
         Reply::text(429, "too many requests, wait a minute")
     } else if method != "GET" && method != "HEAD" {
         Reply::text(405, "only GET")
     } else {
         route(state, target, Os::of(&agent))
     };
+    let mut extra = reply.location.as_ref().map(|l| format!("Location: {l}\r\n")).unwrap_or_default();
+    if reply.ranges {
+        extra += "Accept-Ranges: bytes\r\n";
+        let total = reply.body.len();
+        match range.as_deref().map(|r| byte_range(r, total)) {
+            Some(Some((start, end))) => {
+                reply.status = 206;
+                extra += &format!("Content-Range: bytes {start}-{end}/{total}\r\n");
+                reply.body = match reply.body {
+                    Cow::Borrowed(b) => Cow::Borrowed(&b[start..=end]),
+                    Cow::Owned(b) => Cow::Owned(b[start..=end].to_vec()),
+                };
+            }
+            Some(None) => {
+                reply = Reply::text(416, "range not satisfiable");
+                extra = format!("Content-Range: bytes */{total}\r\n");
+            }
+            None => {}
+        }
+    }
     let mut out = &stream;
     let head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: {CSP}\r\n{}Connection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: {CSP}\r\n{extra}Connection: close\r\n\r\n",
         reply.status,
         reason(reply.status),
         reply.kind,
         reply.body.len(),
-        // Pages differ by the visitor's system (the download button).
-        if reply.per_visitor { "private, max-age=30" } else { "public, max-age=30" },
-        reply.location.as_ref().map(|l| format!("Location: {l}\r\n")).unwrap_or_default()
+        reply.cache,
     );
     let _ = out.write_all(head.as_bytes());
     if method != "HEAD" {
-        let _ = out.write_all(reply.body.as_bytes());
+        let _ = out.write_all(&reply.body);
     }
 }
 
-/// Styles inline and the font from Google; map covers from osu!; no scripts at all.
-const CSP: &str = "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src https://assets.ppy.sh; form-action 'self'";
+/// The first byte range of a `Range: bytes=...` header for a body of `total` bytes, as
+/// inclusive (start, end); None if it can't be served.
+fn byte_range(header: &str, total: usize) -> Option<(usize, usize)> {
+    let spec = header.strip_prefix("bytes=")?.split(',').next()?.trim();
+    let (a, b) = spec.split_once('-')?;
+    let (start, end) = match (a.trim(), b.trim()) {
+        ("", n) => {
+            let n: usize = n.parse().ok()?;
+            (total.checked_sub(n.min(total))?, total.checked_sub(1)?)
+        }
+        (s, "") => (s.parse().ok()?, total.checked_sub(1)?),
+        (s, e) => (s.parse().ok()?, e.parse::<usize>().ok()?.min(total.checked_sub(1)?)),
+    };
+    (start <= end && end < total).then_some((start, end))
+}
+
+/// Styles inline and the font from Google; map covers from osu!; clips from here; no scripts at all.
+const CSP: &str = "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https://assets.ppy.sh; media-src 'self'; form-action 'self'";
 
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        206 => "Partial Content",
         302 => "Found",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        416 => "Range Not Satisfiable",
         429 => "Too Many Requests",
         _ => "Error",
     }
@@ -148,36 +189,50 @@ fn reason(status: u16) -> &'static str {
 struct Reply {
     status: u16,
     kind: &'static str,
-    body: String,
+    body: Cow<'static, [u8]>,
     location: Option<String>,
-    per_visitor: bool,
+    cache: &'static str,
+    /// Byte ranges may be asked for (the clips).
+    ranges: bool,
 }
 
 impl Reply {
-    fn html(status: u16, title: &str, body: String) -> Reply {
-        Reply { status, kind: "text/html; charset=utf-8", body: pages::page(title, &body), location: None, per_visitor: false }
+    fn new(status: u16, kind: &'static str, body: Cow<'static, [u8]>) -> Reply {
+        Reply { status, kind, body, location: None, cache: "public, max-age=30", ranges: false }
+    }
+
+    /// A page; `nav` is the header link it's under ("" for none).
+    fn html(status: u16, title: &str, nav: &str, body: String) -> Reply {
+        Reply::new(status, "text/html; charset=utf-8", pages::page(title, nav, &body).into_bytes().into())
     }
 
     fn json<T: serde::Serialize>(value: &T) -> Reply {
-        Reply { status: 200, kind: "application/json", body: serde_json::to_string(value).unwrap_or_default(), location: None, per_visitor: false }
+        Reply::new(200, "application/json", serde_json::to_vec(value).unwrap_or_default().into())
     }
 
     fn text(status: u16, text: &str) -> Reply {
-        Reply { status, kind: "text/plain; charset=utf-8", body: text.to_string(), location: None, per_visitor: false }
+        Reply::new(status, "text/plain; charset=utf-8", text.as_bytes().to_vec().into())
     }
 
     fn redirect(to: String) -> Reply {
-        Reply { status: 302, kind: "text/plain", body: String::new(), location: Some(to), per_visitor: false }
+        Reply { location: Some(to), ..Reply::new(302, "text/plain", Cow::Borrowed(&[])) }
     }
 
+    /// A clip or its poster: the same for everyone and never changing within a release.
+    fn clip(name: &str, bytes: &'static [u8]) -> Reply {
+        let kind = if name.ends_with(".mp4") { "video/mp4" } else { "image/jpeg" };
+        Reply { cache: "public, max-age=86400", ranges: true, ..Reply::new(200, kind, Cow::Borrowed(bytes)) }
+    }
+
+    /// Pages that differ by the visitor's system (the download button).
     fn per_visitor(mut self) -> Reply {
-        self.per_visitor = true;
+        self.cache = "private, max-age=30";
         self
     }
 }
 
 fn not_found(why: &str) -> Reply {
-    Reply::html(404, "Not found", pages::not_found(why))
+    Reply::html(404, "Not found", "", pages::not_found(why))
 }
 
 /// The reply for a GET of `target` (path and query) from a visitor on `os`.
@@ -191,25 +246,25 @@ fn route(state: &State, target: &str, os: Os) -> Reply {
             let maps = scores.maps(6);
             let plays = scores.play_count();
             drop(scores);
-            Reply::html(200, "osu!taiko, rebuilt", pages::home(&ranked, &maps, ranked.len(), plays, os)).per_visitor()
+            Reply::html(200, "osu!taiko, rebuilt", "", pages::home(&ranked, &maps, ranked.len(), plays, os)).per_visitor()
         }
-        ["rankings"] => Reply::html(200, "Performance Ranking", pages::rankings(&state.scores.lock().unwrap().rankings(RANKINGS))),
+        ["rankings"] => Reply::html(200, "Performance Ranking", "rankings", pages::rankings(&state.scores.lock().unwrap().rankings(RANKINGS))),
         ["api", "rankings"] => Reply::json(&state.scores.lock().unwrap().rankings(RANKINGS)),
-        ["download"] => Reply::html(200, "Download", pages::download(os)).per_visitor(),
+        ["download"] => Reply::html(200, "Download", "download", pages::download(os)).per_visitor(),
         // The search box: /u?name=...
         ["u"] => match query.split('&').find_map(|kv| kv.strip_prefix("name=")) {
             Some(name) if crate::online::valid_name(name) => Reply::redirect(format!("/u/{name}")),
             _ => Reply::redirect("/rankings".into()),
         },
         ["u", name] => match state.profile(name) {
-            Some(p) => Reply::html(200, &p.name, pages::profile(&p)),
+            Some(p) => Reply::html(200, &p.name, "rankings", pages::profile(&p)),
             None => not_found("There is no player by that name"),
         },
         ["api", "u", name] => match state.profile(name) {
             Some(p) => Reply::json(&p),
             None => Reply::text(404, "no such player"),
         },
-        ["beatmaps"] => Reply::html(200, "Beatmaps", pages::beatmaps(&state.scores.lock().unwrap().maps(MAPS))),
+        ["beatmaps"] => Reply::html(200, "Beatmaps", "beatmaps", pages::beatmaps(&state.scores.lock().unwrap().maps(MAPS))),
         ["api", "beatmaps"] => Reply::json(&state.scores.lock().unwrap().maps(MAPS)),
         ["m", hash] | ["api", "m", hash] => {
             let Ok(map) = u64::from_str_radix(hash, 16) else { return not_found("That is not a map link") };
@@ -219,11 +274,31 @@ fn route(state: &State, target: &str, os: Os) -> Reply {
                 return Reply::json(&rows);
             }
             match scores.map(map) {
-                Some(m) => Reply::html(200, &m.name, pages::map_page(&m, &rows)),
+                Some(m) => Reply::html(200, &m.name, "beatmaps", pages::map_page(&m, &rows)),
                 None => not_found("Nobody has sent a play on that map yet"),
             }
         }
+        ["clips", name] => match pages::CLIP_FILES.iter().find(|(f, _)| f == name) {
+            Some((f, bytes)) => Reply::clip(f, bytes),
+            None => not_found("There is no such clip"),
+        },
         ["robots.txt"] => Reply::text(200, "User-agent: *\nAllow: /\n"),
         _ => not_found("There is nothing at this address"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::byte_range;
+
+    #[test]
+    fn byte_ranges() {
+        assert_eq!(byte_range("bytes=0-99", 1000), Some((0, 99)));
+        assert_eq!(byte_range("bytes=900-", 1000), Some((900, 999)));
+        assert_eq!(byte_range("bytes=-100", 1000), Some((900, 999)));
+        assert_eq!(byte_range("bytes=500-5000", 1000), Some((500, 999)));
+        assert_eq!(byte_range("bytes=1000-", 1000), None);
+        assert_eq!(byte_range("bytes=9-3", 1000), None);
+        assert_eq!(byte_range("items=0-1", 1000), None);
     }
 }
