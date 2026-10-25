@@ -186,6 +186,30 @@ fn assert_every_screen_fits() {
         })
         .collect();
     check(&mut s, "select with scores", &mut out);
+    // The online tab: other players, long names and mods, still loading, and the server away.
+    s.board_online = true;
+    let online_rows: Vec<online::OnlineScore> = (0..8)
+        .map(|i| online::OnlineScore {
+            player: if i == 1 { LONG_NAME.into() } else { format!("player{i}") },
+            map: "A - T [Oni]".into(),
+            map_hash: hash,
+            score: 1_234_567 - i * 1000,
+            accuracy: 0.9876,
+            max_combo: 1290,
+            miss: 12,
+            rate: 1.25,
+            mods: ["HD", "HR", "DT", "FL", "PR", "AC", "WV", "SU"].iter().map(|m| m.to_string()).collect(),
+            pp: Some(456.7),
+            date: 1_700_000_000,
+        })
+        .collect();
+    s.cfg.online_user = "player2".into();
+    s.online_boards.insert(hash, (Instant::now(), Ok(online_rows)));
+    check(&mut s, "select online scores", &mut out);
+    s.online_boards.insert(hash, (Instant::now(), Err("the server is offline (connection refused)".into())));
+    check(&mut s, "select online scores, server away", &mut out);
+    s.online_boards.clear();
+    s.board_online = false;
     s.select.menu = Some(ui::SongMenu { row: s.select.cursor(), header: true, x: 2000.0, y: 300.0 });
     check(&mut s, "song menu", &mut out);
     s.select.menu = None;

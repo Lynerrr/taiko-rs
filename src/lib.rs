@@ -245,6 +245,14 @@ struct State {
     /// Working out the pp of scores saved before pp (started once, on the first frame).
     pp_backfill: Option<Receiver<Vec<(PathBuf, f64)>>>,
     pp_backfill_started: bool,
+    /// Plays on their way to the online leaderboards.
+    submits: Vec<Receiver<Result<online::Reply, String>>>,
+    /// The song select leaderboard shows the server's scores, not the local ones.
+    board_online: bool,
+    /// Online leaderboards fetched (by map hash: when, and the rows or why not), and the one
+    /// being fetched.
+    online_boards: std::collections::HashMap<u64, (Instant, Result<Vec<online::OnlineScore>, String>)>,
+    board_fetch: Option<(u64, Receiver<Result<Vec<online::OnlineScore>, String>>)>,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
     /// Mods of the play being loaded.
@@ -466,9 +474,55 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
     }
 }
 
+/// The leaderboard's LOCAL / ONLINE tabs; returns how wide they are.
+fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
+    let mut tx = x;
+    for (label, on) in [("LOCAL", false), ("ONLINE", true)] {
+        let tw = Canvas::text_width(7.0, label) + 10.0;
+        let lit = on == online;
+        let h = Canvas::text_height(7.0) + 3.0;
+        c.round_rect(tx, y - 1.5, tw, h, 3.0, rgba(if lit { accent() } else { 0x1d1d27 }, if lit { 0.9 } else { 1.0 }), rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+        c.text(tx + 5.0, y + 1.5, 7.0, rgba(if lit { 0xffffff } else { 0x8a8aa0 }, 1.0), label);
+        c.hit(tx, y - 1.5, tw, h, render::Hit::BoardTab(on));
+        tx += tw + 4.0;
+    }
+    tx - x - 4.0
+}
+
+/// The server's scores for the selected map: each player's best (`board` None while loading).
+fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option<&Result<Vec<online::OnlineScore>, String>>, me: &str, fits: usize) {
+    let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true);
+    let at = x + 4.0 + tabs_w + 10.0;
+    let note = match board {
+        None => Some("loading...".to_string()),
+        Some(Err(e)) => Some(format!("can't reach the server: {e}")),
+        Some(Ok(rows)) if rows.is_empty() => Some("no online scores yet - log in (F9) and finish a play".to_string()),
+        Some(Ok(_)) => None,
+    };
+    if let Some(note) = note {
+        c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, &note));
+        return;
+    }
+    let Some(Ok(rows)) = board else { return };
+    for (k, r) in rows.iter().take(fits).enumerate() {
+        let ry = y + 14.0 + k as f32 * 18.0;
+        let mine = r.player.eq_ignore_ascii_case(me);
+        c.round_rect(x, ry, w, 16.0, 5.0, rgba(if mine { 0x23232f } else { 0x15151d }, 0.9), rgba(if mine { accent() } else { 0x2a2a38 }, 1.0), 1.0);
+        let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
+        let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods.concat()) };
+        let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
+        let core = format!("#{}  {}  {:08}  {:.2}%  {}x{pp}", k + 1, r.player, r.score, r.accuracy * 100.0, r.max_combo);
+        let room = w - 16.0;
+        let right = Canvas::fit(6.5, room - Canvas::text_width(6.5, &core) - 12.0, &format!("{} miss  {}", r.miss, scores::age(r.date)));
+        let left_room = room - if right.is_empty() { 0.0 } else { Canvas::text_width(6.5, &right) + 8.0 };
+        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
+        c.text_right(x + w - 8.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
+    }
+}
+
 /// Local scores for the selected map, under the song select panel, and the player's pp total.
 fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow], total_pp: f64) {
-    let mut label_w = c.text(x + 4.0, y + 2.0, 7.0, rgba(accent(), 1.0), "LOCAL SCORES");
+    let mut label_w = board_tabs(c, x + 4.0, y + 1.0, false);
     if total_pp > 0.0 {
         label_w += 10.0 + c.text(x + 14.0 + label_w, y + 2.5, 6.0, rgba(0xff8ad8, 1.0), &format!("{total_pp:.0} pp total"));
     }
@@ -499,6 +553,28 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         c.button(bx, ry + 2.0, bw, 12.0, "video", 6.0, render::Hit::ScoreVideo(k), false);
         c.text_right(bx - 6.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
+}
+
+/// Sends a play to the online leaderboards on a background thread.
+fn submit_score(server: String, token: String, play: online::ScoreSubmit) -> Receiver<Result<online::Reply, String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(online::call(&server, online::Request::SubmitScore { token, play: Box::new(play) }));
+    });
+    rx
+}
+
+/// Fetches a map's online leaderboard on a background thread.
+fn fetch_board(server: String, map: u64) -> Receiver<Result<Vec<online::OnlineScore>, String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let rows = online::call(&server, online::Request::MapScores { map }).and_then(|r| match r {
+            online::Reply::Scores(rows) => Ok(rows),
+            _ => Err("odd reply from the server".to_string()),
+        });
+        let _ = tx.send(rows);
+    });
+    rx
 }
 
 /// `file://` URI for a local path.
@@ -5066,9 +5142,14 @@ impl State {
                         let fits = ((436.0 - top - 16.0) / 18.0).floor().max(0.0) as usize;
                         if fits > 0 {
                             let hash = self.library[i].hash();
-                            let rows = scores::top(&self.scores, hash, fits);
-                            self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
-                            draw_leaderboard(canvas, x, top, pw, &rows, scores::total_pp(&self.scores));
+                            if self.board_online {
+                                let board = self.online_board(hash).cloned();
+                                draw_online_leaderboard(canvas, x, top, pw, board.as_ref(), &self.cfg.online_user, fits);
+                            } else {
+                                let rows = scores::top(&self.scores, hash, fits);
+                                self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
+                                draw_leaderboard(canvas, x, top, pw, &rows, scores::total_pp(&self.scores));
+                            }
                         }
                     }
                 }
@@ -5198,6 +5279,34 @@ impl State {
                         };
                         let pp = pp::play_pp(&e.path, &replay.pp_play());
                         results.pp = pp;
+                        // Whole plays go to the online leaderboards too, when logged in.
+                        if from.is_none() && !self.cfg.online_token.is_empty() && !game.mods.unranked() {
+                            let m = &game.map.meta;
+                            let play = online::ScoreSubmit {
+                                map: net::MapInfo {
+                                    hash: replay.map_hash,
+                                    artist: m.artist.clone(),
+                                    title: m.title.clone(),
+                                    version: m.version.clone(),
+                                    rate: replay.rate,
+                                    from: None,
+                                    set_id: m.set_id,
+                                    mods: replay.mods.clone(),
+                                },
+                                score: replay.score,
+                                accuracy: replay.accuracy,
+                                max_combo: replay.max_combo,
+                                great: replay.great,
+                                ok: replay.ok,
+                                miss: replay.miss,
+                                pp,
+                                date: replay.date,
+                                replay_version: replay.version,
+                                inputs: replay.inputs.clone(),
+                            };
+                            self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
+                            self.online_boards.remove(&replay.map_hash);
+                        }
                         match scores::save(&replay, pp) {
                             Ok(row) => {
                                 results.replay = Some(row.file.clone());
@@ -5851,8 +5960,52 @@ impl State {
         }
     }
 
+    /// Plays sent to the online leaderboards, and the leaderboard being fetched.
+    fn poll_online_scores(&mut self) {
+        let mut done = Vec::new();
+        self.submits.retain(|rx| match rx.try_recv() {
+            Ok(r) => {
+                done.push(r);
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        });
+        for r in done {
+            let text = match r {
+                Ok(online::Reply::Submitted { map_rank, pp, rank }) => {
+                    let place = map_rank.map(|r| format!("#{r} on this map")).unwrap_or_else(|| "sent (not your best here)".into());
+                    let total = rank.map(|r| format!("  |  {pp:.0} pp, #{r} overall")).unwrap_or_default();
+                    format!("online: {place}{total}")
+                }
+                // Servers from before scores don't know the request.
+                Err(e) if e == "bad request" => "online: the server doesn't take scores yet".into(),
+                Err(e) => format!("online: score not sent ({e})"),
+                Ok(_) => continue,
+            };
+            self.toast(text);
+        }
+        if let Some((map, rx)) = &self.board_fetch {
+            if let Ok(rows) = rx.try_recv() {
+                let rows = rows.map_err(|e| if e == "bad request" { "the server doesn't keep scores yet".into() } else { e });
+                self.online_boards.insert(*map, (Instant::now(), rows));
+                self.board_fetch = None;
+            }
+        }
+    }
+
+    /// The online leaderboard of map `hash` (fetched in the background; again after a minute).
+    fn online_board(&mut self, hash: u64) -> Option<&Result<Vec<online::OnlineScore>, String>> {
+        let stale = self.online_boards.get(&hash).is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(60));
+        if stale && self.board_fetch.is_none() {
+            self.board_fetch = Some((hash, fetch_board(self.cfg.online_server.clone(), hash)));
+        }
+        self.online_boards.get(&hash).map(|(_, rows)| rows)
+    }
+
     fn poll_downloads(&mut self) {
         self.poll_pp_backfill();
+        self.poll_online_scores();
         #[cfg(target_os = "android")]
         if self.imports_checked.elapsed() >= Duration::from_secs(1) {
             self.imports_checked = Instant::now();
@@ -6063,6 +6216,7 @@ impl State {
                     self.toast(format!("{name} is the host now"));
                 }
             }
+            Hit::BoardTab(online) => self.board_online = online,
             Hit::ScoreVideo(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
                     self.open_video_editor(&file);
@@ -6737,6 +6891,10 @@ impl State {
             scores: scores::load_index(),
             pp_backfill: None,
             pp_backfill_started: false,
+            submits: Vec::new(),
+            board_online: false,
+            online_boards: std::collections::HashMap::new(),
+            board_fetch: None,
             pending_replay: None,
             pending_mods: Mods::NONE,
             mod_select: None,

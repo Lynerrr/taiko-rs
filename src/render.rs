@@ -1471,6 +1471,8 @@ pub enum Hit {
     /// A row of the song select leaderboard (watches that replay) / its video button.
     ScoreRow(usize),
     ScoreVideo(usize),
+    /// The leaderboard's tabs: local (false) or online (true).
+    BoardTab(bool),
     /// Lobby: give the host role to this player.
     GiveHost(u32),
     /// The friends overlay: its chip, its panel (swallows clicks), a tab, a row, a row's button, and a

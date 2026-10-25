@@ -12,6 +12,7 @@ mod net;
 #[allow(dead_code)]
 #[path = "../../src/online.rs"]
 mod online;
+mod scores;
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, Read};
@@ -172,6 +173,7 @@ struct State {
     /// Verified against when the name doesn't exist, so a login takes as long either way.
     dummy_hash: String,
     hub: Mutex<Hub>,
+    scores: Mutex<scores::Scores>,
 }
 
 fn now_secs() -> u64 {
@@ -203,6 +205,8 @@ impl State {
         let cutoff = now_secs().saturating_sub(SESSION_DAYS * 86400);
         accounts.sessions.retain(|_, s| s.created >= cutoff);
         println!("{} accounts, {} sessions ({})", accounts.users.len(), accounts.sessions.len(), path.display());
+        // Scores live next to the accounts.
+        let scores = scores::Scores::load(Some(path.parent().map(|d| d.to_path_buf()).unwrap_or_default()));
         State {
             accounts: Mutex::new(accounts),
             path,
@@ -211,6 +215,7 @@ impl State {
             limits: Mutex::new(HashMap::new()),
             dummy_hash: hash_password("not a real password").expect("argon2"),
             hub: Mutex::new(Hub::default()),
+            scores: Mutex::new(scores),
         }
     }
 
@@ -325,6 +330,27 @@ fn handle(state: &State, stream: TcpStream) {
             reply(&mut reader, Reply::Account { name: name.clone(), token });
             social_session(state, reader, name);
             return;
+        }
+        Request::SubmitScore { token, play } => {
+            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to send scores".into())) };
+            let key = name.to_ascii_lowercase();
+            let map = format!("{} - {} [{}]", play.map.artist, play.map.title, play.map.version);
+            match state.scores.lock().unwrap().submit(&key, &name, *play, now_secs()) {
+                Ok((map_rank, pp, rank)) => {
+                    println!("score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total");
+                    Reply::Submitted { map_rank, pp, rank }
+                }
+                Err(e) => Reply::Error(e),
+            }
+        }
+        Request::MapScores { map } => Reply::Scores(state.scores.lock().unwrap().map_scores(map)),
+        Request::Profile { name } => {
+            let key = name.trim().to_ascii_lowercase();
+            let user = state.accounts.lock().unwrap().users.get(&key).map(|u| (u.name.clone(), u.created));
+            match user {
+                Some((name, joined)) => Reply::Profile(Box::new(state.scores.lock().unwrap().profile(&key, &name, joined))),
+                None => Reply::Error("no such player".into()),
+            }
         }
         Request::JoinRoom { token, room } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to join a lobby".into())) };

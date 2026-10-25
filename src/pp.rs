@@ -51,9 +51,9 @@ pub fn play_pp(path: &Path, p: &Play) -> Option<f64> {
 
 /// A player's total: their best pp per map, highest first, each counting 5% less than the one
 /// before (osu!'s weighting).
-pub fn total(mut best: Vec<f64>) -> f64 {
-    best.sort_by(|a, b| b.total_cmp(a));
-    best.iter().enumerate().map(|(i, pp)| pp * 0.95f64.powi(i as i32)).sum()
+pub fn total(best: Vec<f64>) -> f64 {
+    // The server's formula, so local and online totals agree.
+    crate::online::weighted_pp(best)
 }
 
 #[cfg(test)]
