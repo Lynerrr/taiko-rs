@@ -22,7 +22,7 @@ Linux (Wayland) · Windows · Android
 | Platform | |
 | --- | --- |
 | 🐧 **Linux** | `curl -fsSL https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.sh \| sh` |
-| 🪟 **Windows** | `irm https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.ps1 \| iex` |
+| 🪟 **Windows** | run [`taiko-rs-windows-x64-setup.exe`](https://github.com/Lynerrr/taiko-rs/releases/download/latest/taiko-rs-windows-x64-setup.exe), or in PowerShell: `irm https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.ps1 \| iex` |
 | 🤖 **Android** | grab `taiko-rs-android.apk` from the [latest release](https://github.com/Lynerrr/taiko-rs/releases/tag/latest) (8.0+, arm64) |
 
 No root or admin needed. It finds your osu! Songs folder (osu-winello and Wine too); if yours is

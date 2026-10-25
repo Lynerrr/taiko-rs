@@ -2,3 +2,4 @@
 /.claude
 /server/target
 /server/deploy/taiko-server
+/taiko-rs-windows-x64-setup.exe

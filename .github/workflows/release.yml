@@ -44,10 +44,33 @@ jobs:
           Copy-Item assets/taiko-rs.ico dist/
           Compress-Archive -Path dist/* -DestinationPath taiko-rs-windows-x64.zip
 
+      # windows/installer.iss. The runner image may or may not have Inno Setup (6 or 7).
+      - name: Installer
+        shell: pwsh
+        run: |
+          $find = { Get-ChildItem "$env:ProgramFiles\Inno Setup *\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup *\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1 }
+          $iscc = & $find
+          if (-not $iscc) { choco install innosetup -y --no-progress; $iscc = & $find }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          & $iscc.FullName /Q "/DAppVersion=$version" windows\installer.iss
+          if ($LASTEXITCODE) { throw "ISCC failed" }
+
+          # Install and uninstall it the way a user would, silently.
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\taiko-rs'
+          Start-Process .\taiko-rs-windows-x64-setup.exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
+          if (-not (Test-Path "$dir\taiko-rs.exe")) { throw "the installer didn't install taiko-rs.exe" }
+          if (-not (Test-Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'taiko-rs.lnk'))) { throw "no Start menu shortcut" }
+          Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
+          # The uninstaller finishes from a copy of itself in %TEMP%.
+          for ($i = 0; $i -lt 30 -and (Test-Path "$dir\taiko-rs.exe"); $i++) { Start-Sleep 1 }
+          if (Test-Path "$dir\taiko-rs.exe") { throw "the uninstaller left taiko-rs.exe" }
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: taiko-rs-windows-x64.zip
+          path: |
+            taiko-rs-windows-x64.zip
+            taiko-rs-windows-x64-setup.exe
 
   linux:
     # The oldest runner whose PipeWire headers the pipewire crate builds against (22.04's 0.3.48
@@ -159,8 +182,8 @@ jobs:
           # Recreate the release so its tag always points at this commit.
           gh release delete latest --yes --cleanup-tag || true
           raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/worktree-taiko-client"
-          notes=$(printf 'Build of %s.\n\nInstall or update on Windows (PowerShell):\n```powershell\nirm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | sh\n```\n\nOn Android (8.0+, 64-bit ARM): install `taiko-rs-android.apk`.' "$GITHUB_SHA" "$raw" "$raw")
-          gh release create latest taiko-rs-windows-x64.zip taiko-rs-linux-x64.tar.gz taiko-rs-android.apk --title "taiko-rs (latest build)" --notes "$notes" --target "$GITHUB_SHA"
+          notes=$(printf 'Build of %s.\n\nOn Windows: run `taiko-rs-windows-x64-setup.exe`, or install or update from PowerShell:\n```powershell\nirm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | sh\n```\n\nOn Android (8.0+, 64-bit ARM): install `taiko-rs-android.apk`.' "$GITHUB_SHA" "$raw" "$raw")
+          gh release create latest taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-android.apk --title "taiko-rs (latest build)" --notes "$notes" --target "$GITHUB_SHA"
 
       - name: Publish "dev" pre-release
         if: github.ref == 'refs/heads/dev'
@@ -171,7 +194,7 @@ jobs:
           gh release delete dev --yes --cleanup-tag || true
           raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/worktree-taiko-client"
           notes=$(printf 'Test build of %s (the `dev` branch); it may be broken.\n\nIn the game: Settings -> Updates -> Build channel: dev, then Update. Or install it directly on Windows (PowerShell):\n```powershell\n$env:TAIKO_RS_CHANNEL="dev"; irm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | TAIKO_RS_CHANNEL=dev sh\n```' "$GITHUB_SHA" "$raw" "$raw")
-          gh release create dev taiko-rs-windows-x64.zip taiko-rs-linux-x64.tar.gz taiko-rs-android.apk --title "taiko-rs (dev build)" --notes "$notes" --target "$GITHUB_SHA" --prerelease --latest=false
+          gh release create dev taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-android.apk --title "taiko-rs (dev build)" --notes "$notes" --target "$GITHUB_SHA" --prerelease --latest=false
 
   # Runs the same one-line install command users run, on a fresh machine, against the release
   # that was just published.
