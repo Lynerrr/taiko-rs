@@ -186,6 +186,26 @@ fn assert_every_screen_fits() {
         })
         .collect();
     check(&mut s, "select with scores", &mut out);
+    // Many scores, scrolled, with the song list and the preview dragged to their limits.
+    let more: Vec<scores::ScoreRow> = (5..40)
+        .map(|i| {
+            let mut r = s.scores[0].clone();
+            r.date += i;
+            r.score -= i * 1000;
+            r
+        })
+        .collect();
+    s.scores.extend(more);
+    for (share, size) in [(ui::LIST_SHARE.0, preview::PREVIEW_SIZE.0), (ui::LIST_SHARE.1, preview::PREVIEW_SIZE.0), (ui::LIST_SHARE.1, preview::PREVIEW_SIZE.1), (ui::LIST_SHARE.0, preview::PREVIEW_SIZE.1)] {
+        s.cfg.song_list_share = share;
+        s.cfg.song_preview_size = size;
+        s.board_scroll = 10;
+        check(&mut s, &format!("select resized {share} {size}"), &mut out);
+    }
+    s.cfg.song_list_share = ui::LIST_SHARE.2;
+    s.cfg.song_preview_size = preview::PREVIEW_SIZE.1;
+    s.scores.truncate(5);
+    s.board_scroll = 0;
     // The online tab: other players, long names and mods, still loading, and the server away.
     s.board_online = true;
     let online_rows: Vec<online::OnlineScore> = (0..8)
@@ -207,6 +227,9 @@ fn assert_every_screen_fits() {
     s.cfg.online_user = "player2".into();
     s.online_boards.insert(hash, (Instant::now(), Ok(online_rows)));
     check(&mut s, "select online scores", &mut out);
+    s.board_scroll = 3;
+    check(&mut s, "select online scores scrolled", &mut out);
+    s.board_scroll = 0;
     s.online_boards.insert(hash, (Instant::now(), Err("the server is offline (connection refused)".into())));
     check(&mut s, "select online scores, server away", &mut out);
     s.online_boards.clear();
@@ -465,6 +488,13 @@ fn assert_every_screen_fits() {
     opened.replay_error = Some("that replay isn't on the server".into());
     s.scene = Scene::Results { results: opened, entry: 0, from: None };
     check(&mut s, "results of an online score", &mut out);
+    // Scrolled down to the pp.
+    for failed in [false, true] {
+        let mut r = results(failed);
+        (r.scroll, r.scroll_to) = (ui::RESULTS_SCROLL, ui::RESULTS_SCROLL);
+        s.scene = Scene::Results { results: r, entry: 0, from: None };
+        check(&mut s, if failed { "results failed, performance" } else { "results, performance" }, &mut out);
+    }
     s.mp_menu.account = None;
     s.me = None;
     s.scene = Scene::Select;

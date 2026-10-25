@@ -284,6 +284,16 @@ struct State {
     shapeshift_setup: Option<shapeshift::Setup>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
     leaderboard: Vec<PathBuf>,
+    /// The leaderboard's rows scrolled past, for which map and tab (a new one starts at the
+    /// top), how far it goes, and where its rows were drawn (for the wheel).
+    board_scroll: usize,
+    board_for: (u64, bool),
+    board_max: usize,
+    board_rect: Option<[f32; 4]>,
+    /// A song select divider being dragged: which, where the pointer started (virtual units)
+    /// and the size it had then; and the last press on one (a second soon after resets it).
+    split_drag: Option<(render::Hit, f32, f32)>,
+    split_click: Option<(render::Hit, Instant)>,
     online_leaderboard: Vec<online::OnlineScore>,
     /// A video export in progress, and the editor's last message.
     export: Option<video::Export>,
@@ -537,7 +547,7 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
 }
 
 /// The server's scores for the selected map: each player's best (`board` None while loading).
-fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option<&Result<Vec<online::OnlineScore>, String>>, me: &str, fits: usize) {
+fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option<&Result<Vec<online::OnlineScore>, String>>, me: &str, fits: usize, first: usize) {
     let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true);
     let at = x + 4.0 + tabs_w + 10.0;
     let note = match board {
@@ -552,7 +562,9 @@ fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option
     }
     let Some(Ok(rows)) = board else { return };
     c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, w - 20.0 - tabs_w, "click: results and replay"));
-    for (k, r) in rows.iter().take(fits).enumerate() {
+    let shown = rows.len().saturating_sub(first).min(fits);
+    board_scrollbar(c, x + w + 5.0, y + 14.0, shown.max(1), first, rows.len());
+    for (k, r) in rows.iter().skip(first).take(fits).enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
         let mine = r.player.eq_ignore_ascii_case(me);
         let hover = c.hovered(x, ry, w, 16.0);
@@ -562,17 +574,18 @@ fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods.concat()) };
         let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!("#{}  {}  {:08}  {:.2}%{pp}  {}x", k + 1, r.player, r.score, r.accuracy * 100.0, r.max_combo);
+        let core = format!("#{}  {}  {:08}  {:.2}%{pp}  {}x", first + k + 1, r.player, r.score, r.accuracy * 100.0, r.max_combo);
         let room = w - 16.0;
         let right = Canvas::fit(6.5, room - Canvas::text_width(6.5, &core) - 12.0, &format!("{} miss  {}", r.miss, scores::age(r.date)));
         let left_room = room - if right.is_empty() { 0.0 } else { Canvas::text_width(6.5, &right) + 8.0 };
-        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
+        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
         c.text_right(x + w - 8.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
 }
 
-/// Local scores for the selected map, under the song select panel.
-fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow]) {
+/// Local scores for the selected map, under the song select panel: `rows` from place `first`
+/// on, of `total`.
+fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow], first: usize, total: usize) {
     let label_w = board_tabs(c, x + 4.0, y + 1.0, false);
     if rows.is_empty() {
         let at = x + 4.0 + label_w + 14.0;
@@ -589,7 +602,7 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods) };
         let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!("#{}  {:08}  {:.2}%{pp}  {}x", k + 1, r.score, r.accuracy * 100.0, r.max_combo);
+        let core = format!("#{}  {:08}  {:.2}%{pp}  {}x", first + k + 1, r.score, r.accuracy * 100.0, r.max_combo);
         // The video button sits on top of the row (drawn after it, so it wins the click).
         let bw = Canvas::text_width(6.0, "video") + 12.0;
         let bx = x + w - bw - 3.0;
@@ -597,10 +610,38 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         let room = bx - 6.0 - (x + 8.0);
         let right = Canvas::fit(6.5, room - Canvas::text_width(6.5, &core) - 12.0, &format!("{}  {} miss  {}", r.player, r.miss, scores::age(r.date)));
         let left_room = room - if right.is_empty() { 0.0 } else { Canvas::text_width(6.5, &right) + 8.0 };
-        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
+        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
         c.button(bx, ry + 2.0, bw, 12.0, "video", 6.0, render::Hit::ScoreVideo(k), false);
         c.text_right(bx - 6.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
+    board_scrollbar(c, x + w + 5.0, y + 14.0, rows.len().max(1), first, total.max(rows.len()));
+}
+
+/// A song select divider in `rect` (`upright`: between left and right, else between top and
+/// bottom): a short grip, lit along its length while hovered or dragged.
+fn draw_divider(c: &mut Canvas, [x, y, w, h]: [f32; 4], upright: bool, dragging: bool, hit: render::Hit) {
+    let lit = dragging || c.hovered(x, y, w, h);
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    if upright {
+        let len = if lit { h } else { 28.0 };
+        c.round_rect(cx - 1.0, cy - len / 2.0, 2.0, len, 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
+    } else {
+        let len = if lit { w } else { 28.0 };
+        c.round_rect(cx - len / 2.0, cy - 1.0, len, 2.0, 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
+    }
+    c.hit(x, y, w, h, hit);
+}
+
+/// A leaderboard's scroll bar right of its rows, when there are more than the `shown`.
+fn board_scrollbar(c: &mut Canvas, x: f32, y: f32, shown: usize, first: usize, total: usize) {
+    if total <= shown || shown == 0 {
+        return;
+    }
+    let h = shown as f32 * 18.0 - 2.0;
+    let thumb = (h * shown as f32 / total as f32).max(10.0);
+    let at = (h - thumb) * first as f32 / (total - shown) as f32;
+    c.round_rect(x, y, 3.0, h, 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+    c.round_rect(x, y + at, 3.0, thumb, 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
 }
 
 /// Sends a play to the online leaderboards on a background thread.
@@ -1284,6 +1325,24 @@ impl State {
         self.scene = Scene::Loading { rx, label, entry, from: None };
     }
 
+    /// Song select's layout as it comes: the list's share and the preview's size.
+    fn song_layout_is_default(&self) -> bool {
+        let d = Config::default();
+        (self.cfg.song_list_share - d.song_list_share).abs() < 1e-4 && (self.cfg.song_preview_size - d.song_preview_size).abs() < 1e-4
+    }
+
+    /// Puts song select's divider `which` (both: None) back where it was at first.
+    fn reset_song_layout(&mut self, which: Option<render::Hit>) {
+        let d = Config::default();
+        if which != Some(render::Hit::SplitPreview) {
+            self.cfg.song_list_share = d.song_list_share;
+        }
+        if which != Some(render::Hit::SplitList) {
+            self.cfg.song_preview_size = d.song_preview_size;
+        }
+        self.cfg.save();
+    }
+
     /// The results screen of a local score on the selected map (its leaderboard row).
     fn open_local_score(&mut self, file: &std::path::Path) {
         let Some(entry) = self.select.selected() else { return };
@@ -1624,6 +1683,8 @@ impl State {
                 }
             }
             Item::Changelog => "Enter to read".into(),
+            Item::SongSelectLayout if self.song_layout_is_default() => "default".into(),
+            Item::SongSelectLayout => "custom, Enter: default".into(),
             Item::KrokodilKoban => String::new(),
             Item::Fullscreen => on(self.fullscreen),
             Item::WindowSize if self.fullscreen => format!("fullscreen ({:.0}x{:.0})", self.window_w, self.window_h),
@@ -1756,7 +1817,7 @@ impl State {
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::CheckUpdates => self.cfg.check_updates = !self.cfg.check_updates,
             // Acts on Enter in `settings_key`.
-            Item::Update | Item::Changelog | Item::KrokodilKoban => return,
+            Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout => return,
             Item::Fullscreen => self.toggle_fullscreen(window),
             Item::WindowSize => {
                 // The next size up or down from the window's, in its aspect ratio while there is
@@ -2758,6 +2819,10 @@ impl State {
                 Ok(()) => self.quit = true,
                 Err(e) => self.toast(e),
             },
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SongSelectLayout => {
+                self.reset_song_layout(None);
+                self.toast("song select: the usual layout".into());
+            }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Changelog => self.changelog = Some(changelog::View::recent(false)),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
                 self.cfg.playfield_area = Area::FULL;
@@ -3422,6 +3487,15 @@ impl State {
             return;
         }
         let (vx, vy) = self.mouse_virtual();
+        if let Scene::Results { results, .. } = &mut self.scene {
+            results.scroll_by(-notches as f32 * 60.0);
+            return;
+        }
+        let on_board = self.board_rect.is_some_and(|[bx, by, bw, bh]| vx >= bx && vx <= bx + bw && vy >= by && vy <= by + bh);
+        if matches!(self.scene, Scene::Select) && on_board && self.select.picker.is_none() {
+            self.board_scroll = (self.board_scroll as i64 - notches as i64).clamp(0, self.board_max as i64) as usize;
+            return;
+        }
         match &self.scene {
             Scene::Select if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Select if self.select.picker.is_some() => {
@@ -3556,6 +3630,29 @@ impl State {
             }
             self.right_scroll = false;
         }
+        if let Some((h, from, start)) = self.split_drag {
+            if !matches!(self.scene, Scene::Select) {
+                self.split_drag = None;
+            } else {
+                let (vx, vy) = self.mouse_virtual();
+                let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
+                // A drag, not the first click of a double click.
+                if (if h == render::Hit::SplitList { vx } else { vy } - from).abs() > 3.0 {
+                    self.split_click = None;
+                }
+                if h == render::Hit::SplitList {
+                    // Kept where the list's width still follows it.
+                    if let Some((min, max)) = Select::share_range(width) {
+                        self.cfg.song_list_share = (start + (vx - from) / width).clamp(min, max);
+                    }
+                    return CursorIcon::EwResize;
+                }
+                let (min, max) = preview::PREVIEW_SIZE;
+                let max = self.preview.size_cap.clamp(min, max);
+                self.cfg.song_preview_size = (start + (vy - from) / self.preview.size_unit.max(1.0)).clamp(min, max);
+                return CursorIcon::NsResize;
+            }
+        }
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
         let (vx, vy) = self.mouse_virtual();
         let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
@@ -3608,7 +3705,11 @@ impl State {
                     game.paused = Some(i);
                 }
                 self.hover = None;
-                return CursorIcon::Pointer;
+                return match hit {
+                    render::Hit::SplitList => CursorIcon::EwResize,
+                    render::Hit::SplitPreview => CursorIcon::NsResize,
+                    _ => CursorIcon::Pointer,
+                };
             }
         }
         if matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
@@ -3835,6 +3936,10 @@ impl State {
         }
         if !pressed {
             self.scrollbar_drag = false;
+            if self.split_drag.take().is_some() {
+                self.cfg.save();
+                return;
+            }
             if let Some(d) = self.list_drag.take() {
                 if d.moved {
                     self.select.drag_end(&self.library);
@@ -3853,6 +3958,21 @@ impl State {
             }
             if self.select.menu.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::SongMenu(_))) {
                 self.select.menu = None;
+                return;
+            }
+            if let (Scene::Select, Some(h @ (render::Hit::SplitList | render::Hit::SplitPreview))) = (&self.scene, hit) {
+                // Twice in quick succession: back to the usual size.
+                let now = Instant::now();
+                if self.split_click.take().is_some_and(|(last, at)| last == h && now.duration_since(at) < Duration::from_millis(400)) {
+                    self.reset_song_layout(Some(h));
+                    return;
+                }
+                self.split_click = Some((h, now));
+                let (from, start) = match h {
+                    render::Hit::SplitList => (vx, self.cfg.song_list_share),
+                    _ => (vy, self.preview.size_shown),
+                };
+                self.split_drag = Some((h, from, start));
                 return;
             }
             // A row acts on release, unless the press turns into dragging the list.
@@ -5818,6 +5938,15 @@ impl State {
                 KeyCode::KeyR if self.modifiers_ctrl => self.restart_map(),
                 _ => {}
             },
+            Scene::Results { results, .. } if matches!(code, KeyCode::ArrowDown | KeyCode::ArrowUp | KeyCode::PageDown | KeyCode::PageUp | KeyCode::Home | KeyCode::End) => {
+                let by = match code {
+                    KeyCode::ArrowDown => 60.0,
+                    KeyCode::ArrowUp => -60.0,
+                    KeyCode::PageDown | KeyCode::End => ui::RESULTS_SCROLL,
+                    _ => -ui::RESULTS_SCROLL,
+                };
+                results.scroll_by(by);
+            }
             Scene::Results { .. } if code == KeyCode::KeyR && self.modifiers_ctrl => self.restart_map(),
             Scene::Results { results, .. } if code == KeyCode::KeyV && results.replay.is_some() => {
                 if let Some(file) = results.replay.clone() {
@@ -6078,14 +6207,20 @@ impl State {
                 };
                 let (stars, rate) = (&self.stars, self.play_speed().0);
                 self.select.instant = self.right_scroll || self.scrollbar_drag;
+                self.select.list_share = self.cfg.song_list_share;
                 self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate));
-                let x = 24.0 + Select::list_width(canvas.width) + 12.0;
+                let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
+                let x = 24.0 + lw + 12.0;
                 let pw = canvas.width - x - 24.0;
+                self.board_rect = None;
+                self.preview.size = self.cfg.song_preview_size;
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
                 self.leaderboard.clear();
                 if pw > 160.0 {
                     let status = self.select.selected().and_then(|i| self.map_status(i));
-                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, 380.0, self.cfg.scroll_speed, selected_stars, Some(("Play from", "Shift+Enter")), status) {
+                    // No taller than leaves the leaderboard three rows (its tabs, rows and gaps).
+                    let panel_h = 436.0 - 54.0 - 8.0 - (16.0 + 3.0 * 18.0 + 14.0);
+                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, panel_h, self.cfg.scroll_speed, selected_stars, Some(("Play from", "Shift+Enter")), status) {
                         self.frame_clip = Some(clip);
                     }
                     if let Some(i) = self.select.selected() {
@@ -6093,20 +6228,38 @@ impl State {
                         let fits = ((436.0 - top - 16.0) / 18.0).floor().max(0.0) as usize;
                         if fits > 0 {
                             let hash = self.library[i].hash();
+                            if self.board_for != (hash, self.board_online) {
+                                self.board_for = (hash, self.board_online);
+                                self.board_scroll = 0;
+                            }
+                            self.board_rect = Some([x, top + 12.0, pw, fits as f32 * 18.0]);
                             if self.board_online {
                                 let board = self.online_board(hash).cloned();
-                                draw_online_leaderboard(canvas, x, top, pw, board.as_ref(), &self.cfg.online_user, fits);
+                                let total = board.as_ref().and_then(|b| b.as_ref().ok()).map_or(0, Vec::len);
+                                self.board_max = total.saturating_sub(fits);
+                                self.board_scroll = self.board_scroll.min(self.board_max);
+                                draw_online_leaderboard(canvas, x, top, pw, board.as_ref(), &self.cfg.online_user, fits, self.board_scroll);
                                 self.online_leaderboard = match board {
-                                    Some(Ok(rows)) => rows.into_iter().take(fits).collect(),
+                                    Some(Ok(rows)) => rows.into_iter().skip(self.board_scroll).take(fits).collect(),
                                     _ => Vec::new(),
                                 };
                             } else {
-                                let rows = scores::top(&self.scores, hash, fits);
+                                let all = scores::top(&self.scores, hash, usize::MAX);
+                                self.board_max = all.len().saturating_sub(fits);
+                                self.board_scroll = self.board_scroll.min(self.board_max);
+                                let rows: Vec<&scores::ScoreRow> = all.iter().skip(self.board_scroll).take(fits).copied().collect();
                                 self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
-                                draw_leaderboard(canvas, x, top, pw, &rows);
+                                draw_leaderboard(canvas, x, top, pw, &rows, self.board_scroll, all.len());
                             }
                         }
+                        // The panel's bottom edge: dragged up, the preview shrinks and the
+                        // leaderboard gets more rows.
+                        let dragging = matches!(self.split_drag, Some((render::Hit::SplitPreview, ..)));
+                        draw_divider(canvas, [x, self.preview.panel_bottom + 1.0, pw, 6.0], false, dragging, render::Hit::SplitPreview);
                     }
+                    // The song list's right edge.
+                    let dragging = matches!(self.split_drag, Some((render::Hit::SplitList, ..)));
+                    draw_divider(canvas, [24.0 + lw + 2.0, 54.0, 8.0, 382.0], true, dragging, render::Hit::SplitList);
                 }
                 if self.picking_lobby_map {
                     let w = canvas.width;
@@ -6299,6 +6452,7 @@ impl State {
             }
             Scene::Results { results, .. } => {
                 results.poll();
+                results.animate(canvas.dt_ms);
                 // Back to the preview point when the song ends, like osu!.
                 if let (Some((track, again)), Some(a)) = (&results.music, &self.audio) {
                     let end = track.frames() as f64 / a.rate as f64 * 1000.0;
@@ -6311,7 +6465,8 @@ impl State {
             Scene::Download => {
                 let installed = self.installed_sets.take().unwrap_or_default();
                 let dir = self.songs_dir.display().to_string();
-                let lw = Select::list_width(canvas.width);
+                let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
+                self.preview.size = self.cfg.song_preview_size;
                 self.browse.draw(canvas, &self.downloads, &installed, &dir, lw);
                 self.installed_sets = Some(installed);
                 // The selected set's preview, like song select's.
@@ -7292,6 +7447,8 @@ impl State {
                 None => self.goto_tab(2),
             },
             Hit::Overlay => {}
+            // Dragged (`mouse_button`).
+            Hit::SplitList | Hit::SplitPreview => {}
             Hit::ScoreVideo(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
                     self.open_video_editor(&file);
@@ -8073,6 +8230,12 @@ impl State {
             universe_setup: None,
             shapeshift_setup: None,
             leaderboard: Vec::new(),
+            board_scroll: 0,
+            board_for: (0, false),
+            board_max: 0,
+            board_rect: None,
+            split_drag: None,
+            split_click: None,
             online_leaderboard: Vec::new(),
             export: None,
             video_status: String::new(),

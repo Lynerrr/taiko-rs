@@ -25,6 +25,8 @@ pub enum Item {
     ResumeDelay,
     Interface,
     InterfaceHides,
+    /// Song select's layout (dragged): Enter puts it back.
+    SongSelectLayout,
     InterfaceKey,
     /// Which skin each part of the playfield and interface comes from.
     SkinParts,
@@ -83,7 +85,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 102] = [
+pub const ITEMS: [(&str, Item); 103] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -95,6 +97,7 @@ pub const ITEMS: [(&str, Item); 102] = [
     ("GAMEPLAY", Item::Interface),
     ("GAMEPLAY", Item::InterfaceHides),
     ("GAMEPLAY", Item::InterfaceKey),
+    ("GAMEPLAY", Item::SongSelectLayout),
     ("PLAYFIELD", Item::PlayfieldArea),
     ("PLAYFIELD", Item::PlayfieldPreset),
     ("PLAYFIELD", Item::PlayfieldReset),
@@ -246,6 +249,7 @@ impl Item {
             Item::Interface => "Interface",
             Item::InterfaceHides => "Interface toggle hides",
             Item::InterfaceKey => "Interface toggle key",
+            Item::SongSelectLayout => "Song select layout",
             Item::Key(i) => KEY_LABELS[i],
             Item::PresetKey(0) => "Previous preset key",
             Item::PresetKey(_) => "Next preset key",
@@ -357,7 +361,7 @@ impl Item {
             | Item::Fullscreen
             | Item::DiscordPresence => Kind::Toggle,
             Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => Kind::Key,
-            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SkinFolder => Kind::Action,
+            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout | Item::SkinFolder => Kind::Action,
         }
     }
 
@@ -417,6 +421,7 @@ impl Item {
             Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko-rs restarts into it.",
             // No explanation: krokodil_koban knows.
             Item::KrokodilKoban => "",
+            Item::SongSelectLayout => "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
             Item::Changelog => "Enter: the latest changes. They also show by themselves after an update.",
             Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",
             Item::Fullscreen => "Shortcut: F11.",

@@ -348,3 +348,149 @@ fn the_friends_overlay_closes_on_a_click_outside_it_and_slides_away() {
     s.build_frame(&mut c, Instant::now(), 853.3);
     assert!(!s.hits.iter().any(|h| matches!(h.hit, render::Hit::SocialPanel)));
 }
+
+/// Song select with 40 scores on the selected map (the window is 1920x1080: 2.25 px per unit).
+fn select_with_scores() -> State {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let hash = s.library[s.select.selected().unwrap()].hash();
+    s.scores = (0..40)
+        .map(|i| scores::ScoreRow {
+            map_hash: hash,
+            date: 1_700_000_000 + i,
+            score: 1_000_000 - i * 1000,
+            accuracy: 0.99,
+            max_combo: 100,
+            miss: 0,
+            rate: 1.0,
+            player: "me".into(),
+            file: PathBuf::from(format!("/nonexistent/{i}.json")),
+            mods: String::new(),
+            pp: None,
+        })
+        .collect();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s
+}
+
+fn point(s: &mut State, x: f32, y: f32) {
+    s.mouse_moved(x as f64 * 2.25, y as f64 * 2.25);
+}
+
+#[test]
+fn song_select_dividers_drag_within_limits_and_reset() {
+    let mut s = select_with_scores();
+    let w = 853.3333f32;
+    let frame = |s: &mut State| s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // The song list's edge, dragged right, then far past its limit.
+    let lw = Select::list_width(w, s.cfg.song_list_share);
+    point(&mut s, 24.0 + lw + 6.0, 240.0);
+    assert_eq!(s.hit_at(24.0 + lw + 6.0, 240.0), Some(render::Hit::SplitList));
+    s.mouse_button(true, None);
+    point(&mut s, 24.0 + lw + 6.0 + 40.0, 240.0);
+    assert!((s.cfg.song_list_share - (ui::LIST_SHARE.2 + 40.0 / w)).abs() < 0.002, "{}", s.cfg.song_list_share);
+    point(&mut s, w, 240.0);
+    s.mouse_button(false, None);
+    assert!(s.split_drag.is_none());
+    let widest = Select::list_width(w, s.cfg.song_list_share);
+    assert!(s.cfg.song_list_share <= ui::LIST_SHARE.1 && w - 24.0 - widest - 12.0 - 24.0 >= 219.9, "the panel keeps its room: {widest}");
+    // And far left: the list keeps its room too.
+    frame(&mut s);
+    point(&mut s, 24.0 + widest + 6.0, 240.0);
+    s.mouse_button(true, None);
+    point(&mut s, 0.0, 240.0);
+    s.mouse_button(false, None);
+    let narrowest = Select::list_width(w, s.cfg.song_list_share);
+    assert!(s.cfg.song_list_share >= ui::LIST_SHARE.0 && narrowest >= 259.9, "{narrowest}");
+
+    // A double click on it puts it back.
+    frame(&mut s);
+    point(&mut s, 24.0 + narrowest + 6.0, 240.0);
+    for _ in 0..2 {
+        s.mouse_button(true, None);
+        s.mouse_button(false, None);
+    }
+    assert_eq!(s.cfg.song_list_share, ui::LIST_SHARE.2);
+
+    // The panel's bottom edge, dragged up: the preview shrinks (no smaller than its limit) and
+    // more of the leaderboard shows.
+    frame(&mut s);
+    let rows_before = s.leaderboard.len();
+    let edge = s.preview.panel_bottom + 4.0;
+    let mid = 24.0 + Select::list_width(w, s.cfg.song_list_share) + 12.0 + 100.0;
+    point(&mut s, mid, edge);
+    assert_eq!(s.hit_at(mid, edge), Some(render::Hit::SplitPreview));
+    s.mouse_button(true, None);
+    point(&mut s, mid, edge - 1000.0);
+    s.mouse_button(false, None);
+    assert_eq!(s.cfg.song_preview_size, preview::PREVIEW_SIZE.0);
+    frame(&mut s);
+    assert!(s.preview.panel_bottom < edge - 4.0, "{} vs {edge}", s.preview.panel_bottom);
+    assert!(s.leaderboard.len() > rows_before, "{} rows, {rows_before} before", s.leaderboard.len());
+
+    // Settings > Gameplay puts the whole layout back.
+    s.cfg.song_list_share = ui::LIST_SHARE.1;
+    s.open_settings();
+    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::SongSelectLayout).unwrap();
+    assert!(s.setting_value(Item::SongSelectLayout).starts_with("custom"));
+    s.key(KeyCode::Enter, false, None, Instant::now(), None);
+    assert_eq!((s.cfg.song_list_share, s.cfg.song_preview_size), (ui::LIST_SHARE.2, preview::PREVIEW_SIZE.1));
+    assert_eq!(s.setting_value(Item::SongSelectLayout), "default");
+}
+
+#[test]
+fn the_leaderboard_scrolls_with_the_wheel() {
+    let mut s = select_with_scores();
+    // Room for a few rows whatever the map's title (a long one wraps, making the panel taller).
+    s.cfg.song_preview_size = preview::PREVIEW_SIZE.0;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let [bx, by, bw, bh] = s.board_rect.expect("a leaderboard");
+    let shown = s.leaderboard.len();
+    assert!(shown > 0 && shown < 40);
+    point(&mut s, bx + bw / 2.0, by + bh / 2.0);
+    let cursor = s.select.cursor();
+    s.wheel(-2);
+    assert_eq!(s.board_scroll, 2);
+    assert_eq!(s.select.cursor(), cursor, "the song list stays");
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // The rows shown start at the 3rd best: a click opens the one clicked.
+    assert_eq!(s.leaderboard[0], PathBuf::from("/nonexistent/2.json"));
+    // No further than the last score.
+    s.wheel(-1000);
+    assert_eq!(s.board_scroll, 40 - shown);
+    s.wheel(1000);
+    assert_eq!(s.board_scroll, 0);
+    // The other tab starts at the top.
+    s.wheel(-3);
+    s.click(render::Hit::BoardTab(true), None);
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert_eq!(s.board_scroll, 0);
+}
+
+#[test]
+fn the_results_scroll_down_to_the_pp_and_back() {
+    let mut s = select_with_scores();
+    let mut r = ui::Results::new("map".into(), game::Stats { great: 10, ..Default::default() }, game::Windows::new(5.0));
+    r.no_pp = Some("no pp here");
+    s.scene = Scene::Results { results: r, entry: 0, from: None };
+    let scroll = |s: &State| match &s.scene {
+        Scene::Results { results, .. } => results.scroll_to,
+        _ => panic!("left the results"),
+    };
+    s.wheel(-2);
+    assert_eq!(scroll(&s), 120.0);
+    s.key(KeyCode::PageDown, false, None, Instant::now(), None);
+    assert_eq!(scroll(&s), ui::RESULTS_SCROLL);
+    s.wheel(-5);
+    assert_eq!(scroll(&s), ui::RESULTS_SCROLL, "no further than the pp");
+    s.key(KeyCode::Home, false, None, Instant::now(), None);
+    assert_eq!(scroll(&s), 0.0);
+    // The hint under the buttons goes there too.
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.click(render::Hit::Key(KeyCode::PageDown), None);
+    assert_eq!(scroll(&s), ui::RESULTS_SCROLL);
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(s.hits.iter().any(|h| h.hit == render::Hit::Key(KeyCode::PageUp)), "and back up");
+}

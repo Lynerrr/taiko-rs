@@ -98,6 +98,8 @@ pub struct Select {
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
     random_history: Vec<usize>,
     rng: u64,
+    /// The song list's share of the width (`Config::song_list_share`).
+    pub list_share: f32,
 }
 
 /// Song list motion. Each selection change starts one eased transition from wherever things
@@ -139,6 +141,11 @@ struct ListDrag {
 const LIST_ANIM_MS: f32 = 200.0;
 /// Top and bottom of the song list (virtual units).
 const LIST_TOP: f32 = 86.0;
+/// The song list's share of the width: least, most and usual (dragging its edge).
+pub const LIST_SHARE: (f32, f32, f32) = (0.3, 0.7, 0.52);
+/// The narrowest the song list and the panel beside it get (virtual units).
+const LIST_MIN: f32 = 260.0;
+const PANEL_MIN: f32 = 220.0;
 /// Height of a song's own row in the list (virtual units).
 pub const SONG_ROW_H: f32 = 34.0;
 const LIST_BOTTOM: f32 = 440.0;
@@ -156,6 +163,7 @@ impl Select {
         let has_taiko = library.iter().any(|e| e.meta.mode == 1);
         let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9e37_79b9_7f4a_7c15);
         let mut s = Select {
+            list_share: LIST_SHARE.2,
             filter: String::new(),
             sort: SortMode::Artist,
             info: None,
@@ -430,9 +438,23 @@ impl Select {
         self.visible.get(self.cursor).copied()
     }
 
-    /// Width of the song list; the preview panel takes the rest.
-    pub fn list_width(screen_w: f32) -> f32 {
-        (screen_w * 0.52).max(300.0).min(screen_w - 48.0)
+    /// Width of the song list (`share` of the screen, as the player dragged it); the preview
+    /// panel takes the rest. Neither gets too narrow to use (`LIST_MIN`, `PANEL_MIN`); a screen
+    /// too narrow for both keeps the list at its usual size.
+    pub fn list_width(screen_w: f32, share: f32) -> f32 {
+        match Self::share_range(screen_w) {
+            Some((min, max)) => screen_w * share.clamp(min, max),
+            None => (screen_w * LIST_SHARE.2).max(300.0).min(screen_w - 48.0),
+        }
+    }
+
+    /// The shares of a `screen_w` wide screen the song list can take: within `LIST_SHARE`, and
+    /// leaving the list and the panel (past the margins and the gap between them) their least.
+    /// None when the screen is too narrow for both.
+    pub fn share_range(screen_w: f32) -> Option<(f32, f32)> {
+        let w = screen_w.max(1.0);
+        let (min, max) = (LIST_SHARE.0.max(LIST_MIN / w), LIST_SHARE.1.min((w - 60.0 - PANEL_MIN) / w));
+        (min <= max).then_some((min, max))
     }
 
     /// F2: jump to a random song among those listed (search and filters apply), keeping the
@@ -681,7 +703,7 @@ impl Select {
         let groups = &self.groups;
         crate::settings::tab_bar(c, 0, &format!("{} songs, {} maps  |  {mode}{}{}", groups.len(), self.visible.len(), self.rate_label, self.info_progress));
 
-        let lw = Self::list_width(w);
+        let lw = Self::list_width(w, self.list_share);
         // Mods, sort and collection buttons share the search row, right to left. On a narrow
         // screen the widest of them switches to a shorter label until the search box gets at
         // least SEARCH_MIN; past that the widest give up room (their labels get cut).
@@ -1263,10 +1285,15 @@ pub struct Results {
     /// What the play did to the player's online pp total, and whether the server is yet to say.
     pub total: Option<Total>,
     pub total_due: bool,
+    /// How far the page is scrolled down (toward the pp), and where it's going.
+    pub scroll: f32,
+    pub scroll_to: f32,
 }
 
-/// Width of the pp panel on the right.
-const PP_PANEL_W: f32 = 222.0;
+/// How far down the results scroll: the pp start a screen below them.
+pub const RESULTS_SCROLL: f32 = 456.0;
+/// The bottom of what scrolls (the buttons stay put under it).
+const RESULTS_VIEW: f32 = 416.0;
 
 impl Results {
     /// A results screen with nothing but the essentials filled in.
@@ -1290,6 +1317,8 @@ impl Results {
             replay_error: None,
             total: None,
             total_due: false,
+            scroll: 0.0,
+            scroll_to: 0.0,
         }
     }
 
@@ -1323,14 +1352,24 @@ impl Results {
         }
     }
 
+    /// Scrolls the page by `by` (virtual units; down is positive).
+    pub fn scroll_by(&mut self, by: f32) {
+        self.scroll_to = (self.scroll_to + by).clamp(0.0, RESULTS_SCROLL);
+    }
+
+    /// Glides the page toward where it was scrolled to.
+    pub fn animate(&mut self, dt_ms: f32) {
+        crate::render::approach(&mut self.scroll, self.scroll_to, dt_ms, 60.0);
+    }
+
     pub fn draw(&self, c: &mut Canvas) {
         let w = c.width;
-        let panel_x = w - 24.0 - PP_PANEL_W;
-        // The play's numbers in the middle of what the pp panel leaves.
-        let cx = panel_x / 2.0 + 6.0;
+        let cx = w / 2.0;
+        // The page scrolls under the buttons: the results, and a screen below them the pp.
+        let page = c.shapes.len();
         let size = Canvas::fit_size(12.0, 9.0, w - 48.0, &self.title);
         // Above the friends chip (top right, from y 41).
-        c.text_centered(w / 2.0, 24.0 + (12.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, w - 48.0, &self.title));
+        c.text_centered(cx, 24.0 + (12.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, w - 48.0, &self.title));
         let s = &self.stats;
         let acc = s.accuracy() * 100.0;
         let grade = crate::online::grade(s.great, s.ok, s.miss, s.accuracy());
@@ -1374,9 +1413,6 @@ impl Results {
         for (i, text) in right.iter().enumerate() {
             c.text(cx + 30.0, 260.0 + i as f32 * 24.0, 12.0, rgba(0xc8c8d8, 1.0), text);
         }
-        // From the grade's top to the last stat row's bottom.
-        self.draw_pp_panel(c, panel_x, 80.0, count as f64);
-
         let hint = if let Some(o) = &self.opened {
             let place = if o.online { "online" } else { "local" };
             format!("{place} score by {}, {} ago", o.player, crate::scores::age(o.date))
@@ -1386,16 +1422,20 @@ impl Results {
         } else {
             format!("Windows: great +-{:.0}  ok +-{:.0} ms", self.windows.great, self.windows.ok)
         };
-        c.text_centered(w / 2.0, 380.0, 9.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(9.0, w - 48.0, &hint));
+        c.text_centered(cx, 380.0, 9.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(9.0, w - 48.0, &hint));
         if let Some(e) = &self.replay_error {
-            c.text_centered(w / 2.0, 404.0, 9.0, rgba(0xEB452C, 1.0), &Canvas::fit(9.0, w - 48.0, &format!("no replay: {e}")));
+            c.text_centered(cx, 400.0, 9.0, rgba(0xEB452C, 1.0), &Canvas::fit(9.0, w - 48.0, &format!("no replay: {e}")));
         } else if self.opened.as_ref().is_some_and(|o| o.online) && self.replay.is_none() {
-            c.text_centered(w / 2.0, 404.0, 9.0, rgba(0x4fb4ff, 1.0), "getting the replay...");
+            c.text_centered(cx, 400.0, 9.0, rgba(0x4fb4ff, 1.0), "getting the replay...");
         } else if let Some(who) = &self.watched {
-            c.text_centered(w / 2.0, 404.0, 9.0, rgba(0x4fb4ff, 1.0), &format!("replay of {who}"));
+            c.text_centered(cx, 400.0, 9.0, rgba(0x4fb4ff, 1.0), &format!("replay of {who}"));
         } else if let Some((rank, of)) = self.rank {
-            c.text_centered(w / 2.0, 404.0, 9.0, rgba(0xFFD34D, 1.0), &format!("#{rank} of {of} local scores on this map"));
+            c.text_centered(cx, 400.0, 9.0, rgba(0xFFD34D, 1.0), &format!("#{rank} of {of} local scores on this map"));
         }
+        self.draw_performance(c, count as f64);
+        c.transform_since(page, [0.0, 0.0], 1.0, 0.0, -self.scroll);
+        c.clip_since(page, 0.0, 0.0, w, RESULTS_VIEW);
+
         let mut buttons = Vec::new();
         if self.opened.is_none() {
             buttons.push(("Retry  (Enter)", Hit::Key(KeyCode::Enter), true));
@@ -1407,69 +1447,80 @@ impl Results {
         let back = if self.opened.is_some() { "Back  (Esc)" } else { "Song select  (Esc)" };
         buttons.push((back, Hit::Key(KeyCode::Escape), false));
         c.button_row(424.0, &buttons);
+        // Where the pp went: one click (or the wheel) away, and back.
+        let down = self.scroll_to < RESULTS_SCROLL / 2.0;
+        let (cue, key) = if down { ("scroll down: performance", KeyCode::PageDown) } else { ("scroll up: results", KeyCode::PageUp) };
+        let cw = Canvas::text_width(7.0, cue) + 16.0;
+        let hover = c.hovered(cx - cw / 2.0, 450.0, cw, 14.0);
+        c.text_centered(cx, 453.5, 7.0, rgba(if hover { 0xffffff } else { 0x8a8aa0 }, 1.0), cue);
+        c.hit(cx - cw / 2.0, 450.0, cw, 14.0, Hit::Key(key));
     }
 
-    /// osu!'s performance breakdown: the pp, the difficulty and accuracy parts measured against
-    /// an SS's, and what a full combo and an SS would give. `count` (0-1) counts the numbers up.
-    fn draw_pp_panel(&self, c: &mut Canvas, x: f32, y: f32, count: f64) {
-        let (pw, h) = (PP_PANEL_W, 268.0);
+    /// The pp, a screen below the results, as osu!'s performance breakdown: the pp, the
+    /// difficulty and accuracy parts measured against an SS's, what a full combo and an SS would
+    /// give, and what the play did to the player's online total. `count` (0-1) counts it up.
+    fn draw_performance(&self, c: &mut Canvas, count: f64) {
+        let w = c.width;
+        let pw = (w - 48.0).min(620.0);
+        // Centred between the friends chip (top right, down to y 54) and the buttons.
+        let h = if self.breakdown.is_some() { 200.0 } else { 80.0 };
+        let (x, y) = ((w - pw) / 2.0, RESULTS_SCROLL + 64.0 + ((RESULTS_VIEW - 64.0 - h) / 2.0).max(0.0));
         let (label, value) = (rgba(0x8a8aa0, 1.0), rgba(0xffffff, 1.0));
-        c.round_rect(x, y, pw, h, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
-        c.text(x + 12.0, y + 10.0, 7.0, label, "PERFORMANCE");
         let Some(b) = self.breakdown else {
+            c.round_rect(x, y, pw, h, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+            c.text(x + 16.0, y + 12.0, 8.0, label, "PERFORMANCE");
             let note = if self.job.is_some() { "working it out..." } else { self.no_pp.unwrap_or("no pp for this play") };
-            c.text_centered(x + pw / 2.0, y + h / 2.0 - 4.0, 8.0, label, &Canvas::fit(8.0, pw - 24.0, note));
+            c.text_centered(x + pw / 2.0, y + 44.0, 9.0, label, &Canvas::fit(9.0, pw - 32.0, note));
             return;
         };
-        crate::stars::draw_pill(c, x + pw - 10.0, y + 7.0, 7.0, Some(b.stars as f32));
-        let big = c.text(x + 12.0, y + 24.0, 22.0, rgba(0xff8ad8, 1.0), &format!("{:.0}", b.pp * count));
-        c.text(x + 16.0 + big, y + 36.0, 9.0, rgba(0xff8ad8, 1.0), "pp");
+        c.round_rect(x, y, pw, h, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        c.text(x + 16.0, y + 12.0, 8.0, label, "PERFORMANCE");
+        crate::stars::draw_pill(c, x + pw - 14.0, y + 9.0, 8.0, Some(b.stars as f32));
+        // Two columns: the pp and its parts, then what could have been and the total.
+        let col_w = (pw - 48.0) / 2.0;
+        let (lx, rx) = (x + 16.0, x + 32.0 + col_w);
+        let big = c.text(lx, y + 34.0, 26.0, rgba(0xff8ad8, 1.0), &format!("{:.0}", b.pp * count));
+        c.text(lx + 6.0 + big, y + 49.0, 10.0, rgba(0xff8ad8, 1.0), "pp");
         let of_ss = if b.if_ss > 0.0 { b.pp / b.if_ss * 100.0 } else { 0.0 };
-        c.text_right(x + pw - 12.0, y + 36.0, 6.0, label, &format!("{of_ss:.0}% of an SS"));
+        c.text(lx, y + 72.0, 7.0, label, &format!("{of_ss:.0}% of an SS"));
         for (i, (name, v, max)) in [("Difficulty", b.difficulty, b.ss_difficulty), ("Accuracy", b.accuracy, b.ss_accuracy)].into_iter().enumerate() {
-            let by = y + 62.0 + i as f32 * 30.0;
-            c.text(x + 12.0, by, 8.0, rgba(0xc8c8d8, 1.0), name);
-            c.text_right(x + pw - 12.0, by, 8.0, value, &format!("{:.0}", v * count));
-            let bw = pw - 24.0;
-            c.round_rect(x + 12.0, by + 13.0, bw, 5.0, 2.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+            let by = y + 100.0 + i as f32 * 40.0;
+            c.text(lx, by, 8.0, rgba(0xc8c8d8, 1.0), name);
+            c.text_right(lx + col_w, by, 8.0, value, &format!("{:.0}", v * count));
+            c.round_rect(lx, by + 15.0, col_w, 6.0, 3.0, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
             let f = if max > 0.0 { ((v / max).clamp(0.0, 1.0) * count) as f32 } else { 0.0 };
             if f > 0.0 {
-                c.round_rect(x + 12.0, by + 13.0, (bw * f).max(5.0), 5.0, 2.5, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
+                c.round_rect(lx, by + 15.0, (col_w * f).max(6.0), 6.0, 3.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
             }
         }
-        c.rect(x + 12.0, y + 122.0, pw - 24.0, 1.0, rgba(0x2a2a38, 1.0));
-        let rows = [
-            ("Full combo", format!("{:.0} pp", b.if_fc)),
-            ("SS", format!("{:.0} pp", b.if_ss)),
-            ("Combo", format!("{} / {}", self.stats.max_combo, b.max_combo)),
+        let mut rows = vec![
+            ("Full combo", format!("{:.0} pp", b.if_fc), 0xffffff),
+            ("SS", format!("{:.0} pp", b.if_ss), 0xffffff),
+            ("Combo", format!("{} / {}", self.stats.max_combo, b.max_combo), 0xffffff),
         ];
-        for (i, (name, v)) in rows.iter().enumerate() {
-            let ry = y + 132.0 + i as f32 * 18.0;
-            c.text(x + 12.0, ry, 7.0, label, name);
-            c.text_right(x + pw - 12.0, ry, 7.0, value, v);
+        // What it did to the online total (sent plays only).
+        match self.total {
+            Some(t) => {
+                let (change, col) = match t.before.map(|b| t.after - b) {
+                    Some(g) if g >= 0.05 => (format!("+{g:.1} pp"), 0x86E05A),
+                    Some(_) => ("none".to_string(), 0x8a8aa0),
+                    None => ("-".to_string(), 0x8a8aa0),
+                };
+                rows.push(("Total", format!("{:.0} pp", t.after), 0xffffff));
+                rows.push(("Change", change, col));
+                rows.push(("Rank", t.rank.map(|r| format!("#{r}")).unwrap_or_else(|| "-".into()), 0xc8c8d8));
+            }
+            None if self.total_due => rows.push(("Total", "...".to_string(), 0x8a8aa0)),
+            None => {}
         }
-        // What it did to the player's online total (sent plays only).
-        if self.total.is_none() && !self.total_due {
-            return;
-        }
-        c.rect(x + 12.0, y + 190.0, pw - 24.0, 1.0, rgba(0x2a2a38, 1.0));
-        let Some(t) = self.total else {
-            c.text(x + 12.0, y + 200.0, 7.0, label, "Total");
-            c.text_right(x + pw - 12.0, y + 200.0, 7.0, label, "...");
-            return;
-        };
-        let gain = t.before.map(|b| t.after - b);
-        let (change, col) = match gain {
-            Some(g) if g >= 0.05 => (format!("+{g:.1} pp"), 0x86E05A),
-            Some(_) => ("none".to_string(), 0x8a8aa0),
-            None => ("-".to_string(), 0x8a8aa0),
-        };
-        let place = t.rank.map(|r| format!("#{r}")).unwrap_or_else(|| "-".into());
-        let rows = [("Total", format!("{:.0} pp", t.after), 0xffffff), ("Change", change, col), ("Rank", place, 0xc8c8d8)];
         for (i, (name, v, col)) in rows.iter().enumerate() {
-            let ry = y + 200.0 + i as f32 * 18.0;
-            c.text(x + 12.0, ry, 7.0, label, name);
-            c.text_right(x + pw - 12.0, ry, 7.0, rgba(*col, 1.0), v);
+            // The total under a line of its own.
+            let ry = y + 36.0 + i as f32 * 24.0 + if i >= 3 { 12.0 } else { 0.0 };
+            if i == 3 {
+                c.rect(rx, ry - 13.0, col_w, 1.0, rgba(0x2a2a38, 1.0));
+            }
+            c.text(rx, ry, 8.0, label, name);
+            c.text_right(rx + col_w, ry, 8.0, rgba(*col, 1.0), v);
         }
     }
 }

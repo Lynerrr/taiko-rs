@@ -181,6 +181,11 @@ pub struct Config {
     /// there was a config to read (not the first start).
     pub last_build: String,
     pub existed: bool,
+    /// Song select's layout: the share of the width the song list takes (`ui::LIST_SHARE`), and
+    /// how big the autoplay preview is (`preview::PREVIEW_SIZE`; smaller leaves the leaderboard
+    /// more room).
+    pub song_list_share: f32,
+    pub song_preview_size: f32,
     /// Every other shortcut's key (`keys::Hotkey`).
     pub hotkeys: crate::keys::Bindings,
     /// Show the playfield's resolution in a corner during play.
@@ -273,6 +278,8 @@ impl Default for Config {
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             hotkeys: crate::keys::Bindings::default(),
+            song_list_share: crate::ui::LIST_SHARE.2,
+            song_preview_size: crate::preview::PREVIEW_SIZE.1,
             last_build: String::new(),
             existed: false,
             show_playfield_size: true,
@@ -630,6 +637,14 @@ impl Config {
                     }
                 }
                 "last_build" => cfg.last_build = v.to_string(),
+                "song_list_share" => {
+                    let (min, max, _) = crate::ui::LIST_SHARE;
+                    cfg.song_list_share = v.parse::<f32>().ok().filter(|f| f.is_finite()).map_or(cfg.song_list_share, |f| f.clamp(min, max));
+                }
+                "song_preview_size" => {
+                    let (min, max) = crate::preview::PREVIEW_SIZE;
+                    cfg.song_preview_size = v.parse::<f32>().ok().filter(|f| f.is_finite()).map_or(cfg.song_preview_size, |f| f.clamp(min, max));
+                }
                 k if k.starts_with("hotkey.") => cfg.hotkeys.parse_line(&k["hotkey.".len()..], v),
                 "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
                 "skin" => cfg.skin = v.to_string(),
@@ -795,6 +810,10 @@ impl Config {
             self.interface_hidden,
             self.interface_hides.format(),
             interface_key_name(self.interface_key)
+        ));
+        out.push_str(&format!(
+            "# song select: the song list's share of the width, and the autoplay preview's size (drag the edges between them)\nsong_list_share = {:.3}\nsong_preview_size = {:.3}\n",
+            self.song_list_share, self.song_preview_size
         ));
         out.push_str(&self.hotkeys.config_lines());
         out.push_str(&format!("# the build last started (what's new shows after an update)\nlast_build = {}\n", self.last_build));
