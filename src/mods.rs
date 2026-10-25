@@ -360,7 +360,7 @@ impl Mod {
             Cracked => "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
             Crumble => "Hits knock pieces out of the lane, harder as the combo grows; a miss puts them back.",
             Portal => "Notes dive into one portal and come out of another; they move every 8 bars.",
-            Multiverse => "Eight playfields circle about, each with its own look and mods (M sets them up).",
+            Multiverse => "Eight playfields circle about, each with its own look and mods (C sets them up).",
         }
     }
 
