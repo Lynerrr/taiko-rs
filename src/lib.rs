@@ -40,6 +40,8 @@ mod stars;
 mod ui;
 mod update;
 mod video;
+#[cfg(target_os = "linux")]
+mod wayland_dnd;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
@@ -205,6 +207,8 @@ struct State {
     scene: Scene,
     audio: Option<Engine>,
     toast: Option<Toast>,
+    /// Since when files are being dragged over the window.
+    drag_hover: Option<Instant>,
     stats: FrameStats,
     status: String,
     modifiers_shift: bool,
@@ -523,6 +527,16 @@ fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
 
 /// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
 /// Only those few candidates are hashed, so this stays cheap with a huge library.
+/// A path for a settings row: its last two folders.
+fn short_path(dir: &std::path::Path) -> String {
+    let parts: Vec<_> = dir.components().collect();
+    if parts.len() <= 3 {
+        return dir.display().to_string();
+    }
+    let tail: PathBuf = parts[parts.len() - 2..].iter().collect();
+    format!("...{}{}", std::path::MAIN_SEPARATOR, tail.display())
+}
+
 /// Where downloaded maps go: the first Songs folder being scanned, else taiko-rs's own (which
 /// is scanned at startup when it exists).
 fn download_dir(inputs: &[PathBuf]) -> PathBuf {
@@ -682,6 +696,14 @@ impl State {
     /// Scenes that use the gameplay present mode; everything else is a menu.
     fn in_song(&self) -> bool {
         matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. } | Scene::Spectate(_) | Scene::Watch(_))
+    }
+
+    /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
+    /// uncapped, its near-empty frame runs at thousands of fps and the GPU whines.
+    fn frame_cap(&self) -> u32 {
+        let menu = matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_some() && game.resuming.is_none());
+        let screen = (self.refresh_hz.round() as u32).max(30);
+        if menu && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > screen) { screen } else { self.cfg.fps_cap }
     }
 
     /// The present mode this frame should use.
@@ -1184,10 +1206,12 @@ impl State {
             Item::NotifyRequests => on(c.notify_requests),
             Item::ShowConverts => on(self.select.show_converts),
             Item::HiddenMaps => self.select.hidden.describe(),
+            Item::SongsFolder if self.folder_pick.is_some() => "picking...".into(),
+            Item::SongsFolder if self.scan.is_some() => "scanning...".into(),
             Item::SongsFolder => match (&c.songs_folder, self.song_dirs.first()) {
-                (Some(dir), _) => dir.display().to_string(),
-                (None, Some(dir)) => format!("found {}", dir.display()),
-                (None, None) => "not found".into(),
+                (Some(dir), _) => short_path(dir),
+                (None, Some(dir)) => format!("found {}", short_path(dir)),
+                (None, None) => "none found, Enter to pick".into(),
             },
             Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
             Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
@@ -1422,7 +1446,12 @@ impl State {
                 if !cfg!(target_os = "android") {
                     names.insert(0, "Browse...".into());
                 }
-                (names, None, self.setting_value(item))
+                let note = match (&c.songs_folder, self.song_dirs.first()) {
+                    (Some(dir), _) => dir.display().to_string(),
+                    (None, Some(dir)) => format!("found {}", dir.display()),
+                    (None, None) => "none found".into(),
+                };
+                (names, None, note)
             }
             _ => return,
         };
@@ -1608,7 +1637,7 @@ impl State {
         if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
             return Err("change the Songs folder from song select".into());
         }
-        let folder = folder.map(|f| library::songs_folder_in(&f));
+        let folder = folder.map(|f| library::picked_songs(&f));
         if let Some(f) = folder.as_ref().filter(|f| !f.is_dir()) {
             return Err(format!("{} isn't a folder", f.display()));
         }
@@ -1693,6 +1722,53 @@ impl State {
         if std::process::Command::new(opener).arg(&dir).spawn().is_err() {
             self.toast(format!("skins go in {}", dir.display()));
         }
+    }
+
+    /// Adds maps to the end of the library, so the indices already handed out stay valid.
+    fn append_maps(&mut self, fresh: Vec<Entry>) {
+        let start = self.library.len();
+        self.library.extend(fresh);
+        if let Some(info) = &self.mapinfo {
+            info.extend(self.library[start..].iter().enumerate().map(|(k, e)| (start + k, e.path.clone(), e.modified, e.size)).collect());
+            self.mapinfo_sorted = false;
+        }
+        self.select.refilter(&self.library);
+    }
+
+    /// Files dragged over the window and dropped on it: .osz maps are unpacked into the Songs
+    /// folder (the file itself stays where it was) and join the list.
+    fn file_drag(&mut self, drag: FileDrag) {
+        match drag {
+            FileDrag::Hover => {
+                self.drag_hover.get_or_insert_with(Instant::now);
+            }
+            FileDrag::Left => self.drag_hover = None,
+            FileDrag::Drop(paths) => {
+                self.drag_hover = None;
+                for path in paths {
+                    let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("osz")) {
+                        self.toast(format!("importing {name}..."));
+                        self.downloads.push(download::import(path, &name, self.songs_dir.clone(), false));
+                    } else {
+                        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        self.toast(format!("{file} isn't a map: drop .osz files"));
+                    }
+                }
+            }
+        }
+    }
+
+    /// While files are dragged over the window: where they go when dropped.
+    fn draw_drag_hover(&self, canvas: &mut Canvas, now: Instant) {
+        let Some(since) = self.drag_hover else { return };
+        let a = (now.saturating_duration_since(since).as_secs_f32() / 0.12).min(1.0);
+        let (w, h) = (canvas.width, render::VIRTUAL_HEIGHT);
+        canvas.rect(0.0, 0.0, w, h, rgba(0x000000, 0.6 * a));
+        canvas.round_rect(24.0, 24.0, w - 48.0, h - 48.0, 16.0, rgba(0x000000, 0.0), rgba(accent(), 0.9 * a), 2.5);
+        canvas.text_centered(w / 2.0, h / 2.0 - 22.0, 18.0, rgba(0xffffff, a), "Drop .osz maps to add them");
+        let to = Canvas::fit(9.0, w - 96.0, &format!("into {}", self.songs_dir.display()));
+        canvas.text_centered(w / 2.0, h / 2.0 + 14.0, 9.0, rgba(0x9a9ab0, a), &to);
     }
 
     /// Keeps the Discord status in line with what's on screen (checked about once a second).
@@ -5250,6 +5326,7 @@ impl State {
             }
         }
         self.draw_update(canvas);
+        self.draw_drag_hover(canvas, now);
         if self.splash.is_some() {
             let boot = self.boot_log();
             // Some window managers never report focus: don't wait forever.
@@ -5449,7 +5526,7 @@ impl State {
             self.imports_checked = Instant::now();
             for (archive, name) in android::take_imports() {
                 self.toast(format!("importing {name}..."));
-                self.downloads.push(download::import(archive, &name, self.songs_dir.clone()));
+                self.downloads.push(download::import(archive, &name, self.songs_dir.clone(), true));
             }
         }
         if let Some(rx) = &self.lobby_lookup {
@@ -5495,13 +5572,7 @@ impl State {
         let fresh: Vec<Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0)).into_iter().filter(|e| !known.contains(&e.path)).collect();
         let first = fresh.iter().find(|e| e.meta.mode == 1).or(fresh.first()).map(|e| e.path.clone());
         let n = fresh.len();
-        let start = self.library.len();
-        self.library.extend(fresh);
-        if let Some(info) = &self.mapinfo {
-            info.extend(self.library[start..].iter().enumerate().map(|(k, e)| (start + k, e.path.clone(), e.modified, e.size)).collect());
-            self.mapinfo_sorted = false;
-        }
-        self.select.refilter(&self.library);
+        self.append_maps(fresh);
         self.installed_sets().insert(set.id);
         eprintln!("downloaded set {} into {} ({n} maps)", set.id, folder.display());
         // Lobby: the map we were missing may be here now.
@@ -5524,6 +5595,7 @@ impl State {
         }
         let text = lobby_note.unwrap_or_else(|| match set.artist.is_empty() {
             // An imported .osz: only its file name is known.
+            true if n == 0 => format!("{} is already in the list", set.title),
             true => format!("imported {} ({n} maps)", set.title),
             false => format!("downloaded {} - {}", set.artist, set.title),
         });
@@ -5754,6 +5826,16 @@ enum UserEvent {
     Stopped,
     /// Gameplay wants the pointer hidden (it's been still a second) or back.
     HideCursor(bool),
+    /// Files dragged over the window, on Wayland (winit reports them itself elsewhere).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    FileDrag(FileDrag),
+}
+
+/// Files dragged over the window, or dropped on it.
+pub(crate) enum FileDrag {
+    Hover,
+    Left,
+    Drop(Vec<PathBuf>),
 }
 
 fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoopProxy<UserEvent>) {
@@ -5800,7 +5882,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 }
             }
             renderer.pixel_scale = if s.cfg.half_resolution { 2 } else { 1 };
-            (s.present, s.cfg.fps_cap)
+            (s.present, s.frame_cap())
         };
 
         let t0 = timing.then(Instant::now);
@@ -5990,6 +6072,16 @@ impl ApplicationHandler<UserEvent> for App {
             attrs = attrs.with_name("taiko-rs", "taiko-rs");
         }
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
+        #[cfg(target_os = "linux")]
+        {
+            use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+            if let Ok(RawDisplayHandle::Wayland(h)) = window.display_handle().map(|h| h.as_raw()) {
+                let proxy = self.proxy.clone();
+                wayland_dnd::start(h.display.as_ptr(), move |drag| {
+                    let _ = proxy.send_event(UserEvent::FileDrag(drag));
+                });
+            }
+        }
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
             event_loop.owned_display_handle(),
         )));
@@ -6061,6 +6153,7 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Stopped => event_loop.exit(),
+            UserEvent::FileDrag(drag) => lock(&self.state).file_drag(drag),
             UserEvent::HideCursor(hide) => {
                 if hide != self.cursor_hidden {
                     self.cursor_hidden = hide;
@@ -6083,6 +6176,9 @@ impl ApplicationHandler<UserEvent> for App {
         }
         match event {
             WindowEvent::CloseRequested => lock(&self.state).quit = true,
+            WindowEvent::HoveredFile(_) => lock(&self.state).file_drag(FileDrag::Hover),
+            WindowEvent::HoveredFileCancelled => lock(&self.state).file_drag(FileDrag::Left),
+            WindowEvent::DroppedFile(path) => lock(&self.state).file_drag(FileDrag::Drop(vec![path])),
             WindowEvent::Resized(size) => {
                 let mut s = lock(&self.state);
                 s.want_size = Some((size.width, size.height));
@@ -6223,6 +6319,7 @@ impl State {
             scene: Scene::Select,
             audio,
             toast: None,
+            drag_hover: None,
             stats: FrameStats {
                 last: Instant::now(),
                 frames: 0,

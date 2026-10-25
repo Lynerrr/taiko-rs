@@ -3,7 +3,7 @@
 //! "song frame N starts playing at instant T" and the game interpolates from that.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -48,6 +48,8 @@ enum Cmd {
     /// Replaces the playing track without moving the play position.
     Swap { track: Arc<Track>, base: i64 },
     Seek(i64),
+    /// Sent after each Play / Seek: the stamp describes the new position from here on.
+    Epoch(u64),
     Pause(bool),
     Stop,
     /// A sound and its volume (0..1, the map's timing point volume for hits).
@@ -73,6 +75,8 @@ struct Stamp {
     at: Instant,
     /// Delay from callback to the samples reaching the speakers.
     latency: Duration,
+    /// The last Play / Seek the callback had applied.
+    epoch: u64,
 }
 
 pub struct Engine {
@@ -80,6 +84,8 @@ pub struct Engine {
     tx: Sender<Cmd>,
     garbage: Receiver<Garbage>,
     stamp: Arc<Mutex<Stamp>>,
+    /// The last Play / Seek sent.
+    epoch: AtomicU64,
     volume: Arc<[AtomicU32; 2]>,
     pub rate: u32,
     pub description: String,
@@ -97,7 +103,7 @@ impl Engine {
             config.buffer_size = cpal::BufferSize::Fixed(buffer_frames.clamp(*min, *max));
         }
 
-        let stamp = Arc::new(Mutex::new(Stamp { playing: false, frame: 0, at: Instant::now(), latency: Duration::ZERO }));
+        let stamp = Arc::new(Mutex::new(Stamp { playing: false, frame: 0, at: Instant::now(), latency: Duration::ZERO, epoch: 0 }));
         let volume = Arc::new([AtomicU32::new(0.8f32.to_bits()), AtomicU32::new(1.0f32.to_bits())]);
         let fmt = supported.sample_format();
         let open = |config: StreamConfig| -> Result<(cpal::Stream, Sender<Cmd>, Receiver<Garbage>), String> {
@@ -125,7 +131,7 @@ impl Engine {
         stream.play().map_err(|e| e.to_string())?;
 
         let description = format!("{:?} {} Hz, {} ch, buffer {:?}", host.id(), rate, channels, config.buffer_size);
-        Ok(Engine { _stream: stream, tx, garbage, stamp, volume, rate, description })
+        Ok(Engine { _stream: stream, tx, garbage, stamp, epoch: AtomicU64::new(0), volume, rate, description })
     }
 
     pub fn play(&self, track: Arc<Track>, start_ms: f64) {
@@ -135,7 +141,16 @@ impl Engine {
     /// Plays part of a song: `base` is the song frame the track's first sample belongs at.
     pub fn play_part(&self, track: Arc<Track>, base: i64, start_ms: f64) {
         let start_frame = (start_ms / 1000.0 * self.rate as f64).round() as i64;
-        let _ = self.tx.send(Cmd::Play { track, start_frame, base });
+        self.jump(Cmd::Play { track, start_frame, base });
+    }
+
+    /// Sends a command that moves the play position. Until the callback has applied it, the stamp
+    /// still describes the old position (the previous song, or where a retried play had got to),
+    /// so `position_ms` reports nothing rather than that.
+    fn jump(&self, cmd: Cmd) {
+        let epoch = self.epoch.fetch_add(1, Ordering::Relaxed) + 1;
+        let _ = self.tx.send(cmd);
+        let _ = self.tx.send(Cmd::Epoch(epoch));
     }
 
     /// Swaps in another decode of the playing song (the full one for a part), seamlessly.
@@ -144,7 +159,7 @@ impl Engine {
     }
 
     pub fn seek(&self, ms: f64) {
-        let _ = self.tx.send(Cmd::Seek((ms / 1000.0 * self.rate as f64).round() as i64));
+        self.jump(Cmd::Seek((ms / 1000.0 * self.rate as f64).round() as i64));
     }
 
     pub fn stop(&self) {
@@ -181,7 +196,7 @@ impl Engine {
         // Free tracks the callback replaced; deallocation stays off the audio thread.
         while self.garbage.try_recv().is_ok() {}
         let s = *self.stamp.lock().unwrap();
-        if !s.playing {
+        if !s.playing || s.epoch != self.epoch.load(Ordering::Relaxed) {
             return None;
         }
         let since = now.saturating_duration_since(s.at).as_secs_f64() - s.latency.as_secs_f64();
@@ -232,6 +247,7 @@ struct Mixer {
     /// Song frame of the track's first sample.
     base: i64,
     frame: i64,
+    epoch: u64,
     paused: bool,
     voices: Vec<Voice>,
     sounds: Arc<Sounds>,
@@ -247,7 +263,7 @@ impl Mixer {
         channels: usize,
     ) -> Mixer {
         let sounds = Arc::new(hitsound_set(rate, Custom::default()));
-        Mixer { rx, gc, stamp, volume, channels, track: None, base: 0, frame: 0, paused: false, voices: Vec::with_capacity(64), sounds }
+        Mixer { rx, gc, stamp, volume, channels, track: None, base: 0, frame: 0, epoch: 0, paused: false, voices: Vec::with_capacity(64), sounds }
     }
 
     fn render<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T], info: &OutputCallbackInfo) {
@@ -270,6 +286,7 @@ impl Mixer {
                         self.base = base;
                     }
                     Cmd::Seek(f) => self.frame = f,
+                    Cmd::Epoch(e) => self.epoch = e,
                     Cmd::Pause(p) => self.paused = p,
                     Cmd::Stop => {
                         if let Some(old) = self.track.take() {
@@ -291,7 +308,7 @@ impl Mixer {
         let ts = info.timestamp();
         let latency = ts.playback.duration_since(ts.callback);
         if let Ok(mut s) = self.stamp.try_lock() {
-            *s = Stamp { playing: self.track.is_some() && !self.paused, frame: self.frame, at: now, latency };
+            *s = Stamp { playing: self.track.is_some() && !self.paused, frame: self.frame, at: now, latency, epoch: self.epoch };
         }
 
         let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed));

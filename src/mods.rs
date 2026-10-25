@@ -350,9 +350,9 @@ impl Mod {
             FlipFlop => "Every 8 bars the lane flips over to the other side.",
             Shatter => "The lane breaks into pieces that slide apart and back; further where streams are.",
             Cracked => "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
-            Crumble => "Every hit knocks a piece out of the lane: crumbs for streams, chunks for slow notes.",
+            Crumble => "Hits knock pieces out of the lane, harder as the combo grows; a miss puts them back.",
             Portal => "Notes dive into one portal and come out of another; they move every 8 bars.",
-            Multiverse => "Five playfields drift and swap places; every 2 bars another one is in colour.",
+            Multiverse => "Eight playfields circle about; the next lights up, then takes the colour every 2 bars.",
         }
     }
 

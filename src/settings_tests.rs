@@ -52,6 +52,7 @@ fn typing_replaces_the_old_value_then_adds_to_it() {
 fn songs_folder_is_saved_scanned_and_found_inside_an_install() {
     let install = std::env::temp_dir().join(format!("taiko-rs-songs-test-{}", std::process::id()));
     std::fs::create_dir_all(install.join("Songs")).unwrap();
+    std::fs::write(install.join("osu!.db"), b"").unwrap();
     let mut s = layout_tests::state();
     // Picking osu!'s own folder means its Songs folder.
     s.set_songs_folder(Some(install.clone())).unwrap();
