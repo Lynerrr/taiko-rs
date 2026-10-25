@@ -111,6 +111,14 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
     ("PLAYFIELD", 0xff5fa2, &[Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal, Multiverse]),
 ];
 
+/// The mods with settings of their own, in the order of the mod customization's tabs.
+const CUSTOMIZABLE: [Mod; 2] = [Mod::Multiverse, Mod::Shapeshift];
+
+/// The tabs of the mod customization: the mods with settings that are on (only those show).
+pub fn customizable(mods: Mods) -> Vec<Mod> {
+    CUSTOMIZABLE.into_iter().filter(|&m| mods.has(m)).collect()
+}
+
 /// Mod select keyboard navigation: the mod `dx` columns and `dy` rows from `index` (into `ALL`).
 pub fn step(index: usize, dx: i32, dy: i32) -> usize {
     let m = ALL[index.min(ALL.len() - 1)];
@@ -340,7 +348,7 @@ impl Mod {
             Spiral => "The lane coils into a spiral; notes wind their way in.",
             Loop => "The lane has a loop-the-loop in the middle.",
             Elbow => "Notes fall from the top and turn into the lane at a corner.",
-            Shapeshift => "Every 16 bars the lane bends into another rails shape.",
+            Shapeshift => "Every few bars the lane bends into another rails shape (C: how often, which order).",
             Snake => "Streams slither along the lane, triplets the other way; 1/1 notes fly straight.",
             Mirror => "The lane is flipped: notes come from the left.",
             Tilt => "The lane rocks from side to side with the beat.",
@@ -352,22 +360,32 @@ impl Mod {
             Cracked => "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
             Crumble => "Hits knock pieces out of the lane, harder as the combo grows; a miss puts them back.",
             Portal => "Notes dive into one portal and come out of another; they move every 8 bars.",
-            Multiverse => "Eight playfields circle about, each with its own look and mods (M sets them up).",
+            Multiverse => "Eight playfields circle about, each with its own look and mods (C sets them up).",
         }
     }
 
-    /// Score multiplier (osu!'s for its mods).
+    /// Score multiplier: osu!'s for its mods, and on the same scale for taiko-rs's own by how
+    /// much harder they make a map to read or play (HR's 1.06 is "clearly harder", DT's 1.12
+    /// "a lot"). Mods that help score below 1; ones that only look different stay at 1.
     pub fn multiplier(self) -> f64 {
         match self {
             Easy | NoFail => 0.5,
             HalfTime | Daycore => 0.3,
             Half => 0.5,
-            NoFinishers => 0.9,
-            HardRock | Hidden => 1.06,
-            DoubleTime | Nightcore | Flashlight => 1.12,
-            Precise => 1.06,
-            ConstantSpeed => 0.9,
+            NoFinishers | ConstantSpeed | Mercy => 0.9,
+            WindDown => 0.85,
+            HardRock | Hidden | Precise => 1.06,
+            DoubleTime | Nightcore | Flashlight | Multiverse => 1.12,
             Spotlight | Blackout | Memory | Colorless => 1.1,
+            // Hard to read or to play: notes that lie about where or when they'll arrive.
+            SvChaos | Even => 1.08,
+            Sudden | Blink | Decoy | Liar | Alternate | WindUp | Stutter | Roulette | HyperSv | Split | Leapfrog | LagSpike | Moonwalk => 1.06,
+            Spiral | Shapeshift | Spin | Portal => 1.06,
+            // Noticeably harder.
+            GreatOrNothing | Random | Accel | Brake | Pulse | Crescendo | Drop | Gearbox | AntiSv | Swing | Panic | SnapSpeed => 1.04,
+            UTurn | Loop | Snake | FlipFlop | Shatter | Crumble => 1.04,
+            // A little harder: the lane moves or bends, the notes read as usual.
+            AllBig | Wave | Zigzag | Elbow | Mirror | Tilt | Mania | BarrelRoll | Cracked | Party => 1.02,
             _ => 1.0,
         }
     }
@@ -508,6 +526,16 @@ impl Mods {
             }
         }
         out
+    }
+
+    /// Just a set of mods, conflicting ones too (the favourites): "HD,HR,EZ".
+    pub fn parse_set(s: &str) -> Mods {
+        Mods(s.split([',', ' ']).filter_map(Mod::from_acronym).fold(0, |bits, m| bits | m.bit()))
+    }
+
+    /// `self` with `m` added or taken out, conflicts or not.
+    pub fn flip(self, m: Mod) -> Mods {
+        Mods(self.0 ^ m.bit())
     }
 
     pub fn from_list(list: &[String]) -> Mods {
@@ -730,6 +758,36 @@ impl Speed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multipliers_follow_how_hard_a_mod_is() {
+        for m in ALL {
+            let x = m.multiplier();
+            let ok = match m.shuffle_cost() {
+                Some(c) if c < 0 => x < 1.0,
+                Some(0) => x <= 1.0,
+                Some(1) => (1.0..=1.1).contains(&x),
+                Some(2) => (1.04..=1.12).contains(&x),
+                Some(_) => x >= 1.1,
+                None => true,
+            };
+            assert!(ok, "{}: x{x} for a shuffle cost of {:?}", m.name(), m.shuffle_cost());
+        }
+        // A heavy custom set adds up, but stays in reach of osu!'s HDHRDTFL (x1.42).
+        let set = Mods::parse("CH,EV,SS,SU,ST");
+        assert!((1.3..1.5).contains(&set.multiplier()), "{}", set.multiplier());
+    }
+
+    #[test]
+    fn favourites_keep_conflicting_mods_and_round_trip() {
+        // Easy and Hard Rock conflict, but both can be favourites.
+        let favs = Mods::NONE.flip(Mod::Easy).flip(Mod::HardRock).flip(Mod::Hidden);
+        assert!(favs.has(Mod::Easy) && favs.has(Mod::HardRock));
+        assert_eq!(Mods::parse_set(&favs.to_config()), favs);
+        assert!(!favs.flip(Mod::Hidden).has(Mod::Hidden));
+        assert_eq!(customizable(Mods::parse("SS")), [Mod::Shapeshift]);
+        assert!(customizable(Mods::parse("HD")).is_empty());
+    }
 
     #[test]
     fn acronyms_are_unique_and_parse_back() {

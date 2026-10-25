@@ -2,7 +2,10 @@
 //! players don't need an open port. Rooms run the game's own room code (`src/net.rs`); the
 //! protocol in front of them is `src/online.rs`.
 //!
-//!   taiko-server [--port 7800] [--data DIR]
+//!   taiko-server [--port 7800] [--data DIR] [--http-port 8080 [--behind-proxy]]
+//!
+//! With --http-port it also serves the website (`web.rs`); --behind-proxy takes the visitor's
+//! address from the proxy's header (Cloudflare), for the per-address limits.
 //!
 //! Accounts and sessions live in DIR/accounts.json (passwords as argon2 hashes).
 
@@ -12,6 +15,9 @@ mod net;
 #[allow(dead_code)]
 #[path = "../../src/online.rs"]
 mod online;
+mod scores;
+mod pages;
+mod web;
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, Read};
@@ -172,6 +178,7 @@ struct State {
     /// Verified against when the name doesn't exist, so a login takes as long either way.
     dummy_hash: String,
     hub: Mutex<Hub>,
+    scores: Mutex<scores::Scores>,
 }
 
 fn now_secs() -> u64 {
@@ -203,6 +210,8 @@ impl State {
         let cutoff = now_secs().saturating_sub(SESSION_DAYS * 86400);
         accounts.sessions.retain(|_, s| s.created >= cutoff);
         println!("{} accounts, {} sessions ({})", accounts.users.len(), accounts.sessions.len(), path.display());
+        // Scores live next to the accounts.
+        let scores = scores::Scores::load(Some(path.parent().map(|d| d.to_path_buf()).unwrap_or_default()));
         State {
             accounts: Mutex::new(accounts),
             path,
@@ -211,6 +220,7 @@ impl State {
             limits: Mutex::new(HashMap::new()),
             dummy_hash: hash_password("not a real password").expect("argon2"),
             hub: Mutex::new(Hub::default()),
+            scores: Mutex::new(scores),
         }
     }
 
@@ -326,6 +336,23 @@ fn handle(state: &State, stream: TcpStream) {
             social_session(state, reader, name);
             return;
         }
+        Request::SubmitScore { token, play } => {
+            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to send scores".into())) };
+            let key = name.to_ascii_lowercase();
+            let map = format!("{} - {} [{}]", play.map.artist, play.map.title, play.map.version);
+            match state.scores.lock().unwrap().submit(&key, &name, *play, now_secs()) {
+                Ok((map_rank, pp, rank)) => {
+                    println!("score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total");
+                    Reply::Submitted { map_rank, pp, rank }
+                }
+                Err(e) => Reply::Error(e),
+            }
+        }
+        Request::MapScores { map } => Reply::Scores(state.scores.lock().unwrap().map_scores(map)),
+        Request::Profile { name } => match state.profile(&name) {
+            Some(p) => Reply::Profile(Box::new(p)),
+            None => Reply::Error("no such player".into()),
+        },
         Request::JoinRoom { token, room } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to join a lobby".into())) };
             let lobbies = state.lobbies.lock().unwrap();
@@ -388,6 +415,15 @@ fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
 }
 
 impl State {
+    /// A player's profile, by their name in any case.
+    fn profile(&self, name: &str) -> Option<online::Profile> {
+        let key = name.trim().to_ascii_lowercase();
+        let (name, joined) = self.accounts.lock().unwrap().users.get(&key).map(|u| (u.name.clone(), u.created))?;
+        let mut p = self.scores.lock().unwrap().profile(&key, &name, joined);
+        p.online = self.hub.lock().unwrap().conns.contains_key(&key);
+        Some(p)
+    }
+
     fn display_name(&self, key: &str) -> String {
         self.accounts.lock().unwrap().users.get(key).map(|u| u.name.clone()).unwrap_or_else(|| key.to_string())
     }
@@ -704,19 +740,26 @@ fn announcer(state: Arc<State>) {
 fn main() {
     let mut port = online::DEFAULT_PORT;
     let mut data = PathBuf::from(".");
+    let mut http_port = 0;
+    let mut behind_proxy = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--port" => port = args.next().and_then(|p| p.parse().ok()).expect("--port N"),
             "--data" => data = PathBuf::from(args.next().expect("--data DIR")),
+            "--http-port" => http_port = args.next().and_then(|p| p.parse().ok()).expect("--http-port N"),
+            "--behind-proxy" => behind_proxy = true,
             _ => {
-                eprintln!("usage: taiko-server [--port 7800] [--data DIR]");
+                eprintln!("usage: taiko-server [--port 7800] [--data DIR] [--http-port 8080 [--behind-proxy]]");
                 std::process::exit(2);
             }
         }
     }
     std::fs::create_dir_all(&data).expect("data dir");
     let state = Arc::new(State::load(data.join("accounts.json")));
+    if http_port != 0 {
+        web::serve(state.clone(), http_port, behind_proxy);
+    }
     {
         let state = state.clone();
         std::thread::spawn(move || reaper(state));

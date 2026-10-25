@@ -36,6 +36,149 @@ pub enum Request {
     /// The social connection (friends, chat, watching): after `Reply::Account` the connection
     /// stays open, the game sending `Up` lines and the server `Down` lines.
     Connect { token: String },
+    /// A kept play for the online leaderboards (`Reply::Submitted`).
+    SubmitScore { token: String, play: Box<ScoreSubmit> },
+    /// The best score of each player on a map, by its hash (`Reply::Scores`).
+    MapScores { map: u64 },
+    /// A player's profile (`Reply::Profile`).
+    Profile { name: String },
+}
+
+/// A play sent to the server: what the leaderboards show, and the replay's presses (kept so
+/// plays can be watched and checked later).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ScoreSubmit {
+    /// The map (its hash, names and set), with the rate and mods played.
+    pub map: crate::net::MapInfo,
+    pub score: u64,
+    pub accuracy: f64,
+    pub max_combo: u32,
+    pub great: u32,
+    pub ok: u32,
+    pub miss: u32,
+    pub pp: Option<f64>,
+    /// Unix seconds.
+    pub date: u64,
+    pub replay_version: u32,
+    pub inputs: Vec<(f64, u8)>,
+    /// Star rating at the rate played.
+    #[serde(default)]
+    pub stars: Option<f64>,
+}
+
+/// A score on a leaderboard or a profile.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct OnlineScore {
+    pub player: String,
+    /// "Artist - Title [Version]".
+    pub map: String,
+    pub map_hash: u64,
+    pub score: u64,
+    pub accuracy: f64,
+    pub max_combo: u32,
+    pub miss: u32,
+    pub rate: f64,
+    pub mods: Vec<String>,
+    pub pp: Option<f64>,
+    pub date: u64,
+    #[serde(default)]
+    pub great: u32,
+    #[serde(default)]
+    pub ok: u32,
+    /// The map's osu! set (for its cover), and its star rating at the rate played.
+    #[serde(default)]
+    pub set_id: Option<u32>,
+    #[serde(default)]
+    pub stars: Option<f64>,
+}
+
+impl OnlineScore {
+    #[allow(dead_code)] // used by the online server (server/)
+    pub fn grade(&self) -> &'static str {
+        grade(self.great, self.ok, self.miss, self.accuracy)
+    }
+}
+
+/// A play's letter, as the results screen gives it.
+pub fn grade(great: u32, ok: u32, miss: u32, accuracy: f64) -> &'static str {
+    let acc = accuracy * 100.0;
+    match () {
+        _ if miss == 0 && ok == 0 && great > 0 => "SS",
+        _ if acc >= 95.0 && miss == 0 => "S",
+        _ if acc >= 90.0 => "A",
+        _ if acc >= 80.0 => "B",
+        _ if acc >= 70.0 => "C",
+        _ => "D",
+    }
+}
+
+/// A player as the server sees them.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct Profile {
+    pub name: String,
+    /// Unix seconds.
+    pub joined: u64,
+    /// Plays sent, and their pp total (best per map, weighted like osu!).
+    pub plays: u32,
+    pub pp: f64,
+    /// Place among everyone by pp (1-based; None without pp yet).
+    pub rank: Option<u32>,
+    /// Their best plays by pp, and the latest ones.
+    pub top: Vec<OnlineScore>,
+    pub recent: Vec<OnlineScore>,
+    #[serde(default)]
+    pub stats: Stats,
+    /// Maps where theirs is the best score.
+    #[serde(default)]
+    pub firsts: Vec<OnlineScore>,
+    #[serde(default)]
+    pub online: bool,
+}
+
+/// A player's totals, like osu!'s profile.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct Stats {
+    /// Their best score on each map, added up; and every score.
+    pub ranked_score: u64,
+    pub total_score: u64,
+    /// Accuracy of their best plays, weighted like pp.
+    pub accuracy: f64,
+    pub total_hits: u64,
+    pub max_combo: u32,
+    /// Best plays per map graded SS, S and A.
+    pub ss: u32,
+    pub s: u32,
+    pub a: u32,
+}
+
+/// osu!'s level for a total score, with the part of the way to the next.
+#[allow(dead_code)] // used by the online server (server/)
+pub fn level(total_score: u64) -> f64 {
+    let needed = |n: f64| -> f64 {
+        if n <= 100.0 {
+            5000.0 / 3.0 * (4.0 * n.powi(3) - 3.0 * n.powi(2) - n) + 1.25 * 1.8f64.powf(n - 60.0)
+        } else {
+            26_931_190_827.0 + 99_999_999_999.0 * (n - 100.0)
+        }
+    };
+    let score = total_score as f64;
+    let mut n = 1.0;
+    while needed(n + 1.0) <= score && n < 200.0 {
+        n += 1.0;
+    }
+    let (lo, hi) = (needed(n), needed(n + 1.0));
+    n + ((score - lo) / (hi - lo)).clamp(0.0, 0.999)
+}
+
+/// Leaderboard rows a map's scores reply holds at most.
+#[allow(dead_code)] // used by the online server (server/)
+pub const MAP_SCORES: usize = 50;
+
+/// A player's pp total from their pp on each map (best per map): highest first, each counting
+/// 5% less than the one before, like osu!.
+pub fn weighted_pp(mut best: Vec<f64>) -> f64 {
+    best.sort_by(|a, b| b.total_cmp(a));
+    best.iter().enumerate().map(|(i, pp)| pp * 0.95f64.powi(i as i32)).sum()
 }
 
 /// What a player is doing, for their friends.
@@ -147,6 +290,11 @@ pub enum Reply {
     /// `host_token` (set when we created the room).
     Joined { room: u32, title: String, host_token: Option<u64> },
     Error(String),
+    /// The play is on the leaderboards: its place on the map (if it's the player's best there),
+    /// and the player's pp total and rank now.
+    Submitted { map_rank: Option<u32>, pp: f64, rank: Option<u32> },
+    Scores(Vec<OnlineScore>),
+    Profile(Box<Profile>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

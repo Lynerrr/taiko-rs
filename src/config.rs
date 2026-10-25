@@ -188,6 +188,10 @@ pub struct Config {
     pub universes: [crate::multiverse::Universe; crate::multiverse::COUNT],
     /// The player's Multiverse presets.
     pub universe_presets: Vec<crate::multiverse::Preset>,
+    /// Shapeshift: how often the lane changes shape, how long the morph takes, the order.
+    pub shapeshift: crate::shapeshift::Config,
+    /// Mods marked as favourites in the mod select (shown in a row of their own).
+    pub favourite_mods: crate::mods::Mods,
     /// Note colours without Multiverse.
     pub note_colours: crate::multiverse::Colours,
     /// How replay videos are exported.
@@ -265,6 +269,8 @@ impl Default for Config {
             songs_folder: None,
             universes: crate::multiverse::defaults(),
             universe_presets: Vec::new(),
+            shapeshift: Default::default(),
+            favourite_mods: crate::mods::Mods::NONE,
             note_colours: crate::multiverse::Colours::CLASSIC,
             video: Default::default(),
             songs: Vec::new(),
@@ -596,6 +602,8 @@ impl Config {
                 "multiverse" => cfg.universes = crate::multiverse::parse(v),
                 "multiverse_preset" => cfg.universe_presets.extend(crate::multiverse::Preset::parse(v)),
                 "note_colours" => cfg.note_colours = crate::multiverse::Colours::parse(v),
+                "shapeshift" => cfg.shapeshift = crate::shapeshift::Config::parse(v),
+                "favourite_mods" => cfg.favourite_mods = crate::mods::Mods::parse_set(v),
                 k if k.starts_with("video_") => {
                     cfg.video.parse(k, v);
                 }
@@ -753,13 +761,21 @@ impl Config {
         ));
         out.push_str(&self.video.config_lines());
         out.push_str(&format!(
-            "# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (M in the mod select)\nmultiverse = {}\n",
+            "# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (C in the mod select)\nmultiverse = {}\n",
             crate::multiverse::format(&self.universes)
         ));
         out.push_str("# your own Multiverse presets, one per line: name: universes as above\n");
         for p in &self.universe_presets {
             out.push_str(&format!("multiverse_preset = {}\n", p.format()));
         }
+        out.push_str(&format!(
+            "# Shapeshift: bars per shape (4/8/16/32), bars to morph (0.5/1/2/4), order shuffle/fixed, shapes in order (- = left out)\nshapeshift = {}\n",
+            self.shapeshift.format()
+        ));
+        out.push_str(&format!(
+            "# favourite mods (right-click or F in the mod select), e.g. HD,HR\nfavourite_mods = {}\n",
+            self.favourite_mods.to_config()
+        ));
         out.push_str(&format!(
             "# note colours without Multiverse: a palette (classic, neon, sunset...) or custom #don/#kat\nnote_colours = {}\n",
             self.note_colours.format()

@@ -32,10 +32,13 @@ mod multiverse;
 mod multiplayer;
 mod net;
 mod osudb;
+mod pp;
+mod profile;
 mod preview;
 mod render;
 mod scores;
 mod settings;
+mod shapeshift;
 mod skin;
 mod social;
 mod splash;
@@ -242,14 +245,29 @@ struct State {
     host_transfer: Option<std::sync::mpsc::Sender<Option<Vec<u8>>>>,
     /// Local scores (index of saved replays).
     scores: Vec<scores::ScoreRow>,
+    /// Working out the pp of scores saved before pp (started once, on the first frame).
+    pp_backfill: Option<Receiver<Vec<(PathBuf, f64)>>>,
+    pp_backfill_started: bool,
+    /// Plays on their way to the online leaderboards.
+    submits: Vec<Receiver<Result<online::Reply, String>>>,
+    /// The song select leaderboard shows the server's scores, not the local ones.
+    board_online: bool,
+    /// A player's profile, over everything else.
+    profile: Option<profile::View>,
+    /// Online leaderboards fetched (by map hash: when, and the rows or why not), and the one
+    /// being fetched.
+    online_boards: std::collections::HashMap<u64, (Instant, Result<Vec<online::OnlineScore>, String>)>,
+    board_fetch: Option<(u64, Receiver<Result<Vec<online::OnlineScore>, String>>)>,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
     /// Mods of the play being loaded.
     pending_mods: Mods,
     /// The mod select is open: the mod the keyboard is on (index into `mods::ALL`).
     mod_select: Option<usize>,
-    /// The Multiverse setup, over the mod select.
+    /// The mod customization over the mod select: the Multiverse tab or the Shapeshift tab (at
+    /// most one is open).
     universe_setup: Option<multiverse::Setup>,
+    shapeshift_setup: Option<shapeshift::Setup>,
     /// Replay files of the leaderboard rows drawn this frame.
     leaderboard: Vec<PathBuf>,
     /// A video export in progress, and the editor's last message.
@@ -484,15 +502,64 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
     }
 }
 
-/// Local scores for the selected map, under the song select panel.
-fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow]) {
-    let label_w = c.text(x + 4.0, y + 2.0, 7.0, rgba(accent(), 1.0), "LOCAL SCORES");
+/// The leaderboard's LOCAL / ONLINE tabs; returns how wide they are.
+fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
+    let mut tx = x;
+    for (label, on) in [("LOCAL", false), ("ONLINE", true)] {
+        let tw = Canvas::text_width(7.0, label) + 10.0;
+        let lit = on == online;
+        let h = Canvas::text_height(7.0) + 3.0;
+        c.round_rect(tx, y - 1.5, tw, h, 3.0, rgba(if lit { accent() } else { 0x1d1d27 }, if lit { 0.9 } else { 1.0 }), rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+        c.text(tx + 5.0, y + 1.5, 7.0, rgba(if lit { 0xffffff } else { 0x8a8aa0 }, 1.0), label);
+        c.hit(tx, y - 1.5, tw, h, render::Hit::BoardTab(on));
+        tx += tw + 4.0;
+    }
+    tx - x - 4.0
+}
+
+/// The server's scores for the selected map: each player's best (`board` None while loading).
+fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option<&Result<Vec<online::OnlineScore>, String>>, me: &str, fits: usize) {
+    let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true);
+    let at = x + 4.0 + tabs_w + 10.0;
+    let note = match board {
+        None => Some("loading...".to_string()),
+        Some(Err(e)) => Some(format!("can't reach the server: {e}")),
+        Some(Ok(rows)) if rows.is_empty() => Some("no online scores yet - log in (F9) and finish a play".to_string()),
+        Some(Ok(_)) => None,
+    };
+    if let Some(note) = note {
+        c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, &note));
+        return;
+    }
+    let Some(Ok(rows)) = board else { return };
+    for (k, r) in rows.iter().take(fits).enumerate() {
+        let ry = y + 14.0 + k as f32 * 18.0;
+        let mine = r.player.eq_ignore_ascii_case(me);
+        c.round_rect(x, ry, w, 16.0, 5.0, rgba(if mine { 0x23232f } else { 0x15151d }, 0.9), rgba(if mine { accent() } else { 0x2a2a38 }, 1.0), 1.0);
+        let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
+        let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods.concat()) };
+        let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
+        let core = format!("#{}  {}  {:08}  {:.2}%{pp}  {}x", k + 1, r.player, r.score, r.accuracy * 100.0, r.max_combo);
+        let room = w - 16.0;
+        let right = Canvas::fit(6.5, room - Canvas::text_width(6.5, &core) - 12.0, &format!("{} miss  {}", r.miss, scores::age(r.date)));
+        let left_room = room - if right.is_empty() { 0.0 } else { Canvas::text_width(6.5, &right) + 8.0 };
+        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
+        c.text_right(x + w - 8.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
+    }
+}
+
+/// Local scores for the selected map, under the song select panel, and the player's pp total.
+fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow], total_pp: f64) {
+    let mut label_w = board_tabs(c, x + 4.0, y + 1.0, false);
+    if total_pp > 0.0 {
+        label_w += 10.0 + c.text(x + 14.0 + label_w, y + 2.5, 6.0, rgba(0xff8ad8, 1.0), &format!("{total_pp:.0} pp total"));
+    }
     if rows.is_empty() {
         let at = x + 4.0 + label_w + 14.0;
         c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, "none yet - finish a play to set one"));
         return;
     }
-    let room = w - 20.0 - Canvas::text_width(7.0, "LOCAL SCORES");
+    let room = w - 20.0 - label_w;
     c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, room, "click: watch the replay   video: export it"));
     for (k, r) in rows.iter().enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
@@ -501,7 +568,8 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         c.hit(x, ry, w, 16.0, render::Hit::ScoreRow(k));
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods) };
-        let core = format!("#{}  {:08}  {:.2}%  {}x", k + 1, r.score, r.accuracy * 100.0, r.max_combo);
+        let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
+        let core = format!("#{}  {:08}  {:.2}%{pp}  {}x", k + 1, r.score, r.accuracy * 100.0, r.max_combo);
         // The video button sits on top of the row (drawn after it, so it wins the click).
         let bw = Canvas::text_width(6.0, "video") + 12.0;
         let bx = x + w - bw - 3.0;
@@ -513,6 +581,28 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         c.button(bx, ry + 2.0, bw, 12.0, "video", 6.0, render::Hit::ScoreVideo(k), false);
         c.text_right(bx - 6.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
+}
+
+/// Sends a play to the online leaderboards on a background thread.
+fn submit_score(server: String, token: String, play: online::ScoreSubmit) -> Receiver<Result<online::Reply, String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(online::call(&server, online::Request::SubmitScore { token, play: Box::new(play) }));
+    });
+    rx
+}
+
+/// Fetches a map's online leaderboard on a background thread.
+fn fetch_board(server: String, map: u64) -> Receiver<Result<Vec<online::OnlineScore>, String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let rows = online::call(&server, online::Request::MapScores { map }).and_then(|r| match r {
+            online::Reply::Scores(rows) => Ok(rows),
+            _ => Err("odd reply from the server".to_string()),
+        });
+        let _ = tx.send(rows);
+    });
+    rx
 }
 
 /// `file://` URI for a local path.
@@ -2119,8 +2209,7 @@ impl State {
                 for path in paths {
                     let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("osz")) {
-                        self.toast(format!("importing {name}..."));
-                        self.downloads.push(download::import(path, &name, self.songs_dir.clone(), false));
+                        self.import_osz(path, &name, false);
                     } else {
                         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                         self.toast(format!("{file} isn't a map: drop .osz files"));
@@ -2128,6 +2217,39 @@ impl State {
                 }
             }
         }
+    }
+
+    /// Unpacks an `.osz` into the Songs folder, unless everything in it is already in the list or
+    /// on its way (the same file dropped twice). A set that's partly here (a new difficulty) is
+    /// unpacked into its own folder when that's in the Songs folder. `remove`: delete the
+    /// archive afterwards (a temporary copy).
+    fn import_osz(&mut self, archive: PathBuf, name: &str, remove: bool) {
+        let maps = match download::archive_maps(&archive) {
+            Ok(maps) if !maps.is_empty() => maps,
+            result => {
+                if remove {
+                    let _ = std::fs::remove_file(&archive);
+                }
+                self.toast(match result {
+                    Err(e) => format!("{name}: {e}"),
+                    Ok(_) => format!("{name} has no maps in it"),
+                });
+                return;
+            }
+        };
+        let pending: std::collections::HashSet<u64> = self.downloads.iter().flat_map(|j| j.maps.iter().copied()).collect();
+        let (fresh, home) = library::osz_news(&self.library, &pending, &maps);
+        if fresh == 0 {
+            if remove {
+                let _ = std::fs::remove_file(&archive);
+            }
+            self.toast(format!("{name} is already in your songs"));
+            return;
+        }
+        let folder = home.filter(|d| d.parent() == Some(self.songs_dir.as_path())).and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned());
+        self.toast(format!("importing {name}..."));
+        let job = download::import(archive, folder.as_deref().unwrap_or(name), self.songs_dir.clone(), remove, maps.into_iter().map(|m| m.1).collect());
+        self.downloads.push(job);
     }
 
     /// While files are dragged over the window: where they go when dropped.
@@ -3241,6 +3363,14 @@ impl State {
     /// Released without moving, it opens the row's menu (or, off the rows, jumps there).
     fn right_button(&mut self, pressed: bool) {
         if self.mod_select.is_some() {
+            // Right-clicking a mod makes it a favourite (or not any more).
+            if pressed && self.customization_tab().is_none() {
+                let (vx, vy) = self.mouse_virtual();
+                if let Some(render::Hit::ModToggle(i)) = self.hit_at(vx, vy) {
+                    self.mod_select = Some(i);
+                    self.toggle_favourite(mods::ALL[i]);
+                }
+            }
             return;
         }
         let free = self.splash.is_none() && self.select.picker.is_none() && self.settings_ui.dropdown.is_none();
@@ -3283,13 +3413,27 @@ impl State {
             }
             return;
         }
+        if self.profile.is_some() {
+            // Only its Back button.
+            if pressed {
+                let (vx, vy) = self.mouse_virtual();
+                if let Some(hit @ render::Hit::Key(_)) = self.hit_at(vx, vy) {
+                    self.click(hit, window);
+                }
+            }
+            return;
+        }
         if self.mod_select.is_some() {
             // Only the mod select's own chips and buttons; nothing under it.
             if pressed {
                 let (vx, vy) = self.mouse_virtual();
                 let hit = self.hit_at(vx, vy);
-                let ours = if self.universe_setup.is_some() {
-                    matches!(hit, Some(render::Hit::UniverseCell(..) | render::Hit::UniversePreset(_) | render::Hit::UniversePresetDelete(_) | render::Hit::Key(_)))
+                let ours = if self.customization_tab().is_some() {
+                    use render::Hit as H;
+                    matches!(
+                        hit,
+                        Some(H::UniverseCell(..) | H::UniversePreset(_) | H::UniversePresetDelete(_) | H::ShapeshiftCell(..) | H::ShapeshiftMove(_) | H::CustomTab(_) | H::Key(_))
+                    )
                 } else {
                     matches!(hit, Some(render::Hit::ModToggle(_) | render::Hit::Key(_)))
                 };
@@ -4022,10 +4166,65 @@ impl State {
                 self.cfg.mods = Mods::shuffle(seed);
                 self.mods_changed();
             }
-            KeyCode::KeyM => self.universe_setup = Some(multiverse::Setup::new(game::FIRST_FOCUS, 0)),
+            KeyCode::KeyF => self.toggle_favourite(mods::ALL[cur]),
+            KeyCode::KeyC | KeyCode::KeyM => match mods::customizable(self.cfg.mods).first() {
+                Some(&m) => self.open_customization(m),
+                None => self.toast("switch on Multiverse or Shapeshift to customize it".to_string()),
+            },
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
         }
+    }
+
+    fn toggle_favourite(&mut self, m: mods::Mod) {
+        self.cfg.favourite_mods = self.cfg.favourite_mods.flip(m);
+        self.cfg.save();
+    }
+
+    /// Opens the mod customization on mod `m`'s tab.
+    fn open_customization(&mut self, m: mods::Mod) {
+        self.universe_setup = (m == mods::Mod::Multiverse).then(|| multiverse::Setup::new(game::FIRST_FOCUS, 0));
+        self.shapeshift_setup = (m == mods::Mod::Shapeshift).then(shapeshift::Setup::default);
+    }
+
+    /// The mod customization's open tab.
+    fn customization_tab(&self) -> Option<mods::Mod> {
+        if self.universe_setup.is_some() {
+            Some(mods::Mod::Multiverse)
+        } else {
+            self.shapeshift_setup.is_some().then_some(mods::Mod::Shapeshift)
+        }
+    }
+
+    /// Keys in the mod customization: Tab goes to the next tab (closes it with only one), the
+    /// rest go to the open one.
+    fn customization_key(&mut self, code: KeyCode, text: Option<&str>, repeat: bool) {
+        let typing = self.universe_setup.as_ref().is_some_and(|s| s.typing.is_some());
+        let tabs = mods::customizable(self.cfg.mods);
+        if code == KeyCode::Tab && !typing && tabs.len() > 1 {
+            let at = tabs.iter().position(|&m| Some(m) == self.customization_tab()).unwrap_or(0);
+            self.open_customization(tabs[(at + 1) % tabs.len()]);
+            return;
+        }
+        let arrows = matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight);
+        if repeat && !typing && !arrows {
+            return;
+        }
+        if let Some(setup) = &mut self.universe_setup {
+            let action = setup.key(code, text, self.modifiers_shift, &mut self.cfg.universes, &mut self.cfg.universe_presets, game::FIRST_FOCUS);
+            self.universe_action(action);
+        } else if let Some(setup) = &mut self.shapeshift_setup {
+            if matches!(code, KeyCode::Escape | KeyCode::F1 | KeyCode::Backspace | KeyCode::Tab) {
+                self.shapeshift_setup = None;
+            } else if setup.key(code, self.modifiers_shift, &mut self.cfg.shapeshift) {
+                self.shapeshift_changed();
+            }
+        }
+    }
+
+    fn shapeshift_changed(&mut self) {
+        shapeshift::set(self.cfg.shapeshift);
+        self.cfg.save();
     }
 
     /// After a key or click in the Multiverse setup: the universes are saved and drawn with, or
@@ -4197,6 +4396,7 @@ impl State {
                 _ => {}
             },
             KeyCode::KeyW if self.modifiers_ctrl => self.social_action(social::Action::Watch),
+            KeyCode::KeyP if self.modifiers_ctrl => self.social_action(social::Action::Profile),
             KeyCode::KeyJ if self.modifiers_ctrl => self.social_action(social::Action::Join),
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 let text = self.social.input.trim().to_string();
@@ -4288,6 +4488,21 @@ impl State {
                     self.toast("not connected to the server".into());
                 }
             }
+            (Row::Friend(k), Action::Profile) => {
+                if let Some(f) = self.social.friends.get(k) {
+                    self.open_profile(f.name.clone());
+                }
+            }
+            (Row::Player(k), Action::Profile) => {
+                if let Some(p) = self.social.players.as_ref().and_then(|v| v.get(k)) {
+                    self.open_profile(p.name.clone());
+                }
+            }
+            // Elsewhere: our own.
+            (_, Action::Profile) => match self.mp_menu.account.clone() {
+                Some(me) => self.open_profile(me),
+                None => self.toast("log in (F9) to have a profile".into()),
+            },
             (Row::Friend(k), Action::Watch) => {
                 if let Some(f) = self.social.friends.get(k).cloned() {
                     self.watch(f.name);
@@ -4312,6 +4527,10 @@ impl State {
             }
             _ => {}
         }
+    }
+
+    fn open_profile(&mut self, name: String) {
+        self.profile = Some(profile::View::open(self.cfg.online_server.clone(), name));
     }
 
     /// Starts watching a friend's solo plays.
@@ -4830,6 +5049,13 @@ impl State {
             }
             return;
         }
+        // A profile is over everything: any of these closes it, the rest do nothing.
+        if self.profile.is_some() {
+            if matches!(code, KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter) {
+                self.profile = None;
+            }
+            return;
+        }
         // Ctrl+V: the clipboard's text, typed into whatever takes text here.
         if self.modifiers_ctrl && code == KeyCode::KeyV && self.takes_text() {
             if !repeat {
@@ -4871,12 +5097,8 @@ impl State {
             }
             return;
         }
-        if let Some(setup) = &mut self.universe_setup {
-            let typing = setup.typing.is_some();
-            if !repeat || typing || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-                let action = setup.key(code, text, self.modifiers_shift, &mut self.cfg.universes, &mut self.cfg.universe_presets, game::FIRST_FOCUS);
-                self.universe_action(action);
-            }
+        if self.customization_tab().is_some() {
+            self.customization_key(code, text, repeat);
             return;
         }
         if self.mod_select.is_some() {
@@ -5375,9 +5597,14 @@ impl State {
                         let fits = ((436.0 - top - 16.0) / 18.0).floor().max(0.0) as usize;
                         if fits > 0 {
                             let hash = self.library[i].hash();
-                            let rows = scores::top(&self.scores, hash, fits);
-                            self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
-                            draw_leaderboard(canvas, x, top, pw, &rows);
+                            if self.board_online {
+                                let board = self.online_board(hash).cloned();
+                                draw_online_leaderboard(canvas, x, top, pw, board.as_ref(), &self.cfg.online_user, fits);
+                            } else {
+                                let rows = scores::top(&self.scores, hash, fits);
+                                self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
+                                draw_leaderboard(canvas, x, top, pw, &rows, scores::total_pp(&self.scores));
+                            }
                         }
                     }
                 }
@@ -5480,6 +5707,7 @@ impl State {
                         rank: None,
                         watched: game.replay_of.clone(),
                         failed,
+                        pp: None,
                     };
                     // Failed plays aren't kept, like osu!.
                     if game.record && !failed {
@@ -5505,7 +5733,38 @@ impl State {
                             ur: st.unstable_rate(),
                             inputs: std::mem::take(&mut game.inputs),
                         };
-                        match scores::save(&replay) {
+                        let pp = pp::play_pp(&e.path, &replay.pp_play());
+                        results.pp = pp;
+                        // Whole plays go to the online leaderboards too, when logged in.
+                        if from.is_none() && !self.cfg.online_token.is_empty() && !game.mods.unranked() {
+                            let m = &game.map.meta;
+                            let play = online::ScoreSubmit {
+                                map: net::MapInfo {
+                                    hash: replay.map_hash,
+                                    artist: m.artist.clone(),
+                                    title: m.title.clone(),
+                                    version: m.version.clone(),
+                                    rate: replay.rate,
+                                    from: None,
+                                    set_id: m.set_id,
+                                    mods: replay.mods.clone(),
+                                },
+                                score: replay.score,
+                                accuracy: replay.accuracy,
+                                max_combo: replay.max_combo,
+                                great: replay.great,
+                                ok: replay.ok,
+                                miss: replay.miss,
+                                pp,
+                                date: replay.date,
+                                replay_version: replay.version,
+                                inputs: replay.inputs.clone(),
+                                stars: stars::star_rating(&e.path, replay.rate),
+                            };
+                            self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
+                            self.online_boards.remove(&replay.map_hash);
+                        }
+                        match scores::save(&replay, pp) {
                             Ok(row) => {
                                 results.replay = Some(row.file.clone());
                                 self.scores.push(row);
@@ -5846,9 +6105,15 @@ impl State {
             self.readout_rect = None;
         }
         if let Some(cur) = self.mod_select {
-            ui::draw_mod_select(canvas, self.cfg.mods, cur);
+            ui::draw_mod_select(canvas, self.cfg.mods, self.cfg.favourite_mods, cur);
             if let Some(setup) = &self.universe_setup {
                 setup.draw(canvas, &self.cfg.universes, &self.cfg.universe_presets, game::FIRST_FOCUS);
+            }
+            if let Some(setup) = &self.shapeshift_setup {
+                setup.draw_panel(canvas, &self.cfg.shapeshift, game::rail_outline);
+            }
+            if let Some(tab) = self.customization_tab() {
+                ui::draw_customization_tabs(canvas, &mods::customizable(self.cfg.mods), tab);
             }
         }
         if self.settings_ui.dropdown.is_some() {
@@ -5917,6 +6182,9 @@ impl State {
                 social::draw_chip(canvas, &self.social, lobby_unread);
             }
             social::draw_notes(canvas, &self.social);
+        }
+        if let Some(p) = &self.profile {
+            p.draw(canvas);
         }
         if let Some(t) = &self.toast {
             if now < t.until {
@@ -6025,7 +6293,7 @@ impl State {
             None => {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let found = download::search(&format!("{} {}", m.artist, m.title), download::Category::Any, download::SortKey::Relevance, true).and_then(|sets| {
+                    let found = download::search(&format!("{} {}", m.artist, m.title), download::Category::Any, download::SortKey::Relevance, true, 0).and_then(|(sets, _)| {
                         sets.into_iter()
                             .find(|s| s.title.eq_ignore_ascii_case(&m.title) && s.diffs.iter().any(|d| d.version == m.version))
                             .ok_or_else(|| "not found on the mirrors".to_string())
@@ -6129,13 +6397,86 @@ impl State {
         })
     }
 
+    /// Scores saved before pp get theirs worked out in the background, once, and the index is
+    /// written again with them.
+    fn poll_pp_backfill(&mut self) {
+        if !self.pp_backfill_started {
+            self.pp_backfill_started = true;
+            let missing: Vec<PathBuf> = self.scores.iter().filter(|r| r.pp.is_none()).map(|r| r.file.clone()).collect();
+            if !missing.is_empty() {
+                self.pp_backfill = Some(scores::backfill_pp(missing));
+            }
+        }
+        let Some(found) = self.pp_backfill.as_ref().and_then(|rx| rx.try_recv().ok()) else { return };
+        self.pp_backfill = None;
+        if found.is_empty() {
+            return;
+        }
+        let found: std::collections::HashMap<PathBuf, f64> = found.into_iter().collect();
+        for row in &mut self.scores {
+            if let Some(&pp) = found.get(&row.file) {
+                row.pp = Some(pp);
+            }
+        }
+        if let Err(e) = scores::rewrite_index(&self.scores) {
+            eprintln!("couldn't save the scores' pp: {e}");
+        }
+    }
+
+    /// Plays sent to the online leaderboards, and the leaderboard being fetched.
+    fn poll_online_scores(&mut self) {
+        let mut done = Vec::new();
+        self.submits.retain(|rx| match rx.try_recv() {
+            Ok(r) => {
+                done.push(r);
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        });
+        for r in done {
+            let text = match r {
+                Ok(online::Reply::Submitted { map_rank, pp, rank }) => {
+                    let place = map_rank.map(|r| format!("#{r} on this map")).unwrap_or_else(|| "sent (not your best here)".into());
+                    let total = rank.map(|r| format!("  |  {pp:.0} pp, #{r} overall")).unwrap_or_default();
+                    format!("online: {place}{total}")
+                }
+                // Servers from before scores don't know the request.
+                Err(e) if e == "bad request" => "online: the server doesn't take scores yet".into(),
+                Err(e) => format!("online: score not sent ({e})"),
+                Ok(_) => continue,
+            };
+            self.toast(text);
+        }
+        if let Some((map, rx)) = &self.board_fetch {
+            if let Ok(rows) = rx.try_recv() {
+                let rows = rows.map_err(|e| if e == "bad request" { "the server doesn't keep scores yet".into() } else { e });
+                self.online_boards.insert(*map, (Instant::now(), rows));
+                self.board_fetch = None;
+            }
+        }
+    }
+
+    /// The online leaderboard of map `hash` (fetched in the background; again after a minute).
+    fn online_board(&mut self, hash: u64) -> Option<&Result<Vec<online::OnlineScore>, String>> {
+        let stale = self.online_boards.get(&hash).is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(60));
+        if stale && self.board_fetch.is_none() {
+            self.board_fetch = Some((hash, fetch_board(self.cfg.online_server.clone(), hash)));
+        }
+        self.online_boards.get(&hash).map(|(_, rows)| rows)
+    }
+
     fn poll_downloads(&mut self) {
+        self.poll_pp_backfill();
+        self.poll_online_scores();
+        if let Some(p) = &mut self.profile {
+            p.poll();
+        }
         #[cfg(target_os = "android")]
         if self.imports_checked.elapsed() >= Duration::from_secs(1) {
             self.imports_checked = Instant::now();
             for (archive, name) in android::take_imports() {
-                self.toast(format!("importing {name}..."));
-                self.downloads.push(download::import(archive, &name, self.songs_dir.clone(), true));
+                self.import_osz(archive, &name, true);
             }
         }
         if let Some(rx) = &self.lobby_lookup {
@@ -6342,6 +6683,7 @@ impl State {
                     self.toast(format!("{name} is the host now"));
                 }
             }
+            Hit::BoardTab(online) => self.board_online = online,
             Hit::ScoreVideo(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
                     self.open_video_editor(&file);
@@ -6380,6 +6722,23 @@ impl State {
                 let dir = if self.modifiers_shift { -1 } else { 1 };
                 multiverse::Setup::change(&mut self.cfg.universes, row, col, dir);
                 self.universe_action(multiverse::Action::Changed);
+            }
+            Hit::ShapeshiftCell(row, col) => {
+                self.shapeshift_setup = Some(shapeshift::Setup { row, col });
+                shapeshift::Setup::pick(&mut self.cfg.shapeshift, row, col);
+                self.shapeshift_changed();
+            }
+            Hit::ShapeshiftMove(dir) => {
+                if let Some(setup) = &mut self.shapeshift_setup {
+                    if setup.move_shape(&mut self.cfg.shapeshift, dir) {
+                        self.shapeshift_changed();
+                    }
+                }
+            }
+            Hit::CustomTab(i) => {
+                if let Some(&m) = mods::customizable(self.cfg.mods).get(i) {
+                    self.open_customization(m);
+                }
             }
             Hit::UniversePreset(i) => {
                 let action = multiverse::Setup::load(&mut self.cfg.universes, &self.cfg.universe_presets, i);
@@ -7081,10 +7440,18 @@ impl State {
             preview_remote: false,
             host_transfer: None,
             scores: scores::load_index(),
+            pp_backfill: None,
+            pp_backfill_started: false,
+            submits: Vec::new(),
+            board_online: false,
+            profile: None,
+            online_boards: std::collections::HashMap::new(),
+            board_fetch: None,
             pending_replay: None,
             pending_mods: Mods::NONE,
             mod_select: None,
             universe_setup: None,
+            shapeshift_setup: None,
             leaderboard: Vec::new(),
             export: None,
             video_status: String::new(),
@@ -7212,6 +7579,7 @@ fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEv
     config::set_data_folder(cfg.data_folder.clone());
     library::set_songs_folder(cfg.songs_folder.clone());
     multiverse::set(cfg.universes);
+    shapeshift::set(cfg.shapeshift);
     multiverse::set_note_colours(cfg.note_colours);
     let inputs = if args.is_empty() { song_inputs(&cfg) } else { args.clone() };
     let songs_dir = download_dir(&inputs);
