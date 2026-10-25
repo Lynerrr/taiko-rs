@@ -292,6 +292,11 @@ struct State {
     exit_when_done: bool,
     quit: bool,
     smooth: Option<debug::Smoothness>,
+    /// When the frame being built got its swapchain image (for the smoothness report).
+    frame_acquired: Option<Instant>,
+    /// With vsync, how much later (ms) than its image was handed out the frame's notes are drawn
+    /// for, to keep them on the refresh grid (`clock::VsyncPacer`).
+    pace_shift_ms: f64,
     started: Instant,
     /// Requests from the input thread that only the render thread can apply.
     want_size: Option<(u32, u32)>,
@@ -4737,7 +4742,7 @@ impl State {
         self.refresh_play_offset();
         // Notes are drawn this far ahead: the player's visual offset and, with vsync, the time
         // until the frame is on screen.
-        let visual_offset = self.cfg.visual_offset_ms + self.vsync_lead();
+        let visual_offset = self.cfg.visual_offset_ms + self.vsync_lead() + self.pace_shift_ms;
         let dt = now.duration_since(self.stats.last).as_secs_f64() * 1000.0;
         self.stats.last = now;
         self.stats.frames += 1;
@@ -5015,7 +5020,8 @@ impl State {
                         sm.break_sequence();
                     } else {
                         let wall = now.duration_since(self.started).as_secs_f64() * 1000.0;
-                        sm.sample(wall, game.raw_time, game.last_audio_ms);
+                        let shown = self.frame_acquired.unwrap_or(now).duration_since(self.started).as_secs_f64() * 1000.0;
+                        sm.sample(wall, game.raw_time, game.last_audio_ms, shown, game.raw_time + visual_offset);
                     }
                 }
                 // Offset advice is for live play (and its line would sit on the replay timeline).
@@ -6043,6 +6049,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     let mut next_frame = Instant::now();
     let mut last_sample: Option<Instant> = None;
     let mut requested_present: Option<PresentChoice> = None;
+    let mut pacer = clock::VsyncPacer::default();
+    // TAIKO_NO_PACE=1: draw notes for when each image was handed out, as before (to compare).
+    let pace = std::env::var_os("TAIKO_NO_PACE").is_none();
     let mut waits = (0.0, 0.0, 0.0);
     let mut cursor_hidden = false;
     // TAIKO_PROFILE=1: every 2 s, print where frame time goes (build = CPU under the state lock).
@@ -6055,7 +6064,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
     let mut layout_seen = std::collections::HashSet::new();
     loop {
-        let (present, cap) = {
+        let (present, cap, refresh_hz) = {
             let mut s = lock(&state);
             if s.quit {
                 break;
@@ -6081,7 +6090,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 }
             }
             renderer.pixel_scale = if s.cfg.half_resolution { 2 } else { 1 };
-            (s.present, s.frame_cap())
+            (s.present, s.frame_cap(), s.refresh_hz)
         };
 
         let t0 = timing.then(Instant::now);
@@ -6091,6 +6100,15 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         };
         let acquired = Instant::now();
         let now = acquired;
+        // With vsync the notes are drawn for this frame's place on the refresh grid; the game
+        // itself (and judging) runs on the real clock.
+        let pace_shift_ms = if present == PresentChoice::Fifo && pace {
+            let t = pacer.frame_time(acquired, refresh_hz);
+            if t >= acquired { (t - acquired).as_secs_f64() * 1000.0 } else { -(acquired - t).as_secs_f64() * 1000.0 }
+        } else {
+            pacer.reset();
+            0.0
+        };
         // A video export renders offscreen for a while each UI frame (which shows its progress).
         let exporting = Instant::now();
         while exporting.elapsed() < Duration::from_millis(30) {
@@ -6130,6 +6148,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             // Video export frames above are drawn without the grid; the screen's frame with it.
             render::set_text_grid(renderer.text_grid());
             render::set_frame_time(Some(now));
+            s.frame_acquired = Some(acquired);
+            s.pace_shift_ms = pace_shift_ms;
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
             render::set_frame_time(None);
             render::set_text_grid(None);
@@ -6585,6 +6605,8 @@ impl State {
             exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
             quit: false,
             smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
+            frame_acquired: None,
+            pace_shift_ms: 0.0,
             started: Instant::now(),
             want_size: None,
             touch_used: false,

@@ -1,7 +1,9 @@
 //! Diagnostics: screenshot encoding and frame/clock smoothness statistics.
 //!
-//! `TAIKO_STATS=1` prints a report when leaving gameplay; `TAIKO_SHOTS=dir:ms,ms,...` saves PNGs
-//! at the given gameplay times (used for headless testing).
+//! `TAIKO_STATS=1` prints a report when leaving gameplay (with vsync, its "note step vs refresh
+//! grid" line shows how evenly notes move; `TAIKO_NO_PACE=1` turns the vsync pacing off to
+//! compare); `TAIKO_SHOTS=dir:ms,ms,...` saves PNGs at the given gameplay times (used for headless
+//! testing).
 
 use std::path::{Path, PathBuf};
 
@@ -86,10 +88,20 @@ pub struct Smoothness {
     present_ms: Vec<f64>,
     /// Clock sample to the next refresh boundary (next acquire returning).
     sample_age_ms: Vec<f64>,
+    /// Per frame: how long after the one before it got its swapchain image, and how far the
+    /// notes moved (the time they're drawn at, real ms).
+    shown_steps: Vec<(f64, f64)>,
+    last_shown: Option<(f64, f64)>,
 }
 
 impl Smoothness {
-    pub fn sample(&mut self, wall_ms: f64, game_ms: f64, audio_ms: Option<f64>) {
+    /// `shown_ms`: when the frame got its swapchain image; `drawn_ms`: the time its notes are
+    /// drawn at.
+    pub fn sample(&mut self, wall_ms: f64, game_ms: f64, audio_ms: Option<f64>, shown_ms: f64, drawn_ms: f64) {
+        if let Some((s, d)) = self.last_shown {
+            self.shown_steps.push((shown_ms - s, drawn_ms - d));
+        }
+        self.last_shown = Some((shown_ms, drawn_ms));
         if let Some((w, g)) = self.last {
             let dw = wall_ms - w;
             let dg = game_ms - g;
@@ -107,6 +119,27 @@ impl Smoothness {
 
     pub fn break_sequence(&mut self) {
         self.last = None;
+        self.last_shown = None;
+    }
+
+    /// How evenly notes move from one frame to the next: with vsync frames are shown whole
+    /// refreshes apart (the refresh being the median time between images), so each step of the
+    /// notes should be whole refreshes too. Also how many frames showed a refresh or more late.
+    fn pacing(&self) -> (f64, Vec<f64>, usize) {
+        let mut steps: Vec<f64> = self.shown_steps.iter().map(|s| s.0).collect();
+        steps.sort_by(|a, b| a.total_cmp(b));
+        let refresh = steps.get(steps.len() / 2).copied().unwrap_or(16.7).max(0.1);
+        let mut late = 0;
+        let dev = self
+            .shown_steps
+            .iter()
+            .map(|&(_, drawn)| {
+                let n = (drawn / refresh).round().max(1.0);
+                late += (n >= 2.0) as usize;
+                (drawn - n * refresh).abs()
+            })
+            .collect();
+        (refresh, dev, late)
     }
 
     pub fn sample_waits(&mut self, acquire_ms: f64, present_ms: f64, sample_age_ms: f64) {
@@ -129,13 +162,15 @@ impl Smoothness {
         let n = self.frame_ms.len().max(1) as f64;
         let mean = self.frame_ms.iter().sum::<f64>() / n;
         let drift_abs: Vec<f64> = self.drift_ms.iter().map(|d| d.abs()).collect();
+        let pacing = self.pacing();
         format!(
             "frames {}  avg {:.0} fps\n\
              frame time  p50 {:.3}  p99 {:.3}  max {:.3} ms\n\
              clock jitter vs wall  p50 {:.4}  p99 {:.4}  max {:.4} ms  (backwards steps: {})\n\
              clock vs raw audio  p50 {:.3}  p99 {:.3}  max {:.3} ms\n\
              blocked in acquire  p50 {:.3}  p99 {:.3} ms;  in present  p50 {:.3}  p99 {:.3} ms\n\
-             clock sample -> next refresh  p50 {:.3}  p99 {:.3} ms",
+             clock sample -> next refresh  p50 {:.3}  p99 {:.3} ms\n\
+             note step vs refresh grid ({:.3} ms)  p50 {:.4}  p99 {:.4}  max {:.4} ms  (frames a refresh late: {})",
             self.frame_ms.len(),
             1000.0 / mean.max(1e-9),
             pct(&self.frame_ms, 0.5),
@@ -154,6 +189,11 @@ impl Smoothness {
             pct(&self.present_ms, 0.99),
             pct(&self.sample_age_ms, 0.5),
             pct(&self.sample_age_ms, 0.99),
+            pacing.0,
+            pct(&pacing.1, 0.5),
+            pct(&pacing.1, 0.99),
+            pct(&pacing.1, 1.0),
+            pacing.2,
         )
     }
 }
