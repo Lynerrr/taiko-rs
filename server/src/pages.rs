@@ -146,6 +146,14 @@ pub fn profile_meta(p: &Profile) -> Meta {
     }
 }
 
+/// A fingerprint of the site's card image, in its link: a new card is a new link, so neither the
+/// proxy nor Discord keeps showing the old one.
+fn card_version() -> String {
+    let bytes = STATIC_FILES.iter().find(|(f, _)| *f == "site/og.jpg").map(|(_, b)| *b).unwrap_or_default();
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+    format!("{:08x}", hash >> 32)
+}
+
 /// A beatmap's preview: stars, plays and who holds #1, over its cover.
 pub fn map_meta(m: &MapRow, rows: &[OnlineScore]) -> Meta {
     let (_, version) = split_map(&m.name);
@@ -971,7 +979,7 @@ pub fn not_found(why: &str) -> String {
 /// A whole page: `nav` is the header link to mark as the current one ("" for none); `viewer`
 /// the logged-in player, if any (their profile and chat in the header, else a log in button).
 pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &str) -> String {
-    let image = meta.image.clone().unwrap_or_else(|| format!("{SITE}/site/og.jpg"));
+    let image = meta.image.clone().unwrap_or_else(|| format!("{SITE}/site/og.jpg?v={}", card_version()));
     let og = format!(
         "<meta name=description content=\"{0}\"><meta property=og:site_name content=taiko-rs><meta property=og:type content=website>\
          <meta property=og:title content=\"{1}\"><meta property=og:description content=\"{0}\"><meta property=og:image content=\"{2}\">\
@@ -1246,7 +1254,7 @@ mod tests {
         assert!(page("Rankings", "rankings", None, &Meta::default(), "").contains("href=\"/rankings\" class=on"));
         assert!(page("x", "", None, &Meta::default(), "").contains("href=\"/login\""));
         let card = page("A \"quote\"", "", None, &Meta { description: "d<b>".into(), image: None }, "");
-        assert!(card.contains("og:image content=\"https://rstaiko.auneu.space/site/og.jpg\"") && card.contains("og:title content=\"A &quot;quote&quot;\"") && card.contains("d&lt;b&gt;"));
+        assert!(card.contains(&format!("og:image content=\"https://rstaiko.auneu.space/site/og.jpg?v={}\"", card_version())) && card.contains("og:title content=\"A &quot;quote&quot;\"") && card.contains("d&lt;b&gt;"));
         let mine = page("x", "chat", Some("Ryuji"), &Meta::default(), "");
         assert!(mine.contains("href=\"/u/Ryuji\"") && mine.contains("action=\"/logout\"") && !mine.contains("href=\"/login\""));
         assert_eq!(thousands(1234567), "1,234,567");
