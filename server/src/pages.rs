@@ -80,6 +80,19 @@ fn mod_info(acronym: &str) -> Option<(&'static str, &'static str)> {
     groups().iter().find_map(|g| g.mods.iter().find(|m| m.acronym == acronym).map(|m| (g.colour.as_str(), m.name.as_str())))
 }
 
+/// Badges next to a player's name on their profile, like osu!'s groups: (lowercased name,
+/// label, colour, what it means).
+const BADGES: [(&str, &str, &str, &str); 1] = [("auneu", "DEV", "#EB452C", "taiko-rs developer")];
+
+fn badges(name: &str) -> String {
+    let key = name.to_ascii_lowercase();
+    BADGES
+        .iter()
+        .filter(|b| b.0 == key)
+        .map(|(_, label, colour, what)| format!("<span class=badge style=\"--c:{colour}\" title=\"{what}\">{label}</span>"))
+        .collect()
+}
+
 /// How the one looking at a profile stands with its player.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Friendship {
@@ -654,7 +667,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
     format!(
         "<div class=cover{cover}></div>\
          <div class=page><div class=\"panel head\">\
-           <div class=who>{}<div class=id><h1>{}</h1><div>{status}</div><div class=dim>joined {}</div><div class=actions>{actions}</div></div></div>\
+           <div class=who>{}<div class=id><div class=name-row><h1>{}</h1>{}</div><div>{status}</div><div class=dim>joined {}</div><div class=actions>{actions}</div></div></div>\
            <div class=ranks><div class=bigstat><span>GLOBAL RANK</span><b>{rank}</b></div><div class=bigstat><span>PP</span><b class=pp>{}</b></div>\
              <div class=level><span>LEVEL <b>{}</b></span><div class=bar><i style=\"width:{:.0}%\"></i></div></div></div>\
          </div>{notice}\
@@ -672,6 +685,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
            </aside></div></div>",
         avatar(&p.name, "big"),
         esc(&p.name),
+        badges(&p.name),
         month_year(p.joined),
         thousands(p.pp.round() as u64),
         level.floor(),
@@ -1067,6 +1081,8 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 /* Profile. */
 .head{margin-top:-100px;position:relative;z-index:1;display:flex;align-items:flex-end;gap:32px;flex-wrap:wrap;padding:22px 24px}
 .who{display:flex;align-items:flex-end;gap:22px;min-width:0}.who h1{font-size:48px;line-height:56px;text-shadow:-2px 0 var(--don),2px 0 var(--katl)}.id{min-width:0}
+.name-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.badge{display:inline-block;padding:2px 10px;background:var(--c);color:var(--white);font-size:24px;line-height:28px;letter-spacing:2px;box-shadow:3px 3px 0 color-mix(in srgb,var(--c) 45%,#000),-2px 0 0 var(--katl);cursor:default}
 .status{color:var(--dim)}.status:before{content:"";display:inline-block;width:8px;height:8px;background:currentColor;margin-right:8px;vertical-align:2px}.status.on{color:var(--green)}
 .ranks{margin-left:auto;display:flex;gap:36px;align-items:flex-end;flex-wrap:wrap}.bigstat span{display:block;color:var(--dim)}.bigstat b{font-size:48px;line-height:48px;color:var(--white)}.bigstat b.pp{color:var(--acc)}
 .level{min-width:220px}.level span{color:var(--dim)}.level b{color:var(--white)}
@@ -1164,6 +1180,12 @@ mod tests {
         assert!(Os::of("Mozilla/5.0 (Linux; Android 14)") == Os::Android);
         assert!(Os::of("Mozilla/5.0 (X11; Linux x86_64)") == Os::Linux);
         assert!(Os::of("Mozilla/5.0 (Macintosh)") == Os::Other);
+    }
+
+    #[test]
+    fn badges_go_by_name_in_any_case() {
+        assert!(badges("Auneu").contains(">DEV<"));
+        assert!(badges("Ryuji").is_empty());
     }
 
     #[test]
