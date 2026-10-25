@@ -8,7 +8,9 @@
 //!   /u/<name>         a profile         /api/u/<name>
 //!   /beatmaps         maps played       /api/beatmaps
 //!   /m/<map hash>     a map's scores    /api/m/<map hash>
-//!   /clips/<file>     the home page's gameplay clips (with byte ranges, for video players)
+//!   /mods             the mod select, and clips of what the mods do
+//!   /clips/<file>     the gameplay clips (with byte ranges, for video players)
+//!   /site/<file>      the font and the logo
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -170,8 +172,8 @@ fn byte_range(header: &str, total: usize) -> Option<(usize, usize)> {
     (start <= end && end < total).then_some((start, end))
 }
 
-/// Styles inline and the font from Google; map covers from osu!; clips from here; no scripts at all.
-const CSP: &str = "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https://assets.ppy.sh; media-src 'self'; form-action 'self'";
+/// Styles inline, the font and clips from here, map covers from osu!; no scripts at all.
+const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' https://assets.ppy.sh; media-src 'self'; form-action 'self'";
 
 fn reason(status: u16) -> &'static str {
     match status {
@@ -218,9 +220,16 @@ impl Reply {
         Reply { location: Some(to), ..Reply::new(302, "text/plain", Cow::Borrowed(&[])) }
     }
 
-    /// A clip or its poster: the same for everyone and never changing within a release.
-    fn clip(name: &str, bytes: &'static [u8]) -> Reply {
-        let kind = if name.ends_with(".mp4") { "video/mp4" } else { "image/jpeg" };
+    /// A clip, its poster, the font or the logo: the same for everyone and never changing
+    /// within a release.
+    fn file(name: &str, bytes: &'static [u8]) -> Reply {
+        let kind = match name.rsplit('.').next() {
+            Some("mp4") => "video/mp4",
+            Some("jpg") => "image/jpeg",
+            Some("png") => "image/png",
+            Some("woff2") => "font/woff2",
+            _ => "application/octet-stream",
+        };
         Reply { cache: "public, max-age=86400", ranges: true, ..Reply::new(200, kind, Cow::Borrowed(bytes)) }
     }
 
@@ -245,8 +254,12 @@ fn route(state: &State, target: &str, os: Os) -> Reply {
             let ranked = scores.rankings(usize::MAX);
             let maps = scores.maps(6);
             let plays = scores.play_count();
+            let latest = scores.latest(8);
             drop(scores);
-            Reply::html(200, "osu!taiko, rebuilt", "", pages::home(&ranked, &maps, ranked.len(), plays, os)).per_visitor()
+            let (online, rooms) = (state.online_players(), state.rooms());
+            let live = pages::Live { online: &online, rooms: &rooms, latest: &latest };
+            // Live parts: not kept by the proxy for long.
+            Reply::html(200, "osu!taiko, rebuilt", "", pages::home(&ranked, &maps, ranked.len(), plays, os, live)).per_visitor()
         }
         ["rankings"] => Reply::html(200, "Performance Ranking", "rankings", pages::rankings(&state.scores.lock().unwrap().rankings(RANKINGS))),
         ["api", "rankings"] => Reply::json(&state.scores.lock().unwrap().rankings(RANKINGS)),
@@ -257,7 +270,11 @@ fn route(state: &State, target: &str, os: Os) -> Reply {
             _ => Reply::redirect("/rankings".into()),
         },
         ["u", name] => match state.profile(name) {
-            Some(p) => Reply::html(200, &p.name, "rankings", pages::profile(&p)),
+            Some(p) => {
+                let extras = state.scores.lock().unwrap().extras(&p.name.to_ascii_lowercase());
+                let (activity, friends) = (state.activity(&p.name), state.friends_online(&p.name));
+                Reply::html(200, &p.name, "rankings", pages::profile(&p, &extras, activity.as_ref(), &friends))
+            }
             None => not_found("There is no player by that name"),
         },
         ["api", "u", name] => match state.profile(name) {
@@ -278,9 +295,10 @@ fn route(state: &State, target: &str, os: Os) -> Reply {
                 None => not_found("Nobody has sent a play on that map yet"),
             }
         }
-        ["clips", name] => match pages::CLIP_FILES.iter().find(|(f, _)| f == name) {
-            Some((f, bytes)) => Reply::clip(f, bytes),
-            None => not_found("There is no such clip"),
+        ["mods"] => Reply::html(200, "Mods", "mods", pages::mods_page()),
+        [dir @ ("clips" | "site"), name] => match pages::STATIC_FILES.iter().find(|(f, _)| f.strip_prefix(dir).and_then(|f| f.strip_prefix('/')) == Some(name)) {
+            Some((f, bytes)) => Reply::file(f, bytes),
+            None => not_found("There is no such file"),
         },
         ["robots.txt"] => Reply::text(200, "User-agent: *\nAllow: /\n"),
         _ => not_found("There is nothing at this address"),

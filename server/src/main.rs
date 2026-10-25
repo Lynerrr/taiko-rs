@@ -424,6 +424,31 @@ impl State {
         Some(p)
     }
 
+    /// Everyone online with what they're doing, for the website.
+    fn online_players(&self) -> Vec<OnlinePlayer> {
+        match self.hub.lock().unwrap().players() {
+            Down::Players { players, .. } => players,
+            _ => Vec::new(),
+        }
+    }
+
+    /// What `name` is doing, if they're online.
+    fn activity(&self, name: &str) -> Option<Activity> {
+        let key = name.trim().to_ascii_lowercase();
+        self.hub.lock().unwrap().conns.get(&key).and_then(|v| v.last()).map(|c| c.activity.clone())
+    }
+
+    /// `name`'s friends as written, and whether each is online.
+    fn friends_online(&self, name: &str) -> Vec<(String, bool)> {
+        let key = name.trim().to_ascii_lowercase();
+        // Names first: the accounts and the hub are never locked at once here.
+        let named: Vec<(String, String)> = self.friend_keys(&key).into_iter().map(|k| (self.display_name(&k), k)).collect();
+        let hub = self.hub.lock().unwrap();
+        let mut out: Vec<(String, bool)> = named.into_iter().map(|(name, k)| (name, hub.conns.contains_key(&k))).collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+        out
+    }
+
     fn display_name(&self, key: &str) -> String {
         self.accounts.lock().unwrap().users.get(key).map(|u| u.name.clone()).unwrap_or_else(|| key.to_string())
     }

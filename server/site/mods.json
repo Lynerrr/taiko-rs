@@ -1,0 +1,415 @@
+[
+  {
+    "colour": "#86e05a",
+    "mods": [
+      {
+        "acronym": "EZ",
+        "description": "Wider timing windows (OD x0.5), slower notes, a kinder HP bar.",
+        "name": "Easy"
+      },
+      {
+        "acronym": "NF",
+        "description": "You can't fail, whatever the HP bar says.",
+        "name": "No Fail"
+      },
+      {
+        "acronym": "HT",
+        "description": "0.75x speed, same pitch.",
+        "name": "Half Time"
+      },
+      {
+        "acronym": "DC",
+        "description": "0.75x speed, lower pitch.",
+        "name": "Daycore"
+      },
+      {
+        "acronym": "HA",
+        "description": "Every other don/kat is gone. For learning hard maps.",
+        "name": "Half Notes"
+      },
+      {
+        "acronym": "NB",
+        "description": "Big notes become normal ones.",
+        "name": "No Finishers"
+      }
+    ],
+    "title": "REDUCTION"
+  },
+  {
+    "colour": "#eb452c",
+    "mods": [
+      {
+        "acronym": "HR",
+        "description": "Tighter windows (OD x1.4), much faster notes, a stricter HP bar.",
+        "name": "Hard Rock"
+      },
+      {
+        "acronym": "SD",
+        "description": "The first miss fails the play.",
+        "name": "Sudden Death"
+      },
+      {
+        "acronym": "PF",
+        "description": "Anything but a GREAT fails the play.",
+        "name": "Perfect"
+      },
+      {
+        "acronym": "DT",
+        "description": "1.5x speed, same pitch.",
+        "name": "Double Time"
+      },
+      {
+        "acronym": "NC",
+        "description": "1.5x speed, higher pitch.",
+        "name": "Nightcore"
+      },
+      {
+        "acronym": "HD",
+        "description": "Notes fade out long before they reach the drum.",
+        "name": "Hidden"
+      },
+      {
+        "acronym": "FL",
+        "description": "Only a circle around the drum is lit; it shrinks at 100 and 200 combo.",
+        "name": "Flashlight"
+      },
+      {
+        "acronym": "PR",
+        "description": "OD +2.",
+        "name": "Precise"
+      },
+      {
+        "acronym": "GN",
+        "description": "An OK counts as a miss (but doesn't fail you).",
+        "name": "Great or Nothing"
+      }
+    ],
+    "title": "INCREASE"
+  },
+  {
+    "colour": "#4fb4ff",
+    "mods": [
+      {
+        "acronym": "RX",
+        "description": "Colours don't matter: any key hits any note.",
+        "name": "Relax"
+      },
+      {
+        "acronym": "AT",
+        "description": "Watch the map play itself.",
+        "name": "Autoplay"
+      },
+      {
+        "acronym": "SW",
+        "description": "Dons become kats and kats become dons.",
+        "name": "Swap"
+      },
+      {
+        "acronym": "RD",
+        "description": "Every note gets a random colour.",
+        "name": "Random"
+      },
+      {
+        "acronym": "CS",
+        "description": "All notes scroll at one speed: no SV changes.",
+        "name": "Constant Speed"
+      },
+      {
+        "acronym": "AL",
+        "description": "The same hand can't hit twice in a row.",
+        "name": "Alternate"
+      },
+      {
+        "acronym": "WU",
+        "description": "The song speeds up from 1.0x to 1.5x of your speed.",
+        "name": "Wind Up"
+      },
+      {
+        "acronym": "WD",
+        "description": "The song slows down from 1.0x to 0.75x of your speed.",
+        "name": "Wind Down"
+      },
+      {
+        "acronym": "AB",
+        "description": "Every don and kat is a big note.",
+        "name": "All Big"
+      }
+    ],
+    "title": "CONVERSION"
+  },
+  {
+    "colour": "#ffd34d",
+    "mods": [
+      {
+        "acronym": "AC",
+        "description": "Notes start slow and rush in near the drum.",
+        "name": "Accel"
+      },
+      {
+        "acronym": "BR",
+        "description": "Notes fly in fast and brake near the drum.",
+        "name": "Brake"
+      },
+      {
+        "acronym": "WV",
+        "description": "Note speed swells and falls along the song.",
+        "name": "Wave"
+      },
+      {
+        "acronym": "PU",
+        "description": "Notes jump forward on every beat.",
+        "name": "Pulse"
+      },
+      {
+        "acronym": "ST",
+        "description": "Notes freeze for half a beat, then catch up.",
+        "name": "Stutter"
+      },
+      {
+        "acronym": "CH",
+        "description": "Every note gets its own speed (+-30%): they overtake each other.",
+        "name": "SV Chaos"
+      },
+      {
+        "acronym": "CC",
+        "description": "Notes speed up steadily over the map, from 0.8x to 1.6x.",
+        "name": "Crescendo"
+      },
+      {
+        "acronym": "DR",
+        "description": "Notes freeze two beats before every kiai, then slam in 1.4x faster.",
+        "name": "Drop"
+      },
+      {
+        "acronym": "GB",
+        "description": "Every beat of a bar shifts up a gear (+15%); the next bar starts over.",
+        "name": "Gearbox"
+      },
+      {
+        "acronym": "RL",
+        "description": "Every 4 bars a random speed (0.5x-2x); a marker shows where it changes.",
+        "name": "Roulette"
+      }
+    ],
+    "title": "SCROLL"
+  },
+  {
+    "colour": "#ff8a3d",
+    "mods": [
+      {
+        "acronym": "AS",
+        "description": "The map's speed changes are turned upside down: 2x becomes 0.5x.",
+        "name": "Anti-SV"
+      },
+      {
+        "acronym": "HS",
+        "description": "The map's speed changes are exaggerated: 1.5x becomes 2.25x.",
+        "name": "Hyper SV"
+      },
+      {
+        "acronym": "EV",
+        "description": "Notes are evenly spaced: bursts fly in fast, slow parts crawl. Play by ear.",
+        "name": "Even"
+      },
+      {
+        "acronym": "SL",
+        "description": "Dons are 20% faster and kats 15% slower: colours overtake each other.",
+        "name": "Split"
+      },
+      {
+        "acronym": "SG",
+        "description": "Notes on the beat are faster, notes between beats slower.",
+        "name": "Swing"
+      },
+      {
+        "acronym": "LF",
+        "description": "Every other note is faster: pairs swap places on the way in.",
+        "name": "Leapfrog"
+      },
+      {
+        "acronym": "PN",
+        "description": "Every miss makes notes 15% faster for 4 seconds; misses stack.",
+        "name": "Panic"
+      },
+      {
+        "acronym": "MC",
+        "description": "Every miss slows notes down for a few seconds.",
+        "name": "Mercy"
+      },
+      {
+        "acronym": "LG",
+        "description": "The lane freezes now and then, then skips ahead. Like a bad stream.",
+        "name": "Lag Spike"
+      },
+      {
+        "acronym": "MW",
+        "description": "On every bar the notes slide backwards for a moment.",
+        "name": "Moonwalk"
+      },
+      {
+        "acronym": "SR",
+        "description": "Speed by rhythm: 1/3s slower, 1/6s faster, 1/8s a bit faster than the rest.",
+        "name": "Snap Speed"
+      }
+    ],
+    "title": "SV LAB"
+  },
+  {
+    "colour": "#c77dff",
+    "mods": [
+      {
+        "acronym": "SU",
+        "description": "Notes only show up close to the drum.",
+        "name": "Sudden"
+      },
+      {
+        "acronym": "BL",
+        "description": "Approaching notes vanish on the second half of every beat.",
+        "name": "Blink"
+      },
+      {
+        "acronym": "BO",
+        "description": "Kiai time turns the lights off: only the drum stays lit.",
+        "name": "Blackout"
+      },
+      {
+        "acronym": "SP",
+        "description": "Flashlight whose circle breathes with the beat.",
+        "name": "Spotlight"
+      },
+      {
+        "acronym": "CL",
+        "description": "Dons and kats look the same. Play by ear and memory.",
+        "name": "Colorless"
+      },
+      {
+        "acronym": "MM",
+        "description": "Notes are only shown for the first 15 seconds.",
+        "name": "Memory"
+      },
+      {
+        "acronym": "DY",
+        "description": "See-through fake notes fly in between the real ones and vanish before the drum.",
+        "name": "Decoy"
+      },
+      {
+        "acronym": "PY",
+        "description": "Everything flashy at once; notes pulse to their own rhythm, 1/4s four times a beat.",
+        "name": "Party"
+      },
+      {
+        "acronym": "OT",
+        "description": "It's me.",
+        "name": "Overtime"
+      },
+      {
+        "acronym": "LI",
+        "description": "Far off, triplets are spaced like 1/4s; their real spacing shows near the drum.",
+        "name": "Liar"
+      }
+    ],
+    "title": "VISUAL"
+  },
+  {
+    "colour": "#5ee6c8",
+    "mods": [
+      {
+        "acronym": "ZZ",
+        "description": "The lane zigzags across the screen.",
+        "name": "Zigzag"
+      },
+      {
+        "acronym": "UT",
+        "description": "Notes come in along the top, make a U-turn and come back to the drum.",
+        "name": "U-Turn"
+      },
+      {
+        "acronym": "SI",
+        "description": "The lane coils into a spiral; notes wind their way in.",
+        "name": "Spiral"
+      },
+      {
+        "acronym": "LP",
+        "description": "The lane has a loop-the-loop in the middle.",
+        "name": "Loop"
+      },
+      {
+        "acronym": "EB",
+        "description": "Notes fall from the top and turn into the lane at a corner.",
+        "name": "Elbow"
+      },
+      {
+        "acronym": "SS",
+        "description": "Every few bars the lane bends into another rails shape (C: how often, which order).",
+        "name": "Shapeshift"
+      },
+      {
+        "acronym": "SK",
+        "description": "Streams slither along the lane, triplets the other way; 1/1 notes fly straight.",
+        "name": "Snake"
+      }
+    ],
+    "title": "RAILS"
+  },
+  {
+    "colour": "#ff5fa2",
+    "mods": [
+      {
+        "acronym": "MR",
+        "description": "The lane is flipped: notes come from the left.",
+        "name": "Mirror"
+      },
+      {
+        "acronym": "TL",
+        "description": "The lane rocks from side to side with the beat.",
+        "name": "Tilt"
+      },
+      {
+        "acronym": "SN",
+        "description": "The lane moves to the middle and turns full circle every 24 seconds.",
+        "name": "Spin"
+      },
+      {
+        "acronym": "MN",
+        "description": "The lane stands up: notes fall down onto the drum.",
+        "name": "Mania"
+      },
+      {
+        "acronym": "BA",
+        "description": "Every kiai starts with a full spin of the lane.",
+        "name": "Barrel Roll"
+      },
+      {
+        "acronym": "FF",
+        "description": "Every 8 bars the lane flips over to the other side.",
+        "name": "Flip Flop"
+      },
+      {
+        "acronym": "SH",
+        "description": "The lane breaks into pieces that slide apart and back; further where streams are.",
+        "name": "Shatter"
+      },
+      {
+        "acronym": "CK",
+        "description": "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
+        "name": "Cracked"
+      },
+      {
+        "acronym": "CR",
+        "description": "Hits knock pieces out of the lane, harder as the combo grows; a miss puts them back.",
+        "name": "Crumble"
+      },
+      {
+        "acronym": "PT",
+        "description": "Notes dive into one portal and come out of another; they move every 8 bars.",
+        "name": "Portal"
+      },
+      {
+        "acronym": "MV",
+        "description": "Eight playfields circle about, each with its own look and mods (C sets them up).",
+        "name": "Multiverse"
+      }
+    ],
+    "title": "PLAYFIELD"
+  }
+]

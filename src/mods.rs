@@ -869,4 +869,26 @@ mod tests {
         assert_eq!(c.track(1500.0), 1000.0);
         assert_eq!(c.map(1000.0), 1500.0);
     }
+
+    /// The website's mod select (server/site/mods.json) is this one; a change here rewrites it,
+    /// and the test fails once so the new file gets committed.
+    #[test]
+    fn website_mod_list_is_current() {
+        let groups: Vec<serde_json::Value> = GROUPS
+            .iter()
+            .map(|(title, colour, mods)| {
+                let mods: Vec<serde_json::Value> = mods
+                    .iter()
+                    .map(|m| serde_json::json!({ "acronym": m.acronym(), "name": m.name(), "description": m.description() }))
+                    .collect();
+                serde_json::json!({ "title": title, "colour": format!("#{colour:06x}"), "mods": mods })
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&groups).unwrap() + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("server/site/mods.json");
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+            std::fs::write(&path, &text).unwrap();
+            panic!("{} was out of date and has been rewritten: commit it", path.display());
+        }
+    }
 }
