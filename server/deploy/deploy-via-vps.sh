@@ -8,6 +8,9 @@ set -e
 vps=${1:-vps}
 here=$(cd "$(dirname "$0")" && pwd)
 bin="$here/../target/x86_64-unknown-linux-musl/release/taiko-server"
+# ring (TLS for the Discord bot) has C in it: clang builds it for musl without a musl gcc.
+export CC_x86_64_unknown_linux_musl="${CC_x86_64_unknown_linux_musl:-clang}"
+export CFLAGS_x86_64_unknown_linux_musl="${CFLAGS_x86_64_unknown_linux_musl:---target=x86_64-unknown-linux-musl}"
 cargo build --release --target x86_64-unknown-linux-musl --manifest-path "$here/../Cargo.toml"
 sum=$(sha256sum "$bin" | cut -d' ' -f1)
 scp -q "$bin" "$vps:/tmp/taiko-server.new"

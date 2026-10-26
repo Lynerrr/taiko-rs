@@ -36,7 +36,7 @@ const CLIPS: [Clip; 6] = [
 ];
 
 /// Files served under /clips/ and /site/ (`web.rs`).
-pub const STATIC_FILES: [(&str, &[u8]); 16] = [
+pub const STATIC_FILES: [(&str, &[u8]); 17] = [
     ("clips/multiverse.mp4", include_bytes!("../site/clips/multiverse.mp4")),
     ("clips/multiverse.jpg", include_bytes!("../site/clips/multiverse.jpg")),
     ("clips/loop.mp4", include_bytes!("../site/clips/loop.mp4")),
@@ -52,6 +52,7 @@ pub const STATIC_FILES: [(&str, &[u8]); 16] = [
     ("site/taiko5x7.woff2", include_bytes!("../site/taiko5x7.woff2")),
     ("site/logo.png", include_bytes!("../../assets/icon-64.png")),
     ("site/chat.js", include_bytes!("../site/chat.js")),
+    ("site/copy.js", include_bytes!("../site/copy.js")),
     ("site/og.jpg", include_bytes!("../site/og.jpg")),
 ];
 
@@ -239,8 +240,9 @@ fn split_song(song: &str) -> (&str, &str) {
     song.split_once(" - ").unwrap_or(("", song))
 }
 
+/// A set's cover from osu!, unless it's NSFW, blocked or not checked yet (`covers`).
 fn cover(set: Option<u32>, size: &str) -> Option<String> {
-    set.map(|s| format!("https://assets.ppy.sh/beatmaps/{s}/covers/{size}.jpg"))
+    set.filter(|&s| crate::covers::allowed(s)).map(|s| format!("https://assets.ppy.sh/beatmaps/{s}/covers/{size}.jpg"))
 }
 
 /// The style for a block with a map's cover behind it: the map's own hue (for when it has no
@@ -350,15 +352,47 @@ impl Os {
 struct Build {
     os: Os,
     name: &'static str,
-    file: &'static str,
     note: &'static str,
+    /// The download (and what to call it), and the other way to get it.
+    file: &'static str,
+    kind: &'static str,
+    alt: Option<(&'static str, &'static str)>,
 }
 
 const BUILDS: [Build; 3] = [
-    Build { os: Os::Windows, name: "Windows", file: "taiko-rs-windows-x64.zip", note: "Windows 10 or 11, 64-bit" },
-    Build { os: Os::Linux, name: "Linux", file: "taiko-rs-linux-x64.tar.gz", note: "64-bit, glibc 2.39+ (Ubuntu 24.04, Debian 13, Fedora 40, Arch...)" },
-    Build { os: Os::Android, name: "Android", file: "taiko-rs-android.apk", note: "Android 8.0+, 64-bit ARM" },
+    Build {
+        os: Os::Windows,
+        name: "Windows",
+        note: "Windows 10 or 11, 64-bit. Installs for you alone (no admin), with a Start menu shortcut and an uninstaller; it then updates itself from the game.",
+        file: "taiko-rs-windows-x64-setup.exe",
+        kind: "installer",
+        alt: Some(("taiko-rs-windows-x64.zip", "portable .zip")),
+    },
+    Build {
+        os: Os::Linux,
+        name: "Linux",
+        note: "64-bit, glibc 2.39+ (Ubuntu 24.04, Debian 13, Fedora 40, Arch...). The command installs it, adds it to your apps and keeps it updated.",
+        file: "taiko-rs-linux-x64.tar.gz",
+        kind: ".tar.gz",
+        alt: None,
+    },
+    Build { os: Os::Android, name: "Android", note: "Android 8.0+, 64-bit ARM.", file: "taiko-rs-android.apk", kind: "APK", alt: None },
 ];
+
+/// The install commands.
+fn linux_command() -> String {
+    format!("curl -fsSL {RAW}/install.sh | sh")
+}
+
+fn powershell_command() -> String {
+    format!("irm {RAW}/install.ps1 | iex")
+}
+
+/// A command to paste, with a button that copies it (`site/copy.js`).
+fn cmd(command: &str) -> String {
+    let c = esc(command);
+    format!("<div class=cmd><code><span class=prompt>$ </span>{c}</code><button class=copy type=button data-copy=\"{c}\">copy</button></div>")
+}
 
 fn download_url(file: &str) -> String {
     format!("{REPO}/releases/download/latest/{file}")
@@ -369,6 +403,11 @@ fn download_url(file: &str) -> String {
 fn download_cta(os: Os, on_download_page: bool) -> String {
     let others = if on_download_page { String::new() } else { " &middot; <a href=\"/download\">other systems</a>".into() };
     match BUILDS.iter().find(|b| b.os == os) {
+        Some(b) if b.os == Os::Linux => format!(
+            "<div class=cta-label>Install on Linux: paste this in a terminal</div>{}<div class=hint>installs, adds it to your apps and keeps it updated &middot; <a href=\"{}\">or the .tar.gz</a>{others}</div>",
+            cmd(&linux_command()),
+            download_url(b.file)
+        ),
         Some(b) => format!(
             "<a class=\"btn hot\" href=\"{}\">Download for {}</a><div class=hint>{}{others}</div>",
             download_url(b.file),
@@ -897,23 +936,27 @@ pub fn download(os: Os) -> String {
         .iter()
         .map(|b| {
             let mine = b.os == os;
+            let hot = if mine { " hot" } else { "" };
+            let button = format!("<a class=\"btn{hot}\" href=\"{}\">Download {}</a>", download_url(b.file), b.kind);
+            let alt = |(file, label): (&str, &str)| format!("<a class=alt href=\"{}\">or the {label}</a>", download_url(file));
+            let how = match b.os {
+                // Linux: the command, the archive for those who'd rather.
+                Os::Linux => format!("<h3>In a terminal</h3>{}{}", cmd(&linux_command()), alt((b.file, b.kind))),
+                Os::Windows => format!("{button}{}<h3>Or from PowerShell</h3>{}", b.alt.map(alt).unwrap_or_default(), cmd(&powershell_command())),
+                _ => button,
+            };
             format!(
-                "<div class=\"panel build{}\"><h2>{}{}</h2><p class=dim>{}</p><a class=\"btn{}\" href=\"{}\">Download {}</a></div>",
+                "<div class=\"panel build{}\"><h2>{}{}</h2><p class=dim>{}</p>{how}</div>",
                 if mine { " mine" } else { "" },
                 b.name,
                 if mine { " <span class=yours>YOUR SYSTEM</span>" } else { "" },
                 b.note,
-                if mine { " hot" } else { "" },
-                download_url(b.file),
-                b.file
             )
         })
         .collect();
     format!(
-        "<div class=band><div class=inner><h1 class=glitch data-text=\"DOWNLOAD\">DOWNLOAD</h1>{}</div></div>\
+        "<div class=band><div class=inner><h1 class=glitch data-text=\"DOWNLOAD\">DOWNLOAD</h1><div class=band-cta>{}</div></div></div>\
          <div class=page><div class=builds>{builds}</div>\
-         <section class=panel><div class=panel-head><h2>ONE COMMAND</h2></div><p class=dim>Installs (or updates) taiko.rs and adds it to your apps; it then updates itself from the game.</p>\
-         <h3>Windows (PowerShell)</h3><pre>irm {RAW}/install.ps1 | iex</pre><h3>Linux</h3><pre>curl -fsSL {RAW}/install.sh | sh</pre></section>\
          <p class=dim>No macOS build yet. Source and every build: <a href=\"{REPO}/releases\">GitHub releases</a>.</p></div>",
         download_cta(os, true)
     )
@@ -1008,8 +1051,8 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
     format!(
         r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{} · taiko.rs</title>
 <meta name=theme-color content=#EB452C><meta name=color-scheme content=dark><link rel=icon href="/site/logo.png">{og}
-<link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style></head>
-<body><nav><div class=inner><a class=logo href="/" aria-label="taiko.rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO-RS</a><div class=links>{links}</div>
+<link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style><script src="/site/copy.js" defer></script></head>
+<body><nav><div class=inner><a class=logo href="/" aria-label="taiko.rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO.RS</a><div class=links>{links}</div>
 <form action="/u" role=search><input name=name placeholder="find a player" maxlength=16 aria-label="Find a player"></form><div class=account>{account}</div></div></nav>
 <main>{}</main><footer><div class=inner><span class=brand>TAIKO.RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
         esc(title),
@@ -1224,8 +1267,14 @@ button.btn{font:inherit;cursor:pointer}.actions{display:flex;align-items:center;
 .log li.mine .player{color:var(--acc)}.log .empty{justify-content:center;padding:40px 0}
 .say{display:flex;gap:10px}.say input{flex:1;min-width:0}.say .btn.hot{font-size:16px;min-height:44px;box-shadow:3px 3px 0 #6b1d12}
 /* Download. */
-.builds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.build{display:flex;flex-direction:column;align-items:flex-start}.build h2{font-size:32px}.build .btn{margin-top:auto}.build p{margin-bottom:18px}
-.build.mine{border-color:var(--acc)}.yours{font-size:16px;color:var(--acc)}
+/* Install commands. */
+.cmd{display:flex;align-items:stretch;max-width:100%;border:2px solid var(--line2);background:var(--bg2);margin:8px 0}
+.cmd code{flex:1;min-width:0;padding:10px 14px;font:inherit;color:var(--green);word-break:break-all}.cmd .prompt{color:var(--dim2)}
+.copy{flex:none;font:inherit;border:0;border-left:2px solid var(--line2);background:var(--panel2);color:var(--white);padding:0 16px;cursor:pointer}.copy:hover{background:var(--acc)}
+.cta-label{color:var(--white);margin-bottom:2px}.stage-cta .cmd{max-width:820px;background:rgba(12,12,18,.92)}.alt{display:inline-block;margin-top:10px;color:var(--dim)}.alt:hover{color:var(--acc)}
+/* Download. */
+.builds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.build{display:flex;flex-direction:column;align-items:flex-start;min-width:0}.build h2{font-size:32px}.build p{margin-bottom:18px}.build .cmd{align-self:stretch}
+.build.mine{border-color:var(--acc)}.build .btn.hot{font-size:16px;min-height:44px;box-shadow:3px 3px 0 #6b1d12}.band-cta{margin-top:18px;max-width:820px}.yours{font-size:16px;color:var(--acc)}
 pre{background:var(--bg2);border:2px solid var(--line);padding:12px 14px;overflow-x:auto;font:16px/24px taiko5x7,monospace;color:var(--green)}h3{font-size:16px;margin-top:16px;color:var(--dim)}
 .lost{text-align:center;padding:56px 24px}.lost h1{font-size:96px;line-height:96px;color:var(--acc)}
 footer{border-top:2px solid var(--line);background:var(--bg2);padding:24px 0}footer .inner{display:flex;flex-wrap:wrap;align-items:center;gap:24px;color:var(--dim)}footer a{color:var(--dim)}footer .brand{color:var(--white)}

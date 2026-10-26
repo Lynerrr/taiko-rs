@@ -15,6 +15,8 @@ mod net;
 #[allow(dead_code)]
 #[path = "../../src/online.rs"]
 mod online;
+mod covers;
+mod discord;
 mod scores;
 mod pages;
 mod web;
@@ -882,10 +884,12 @@ fn main() {
         }
     }
     std::fs::create_dir_all(&data).expect("data dir");
+    covers::init(data.clone());
     let state = Arc::new(State::load(data.join("accounts.json")));
     if http_port != 0 {
         web::serve(state.clone(), http_port, behind_proxy);
     }
+    discord::start(state.clone(), data.clone());
     {
         let state = state.clone();
         std::thread::spawn(move || reaper(state));

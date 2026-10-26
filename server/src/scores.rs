@@ -162,6 +162,30 @@ impl Scores {
         serde_json::from_slice(&std::fs::read(dir.join(format!("{id}.json"))).ok()?).ok()
     }
 
+    /// `player`'s plays (by their key), newest first.
+    pub fn plays_of(&self, player: &str) -> Vec<OnlineScore> {
+        self.all.iter().rev().filter(|s| s.player == player).map(|s| s.score.clone()).collect()
+    }
+
+    /// `player`'s best play on each map by pp, highest first.
+    pub fn best_of(&self, player: &str) -> Vec<OnlineScore> {
+        let mut best: HashMap<u64, &Stored> = HashMap::new();
+        for s in self.all.iter().filter(|s| s.player == player && s.score.pp.is_some()) {
+            let b = best.entry(s.score.map_hash).or_insert(s);
+            if s.score.pp > b.score.pp {
+                *b = s;
+            }
+        }
+        let mut top: Vec<OnlineScore> = best.into_values().map(|s| s.score.clone()).collect();
+        top.sort_by(|a, b| b.pp.unwrap_or(0.0).total_cmp(&a.pp.unwrap_or(0.0)));
+        top
+    }
+
+    /// Where play `id` stands on its map's leaderboard (1-based), if it's its player's best there.
+    pub fn place_of(&self, map: u64, id: u64) -> Option<u32> {
+        self.best_on(map).iter().position(|s| s.id == id).map(|p| p as u32 + 1)
+    }
+
     pub fn map_scores(&self, map: u64) -> Vec<OnlineScore> {
         self.best_on(map).into_iter().take(online::MAP_SCORES).map(|s| s.score.clone()).collect()
     }
