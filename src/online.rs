@@ -11,6 +11,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL: u32 = 1;
+/// Most maps one `Request::SetStatuses` is answered for.
+pub const MAX_STATUS_MAPS: usize = 500;
 pub const DEFAULT_PORT: u16 = 7800;
 pub const DEFAULT_SERVER: &str = "jashincraft.space:7800";
 /// The website (profiles at /u/<name>).
@@ -54,6 +56,10 @@ pub enum Request {
     Replay { id: u64 },
     /// One online score, by its `OnlineScore::id` (`Reply::Score`): what a score link opens.
     Score { id: u64 },
+    /// The statuses on osu! of the sets the maps are of, each as (set ID, the ID of one of its
+    /// maps): what the server knows now (`Reply::SetStatuses`), and it looks the rest up for
+    /// the next time (when `token` is a logged-in player's).
+    SetStatuses { token: String, maps: Vec<(u32, u32)> },
     /// The map sets loved on the server (`Reply::LovedSets`): they give pp there.
     LovedSets,
     /// A loved nominator loves a map set on the server, or takes it back (`Reply::LovedSets`).
@@ -339,6 +345,9 @@ pub enum Reply {
     },
     /// The map sets loved on the server.
     LovedSets(Vec<u32>),
+    /// (set ID, status on osu!) of the sets asked about that the server knows ("ranked",
+    /// "loved", "graveyard"..., "missing" when osu! doesn't have it).
+    SetStatuses(Vec<(u32, String)>),
     /// A `Played` play was counted.
     Counted,
     LoggedOut,

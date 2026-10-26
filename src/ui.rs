@@ -1125,6 +1125,7 @@ impl Select {
         let section_open: Vec<bool> = (0..self.sections.len()).map(|s| self.section_open(s)).collect();
         let (mut final_y, mut final_cursor) = (0.0f32, 0.0f32);
         let cursor_section = self.cursor_section();
+        let cursor_hidden = cursor_section.is_some_and(|si| !section_open[si]);
         for (si, sec) in self.sections.iter().enumerate() {
             // A closed heading holding the selection is the one to keep in view.
             if !section_open[si] && cursor_section == Some(si) {
@@ -1231,7 +1232,9 @@ impl Select {
                     let col = sec.colour.unwrap_or_else(accent);
                     let open = section_open[*si];
                     let hover = c.hovered(24.0, y, lw, rh - 2.0);
-                    c.round_rect(24.0, y, lw, rh - 3.0, 5.0, rgba(if hover { 0x24242f } else { 0x16161e }, 0.9), rgba(col, if open { 0.7 } else { 0.35 }), 1.0);
+                    let holds_cursor = cursor_section == Some(*si) && !open;
+                    let border = if holds_cursor { rgba(accent(), 1.0) } else { rgba(col, if open { 0.7 } else { 0.35 }) };
+                    c.round_rect(24.0, y, lw, rh - 3.0, 5.0, rgba(if hover { 0x24242f } else { 0x16161e }, 0.9), border, if holds_cursor { 1.5 } else { 1.0 });
                     c.hit(24.0, y, lw, *rh, Hit::SectionHeader(*si));
                     let n = sec.groups.len();
                     c.text(34.0, y + 6.0, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
@@ -1298,8 +1301,9 @@ impl Select {
         }
 
         // The selection outline moves with the same transition.
+        // Not with its heading closed: the heading shows where the selection is instead.
         let oy = outline;
-        if !self.visible.is_empty() && oy > top - DIFF_H && oy < bottom {
+        if !self.visible.is_empty() && !cursor_hidden && oy > top - DIFF_H && oy < bottom {
             c.round_rect(44.0, oy, lw - 20.0, DIFF_H - 3.0, 5.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
         }
         // Rows scrolling past the edges slide under them instead of over the search row.
