@@ -505,6 +505,42 @@ fn bar_at(bars: &[beatmap::Barline], t: f64, fallback: f64) -> Option<(usize, f6
     Some((i, start, len))
 }
 
+/// Radar's beam.
+const RADAR_COL: u32 = 0x5ef0a0;
+/// Radar: how lit a note is once the beam is a whole sweep past it.
+const RADAR_DIM: f32 = 0.13;
+/// Radar: notes this close to the drum are always fully lit.
+const RADAR_NEAR: f32 = 100.0;
+
+/// Radar: where the beam is, 0 at the drum to 1 at the lane's end. It leaves the drum on every
+/// beat, in kiai on every half beat.
+fn radar_sweep(beat_phase: f32, kiai: bool) -> f32 {
+    if kiai { (2.0 * beat_phase).fract() } else { beat_phase }
+}
+
+/// Radar: how many sweeps ago the beam passed a note `s` along a lane `len` long that comes `u`
+/// closer every sweep, the beam at `sweep`. None if the note wasn't on screen yet back then.
+fn radar_age(s: f32, u: f32, len: f32, sweep: f32) -> Option<f32> {
+    let b = sweep * len;
+    // The beam and the note close in on each other at `len + u` a sweep.
+    let back = if s <= b { b - s } else { b + len - s };
+    let age = back / (len + u.max(0.0));
+    (s + u.max(0.0) * age <= len).then_some(age)
+}
+
+/// Radar: how lit that note is: fully as the beam passes, fading to `RADAR_DIM` by the next one;
+/// always fully by the drum.
+fn radar_light(s: f32, u: f32, len: f32, sweep: f32) -> f32 {
+    let near = smooth((RADAR_NEAR + 50.0) as f64, RADAR_NEAR as f64, s as f64) as f32;
+    let lit = radar_age(s, u, len, sweep).map_or(RADAR_DIM, |a| RADAR_DIM + (1.0 - RADAR_DIM) * (1.0 - a).max(0.0).powf(1.5));
+    lit.max(near)
+}
+
+/// Echo: where its bar sits, under the lane.
+const ECHO_Y: f32 = LANE_Y + LANE_H / 2.0 + 50.0;
+/// Echo: how long a note rings once the cursor reaches it.
+const ECHO_RING_MS: f32 = 300.0;
+
 /// Rails: the lane bent into a curve. Distances along it (`s`) count from the hit target; it
 /// leaves the hit target heading right, so the drum stays where it is, and behind the hit
 /// target it runs straight on to the left.
@@ -2309,6 +2345,10 @@ impl Game {
         let pulse = (1.0 - beat_phase).powi(3);
         let kiai = cp.kiai && self.kiai_effects;
         let in_kiai = cp.kiai;
+        // Radar: where the beam is (see `radar_sweep`), and how long it takes to cross the lane.
+        let radar = mods.has(Mod::Radar);
+        let sweep = radar_sweep(beat_phase, in_kiai);
+        let sweep_ms = if in_kiai { cp.beat_length / 2.0 } else { cp.beat_length };
 
         let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp);
         // The lane's shape, and how fast notes go along it (see `lane_stretch`).
@@ -2402,6 +2442,10 @@ impl Game {
             }
             a
         };
+        // Radar: how far a note at map time `time` scrolling at `vel` comes in a sweep, and how
+        // lit it is `s` along the lane.
+        let radar_u = |time: f64, vel: f64| s_of(time + sweep_ms, vel) - s_of(time, vel);
+        let radar_lit = |s: f32, time: f64, vel: f64| if radar { radar_light(s, radar_u(time, vel), lane_len, sweep) } else { 1.0 };
         // A don or kat `s` along the lane (`k`th drawn, in a 1/`flow` stream): Snake swings it
         // sideways, Party pumps and squishes it. Nothing changes at the drum.
         let draw_hit = |c: &mut Canvas, s: f32, n: &beatmap::Note, k: usize, flow: u8, col: u32, a: f32| {
@@ -2438,7 +2482,7 @@ impl Game {
                 c.stretch_since(first, [x, y], squish, 1.0 / squish);
             }
         };
-        let (don, kat) = if mods.has(Mod::Colorless) { (GREY, GREY) } else { (mix(uni.idle(), uni.don(), look.colour), mix(uni.idle(), uni.kat(), look.colour)) };
+        let (don, kat) = if mods.has(Mod::Colorless) || mods.has(Mod::Echo) { (GREY, GREY) } else { (mix(uni.idle(), uni.don(), look.colour), mix(uni.idle(), uni.kat(), look.colour)) };
         // Text is drawn last, after Mirror flips the rest (letters must stay readable), and so
         // are the skin's numbers and judgements (centre x, top, height).
         let mut texts: Vec<(f32, f32, f32, [f32; 4], String)> = Vec::new();
@@ -2459,8 +2503,12 @@ impl Game {
         let mut lane_col = if kiai { rgba(0x2b2433, 1.0) } else { rgba(0x20202b, 1.0) };
         let mut edge_col = rgba(0x3a3a4e, 1.0);
         let mut skin_lane_tint = rgba(WHITE, 1.0);
+        if radar {
+            lane_col = if in_kiai { rgba(0x17150d, 1.0) } else { rgba(0x0b110f, 1.0) };
+        }
         if kiai {
-            lane_col = tint(lane_col, 0xff8a3d, 0.05 + 0.06 * pulse);
+            // Radar's lane stays dark, a little warmer.
+            lane_col = tint(lane_col, 0xff8a3d, (0.05 + 0.06 * pulse) * if radar { 0.35 } else { 1.0 });
         }
         if party {
             // The lane flashes a new colour on every beat.
@@ -2496,7 +2544,8 @@ impl Game {
         } else {
             let (lane_x, lane_w) = if turns { (-w, 3.0 * w) } else { (0.0, w) };
             let glow = if kiai { 0.75 + 0.25 * pulse } else { 0.0 };
-            if !skin_lane(c, lane_x, lane_w, skin_lane_tint, glow) {
+            // Radar's lane is its own dark one.
+            if radar || !skin_lane(c, lane_x, lane_w, skin_lane_tint, glow) {
                 draw_lane(c, lane_x, lane_w, lane_col, edge_col);
             }
         }
@@ -2565,6 +2614,23 @@ impl Game {
             }
         }
 
+        // Radar: the beam, a bright line with a trail fading out behind it.
+        if radar && !self.hide_notes {
+            let b = sweep * lane_len;
+            for d in if crossfire { vec![1.0, -1.0] } else { vec![1.0] } {
+                for k in 0..14 {
+                    let back = b - 6.0 * k as f32 - 3.0;
+                    if back > 0.0 {
+                        let (x, y, a, _) = place(d * back, 0.0);
+                        lane_rect(c, (x, y, a), 6.5, LANE_H, rgba(RADAR_COL, 0.16 * (1.0 - k as f32 / 14.0).powi(2)));
+                    }
+                }
+                let (x, y, a, _) = place(d * b, 0.0);
+                lane_rect(c, (x, y, a), 9.0, LANE_H, rgba(RADAR_COL, 0.2));
+                lane_rect(c, (x, y, a), 2.5, LANE_H, rgba(0xc8ffe0, 0.95));
+            }
+        }
+
         // Hit target.
         draw_hit_target(c);
         if kiai {
@@ -2586,7 +2652,7 @@ impl Game {
                 }
                 let s = s_of(n.time, n.velocity);
                 // A little see-through, so a careful eye can tell them apart.
-                let a = DECOY_ALPHA * note_alpha(s) * smooth(0.22, 0.38, (s / lane_len) as f64) as f32;
+                let a = DECOY_ALPHA * note_alpha(s) * radar_lit(s, n.time, n.velocity) * smooth(0.22, 0.38, (s / lane_len) as f64) as f32;
                 if a > 0.01 && s < lane_len + BIG_R {
                     draw_hit(c, s, n, k, self.decoy_flows[k], if n.kind == Kind::Don { don } else { kat }, a);
                 }
@@ -2617,9 +2683,19 @@ impl Game {
                         judged => {
                             let s = note_s(i);
                             if on_lane(s, r) {
-                                let a = if judged.is_some() { 0.4 } else { note_alpha(s) };
+                                let a = if judged.is_some() { 0.4 } else { note_alpha(s) * radar_lit(s, n.time, n.velocity) };
                                 if a > 0.01 {
                                     draw_hit(c, s, n, i, self.flows[i], col, a);
+                                }
+                                // Radar: a note the beam just passed flashes and pings.
+                                let ping = radar_age(s, radar_u(n.time, n.velocity), lane_len, sweep).filter(|&age| radar && judged.is_none() && s > RADAR_NEAR && age < 0.35);
+                                if let Some(age) = ping {
+                                    let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
+                                    let k = age / 0.35;
+                                    let fade = note_alpha(s) * (1.0 - k);
+                                    let sprite = if n.big { Sprite::BigCircle } else { Sprite::HitCircle };
+                                    c.light(sprite, x, y, r * size, rgba(WHITE, 0.25 * fade * (1.0 - k)));
+                                    c.ring(x, y, (r + 3.0 + 16.0 * k) * size, rgba(RADAR_COL, 0.85 * fade), 1.0 + 2.5 * (1.0 - k));
                                 }
                             }
                         }
@@ -2706,7 +2782,7 @@ impl Game {
                     }
                     if vt < n.time {
                         let s = s_of(n.time, n.velocity);
-                        let a = note_alpha(s);
+                        let a = note_alpha(s) * radar_lit(s, n.time, n.velocity);
                         if s < lane_len + r && a > 0.01 {
                             let (x, y, _, size) = place(s, 0.0);
                             let r = r * size;
@@ -2745,7 +2821,7 @@ impl Game {
                 let (s, col, a) = match n.kind {
                     Kind::Don | Kind::Kat if self.state[i].judged.is_none() => {
                         let s = note_s(i);
-                        (s, WHITE, CIRCLE_FLASH * note_alpha(s))
+                        (s, WHITE, CIRCLE_FLASH * note_alpha(s) * radar_lit(s, n.time, n.velocity))
                     }
                     Kind::Roll if !(n.fake_len > 0.0 && vt >= n.time - n.fake_len) => {
                         let s = s_of(n.time, n.velocity);
@@ -2952,6 +3028,66 @@ impl Game {
                 }
             }
         }
+        // Echo's bar stays where it is, whatever the playfield does.
+        if mods.has(Mod::Echo) && !self.hide_notes {
+            self.draw_echo(c, vt, w, uni);
+        }
+    }
+
+    /// Echo: the bar map time `t` is in and the one after it (start, length each). Before the
+    /// first barline, the bar leading up to it.
+    fn echo_bars(&self, t: f64) -> Option<[(f64, f64); 2]> {
+        let bars = &self.map.barlines;
+        let fallback = 4.0 * beatmap::control_point_at(&self.map.control_points, t).beat_length;
+        let len_of = |i: usize| bars.get(i + 1).map_or(fallback, |b| b.time - bars[i].time).max(1.0);
+        match bar_at(bars, t, fallback) {
+            Some((i, start, len)) => Some([(start, len), (start + len, if i + 1 < bars.len() { len_of(i + 1) } else { fallback })]),
+            None => {
+                let first = bars.first()?.time;
+                let len = len_of(0);
+                Some([(first - len, len), (first, len)])
+            }
+        }
+    }
+
+    /// Echo: the next bar's notes in colour on a line under the lane, and a cursor running along
+    /// it with the bar being played. Each note rings as the cursor reaches it, a bar before it's
+    /// hit; the line fades over to the next bar on the barline.
+    fn draw_echo(&self, c: &mut Canvas, vt: f64, w: f32, uni: &Universe) {
+        let Some([(start, len), (next, next_len)]) = self.echo_bars(vt) else { return };
+        let p = ((vt - start) / len).clamp(0.0, 1.0);
+        let fade = (smooth(0.0, 0.05, p) * (1.0 - smooth(0.94, 1.0, p))) as f32;
+        let p = p as f32;
+        let (x0, x1) = (HIT_X, w - 120.0);
+        let x_at = |f: f32| x0 + (x1 - x0) * f;
+        let line = rgba(0x4a4a60, fade);
+        c.rect(x0, ECHO_Y - 0.75, x1 - x0, 1.5, line);
+        for x in [x0, x1] {
+            c.rect(x - 0.75, ECHO_Y - 5.0, 1.5, 10.0, line);
+        }
+        let notes = &self.map.notes;
+        let from = notes.partition_point(|n| n.time < next - 1.0);
+        for n in notes[from..].iter().take_while(|n| n.time < next + next_len - 1.0) {
+            let col = match n.kind {
+                Kind::Don => uni.don(),
+                Kind::Kat => uni.kat(),
+                _ => continue,
+            };
+            let f = ((n.time - next) / next_len) as f32;
+            let (x, r) = (x_at(f), if n.big { 8.5 } else { 5.5 });
+            // Ms since the cursor got to it.
+            let age = (p - f) * len as f32;
+            if age >= 0.0 {
+                c.circle(x, ECHO_Y, r + 0.5, rgba(col, fade), rgba(WHITE, fade), 1.5);
+                if age < ECHO_RING_MS {
+                    let k = age / ECHO_RING_MS;
+                    c.ring(x, ECHO_Y, r + 3.0 + 10.0 * k, rgba(col, 0.8 * (1.0 - k) * fade), 1.0 + 2.0 * (1.0 - k));
+                }
+            } else {
+                c.circle(x, ECHO_Y, r, rgba(col, 0.6 * fade), rgba(col, 0.0), 0.0);
+            }
+        }
+        c.rect(x_at(p) - 1.0, ECHO_Y - 11.0, 2.0, 22.0, rgba(WHITE, 0.85 * fade));
     }
 
     /// The kiai flash at map time `t`, taiko_arranger's rule: 1 on each beat counted from the
@@ -3836,6 +3972,49 @@ mod tests {
         assert!((f(8725.0) - 0.75).abs() < 1e-6);
         // A 120 BPM kiai ending mid-beat just stops.
         assert_eq!(f(9000.0), 0.0);
+    }
+
+    #[test]
+    fn radar_lights_notes_as_the_beam_passes_them() {
+        // The beam leaves the drum on the beat and crosses the lane in a beat, in kiai in half.
+        assert_eq!(radar_sweep(0.25, false), 0.25);
+        assert_eq!(radar_sweep(0.75, true), 0.5);
+        let (len, u) = (600.0, 100.0);
+        // A note 300 along lights up as the beam gets there and has faded by the next one.
+        assert!(radar_light(300.0, u, len, 0.5) > 0.99);
+        assert!(radar_light(300.0, u, len, 0.75) > radar_light(300.0, u, len, 0.95));
+        assert!(radar_light(300.0, u, len, 0.49) < 0.2);
+        // By the drum it's always lit.
+        assert_eq!(radar_light(50.0, u, len, 0.9), 1.0);
+        // One that came on screen after the beam went by stays dark till the next one.
+        assert_eq!(radar_age(590.0, u, len, 0.3), None);
+        assert_eq!(radar_light(590.0, u, len, 0.3), RADAR_DIM);
+        // Hidden decides when far notes show too: picking it switches Radar off.
+        assert!(!Mods::parse("RA,HD").has(Mod::Radar));
+    }
+
+    #[test]
+    fn echo_shows_the_next_bar_in_colour_and_the_lane_in_grey() {
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        for (k, n) in map.notes.iter_mut().enumerate() {
+            if k % 3 == 1 {
+                n.kind = Kind::Kat;
+            }
+        }
+        let mut g = Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse("EC"));
+        // Bars are 2 s: in the one from 2 s, the one from 4 s shows; before the first barline,
+        // the first bar.
+        assert_eq!(g.echo_bars(2500.0), Some([(2000.0, 2000.0), (4000.0, 2000.0)]));
+        assert_eq!(g.echo_bars(-500.0), Some([(-2000.0, 2000.0), (0.0, 2000.0)]));
+        g.time = 2500.0;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        let fill = |s: &Shape| (s.fill[0] * 255.0).round() as u32 * 65536 + (s.fill[1] * 255.0).round() as u32 * 256 + (s.fill[2] * 255.0).round() as u32;
+        let notes: Vec<u32> = c.shapes.iter().filter(|s| s.center[1] == LANE_Y && s.half[0] == NOTE_R && s.center[0] > HIT_X + 40.0).map(fill).collect();
+        assert!(!notes.is_empty() && notes.iter().all(|&f| f == GREY), "{notes:x?}");
+        let dots: std::collections::HashSet<u32> = c.shapes.iter().filter(|s| s.center[1] == ECHO_Y && s.half[0] < 10.0 && s.half[0] > 3.0).map(fill).collect();
+        assert!(dots.len() >= 2 && !dots.contains(&GREY), "{dots:x?}");
     }
 
     #[test]
