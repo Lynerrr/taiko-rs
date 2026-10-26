@@ -173,6 +173,9 @@ fn flip_x(sh: &mut Shape) {
     let sprite = |s: Sprite| SPRITE_BASE + s as usize as f32;
     // The drum's halves have their mirror images in the atlas.
     let pairs = [(Sprite::DrumInner, Sprite::DrumInnerFlipped), (Sprite::DrumOuter, Sprite::DrumOuterFlipped)];
+    // Turned the other way in the mirror (the pieces of a bent lane: left as they were, its
+    // bends came out turned against the lane and cut into it).
+    sh.angle = -sh.angle;
     if (0.5..2.5).contains(&sh.params[3]) {
         sh.params[3] = 3.0 - sh.params[3];
     } else if sh.params[3] == sprite(Sprite::RollEnd) {
