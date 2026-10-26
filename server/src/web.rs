@@ -24,6 +24,7 @@
 //!   /site/<file>      the font and the logo
 //!   /api/claude/pings?after=N   the developer's pings of the Discord bot, for Claude
 //!   /api/claude/reply           POST (channel, to, text): Claude's answer, posted by the bot
+//!   /api/claude/mark            POST (channel, message, tag): a forum post tagged done (else ✅)
 //!                               (both need `Authorization: Bearer` with DIR/claude-key)
 
 use std::borrow::Cow;
@@ -615,6 +616,10 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
                 Err(e) => Reply::text(502, &e),
             }
         }
+        ["api", "claude", "mark"] if req.claude => match crate::discord::mark(req.field("channel"), req.field("message"), req.field("tag")) {
+            Ok(done) => Reply::text(200, &done),
+            Err(e) => Reply::text(502, &e),
+        },
         ["friend", other] => {
             let (Some(me), Some(key)) = (req.viewer.as_deref(), req.key()) else { return Reply::see_other("/login".into()) };
             let Some(p) = state.profile(other) else { return req.not_found("There is no player by that name") };

@@ -663,6 +663,23 @@ impl Bot {
         Err("rate limited".into())
     }
 
+    /// A PATCH or PUT to Discord's API (a null body: none).
+    fn send_json(&self, method: &str, url: &str, body: &Value) -> Result<(), String> {
+        let auth = format!("Bot {}", self.token);
+        let reply = match method {
+            "PATCH" => self.http.patch(url).header("Authorization", &auth).header("User-Agent", USER_AGENT).header("Content-Type", "application/json").send(body.to_string()),
+            _ if body.is_null() => self.http.put(url).header("Authorization", &auth).header("User-Agent", USER_AGENT).send_empty(),
+            _ => self.http.put(url).header("Authorization", &auth).header("User-Agent", USER_AGENT).header("Content-Type", "application/json").send(body.to_string()),
+        };
+        let mut reply = reply.map_err(|e| e.to_string())?;
+        let status = reply.status().as_u16();
+        if (200..300).contains(&status) {
+            return Ok(());
+        }
+        let text = reply.body_mut().read_to_string().unwrap_or_default();
+        Err(format!("Discord said {status}: {}", text.chars().take(200).collect::<String>()))
+    }
+
     /// A GET from Discord's API.
     fn get(&self, url: &str) -> Result<Value, String> {
         let mut reply = self.http.get(url).header("Authorization", &format!("Bot {}", self.token)).header("User-Agent", USER_AGENT).call().map_err(|e| e.to_string())?;
@@ -755,6 +772,35 @@ pub fn claude_key(key: &str) -> bool {
 /// The pings for Claude after number `after`.
 pub fn pings(after: u64) -> Vec<Value> {
     BOT.get().map(|b| b.pings.lock().unwrap().iter().filter(|p| p["id"].as_u64().is_some_and(|n| n > after)).cloned().collect()).unwrap_or_default()
+}
+
+/// Claude marks a report done: the forum's tag whose name has `tag` in it on thread `channel`,
+/// or where there's no such tag (not a forum post, or a forum without one) a ✅ on its message
+/// `message`. Says which it did.
+pub fn mark(channel: &str, message: &str, tag: &str) -> Result<String, String> {
+    let bot = BOT.get().ok_or("the bot is off")?;
+    let thread = bot.get(&format!("{API}/channels/{channel}"))?;
+    if let Some(parent) = thread["parent_id"].as_str() {
+        let forum = bot.get(&format!("{API}/channels/{parent}"))?;
+        let wanted = tag.trim().to_lowercase();
+        let found = forum["available_tags"].as_array().and_then(|tags| tags.iter().find(|t| t["name"].as_str().is_some_and(|n| n.to_lowercase().contains(&wanted))));
+        if let Some(id) = found.and_then(|t| t["id"].as_str()) {
+            let name = found.and_then(|t| t["name"].as_str()).unwrap_or(tag);
+            let mut applied = thread["applied_tags"].as_array().cloned().unwrap_or_default();
+            if applied.iter().any(|t| t.as_str() == Some(id)) {
+                return Ok(format!("already tagged {name}"));
+            }
+            // Discord takes at most 5 tags on a post.
+            if applied.len() >= 5 {
+                return Err("the post has 5 tags already".into());
+            }
+            applied.push(json!(id));
+            bot.send_json("PATCH", &format!("{API}/channels/{channel}"), &json!({ "applied_tags": applied }))?;
+            return Ok(format!("tagged {name}"));
+        }
+    }
+    bot.send_json("PUT", &format!("{API}/channels/{channel}/messages/{message}/reactions/%E2%9C%85/@me"), &Value::Null)?;
+    Ok("reacted ✅".into())
 }
 
 /// Claude's answer: `text` in `channel`, the first part replying to message `to`, in parts of
