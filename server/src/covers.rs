@@ -167,6 +167,24 @@ pub fn gives_pp(set: Option<u32>) -> Option<bool> {
     gives_pp_by(c.known(set).as_ref())
 }
 
+/// The artist and title of `set`, if it's been looked up.
+pub fn names(set: u32) -> Option<(String, String)> {
+    match COVERS.get()?.sets.lock().unwrap().get(&set)? {
+        Set::Found(info) => Some((info.artist.clone(), info.title.clone())),
+        Set::Missing => None,
+    }
+}
+
+/// What osu! says of `set` ("ranked", "graveyard"...; "missing" when no mirror knows it), if
+/// it's been looked up.
+pub fn osu_status(set: u32) -> Option<String> {
+    match COVERS.get()?.sets.lock().unwrap().get(&set)? {
+        Set::Found(info) if info.status.is_empty() => None,
+        Set::Found(info) => Some(info.status.clone()),
+        Set::Missing => Some("missing".into()),
+    }
+}
+
 /// Asks the mirrors right away (for a while) about `set` if whether it gives pp isn't known yet,
 /// so a play just sent on it counts at once. Call it without any lock held.
 pub fn learn(set: Option<u32>) {

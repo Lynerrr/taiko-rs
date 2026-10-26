@@ -11,6 +11,11 @@
 //!   /s/<id>           a score, and a button that opens it in the game (?watch: by itself)
 //!   /s/<id>/card.png  its card (`card.rs`), for Discord   /api/s/<id>
 //!   /mods             the mod select, and clips of what the mods do
+//!   /loved            the maps loved here (they give pp)
+//!   /a/<name>         a player's profile picture
+//!   /avatar           POST (a form with a file): set your picture; /avatar/remove takes it off
+//!   /love/<set>       POST: a loved nominator loves a map set here (on=0: takes it back)
+//!   /u/<name>/nominator  POST: an admin makes them a loved nominator (on=0: not any more)
 //!   /login /logout    the website's session (the game's accounts)
 //!   /chat[/<name>]    the global chat and messages to friends, like the game's   /api/chat[/<name>]
 //!   /friend/<name>    POST: ask to be friends, or accept
@@ -97,6 +102,8 @@ struct Req<'a> {
     query: &'a str,
     /// A posted form's fields.
     form: HashMap<String, String>,
+    /// The file posted to /avatar.
+    upload: Option<Vec<u8>>,
     os: Os,
     ip: IpAddr,
     /// The session cookie, and the account it belongs to (name as written).
@@ -149,6 +156,7 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let mut token = None;
     let mut length = 0usize;
     let mut cross_site = false;
+    let mut content_type = String::new();
     loop {
         let mut h = String::new();
         match reader.read_line(&mut h) {
@@ -169,6 +177,8 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
                         length = v.parse().unwrap_or(usize::MAX);
                     } else if k.eq_ignore_ascii_case("sec-fetch-site") {
                         cross_site = v.eq_ignore_ascii_case("cross-site");
+                    } else if k.eq_ignore_ascii_case("content-type") {
+                        content_type = v.to_string();
                     }
                 }
             }
@@ -178,18 +188,25 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let mut parts = line.split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    // A picture upload may be bigger than a form.
+    let upload = method == "POST" && path == "/avatar";
+    let max_body = if upload { crate::avatars::MAX_BYTES + MAX_FORM } else { MAX_FORM };
     let mut body = Vec::new();
-    if method == "POST" && length <= MAX_FORM {
+    if method == "POST" && length <= max_body {
+        if upload {
+            reader.get_mut().set_limit(max_body as u64);
+        }
         body.resize(length, 0);
         if reader.read_exact(&mut body).is_err() {
             return;
         }
     }
     let viewer = token.as_deref().and_then(|t| state.user(t));
-    let req = Req { method, path, query, form: form(&body), os: Os::of(&agent), ip, token, viewer };
+    let file = upload.then(|| crate::avatars::multipart_file(&content_type, &body, "avatar").map(<[u8]>::to_vec)).flatten();
+    let req = Req { method, path, query, form: if upload { HashMap::new() } else { form(&body) }, upload: file, os: Os::of(&agent), ip, token, viewer };
     let mut reply = if !web.allow(ip) {
         Reply::text(429, "too many requests, wait a minute")
-    } else if method == "POST" && (cross_site || length > MAX_FORM) {
+    } else if method == "POST" && (cross_site || length > max_body) {
         Reply::text(403, "no")
     } else if !matches!(method, "GET" | "HEAD" | "POST") {
         Reply::text(405, "only GET and POST")
@@ -402,7 +419,17 @@ fn route(state: &State, req: &Req) -> Reply {
                 let (activity, friends) = (state.activity(&p.name), state.friends_online(&p.name));
                 let tie = req.key().map(|me| state.friendship(&me, &key)).unwrap_or(pages::Friendship::None);
                 let notice = req.arg("msg");
-                req.page_with(200, &p.name, "rankings", &pages::profile_meta(&p), pages::profile(&p, &extras, activity.as_ref(), &friends, tie, notice.as_deref()))
+                let own = req.key().as_deref() == Some(key.as_str());
+                let nominator = state.is_nominator(&key);
+                let roles = pages::Roles {
+                    admin: crate::is_admin(&key),
+                    nominator,
+                    own,
+                    viewer_admin: req.key().is_some_and(|me| crate::is_admin(&me)),
+                    // Their own page tells a nominator how to love maps from Discord.
+                    verify_code: (own && nominator).then(|| state.verify_code(&key)),
+                };
+                req.page_with(200, &p.name, "rankings", &pages::profile_meta(&p), pages::profile(&p, &extras, activity.as_ref(), &friends, tie, notice.as_deref(), &roles))
             }
             None => req.not_found("There is no player by that name"),
         },
@@ -449,7 +476,15 @@ fn route(state: &State, req: &Req) -> Reply {
                 return Reply::json(&rows);
             }
             match scores.map(map) {
-                Some(m) => req.page_with(200, &m.name, "beatmaps", &pages::map_meta(&m, &rows), pages::map_page(&m, &rows)),
+                Some(m) => {
+                    drop(scores);
+                    let love = pages::Love {
+                        loved: m.set_id.and_then(crate::loved::get),
+                        can_love: req.key().is_some_and(|me| state.is_nominator(&me)),
+                        notice: req.arg("msg"),
+                    };
+                    req.page_with(200, &m.name, "beatmaps", &pages::map_meta(&m, &rows), pages::map_page(&m, &rows, &love))
+                }
                 None => req.not_found("Nobody has sent a play on that map yet"),
             }
         }
@@ -468,6 +503,18 @@ fn route(state: &State, req: &Req) -> Reply {
             }
         }
         ["mods"] => req.page(200, "Mods", "mods", pages::mods_page()),
+        ["loved"] => {
+            let sets: Vec<pages::LovedRow> = crate::loved::all()
+                .into_iter()
+                .rev()
+                .map(|(set, loved)| pages::LovedRow { set, names: crate::covers::names(set), loved })
+                .collect();
+            req.page(200, "Loved here", "loved", pages::loved(&sets))
+        }
+        ["a", name] => match crate::avatars::load(&name.to_ascii_lowercase()) {
+            Some((kind, bytes)) => Reply { cache: "public, max-age=86400", ..Reply::new(200, kind, bytes.into()) },
+            None => Reply::text(404, "no picture"),
+        },
         [dir @ ("clips" | "site"), name] => match pages::STATIC_FILES.iter().find(|(f, _)| f.strip_prefix(dir).and_then(|f| f.strip_prefix('/')) == Some(name)) {
             Some((f, bytes)) => Reply::file(f, bytes),
             None => req.not_found("There is no such file"),
@@ -492,6 +539,32 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
                 state.logout(t);
             }
             Reply { cookie: Some(String::new()), ..Reply::see_other("/".into()) }
+        }
+        ["avatar"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let msg = match &req.upload {
+                Some(file) => crate::avatars::save(&key, file, crate::now_secs()).map(|_| "Your picture is set".to_string()).unwrap_or_else(|e| e),
+                None => "pick a picture first".into(),
+            };
+            Reply::see_other(format!("/u/{}?msg={}", state.display_name(&key), encode(&msg)))
+        }
+        ["avatar", "remove"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            crate::avatars::remove(&key);
+            Reply::see_other(format!("/u/{}?msg={}", state.display_name(&key), encode("Your picture is off")))
+        }
+        ["love", set] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Ok(set) = set.parse::<u32>() else { return req.not_found("That is not a map set") };
+            let back = req.field("back");
+            let back = if back.starts_with("/m/") { back.to_string() } else { "/loved".into() };
+            let msg = state.love(&key, set, req.field("on") != "0").unwrap_or_else(|e| e);
+            Reply::see_other(format!("{back}?msg={}", encode(&msg)))
+        }
+        ["u", name, "nominator"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let msg = state.set_nominator(&key, name, req.field("on") != "0").unwrap_or_else(|e| e);
+            Reply::see_other(format!("/u/{}?msg={}", encode(name), encode(&msg)))
         }
         ["friend", other] => {
             let (Some(me), Some(key)) = (req.viewer.as_deref(), req.key()) else { return Reply::see_other("/login".into()) };

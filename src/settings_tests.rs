@@ -267,6 +267,28 @@ fn a_maps_status_comes_from_the_mirror_else_osu_db() {
 }
 
 #[test]
+fn sets_loved_on_the_server_count_as_loved() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.library[0].meta.set_id = Some(2275915);
+    s.set_status.insert(2275915, Some("graveyard".into()));
+    s.select.server_loved.insert(2275915);
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("LOVED HERE"));
+    assert_eq!(map_gives_pp(&s.library[0], &s.set_status, &s.db_status, &s.select.server_loved), Some(true));
+    // The search's status=l finds it.
+    s.select.filter = "status=l".into();
+    s.select.refilter(&s.library);
+    assert_eq!(s.select.selected(), Some(0));
+    // Only nominators get the menu item, and it says which way.
+    s.select.filter.clear();
+    s.select.refilter(&s.library);
+    s.select.menu = Some(ui::SongMenu { row: 0, header: false, x: 0.0, y: 0.0 });
+    assert!(!s.select.menu_items(&s.library).iter().any(|(_, a)| matches!(a, ui::MenuAction::Love(..))));
+    s.select.nominator = true;
+    assert!(s.select.menu_items(&s.library).iter().any(|(l, a)| l == "Unlove on taiko.rs" && *a == ui::MenuAction::Love(2275915, false)));
+}
+
+#[test]
 fn hotkeys_can_be_moved_and_removed() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);

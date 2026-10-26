@@ -99,6 +99,103 @@ fn badges(name: &str) -> String {
         .collect()
 }
 
+/// A player's roles (their badges), and what the one looking at their profile may do there.
+pub struct Roles {
+    pub admin: bool,
+    pub nominator: bool,
+    /// It's the viewer's own profile.
+    pub own: bool,
+    pub viewer_admin: bool,
+    /// Their code for `>verify` on Discord (their own page, nominators only).
+    pub verify_code: Option<String>,
+}
+
+fn role_badges(r: &Roles) -> String {
+    let badge = |label: &str, colour: &str, what: &str| format!("<span class=badge style=\"--c:{colour}\" title=\"{what}\">{label}</span>");
+    if r.admin {
+        badge("ADMIN", "#9b59ff", "taiko.rs admin: makes loved nominators, and loves maps")
+    } else if r.nominator {
+        badge("LOVED", "#ff66aa", "loved nominator: loves graveyard maps so they give pp here")
+    } else {
+        String::new()
+    }
+}
+
+/// The profile's tools for whoever may use them: their picture and Discord code (their own
+/// page), loved nominator on or off (admins).
+fn profile_tools(p: &Profile, r: &Roles) -> String {
+    let mut parts = Vec::new();
+    if r.own {
+        let remove = if crate::avatars::version(&p.name.to_ascii_lowercase()).is_some() {
+            "<form method=post action=\"/avatar/remove\"><button class=\"btn small\">remove picture</button></form>"
+        } else {
+            ""
+        };
+        parts.push(format!(
+            "<div class=tool><b>PROFILE PICTURE</b><form method=post action=\"/avatar\" enctype=\"multipart/form-data\" class=upload>\
+             <input type=file name=avatar accept=\"image/png,image/jpeg,image/gif,image/webp\" required aria-label=\"picture\"><button class=\"btn small\">upload</button></form>{remove}\
+             <span class=dim>PNG, JPEG, GIF or WebP, at most {} MB. Square ones look best.</span></div>",
+            crate::avatars::MAX_BYTES / 1024 / 1024
+        ));
+    }
+    if let Some(code) = &r.verify_code {
+        parts.push(format!(
+            "<div class=tool><b>DISCORD</b><span>To love maps from Discord, send the taiko.rs bot <code>&gt;verify {}</code> (it works once, within 30 minutes).</span></div>",
+            esc(code)
+        ));
+    }
+    if r.viewer_admin && !r.own && !r.admin {
+        let (on, label) = if r.nominator { ("0", "remove loved nominator") } else { ("1", "make loved nominator") };
+        parts.push(format!(
+            "<div class=tool><b>ADMIN</b><form method=post action=\"/u/{}/nominator\"><input type=hidden name=on value={on}><button class=\"btn small\">{label}</button></form></div>",
+            esc(&p.name)
+        ));
+    }
+    if parts.is_empty() { String::new() } else { format!("<section class=\"panel tools\">{}</section>", parts.concat()) }
+}
+
+/// A map page's love button and state.
+pub struct Love {
+    /// Loved here: by whom and when.
+    pub loved: Option<crate::loved::Loved>,
+    /// The viewer is a loved nominator.
+    pub can_love: bool,
+    pub notice: Option<String>,
+}
+
+/// A set loved here, for the list of them.
+pub struct LovedRow {
+    pub set: u32,
+    /// Its artist and title, if looked up.
+    pub names: Option<(String, String)>,
+    pub loved: crate::loved::Loved,
+}
+
+pub fn loved(rows: &[LovedRow]) -> String {
+    let list = if rows.is_empty() {
+        "<p class=dim>Nothing yet. Loved nominators pick graveyard maps to love; then plays on them give pp.</p>".to_string()
+    } else {
+        rows.iter()
+            .map(|r| {
+                let (artist, title) = r.names.clone().unwrap_or_else(|| (String::new(), format!("set {}", r.set)));
+                format!(
+                    "<a class=mini href=\"https://osu.ppy.sh/beatmapsets/{0}\"{1}><span class=art></span><span class=mini-info><b>{2}</b><span class=dim>{3}</span></span><span class=dim>by {4}, {5}</span></a>",
+                    r.set,
+                    cover_style(Some(r.set), 0, "list@2x"),
+                    esc(&title),
+                    esc(&artist),
+                    esc(&r.loved.by),
+                    ago(r.loved.at)
+                )
+            })
+            .collect()
+    };
+    format!(
+        "<div class=band><div class=inner><h1 class=glitch data-text=\"LOVED\">LOVED</h1><p class=dim>Maps loved here by taiko.rs's loved nominators: they give pp on taiko.rs, whatever their status on osu!.</p></div></div>\
+         <div class=page><section class=panel>{list}</section></div>"
+    )
+}
+
 /// How the one looking at a profile stands with its player.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Friendship {
@@ -274,7 +371,12 @@ fn cover_style(set: Option<u32>, hash: u64, size: &str) -> String {
 }
 
 /// A player's picture: their initial on a colour of their own.
+/// A player's picture, or (without one) their initial on a colour of its own.
 fn avatar(name: &str, class: &str) -> String {
+    let key = name.to_ascii_lowercase();
+    if let Some(v) = crate::avatars::version(&key) {
+        return format!("<img class=\"avatar {class}\" src=\"/a/{}?v={v}\" alt=\"\" loading=lazy>", esc(&key));
+    }
     let hue = name.bytes().fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b.to_ascii_lowercase() as u32)) % 360;
     let initial = name.chars().next().map(|c| c.to_ascii_uppercase()).unwrap_or('?');
     format!("<span class=\"avatar {class}\" style=\"--h:{hue}\" aria-hidden=true>{}</span>", esc(&initial.to_string()))
@@ -724,7 +826,7 @@ fn pp_chart(history: &[(u64, f64)]) -> String {
     )
 }
 
-pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friends: &[(String, bool)], tie: Friendship, notice: Option<&str>) -> String {
+pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friends: &[(String, bool)], tie: Friendship, notice: Option<&str>, roles: &Roles) -> String {
     let st = &p.stats;
     let level = online::level(st.total_score);
     let cover = p.top.first().map(|s| cover_style(s.set_id, s.map_hash, "cover@2x")).unwrap_or_default();
@@ -743,6 +845,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
         Friendship::None => befriend("add friend"),
     };
     let notice = notice.map(|n| format!("<div class=notice>{}</div>", esc(n))).unwrap_or_default();
+    let notice = notice + &profile_tools(p, roles);
     let hud = |k: &str, v: String| format!("<div class=hudstat><span>{k}</span><b>{v}</b></div>");
     let stats = [
         hud("RANKED SCORE", format!("{:08}", st.ranked_score)),
@@ -823,7 +926,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
            </aside></div></div>",
         avatar(&p.name, "big"),
         esc(&p.name),
-        badges(&p.name),
+        badges(&p.name) + &role_badges(roles),
         month_year(p.joined),
         thousands(p.pp.round() as u64),
         level.floor(),
@@ -909,10 +1012,21 @@ pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool) -> String {
     format!("{head}<div class=page>{top}{watch_panel}</div><script src=\"/site/watch.js\" defer></script>")
 }
 
-pub fn map_page(m: &MapRow, rows: &[OnlineScore]) -> String {
+pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
     let (song, version) = split_map(&m.name);
     let (artist, title) = split_song(song);
-    let osu = m.set_id.map(|s| format!("<a class=\"btn small\" href=\"https://osu.ppy.sh/beatmapsets/{s}\">osu! page</a>")).unwrap_or_default();
+    let mut osu = m.set_id.map(|s| format!("<a class=\"btn small\" href=\"https://osu.ppy.sh/beatmapsets/{s}\">osu! page</a>")).unwrap_or_default();
+    if let Some(l) = &love.loved {
+        osu += &format!("<span class=\"tag loved\" title=\"loved by {0} {1}\">LOVED HERE</span>", esc(&l.by), ago(l.at));
+    }
+    if let (true, Some(set)) = (love.can_love, m.set_id) {
+        let (on, label) = if love.loved.is_some() { ("0", "unlove") } else { ("1", "love: give pp here") };
+        osu += &format!(
+            "<form method=post action=\"/love/{set}\" class=inline><input type=hidden name=on value={on}><input type=hidden name=back value=\"/m/{:x}\"><button class=\"btn small hot\">{label}</button></form>",
+            m.hash
+        );
+    }
+    let notice = love.notice.as_ref().map(|n| format!("<div class=notice>{}</div>", esc(n))).unwrap_or_default();
     let head = format!(
         "<div class=\"cover map\"{}><div class=inner><div class=artist>{}</div><h1>{}</h1>\
          <div class=sub>{}<span class=version>[{}]</span><span class=dim>{} plays &middot; {} players</span>{osu}</div></div></div>",
@@ -924,7 +1038,7 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore]) -> String {
         thousands(m.plays as u64),
         m.players
     );
-    let Some(first) = rows.first() else { return format!("{head}<div class=page><section class=panel><p class=dim>No scores yet.</p></section></div>") };
+    let Some(first) = rows.first() else { return format!("{head}<div class=page>{notice}<section class=panel><p class=dim>No scores yet.</p></section></div>") };
     let mods = if first.mods.is_empty() && (first.rate - 1.0).abs() < 1e-6 { "-".into() } else { mod_chips(&first.mods, first.rate) };
     let top = format!(
         "<div class=\"panel topscore\"><div class=place>#1</div><span class=bigrade>{}</span><div class=who>{}<div>{}<div class=dim>{}</div></div></div>\
@@ -963,7 +1077,7 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore]) -> String {
         })
         .collect();
     format!(
-        "{head}<div class=page>{top}<section class=panel><div class=scroll><table class=list><thead><tr><th>Rank</th><th></th><th>Score</th><th>Acc</th><th>Player</th><th class=wide>Combo</th><th class=wide>Great</th><th class=wide>Ok</th><th class=wide>Miss</th><th>pp</th><th class=wide>Mods</th><th></th></tr></thead><tbody>{body}</tbody></table></div></section></div>"
+        "{head}<div class=page>{notice}{top}<section class=panel><div class=scroll><table class=list><thead><tr><th>Rank</th><th></th><th>Score</th><th>Acc</th><th>Player</th><th class=wide>Combo</th><th class=wide>Great</th><th class=wide>Ok</th><th class=wide>Miss</th><th>pp</th><th class=wide>Mods</th><th></th></tr></thead><tbody>{body}</tbody></table></div></section></div>"
     )
 }
 
@@ -1108,7 +1222,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
         }
         None => "<a class=\"navbtn hot\" href=\"/login\">log in</a>".into(),
     };
-    let links: String = [("rankings", "/rankings"), ("beatmaps", "/beatmaps"), ("mods", "/mods"), ("download", "/download")]
+    let links: String = [("rankings", "/rankings"), ("beatmaps", "/beatmaps"), ("loved", "/loved"), ("mods", "/mods"), ("download", "/download")]
         .iter()
         .map(|(name, href)| {
             let on = if *name == nav { " class=on aria-current=page" } else { "" };
@@ -1317,6 +1431,8 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 .navbtn:hover,.navbtn.on{border-color:var(--acc);color:var(--white)}.navbtn.hot{background:var(--acc);border-color:var(--acc);color:var(--white)}
 button.btn{font:inherit;cursor:pointer}.actions{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}.actions form{margin:0}.actions .btn{min-height:36px;padding:0 14px}
 .btn.hot.small-hot{font-size:16px;min-height:36px;padding:0 14px;box-shadow:3px 3px 0 #6b1d12}
+img.avatar{object-fit:cover;background:var(--panel2)}.tag.loved{color:#ff66aa;border-color:#ff66aa}form.inline{display:inline;margin:0}
+.tools{display:flex;flex-direction:column;gap:14px}.tool{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.tool b{min-width:170px;letter-spacing:1px}.tool form{margin:0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tool input[type=file]{font:inherit;color:var(--dim);max-width:100%}.tool code{color:var(--gold)}
 .notice{border:2px solid var(--gold);color:var(--gold);padding:8px 12px;margin:0 0 20px;background:rgba(255,211,77,.06)}.notice.bad{border-color:var(--acc);color:#ff8a78;background:rgba(235,69,44,.08)}
 .login{max-width:520px;margin:24px auto}.login h1{font-size:48px;line-height:56px;margin-bottom:8px}.login form{display:flex;flex-direction:column;gap:14px;margin:18px 0}
 .login label{display:flex;flex-direction:column;gap:6px;color:var(--dim)}

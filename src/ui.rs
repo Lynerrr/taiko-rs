@@ -57,6 +57,10 @@ pub struct Select {
     /// Each map's status on osu! (`search`'s codes), from osu!.db and the mirrors, for the
     /// search's `status=` filter.
     pub status: std::collections::HashMap<std::path::PathBuf, u8>,
+    /// Map sets loved on the online server (they give pp there, whatever osu! says).
+    pub server_loved: std::collections::HashSet<u32>,
+    /// The account logged in is a loved nominator: the right-click menu can love sets.
+    pub nominator: bool,
     /// osu! collections: (name, library indices).
     pub collections: Vec<(String, std::collections::HashSet<usize>)>,
     /// The collection shown (None: everything) and the open collection list's cursor.
@@ -172,6 +176,8 @@ impl Select {
             info: None,
             played: std::collections::HashMap::new(),
             status: std::collections::HashMap::new(),
+            server_loved: std::collections::HashSet::new(),
+            nominator: false,
             collections: Vec::new(),
             collection: None,
             picker: None,
@@ -214,7 +220,10 @@ impl Select {
                 length_s: known.map(|x| x.length_ms as f64 / 1000.0),
                 bpm: known.map(|x| x.bpm as f64),
                 played_days: self.played.get(&e.path).filter(|&&t| t > 0).map(|&t| now.saturating_sub(t) as f64 / 86_400.0),
-                status: self.status.get(&e.path).copied().unwrap_or(if e.meta.set_id.is_some() { crate::search::UNKNOWN } else { crate::search::NOT_SUBMITTED }),
+                status: match e.meta.set_id {
+                    Some(set) if self.server_loved.contains(&set) => crate::search::LOVED,
+                    set => self.status.get(&e.path).copied().unwrap_or(if set.is_some() { crate::search::UNKNOWN } else { crate::search::NOT_SUBMITTED }),
+                },
             }
         };
         self.visible = library
@@ -603,6 +612,10 @@ impl Select {
             items.push((fit(format!("Hide [{}]", library[i].meta.version)), MenuAction::HideDifficulty));
         }
         items.push((fit(format!("Hide {}", library[i].meta.title)), MenuAction::HideSong));
+        if let Some(set) = library[i].meta.set_id.filter(|_| self.nominator) {
+            let loved = self.server_loved.contains(&set);
+            items.push((if loved { "Unlove on taiko.rs" } else { "Love on taiko.rs (gives pp)" }.to_string(), MenuAction::Love(set, !loved)));
+        }
         items
     }
 
@@ -622,6 +635,7 @@ impl Select {
                 let t = &library[i].meta.title;
                 if t.chars().count() > 30 { t.chars().take(27).collect::<String>() + "..." } else { t.clone() }
             }
+            MenuAction::Love(..) => return None,
         };
         self.hidden.save();
         // The selection stays unless it was hidden: then another difficulty of that song, else
@@ -1180,6 +1194,8 @@ pub struct SongMenu {
 pub enum MenuAction {
     HideDifficulty,
     HideSong,
+    /// Loved nominators: love the map set on the online server (false: take it back).
+    Love(u32, bool),
 }
 
 impl Select {

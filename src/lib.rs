@@ -341,6 +341,10 @@ struct State {
     set_status: std::collections::HashMap<u32, Option<String>>,
     set_status_tx: mpsc::Sender<(u32, Option<String>)>,
     set_status_rx: Receiver<(u32, Option<String>)>,
+    /// Asking the online server which sets are loved there (or loving one: the set and which
+    /// way, for the message), and whether it's been asked since starting.
+    loved_call: Option<(Receiver<Result<online::Reply, String>>, Option<(u32, bool)>)>,
+    loved_asked: bool,
     /// The selected set and since when: asked about once the selection rests.
     status_wait: Option<(u32, Instant)>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
@@ -678,8 +682,12 @@ fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
 /// Whether plays on library map `e` give pp (only ranked, approved and loved ones do, as on
 /// osu!), from the mirrors' status else osu!.db's; None when it isn't known. The server has the
 /// last word.
-fn map_gives_pp(e: &Entry, set_status: &std::collections::HashMap<u32, Option<String>>, db_status: &std::collections::HashMap<PathBuf, u8>) -> Option<bool> {
+fn map_gives_pp(e: &Entry, set_status: &std::collections::HashMap<u32, Option<String>>, db_status: &std::collections::HashMap<PathBuf, u8>, server_loved: &std::collections::HashSet<u32>) -> Option<bool> {
     let Some(set) = e.meta.set_id else { return Some(false) };
+    // Loved on the online server: it gives pp there.
+    if server_loved.contains(&set) {
+        return Some(true);
+    }
     if let Some(Some(s)) = set_status.get(&set) {
         return Some(matches!(s.as_str(), "ranked" | "approved" | "loved"));
     }
@@ -4532,6 +4540,7 @@ impl State {
     /// Forgets the saved online login.
     fn sign_out(&mut self, why: &str) {
         self.social = social::Social::default();
+        self.select.nominator = false;
         self.mp_menu.account = None;
         self.mp_menu.rooms.clear();
         self.cfg.online_token.clear();
@@ -4540,9 +4549,50 @@ impl State {
         self.mp_menu.cursor = 0;
     }
 
+    /// Asks the online server which map sets are loved there, or (`change`) loves one or takes
+    /// it back, in the background.
+    fn call_loved(&mut self, change: Option<(u32, bool)>) {
+        let request = match change {
+            Some((set, loved)) => online::Request::SetLoved { token: self.cfg.online_token.clone(), set, loved },
+            None => online::Request::LovedSets,
+        };
+        let (tx, rx) = mpsc::channel();
+        let server = self.cfg.online_server.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(online::call(&server, request));
+        });
+        self.loved_call = Some((rx, change));
+    }
+
+    /// The loved sets as the server has them, once it answers.
+    fn poll_loved(&mut self) {
+        if !self.loved_asked && self.loved_call.is_none() {
+            self.loved_asked = true;
+            self.call_loved(None);
+        }
+        let Some((rx, change)) = &self.loved_call else { return };
+        let Ok(result) = rx.try_recv() else { return };
+        let change = *change;
+        self.loved_call = None;
+        match (result, change) {
+            (Ok(online::Reply::LovedSets(sets)), _) => {
+                self.select.server_loved = sets.into_iter().collect();
+                if !self.select.filter.is_empty() {
+                    self.select.refilter(&self.library);
+                }
+                if let Some((set, loved)) = change {
+                    self.toast(if loved { format!("loved set {set} on taiko.rs: its plays give pp now") } else { format!("set {set} isn't loved on taiko.rs any more") });
+                }
+            }
+            (Err(e), Some(_)) => self.toast(format!("couldn't: {e}")),
+            _ => {}
+        }
+    }
+
     /// The online server's side of the multiplayer menu: the saved login, account replies and
     /// a lobby list kept fresh while the menu is open.
     fn poll_online(&mut self) {
+        self.poll_loved();
         let menu = &mut self.mp_menu;
         if !menu.session_loaded {
             menu.session_loaded = true;
@@ -4558,7 +4608,9 @@ impl State {
                 Ok(result) => {
                     menu.account_request = None;
                     match result {
-                        Ok(online::Reply::Account { name, token }) => {
+                        Ok(online::Reply::Account { name, token, nominator }) => {
+                            self.select.nominator = nominator;
+                            self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name) || self.cfg.online_token != token;
                             menu.account = Some(name.clone());
                             menu.online = Some(Ok(()));
@@ -4638,11 +4690,15 @@ impl State {
         let filter = std::mem::take(&mut self.select.filter);
         let played = std::mem::take(&mut self.select.played);
         let status = std::mem::take(&mut self.select.status);
+        let server_loved = std::mem::take(&mut self.select.server_loved);
+        let nominator = self.select.nominator;
         let sort = self.select.sort;
         self.select = Select::new(&self.library);
         self.select.filter = filter;
         self.select.played = played;
         self.select.status = status;
+        self.select.server_loved = server_loved;
+        self.select.nominator = nominator;
         self.select.sort = sort;
         self.select.mods_label = self.cfg.mods.label();
         let maps = self.library.iter().enumerate().map(|(i, e)| (i, e.path.clone(), e.modified, e.size)).collect();
@@ -5036,6 +5092,9 @@ impl State {
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
         let Some(set) = e.meta.set_id else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
+        if self.select.server_loved.contains(&set) {
+            return Some(("LOVED HERE", 0xff66aa));
+        }
         if let Some(Some(s)) = self.set_status.get(&set) {
             return Some(match s.as_str() {
                 "ranked" => ("RANKED", 0xb3ff66),
@@ -6707,7 +6766,7 @@ impl State {
                         Some("failed plays get no pp")
                     } else if from.is_some() {
                         Some("plays from a start point get no pp")
-                    } else if map_gives_pp(&self.library[*entry], &self.set_status, &self.db_status) == Some(false) {
+                    } else if map_gives_pp(&self.library[*entry], &self.set_status, &self.db_status, &self.select.server_loved) == Some(false) {
                         Some("only ranked and loved maps give pp")
                     } else {
                         results.job = Some(results_job(e.path.clone(), play, None, None));
@@ -7863,7 +7922,11 @@ impl State {
             }
             Hit::SongMenu(k) => {
                 let action = self.select.menu_items(&self.library).get(k).map(|(_, a)| *a);
-                if let Some(what) = action.and_then(|a| self.select.hide(a, &self.library)) {
+                if let Some(ui::MenuAction::Love(set, loved)) = action {
+                    self.select.menu = None;
+                    self.toast(format!("{} set {set} on taiko.rs...", if loved { "loving" } else { "unloving" }));
+                    self.call_loved(Some((set, loved)));
+                } else if let Some(what) = action.and_then(|a| self.select.hide(a, &self.library)) {
                     self.toast(format!("hid {what}: Settings > Hidden maps brings it back"));
                 }
             }
@@ -8617,6 +8680,8 @@ impl State {
             set_status: Default::default(),
             set_status_tx,
             set_status_rx,
+            loved_call: None,
+            loved_asked: false,
             status_wait: None,
             scene_kind: None,
             scene_since: Instant::now(),

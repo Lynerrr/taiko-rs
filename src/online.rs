@@ -54,6 +54,10 @@ pub enum Request {
     Replay { id: u64 },
     /// One online score, by its `OnlineScore::id` (`Reply::Score`): what a score link opens.
     Score { id: u64 },
+    /// The map sets loved on the server (`Reply::LovedSets`): they give pp there.
+    LovedSets,
+    /// A loved nominator loves a map set on the server, or takes it back (`Reply::LovedSets`).
+    SetLoved { token: String, set: u32, loved: bool },
 }
 
 /// A play sent to the server: what the leaderboards show, and the replay's presses (kept so
@@ -314,8 +318,16 @@ pub enum Down {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Reply {
-    /// Logged in (or the token checked out): the account's name and a session token.
-    Account { name: String, token: String },
+    /// Logged in (or the token checked out): the account's name and a session token, and
+    /// whether it may love maps (a loved nominator or an admin).
+    Account {
+        name: String,
+        token: String,
+        #[serde(default)]
+        nominator: bool,
+    },
+    /// The map sets loved on the server.
+    LovedSets(Vec<u32>),
     LoggedOut,
     Rooms(Vec<RoomInfo>),
     /// In the room: from here on this connection speaks the room protocol. Send Hello with

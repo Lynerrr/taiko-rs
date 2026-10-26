@@ -85,7 +85,7 @@ impl Scores {
         if let Some(f) = &file {
             println!("{} scores ({})", all.len(), f.display());
         }
-        let mut scores = Scores { file, replays: dir.map(|d| d.join("replays")), all, next_id, submits: HashMap::new(), gives_pp: crate::covers::gives_pp };
+        let mut scores = Scores { file, replays: dir.map(|d| d.join("replays")), all, next_id, submits: HashMap::new(), gives_pp: crate::loved::gives_pp };
         scores.count_pp();
         scores
     }

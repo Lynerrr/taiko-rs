@@ -2,7 +2,8 @@
 //! `>ranking`... `>help` lists them), and the game's changes posted as they're pushed.
 //!
 //! Its token is DISCORD_TOKEN or DIR/discord-token (no token: no bot). Discord accounts linked
-//! to players (`>link name`) are kept in DIR/discord-links.json; the channel the changelog goes
+//! to players (`>link name`) are kept in DIR/discord-links.json, and the ones proved with a code
+//! from the website (`>verify`, needed to love maps) in DIR/discord-verified.json; the channel the changelog goes
 //! to is DIR/discord-changelog (a channel id), and the commits posted there
 //! DIR/discord-changelog.json. It talks to Discord's gateway (a websocket) for messages and its
 //! HTTP API for replies; everything runs on threads of its own, and a broken connection is
@@ -39,6 +40,9 @@ pub(crate) struct Bot {
     state: Arc<State>,
     /// Discord user id -> player (their key).
     links: Mutex<HashMap<String, String>>,
+    /// The same, proved with a code from their profile page (`>verify`): anyone can `>link`
+    /// any name, so loving maps and making nominators go by these.
+    verified: Mutex<HashMap<String, String>>,
     /// The map last shown in each channel (`>c`, `>lb`), and the map of each play the bot
     /// showed (replying to one with `>c`).
     last_map: Mutex<HashMap<String, u64>>,
@@ -55,7 +59,8 @@ pub fn start(state: Arc<State>, dir: PathBuf) {
     }
     let links = std::fs::read_to_string(dir.join("discord-links.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let http: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).http_status_as_error(false).build().into();
-    let bot = Arc::new(Bot { token, dir, state, links: Mutex::new(links), last_map: Mutex::default(), shown: Mutex::default(), http });
+    let verified = std::fs::read_to_string(dir.join("discord-verified.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let bot = Arc::new(Bot { token, dir, state, links: Mutex::new(links), verified: Mutex::new(verified), last_map: Mutex::default(), shown: Mutex::default(), http });
     {
         let bot = bot.clone();
         std::thread::Builder::new().name("discord".into()).spawn(move || gateway(bot)).expect("discord thread");
@@ -274,6 +279,45 @@ impl Bot {
                 self.save_links();
                 text(format!("Linked to **{display}**. Now `>rs`, `>top` and `>osu` show your plays."))
             }
+            "verify" => {
+                let Some(key) = self.state.take_verify_code(&cmd.rest) else {
+                    return text("That code doesn't work (they last 30 minutes). Loved nominators find theirs on their taiko.rs profile page.".into());
+                };
+                self.verified.lock().unwrap().insert(author.to_string(), key.clone());
+                self.links.lock().unwrap().insert(author.to_string(), key.clone());
+                self.save_links();
+                let name = self.state.display_name(&key);
+                text(format!("Verified as **{}**: `>love` and `>unlove` work for you now.", clean(&name)))
+            }
+            "love" | "unlove" => {
+                let on = cmd.word == "love";
+                let Some(key) = self.verified.lock().unwrap().get(author).cloned() else {
+                    return text("Verify first: send `>verify` with the code on your taiko.rs profile page.".into());
+                };
+                // A set id or osu! link, else the map last shown here.
+                let set = set_of(&cmd.rest).or_else(|| {
+                    let hash = map.filter(|_| cmd.rest.trim().is_empty())?;
+                    self.state.scores.lock().unwrap().map(hash)?.set_id
+                });
+                let Some(set) = set else { return text(format!("`>{} 123456` with a map set id or its osu! link, or after a play of it here.", cmd.word)) };
+                text(match self.state.love(&key, set, on) {
+                    Ok(done) => format!("{done}. <https://osu.ppy.sh/beatmapsets/{set}>"),
+                    Err(e) => format!("Couldn't: {e}."),
+                })
+            }
+            "nominator" | "unnominator" => {
+                let Some(key) = self.verified.lock().unwrap().get(author).cloned() else {
+                    return text("Verify first: send `>verify` with the code on your taiko.rs profile page.".into());
+                };
+                let name = cmd.rest.trim();
+                if name.is_empty() {
+                    return text(format!("`>{} name`", cmd.word));
+                }
+                text(match self.state.set_nominator(&key, name, cmd.word == "nominator") {
+                    Ok(done) => format!("{}.", clean(&done)),
+                    Err(e) => format!("Couldn't: {e}."),
+                })
+            }
             "unlink" => {
                 let had = self.links.lock().unwrap().remove(author).is_some();
                 self.save_links();
@@ -418,11 +462,13 @@ impl Bot {
     }
 
     fn save_links(&self) {
-        let text = serde_json::to_string(&*self.links.lock().unwrap()).unwrap_or_default();
-        let file = self.dir.join("discord-links.json");
-        let tmp = file.with_extension("json.tmp");
-        if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &file)) {
-            eprintln!("discord: saving links: {e}");
+        let files = [("discord-links.json", serde_json::to_string(&*self.links.lock().unwrap())), ("discord-verified.json", serde_json::to_string(&*self.verified.lock().unwrap()))];
+        for (name, text) in files {
+            let file = self.dir.join(name);
+            let tmp = file.with_extension("json.tmp");
+            if let Err(e) = std::fs::write(&tmp, text.unwrap_or_default()).and_then(|_| std::fs::rename(&tmp, &file)) {
+                eprintln!("discord: saving {name}: {e}");
+            }
         }
     }
 
@@ -567,6 +613,16 @@ impl Bot {
     }
 }
 
+/// A map set from a command: its id, or an osu! link with it in.
+fn set_of(arg: &str) -> Option<u32> {
+    let arg = arg.trim().trim_matches(['<', '>']);
+    if let Ok(set) = arg.parse() {
+        return Some(set);
+    }
+    let rest = arg.split_once("beatmapsets/")?.1;
+    rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
 fn help() -> Value {
     let lines = [
         "`>link name` link your taiko.rs account (`>unlink` to undo)",
@@ -576,6 +632,8 @@ fn help() -> Value {
         "`>osu` your profile",
         "`>lb` the leaderboard of the last map shown here",
         "`>ranking` the top players",
+        "`>love 123456` loved nominators: love a map set (id or osu! link; none: the last map shown) so it gives pp here; `>unlove` takes it back",
+        "`>verify CODE` prove your account (the code is on your profile page) to use `>love`",
     ];
     json!({
         "title": "taiko.rs bot",
@@ -848,14 +906,16 @@ mod tests {
 
     /// A bot over a fresh server with two players, one with a play.
     fn bot() -> Arc<Bot> {
-        let dir = std::env::temp_dir().join(format!("taiko-server-discord-{}-{}", std::process::id(), std::thread::current().name().unwrap_or("t").len()));
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("taiko-server-discord-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let state = Arc::new(State::load(dir.join("accounts.json")));
         {
             let mut a = state.accounts.lock().unwrap();
             for name in ["Ryuji", "Lynerrr"] {
-                a.users.insert(name.to_ascii_lowercase(), crate::User { name: name.into(), hash: String::new(), created: 1_700_000_000, friends: Vec::new(), requests: Vec::new() });
+                a.users.insert(name.to_ascii_lowercase(), crate::User { name: name.into(), hash: String::new(), created: 1_700_000_000, friends: Vec::new(), requests: Vec::new(), nominator: false });
             }
         }
         let play = online::ScoreSubmit {
@@ -875,7 +935,7 @@ mod tests {
         };
         state.scores.lock().unwrap().submit("ryuji", "Ryuji", play, 1_792_990_923).unwrap();
         let http: ureq::Agent = ureq::Agent::config_builder().build().into();
-        Arc::new(Bot { token: String::new(), dir, state, links: Mutex::default(), last_map: Mutex::default(), shown: Mutex::default(), http })
+        Arc::new(Bot { token: String::new(), dir, state, links: Mutex::default(), verified: Mutex::default(), last_map: Mutex::default(), shown: Mutex::default(), http })
     }
 
     fn answer(bot: &Bot, text: &str, author: &str, map: Option<u64>) -> (Answer, Option<u64>) {
@@ -887,6 +947,39 @@ mod tests {
             Answer::Text(t) => t.clone(),
             Answer::Embed(e, buttons) => format!("{e} {buttons:?}"),
         }
+    }
+
+    #[test]
+    fn loving_maps_takes_a_verified_nominator() {
+        let b = bot();
+        assert_eq!(set_of("https://osu.ppy.sh/beatmapsets/2275915#taiko/4855000"), Some(2275915));
+        assert_eq!(set_of("<https://osu.ppy.sh/beatmapsets/123>"), Some(123));
+        assert_eq!(set_of("42"), Some(42));
+        assert_eq!(set_of("ghost"), None);
+        // `>link` alone proves nothing.
+        answer(&b, ">link lynerrr", "1", None);
+        assert!(says(&answer(&b, ">love 123", "1", None).0).starts_with("Verify first"));
+        assert!(says(&answer(&b, ">verify NOPE", "1", None).0).starts_with("That code doesn't work"));
+        // The admin's code from their page.
+        let code = b.state.verify_code("lynerrr");
+        assert_eq!(b.state.verify_code("lynerrr"), code, "the same code until it's used");
+        assert!(says(&answer(&b, &format!(">verify {}", code.to_lowercase()), "1", None).0).starts_with("Verified as **Lynerrr**"));
+        assert!(says(&answer(&b, &format!(">verify {code}"), "2", None).0).starts_with("That code doesn't work"), "once only");
+        assert_eq!(says(&answer(&b, ">unlove 123", "1", None).0), "Couldn't: that set isn't loved here.");
+        // Ryuji verifies too, but isn't a nominator until the admin says so.
+        let code = b.state.verify_code("ryuji");
+        answer(&b, &format!(">verify {code}"), "2", None);
+        assert_eq!(says(&answer(&b, ">love 123", "2", None).0), "Couldn't: only loved nominators can love maps.");
+        assert_eq!(says(&answer(&b, ">nominator lynerrr", "2", None).0), "Couldn't: only admins can do that.");
+        assert_eq!(says(&answer(&b, ">nominator ryuji", "1", None).0), "Ryuji is a loved nominator now.");
+        assert!(b.state.is_nominator("ryuji"));
+        assert_eq!(says(&answer(&b, ">unlove 123", "2", None).0), "Couldn't: that set isn't loved here.");
+        assert_eq!(says(&answer(&b, ">unnominator ryuji", "1", None).0), "Ryuji isn't a loved nominator any more.");
+        assert!(!b.state.is_nominator("ryuji"));
+        assert!(says(&answer(&b, ">love", "1", None).0).contains("with a map set id"));
+        let saved = std::fs::read_to_string(b.dir.join("discord-verified.json")).unwrap();
+        assert!(saved.contains(r#""1":"lynerrr""#) && saved.contains(r#""2":"ryuji""#), "{saved}");
+        let _ = std::fs::remove_dir_all(&b.dir);
     }
 
     #[test]
