@@ -310,6 +310,12 @@ pub struct Game {
     /// Shapeshift: its setup and the shape of each section (index into `SHAPESHIFT`).
     shapeshift: shapeshift::Config,
     shape_order: Vec<u8>,
+    /// Multiverse's universes when the play brought its own (a lobby host's); None: the
+    /// player's, as they set them up.
+    universes: Option<[Universe; multiverse::COUNT]>,
+    /// Where the playfield in play was drawn last frame (x, y, w, h on the canvas): the lane,
+    /// wherever the mods took it; with Multiverse, the playfield in focus.
+    zone: Option<[f32; 4]>,
 }
 
 /// Decoy: how opaque the fake notes are next to real ones.
@@ -1083,6 +1089,17 @@ fn hash01(t: f64) -> f64 {
     (x >> 11) as f64 / (1u64 << 53) as f64
 }
 
+/// Shapeshift: the shape of each section, by `setup`.
+fn shape_order(map: &Beatmap, mods: Mods, setup: shapeshift::Config) -> Vec<u8> {
+    if !mods.has(Mod::Shapeshift) {
+        return Vec::new();
+    }
+    // Each map its own shuffle, the same every time it's played.
+    let m = &map.meta;
+    let seed = crate::net::map_hash(format!("{}\n{}\n{}\n{}", m.artist, m.title, m.creator, m.version).as_bytes());
+    setup.sequence(map.barlines.len() / setup.bars() + 1, seed)
+}
+
 /// The speed a play of `map` with `mods` at `rate` runs at (what `Game::with_mods` will use), to
 /// prepare its audio with.
 pub fn speed_for(map: &Beatmap, mods: Mods, rate: f64) -> Speed {
@@ -1197,14 +1214,7 @@ impl Game {
         let min_velocity = decoys.iter().map(|n| n.velocity).fold(min_velocity, f64::min);
         let focus_switches = if mods.has(Mod::Multiverse) { focus_switches(&map) } else { Vec::new() };
         let shapeshift = shapeshift::get();
-        let shape_order = if mods.has(Mod::Shapeshift) {
-            // Each map its own shuffle, the same every time it's played.
-            let m = &map.meta;
-            let seed = crate::net::map_hash(format!("{}\n{}\n{}\n{}", m.artist, m.title, m.creator, m.version).as_bytes());
-            shapeshift.sequence(map.barlines.len() / shapeshift.bars() + 1, seed)
-        } else {
-            Vec::new()
-        };
+        let shape_order = shape_order(&map, mods, shapeshift);
         Game {
             windows: Windows::new(mods.od(map.meta.od)),
             map,
@@ -1278,6 +1288,26 @@ impl Game {
             focus_switches,
             shapeshift,
             shape_order,
+            universes: None,
+            zone: None,
+        }
+    }
+
+    /// Where the playfield in play was drawn last frame (x, y, w, h on the canvas it was drawn
+    /// on), for views that show only that (spectating everyone at once).
+    pub fn play_zone(&self) -> Option<[f32; 4]> {
+        self.zone
+    }
+
+    /// Plays with someone else's mod settings (a lobby host's): Multiverse's universes and
+    /// Shapeshift's setup, each when given. The player's own config is left alone.
+    pub fn use_mod_settings(&mut self, universes: Option<[Universe; multiverse::COUNT]>, shapeshift: Option<shapeshift::Config>) {
+        if universes.is_some() {
+            self.universes = universes;
+        }
+        if let Some(s) = shapeshift {
+            self.shapeshift = s;
+            self.shape_order = shape_order(&self.map, self.mods, s);
         }
     }
 
@@ -2285,8 +2315,10 @@ impl Game {
         // Where each drum ends up on screen, for the sparks.
         let drum_x = if self.mods.has(Mod::Mirror) { inner - HIT_X } else { HIT_X };
         let mut drums = [(0.0f32, 0.0f32); FIELD_COUNT];
-        let universes = multiverse::get();
+        let universes = self.universes.unwrap_or_else(multiverse::get);
         let base = self.mods;
+        // The zone in play, summed weighted by focus, and the weights.
+        let mut zone = ([0.0f32; 4], 0.0f32);
         for i in order {
             let l = looks[i];
             let (left, mid, lean) = HOMES[i];
@@ -2298,6 +2330,7 @@ impl Game {
             self.draw_field(c, scroll_speed, l, &universes[i]);
             self.mods = base;
             c.width = w;
+            let field_zone = self.zone.take();
             // Out of focus it circles its home, each its own way round and at its own pace,
             // leaning and rocking. Called or in focus it parks where it fits on screen, holds
             // still and breathes with the beat.
@@ -2318,7 +2351,16 @@ impl Game {
             c.fade_since(start, 0.45 + 0.55 * l.focus + 0.4 * lit, 0.75 + 0.25 * l.focus + 0.2 * lit);
             c.rotate_since(start, [0.0, LANE_Y], angle, zoom, [x, y]);
             drums[i] = (x + drum_x * zoom * angle.cos(), y + drum_x * zoom * angle.sin());
+            // The zone in play: the one in focus, sliding to the next as the focus does.
+            if let Some(z) = field_zone.filter(|_| l.focus > 0.0) {
+                let z = turned_box(z, [0.0, LANE_Y], angle, zoom, [x, y]);
+                for (sum, v) in zone.0.iter_mut().zip(z) {
+                    *sum += v * l.focus;
+                }
+                zone.1 += l.focus;
+            }
         }
+        self.zone = (zone.1 > 0.0).then(|| zone.0.map(|v| v / zone.1));
         // The sparks: from the drum in focus to the drum of the one it's heading for.
         let to = (0..FIELD_COUNT).find(|&f| looks[f].aim > 0.0);
         let from = (0..FIELD_COUNT).filter(|&f| looks[f].aim == 0.0).max_by(|&a, &b| looks[a].focus.total_cmp(&looks[b].focus));
@@ -2371,6 +2413,15 @@ impl Game {
         let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp);
         // The lane's shape, and how fast notes go along it (see `lane_stretch`).
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w);
+        // Where it's played before the whole-playfield moves (x0, y0, x1, y1): from the screen's
+        // left edge (the drum) along the lane, with room for the judgements.
+        let (band_top, band_h) = lane_band();
+        let local_zone = match &rail {
+            Some(r) => r.pts.iter().fold([0.0, band_top, HIT_X, band_top + band_h], |z, &(x, y, _)| {
+                [z[0], z[1].min(y - LANE_H / 2.0), z[2].max(x + LANE_H / 2.0), z[3].max(y + LANE_H / 2.0)]
+            }),
+            None => [0.0, band_top, (HIT_X + lane_len).max(HIT_X + BIG_R), band_top + band_h],
+        };
         let portal = self.portal_at(vt, lane_len);
         let scroll = Scroll {
             t: vt,
@@ -3004,6 +3055,9 @@ impl Game {
         if angle != 0.0 || zoom != 1.0 || dest != pivot {
             c.rotate_since(start_shape, pivot, angle, zoom, dest);
         }
+        let [x0, y0, x1, y1] = local_zone;
+        let (x0, x1) = (flip_x(x0).min(flip_x(x1)), flip_x(x0).max(flip_x(x1)));
+        self.zone = Some(turned_box([x0, y0, x1 - x0, y1 - y0], pivot, angle, zoom, dest));
         // Texts go where the playfield took them, but stay upright and readable: their centre x,
         // top and height there.
         let (sin, cos) = angle.sin_cos();
@@ -3381,6 +3435,20 @@ fn darken_outside(c: &mut Canvas, x: f32, y: f32, r: f32, w: f32) {
         let inner = r + k as f32 * 3.0;
         c.ring(x, y, inner + 3.0, rgba(0x08080b, 0.97 * (k as f32 + 0.5) / 6.0), 3.0);
     }
+}
+
+/// The box (x, y, w, h) around `rect` turned by `angle` and scaled by `scale` about `pivot`,
+/// which lands on `dest` (as `Canvas::rotate_since` moves shapes).
+fn turned_box(rect: [f32; 4], pivot: [f32; 2], angle: f32, scale: f32, dest: [f32; 2]) -> [f32; 4] {
+    let (sin, cos) = angle.sin_cos();
+    let [x, y, w, h] = rect;
+    let corners = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)].map(|(px, py)| {
+        let (dx, dy) = ((px - pivot[0]) * scale, (py - pivot[1]) * scale);
+        (dest[0] + dx * cos - dy * sin, dest[1] + dx * sin + dy * cos)
+    });
+    let (x0, x1) = corners.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+    let (y0, y1) = corners.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+    [x0, y0, x1 - x0, y1 - y0]
 }
 
 /// Vertical band (top, height) of the lane with a little room for judgements, for previews that
@@ -4087,6 +4155,23 @@ mod tests {
         assert!(!notes.is_empty() && notes.iter().all(|&f| f == GREY), "{notes:x?}");
         let dots: std::collections::HashSet<u32> = c.shapes.iter().filter(|s| s.center[1] == ECHO_Y && s.half[0] < 10.0 && s.half[0] > 3.0).map(fill).collect();
         assert!(dots.len() >= 2 && !dots.contains(&GREY), "{dots:x?}");
+    }
+
+    #[test]
+    fn a_lobby_hosts_mod_settings_are_what_the_match_plays_with() {
+        let mut g = kiai_game("MV");
+        g.use_mod_settings(Some(multiverse::classic()), None);
+        assert_eq!(g.universes, Some(multiverse::classic()));
+        let mut g = kiai_game("SS");
+        let host = shapeshift::Config::parse("every=4 order=fixed shapes=spiral,loop,-zigzag,-uturn,-elbow,-straight");
+        g.use_mod_settings(None, Some(host));
+        assert_eq!(g.shapeshift.bars(), 4);
+        assert_eq!(&g.shape_order[..4], &[2, 3, 2, 3]);
+        // Settings the host didn't send stay the player's own.
+        let mut g = kiai_game("SS");
+        let own = g.shape_order.clone();
+        g.use_mod_settings(None, None);
+        assert_eq!((g.universes, g.shape_order), (None, own));
     }
 
     #[test]

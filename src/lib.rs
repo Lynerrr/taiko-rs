@@ -131,6 +131,8 @@ struct SpectateView {
     from: Option<f64>,
     rate: f64,
     mods: Mods,
+    /// The match's map as the room named it, with the host's mod settings.
+    map: net::MapInfo,
     players: Vec<(u32, String)>,
     /// One game per player, fed with their presses.
     games: Vec<(u32, Box<Game>)>,
@@ -141,6 +143,10 @@ struct SpectateView {
     /// Players who skipped the intro; once all have, so does the view.
     skipped: std::collections::HashSet<u32>,
     skip_done: bool,
+    /// Watching everyone: what each player's strip shows (see `draw_spectate_all`), and when it
+    /// was last drawn.
+    zones: Vec<[f32; 4]>,
+    zones_at: Option<Instant>,
 }
 
 impl SpectateView {
@@ -242,6 +248,10 @@ struct State {
     hits: Vec<render::HitBox>,
     browse: browse::Browse,
     downloads: Vec<download::Job>,
+    /// Song select: the set being checked for a newer version on osu! (see `poll_set_check`),
+    /// and the one the selection rests on, since when.
+    set_check: Option<(u32, Receiver<Result<bool, String>>)>,
+    set_check_due: Option<(u32, Instant)>,
     /// Android: when the folder of .osz files opened with the game was last looked at.
     #[cfg(target_os = "android")]
     imports_checked: Instant,
@@ -523,21 +533,40 @@ fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool) -> [f32; 4] {
 }
 
 /// Every spectated player at once: one lane per player, stacked, with their numbers.
-fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[(u32, String)], scroll: f64) {
+/// Each player's strip shows where they play: the lane, or wherever the mods take it (rails,
+/// Multiverse's playfield in focus...), fitted in and followed smoothly. `zones` keeps what each
+/// strip shows between frames; `dt` is the time since the last one (s).
+fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[(u32, String)], scroll: f64, zones: &mut Vec<[f32; 4]>, dt: f32) {
     let n = games.len().max(1) as f32;
     let (band_top, band_h) = game::lane_band();
     let (top, bottom) = (40.0, 470.0);
     let strip = ((bottom - top) / n).min(120.0);
     let k = strip / band_h;
     let full_w = c.width;
+    // Drawn wider than the screen, so a plain lane fills the strip's width.
+    let plain = [0.0, band_top, full_w / k, band_h];
+    zones.resize(games.len(), [f32::NAN; 4]);
+    let follow = 1.0 - (-dt / 0.15).exp();
     c.text_centered(full_w / 2.0, 16.0, 9.0, rgba(0x4fb4ff, 1.0), "SPECTATING  -  everyone   Left/Right or A: one player   Esc leave");
     for (i, (id, g)) in games.iter_mut().enumerate() {
         let y = top + i as f32 * strip;
         let start = c.shapes.len();
         c.width = full_w / k;
         g.draw_playfield(c, scroll);
-        c.transform_since(start, [0.0, 0.0], k, 0.0, y - band_top * k);
         c.width = full_w;
+        let target = g.play_zone().filter(|z| z[2] > 1.0 && z[3] > 1.0).unwrap_or(plain);
+        let z = &mut zones[i];
+        if z[0].is_nan() {
+            *z = target;
+        } else {
+            for (v, t) in z.iter_mut().zip(target) {
+                *v += (t - *v) * follow;
+            }
+        }
+        let [zx, zy, zw, zh] = *z;
+        let scale = (full_w / zw).min(strip / zh);
+        let (dx, dy) = ((full_w - zw * scale) / 2.0 - zx * scale, y + (strip - zh * scale) / 2.0 - zy * scale);
+        c.transform_since(start, [0.0, 0.0], scale, dx, dy);
         c.clip_since(start, 0.0, y, full_w, strip - 2.0);
         let name = players.iter().find(|(p, _)| p == id).map(|(_, n)| n.as_str()).unwrap_or("?");
         let st = &g.stats;
@@ -924,10 +953,14 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
     c.text(title_x, 22.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, title_end - title_x, &title));
 }
 
-/// How a map is named to other players (lobby map, a solo play friends watch).
+/// How a map is named to other players (lobby map, a solo play friends watch), with our
+/// settings of the mods that have them.
 fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
+    let (multiverse, shapeshift) = mod_settings(mods);
     net::MapInfo {
         mods: mods.list(),
+        multiverse,
+        shapeshift,
         hash: e.hash(),
         artist: e.meta.artist.clone(),
         title: e.meta.title.clone(),
@@ -936,6 +969,20 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         from: None,
         set_id: e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)),
     }
+}
+
+/// Our settings of the mods in `mods` that have them (Multiverse's universes, Shapeshift's
+/// setup), as the config writes them: what a lobby we host plays with.
+fn mod_settings(mods: Mods) -> (Option<String>, Option<String>) {
+    let universes = mods.has(mods::Mod::Multiverse).then(|| multiverse::format(&multiverse::get()));
+    let shapes = mods.has(mods::Mod::Shapeshift).then(|| shapeshift::get().format());
+    (universes, shapes)
+}
+
+/// Plays `game` with the mod settings `map` carries (the lobby host's, or the friend's being
+/// watched) where it has them; ours otherwise. Our config and presets aren't touched.
+fn use_mod_settings(game: &mut Game, map: &net::MapInfo) {
+    game.use_mod_settings(map.multiverse.as_deref().map(multiverse::parse), map.shapeshift.as_deref().map(shapeshift::Config::parse));
 }
 
 /// The library entry for a map someone else named: the file's content hash identifies it (the
@@ -3307,7 +3354,7 @@ impl State {
                 self.ask_quit();
                 return true;
             }
-            KeyCode::KeyU if self.modifiers_ctrl && !self.in_song() => {
+            KeyCode::KeyU if self.modifiers_ctrl && !self.modifiers_shift && !self.in_song() => {
                 self.update_now();
                 return true;
             }
@@ -4291,6 +4338,7 @@ impl State {
                         if let Some(mut m) = s.map.clone() {
                             m.rate = rate;
                             m.mods = mods.list();
+                            (m.multiverse, m.shapeshift) = mod_settings(mods);
                             s.client.send(net::ClientMsg::SelectMap(m));
                         }
                         let text = format!("match rate {rate:.2}x");
@@ -4835,13 +4883,21 @@ impl State {
     fn mods_changed(&mut self) {
         self.cfg.save();
         self.select.mods_label = self.cfg.mods.label();
+        self.update_lobby_map();
+    }
+
+    /// As the lobby host: tells the room the match's rate, mods and mod settings as they are now.
+    fn update_lobby_map(&self) {
         let (rate, mods) = (self.play_speed().0, self.cfg.mods);
         if let Some(s) = &self.mp {
             if s.is_host() && !s.in_match {
                 if let Some(mut m) = s.map.clone() {
                     m.rate = rate;
                     m.mods = mods.list();
-                    s.client.send(net::ClientMsg::SelectMap(m));
+                    (m.multiverse, m.shapeshift) = mod_settings(mods);
+                    if Some(&m) != s.map.as_ref() {
+                        s.client.send(net::ClientMsg::SelectMap(m));
+                    }
                 }
             }
         }
@@ -4924,6 +4980,7 @@ impl State {
     fn shapeshift_changed(&mut self) {
         shapeshift::set(self.cfg.shapeshift);
         self.cfg.save();
+        self.update_lobby_map();
     }
 
     /// After a key or click in the Multiverse setup: the universes are saved and drawn with, or
@@ -4933,6 +4990,7 @@ impl State {
             multiverse::Action::Changed => {
                 multiverse::set(self.cfg.universes);
                 self.cfg.save();
+                self.update_lobby_map();
             }
             multiverse::Action::Close => self.universe_setup = None,
             multiverse::Action::None => {}
@@ -5692,6 +5750,9 @@ impl State {
                     let mods = v.play.as_ref().map(|p| Mods::from_list(&p.map.mods)).unwrap_or_default();
                     let mut g = Game::with_mods(map, track, self.audio.as_ref(), mods);
                     g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods, 1.0));
+                    if let Some(p) = &v.play {
+                        use_mod_settings(&mut g, &p.map);
+                    }
                     g.replay = Some((std::mem::take(&mut v.inputs), 0));
                     g.watched = true;
                     g.banner = Some(format!("WATCHING  -  {}", v.player));
@@ -5842,12 +5903,15 @@ impl State {
                             from: map.from,
                             rate: map.rate,
                             mods,
+                            map: map.clone(),
                             players,
                             games: Vec::new(),
                             focus: Some(0),
                             pending: std::collections::HashMap::new(),
                             skipped: std::collections::HashSet::new(),
                             skip_done: false,
+                            zones: Vec::new(),
+                            zones_at: None,
                         }));
                     }
                     None => {
@@ -6269,6 +6333,11 @@ impl State {
                 self.cycle_sort(dir);
             }
             Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyL => self.open_collections(),
+            Scene::Select if self.modifiers_ctrl && self.modifiers_shift && code == KeyCode::KeyU => {
+                if let Some(i) = self.select.selected() {
+                    self.update_set(i);
+                }
+            }
             Scene::Select if code == KeyCode::F2 => {
                 if self.modifiers_shift {
                     self.select.random_back();
@@ -6461,6 +6530,7 @@ impl State {
         }
         self.poll_downloads();
         self.poll_score_link();
+        self.poll_set_check(now);
         self.poll_sorting();
         self.update_presence();
         if let Some(ex) = &self.export {
@@ -6815,6 +6885,8 @@ impl State {
                                     from: None,
                                     set_id: m.set_id,
                                     mods: replay.mods.clone(),
+                                    multiverse: None,
+                                    shapeshift: None,
                                 },
                                 score: replay.score,
                                 accuracy: replay.accuracy,
@@ -6947,6 +7019,9 @@ impl State {
                         if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
                             game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, self.cfg.scroll_speed);
                         }
+                        if let Some(m) = self.mp.as_ref().and_then(|s| s.map.as_ref()) {
+                            use_mod_settings(&mut game, m);
+                        }
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
@@ -7031,6 +7106,7 @@ impl State {
                         audio.play(track.clone(), first_ms + behind);
                         for (k, (id, name)) in v.players.iter().enumerate() {
                             let mut g = Game::with_mods(map.clone(), track.clone(), None, v.mods);
+                            use_mod_settings(&mut g, &v.map);
                             if let Some(t) = v.from {
                                 g.skip_to(t);
                             }
@@ -7064,7 +7140,11 @@ impl State {
                         g.draw_hud(canvas);
                         canvas.text_centered(canvas.width / 2.0, 470.0, 7.0, rgba(0x9a9ab0, 1.0), "Left/Right: other player   A: everyone   Esc: leave");
                     }
-                    _ if !v.games.is_empty() => draw_spectate_all(canvas, &mut v.games, &v.players, scroll),
+                    _ if !v.games.is_empty() => {
+                        let dt = v.zones_at.map_or(0.0, |at| now.saturating_duration_since(at).as_secs_f32());
+                        v.zones_at = Some(now);
+                        draw_spectate_all(canvas, &mut v.games, &v.players, scroll, &mut v.zones, dt);
+                    }
                     _ => {}
                 }
             }
@@ -7644,24 +7724,152 @@ impl State {
         let mut finished = Vec::new();
         self.downloads.retain(|job| match job.rx.try_recv() {
             Ok(result) => {
-                finished.push((job.set.clone(), result));
+                finished.push((job.set.clone(), job.update, result));
                 false
             }
             Err(mpsc::TryRecvError::Empty) => true,
             Err(mpsc::TryRecvError::Disconnected) => {
-                finished.push((job.set.clone(), Err("download stopped".into())));
+                finished.push((job.set.clone(), job.update, Err("download stopped".into())));
                 false
             }
         });
-        for (set, result) in finished {
+        for (set, update, result) in finished {
             match result {
+                Ok(folder) if update => self.add_updated(&set, &folder),
                 Ok(folder) => self.add_downloaded(&set, &folder),
                 Err(e) => {
+                    if update {
+                        self.select.updates.insert(set.id, ui::SetUpdate::Unknown);
+                    }
                     eprintln!("download {} failed: {e}", set.id);
                     self.toast(format!("download failed: {}", e.chars().take(80).collect::<String>()));
                 }
             }
         }
+    }
+
+    /// Song select: once the selection has rested on a song for a moment, asks a mirror whether
+    /// osu! has a newer version of its set (each set once a session; not while scrolling past).
+    fn poll_set_check(&mut self, now: Instant) {
+        if let Some((id, rx)) = &self.set_check {
+            let id = *id;
+            let state = match rx.try_recv() {
+                Ok(Ok(true)) => ui::SetUpdate::Available,
+                Ok(Ok(false)) => ui::SetUpdate::UpToDate,
+                Ok(Err(e)) => {
+                    eprintln!("checking set {id} for updates: {e}");
+                    ui::SetUpdate::Unknown
+                }
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => ui::SetUpdate::Unknown,
+            };
+            self.set_check = None;
+            // An update started meanwhile keeps its state.
+            self.select.updates.entry(id).and_modify(|s| if *s == ui::SetUpdate::Checking { *s = state }).or_insert(state);
+        }
+        if !self.cfg.check_updates || !matches!(self.scene, Scene::Select) {
+            self.set_check_due = None;
+            return;
+        }
+        let Some(entry) = self.select.selected() else { return };
+        let Some(id) = self.library[entry].set_id() else { return };
+        if self.select.updates.contains_key(&id) {
+            return;
+        }
+        match self.set_check_due {
+            Some((due, since)) if due == id => {
+                if self.set_check.is_some() || now.saturating_duration_since(since) < Duration::from_millis(800) {
+                    return;
+                }
+            }
+            _ => {
+                self.set_check_due = Some((id, now));
+                return;
+            }
+        }
+        // The set's difficulties here: beatmap ID and the MD5 osu! knows each version by.
+        let folder = self.library[entry].path.parent().map(|p| p.to_path_buf());
+        let maps: Vec<(Option<u32>, PathBuf)> = self
+            .library
+            .iter()
+            .filter(|e| e.set_id() == Some(id) && e.path.parent() == folder.as_deref() && !self.select.gone.contains(&e.path))
+            .map(|e| (e.meta.beatmap_id, e.path.clone()))
+            .collect();
+        self.select.updates.insert(id, ui::SetUpdate::Checking);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = download::set_checksums(id).map(|online| {
+                let here: Vec<(Option<u32>, String)> = maps.iter().filter_map(|(bid, p)| Some((*bid, download::md5_hex(&std::fs::read(p).ok()?)))).collect();
+                download::outdated(&here, &online)
+            });
+            let _ = tx.send(result);
+        });
+        self.set_check = Some((id, rx));
+    }
+
+    /// Downloads the newest version of map `entry`'s set into its folder: the set's own
+    /// difficulties are replaced, home-made ones (no beatmap ID) stay.
+    fn update_set(&mut self, entry: usize) {
+        let e = &self.library[entry];
+        let (Some(id), Some(folder)) = (e.set_id(), e.path.parent().map(|p| p.to_path_buf())) else {
+            self.toast("this map has no osu! set ID to update it by".into());
+            return;
+        };
+        if self.downloads.iter().any(|j| j.set.id == id) {
+            return;
+        }
+        let replaced: Vec<PathBuf> = self
+            .library
+            .iter()
+            .filter(|m| m.path.parent() == Some(folder.as_path()) && m.meta.beatmap_id.is_some() && m.set_id() == Some(id) && !self.select.gone.contains(&m.path))
+            .map(|m| m.path.clone())
+            .collect();
+        let set = download::SetInfo {
+            id,
+            artist: e.meta.artist.clone(),
+            title: e.meta.title.clone(),
+            creator: e.meta.creator.clone(),
+            status: String::new(),
+            diffs: Vec::new(),
+            play_count: 0,
+            favourite_count: 0,
+            rating: 0.0,
+            ranked_date: String::new(),
+        };
+        self.toast(format!("updating {} - {}...", set.artist, set.title));
+        self.select.updates.insert(id, ui::SetUpdate::Updating);
+        self.downloads.push(download::start_update(set, folder, replaced));
+    }
+
+    /// A set downloaded again (see `update_set`): its difficulties in the library are read anew in
+    /// place (indices stay valid), ones it no longer has leave the list, new ones join it.
+    fn add_updated(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
+        let mut fresh: std::collections::HashMap<PathBuf, Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0)).into_iter().map(|e| (e.path.clone(), e)).collect();
+        let mut changed = Vec::new();
+        for (i, e) in self.library.iter_mut().enumerate() {
+            if e.path.parent() != Some(folder) {
+                continue;
+            }
+            match fresh.remove(&e.path) {
+                Some(new) => {
+                    *e = new;
+                    self.select.gone.remove(&e.path);
+                    changed.push((i, e.path.clone(), e.modified, e.size));
+                }
+                None => {
+                    self.select.gone.insert(e.path.clone());
+                }
+            }
+        }
+        if let Some(info) = &self.mapinfo {
+            info.extend(changed);
+            self.mapinfo_sorted = false;
+        }
+        let mut added: Vec<Entry> = fresh.into_values().collect();
+        added.sort_by(|a, b| a.path.cmp(&b.path));
+        self.append_maps(added);
+        self.select.updates.insert(set.id, ui::SetUpdate::UpToDate);
+        self.toast(format!("updated {} - {}", set.artist, set.title));
     }
 
     /// Adds a freshly downloaded set to the library (appended, so existing indices stay valid).
@@ -7920,12 +8128,18 @@ impl State {
                 let action = multiverse::Setup::delete(&mut self.cfg.universe_presets, i);
                 self.universe_action(action);
             }
+            Hit::UpdateSet(i) => self.update_set(i),
             Hit::SongMenu(k) => {
                 let action = self.select.menu_items(&self.library).get(k).map(|(_, a)| *a);
                 if let Some(ui::MenuAction::Love(set, loved)) = action {
                     self.select.menu = None;
                     self.toast(format!("{} set {set} on taiko.rs...", if loved { "loving" } else { "unloving" }));
                     self.call_loved(Some((set, loved)));
+                } else if action == Some(ui::MenuAction::UpdateSong) {
+                    if let Some(i) = self.select.menu_map() {
+                        self.update_set(i);
+                    }
+                    self.select.menu = None;
                 } else if let Some(what) = action.and_then(|a| self.select.hide(a, &self.library)) {
                     self.toast(format!("hid {what}: Settings > Hidden maps brings it back"));
                 }
@@ -8624,6 +8838,8 @@ impl State {
             hits: Vec::new(),
             browse: browse::Browse::default(),
             downloads: Vec::new(),
+            set_check: None,
+            set_check_due: None,
             #[cfg(target_os = "android")]
             imports_checked: Instant::now(),
             #[cfg(target_os = "android")]

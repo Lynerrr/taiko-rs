@@ -919,7 +919,7 @@ mod tests {
             }
         }
         let play = online::ScoreSubmit {
-            map: crate::net::MapInfo { hash: 7, artist: "A".into(), title: "T".into(), version: "Oni".into(), rate: 1.0, from: None, set_id: None, mods: vec!["HR".into()] },
+            map: crate::net::MapInfo { hash: 7, artist: "A".into(), title: "T".into(), version: "Oni".into(), rate: 1.0, from: None, set_id: None, mods: vec!["HR".into()], multiverse: None, shapeshift: None },
             score: 1_000_000,
             accuracy: 0.98,
             max_combo: 500,

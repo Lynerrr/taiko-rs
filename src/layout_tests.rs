@@ -120,6 +120,8 @@ fn session(mapguessr: bool) -> multiplayer::Session {
         from: Some(61_000.0),
         set_id: Some(1),
         mods: Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR").list(),
+        multiverse: None,
+        shapeshift: None,
     });
     let live = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
     let result = net::Final { score: 1_234_567, accuracy: 0.9876, max_combo: 1290, great: 1234, ok: 56, miss: 7, ur: 123.4, quit: false };
@@ -239,9 +241,14 @@ fn assert_every_screen_fits() {
     check(&mut s, "select online scores, server away", &mut out);
     s.online_boards.clear();
     s.board_online = false;
+    // Every song has a newer version on osu! (one being downloaded).
+    let sets: Vec<u32> = s.library.iter().filter_map(|e| e.set_id()).collect();
+    s.select.updates = sets.iter().map(|&id| (id, if id == 2 { ui::SetUpdate::Updating } else { ui::SetUpdate::Available })).collect();
+    check(&mut s, "select updates", &mut out);
     s.select.menu = Some(ui::SongMenu { row: s.select.cursor(), header: true, x: 2000.0, y: 300.0 });
     check(&mut s, "song menu", &mut out);
     s.select.menu = None;
+    s.select.updates.clear();
 
     s.open_preview();
     check(&mut s, "preview", &mut out);
@@ -604,4 +611,42 @@ fn exiting_asks_first() {
     assert!(!s.quit);
     s.ask_quit();
     assert!(s.quit);
+}
+
+/// Watching everyone at once, each player's strip follows where they play: a plain lane, rails
+/// lanes, Shapeshift's and Multiverse's playfield in focus all land in their strip.
+#[test]
+fn watching_everyone_shows_where_each_player_plays() {
+    let mods = ["", "SI", "LP", "SS", "MV", "UT,MV"];
+    let players: Vec<(u32, String)> = (0..mods.len() as u32).map(|i| (i, format!("player {i}"))).collect();
+    for &w in widths() {
+        let mut games: Vec<(u32, Box<Game>)> = mods
+            .iter()
+            .enumerate()
+            .map(|(i, mods)| {
+                let mut map = beatmap::calibration_map(500.0, 4, 64);
+                map.meta = entry(0, 0, false).meta;
+                let mut g = Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse(mods));
+                g.set_time(9000.0);
+                (i as u32, Box::new(g))
+            })
+            .collect();
+        let mut zones = Vec::new();
+        let mut c = Canvas::default();
+        c.clear(w);
+        draw_spectate_all(&mut c, &mut games, &players, 1.0, &mut zones, 0.0);
+        if let Some(dir) = std::env::var_os("TAIKO_LAYOUT_SHOTS") {
+            let (iw, ih, rgb) = debug::rasterize(&c, 2.0);
+            debug::write_png(&std::path::Path::new(&dir).join(format!("spectate_everyone-{w:.0}.png")), iw, ih, &rgb).unwrap();
+        }
+        assert_eq!(c.clips.len(), games.len());
+        for (k, (range, [x, y, cw, ch])) in c.clips.iter().enumerate() {
+            let shapes = &c.shapes[range.clone()];
+            let inside = shapes.iter().filter(|s| (*x..x + cw).contains(&s.center[0]) && (*y..y + ch + 2.0).contains(&s.center[1])).count();
+            // Multiverse's other playfields circle off the strip (and are clipped): the one in
+            // focus is there.
+            let share = if mods[k].contains("MV") { 0.125 } else { 0.9 };
+            assert!(inside as f32 >= shapes.len() as f32 * share, "{} at {w}: {inside} of {} shapes in their strip", mods[k], shapes.len());
+        }
+    }
 }

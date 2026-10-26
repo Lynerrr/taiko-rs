@@ -423,7 +423,7 @@ impl Item {
             Item::KrokodilKoban => "",
             Item::SongSelectLayout => "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
             Item::Changelog => "Enter: the latest changes. They also show by themselves after an update.",
-            Item::CheckUpdates => "Look for a newer build each time taiko.rs starts; a badge top right says when there is one.",
+            Item::CheckUpdates => "Look for a newer build each time taiko.rs starts (a badge top right says when there is one), and for newer versions of the songs you pick on osu!.",
             Item::Fullscreen => "Shortcut: F11.",
             Item::WindowSize => "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
             Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",

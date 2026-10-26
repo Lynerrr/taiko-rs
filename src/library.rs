@@ -28,6 +28,11 @@ impl Entry {
         format!("{} - {} [{}]", self.meta.artist, self.meta.title, self.meta.version)
     }
 
+    /// The osu! beatmap set it belongs to: from the `.osu`, else its "123456 Artist - Title" folder.
+    pub fn set_id(&self) -> Option<u32> {
+        self.meta.set_id.or_else(|| self.path.parent().and_then(crate::download::set_id_of_folder)).filter(|&id| id > 0)
+    }
+
     pub fn hash(&self) -> u64 {
         *self.hash.get_or_init(|| crate::net::map_hash(&std::fs::read(&self.path).unwrap_or_default()))
     }

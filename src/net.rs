@@ -76,6 +76,13 @@ pub struct MapInfo {
     /// Mods the host picked for the match (acronyms, e.g. "HD"); `rate` already includes DT/HT.
     #[serde(default)]
     pub mods: Vec<String>,
+    /// The host's settings of the mods that have them, as the config writes them, while those
+    /// mods are on: Multiverse's universes and Shapeshift's setup. Everyone plays the match with
+    /// them; their own setups and presets stay as they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiverse: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shapeshift: Option<String>,
 }
 
 fn one() -> f64 {
@@ -1343,7 +1350,7 @@ mod tests {
         wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
         let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
         wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new() }));
+        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
         a.send(ClientMsg::HasMap(false));
@@ -1352,7 +1359,7 @@ mod tests {
         assert!(players.iter().any(|p| p.name == "alice" && p.host));
         assert!(players.iter().any(|p| p.name == "bob" && !p.host));
 
-        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9), mods: vec!["HD".into()] };
+        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9), mods: vec!["HD".into()], multiverse: None, shapeshift: Some("every=4".into()) };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
         for c in [&a, &b] {
@@ -1362,7 +1369,7 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
         a.send(ClientMsg::StartMatch);
         for c in [&mut a, &mut b] {
-            assert!(matches!(wait_for(c, |m| matches!(m, ServerMsg::Prepare(_))), ServerMsg::Prepare(m) if m.hash == 42 && m.rate == 1.5));
+            assert!(matches!(wait_for(c, |m| matches!(m, ServerMsg::Prepare(_))), ServerMsg::Prepare(m) if m.hash == 42 && m.rate == 1.5 && m.shapeshift.as_deref() == Some("every=4")));
             c.send(ClientMsg::Loaded(true));
         }
         let ServerMsg::Start { at: at_a } = wait_for(&mut a, |m| matches!(m, ServerMsg::Start { .. })) else { unreachable!() };

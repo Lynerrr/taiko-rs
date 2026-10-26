@@ -1620,6 +1620,8 @@ pub enum Hit {
     SongHeader(usize),
     /// An item of the song list's right-click menu.
     SongMenu(usize),
+    /// A song's "update available" (library index of one of its difficulties).
+    UpdateSet(usize),
     /// A mod in the mod select (index into `mods::ALL`) / the song select's Mods button.
     ModToggle(usize),
     ModsButton,

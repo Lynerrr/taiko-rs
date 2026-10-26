@@ -81,6 +81,10 @@ pub struct Select {
     pub hidden: Hidden,
     /// The right-click menu of a song list row.
     pub menu: Option<SongMenu>,
+    /// Sets checked for a newer version on osu! this session, by set ID.
+    pub updates: std::collections::HashMap<u32, SetUpdate>,
+    /// Difficulties an update took out of their set (renamed or dropped on osu!): not listed.
+    pub gone: std::collections::HashSet<std::path::PathBuf>,
     /// The list being dragged with the left button.
     drag: Option<ListDrag>,
     /// Where each song's own row is in the list as last drawn (list units, top = 0).
@@ -189,6 +193,8 @@ impl Select {
             show_converts: !has_taiko,
             hidden: Hidden::load(),
             menu: None,
+            updates: std::collections::HashMap::new(),
+            gone: std::collections::HashSet::new(),
             drag: None,
             song_y: Vec::new(),
             visible: Vec::new(),
@@ -231,7 +237,7 @@ impl Select {
             .enumerate()
             .filter(|(_, e)| self.show_converts || e.meta.mode == 1)
             .filter(|(i, _)| only.is_none_or(|set| set.contains(i)))
-            .filter(|(_, e)| !self.hidden.contains(&e.path))
+            .filter(|(_, e)| !self.hidden.contains(&e.path) && !self.gone.contains(&e.path))
             .filter(|&(i, e)| query.is_empty() || query.matches(&e.meta, &e.label(), &facts(i, e)))
             .map(|(i, _)| i)
             .collect();
@@ -602,7 +608,13 @@ impl Select {
         }
     }
 
-    /// The menu's items for its row: hide the difficulty (not on a song's own row), hide the song.
+    /// The map (library index) the right-click menu is open on.
+    pub fn menu_map(&self) -> Option<usize> {
+        self.visible.get(self.menu.as_ref()?.row).copied()
+    }
+
+    /// The menu's items for its row: hide the difficulty (not on a song's own row), hide the song,
+    /// and get the song's newest version from osu! (a set that has an ID).
     pub fn menu_items(&self, library: &[Entry]) -> Vec<(String, MenuAction)> {
         let Some(m) = &self.menu else { return Vec::new() };
         let Some(&i) = self.visible.get(m.row) else { return Vec::new() };
@@ -616,6 +628,14 @@ impl Select {
             let loved = self.server_loved.contains(&set);
             items.push((if loved { "Unlove on taiko.rs" } else { "Love on taiko.rs (gives pp)" }.to_string(), MenuAction::Love(set, !loved)));
         }
+        if let Some(id) = library[i].set_id() {
+            let label = match self.updates.get(&id) {
+                Some(SetUpdate::Updating) => "Updating...".to_string(),
+                Some(SetUpdate::Available) => format!("Update {}", library[i].meta.title),
+                _ => format!("Download {} again", library[i].meta.title),
+            };
+            items.push((fit(label), MenuAction::UpdateSong));
+        }
         items
     }
 
@@ -626,6 +646,7 @@ impl Select {
         let &i = self.visible.get(m.row)?;
         let g = *self.group_of.get(m.row)?;
         let what = match action {
+            MenuAction::UpdateSong => return None,
             MenuAction::HideDifficulty => {
                 self.hidden.maps.insert(library[i].path.clone());
                 format!("[{}]", library[i].meta.version)
@@ -925,8 +946,28 @@ impl Select {
                     let room = 2.0 * (23.5 - title_bottom - 1.5).min(rh - 4.0 - 1.5 - 23.5);
                     let sub_size = Canvas::fit_height(7.0, room);
                     c.text(44.0, y + 20.0 + (7.0 - sub_size) / 2.0, sub_size, rgba(0x9a9ab0, 1.0), &fit(sub, max_chars(sub_size, lw - 110.0)));
+                    // A newer version on osu!: click (or Ctrl+Shift+U) to get it. Under the
+                    // difficulty count (moved up for it), inside the row (not on one cut off at
+                    // the list's end).
+                    let update = e.set_id().and_then(|id| self.updates.get(&id)).filter(|u| matches!(u, SetUpdate::Available | SetUpdate::Updating) && y + rh - 4.0 <= bottom);
                     let n = g.len();
-                    c.text_right(24.0 + lw - 12.0, y + 11.0, 8.0, rgba(0x8a8aa0, 1.0), &format!("{n} diff{}", if n == 1 { "" } else { "s" }));
+                    let diffs_y = if update.is_some() { y + 6.0 } else { y + 11.0 };
+                    c.text_right(24.0 + lw - 12.0, diffs_y, 8.0, rgba(0x8a8aa0, 1.0), &format!("{n} diff{}", if n == 1 { "" } else { "s" }));
+                    let (by, bh) = (y + 19.0, 9.0);
+                    let ty = by + (bh - Canvas::text_height(6.0)) / 2.0;
+                    match update {
+                        Some(SetUpdate::Available) => {
+                            let label = "update";
+                            let bw = Canvas::text_width(6.0, label) + 10.0;
+                            let bx = 24.0 + lw - 12.0 - bw;
+                            let hover = c.hovered(bx, by, bw, bh);
+                            c.round_rect(bx, by, bw, bh, 3.0, rgba(if hover { 0x5a4a1a } else { 0x3a3218 }, 1.0), rgba(0xFFD34D, 1.0), 1.0);
+                            c.text_centered(bx + bw / 2.0, ty, 6.0, rgba(0xFFD34D, 1.0), label);
+                            c.hit(bx, by, bw, bh, Hit::UpdateSet(self.visible[g.start]));
+                        }
+                        Some(SetUpdate::Updating) => c.text_right(24.0 + lw - 12.0, ty, 6.0, rgba(0x4fb4ff, 1.0), "updating..."),
+                        _ => {}
+                    }
                 }
                 Row::Diff(i) => {
                     let a = *alpha;
@@ -1196,6 +1237,19 @@ pub enum MenuAction {
     HideSong,
     /// Loved nominators: love the map set on the online server (false: take it back).
     Love(u32, bool),
+    /// Download the song's set again, its newest version (replacing its difficulties).
+    UpdateSong,
+}
+
+/// Whether osu! has a newer version of a set than the one here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SetUpdate {
+    Checking,
+    UpToDate,
+    Available,
+    Updating,
+    /// The mirrors couldn't be asked.
+    Unknown,
 }
 
 impl Select {
@@ -1217,7 +1271,7 @@ impl Select {
             c.hit(x + 4.0, ry, bw - 8.0, ROW - 2.0, Hit::SongMenu(k));
             c.text(x + 12.0, ry + 5.0, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, bw - 20.0, label));
         }
-        c.text(x + 12.0, y + bh - 14.0, 6.0, rgba(0x6f6f86, 1.0), "only in taiko.rs; files stay");
+        c.text(x + 12.0, y + bh - 14.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit(6.0, bw - 24.0, "hiding: only in taiko.rs; files stay"));
     }
 
     /// The collection list over the song list.
