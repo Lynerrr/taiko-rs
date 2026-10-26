@@ -807,7 +807,14 @@ fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
     for _ in 0..20 {
         let _ = s.select.key(KeyCode::ArrowDown, &s.library);
     }
-    assert!(s.select.open_sections().len() >= 2, "the keys went on into the next heading");
+    let open = s.select.open_sections();
+    assert!(open.len() == 1 && open[0] > 0, "the keys went on into the next heading, and the one they left closed: {open:?}");
+    // Moving the selection to another heading that is open closes the one it leaves.
+    s.select.click_section(0);
+    assert_eq!(s.select.open_sections().len(), 2);
+    s.select.scroll_to(-1000.0, &s.library);
+    let open = s.select.open_sections();
+    assert!(open.len() == 1 && open[0] == 0, "scrolling back up left the other heading and closed it: {open:?}");
     // It all draws.
     check_draw("sections", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None));
 }
