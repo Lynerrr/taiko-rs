@@ -65,6 +65,14 @@ impl SortMode {
     }
 }
 
+/// A heading of the song list and the songs (`Select::groups` indices) under it.
+struct Section {
+    label: String,
+    /// None: the accent colour.
+    colour: Option<u32>,
+    groups: std::ops::Range<usize>,
+}
+
 pub struct Select {
     pub filter: String,
     /// The search box has the keys (clicked, or Ctrl+F): everything typed goes into it.
@@ -115,9 +123,17 @@ pub struct Select {
     groups: Vec<std::ops::Range<usize>>,
     /// Index into `groups` for each row of `visible`.
     group_of: Vec<usize>,
-    /// Sorted by status: for each song that starts a status section, the section (status code,
-    /// songs in it); drawn as a heading above the song.
-    sections: Vec<Option<(u8, usize)>>,
+    /// The list's headings, in order: what the sort groups songs by, like osu!'s groups. Only the
+    /// section holding the selection shows its songs.
+    sections: Vec<Section>,
+    /// The section of each song (`groups`).
+    section_of: Vec<usize>,
+    /// A section closed by clicking its heading, and the cursor at the time: moving the selection
+    /// opens it again.
+    closed: Option<(usize, usize)>,
+    /// What the sort ordered each row of `visible` by (its song's value; NaN: not known or the
+    /// sort has none).
+    row_value: Vec<f64>,
     cursor: usize,
     scroll: f32,
     anim: ListAnim,
@@ -183,6 +199,15 @@ const PANEL_MIN: f32 = 220.0;
 /// Height of a song's own row in the list (virtual units).
 pub const SONG_ROW_H: f32 = 34.0;
 
+/// What a song's name starts with, as its heading when the list is by artist or title.
+fn initial(name: &str) -> String {
+    match name.trim_start().chars().next() {
+        Some(c) if c.is_ascii_digit() => "0-9".to_string(),
+        Some(c) if c.is_alphabetic() && (c as u32) < 0x250 => c.to_uppercase().collect(),
+        _ => "Other".to_string(),
+    }
+}
+
 /// A status section's heading and colour in the song list.
 fn status_heading(code: u8) -> (&'static str, u32) {
     use crate::search::*;
@@ -239,6 +264,9 @@ impl Select {
             groups: Vec::new(),
             group_of: Vec::new(),
             sections: Vec::new(),
+            section_of: Vec::new(),
+            closed: None,
+            row_value: Vec::new(),
             cursor: 0,
             scroll: 0.0,
             anim: ListAnim::default(),
@@ -303,10 +331,22 @@ impl Select {
         }
     }
 
-    /// The status sections of the list sorted by status: (status code, songs), in order.
+    /// The list's headings: (heading, songs under it), in order.
     #[cfg(test)]
-    pub fn sections(&self) -> Vec<(u8, usize)> {
-        self.sections.iter().flatten().copied().collect()
+    pub fn sections(&self) -> Vec<(String, usize)> {
+        self.sections.iter().map(|s| (s.label.clone(), s.groups.len())).collect()
+    }
+
+    /// The first song of section `s`, as an index of `songs()`.
+    #[cfg(test)]
+    pub fn sections_first_song(&self, s: usize) -> usize {
+        self.sections[s].groups.start
+    }
+
+    /// The headings whose songs are listed: the one holding the selection, unless closed.
+    #[cfg(test)]
+    pub fn open_sections(&self) -> Vec<usize> {
+        (0..self.sections.len()).filter(|&s| self.section_open(s)).collect()
     }
 
     /// A map's status on osu! (`search`'s codes), loved here counting as loved.
@@ -321,7 +361,9 @@ impl Select {
     /// order). A song's value is its highest (hardest, longest, most recent...).
     fn sort_visible(&mut self, library: &[Entry]) {
         if self.sort == SortMode::Artist {
-            return; // the library is already in artist / title order
+            // The library is already in artist / title order.
+            self.row_value = vec![f64::NAN; self.visible.len()];
+            return;
         }
         let mut folder_ids: std::collections::HashMap<&std::path::Path, usize> = std::collections::HashMap::new();
         let folder = |i: usize| library[i].path.parent().unwrap_or(std::path::Path::new(""));
@@ -385,6 +427,7 @@ impl Select {
                 order.then(a.0.cmp(&b.0))
             });
         }
+        self.row_value = keyed.iter().map(|&(f, _)| if self.sort == SortMode::Title { f64::NAN } else { set_value[f] }).collect();
         self.visible = keyed.into_iter().map(|(_, i)| i).collect();
     }
 
@@ -415,21 +458,86 @@ impl Select {
                 start = i;
             }
         }
-        self.sections = vec![None; self.groups.len()];
-        if self.sort == SortMode::Status {
-            let mut last: Option<usize> = None;
-            let mut prev = None;
-            for (g, r) in self.groups.iter().enumerate() {
-                let code = self.status_section(&library[self.visible[r.start]]);
-                if prev != Some(code) {
-                    last = Some(g);
-                    self.sections[g] = Some((code, 0));
-                    prev = Some(code);
-                }
-                if let Some((_, n)) = last.and_then(|l| self.sections[l].as_mut()) {
-                    *n += 1;
-                }
+        self.sections.clear();
+        self.section_of.clear();
+        self.closed = None;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        for g in 0..self.groups.len() {
+            let (label, colour) = self.section_heading(library, self.groups[g].start, now);
+            match self.sections.last_mut() {
+                Some(last) if last.label == label => last.groups.end = g + 1,
+                _ => self.sections.push(Section { label, colour, groups: g..g + 1 }),
             }
+            self.section_of.push(self.sections.len() - 1);
+        }
+    }
+
+    /// The heading the song at row `row` is listed under for the sort: what it's grouped by.
+    fn section_heading(&self, library: &[Entry], row: usize, now: u64) -> (String, Option<u32>) {
+        let e = &library[self.visible[row]];
+        let v = self.row_value.get(row).copied().unwrap_or(f64::NAN);
+        let unknown = || "Not worked out yet".to_string();
+        let age = |t: f64| {
+            let days = now.saturating_sub(t as u64) / 86_400;
+            match days {
+                0 => "Today",
+                1 => "Yesterday",
+                2..=6 => "Last 7 days",
+                7..=29 => "Last 30 days",
+                30..=179 => "Last 6 months",
+                _ => "Older",
+            }
+            .to_string()
+        };
+        let label = match self.sort {
+            SortMode::Artist => initial(&e.meta.artist),
+            SortMode::Title => initial(&e.meta.title),
+            SortMode::Status => {
+                let (name, colour) = status_heading(self.status_section(e));
+                return (name.to_string(), Some(colour));
+            }
+            _ if v.is_nan() && self.sort == SortMode::Played => "Never played".to_string(),
+            _ if v.is_nan() => unknown(),
+            SortMode::Difficulty => match v.floor() as i64 {
+                n if n >= 10 => "10+ stars".to_string(),
+                n => format!("{n}.00 - {n}.99 stars"),
+            },
+            SortMode::Length => match (v / 60_000.0).floor() as i64 {
+                0 => "Under 1 minute".to_string(),
+                m if m >= 10 => "10+ minutes".to_string(),
+                m => format!("{m} - {} minutes", m + 1),
+            },
+            SortMode::Bpm => match v {
+                v if v < 60.0 => "Under 60 BPM".to_string(),
+                v if v >= 300.0 => "300+ BPM".to_string(),
+                v => format!("{} - {} BPM", (v / 20.0).floor() as i64 * 20, (v / 20.0).floor() as i64 * 20 + 19),
+            },
+            SortMode::Hp => format!("HP {:.0}.0 - {:.0}.9", v.floor(), v.floor()),
+            SortMode::Od => format!("OD {:.0}.0 - {:.0}.9", v.floor(), v.floor()),
+            SortMode::Played | SortMode::Added => age(v),
+        };
+        (label, None)
+    }
+
+    /// The heading the selection is under.
+    fn cursor_section(&self) -> Option<usize> {
+        self.group_of.get(self.cursor).map(|&g| self.section_of[g])
+    }
+
+    /// Whether section `s` lists its songs: it holds the selection and wasn't closed.
+    fn section_open(&self, s: usize) -> bool {
+        self.cursor_section() == Some(s) && self.closed != Some((s, self.cursor))
+    }
+
+    /// A click on heading `s`: the open one closes (or opens again); another opens, on its first
+    /// song.
+    pub fn click_section(&mut self, s: usize, library: &[Entry]) {
+        let Some(sec) = self.sections.get(s) else { return };
+        if self.cursor_section() == Some(s) {
+            self.closed = if self.closed == Some((s, self.cursor)) { None } else { Some((s, self.cursor)) };
+        } else {
+            let first = self.groups[sec.groups.start].start;
+            self.enter_song(first, library);
         }
     }
 
@@ -933,10 +1041,10 @@ impl Select {
         // Rows: one per song, plus the selected song's difficulties under it.
         const SONG_H: f32 = SONG_ROW_H;
         const DIFF_H: f32 = 22.0;
-        // A heading above the first song of each status section (sorted by status).
-        const SECTION_H: f32 = 18.0;
+        // A heading above each section's songs (what the sort groups by).
+        const SECTION_H: f32 = 20.0;
         enum Row {
-            Section(u8, usize),
+            Section(usize),
             Song(std::ops::Range<usize>),
             Diff(usize),
         }
@@ -945,17 +1053,27 @@ impl Select {
         let view = bottom - top;
         // Where everything ends up: the selected song open, the others closed.
         let open_start = self.group_of.get(self.cursor).map(|&g| groups[g].start);
+        let section_open: Vec<bool> = (0..self.sections.len()).map(|s| self.section_open(s)).collect();
         let (mut final_y, mut final_cursor) = (0.0f32, 0.0f32);
-        for (gi, g) in groups.iter().enumerate() {
-            if self.sections[gi].is_some() {
-                final_y += SECTION_H;
+        let cursor_section = self.cursor_section();
+        for (si, sec) in self.sections.iter().enumerate() {
+            // A closed heading holding the selection is the one to keep in view.
+            if !section_open[si] && cursor_section == Some(si) {
+                final_cursor = final_y;
             }
-            final_y += SONG_H;
-            if g.contains(&self.cursor) {
-                final_cursor = final_y + (self.cursor - g.start) as f32 * DIFF_H;
-                final_y += g.len() as f32 * DIFF_H;
+            final_y += SECTION_H;
+            if !section_open[si] {
+                continue;
+            }
+            for g in &groups[sec.groups.clone()] {
+                final_y += SONG_H;
+                if g.contains(&self.cursor) {
+                    final_cursor = final_y + (self.cursor - g.start) as f32 * DIFF_H;
+                    final_y += g.len() as f32 * DIFF_H;
+                }
             }
         }
+
         let final_scroll = (final_cursor - view * 0.4).clamp(0.0, (final_y - view).max(0.0));
         let final_outline = top + final_cursor - final_scroll;
 
@@ -1008,19 +1126,24 @@ impl Select {
         let mut rows: Vec<(Row, f32, f32, f32)> = Vec::new();
         let mut y = 0.0;
         self.song_y.clear();
-        for (gi, g) in groups.iter().enumerate() {
-            if let Some((code, n)) = self.sections[gi] {
-                rows.push((Row::Section(code, n), y, SECTION_H, 1.0));
-                y += SECTION_H;
-            }
-            self.song_y.push(y);
-            rows.push((Row::Song(g.clone()), y, SONG_H, 1.0));
-            y += SONG_H;
-            let f = if Some(g.start) == open_g { open_f } else if Some(g.start) == closing_g { closing_f } else { 0.0 };
-            if f > 0.001 {
-                for i in g.clone() {
-                    rows.push((Row::Diff(i), y, DIFF_H, f * f));
-                    y += DIFF_H * f;
+        for (si, sec) in self.sections.iter().enumerate() {
+            rows.push((Row::Section(si), y, SECTION_H, 1.0));
+            y += SECTION_H;
+            for g in &groups[sec.groups.clone()] {
+                if !section_open[si] {
+                    // Not listed: the song's place is its heading's (for dragging the list).
+                    self.song_y.push(y - SECTION_H);
+                    continue;
+                }
+                self.song_y.push(y);
+                rows.push((Row::Song(g.clone()), y, SONG_H, 1.0));
+                y += SONG_H;
+                let f = if Some(g.start) == open_g { open_f } else if Some(g.start) == closing_g { closing_f } else { 0.0 };
+                if f > 0.001 {
+                    for i in g.clone() {
+                        rows.push((Row::Diff(i), y, DIFF_H, f * f));
+                        y += DIFF_H * f;
+                    }
                 }
             }
         }
@@ -1034,10 +1157,17 @@ impl Select {
                 continue;
             }
             match row {
-                Row::Section(code, n) => {
-                    let (name, col) = status_heading(*code);
-                    c.rect(24.0, y + SECTION_H - 4.0, lw, 1.0, rgba(col, 0.5));
-                    c.text(28.0, y + 3.0, 8.0, rgba(col, 1.0), &format!("{name}  |  {n} song{}", if *n == 1 { "" } else { "s" }));
+                Row::Section(si) => {
+                    let sec = &self.sections[*si];
+                    let col = sec.colour.unwrap_or_else(accent);
+                    let open = section_open[*si];
+                    let hover = c.hovered(24.0, y, lw, rh - 2.0);
+                    c.round_rect(24.0, y, lw, rh - 3.0, 5.0, rgba(if hover { 0x24242f } else { 0x16161e }, 0.9), rgba(col, if open { 0.7 } else { 0.35 }), 1.0);
+                    c.hit(24.0, y, lw, *rh, Hit::SectionHeader(*si));
+                    let n = sec.groups.len();
+                    c.text(34.0, y + 6.0, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
+                    let label = format!("{}  |  {n} song{}", sec.label, if n == 1 { "" } else { "s" });
+                    c.text(48.0, y + 6.0, 7.0, rgba(col, 1.0), &fit(label, max_chars(7.0, lw - 60.0)));
                 }
                 Row::Song(g) => {
                     let e = &library[self.visible[g.start]];

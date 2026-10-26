@@ -136,6 +136,7 @@ pub fn replay_game(map: &Beatmap, track: &Arc<Track>, r: &Replay) -> Game {
     let mut g = Game::with_seed(map.clone(), track.clone(), None, crate::mods::Mods::from_list(&r.mods), r.seed);
     g.replay = Some((r.inputs.clone(), 0));
     g.mash = r.mash();
+    g.scoring = r.scoring();
     g.mute_hits = true;
     g
 }

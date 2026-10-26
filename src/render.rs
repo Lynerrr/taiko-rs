@@ -1621,6 +1621,8 @@ pub enum Hit {
     /// (pointing at its first difficulty).
     SongRow(usize),
     SongHeader(usize),
+    /// A heading of the song list (index into its sections): opens or closes it.
+    SectionHeader(usize),
     /// An item of the song list's right-click menu.
     SongMenu(usize),
     /// A song's "update available" (library index of one of its difficulties).

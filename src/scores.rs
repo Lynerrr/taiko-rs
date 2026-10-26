@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// 2: judged with `Mash::Nearest` (1: with the `anti_mash` setting).
-const REPLAY_VERSION: u32 = 2;
+/// 3: scored with `Scoring::Standard` (below: `Classic`). 2: judged with `Mash::Nearest` (1: with
+/// the `anti_mash` setting).
+const REPLAY_VERSION: u32 = 3;
 
 /// A recorded play: the map time each drum key was judged at, plus what the judging depended
 /// on. Playing the inputs back through the same map reproduces the play exactly.
@@ -197,6 +198,11 @@ impl Replay {
     /// How the play's presses are judged.
     pub fn mash(&self) -> crate::game::Mash {
         if self.version >= 2 { crate::game::Mash::Nearest } else { crate::game::Mash::legacy(self.anti_mash) }
+    }
+
+    /// How its score was worked out.
+    pub fn scoring(&self) -> crate::game::Scoring {
+        if self.version >= 3 { crate::game::Scoring::Standard } else { crate::game::Scoring::Classic }
     }
 }
 
