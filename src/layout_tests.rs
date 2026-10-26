@@ -765,7 +765,7 @@ fn songs_sort_by_hp_od_and_status() {
 }
 
 #[test]
-fn a_sorted_list_shows_the_songs_of_one_heading_and_clicking_one_opens_or_closes_it() {
+fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = Scene::Select;
@@ -775,18 +775,38 @@ fn a_sorted_list_shows_the_songs_of_one_heading_and_clicking_one_opens_or_closes
     }
     s.select.sort = ui::SortMode::Status;
     s.select.refilter(&s.library);
-    let n = s.select.sections().len();
-    assert!(n >= 2);
-    // The heading holding the selection is the open one.
+    assert!(s.select.sections().len() >= 3);
+    // The heading holding the selection is open, the rest closed.
     assert_eq!(s.select.open_sections(), vec![0]);
-    s.select.click_section(0, &s.library);
-    assert!(s.select.open_sections().is_empty(), "clicking the open heading closes it");
-    s.select.click_section(0, &s.library);
-    assert_eq!(s.select.open_sections(), vec![0], "and again opens it");
-    // Another heading opens on its first song, and the first closes.
-    s.select.click_section(1, &s.library);
-    assert_eq!(s.select.open_sections(), vec![1]);
-    assert_eq!(s.select.current_song(), Some(s.select.sections_first_song(1)));
+    // A click opens another without selecting anything, and closes it again.
+    let at = s.select.cursor();
+    s.select.click_section(1);
+    assert_eq!(s.select.open_sections(), vec![0, 1]);
+    assert_eq!(s.select.cursor(), at);
+    s.select.click_section(1);
+    assert_eq!(s.select.open_sections(), vec![0]);
+    // The open one closes too, with the selection in it, and opens again.
+    s.select.click_section(0);
+    assert!(s.select.open_sections().is_empty());
+    s.select.click_section(0);
+    assert_eq!(s.select.open_sections(), vec![0]);
+    // The wheel and right-click scrolling stay in the open heading, however far they go.
+    s.select.step(-50, &s.library, false);
+    s.select.step(500, &s.library, false);
+    assert_eq!(s.select.open_sections(), vec![0], "the wheel opened nothing");
+    s.select.scroll_to(1000.0, &s.library);
+    assert_eq!(s.select.open_sections(), vec![0], "right-click scrolling opened nothing");
+    let in_first = |s: &State| s.select.current_song().is_some_and(|g| g < s.select.sections_end(0));
+    assert!(in_first(&s), "and the selection never left it");
+    s.select.scroll_to(-1000.0, &s.library);
+    assert!(in_first(&s));
+    // The arrow keys, past the last song listed, open the next heading and go on into it.
+    s.select.step(500, &s.library, false);
+    let _ = s.select.key(KeyCode::ArrowDown, &s.library);
+    for _ in 0..20 {
+        let _ = s.select.key(KeyCode::ArrowDown, &s.library);
+    }
+    assert!(s.select.open_sections().len() >= 2, "the keys went on into the next heading");
     // It all draws.
     check_draw("sections", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None));
 }
