@@ -679,3 +679,34 @@ fn song_select_search_takes_the_keys_only_once_clicked() {
     assert!(!s.select.searching && s.select.filter == "-45[", "Escape leaves the box, keeping the search");
     assert!(matches!(s.scene, Scene::Select));
 }
+
+#[test]
+fn songs_sort_by_hp_od_and_status() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    for (k, e) in s.library.iter_mut().enumerate() {
+        e.meta.hp = ((k * 7) % 11) as f64;
+        e.meta.od = ((k * 5) % 9) as f64;
+    }
+    // A song's value is its highest difficulty's, songs in order of it.
+    let song_values = |s: &State, of: fn(&Entry) -> f64| {
+        s.select.songs().iter().map(|song| song.iter().map(|&i| of(&s.library[i])).fold(f64::MIN, f64::max)).collect::<Vec<f64>>()
+    };
+    s.select.sort = ui::SortMode::Hp;
+    s.select.refilter(&s.library);
+    assert!(s.select.songs().len() == 12 && song_values(&s, |e| e.meta.hp).is_sorted());
+    s.select.sort = ui::SortMode::Od;
+    s.select.refilter(&s.library);
+    assert!(song_values(&s, |e| e.meta.od).is_sorted());
+    // Status: ranked before loved before pending, the unknown last.
+    let codes = [search::PENDING, search::RANKED, search::LOVED, search::UNKNOWN];
+    let paths: Vec<PathBuf> = s.library.iter().map(|e| e.path.clone()).collect();
+    for (k, p) in paths.iter().enumerate() {
+        s.select.status.insert(p.clone(), codes[(k / 3) % codes.len()]);
+    }
+    s.select.sort = ui::SortMode::Status;
+    s.select.refilter(&s.library);
+    let first: Vec<u8> = s.select.songs().iter().map(|song| s.select.status[&s.library[song[0]].path]).collect();
+    let rank = |c: u8| [search::LOVED, search::RANKED, search::PENDING, search::UNKNOWN].iter().position(|&x| x == c).unwrap();
+    assert!(first.iter().map(|&c| rank(c)).collect::<Vec<_>>().is_sorted(), "{first:?}");
+}
