@@ -710,6 +710,13 @@ fn songs_sort_by_hp_od_and_status() {
     let first: Vec<u8> = s.select.songs().iter().map(|song| s.select.status[&s.library[song[0]].path]).collect();
     let rank = |c: u8| [search::LOVED, search::RANKED, search::PENDING, search::UNKNOWN].iter().position(|&x| x == c).unwrap();
     assert!(first.iter().map(|&c| rank(c)).collect::<Vec<_>>().is_sorted(), "{first:?}");
+    // Each status is a section of its own, with its songs counted; other sorts have none.
+    let sections = s.select.sections();
+    assert_eq!(sections.iter().map(|x| x.0).collect::<Vec<_>>(), vec![search::LOVED, search::RANKED, search::PENDING, search::UNKNOWN]);
+    assert_eq!(sections.iter().map(|x| x.1).sum::<usize>(), s.select.songs().len());
+    s.select.sort = ui::SortMode::Hp;
+    s.select.refilter(&s.library);
+    assert!(s.select.sections().is_empty());
 }
 
 #[test]
