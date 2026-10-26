@@ -1058,7 +1058,7 @@ fn changelog(bot: Arc<Bot>) {
 
 /// The branch's commits not posted yet, oldest first (none when GitHub says nothing changed).
 fn new_commits(bot: &Bot, posted: &Posted, etag: &mut String) -> Result<Vec<Value>, String> {
-    let url = format!("https://api.github.com/repos/{REPO}/commits?sha={BRANCH}&per_page=30");
+    let url = format!("https://api.github.com/repos/{REPO}/commits?sha={BRANCH}&per_page=100");
     let mut req = bot.http.get(&url).header("User-Agent", "taiko.rs-server (+https://rstaiko.auneu.space)").header("Accept", "application/vnd.github+json");
     if !etag.is_empty() {
         req = req.header("If-None-Match", etag.as_str());
@@ -1076,10 +1076,19 @@ fn new_commits(bot: &Bot, posted: &Posted, etag: &mut String) -> Result<Vec<Valu
     }
     let commits: Vec<Value> = serde_json::from_str(&reply.body_mut().read_to_string().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let seen: HashSet<&str> = posted.posted.iter().map(String::as_str).collect();
-    // Newest first from GitHub; up to the first one already posted, then oldest first.
-    let mut fresh: Vec<Value> = commits.into_iter().take_while(|c| !seen.contains(c["sha"].as_str().unwrap_or(""))).collect();
+    Ok(unposted(commits, &seen))
+}
+
+/// The commits of GitHub's list (newest first) not posted yet, oldest first: every one above
+/// the last one posted. A merged branch's commits are dated before others merged meanwhile, so
+/// they sit among posted ones (stopping at the first posted one left them out); below the last
+/// posted one is what was there before the bot.
+pub(crate) fn unposted(commits: Vec<Value>, seen: &HashSet<&str>) -> Vec<Value> {
+    let is_seen = |c: &Value| seen.contains(c["sha"].as_str().unwrap_or(""));
+    let end = commits.iter().rposition(is_seen).unwrap_or(commits.len());
+    let mut fresh: Vec<Value> = commits.into_iter().take(end).filter(|c| !is_seen(c)).collect();
     fresh.reverse();
-    Ok(fresh)
+    fresh
 }
 
 #[cfg(test)]
@@ -1105,6 +1114,15 @@ mod tests {
         let (title, body) = post_text("Title here\n\n- one\n- two\n\nCo-Authored-By: C <c@x>\nClaude-Session: https://x\n");
         assert_eq!(title, "Title here");
         assert_eq!(body, "- one\n- two");
+    }
+
+    #[test]
+    fn a_merged_branch_s_commits_dated_among_posted_ones_get_posted() {
+        let list: Vec<Value> = ["merge", "mine2", "theirs2", "mine1", "theirs1", "old"].iter().map(|s| json!({ "sha": s })).collect();
+        let seen: HashSet<&str> = ["theirs2", "theirs1"].into_iter().collect();
+        let fresh: Vec<String> = unposted(list.clone(), &seen).iter().map(|c| c["sha"].as_str().unwrap().to_string()).collect();
+        assert_eq!(fresh, ["mine1", "mine2", "merge"], "oldest first, nothing from before the bot");
+        assert_eq!(unposted(list, &HashSet::new()).len(), 6);
     }
 
     #[test]
