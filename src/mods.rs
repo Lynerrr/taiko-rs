@@ -311,7 +311,7 @@ impl Mod {
             Swap => "Dons become kats and kats become dons.",
             Random => "Every note gets a random colour.",
             ConstantSpeed => "All notes scroll at one speed: no SV changes.",
-            Alternate => "The same hand can't hit twice in a row.",
+            Alternate => "Hands must alternate; either may follow a finisher, drumroll or swell.",
             WindUp => "The song speeds up from 1.0x to 1.5x of your speed.",
             WindDown => "The song slows down from 1.0x to 0.75x of your speed.",
             AllBig => "Every don and kat is a big note.",

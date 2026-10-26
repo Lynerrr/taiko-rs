@@ -275,7 +275,8 @@ pub struct Game {
     hp_exempt: bool,
     /// Failed by Sudden Death / Perfect: map time and when (the play ends a moment later).
     failed: Option<(f64, Instant)>,
-    /// Alternate: the hand of the last accepted press (true = left) and when.
+    /// Alternate: the hand of the last accepted press (true = left) and when; None while either
+    /// hand may hit (after a finisher, a drumroll or a swell, until a press hits a note).
     last_hand: Option<(bool, f64)>,
     /// Party: map time of the last big hit (the lane shakes).
     quake_at: f64,
@@ -1681,25 +1682,38 @@ impl Game {
     pub fn press(&mut self, key: usize, at: Instant, audio: Option<&Engine>, offset: f64) {
         let t = self.speed.map(self.clock.at(at) - offset);
         self.offset = offset;
+        self.press_time(key, t, audio);
+    }
+
+    /// A live press at map time `t`.
+    fn press_time(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
         if self.failed.is_some() {
             return;
         }
-        // Alternate: the same hand twice in a row doesn't count (after a 2 s pause either may start).
-        if self.mods.has(Mod::Alternate) {
-            let left = key < 2;
-            if self.last_hand.is_some_and(|(hand, at)| hand == left && t - at < 2000.0) {
-                return;
-            }
-            self.last_hand = Some((left, t));
+        // Alternate: the same hand twice in a row doesn't count (after a 2 s pause either may
+        // start). Drumrolls and swells take either hand, as fast as you like.
+        let alternate = self.mods.has(Mod::Alternate);
+        let left = key < 2;
+        let free_run = alternate && (self.find_active(t, Kind::Roll).is_some() || self.find_active(t, Kind::Swell).is_some());
+        if alternate && !free_run && self.last_hand.is_some_and(|(hand, at)| hand == left && t - at < 2000.0) {
+            return;
         }
         if self.record || self.log_inputs {
             self.inputs.push((t, key as u8));
         }
-        self.press_at(key, t, audio);
+        let hits = self.stats.great + self.stats.ok;
+        let sfx = self.press_at(key, t, audio);
+        if alternate {
+            let hit = self.stats.great + self.stats.ok > hits;
+            let finisher = hit && matches!(sfx, Sfx::BigDon | Sfx::BigKat);
+            // A finisher counts as two notes, so either hand may hit next; after a drumroll or
+            // a swell, either hand may until one hits a note.
+            self.last_hand = if free_run || finisher || (self.last_hand.is_none() && !hit) { None } else { Some((left, t)) };
+        }
     }
 
-    /// A press judged at map time `t` (live, or from a replay).
-    fn press_at(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
+    /// A press judged at map time `t` (live, or from a replay); the sound it makes.
+    fn press_at(&mut self, key: usize, t: f64, audio: Option<&Engine>) -> Sfx {
         let kat = if self.mods.has(Mod::Relax) { self.relax_colour(t, key == 0 || key == 3) } else { key == 0 || key == 3 };
         self.presses[key] = t;
         let sfx = self.judge_press(key, kat, t);
@@ -1711,6 +1725,7 @@ impl Game {
             a.sfx_at(sfx, volume);
         }
         self.play_combo_break(audio);
+        sfx
     }
 
     /// Replays without audio: jumps to map time `t` (forwards only), judging the recorded presses
@@ -3407,6 +3422,59 @@ mod tests {
         }
         let end = g.end_time + 2000.0;
         g.set_time(end);
+    }
+
+    #[test]
+    fn alternate_lets_either_hand_follow_finishers_drumrolls_and_swells() {
+        // Dons 500 ms apart, with a finisher at 1000, a drumroll from 2500 to 3500 and a swell
+        // from 5000 to 6000.
+        let mut map = beatmap::calibration_map(500.0, 0, 15);
+        let base = map.notes[0].clone();
+        let at = |t: f64| beatmap::Note { time: t, end_time: t, ..base.clone() };
+        map.notes = vec![
+            at(0.0),
+            at(500.0),
+            beatmap::Note { big: true, ..at(1000.0) },
+            at(1500.0),
+            at(2000.0),
+            beatmap::Note { kind: Kind::Roll, end_time: 3500.0, tick_spacing: 125.0, ..at(2500.0) },
+            at(4000.0),
+            at(4500.0),
+            beatmap::Note { kind: Kind::Swell, end_time: 6000.0, required_hits: 6, ..at(5000.0) },
+            at(6500.0),
+        ];
+        let mut g = Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse("AL"));
+        let (l, r) = (1, 2); // left and right centre
+        g.press_time(l, 0.0, None);
+        g.press_time(r, 500.0, None);
+        // The finisher with the left hand only, then the left hand again.
+        g.press_time(l, 1000.0, None);
+        g.press_time(l, 1500.0, None);
+        // Back to alternating: a second left in a row is ignored, the right then hits.
+        g.press_time(l, 1990.0, None);
+        g.press_time(r, 2000.0, None);
+        // The drumroll mashed with the left hand, then the left hand again after it.
+        for k in 0..=8 {
+            g.press_time(l, 2500.0 + 125.0 * k as f64, None);
+        }
+        g.press_time(l, 4000.0, None);
+        g.press_time(l, 4490.0, None);
+        g.press_time(r, 4500.0, None);
+        // The swell with the left hand alone (centre, rim, centre...), then the left again.
+        for k in 0..6 {
+            g.press_time(if k % 2 == 0 { l } else { 0 }, 5100.0 + 100.0 * k as f64, None);
+        }
+        g.press_time(l, 6500.0, None);
+        g.set_time(9000.0);
+        let s = &g.stats;
+        assert_eq!((s.great, s.ok, s.miss), (8, 0, 0), "every don hit");
+        assert_eq!((s.roll_ticks, s.swells), (9, 1));
+        // Without the finisher, drumroll and swell rule, the same hand twice is still out.
+        let mut g = Game::with_mods(beatmap::calibration_map(500.0, 0, 4), Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse("AL"));
+        g.press_time(l, 0.0, None);
+        g.press_time(l, 500.0, None);
+        g.set_time(9000.0);
+        assert_eq!((g.stats.great, g.stats.miss), (1, 3));
     }
 
     #[test]

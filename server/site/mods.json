@@ -116,7 +116,7 @@
       },
       {
         "acronym": "AL",
-        "description": "The same hand can't hit twice in a row.",
+        "description": "Hands must alternate; either may follow a finisher, drumroll or swell.",
         "name": "Alternate"
       },
       {
