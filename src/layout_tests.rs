@@ -141,6 +141,7 @@ fn session(mapguessr: bool) -> multiplayer::Session {
             guessed: i % 2 == 0,
             tries: (i % 4) as u8,
             maps: (i != 3).then_some(123_456),
+            mods: if i % 2 == 0 { vec!["HD".into(), "HR".into(), "FL".into(), "PR".into()] } else { Vec::new() },
         })
         .collect();
     s.results = Some(s.players.clone());

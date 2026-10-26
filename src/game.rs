@@ -222,6 +222,9 @@ pub struct Game {
     /// for the profile's play time; and the frame they were last counted at.
     pub played_ms: f64,
     played_at: Option<Instant>,
+    /// The scroll speed setting this play is at: fixed when it starts (it counts for pp), and
+    /// a replay's own.
+    pub scroll_speed: f64,
     /// Calibration: draw no notes or barlines (play by ear) / play no hitsounds on presses.
     pub hide_notes: bool,
     /// Draw the HP bar (not in calibration).
@@ -1257,6 +1260,7 @@ impl Game {
             resuming: None,
             played_ms: 0.0,
             played_at: None,
+            scroll_speed: 1.0,
             hide_notes: false,
             show_hp: true,
             mute_hits: false,

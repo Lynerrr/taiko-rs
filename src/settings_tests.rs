@@ -267,6 +267,29 @@ fn a_maps_status_comes_from_the_mirror_else_osu_db() {
 }
 
 #[test]
+fn scroll_speed_changes_between_songs_only() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let now = Instant::now();
+    let start = s.cfg.scroll_speed;
+    s.key(KeyCode::F4, false, None, now, None);
+    let faster = s.cfg.scroll_speed;
+    assert!(faster > start, "song select changes it");
+    // In a song (and its pause menu's settings) it stays, and the play keeps its own.
+    let map = beatmap::calibration_map(500.0, 4, 64);
+    let mut game = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+    game.scroll_speed = faster;
+    s.scene = Scene::Play { game: Box::new(game), entry: 0, from: None };
+    s.key(KeyCode::F3, false, None, now, None);
+    assert_eq!(s.cfg.scroll_speed, faster);
+    s.scene = Scene::Settings { prev: Box::new(std::mem::replace(&mut s.scene, Scene::Select)) };
+    s.adjust_setting(settings::Item::ScrollSpeed, -1, None);
+    assert_eq!(s.cfg.scroll_speed, faster);
+    assert!(s.apply_typed(settings::Item::ScrollSpeed, "0.5").is_err());
+    assert_eq!(s.cfg.scroll_speed, faster);
+}
+
+#[test]
 fn sets_loved_on_the_server_count_as_loved() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);

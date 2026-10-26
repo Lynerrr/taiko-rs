@@ -485,6 +485,9 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         if me {
             name.push_str("  (you)");
         }
+        if !p.mods.is_empty() {
+            name.push_str(&format!("  +{}", p.mods.concat()));
+        }
         c.text(x0 + 12.0, y + 7.0, 9.0, rgba(0xffffff, 1.0), &Canvas::fit(9.0, name_end - 8.0 - (x0 + 12.0), &name));
         let (st, color) = status_text(p, s.map.is_some());
         c.text_right(x0 + col - 12.0, y + 7.0, 9.0, rgba(color, 1.0), st);
@@ -519,7 +522,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             (&start_label, Hit::Key(KeyCode::Enter), true),
             (if s.owns_room() { "Close room  (Esc)" } else { "Leave  (Esc)" }, Hit::Key(KeyCode::Escape), false),
         ]);
-        let hint = if me_spectator { "you'll watch the match   S: play instead   [ ] match rate   F1 mods (host)   Tab songs" } else { "S: spectate instead   [ ] match rate   F1 mods (host)   Tab songs" };
+        let hint = if me_spectator { "you'll watch the match   S: play instead   [ ] match rate   F1 mods   Tab songs" } else { "S: spectate instead   [ ] match rate   F1 mods (speed: for all)   Tab songs" };
         c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hint));
     } else {
         let missing = s.map.is_some() && !have_map;
@@ -534,6 +537,8 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
         } else {
             let mut buttons = vec![("Preview  (P)", Hit::Key(KeyCode::KeyP), false)];
             if !me_spectator {
+                // Everyone picks their own mods (the speed is the host's).
+                buttons.push(("Mods  (F1)", Hit::Key(KeyCode::F1), false));
                 buttons.push((ready_label, Hit::Key(KeyCode::Space), true));
             }
             buttons.push((spectate_label, Hit::Key(KeyCode::KeyS), me_spectator));
@@ -654,11 +659,11 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
                 r.ok,
                 r.miss,
                 r.ur,
-                if r.quit { "  quit" } else { "" }
+                if r.quit { "  quit".to_string() } else if p.mods.is_empty() { String::new() } else { format!("  +{}", p.mods.concat()) }
             ),
             None => format!("{}  {:<14} {:08} {:6.2}%   playing ({:.0}%)", i + 1, name, p.live.score, p.live.accuracy * 100.0, p.live.progress * 100.0),
         };
-        c.text(x0 + 14.0, y + 8.0, 8.0, rgba(if me { 0xFFD34D } else { 0xffffff }, 1.0), &line);
+        c.text(x0 + 14.0, y + 8.0, 8.0, rgba(if me { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(8.0, col - 28.0, &line));
     }
     c.button_row(440.0, &[("Back to lobby  (Esc)", Hit::Key(KeyCode::Escape), final_results.is_some())]);
 }
