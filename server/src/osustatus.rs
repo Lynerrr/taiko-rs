@@ -199,6 +199,7 @@ fn worker() {
     let Some(s) = STATUS.get() else { return };
     let agent = agent();
     let mut last_save = Instant::now();
+    let mut batches = 0u32;
     loop {
         let batch: Vec<(u32, u32)> = {
             let mut inner = s.inner.lock().unwrap();
@@ -230,6 +231,10 @@ fn worker() {
                     inner.queued.remove(&set);
                 }
                 inner.dirty = true;
+                batches += 1;
+                if batches % 20 == 0 {
+                    println!("osu statuses: {} sets known, {} waiting", inner.known.len(), inner.queue.len());
+                }
                 if last_save.elapsed() >= Duration::from_secs(30) {
                     s.save(&mut inner);
                     last_save = Instant::now();
