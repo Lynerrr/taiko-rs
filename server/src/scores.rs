@@ -114,6 +114,7 @@ impl Scores {
                 set_id: m.set_id,
                 stars: play.stars.filter(|s| s.is_finite() && (0.0..50.0).contains(s)),
                 id,
+                scroll_speed: play.scroll_speed.filter(|s| s.is_finite() && (0.1..=10.0).contains(s)),
             },
         };
         if let Some(dir) = &self.replays {
@@ -424,6 +425,7 @@ mod tests {
             replay_version: 2,
             inputs: vec![(1000.0, 1)],
             stars: Some(5.0),
+            scroll_speed: Some(0.5),
         }
     }
 
@@ -490,6 +492,7 @@ mod tests {
         assert!(dir.join("replays/1.json").is_file());
         let again = Scores::load(Some(dir.clone()));
         assert_eq!(again.map_scores(7)[0].id, 1, "scores carry their id to ask for the replay by");
+        assert_eq!(again.map_scores(7)[0].scroll_speed, Some(0.5), "and the scroll speed they were played at");
         let r = again.replay(1).unwrap();
         assert_eq!((r.version, r.inputs.clone()), (2, vec![(1000.0, 1)]));
         assert!(again.replay(99).is_none());

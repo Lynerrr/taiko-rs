@@ -719,6 +719,7 @@ fn fetch_replay(server: &str, score: &online::OnlineScore, map_path: &std::path:
         keep_pitch: true,
         anti_mash: true,
         mods: score.mods.clone(),
+        scroll_speed: score.scroll_speed.unwrap_or(1.0),
         score: score.score,
         accuracy: score.accuracy,
         max_combo: score.max_combo,
@@ -1380,7 +1381,7 @@ impl State {
         results.pp = score.pp;
         results.no_pp = mods.unranked().then_some("Autoplay and Relax get no pp");
         results.opened = Some(ui::Opened { player: score.player.clone(), date: score.date, online: true });
-        let play = pp::Play { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, rate: score.rate, mods };
+        let play = pp::Play { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, rate: score.rate, mods, scroll_speed: score.scroll_speed.unwrap_or(1.0) };
         let online = (self.cfg.online_server.clone(), score, e.label());
         results.job = Some(results_job(e.path.clone(), play, None, Some(online)));
         self.scene = Scene::Results { results, entry, from: None };
@@ -3488,7 +3489,7 @@ impl State {
         }
         let (vx, vy) = self.mouse_virtual();
         if let Scene::Results { results, .. } = &mut self.scene {
-            results.scroll_by(-notches as f32 * 60.0);
+            results.scroll(notches < 0);
             return;
         }
         let on_board = self.board_rect.is_some_and(|[bx, by, bw, bh]| vx >= bx && vx <= bx + bw && vy >= by && vy <= by + bh);
@@ -5392,7 +5393,7 @@ impl State {
                     let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
                     let mods = v.play.as_ref().map(|p| Mods::from_list(&p.map.mods)).unwrap_or_default();
                     let mut g = Game::with_mods(map, track, self.audio.as_ref(), mods);
-                    g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods));
+                    g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods, 1.0));
                     g.replay = Some((std::mem::take(&mut v.inputs), 0));
                     g.watched = true;
                     g.banner = Some(format!("WATCHING  -  {}", v.player));
@@ -5939,13 +5940,7 @@ impl State {
                 _ => {}
             },
             Scene::Results { results, .. } if matches!(code, KeyCode::ArrowDown | KeyCode::ArrowUp | KeyCode::PageDown | KeyCode::PageUp | KeyCode::Home | KeyCode::End) => {
-                let by = match code {
-                    KeyCode::ArrowDown => 60.0,
-                    KeyCode::ArrowUp => -60.0,
-                    KeyCode::PageDown | KeyCode::End => ui::RESULTS_SCROLL,
-                    _ => -ui::RESULTS_SCROLL,
-                };
-                results.scroll_by(by);
+                results.scroll(matches!(code, KeyCode::ArrowDown | KeyCode::PageDown | KeyCode::End));
             }
             Scene::Results { .. } if code == KeyCode::KeyR && self.modifiers_ctrl => self.restart_map(),
             Scene::Results { results, .. } if code == KeyCode::KeyV && results.replay.is_some() => {
@@ -6275,7 +6270,7 @@ impl State {
                     Ok(Ok((map, track))) => {
                         let mods = std::mem::take(&mut self.pending_mods);
                         let mut game = Game::with_mods(map, track, self.audio.as_ref(), mods);
-                        game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods);
+                        game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods, self.cfg.scroll_speed);
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
@@ -6366,6 +6361,7 @@ impl State {
                         max_combo: game.stats.max_combo,
                         rate: game.rate,
                         mods: game.mods,
+                        scroll_speed: self.cfg.scroll_speed,
                     };
                     results.no_pp = if game.mods.unranked() {
                         Some("Autoplay and Relax get no pp")
@@ -6392,6 +6388,7 @@ impl State {
                             keep_pitch: self.cfg.rate_keep_pitch,
                             anti_mash: true,
                             mods: game.mods.list(),
+                            scroll_speed: self.cfg.scroll_speed,
                             score: st.score,
                             accuracy: st.accuracy(),
                             max_combo: st.max_combo,
@@ -6431,6 +6428,7 @@ impl State {
                                 replay_version: replay.version,
                                 inputs: replay.inputs.clone(),
                                 stars: stars::star_rating(&e.path, replay.rate),
+                                scroll_speed: Some(replay.scroll_speed),
                             };
                             self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
                             results.total_due = true;
@@ -6543,7 +6541,7 @@ impl State {
                     if let Some((map, track)) = loaded.take() {
                         let mut game = Game::with_mods(map, track, self.audio.as_ref(), self.pending_mods);
                         if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
-                            game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods);
+                            game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, self.cfg.scroll_speed);
                         }
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);

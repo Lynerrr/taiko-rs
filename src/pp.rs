@@ -1,5 +1,5 @@
-//! Performance points: osu!lazer's taiko pp (via rosu-pp) for a play's hits, speed and osu!'s
-//! difficulty mods, times the score multipliers of taiko-rs's own mods.
+//! Performance points: osu!lazer's taiko pp (via rosu-pp) for a play's hits, speed, osu!'s
+//! difficulty mods and scroll speed, times the score multipliers of taiko-rs's own mods.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -19,6 +19,35 @@ pub struct Play {
     /// Speed, DT/HT included.
     pub rate: f64,
     pub mods: Mods,
+    /// The scroll speed setting played at (1 = osu!'s): notes moving slower are easier to read
+    /// and give less pp, faster ones more (lazer's Difficulty Adjust). HR's faster notes slowed
+    /// back down don't count as HR's.
+    pub scroll_speed: f64,
+}
+
+/// The mods pp is worked out with: osu!'s that change the formula (`FORMULA`), and a scroll
+/// speed other than the usual as lazer's Difficulty Adjust. At the usual speed, osu!'s plain mod
+/// bits (the same numbers either way).
+fn formula_mods(mods: Mods, scroll_speed: f64) -> rosu_pp::model::mods::GameMods {
+    let bits: u32 = FORMULA.iter().filter(|f| mods.has(f.0)).map(|f| f.1).sum();
+    if !scroll_speed.is_finite() || scroll_speed <= 0.0 || (scroll_speed - 1.0).abs() < 1e-6 {
+        return bits.into();
+    }
+    use rosu_pp::model::mods::rosu_mods::generated_mods::DifficultyAdjustTaiko;
+    use rosu_pp::model::mods::rosu_mods::{GameMod, GameMods};
+    let mut lazer = GameMods::new();
+    for (m, gm) in [
+        (Mod::Easy, GameMod::EasyTaiko(Default::default())),
+        (Mod::Hidden, GameMod::HiddenTaiko(Default::default())),
+        (Mod::HardRock, GameMod::HardRockTaiko(Default::default())),
+        (Mod::Flashlight, GameMod::FlashlightTaiko(Default::default())),
+    ] {
+        if mods.has(m) {
+            lazer.insert(gm);
+        }
+    }
+    lazer.insert(GameMod::DifficultyAdjustTaiko(DifficultyAdjustTaiko { scroll_speed: Some(scroll_speed), ..Default::default() }));
+    lazer.into()
 }
 
 /// osu!'s mods that change the pp formula itself, with their (legacy) bits.
@@ -38,9 +67,8 @@ pub fn play_pp(path: &Path, p: &Play) -> Option<f64> {
         return None;
     }
     let map = crate::stars::load(path)?;
-    let bits: u32 = FORMULA.iter().filter(|f| p.mods.has(f.0)).map(|f| f.1).sum();
     let attrs = TaikoPerformance::new(&map)
-        .mods(bits)
+        .mods(formula_mods(p.mods, p.scroll_speed))
         .clock_rate(p.rate)
         .n300(p.great)
         .n100(p.ok)
@@ -75,9 +103,8 @@ pub fn breakdown(path: &Path, p: &Play) -> Option<Breakdown> {
         return None;
     }
     let map = crate::stars::load(path)?;
-    let bits: u32 = FORMULA.iter().filter(|f| p.mods.has(f.0)).map(|f| f.1).sum();
     let k = custom_factor(p.mods);
-    let base = TaikoPerformance::new(&map).mods(bits).clock_rate(p.rate);
+    let base = TaikoPerformance::new(&map).mods(formula_mods(p.mods, p.scroll_speed)).clock_rate(p.rate);
     let attrs = base.clone().n300(p.great).n100(p.ok).misses(p.miss).combo(p.max_combo).calculate().ok()?;
     let max_combo = attrs.difficulty.max_combo;
     let fc = base.clone().n300(p.great + p.miss).n100(p.ok).misses(0).combo(max_combo).calculate().ok()?;
@@ -111,19 +138,19 @@ type Counts = (u32, u32, u32, u32);
 
 impl Live {
     /// None for Autoplay / Relax (they get no pp).
-    pub fn start(path: PathBuf, rate: f64, mods: Mods) -> Option<Live> {
+    pub fn start(path: PathBuf, rate: f64, mods: Mods, scroll_speed: f64) -> Option<Live> {
         if mods.unranked() {
             return None;
         }
         let (tx, jobs) = mpsc::channel::<Counts>();
         let (done, rx) = mpsc::channel();
-        let bits: u32 = FORMULA.iter().filter(|f| mods.has(f.0)).map(|f| f.1).sum();
+        let formula = formula_mods(mods, scroll_speed);
         let k = custom_factor(mods);
         std::thread::Builder::new()
             .name("live pp".into())
             .spawn(move || {
                 let Some(map) = crate::stars::load(&path) else { return };
-                let fresh = || TaikoGradualPerformance::new(Difficulty::new().mods(bits).clock_rate(rate), &map).ok();
+                let fresh = || TaikoGradualPerformance::new(Difficulty::new().mods(formula.clone()).clock_rate(rate), &map).ok();
                 let Some(mut gradual) = fresh() else { return };
                 // Notes the calculator has walked past.
                 let mut walked = 0usize;
@@ -209,7 +236,7 @@ mod tests {
             text += &format!("256,192,{},1,{sound},0:0:0:0:\n", 1000 + k * 150);
         }
         std::fs::write(&path, text).unwrap();
-        let play = Play { great: 400, ok: 0, miss: 0, max_combo: 400, rate: 1.0, mods: Mods::NONE };
+        let play = Play { great: 400, ok: 0, miss: 0, max_combo: 400, rate: 1.0, mods: Mods::NONE, scroll_speed: 1.0 };
         let ss = play_pp(&path, &play).unwrap();
         assert!(ss > 1.0, "{ss}");
         let worse = play_pp(&path, &Play { great: 360, ok: 30, miss: 10, max_combo: 200, ..play }).unwrap();
@@ -224,7 +251,7 @@ mod tests {
         assert!(b.difficulty > 0.0 && b.accuracy > 0.0 && b.max_combo == 400);
 
         // The live counter climbs as notes are hit and ends where the whole play's pp is.
-        let mut live = Live::start(path.clone(), 1.0, Mods::NONE).unwrap();
+        let mut live = Live::start(path.clone(), 1.0, Mods::NONE, 1.0).unwrap();
         let read = |live: &mut Live, n: u32| {
             for _ in 0..1000 {
                 let pp = live.update(n, 0, 0, n);
@@ -241,7 +268,20 @@ mod tests {
         assert!((all - ss).abs() / ss < 0.01, "{all} vs {ss}");
         // Seeking back (a replay) works it out again from the start.
         assert!((read(&mut live, 200) - half).abs() < 1e-9);
-        assert!(Live::start(path.clone(), 1.0, Mods::parse("AT")).is_none());
+        assert!(Live::start(path.clone(), 1.0, Mods::parse("AT"), 1.0).is_none());
+
+        // Scroll speed: HR's faster notes slowed back down are worth about nomod's reading, not
+        // HR's; the usual speed is exactly what it always was; faster notes are worth more.
+        let hr = Play { mods: Mods::parse("HR"), ..play };
+        let hr_pp = play_pp(&path, &hr).unwrap();
+        let hr_slow = play_pp(&path, &Play { scroll_speed: 0.5, ..hr }).unwrap();
+        assert!(hr_slow < hr_pp, "{hr_slow} vs {hr_pp}");
+        assert!(play_pp(&path, &Play { scroll_speed: 1.5, ..play }).unwrap() > ss);
+        let bits = TaikoPerformance::new(&crate::stars::load(&path).unwrap()).mods(16u32).n300(400).calculate().unwrap().pp;
+        assert!((hr_pp - bits).abs() < 1e-9, "the usual speed changes nothing");
+        // The lazer form of HR at a scroll speed of exactly 1 is HR.
+        let lazer_one = TaikoPerformance::new(&crate::stars::load(&path).unwrap()).mods(formula_mods(Mods::parse("HR"), 1.0 + 1e-3)).n300(400).calculate().unwrap().pp;
+        assert!((lazer_one - bits).abs() / bits < 0.01, "{lazer_one} vs {bits}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

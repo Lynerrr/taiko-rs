@@ -68,6 +68,9 @@ pub struct ScoreSubmit {
     /// Star rating at the rate played.
     #[serde(default)]
     pub stars: Option<f64>,
+    /// The scroll speed setting played at (pp count it).
+    #[serde(default)]
+    pub scroll_speed: Option<f64>,
 }
 
 /// A score on a leaderboard or a profile.
@@ -98,6 +101,9 @@ pub struct OnlineScore {
     /// replays).
     #[serde(default)]
     pub id: u64,
+    /// The scroll speed setting it was played at (None: sent before that was).
+    #[serde(default)]
+    pub scroll_speed: Option<f64>,
 }
 
 /// An online score's replay: its presses, the map they were played on and how they are judged

@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// The Songs folder and the game data folder are the whole program's: tests that change them
+/// take turns.
+static FOLDERS: Mutex<()> = Mutex::new(());
+
 #[test]
 fn typed_numbers_take_units_and_commas() {
     assert_eq!(parse_number("1.25x"), Some(1.25));
@@ -50,6 +54,7 @@ fn typing_replaces_the_old_value_then_adds_to_it() {
 
 #[test]
 fn songs_folder_is_saved_scanned_and_found_inside_an_install() {
+    let _turn = FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
     let install = std::env::temp_dir().join(format!("taiko-rs-songs-test-{}", std::process::id()));
     std::fs::create_dir_all(install.join("Songs")).unwrap();
     std::fs::write(install.join("osu!.db"), b"").unwrap();
@@ -130,6 +135,7 @@ fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
 
 #[test]
 fn moving_the_game_data_runs_in_the_background_then_switches_folders() {
+    let _turn = FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
     let root = std::env::temp_dir().join(format!("taiko-rs-move-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let old = root.join("old/taiko-rs");
@@ -355,6 +361,10 @@ fn select_with_scores() -> State {
     s.play_when_scanned = false;
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = Scene::Select;
+    // A short title, so the panel's height is up to its preview (a long one wraps, and its
+    // details alone fill the panel).
+    let short = s.library.iter().find(|e| e.meta.title.len() < 12).expect("a short title").path.clone();
+    s.select.select_path(&s.library, &short);
     let hash = s.library[s.select.selected().unwrap()].hash();
     s.scores = (0..40)
         .map(|i| scores::ScoreRow {
@@ -479,12 +489,15 @@ fn the_results_scroll_down_to_the_pp_and_back() {
         Scene::Results { results, .. } => results.scroll_to,
         _ => panic!("left the results"),
     };
-    s.wheel(-2);
-    assert_eq!(scroll(&s), 120.0);
-    s.key(KeyCode::PageDown, false, None, Instant::now(), None);
+    // One notch takes it all the way, either way.
+    s.wheel(-1);
     assert_eq!(scroll(&s), ui::RESULTS_SCROLL);
     s.wheel(-5);
     assert_eq!(scroll(&s), ui::RESULTS_SCROLL, "no further than the pp");
+    s.wheel(1);
+    assert_eq!(scroll(&s), 0.0);
+    s.key(KeyCode::ArrowDown, false, None, Instant::now(), None);
+    assert_eq!(scroll(&s), ui::RESULTS_SCROLL);
     s.key(KeyCode::Home, false, None, Instant::now(), None);
     assert_eq!(scroll(&s), 0.0);
     // The hint under the buttons goes there too.

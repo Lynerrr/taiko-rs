@@ -1352,14 +1352,15 @@ impl Results {
         }
     }
 
-    /// Scrolls the page by `by` (virtual units; down is positive).
-    pub fn scroll_by(&mut self, by: f32) {
-        self.scroll_to = (self.scroll_to + by).clamp(0.0, RESULTS_SCROLL);
+    /// Scrolls all the way down to the pp (`down`) or back up to the results: there's no
+    /// stopping in between.
+    pub fn scroll(&mut self, down: bool) {
+        self.scroll_to = if down { RESULTS_SCROLL } else { 0.0 };
     }
 
-    /// Glides the page toward where it was scrolled to.
+    /// Slides the page there, quickly.
     pub fn animate(&mut self, dt_ms: f32) {
-        crate::render::approach(&mut self.scroll, self.scroll_to, dt_ms, 60.0);
+        crate::render::approach(&mut self.scroll, self.scroll_to, dt_ms, 30.0);
     }
 
     pub fn draw(&self, c: &mut Canvas) {
@@ -1448,12 +1449,26 @@ impl Results {
         buttons.push((back, Hit::Key(KeyCode::Escape), false));
         c.button_row(424.0, &buttons);
         // Where the pp went: one click (or the wheel) away, and back.
+        // Where the pp went: a pill under the buttons, its arrows bobbing the way to go.
         let down = self.scroll_to < RESULTS_SCROLL / 2.0;
-        let (cue, key) = if down { ("scroll down: performance", KeyCode::PageDown) } else { ("scroll up: results", KeyCode::PageUp) };
-        let cw = Canvas::text_width(7.0, cue) + 16.0;
-        let hover = c.hovered(cx - cw / 2.0, 450.0, cw, 14.0);
-        c.text_centered(cx, 453.5, 7.0, rgba(if hover { 0xffffff } else { 0x8a8aa0 }, 1.0), cue);
-        c.hit(cx - cw / 2.0, 450.0, cw, 14.0, Hit::Key(key));
+        let (cue, key) = match (down, self.pp) {
+            (true, Some(pp)) => (format!("scroll down: {pp:.0} pp breakdown"), KeyCode::PageDown),
+            (true, None) => ("scroll down: performance".to_string(), KeyCode::PageDown),
+            (false, _) => ("scroll up: results".to_string(), KeyCode::PageUp),
+        };
+        let a = progress(self.shown + std::time::Duration::from_millis(600), 300.0);
+        let (cw, ch, cy) = (Canvas::text_width(8.0, &cue) + 48.0, 18.0, 450.0);
+        let x0 = cx - cw / 2.0;
+        let hover = c.hovered(x0, cy, cw, ch);
+        let pink = 0xff8ad8;
+        c.round_rect(x0, cy, cw, ch, ch / 2.0, rgba(if hover { 0x2b1f2a } else { 0x1d1d27 }, 0.95 * a), rgba(pink, if hover { a } else { 0.75 * a }), 1.5);
+        c.text_centered(cx, cy + (ch - 8.0) / 2.0, 8.0, rgba(if hover { 0xffffff } else { pink }, a), &cue);
+        let t = self.shown.elapsed().as_secs_f32();
+        let bob = 1.5 * (t * 4.0).sin() * if down { 1.0 } else { -1.0 };
+        for ax in [x0 + 14.0, x0 + cw - 14.0] {
+            chevron(c, ax, cy + ch / 2.0 + bob, down, rgba(pink, a));
+        }
+        c.hit(x0, cy, cw, ch, Hit::Key(key));
     }
 
     /// The pp, a screen below the results, as osu!'s performance breakdown: the pp, the
@@ -1521,6 +1536,17 @@ impl Results {
             }
             c.text(rx, ry, 8.0, label, name);
             c.text_right(rx + col_w, ry, 8.0, rgba(*col, 1.0), v);
+        }
+    }
+}
+
+/// A small arrow head at (`x`, `y`), pointing down (`down`) or up.
+fn chevron(c: &mut Canvas, x: f32, y: f32, down: bool, col: [f32; 4]) {
+    let tip = if down { -1.0 } else { 1.0 };
+    for side in [-1.0f32, 1.0] {
+        c.rect(x + side * 2.0 - 3.0, y - 0.9, 6.0, 1.8, col);
+        if let Some(sh) = c.shapes.last_mut() {
+            sh.angle = side * tip * std::f32::consts::FRAC_PI_4;
         }
     }
 }

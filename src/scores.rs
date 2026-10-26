@@ -29,6 +29,9 @@ pub struct Replay {
     /// Mods played with (acronyms); `rate` already includes DT/HT.
     #[serde(default)]
     pub mods: Vec<String>,
+    /// The scroll speed setting played at (replays from before it: the usual).
+    #[serde(default = "usual_scroll_speed")]
+    pub scroll_speed: f64,
     pub score: u64,
     pub accuracy: f64,
     pub max_combo: u32,
@@ -142,8 +145,13 @@ impl Replay {
             max_combo: self.max_combo,
             rate: self.rate,
             mods: crate::mods::Mods::from_list(&self.mods),
+            scroll_speed: self.scroll_speed,
         }
     }
+}
+
+fn usual_scroll_speed() -> f64 {
+    1.0
 }
 
 /// Works out the pp of saved scores from before pp (on a background thread): (replay file, pp)
