@@ -469,6 +469,8 @@ pub struct Dropdown {
     pub bounds: [f32; 4],
     /// Typing a size: for a new saved one (None) or saved one `i`, and the text so far.
     pub editing: Option<(Option<usize>, String)>,
+    /// Where typing goes in that text (a character index).
+    pub caret: usize,
     /// Buttons drawn last frame.
     pub buttons: Vec<(PresetAction, [f32; 4])>,
 }
@@ -589,9 +591,11 @@ impl Dropdown {
         let focus_y = focus.map(|l| l.1).unwrap_or(0.0);
         self.scroll = (focus_y - view / 2.0).clamp(0.0, (y - view).max(0.0));
         self.rows.clear();
+        let caret = self.caret;
         let text_input = |c: &mut Canvas, ry: f32, text: &str| {
             c.round_rect(bx + 8.0, ry, bw - 16.0, ROW - 2.0, 4.0, rgba(0x1d1d27, 1.0), rgba(0xFFD34D, 1.0), 1.0);
-            c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), &format!("{text}_"));
+            c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), text);
+            c.rect(bx + 22.0 + caret_x(7.0, text, caret), ry + 2.5, 1.0, 9.0, rgba(0xFFD34D, 1.0));
             c.text_right(bx + bw - 22.0, ry + 3.5, 6.0, rgba(0x8a8aa0, 1.0), "width x height");
         };
         for (line, ly) in layout {
@@ -661,36 +665,93 @@ impl Dropdown {
 pub struct Edit {
     pub item: Item,
     pub text: String,
+    /// Where typing goes: a character index into `text`.
+    pub caret: usize,
     /// Still the value it opened with: the first key typed replaces it.
     pub fresh: bool,
 }
 
 impl Edit {
     pub fn new(item: Item, text: String) -> Edit {
-        Edit { item, text, fresh: true }
+        Edit { item, caret: text.chars().count(), text, fresh: true }
     }
 
-    /// Adds typed text (control characters dropped), up to `max` characters.
+    /// Adds typed text at the caret (control characters dropped), up to `max` characters.
     pub fn type_text(&mut self, typed: &str, max: usize) {
         if self.fresh {
             self.text.clear();
+            self.caret = 0;
             self.fresh = false;
         }
-        for ch in typed.chars().filter(|ch| !ch.is_control()) {
-            if self.text.chars().count() < max {
-                self.text.push(ch);
-            }
-        }
+        caret_insert(&mut self.text, &mut self.caret, typed, max);
     }
 
     pub fn backspace(&mut self) {
         if self.fresh {
             self.text.clear();
+            self.caret = 0;
             self.fresh = false;
         } else {
-            self.text.pop();
+            caret_backspace(&mut self.text, &mut self.caret);
         }
     }
+
+    /// Left / Right / Home / End move the caret, Delete removes the character after it.
+    /// Says whether the key was one of those.
+    pub fn nav(&mut self, code: winit::keyboard::KeyCode) -> bool {
+        // The value that opened is replaced by typing; moving into it keeps it to edit.
+        let used = caret_nav(&mut self.text, &mut self.caret, code);
+        if used {
+            self.fresh = false;
+        }
+        used
+    }
+}
+
+/// Inserts `typed` (control characters dropped) at char index `caret`, up to `max` characters.
+pub fn caret_insert(text: &mut String, caret: &mut usize, typed: &str, max: usize) {
+    for ch in typed.chars().filter(|ch| !ch.is_control()) {
+        if text.chars().count() < max {
+            text.insert(byte_at(text, *caret), ch);
+            *caret += 1;
+        }
+    }
+}
+
+pub fn caret_backspace(text: &mut String, caret: &mut usize) {
+    if *caret > 0 {
+        *caret -= 1;
+        text.remove(byte_at(text, *caret));
+    }
+}
+
+/// Moves the caret (Left, Right, Home, End) or deletes after it (Delete); false for other keys.
+pub fn caret_nav(text: &mut String, caret: &mut usize, code: winit::keyboard::KeyCode) -> bool {
+    use winit::keyboard::KeyCode::*;
+    let len = text.chars().count();
+    *caret = (*caret).min(len);
+    match code {
+        ArrowLeft => *caret = caret.saturating_sub(1),
+        ArrowRight => *caret = (*caret + 1).min(len),
+        Home => *caret = 0,
+        End => *caret = len,
+        Delete => {
+            if *caret < len {
+                text.remove(byte_at(text, *caret));
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+fn byte_at(text: &str, caret: usize) -> usize {
+    text.char_indices().nth(caret).map_or(text.len(), |(b, _)| b)
+}
+
+/// Where the caret is drawn: the text before it, in `size`, from the text's left edge.
+pub fn caret_x(size: f32, text: &str, caret: usize) -> f32 {
+    Canvas::text_width(size, &text.chars().take(caret).collect::<String>())
 }
 
 /// A setting's choices in one list (skins, present modes, ...), so picking one isn't stepping
@@ -862,7 +923,9 @@ impl SettingsUi {
                     c.rect(right - 7.0 - tw, y + 7.0, tw + 2.0, ROW - 18.0, rgba(accent(), 0.45));
                 }
                 c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
-                c.text(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), "_");
+                // At the caret in the text (at the end when the start was cut off to fit).
+                let at = if text == edit.text { caret_x(8.0, &text, edit.caret) } else { tw };
+                c.rect(right - 6.0 - tw + at, y + 7.0, 1.0, ROW - 18.0, rgba(0xFFD34D, 1.0));
                 continue;
             }
             let v = if selected && self.binding.is_some() {
