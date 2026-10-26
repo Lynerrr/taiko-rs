@@ -27,6 +27,10 @@ struct Stored {
     score: OnlineScore,
     #[serde(skip)]
     sent_pp: Option<f64>,
+    /// Shown on its player's profile only: off the maps' boards, the rankings, the beatmaps and
+    /// the latest plays (Claude's showpiece, `/api/claude/score`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    hidden: bool,
 }
 
 #[derive(Serialize)]
@@ -230,6 +234,7 @@ impl Scores {
                 scroll_speed: play.scroll_speed.filter(|s| s.is_finite() && (0.1..=10.0).contains(s)),
             },
             sent_pp: play.pp,
+            hidden: false,
         };
         if let Some(dir) = &self.replays {
             let replay = StoredReplay { version: play.replay_version, map: &play.map, inputs: &play.inputs };
@@ -238,14 +243,7 @@ impl Scores {
                 eprintln!("saving replay {id}: {e}");
             }
         }
-        if let Some(file) = &self.file {
-            let line = serde_json::to_string(&stored).map_err(|e| e.to_string())? + "\n";
-            let written = std::fs::OpenOptions::new().create(true).append(true).open(file).and_then(|mut f| f.write_all(line.as_bytes()));
-            if let Err(e) = written {
-                eprintln!("saving score {id}: {e}");
-                return Err("the server couldn't save it".into());
-            }
-        }
+        self.save(&stored)?;
         if let Some(ms) = play.play_ms {
             self.count_play(player, ms, false);
         }
@@ -261,10 +259,68 @@ impl Scores {
         Ok((map_rank, pp, rank))
     }
 
+    /// Adds a play to DIR/scores.jsonl.
+    fn save(&self, stored: &Stored) -> Result<(), String> {
+        let Some(file) = &self.file else { return Ok(()) };
+        let line = serde_json::to_string(stored).map_err(|e| e.to_string())? + "\n";
+        let written = std::fs::OpenOptions::new().create(true).append(true).open(file).and_then(|mut f| f.write_all(line.as_bytes()));
+        written.map_err(|e| {
+            eprintln!("saving score {}: {e}", stored.id);
+            "the server couldn't save it".into()
+        })
+    }
+
+    /// A play on `map` shown on `player`'s profile only (see `Stored::hidden`): all greats, full
+    /// combo, worth `pp`, with the map's name, set, stars and notes from the plays already on it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_hidden(&mut self, player: &str, name: &str, map: u64, pp: f64, score: u64, mods: Vec<String>, now: u64) -> Result<u64, String> {
+        if !pp.is_finite() || pp < 0.0 {
+            return Err("pp is a number, 0 or more".into());
+        }
+        let row = self.map(map).ok_or("nobody has played that map here")?;
+        let notes = self.all.iter().filter(|s| s.score.map_hash == map).map(|s| s.score.great + s.score.ok + s.score.miss).max().unwrap_or(1);
+        let id = self.next_id;
+        self.next_id += 1;
+        let stored = Stored {
+            id,
+            player: player.to_string(),
+            score: OnlineScore {
+                player: name.to_string(),
+                map: row.name,
+                map_hash: map,
+                score,
+                accuracy: 1.0,
+                max_combo: notes,
+                miss: 0,
+                rate: 1.0,
+                mods,
+                pp: Some(pp),
+                date: now,
+                great: notes,
+                ok: 0,
+                set_id: row.set_id,
+                stars: row.stars,
+                id,
+                scroll_speed: None,
+            },
+            sent_pp: Some(pp),
+            hidden: true,
+        };
+        self.save(&stored)?;
+        self.all.push(stored);
+        self.count_pp();
+        Ok(id)
+    }
+
+    /// The plays everyone sees (all but the `hidden` ones).
+    fn public(&self) -> impl DoubleEndedIterator<Item = &Stored> {
+        self.all.iter().filter(|s| !s.hidden)
+    }
+
     /// Each player's best score (by score) on `map`, highest first.
     fn best_on(&self, map: u64) -> Vec<&Stored> {
         let mut best: HashMap<&str, &Stored> = HashMap::new();
-        for s in self.all.iter().filter(|s| s.score.map_hash == map) {
+        for s in self.public().filter(|s| s.score.map_hash == map) {
             let b = best.entry(&s.player).or_insert(s);
             if s.score.score > b.score.score {
                 *b = s;
@@ -318,7 +374,7 @@ impl Scores {
     /// Everyone's pp total, by player key.
     fn totals(&self) -> HashMap<&str, f64> {
         let mut best: HashMap<(&str, u64), f64> = HashMap::new();
-        for s in &self.all {
+        for s in self.public() {
             if let Some(pp) = s.score.pp {
                 let b = best.entry((s.player.as_str(), s.score.map_hash)).or_insert(0.0);
                 *b = b.max(pp);
@@ -334,7 +390,7 @@ impl Scores {
     /// Everyone with pp, highest first, with osu!'s ranking columns.
     pub fn rankings(&self, limit: usize) -> Vec<Ranked> {
         let mut per: HashMap<&str, Vec<&Stored>> = HashMap::new();
-        for s in &self.all {
+        for s in self.public() {
             per.entry(s.player.as_str()).or_default().push(s);
         }
         let mut out: Vec<Ranked> = per
@@ -374,7 +430,7 @@ impl Scores {
     /// The maps played, the most lately played first.
     pub fn maps(&self, limit: usize) -> Vec<MapRow> {
         let mut rows: HashMap<u64, (MapRow, Vec<&str>)> = HashMap::new();
-        for s in &self.all {
+        for s in self.public() {
             let sc = &s.score;
             let (row, players) = rows.entry(sc.map_hash).or_insert_with(|| {
                 (MapRow { hash: sc.map_hash, name: sc.map.clone(), set_id: None, stars: None, plays: 0, players: 0, last: 0 }, Vec::new())
@@ -409,7 +465,7 @@ impl Scores {
 
     /// The latest plays by anyone, newest first.
     pub fn latest(&self, limit: usize) -> Vec<OnlineScore> {
-        self.all.iter().rev().take(limit).map(|s| s.score.clone()).collect()
+        self.public().rev().take(limit).map(|s| s.score.clone()).collect()
     }
 
     /// `player`'s pp history, most played maps and mods (see `Extras`).
@@ -458,8 +514,9 @@ impl Scores {
         top.sort_by(|a, b| b.pp.unwrap_or(0.0).total_cmp(&a.pp.unwrap_or(0.0)));
         top.truncate(PROFILE_PLAYS);
         let recent = mine.iter().rev().take(PROFILE_PLAYS).map(|s| s.score.clone()).collect();
-        let (pp, rank) = self.standing(player);
-        let (stats, _) = stats_of(&mine);
+        // The pp counts their hidden plays too; the rank is among everyone's public ones.
+        let (_, rank) = self.standing(player);
+        let (stats, pp) = stats_of(&mine);
         // First places: maps where theirs is the best score.
         let mut maps: Vec<u64> = mine.iter().map(|s| s.score.map_hash).collect();
         maps.sort_unstable();
@@ -729,6 +786,28 @@ mod tests {
         let again = Scores::load(Some(dir.clone()));
         assert_eq!(again.map_scores(7).len(), 1);
         assert_eq!(again.next_id, 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hidden_plays_are_on_their_profile_only() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-hidden-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        assert!(s.add_hidden("claude", "claude", 9, 1.0, 1, vec![], 2).is_err(), "only maps someone has played");
+        let id = s.add_hidden("claude", "claude", 7, 100_000.0, 1_000_000, vec!["HD".into()], 2).unwrap();
+        for s in [&s, &Scores::load(Some(dir.clone()))] {
+            let p = s.profile("claude", "claude", 0);
+            assert_eq!((p.pp, p.rank, p.top[0].id, p.recent.len(), p.firsts.len()), (100_000.0, None, id, 1, 0));
+            assert_eq!((p.top[0].great, p.top[0].max_combo, p.top[0].grade()), (100, 100, "SS"));
+            assert_eq!(s.rankings(10).iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["A"]);
+            assert_eq!(s.map_scores(7).iter().map(|r| r.player.as_str()).collect::<Vec<_>>(), ["A"]);
+            assert_eq!(s.latest(10).len(), 1);
+            assert_eq!(s.map(7).map(|m| (m.plays, m.players)), Some((1, 1)));
+            assert_eq!(s.profile("a", "A", 0).rank, Some(1));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
