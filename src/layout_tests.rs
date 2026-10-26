@@ -751,6 +751,18 @@ fn songs_sort_by_hp_od_and_status() {
     let first: Vec<u8> = s.select.songs().iter().map(|song| s.select.status[&s.library[song[0]].path]).collect();
     let rank = |c: u8| [search::LOVED, search::RANKED, search::PENDING, search::UNKNOWN].iter().position(|&x| x == c).unwrap();
     assert!(first.iter().map(|&c| rank(c)).collect::<Vec<_>>().is_sorted(), "{first:?}");
+    // A song whose difficulties differ in status is listed under its best one, never splitting
+    // a heading: the same status doesn't come twice.
+    let first_song = s.select.songs()[0].clone();
+    for (k, &i) in first_song.iter().enumerate() {
+        s.select.status.insert(s.library[i].path.clone(), if k == 0 { search::NOT_SUBMITTED } else { search::RANKED });
+    }
+    s.select.refilter(&s.library);
+    let names: Vec<String> = s.select.sections().into_iter().map(|x| x.0).collect();
+    let mut unique = names.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(names.len(), unique.len(), "{names:?}");
     // Each status is a section of its own, with its songs counted; every sort has its headings.
     let sections = s.select.sections();
     assert_eq!(sections.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["Loved", "Ranked", "Pending / Graveyard", "Status not known yet"]);
