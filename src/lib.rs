@@ -1084,6 +1084,11 @@ impl State {
     }
 
     /// Scenes that use the gameplay present mode; everything else is a menu.
+    /// In a song (or its pause menu's settings): what counts for pp stays as it started.
+    fn mid_song(&self) -> bool {
+        self.in_song() || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. } | Scene::MpPlay { .. }))
+    }
+
     fn in_song(&self) -> bool {
         matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. } | Scene::Spectate(_) | Scene::Watch(_))
     }
@@ -1960,6 +1965,10 @@ impl State {
     /// Changes a setting one step in `dir` (-1 / +1), applying it immediately.
     fn adjust_setting(&mut self, item: Item, dir: i32, window: Option<&Window>) {
         let d = dir as f64;
+        if item == Item::ScrollSpeed && self.mid_song() {
+            self.toast("change the scroll speed in song select, not during a song".into());
+            return;
+        }
         match item {
             Item::ScrollSpeed => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, d),
             Item::Offset => self.cfg.offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
@@ -2373,6 +2382,9 @@ impl State {
 
     /// Sets `item` to a typed value.
     fn apply_typed(&mut self, item: Item, text: &str) -> Result<(), String> {
+        if item == Item::ScrollSpeed && self.mid_song() {
+            return Err("change the scroll speed in song select, not during a song".into());
+        }
         let number = || parse_number(text).ok_or_else(|| "type a number".to_string());
         let percent = || number().map(|n| (n / 100.0).clamp(0.0, 1.0) as f32);
         let c = &mut self.cfg;
@@ -3324,6 +3336,11 @@ impl State {
                         self.toast(format!("offset {:+.0} ms (all maps)", self.cfg.offset_ms));
                     }
                 }
+                return true;
+            }
+            // Like the speed, only between songs: it counts for pp.
+            KeyCode::F3 | KeyCode::F4 if self.mid_song() => {
+                self.toast("change the scroll speed in song select, not during a song".into());
                 return true;
             }
             KeyCode::F3 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, -1.0),
@@ -6541,7 +6558,7 @@ impl State {
             let in_menu = in_menu && self.splash.is_none();
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.play_offset, rate);
             self.stars.poll();
-            self.stars.set_mods(self.cfg.mods);
+            self.stars.set_mods(self.cfg.mods, self.cfg.scroll_speed);
             let play_rate = self.play_speed().0;
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
                 self.stars.request(i, &self.library[i].path, play_rate);
@@ -6778,13 +6795,15 @@ impl State {
                     Ok(Ok((map, track))) => {
                         let mods = std::mem::take(&mut self.pending_mods);
                         let mut game = Game::with_mods(map, track, self.audio.as_ref(), mods);
-                        game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods, self.cfg.scroll_speed);
+                        game.scroll_speed = self.cfg.scroll_speed;
+                        game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods, game.scroll_speed);
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
                         match self.pending_replay.take() {
                             Some(r) => {
                                 game.mash = r.mash();
+                                game.scroll_speed = r.scroll_speed;
                                 game.replay_of = Some(r.player.clone());
                                 game.banner = Some(format!("REPLAY  -  {}", r.player));
                                 game.replay = Some((r.inputs, 0));
@@ -6830,7 +6849,7 @@ impl State {
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
-                    game.draw_playfield(c, self.cfg.scroll_speed);
+                    game.draw_playfield(c, game.scroll_speed);
                 });
                 game.draw_hud(canvas);
                 if game.replay.is_some() && game.paused.is_none() {
@@ -6870,7 +6889,7 @@ impl State {
                         max_combo: game.stats.max_combo,
                         rate: game.rate,
                         mods: game.mods,
-                        scroll_speed: self.cfg.scroll_speed,
+                        scroll_speed: game.scroll_speed,
                     };
                     results.no_pp = if game.mods.unranked() {
                         Some("Autoplay and Relax get no pp")
@@ -6899,7 +6918,7 @@ impl State {
                             keep_pitch: self.cfg.rate_keep_pitch,
                             anti_mash: true,
                             mods: game.mods.list(),
-                            scroll_speed: self.cfg.scroll_speed,
+                            scroll_speed: game.scroll_speed,
                             score: st.score,
                             accuracy: st.accuracy(),
                             max_combo: st.max_combo,
@@ -7061,8 +7080,9 @@ impl State {
                 if start.is_some_and(|at| now >= at) {
                     if let Some((map, track)) = loaded.take() {
                         let mut game = Game::with_mods(map, track, self.audio.as_ref(), self.pending_mods);
+                        game.scroll_speed = self.cfg.scroll_speed;
                         if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
-                            game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, self.cfg.scroll_speed);
+                            game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, game.scroll_speed);
                         }
                         if let Some(m) = self.mp.as_ref().and_then(|s| s.map.as_ref()) {
                             use_mod_settings(&mut game, m);
@@ -7094,7 +7114,7 @@ impl State {
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
-                    game.draw_playfield(c, self.cfg.scroll_speed);
+                    game.draw_playfield(c, game.scroll_speed);
                 });
                 game.draw_hud(canvas);
                 if let Some(s) = mp {

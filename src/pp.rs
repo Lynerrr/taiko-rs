@@ -28,7 +28,7 @@ pub struct Play {
 /// The mods pp is worked out with: osu!'s that change the formula (`FORMULA`), and a scroll
 /// speed other than the usual as lazer's Difficulty Adjust. At the usual speed, osu!'s plain mod
 /// bits (the same numbers either way).
-fn formula_mods(mods: Mods, scroll_speed: f64) -> rosu_pp::model::mods::GameMods {
+pub(crate) fn formula_mods(mods: Mods, scroll_speed: f64) -> rosu_pp::model::mods::GameMods {
     let bits: u32 = FORMULA.iter().filter(|f| mods.has(f.0)).map(|f| f.1).sum();
     if !scroll_speed.is_finite() || scroll_speed <= 0.0 || (scroll_speed - 1.0).abs() < 1e-6 {
         return bits.into();
