@@ -375,8 +375,10 @@ struct State {
     pending_screen_shots: Vec<&'static str>,
     exit_when_done: bool,
     quit: bool,
-    /// "Exit taiko.rs?" is up (F12, Esc in song select, the window's close button).
+    /// "Exit taiko.rs?" is up (Ctrl+Q, Esc in song select, the window's close button).
     quit_asked: bool,
+    /// F12 was pressed: the next frame is saved as a picture.
+    screenshot_due: bool,
     smooth: Option<debug::Smoothness>,
     /// When the frame being built got its swapchain image (for the smoothness report).
     frame_acquired: Option<Instant>,
@@ -3187,7 +3189,8 @@ impl State {
                 KeyCode::Enter | KeyCode::NumpadEnter => self.finish_calibration(),
                 KeyCode::Escape => self.leave_calibration(false),
                 KeyCode::F11 => self.toggle_fullscreen(window),
-                KeyCode::F12 => self.ask_quit(),
+                KeyCode::F12 => self.screenshot_due = true,
+                KeyCode::KeyQ if self.modifiers_ctrl => self.ask_quit(),
                 _ => {}
             }
             return;
@@ -3206,7 +3209,8 @@ impl State {
                 self.cfg.save();
             }
             KeyCode::F11 => self.toggle_fullscreen(window),
-            KeyCode::F12 => self.ask_quit(),
+            KeyCode::F12 => self.screenshot_due = true,
+            KeyCode::KeyQ if self.modifiers_ctrl => self.ask_quit(),
             _ => {}
         }
     }
@@ -3396,6 +3400,10 @@ impl State {
                 return true;
             }
             KeyCode::F12 => {
+                self.screenshot_due = true;
+                return true;
+            }
+            KeyCode::KeyQ if self.modifiers_ctrl => {
                 self.ask_quit();
                 return true;
             }
@@ -6169,7 +6177,7 @@ impl State {
 
     /// A key press: the player's own hotkeys (`keys::Bindings`) turned into the keys the game
     /// knows them by, then `key_inner`.
-    /// Asks whether to exit; asked again (F12 or the close button twice), exits.
+    /// Asks whether to exit; asked again (Ctrl+Q or the close button twice), exits.
     fn ask_quit(&mut self) {
         if self.quit_asked {
             self.quit = true;
@@ -6181,7 +6189,8 @@ impl State {
     /// A key while "Exit taiko.rs?" is up: yes, no, or nothing. 1 and 2 answer like osu!'s.
     fn quit_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::KeyY | KeyCode::F12 | KeyCode::Digit1 | KeyCode::Numpad1 => self.quit = true,
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::KeyY | KeyCode::Digit1 | KeyCode::Numpad1 => self.quit = true,
+            KeyCode::KeyQ if self.modifiers_ctrl => self.quit = true,
             KeyCode::Escape | KeyCode::KeyN | KeyCode::Backspace | KeyCode::Digit2 | KeyCode::Numpad2 => self.quit_asked = false,
             _ => {}
         }
@@ -6729,6 +6738,9 @@ impl State {
         self.browse.poll(now);
         let mut next: Option<Scene> = None;
         let mut capture: Option<String> = None;
+        if std::mem::take(&mut self.screenshot_due) {
+            capture = Some(SCREENSHOT.to_string());
+        }
         let preview_target = self.preview_target();
         let lobby_download = self.lobby_download_status();
         let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
@@ -8370,6 +8382,30 @@ impl State {
     }
 }
 
+/// The capture name of an F12 screenshot (scripted runs name theirs).
+const SCREENSHOT: &str = "screenshot";
+
+/// Saves an F12 screenshot as the next free `taiko-rs-N.png` in the Screenshots folder, off the
+/// render thread (the encoding takes a moment), and says where it went.
+fn save_screenshot(state: &Arc<Mutex<State>>, w: u32, h: u32, rgb: Vec<u8>) {
+    let state = state.clone();
+    std::thread::spawn(move || {
+        let saved = (|| {
+            let dir = config::own_dir("Screenshots").ok_or("no folder to keep screenshots in")?;
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let path = (1..).map(|n| dir.join(format!("taiko-rs-{n}.png"))).find(|p| !p.exists()).unwrap();
+            image::save_buffer(&path, &rgb, w, h, image::ColorType::Rgb8).map_err(|e| e.to_string())?;
+            Ok::<_, String>(path)
+        })();
+        let text = match saved {
+            Ok(path) => format!("screenshot saved: Screenshots/{}", path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned())),
+            Err(e) => format!("screenshot failed: {e}"),
+        };
+        eprintln!("{text}");
+        lock(&state).toast = Some(Toast { text, until: Instant::now() + Duration::from_millis(4000) });
+    });
+}
+
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
     // A panic elsewhere shouldn't take the game down with a poisoned lock.
     state.lock().unwrap_or_else(|e| e.into_inner())
@@ -8610,7 +8646,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             }
         }
         if let (Some(name), Some((w, h, rgb))) = (capture, shot) {
-            if let Some(dir) = lock(&state).shots.as_ref().map(|p| p.dir.clone()) {
+            if name == SCREENSHOT {
+                save_screenshot(&state, w, h, rgb);
+            } else if let Some(dir) = lock(&state).shots.as_ref().map(|p| p.dir.clone()) {
                 let path = dir.join(name);
                 match debug::write_png(&path, w, h, &rgb) {
                     Ok(()) => eprintln!("saved {}", path.display()),
@@ -9108,6 +9146,7 @@ impl State {
             exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
             quit: false,
             quit_asked: false,
+            screenshot_due: false,
             smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
             frame_acquired: None,
             pace_shift_ms: 0.0,

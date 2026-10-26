@@ -176,6 +176,24 @@ impl Mash {
     }
 }
 
+/// How a play's score is worked out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Scoring {
+    /// Replays from before it (versions 1 and 2): points per hit that grow with the combo, plus
+    /// drumrolls and swells, so a play's top score depended on the map.
+    Classic,
+    /// Like osu!'s ScoreV2: a clean play of any map with no mods is 1,000,000, and the mods
+    /// multiply that. 700,000 comes from the hits weighted by the combo they were made at, 300,000
+    /// from accuracy (to the 10th power), each as far as the play has got. Drumrolls and swells
+    /// don't count.
+    Standard,
+}
+
+/// What a hit is worth in the combo part of `Scoring::Standard`: later hits in a combo more.
+fn combo_weight(combo: u32) -> f64 {
+    (combo as f64 + 1.0).sqrt()
+}
+
 struct StrongPending {
     note: usize,
     kat: bool,
@@ -241,6 +259,12 @@ pub struct Game {
     pub visual_offset: f64,
     /// How presses that don't make a hit are judged.
     pub mash: Mash,
+    pub scoring: Scoring,
+    /// Standard scoring: the combo points a clean play of the part played gives, and how many
+    /// notes it has. Worked out at the first hit (after the part skipped is known).
+    score_basis: Option<(f64, u32)>,
+    /// Standard scoring: the combo points made so far.
+    combo_points: f64,
     /// Presses let off as extra hits since a note was last judged (`judge_nearest`).
     extra_taps: u32,
     /// Record presses (map time judged at, key) for a replay.
@@ -1269,6 +1293,9 @@ impl Game {
             hidden: crate::hud::Parts::NONE,
             visual_offset: 0.0,
             mash: Mash::Nearest,
+            scoring: Scoring::Standard,
+            score_basis: None,
+            combo_points: 0.0,
             extra_taps: 0,
             record: false,
             log_inputs: false,
@@ -1353,7 +1380,31 @@ impl Game {
     }
 
     fn add_score(&mut self, base: f64) {
-        self.stats.score += (base * self.score_mult) as u64;
+        if self.scoring == Scoring::Classic {
+            self.stats.score += (base * self.score_mult) as u64;
+        }
+    }
+
+    /// Standard scoring after a hit or miss: the score of the play so far, mods included. `combo`
+    /// is the combo the note was judged at.
+    fn rescore(&mut self, judge: Judge, combo: u32) {
+        let (max_points, notes) = *self.score_basis.get_or_insert_with(|| {
+            // Notes skipped by `skip_to` aren't part of the play.
+            let n = self.map.notes.iter().zip(&self.state).filter(|(n, st)| matches!(n.kind, Kind::Don | Kind::Kat) && st.judged_at != f64::NEG_INFINITY).count() as u32;
+            (300.0 * (0..n).map(combo_weight).sum::<f64>(), n)
+        });
+        self.combo_points += match judge {
+            Judge::Great => 300.0 * combo_weight(combo),
+            Judge::Ok => 150.0 * combo_weight(combo),
+            Judge::Miss => 0.0,
+        };
+        let s = &self.stats;
+        let judged = (s.great + s.ok + s.miss).min(notes);
+        if max_points > 0.0 && notes > 0 {
+            let combo_part = 700_000.0 * (self.combo_points / max_points).min(1.0);
+            let accuracy_part = 300_000.0 * s.accuracy().powi(10) * judged as f64 / notes as f64;
+            self.stats.score = ((combo_part + accuracy_part) * self.score_mult).round() as u64;
+        }
     }
 
     fn fail(&mut self, t: f64) {
@@ -1571,6 +1622,7 @@ impl Game {
         while self.cursor < self.map.notes.len() && self.state[self.cursor].finished {
             self.cursor += 1;
         }
+        self.score_basis = None;
         self.next_scare = self.scares.partition_point(|&at| at < t);
     }
 
@@ -1614,6 +1666,8 @@ impl Game {
         }
         self.cursor = 0;
         self.stats = Stats::default();
+        self.score_basis = None;
+        self.combo_points = 0.0;
         self.presses = [f64::NEG_INFINITY; 4];
         self.last_judge = None;
         self.recent_errors.clear();
@@ -1715,6 +1769,7 @@ impl Game {
             return;
         }
         let combo_mult = 1.0 + self.stats.combo.min(100) as f64 / 100.0;
+        let combo_before = self.stats.combo;
         match judge {
             Judge::Great => self.add_score(300.0 * combo_mult),
             Judge::Ok => self.add_score(150.0 * combo_mult),
@@ -1772,6 +1827,9 @@ impl Game {
             }
         }
         self.last_judge = Some((judge, t));
+        if self.scoring == Scoring::Standard {
+            self.rescore(judge, combo_before);
+        }
     }
 
     /// Handles a drum key (0 = left rim, 1 = left centre, 2 = right centre, 3 = right rim).
@@ -3883,6 +3941,38 @@ mod tests {
         play_all(&mut plain, 0.0);
         play_all(&mut hd, 0.0);
         assert!(hd.stats.score > plain.stats.score);
+    }
+
+    #[test]
+    fn a_clean_play_is_a_million_and_mods_go_above_or_below_it() {
+        let mut g = modded("");
+        let mut last = 0;
+        let times: Vec<(f64, bool)> = g.map.notes.iter().filter(|n| matches!(n.kind, Kind::Don | Kind::Kat)).map(|n| (n.time, n.kind == Kind::Kat)).collect();
+        for (t, kat) in times {
+            g.press_at(if kat { 0 } else { 1 }, t, None);
+            assert!(g.stats.score >= last, "the score only grows while nothing is missed");
+            last = g.stats.score;
+        }
+        assert_eq!(g.stats.score, 1_000_000);
+        // Rolls and swells aren't part of it.
+        g.set_time(g.end_time + 2000.0);
+        assert_eq!(g.stats.score, 1_000_000);
+        let mut hard = modded("HD,HR");
+        play_all(&mut hard, 0.0);
+        assert!(hard.stats.score > 1_000_000);
+        let mut easy = modded("EZ");
+        play_all(&mut easy, 0.0);
+        assert!(easy.stats.score < 1_000_000);
+        // An OK, and a miss, each cost something; a miss more.
+        let mut ok = modded("");
+        let first = ok.map.notes[0].time;
+        ok.press_at(1, first + 80.0, None);
+        let mut miss = modded("");
+        miss.set_time(first + 500.0);
+        assert!(ok.stats.ok == 1 && miss.stats.miss == 1);
+        play_all(&mut ok, 0.0);
+        play_all(&mut miss, 0.0);
+        assert!(miss.stats.score < ok.stats.score && ok.stats.score < 1_000_000, "{} {}", miss.stats.score, ok.stats.score);
     }
 
     #[test]

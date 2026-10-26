@@ -600,23 +600,30 @@ fn assert_every_screen_fits() {
 #[test]
 fn exiting_asks_first() {
     let mut s = state();
-    let key = |s: &mut State, code| s.key(code, false, None, Instant::now(), None);
+    let key = |s: &mut State, code| {
+        // Ctrl+Q asks; F12 is the screenshot.
+        s.modifiers_ctrl = code == KeyCode::KeyQ;
+        s.key(code, false, None, Instant::now(), None);
+        s.modifiers_ctrl = false;
+    };
     key(&mut s, KeyCode::F12);
+    assert!(!s.quit_asked && s.screenshot_due, "F12 takes a screenshot");
+    key(&mut s, KeyCode::KeyQ);
     assert!(s.quit_asked && !s.quit);
     // Esc says stay; other keys do nothing while it's asked.
     key(&mut s, KeyCode::Escape);
     assert!(!s.quit_asked && !s.quit);
-    key(&mut s, KeyCode::F12);
+    key(&mut s, KeyCode::KeyQ);
     key(&mut s, KeyCode::KeyA);
     assert!(s.quit_asked && !s.quit);
     key(&mut s, KeyCode::Enter);
     assert!(s.quit);
     // Like osu!: 2 stays, 1 exits.
     let mut s = state();
-    key(&mut s, KeyCode::F12);
+    key(&mut s, KeyCode::KeyQ);
     key(&mut s, KeyCode::Digit2);
     assert!(!s.quit_asked && !s.quit);
-    key(&mut s, KeyCode::F12);
+    key(&mut s, KeyCode::KeyQ);
     key(&mut s, KeyCode::Digit1);
     assert!(s.quit);
     // The close button twice exits too.
