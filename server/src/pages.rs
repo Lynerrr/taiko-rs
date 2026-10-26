@@ -88,7 +88,7 @@ pub(crate) fn mod_info(acronym: &str) -> Option<(&'static str, &'static str)> {
 
 /// Badges next to a player's name on their profile, like osu!'s groups: (lowercased name,
 /// label, colour, what it means).
-const BADGES: [(&str, &str, &str, &str); 1] = [("auneu", "DEV", "#EB452C", "taiko.rs developer")];
+const BADGES: [(&str, &str, &str, &str); 2] = [("auneu", "DEV", "#EB452C", "taiko.rs developer"), ("lynerrr", "DEV", "#EB452C", "taiko.rs developer")];
 
 fn badges(name: &str) -> String {
     let key = name.to_ascii_lowercase();
@@ -1505,6 +1505,7 @@ mod tests {
     #[test]
     fn badges_go_by_name_in_any_case() {
         assert!(badges("Auneu").contains(">DEV<"));
+        assert!(badges("lynerrr").contains(">DEV<"));
         assert!(badges("Ryuji").is_empty());
     }
 
