@@ -234,7 +234,7 @@ impl Default for Config {
             wheel_resizes_playfield: false,
             bg_dim_black: true,
             interface_hidden: false,
-            interface_hides: crate::hud::Parts::ALL,
+            interface_hides: crate::hud::Parts::DEFAULT_HIDES,
             interface_key: (true, KeyCode::Tab),
             fps_cap: 0,
             calibration_bpm: 120.0,

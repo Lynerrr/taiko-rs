@@ -1,5 +1,6 @@
 //! The interface during play and what its toggle (Shift+Tab by default) hides: the player picks
-//! which parts go, everything (the hit animation too) unless they choose otherwise.
+//! which parts go: everything but GREAT / OK / MISS (like osu!, which keeps judgements on with
+//! the HUD hidden) unless they choose otherwise.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Part {
@@ -77,6 +78,8 @@ pub struct Parts(u16);
 impl Parts {
     pub const NONE: Parts = Parts(0);
     pub const ALL: Parts = Parts((1 << Part::ALL.len()) - 1);
+    /// What the toggle hides to begin with: all but the judgements (`Part::Judgements`, 10th).
+    pub const DEFAULT_HIDES: Parts = Parts(Parts::ALL.0 & !(1 << 9));
 
     pub fn has(self, p: Part) -> bool {
         self.0 & p.bit() != 0
@@ -109,6 +112,12 @@ impl Parts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hiding_the_interface_keeps_the_judgements_to_begin_with() {
+        let d = Parts::DEFAULT_HIDES;
+        assert!(!d.has(Part::Judgements) && d.len() == Part::ALL.len() - 1);
+    }
 
     #[test]
     fn parts_round_trip_through_the_config() {
