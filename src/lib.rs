@@ -44,6 +44,7 @@ mod preview;
 mod render;
 mod scores;
 mod search;
+mod setstatus;
 mod settings;
 mod shapeshift;
 mod skin;
@@ -351,6 +352,12 @@ struct State {
     set_status: std::collections::HashMap<u32, Option<String>>,
     set_status_tx: mpsc::Sender<(u32, Option<String>)>,
     set_status_rx: Receiver<(u32, Option<String>)>,
+    /// What the mirrors said about sets, kept between runs (see `setstatus`), when it was last
+    /// written, and when the list was last sorted again for new answers.
+    status_cache: setstatus::Cache,
+    status_saved: Instant,
+    status_resorted: Instant,
+    status_new: bool,
     /// Asking the online server which sets are loved there (or loving one: the set and which
     /// way, for the message), and whether it's been asked since starting.
     loved_call: Option<(Receiver<Result<online::Reply, String>>, Option<(u32, bool)>)>,
@@ -727,7 +734,7 @@ fn map_gives_pp(e: &Entry, set_status: &std::collections::HashMap<u32, Option<St
     if server_loved.contains(&set) {
         return Some(true);
     }
-    if let Some(Some(s)) = set_status.get(&set) {
+    if let Some(Some(s)) = set_status.get(&set).filter(|s| s.as_deref() != Some(setstatus::MISSING)) {
         return Some(matches!(s.as_str(), "ranked" | "approved" | "loved"));
     }
     db_status.get(&e.path).filter(|&&s| s != 0).map(|s| matches!(s, 4 | 5 | 7))
@@ -4882,6 +4889,7 @@ impl State {
             let _ = tx.send(dirs.iter().find_map(|d| osudb::load(d)));
         });
         self.osudb_rx = Some(rx);
+        self.apply_cached_statuses();
         self.select.refilter(&self.library);
         // Start on a random song rather than the first one every time (not before a map given on
         // the command line, nor in scripted runs, whose screenshots expect the first song).
@@ -4919,6 +4927,8 @@ impl State {
                 if let Some(db) = db {
                     self.apply_osu_db(db);
                 }
+                // With osu!.db's statuses known, the mirrors are asked about the rest.
+                self.start_status_sweep();
             }
         }
         let Some(info) = &self.mapinfo else { return };
@@ -5338,16 +5348,20 @@ impl State {
             return Some(("LOVED HERE", 0xff66aa));
         }
         if let Some(Some(s)) = self.set_status.get(&set) {
-            return Some(match s.as_str() {
-                "ranked" => ("RANKED", 0xb3ff66),
-                "approved" => ("APPROVED", 0xb3ff66),
-                "qualified" => ("QUALIFIED", 0x66ccff),
-                "loved" => ("LOVED", 0xff66aa),
-                "pending" => ("PENDING", 0xffd966),
-                "wip" => ("WIP", 0xffd966),
-                "graveyard" => ("GRAVEYARD", 0x8a8aa0),
-                _ => return None,
-            });
+            let known = match s.as_str() {
+                "ranked" => Some(("RANKED", 0xb3ff66)),
+                "approved" => Some(("APPROVED", 0xb3ff66)),
+                "qualified" => Some(("QUALIFIED", 0x66ccff)),
+                "loved" => Some(("LOVED", 0xff66aa)),
+                "pending" => Some(("PENDING", 0xffd966)),
+                "wip" => Some(("WIP", 0xffd966)),
+                "graveyard" => Some(("GRAVEYARD", 0x8a8aa0)),
+                _ => None,
+            };
+            // Not one the mirrors know (they don't have the set): osu!.db's.
+            if known.is_some() {
+                return known;
+            }
         }
         Some(match self.db_status.get(&e.path)? {
             4 => ("RANKED", 0xb3ff66),
@@ -5360,6 +5374,67 @@ impl State {
         })
     }
 
+    fn status_cache_due(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.status_saved) >= Duration::from_secs(15)
+    }
+
+    /// The sets' statuses the cache has, for the maps in the library (before osu!.db's).
+    fn apply_cached_statuses(&mut self) {
+        for e in &self.library {
+            let code = e.meta.set_id.and_then(|set| self.status_cache.status(set)).and_then(search::status_code);
+            if let Some(code) = code {
+                self.select.status.insert(e.path.clone(), code);
+            }
+        }
+    }
+
+    /// Asks the mirrors, slowly and in the background, about every set whose status isn't known
+    /// or is old (osu!.db knows a ranked, approved or loved one for sure), so that sorting by
+    /// status works for the whole library. The answers are kept (`setstatus`) for the next run.
+    fn start_status_sweep(&mut self) {
+        static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if cfg!(test) || RUNNING.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let now = setstatus::now();
+        let mut sets = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for e in &self.library {
+            let Some(set) = e.meta.set_id else { continue };
+            let sure = matches!(self.db_status.get(&e.path), Some(4 | 5 | 7));
+            if !sure && self.status_cache.due(set, now) && seen.insert(set) {
+                sets.push(set);
+            }
+        }
+        if sets.is_empty() {
+            RUNNING.store(false, Ordering::SeqCst);
+            return;
+        }
+        let tx = self.set_status_tx.clone();
+        std::thread::spawn(move || {
+            let mut failed = 0;
+            for set in sets {
+                std::thread::sleep(Duration::from_millis(400));
+                match download::set_status(set) {
+                    Ok(status) => {
+                        failed = 0;
+                        if tx.send((set, Some(status))).is_err() {
+                            break;
+                        }
+                    }
+                    // Offline or turned away: leave it to the next run.
+                    Err(_) => {
+                        failed += 1;
+                        if failed >= 6 {
+                            break;
+                        }
+                    }
+                }
+            }
+            RUNNING.store(false, Ordering::SeqCst);
+        });
+    }
+
     /// Asks the mirrors for the selected set's status once the selection has rested a moment
     /// (scrolling past sets asks about none of them), and takes in what they say.
     fn poll_set_status(&mut self, now: Instant) {
@@ -5370,7 +5445,22 @@ impl State {
                     self.select.status.insert(e.path.clone(), code);
                 }
             }
+            if let Some(status) = &status {
+                self.status_cache.put(set, status, setstatus::now());
+                self.status_new = true;
+            }
             self.set_status.insert(set, status);
+        }
+        if self.status_cache_due(now) {
+            self.status_cache.save();
+            self.status_saved = now;
+        }
+        // The list sorted (or searched) by status follows what the mirrors have said since.
+        let by_status = self.select.sort == ui::SortMode::Status || self.select.filter.contains("status");
+        if self.status_new && by_status && now.saturating_duration_since(self.status_resorted) >= Duration::from_secs(10) {
+            self.status_new = false;
+            self.status_resorted = now;
+            self.select.refilter(&self.library);
         }
         let set = self.select.selected().and_then(|i| self.library.get(i)).and_then(|e| e.meta.set_id);
         let Some(set) = set.filter(|s| !self.set_status.contains_key(s)) else {
@@ -9071,6 +9161,7 @@ impl State {
         let library = Vec::new();
         let mut select = Select::new(&library);
         let (set_status_tx, set_status_rx) = mpsc::channel();
+        let status_cache = setstatus::Cache::load();
         select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
         select.mods_label = cfg.mods.label();
         select.played = load_plays();
@@ -9160,7 +9251,11 @@ impl State {
             song_dirs,
             osudb_rx: None,
             db_status: Default::default(),
-            set_status: Default::default(),
+            set_status: status_cache.iter().map(|(set, status)| (set, Some(status.to_string()))).collect(),
+            status_cache,
+            status_saved: Instant::now(),
+            status_resorted: Instant::now(),
+            status_new: false,
             set_status_tx,
             set_status_rx,
             loved_call: None,
