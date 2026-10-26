@@ -78,11 +78,13 @@ def kat():
 
 
 def finish():
-    t = time(0.75)
-    x = membrane(t, 48, 150, 0.045, 0.2) * 1.1
-    shimmer = highpass(highpass(rng.standard_normal(len(t)), 5000), 5000) * np.exp(-t / 0.09) * 0.22
-    bell = sum(a * np.sin(2 * np.pi * hz * t) * np.exp(-t / d) for hz, a, d in [(830, 0.22, 0.32), (1297, 0.16, 0.26), (2071, 0.1, 0.18)])
-    return finish_up(x + shimmer + bell, -16)
+    # Played on top of a don or kat, so it's under the don's loudness: a deeper, longer face
+    # with a soft, low ring, and only a breath of brightness (a hiss up top sounded cheap).
+    t = time(0.6)
+    x = membrane(t, 44, 125, 0.05, 0.17)
+    shimmer = lowpass(highpass(rng.standard_normal(len(t)), 3000), 7000) * np.exp(-t / 0.04) * 0.06
+    bell = sum(a * np.sin(2 * np.pi * hz * t) * np.exp(-t / d) for hz, a, d in [(392, 0.1, 0.24), (587, 0.06, 0.18), (880, 0.03, 0.12)])
+    return finish_up(x + shimmer + bell, -21)
 
 
 def combobreak():
