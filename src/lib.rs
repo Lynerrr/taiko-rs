@@ -358,6 +358,9 @@ struct State {
     status_saved: Instant,
     status_resorted: Instant,
     status_new: bool,
+    /// Maps came in (downloaded or dropped): when to ask about their sets' statuses (a while
+    /// later, so a batch of downloads is asked about once).
+    status_sweep_due: Option<Instant>,
     /// Asking the online server which sets are loved there (or loving one: the set and which
     /// way, for the message), and whether it's been asked since starting.
     loved_call: Option<(Receiver<Result<online::Reply, String>>, Option<(u32, bool)>)>,
@@ -2748,6 +2751,9 @@ impl State {
     fn append_maps(&mut self, fresh: Vec<Entry>) {
         let start = self.library.len();
         self.library.extend(fresh);
+        // What's known of their sets' statuses, and the rest asked about soon.
+        self.apply_cached_statuses();
+        self.status_sweep_due = Some(Instant::now() + Duration::from_secs(10));
         if let Some(info) = &self.mapinfo {
             info.extend(self.library[start..].iter().enumerate().map(|(k, e)| (start + k, e.path.clone(), e.modified, e.size)).collect());
             self.mapinfo_sorted = false;
@@ -5394,10 +5400,12 @@ impl State {
     /// whole library. The answers are kept (`setstatus`) for the next run. The mirrors aren't
     /// asked: however many play, they hear nothing from us for this.
     fn start_status_sweep(&mut self) {
-        static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if cfg!(test) || RUNNING.swap(true, Ordering::SeqCst) {
+        // A newer sweep (more maps came in) takes over from one still asking.
+        static LATEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if cfg!(test) {
             return;
         }
+        let generation = LATEST.fetch_add(1, Ordering::SeqCst) + 1;
         let now = setstatus::now();
         let mut maps: Vec<(u32, u32)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -5409,7 +5417,6 @@ impl State {
             }
         }
         if maps.is_empty() {
-            RUNNING.store(false, Ordering::SeqCst);
             return;
         }
         let (server, token) = (self.cfg.online_server.clone(), self.cfg.online_token.clone());
@@ -5422,6 +5429,9 @@ impl State {
                 if round > 0 {
                     std::thread::sleep(Duration::from_secs(STATUS_ROUND_SECS));
                 }
+                if LATEST.load(Ordering::SeqCst) != generation {
+                    return;
+                }
                 let mut left = Vec::new();
                 for chunk in maps.chunks(online::MAX_STATUS_MAPS) {
                     match online::call(&server, online::Request::SetStatuses { token: token.clone(), maps: chunk.to_vec() }) {
@@ -5431,7 +5441,6 @@ impl State {
                             left.extend(chunk.iter().filter(|(set, _)| !got.contains(set)).copied());
                             for (set, status) in found {
                                 if tx.send((set, Some(status))).is_err() {
-                                    RUNNING.store(false, Ordering::SeqCst);
                                     return;
                                 }
                             }
@@ -5449,7 +5458,6 @@ impl State {
                     break;
                 }
             }
-            RUNNING.store(false, Ordering::SeqCst);
         });
     }
 
@@ -5468,6 +5476,10 @@ impl State {
                 self.status_new = true;
             }
             self.set_status.insert(set, status);
+        }
+        if self.status_sweep_due.is_some_and(|t| now >= t) {
+            self.status_sweep_due = None;
+            self.start_status_sweep();
         }
         if self.status_cache_due(now) {
             self.status_cache.save();
@@ -9278,6 +9290,7 @@ impl State {
             status_saved: Instant::now(),
             status_resorted: Instant::now(),
             status_new: false,
+            status_sweep_due: None,
             set_status_tx,
             set_status_rx,
             loved_call: None,
