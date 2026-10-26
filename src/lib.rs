@@ -454,6 +454,8 @@ struct State {
     preview: preview::Preview,
     /// Star ratings (rosu-pp), calculated in the background for the selected song.
     stars: stars::Stars,
+    /// The pp the selected map could give (song select's details).
+    potentials: pp::Potentials,
     /// Background brightness for this frame (0 hides it).
     bg_brightness: f32,
     /// Where the playfield size readout was drawn (virtual units), so it can be clicked.
@@ -6760,6 +6762,10 @@ impl State {
                 self.board_rect = None;
                 self.preview.size = self.cfg.song_preview_size;
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
+                self.preview.potential = match self.select.selected() {
+                    Some(i) => self.potentials.get(&self.library[i].path, rate, self.cfg.mods, self.cfg.scroll_speed),
+                    None => None,
+                };
                 self.leaderboard.clear();
                 if pw > 160.0 {
                     let status = self.select.selected().and_then(|i| self.map_status(i));
@@ -9057,6 +9063,7 @@ impl State {
             mouse_moved_at: Instant::now(),
             preview: preview::Preview::default(),
             stars: stars::Stars::default(),
+            potentials: pp::Potentials::default(),
             bg_brightness: 0.0,
             resolutions: Vec::new(),
             monitor_modes: Vec::new(),

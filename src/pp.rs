@@ -122,6 +122,73 @@ pub fn breakdown(path: &Path, p: &Play) -> Option<Breakdown> {
     })
 }
 
+/// The accuracies song select tells the pp of, full combo, before a play.
+pub const POTENTIAL: [f64; 3] = [100.0, 99.0, 98.0];
+
+/// What a full combo of the map at `path` gives at each of `POTENTIAL`'s accuracies, with
+/// `mods` at `rate` and `scroll_speed` (None where `play_pp` would be None).
+pub fn potential(path: &Path, rate: f64, mods: Mods, scroll_speed: f64) -> Option<[f64; 3]> {
+    if mods.unranked() {
+        return None;
+    }
+    let map = crate::stars::load(path)?;
+    let base = TaikoPerformance::new(&map).mods(formula_mods(mods, scroll_speed)).clock_rate(rate).misses(0);
+    let mut out = [0.0; 3];
+    for (pp, acc) in out.iter_mut().zip(POTENTIAL) {
+        *pp = base.clone().accuracy(acc).calculate().ok()?.pp * custom_factor(mods);
+    }
+    Some(out)
+}
+
+/// `potential` for the selected map, worked out on a thread of its own and kept per map, speed,
+/// mods and scroll speed, so changing them back and forth costs nothing.
+pub struct Potentials {
+    tx: Sender<(PotentialKey, PathBuf)>,
+    rx: Receiver<(PotentialKey, Option<[f64; 3]>)>,
+    known: std::collections::HashMap<PotentialKey, Option<[f64; 3]>>,
+}
+
+/// The map, the speed (in hundredths), the mods and the scroll speed (in hundredths).
+type PotentialKey = (PathBuf, u32, String, u32);
+
+impl Default for Potentials {
+    fn default() -> Self {
+        let (tx, jobs) = mpsc::channel::<(PotentialKey, PathBuf)>();
+        let (done, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("pp-potential".into())
+            .spawn(move || {
+                for (key, path) in jobs {
+                    let (rate, scroll) = (key.1 as f64 / 100.0, key.3 as f64 / 100.0);
+                    let pp = std::panic::catch_unwind(|| potential(&path, rate, Mods::parse_set(&key.2), scroll)).ok().flatten();
+                    if done.send((key, pp)).is_err() {
+                        return;
+                    }
+                }
+            })
+            .expect("spawn pp worker");
+        Potentials { tx, rx, known: std::collections::HashMap::new() }
+    }
+}
+
+impl Potentials {
+    /// The answer for these, once it's there (asked for the first time it isn't).
+    pub fn get(&mut self, path: &Path, rate: f64, mods: Mods, scroll_speed: f64) -> Option<[f64; 3]> {
+        while let Ok((key, pp)) = self.rx.try_recv() {
+            self.known.insert(key, pp);
+        }
+        let key = (path.to_path_buf(), (rate * 100.0).round() as u32, mods.list().join(","), (scroll_speed * 100.0).round() as u32);
+        match self.known.get(&key) {
+            Some(pp) => *pp,
+            None => {
+                self.known.insert(key.clone(), None);
+                let _ = self.tx.send((key, path.to_path_buf()));
+                None
+            }
+        }
+    }
+}
+
 /// The pp of a play while it is played, like osu!'s pp counter: what the notes judged so far
 /// are worth. Worked out on a thread of its own (the map's difficulty is walked note by note),
 /// so the game only hands it the counts and reads the latest answer.
@@ -249,6 +316,18 @@ mod tests {
         assert!((b.pp - worse).abs() < 1e-9);
         assert!(b.pp < b.if_fc && b.if_fc < b.if_ss && (b.if_ss - ss).abs() < 1e-9, "{b:?}");
         assert!(b.difficulty > 0.0 && b.accuracy > 0.0 && b.max_combo == 400);
+
+        // Before a play: SS, 99% and 98% full combos, the SS the same as the play's.
+        let [p100, p99, p98] = potential(&path, 1.0, Mods::NONE, 1.0).unwrap();
+        assert!((p100 - ss).abs() < 1e-6 && p100 > p99 && p99 > p98, "{p100} {p99} {p98}");
+        assert!(potential(&path, 1.5, Mods::parse("HR,DT"), 1.0).unwrap()[1] > p99);
+        assert!(potential(&path, 1.0, Mods::parse("AT"), 1.0).is_none());
+        let mut worker = Potentials::default();
+        let got = (0..1000).find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            worker.get(&path, 1.0, Mods::NONE, 1.0)
+        });
+        assert_eq!(got, Some([p100, p99, p98]));
 
         // The live counter climbs as notes are hit and ends where the whole play's pp is.
         let mut live = Live::start(path.clone(), 1.0, Mods::NONE, 1.0).unwrap();
