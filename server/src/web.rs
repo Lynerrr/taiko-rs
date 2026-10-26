@@ -8,6 +8,8 @@
 //!   /u/<name>         a profile         /api/u/<name>
 //!   /beatmaps         maps played       /api/beatmaps
 //!   /m/<map hash>     a map's scores    /api/m/<map hash>
+//!   /s/<id>           a score, and a button that opens it in the game (?watch: by itself)
+//!   /s/<id>/card.png  its card (`card.rs`), for Discord   /api/s/<id>
 //!   /mods             the mod select, and clips of what the mods do
 //!   /login /logout    the website's session (the game's accounts)
 //!   /chat[/<name>]    the global chat and messages to friends, like the game's   /api/chat[/<name>]
@@ -449,6 +451,20 @@ fn route(state: &State, req: &Req) -> Reply {
             match scores.map(map) {
                 Some(m) => req.page_with(200, &m.name, "beatmaps", &pages::map_meta(&m, &rows), pages::map_page(&m, &rows)),
                 None => req.not_found("Nobody has sent a play on that map yet"),
+            }
+        }
+        ["s", id] | ["s", id, "card.png"] | ["api", "s", id] => {
+            let Ok(id) = id.parse::<u64>() else { return req.not_found("That is not a score link") };
+            let (score, place) = {
+                let scores = state.scores.lock().unwrap();
+                let Some(s) = scores.score(id) else { return req.not_found("That score isn't on the server") };
+                let place = scores.place_of(s.map_hash, id);
+                (s, place)
+            };
+            match segs.as_slice() {
+                ["api", ..] => Reply::json(&score),
+                [_, _, _] => Reply { cache: "public, max-age=86400", ..Reply::new(200, "image/png", crate::card::png(&score).into()) },
+                _ => req.page_with(200, &score.map, "beatmaps", &pages::score_meta(&score), pages::score_page(&score, place, req.arg("watch").is_some())),
             }
         }
         ["mods"] => req.page(200, "Mods", "mods", pages::mods_page()),

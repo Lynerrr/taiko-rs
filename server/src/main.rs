@@ -15,8 +15,12 @@ mod net;
 #[allow(dead_code)]
 #[path = "../../src/online.rs"]
 mod online;
+mod card;
 mod covers;
 mod discord;
+#[allow(dead_code)]
+#[path = "../../src/font.rs"]
+mod font;
 mod scores;
 mod pages;
 mod web;
@@ -383,6 +387,10 @@ fn handle(state: &State, stream: TcpStream) {
         Request::Replay { id } => match state.scores.lock().unwrap().replay(id) {
             Some(r) => Reply::Replay(Box::new(r)),
             None => Reply::Error("that replay isn't on the server".into()),
+        },
+        Request::Score { id } => match state.scores.lock().unwrap().score(id) {
+            Some(s) => Reply::Score(Box::new(s)),
+            None => Reply::Error("that score isn't on the server".into()),
         },
         Request::Profile { name } => match state.profile(&name) {
             Some(p) => Reply::Profile(Box::new(p)),

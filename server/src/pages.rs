@@ -36,7 +36,7 @@ const CLIPS: [Clip; 6] = [
 ];
 
 /// Files served under /clips/ and /site/ (`web.rs`).
-pub const STATIC_FILES: [(&str, &[u8]); 17] = [
+pub const STATIC_FILES: [(&str, &[u8]); 18] = [
     ("clips/multiverse.mp4", include_bytes!("../site/clips/multiverse.mp4")),
     ("clips/multiverse.jpg", include_bytes!("../site/clips/multiverse.jpg")),
     ("clips/loop.mp4", include_bytes!("../site/clips/loop.mp4")),
@@ -53,6 +53,7 @@ pub const STATIC_FILES: [(&str, &[u8]); 17] = [
     ("site/logo.png", include_bytes!("../../assets/icon-64.png")),
     ("site/chat.js", include_bytes!("../site/chat.js")),
     ("site/copy.js", include_bytes!("../site/copy.js")),
+    ("site/watch.js", include_bytes!("../site/watch.js")),
     ("site/og.jpg", include_bytes!("../site/og.jpg")),
 ];
 
@@ -81,7 +82,7 @@ fn mod_count() -> usize {
 }
 
 /// A mod's column colour and name, by its acronym.
-fn mod_info(acronym: &str) -> Option<(&'static str, &'static str)> {
+pub(crate) fn mod_info(acronym: &str) -> Option<(&'static str, &'static str)> {
     groups().iter().find_map(|g| g.mods.iter().find(|m| m.acronym == acronym).map(|m| (g.colour.as_str(), m.name.as_str())))
 }
 
@@ -153,6 +154,26 @@ fn card_version() -> String {
     let bytes = STATIC_FILES.iter().find(|(f, _)| *f == "site/og.jpg").map(|(_, b)| *b).unwrap_or_default();
     let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
     format!("{:08x}", hash >> 32)
+}
+
+/// A score's preview: its numbers, with its card (`card.rs`) as the picture.
+pub fn score_meta(s: &OnlineScore) -> Meta {
+    let pp = s.pp.map(|p| format!("{p:.0}pp · ")).unwrap_or_default();
+    let mods = if s.mods.is_empty() { String::new() } else { format!(" +{}", s.mods.concat()) };
+    let rate = if (s.rate - 1.0).abs() > 1e-6 { format!(" {:.2}x", s.rate) } else { String::new() };
+    Meta {
+        description: format!(
+            "{} by {}: {pp}{:.2}% · {} · x{} · {} miss{}{mods}{rate}. Watch the replay in taiko.rs.",
+            s.grade(),
+            s.player,
+            s.accuracy * 100.0,
+            thousands(s.score),
+            thousands(s.max_combo as u64),
+            s.miss,
+            if s.miss == 1 { "" } else { "es" }
+        ),
+        image: Some(format!("{SITE}/s/{}/card.png", s.id)),
+    }
 }
 
 /// A beatmap's preview: stars, plays and who holds #1, over its cover.
@@ -286,7 +307,7 @@ fn mod_chips<S: AsRef<str>>(m: &[S], rate: f64) -> String {
 }
 
 /// osu!'s colour for a star rating: blue for easy through red and purple to black.
-fn star_colour(s: f64) -> [u8; 3] {
+pub(crate) fn star_colour(s: f64) -> [u8; 3] {
     const STOPS: [(f64, [u8; 3]); 11] = [
         (0.1, [0x42, 0x90, 0xfb]),
         (1.25, [0x4f, 0xc0, 0xff]),
@@ -840,6 +861,51 @@ fn play_row(s: &OnlineScore, weighted: Option<usize>, show_score: bool) -> Strin
         mod_chips(&s.mods, s.rate),
         s.accuracy * 100.0
     )
+}
+
+/// One score: its numbers, and a button that opens it (and its replay) in the game, through
+/// the `taiko-rs://` link the game registers. `watch`: from a "Watch replay" button, so the
+/// page opens the game itself straight away (`site/watch.js`).
+pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool) -> String {
+    let (song, version) = split_map(&s.map);
+    let (artist, title) = split_song(song);
+    let head = format!(
+        "<div class=\"cover map\"{}><div class=inner><div class=artist>{}</div><h1>{}</h1>\
+         <div class=sub>{}<span class=version>[{}]</span><a class=\"btn small\" href=\"/m/{:x}\">map leaderboard</a></div></div></div>",
+        cover_style(s.set_id, s.map_hash, "cover@2x"),
+        esc(artist),
+        esc(title),
+        stars(s.stars),
+        esc(version),
+        s.map_hash
+    );
+    let mods = if s.mods.is_empty() && (s.rate - 1.0).abs() < 1e-6 { "-".into() } else { mod_chips(&s.mods, s.rate) };
+    let place = place.map(|p| format!("<div class=place>#{p}</div>")).unwrap_or_default();
+    let top = format!(
+        "<div class=\"panel topscore\">{place}<span class=bigrade>{}</span><div class=who>{}<div>{}<div class=dim>{}</div></div></div>\
+         <div class=hudrow-in><div class=hudstat><span>PP</span><b class=pp>{}</b></div><div class=hudstat><span>ACCURACY</span><b>{:.2}%</b></div>\
+         <div class=hudstat><span>GREAT</span><b class=great>{}</b></div><div class=hudstat><span>OK</span><b class=ok>{}</b></div><div class=hudstat><span>MISS</span><b class=miss>{}</b></div>\
+         <div class=hudstat><span>COMBO</span><b>{}x</b></div><div class=hudstat><span>SCORE</span><b>{:08}</b></div><div class=hudstat><span>MODS</span><b class=mods>{mods}</b></div></div></div>",
+        grade(s.grade()),
+        avatar(&s.player, "mid"),
+        player_link(&s.player),
+        ago(s.date),
+        s.pp.map(|p| format!("{p:.0}")).unwrap_or_else(|| "-".into()),
+        s.accuracy * 100.0,
+        s.great,
+        s.ok,
+        s.miss,
+        thousands(s.max_combo as u64),
+        s.score,
+    );
+    let auto = if watch { " data-autoopen" } else { "" };
+    let watch_panel = format!(
+        "<section class=panel><a class=\"btn hot\" href=\"taiko-rs://score/{}\"{auto}>Watch replay in taiko.rs</a>\
+         <p class=hint>Opens the game on this score, ready to watch. It downloads the map if you haven't got it. \
+         Nothing happens? <a href=\"/download\">Get taiko.rs</a>, open it once, and try again.</p></section>",
+        s.id
+    );
+    format!("{head}<div class=page>{top}{watch_panel}</div><script src=\"/site/watch.js\" defer></script>")
 }
 
 pub fn map_page(m: &MapRow, rows: &[OnlineScore]) -> String {

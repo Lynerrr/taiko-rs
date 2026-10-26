@@ -130,3 +130,79 @@ fn servers_without_replays_say_so() {
     assert!(d.stats.is_none() && d.breakdown.is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_score_link_opens_its_results_on_its_map() {
+    use std::io::{BufRead, Write};
+    let (dir, path) = map("link");
+    let other = dir.join("other.osu");
+    std::fs::write(&other, b"another difficulty").unwrap();
+    let meta = |version: &str, set_id| beatmap::Meta { artist: "A".into(), title: "T".into(), version: version.into(), set_id, mode: 1, ..Default::default() };
+    let library = vec![library::Entry::new(other, meta("Easy", Some(123))), library::Entry::new(path.clone(), meta("Oni", Some(123)))];
+    let hash = library[1].hash();
+    // A server with two scores: one on that map, one on a map nobody has (and no set to fetch).
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let server = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = std::io::BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let asked: online::Envelope = serde_json::from_str(&line).unwrap();
+            let reply = match asked.request {
+                online::Request::Score { id: 41 } => online::Reply::Score(Box::new(online::OnlineScore {
+                    player: "friend".into(),
+                    map: "A - T [Oni]".into(),
+                    map_hash: hash,
+                    score: 900_000,
+                    accuracy: 0.97,
+                    great: 380,
+                    ok: 20,
+                    rate: 1.0,
+                    set_id: Some(123),
+                    id: 41,
+                    ..Default::default()
+                })),
+                online::Request::Score { id: 42 } => online::Reply::Score(Box::new(online::OnlineScore { map: "B - U [Hard]".into(), map_hash: 5, id: 42, ..Default::default() })),
+                _ => online::Reply::Error("nothing here".into()),
+            };
+            let mut out = serde_json::to_string(&reply).unwrap();
+            out.push('\n');
+            let _ = reader.get_mut().write_all(out.as_bytes());
+        }
+    });
+    let mut s = crate::layout_tests::state();
+    s.cfg.online_server = server;
+    let (tx, rx) = mpsc::channel();
+    tx.send(library).unwrap();
+    s.scan = Some((rx, Arc::new(AtomicUsize::new(0))));
+    // Song select, not straight into the first map (the test state's command-line map).
+    s.play_when_scanned = false;
+    s.poll_scan();
+    let settle = |s: &mut State| {
+        let until = Instant::now() + Duration::from_secs(10);
+        while s.score_link.is_some() && Instant::now() < until {
+            s.poll_score_link();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    s.open_link(link::Link::Score(41));
+    settle(&mut s);
+    match &s.scene {
+        Scene::Results { results, entry, .. } => {
+            assert_eq!(*entry, 1);
+            assert_eq!(results.opened.as_ref().map(|o| (o.player.as_str(), o.online)), Some(("friend", true)));
+        }
+        _ => panic!("not on the score's results"),
+    }
+    assert_eq!(s.select.selected(), Some(1));
+    s.scene = Scene::Select;
+    s.open_link(link::Link::Score(42));
+    settle(&mut s);
+    assert!(matches!(s.scene, Scene::Select));
+    assert_eq!(s.toast.as_ref().map(|t| t.text.as_str()), Some("you haven't got B - U [Hard]"));
+    s.open_link(link::Link::Score(43));
+    settle(&mut s);
+    assert_eq!(s.toast.as_ref().map(|t| t.text.as_str()), Some("can't open that score: nothing here"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

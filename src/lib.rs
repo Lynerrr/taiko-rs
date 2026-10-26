@@ -27,6 +27,7 @@ mod results_tests;
 #[cfg(test)]
 mod settings_tests;
 mod library;
+mod link;
 mod logo;
 mod mapinfo;
 mod hud;
@@ -339,6 +340,8 @@ struct State {
     status_wait: Option<(u32, Instant)>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
     lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
+    /// A score a `taiko-rs://` link asked for, until its results screen opens.
+    score_link: Option<ScoreLink>,
     /// Which screen was drawn last and since when, for the fade between screens.
     scene_kind: Option<std::mem::Discriminant<Scene>>,
     scene_since: Instant,
@@ -912,6 +915,30 @@ fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
     library.iter().position(|e| e.meta.version == m.version && e.hash() == m.hash)
 }
 
+/// A score a `taiko-rs://` link asked for: being fetched from the server, then waiting for its
+/// map (the library scan, or a download) and for the player to be out of a song.
+struct ScoreLink {
+    fetch: Option<Receiver<Result<online::OnlineScore, String>>>,
+    score: Option<online::OnlineScore>,
+    /// Its set is downloading, since then.
+    downloading: Option<Instant>,
+}
+
+/// How long a score link waits for its map's download.
+const SCORE_LINK_WAIT: Duration = Duration::from_secs(300);
+
+/// The map an online score was played on: only maps of its set or with its name are hashed
+/// (hashing reads the file).
+fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Option<usize> {
+    library.iter().position(|e| {
+        let candidate = match (s.set_id, e.meta.set_id) {
+            (Some(a), Some(b)) => a == b,
+            _ => online::clean_text(&e.label(), 160) == s.map,
+        };
+        candidate && e.hash() == s.map_hash
+    })
+}
+
 /// A character typed into a playfield size: a digit, or `x` between width and height.
 fn size_char(code: KeyCode) -> Option<char> {
     use KeyCode::*;
@@ -1379,10 +1406,116 @@ impl State {
         self.scene = Scene::Results { results, entry, from: None };
     }
 
+    /// Opens what a `taiko-rs://` link asks for: a score's results, its replay ready to watch.
+    fn open_link(&mut self, link: link::Link) {
+        match link {
+            link::Link::Score(id) => {
+                let server = self.cfg.online_server.clone();
+                let (tx, rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let got = match online::call(&server, online::Request::Score { id }) {
+                        Ok(online::Reply::Score(s)) => Ok(*s),
+                        Ok(_) => Err("odd reply from the server".to_string()),
+                        Err(e) if e == "bad request" => Err("the server can't open score links yet".to_string()),
+                        Err(e) => Err(e),
+                    };
+                    let _ = tx.send(got);
+                });
+                self.score_link = Some(ScoreLink { fetch: Some(rx), score: None, downloading: None });
+                let later = if self.in_song() || self.mp.is_some() { " (it opens once you're back in song select)" } else { "" };
+                self.toast(format!("opening a score{later}..."));
+            }
+        }
+    }
+
+    /// Opens a linked score's results once it's here, its map is (downloading it if need be)
+    /// and the player is in song select.
+    fn poll_score_link(&mut self) {
+        let Some(l) = &mut self.score_link else { return };
+        if let Some(rx) = &l.fetch {
+            match rx.try_recv() {
+                Ok(Ok(s)) => {
+                    l.score = Some(s);
+                    l.fetch = None;
+                }
+                Ok(Err(e)) => {
+                    self.score_link = None;
+                    self.toast(format!("can't open that score: {e}"));
+                    return;
+                }
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.score_link = None;
+                    return;
+                }
+            }
+        }
+        let free = matches!(self.scene, Scene::Select | Scene::Results { .. } | Scene::Preview { .. } | Scene::Download) && self.mp.is_none();
+        if self.scan.is_some() || !free {
+            return;
+        }
+        let Some(score) = self.score_link.as_ref().and_then(|l| l.score.clone()) else { return };
+        if let Some(entry) = find_score_map(&self.library, &score) {
+            self.score_link = None;
+            self.scene = Scene::Select;
+            let path = self.library[entry].path.clone();
+            self.select.select_path(&self.library, &path);
+            if self.select.selected() != Some(entry) {
+                // Hidden by the search: show everything.
+                self.select.filter.clear();
+                self.select.refilter(&self.library);
+                self.select.select_path(&self.library, &path);
+            }
+            self.open_online_score_on(entry, score);
+            return;
+        }
+        let downloading = self.score_link.as_ref().and_then(|l| l.downloading);
+        match (downloading, score.set_id) {
+            (Some(since), _) => {
+                if since.elapsed() > SCORE_LINK_WAIT && !self.downloads.iter().any(|j| Some(j.set.id) == score.set_id) {
+                    self.score_link = None;
+                }
+            }
+            (None, Some(id)) if self.installed_sets().contains(&id) => {
+                self.score_link = None;
+                self.toast(format!("your copy of {} is a different version than the one played", score.map));
+            }
+            (None, Some(id)) => {
+                let song = score.map.rsplit_once(" [").map_or(score.map.as_str(), |(s, _)| s);
+                let (artist, title) = song.split_once(" - ").unwrap_or(("", song));
+                self.start_download(download::SetInfo {
+                    id,
+                    artist: artist.to_string(),
+                    title: title.to_string(),
+                    creator: String::new(),
+                    status: String::new(),
+                    diffs: Vec::new(),
+                    play_count: 0,
+                    favourite_count: 0,
+                    rating: 0.0,
+                    ranked_date: String::new(),
+                });
+                if let Some(l) = &mut self.score_link {
+                    l.downloading = Some(Instant::now());
+                }
+                self.toast(format!("downloading {song} for that score..."));
+            }
+            (None, None) => {
+                self.score_link = None;
+                self.toast(format!("you haven't got {}", score.map));
+            }
+        }
+    }
+
     /// The results screen of an online score on the selected map; its replay is fetched
     /// meanwhile.
     fn open_online_score(&mut self, score: online::OnlineScore) {
         let Some(entry) = self.select.selected() else { return };
+        self.open_online_score_on(entry, score);
+    }
+
+    /// The results screen of an online score on map `entry`.
+    fn open_online_score_on(&mut self, entry: usize, score: online::OnlineScore) {
         let stats = game::Stats { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, score: score.score, ..Default::default() };
         let mods = Mods::from_list(&score.mods);
         let e = &self.library[entry];
@@ -6087,6 +6220,7 @@ impl State {
         }
         self.poll_multiplayer();
         self.poll_downloads();
+        self.poll_score_link();
         self.poll_sorting();
         self.update_presence();
         if let Some(ex) = &self.export {
@@ -7602,6 +7736,9 @@ enum UserEvent {
     /// Android: the on-screen keyboard typed something (or came up or went away).
     #[cfg(target_os = "android")]
     Typed(android::Typed),
+    /// A `taiko-rs://` link opened while the game runs (`link::listen`).
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    Link(link::Link),
 }
 
 /// Files dragged over the window, or dropped on it.
@@ -8134,6 +8271,13 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Stopped => event_loop.exit(),
             UserEvent::FileDrag(drag) => lock(&self.state).file_drag(drag),
             UserEvent::WindowRequest => self.apply_window_request(),
+            UserEvent::Link(link) => {
+                lock(&self.state).open_link(link);
+                if let Some(w) = &self.window {
+                    w.set_minimized(false);
+                    w.focus_window();
+                }
+            }
             #[cfg(target_os = "android")]
             UserEvent::Typed(typed) => lock(&self.state).soft_keyboard(typed, self.window.as_deref()),
             UserEvent::HideCursor(hide) => {
@@ -8228,6 +8372,7 @@ impl State {
             songs_dir,
             installed_sets: None,
             lobby_lookup: None,
+            score_link: None,
             preview_remote: false,
             host_transfer: None,
             scores: scores::load_index(),
@@ -8367,8 +8512,15 @@ pub fn desktop_main() {
     let mut args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let auto = args.iter().any(|a| a == "--auto");
     args.retain(|a| a != "--auto");
+    // A `taiko-rs://` link (a score's "Watch replay" button): the running game opens it, else
+    // this one does.
+    let link = args.iter().find_map(|a| link::parse(&a.to_string_lossy()));
+    args.retain(|a| link::parse(&a.to_string_lossy()).is_none());
+    if link.is_some_and(link::forward) {
+        return;
+    }
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu]...");
+        println!("usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu | taiko-rs://score/<id>]...");
         println!("       taiko-rs --info file.osu...   print converted map stats");
         println!("With no arguments, scans osu! stable install locations and `songs =` lines in the config.");
         return;
@@ -8380,7 +8532,15 @@ pub fn desktop_main() {
         return;
     }
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
-    run(cfg, args, auto, event_loop);
+    // Scripted runs (tests) neither take links nor become their handler.
+    if std::env::var_os("TAIKO_SHOTS").is_none() && std::env::var_os("TAIKO_INPUT").is_none() {
+        let proxy = event_loop.create_proxy();
+        link::listen(move |l| {
+            let _ = proxy.send_event(UserEvent::Link(l));
+        });
+        link::register();
+    }
+    run(cfg, args, auto, link, event_loop);
 }
 
 /// Android entry point (the native activity's `android_main`): no command line, the app's own
@@ -8393,12 +8553,12 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     let cfg = Config::load();
     let event_loop = EventLoop::<UserEvent>::with_user_event().with_android_app(app).build().expect("event loop");
     android::set_proxy(event_loop.create_proxy());
-    run(cfg, Vec::new(), false, event_loop);
+    run(cfg, Vec::new(), false, None, event_loop);
 }
 
 /// Scans the library, opens audio and runs the game until it quits. `args`: songs folders, map
-/// folders, .osz or a single .osu to play; empty = the usual song folders.
-fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEvent>) {
+/// folders, .osz or a single .osu to play; empty = the usual song folders. `link`: a score to open.
+fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, link: Option<link::Link>, event_loop: EventLoop<UserEvent>) {
     config::set_data_folder(cfg.data_folder.clone());
     library::set_songs_folder(cfg.songs_folder.clone());
     multiverse::set(cfg.universes);
@@ -8432,6 +8592,9 @@ fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEv
     update::cleanup();
     let mut state = State::new(cfg, audio, splash, songs_dir, songs_dirs_for_db, Some(scan), play_when_scanned, auto);
     state.load_skin();
+    if let Some(l) = link {
+        state.open_link(l);
+    }
     let mut app = App {
         state: Arc::new(Mutex::new(state)),
         cursor: CursorIcon::Default,

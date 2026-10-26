@@ -17,6 +17,8 @@ bin_dir="$HOME/.local/bin"
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
 exe="$bin_dir/taiko-rs"
 desktop="$data_dir/applications/taiko-rs.desktop"
+# The hidden entry that opens taiko-rs:// links (a score's "Watch replay"), as the game writes it.
+link_desktop="$data_dir/applications/taiko-rs-link.desktop"
 icon="$data_dir/icons/hicolor/256x256/apps/taiko-rs.png"
 # Earlier installs put an SVG icon here.
 old_icon="$data_dir/icons/hicolor/scalable/apps/taiko-rs.svg"
@@ -26,7 +28,7 @@ for arg in "$@"; do
     case "$arg" in
         --no-launch) launch=0 ;;
         --uninstall)
-            rm -f "$exe" "$desktop" "$icon" "$old_icon"
+            rm -f "$exe" "$desktop" "$link_desktop" "$icon" "$old_icon"
             echo "Removed taiko.rs. Settings ($HOME/.config/taiko-rs) and maps ($data_dir/taiko-rs) are kept."
             exit 0
             ;;
@@ -70,7 +72,19 @@ Icon=taiko-rs
 Terminal=false
 Categories=Game;
 EOF
+cat > "$link_desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=taiko.rs
+Comment=Opens taiko.rs links (scores to watch)
+Exec="$exe" %u
+Icon=taiko-rs
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/taiko-rs;
+EOF
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$(dirname "$desktop")" 2>/dev/null || true
+command -v xdg-mime >/dev/null 2>&1 && xdg-mime default taiko-rs-link.desktop x-scheme-handler/taiko-rs 2>/dev/null || true
 
 echo "Installed $exe (added to the app menu)."
 

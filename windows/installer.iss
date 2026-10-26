@@ -54,6 +54,14 @@ Source: "THIRD-PARTY.md"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{autoprograms}\taiko-rs"; Filename: "{app}\taiko-rs.exe"; WorkingDir: "{app}"
 Name: "{autodesktop}\taiko-rs"; Filename: "{app}\taiko-rs.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
+[Registry]
+; taiko-rs:// links (a score's "Watch replay" button) open the game, as the game itself also
+; registers them when it starts (src/link.rs).
+Root: HKCU; Subkey: "Software\Classes\taiko-rs"; ValueType: string; ValueName: ""; ValueData: "URL:taiko.rs"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\taiko-rs"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\taiko-rs\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\taiko-rs.exe"",0"
+Root: HKCU; Subkey: "Software\Classes\taiko-rs\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\taiko-rs.exe"" ""%1"""
+
 [Run]
 Filename: "{app}\taiko-rs.exe"; Description: "{cm:LaunchProgram,taiko.rs}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 

@@ -224,11 +224,11 @@ pub(crate) fn parse(content: &str) -> Option<Command> {
     Some(Command { word, n, rest: rest.trim().to_string() })
 }
 
-/// A reply: text, or an embed.
+/// A reply: text, or an embed with link buttons under it (label, URL).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Answer {
     Text(String),
-    Embed(Value),
+    Embed(Value, Vec<(String, String)>),
 }
 
 impl Bot {
@@ -263,7 +263,7 @@ impl Bot {
         let text = |s: String| Some((Answer::Text(s), None));
         let n = cmd.n.unwrap_or(1).max(1);
         match cmd.word.as_str() {
-            "help" | "h" => Some((Answer::Embed(help()), None)),
+            "help" | "h" => Some((Answer::Embed(help(), Vec::new()), None)),
             "link" => {
                 let name = cmd.rest.trim();
                 if name.is_empty() {
@@ -290,7 +290,7 @@ impl Bot {
                     return text(format!("`{name}` hasn't sent a play yet."));
                 }
                 let Some(play) = plays.get(n - 1) else { return text(format!("`{name}` has only {} recent plays.", plays.len())) };
-                Some((Answer::Embed(self.play_embed(&key, play)), Some(play.map_hash)))
+                Some((Answer::Embed(self.play_embed(&key, play), play_buttons(play)), Some(play.map_hash)))
             }
             "c" | "compare" => {
                 let key = match self.target(&cmd.rest, author) {
@@ -305,7 +305,8 @@ impl Bot {
                     return text(format!("`{name}` hasn't played {label}."));
                 }
                 plays.sort_by(|a, b| b.score.cmp(&a.score));
-                Some((Answer::Embed(self.plays_embed(&format!("{name} on {}", plays[0].map), &plays, 0, &key)), Some(map)))
+                let shown: Vec<OnlineScore> = plays.into_iter().take(PAGE).collect();
+                Some((Answer::Embed(self.plays_embed(&format!("{name} on {}", shown[0].map), &shown, 0, &key), watch_buttons(&shown, 0)), Some(map)))
             }
             "top" | "best" => {
                 let key = match self.target(&cmd.rest, author) {
@@ -322,7 +323,7 @@ impl Bot {
                 let shown: Vec<OnlineScore> = best.iter().skip((page - 1) * PAGE).take(PAGE).cloned().collect();
                 let mut e = self.plays_embed(&format!("Best plays of {name}"), &shown, (page - 1) * PAGE, &key);
                 e["footer"] = json!({ "text": format!("page {page}/{pages} · taiko.rs") });
-                Some((Answer::Embed(e), None))
+                Some((Answer::Embed(e, watch_buttons(&shown, (page - 1) * PAGE)), None))
             }
             "osu" | "profile" | "p" => {
                 let key = match self.target(&cmd.rest, author) {
@@ -330,7 +331,7 @@ impl Bot {
                     Err(e) => return text(e),
                 };
                 let p = self.state.profile(&key)?;
-                Some((Answer::Embed(self.profile_embed(&p)), None))
+                Some((Answer::Embed(self.profile_embed(&p), Vec::new()), None))
             }
             "lb" | "leaderboard" => {
                 let Some(map) = map else { return text("Show a play here first (`>rs`), or reply to one.".into()) };
@@ -340,20 +341,21 @@ impl Bot {
                 }
                 let pages = board.len().div_ceil(LB_PAGE);
                 let page = n.min(pages);
-                let lines: Vec<String> = board
+                let from = (page - 1) * LB_PAGE;
+                let shown: Vec<OnlineScore> = board.iter().skip(from).take(LB_PAGE).cloned().collect();
+                let lines: Vec<String> = shown
                     .iter()
                     .enumerate()
-                    .skip((page - 1) * LB_PAGE)
-                    .take(LB_PAGE)
                     .map(|(i, s)| {
                         format!(
-                            "**#{}** [{}]({WEBSITE}/u/{}) · {} · {:.2}% · {}{}",
-                            i + 1,
+                            "**#{}** [{}]({WEBSITE}/u/{}) · **{}** · {:.2}% · {} · {}{}",
+                            from + i + 1,
                             clean(&s.player),
                             url_part(&s.player),
-                            thousands(s.score),
-                            s.accuracy * 100.0,
                             pp_text(s.pp),
+                            s.accuracy * 100.0,
+                            miss_text(s),
+                            thousands(s.score),
                             mods_text(s)
                         )
                     })
@@ -361,13 +363,13 @@ impl Bot {
                 let first = &board[0];
                 let e = json!({
                     "title": first.map,
-                    "url": format!("{WEBSITE}/m/{}", first.map_hash),
+                    "url": format!("{WEBSITE}/m/{:x}", first.map_hash),
                     "description": lines.join("\n"),
                     "color": COLOUR,
                     "thumbnail": cover_thumb(first.set_id),
                     "footer": { "text": format!("{} plays on this map · page {page}/{pages}", board.len()) },
                 });
-                Some((Answer::Embed(e), Some(map)))
+                Some((Answer::Embed(e, watch_buttons(&shown, from)), Some(map)))
             }
             "ranking" | "rankings" | "rank" => {
                 let (rows, players, plays) = {
@@ -389,7 +391,7 @@ impl Bot {
                     "color": COLOUR,
                     "footer": { "text": format!("{players} players · {plays} plays") },
                 });
-                Some((Answer::Embed(e), None))
+                Some((Answer::Embed(e, Vec::new()), None))
             }
             _ => None,
         }
@@ -432,20 +434,28 @@ impl Bot {
             let tries = scores.plays_of(key).iter().filter(|p| p.map_hash == s.map_hash && p.date <= s.date).count();
             (place, tries)
         };
+        let grade = s.grade();
         let mut lines = vec![
-            format!("**{}**{} · **{:.2}%** · **{}**", online::grade(s.great, s.ok, s.miss, s.accuracy), mods_text(s), s.accuracy * 100.0, pp_text(s.pp)),
-            format!("{} · x{} · [{}/{}/{}]", thousands(s.score), s.max_combo, s.great, s.ok, s.miss),
+            format!("### {} · {} · {:.2}% · {}", grade, pp_text(s.pp), s.accuracy * 100.0, miss_text(s)),
+            format!("{} · x{} · `{}` / `{}` / `{}`", thousands(s.score), thousands(s.max_combo as u64), s.great, s.ok, s.miss),
         ];
+        let mods = mod_badges(s);
+        if !mods.is_empty() {
+            lines.push(mods);
+        }
         if let Some(p) = place {
             lines.push(format!("🏆 **#{p}** on the map"));
         }
+        // Its card (`card.rs`): the numbers big enough to read at a glance.
+        let image = if s.id != 0 { json!({ "url": format!("{WEBSITE}/s/{}/card.png", s.id) }) } else { Value::Null };
         json!({
             "author": { "name": s.player, "url": format!("{WEBSITE}/u/{}", url_part(&s.player)) },
             "title": s.map,
-            "url": format!("{WEBSITE}/m/{}", s.map_hash),
+            "url": format!("{WEBSITE}/m/{:x}", s.map_hash),
             "description": lines.join("\n"),
-            "color": COLOUR,
+            "color": crate::card::grade_colour(grade),
             "thumbnail": cover_thumb(s.set_id),
+            "image": image,
             "footer": { "text": format!("Try #{tries} · taiko.rs") },
             "timestamp": iso8601(s.date),
         })
@@ -457,19 +467,18 @@ impl Bot {
             .iter()
             .enumerate()
             .map(|(i, s)| {
+                let mods = mod_badges(s);
                 format!(
-                    "**{}.** [{}]({WEBSITE}/m/{}){}\n**{}** · {:.2}% · {} · x{} · [{}/{}/{}] · {} ago",
+                    "**{}.** [{}]({WEBSITE}/m/{:x}){}\n**{}** · **{}** · {:.2}% · {} · x{} · {} ago",
                     from + i + 1,
                     clean(&s.map),
                     s.map_hash,
-                    mods_text(s),
+                    if mods.is_empty() { String::new() } else { format!(" {mods}") },
+                    s.grade(),
                     pp_text(s.pp),
                     s.accuracy * 100.0,
-                    thousands(s.score),
-                    s.max_combo,
-                    s.great,
-                    s.ok,
-                    s.miss,
+                    miss_text(s),
+                    thousands(s.max_combo as u64),
                     age(s.date)
                 )
             })
@@ -494,7 +503,7 @@ impl Bot {
             format!("**Grades:** SS {} · S {} · A {}", st.ss, st.s, st.a),
         ];
         if let Some(best) = p.top.first() {
-            lines.push(format!("**Best:** [{}]({WEBSITE}/m/{}) · **{}**", clean(&best.map), best.map_hash, pp_text(best.pp)));
+            lines.push(format!("**Best:** [{}]({WEBSITE}/m/{:x}) · **{}**", clean(&best.map), best.map_hash, pp_text(best.pp)));
         }
         lines.push(format!("Joined <t:{}:D>", p.joined));
         if p.online {
@@ -516,13 +525,16 @@ impl Bot {
         let mut body = json!({ "allowed_mentions": { "parse": [] } });
         match answer {
             Answer::Text(t) => body["content"] = json!(t),
-            Answer::Embed(e) => {
+            Answer::Embed(e, buttons) => {
                 // Without what it hasn't got (a cover).
                 let mut e = e.clone();
                 if let Some(o) = e.as_object_mut() {
                     o.retain(|_, v| !v.is_null());
                 }
                 body["embeds"] = json!([e]);
+                if !buttons.is_empty() {
+                    body["components"] = button_rows(buttons);
+                }
             }
         }
         if let Some(id) = to {
@@ -578,6 +590,54 @@ fn cover_thumb(set: Option<u32>) -> Value {
     match set.filter(|&s| crate::covers::allowed(s)) {
         Some(s) => json!({ "url": format!("https://assets.ppy.sh/beatmaps/{s}/covers/list@2x.jpg") }),
         None => Value::Null,
+    }
+}
+
+/// A play's buttons: watch it in the game (through its page, which opens the game), its page,
+/// and its map's leaderboard.
+fn play_buttons(s: &OnlineScore) -> Vec<(String, String)> {
+    let mut b = Vec::new();
+    if s.id != 0 {
+        b.push(("▶ Watch replay".to_string(), format!("{WEBSITE}/s/{}?watch=1", s.id)));
+        b.push(("Score".to_string(), format!("{WEBSITE}/s/{}", s.id)));
+    }
+    b.push(("Leaderboard".to_string(), format!("{WEBSITE}/m/{:x}", s.map_hash)));
+    b
+}
+
+/// A watch button for each of a list's plays, numbered from `from` + 1 like the list.
+fn watch_buttons(plays: &[OnlineScore], from: usize) -> Vec<(String, String)> {
+    plays.iter().enumerate().filter(|(_, s)| s.id != 0).map(|(i, s)| (format!("▶ {}", from + i + 1), format!("{WEBSITE}/s/{}?watch=1", s.id))).collect()
+}
+
+/// Link buttons, five to a row (Discord's most), at most five rows.
+fn button_rows(buttons: &[(String, String)]) -> Value {
+    let rows: Vec<Value> = buttons
+        .chunks(5)
+        .take(5)
+        .map(|row| {
+            let parts: Vec<Value> = row.iter().map(|(label, url)| json!({ "type": 2, "style": 5, "label": label, "url": url })).collect();
+            json!({ "type": 1, "components": parts })
+        })
+        .collect();
+    json!(rows)
+}
+
+/// The mods as badges and the rate with which way it goes: "`HD` `HR` ⏩ **1.25x**".
+fn mod_badges(s: &OnlineScore) -> String {
+    let mut parts: Vec<String> = s.mods.iter().map(|m| format!("`{}`", m.replace('`', ""))).collect();
+    if (s.rate - 1.0).abs() > 1e-6 {
+        parts.push(format!("{} **{:.2}x**", if s.rate > 1.0 { "⏩" } else { "⏪" }, s.rate));
+    }
+    parts.join(" ")
+}
+
+/// A full combo, or how many misses, to see at a glance.
+fn miss_text(s: &OnlineScore) -> String {
+    match s.miss {
+        0 => "✅ **FC**".into(),
+        1 => "❌ **1** miss".into(),
+        n => format!("❌ **{n}** misses"),
     }
 }
 
@@ -825,7 +885,7 @@ mod tests {
     fn says(a: &Answer) -> String {
         match a {
             Answer::Text(t) => t.clone(),
-            Answer::Embed(e) => e.to_string(),
+            Answer::Embed(e, buttons) => format!("{e} {buttons:?}"),
         }
     }
 
@@ -839,7 +899,8 @@ mod tests {
         // Their latest play, with its place, and the map it shows.
         let (a, shows) = answer(&b, ">rs", "1", None);
         let e = says(&a);
-        assert!(e.contains("A - T [Oni]") && e.contains("321pp") && e.contains("+HR") && e.contains("#1** on the map") && e.contains("Try #1"), "{e}");
+        assert!(e.contains("A - T [Oni]") && e.contains("321pp") && e.contains("`HR`") && e.contains("✅ **FC**") && e.contains("#1** on the map") && e.contains("Try #1"), "{e}");
+        assert!(e.contains("/s/1/card.png") && e.contains("/s/1?watch=1") && e.contains("/m/7"), "{e}");
         assert_eq!(shows, Some(7));
         assert_eq!(says(&answer(&b, ">rs2", "1", None).0), "`Ryuji` has only 1 recent plays.");
         assert_eq!(says(&answer(&b, ">rs lynerrr", "1", None).0), "`Lynerrr` hasn't sent a play yet.");

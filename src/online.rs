@@ -46,6 +46,8 @@ pub enum Request {
     Profile { name: String },
     /// The presses of an online score, by its `OnlineScore::id` (`Reply::Replay`).
     Replay { id: u64 },
+    /// One online score, by its `OnlineScore::id` (`Reply::Score`): what a score link opens.
+    Score { id: u64 },
 }
 
 /// A play sent to the server: what the leaderboards show, and the replay's presses (kept so
@@ -320,6 +322,7 @@ pub enum Reply {
     Scores(Vec<OnlineScore>),
     Profile(Box<Profile>),
     Replay(Box<OnlineReplay>),
+    Score(Box<OnlineScore>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

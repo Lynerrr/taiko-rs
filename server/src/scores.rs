@@ -162,6 +162,11 @@ impl Scores {
         serde_json::from_slice(&std::fs::read(dir.join(format!("{id}.json"))).ok()?).ok()
     }
 
+    /// Score `id`.
+    pub fn score(&self, id: u64) -> Option<OnlineScore> {
+        self.all.iter().find(|s| s.id == id).map(|s| s.score.clone())
+    }
+
     /// `player`'s plays (by their key), newest first.
     pub fn plays_of(&self, player: &str) -> Vec<OnlineScore> {
         self.all.iter().rev().filter(|s| s.player == player).map(|s| s.score.clone()).collect()
