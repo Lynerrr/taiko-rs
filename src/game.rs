@@ -507,8 +507,6 @@ fn bar_at(bars: &[beatmap::Barline], t: f64, fallback: f64) -> Option<(usize, f6
 
 /// Radar's beam.
 const RADAR_COL: u32 = 0x5ef0a0;
-/// Radar: how lit a note is once the beam is a whole sweep past it.
-const RADAR_DIM: f32 = 0.13;
 /// Radar: notes this close to the drum are always fully lit.
 const RADAR_NEAR: f32 = 100.0;
 
@@ -518,21 +516,23 @@ fn radar_sweep(beat_phase: f32, kiai: bool) -> f32 {
     if kiai { (2.0 * beat_phase).fract() } else { beat_phase }
 }
 
-/// Radar: how many sweeps ago the beam passed a note `s` along a lane `len` long that comes `u`
-/// closer every sweep, the beam at `sweep`. None if the note wasn't on screen yet back then.
+/// Radar: how far a note `s` along a lane `len` long that comes `u` closer every sweep is from
+/// the beam's last pass (0) to its next (1), the beam at `sweep`. None if the note wasn't on
+/// screen yet when the beam last went by.
 fn radar_age(s: f32, u: f32, len: f32, sweep: f32) -> Option<f32> {
     let b = sweep * len;
-    // The beam and the note close in on each other at `len + u` a sweep.
+    // How far the beam has gone since; the note came closer meanwhile, as the beam and the note
+    // close in on each other at `len + u` a sweep.
     let back = if s <= b { b - s } else { b + len - s };
-    let age = back / (len + u.max(0.0));
-    (s + u.max(0.0) * age <= len).then_some(age)
+    let u = u.max(0.0);
+    (s + u * back / (len + u) <= len).then_some(back / len)
 }
 
-/// Radar: how lit that note is: fully as the beam passes, fading to `RADAR_DIM` by the next one;
-/// always fully by the drum.
+/// Radar: how lit that note is: fully as the beam passes, gone by the next one (and unseen till
+/// it first passes them); always fully by the drum.
 fn radar_light(s: f32, u: f32, len: f32, sweep: f32) -> f32 {
     let near = smooth((RADAR_NEAR + 50.0) as f64, RADAR_NEAR as f64, s as f64) as f32;
-    let lit = radar_age(s, u, len, sweep).map_or(RADAR_DIM, |a| RADAR_DIM + (1.0 - RADAR_DIM) * (1.0 - a).max(0.0).powf(1.5));
+    let lit = radar_age(s, u, len, sweep).map_or(0.0, |a| (1.0 - a).max(0.0).powf(1.5));
     lit.max(near)
 }
 
@@ -3980,15 +3980,15 @@ mod tests {
         assert_eq!(radar_sweep(0.25, false), 0.25);
         assert_eq!(radar_sweep(0.75, true), 0.5);
         let (len, u) = (600.0, 100.0);
-        // A note 300 along lights up as the beam gets there and has faded by the next one.
+        // A note 300 along lights up as the beam gets there and is gone by the next one.
         assert!(radar_light(300.0, u, len, 0.5) > 0.99);
         assert!(radar_light(300.0, u, len, 0.75) > radar_light(300.0, u, len, 0.95));
-        assert!(radar_light(300.0, u, len, 0.49) < 0.2);
+        assert!(radar_light(300.0, u, len, 0.499) < 1e-3);
         // By the drum it's always lit.
         assert_eq!(radar_light(50.0, u, len, 0.9), 1.0);
         // One that came on screen after the beam went by stays dark till the next one.
         assert_eq!(radar_age(590.0, u, len, 0.3), None);
-        assert_eq!(radar_light(590.0, u, len, 0.3), RADAR_DIM);
+        assert_eq!(radar_light(590.0, u, len, 0.3), 0.0);
         // Hidden decides when far notes show too: picking it switches Radar off.
         assert!(!Mods::parse("RA,HD").has(Mod::Radar));
     }
