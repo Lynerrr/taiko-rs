@@ -2989,9 +2989,12 @@ impl Game {
                     Judge::Ok => Sprite::JudgeOk,
                     Judge::Miss => Sprite::JudgeMiss,
                 };
-                // The skin's sits in the hit target, popping a little as it shows.
+                // The skin's sits in the hit target, popping a little as it shows. At its own size
+                // next to the notes as osu! draws it: lazer fits the 128 px hitcircle into a 95
+                // unit note but draws judgements pixel for pixel, so they're 128/95 of ours.
                 if let Some([_, sh]) = c.sprite_size(sprite) {
-                    let h = 2.0 * NOTE_R * sh * (1.0 + 0.12 * (1.0 - age / 90.0).max(0.0));
+                    const JUDGE_SCALE: f32 = 128.0 / 95.0;
+                    let h = 2.0 * NOTE_R * sh * JUDGE_SCALE * (1.0 + 0.12 * (1.0 - age / 90.0).max(0.0));
                     upright.push((HIT_X, LANE_Y - h / 2.0 - age * 0.02, h, rgba(WHITE, a), Upright::Image(sprite)));
                 } else {
                     texts.push((HIT_X, lane_top - 30.0 - age * 0.02, 15.0, rgba(j.color(), a), j.label().to_string()));
