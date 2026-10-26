@@ -788,6 +788,7 @@ fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
     // The open one closes too, with the selection in it, and opens again.
     s.select.click_section(0);
     assert!(s.select.open_sections().is_empty());
+    check_draw("sections closed", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None));
     s.select.click_section(0);
     assert_eq!(s.select.open_sections(), vec![0]);
     // The wheel and right-click scrolling stay in the open heading, however far they go.
