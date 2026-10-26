@@ -184,6 +184,9 @@ struct StrongPending {
 }
 
 pub struct Game {
+    /// Random's colouring of the notes: a new one each play, kept with the replay so it plays
+    /// back the same; 0 is the one per map from before seeds.
+    pub seed: u64,
     pub map: Beatmap,
     clock: GameClock,
     state: Vec<NoteState>,
@@ -1111,14 +1114,14 @@ pub fn speed_for(map: &Beatmap, mods: Mods, rate: f64) -> Speed {
         return Speed::constant(rate);
     }
     let mut map = map.clone();
-    apply_to_map(&mut map, mods);
+    apply_to_map(&mut map, mods, 0);
     let first = map.notes.first().map(|n| n.time).unwrap_or(0.0);
     let end = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
     Speed::for_play(mods, rate.clamp(0.25, 4.0), first, end)
 }
 
 /// Changes the notes themselves for the mods that do (before anything is judged).
-fn apply_to_map(map: &mut Beatmap, mods: Mods) {
+fn apply_to_map(map: &mut Beatmap, mods: Mods, seed: u64) {
     let hit = |n: &beatmap::Note| matches!(n.kind, Kind::Don | Kind::Kat);
     if mods.has(Mod::Half) {
         let mut k = 0;
@@ -1135,7 +1138,9 @@ fn apply_to_map(map: &mut Beatmap, mods: Mods) {
             n.kind = if n.kind == Kind::Don { Kind::Kat } else { Kind::Don };
         }
         if mods.has(Mod::Random) {
-            n.kind = if hash01(n.time + 0.5) < 0.5 { Kind::Don } else { Kind::Kat };
+            // Seed 0: the colouring every play of the map had before seeds (old replays).
+            let salt = if seed == 0 { 0.0 } else { ((seed % 1_000_003) as f64 + 1.0) * 1.618 };
+            n.kind = if hash01(n.time + 0.5 + salt) < 0.5 { Kind::Don } else { Kind::Kat };
         }
         if mods.has(Mod::NoFinishers) {
             n.big = false;
@@ -1153,8 +1158,13 @@ impl Game {
     }
 
     /// A play with `mods` (the track is already at their speed, see `audio::change_speed`).
-    pub fn with_mods(mut map: Beatmap, track: Arc<Track>, audio: Option<&Engine>, mods: Mods) -> Game {
-        apply_to_map(&mut map, mods);
+    pub fn with_mods(map: Beatmap, track: Arc<Track>, audio: Option<&Engine>, mods: Mods) -> Game {
+        Game::with_seed(map, track, audio, mods, 0)
+    }
+
+    /// The same, with Random colouring the notes by `seed` (see `Game::seed`).
+    pub fn with_seed(mut map: Beatmap, track: Arc<Track>, audio: Option<&Engine>, mods: Mods, seed: u64) -> Game {
+        apply_to_map(&mut map, mods, seed);
         let first_note = map.notes.first().map(|n| n.time).unwrap_or(0.0);
         let end_time = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
         let start = (first_note - 2000.0).min(0.0).min(-map.meta.audio_lead_in);
@@ -1220,6 +1230,7 @@ impl Game {
         let shapeshift = shapeshift::get();
         let shape_order = shape_order(&map, mods, shapeshift);
         Game {
+            seed,
             windows: Windows::new(mods.od(map.meta.od)),
             map,
             clock: GameClock::new(track_start, audio.is_some()),
@@ -3631,6 +3642,24 @@ mod tests {
     fn modded(mods: &str) -> Game {
         let map = beatmap::calibration_map(500.0, 0, 64);
         Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse(mods))
+    }
+
+    #[test]
+    fn random_colours_each_play_its_own_way_and_replays_the_same() {
+        let colours = |seed: u64| {
+            let g = Game::with_seed(beatmap::calibration_map(500.0, 0, 64), Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse("RD"), seed);
+            g.map.notes.iter().map(|n| n.kind == Kind::Don).collect::<Vec<_>>()
+        };
+        // Seed 0 is how every play of a map looked before seeds (replays from then).
+        let before: Vec<bool> = modded("RD").map.notes.iter().map(|n| hash01(n.time + 0.5) < 0.5).collect();
+        assert_eq!(colours(0), before);
+        assert_eq!(colours(12345), colours(12345));
+        let plays: Vec<_> = [1u64, 2, 777, 1 << 40].into_iter().map(colours).collect();
+        for (i, a) in plays.iter().enumerate() {
+            assert!(plays[i + 1..].iter().all(|b| b != a), "seeds give different colourings");
+            let dons = a.iter().filter(|&&d| d).count();
+            assert!((16..=48).contains(&dons), "about half dons: {dons} of 64");
+        }
     }
 
     /// Hits every note `err` ms off (centre key, so dons), then lets the map end.

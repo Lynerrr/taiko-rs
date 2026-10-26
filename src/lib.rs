@@ -793,6 +793,7 @@ fn fetch_replay(server: &str, score: &online::OnlineScore, map_path: &std::path:
         miss: score.miss,
         ur: 0.0,
         inputs: got.inputs,
+        seed: got.map.seed.unwrap_or(0),
     };
     let file = scores::save_online(score.id, &replay)?;
     Ok((file, replay))
@@ -967,6 +968,7 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         mods: mods.list(),
         multiverse,
         shapeshift,
+        seed: None,
         hash: e.hash(),
         artist: e.meta.artist.clone(),
         title: e.meta.title.clone(),
@@ -975,6 +977,17 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         from: None,
         set_id: e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)),
     }
+}
+
+/// A new seed for Random's colouring (never 0, the one from before seeds).
+fn fresh_seed() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64).max(1)
+}
+
+/// The Random colouring a lobby map plays with: the one it has while Random stays on, a new
+/// one when it's switched on (everyone in the match gets the same).
+fn lobby_seed(mods: Mods, had: Option<u64>) -> Option<u64> {
+    mods.has(mods::Mod::Random).then(|| had.unwrap_or_else(fresh_seed))
 }
 
 /// Our settings of the mods in `mods` that have them (Multiverse's universes, Shapeshift's
@@ -4293,7 +4306,8 @@ impl State {
             self.scene = Scene::Lobby;
             return;
         }
-        let info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
+        let mut info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
+        info.seed = lobby_seed(self.cfg.mods, None);
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
@@ -4365,6 +4379,7 @@ impl State {
                             m.rate = rate;
                             m.mods = mods.list();
                             (m.multiverse, m.shapeshift) = mod_settings(mods);
+                            m.seed = lobby_seed(mods, m.seed);
                             s.client.send(net::ClientMsg::SelectMap(m));
                         }
                         let text = format!("match rate {rate:.2}x");
@@ -4956,6 +4971,7 @@ impl State {
                     m.rate = rate;
                     m.mods = mods.list();
                     (m.multiverse, m.shapeshift) = mod_settings(mods);
+                    m.seed = lobby_seed(mods, m.seed);
                     if Some(&m) != s.map.as_ref() {
                         s.client.send(net::ClientMsg::SelectMap(m));
                     }
@@ -5767,7 +5783,7 @@ impl State {
             }
             game.log_inputs = true;
             let Some(e) = self.library.get(*entry) else { return };
-            conn.send(online::Up::PlayStart(online::SoloPlay { map: map_info(e, game.rate, game.mods), anti_mash: true }));
+            conn.send(online::Up::PlayStart(online::SoloPlay { map: net::MapInfo { seed: (game.seed != 0).then_some(game.seed), ..map_info(e, game.rate, game.mods) }, anti_mash: true }));
             self.stream = Some((id, 0, Instant::now() - Duration::from_secs(1)));
         }
         let Some((_, sent, last)) = self.stream.as_mut() else { return };
@@ -5809,7 +5825,8 @@ impl State {
                     v.rx = None;
                     let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
                     let mods = v.play.as_ref().map(|p| Mods::from_list(&p.map.mods)).unwrap_or_default();
-                    let mut g = Game::with_mods(map, track, self.audio.as_ref(), mods);
+                    let seed = v.play.as_ref().and_then(|p| p.map.seed).unwrap_or(0);
+                    let mut g = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
                     g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods, 1.0));
                     if let Some(p) = &v.play {
                         use_mod_settings(&mut g, &p.map);
@@ -6805,7 +6822,13 @@ impl State {
                 match rx.try_recv() {
                     Ok(Ok((map, track))) => {
                         let mods = std::mem::take(&mut self.pending_mods);
-                        let mut game = Game::with_mods(map, track, self.audio.as_ref(), mods);
+                        // Random: the replay's colouring, else a new one each play.
+                        let seed = match &self.pending_replay {
+                            Some(r) => r.seed,
+                            None if mods.has(mods::Mod::Random) => fresh_seed(),
+                            None => 0,
+                        };
+                        let mut game = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
                         game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods, self.cfg.scroll_speed);
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
@@ -6936,6 +6959,7 @@ impl State {
                             miss: st.miss,
                             ur: st.unstable_rate(),
                             inputs: std::mem::take(&mut game.inputs),
+                            seed: game.seed,
                         };
                         let pp = pp::play_pp(&e.path, &replay.pp_play());
                         results.pp = pp.filter(|_| results.no_pp.is_none());
@@ -6957,6 +6981,7 @@ impl State {
                                     mods: replay.mods.clone(),
                                     multiverse: None,
                                     shapeshift: None,
+                                    seed: (replay.seed != 0).then_some(replay.seed),
                                 },
                                 score: replay.score,
                                 accuracy: replay.accuracy,
@@ -7088,7 +7113,8 @@ impl State {
                 }
                 if start.is_some_and(|at| now >= at) {
                     if let Some((map, track)) = loaded.take() {
-                        let mut game = Game::with_mods(map, track, self.audio.as_ref(), self.pending_mods);
+                        let seed = self.mp.as_ref().and_then(|s| s.map.as_ref()).and_then(|m| m.seed).unwrap_or(0);
+                        let mut game = Game::with_seed(map, track, self.audio.as_ref(), self.pending_mods, seed);
                         if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
                             game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, self.cfg.scroll_speed);
                         }
@@ -7178,7 +7204,7 @@ impl State {
                         let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
                         audio.play(track.clone(), first_ms + behind);
                         for (k, (id, name)) in v.players.iter().enumerate() {
-                            let mut g = Game::with_mods(map.clone(), track.clone(), None, v.mods);
+                            let mut g = Game::with_seed(map.clone(), track.clone(), None, v.mods, v.map.seed.unwrap_or(0));
                             use_mod_settings(&mut g, &v.map);
                             if let Some(t) = v.from {
                                 g.skip_to(t);
