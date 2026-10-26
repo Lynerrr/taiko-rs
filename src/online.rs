@@ -32,8 +32,14 @@ pub enum Request {
     WhoAmI { token: String },
     Logout { token: String },
     ListRooms,
-    /// Opens a lobby on the server and joins it as its host.
-    CreateRoom { token: String, title: String },
+    /// Opens a lobby on the server and joins it as its host; `mapguessr`: one that plays
+    /// mapguessr.
+    CreateRoom {
+        token: String,
+        title: String,
+        #[serde(default)]
+        mapguessr: bool,
+    },
     JoinRoom { token: String, room: u32 },
     /// The social connection (friends, chat, watching): after `Reply::Account` the connection
     /// stays open, the game sending `Up` lines and the server `Down` lines.
@@ -333,6 +339,8 @@ pub struct RoomInfo {
     pub players: u32,
     pub map: Option<String>,
     pub in_match: bool,
+    #[serde(default)]
+    pub mapguessr: bool,
 }
 
 pub const NAME_RULES: &str = "3-16 letters, digits, _ or -";
@@ -352,10 +360,17 @@ pub fn clean_text(text: &str, max: usize) -> String {
 
 /// A lobby title, at most 32 characters.
 #[allow(dead_code)] // used by the online server (server/)
-pub fn clean_title(title: &str, owner: &str) -> String {
+/// `mapguessr`: the default title says it's a mapguessr lobby.
+pub fn clean_title(title: &str, owner: &str, mapguessr: bool) -> String {
     let t = clean_text(title, 32);
     let t = t.trim();
-    if t.is_empty() { format!("{owner}'s lobby") } else { t.to_string() }
+    if !t.is_empty() {
+        t.to_string()
+    } else if mapguessr {
+        format!("{owner}'s mapguessr")
+    } else {
+        format!("{owner}'s lobby")
+    }
 }
 
 /// One line of JSON (without the newline), at most `MAX_LINE` bytes.
@@ -557,8 +572,9 @@ mod tests {
         assert!(valid_name("Lynerrr") && valid_name("den4ik_228") && valid_name("a-b"));
         assert!(!valid_name("ab") && !valid_name("has space") && !valid_name("x".repeat(17).as_str()) && !valid_name("ünï"));
         assert!(valid_password("hunter2") && !valid_password("short"));
-        assert_eq!(clean_title("  ", "Lynerrr"), "Lynerrr's lobby");
-        assert_eq!(clean_title("taiko\u{7}  night", "x"), "taiko  night");
+        assert_eq!(clean_title("  ", "Lynerrr", false), "Lynerrr's lobby");
+        assert_eq!(clean_title("", "Lynerrr", true), "Lynerrr's mapguessr");
+        assert_eq!(clean_title("taiko\u{7}  night", "x", true), "taiko  night");
     }
 
     #[test]

@@ -100,13 +100,14 @@ fn check_draw(what: &str, out: &mut Vec<String>, mut draw: impl FnMut(&mut Canva
 
 const LONG_NAME: &str = "FriendWithAVeryLongName";
 
-/// A room hosted on this machine, filled with long names (its lobby, match and result screens).
-fn session() -> multiplayer::Session {
+/// A room hosted on this machine (`mapguessr`: playing mapguessr), filled with long names (its
+/// lobby, match and result screens).
+fn session(mapguessr: bool) -> multiplayer::Session {
     // Another test can take the free port found here before the room listens on it: try again.
     let mut s = (0..10)
         .find_map(|_| {
             let port = std::net::TcpListener::bind("127.0.0.1:0").ok()?.local_addr().ok()?.port();
-            multiplayer::start_host(port, LONG_NAME.into()).recv_timeout(Duration::from_secs(5)).ok()?.ok()
+            multiplayer::start_host(port, LONG_NAME.into(), mapguessr).recv_timeout(Duration::from_secs(5)).ok()?.ok()
         })
         .expect("host a room on this machine");
     let e = entry(0, 0, true);
@@ -133,6 +134,10 @@ fn session() -> multiplayer::Session {
             live: live.clone(),
             result: Some(result.clone()),
             spectator: i == 7,
+            points: 12_345 * i,
+            guessed: i % 2 == 0,
+            tries: (i % 4) as u8,
+            maps: (i != 3).then_some(123_456),
         })
         .collect();
     s.results = Some(s.players.clone());
@@ -529,12 +534,43 @@ fn assert_every_screen_fits() {
     s.library = library;
     s.select = Select::new(&s.library);
 
-    let room = session();
+    let room = session(false);
     let player = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
     check_draw("lobby", &mut out, |c| multiplayer::draw_lobby(c, &room, false, Some("downloading the map: 45% of 12.3 MB".into())));
     check_draw("match waiting", &mut out, |c| multiplayer::draw_waiting(c, &room, None, false, Instant::now()));
     check_draw("match scoreboard", &mut out, |c| multiplayer::draw_scoreboard(c, &room, &player));
     check_draw("match results", &mut out, |c| multiplayer::draw_results(c, &room));
+
+    // Mapguessr: the lobby (after a game, so with points), a round, its answer, and picking a
+    // guess in song select.
+    let guessr_room = || {
+        let mut room = session(true);
+        room.mapguessr = true;
+        room.common = Some(123_456);
+        room
+    };
+    let mut room = guessr_room();
+    let mut g = mapguessr::Guessr::new(&[]);
+    g.rounds = 50;
+    g.test_round(None);
+    check_draw("mapguessr lobby", &mut out, |c| mapguessr::draw_lobby(c, &room, &mut g, 1.0, Instant::now()));
+    room.in_match = true;
+    g.test_round(Some(beatmap::calibration_map(250.0, 0, 600)));
+    g.tries = 2;
+    g.last_guess = Some(format!("{LONG_NAME} - a song with a very long title (TV Size) [Extra Oni]"));
+    // A few seconds in, so the notes are on the lane.
+    for k in 0..4 {
+        g.tick(&room, Instant::now() + Duration::from_secs(k));
+    }
+    check_draw("mapguessr round", &mut out, |c| mapguessr::draw_lobby(c, &room, &mut g, 1.0, Instant::now()));
+    g.reveal = Some(mapguessr::Reveal { label: format!("{LONG_NAME} - a song with a very long title (TV Size) [Extra Oni]"), got: vec![(0, 199), (2, 150)], last: true });
+    check_draw("mapguessr answer", &mut out, |c| mapguessr::draw_lobby(c, &room, &mut g, 1.0, Instant::now()));
+    g.reveal = None;
+    s.mp = Some(guessr_room());
+    s.guessr = Some(g);
+    s.picking_lobby_map = true;
+    s.scene = Scene::Select;
+    check(&mut s, "mapguessr picking", &mut out);
 
     for p in &out {
         eprintln!("{p}");

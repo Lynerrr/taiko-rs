@@ -29,6 +29,7 @@ mod settings_tests;
 mod library;
 mod link;
 mod logo;
+mod mapguessr;
 mod mapinfo;
 mod hud;
 mod keys;
@@ -385,8 +386,11 @@ struct State {
     mp_connecting: Option<multiplayer::Connecting>,
     mp_menu: multiplayer::Menu,
     mp_status: String,
-    /// Song select is being used by the host to pick the lobby map.
+    /// Song select is being used by the host to pick the lobby map (in mapguessr, by anyone to
+    /// pick their guess).
     picking_lobby_map: bool,
+    /// Our side of a mapguessr room, while in one.
+    guessr: Option<mapguessr::Guessr>,
     /// Discord status: the connection thread (while enabled), the activity last set, and when
     /// it was last worked out.
     discord: Option<discord::Presence>,
@@ -4193,6 +4197,15 @@ impl State {
 
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
+        if let (Some(s), Some(g)) = (self.mp.as_ref().filter(|s| s.mapguessr), &mut self.guessr) {
+            let e = &self.library[entry];
+            if g.can_guess(s) {
+                s.client.send(net::ClientMsg::Guess { hash: e.hash(), song: mapguessr::entry_song(e) });
+                g.last_guess = Some(format!("{} - {}", e.meta.artist, e.meta.title));
+            }
+            self.scene = Scene::Lobby;
+            return;
+        }
         let info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
@@ -4239,6 +4252,10 @@ impl State {
                     self.scene = Scene::MpMenu;
                     return;
                 };
+                if s.mapguessr {
+                    self.guessr_key(code);
+                    return;
+                }
                 match code {
                     KeyCode::Space | KeyCode::KeyR if s.me().is_some_and(|p| p.spectator) => {
                         self.toast("you're spectating: S to play instead".into());
@@ -4355,6 +4372,46 @@ impl State {
         }
     }
 
+    /// A key in a mapguessr lobby.
+    fn guessr_key(&mut self, code: KeyCode) {
+        let (Some(s), Some(g)) = (&self.mp, &mut self.guessr) else { return };
+        let in_game = s.in_match;
+        match code {
+            KeyCode::KeyG | KeyCode::Tab | KeyCode::Space | KeyCode::Enter | KeyCode::NumpadEnter if in_game => {
+                if g.can_guess(s) {
+                    self.picking_lobby_map = true;
+                    self.scene = Scene::Select;
+                } else if s.me().is_some_and(|p| p.guessed) {
+                    self.toast("you've got this one".into());
+                }
+            }
+            KeyCode::BracketLeft | KeyCode::BracketRight if s.is_host() && !in_game => {
+                let step = if self.modifiers_shift { 5 } else { 1 };
+                // Past either end it comes round again (the button only goes up).
+                g.rounds = match code {
+                    KeyCode::BracketRight if g.rounds >= mapguessr::MAX_ROUNDS => 1,
+                    KeyCode::BracketRight => (g.rounds + step).min(mapguessr::MAX_ROUNDS),
+                    _ if g.rounds <= 1 => mapguessr::MAX_ROUNDS,
+                    _ => g.rounds.saturating_sub(step).max(1),
+                };
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter if s.is_host() && !in_game => {
+                s.client.send(net::ClientMsg::StartGuessr { rounds: g.rounds });
+            }
+            KeyCode::KeyS if !in_game => {
+                let on = !s.me().is_some_and(|p| p.spectator);
+                s.client.send(net::ClientMsg::Spectator(on));
+                self.toast(if on { "you'll watch the next game" } else { "you'll play the next game" }.into());
+            }
+            KeyCode::Tab => self.scene = Scene::Select,
+            KeyCode::Escape => {
+                let why = if s.owns_room() { "room closed" } else { "left the room" };
+                self.leave_room(why);
+            }
+            _ => {}
+        }
+    }
+
     fn mp_menu_key(&mut self, code: KeyCode, text: Option<&str>) {
         use multiplayer::Row;
         let row = self.mp_menu.row();
@@ -4417,9 +4474,10 @@ impl State {
                         self.mp_menu.account_call(&server, online::Request::Logout { token });
                         self.sign_out("logged out");
                     }
-                    Row::HostOnline => {
-                        self.mp_status = "opening a lobby on the server...".into();
-                        let request = online::Request::CreateRoom { token, title: String::new() };
+                    Row::HostOnline | Row::HostGuessr => {
+                        let mapguessr = row == Row::HostGuessr;
+                        self.mp_status = if mapguessr { "opening a mapguessr lobby..." } else { "opening a lobby on the server..." }.into();
+                        let request = online::Request::CreateRoom { token, title: String::new(), mapguessr };
                         self.mp_connecting = Some(multiplayer::start_online(server, request, account));
                     }
                     Row::Lobby(k) => {
@@ -4430,7 +4488,7 @@ impl State {
                     }
                     Row::HostDirect => {
                         self.mp_status = format!("opening room on port {}...", self.cfg.mp_port);
-                        self.mp_connecting = Some(multiplayer::start_host(self.cfg.mp_port, name));
+                        self.mp_connecting = Some(multiplayer::start_host(self.cfg.mp_port, name, false));
                     }
                     Row::JoinDirect if self.cfg.mp_address.trim().is_empty() => self.mp_status = "type the host's address first".into(),
                     Row::JoinDirect => {
@@ -5615,20 +5673,40 @@ impl State {
                 Err(mpsc::TryRecvError::Disconnected) => self.mp_connecting = None,
             }
         }
+        if self.mp.is_none() {
+            self.guessr = None;
+        }
         let Some(s) = &mut self.mp else { return };
         for msg in s.client.poll() {
             self.handle_server_msg(msg);
+        }
+        if let (Some(s), Some(g)) = (&self.mp, &mut self.guessr) {
+            g.tick(s, Instant::now());
         }
     }
 
     fn handle_server_msg(&mut self, msg: net::ServerMsg) {
         use net::ServerMsg;
         match msg {
-            ServerMsg::Room { players, map, in_match } => {
+            ServerMsg::Room { players, map, in_match, mapguessr, common } => {
                 let library = &self.library;
                 let Some(s) = &mut self.mp else { return };
+                let game_over = s.in_match && !in_match;
                 s.players = players;
                 s.in_match = in_match;
+                s.mapguessr = mapguessr;
+                s.common = common;
+                if mapguessr {
+                    let g = self.guessr.get_or_insert_with(|| mapguessr::Guessr::new(library));
+                    if game_over {
+                        g.game_over();
+                        if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
+                            self.picking_lobby_map = false;
+                            self.scene = Scene::Lobby;
+                        }
+                    }
+                    return;
+                }
                 let hash = map.as_ref().map(|m| m.hash);
                 if hash != s.reported_map {
                     s.reported_map = hash;
@@ -5742,8 +5820,32 @@ impl State {
                     self.scene = Scene::MpMenu;
                 }
             }
+            ServerMsg::GuessRound { round, rounds, hash, from, seconds } => {
+                if let Some(g) = &mut self.guessr {
+                    g.start_round(round, rounds, hash, from, seconds);
+                }
+            }
+            ServerMsg::GuessWrong { tries } => {
+                if let Some(g) = &mut self.guessr {
+                    g.tries = tries;
+                }
+                self.toast(if tries == 0 { "wrong, and that was your last guess".into() } else { format!("wrong! {tries} left") });
+            }
+            ServerMsg::GuessReveal { hash, got, last } => {
+                if let Some(g) = &mut self.guessr {
+                    g.reveal(&self.library, hash, got, last);
+                }
+                // Picking a guess: back to the lobby to see the answer.
+                if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
+                    self.picking_lobby_map = false;
+                    self.scene = Scene::Lobby;
+                }
+            }
             ServerMsg::Chat { from, text } => {
                 let text = if self.cfg.chat_filter { net::censor(&text) } else { text };
+                if from == net::GUESSR_NAME {
+                    self.toast(text.clone());
+                }
                 if let Some(s) = &mut self.mp {
                     s.chat.push((from, text));
                     if s.chat.len() > 200 {
@@ -6420,7 +6522,10 @@ impl State {
                     let dragging = matches!(self.split_drag, Some((render::Hit::SplitList, ..)));
                     draw_divider(canvas, [24.0 + lw + 2.0, 54.0, 8.0, 382.0], true, dragging, render::Hit::SplitList);
                 }
-                if self.picking_lobby_map {
+                let guessing = self.mp.as_ref().is_some_and(|s| s.mapguessr);
+                if let Some(g) = self.guessr.as_mut().filter(|_| self.picking_lobby_map && guessing) {
+                    mapguessr::draw_picking(canvas, g, self.cfg.scroll_speed, Instant::now());
+                } else if self.picking_lobby_map {
                     let w = canvas.width;
                     canvas.round_rect(24.0, 438.0, w - 48.0, 34.0, 8.0, rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0), rgba(accent(), 1.0), 1.5);
                     canvas.text_centered(w / 2.0, 450.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, w - 64.0, "Picking the lobby map: Enter to choose, Esc to cancel"));
@@ -6678,6 +6783,11 @@ impl State {
                 multiplayer::draw_menu(canvas, &self.mp_menu, &self.cfg.mp_name, self.cfg.mp_port, &self.cfg.mp_address, &self.cfg.online_server, &self.mp_status, self.mp_connecting.is_some());
             }
             Scene::Lobby => match &self.mp {
+                Some(s) if s.mapguessr => {
+                    if let Some(g) = &mut self.guessr {
+                        mapguessr::draw_lobby(canvas, s, g, self.cfg.scroll_speed, Instant::now());
+                    }
+                }
                 Some(s) => {
                     multiplayer::draw_lobby(canvas, s, s.have_map, lobby_download);
                 }
@@ -8465,6 +8575,7 @@ impl State {
             mp_menu: multiplayer::Menu::default(),
             mp_status: String::new(),
             picking_lobby_map: false,
+            guessr: None,
             discord: None,
             map_offsets: config::load_map_offsets(),
             play_offset: 0.0,

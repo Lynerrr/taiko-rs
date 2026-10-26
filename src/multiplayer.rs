@@ -32,6 +32,9 @@ pub struct Session {
     pub chat_unread: usize,
     /// The lobby's id on the online server (friends can join it from their list).
     pub online_room: Option<u32>,
+    /// The room plays mapguessr; how many maps every player has (None: a list is missing).
+    pub mapguessr: bool,
+    pub common: Option<u32>,
 }
 
 impl Session {
@@ -53,6 +56,8 @@ impl Session {
             chat: Vec::new(),
             chat_unread: 0,
             online_room: None,
+            mapguessr: false,
+            common: None,
         }
     }
 
@@ -74,12 +79,13 @@ impl Session {
 
 pub type Connecting = Receiver<Result<Session, String>>;
 
-/// Opens a room and joins it ourselves, on a background thread so the UI never stalls.
-pub fn start_host(port: u16, name: String) -> Connecting {
+/// Opens a room (`mapguessr`: one playing mapguessr) and joins it ourselves, on a background
+/// thread so the UI never stalls.
+pub fn start_host(port: u16, name: String, mapguessr: bool) -> Connecting {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let result = (|| {
-            let server = net::host(port)?;
+            let server = net::host(port, mapguessr)?;
             let token = Some(server.token);
             let client = Client::connect(&format!("127.0.0.1:{port}"), &name, token)
                 .or_else(|_| Client::connect(&format!("[::1]:{port}"), &name, token))?;
@@ -130,6 +136,7 @@ pub enum Row {
     LogIn,
     Register,
     HostOnline,
+    HostGuessr,
     Lobby(usize),
     LogOut,
     Name,
@@ -165,13 +172,14 @@ pub struct Menu {
 }
 
 /// Lobbies shown at once (the list scrolls with the cursor).
-const LOBBY_ROWS: usize = 6;
+const LOBBY_ROWS: usize = 5;
 
 impl Menu {
     pub fn rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
         if self.account.is_some() {
             rows.push(Row::HostOnline);
+            rows.push(Row::HostGuessr);
             rows.extend((0..self.rooms.len()).map(Row::Lobby));
             rows.push(Row::LogOut);
         } else {
@@ -318,6 +326,10 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                 c.text(left, y - 2.0, 8.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(8.0, col, &format!("logged in as {who}")));
                 y += 12.0;
                 row(c, i, left, y, 30.0, "HOST AN ONLINE LOBBY", None);
+                y += 36.0;
+            }
+            Row::HostGuessr => {
+                row(c, i, left, y, 30.0, "HOST A MAPGUESSR LOBBY", None);
                 y += 42.0;
                 c.text(left, y, 8.0, rgba(accent(), 1.0), &format!("LOBBIES ({})", menu.rooms.len()));
                 y += 14.0;
@@ -346,6 +358,9 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                 let players = format!("{} player{}", r.players, if r.players == 1 { "" } else { "s" });
                 c.text_right(left + col - 12.0, y + 6.0, 8.0, rgba(if r.in_match { 0x438EAD } else { 0x86E05A }, 1.0), state);
                 let mut info = format!("host {}   {players}", r.host);
+                if r.mapguessr {
+                    info = format!("MAPGUESSR   {info}");
+                }
                 if let Some(m) = &r.map {
                     info.push_str("   ");
                     info.push_str(m);

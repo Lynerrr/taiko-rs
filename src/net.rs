@@ -24,6 +24,16 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const MATCH_BROADCAST: Duration = Duration::from_millis(100);
 /// Longest accepted message; anything bigger drops the connection.
 const MAX_LINE: u64 = 256 * 1024;
+/// Mapguessr: how long a round lasts, how long its answer shows before the next, and guesses
+/// per round.
+pub const GUESS_ROUND: Duration = Duration::from_secs(45);
+const GUESS_REVEAL: Duration = if cfg!(test) { Duration::from_millis(200) } else { Duration::from_secs(6) };
+pub const GUESS_TRIES: u8 = 3;
+/// Mapguessr: map list entries per `Library` message (well under `MAX_LINE`), and the most kept.
+pub const LIBRARY_CHUNK: usize = 4000;
+const MAX_LIBRARY: usize = 200_000;
+/// Who mapguessr's notices in the lobby chat are from (not a name anyone can have).
+pub const GUESSR_NAME: &str = "[mapguessr]";
 
 /// Reads one newline-terminated message, refusing oversized ones. `Ok(None)` at end of stream.
 fn read_message(reader: &mut impl BufRead, buf: &mut String) -> std::io::Result<Option<()>> {
@@ -123,6 +133,16 @@ pub struct PlayerInfo {
     /// Watches matches instead of playing them.
     #[serde(default)]
     pub spectator: bool,
+    /// Mapguessr: points this game, whether they got this round's map, guesses left in it, and
+    /// how many maps their list has (None: not sent yet).
+    #[serde(default)]
+    pub points: u32,
+    #[serde(default)]
+    pub guessed: bool,
+    #[serde(default)]
+    pub tries: u8,
+    #[serde(default)]
+    pub maps: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -154,6 +174,13 @@ pub enum ClientMsg {
     Skipped,
     /// A line of lobby chat.
     Chat(String),
+    /// Mapguessr: part of our map list as (map hash, song key); `done` on the last part. A new
+    /// list after a done one replaces it.
+    Library { maps: Vec<(u64, u64)>, done: bool },
+    /// Mapguessr, host: start a game of this many rounds.
+    StartGuessr { rounds: u32 },
+    /// Mapguessr: it's this map (any difficulty of the song counts: `song` is its song key).
+    Guess { hash: u64, song: u64 },
 }
 
 /// A piece of a map set archive sent from the host's Songs folder. `data` is base64; the
@@ -175,7 +202,17 @@ pub enum ServerMsg {
     Welcome { id: u32 },
     Rejected(String),
     Pong { t: f64, server: f64 },
-    Room { players: Vec<PlayerInfo>, map: Option<MapInfo>, in_match: bool },
+    /// `mapguessr`: the room plays mapguessr, where `common` maps are in every player's list
+    /// (None while a list hasn't arrived).
+    Room {
+        players: Vec<PlayerInfo>,
+        map: Option<MapInfo>,
+        in_match: bool,
+        #[serde(default)]
+        mapguessr: bool,
+        #[serde(default)]
+        common: Option<u32>,
+    },
     Prepare(MapInfo),
     /// Start the song at this server time (ms).
     Start { at: f64 },
@@ -192,6 +229,14 @@ pub enum ServerMsg {
     Skipped { from: u32 },
     /// Lobby chat (also the recent lines, to someone who just joined).
     Chat { from: String, text: String },
+    /// Mapguessr: round `round` of `rounds` shows map `hash` (in every player's list) from
+    /// `from` (0-1, how far through its notes) for `seconds`.
+    GuessRound { round: u32, rounds: u32, hash: u64, from: f64, seconds: u32 },
+    /// Mapguessr: our guess was wrong; guesses left.
+    GuessWrong { tries: u8 },
+    /// Mapguessr: the round is over and it was `hash`; who got it and the points each got.
+    /// `last`: the game ends with it.
+    GuessReveal { hash: u64, got: Vec<(u32, u32)>, last: bool },
     /// Synthesised locally when the connection drops.
     Disconnected(String),
 }
@@ -348,7 +393,8 @@ fn english_swear(w: &str) -> bool {
 fn clean_name(name: &str) -> String {
     let n: String = name.chars().filter(|c| drawable_char(*c)).take(20).collect();
     let n = n.trim().to_string();
-    if n.is_empty() { "player".into() } else { n }
+    // Mapguessr's notices are from a name nobody else gets.
+    if n.is_empty() || n.eq_ignore_ascii_case(GUESSR_NAME) { "player".into() } else { n }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -376,7 +422,8 @@ enum Event {
     Left(u32),
 }
 
-pub fn host(port: u16) -> Result<Server, String> {
+/// `mapguessr`: the room plays mapguessr instead of matches.
+pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
     // Listen on IPv6 and IPv4. On Linux the `::` socket is dual-stack, so the IPv4 bind just
     // fails as "in use"; on Windows `::` is IPv6-only and both are needed, or IPv4 friends
     // would be refused.
@@ -428,7 +475,7 @@ pub fn host(port: u16) -> Result<Server, String> {
     }
     {
         let stop = stop.clone();
-        thread::Builder::new().name("mp-room".into()).spawn(move || room_loop(rx, stop, token, None)).map_err(|e| e.to_string())?;
+        thread::Builder::new().name("mp-room".into()).spawn(move || room_loop(rx, stop, token, None, mapguessr)).map_err(|e| e.to_string())?;
     }
     Ok(Server { stop, token, port })
 }
@@ -441,6 +488,11 @@ fn new_token() -> u64 {
     h.finish()
 }
 
+/// A number below `n` (which isn't 0), at random.
+fn random_below(n: usize) -> usize {
+    (new_token() % n as u64) as usize
+}
+
 /// What a lobby list shows about a room.
 #[derive(Clone, Debug, Default)]
 pub struct Summary {
@@ -448,6 +500,8 @@ pub struct Summary {
     pub host: String,
     pub map: Option<String>,
     pub in_match: bool,
+    #[allow(dead_code)] // read by the online server (server/)
+    pub mapguessr: bool,
 }
 
 /// A room run by the online server: connections are handed to it after their own handshake
@@ -469,14 +523,14 @@ impl Drop for Room {
 }
 
 #[allow(dead_code)] // used by the online server (server/)
-pub fn open_room() -> Room {
+pub fn open_room(mapguessr: bool) -> Room {
     let stop = Arc::new(AtomicBool::new(false));
     let token = new_token();
-    let summary = Arc::new(Mutex::new(Summary::default()));
+    let summary = Arc::new(Mutex::new(Summary { mapguessr, ..Summary::default() }));
     let (events, rx) = mpsc::channel();
     {
         let (stop, summary) = (stop.clone(), summary.clone());
-        thread::spawn(move || room_loop(rx, stop, token, Some(summary)));
+        thread::spawn(move || room_loop(rx, stop, token, Some(summary), mapguessr));
     }
     Room { events, stop, next_id: AtomicU32::new(1), token, summary }
 }
@@ -531,6 +585,45 @@ struct Player {
     spectating: bool,
 }
 
+/// A mapguessr game in progress.
+struct GuessGame {
+    rounds: u32,
+    round: u32,
+    /// Who plays it (everyone not spectating when it started).
+    players: Vec<u32>,
+    /// Songs already asked about.
+    used: std::collections::HashSet<u64>,
+    /// This round's map and its song key.
+    answer: (u64, u64),
+    ends: Instant,
+    /// Showing the answer until then (or about to start the first round).
+    reveal_until: Option<Instant>,
+    /// Who got this round, with the points.
+    got: Vec<(u32, u32)>,
+    last: bool,
+}
+
+/// Each player's map list: map hash -> song key, and whether all of it has arrived.
+type Libraries = std::collections::HashMap<u32, (std::collections::HashMap<u64, u64>, bool)>;
+
+/// The maps (hash, song key) in every list of `ids`, leaving out songs in `used`.
+fn common_maps(ids: &[u32], libraries: &Libraries, used: &std::collections::HashSet<u64>) -> Vec<(u64, u64)> {
+    let lists: Option<Vec<&std::collections::HashMap<u64, u64>>> = ids.iter().map(|id| libraries.get(id).map(|l| &l.0)).collect();
+    let Some(mut lists) = lists.filter(|l| !l.is_empty()) else { return Vec::new() };
+    lists.sort_by_key(|l| l.len());
+    let mut out: Vec<(u64, u64)> = lists[0].iter().filter(|(h, song)| !used.contains(*song) && lists[1..].iter().all(|l| l.contains_key(*h))).map(|(&h, &song)| (h, song)).collect();
+    // The same order every time, so a pick doesn't depend on how the lists were stored.
+    out.sort_unstable();
+    out
+}
+
+/// A lobby chat line from mapguessr itself (not kept in the chat history).
+fn notice(players: &[Player], text: String) {
+    for p in players.iter().filter(|p| p.hello) {
+        let _ = p.tx.send(ServerMsg::Chat { from: GUESSR_NAME.into(), text: text.clone() });
+    }
+}
+
 #[derive(PartialEq)]
 enum Phase {
     Lobby,
@@ -538,8 +631,9 @@ enum Phase {
     Playing,
 }
 
-/// `summary`: kept up to date for the online server's lobby list.
-fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Option<Arc<Mutex<Summary>>>) {
+/// `summary`: kept up to date for the online server's lobby list. `mapguessr`: the room plays
+/// mapguessr (see `GuessGame`) instead of matches.
+fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Option<Arc<Mutex<Summary>>>, mapguessr: bool) {
     let epoch = Instant::now();
     let now_ms = || epoch.elapsed().as_secs_f64() * 1000.0;
     let mut players: Vec<Player> = Vec::new();
@@ -559,6 +653,12 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
     // Recent lobby chat (name, line) for whoever joins, and each player's last lines (flood limit).
     let mut chat: std::collections::VecDeque<(String, String)> = std::collections::VecDeque::new();
     let mut chat_times: std::collections::HashMap<u32, std::collections::VecDeque<Instant>> = std::collections::HashMap::new();
+    // Mapguessr: everyone's map list, the game in progress, and how many maps all the players
+    // have (None while a list is missing), worked out again when `common_dirty`.
+    let mut libraries: Libraries = std::collections::HashMap::new();
+    let mut guess: Option<GuessGame> = None;
+    let mut common: Option<u32> = None;
+    let mut common_dirty = false;
 
     while !stop.load(Ordering::Relaxed) {
         match rx.recv_timeout(Duration::from_millis(50)) {
@@ -575,6 +675,10 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         live: Live::default(),
                         result: None,
                         spectator: false,
+                        points: 0,
+                        guessed: false,
+                        tries: 0,
+                        maps: None,
                     },
                     tx,
                     hello: false,
@@ -586,6 +690,8 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
             Ok(Event::Left(id)) => {
                 players.retain(|p| p.info.id != id);
                 chat_times.remove(&id);
+                libraries.remove(&id);
+                common_dirty = true;
                 // A handed-over host leaving gives it back to the room's owner (or anyone left).
                 if host_id == Some(id) {
                     host_id = owner_id.filter(|o| players.iter().any(|p| p.info.id == *o)).or_else(|| players.iter().find(|p| p.hello).map(|p| p.info.id));
@@ -682,6 +788,63 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         }
                         continue;
                     }
+                    ClientMsg::Library { maps, done } if mapguessr => {
+                        let list = libraries.entry(id).or_default();
+                        if list.1 {
+                            *list = Default::default();
+                        }
+                        let room = MAX_LIBRARY.saturating_sub(list.0.len());
+                        list.0.extend(maps.into_iter().take(room));
+                        if done {
+                            list.1 = true;
+                            let count = list.0.len() as u32;
+                            if let Some(p) = players.iter_mut().find(|p| p.info.id == id) {
+                                p.info.maps = Some(count);
+                            }
+                            common_dirty = true;
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    ClientMsg::StartGuessr { rounds } if mapguessr && is_host && guess.is_none() => {
+                        let ids: Vec<u32> = players.iter().filter(|p| p.hello && !p.info.spectator).map(|p| p.info.id).collect();
+                        let waiting: Vec<String> = players.iter().filter(|p| ids.contains(&p.info.id) && !libraries.get(&p.info.id).is_some_and(|l| l.1)).map(|p| p.info.name.clone()).collect();
+                        if !waiting.is_empty() {
+                            notice(&players, format!("waiting for the map list of {}", waiting.join(", ")));
+                        } else if ids.is_empty() {
+                            notice(&players, "nobody is playing: everyone's spectating".into());
+                        } else if common_maps(&ids, &libraries, &Default::default()).is_empty() {
+                            notice(&players, "there's no map that everyone has".into());
+                        } else {
+                            for p in players.iter_mut().filter(|p| ids.contains(&p.info.id)) {
+                                p.info.points = 0;
+                            }
+                            // The first round starts right away (see below).
+                            let now = Instant::now();
+                            guess = Some(GuessGame { rounds: rounds.clamp(1, 50), round: 0, players: ids, used: Default::default(), answer: (0, 0), ends: now, reveal_until: Some(now), got: Vec::new(), last: false });
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    ClientMsg::Guess { song, .. } => {
+                        let Some(g) = guess.as_mut().filter(|g| g.reveal_until.is_none() && g.players.contains(&id)) else { continue };
+                        let Some(p) = players.iter_mut().find(|p| p.info.id == id && !p.info.guessed && p.info.tries > 0) else { continue };
+                        if song == g.answer.1 {
+                            // 100 for getting it, up to 100 more for getting it fast.
+                            let left = g.ends.saturating_duration_since(Instant::now()).as_secs_f64() / GUESS_ROUND.as_secs_f64();
+                            let points = 100 + (100.0 * left).round() as u32;
+                            p.info.guessed = true;
+                            p.info.points += points;
+                            g.got.push((id, points));
+                            let name = p.info.name.clone();
+                            notice(&players, format!("{name} got it! (+{points})"));
+                        } else {
+                            p.info.tries -= 1;
+                            let _ = p.tx.send(ServerMsg::GuessWrong { tries: p.info.tries });
+                        }
+                        dirty = true;
+                        continue;
+                    }
                     other => other,
                 };
                 let Some(p) = players.iter_mut().find(|p| p.info.id == id) else { continue };
@@ -701,6 +864,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         }
                         p.info.name = p.forced_name.clone().unwrap_or_else(|| clean_name(&name));
                         p.hello = true;
+                        common_dirty = true;
                         let _ = p.tx.send(ServerMsg::Welcome { id });
                         for (from, text) in &chat {
                             let _ = p.tx.send(ServerMsg::Chat { from: from.clone(), text: text.clone() });
@@ -710,7 +874,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                     ClientMsg::Ping { t } => {
                         let _ = p.tx.send(ServerMsg::Pong { t, server: now_ms() });
                     }
-                    ClientMsg::SelectMap(m) if is_host && phase == Phase::Lobby => {
+                    ClientMsg::SelectMap(m) if is_host && phase == Phase::Lobby && !mapguessr => {
                         // Same map at a new rate: everyone still has it, they just re-ready.
                         let same_map = map.as_ref().is_some_and(|old| old.hash == m.hash);
                         map = Some(m);
@@ -736,9 +900,10 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         if on {
                             p.info.ready = false;
                         }
+                        common_dirty = true;
                         dirty = true;
                     }
-                    ClientMsg::StartMatch if is_host && phase == Phase::Lobby => {
+                    ClientMsg::StartMatch if is_host && phase == Phase::Lobby && !mapguessr => {
                         if let Some(m) = &map {
                             let mut any = false;
                             for p in players.iter_mut().filter(|p| p.hello && p.info.ready && p.info.has_map) {
@@ -825,12 +990,74 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
             dirty = true;
         }
 
-        let interval = if phase == Phase::Lobby { Duration::ZERO } else { MATCH_BROADCAST };
+        // Mapguessr: once the answer has shown, start the next round (or end the game); show the
+        // answer once everyone has it or is out of guesses, or the time is up.
+        if let Some(g) = &mut guess {
+            g.players.retain(|id| players.iter().any(|p| p.info.id == *id));
+            let now = Instant::now();
+            match g.reveal_until {
+                Some(until) if now >= until => {
+                    let maps = common_maps(&g.players, &libraries, &g.used);
+                    if g.last || g.players.is_empty() || maps.is_empty() {
+                        for p in &mut players {
+                            p.info.status = Status::Lobby;
+                            p.info.guessed = false;
+                            p.info.tries = 0;
+                        }
+                        guess = None;
+                    } else {
+                        let (hash, song) = maps[random_below(maps.len())];
+                        g.round += 1;
+                        g.answer = (hash, song);
+                        g.used.insert(song);
+                        g.reveal_until = None;
+                        g.got.clear();
+                        g.ends = now + GUESS_ROUND;
+                        // Somewhere between a tenth and two thirds of the way through.
+                        let from = 0.1 + random_below(1000) as f64 / 1000.0 * 0.55;
+                        let msg = ServerMsg::GuessRound { round: g.round, rounds: g.rounds, hash, from, seconds: GUESS_ROUND.as_secs() as u32 };
+                        for p in players.iter_mut().filter(|p| p.hello) {
+                            if g.players.contains(&p.info.id) {
+                                p.info.guessed = false;
+                                p.info.tries = GUESS_TRIES;
+                                p.info.status = Status::Playing;
+                            }
+                            let _ = p.tx.send(msg.clone());
+                        }
+                    }
+                    dirty = true;
+                }
+                Some(_) => {}
+                None => {
+                    let done = |id: &u32| players.iter().find(|p| p.info.id == *id).is_none_or(|p| p.info.guessed || p.info.tries == 0);
+                    if now >= g.ends || g.players.iter().all(done) {
+                        g.last = g.round >= g.rounds || common_maps(&g.players, &libraries, &g.used).is_empty();
+                        g.reveal_until = Some(now + GUESS_REVEAL);
+                        let msg = ServerMsg::GuessReveal { hash: g.answer.0, got: g.got.clone(), last: g.last };
+                        for p in players.iter().filter(|p| p.hello) {
+                            let _ = p.tx.send(msg.clone());
+                        }
+                        dirty = true;
+                    }
+                }
+            }
+        }
+        if mapguessr && std::mem::take(&mut common_dirty) {
+            let ids: Vec<u32> = players.iter().filter(|p| p.hello && !p.info.spectator).map(|p| p.info.id).collect();
+            let all_in = !ids.is_empty() && ids.iter().all(|id| libraries.get(id).is_some_and(|l| l.1));
+            common = all_in.then(|| common_maps(&ids, &libraries, &Default::default()).len() as u32);
+            dirty = true;
+        }
+
+        let in_match = phase != Phase::Lobby || guess.is_some();
+        let interval = if in_match { MATCH_BROADCAST } else { Duration::ZERO };
         if dirty && last_broadcast.elapsed() >= interval {
             let room = ServerMsg::Room {
                 players: players.iter().filter(|p| p.hello).map(|p| p.info.clone()).collect(),
                 map: map.clone(),
-                in_match: phase != Phase::Lobby,
+                in_match,
+                mapguessr,
+                common,
             };
             for p in players.iter().filter(|p| p.hello) {
                 let _ = p.tx.send(room.clone());
@@ -840,7 +1067,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                 s.players = players.iter().filter(|p| p.hello).count() as u32;
                 s.host = players.iter().find(|p| p.info.host).map(|p| p.info.name.clone()).unwrap_or_default();
                 s.map = map.as_ref().map(MapInfo::label);
-                s.in_match = phase != Phase::Lobby;
+                s.in_match = in_match;
             }
             dirty = false;
             last_broadcast = Instant::now();
@@ -1039,7 +1266,7 @@ mod tests {
 
     #[test]
     fn room_accepts_ipv4_and_ipv6() {
-        let server = host(0).unwrap();
+        let server = host(0, false).unwrap();
         let port = server.port;
         let mut v4 = Client::connect(&format!("127.0.0.1:{port}"), "v4", None).unwrap();
         wait_for(&mut v4, |m| matches!(m, ServerMsg::Welcome { .. }));
@@ -1052,7 +1279,7 @@ mod tests {
 
     #[test]
     fn oversized_message_drops_the_connection() {
-        let server = host(0).unwrap();
+        let server = host(0, false).unwrap();
         let port = server.port;
         let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
         let junk = vec![b'x'; (MAX_LINE as usize) + 10];
@@ -1065,8 +1292,50 @@ mod tests {
     }
 
     #[test]
+    fn mapguessr_game_over_localhost() {
+        let server = host(0, true).unwrap();
+        let addr = format!("127.0.0.1:{}", server.port);
+        let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
+        wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
+        let mut b = Client::connect(&addr, "bob", None).unwrap();
+        wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
+        // Maps 2 and 3 (songs 20 and 30) are the ones both have; bob's list comes in two parts.
+        a.send(ClientMsg::Library { maps: vec![(1, 10), (2, 20), (3, 30)], done: true });
+        b.send(ClientMsg::Library { maps: vec![(2, 20)], done: false });
+        b.send(ClientMsg::Library { maps: vec![(3, 30), (4, 40)], done: true });
+        wait_for(&mut a, |m| matches!(m, ServerMsg::Room { mapguessr: true, common: Some(2), .. }));
+        // Only the host starts it.
+        b.send(ClientMsg::StartGuessr { rounds: 5 });
+        thread::sleep(Duration::from_millis(100));
+        a.send(ClientMsg::StartGuessr { rounds: 5 });
+        let ServerMsg::GuessRound { round: 1, hash, from, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::GuessRound { .. })) else { unreachable!() };
+        assert!([2, 3].contains(&hash) && (0.1..0.7).contains(&from));
+        assert!(matches!(wait_for(&mut b, |m| matches!(m, ServerMsg::GuessRound { .. })), ServerMsg::GuessRound { hash: h, .. } if h == hash));
+        let song = hash * 10;
+        // Alice gets it (any difficulty of the song: another hash, same song key); bob runs out.
+        a.send(ClientMsg::Guess { hash: 99, song });
+        for left in (0..GUESS_TRIES).rev() {
+            b.send(ClientMsg::Guess { hash: 1, song: 10 });
+            assert!(matches!(wait_for(&mut b, |m| matches!(m, ServerMsg::GuessWrong { .. })), ServerMsg::GuessWrong { tries } if tries == left));
+        }
+        let ServerMsg::GuessReveal { hash: answer, got, last } = wait_for(&mut b, |m| matches!(m, ServerMsg::GuessReveal { .. })) else { unreachable!() };
+        assert_eq!(answer, hash);
+        assert!(!last);
+        assert!(got.len() == 1 && got[0].1 > 100 && got[0].1 <= 200, "{got:?}");
+        // The other map's song next, and then it's over: there's no third map everyone has.
+        let ServerMsg::GuessRound { round: 2, hash: second, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::GuessRound { .. })) else { unreachable!() };
+        assert_ne!(second, hash);
+        a.send(ClientMsg::Guess { hash: second, song: second * 10 });
+        b.send(ClientMsg::Guess { hash: second, song: second * 10 });
+        assert!(matches!(wait_for(&mut a, |m| matches!(m, ServerMsg::GuessReveal { .. })), ServerMsg::GuessReveal { last: true, ref got, .. } if got.len() == 2));
+        let ServerMsg::Room { players, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::Room { in_match: false, players, .. } if players.iter().any(|p| p.points > 0))) else { unreachable!() };
+        let points = |n: &str| players.iter().find(|p| p.name == n).map(|p| p.points).unwrap();
+        assert!(points("alice") > points("bob") && points("bob") > 100);
+    }
+
+    #[test]
     fn full_match_over_localhost() {
-        let server = host(0).unwrap();
+        let server = host(0, false).unwrap();
         let port = server.port;
         let addr = format!("127.0.0.1:{port}");
         // An intruder racing in first must not become host.

@@ -310,7 +310,7 @@ impl State {
             .iter()
             .filter_map(|(&id, l)| {
                 let s = l.room.summary.lock().unwrap().clone();
-                (s.players > 0).then(|| RoomInfo { id, title: l.title.clone(), host: if s.host.is_empty() { l.owner.clone() } else { s.host }, players: s.players, map: s.map, in_match: s.in_match })
+                (s.players > 0).then(|| RoomInfo { id, title: l.title.clone(), host: if s.host.is_empty() { l.owner.clone() } else { s.host }, players: s.players, map: s.map, in_match: s.in_match, mapguessr: s.mapguessr })
             })
             .collect();
         out.sort_by_key(|r| r.id);
@@ -350,15 +350,15 @@ fn handle(state: &State, stream: TcpStream) {
             Reply::LoggedOut
         }
         Request::ListRooms => Reply::Rooms(state.rooms()),
-        Request::CreateRoom { token, title } => {
+        Request::CreateRoom { token, title, mapguessr } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to host a lobby".into())) };
             let mut lobbies = state.lobbies.lock().unwrap();
             if lobbies.len() >= MAX_ROOMS {
                 return reply(&mut reader, Reply::Error("the server is full, try again later".into()));
             }
             let id = state.next_room.fetch_add(1, Ordering::Relaxed);
-            let title = online::clean_title(&title, &name);
-            let room = net::open_room();
+            let title = online::clean_title(&title, &name, mapguessr);
+            let room = net::open_room(mapguessr);
             let host_token = room.token;
             println!("lobby {id} \"{title}\" opened by {name} ({ip})");
             reply(&mut reader, Reply::Joined { room: id, title: title.clone(), host_token: Some(host_token) });

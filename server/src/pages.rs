@@ -601,6 +601,7 @@ fn room_list(rooms: &[RoomInfo]) -> String {
         .take(8)
         .map(|r| {
             let state = if r.in_match { "<span class=\"tag live\">PLAYING</span>" } else { "<span class=tag>OPEN</span>" };
+            let state = if r.mapguessr { format!("<span class=tag>MAPGUESSR</span>{state}") } else { state.to_string() };
             let map = r.map.as_deref().map(|m| format!("<div class=\"dim small\">{}</div>", esc(m))).unwrap_or_default();
             format!("<div class=room><div class=room-top><b>{}</b>{state}</div><div class=dim>host {} &middot; {} player{}</div>{map}</div>", esc(&r.title), esc(&r.host), r.players, if r.players == 1 { "" } else { "s" })
         })
