@@ -1113,7 +1113,13 @@ impl State {
 
     /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
     /// uncapped, its near-empty frame runs at thousands of fps and the GPU whines.
+    ///
+    /// Without the focus (another window, the Snipping Tool's overlay) it's 30: an uncapped game
+    /// takes the whole GPU, and the screenshot tool then needs seconds to start.
     fn frame_cap(&self) -> u32 {
+        if !self.focused && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > UNFOCUSED_FPS) {
+            return UNFOCUSED_FPS;
+        }
         let menu = matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_some() && game.resuming.is_none());
         let screen = (self.refresh_hz.round() as u32).max(30);
         if menu && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > screen) { screen } else { self.cfg.fps_cap }
@@ -8382,6 +8388,9 @@ impl State {
         }
     }
 }
+
+/// Frames per second drawn while the window doesn't have the focus.
+const UNFOCUSED_FPS: u32 = 30;
 
 /// The capture name of an F12 screenshot (scripted runs name theirs).
 const SCREENSHOT: &str = "screenshot";

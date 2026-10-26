@@ -598,6 +598,21 @@ fn assert_every_screen_fits() {
 }
 
 #[test]
+fn an_unfocused_window_draws_at_most_30_fps() {
+    let mut s = state();
+    s.cfg.fps_cap = 0;
+    assert_eq!(s.frame_cap(), 0);
+    s.focused = false;
+    assert_eq!(s.frame_cap(), 30);
+    s.cfg.fps_cap = 20;
+    assert_eq!(s.frame_cap(), 20, "a lower cap of the player's stays");
+    s.cfg.fps_cap = 240;
+    assert_eq!(s.frame_cap(), 30);
+    s.focused = true;
+    assert_eq!(s.frame_cap(), 240);
+}
+
+#[test]
 fn exiting_asks_first() {
     let mut s = state();
     let key = |s: &mut State, code| {
