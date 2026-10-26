@@ -133,6 +133,8 @@ pub struct Select {
     open: std::collections::HashSet<String>,
     /// The sort `open` is for (another starts over with the selection's section).
     open_for: SortMode,
+    /// The heading the selection was last under: when it moves to another, this one closes.
+    cursor_label: Option<String>,
     /// The cursor when the player closed the heading it was under: it stays closed until the
     /// selection moves.
     closed_at: Option<usize>,
@@ -272,6 +274,7 @@ impl Select {
             section_of: Vec::new(),
             open: Default::default(),
             open_for: SortMode::Artist,
+            cursor_label: None,
             closed_at: None,
             row_value: Vec::new(),
             cursor: 0,
@@ -471,6 +474,7 @@ impl Select {
         if self.open_for != self.sort {
             self.open_for = self.sort;
             self.open.clear();
+            self.cursor_label = None;
         }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         for g in 0..self.groups.len() {
@@ -543,12 +547,17 @@ impl Select {
     }
 
     /// The heading the selection is under stays open, unless the player closed it with the
-    /// selection there.
+    /// selection there; when the selection moves to another heading, the one it left closes.
     fn open_cursor_section(&mut self) {
-        if let Some(s) = self.cursor_section() {
-            if self.closed_at != Some(self.cursor) && !self.sections[s].label.is_empty() {
-                self.open.insert(self.sections[s].label.clone());
+        let Some(s) = self.cursor_section() else { return };
+        let label = self.sections[s].label.clone();
+        if self.cursor_label.as_ref() != Some(&label) {
+            if let Some(left) = self.cursor_label.replace(label.clone()) {
+                self.open.remove(&left);
             }
+        }
+        if self.closed_at != Some(self.cursor) {
+            self.open.insert(label);
         }
     }
 
