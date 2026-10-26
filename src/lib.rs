@@ -4976,6 +4976,18 @@ impl State {
         self.mod_select = Some(first);
     }
 
+    /// The mods the mod select shows as on: in a lobby as a guest, the host's speed picked for
+    /// everyone (which can't be switched here) on top of our own.
+    fn shown_mods(&self) -> Mods {
+        match &self.mp {
+            Some(s) if matches!(self.scene, Scene::Lobby) && !s.is_host() => {
+                let lobby = s.map.as_ref().map(|m| Mods::from_list(&m.mods).shared()).unwrap_or(Mods::NONE);
+                lobby.plus(self.cfg.mods.free())
+            }
+            _ => self.cfg.mods,
+        }
+    }
+
     fn toggle_mod(&mut self, m: mods::Mod) {
         // In a lobby the host picks the speed for everyone.
         if m.shared() && matches!(self.scene, Scene::Lobby) && self.mp.as_ref().is_some_and(|s| !s.is_host()) {
@@ -7481,7 +7493,7 @@ impl State {
             self.readout_rect = None;
         }
         if let Some(cur) = self.mod_select {
-            ui::draw_mod_select(canvas, self.cfg.mods, self.cfg.favourite_mods, cur);
+            ui::draw_mod_select(canvas, self.shown_mods(), self.cfg.favourite_mods, cur);
             if let Some(setup) = &self.universe_setup {
                 setup.draw(canvas, &self.cfg.universes, &self.cfg.universe_presets, game::FIRST_FOCUS);
             }
