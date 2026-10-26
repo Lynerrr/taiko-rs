@@ -667,10 +667,13 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
 }
 
 /// A song select divider in `rect` (`upright`: between left and right, else between top and
-/// bottom): a short grip, lit along its length while hovered or dragged.
+/// bottom): a short grip, lit along its length while hovered or dragged. Only the grip takes the
+/// mouse, not the whole edge: passing along it shouldn't light it up.
 fn draw_divider(c: &mut Canvas, [x, y, w, h]: [f32; 4], upright: bool, dragging: bool, hit: render::Hit) {
-    let lit = dragging || c.hovered(x, y, w, h);
+    const GRIP: f32 = 48.0;
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let [gx, gy, gw, gh] = if upright { [x, cy - GRIP / 2.0, w, GRIP] } else { [cx - GRIP / 2.0, y, GRIP, h] };
+    let lit = dragging || c.hovered(gx, gy, gw, gh);
     if upright {
         let len = if lit { h } else { 28.0 };
         c.round_rect(cx - 1.0, cy - len / 2.0, 2.0, len, 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
@@ -678,7 +681,7 @@ fn draw_divider(c: &mut Canvas, [x, y, w, h]: [f32; 4], upright: bool, dragging:
         let len = if lit { w } else { 28.0 };
         c.round_rect(cx - len / 2.0, cy - 1.0, len, 2.0, 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
     }
-    c.hit(x, y, w, h, hit);
+    c.hit(gx, gy, gw, gh, hit);
 }
 
 /// A leaderboard's scroll bar right of its rows, when there are more than the `shown`.

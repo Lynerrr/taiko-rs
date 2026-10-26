@@ -420,6 +420,8 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     let lw = Select::list_width(w, s.cfg.song_list_share);
     point(&mut s, 24.0 + lw + 6.0, 240.0);
     assert_eq!(s.hit_at(24.0 + lw + 6.0, 240.0), Some(render::Hit::SplitList));
+    // Only its grip in the middle, not the whole edge.
+    assert_ne!(s.hit_at(24.0 + lw + 6.0, 120.0), Some(render::Hit::SplitList));
     s.mouse_button(true, None);
     point(&mut s, 24.0 + lw + 6.0 + 40.0, 240.0);
     assert!((s.cfg.song_list_share - (ui::LIST_SHARE.2 + 40.0 / w)).abs() < 0.002, "{}", s.cfg.song_list_share);
@@ -451,7 +453,9 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     frame(&mut s);
     let rows_before = s.leaderboard.len();
     let edge = s.preview.panel_bottom + 4.0;
-    let mid = 24.0 + Select::list_width(w, s.cfg.song_list_share) + 12.0 + 100.0;
+    let left = 24.0 + Select::list_width(w, s.cfg.song_list_share) + 12.0;
+    let mid = (left + w - 24.0) / 2.0;
+    assert_ne!(s.hit_at(left + 20.0, edge), Some(render::Hit::SplitPreview));
     point(&mut s, mid, edge);
     assert_eq!(s.hit_at(mid, edge), Some(render::Hit::SplitPreview));
     s.mouse_button(true, None);
