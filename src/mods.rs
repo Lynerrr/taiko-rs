@@ -502,8 +502,29 @@ impl Mod {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Mods(u128);
 
+/// Mods that change the song's speed: everyone in a lobby plays the host's, so the song stays
+/// in step for all. The rest each player picks for themselves.
+const SPEED: [Mod; 6] = [Mod::DoubleTime, Mod::Nightcore, Mod::HalfTime, Mod::Daycore, Mod::WindUp, Mod::WindDown];
+
+impl Mod {
+    /// A lobby's host picks it for everyone (it changes the song's speed).
+    pub fn shared(self) -> bool {
+        SPEED.contains(&self)
+    }
+}
+
 impl Mods {
     pub const NONE: Mods = Mods(0);
+
+    /// The mods everyone in a lobby plays with (the host's): the speed's.
+    pub fn shared(self) -> Mods {
+        Mods(self.0 & SPEED.iter().fold(0, |bits, m| bits | m.bit()))
+    }
+
+    /// The rest: each player's own in a lobby.
+    pub fn free(self) -> Mods {
+        Mods(self.0 & !self.shared().0)
+    }
 
     pub fn has(self, m: Mod) -> bool {
         self.0 & m.bit() != 0
@@ -782,6 +803,17 @@ impl Speed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lobbies_share_the_speed_and_leave_the_rest_to_each_player() {
+        let host = Mods::parse("DT,HD,HR");
+        assert_eq!(host.shared(), Mods::parse("DT"));
+        assert_eq!(host.free(), Mods::parse("HD,HR"));
+        // A player's game: the host's speed, their own others (not the host's).
+        let mine = Mods::parse("HT,EZ,FL");
+        assert_eq!(host.shared().plus(mine.free()), Mods::parse("DT,EZ,FL"));
+        assert!(Mod::WindUp.shared() && Mod::Nightcore.shared() && !Mod::Hidden.shared() && !Mod::Random.shared());
+    }
 
     #[test]
     fn multipliers_follow_how_hard_a_mod_is() {

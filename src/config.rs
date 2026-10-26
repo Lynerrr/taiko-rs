@@ -119,6 +119,8 @@ pub struct Config {
     pub show_offset_hint: bool,
     /// The offset/UR line during play (Tab hides it).
     pub show_map_info: bool,
+    /// The live scoreboard in lobby matches (Tab there hides it).
+    pub mp_scoreboard: bool,
     /// Mods picked in the mod select (F1 on song select).
     pub mods: Mods,
     /// Multiplayer: display name, port to host on, last address joined.
@@ -241,6 +243,7 @@ impl Default for Config {
             rate_keep_pitch: true,
             show_offset_hint: true,
             show_map_info: true,
+            mp_scoreboard: true,
             mods: Mods::NONE,
             mp_name: std::env::var("USER")
                 .or_else(|_| std::env::var("USERNAME"))
@@ -594,6 +597,7 @@ impl Config {
                 "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "show_map_info" => cfg.show_map_info = v != "false",
+                "mp_scoreboard" => cfg.mp_scoreboard = v != "false",
                 "mods" => cfg.mods = Mods::parse(v),
                 "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
                 "mp_port" => cfg.mp_port = v.parse().unwrap_or(cfg.mp_port),
@@ -767,6 +771,7 @@ impl Config {
             self.show_map_info,
             self.mods.to_config(),
         );
+        out.push_str(&format!("# the live scoreboard in lobby matches (Tab toggles)\nmp_scoreboard = {}\n", self.mp_scoreboard));
         out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
         out.push_str("# parts of the skin from elsewhere: skin_part = <part> = <skin folder name> (or <built-in>)\n");
         for line in self.skin_parts.to_config() {

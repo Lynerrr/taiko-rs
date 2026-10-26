@@ -150,6 +150,9 @@ pub struct PlayerInfo {
     pub tries: u8,
     #[serde(default)]
     pub maps: Option<u32>,
+    /// The mods they picked themselves (the speed ones are the host's, in the map).
+    #[serde(default)]
+    pub mods: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -181,6 +184,9 @@ pub enum ClientMsg {
     Skipped,
     /// A line of lobby chat.
     Chat(String),
+    /// The mods we picked ourselves (acronyms): everyone plays the host's speed mods, and their
+    /// own others.
+    Mods(Vec<String>),
     /// Mapguessr: part of our map list as (map hash, song key); `done` on the last part. A new
     /// list after a done one replaces it.
     Library { maps: Vec<(u64, u64)>, done: bool },
@@ -686,6 +692,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         guessed: false,
                         tries: 0,
                         maps: None,
+                        mods: Vec::new(),
                     },
                     tx,
                     hello: false,
@@ -930,6 +937,13 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                     }
                     ClientMsg::Loaded(ok) => {
                         p.loaded = Some(ok);
+                    }
+                    ClientMsg::Mods(list) => {
+                        let list: Vec<String> = list.into_iter().take(40).filter(|m| (1..=4).contains(&m.len()) && m.chars().all(|c| c.is_ascii_alphanumeric())).collect();
+                        if p.info.mods != list {
+                            p.info.mods = list;
+                            dirty = true;
+                        }
                     }
                     ClientMsg::Live(l) => {
                         if p.in_match {
@@ -1338,6 +1352,16 @@ mod tests {
         let ServerMsg::Room { players, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::Room { in_match: false, players, .. } if players.iter().any(|p| p.points > 0))) else { unreachable!() };
         let points = |n: &str| players.iter().find(|p| p.name == n).map(|p| p.points).unwrap();
         assert!(points("alice") > points("bob") && points("bob") > 100);
+    }
+
+    #[test]
+    fn players_tell_the_room_their_own_mods() {
+        let server = host(0, false).unwrap();
+        let mut a = Client::connect(&format!("127.0.0.1:{}", server.port), "alice", Some(server.token)).unwrap();
+        wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
+        a.send(ClientMsg::Mods(vec!["HD".into(), "HR".into(), "<script>".into()]));
+        let ServerMsg::Room { players, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::Room { players, .. } if !players.is_empty() && !players[0].mods.is_empty())) else { unreachable!() };
+        assert_eq!(players[0].mods, ["HD", "HR"], "odd ones left out");
     }
 
     #[test]

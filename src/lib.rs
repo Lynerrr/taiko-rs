@@ -4424,7 +4424,11 @@ impl State {
             }
             Scene::MpPlay { game, quit_armed } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
-                KeyCode::Tab => self.toggle_map_info(),
+                KeyCode::Tab => {
+                    self.cfg.mp_scoreboard = !self.cfg.mp_scoreboard;
+                    self.cfg.save();
+                    self.toast(if self.cfg.mp_scoreboard { "scoreboard shown (Tab)" } else { "scoreboard hidden (Tab)" }.into());
+                }
                 KeyCode::Space => {
                     if game.skip(self.audio.as_ref(), self.play_offset) {
                         if let Some(s) = &self.mp {
@@ -4922,19 +4926,27 @@ impl State {
 
     /// F1 / the Mods button: the mod select, on the first mod that's on.
     fn open_mod_select(&mut self) {
-        if let Some(s) = &self.mp {
-            if matches!(self.scene, Scene::Lobby) && !s.is_host() {
-                self.toast("the host picks the mods".into());
-                return;
-            }
-        }
         let first = self.cfg.mods.iter().next().and_then(|m| mods::ALL.iter().position(|&x| x == m)).unwrap_or(0);
         self.mod_select = Some(first);
     }
 
     fn toggle_mod(&mut self, m: mods::Mod) {
+        // In a lobby the host picks the speed for everyone.
+        if m.shared() && matches!(self.scene, Scene::Lobby) && self.mp.as_ref().is_some_and(|s| !s.is_host()) {
+            self.toast(format!("the host picks the speed ({} is theirs to pick)", m.acronym()));
+            return;
+        }
         self.cfg.mods.toggle(m);
         self.mods_changed();
+    }
+
+    /// Tells the room the mods we picked ourselves, if it doesn't have them.
+    fn send_my_mods(&self) {
+        let Some(s) = &self.mp else { return };
+        let mine = self.cfg.mods.free().list();
+        if s.me().is_some_and(|p| p.mods != mine) {
+            s.client.send(net::ClientMsg::Mods(mine));
+        }
     }
 
     /// After the mods change: save them, and as the lobby host tell the room.
@@ -4942,6 +4954,7 @@ impl State {
         self.cfg.save();
         self.select.mods_label = self.cfg.mods.label();
         self.update_lobby_map();
+        self.send_my_mods();
     }
 
     /// As the lobby host: tells the room the match's rate, mods and mod settings as they are now.
@@ -4951,7 +4964,8 @@ impl State {
             if s.is_host() && !s.in_match {
                 if let Some(mut m) = s.map.clone() {
                     m.rate = rate;
-                    m.mods = mods.list();
+                    // Only the speed's: everyone picks their other mods themselves.
+                    m.mods = mods.shared().list();
                     (m.multiverse, m.shapeshift) = mod_settings(mods);
                     if Some(&m) != s.map.as_ref() {
                         s.client.send(net::ClientMsg::SelectMap(m));
@@ -5889,6 +5903,11 @@ impl State {
                 let Some(s) = &mut self.mp else { return };
                 let game_over = s.in_match && !in_match;
                 s.players = players;
+                // The room learns our own mods (on joining, and if it has others).
+                let mine = self.cfg.mods.free().list();
+                if !mapguessr && s.me().is_some_and(|p| p.mods != mine) {
+                    s.client.send(net::ClientMsg::Mods(mine));
+                }
                 s.in_match = in_match;
                 s.mapguessr = mapguessr;
                 s.common = common;
@@ -5931,7 +5950,9 @@ impl State {
                         self.stop_audio();
                         self.picking_lobby_map = false;
                         self.preview.show_background_for(&self.library[i]);
-                        let rx = self.load_with(i, map.rate, Mods::from_list(&map.mods));
+                        // The host's speed mods, and our own others.
+                        let mods = Mods::from_list(&map.mods).shared().plus(self.cfg.mods.free());
+                        let rx = self.load_with(i, map.rate, mods);
                         self.scene = Scene::MpWait { rx: Some(rx), loaded: None, start: None, from: map.from };
                     }
                     None => s.client.send(net::ClientMsg::Loaded(false)),
@@ -7117,7 +7138,7 @@ impl State {
                     game.draw_playfield(c, game.scroll_speed);
                 });
                 game.draw_hud(canvas);
-                if let Some(s) = mp {
+                if let Some(s) = mp.as_ref().filter(|_| self.cfg.mp_scoreboard) {
                     multiplayer::draw_scoreboard(canvas, s, &live);
                 }
                 if let Some(s) = &mut self.mp {
@@ -7170,7 +7191,9 @@ impl State {
                         let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
                         audio.play(track.clone(), first_ms + behind);
                         for (k, (id, name)) in v.players.iter().enumerate() {
-                            let mut g = Game::with_mods(map.clone(), track.clone(), None, v.mods);
+                            // The lobby's speed mods, and the player's own others.
+                            let own = self.mp.as_ref().and_then(|s| s.players.iter().find(|p| p.id == *id)).map(|p| Mods::from_list(&p.mods).free()).unwrap_or(Mods::NONE);
+                            let mut g = Game::with_mods(map.clone(), track.clone(), None, v.mods.shared().plus(own));
                             use_mod_settings(&mut g, &v.map);
                             if let Some(t) = v.from {
                                 g.skip_to(t);
