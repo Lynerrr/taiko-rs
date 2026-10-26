@@ -4445,6 +4445,11 @@ impl State {
             Scene::MpPlay { game, quit_armed } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
+                KeyCode::KeyL => {
+                    self.cfg.show_scoreboard = !self.cfg.show_scoreboard;
+                    self.cfg.save();
+                    self.toast(format!("scoreboard {} (L)", if self.cfg.show_scoreboard { "shown" } else { "hidden" }));
+                }
                 KeyCode::Space => {
                     if game.skip(self.audio.as_ref(), self.play_offset) {
                         if let Some(s) = &self.mp {
@@ -7206,7 +7211,7 @@ impl State {
                     game.draw_playfield(c, self.cfg.scroll_speed);
                 });
                 game.draw_hud(canvas);
-                if let Some(s) = mp {
+                if let Some(s) = mp.as_ref().filter(|_| self.cfg.show_scoreboard && !hidden.has(hud::Part::Scoreboard)) {
                     multiplayer::draw_scoreboard(canvas, s, &live);
                 }
                 if let Some(s) = &mut self.mp {

@@ -15,10 +15,12 @@ pub enum Part {
     OffsetHint,
     Judgements,
     HitAnimation,
+    /// A multiplayer match's scoreboard.
+    Scoreboard,
 }
 
 impl Part {
-    pub const ALL: [Part; 11] = [
+    pub const ALL: [Part; 12] = [
         Part::Score,
         Part::Accuracy,
         Part::Pp,
@@ -30,6 +32,7 @@ impl Part {
         Part::OffsetHint,
         Part::Judgements,
         Part::HitAnimation,
+        Part::Scoreboard,
     ];
 
     /// For the settings list.
@@ -46,6 +49,7 @@ impl Part {
             Part::OffsetHint => "Offset suggestion",
             Part::Judgements => "GREAT / OK / MISS",
             Part::HitAnimation => "Note hit animation",
+            Part::Scoreboard => "Match scoreboard",
         }
     }
 
@@ -63,6 +67,7 @@ impl Part {
             Part::OffsetHint => "offset_hint",
             Part::Judgements => "judgements",
             Part::HitAnimation => "hit_animation",
+            Part::Scoreboard => "scoreboard",
         }
     }
 
@@ -98,6 +103,18 @@ impl Parts {
         Part::ALL.iter().filter(|&&p| self.has(p)).map(|p| p.key()).collect::<Vec<_>>().join(",")
     }
 
+    /// The config's line: saved before parts that came later (the pp counter, the scoreboard),
+    /// hiding all it knew of still hides those too.
+    pub fn parse_saved(s: &str) -> Parts {
+        let mut parts = Parts::parse(s);
+        let newer = [Part::Pp, Part::Scoreboard];
+        let saved = |p: Part| s.split(',').any(|k| k.trim() == p.key());
+        if Part::ALL.iter().all(|&p| parts.has(p) || (newer.contains(&p) && !saved(p))) {
+            parts = Parts::ALL;
+        }
+        parts
+    }
+
     pub fn parse(s: &str) -> Parts {
         let mut out = Parts::NONE;
         for word in s.split(',').map(str::trim) {
@@ -112,6 +129,16 @@ impl Parts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hiding_everything_saved_before_newer_parts_still_hides_them() {
+        let old = "score,accuracy,combo,progress,health,mods,hit_error,offset_hint,judgements,hit_animation";
+        assert_eq!(Parts::parse_saved(old), Parts::ALL);
+        assert_eq!(Parts::parse_saved(&format!("{old},pp")), Parts::ALL);
+        let some = Parts::parse_saved("score,pp");
+        assert!(some.has(Part::Score) && !some.has(Part::Scoreboard) && some.len() == 2);
+        assert_eq!(Parts::parse_saved(&Parts::DEFAULT_HIDES.format()), Parts::DEFAULT_HIDES);
+    }
 
     #[test]
     fn hiding_the_interface_keeps_the_judgements_to_begin_with() {

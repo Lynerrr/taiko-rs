@@ -119,6 +119,8 @@ pub struct Config {
     pub show_offset_hint: bool,
     /// The offset/UR line during play (Tab hides it).
     pub show_map_info: bool,
+    /// The players' scores beside a multiplayer match (L hides it).
+    pub show_scoreboard: bool,
     /// Mods picked in the mod select (F1 on song select).
     pub mods: Mods,
     /// Multiplayer: display name, port to host on, last address joined.
@@ -244,6 +246,7 @@ impl Default for Config {
             rate_keep_pitch: true,
             show_offset_hint: true,
             show_map_info: true,
+            show_scoreboard: true,
             mods: Mods::NONE,
             mp_name: std::env::var("USER")
                 .or_else(|_| std::env::var("USERNAME"))
@@ -606,6 +609,7 @@ impl Config {
                 "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "show_map_info" => cfg.show_map_info = v != "false",
+                "show_scoreboard" => cfg.show_scoreboard = v != "false",
                 "mods" => cfg.mods = Mods::parse(v),
                 "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
                 "mp_port" => cfg.mp_port = v.parse().unwrap_or(cfg.mp_port),
@@ -631,14 +635,7 @@ impl Config {
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
                 "interface_hidden" => cfg.interface_hidden = v == "true",
-                "interface_hides" => {
-                    let mut parts = crate::hud::Parts::parse(v);
-                    // Saved before the pp counter, "everything" still means everything.
-                    if !v.split(',').any(|k| k.trim() == "pp") && parts.len() == crate::hud::Part::ALL.len() - 1 {
-                        parts = crate::hud::Parts::ALL;
-                    }
-                    cfg.interface_hides = parts;
-                }
+                "interface_hides" => cfg.interface_hides = crate::hud::Parts::parse_saved(v),
                 "interface_key" => {
                     let (shift, name) = match v.strip_prefix("Shift+") {
                         Some(rest) => (true, rest),
@@ -745,6 +742,8 @@ impl Config {
              offset_hint_ur_scaled = {}\n\
              # offset/UR line during play (Tab toggles)\n\
              show_map_info = {}\n\
+             # the players' scores beside a multiplayer match (L toggles)\n\
+             show_scoreboard = {}\n\
              # mods picked on song select (F1), e.g. HD,HR\n\
              mods = {}\n",
             keys.join(", "),
@@ -781,6 +780,7 @@ impl Config {
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
             self.show_map_info,
+            self.show_scoreboard,
             self.mods.to_config(),
         );
         out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
@@ -822,7 +822,7 @@ impl Config {
         out.push_str(&format!("# the mouse wheel resizes the playfield during play\nwheel_resizes_playfield = {}\n", self.wheel_resizes_playfield));
         out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));
         out.push_str(&format!(
-            "# the interface during play: hidden or not, what hiding it hides (score, accuracy, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
+            "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
             self.interface_hidden,
             self.interface_hides.format(),
             interface_key_name(self.interface_key)
