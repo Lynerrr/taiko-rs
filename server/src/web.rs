@@ -16,6 +16,7 @@
 //!   /avatar           POST (a form with a file): set your picture; /avatar/remove takes it off
 //!   /love/<set>       POST: a loved nominator loves a map set here (on=0: takes it back)
 //!   /u/<name>/nominator  POST: an admin makes them a loved nominator (on=0: not any more)
+//!   /s/<id>/pp        POST: an admin sets a play's pp (empty: back to what was sent)
 //!   /login /logout    the website's session (the game's accounts)
 //!   /chat[/<name>]    the global chat and messages to friends, like the game's   /api/chat[/<name>]
 //!   /friend/<name>    POST: ask to be friends, or accept
@@ -499,7 +500,11 @@ fn route(state: &State, req: &Req) -> Reply {
             match segs.as_slice() {
                 ["api", ..] => Reply::json(&score),
                 [_, _, _] => Reply { cache: "public, max-age=86400", ..Reply::new(200, "image/png", crate::card::png(&score).into()) },
-                _ => req.page_with(200, &score.map, "beatmaps", &pages::score_meta(&score), pages::score_page(&score, place, req.arg("watch").is_some())),
+                _ => {
+                    let admin = req.key().filter(|me| crate::is_admin(me)).and_then(|_| state.scores.lock().unwrap().pp_of(score.id));
+                    let notice = req.arg("msg");
+                    req.page_with(200, &score.map, "beatmaps", &pages::score_meta(&score), pages::score_page(&score, place, req.arg("watch").is_some(), admin, notice.as_deref()))
+                }
             }
         }
         ["mods"] => req.page(200, "Mods", "mods", pages::mods_page()),
@@ -552,6 +557,27 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
             crate::avatars::remove(&key);
             Reply::see_other(format!("/u/{}?msg={}", state.display_name(&key), encode("Your picture is off")))
+        }
+        ["s", id, "pp"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Ok(id) = id.parse::<u64>() else { return req.not_found("That is not a score link") };
+            let value = req.field("pp").trim();
+            let msg = if !crate::is_admin(&key) {
+                "only admins can do that".to_string()
+            } else {
+                let pp = if value.is_empty() { Ok(None) } else { value.parse::<f64>().map(Some).map_err(|_| "pp is a number".to_string()) };
+                match pp.and_then(|pp| state.scores.lock().unwrap().set_pp(id, pp).map(|_| pp)) {
+                    Ok(pp) => {
+                        println!("score {id}: pp set to {pp:?} by {key}");
+                        match pp {
+                            Some(v) => format!("This play is worth {v:.2}pp now"),
+                            None => "This play is worth what it was sent with again".into(),
+                        }
+                    }
+                    Err(e) => e,
+                }
+            };
+            Reply::see_other(format!("/s/{id}?msg={}", encode(&msg)))
         }
         ["love", set] => {
             let Some(key) = req.key() else { return Reply::see_other("/login".into()) };

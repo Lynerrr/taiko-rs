@@ -986,7 +986,8 @@ fn play_row(s: &OnlineScore, weighted: Option<usize>, show_score: bool) -> Strin
 /// One score: its numbers, and a button that opens it (and its replay) in the game, through
 /// the `taiko-rs://` link the game registers. `watch`: from a "Watch replay" button, so the
 /// page opens the game itself straight away (`site/watch.js`).
-pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool) -> String {
+/// `admin`: the viewer is an admin, and this play's pp as sent and as set by an admin (if).
+pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Option<(Option<f64>, Option<f64>)>, notice: Option<&str>) -> String {
     let (song, version) = split_map(&s.map);
     let (artist, title) = split_song(song);
     let head = format!(
@@ -1025,7 +1026,20 @@ pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool) -> String {
          Nothing happens? <a href=\"/download\">Get taiko.rs</a>, open it once, and try again.</p></section>",
         s.id
     );
-    format!("{head}<div class=page>{top}{watch_panel}</div><script src=\"/site/watch.js\" defer></script>")
+    let notice = notice.map(|n| format!("<div class=notice>{}</div>", esc(n))).unwrap_or_default();
+    let admin = admin
+        .map(|(sent, fixed)| {
+            let sent = sent.map(|p| format!("{p:.2}pp")).unwrap_or_else(|| "no pp".into());
+            let now = fixed.map(|p| format!("set to {p:.2}pp by an admin")).unwrap_or_else(|| "as sent".into());
+            format!(
+                "<section class=\"panel tools\"><div class=tool><b>ADMIN</b><form method=post action=\"/s/{}/pp\"><input name=pp inputmode=decimal placeholder=\"pp (empty: as sent)\" value=\"{}\" aria-label=pp><button class=\"btn small\">set pp</button></form>\
+                 <span class=dim>sent with {sent}; {now}</span></div></section>",
+                s.id,
+                fixed.map(|p| format!("{p:.2}")).unwrap_or_default()
+            )
+        })
+        .unwrap_or_default();
+    format!("{head}<div class=page>{notice}{top}{watch_panel}{admin}</div><script src=\"/site/watch.js\" defer></script>")
 }
 
 pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
@@ -1448,7 +1462,7 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 button.btn{font:inherit;cursor:pointer}.actions{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}.actions form{margin:0}.actions .btn{min-height:36px;padding:0 14px}
 .btn.hot.small-hot{font-size:16px;min-height:36px;padding:0 14px;box-shadow:3px 3px 0 #6b1d12}
 img.avatar{object-fit:cover;background:var(--panel2)}.tag.loved{color:#ff66aa;border-color:#ff66aa}form.inline{display:inline;margin:0}
-.tools{display:flex;flex-direction:column;gap:14px}.tool{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.tool b{min-width:170px;letter-spacing:1px}.tool form{margin:0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tool input[type=file]{font:inherit;color:var(--dim);max-width:100%}.tool code{color:var(--gold)}
+.tools{display:flex;flex-direction:column;gap:14px}.tool{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.tool b{min-width:170px;letter-spacing:1px}.tool form{margin:0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tool input[name=pp]{font:inherit;background:var(--panel2);color:var(--white);border:2px solid var(--line2);padding:6px 10px;width:220px}.tool input[type=file]{font:inherit;color:var(--dim);max-width:100%}.tool code{color:var(--gold)}
 .notice{border:2px solid var(--gold);color:var(--gold);padding:8px 12px;margin:0 0 20px;background:rgba(255,211,77,.06)}.notice.bad{border-color:var(--acc);color:#ff8a78;background:rgba(235,69,44,.08)}
 .login{max-width:520px;margin:24px auto}.login h1{font-size:48px;line-height:56px;margin-bottom:8px}.login form{display:flex;flex-direction:column;gap:14px;margin:18px 0}
 .login label{display:flex;flex-direction:column;gap:6px;color:var(--dim)}

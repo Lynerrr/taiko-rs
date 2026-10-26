@@ -55,6 +55,9 @@ pub struct Scores {
     tally_file: Option<PathBuf>,
     tallies: HashMap<String, Tally>,
     reports: HashMap<String, Vec<Instant>>,
+    /// DIR/pp-overrides.json: pp admins have set for plays (by id), in place of what was sent.
+    overrides_file: Option<PathBuf>,
+    overrides: HashMap<u64, f64>,
     replays: Option<PathBuf>,
     all: Vec<Stored>,
     next_id: u64,
@@ -104,8 +107,12 @@ impl Scores {
         }
         let tally_file = dir.as_ref().map(|d| d.join("playtime.json"));
         let tallies = tally_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let overrides_file = dir.as_ref().map(|d| d.join("pp-overrides.json"));
+        let overrides = overrides_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         let mut scores = Scores {
             file,
+            overrides_file,
+            overrides,
             tally_file,
             tallies,
             reports: HashMap::new(),
@@ -156,8 +163,34 @@ impl Scores {
         let mut sets: HashMap<Option<u32>, bool> = HashMap::new();
         for s in &mut self.all {
             let gives = *sets.entry(s.score.set_id).or_insert_with(|| (self.gives_pp)(s.score.set_id) != Some(false));
-            s.score.pp = s.sent_pp.filter(|_| gives);
+            let pp = self.overrides.get(&s.id).copied().or(s.sent_pp);
+            s.score.pp = pp.filter(|_| gives);
         }
+    }
+
+    /// The pp play `id` was sent with, and what an admin set it to instead (if they did).
+    pub fn pp_of(&self, id: u64) -> Option<(Option<f64>, Option<f64>)> {
+        let s = self.all.iter().find(|s| s.id == id)?;
+        Some((s.sent_pp, self.overrides.get(&id).copied()))
+    }
+
+    /// An admin sets play `id`'s pp (None: back to what was sent); totals follow at once.
+    pub fn set_pp(&mut self, id: u64, pp: Option<f64>) -> Result<(), String> {
+        if !self.all.iter().any(|s| s.id == id) {
+            return Err("that score isn't on the server".into());
+        }
+        match pp {
+            Some(v) if v.is_finite() && v >= 0.0 => self.overrides.insert(id, v),
+            Some(_) => return Err("pp is a number, 0 or more".into()),
+            None => self.overrides.remove(&id),
+        };
+        if let Some(file) = &self.overrides_file {
+            let tmp = file.with_extension("json.tmp");
+            let text = serde_json::to_string_pretty(&self.overrides).unwrap_or_default();
+            std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, file)).map_err(|e| format!("couldn't save it: {e}"))?;
+        }
+        self.count_pp();
+        Ok(())
     }
 
     /// Takes a play by `player` (lowercased key, `name` as written). Returns its place on the map
@@ -546,6 +579,29 @@ mod tests {
             scroll_speed: Some(0.5),
             play_ms: Some(60_000),
         }
+    }
+
+    #[test]
+    fn admins_can_set_a_plays_pp() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-ppfix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        let (_, total, _) = s.submit("a", "A", play(7, 500, 703.0), 1).unwrap();
+        assert_eq!(total, 703.0);
+        s.set_pp(1, Some(503.0)).unwrap();
+        assert_eq!(s.profile("a", "A", 0).pp, 503.0);
+        assert_eq!(s.score(1).unwrap().pp, Some(503.0));
+        assert_eq!(s.pp_of(1), Some((Some(703.0), Some(503.0))));
+        // Kept across a restart; the play's own line still says what was sent.
+        let again = Scores::load(Some(dir.clone()));
+        assert_eq!(again.profile("a", "A", 0).pp, 503.0);
+        assert!(std::fs::read_to_string(dir.join("scores.jsonl")).unwrap().contains("703"));
+        // Back to what was sent; odd numbers and missing plays are refused.
+        s.set_pp(1, None).unwrap();
+        assert_eq!(s.profile("a", "A", 0).pp, 703.0);
+        assert!(s.set_pp(1, Some(f64::NAN)).is_err() && s.set_pp(1, Some(-1.0)).is_err() && s.set_pp(99, Some(1.0)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
