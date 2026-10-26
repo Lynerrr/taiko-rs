@@ -284,7 +284,8 @@ fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Op
     Err(errors.join("; "))
 }
 
-/// A set's status on osu! ("ranked", "loved", "graveyard"...), from the mirrors.
+/// A set's status on osu! ("ranked", "loved", "graveyard"...), from the mirrors; `setstatus::MISSING`
+/// when they all say they don't have the set.
 pub fn set_status(set: u32) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Set {
@@ -292,18 +293,25 @@ pub fn set_status(set: u32) -> Result<String, String> {
     }
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(8))).build().into();
     let mut errors = Vec::new();
+    let mut not_found = 0;
     for base in ["https://osu.direct/api/v2/s/", "https://catboy.best/api/v2/s/"] {
         let result = agent
             .get(&format!("{base}{set}"))
             .header("User-Agent", USER_AGENT)
             .call()
-            .map_err(|e| e.to_string())
+            .map_err(|e| {
+                not_found += matches!(e, ureq::Error::StatusCode(404)) as usize;
+                e.to_string()
+            })
             .and_then(|mut r| r.body_mut().read_to_string().map_err(|e| e.to_string()))
             .and_then(|body| serde_json::from_str::<Set>(&body).map_err(|e| e.to_string()));
         match result {
             Ok(s) => return Ok(s.status),
             Err(e) => errors.push(e),
         }
+    }
+    if not_found == errors.len() {
+        return Ok(crate::setstatus::MISSING.to_string());
     }
     Err(errors.join("; "))
 }

@@ -598,6 +598,25 @@ fn assert_every_screen_fits() {
 }
 
 #[test]
+fn statuses_from_the_cache_reach_the_song_list_before_osu_db_does() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    for e in s.library.iter_mut().take(3) {
+        e.meta.set_id = Some(77);
+    }
+    let sets = [77];
+    s.select.status.clear();
+    s.status_cache.put(sets[0], "graveyard", 1);
+    s.apply_cached_statuses();
+    let with: Vec<_> = s.library.iter().filter(|e| e.meta.set_id == Some(sets[0])).collect();
+    assert!(with.iter().all(|e| s.select.status.get(&e.path) == Some(&search::GRAVEYARD)));
+    // osu!.db's doesn't overwrite what the mirrors said.
+    s.db_status.insert(with[0].path.clone(), 4);
+    s.select.status.entry(with[0].path.clone()).or_insert(4);
+    assert_eq!(s.select.status[&with[0].path], search::GRAVEYARD);
+}
+
+#[test]
 fn an_unfocused_window_draws_at_most_30_fps() {
     let mut s = state();
     s.cfg.fps_cap = 0;
