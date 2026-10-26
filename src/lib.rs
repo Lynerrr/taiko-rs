@@ -5388,47 +5388,65 @@ impl State {
         }
     }
 
-    /// Asks the mirrors, slowly and in the background, about every set whose status isn't known
-    /// or is old (osu!.db knows a ranked, approved or loved one for sure), so that sorting by
-    /// status works for the whole library. The answers are kept (`setstatus`) for the next run.
+    /// Asks the online server in the background about every set whose status isn't known or is
+    /// old (osu!.db knows a ranked, approved or loved one for sure): it answers what it has at
+    /// once and looks the rest up on osu! for the next round, so sorting by status works for the
+    /// whole library. The answers are kept (`setstatus`) for the next run. The mirrors aren't
+    /// asked: however many play, they hear nothing from us for this.
     fn start_status_sweep(&mut self) {
         static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if cfg!(test) || RUNNING.swap(true, Ordering::SeqCst) {
             return;
         }
         let now = setstatus::now();
-        let mut sets = Vec::new();
+        let mut maps: Vec<(u32, u32)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for e in &self.library {
-            let Some(set) = e.meta.set_id else { continue };
+            let (Some(set), Some(map)) = (e.meta.set_id, e.meta.beatmap_id) else { continue };
             let sure = matches!(self.db_status.get(&e.path), Some(4 | 5 | 7));
             if !sure && self.status_cache.due(set, now) && seen.insert(set) {
-                sets.push(set);
+                maps.push((set, map));
             }
         }
-        if sets.is_empty() {
+        if maps.is_empty() {
             RUNNING.store(false, Ordering::SeqCst);
             return;
         }
+        let (server, token) = (self.cfg.online_server.clone(), self.cfg.online_token.clone());
         let tx = self.set_status_tx.clone();
         std::thread::spawn(move || {
             let mut failed = 0;
-            for set in sets {
-                std::thread::sleep(Duration::from_millis(400));
-                match download::set_status(set) {
-                    Ok(status) => {
-                        failed = 0;
-                        if tx.send((set, Some(status))).is_err() {
-                            break;
+            // The server looks up what it doesn't know in the background (some 45 maps a second):
+            // ask again, now and then, about what's left.
+            for round in 0..STATUS_ROUNDS {
+                if round > 0 {
+                    std::thread::sleep(Duration::from_secs(STATUS_ROUND_SECS));
+                }
+                let mut left = Vec::new();
+                for chunk in maps.chunks(online::MAX_STATUS_MAPS) {
+                    match online::call(&server, online::Request::SetStatuses { token: token.clone(), maps: chunk.to_vec() }) {
+                        Ok(online::Reply::SetStatuses(found)) => {
+                            failed = 0;
+                            let got: std::collections::HashSet<u32> = found.iter().map(|(set, _)| *set).collect();
+                            left.extend(chunk.iter().filter(|(set, _)| !got.contains(set)).copied());
+                            for (set, status) in found {
+                                if tx.send((set, Some(status))).is_err() {
+                                    RUNNING.store(false, Ordering::SeqCst);
+                                    return;
+                                }
+                            }
+                        }
+                        // An older server, offline: leave it to the next run.
+                        _ => {
+                            failed += 1;
+                            left.extend_from_slice(chunk);
                         }
                     }
-                    // Offline or turned away: leave it to the next run.
-                    Err(_) => {
-                        failed += 1;
-                        if failed >= 6 {
-                            break;
-                        }
-                    }
+                }
+                maps = left;
+                // Without a login the server only says what it has: nothing more will come.
+                if maps.is_empty() || failed >= 3 || token.is_empty() {
+                    break;
                 }
             }
             RUNNING.store(false, Ordering::SeqCst);
@@ -8498,6 +8516,10 @@ impl State {
         }
     }
 }
+
+/// Rounds of asking the server about statuses it didn't have yet, and the wait between them.
+const STATUS_ROUNDS: usize = 60;
+const STATUS_ROUND_SECS: u64 = 45;
 
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;

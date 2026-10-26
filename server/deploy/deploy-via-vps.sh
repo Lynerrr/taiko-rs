@@ -18,6 +18,9 @@ scp -q "$here/Dockerfile" "$here/docker-compose.yml" "$vps:/tmp/"
 # Claude's key for the Discord pings (/api/claude/...), when this machine has one.
 key=${CLAUDE_KEY_FILE:-$HOME/.config/claude-discord/key}
 if [ -f "$key" ]; then scp -q "$key" "$vps:/tmp/claude-key"; else ssh "$vps" rm -f /tmp/claude-key; fi
+# The osu! API client for map set statuses (two lines: client ID, secret), when this machine has one.
+osu=${OSU_API_FILE:-$HOME/.config/taiko-server/osu-api}
+if [ -f "$osu" ]; then scp -q "$osu" "$vps:/tmp/osu-api"; else ssh "$vps" rm -f /tmp/osu-api; fi
 # On the VPS: the account for the last hop is the one its tunnel service uses.
 ssh "$vps" sh -s "$sum" <<'EOF'
 set -e
@@ -28,6 +31,11 @@ if [ -f /tmp/claude-key ]; then
     scp -q -F /dev/null -P 1337 -i ~/.ssh/xui_node -o IdentitiesOnly=yes /tmp/claude-key "$target:taiko-server/data/claude-key"
     rm -f /tmp/claude-key
     $hop "$target" chmod 600 taiko-server/data/claude-key
+fi
+if [ -f /tmp/osu-api ]; then
+    scp -q -F /dev/null -P 1337 -i ~/.ssh/xui_node -o IdentitiesOnly=yes /tmp/osu-api "$target:taiko-server/data/osu-api"
+    rm -f /tmp/osu-api
+    $hop "$target" chmod 600 taiko-server/data/osu-api
 fi
 $hop "$target" "sh -s $1" <<'REMOTE'
 set -e

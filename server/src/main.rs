@@ -18,6 +18,7 @@ mod online;
 mod avatars;
 mod card;
 mod covers;
+mod osustatus;
 mod discord;
 #[allow(dead_code)]
 #[path = "../../src/font.rs"]
@@ -452,6 +453,13 @@ fn handle(state: &State, stream: TcpStream) {
                 Ok(()) => Reply::Counted,
                 Err(e) => Reply::Error(e),
             }
+        }
+        // What the server knows of the sets (asking osu! in the background about the rest, for
+        // logged-in players only: not anyone can spend the API's allowance).
+        Request::SetStatuses { token, maps } => {
+            let ask = state.user(&token).is_some();
+            let maps: Vec<(u32, u32)> = maps.into_iter().take(online::MAX_STATUS_MAPS).collect();
+            Reply::SetStatuses(osustatus::lookup(&maps, ask))
         }
         Request::LovedSets => Reply::LovedSets(loved::all().into_iter().map(|(set, _)| set).collect()),
         Request::SetLoved { token, set, loved: on } => {
@@ -1037,6 +1045,7 @@ fn main() {
     }
     std::fs::create_dir_all(&data).expect("data dir");
     covers::init(data.clone());
+    osustatus::init(data.clone());
     loved::init(data.clone());
     avatars::init(data.clone());
     let state = Arc::new(State::load(data.join("accounts.json")));
