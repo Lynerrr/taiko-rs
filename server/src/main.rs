@@ -65,7 +65,7 @@ struct User {
 }
 
 /// Admins (lowercased names): they make loved nominators, and nominate themselves.
-const ADMINS: &[&str] = &["lynerrr"];
+const ADMINS: &[&str] = &["lynerrr", "auneu"];
 
 fn is_admin(key: &str) -> bool {
     ADMINS.contains(&key)
