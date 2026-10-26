@@ -192,6 +192,9 @@ pub struct Config {
     pub show_playfield_size: bool,
     /// The player's own playfield sizes, first in the preset list, in their order.
     pub saved_presets: Vec<(u32, u32)>,
+    /// Where each playfield size was last put (its top-left corner, as fractions of the screen),
+    /// so going back to a preset puts it back there instead of in the middle.
+    pub preset_spots: Vec<((u32, u32), (f32, f32))>,
     /// Name of the osu! skin in use (its folder name); empty = built-in.
     pub skin: String,
     /// Where each part of the skin comes from: that skin, the built-in look or another skin.
@@ -284,6 +287,7 @@ impl Default for Config {
             existed: false,
             show_playfield_size: true,
             saved_presets: Vec::new(),
+            preset_spots: Vec::new(),
             skin: String::new(),
             skin_parts: Default::default(),
             songs_folder: None,
@@ -296,6 +300,14 @@ impl Default for Config {
             songs: Vec::new(),
         }
     }
+}
+
+/// One of `preset_spots`: `1280x720@0.1000/0.2000`.
+fn parse_spot(s: &str) -> Option<((u32, u32), (f32, f32))> {
+    let (size, spot) = s.trim().split_once('@')?;
+    let (x, y) = spot.split_once('/')?;
+    let (x, y) = (x.parse::<f32>().ok()?, y.parse::<f32>().ok()?);
+    ((0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y)).then_some((crate::layout::parse_size(size)?, (x, y)))
 }
 
 /// Per-user taiko.rs directory: settings (`cache == false`) or disposable data like extracted
@@ -647,6 +659,7 @@ impl Config {
                 }
                 k if k.starts_with("hotkey.") => cfg.hotkeys.parse_line(&k["hotkey.".len()..], v),
                 "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
+                "preset_spots" => cfg.preset_spots = v.split(',').filter_map(parse_spot).collect(),
                 "skin" => cfg.skin = v.to_string(),
                 "skin_part" => cfg.skin_parts.parse(v),
                 "songs_folder" => cfg.songs_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
@@ -687,6 +700,8 @@ impl Config {
              show_playfield_size = {}\n\
              # your own playfield sizes (preset list, in this order)\n\
              saved_presets = {}\n\
+             # where each playfield size was last put: WxH@x/y (fractions of the screen)\n\
+             preset_spots = {}\n\
              offset_ms = {}\n\
              # notes drawn this many ms early to make up for display latency (judging is unaffected)\n\
              visual_offset_ms = {}\n\
@@ -737,6 +752,7 @@ impl Config {
             self.touch_layout.name(),
             self.show_playfield_size,
             self.saved_presets.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(", "),
+            self.preset_spots.iter().map(|((w, h), (x, y))| format!("{w}x{h}@{x:.4}/{y:.4}")).collect::<Vec<_>>().join(", "),
             self.offset_ms,
             self.visual_offset_ms,
             self.scroll_speed,
@@ -871,6 +887,13 @@ mod tests {
             assert_eq!(TouchLayout::parse(&layout.name().to_lowercase()), Some(layout));
         }
         assert_eq!(TouchLayout::Kddk.step(-1), TouchLayout::Ddkk);
+    }
+
+    #[test]
+    fn preset_spots_read_back() {
+        assert_eq!(parse_spot(" 1280x720@0.1000/0.2500"), Some(((1280, 720), (0.1, 0.25))));
+        assert_eq!(parse_spot("1280x720@1.5/0"), None);
+        assert_eq!(parse_spot("1280x720"), None);
     }
 
     #[test]

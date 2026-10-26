@@ -3300,7 +3300,9 @@ impl State {
     fn handle_global_key(&mut self, key: KeyCode, window: Option<&Window>) -> bool {
         let step = if self.modifiers_shift { 5.0 } else { 1.0 };
         match key {
-            KeyCode::Minus | KeyCode::Equal if matches!(self.scene, Scene::Select) && !self.select.filter.is_empty() => return false,
+            // Song select: they're letters of the search (there's an artist called -45); the
+            // numpad's still change the offset.
+            KeyCode::Minus | KeyCode::Equal if matches!(self.scene, Scene::Select) && !self.modifiers_ctrl => return false,
             KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd if self.modifiers_ctrl => {
                 let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) { -step } else { step };
                 self.cfg.visual_offset_ms += d;
@@ -3499,7 +3501,17 @@ impl State {
             self.toast(format!("{w}x{h} doesn't fit this window"));
             return;
         }
-        self.cfg.playfield_area = layout::preset_area(w, h, self.window_w, self.window_h);
+        // Where the size being left was, and where this one was last put (else the middle).
+        if let Some(old) = self.current_preset() {
+            let a = self.cfg.playfield_area;
+            self.cfg.preset_spots.retain(|(s, _)| *s != old);
+            self.cfg.preset_spots.push((old, (a.x, a.y)));
+        }
+        let mut area = layout::preset_area(w, h, self.window_w, self.window_h);
+        if let Some(&(_, (x, y))) = self.cfg.preset_spots.iter().find(|(s, _)| *s == (w, h)) {
+            area = Area { x, y, ..area }.clamped();
+        }
+        self.cfg.playfield_area = area;
         self.cfg.save();
         self.toast(format!("playfield {w}x{h}"));
     }
