@@ -351,7 +351,7 @@ impl Mod {
             Decoy => "See-through fake notes fly in between the real ones and vanish before the drum.",
             Overtime => "It's me.",
             Liar => "Far off, triplets are spaced like 1/4s; their real spacing shows near the drum.",
-            Radar => "The lane is dark: a beam sweeps it every beat and lights notes up as it passes.",
+            Radar => "The lane is dark: a beam sweeps it every other beat and lights notes up as it passes.",
             Echo => "Notes are grey; the next bar shows in colour under the lane, a cursor running along it.",
             Party => "Everything flashy at once; notes pulse to their own rhythm, 1/4s four times a beat.",
             Zigzag => "The lane zigzags across the screen.",

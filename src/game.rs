@@ -511,10 +511,13 @@ const RADAR_COL: u32 = 0x5ef0a0;
 /// Radar: notes this close to the drum are always fully lit.
 const RADAR_NEAR: f32 = 100.0;
 
-/// Radar: where the beam is, 0 at the drum to 1 at the lane's end. It leaves the drum on every
-/// beat, in kiai on every half beat.
-fn radar_sweep(beat_phase: f32, kiai: bool) -> f32 {
-    if kiai { (2.0 * beat_phase).fract() } else { beat_phase }
+/// Radar: how many beats the beam takes to cross the lane, and in kiai.
+const RADAR_BEATS: (f32, f32) = (2.0, 1.0);
+
+/// Radar: where the beam is, 0 at the drum to 1 at the lane's end, `beats` since the red line.
+/// It leaves the drum every `RADAR_BEATS` beats.
+fn radar_sweep(beats: f32, kiai: bool) -> f32 {
+    (beats / if kiai { RADAR_BEATS.1 } else { RADAR_BEATS.0 }).rem_euclid(1.0)
 }
 
 /// Radar: how far a note `s` along a lane `len` long that comes `u` closer every sweep is from
@@ -2362,8 +2365,8 @@ impl Game {
         let in_kiai = cp.kiai;
         // Radar: where the beam is (see `radar_sweep`), and how long it takes to cross the lane.
         let radar = mods.has(Mod::Radar);
-        let sweep = radar_sweep(beat_phase, in_kiai);
-        let sweep_ms = if in_kiai { cp.beat_length / 2.0 } else { cp.beat_length };
+        let sweep = radar_sweep(beats, in_kiai);
+        let sweep_ms = cp.beat_length * if in_kiai { RADAR_BEATS.1 } else { RADAR_BEATS.0 } as f64;
 
         let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp);
         // The lane's shape, and how fast notes go along it (see `lane_stretch`).
@@ -4044,9 +4047,10 @@ mod tests {
 
     #[test]
     fn radar_lights_notes_as_the_beam_passes_them() {
-        // The beam leaves the drum on the beat and crosses the lane in a beat, in kiai in half.
-        assert_eq!(radar_sweep(0.25, false), 0.25);
-        assert_eq!(radar_sweep(0.75, true), 0.5);
+        // The beam leaves the drum every other beat and crosses the lane in two, in kiai in one.
+        assert_eq!(radar_sweep(0.5, false), 0.25);
+        assert_eq!(radar_sweep(3.0, false), 0.5);
+        assert_eq!(radar_sweep(4.5, true), 0.5);
         let (len, u) = (600.0, 100.0);
         // A note 300 along lights up as the beam gets there and is gone by the next one.
         assert!(radar_light(300.0, u, len, 0.5) > 0.99);
