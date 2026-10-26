@@ -1030,7 +1030,9 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, favourites: crat
             let bg = if i == cursor { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
             let border = if i == cursor { crate::render::accent() } else if on { *accent } else { 0x2a2a38 };
             c.round_rect(x, y, col_w - 6.0, h, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if i == cursor { 1.5 } else { 1.0 });
-            c.round_rect(x + 4.0, y + 4.0, 22.0, h - 8.0, 3.0, rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
+            // The acronym's badge keeps room for its letters when there are many rows.
+            let inset = ((h - 13.0) / 2.0).clamp(3.0, 4.0);
+            c.round_rect(x + 4.0, y + inset, 22.0, h - 2.0 * inset, 3.0,rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
             c.text_centered(x + 15.0, y + h / 2.0 - 3.5, 7.0, rgba(if on { 0x15151d } else { *accent }, 1.0), m.acronym());
             let fav = favourites.has(m);
             if fav {

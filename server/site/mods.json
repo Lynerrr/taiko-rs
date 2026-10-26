@@ -306,6 +306,16 @@
         "acronym": "LI",
         "description": "Far off, triplets are spaced like 1/4s; their real spacing shows near the drum.",
         "name": "Liar"
+      },
+      {
+        "acronym": "RA",
+        "description": "The lane is dark: a beam sweeps it every beat and lights notes up as it passes.",
+        "name": "Radar"
+      },
+      {
+        "acronym": "EC",
+        "description": "Notes are grey; the next bar shows in colour under the lane, a cursor running along it.",
+        "name": "Echo"
       }
     ],
     "title": "VISUAL"
