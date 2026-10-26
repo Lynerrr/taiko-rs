@@ -564,7 +564,7 @@ mod tests {
 
     fn play(map: u64, score: u64, pp: f64) -> ScoreSubmit {
         ScoreSubmit {
-            map: crate::net::MapInfo { hash: map, artist: "A".into(), title: "T".into(), version: "Oni".into(), rate: 1.0, from: None, set_id: None, mods: vec!["HD".into()], multiverse: None, shapeshift: None },
+            map: crate::net::MapInfo { hash: map, artist: "A".into(), title: "T".into(), version: "Oni".into(), rate: 1.0, from: None, set_id: None, mods: vec!["HD".into()], multiverse: None, shapeshift: None, seed: None },
             score,
             accuracy: 0.95,
             max_combo: 100,

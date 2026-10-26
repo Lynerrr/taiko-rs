@@ -122,6 +122,7 @@ fn session(mapguessr: bool) -> multiplayer::Session {
         mods: Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR").list(),
         multiverse: None,
         shapeshift: None,
+        seed: None,
     });
     let live = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
     let result = net::Final { score: 1_234_567, accuracy: 0.9876, max_combo: 1290, great: 1234, ok: 56, miss: 7, ur: 123.4, quit: false };
@@ -173,7 +174,11 @@ fn assert_every_screen_fits() {
     s.select.filter = "camellia long search query that is typed".into();
     s.select.refilter(&s.library);
     check(&mut s, "select filtered", &mut out);
+    s.select.searching = true;
+    check(&mut s, "select filtered, typing", &mut out);
     s.select.filter.clear();
+    check(&mut s, "select, typing", &mut out);
+    s.select.searching = false;
     s.select.collection = None;
     s.select.refilter(&s.library);
 
@@ -658,4 +663,67 @@ fn watching_everyone_shows_where_each_player_plays() {
             assert!(inside as f32 >= shapes.len() as f32 * share, "{} at {w}: {inside} of {} shapes in their strip", mods[k], shapes.len());
         }
     }
+}
+
+#[test]
+fn song_select_search_takes_the_keys_only_once_clicked() {
+    let mut s = state();
+    let press = |s: &mut State, code: KeyCode, text: &str| s.key_inner(code, false, Some(text), Instant::now(), None);
+    press(&mut s, KeyCode::KeyA, "a");
+    assert_eq!(s.select.filter, "", "typing does nothing until the search box is clicked");
+    s.select.searching = true;
+    for (code, text) in [(KeyCode::Minus, "-"), (KeyCode::Digit4, "4"), (KeyCode::Digit5, "5"), (KeyCode::BracketLeft, "[")] {
+        press(&mut s, code, text);
+    }
+    assert_eq!(s.select.filter, "-45[", "in the box every key types, - and [ too");
+    press(&mut s, KeyCode::Escape, "");
+    assert!(!s.select.searching && s.select.filter == "-45[", "Escape leaves the box, keeping the search");
+    assert!(matches!(s.scene, Scene::Select));
+}
+
+#[test]
+fn songs_sort_by_hp_od_and_status() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    for (k, e) in s.library.iter_mut().enumerate() {
+        e.meta.hp = ((k * 7) % 11) as f64;
+        e.meta.od = ((k * 5) % 9) as f64;
+    }
+    // A song's value is its highest difficulty's, songs in order of it.
+    let song_values = |s: &State, of: fn(&Entry) -> f64| {
+        s.select.songs().iter().map(|song| song.iter().map(|&i| of(&s.library[i])).fold(f64::MIN, f64::max)).collect::<Vec<f64>>()
+    };
+    s.select.sort = ui::SortMode::Hp;
+    s.select.refilter(&s.library);
+    assert!(s.select.songs().len() == 12 && song_values(&s, |e| e.meta.hp).is_sorted());
+    s.select.sort = ui::SortMode::Od;
+    s.select.refilter(&s.library);
+    assert!(song_values(&s, |e| e.meta.od).is_sorted());
+    // Status: ranked before loved before pending, the unknown last.
+    let codes = [search::PENDING, search::RANKED, search::LOVED, search::UNKNOWN];
+    let paths: Vec<PathBuf> = s.library.iter().map(|e| e.path.clone()).collect();
+    for (k, p) in paths.iter().enumerate() {
+        s.select.status.insert(p.clone(), codes[(k / 3) % codes.len()]);
+    }
+    s.select.sort = ui::SortMode::Status;
+    s.select.refilter(&s.library);
+    let first: Vec<u8> = s.select.songs().iter().map(|song| s.select.status[&s.library[song[0]].path]).collect();
+    let rank = |c: u8| [search::LOVED, search::RANKED, search::PENDING, search::UNKNOWN].iter().position(|&x| x == c).unwrap();
+    assert!(first.iter().map(|&c| rank(c)).collect::<Vec<_>>().is_sorted(), "{first:?}");
+}
+
+#[test]
+fn np_names_the_map_on_screen_with_a_link_others_can_click() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let np = s.now_playing().expect("a map is selected");
+    let e = &s.library[s.select.selected().unwrap()];
+    assert!(np.starts_with("is playing ") && np.contains(&e.meta.title) && np.contains(&format!("[{}]", e.meta.version)), "{np}");
+    if let Some(set) = e.meta.set_id {
+        assert_eq!(social::map_set_in(&np), Some(set));
+    }
+    assert_eq!(social::map_set_in("look https://osu.ppy.sh/beatmapsets/1234#taiko/99 ok"), Some(1234));
+    assert_eq!(social::map_set_in("osu.ppy.sh/beatmapsets/"), None);
+    assert_eq!(social::map_set_in("no link"), None);
 }

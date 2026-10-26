@@ -23,6 +23,10 @@
 //!   /friend/<name>    POST: ask to be friends, or accept
 //!   /clips/<file>     the gameplay clips (with byte ranges, for video players)
 //!   /site/<file>      the font and the logo
+//!   /api/claude/pings?after=N   the developer's pings of the Discord bot, for Claude
+//!   /api/claude/reply           POST (channel, to, text): Claude's answer, posted by the bot
+//!   /api/claude/mark            POST (channel, message, tag): a forum post tagged done (else ✅)
+//!                               (both need `Authorization: Bearer` with DIR/claude-key)
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -43,6 +47,8 @@ const REQUESTS_PER_MINUTE: usize = 120;
 const MAX_REQUEST: u64 = 16 * 1024;
 /// Longest posted form.
 const MAX_FORM: usize = 4096;
+/// Longest form from Claude (an answer in Discord).
+const MAX_CLAUDE_FORM: usize = 256 * 1024;
 /// The session cookie (the same sessions the game logs in with), and how long it lasts.
 const COOKIE: &str = "rs_session";
 const COOKIE_DAYS: u64 = 180;
@@ -111,6 +117,8 @@ struct Req<'a> {
     /// The session cookie, and the account it belongs to (name as written).
     token: Option<String>,
     viewer: Option<String>,
+    /// It came with Claude's key (`discord::claude_key`).
+    claude: bool,
 }
 
 impl Req<'_> {
@@ -159,6 +167,7 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let mut length = 0usize;
     let mut cross_site = false;
     let mut content_type = String::new();
+    let mut bearer = None;
     loop {
         let mut h = String::new();
         match reader.read_line(&mut h) {
@@ -181,6 +190,8 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
                         cross_site = v.eq_ignore_ascii_case("cross-site");
                     } else if k.eq_ignore_ascii_case("content-type") {
                         content_type = v.to_string();
+                    } else if k.eq_ignore_ascii_case("authorization") {
+                        bearer = v.strip_prefix("Bearer ").map(|t| t.trim().to_string());
                     }
                 }
             }
@@ -192,10 +203,12 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     // A picture upload may be bigger than a form.
     let upload = method == "POST" && (path == "/avatar" || (path.starts_with("/u/") && path.ends_with("/avatar")));
-    let max_body = if upload { crate::avatars::MAX_BYTES + MAX_FORM } else { MAX_FORM };
+    // Claude's answers too (a long one in Cyrillic is ~6 bytes a letter).
+    let claude = bearer.as_deref().is_some_and(crate::discord::claude_key);
+    let max_body = if upload { crate::avatars::MAX_BYTES + MAX_FORM } else if claude { MAX_CLAUDE_FORM } else { MAX_FORM };
     let mut body = Vec::new();
     if method == "POST" && length <= max_body {
-        if upload {
+        if upload || claude {
             reader.get_mut().set_limit(max_body as u64);
         }
         body.resize(length, 0);
@@ -205,7 +218,7 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     }
     let viewer = token.as_deref().and_then(|t| state.user(t));
     let file = upload.then(|| crate::avatars::multipart_file(&content_type, &body, "avatar").map(<[u8]>::to_vec)).flatten();
-    let req = Req { method, path, query, form: if upload { HashMap::new() } else { form(&body) }, upload: file, os: Os::of(&agent), ip, token, viewer };
+    let req = Req { method, path, query, form: if upload { HashMap::new() } else { form(&body) }, upload: file, os: Os::of(&agent), ip, token, viewer, claude };
     let mut reply = if !web.allow(ip) {
         Reply::text(429, "too many requests, wait a minute")
     } else if method == "POST" && (cross_site || length > max_body) {
@@ -461,6 +474,10 @@ fn route(state: &State, req: &Req) -> Reply {
                 }
             }
         }
+        ["api", "claude", "pings"] if req.claude => {
+            let after = req.arg("after").and_then(|a| a.parse().ok()).unwrap_or(0);
+            Reply { cache: "no-store", ..Reply::json(&crate::discord::pings(after)) }
+        }
         ["api", "chat"] | ["api", "chat", _] => {
             let Some(key) = req.key() else { return Reply::text(401, "log in first") };
             match segs.get(2) {
@@ -611,6 +628,17 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             let msg = state.set_nominator(&key, name, req.field("on") != "0").unwrap_or_else(|e| e);
             Reply::see_other(format!("/u/{}?msg={}", encode(name), encode(&msg)))
         }
+        ["api", "claude", "reply"] if req.claude => {
+            let to = Some(req.field("to")).filter(|t| !t.is_empty());
+            match crate::discord::say(req.field("channel"), to, req.field("text")) {
+                Ok(()) => Reply::text(200, "sent"),
+                Err(e) => Reply::text(502, &e),
+            }
+        }
+        ["api", "claude", "mark"] if req.claude => match crate::discord::mark(req.field("channel"), req.field("message"), req.field("tag")) {
+            Ok(done) => Reply::text(200, &done),
+            Err(e) => Reply::text(502, &e),
+        },
         ["friend", other] => {
             let (Some(me), Some(key)) = (req.viewer.as_deref(), req.key()) else { return Reply::see_other("/login".into()) };
             let Some(p) = state.profile(other) else { return req.not_found("There is no player by that name") };

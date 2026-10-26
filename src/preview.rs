@@ -122,6 +122,9 @@ pub struct Preview {
     pub hold: bool,
     /// The selected map's own offset, shown with its details.
     pub map_offset: f64,
+    /// The pp a full combo of the selected map gives with the mods picked, at `pp::POTENTIAL`'s
+    /// accuracies (SS, 99%, 98%), shown with its details once worked out.
+    pub potential: Option<[f64; 3]>,
     /// Bottom of the song select panel as last drawn (virtual units).
     pub panel_bottom: f32,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
@@ -511,7 +514,13 @@ impl Preview {
         let pill_w = Canvas::text_width(9.0, "0.00") + 9.0 * 1.6 + 6.0;
         let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
         // Stats as label + value, flowed left to right; the first group is the map's, the second its notes.
-        let mut stats: [Vec<(&str, String, f32)>; 2] = [vec![("OD", format!("{:.1}", e.meta.od), 1.0)], Vec::new()];
+        let mut stats: [Vec<(&str, String, f32)>; 3] = [vec![("OD", format!("{:.1}", e.meta.od), 1.0)], Vec::new(), Vec::new()];
+        // What a full combo would give: SS, 99%, 98%.
+        if let Some(pp) = self.potential {
+            for (label, pp) in ["SS", "99%", "98%"].into_iter().zip(pp) {
+                stats[2].push((label, format!("{:.0}pp", pp), 1.0));
+            }
+        }
         if let Some((_, _, d, _)) = loaded {
             // At the speed played (DT, HT, the rate): as fast and as long as it'll be.
             let speed = self.requested_rate.0.max(0.01);
@@ -549,8 +558,9 @@ impl Preview {
                 rows
             })
             .collect();
-        // Two rows are always kept, so the panel doesn't jump when the details arrive.
-        let stat_rows = rows.iter().map(Vec::len).sum::<usize>().max(2);
+        // Three rows are always kept (the pp one too), so the panel doesn't jump when the details
+        // arrive.
+        let stat_rows = rows.iter().map(Vec::len).sum::<usize>().max(3);
         let (title_step, body_step, row_h) = (th_title + 4.0, th_body + 3.0, th_small + 4.0);
         let head = 12.0 + title.len() as f32 * title_step + 3.0 + artist.len() as f32 * body_step + 4.0 + 13.0 + 6.0 + (version.len() as f32 * body_step).max(15.0) + 6.0 + stat_rows as f32 * row_h + 6.0;
         (self.size_cap, self.size_shown) = (fitted(head), wanted.min(fitted(head)));

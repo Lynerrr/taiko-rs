@@ -454,6 +454,8 @@ struct State {
     preview: preview::Preview,
     /// Star ratings (rosu-pp), calculated in the background for the selected song.
     stars: stars::Stars,
+    /// The pp the selected map could give (song select's details).
+    potentials: pp::Potentials,
     /// Background brightness for this frame (0 hides it).
     bg_brightness: f32,
     /// Where the playfield size readout was drawn (virtual units), so it can be clicked.
@@ -793,6 +795,7 @@ fn fetch_replay(server: &str, score: &online::OnlineScore, map_path: &std::path:
         miss: score.miss,
         ur: 0.0,
         inputs: got.inputs,
+        seed: got.map.seed.unwrap_or(0),
     };
     let file = scores::save_online(score.id, &replay)?;
     Ok((file, replay))
@@ -967,6 +970,7 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         mods: mods.list(),
         multiverse,
         shapeshift,
+        seed: None,
         hash: e.hash(),
         artist: e.meta.artist.clone(),
         title: e.meta.title.clone(),
@@ -975,6 +979,18 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         from: None,
         set_id: e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)),
     }
+}
+
+/// A new seed for Random's colouring (never 0, the one from before seeds).
+fn fresh_seed() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64).max(1)
+}
+
+/// The Random colouring a lobby map plays with: the one it has, else a new one. Every map
+/// carries one, Random being each player's own mod: whoever plays it gets the same colouring,
+/// and watching everyone shows each player's.
+fn lobby_seed(had: Option<u64>) -> Option<u64> {
+    Some(had.unwrap_or_else(fresh_seed))
 }
 
 /// Our settings of the mods in `mods` that have them (Multiverse's universes, Shapeshift's
@@ -3312,7 +3328,13 @@ impl State {
     fn handle_global_key(&mut self, key: KeyCode, window: Option<&Window>) -> bool {
         let step = if self.modifiers_shift { 5.0 } else { 1.0 };
         match key {
-            KeyCode::Minus | KeyCode::Equal if matches!(self.scene, Scene::Select) && !self.select.filter.is_empty() => return false,
+            // Song select's search box has the keys: they're letters of the search (there's an
+            // artist called -45).
+            KeyCode::Minus | KeyCode::Equal | KeyCode::NumpadSubtract | KeyCode::NumpadAdd
+                if matches!(self.scene, Scene::Select) && self.select.searching && !self.modifiers_ctrl =>
+            {
+                return false
+            }
             KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd if self.modifiers_ctrl => {
                 let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) { -step } else { step };
                 self.cfg.visual_offset_ms += d;
@@ -3516,7 +3538,17 @@ impl State {
             self.toast(format!("{w}x{h} doesn't fit this window"));
             return;
         }
-        self.cfg.playfield_area = layout::preset_area(w, h, self.window_w, self.window_h);
+        // Where the size being left was, and where this one was last put (else the middle).
+        if let Some(old) = self.current_preset() {
+            let a = self.cfg.playfield_area;
+            self.cfg.preset_spots.retain(|(s, _)| *s != old);
+            self.cfg.preset_spots.push((old, (a.x, a.y)));
+        }
+        let mut area = layout::preset_area(w, h, self.window_w, self.window_h);
+        if let Some(&(_, (x, y))) = self.cfg.preset_spots.iter().find(|(s, _)| *s == (w, h)) {
+            area = Area { x, y, ..area }.clamped();
+        }
+        self.cfg.playfield_area = area;
         self.cfg.save();
         self.toast(format!("playfield {w}x{h}"));
     }
@@ -4204,6 +4236,10 @@ impl State {
         if pressed {
             let (vx, vy) = self.mouse_virtual();
             let hit = self.hit_at(vx, vy);
+            // The search box takes the keys when clicked, and gives them back on a click elsewhere.
+            if matches!(self.scene, Scene::Select) {
+                self.select.searching = hit == Some(render::Hit::TextField);
+            }
             if self.select.picker.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::PickRow(_))) {
                 self.select.picker = None;
                 return;
@@ -4290,7 +4326,8 @@ impl State {
             self.scene = Scene::Lobby;
             return;
         }
-        let info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
+        let mut info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
+        info.seed = lobby_seed(None);
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
@@ -4362,6 +4399,7 @@ impl State {
                             m.rate = rate;
                             m.mods = mods.list();
                             (m.multiverse, m.shapeshift) = mod_settings(mods);
+                            m.seed = lobby_seed(m.seed);
                             s.client.send(net::ClientMsg::SelectMap(m));
                         }
                         let text = format!("match rate {rate:.2}x");
@@ -4967,6 +5005,7 @@ impl State {
                     // Only the speed's: everyone picks their other mods themselves.
                     m.mods = mods.shared().list();
                     (m.multiverse, m.shapeshift) = mod_settings(mods);
+                    m.seed = lobby_seed(m.seed);
                     if Some(&m) != s.map.as_ref() {
                         s.client.send(net::ClientMsg::SelectMap(m));
                     }
@@ -5201,6 +5240,45 @@ impl State {
         c.hit(0.0, 0.0, c.width, 31.0, render::Hit::TextField);
     }
 
+    /// `/np`'s line: the map on this screen, with its set's osu! link when it has one.
+    fn now_playing(&self) -> Option<String> {
+        let e = self.library.get(self.offset_entry()?)?;
+        let name = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
+        let set = e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder));
+        Some(match set {
+            Some(set) => format!("is playing {name} https://osu.ppy.sh/beatmapsets/{set}"),
+            None => format!("is playing {name}"),
+        })
+    }
+
+    /// A map set named in the chat, clicked: picked in song select when we have it, else downloaded.
+    fn open_chat_map(&mut self, set: u32) {
+        let have = self.library.iter().position(|e| e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)) == Some(set));
+        match have {
+            Some(i) if matches!(self.scene, Scene::Select) => {
+                let path = self.library[i].path.clone();
+                self.select.select_path(&self.library, &path);
+                self.social.close();
+            }
+            Some(i) => {
+                let label = self.library[i].label();
+                self.toast(format!("you have it: {label}"));
+            }
+            None => self.start_download(download::SetInfo {
+                id: set,
+                artist: String::new(),
+                title: format!("set {set}"),
+                creator: String::new(),
+                status: String::new(),
+                diffs: Vec::new(),
+                play_count: 0,
+                favourite_count: 0,
+                rating: 0.0,
+                ranked_date: String::new(),
+            }),
+        }
+    }
+
     /// What Ctrl+C copies here: the text being typed, else the map or set picked.
     fn copy_text(&self) -> Option<String> {
         if let Some(e) = &self.settings_ui.editing {
@@ -5379,7 +5457,17 @@ impl State {
             KeyCode::KeyP if self.modifiers_ctrl => self.social_action(social::Action::Profile),
             KeyCode::KeyJ if self.modifiers_ctrl => self.social_action(social::Action::Join),
             KeyCode::Enter | KeyCode::NumpadEnter => {
-                let text = self.social.input.trim().to_string();
+                let mut text = self.social.input.trim().to_string();
+                // `/np` in a chat: the map on screen, with its osu! link (a link others can click).
+                if text.eq_ignore_ascii_case("/np") && matches!(row, Row::Friend(_) | Row::Lobby | Row::Global) {
+                    match self.now_playing() {
+                        Some(np) => text = np,
+                        None => {
+                            self.toast("no map to share: pick one first".into());
+                            return;
+                        }
+                    }
+                }
                 match row {
                     Row::AddFriend if !text.is_empty() => {
                         if let Some(c) = &self.social.conn {
@@ -5778,7 +5866,7 @@ impl State {
             }
             game.log_inputs = true;
             let Some(e) = self.library.get(*entry) else { return };
-            conn.send(online::Up::PlayStart(online::SoloPlay { map: map_info(e, game.rate, game.mods), anti_mash: true }));
+            conn.send(online::Up::PlayStart(online::SoloPlay { map: net::MapInfo { seed: (game.seed != 0).then_some(game.seed), ..map_info(e, game.rate, game.mods) }, anti_mash: true }));
             self.stream = Some((id, 0, Instant::now() - Duration::from_secs(1)));
         }
         let Some((_, sent, last)) = self.stream.as_mut() else { return };
@@ -5820,7 +5908,8 @@ impl State {
                     v.rx = None;
                     let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
                     let mods = v.play.as_ref().map(|p| Mods::from_list(&p.map.mods)).unwrap_or_default();
-                    let mut g = Game::with_mods(map, track, self.audio.as_ref(), mods);
+                    let seed = v.play.as_ref().and_then(|p| p.map.seed).unwrap_or(0);
+                    let mut g = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
                     g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods, 1.0));
                     if let Some(p) = &v.play {
                         use_mod_settings(&mut g, &p.map);
@@ -6356,13 +6445,14 @@ impl State {
             && matches!(self.scene, Scene::Select)
             && code == KeyCode::Escape
             && self.select.filter.is_empty()
+            && !self.select.searching
         {
             self.scene = Scene::Lobby;
             return;
         }
         if self.picking_lobby_map && matches!(self.scene, Scene::Select) && !repeat {
             match code {
-                KeyCode::Escape if self.select.filter.is_empty() => {
+                KeyCode::Escape if self.select.filter.is_empty() && !self.select.searching => {
                     self.picking_lobby_map = false;
                     self.scene = Scene::Lobby;
                     return;
@@ -6402,6 +6492,13 @@ impl State {
             return;
         }
         match &mut self.scene {
+            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyF => self.select.searching = true,
+            // In the search box the keys that have a job here otherwise (speed's [ and ]) type.
+            Scene::Select if self.select.searching && !self.modifiers_ctrl && matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) => {
+                if let Some(text) = text {
+                    self.select.type_text(text, &self.library);
+                }
+            }
             Scene::Select if self.modifiers_shift && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) && !self.picking_lobby_map => {
                 self.play_from_marker();
             }
@@ -6753,6 +6850,10 @@ impl State {
                 self.board_rect = None;
                 self.preview.size = self.cfg.song_preview_size;
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
+                self.preview.potential = match self.select.selected() {
+                    Some(i) => self.potentials.get(&self.library[i].path, rate, self.cfg.mods, self.cfg.scroll_speed),
+                    None => None,
+                };
                 self.leaderboard.clear();
                 if pw > 160.0 {
                     let status = self.select.selected().and_then(|i| self.map_status(i));
@@ -6815,7 +6916,13 @@ impl State {
                 match rx.try_recv() {
                     Ok(Ok((map, track))) => {
                         let mods = std::mem::take(&mut self.pending_mods);
-                        let mut game = Game::with_mods(map, track, self.audio.as_ref(), mods);
+                        // Random: the replay's colouring, else a new one each play.
+                        let seed = match &self.pending_replay {
+                            Some(r) => r.seed,
+                            None if mods.has(mods::Mod::Random) => fresh_seed(),
+                            None => 0,
+                        };
+                        let mut game = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
                         game.scroll_speed = self.cfg.scroll_speed;
                         game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods, game.scroll_speed);
                         if let Some(t) = *from {
@@ -6948,6 +7055,7 @@ impl State {
                             miss: st.miss,
                             ur: st.unstable_rate(),
                             inputs: std::mem::take(&mut game.inputs),
+                            seed: game.seed,
                         };
                         let pp = pp::play_pp(&e.path, &replay.pp_play());
                         results.pp = pp.filter(|_| results.no_pp.is_none());
@@ -6969,6 +7077,7 @@ impl State {
                                     mods: replay.mods.clone(),
                                     multiverse: None,
                                     shapeshift: None,
+                                    seed: (replay.seed != 0).then_some(replay.seed),
                                 },
                                 score: replay.score,
                                 accuracy: replay.accuracy,
@@ -7100,7 +7209,8 @@ impl State {
                 }
                 if start.is_some_and(|at| now >= at) {
                     if let Some((map, track)) = loaded.take() {
-                        let mut game = Game::with_mods(map, track, self.audio.as_ref(), self.pending_mods);
+                        let seed = self.mp.as_ref().and_then(|s| s.map.as_ref()).and_then(|m| m.seed).unwrap_or(0);
+                        let mut game = Game::with_seed(map, track, self.audio.as_ref(), self.pending_mods, seed);
                         game.scroll_speed = self.cfg.scroll_speed;
                         if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
                             game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, game.scroll_speed);
@@ -7138,7 +7248,7 @@ impl State {
                     game.draw_playfield(c, game.scroll_speed);
                 });
                 game.draw_hud(canvas);
-                if let Some(s) = mp.as_ref().filter(|_| self.cfg.mp_scoreboard) {
+                if let Some(s) = mp.as_ref().filter(|_| self.cfg.mp_scoreboard && !hidden.has(hud::Part::Scoreboard)) {
                     multiplayer::draw_scoreboard(canvas, s, &live);
                 }
                 if let Some(s) = &mut self.mp {
@@ -7193,7 +7303,7 @@ impl State {
                         for (k, (id, name)) in v.players.iter().enumerate() {
                             // The lobby's speed mods, and the player's own others.
                             let own = self.mp.as_ref().and_then(|s| s.players.iter().find(|p| p.id == *id)).map(|p| Mods::from_list(&p.mods).free()).unwrap_or(Mods::NONE);
-                            let mut g = Game::with_mods(map.clone(), track.clone(), None, v.mods.shared().plus(own));
+                            let mut g = Game::with_seed(map.clone(), track.clone(), None, v.mods.shared().plus(own), v.map.seed.unwrap_or(0));
                             use_mod_settings(&mut g, &v.map);
                             if let Some(t) = v.from {
                                 g.skip_to(t);
@@ -8089,6 +8199,7 @@ impl State {
                 }
             }
             Hit::SocialToggle => self.toggle_social(),
+            Hit::ChatMap(set) => self.open_chat_map(set),
             // Tapped: brings up the on-screen keyboard (`keyboard_tap`); the keys type there anyway.
             Hit::SocialPanel | Hit::TextField => {}
             Hit::SocialTab(tab) => {
@@ -9046,6 +9157,7 @@ impl State {
             mouse_moved_at: Instant::now(),
             preview: preview::Preview::default(),
             stars: stars::Stars::default(),
+            potentials: pp::Potentials::default(),
             bg_brightness: 0.0,
             resolutions: Vec::new(),
             monitor_modes: Vec::new(),

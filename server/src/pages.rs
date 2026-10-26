@@ -701,7 +701,7 @@ fn mod_board() -> String {
         })
         .collect();
     format!(
-        "<section class=\"panel board\"><div class=panel-head><h2>MODS</h2><span class=dim>{} of them, in the game's mod select order. Point at one to read it.</span></div>\
+        "<section class=\"panel board\"><div class=panel-head><h2>MODS</h2><span class=dim>{} of them, in the game's mod select order. Point at one (or tap it) to read it.</span></div>\
          <div class=cols>{cols}</div><div class=descbar>Point at a mod (or tab to it) to see what it does.</div></section>",
         mod_count()
     )
@@ -1509,7 +1509,8 @@ footer{border-top:2px solid var(--line);background:var(--bg2);padding:24px 0}foo
 .hud-tr{top:12px;right:16px}.errbar{display:none}.stage-cta{left:16px;right:16px;bottom:16px}.stage-cta .btn.hot{font-size:16px;min-height:44px}.hud-score{font-size:32px;line-height:32px}.hp{width:160px}.hud-tl{display:none}
 .field{top:300px;transform-origin:20% 50%}.n{width:40px;height:40px;margin:-20px 0 0 -20px;left:48px}.n.big{width:56px;height:56px;margin:-28px 0 0 -28px}.seg:first-child{flex-basis:96px}.drum{left:14px;transform:scale(.8)}.judge{left:112px}.track{left:96px}.hit-great{left:106px}
 .chat{grid-template-columns:minmax(0,1fr)}.chans{max-height:240px}.convo{min-height:480px}.me span{display:none}.me{padding:0 6px}.clips{grid-template-columns:minmax(0,1fr)}.clips:not(.three) .clip:first-child{grid-column:auto;grid-row:auto}.clips:not(.three) .clip:first-child .frame{flex:none;aspect-ratio:16/9;min-height:0}
-.cols{grid-template-columns:minmax(0,1fr)}.board{padding-bottom:120px}.descbar,.chip .desc{min-height:80px}
+.cols{grid-template-columns:minmax(0,1fr)}.board{padding-bottom:14px}.descbar{display:none}
+.chip{flex-wrap:wrap}.chip .desc{position:static;flex-basis:100%;min-height:0;padding:0 0 8px 34px;border:0;background:none}
 .panel{padding:14px}.play{gap:10px}.play .mods,.play .acc,.play .score,.weight{display:none}.play .pp{width:auto}.hudrow{grid-template-columns:repeat(2,minmax(0,1fr))}
 .avatar.big{width:88px;height:88px;font-size:64px}.who{gap:14px}.who h1{font-size:32px;line-height:40px;overflow-wrap:anywhere}.bigstat b{font-size:32px;line-height:32px}.ranks{gap:24px}
 .cover.map h1{font-size:32px;line-height:40px}.cover{height:180px}.band h1{font-size:48px;line-height:48px}.section-head h2{font-size:24px}}

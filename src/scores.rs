@@ -41,6 +41,9 @@ pub struct Replay {
     pub ur: f64,
     /// (map time ms, key 0-3: left rim, left centre, right centre, right rim).
     pub inputs: Vec<(f64, u8)>,
+    /// Random's colouring (`Game::seed`; 0 for plays from before it).
+    #[serde(default)]
+    pub seed: u64,
 }
 
 /// One line of the score index.

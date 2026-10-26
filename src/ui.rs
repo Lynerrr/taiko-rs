@@ -13,12 +13,27 @@ pub enum SortMode {
     Difficulty,
     Length,
     Bpm,
+    Hp,
+    Od,
+    /// osu!'s status, ranked and loved first.
+    Status,
     Played,
     Added,
 }
 
 impl SortMode {
-    pub const ALL: [SortMode; 7] = [SortMode::Artist, SortMode::Title, SortMode::Difficulty, SortMode::Length, SortMode::Bpm, SortMode::Played, SortMode::Added];
+    pub const ALL: [SortMode; 10] = [
+        SortMode::Artist,
+        SortMode::Title,
+        SortMode::Difficulty,
+        SortMode::Length,
+        SortMode::Bpm,
+        SortMode::Hp,
+        SortMode::Od,
+        SortMode::Status,
+        SortMode::Played,
+        SortMode::Added,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -27,6 +42,9 @@ impl SortMode {
             SortMode::Difficulty => "difficulty",
             SortMode::Length => "length",
             SortMode::Bpm => "bpm",
+            SortMode::Hp => "hp",
+            SortMode::Od => "od",
+            SortMode::Status => "status",
             SortMode::Played => "recently played",
             SortMode::Added => "date added",
         }
@@ -49,6 +67,8 @@ impl SortMode {
 
 pub struct Select {
     pub filter: String,
+    /// The search box has the keys (clicked, or Ctrl+F): everything typed goes into it.
+    pub searching: bool,
     pub sort: SortMode,
     /// Star rating / length / BPM per library index, filled in the background.
     pub info: Option<crate::mapinfo::Shared>,
@@ -176,6 +196,7 @@ impl Select {
         let mut s = Select {
             list_share: LIST_SHARE.2,
             filter: String::new(),
+            searching: false,
             sort: SortMode::Artist,
             info: None,
             played: std::collections::HashMap::new(),
@@ -226,10 +247,7 @@ impl Select {
                 length_s: known.map(|x| x.length_ms as f64 / 1000.0),
                 bpm: known.map(|x| x.bpm as f64),
                 played_days: self.played.get(&e.path).filter(|&&t| t > 0).map(|&t| now.saturating_sub(t) as f64 / 86_400.0),
-                status: match e.meta.set_id {
-                    Some(set) if self.server_loved.contains(&set) => crate::search::LOVED,
-                    set => self.status.get(&e.path).copied().unwrap_or(if set.is_some() { crate::search::UNKNOWN } else { crate::search::NOT_SUBMITTED }),
-                },
+                status: self.status_of(e),
             }
         };
         self.visible = library
@@ -253,6 +271,20 @@ impl Select {
         }
     }
 
+    /// The listed songs in order, each as its difficulties' library indices.
+    #[cfg(test)]
+    pub fn songs(&self) -> Vec<Vec<usize>> {
+        self.groups.iter().map(|g| self.visible[g.clone()].to_vec()).collect()
+    }
+
+    /// A map's status on osu! (`search`'s codes), loved here counting as loved.
+    fn status_of(&self, e: &Entry) -> u8 {
+        match e.meta.set_id {
+            Some(set) if self.server_loved.contains(&set) => crate::search::LOVED,
+            set => self.status.get(&e.path).copied().unwrap_or(if set.is_some() { crate::search::UNKNOWN } else { crate::search::NOT_SUBMITTED }),
+        }
+    }
+
     /// Orders songs by the sort mode, keeping each song's difficulties together (and in their
     /// order). A song's value is its highest (hardest, longest, most recent...).
     fn sort_visible(&mut self, library: &[Entry]) {
@@ -272,6 +304,14 @@ impl Select {
                 SortMode::Difficulty => info().map(|x| x.stars as f64).unwrap_or(f64::NAN),
                 SortMode::Length => info().map(|x| x.length_ms as f64).unwrap_or(f64::NAN),
                 SortMode::Bpm => info().map(|x| x.bpm as f64).unwrap_or(f64::NAN),
+                SortMode::Hp => library[i].meta.hp,
+                SortMode::Od => library[i].meta.od,
+                // Ordered as osu! has them (graveyard with pending); not known: last.
+                SortMode::Status => match self.status_of(&library[i]) {
+                    crate::search::UNKNOWN => f64::NAN,
+                    crate::search::GRAVEYARD => crate::search::PENDING as f64,
+                    c => c as f64,
+                },
                 SortMode::Played => self.played.get(&library[i].path).map(|&t| t as f64).unwrap_or(f64::NAN),
                 SortMode::Added => library[i].modified as f64,
                 SortMode::Artist | SortMode::Title => 0.0,
@@ -285,7 +325,8 @@ impl Select {
                 set_value[f] = v;
             }
         }
-        let newest_first = matches!(self.sort, SortMode::Played | SortMode::Added);
+        // Highest first: the newest, and the best status.
+        let newest_first = matches!(self.sort, SortMode::Played | SortMode::Added | SortMode::Status);
         let title = |i: usize| (library[i].meta.title.to_lowercase(), library[i].meta.artist.to_lowercase());
         let mut keyed: Vec<(usize, usize)> = self.visible.iter().map(|&i| (folder_ids[folder(i)], i)).collect();
         if self.sort == SortMode::Title {
@@ -389,6 +430,7 @@ impl Select {
             }
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 if let Some(&i) = self.visible.get(self.cursor) {
+                    self.searching = false;
                     return SelectAction::Play(i);
                 }
             }
@@ -398,6 +440,8 @@ impl Select {
                 self.filter.pop();
                 self.refilter(library);
             }
+            // Searching: Escape just leaves the box, the search staying.
+            KeyCode::Escape if self.searching => self.searching = false,
             KeyCode::Escape => {
                 if self.filter.is_empty() {
                     return SelectAction::Quit;
@@ -434,6 +478,9 @@ impl Select {
     }
 
     pub fn type_text(&mut self, text: &str, library: &[Entry]) {
+        if !self.searching {
+            return;
+        }
         let mut changed = false;
         for ch in text.chars().filter(|c| !c.is_control()) {
             self.filter.push(ch);
@@ -794,14 +841,17 @@ impl Select {
             bx -= 6.0;
         }
         let search_w = bx - 24.0;
-        c.round_rect(24.0, 54.0, search_w, 24.0, 6.0, rgba(0x23232f, 0.9), rgba(0x3a3a4e, 1.0), 1.0);
+        let edge = if self.searching { rgba(crate::render::accent(), 1.0) } else { rgba(0x3a3a4e, 1.0) };
+        c.round_rect(24.0, 54.0, search_w, 24.0, 6.0, rgba(0x23232f, 0.9), edge, 1.0);
         let room = search_w - 20.0;
+        let caret = if self.searching { "_" } else { "" };
         let (search, search_col) = if self.filter.is_empty() {
-            let hint = if Canvas::text_width(10.0, "type to search...") <= room { "type to search..." } else { "search..." };
-            (Canvas::fit(10.0, room, hint), 0x6f6f86)
+            let (long, short) = if self.searching { ("type to search...", "search...") } else { ("click to search (ctrl+f)...", "search...") };
+            let hint = if Canvas::text_width(10.0, long) <= room { long } else { short };
+            (Canvas::fit(10.0, room, &format!("{hint}{caret}")), 0x6f6f86)
         } else {
-            let full = format!("search: {}_", self.filter);
-            let text = if Canvas::text_width(10.0, &full) <= room { full } else { Canvas::fit_end(10.0, room, &format!("{}_", self.filter)) };
+            let full = format!("search: {}{caret}", self.filter);
+            let text = if Canvas::text_width(10.0, &full) <= room { full } else { Canvas::fit_end(10.0, room, &format!("{}{caret}", self.filter)) };
             (text, 0xffffff)
         };
         c.text(34.0, 61.0, 10.0, rgba(search_col, 1.0), &search);

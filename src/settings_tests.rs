@@ -203,7 +203,7 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
     let mut c = Canvas { width: 853.3, ..Default::default() };
     s.build_frame(&mut c, Instant::now(), 853.3);
     let Scene::Play { game, .. } = &s.scene else { panic!() };
-    assert_eq!(game.hidden, hud::Parts::ALL);
+    assert_eq!(game.hidden, hud::Parts::DEFAULT_HIDES);
 }
 
 #[test]

@@ -48,6 +48,7 @@ fn replay(path: &std::path::Path, inputs: Vec<(f64, u8)>) -> scores::Replay {
         miss: 0,
         ur: 0.0,
         inputs,
+        seed: 0,
     }
 }
 
@@ -97,7 +98,7 @@ fn an_online_score_fetches_its_replay() {
             online::Request::Replay { id } => id,
             other => panic!("asked for {other:?}"),
         };
-        let map = net::MapInfo { hash: 1, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None };
+        let map = net::MapInfo { hash: 1, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None, seed: None };
         let reply = online::Reply::Replay(Box::new(online::OnlineReplay { version: 2, map, inputs: sent }));
         let mut out = serde_json::to_string(&reply).unwrap();
         out.push('\n');

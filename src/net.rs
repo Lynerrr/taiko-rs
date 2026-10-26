@@ -83,6 +83,10 @@ pub struct MapInfo {
     pub multiverse: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shapeshift: Option<String>,
+    /// Random's colouring for this play (`Game::seed`; a lobby map always has one); None: the one per
+    /// map from before seeds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 fn one() -> f64 {
@@ -1374,7 +1378,7 @@ mod tests {
         wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
         let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
         wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None }));
+        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None, seed: None }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
         a.send(ClientMsg::HasMap(false));
@@ -1383,7 +1387,7 @@ mod tests {
         assert!(players.iter().any(|p| p.name == "alice" && p.host));
         assert!(players.iter().any(|p| p.name == "bob" && !p.host));
 
-        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9), mods: vec!["HD".into()], multiverse: None, shapeshift: Some("every=4".into()) };
+        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9), mods: vec!["HD".into()], multiverse: None, shapeshift: Some("every=4".into()), seed: None };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
         for c in [&a, &b] {
