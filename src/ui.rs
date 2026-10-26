@@ -115,6 +115,9 @@ pub struct Select {
     groups: Vec<std::ops::Range<usize>>,
     /// Index into `groups` for each row of `visible`.
     group_of: Vec<usize>,
+    /// Sorted by status: for each song that starts a status section, the section (status code,
+    /// songs in it); drawn as a heading above the song.
+    sections: Vec<Option<(u8, usize)>>,
     cursor: usize,
     scroll: f32,
     anim: ListAnim,
@@ -179,6 +182,20 @@ const LIST_MIN: f32 = 260.0;
 const PANEL_MIN: f32 = 220.0;
 /// Height of a song's own row in the list (virtual units).
 pub const SONG_ROW_H: f32 = 34.0;
+
+/// A status section's heading and colour in the song list.
+fn status_heading(code: u8) -> (&'static str, u32) {
+    use crate::search::*;
+    match code {
+        RANKED => ("Ranked", 0x6ecb63),
+        APPROVED => ("Approved", 0x6ecb63),
+        QUALIFIED => ("Qualified", 0x4fb4ff),
+        LOVED => ("Loved", 0xff66aa),
+        PENDING | GRAVEYARD => ("Pending / Graveyard", 0xb0a06a),
+        NOT_SUBMITTED => ("Not submitted", 0x8a8aa0),
+        _ => ("Status not known yet", 0x8a8aa0),
+    }
+}
 const LIST_BOTTOM: f32 = 440.0;
 
 pub enum SelectAction {
@@ -221,6 +238,7 @@ impl Select {
             visible: Vec::new(),
             groups: Vec::new(),
             group_of: Vec::new(),
+            sections: Vec::new(),
             cursor: 0,
             scroll: 0.0,
             anim: ListAnim::default(),
@@ -277,6 +295,20 @@ impl Select {
         self.groups.iter().map(|g| self.visible[g.clone()].to_vec()).collect()
     }
 
+    /// The status section a map is listed under: graveyard sorts (and lists) with pending.
+    fn status_section(&self, e: &Entry) -> u8 {
+        match self.status_of(e) {
+            crate::search::GRAVEYARD => crate::search::PENDING,
+            c => c,
+        }
+    }
+
+    /// The status sections of the list sorted by status: (status code, songs), in order.
+    #[cfg(test)]
+    pub fn sections(&self) -> Vec<(u8, usize)> {
+        self.sections.iter().flatten().copied().collect()
+    }
+
     /// A map's status on osu! (`search`'s codes), loved here counting as loved.
     fn status_of(&self, e: &Entry) -> u8 {
         match e.meta.set_id {
@@ -307,9 +339,8 @@ impl Select {
                 SortMode::Hp => library[i].meta.hp,
                 SortMode::Od => library[i].meta.od,
                 // Ordered as osu! has them (graveyard with pending); not known: last.
-                SortMode::Status => match self.status_of(&library[i]) {
+                SortMode::Status => match self.status_section(&library[i]) {
                     crate::search::UNKNOWN => f64::NAN,
-                    crate::search::GRAVEYARD => crate::search::PENDING as f64,
                     c => c as f64,
                 },
                 SortMode::Played => self.played.get(&library[i].path).map(|&t| t as f64).unwrap_or(f64::NAN),
@@ -382,6 +413,22 @@ impl Select {
                 self.group_of.extend(std::iter::repeat_n(self.groups.len(), i - start));
                 self.groups.push(start..i);
                 start = i;
+            }
+        }
+        self.sections = vec![None; self.groups.len()];
+        if self.sort == SortMode::Status {
+            let mut last: Option<usize> = None;
+            let mut prev = None;
+            for (g, r) in self.groups.iter().enumerate() {
+                let code = self.status_section(&library[self.visible[r.start]]);
+                if prev != Some(code) {
+                    last = Some(g);
+                    self.sections[g] = Some((code, 0));
+                    prev = Some(code);
+                }
+                if let Some((_, n)) = last.and_then(|l| self.sections[l].as_mut()) {
+                    *n += 1;
+                }
             }
         }
     }
@@ -886,7 +933,10 @@ impl Select {
         // Rows: one per song, plus the selected song's difficulties under it.
         const SONG_H: f32 = SONG_ROW_H;
         const DIFF_H: f32 = 22.0;
+        // A heading above the first song of each status section (sorted by status).
+        const SECTION_H: f32 = 18.0;
         enum Row {
+            Section(u8, usize),
             Song(std::ops::Range<usize>),
             Diff(usize),
         }
@@ -896,7 +946,10 @@ impl Select {
         // Where everything ends up: the selected song open, the others closed.
         let open_start = self.group_of.get(self.cursor).map(|&g| groups[g].start);
         let (mut final_y, mut final_cursor) = (0.0f32, 0.0f32);
-        for g in groups {
+        for (gi, g) in groups.iter().enumerate() {
+            if self.sections[gi].is_some() {
+                final_y += SECTION_H;
+            }
             final_y += SONG_H;
             if g.contains(&self.cursor) {
                 final_cursor = final_y + (self.cursor - g.start) as f32 * DIFF_H;
@@ -955,7 +1008,11 @@ impl Select {
         let mut rows: Vec<(Row, f32, f32, f32)> = Vec::new();
         let mut y = 0.0;
         self.song_y.clear();
-        for g in groups {
+        for (gi, g) in groups.iter().enumerate() {
+            if let Some((code, n)) = self.sections[gi] {
+                rows.push((Row::Section(code, n), y, SECTION_H, 1.0));
+                y += SECTION_H;
+            }
             self.song_y.push(y);
             rows.push((Row::Song(g.clone()), y, SONG_H, 1.0));
             y += SONG_H;
@@ -977,6 +1034,11 @@ impl Select {
                 continue;
             }
             match row {
+                Row::Section(code, n) => {
+                    let (name, col) = status_heading(*code);
+                    c.rect(24.0, y + SECTION_H - 4.0, lw, 1.0, rgba(col, 0.5));
+                    c.text(28.0, y + 3.0, 8.0, rgba(col, 1.0), &format!("{name}  |  {n} song{}", if *n == 1 { "" } else { "s" }));
+                }
                 Row::Song(g) => {
                     let e = &library[self.visible[g.start]];
                     let open = g.contains(&self.cursor);
