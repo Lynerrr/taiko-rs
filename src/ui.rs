@@ -49,6 +49,8 @@ impl SortMode {
 
 pub struct Select {
     pub filter: String,
+    /// The search box has the keys (clicked, or Ctrl+F): everything typed goes into it.
+    pub searching: bool,
     pub sort: SortMode,
     /// Star rating / length / BPM per library index, filled in the background.
     pub info: Option<crate::mapinfo::Shared>,
@@ -176,6 +178,7 @@ impl Select {
         let mut s = Select {
             list_share: LIST_SHARE.2,
             filter: String::new(),
+            searching: false,
             sort: SortMode::Artist,
             info: None,
             played: std::collections::HashMap::new(),
@@ -389,6 +392,7 @@ impl Select {
             }
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 if let Some(&i) = self.visible.get(self.cursor) {
+                    self.searching = false;
                     return SelectAction::Play(i);
                 }
             }
@@ -398,6 +402,8 @@ impl Select {
                 self.filter.pop();
                 self.refilter(library);
             }
+            // Searching: Escape just leaves the box, the search staying.
+            KeyCode::Escape if self.searching => self.searching = false,
             KeyCode::Escape => {
                 if self.filter.is_empty() {
                     return SelectAction::Quit;
@@ -434,6 +440,9 @@ impl Select {
     }
 
     pub fn type_text(&mut self, text: &str, library: &[Entry]) {
+        if !self.searching {
+            return;
+        }
         let mut changed = false;
         for ch in text.chars().filter(|c| !c.is_control()) {
             self.filter.push(ch);
@@ -794,14 +803,17 @@ impl Select {
             bx -= 6.0;
         }
         let search_w = bx - 24.0;
-        c.round_rect(24.0, 54.0, search_w, 24.0, 6.0, rgba(0x23232f, 0.9), rgba(0x3a3a4e, 1.0), 1.0);
+        let edge = if self.searching { rgba(crate::render::accent(), 1.0) } else { rgba(0x3a3a4e, 1.0) };
+        c.round_rect(24.0, 54.0, search_w, 24.0, 6.0, rgba(0x23232f, 0.9), edge, 1.0);
         let room = search_w - 20.0;
+        let caret = if self.searching { "_" } else { "" };
         let (search, search_col) = if self.filter.is_empty() {
-            let hint = if Canvas::text_width(10.0, "type to search...") <= room { "type to search..." } else { "search..." };
-            (Canvas::fit(10.0, room, hint), 0x6f6f86)
+            let (long, short) = if self.searching { ("type to search...", "search...") } else { ("click to search (ctrl+f)...", "search...") };
+            let hint = if Canvas::text_width(10.0, long) <= room { long } else { short };
+            (Canvas::fit(10.0, room, &format!("{hint}{caret}")), 0x6f6f86)
         } else {
-            let full = format!("search: {}_", self.filter);
-            let text = if Canvas::text_width(10.0, &full) <= room { full } else { Canvas::fit_end(10.0, room, &format!("{}_", self.filter)) };
+            let full = format!("search: {}{caret}", self.filter);
+            let text = if Canvas::text_width(10.0, &full) <= room { full } else { Canvas::fit_end(10.0, room, &format!("{}{caret}", self.filter)) };
             (text, 0xffffff)
         };
         c.text(34.0, 61.0, 10.0, rgba(search_col, 1.0), &search);

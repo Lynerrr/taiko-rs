@@ -172,7 +172,11 @@ fn assert_every_screen_fits() {
     s.select.filter = "camellia long search query that is typed".into();
     s.select.refilter(&s.library);
     check(&mut s, "select filtered", &mut out);
+    s.select.searching = true;
+    check(&mut s, "select filtered, typing", &mut out);
     s.select.filter.clear();
+    check(&mut s, "select, typing", &mut out);
+    s.select.searching = false;
     s.select.collection = None;
     s.select.refilter(&s.library);
 
@@ -657,4 +661,20 @@ fn watching_everyone_shows_where_each_player_plays() {
             assert!(inside as f32 >= shapes.len() as f32 * share, "{} at {w}: {inside} of {} shapes in their strip", mods[k], shapes.len());
         }
     }
+}
+
+#[test]
+fn song_select_search_takes_the_keys_only_once_clicked() {
+    let mut s = state();
+    let press = |s: &mut State, code: KeyCode, text: &str| s.key_inner(code, false, Some(text), Instant::now(), None);
+    press(&mut s, KeyCode::KeyA, "a");
+    assert_eq!(s.select.filter, "", "typing does nothing until the search box is clicked");
+    s.select.searching = true;
+    for (code, text) in [(KeyCode::Minus, "-"), (KeyCode::Digit4, "4"), (KeyCode::Digit5, "5"), (KeyCode::BracketLeft, "[")] {
+        press(&mut s, code, text);
+    }
+    assert_eq!(s.select.filter, "-45[", "in the box every key types, - and [ too");
+    press(&mut s, KeyCode::Escape, "");
+    assert!(!s.select.searching && s.select.filter == "-45[", "Escape leaves the box, keeping the search");
+    assert!(matches!(s.scene, Scene::Select));
 }

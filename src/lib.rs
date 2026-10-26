@@ -3300,9 +3300,13 @@ impl State {
     fn handle_global_key(&mut self, key: KeyCode, window: Option<&Window>) -> bool {
         let step = if self.modifiers_shift { 5.0 } else { 1.0 };
         match key {
-            // Song select: they're letters of the search (there's an artist called -45); the
-            // numpad's still change the offset.
-            KeyCode::Minus | KeyCode::Equal if matches!(self.scene, Scene::Select) && !self.modifiers_ctrl => return false,
+            // Song select's search box has the keys: they're letters of the search (there's an
+            // artist called -45).
+            KeyCode::Minus | KeyCode::Equal | KeyCode::NumpadSubtract | KeyCode::NumpadAdd
+                if matches!(self.scene, Scene::Select) && self.select.searching && !self.modifiers_ctrl =>
+            {
+                return false
+            }
             KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd if self.modifiers_ctrl => {
                 let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) { -step } else { step };
                 self.cfg.visual_offset_ms += d;
@@ -4199,6 +4203,10 @@ impl State {
         if pressed {
             let (vx, vy) = self.mouse_virtual();
             let hit = self.hit_at(vx, vy);
+            // The search box takes the keys when clicked, and gives them back on a click elsewhere.
+            if matches!(self.scene, Scene::Select) {
+                self.select.searching = hit == Some(render::Hit::TextField);
+            }
             if self.select.picker.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::PickRow(_))) {
                 self.select.picker = None;
                 return;
@@ -6330,13 +6338,14 @@ impl State {
             && matches!(self.scene, Scene::Select)
             && code == KeyCode::Escape
             && self.select.filter.is_empty()
+            && !self.select.searching
         {
             self.scene = Scene::Lobby;
             return;
         }
         if self.picking_lobby_map && matches!(self.scene, Scene::Select) && !repeat {
             match code {
-                KeyCode::Escape if self.select.filter.is_empty() => {
+                KeyCode::Escape if self.select.filter.is_empty() && !self.select.searching => {
                     self.picking_lobby_map = false;
                     self.scene = Scene::Lobby;
                     return;
@@ -6376,6 +6385,13 @@ impl State {
             return;
         }
         match &mut self.scene {
+            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyF => self.select.searching = true,
+            // In the search box the keys that have a job here otherwise (speed's [ and ]) type.
+            Scene::Select if self.select.searching && !self.modifiers_ctrl && matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) => {
+                if let Some(text) = text {
+                    self.select.type_text(text, &self.library);
+                }
+            }
             Scene::Select if self.modifiers_shift && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) && !self.picking_lobby_map => {
                 self.play_from_marker();
             }
