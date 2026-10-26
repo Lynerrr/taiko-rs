@@ -47,7 +47,8 @@ fn check(play: &ScoreSubmit) -> Result<(), &'static str> {
         && (1..=100_000).contains(&hits)
         && play.max_combo as u64 <= hits
         && (0.25..=4.0).contains(&play.map.rate)
-        && play.pp.is_none_or(|pp| pp.is_finite() && (0.0..=5000.0).contains(&pp))
+        // No upper limit on pp for now (tests need it); just a real, non-negative number.
+        && play.pp.is_none_or(|pp| pp.is_finite() && pp >= 0.0)
         && play.inputs.len() <= 400_000
         && play.map.hash != 0;
     if !fine {
@@ -473,6 +474,11 @@ mod tests {
         let mut p = play(7, 1, 1.0);
         p.accuracy = 1.5;
         assert!(s.submit("a", "A", p, 0).is_err());
+        // Any amount of pp, but a real one.
+        assert!(s.submit("a", "A", play(7, 1, 12_345.0), 0).is_ok());
+        for pp in [-1.0, f64::NAN, f64::INFINITY] {
+            assert!(s.submit("a", "A", play(7, 1, pp), 0).is_err(), "{pp}");
+        }
         let mut p = play(7, 1, 1.0);
         p.map.mods = vec!["AT".into()];
         assert!(s.submit("a", "A", p, 0).is_err());
