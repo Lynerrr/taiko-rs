@@ -64,6 +64,8 @@ const MAX_FRIENDS: usize = 200;
 const CHAT_HISTORY: usize = 100;
 /// How often a changed online list goes out to everyone.
 const PLAYERS_EVERY: Duration = Duration::from_secs(2);
+/// How often pp is counted again as map sets' statuses become known.
+const COUNT_PP_EVERY: Duration = Duration::from_secs(60);
 
 /// One open social connection (a player can have several, e.g. two PCs).
 struct Conn {
@@ -375,6 +377,8 @@ fn handle(state: &State, stream: TcpStream) {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to send scores".into())) };
             let key = name.to_ascii_lowercase();
             let map = format!("{} - {} [{}]", play.map.artist, play.map.title, play.map.version);
+            // Whether the map gives pp, so the total sent back is right.
+            covers::learn(play.map.set_id);
             match state.scores.lock().unwrap().submit(&key, &name, *play, now_secs()) {
                 Ok((map_rank, pp, rank)) => {
                     println!("score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total");
@@ -905,6 +909,13 @@ fn main() {
     {
         let state = state.clone();
         std::thread::spawn(move || announcer(state));
+    }
+    {
+        let state = state.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(COUNT_PP_EVERY);
+            state.scores.lock().unwrap().count_pp();
+        });
     }
     // IPv6 and IPv4 (on Linux `::` is usually dual-stack and the second bind just fails).
     let mut listeners = Vec::new();

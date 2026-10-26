@@ -1,5 +1,6 @@
 //! The online leaderboards: every play sent in, one JSON line each in DIR/scores.jsonl (kept in
-//! memory too), and its presses in DIR/replays/<id>.json.
+//! memory too), and its presses in DIR/replays/<id>.json. Each play keeps the pp it was sent
+//! with, but only plays on ranked, approved and loved sets count it (see `count_pp`).
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -22,7 +23,10 @@ struct Stored {
     id: u64,
     /// Lowercased account name.
     player: String,
+    /// `score.pp` is what counts; this is what was sent (and is what's saved).
     score: OnlineScore,
+    #[serde(skip)]
+    sent_pp: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -38,6 +42,8 @@ pub struct Scores {
     all: Vec<Stored>,
     next_id: u64,
     submits: HashMap<String, Vec<Instant>>,
+    /// Whether plays on a set give pp (None: not known yet).
+    gives_pp: fn(Option<u32>) -> Option<bool>,
 }
 
 /// What's wrong with a play sent in, if anything.
@@ -73,12 +79,25 @@ impl Scores {
         // Lines from before scores carried their id.
         for s in &mut all {
             s.score.id = s.id;
+            s.sent_pp = s.score.pp;
         }
         let next_id = all.iter().map(|s| s.id + 1).max().unwrap_or(1);
         if let Some(f) = &file {
             println!("{} scores ({})", all.len(), f.display());
         }
-        Scores { file, replays: dir.map(|d| d.join("replays")), all, next_id, submits: HashMap::new() }
+        let mut scores = Scores { file, replays: dir.map(|d| d.join("replays")), all, next_id, submits: HashMap::new(), gives_pp: crate::covers::gives_pp };
+        scores.count_pp();
+        scores
+    }
+
+    /// Counts the pp of plays on sets that give it, and not of the others. A set not known yet
+    /// counts until it is. Called again as sets become known.
+    pub fn count_pp(&mut self) {
+        let mut sets: HashMap<Option<u32>, bool> = HashMap::new();
+        for s in &mut self.all {
+            let gives = *sets.entry(s.score.set_id).or_insert_with(|| (self.gives_pp)(s.score.set_id) != Some(false));
+            s.score.pp = s.sent_pp.filter(|_| gives);
+        }
     }
 
     /// Takes a play by `player` (lowercased key, `name` as written). Returns its place on the map
@@ -117,6 +136,7 @@ impl Scores {
                 id,
                 scroll_speed: play.scroll_speed.filter(|s| s.is_finite() && (0.1..=10.0).contains(s)),
             },
+            sent_pp: play.pp,
         };
         if let Some(dir) = &self.replays {
             let replay = StoredReplay { version: play.replay_version, map: &play.map, inputs: &play.inputs };
@@ -134,7 +154,11 @@ impl Scores {
             }
         }
         let map = stored.score.map_hash;
+        let gives = (self.gives_pp)(stored.score.set_id) != Some(false);
         self.all.push(stored);
+        if let Some(s) = self.all.last_mut().filter(|_| !gives) {
+            s.score.pp = None;
+        }
         let board = self.best_on(map);
         let map_rank = board.iter().position(|s| s.id == id).map(|p| p as u32 + 1);
         let (pp, rank) = self.standing(player);
@@ -495,6 +519,34 @@ mod tests {
         assert_eq!(ranks.iter().map(|r| (r.name.as_str(), r.plays, r.rank)).collect::<Vec<_>>(), [("A", 3, 1), ("B", 1, 2)]);
         assert_eq!(s.map(7).map(|m| (m.name, m.plays, m.players)), Some(("A - T [Oni]".into(), 3, 2)));
         assert_eq!((p.stats.ranked_score, p.stats.total_score, p.firsts.len()), (500 + 100, 500 + 400 + 100, 1));
+    }
+
+    #[test]
+    fn only_plays_on_ranked_and_loved_sets_count_pp() {
+        let mut s = Scores::load(None);
+        // Set 1 ranked, 2 graveyard, 3 not known yet; maps with no set never give pp.
+        s.gives_pp = |set| match set {
+            Some(1) => Some(true),
+            Some(3) => None,
+            _ => Some(false),
+        };
+        let on = |map: u64, set: Option<u32>, pp: f64| {
+            let mut p = play(map, 100, pp);
+            p.map.set_id = set;
+            p
+        };
+        assert_eq!(s.submit("a", "A", on(7, Some(1), 100.0), 1).unwrap().1, 100.0);
+        assert_eq!(s.submit("a", "A", on(8, Some(2), 500.0), 2).unwrap().1, 100.0, "graveyard");
+        assert_eq!(s.submit("a", "A", on(9, None, 500.0), 3).unwrap().1, 100.0, "no set");
+        assert!((s.submit("a", "A", on(10, Some(3), 50.0), 4).unwrap().1 - (100.0 + 47.5)).abs() < 1e-9, "not known yet: counts for now");
+        let p = s.profile("a", "A", 0);
+        assert_eq!(p.top.iter().map(|t| t.map_hash).collect::<Vec<_>>(), [7, 10]);
+        assert_eq!(p.recent.iter().find(|r| r.map_hash == 8).map(|r| r.pp), Some(None), "shown without pp");
+        // Set 3 turns out graveyard, and set 2 gets loved.
+        s.gives_pp = |set| matches!(set, Some(1 | 2)).into();
+        s.count_pp();
+        assert!((s.profile("a", "A", 0).pp - (500.0 + 95.0)).abs() < 1e-9);
+        assert_eq!(s.rankings(10)[0].pp, s.profile("a", "A", 0).pp);
     }
 
     #[test]

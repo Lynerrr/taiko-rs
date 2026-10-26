@@ -665,6 +665,17 @@ fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
 /// A results screen's background work (`ui::Detail`): the pp breakdown of `play` on the map at
 /// `path`; with a replay file, the whole play's stats from it; with an online score id, its
 /// replay fetched from `server` first (and saved, see `scores::save_online`).
+/// Whether plays on library map `e` give pp (only ranked, approved and loved ones do, as on
+/// osu!), from the mirrors' status else osu!.db's; None when it isn't known. The server has the
+/// last word.
+fn map_gives_pp(e: &Entry, set_status: &std::collections::HashMap<u32, Option<String>>, db_status: &std::collections::HashMap<PathBuf, u8>) -> Option<bool> {
+    let Some(set) = e.meta.set_id else { return Some(false) };
+    if let Some(Some(s)) = set_status.get(&set) {
+        return Some(matches!(s.as_str(), "ranked" | "approved" | "loved"));
+    }
+    db_status.get(&e.path).filter(|&&s| s != 0).map(|s| matches!(s, 4 | 5 | 7))
+}
+
 fn results_job(path: PathBuf, play: pp::Play, local: Option<PathBuf>, online: Option<(String, online::OnlineScore, String)>) -> Receiver<ui::Detail> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -6523,6 +6534,8 @@ impl State {
                         Some("failed plays get no pp")
                     } else if from.is_some() {
                         Some("plays from a start point get no pp")
+                    } else if map_gives_pp(&self.library[*entry], &self.set_status, &self.db_status) == Some(false) {
+                        Some("only ranked and loved maps give pp")
                     } else {
                         results.job = Some(results_job(e.path.clone(), play, None, None));
                         None
@@ -6553,7 +6566,7 @@ impl State {
                             inputs: std::mem::take(&mut game.inputs),
                         };
                         let pp = pp::play_pp(&e.path, &replay.pp_play());
-                        results.pp = pp;
+                        results.pp = pp.filter(|_| results.no_pp.is_none());
                         if pp.is_none() && results.no_pp.is_none() {
                             results.no_pp = Some("the map couldn't be rated");
                         }
