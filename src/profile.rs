@@ -67,7 +67,9 @@ impl View {
         };
         // Header: name, then rank, pp, plays and when they joined on the right.
         let rank = p.rank.map(|r| format!("#{r}")).unwrap_or_else(|| "unranked".into());
-        let stats = format!("{rank}   {:.0} pp   {} plays   joined {} ago", p.pp, p.plays, crate::scores::age(p.joined));
+        let hours = p.play_ms as f64 / 3_600_000.0;
+        let time = if hours >= 1.0 { format!("{hours:.0}h played   ") } else if p.play_ms > 0 { format!("{:.0}m played   ", hours * 60.0) } else { String::new() };
+        let stats = format!("{rank}   {:.0} pp   {} plays   {time}joined {} ago", p.pp, p.plays, crate::scores::age(p.joined));
         let stats_w = Canvas::text_width(8.0, &stats).min(pw * 0.6);
         c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), &Canvas::fit(14.0, pw - stats_w - 48.0, &p.name));
         c.text_right(px + pw - 16.0, py + 16.0, 8.0, rgba(0xff8ad8, 1.0), &Canvas::fit(8.0, stats_w, &stats));

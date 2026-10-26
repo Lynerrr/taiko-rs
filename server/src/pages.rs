@@ -88,7 +88,11 @@ pub(crate) fn mod_info(acronym: &str) -> Option<(&'static str, &'static str)> {
 
 /// Badges next to a player's name on their profile, like osu!'s groups: (lowercased name,
 /// label, colour, what it means).
-const BADGES: [(&str, &str, &str, &str); 2] = [("auneu", "DEV", "#EB452C", "taiko.rs developer"), ("lynerrr", "DEV", "#EB452C", "taiko.rs developer")];
+const BADGES: [(&str, &str, &str, &str); 3] = [
+    ("auneu", "DEV", "#EB452C", "taiko.rs developer"),
+    ("lynerrr", "DEV", "#EB452C", "taiko.rs developer"),
+    ("claude", "MAIN DEV", "#d97757", "taiko.rs's main developer"),
+];
 
 fn badges(name: &str) -> String {
     let key = name.to_ascii_lowercase();
@@ -371,6 +375,17 @@ fn cover_style(set: Option<u32>, hash: u64, size: &str) -> String {
 }
 
 /// A player's picture: their initial on a colour of their own.
+/// Time spent playing, like osu!'s: 3d 4h 12m.
+fn play_time(ms: u64) -> String {
+    let minutes = ms / 60_000;
+    let (d, h, m) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    match (d, h) {
+        (0, 0) => format!("{m}m"),
+        (0, _) => format!("{h}h {m}m"),
+        _ => format!("{d}d {h}h {m}m"),
+    }
+}
+
 /// A player's picture, or (without one) their initial on a colour of its own.
 fn avatar(name: &str, class: &str) -> String {
     let key = name.to_ascii_lowercase();
@@ -854,6 +869,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
         hud("TOTAL SCORE", format!("{:08}", st.total_score)),
         hud("TOTAL HITS", thousands(st.total_hits)),
         hud("MAX COMBO", format!("{}x", thousands(st.max_combo as u64))),
+        hud("PLAY TIME", play_time(p.play_ms)),
     ]
     .concat();
     let grades = format!(
@@ -1397,7 +1413,7 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 .ranks{margin-left:auto;display:flex;gap:36px;align-items:flex-end;flex-wrap:wrap}.bigstat span{display:block;color:var(--dim)}.bigstat b{font-size:48px;line-height:48px;color:var(--white)}.bigstat b.pp{color:var(--acc)}
 .level{min-width:220px}.level span{color:var(--dim)}.level b{color:var(--white)}
 .bar{height:16px;margin-top:6px;background:var(--panel2);border:2px solid var(--line2)}.bar i{display:block;height:100%;background:repeating-linear-gradient(90deg,var(--gold) 0 10px,transparent 10px 12px)}
-.hudrow{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:2px;background:var(--line);border:2px solid var(--line);margin-bottom:20px}
+.hudrow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px;background:var(--line);border:2px solid var(--line);margin-bottom:20px}
 .hudstat{background:var(--panel);padding:12px 14px}.hudstat span{display:block;color:var(--dim2)}.hudstat b{font-size:24px;line-height:32px;color:var(--white);white-space:nowrap}
 .hudrow-in{display:flex;gap:28px;flex-wrap:wrap;margin-left:auto}.hudrow-in .hudstat{background:none;padding:0}.hudstat b.mods{font-size:16px}
 .cols-side{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}
@@ -1505,6 +1521,8 @@ mod tests {
     #[test]
     fn badges_go_by_name_in_any_case() {
         assert!(badges("Auneu").contains(">DEV<"));
+        assert!(badges("claude").contains(">MAIN DEV<"));
+        assert_eq!((play_time(59_999), play_time(3_660_000), play_time(90_061_000)), ("0m".into(), "1h 1m".into(), "1d 1h 1m".into()));
         assert!(badges("lynerrr").contains(">DEV<"));
         assert!(badges("Ryuji").is_empty());
     }

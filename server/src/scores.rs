@@ -36,8 +36,25 @@ struct StoredReplay<'a> {
     inputs: &'a [(f64, u8)],
 }
 
+/// A player's plays that aren't on the leaderboards (failed, quit, restarted...) and the time
+/// they've spent playing, all plays told.
+#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq)]
+pub struct Tally {
+    pub other_plays: u32,
+    pub ms: u64,
+}
+
+/// The most of one play's time counted (longer is an odd clock).
+const MAX_PLAY_MS: u64 = 2 * 3600 * 1000;
+/// `Played` reports one account may send per minute.
+const PLAYED_PER_MINUTE: usize = 30;
+
 pub struct Scores {
     file: Option<PathBuf>,
+    /// DIR/playtime.json: each player's `Tally`.
+    tally_file: Option<PathBuf>,
+    tallies: HashMap<String, Tally>,
+    reports: HashMap<String, Vec<Instant>>,
     replays: Option<PathBuf>,
     all: Vec<Stored>,
     next_id: u64,
@@ -85,9 +102,52 @@ impl Scores {
         if let Some(f) = &file {
             println!("{} scores ({})", all.len(), f.display());
         }
-        let mut scores = Scores { file, replays: dir.map(|d| d.join("replays")), all, next_id, submits: HashMap::new(), gives_pp: crate::loved::gives_pp };
+        let tally_file = dir.as_ref().map(|d| d.join("playtime.json"));
+        let tallies = tally_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let mut scores = Scores {
+            file,
+            tally_file,
+            tallies,
+            reports: HashMap::new(),
+            replays: dir.map(|d| d.join("replays")),
+            all,
+            next_id,
+            submits: HashMap::new(),
+            gives_pp: crate::loved::gives_pp,
+        };
         scores.count_pp();
         scores
+    }
+
+    /// `player`'s plays off the leaderboards and time spent playing.
+    pub fn tally(&self, player: &str) -> Tally {
+        self.tallies.get(player).copied().unwrap_or_default()
+    }
+
+    /// Adds `ms` of playing to `player`'s time, and (`other`) a play off the leaderboards.
+    fn count_play(&mut self, player: &str, ms: u64, other: bool) {
+        let t = self.tallies.entry(player.to_string()).or_default();
+        t.ms += ms.min(MAX_PLAY_MS);
+        t.other_plays += other as u32;
+        if let Some(file) = &self.tally_file {
+            let tmp = file.with_extension("json.tmp");
+            let text = serde_json::to_string(&self.tallies).unwrap_or_default();
+            if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, file)) {
+                eprintln!("saving play time: {e}");
+            }
+        }
+    }
+
+    /// A play `player` didn't send to the leaderboards (`Request::Played`).
+    pub fn played(&mut self, player: &str, ms: u64) -> Result<(), String> {
+        let times = self.reports.entry(player.to_string()).or_default();
+        times.retain(|t| t.elapsed() < Duration::from_secs(60));
+        if times.len() >= PLAYED_PER_MINUTE {
+            return Err("too many plays at once, slow down".into());
+        }
+        times.push(Instant::now());
+        self.count_play(player, ms, true);
+        Ok(())
     }
 
     /// Counts the pp of plays on sets that give it, and not of the others. A set not known yet
@@ -152,6 +212,9 @@ impl Scores {
                 eprintln!("saving score {id}: {e}");
                 return Err("the server couldn't save it".into());
             }
+        }
+        if let Some(ms) = play.play_ms {
+            self.count_play(player, ms, false);
         }
         let map = stored.score.map_hash;
         let gives = (self.gives_pp)(stored.score.set_id) != Some(false);
@@ -250,7 +313,7 @@ impl Scores {
                     name: plays.last().map(|s| s.score.player.clone()).unwrap_or_default(),
                     pp,
                     accuracy: stats.accuracy,
-                    plays: plays.len() as u32,
+                    plays: plays.len() as u32 + self.tally(&plays[0].player).other_plays,
                     ss: stats.ss,
                     s: stats.s,
                     a: stats.a,
@@ -372,7 +435,8 @@ impl Scores {
             maps.into_iter().filter_map(|m| self.best_on(m).first().filter(|s| s.player == player).map(|s| s.score.clone())).collect();
         firsts.sort_by(|a, b| b.date.cmp(&a.date));
         firsts.truncate(PROFILE_PLAYS);
-        Profile { name: name.to_string(), joined, plays: mine.len() as u32, pp, rank, top, recent, stats, firsts, online: false }
+        let tally = self.tally(player);
+        Profile { name: name.to_string(), joined, plays: mine.len() as u32 + tally.other_plays, pp, rank, top, recent, stats, firsts, online: false, play_ms: tally.ms }
     }
 }
 
@@ -480,7 +544,30 @@ mod tests {
             inputs: vec![(1000.0, 1)],
             stars: Some(5.0),
             scroll_speed: Some(0.5),
+            play_ms: Some(60_000),
         }
+    }
+
+    #[test]
+    fn plays_off_the_leaderboards_count_in_plays_and_time() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-playtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        s.played("a", 30_000).unwrap();
+        s.played("a", 99 * 3600 * 1000).unwrap();
+        let p = s.profile("a", "A", 0);
+        assert_eq!((p.plays, p.play_ms), (3, 60_000 + 30_000 + MAX_PLAY_MS));
+        assert_eq!(s.rankings(10)[0].plays, 3);
+        // Kept across a restart.
+        assert_eq!(Scores::load(Some(dir.clone())).tally("a"), Tally { other_plays: 2, ms: 60_000 + 30_000 + MAX_PLAY_MS });
+        // Not too many at once.
+        for _ in 0..PLAYED_PER_MINUTE {
+            let _ = s.played("b", 1);
+        }
+        assert!(s.played("b", 1).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

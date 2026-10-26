@@ -355,6 +355,9 @@ struct State {
     /// way, for the message), and whether it's been asked since starting.
     loved_call: Option<(Receiver<Result<online::Reply, String>>, Option<(u32, bool)>)>,
     loved_asked: bool,
+    /// The live play going on (its time played so far), until it's sent to the leaderboards or
+    /// left some other way: then it's counted on the server as played (`Request::Played`).
+    playing: Option<f64>,
     /// The selected set and since when: asked about once the selection rests.
     status_wait: Option<(u32, Instant)>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
@@ -4597,6 +4600,41 @@ impl State {
         self.mp_menu.cursor = 0;
     }
 
+    /// The time played so far of the live play going on: a song or a lobby match (also while
+    /// its pause menu's settings are open), not autoplay or a replay (Relax is still playing).
+    fn live_play_ms(&self) -> Option<f64> {
+        fn game_of(scene: &Scene) -> Option<&Game> {
+            match scene {
+                Scene::Play { game, .. } | Scene::MpPlay { game, .. } => Some(game),
+                Scene::Settings { prev } => game_of(prev),
+                _ => None,
+            }
+        }
+        let g = game_of(&self.scene)?;
+        (g.replay.is_none() && !self.auto && !g.mods.has(mods::Mod::Autoplay)).then_some(g.played_ms)
+    }
+
+    /// Follows the live play; once it's gone without going to the leaderboards (failed, quit,
+    /// restarted, from a start point, a lobby match), tells the server it was played, for the
+    /// profile's play count and play time.
+    fn track_play(&mut self) {
+        if let Some(ms) = self.live_play_ms() {
+            self.playing = Some(ms);
+            return;
+        }
+        let Some(ms) = self.playing.take() else { return };
+        // A start that's left at once isn't a play.
+        if ms < 1000.0 || self.cfg.online_token.is_empty() {
+            return;
+        }
+        let (server, token) = (self.cfg.online_server.clone(), self.cfg.online_token.clone());
+        std::thread::spawn(move || {
+            if let Err(e) = online::call(&server, online::Request::Played { token, ms: ms as u64 }) {
+                eprintln!("counting the play: {e}");
+            }
+        });
+    }
+
     /// Asks the online server which map sets are loved there, or (`change`) loves one or takes
     /// it back, in the background.
     fn call_loved(&mut self, change: Option<(u32, bool)>) {
@@ -6525,6 +6563,7 @@ impl State {
 
         }
         self.poll_multiplayer();
+        self.track_play();
         if self.cfg.check_updates {
             self.updater.check_every(UPDATE_CHECK_EVERY);
         }
@@ -6900,8 +6939,11 @@ impl State {
                                 inputs: replay.inputs.clone(),
                                 stars: stars::star_rating(&e.path, replay.rate),
                                 scroll_speed: Some(replay.scroll_speed),
+                                play_ms: Some(game.played_ms as u64),
                             };
                             self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
+                            // Counted with the play itself.
+                            self.playing = None;
                             results.total_due = true;
                             self.online_boards.remove(&replay.map_hash);
                         }
@@ -8898,6 +8940,7 @@ impl State {
             set_status_rx,
             loved_call: None,
             loved_asked: false,
+            playing: None,
             status_wait: None,
             scene_kind: None,
             scene_since: Instant::now(),

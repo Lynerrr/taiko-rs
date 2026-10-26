@@ -58,6 +58,10 @@ pub enum Request {
     LovedSets,
     /// A loved nominator loves a map set on the server, or takes it back (`Reply::LovedSets`).
     SetLoved { token: String, set: u32, loved: bool },
+    /// A play that isn't on the leaderboards (failed, quit, restarted, from a start point, in
+    /// a lobby): it counts in the profile's play count, and `ms` of playing in its play time
+    /// (`Reply::Counted`).
+    Played { token: String, ms: u64 },
 }
 
 /// A play sent to the server: what the leaderboards show, and the replay's presses (kept so
@@ -80,6 +84,9 @@ pub struct ScoreSubmit {
     /// Star rating at the rate played.
     #[serde(default)]
     pub stars: Option<f64>,
+    /// Real milliseconds spent playing it (pauses left out), for the profile's play time.
+    #[serde(default)]
+    pub play_ms: Option<u64>,
     /// The scroll speed setting played at (pp count it).
     #[serde(default)]
     pub scroll_speed: Option<f64>,
@@ -153,7 +160,8 @@ pub struct Profile {
     pub name: String,
     /// Unix seconds.
     pub joined: u64,
-    /// Plays sent, and their pp total (best per map, weighted like osu!).
+    /// Plays (sent to the leaderboards, and the others: failed, quit...), and their pp total
+    /// (best per map, weighted like osu!).
     pub plays: u32,
     pub pp: f64,
     /// Place among everyone by pp (1-based; None without pp yet).
@@ -168,6 +176,9 @@ pub struct Profile {
     pub firsts: Vec<OnlineScore>,
     #[serde(default)]
     pub online: bool,
+    /// Time spent playing (real milliseconds, pauses left out), counted since this was added.
+    #[serde(default)]
+    pub play_ms: u64,
 }
 
 /// A player's totals, like osu!'s profile.
@@ -328,6 +339,8 @@ pub enum Reply {
     },
     /// The map sets loved on the server.
     LovedSets(Vec<u32>),
+    /// A `Played` play was counted.
+    Counted,
     LoggedOut,
     Rooms(Vec<RoomInfo>),
     /// In the room: from here on this connection speaks the room protocol. Send Hello with

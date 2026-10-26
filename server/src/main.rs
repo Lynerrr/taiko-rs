@@ -247,10 +247,16 @@ impl State {
         let mut accounts: Accounts = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         let cutoff = now_secs().saturating_sub(SESSION_DAYS * 86400);
         accounts.sessions.retain(|_, s| s.created >= cutoff);
+        // Claude's profile (its badge is in `pages`): a password nobody knows, so nobody logs in.
+        let claude_new = !accounts.users.contains_key("claude");
+        if claude_new {
+            let hash = hash_password(&new_token()).expect("argon2");
+            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false });
+        }
         println!("{} accounts, {} sessions ({})", accounts.users.len(), accounts.sessions.len(), path.display());
         // Scores live next to the accounts.
         let scores = scores::Scores::load(Some(path.parent().map(|d| d.to_path_buf()).unwrap_or_default()));
-        State {
+        let state = State {
             accounts: Mutex::new(accounts),
             path,
             lobbies: Mutex::new(HashMap::new()),
@@ -260,7 +266,11 @@ impl State {
             hub: Mutex::new(Hub::default()),
             scores: Mutex::new(scores),
             verify_codes: Mutex::new(HashMap::new()),
+        };
+        if claude_new {
+            state.save(&state.accounts.lock().unwrap());
         }
+        state
     }
 
     /// Writes accounts.json atomically (temp file, then rename), readable by its owner only.
@@ -414,6 +424,13 @@ fn handle(state: &State, stream: TcpStream) {
             Some(s) => Reply::Score(Box::new(s)),
             None => Reply::Error("that score isn't on the server".into()),
         },
+        Request::Played { token, ms } => {
+            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
+            match state.scores.lock().unwrap().played(&name.to_ascii_lowercase(), ms) {
+                Ok(()) => Reply::Counted,
+                Err(e) => Reply::Error(e),
+            }
+        }
         Request::LovedSets => Reply::LovedSets(loved::all().into_iter().map(|(set, _)| set).collect()),
         Request::SetLoved { token, set, loved: on } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };

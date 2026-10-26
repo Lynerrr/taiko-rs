@@ -215,6 +215,10 @@ pub struct Game {
     paused_at: Instant,
     /// Counting down to unpause: (started, ends). The menu is hidden meanwhile.
     pub resuming: Option<(Instant, Instant)>,
+    /// Real milliseconds spent playing (not paused, nor counting down to resume, nor failed),
+    /// for the profile's play time; and the frame they were last counted at.
+    pub played_ms: f64,
+    played_at: Option<Instant>,
     /// Calibration: draw no notes or barlines (play by ear) / play no hitsounds on presses.
     pub hide_notes: bool,
     /// Draw the HP bar (not in calibration).
@@ -1240,6 +1244,8 @@ impl Game {
             paused: None,
             paused_at: Instant::now(),
             resuming: None,
+            played_ms: 0.0,
+            played_at: None,
             hide_notes: false,
             show_hp: true,
             mute_hits: false,
@@ -1344,6 +1350,12 @@ impl Game {
     /// Advances the clock. Returns true once the map is over.
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>, offset: f64) -> bool {
         self.offset = offset;
+        let playing = self.paused.is_none() && self.resuming.is_none() && self.failed.is_none();
+        if let Some(at) = self.played_at.filter(|_| playing) {
+            // A long stall (the window dragged, the machine asleep) counts as a second at most.
+            self.played_ms += now.saturating_duration_since(at).as_secs_f64().min(1.0) * 1000.0;
+        }
+        self.played_at = playing.then_some(now);
         if let Some(live) = &mut self.live_pp {
             let st = &self.stats;
             self.live_pp_value = live.update(st.great, st.ok, st.miss, st.max_combo);
@@ -3629,6 +3641,30 @@ mod tests {
         }
         let end = g.end_time + 2000.0;
         g.set_time(end);
+    }
+
+    #[test]
+    fn play_time_leaves_out_pauses_and_the_resume_countdown() {
+        let mut g = game();
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
+        g.update(at(0), None, 0.0);
+        g.update(at(1000), None, 0.0);
+        g.update(at(1500), None, 0.0);
+        assert!((g.played_ms - 1500.0).abs() < 1.0, "{}", g.played_ms);
+        g.paused = Some(0);
+        g.update(at(9000), None, 0.0);
+        // Counting down to resume doesn't count either.
+        g.paused = None;
+        g.resuming = Some((at(9000), at(12_000)));
+        g.update(at(11_000), None, 0.0);
+        g.resuming = None;
+        g.update(at(12_000), None, 0.0);
+        g.update(at(12_500), None, 0.0);
+        assert!((g.played_ms - 2000.0).abs() < 1.0, "{}", g.played_ms);
+        // A stall counts as a second at most.
+        g.update(at(60_000), None, 0.0);
+        assert!((g.played_ms - 3000.0).abs() < 1.0, "{}", g.played_ms);
     }
 
     #[test]
