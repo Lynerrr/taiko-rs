@@ -720,6 +720,24 @@ fn songs_sort_by_hp_od_and_status() {
 }
 
 #[test]
+fn a_guests_mod_select_shows_the_hosts_speed_mods_on() {
+    let mut s = state();
+    let mut room = session(false);
+    // We're player 1; player 0 hosts.
+    room.client.id = Some(1);
+    room.map.as_mut().unwrap().mods = Mods::parse("DT,HD").list();
+    s.mp = Some(room);
+    s.scene = Scene::Lobby;
+    s.cfg.mods = Mods::parse("FL");
+    let shown = s.shown_mods();
+    assert!(shown.has(mods::Mod::DoubleTime) && shown.has(mods::Mod::Flashlight), "the host's speed and our own");
+    assert!(!shown.has(mods::Mod::Hidden), "the host's other mods aren't forced on us");
+    // Not in a lobby (or as the host), the mod select shows just ours.
+    s.scene = Scene::Select;
+    assert_eq!(s.shown_mods(), s.cfg.mods);
+}
+
+#[test]
 fn np_names_the_map_on_screen_with_a_link_others_can_click() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
