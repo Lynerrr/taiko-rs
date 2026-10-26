@@ -605,6 +605,14 @@ fn exiting_asks_first() {
     assert!(s.quit_asked && !s.quit);
     key(&mut s, KeyCode::Enter);
     assert!(s.quit);
+    // Like osu!: 2 stays, 1 exits.
+    let mut s = state();
+    key(&mut s, KeyCode::F12);
+    key(&mut s, KeyCode::Digit2);
+    assert!(!s.quit_asked && !s.quit);
+    key(&mut s, KeyCode::F12);
+    key(&mut s, KeyCode::Digit1);
+    assert!(s.quit);
     // The close button twice exits too.
     let mut s = state();
     s.ask_quit();

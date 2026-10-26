@@ -6051,11 +6051,11 @@ impl State {
         }
     }
 
-    /// A key while "Exit taiko.rs?" is up: yes, no, or nothing.
+    /// A key while "Exit taiko.rs?" is up: yes, no, or nothing. 1 and 2 answer like osu!'s.
     fn quit_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::KeyY | KeyCode::F12 => self.quit = true,
-            KeyCode::Escape | KeyCode::KeyN | KeyCode::Backspace => self.quit_asked = false,
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::KeyY | KeyCode::F12 | KeyCode::Digit1 | KeyCode::Numpad1 => self.quit = true,
+            KeyCode::Escape | KeyCode::KeyN | KeyCode::Backspace | KeyCode::Digit2 | KeyCode::Numpad2 => self.quit_asked = false,
             _ => {}
         }
     }
@@ -6073,8 +6073,8 @@ impl State {
         c.text_centered(w / 2.0, y + 18.0, 12.0, rgba(0xffffff, 1.0), "Exit taiko.rs?");
         let gap = 10.0;
         let button = (bw - 36.0 - gap) / 2.0;
-        c.button(x + 18.0, y + 56.0, button, 26.0, "Exit  (Enter)", 9.0, render::Hit::Key(KeyCode::KeyY), true);
-        c.button(x + 18.0 + button + gap, y + 56.0, button, 26.0, "Stay  (Esc)", 9.0, render::Hit::Key(KeyCode::KeyN), false);
+        c.button(x + 18.0, y + 56.0, button, 26.0, "1. Exit  (Enter)", 9.0, render::Hit::Key(KeyCode::KeyY), true);
+        c.button(x + 18.0 + button + gap, y + 56.0, button, 26.0, "2. Stay  (Esc)", 9.0, render::Hit::Key(KeyCode::KeyN), false);
     }
 
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
