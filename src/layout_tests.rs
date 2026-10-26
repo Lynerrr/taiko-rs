@@ -717,13 +717,44 @@ fn songs_sort_by_hp_od_and_status() {
     let first: Vec<u8> = s.select.songs().iter().map(|song| s.select.status[&s.library[song[0]].path]).collect();
     let rank = |c: u8| [search::LOVED, search::RANKED, search::PENDING, search::UNKNOWN].iter().position(|&x| x == c).unwrap();
     assert!(first.iter().map(|&c| rank(c)).collect::<Vec<_>>().is_sorted(), "{first:?}");
-    // Each status is a section of its own, with its songs counted; other sorts have none.
+    // Each status is a section of its own, with its songs counted; every sort has its headings.
     let sections = s.select.sections();
-    assert_eq!(sections.iter().map(|x| x.0).collect::<Vec<_>>(), vec![search::LOVED, search::RANKED, search::PENDING, search::UNKNOWN]);
+    assert_eq!(sections.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["Loved", "Ranked", "Pending / Graveyard", "Status not known yet"]);
     assert_eq!(sections.iter().map(|x| x.1).sum::<usize>(), s.select.songs().len());
-    s.select.sort = ui::SortMode::Hp;
+    for sort in ui::SortMode::ALL {
+        s.select.sort = sort;
+        s.select.refilter(&s.library);
+        let sections = s.select.sections();
+        assert!(!sections.is_empty() && sections.iter().map(|x| x.1).sum::<usize>() == s.select.songs().len(), "{sort:?}");
+        assert!(sections.iter().all(|x| !x.0.is_empty()), "{sort:?}");
+    }
+}
+
+#[test]
+fn a_sorted_list_shows_the_songs_of_one_heading_and_clicking_one_opens_or_closes_it() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let paths: Vec<PathBuf> = s.library.iter().map(|e| e.path.clone()).collect();
+    for (k, p) in paths.iter().enumerate() {
+        s.select.status.insert(p.clone(), [search::LOVED, search::RANKED, search::PENDING][(k / 3) % 3]);
+    }
+    s.select.sort = ui::SortMode::Status;
     s.select.refilter(&s.library);
-    assert!(s.select.sections().is_empty());
+    let n = s.select.sections().len();
+    assert!(n >= 2);
+    // The heading holding the selection is the open one.
+    assert_eq!(s.select.open_sections(), vec![0]);
+    s.select.click_section(0, &s.library);
+    assert!(s.select.open_sections().is_empty(), "clicking the open heading closes it");
+    s.select.click_section(0, &s.library);
+    assert_eq!(s.select.open_sections(), vec![0], "and again opens it");
+    // Another heading opens on its first song, and the first closes.
+    s.select.click_section(1, &s.library);
+    assert_eq!(s.select.open_sections(), vec![1]);
+    assert_eq!(s.select.current_song(), Some(s.select.sections_first_song(1)));
+    // It all draws.
+    check_draw("sections", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None));
 }
 
 #[test]

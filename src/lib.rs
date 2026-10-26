@@ -8303,6 +8303,7 @@ impl State {
                 self.download_key(KeyCode::Enter, None, window);
             }
             Hit::SongHeader(row) => self.click(Hit::SongRow(row), window),
+            Hit::SectionHeader(s) => self.select.click_section(s, &self.library),
             Hit::ModsButton => self.open_mod_select(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
