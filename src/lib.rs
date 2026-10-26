@@ -3808,7 +3808,7 @@ impl State {
                 let n = self.select.picker_len() as i32;
                 self.select.picker = self.select.picker.map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
-            Scene::Select => self.select.step(-notches, &self.library),
+            Scene::Select => self.select.step(-notches, &self.library, false),
             Scene::Download if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Download => self.browse.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
@@ -8329,7 +8329,7 @@ impl State {
                 self.download_key(KeyCode::Enter, None, window);
             }
             Hit::SongHeader(row) => self.click(Hit::SongRow(row), window),
-            Hit::SectionHeader(s) => self.select.click_section(s, &self.library),
+            Hit::SectionHeader(s) => self.select.click_section(s),
             Hit::ModsButton => self.open_mod_select(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);

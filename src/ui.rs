@@ -128,9 +128,14 @@ pub struct Select {
     sections: Vec<Section>,
     /// The section of each song (`groups`).
     section_of: Vec<usize>,
-    /// A section closed by clicking its heading, and the cursor at the time: moving the selection
-    /// opens it again.
-    closed: Option<(usize, usize)>,
+    /// The headings (by name) whose songs are listed: the ones opened by clicking them, and the
+    /// one the selection moved into. Scrolling never opens or closes any.
+    open: std::collections::HashSet<String>,
+    /// The sort `open` is for (another starts over with the selection's section).
+    open_for: SortMode,
+    /// The cursor when the player closed the heading it was under: it stays closed until the
+    /// selection moves.
+    closed_at: Option<usize>,
     /// What the sort ordered each row of `visible` by (its song's value; NaN: not known or the
     /// sort has none).
     row_value: Vec<f64>,
@@ -265,7 +270,9 @@ impl Select {
             group_of: Vec::new(),
             sections: Vec::new(),
             section_of: Vec::new(),
-            closed: None,
+            open: Default::default(),
+            open_for: SortMode::Artist,
+            closed_at: None,
             row_value: Vec::new(),
             cursor: 0,
             scroll: 0.0,
@@ -315,6 +322,7 @@ impl Select {
                 self.enter_song(0, library);
             }
         }
+        self.open_cursor_section();
     }
 
     /// The listed songs in order, each as its difficulties' library indices.
@@ -337,10 +345,10 @@ impl Select {
         self.sections.iter().map(|s| (s.label.clone(), s.groups.len())).collect()
     }
 
-    /// The first song of section `s`, as an index of `songs()`.
+    /// One past the last song of section `s`, as an index of `songs()`.
     #[cfg(test)]
-    pub fn sections_first_song(&self, s: usize) -> usize {
-        self.sections[s].groups.start
+    pub fn sections_end(&self, s: usize) -> usize {
+        self.sections[s].groups.end
     }
 
     /// The headings whose songs are listed: the one holding the selection, unless closed.
@@ -460,7 +468,10 @@ impl Select {
         }
         self.sections.clear();
         self.section_of.clear();
-        self.closed = None;
+        if self.open_for != self.sort {
+            self.open_for = self.sort;
+            self.open.clear();
+        }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         for g in 0..self.groups.len() {
             let (label, colour) = self.section_heading(library, self.groups[g].start, now);
@@ -470,6 +481,8 @@ impl Select {
             }
             self.section_of.push(self.sections.len() - 1);
         }
+        let labels: std::collections::HashSet<&str> = self.sections.iter().map(|s| s.label.as_str()).collect();
+        self.open.retain(|l| labels.contains(l.as_str()));
     }
 
     /// The heading the song at row `row` is listed under for the sort: what it's grouped by.
@@ -524,21 +537,37 @@ impl Select {
         self.group_of.get(self.cursor).map(|&g| self.section_of[g])
     }
 
-    /// Whether section `s` lists its songs: it holds the selection and wasn't closed.
+    /// Whether section `s` lists its songs.
     fn section_open(&self, s: usize) -> bool {
-        self.cursor_section() == Some(s) && self.closed != Some((s, self.cursor))
+        self.open.contains(&self.sections[s].label)
     }
 
-    /// A click on heading `s`: the open one closes (or opens again); another opens, on its first
-    /// song.
-    pub fn click_section(&mut self, s: usize, library: &[Entry]) {
-        let Some(sec) = self.sections.get(s) else { return };
-        if self.cursor_section() == Some(s) {
-            self.closed = if self.closed == Some((s, self.cursor)) { None } else { Some((s, self.cursor)) };
-        } else {
-            let first = self.groups[sec.groups.start].start;
-            self.enter_song(first, library);
+    /// The heading the selection is under stays open, unless the player closed it with the
+    /// selection there.
+    fn open_cursor_section(&mut self) {
+        if let Some(s) = self.cursor_section() {
+            if self.closed_at != Some(self.cursor) && !self.sections[s].label.is_empty() {
+                self.open.insert(self.sections[s].label.clone());
+            }
         }
+    }
+
+    /// A click on heading `s`: opens it or closes it (the selection stays where it is).
+    pub fn click_section(&mut self, s: usize) {
+        let Some(sec) = self.sections.get(s) else { return };
+        if !self.open.remove(&sec.label) {
+            self.open.insert(sec.label.clone());
+            if self.cursor_section() == Some(s) {
+                self.closed_at = None;
+            }
+        } else if self.cursor_section() == Some(s) {
+            self.closed_at = Some(self.cursor);
+        }
+    }
+
+    /// The songs (`groups` indices) whose headings are open, in order: what scrolling goes through.
+    fn listed_groups(&self) -> Vec<usize> {
+        (0..self.groups.len()).filter(|&g| self.section_open(self.section_of[g])).collect()
     }
 
     /// The song (range of `visible`) containing the cursor.
@@ -555,12 +584,16 @@ impl Select {
     pub fn key(&mut self, key: KeyCode, library: &[Entry]) -> SelectAction {
         let n = self.visible.len();
         match key {
-            KeyCode::ArrowDown => self.step(1, library),
-            KeyCode::ArrowUp => self.step(-1, library),
+            KeyCode::ArrowDown => self.step(1, library, true),
+            KeyCode::ArrowUp => self.step(-1, library, true),
             KeyCode::PageDown => self.jump_songs(5, library),
             KeyCode::PageUp => self.jump_songs(-5, library),
-            KeyCode::Home => self.enter_song(0, library),
-            KeyCode::End => self.enter_song(n.saturating_sub(1), library),
+            KeyCode::Home | KeyCode::End => {
+                let listed = self.listed_groups();
+                if let Some(&g) = if key == KeyCode::Home { listed.first() } else { listed.last() } {
+                    self.enter_song(self.groups[g].start, library);
+                }
+            }
             // Jump between beatmap sets.
             KeyCode::ArrowRight | KeyCode::ArrowLeft => {
                 if let Some(&cur) = self.visible.get(self.cursor) {
@@ -610,23 +643,55 @@ impl Select {
     }
 
     /// Up/Down and the mouse wheel (`n` steps, negative = up): through the open song's
-    /// difficulties, and past its first or last one into the previous or next song.
-    pub fn step(&mut self, n: i32, library: &[Entry]) {
+    /// difficulties, and past its first or last one into the previous or next listed song. With
+    /// `open_next` (the keys), past the last listed song the next heading opens and goes on into
+    /// it; the wheel stops there.
+    pub fn step(&mut self, n: i32, library: &[Entry], open_next: bool) {
         for _ in 0..n.unsigned_abs() {
             let Some(g) = self.cursor_group() else { return };
             let next = self.cursor as i64 + n.signum() as i64;
             if (g.start as i64..g.end as i64).contains(&next) {
                 self.cursor = next as usize;
             } else {
-                self.jump_songs(n.signum(), library);
+                self.move_songs(n.signum(), library, open_next);
             }
         }
     }
 
-    /// Moves `n` songs on (negative = back), onto each song's remembered or hardest difficulty.
+    /// Moves `n` songs on (negative = back) among those listed (the open headings'), onto each
+    /// song's remembered or hardest difficulty.
     pub fn jump_songs(&mut self, n: i32, library: &[Entry]) {
+        self.move_songs(n, library, false);
+    }
+
+    fn move_songs(&mut self, n: i32, library: &[Entry], open_next: bool) {
         let Some(&g) = self.group_of.get(self.cursor) else { return };
-        let target = (g as i64 + n as i64).clamp(0, self.groups.len() as i64 - 1) as usize;
+        let listed = self.listed_groups();
+        // Where the selection's song is among them (or would be, if its heading was closed).
+        let pos = listed.partition_point(|&k| k < g);
+        let base = match listed.get(pos) {
+            Some(&k) if k == g => pos as i64,
+            _ if n > 0 => pos as i64 - 1,
+            _ => pos as i64,
+        };
+        let idx = base + n as i64;
+        let target = if (0..listed.len() as i64).contains(&idx) {
+            listed[idx as usize]
+        } else if open_next && n.abs() == 1 {
+            // Past the end of what's listed: the heading next to it.
+            let edge = if n > 0 { listed.last().copied().unwrap_or(g) as i64 + 1 } else { listed.first().copied().unwrap_or(g) as i64 - 1 };
+            if !(0..self.groups.len() as i64).contains(&edge) {
+                return;
+            }
+            let label = self.sections[self.section_of[edge as usize]].label.clone();
+            self.open.insert(label);
+            edge as usize
+        } else {
+            match listed.get(idx.clamp(0, listed.len() as i64 - 1) as usize) {
+                Some(&k) => k,
+                None => return,
+            }
+        };
         if target != g {
             self.enter_song(self.groups[target].start, library);
         }
@@ -664,6 +729,7 @@ impl Select {
     pub fn set_cursor(&mut self, row: usize) {
         if row < self.visible.len() {
             self.cursor = row;
+            self.open_cursor_section();
         }
     }
 
@@ -736,6 +802,7 @@ impl Select {
                 self.hardest_pending = Some(g.start);
             }
         }
+        self.open_cursor_section();
     }
 
     /// Left-button drag: the list follows the pointer, `dy` (virtual units) from where it was
@@ -774,6 +841,7 @@ impl Select {
             .song_y
             .iter()
             .enumerate()
+            .filter(|(_, y)| y.is_finite())
             .min_by(|a, b| (a.1 - line).abs().total_cmp(&(b.1 - line).abs()))
             .map(|(g, _)| g);
         // Glide from where the list was dropped; further takes a little longer.
@@ -885,14 +953,14 @@ impl Select {
     }
 
     /// osu!'s right-click scrolling: the pointer's height over the list (`y`, virtual units)
-    /// picks the song that far through the whole list, top to bottom.
+    /// picks the song that far through the listed songs (the open headings'), top to bottom.
     pub fn scroll_to(&mut self, y: f32, library: &[Entry]) {
-        let n = self.groups.len();
-        if n == 0 {
+        let listed = self.listed_groups();
+        if listed.is_empty() {
             return;
         }
         let frac = ((y - LIST_TOP) / (LIST_BOTTOM - LIST_TOP)).clamp(0.0, 1.0);
-        let g = (frac * (n - 1) as f32).round() as usize;
+        let g = listed[(frac * (listed.len() - 1) as f32).round() as usize];
         if self.group_of.get(self.cursor) != Some(&g) {
             self.enter_song(self.groups[g].start, library);
         }
@@ -952,6 +1020,7 @@ impl Select {
 
     /// `stars` looks up a difficulty's star rating (library index) if it has been calculated.
     pub fn draw(&mut self, c: &mut Canvas, library: &[Entry], dt_ms: f64, status: &str, stars: &dyn Fn(usize) -> Option<f32>) {
+        self.open_cursor_section();
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
         let groups = &self.groups;
@@ -1131,8 +1200,8 @@ impl Select {
             y += SECTION_H;
             for g in &groups[sec.groups.clone()] {
                 if !section_open[si] {
-                    // Not listed: the song's place is its heading's (for dragging the list).
-                    self.song_y.push(y - SECTION_H);
+                    // Not listed: nowhere to land when the list is let go.
+                    self.song_y.push(f32::INFINITY);
                     continue;
                 }
                 self.song_y.push(y);
