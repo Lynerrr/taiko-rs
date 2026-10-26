@@ -8,12 +8,16 @@
 //! DIR/discord-changelog.json. It talks to Discord's gateway (a websocket) for messages and its
 //! HTTP API for replies; everything runs on threads of its own, and a broken connection is
 //! simply made again.
+//!
+//! The developer's mentions of the bot (see `PINGER`) are pings for Claude: each is kept, with
+//! the thread it's in, in DIR/claude-pings.jsonl, and the website hands them out to whoever has
+//! the key in DIR/claude-key (`/api/claude/pings`) and posts the answers (`/api/claude/reply`).
 
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -33,6 +37,14 @@ const COLOUR: u32 = 0xEB452C;
 /// Plays a page of `>top` and `>lb` shows.
 const PAGE: usize = 5;
 const LB_PAGE: usize = 10;
+/// The player (verified with `>verify`) whose mentions of the bot go to Claude.
+const PINGER: &str = "auneu";
+/// Messages of the thread kept with a ping, and the pings kept to hand out.
+const PING_CONTEXT: usize = 40;
+const PINGS_KEPT: usize = 200;
+
+/// The running bot, for the website's Claude endpoints.
+static BOT: OnceLock<Arc<Bot>> = OnceLock::new();
 
 pub(crate) struct Bot {
     token: String,
@@ -47,6 +59,10 @@ pub(crate) struct Bot {
     /// showed (replying to one with `>c`).
     last_map: Mutex<HashMap<String, u64>>,
     shown: Mutex<HashMap<String, u64>>,
+    /// The bot's own user id (from READY), to know when it's mentioned.
+    me: Mutex<String>,
+    /// The latest pings for Claude, oldest first.
+    pings: Mutex<Vec<Value>>,
     http: ureq::Agent,
 }
 
@@ -60,7 +76,10 @@ pub fn start(state: Arc<State>, dir: PathBuf) {
     let links = std::fs::read_to_string(dir.join("discord-links.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let http: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).http_status_as_error(false).build().into();
     let verified = std::fs::read_to_string(dir.join("discord-verified.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    let bot = Arc::new(Bot { token, dir, state, links: Mutex::new(links), verified: Mutex::new(verified), last_map: Mutex::default(), shown: Mutex::default(), http });
+    let pings: Vec<Value> = std::fs::read_to_string(dir.join("claude-pings.jsonl")).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    let pings = pings[pings.len().saturating_sub(PINGS_KEPT)..].to_vec();
+    let bot = Arc::new(Bot { token, dir, state, links: Mutex::new(links), verified: Mutex::new(verified), last_map: Mutex::default(), shown: Mutex::default(), me: Mutex::default(), pings: Mutex::new(pings), http });
+    let _ = BOT.set(bot.clone());
     {
         let bot = bot.clone();
         std::thread::Builder::new().name("discord".into()).spawn(move || gateway(bot)).expect("discord thread");
@@ -163,12 +182,20 @@ fn session(bot: &Arc<Bot>) -> Result<Stop, String> {
                 return Err("session invalidated".into());
             }
             Some(0) => match event["t"].as_str() {
-                Some("READY") => println!("discord: logged in as {}", event["d"]["user"]["username"].as_str().unwrap_or("?")),
+                Some("READY") => {
+                    println!("discord: logged in as {}", event["d"]["user"]["username"].as_str().unwrap_or("?"));
+                    *bot.me.lock().unwrap() = event["d"]["user"]["id"].as_str().unwrap_or("").to_string();
+                }
                 Some("MESSAGE_CREATE") => {
                     let message = event["d"].clone();
-                    if message["author"]["bot"].as_bool() != Some(true) && message["content"].as_str().is_some_and(|c| c.trim_start().starts_with('>')) {
-                        let bot = bot.clone();
+                    if message["author"]["bot"].as_bool() == Some(true) {
+                        continue;
+                    }
+                    let bot = bot.clone();
+                    if message["content"].as_str().is_some_and(|c| c.trim_start().starts_with('>')) {
                         std::thread::spawn(move || bot.answer(&message));
+                    } else if bot.mentioned(&message) {
+                        std::thread::spawn(move || bot.ping(&message));
                     }
                 }
                 _ => {}
@@ -611,6 +638,122 @@ impl Bot {
         }
         Err("rate limited".into())
     }
+
+    /// A GET from Discord's API.
+    fn get(&self, url: &str) -> Result<Value, String> {
+        let mut reply = self.http.get(url).header("Authorization", &format!("Bot {}", self.token)).header("User-Agent", USER_AGENT).call().map_err(|e| e.to_string())?;
+        let status = reply.status().as_u16();
+        let text = reply.body_mut().read_to_string().unwrap_or_default();
+        match status {
+            200..=299 => serde_json::from_str(&text).map_err(|e| e.to_string()),
+            _ => Err(format!("Discord said {status}: {}", text.chars().take(200).collect::<String>())),
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Pings for Claude.
+
+    /// Whether `message` mentions the bot.
+    fn mentioned(&self, message: &Value) -> bool {
+        let me = self.me.lock().unwrap();
+        !me.is_empty() && message["mentions"].as_array().is_some_and(|m| m.iter().any(|u| u["id"].as_str() == Some(me.as_str())))
+    }
+
+    /// Keeps a mention of the bot by the developer for Claude, with the thread around it, and
+    /// says so with 👀. Anyone else's mentions are left alone.
+    fn ping(&self, message: &Value) {
+        let author = message["author"]["id"].as_str().unwrap_or("");
+        if self.verified.lock().unwrap().get(author).map(String::as_str) != Some(PINGER) {
+            return;
+        }
+        let channel = message["channel_id"].as_str().unwrap_or("").to_string();
+        let id = message["id"].as_str().unwrap_or("").to_string();
+        // Where it was: the thread (or channel) and its forum.
+        let place = self.get(&format!("{API}/channels/{channel}")).unwrap_or(Value::Null);
+        let forum = place["parent_id"].as_str().and_then(|p| self.get(&format!("{API}/channels/{p}")).ok()).map(|p| p["name"].clone()).unwrap_or(Value::Null);
+        let mut messages: Vec<Value> = self.get(&format!("{API}/channels/{channel}/messages?limit={PING_CONTEXT}")).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
+        messages.reverse();
+        // A forum post's first message (the report) has the thread's id: kept even in a long thread.
+        if place["parent_id"].is_string() && !messages.iter().any(|m| m["id"].as_str() == Some(channel.as_str())) {
+            if let Ok(first) = self.get(&format!("{API}/channels/{channel}/messages/{channel}")) {
+                messages.insert(0, first);
+            }
+        }
+        let said = |m: &Value| {
+            json!({
+                "author": m["author"]["global_name"].as_str().or(m["author"]["username"].as_str()).unwrap_or("?"),
+                "at": m["timestamp"],
+                "text": m["content"],
+                "attachments": m["attachments"].as_array().map(|a| a.iter().map(|f| f["url"].clone()).collect::<Vec<_>>()).unwrap_or_default(),
+            })
+        };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let guild = message["guild_id"].as_str().unwrap_or("@me");
+        {
+            let mut pings = self.pings.lock().unwrap();
+            let n = pings.last().and_then(|p| p["id"].as_u64()).unwrap_or(0) + 1;
+            let ping = json!({
+                "id": n,
+                "at": now,
+                "link": format!("https://discord.com/channels/{guild}/{channel}/{id}"),
+                "channel": channel,
+                "message": id,
+                "place": place["name"],
+                "forum": forum,
+                "ping": said(message),
+                "thread": messages.iter().map(said).collect::<Vec<_>>(),
+            });
+            let line = ping.to_string() + "\n";
+            let file = self.dir.join("claude-pings.jsonl");
+            if let Err(e) = std::fs::OpenOptions::new().create(true).append(true).open(&file).and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes())) {
+                eprintln!("discord: saving a ping: {e}");
+            }
+            pings.push(ping);
+            let extra = pings.len().saturating_sub(PINGS_KEPT);
+            pings.drain(..extra);
+        }
+        let seen = format!("{API}/channels/{channel}/messages/{id}/reactions/%F0%9F%91%80/@me");
+        if let Err(e) = self.http.put(&seen).header("Authorization", &format!("Bot {}", self.token)).header("User-Agent", USER_AGENT).send_empty() {
+            eprintln!("discord: reacting to a ping: {e}");
+        }
+    }
+}
+
+/// Whether `key` is Claude's (DIR/claude-key, read each time: putting it there needs no restart).
+pub fn claude_key(key: &str) -> bool {
+    let Some(bot) = BOT.get() else { return false };
+    let Ok(want) = std::fs::read_to_string(bot.dir.join("claude-key")) else { return false };
+    let want = want.trim();
+    // Compared in the same time whatever matches.
+    want.len() >= 16 && want.len() == key.len() && want.bytes().zip(key.bytes()).fold(0, |d, (a, b)| d | (a ^ b)) == 0
+}
+
+/// The pings for Claude after number `after`.
+pub fn pings(after: u64) -> Vec<Value> {
+    BOT.get().map(|b| b.pings.lock().unwrap().iter().filter(|p| p["id"].as_u64().is_some_and(|n| n > after)).cloned().collect()).unwrap_or_default()
+}
+
+/// Claude's answer: `text` in `channel`, the first part replying to message `to`, in parts of
+/// Discord's size.
+pub fn say(channel: &str, to: Option<&str>, text: &str) -> Result<(), String> {
+    let bot = BOT.get().ok_or("the bot is off")?;
+    for (i, part) in parts(text, 1900).into_iter().enumerate() {
+        bot.reply(channel, to.filter(|_| i == 0), &Answer::Text(part))?;
+    }
+    Ok(())
+}
+
+/// `text` cut into pieces of at most `max` characters, at line ends where it can be.
+pub(crate) fn parts(text: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text.trim();
+    while !rest.is_empty() {
+        let end = rest.char_indices().nth(max).map(|(i, _)| i).unwrap_or(rest.len());
+        let cut = if end == rest.len() { end } else { rest[..end].rfind('\n').filter(|&i| i > 0).unwrap_or(end) };
+        out.push(rest[..cut].trim_end().to_string());
+        rest = rest[cut..].trim_start();
+    }
+    out
 }
 
 /// A map set from a command: its id, or an osu! link with it in.
@@ -895,6 +1038,15 @@ mod tests {
     }
 
     #[test]
+    fn long_answers_go_in_parts() {
+        assert_eq!(parts("  hi  ", 1900), vec!["hi"]);
+        assert_eq!(parts("ab\ncd\nef", 6), vec!["ab\ncd", "ef"]);
+        assert_eq!(parts("абвгд", 2), vec!["аб", "вг", "д"]);
+        let pieces = parts(&"строка\n".repeat(1000), 1900);
+        assert!(pieces.len() > 1 && pieces.iter().all(|p| p.chars().count() <= 1900 && !p.starts_with('\n')));
+    }
+
+    #[test]
     fn helpers_format_like_discord_wants() {
         assert_eq!(iso8601(0), "1970-01-01T00:00:00Z");
         assert_eq!(iso8601(1_792_990_923), "2026-10-26T05:02:03Z");
@@ -936,7 +1088,7 @@ mod tests {
         };
         state.scores.lock().unwrap().submit("ryuji", "Ryuji", play, 1_792_990_923).unwrap();
         let http: ureq::Agent = ureq::Agent::config_builder().build().into();
-        Arc::new(Bot { token: String::new(), dir, state, links: Mutex::default(), verified: Mutex::default(), last_map: Mutex::default(), shown: Mutex::default(), http })
+        Arc::new(Bot { token: String::new(), dir, state, links: Mutex::default(), verified: Mutex::default(), last_map: Mutex::default(), shown: Mutex::default(), me: Mutex::default(), pings: Mutex::default(), http })
     }
 
     fn answer(bot: &Bot, text: &str, author: &str, map: Option<u64>) -> (Answer, Option<u64>) {
