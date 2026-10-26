@@ -1691,6 +1691,8 @@ pub enum Hit {
     SocialRow(usize),
     SocialAction(usize, crate::social::Action),
     SocialNote(usize),
+    /// A chat line naming a map set (`/np`): downloads it, or picks it in song select.
+    ChatMap(u32),
     /// A text field (a search box, the message box): on Android, tapping it brings up the
     /// on-screen keyboard.
     TextField,

@@ -560,11 +560,13 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
 /// bottom, wrapped, as many as fit, scrolled back by `s.chat_scroll` lines.
 #[allow(clippy::too_many_arguments)]
 fn chat_lines(c: &mut Canvas, s: &Social, lines: &[(String, String, bool)], inner: f32, top: f32, input_y: f32, width: usize, a: f32) {
-    let mut wrapped: Vec<(String, u32)> = Vec::new();
+    // Lines naming a map set (`/np`) are links, in blue.
+    let mut wrapped: Vec<(String, u32, Option<u32>)> = Vec::new();
     for (from, text, mine) in lines {
-        let colour = if *mine { 0xFFD34D } else { 0xffffff };
+        let set = map_set_in(text);
+        let colour = if set.is_some() { 0x66ccff } else if *mine { 0xFFD34D } else { 0xffffff };
         for (n, l) in wrap(&format!("{from}: {text}"), width).into_iter().enumerate() {
-            wrapped.push((if n == 0 { l } else { format!("  {l}") }, colour));
+            wrapped.push((if n == 0 { l } else { format!("  {l}") }, colour, set));
         }
     }
     let line_h = 10.0;
@@ -575,13 +577,23 @@ fn chat_lines(c: &mut Canvas, s: &Social, lines: &[(String, String, bool)], inne
     let end = wrapped.len() - back;
     let shown = &wrapped[end.saturating_sub(fit)..end];
     let mut ly = input_y - 6.0 - line_h * shown.len() as f32;
-    for (l, colour) in shown {
+    for (l, colour, set) in shown {
         c.text(inner + 4.0, ly, 6.5, rgba(*colour, a), l);
+        if let Some(set) = set {
+            c.hit(inner, ly - 2.0, PANEL_W - 16.0, line_h, Hit::ChatMap(*set));
+        }
         ly += line_h;
     }
     if back > 0 {
         c.text_right(inner + PANEL_W - 20.0, input_y - 4.0, 6.0, rgba(0x6f6f86, a), &format!("{back} newer lines below"));
     }
+}
+
+/// The map set an osu! link in `text` names (`https://osu.ppy.sh/beatmapsets/123...`).
+pub fn map_set_in(text: &str) -> Option<u32> {
+    let rest = &text[text.find("osu.ppy.sh/beatmapsets/")? + "osu.ppy.sh/beatmapsets/".len()..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// The message box at `input_y`.

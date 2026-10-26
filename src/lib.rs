@@ -5208,6 +5208,45 @@ impl State {
         c.hit(0.0, 0.0, c.width, 31.0, render::Hit::TextField);
     }
 
+    /// `/np`'s line: the map on this screen, with its set's osu! link when it has one.
+    fn now_playing(&self) -> Option<String> {
+        let e = self.library.get(self.offset_entry()?)?;
+        let name = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
+        let set = e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder));
+        Some(match set {
+            Some(set) => format!("is playing {name} https://osu.ppy.sh/beatmapsets/{set}"),
+            None => format!("is playing {name}"),
+        })
+    }
+
+    /// A map set named in the chat, clicked: picked in song select when we have it, else downloaded.
+    fn open_chat_map(&mut self, set: u32) {
+        let have = self.library.iter().position(|e| e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)) == Some(set));
+        match have {
+            Some(i) if matches!(self.scene, Scene::Select) => {
+                let path = self.library[i].path.clone();
+                self.select.select_path(&self.library, &path);
+                self.social.close();
+            }
+            Some(i) => {
+                let label = self.library[i].label();
+                self.toast(format!("you have it: {label}"));
+            }
+            None => self.start_download(download::SetInfo {
+                id: set,
+                artist: String::new(),
+                title: format!("set {set}"),
+                creator: String::new(),
+                status: String::new(),
+                diffs: Vec::new(),
+                play_count: 0,
+                favourite_count: 0,
+                rating: 0.0,
+                ranked_date: String::new(),
+            }),
+        }
+    }
+
     /// What Ctrl+C copies here: the text being typed, else the map or set picked.
     fn copy_text(&self) -> Option<String> {
         if let Some(e) = &self.settings_ui.editing {
@@ -5386,7 +5425,17 @@ impl State {
             KeyCode::KeyP if self.modifiers_ctrl => self.social_action(social::Action::Profile),
             KeyCode::KeyJ if self.modifiers_ctrl => self.social_action(social::Action::Join),
             KeyCode::Enter | KeyCode::NumpadEnter => {
-                let text = self.social.input.trim().to_string();
+                let mut text = self.social.input.trim().to_string();
+                // `/np` in a chat: the map on screen, with its osu! link (a link others can click).
+                if text.eq_ignore_ascii_case("/np") && matches!(row, Row::Friend(_) | Row::Lobby | Row::Global) {
+                    match self.now_playing() {
+                        Some(np) => text = np,
+                        None => {
+                            self.toast("no map to share: pick one first".into());
+                            return;
+                        }
+                    }
+                }
                 match row {
                     Row::AddFriend if !text.is_empty() => {
                         if let Some(c) = &self.social.conn {
@@ -8106,6 +8155,7 @@ impl State {
                 }
             }
             Hit::SocialToggle => self.toggle_social(),
+            Hit::ChatMap(set) => self.open_chat_map(set),
             // Tapped: brings up the on-screen keyboard (`keyboard_tap`); the keys type there anyway.
             Hit::SocialPanel | Hit::TextField => {}
             Hit::SocialTab(tab) => {

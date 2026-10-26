@@ -710,3 +710,19 @@ fn songs_sort_by_hp_od_and_status() {
     let rank = |c: u8| [search::LOVED, search::RANKED, search::PENDING, search::UNKNOWN].iter().position(|&x| x == c).unwrap();
     assert!(first.iter().map(|&c| rank(c)).collect::<Vec<_>>().is_sorted(), "{first:?}");
 }
+
+#[test]
+fn np_names_the_map_on_screen_with_a_link_others_can_click() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let np = s.now_playing().expect("a map is selected");
+    let e = &s.library[s.select.selected().unwrap()];
+    assert!(np.starts_with("is playing ") && np.contains(&e.meta.title) && np.contains(&format!("[{}]", e.meta.version)), "{np}");
+    if let Some(set) = e.meta.set_id {
+        assert_eq!(social::map_set_in(&np), Some(set));
+    }
+    assert_eq!(social::map_set_in("look https://osu.ppy.sh/beatmapsets/1234#taiko/99 ok"), Some(1234));
+    assert_eq!(social::map_set_in("osu.ppy.sh/beatmapsets/"), None);
+    assert_eq!(social::map_set_in("no link"), None);
+}
