@@ -410,7 +410,7 @@ impl Item {
             Item::BackgroundDim => "How dark the map background is during play. 100% hides it.",
             Item::BackgroundDimBlack => "On: in songs the background dims to pure black, and is black when there's none. Off: the interface's grey.",
             Item::PresentMode => "Used during songs. vsync is smoothest on Wayland; mailbox/immediate add judder.",
-            Item::MenuVsync => "Song select (and its autoplay preview), settings and results always use vsync.",
+            Item::MenuVsync => "Everything but playing a song uses vsync: song select (and its autoplay preview), settings, results, replays and autoplay.",
             Item::HalfResolution => "Draw at half resolution, scaled up exactly 2x: chunky, crisp pixels and a quarter of the GPU work. For high-DPI screens.",
             Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",

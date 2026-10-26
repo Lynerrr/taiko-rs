@@ -762,6 +762,7 @@ fn open_url(url: &str) -> bool {
 }
 
 /// `file://` URI for a local path.
+#[cfg(not(windows))]
 fn file_uri(path: &std::path::Path) -> String {
     let mut uri = String::from("file://");
     for b in path.to_string_lossy().bytes() {
@@ -992,7 +993,17 @@ impl State {
         if matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_) | Scene::Calibrate { vsync: true, .. }) {
             return PresentChoice::Fifo;
         }
-        if self.cfg.menu_vsync && !self.in_song() { PresentChoice::Fifo } else { self.cfg.present }
+        if self.cfg.menu_vsync && !self.player_plays() { PresentChoice::Fifo } else { self.cfg.present }
+    }
+
+    /// The player is hitting notes (the gameplay present mode's job): not a replay or autoplay,
+    /// not waiting for a multiplayer match to start.
+    fn player_plays(&self) -> bool {
+        match &self.scene {
+            Scene::Play { game, .. } => game.replay.is_none() && !self.auto && !game.mods.has(mods::Mod::Autoplay),
+            Scene::MpPlay { .. } | Scene::Calibrate { .. } => true,
+            _ => false,
+        }
     }
 
     /// How far ahead (real ms) notes are drawn for vsync: with it, a frame reaches the screen
@@ -2635,11 +2646,19 @@ impl State {
     /// Opens the file manager on `path`'s folder with the file selected where it can.
     fn show_in_folder(&mut self, path: &std::path::Path) {
         use std::process::Command;
-        let opened = if cfg!(windows) {
-            let mut arg = std::ffi::OsString::from("/select,");
-            arg.push(path);
-            Command::new("explorer").arg(arg).spawn().is_ok()
-        } else if cfg!(target_os = "macos") {
+        #[cfg(windows)]
+        let opened = {
+            // Explorer wants `/select,"C:\full\path"`: the whole argument quoted (as `arg` would,
+            // since video names have spaces) or a relative or forward-slashed path opens Documents.
+            use std::os::windows::process::CommandExt;
+            let full = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+            let mut arg = std::ffi::OsString::from("/select,\"");
+            arg.push(full.as_os_str());
+            arg.push("\"");
+            Command::new("explorer").raw_arg(arg).spawn().is_ok()
+        };
+        #[cfg(not(windows))]
+        let opened = if cfg!(target_os = "macos") {
             Command::new("open").arg("-R").arg(path).spawn().is_ok()
         } else {
             // The freedesktop file manager interface (Dolphin, Nautilus, ...) selects the file;
@@ -3097,7 +3116,7 @@ impl State {
             KeyCode::F7 => {
                 self.cfg.present = self.cfg.present.next();
                 self.cfg.save();
-                let note = if self.cfg.menu_vsync && !self.in_song() { " (menus stay on vsync)" } else { "" };
+                let note = if self.cfg.menu_vsync && !self.player_plays() { " (menus stay on vsync)" } else { "" };
                 let text = format!("gameplay present mode: {}{note}", self.cfg.present.name());
                 self.toast(text);
                 return true;

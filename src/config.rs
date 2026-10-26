@@ -90,7 +90,7 @@ pub struct Config {
     /// Draw at half resolution and scale up exactly 2x (default on Android: high-DPI screens,
     /// mobile GPUs).
     pub half_resolution: bool,
-    /// Menus (song select and its preview, settings, results) always use vsync.
+    /// Everything but the player playing a song (menus, results, replays, autoplay) uses vsync.
     pub menu_vsync: bool,
     /// The mouse wheel resizes the playfield during play (it always does in its editor).
     pub wheel_resizes_playfield: bool,
