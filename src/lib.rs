@@ -2387,6 +2387,9 @@ impl State {
                 }
             }
             KeyCode::Backspace => edit.backspace(),
+            KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End | KeyCode::Delete => {
+                edit.nav(code);
+            }
             _ if ctrl => {}
             _ => {
                 if let Some(text) = text {
@@ -3584,8 +3587,9 @@ impl State {
         if let Some((_, text)) = &mut dd.editing {
             match code {
                 KeyCode::Escape => dd.editing = None,
-                KeyCode::Backspace => {
-                    text.pop();
+                KeyCode::Backspace => settings::caret_backspace(text, &mut dd.caret),
+                KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End | KeyCode::Delete => {
+                    settings::caret_nav(text, &mut dd.caret, code);
                 }
                 KeyCode::Enter | KeyCode::NumpadEnter => {
                     if let Some((index, text)) = dd.editing.take() {
@@ -3593,8 +3597,8 @@ impl State {
                     }
                 }
                 _ => {
-                    if let Some(ch) = size_char(code).filter(|_| text.len() < 11) {
-                        text.push(ch);
+                    if let Some(ch) = size_char(code) {
+                        settings::caret_insert(text, &mut dd.caret, ch.encode_utf8(&mut [0; 4]), 11);
                     }
                 }
             }
@@ -3645,11 +3649,14 @@ impl State {
             }
             PresetAction::Add => {
                 dd.editing = Some((None, String::new()));
+                dd.caret = 0;
                 return;
             }
             PresetAction::Edit if i < saved => {
                 let (w, h) = self.cfg.saved_presets[i];
-                dd.editing = Some((Some(i), format!("{w}x{h}")));
+                let text = format!("{w}x{h}");
+                dd.caret = text.len();
+                dd.editing = Some((Some(i), text));
                 return;
             }
             PresetAction::Delete if i < saved => {
@@ -3679,6 +3686,7 @@ impl State {
         let Some(size) = layout::parse_size(&text) else {
             self.toast("type a size like 1280x720".into());
             if let Some(dd) = &mut self.settings_ui.dropdown {
+                dd.caret = text.len();
                 dd.editing = Some((index, text));
             }
             return;

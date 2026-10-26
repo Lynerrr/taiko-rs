@@ -53,6 +53,31 @@ fn typing_replaces_the_old_value_then_adds_to_it() {
 }
 
 #[test]
+fn the_caret_moves_through_a_typed_value_to_fix_one_digit() {
+    use winit::keyboard::KeyCode::*;
+    let mut e = settings::Edit::new(Item::Offset, "1388".into());
+    // Moving keeps the opened value to edit instead of typing over it.
+    assert!(e.nav(Home));
+    assert!(!e.fresh && e.caret == 0);
+    e.nav(ArrowRight);
+    e.nav(Delete);
+    e.type_text("4", 12);
+    assert_eq!(e.text, "1488");
+    assert_eq!(e.caret, 2);
+    e.backspace();
+    assert_eq!(e.text, "188");
+    e.nav(End);
+    e.nav(ArrowRight);
+    e.type_text("9", 12);
+    assert_eq!(e.text, "1889");
+    assert!(!e.nav(KeyA));
+    // Other characters than ASCII too.
+    let (mut t, mut c) = ("ёж".to_string(), 1);
+    settings::caret_insert(&mut t, &mut c, "-", 12);
+    assert_eq!((t.as_str(), c), ("ё-ж", 2));
+}
+
+#[test]
 fn songs_folder_is_saved_scanned_and_found_inside_an_install() {
     let _turn = FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
     let install = std::env::temp_dir().join(format!("taiko-rs-songs-test-{}", std::process::id()));
