@@ -2,7 +2,7 @@
 name = "taiko-server"
 version = "0.1.0"
 edition = "2024"
-description = "taiko-rs online server: accounts and server-hosted multiplayer lobbies"
+description = "taiko.rs online server: accounts and server-hosted multiplayer lobbies"
 
 [dependencies]
 argon2 = "0.5"

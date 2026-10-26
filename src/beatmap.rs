@@ -472,8 +472,8 @@ fn convert(map: &mut Beatmap, mut body: Body) {
 pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
     let meta = Meta {
         title: "Offset calibration".into(),
-        artist: "taiko-rs".into(),
-        creator: "taiko-rs".into(),
+        artist: "taiko.rs".into(),
+        creator: "taiko.rs".into(),
         version: format!("{:.0} BPM click track", 60000.0 / beat_ms),
         mode: 1,
         // OD 0 gives the widest windows, so even a badly-off offset still registers as hits.

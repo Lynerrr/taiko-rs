@@ -654,11 +654,9 @@ fn submit_score(server: String, token: String, play: online::ScoreSubmit) -> Rec
 }
 
 /// "Artist - Title [Version]  1.10x  +HDHR  from 1:23" for a results screen.
-fn results_title(m: &beatmap::Meta, rate: f64, mods: Mods, from: Option<f64>) -> String {
-    let rate = if (rate - 1.0).abs() > 1e-6 && mods.rate_override().is_none() { format!("  {rate:.2}x") } else { String::new() };
+fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
     let part = from.map(|t| format!("  from {}", fmt_time(t))).unwrap_or_default();
-    let mods = if mods.is_empty() { String::new() } else { format!("  +{}", mods.label()) };
-    format!("{} - {} [{}]{rate}{mods}{part}", m.artist, m.title, m.version)
+    format!("{} - {} [{}]{part}", m.artist, m.title, m.version)
 }
 
 /// A results screen's background work (`ui::Detail`): the pp breakdown of `play` on the map at
@@ -792,7 +790,7 @@ fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32, slide: f32) {
     c.text(x + 12.0, y + 40.0, 7.0, rgba(0x9a9ab0, a), &detail);
 }
 
-/// When each map was last played in taiko-rs (`plays.tsv`: Unix seconds, tab, path).
+/// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
 fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
     let mut out = std::collections::HashMap::new();
     let Some(text) = config::data_dir().and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok()) else { return out };
@@ -839,7 +837,7 @@ struct ExportView {
     last: bool,
 }
 
-/// Where downloaded maps go: the first Songs folder being scanned, else taiko-rs's own (which
+/// Where downloaded maps go: the first Songs folder being scanned, else taiko.rs's own (which
 /// is scanned at startup when it exists).
 fn download_dir(inputs: &[PathBuf]) -> PathBuf {
     if let Some(dir) = inputs.iter().find(|p| p.is_dir()) {
@@ -1357,7 +1355,8 @@ impl State {
         let stats = game::Stats { great: r.great, ok: r.ok, miss: r.miss, max_combo: r.max_combo, score: r.score, ..Default::default() };
         let mods = Mods::from_list(&r.mods);
         let e = &self.library[entry];
-        let mut results = Results::new(results_title(&e.meta, r.rate, mods, None), stats, game::Windows::new(e.meta.od));
+        let mut results = Results::new(results_title(&e.meta, None), stats, game::Windows::new(e.meta.od));
+        results.set_mods(mods, r.rate);
         results.replay = Some(file.to_path_buf());
         results.partial = true;
         results.pp = self.scores.iter().find(|row| row.file == file).and_then(|row| row.pp);
@@ -1376,7 +1375,8 @@ impl State {
         let stats = game::Stats { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, score: score.score, ..Default::default() };
         let mods = Mods::from_list(&score.mods);
         let e = &self.library[entry];
-        let mut results = Results::new(results_title(&e.meta, score.rate, mods, None), stats, game::Windows::new(e.meta.od));
+        let mut results = Results::new(results_title(&e.meta, None), stats, game::Windows::new(e.meta.od));
+        results.set_mods(mods, score.rate);
         results.partial = true;
         results.pp = score.pp;
         results.no_pp = mods.unranked().then_some("Autoplay and Relax get no pp");
@@ -2250,7 +2250,7 @@ impl State {
         }
     }
 
-    /// Moves the game's data (replays, scores, videos, taiko-rs's own Songs and Skins, caches)
+    /// Moves the game's data (replays, scores, videos, taiko.rs's own Songs and Skins, caches)
     /// into `target` (into a taiko-rs folder there, unless it is one; None: back to the usual
     /// places), on its own thread. `poll_data_move` takes it from there.
     fn move_data_to(&mut self, target: Option<PathBuf>) -> Result<(), String> {
@@ -2392,7 +2392,7 @@ impl State {
                 match update::restart() {
                     Ok(()) => self.quit = true,
                     Err(e) => {
-                        self.toast(format!("installed; restart taiko-rs ({e})"));
+                        self.toast(format!("installed; restart taiko.rs ({e})"));
                         self.updater = update::Updater::new(false);
                     }
                 }
@@ -5248,7 +5248,7 @@ impl State {
                     }
                 }
             }
-            Down::Notice(text) => self.social.notify("taiko-rs", text, 0x9a9ab0, NoteAction::None),
+            Down::Notice(text) => self.social.notify("taiko.rs", text, 0x9a9ab0, NoteAction::None),
             Down::Players { count, players } => {
                 self.social.online_total = count as usize;
                 self.social.players = Some(players);
@@ -6335,7 +6335,7 @@ impl State {
                     }
                 }
                 if done {
-                    let title = results_title(&game.map.meta, game.rate, game.mods, *from);
+                    let title = results_title(&game.map.meta, *from);
                     let failed = game.failed();
                     if game.failed_early() {
                         if let Some(a) = &self.audio {
@@ -6344,6 +6344,7 @@ impl State {
                         self.preview.invalidate_audio();
                     }
                     let mut results = Results::new(title, game.stats.clone(), game.windows);
+                    results.set_mods(game.mods, game.rate);
                     results.watched = game.replay_of.clone();
                     results.failed = failed;
                     // The song plays on under the results (not after a fail that stopped it),
@@ -6932,7 +6933,7 @@ impl State {
         let audio = self.audio.as_ref().map(|a| a.description.clone()).unwrap_or_else(|| "none (silent)".into());
         let skin = if self.cfg.skin.is_empty() { "built-in" } else { &self.cfg.skin };
         vec![
-            format!("taiko-rs {}", env!("CARGO_PKG_VERSION")),
+            format!("taiko.rs {}", env!("CARGO_PKG_VERSION")),
             format!("gpu    {}", self.adapter),
             format!("audio  {audio}"),
             songs,
@@ -8014,7 +8015,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
         let mut attrs = Window::default_attributes()
-            .with_title("taiko-rs")
+            .with_title("taiko.rs")
             .with_window_icon(logo::window_icon())
             .with_min_inner_size(winit::dpi::LogicalSize::new(MIN_WINDOW.0, MIN_WINDOW.1))
             .with_fullscreen(lock(&self.state).cfg.fullscreen.then_some(Fullscreen::Borderless(None)));

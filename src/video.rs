@@ -383,7 +383,7 @@ impl Editor {
     }
 }
 
-/// ffmpeg on the PATH, or next to taiko-rs's data.
+/// ffmpeg on the PATH, or next to taiko.rs's data.
 pub fn find_ffmpeg() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     let mut candidates = vec![PathBuf::from(exe)];

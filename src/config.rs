@@ -298,7 +298,7 @@ impl Default for Config {
     }
 }
 
-/// Per-user taiko-rs directory: settings (`cache == false`) or disposable data like extracted
+/// Per-user taiko.rs directory: settings (`cache == false`) or disposable data like extracted
 /// `.osz` files (`cache == true`).
 pub fn user_dir(cache: bool) -> Option<PathBuf> {
     // Tests never read or write the player's own settings, scores or replays.
@@ -343,7 +343,7 @@ pub fn cache_dir() -> Option<PathBuf> {
     data_folder().map(|d| d.join("cache")).or_else(|| user_dir(true))
 }
 
-/// taiko-rs's own folder `name` ("Songs", "Skins"): in the data folder, else next to config.txt
+/// taiko.rs's own folder `name` ("Songs", "Skins"): in the data folder, else next to config.txt
 /// on Windows and in ~/.local/share/taiko-rs elsewhere.
 pub fn own_dir(name: &str) -> Option<PathBuf> {
     own_dir_in(data_folder().as_deref(), name)
@@ -677,7 +677,7 @@ impl Config {
         }
         let keys: Vec<String> = self.keys.iter().map(|k| key_name(*k)).collect();
         let mut out = format!(
-            "# taiko-rs settings\n\
+            "# taiko.rs settings\n\
              # keys = left rim, left centre, right centre, right rim\n\
              keys = {}\n\
              # previous / next playfield resolution preset\n\
@@ -777,7 +777,7 @@ impl Config {
             crate::render::accent_name(self.accent)
         ));
         out.push_str(&format!(
-            "# Discord status (\"Playing taiko-rs\"); app id empty = the built-in one\ndiscord_presence = {}\ndiscord_app_id = {}\n",
+            "# Discord status (\"Playing taiko.rs\"); app id empty = the built-in one\ndiscord_presence = {}\ndiscord_app_id = {}\n",
             self.discord_presence, self.discord_app_id
         ));
         out.push_str(&format!(
@@ -801,7 +801,7 @@ impl Config {
         out.push_str(&format!("# the window's size out of fullscreen (empty = 1280x720)\nwindow_size = {window}\n"));
         let data = self.data_folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
         out.push_str(&format!(
-            "# where replays, scores, videos, taiko-rs's Songs and Skins and caches are (empty = the usual places); move it from Settings\ndata_folder = {data}\n"
+            "# where replays, scores, videos, taiko.rs's Songs and Skins and caches are (empty = the usual places); move it from Settings\ndata_folder = {data}\n"
         ));
         out.push_str(&format!("# the mouse wheel resizes the playfield during play\nwheel_resizes_playfield = {}\n", self.wheel_resizes_playfield));
         out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));

@@ -13,7 +13,7 @@
 [Setup]
 ; Never change: Windows knows the installed game (and its uninstaller) by it.
 AppId={{6B0E4C3A-2F1D-4E7B-9A55-7C3D1E8F2A61}
-AppName=taiko-rs
+AppName=taiko.rs
 AppVersion={#AppVersion}
 AppPublisher=Lynerrr
 AppPublisherURL=https://github.com/Lynerrr/taiko-rs
@@ -31,7 +31,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 DefaultDirName={autopf}\taiko-rs
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\taiko-rs.exe
-UninstallDisplayName=taiko-rs
+UninstallDisplayName=taiko.rs
 WizardStyle=modern
 Compression=lzma2/max
 SolidCompression=yes
@@ -55,7 +55,7 @@ Name: "{autoprograms}\taiko-rs"; Filename: "{app}\taiko-rs.exe"; WorkingDir: "{a
 Name: "{autodesktop}\taiko-rs"; Filename: "{app}\taiko-rs.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\taiko-rs.exe"; Description: "{cm:LaunchProgram,taiko-rs}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\taiko-rs.exe"; Description: "{cm:LaunchProgram,taiko.rs}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; What the self-updater leaves next to the exe (src/update.rs). Settings, scores and songs in

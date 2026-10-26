@@ -1,4 +1,4 @@
-"""Synthesizes taiko-rs's built-in hitsounds (don.wav, kat.wav, finish.wav, combobreak.ogg) from
+"""Synthesizes taiko.rs's built-in hitsounds (don.wav, kat.wav, finish.wav, combobreak.ogg) from
 scratch, so none of them comes from anyone else's skin or game.
 
     python3 assets/hitsounds/synth.py      (needs numpy, and ffmpeg for the .ogg)

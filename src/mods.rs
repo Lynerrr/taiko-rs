@@ -1,4 +1,4 @@
-//! Mods: osu!'s (EZ, HR, HD, FL, DT...), lazer's taiko extras and taiko-rs's own (scroll speed
+//! Mods: osu!'s (EZ, HR, HD, FL, DT...), lazer's taiko extras and taiko.rs's own (scroll speed
 //! tricks, SV experiments, visual tricks, note paths, playfield moves and copies). A set of them is a bit mask; each has a two-letter acronym used in
 //! the config, replays and multiplayer.
 
@@ -368,7 +368,7 @@ impl Mod {
         }
     }
 
-    /// Score multiplier: osu!'s for its mods, and on the same scale for taiko-rs's own by how
+    /// Score multiplier: osu!'s for its mods, and on the same scale for taiko.rs's own by how
     /// much harder they make a map to read or play (HR's 1.06 is "clearly harder", DT's 1.12
     /// "a lot"). Mods that help score below 1; ones that only look different stay at 1.
     pub fn multiplier(self) -> f64 {

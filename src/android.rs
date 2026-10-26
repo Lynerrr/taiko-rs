@@ -69,7 +69,7 @@ pub fn setup(app: &AndroidApp) {
         std::env::set_var("XDG_CACHE_HOME", &cache);
         std::env::set_var("TMPDIR", &tmp);
     }
-    eprintln!("taiko-rs data: {}", data.join("taiko-rs").display());
+    eprintln!("taiko.rs data: {}", data.join("taiko-rs").display());
     requeue_unfinished_imports();
 }
 

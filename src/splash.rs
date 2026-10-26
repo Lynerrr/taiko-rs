@@ -48,7 +48,7 @@ const RAGE: (f32, f32) = (700.0, 1200.0);
 /// The hiss: glitches.
 const GLITCH: (f32, f32) = (1420.0, 1640.0);
 /// The title, in parts that stamp in on syllables.
-const TITLE: [(&str, f32); 2] = [("taiko", 710.0), ("-rs", 1830.0)];
+const TITLE: [(&str, f32); 2] = [("taiko", 710.0), (".rs", 1830.0)];
 /// Loading bar progress keyframes (ms, 0..1): it crawls, then the words kick it forward.
 const LOADING: [(f32, f32); 10] = [
     (120.0, 0.0),
@@ -378,7 +378,7 @@ impl Splash {
                 let ly = pcy - size / 2.0 + jy;
                 for (i, ch) in part.chars().enumerate() {
                     let s = ch.to_string();
-                    let col = if ch == '-' { 0x6f6f86 } else if i % 2 == 0 { 0xffffff } else { DON };
+                    let col = if ch == '.' { 0x6f6f86 } else if i % 2 == 0 { 0xffffff } else { DON };
                     c.text(lx + 3.0, ly + 3.0, size, rgba(0x000000, 0.6 * a), &s);
                     if split > 0.5 {
                         c.text(lx - split, ly, size, rgba(0xff2a4a, 0.4 * a), &s);

@@ -1,5 +1,5 @@
 //! Performance points: osu!lazer's taiko pp (via rosu-pp) for a play's hits, speed, osu!'s
-//! difficulty mods and scroll speed, times the score multipliers of taiko-rs's own mods.
+//! difficulty mods and scroll speed, times the score multipliers of taiko.rs's own mods.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -55,7 +55,7 @@ const FORMULA: [(Mod, u32); 4] = [(Mod::Easy, 2), (Mod::Hidden, 8), (Mod::HardRo
 /// osu!'s mods whose only effect on pp is the speed (or none).
 const NEUTRAL: [Mod; 7] = [Mod::NoFail, Mod::SuddenDeath, Mod::Perfect, Mod::DoubleTime, Mod::Nightcore, Mod::HalfTime, Mod::Daycore];
 
-/// What the play's other mods (taiko-rs's own, and osu!'s that pp doesn't know) do to its pp:
+/// What the play's other mods (taiko.rs's own, and osu!'s that pp doesn't know) do to its pp:
 /// their score multipliers.
 pub fn custom_factor(mods: Mods) -> f64 {
     mods.iter().filter(|m| !FORMULA.iter().any(|f| f.0 == *m) && !NEUTRAL.contains(m)).map(|m| m.multiplier()).product()

@@ -238,7 +238,7 @@ impl Hotkey {
             Hotkey::FpsCap => "Next FPS cap",
             Hotkey::FpsOverlay => "FPS overlay",
             Hotkey::Fullscreen => "Fullscreen",
-            Hotkey::Quit => "Quit taiko-rs",
+            Hotkey::Quit => "Quit taiko.rs",
             Hotkey::Friends => "Friends and chat",
             Hotkey::Update => "Update",
             Hotkey::Mods => "Song select: mods",

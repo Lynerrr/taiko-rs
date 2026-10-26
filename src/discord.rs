@@ -1,4 +1,4 @@
-//! Discord Rich Presence ("Playing taiko-rs" with what you're doing) over Discord's local IPC
+//! Discord Rich Presence ("Playing taiko.rs" with what you're doing) over Discord's local IPC
 //! socket: a Unix socket on Linux/macOS, a named pipe on Windows. No SDK; when Discord isn't
 //! running nothing happens and it retries now and then.
 
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// The taiko-rs application on Discord's developer portal (its name is the "Playing ..." line).
+/// The taiko.rs application on Discord's developer portal (its name is the "Playing ..." line).
 /// `discord_app_id` in the config overrides it.
 pub const DEFAULT_APP_ID: &str = "1563250293225951262";
 
@@ -170,7 +170,7 @@ impl Conn {
             let mut v = serde_json::json!({
                 "details": field(&a.details),
                 "timestamps": { "start": a.start },
-                "assets": { "large_image": "logo", "large_text": "taiko-rs" },
+                "assets": { "large_image": "logo", "large_text": "taiko.rs" },
             });
             if !a.state.is_empty() {
                 v["state"] = field(&a.state).into();

@@ -458,6 +458,8 @@ fn assert_every_screen_fits() {
         r.failed = failed;
         r.pp = (!failed).then_some(456.7);
         r.no_pp = failed.then_some("failed plays get no pp");
+        // Lots of mods (two rows and a count of the rest) and a speed of its own.
+        r.set_mods(Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR,SK,TL,FF,SH,CK,PT,LI,DY,MM,OT,BL,ST,SG,LF,PN,MW,SR"), if failed { 1.25 } else { 1.0 });
         r.total = (!failed).then_some(ui::Total { before: Some(12_333.3), after: 12_345.6, rank: Some(99_999) });
         r.breakdown = (!failed).then_some(pp::Breakdown {
             pp: 456.7,

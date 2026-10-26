@@ -71,7 +71,7 @@ pub enum Item {
     Update,
     /// Opens what's new.
     Changelog,
-    /// Only for krokodil_koban: closes taiko-rs and starts osu!stable.
+    /// Only for krokodil_koban: closes taiko.rs and starts osu!stable.
     KrokodilKoban,
     Fullscreen,
     WindowSize,
@@ -415,21 +415,21 @@ impl Item {
             Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
-            Item::Splash => "The animated intro when taiko-rs starts (any key or click skips it).",
+            Item::Splash => "The animated intro when taiko.rs starts (any key or click skips it).",
             Item::VisualOffset => "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
             Item::UpdateChannel => "dev: test builds that haven't reached everyone yet (may break). Switch, then Update installs that channel's build.",
-            Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko-rs restarts into it.",
+            Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko.rs restarts into it.",
             // No explanation: krokodil_koban knows.
             Item::KrokodilKoban => "",
             Item::SongSelectLayout => "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
             Item::Changelog => "Enter: the latest changes. They also show by themselves after an update.",
-            Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",
+            Item::CheckUpdates => "Look for a newer build each time taiko.rs starts; a badge top right says when there is one.",
             Item::Fullscreen => "Shortcut: F11.",
             Item::WindowSize => "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
             Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",
-            Item::Skin => "Enter opens the list. osu! skins from osu!'s or taiko-rs's Skins folder.",
+            Item::Skin => "Enter opens the list. osu! skins from osu!'s or taiko.rs's Skins folder.",
             Item::SkinParts | Item::SkinPart(_) => "What's drawn from a skin, and which: the skin above, built-in, or any other (mix them). Enter opens the list.",
-            Item::SkinFolder => "Enter: open taiko-rs's Skins folder. Drop .osk files there, then pick them above.",
+            Item::SkinFolder => "Enter: open taiko.rs's Skins folder. Drop .osk files there, then pick them above.",
             Item::Accent => "The interface's accent; any but red tints the greys too. Left/Right: presets (or #rrggbb in the config).",
             Item::AccentHue => "Left/Right: turn the UI colour round the colour wheel, for any colour in between.",
             Item::NoteColours => "Dons' and kats' colours (Multiverse's universes have their own: M in the mod select).",
@@ -920,10 +920,10 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
     crate::logo::draw(c, 22.0, 18.0, 26.0);
     // The name like the wordmark: letters alternating white and red, "-rs" red.
     let mut tx = 54.0;
-    for (i, ch) in "taiko-rs".chars().enumerate() {
+    for (i, ch) in "taiko.rs".chars().enumerate() {
         let s = ch.to_string();
         let col = match ch {
-            '-' => 0x6f6f86,
+            '.' => 0x6f6f86,
             'r' | 's' => 0xEB452C,
             _ if i % 2 == 0 => 0xffffff,
             _ => 0xEB452C,

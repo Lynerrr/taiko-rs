@@ -52,7 +52,7 @@ pub struct Select {
     pub sort: SortMode,
     /// Star rating / length / BPM per library index, filled in the background.
     pub info: Option<crate::mapinfo::Shared>,
-    /// When each map was last played (Unix seconds), from taiko-rs and osu!.
+    /// When each map was last played (Unix seconds), from taiko.rs and osu!.
     pub played: std::collections::HashMap<std::path::PathBuf, u64>,
     /// osu! collections: (name, library indices).
     pub collections: Vec<(String, std::collections::HashSet<usize>)>,
@@ -762,7 +762,7 @@ impl Select {
             // Most likely osu! lives somewhere it wasn't looked for.
             let cx = 24.0 + lw / 2.0;
             c.text_centered(cx, 190.0, 12.0, rgba(0xc8c8d8, 1.0), "No maps found.");
-            let hint = "Show taiko-rs where your osu! Songs folder is, or get maps in DOWNLOAD.";
+            let hint = "Show taiko.rs where your osu! Songs folder is, or get maps in DOWNLOAD.";
             let size = Canvas::fit_size(10.0, 7.0, lw, hint);
             c.text_centered(cx, 212.0, size, rgba(0x8a8aa0, 1.0), &Canvas::fit(size, lw, hint));
             let label = if self.picking_folder { "Choosing in the folder dialog..." } else { "Choose Songs folder" };
@@ -773,7 +773,7 @@ impl Select {
         } else if self.visible.is_empty() {
             c.text_centered(24.0 + lw / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "No maps found.");
             let hint = if cfg!(target_os = "android") {
-                "Open .osz files with taiko-rs, or get maps in DOWNLOAD"
+                "Open .osz files with taiko.rs, or get maps in DOWNLOAD"
             } else {
                 "Run: taiko-rs <Songs folder | map.osz | map.osu>"
             };
@@ -1087,7 +1087,7 @@ pub fn draw_customization_tabs(c: &mut Canvas, tabs: &[crate::mods::Mod], open: 
     }
 }
 
-/// Maps hidden from the song list in taiko-rs only (osu! and the Songs folder are untouched):
+/// Maps hidden from the song list in taiko.rs only (osu! and the Songs folder are untouched):
 /// whole songs by folder, single difficulties by file. Kept in `hidden.tsv` in the config folder.
 #[derive(Default)]
 pub struct Hidden {
@@ -1182,7 +1182,7 @@ impl Select {
             c.hit(x + 4.0, ry, bw - 8.0, ROW - 2.0, Hit::SongMenu(k));
             c.text(x + 12.0, ry + 5.0, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, bw - 20.0, label));
         }
-        c.text(x + 12.0, y + bh - 14.0, 6.0, rgba(0x6f6f86, 1.0), "only in taiko-rs; files stay");
+        c.text(x + 12.0, y + bh - 14.0, 6.0, rgba(0x6f6f86, 1.0), "only in taiko.rs; files stay");
     }
 
     /// The collection list over the song list.
@@ -1288,6 +1288,9 @@ pub struct Results {
     /// How far the page is scrolled down (toward the pp), and where it's going.
     pub scroll: f32,
     pub scroll_to: f32,
+    /// The mods played with, and the speed when it isn't theirs (DT / HT show as mods).
+    pub mods: crate::mods::Mods,
+    pub rate: Option<f64>,
 }
 
 /// How far down the results scroll: the pp start a screen below them.
@@ -1319,6 +1322,8 @@ impl Results {
             total_due: false,
             scroll: 0.0,
             scroll_to: 0.0,
+            mods: crate::mods::Mods::NONE,
+            rate: None,
         }
     }
 
@@ -1352,6 +1357,12 @@ impl Results {
         }
     }
 
+    /// The mods a play had and its speed (shown on its own when the mods don't set it).
+    pub fn set_mods(&mut self, mods: crate::mods::Mods, rate: f64) {
+        self.mods = mods;
+        self.rate = ((rate - 1.0).abs() > 1e-6 && mods.rate_override().is_none()).then_some(rate);
+    }
+
     /// Scrolls all the way down to the pp (`down`) or back up to the results: there's no
     /// stopping in between.
     pub fn scroll(&mut self, down: bool) {
@@ -1383,9 +1394,7 @@ impl Results {
             let col = if self.failed { 0xEB452C } else { 0xFFD34D };
             c.text_centered(cx, 80.0 + (70.0 - size) / 2.0, size, rgba(col, pop), grade);
         }
-        if self.failed {
-            c.text_centered(cx, 56.0, 10.0, rgba(0xEB452C, 1.0), "FAILED");
-        }
+        self.draw_mods(c, cx, 44.0);
         c.text_centered(cx, 170.0, 28.0, rgba(0xffffff, 1.0), &format!("{:.2}%", acc * count as f64));
         c.text_centered(cx, 212.0, 16.0, rgba(0xc8c8d8, 1.0), &format!("{:08}", (s.score as f64 * count as f64) as u64));
         if let Some(pp) = self.pp {
@@ -1469,6 +1478,63 @@ impl Results {
             chevron(c, ax, cy + ch / 2.0 + bob, down, rgba(pink, a));
         }
         c.hit(x0, cy, cw, ch, Hit::Key(key));
+    }
+
+    /// The mods (and a speed of the player's own) as badges under the title, each in its mod
+    /// select column's colour: up to two rows centred on `cx` from `y`, the rest counted.
+    fn draw_mods(&self, c: &mut Canvas, cx: f32, y: f32) {
+        let colour = |m: crate::mods::Mod| crate::mods::GROUPS.iter().find(|g| g.2.contains(&m)).map_or(0xc8c8d8, |g| g.1);
+        // A failed play says so first, in red.
+        let failed = self.failed.then(|| ("FAILED".to_string(), 0xEB452C));
+        let mut chips: Vec<(String, u32)> = failed.into_iter().chain(self.mods.iter().map(|m| (m.acronym().to_string(), colour(m)))).collect();
+        if let Some(rate) = self.rate {
+            chips.push((format!("{rate:.2}x"), 0xc8c8d8));
+        }
+        if chips.is_empty() {
+            return;
+        }
+        const SIZE: f32 = 8.0;
+        const H: f32 = 14.0;
+        const GAP: f32 = 4.0;
+        // Clear of the friends chip in the top right (and the same on the left, to stay centred).
+        let room = (c.width - 400.0).max(160.0);
+        let width = |label: &str| Canvas::text_width(SIZE, label) + 12.0;
+        // Rows as wide as fit; past two, the last badge says how many more.
+        let mut rows: Vec<Vec<(String, u32)>> = vec![Vec::new()];
+        let mut used = 0.0;
+        for chip in &chips {
+            let w = width(&chip.0);
+            if used > 0.0 && used + GAP + w > room {
+                if rows.len() == 2 {
+                    // Room for the count of the rest (which grows with each badge given up).
+                    loop {
+                        let shown: usize = rows.iter().map(Vec::len).sum();
+                        let more = format!("+{}", chips.len() - shown);
+                        let last = rows.last_mut().unwrap();
+                        if last.is_empty() || last.iter().map(|(l, _)| width(l) + GAP).sum::<f32>() + width(&more) <= room {
+                            last.push((more, 0x8a8aa0));
+                            break;
+                        }
+                        last.pop();
+                    }
+                    break;
+                }
+                rows.push(Vec::new());
+                used = 0.0;
+            }
+            used += if used > 0.0 { GAP } else { 0.0 } + w;
+            rows.last_mut().unwrap().push(chip.clone());
+        }
+        for (r, row) in rows.iter().enumerate() {
+            let total = row.iter().map(|(l, _)| width(l)).sum::<f32>() + GAP * row.len().saturating_sub(1) as f32;
+            let (mut x, ry) = (cx - total / 2.0, y + r as f32 * (H + 3.0));
+            for (label, col) in row {
+                let w = width(label);
+                c.round_rect(x, ry, w, H, 4.0, rgba(*col, 0.2), rgba(*col, 0.9), 1.0);
+                c.text_centered(x + w / 2.0, ry + (H - SIZE) / 2.0, SIZE, rgba(*col, 1.0), label);
+                x += w + GAP;
+            }
+        }
     }
 
     /// The pp, a screen below the results, as osu!'s performance breakdown: the pp, the

@@ -16,7 +16,7 @@ const SITE: &str = "https://rstaiko.auneu.space";
 const TAGLINE: &str = "A taiko client for osu! beatmaps, with 73 mods that bend, break and multiply the lane. Rankings, profiles, chat and downloads.";
 const RAW: &str = "https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client";
 
-/// A clip of taiko-rs's own mods: what it shows, the mods on, its file under /clips/, and the
+/// A clip of taiko.rs's own mods: what it shows, the mods on, its file under /clips/, and the
 /// hover effect its card plays (the mod done to the card itself).
 struct Clip {
     file: &'static str,
@@ -86,7 +86,7 @@ fn mod_info(acronym: &str) -> Option<(&'static str, &'static str)> {
 
 /// Badges next to a player's name on their profile, like osu!'s groups: (lowercased name,
 /// label, colour, what it means).
-const BADGES: [(&str, &str, &str, &str); 1] = [("auneu", "DEV", "#EB452C", "taiko-rs developer")];
+const BADGES: [(&str, &str, &str, &str); 1] = [("auneu", "DEV", "#EB452C", "taiko.rs developer")];
 
 fn badges(name: &str) -> String {
     let key = name.to_ascii_lowercase();
@@ -135,7 +135,7 @@ pub fn profile_meta(p: &Profile) -> Meta {
     let rank = p.rank.map(|r| format!("#{r} · ")).unwrap_or_default();
     Meta {
         description: format!(
-            "{rank}{}pp · {:.2}% accuracy · {} plays · level {:.0}. taiko-rs player since {}.",
+            "{rank}{}pp · {:.2}% accuracy · {} plays · level {:.0}. taiko.rs player since {}.",
             thousands(p.pp.round() as u64),
             p.stats.accuracy * 100.0,
             thousands(p.plays as u64),
@@ -159,7 +159,7 @@ pub fn map_meta(m: &MapRow, rows: &[OnlineScore]) -> Meta {
     let (_, version) = split_map(&m.name);
     let stars = m.stars.map(|s| format!("{s:.2}* ")).unwrap_or_default();
     let top = rows.first().map(|r| format!(" #1: {} with {} ({:.2}%).", r.player, thousands(r.score), r.accuracy * 100.0)).unwrap_or_default();
-    Meta { description: format!("{stars}[{version}] · {} plays by {} players on taiko-rs.{top}", thousands(m.plays as u64), m.players), image: cover(m.set_id, "cover@2x") }
+    Meta { description: format!("{stars}[{version}] · {} plays by {} players on taiko.rs.{top}", thousands(m.plays as u64), m.players), image: cover(m.set_id, "cover@2x") }
 }
 
 /// What's live on the server, for the home page.
@@ -376,7 +376,7 @@ fn download_cta(os: Os, on_download_page: bool) -> String {
             b.note
         ),
         None if on_download_page => "<p class=dim>Pick your system below.</p>".into(),
-        None => "<a class=\"btn hot\" href=\"/download\">Download taiko-rs</a><div class=hint>Windows, Linux and Android</div>".into(),
+        None => "<a class=\"btn hot\" href=\"/download\">Download taiko.rs</a><div class=hint>Windows, Linux and Android</div>".into(),
     }
 }
 
@@ -462,10 +462,10 @@ fn stage(players: usize, plays: usize, online: usize, bg: &str, cta: &str) -> St
     let mods = ["NM no mod", "TL tilt", "WV wave", "BA barrel roll", "MR mirror", "MV multiverse", "SH shatter"];
     let labels: String = mods.iter().chain(&mods[..1]).map(|m| format!("<span>{m}</span>")).collect();
     format!(
-        "{flashes}<section class=stage{bg} aria-label=\"taiko-rs gameplay, switching mods\">\
+        "{flashes}<section class=stage{bg} aria-label=\"taiko.rs gameplay, switching mods\">\
          <div class=hud-tl>{online} online &middot; {players} ranked &middot; server up</div>\
          <div class=hud-tr aria-hidden=true><div class=hud-score>{:08}</div><div class=hp><i></i></div><div class=modname><div class=ticker>{labels}</div></div></div>\
-         <div class=intro><h1 class=glitch data-text=\"TAIKO-RS\">TA<span class=narrow>I</span>KO-RS</h1>\
+         <div class=intro><h1 class=glitch data-text=\"TAIKO.RS\">TA<span class=narrow>I</span>KO.RS</h1>\
            <p>A taiko client for osu! beatmaps, with <em>{} mods</em> that bend, break and multiply the lane.</p></div>\
          <div class=field aria-hidden=true>{}{}{}{}<div class=hit-great>GREAT</div></div>\
          <div class=stage-cta>{}</div><div class=errbar aria-hidden=true><i></i><i></i><i></i><i></i><i></i></div></section>",
@@ -607,7 +607,7 @@ pub fn home(rankings: &[Ranked], maps: &[MapRow], players: usize, plays: usize, 
 pub fn mods_page() -> String {
     let clips: String = CLIPS.iter().map(clip_card).collect();
     format!(
-        "<div class=band><div class=inner><h1 class=glitch data-text=\"MODS\">MODS</h1><p class=dim>osu!'s mods, lazer's taiko extras and {} of taiko-rs's own. Stack as many as you like.</p></div></div>\
+        "<div class=band><div class=inner><h1 class=glitch data-text=\"MODS\">MODS</h1><p class=dim>osu!'s mods, lazer's taiko extras and {} of taiko.rs's own. Stack as many as you like.</p></div></div>\
          <div class=page><div class=section-head><h2>WHAT THEY LOOK LIKE</h2><span class=dim>Real plays, recorded in the game.</span></div><div class=clips>{clips}</div>{}</div>",
         mod_count().saturating_sub(24),
         mod_board()
@@ -912,7 +912,7 @@ pub fn download(os: Os) -> String {
     format!(
         "<div class=band><div class=inner><h1 class=glitch data-text=\"DOWNLOAD\">DOWNLOAD</h1>{}</div></div>\
          <div class=page><div class=builds>{builds}</div>\
-         <section class=panel><div class=panel-head><h2>ONE COMMAND</h2></div><p class=dim>Installs (or updates) taiko-rs and adds it to your apps; it then updates itself from the game.</p>\
+         <section class=panel><div class=panel-head><h2>ONE COMMAND</h2></div><p class=dim>Installs (or updates) taiko.rs and adds it to your apps; it then updates itself from the game.</p>\
          <h3>Windows (PowerShell)</h3><pre>irm {RAW}/install.ps1 | iex</pre><h3>Linux</h3><pre>curl -fsSL {RAW}/install.sh | sh</pre></section>\
          <p class=dim>No macOS build yet. Source and every build: <a href=\"{REPO}/releases\">GitHub releases</a>.</p></div>",
         download_cta(os, true)
@@ -981,7 +981,7 @@ pub fn not_found(why: &str) -> String {
 pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &str) -> String {
     let image = meta.image.clone().unwrap_or_else(|| format!("{SITE}/site/og.jpg?v={}", card_version()));
     let og = format!(
-        "<meta name=description content=\"{0}\"><meta property=og:site_name content=taiko-rs><meta property=og:type content=website>\
+        "<meta name=description content=\"{0}\"><meta property=og:site_name content=taiko.rs><meta property=og:type content=website>\
          <meta property=og:title content=\"{1}\"><meta property=og:description content=\"{0}\"><meta property=og:image content=\"{2}\">\
          <meta name=twitter:card content=summary_large_image><meta name=twitter:title content=\"{1}\"><meta name=twitter:description content=\"{0}\"><meta name=twitter:image content=\"{2}\">",
         esc(&meta.description),
@@ -1006,12 +1006,12 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
         })
         .collect();
     format!(
-        r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{} · taiko-rs</title>
+        r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{} · taiko.rs</title>
 <meta name=theme-color content=#EB452C><meta name=color-scheme content=dark><link rel=icon href="/site/logo.png">{og}
 <link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style></head>
-<body><nav><div class=inner><a class=logo href="/" aria-label="taiko-rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO-RS</a><div class=links>{links}</div>
+<body><nav><div class=inner><a class=logo href="/" aria-label="taiko.rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO-RS</a><div class=links>{links}</div>
 <form action="/u" role=search><input name=name placeholder="find a player" maxlength=16 aria-label="Find a player"></form><div class=account>{account}</div></div></nav>
-<main>{}</main><footer><div class=inner><span class=brand>TAIKO-RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
+<main>{}</main><footer><div class=inner><span class=brand>TAIKO.RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
         esc(title),
         body
     )
@@ -1250,7 +1250,7 @@ mod tests {
     #[test]
     fn helpers() {
         assert_eq!(esc("<b>\"A&B'</b>"), "&lt;b&gt;&quot;A&amp;B&#39;&lt;/b&gt;");
-        assert!(page("<x>", "", None, &Meta::default(), "").contains("&lt;x&gt; · taiko-rs"));
+        assert!(page("<x>", "", None, &Meta::default(), "").contains("&lt;x&gt; · taiko.rs"));
         assert!(page("Rankings", "rankings", None, &Meta::default(), "").contains("href=\"/rankings\" class=on"));
         assert!(page("x", "", None, &Meta::default(), "").contains("href=\"/login\""));
         let card = page("A \"quote\"", "", None, &Meta { description: "d<b>".into(), image: None }, "");

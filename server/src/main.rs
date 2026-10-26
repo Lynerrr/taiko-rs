@@ -1,4 +1,4 @@
-//! taiko-rs online server: accounts (used by multiplayer for now) and lobbies hosted here, so
+//! taiko.rs online server: accounts (used by multiplayer for now) and lobbies hosted here, so
 //! players don't need an open port. Rooms run the game's own room code (`src/net.rs`); the
 //! protocol in front of them is `src/online.rs`.
 //!
@@ -325,7 +325,7 @@ fn handle(state: &State, stream: TcpStream) {
         Err(_) => return reply(&mut reader, Reply::Error("bad request".into())),
     };
     if env.protocol != online::PROTOCOL {
-        return reply(&mut reader, Reply::Error(format!("update taiko-rs (server protocol {}, yours {})", online::PROTOCOL, env.protocol)));
+        return reply(&mut reader, Reply::Error(format!("update taiko.rs (server protocol {}, yours {})", online::PROTOCOL, env.protocol)));
     }
     let out = match env.request {
         Request::Register { name, password } => register(state, ip, &name, &password),

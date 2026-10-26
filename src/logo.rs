@@ -1,4 +1,4 @@
-//! The taiko-rs logo: a glitched don note with "rs" on it, as pixel art (`assets/icon-*.png`).
+//! The taiko.rs logo: a glitched don note with "rs" on it, as pixel art (`assets/icon-*.png`).
 //! The window and taskbar use it as their icon, the top bar draws it pixel by pixel.
 
 use std::sync::OnceLock;
