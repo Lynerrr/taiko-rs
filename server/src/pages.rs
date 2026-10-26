@@ -148,10 +148,21 @@ fn profile_tools(p: &Profile, r: &Roles) -> String {
             esc(code)
         ));
     }
-    if r.viewer_admin && !r.own && !r.admin {
-        let (on, label) = if r.nominator { ("0", "remove loved nominator") } else { ("1", "make loved nominator") };
+    if r.viewer_admin && !r.own {
+        let nominator = if r.admin {
+            String::new()
+        } else {
+            let (on, label) = if r.nominator { ("0", "remove loved nominator") } else { ("1", "make loved nominator") };
+            format!("<form method=post action=\"/u/{}/nominator\"><input type=hidden name=on value={on}><button class=\"btn small\">{label}</button></form>", esc(&p.name))
+        };
+        let remove = if crate::avatars::version(&p.name.to_ascii_lowercase()).is_some() {
+            format!("<form method=post action=\"/u/{}/avatar/remove\"><button class=\"btn small\">remove picture</button></form>", esc(&p.name))
+        } else {
+            String::new()
+        };
         parts.push(format!(
-            "<div class=tool><b>ADMIN</b><form method=post action=\"/u/{}/nominator\"><input type=hidden name=on value={on}><button class=\"btn small\">{label}</button></form></div>",
+            "<div class=tool><b>ADMIN</b>{nominator}<form method=post action=\"/u/{0}/avatar\" enctype=\"multipart/form-data\" class=upload>\
+             <input type=file name=avatar accept=\"image/png,image/jpeg,image/gif,image/webp\" required aria-label=\"their picture\"><button class=\"btn small\">set their picture</button></form>{remove}</div>",
             esc(&p.name)
         ));
     }

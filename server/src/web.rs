@@ -14,6 +14,7 @@
 //!   /loved            the maps loved here (they give pp)
 //!   /a/<name>         a player's profile picture
 //!   /avatar           POST (a form with a file): set your picture; /avatar/remove takes it off
+//!   /u/<name>/avatar  POST: an admin sets (or with /remove takes off) someone else's picture
 //!   /love/<set>       POST: a loved nominator loves a map set here (on=0: takes it back)
 //!   /u/<name>/nominator  POST: an admin makes them a loved nominator (on=0: not any more)
 //!   /s/<id>/pp        POST: an admin sets a play's pp (empty: back to what was sent)
@@ -190,7 +191,7 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     // A picture upload may be bigger than a form.
-    let upload = method == "POST" && path == "/avatar";
+    let upload = method == "POST" && (path == "/avatar" || (path.starts_with("/u/") && path.ends_with("/avatar")));
     let max_body = if upload { crate::avatars::MAX_BYTES + MAX_FORM } else { MAX_FORM };
     let mut body = Vec::new();
     if method == "POST" && length <= max_body {
@@ -552,6 +553,24 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
                 None => "pick a picture first".into(),
             };
             Reply::see_other(format!("/u/{}?msg={}", state.display_name(&key), encode(&msg)))
+        }
+        ["u", name, "avatar"] | ["u", name, "avatar", "remove"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Some(p) = state.profile(name) else { return req.not_found("There is no player by that name") };
+            let target = p.name.to_ascii_lowercase();
+            let msg = if !crate::is_admin(&key) {
+                "only admins can do that".to_string()
+            } else if segs.len() == 4 {
+                crate::avatars::remove(&target);
+                format!("{}'s picture is off", p.name)
+            } else {
+                match &req.upload {
+                    Some(file) => crate::avatars::save(&target, file, crate::now_secs()).map(|_| format!("{}'s picture is set", p.name)).unwrap_or_else(|e| e),
+                    None => "pick a picture first".into(),
+                }
+            };
+            println!("{key}: {msg}");
+            Reply::see_other(format!("/u/{}?msg={}", p.name, encode(&msg)))
         }
         ["avatar", "remove"] => {
             let Some(key) = req.key() else { return Reply::see_other("/login".into()) };

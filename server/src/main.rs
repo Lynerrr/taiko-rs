@@ -71,6 +71,11 @@ fn is_admin(key: &str) -> bool {
     ADMINS.contains(&key)
 }
 
+/// Shown online all the time (in the menus), whether connected or not.
+const ALWAYS_ONLINE: &str = "claude";
+/// Claude's friends (made at startup, both ways, once their accounts exist).
+const CLAUDE_FRIENDS: &[&str] = &["lynerrr", "auneu"];
+
 /// How long a code for linking Discord to an account (`>verify`) lasts.
 const VERIFY_FOR: Duration = Duration::from_secs(30 * 60);
 
@@ -155,6 +160,9 @@ impl Hub {
     /// Everyone online, as `Down::Players`.
     fn players(&self) -> Down {
         let mut players: Vec<OnlinePlayer> = self.conns.values().filter_map(|v| v.last()).map(|c| OnlinePlayer { name: c.name.clone(), activity: c.activity.clone() }).collect();
+        if !self.conns.contains_key(ALWAYS_ONLINE) {
+            players.push(OnlinePlayer { name: ALWAYS_ONLINE.into(), activity: Activity::Menus });
+        }
         players.sort_by_key(|p| p.name.to_lowercase());
         let count = players.len() as u32;
         players.truncate(online::MAX_LISTED);
@@ -248,10 +256,24 @@ impl State {
         let cutoff = now_secs().saturating_sub(SESSION_DAYS * 86400);
         accounts.sessions.retain(|_, s| s.created >= cutoff);
         // Claude's profile (its badge is in `pages`): a password nobody knows, so nobody logs in.
-        let claude_new = !accounts.users.contains_key("claude");
-        if claude_new {
+        let mut save = !accounts.users.contains_key("claude");
+        if save {
             let hash = hash_password(&new_token()).expect("argon2");
             accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false });
+        }
+        // And its friends, both ways.
+        for &friend in CLAUDE_FRIENDS {
+            if !accounts.users.contains_key(friend) || accounts.users["claude"].friends.iter().any(|f| f == friend) {
+                continue;
+            }
+            for (a, b) in [("claude", friend), (friend, "claude")] {
+                if let Some(u) = accounts.users.get_mut(a) {
+                    u.friends.retain(|f| f != b);
+                    u.friends.push(b.to_string());
+                    u.requests.retain(|r| r != b);
+                }
+            }
+            save = true;
         }
         println!("{} accounts, {} sessions ({})", accounts.users.len(), accounts.sessions.len(), path.display());
         // Scores live next to the accounts.
@@ -267,7 +289,7 @@ impl State {
             scores: Mutex::new(scores),
             verify_codes: Mutex::new(HashMap::new()),
         };
-        if claude_new {
+        if save {
             state.save(&state.accounts.lock().unwrap());
         }
         state
@@ -510,7 +532,7 @@ impl State {
         let key = name.trim().to_ascii_lowercase();
         let (name, joined) = self.accounts.lock().unwrap().users.get(&key).map(|u| (u.name.clone(), u.created))?;
         let mut p = self.scores.lock().unwrap().profile(&key, &name, joined);
-        p.online = self.hub.lock().unwrap().conns.contains_key(&key);
+        p.online = key == ALWAYS_ONLINE || self.hub.lock().unwrap().conns.contains_key(&key);
         Some(p)
     }
 
@@ -525,7 +547,8 @@ impl State {
     /// What `name` is doing, if they're online.
     fn activity(&self, name: &str) -> Option<Activity> {
         let key = name.trim().to_ascii_lowercase();
-        self.hub.lock().unwrap().conns.get(&key).and_then(|v| v.last()).map(|c| c.activity.clone())
+        let activity = self.hub.lock().unwrap().conns.get(&key).and_then(|v| v.last()).map(|c| c.activity.clone());
+        activity.or_else(|| (key == ALWAYS_ONLINE).then_some(Activity::Menus))
     }
 
     /// `name`'s friends as written, and whether each is online.
@@ -534,7 +557,7 @@ impl State {
         // Names first: the accounts and the hub are never locked at once here.
         let named: Vec<(String, String)> = self.friend_keys(&key).into_iter().map(|k| (self.display_name(&k), k)).collect();
         let hub = self.hub.lock().unwrap();
-        let mut out: Vec<(String, bool)> = named.into_iter().map(|(name, k)| (name, hub.conns.contains_key(&k))).collect();
+        let mut out: Vec<(String, bool)> = named.into_iter().map(|(name, k)| (name, k == ALWAYS_ONLINE || hub.conns.contains_key(&k))).collect();
         out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
         out
     }
@@ -636,7 +659,10 @@ impl State {
         let hub = self.hub.lock().unwrap();
         let mut friends: Vec<Friend> = friends
             .into_iter()
-            .map(|(k, name)| Friend { name, activity: hub.conns.get(&k).and_then(|v| v.last()).map(|c| c.activity.clone()) })
+            .map(|(k, name)| {
+                let activity = hub.conns.get(&k).and_then(|v| v.last()).map(|c| c.activity.clone());
+                Friend { name, activity: activity.or_else(|| (k == ALWAYS_ONLINE).then_some(Activity::Menus)) }
+            })
             .collect();
         friends.sort_by_key(|f| (f.activity.is_none(), f.name.to_lowercase()));
         Down::Friends { friends, requests, sent }
