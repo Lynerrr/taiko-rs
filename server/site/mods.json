@@ -309,7 +309,7 @@
       },
       {
         "acronym": "RA",
-        "description": "The lane is dark: a beam sweeps it every beat and lights notes up as it passes.",
+        "description": "The lane is dark: a beam sweeps it every other beat and lights notes up as it passes.",
         "name": "Radar"
       },
       {
