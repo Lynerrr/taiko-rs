@@ -509,8 +509,11 @@ impl Select {
         let label = match self.sort {
             SortMode::Artist => initial(&e.meta.artist),
             SortMode::Title => initial(&e.meta.title),
+            // From the song's value the list was ordered by (its best difficulty's status), not from
+            // the first difficulty's: a song of mixed statuses would split its heading in two.
             SortMode::Status => {
-                let (name, colour) = status_heading(self.status_section(e));
+                let code = if v.is_nan() { crate::search::UNKNOWN } else { v as u8 };
+                let (name, colour) = status_heading(code);
                 return (name.to_string(), Some(colour));
             }
             _ if v.is_nan() && self.sort == SortMode::Played => "Never played".to_string(),
