@@ -43,6 +43,7 @@ mod profile;
 mod preview;
 mod render;
 mod scores;
+mod search;
 mod settings;
 mod shapeshift;
 mod skin;
@@ -115,6 +116,9 @@ enum Scene {
     VideoEdit(Box<video::Editor>),
     MpResults,
 }
+
+/// How often a running game looks for a newer build (with "Check for updates" on).
+const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
 
 /// How far behind the live match spectators watch, so players' presses arrive in time.
 const SPECTATE_DELAY: Duration = Duration::from_millis(1500);
@@ -354,6 +358,8 @@ struct State {
     pending_screen_shots: Vec<&'static str>,
     exit_when_done: bool,
     quit: bool,
+    /// "Exit taiko.rs?" is up (F12, Esc in song select, the window's close button).
+    quit_asked: bool,
     smooth: Option<debug::Smoothness>,
     /// When the frame being built got its swapchain image (for the smoothness report).
     frame_acquired: Option<Instant>,
@@ -3092,7 +3098,7 @@ impl State {
                 KeyCode::Enter | KeyCode::NumpadEnter => self.finish_calibration(),
                 KeyCode::Escape => self.leave_calibration(false),
                 KeyCode::F11 => self.toggle_fullscreen(window),
-                KeyCode::F12 => self.quit = true,
+                KeyCode::F12 => self.ask_quit(),
                 _ => {}
             }
             return;
@@ -3111,7 +3117,7 @@ impl State {
                 self.cfg.save();
             }
             KeyCode::F11 => self.toggle_fullscreen(window),
-            KeyCode::F12 => self.quit = true,
+            KeyCode::F12 => self.ask_quit(),
             _ => {}
         }
     }
@@ -3290,7 +3296,7 @@ impl State {
                 return true;
             }
             KeyCode::F12 => {
-                self.quit = true;
+                self.ask_quit();
                 return true;
             }
             KeyCode::KeyU if self.modifiers_ctrl && !self.in_song() => {
@@ -4631,10 +4637,12 @@ impl State {
         // Keep whatever was typed into the search box while scanning, and the sort.
         let filter = std::mem::take(&mut self.select.filter);
         let played = std::mem::take(&mut self.select.played);
+        let status = std::mem::take(&mut self.select.status);
         let sort = self.select.sort;
         self.select = Select::new(&self.library);
         self.select.filter = filter;
         self.select.played = played;
+        self.select.status = status;
         self.select.sort = sort;
         self.select.mods_label = self.cfg.mods.label();
         let maps = self.library.iter().enumerate().map(|(i, e)| (i, e.path.clone(), e.modified, e.size)).collect();
@@ -4690,10 +4698,12 @@ impl State {
         let Some(info) = &self.mapinfo else { return };
         let (done, total) = (info.done.load(Ordering::Relaxed), info.total.load(Ordering::Relaxed));
         let finished = info.finished();
-        self.select.info_progress = if !finished && self.select.sort.needs_info() { format!("  |  analysing {done}/{total}") } else { String::new() };
+        // Sorting or searching by stars, length or BPM waits on the analysis.
+        let needs_info = self.select.sort.needs_info() || search::Query::parse(&self.select.filter).needs_info();
+        self.select.info_progress = if !finished && needs_info { format!("  |  analysing {done}/{total}") } else { String::new() };
         if finished && !self.mapinfo_sorted {
             self.mapinfo_sorted = true;
-            if self.select.sort.needs_info() {
+            if needs_info {
                 self.select.refilter(&self.library);
             }
         }
@@ -4715,6 +4725,8 @@ impl State {
         for m in db.by_md5.values() {
             if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
                 self.db_status.insert(self.library[i].path.clone(), m.status);
+                // Unless the mirrors have said better already.
+                self.select.status.entry(self.library[i].path.clone()).or_insert(m.status);
             }
         }
         for m in db.by_md5.values().filter(|m| m.last_played > 0) {
@@ -5051,6 +5063,12 @@ impl State {
     /// (scrolling past sets asks about none of them), and takes in what they say.
     fn poll_set_status(&mut self, now: Instant) {
         while let Ok((set, status)) = self.set_status_rx.try_recv() {
+            // The mirrors know graveyard from pending, which osu!.db doesn't: the search uses theirs.
+            if let Some(code) = status.as_deref().and_then(search::status_code) {
+                for e in self.library.iter().filter(|e| e.meta.set_id == Some(set)) {
+                    self.select.status.insert(e.path.clone(), code);
+                }
+            }
             self.set_status.insert(set, status);
         }
         let set = self.select.selected().and_then(|i| self.library.get(i)).and_then(|e| e.meta.set_id);
@@ -5860,7 +5878,48 @@ impl State {
 
     /// A key press: the player's own hotkeys (`keys::Bindings`) turned into the keys the game
     /// knows them by, then `key_inner`.
+    /// Asks whether to exit; asked again (F12 or the close button twice), exits.
+    fn ask_quit(&mut self) {
+        if self.quit_asked {
+            self.quit = true;
+        } else {
+            self.quit_asked = true;
+        }
+    }
+
+    /// A key while "Exit taiko.rs?" is up: yes, no, or nothing.
+    fn quit_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::KeyY | KeyCode::F12 => self.quit = true,
+            KeyCode::Escape | KeyCode::KeyN | KeyCode::Backspace => self.quit_asked = false,
+            _ => {}
+        }
+    }
+
+    /// The exit question over everything.
+    fn draw_quit(&self, c: &mut Canvas) {
+        if !self.quit_asked {
+            return;
+        }
+        let w = c.width;
+        c.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
+        let (bw, bh) = (300.0f32.min(w - 32.0), 100.0);
+        let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
+        c.round_rect(x, y, bw, bh, 10.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
+        c.text_centered(w / 2.0, y + 18.0, 12.0, rgba(0xffffff, 1.0), "Exit taiko.rs?");
+        let gap = 10.0;
+        let button = (bw - 36.0 - gap) / 2.0;
+        c.button(x + 18.0, y + 56.0, button, 26.0, "Exit  (Enter)", 9.0, render::Hit::Key(KeyCode::KeyY), true);
+        c.button(x + 18.0 + button + gap, y + 56.0, button, 26.0, "Stay  (Esc)", 9.0, render::Hit::Key(KeyCode::KeyN), false);
+    }
+
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        if self.quit_asked {
+            if !repeat {
+                self.quit_key(code);
+            }
+            return;
+        }
         let pressed = keys::Chord { key: code, ctrl: self.modifiers_ctrl, shift: self.modifiers_shift, alt: self.modifiers_alt };
         match self.hotkey_place(code).map(|place| self.cfg.hotkeys.resolve(pressed, place)) {
             None | Some(keys::Resolved::Same) => self.key_inner(code, repeat, text, at, window),
@@ -5900,6 +5959,12 @@ impl State {
     }
 
     fn key_inner(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        if self.quit_asked {
+            if !repeat {
+                self.quit_key(code);
+            }
+            return;
+        }
         self.refresh_play_offset();
         if let Some(s) = &mut self.splash {
             // Any key skips the splash and does nothing else.
@@ -6175,7 +6240,7 @@ impl State {
                 SelectAction::Play(i) => self.start_loading(i),
                 SelectAction::Settings => self.open_settings(),
                 SelectAction::Mods => self.open_mod_select(),
-                SelectAction::Quit => self.quit = true,
+                SelectAction::Quit => self.ask_quit(),
                 SelectAction::None => {
                     if let Some(text) = text {
                         self.select.type_text(text, &self.library);
@@ -6332,6 +6397,9 @@ impl State {
 
         }
         self.poll_multiplayer();
+        if self.cfg.check_updates {
+            self.updater.check_every(UPDATE_CHECK_EVERY);
+        }
         self.poll_downloads();
         self.poll_score_link();
         self.poll_sorting();
@@ -7186,6 +7254,7 @@ impl State {
         }
         self.draw_update(canvas);
         self.draw_drag_hover(canvas, now);
+        self.draw_quit(canvas);
         if self.splash.is_some() {
             let boot = self.boot_log();
             // Some window managers never report focus: don't wait forever.
@@ -7645,6 +7714,10 @@ impl State {
 
     fn click(&mut self, hit: render::Hit, window: Option<&Window>) {
         use render::Hit;
+        // The exit question takes only its own buttons.
+        if self.quit_asked && !matches!(hit, Hit::Key(KeyCode::KeyY | KeyCode::KeyN)) {
+            return;
+        }
         match hit {
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
@@ -8121,7 +8194,7 @@ impl App {
             }
         }
         match event {
-            WindowEvent::CloseRequested => lock(&self.state).quit = true,
+            WindowEvent::CloseRequested => lock(&self.state).ask_quit(),
             WindowEvent::HoveredFile(_) => lock(&self.state).file_drag(FileDrag::Hover),
             WindowEvent::HoveredFileCancelled => lock(&self.state).file_drag(FileDrag::Left),
             WindowEvent::DroppedFile(path) => lock(&self.state).file_drag(FileDrag::Drop(vec![path])),
@@ -8553,6 +8626,7 @@ impl State {
             pending_screen_shots: vec!["select", "results"],
             exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
             quit: false,
+            quit_asked: false,
             smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
             frame_acquired: None,
             pace_shift_ms: 0.0,

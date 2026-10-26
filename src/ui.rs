@@ -54,6 +54,9 @@ pub struct Select {
     pub info: Option<crate::mapinfo::Shared>,
     /// When each map was last played (Unix seconds), from taiko.rs and osu!.
     pub played: std::collections::HashMap<std::path::PathBuf, u64>,
+    /// Each map's status on osu! (`search`'s codes), from osu!.db and the mirrors, for the
+    /// search's `status=` filter.
+    pub status: std::collections::HashMap<std::path::PathBuf, u8>,
     /// osu! collections: (name, library indices).
     pub collections: Vec<(String, std::collections::HashSet<usize>)>,
     /// The collection shown (None: everything) and the open collection list's cursor.
@@ -168,6 +171,7 @@ impl Select {
             sort: SortMode::Artist,
             info: None,
             played: std::collections::HashMap::new(),
+            status: std::collections::HashMap::new(),
             collections: Vec::new(),
             collection: None,
             picker: None,
@@ -199,17 +203,30 @@ impl Select {
 
     pub fn refilter(&mut self, library: &[Entry]) {
         let selected = self.visible.get(self.cursor).copied();
-        let needle = self.filter.to_lowercase();
+        let query = crate::search::Query::parse(&self.filter);
         let only = self.collection.and_then(|c| self.collections.get(c)).map(|(_, set)| set);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let info = self.info.as_ref().map(|i| i.lock().unwrap());
+        let facts = |i: usize, e: &Entry| {
+            let known = info.as_ref().and_then(|v| v.get(i).copied().flatten());
+            crate::search::Facts {
+                stars: known.map(|x| x.stars as f64),
+                length_s: known.map(|x| x.length_ms as f64 / 1000.0),
+                bpm: known.map(|x| x.bpm as f64),
+                played_days: self.played.get(&e.path).filter(|&&t| t > 0).map(|&t| now.saturating_sub(t) as f64 / 86_400.0),
+                status: self.status.get(&e.path).copied().unwrap_or(if e.meta.set_id.is_some() { crate::search::UNKNOWN } else { crate::search::NOT_SUBMITTED }),
+            }
+        };
         self.visible = library
             .iter()
             .enumerate()
             .filter(|(_, e)| self.show_converts || e.meta.mode == 1)
             .filter(|(i, _)| only.is_none_or(|set| set.contains(i)))
             .filter(|(_, e)| !self.hidden.contains(&e.path))
-            .filter(|(_, e)| needle.is_empty() || e.label().to_lowercase().contains(&needle) || e.meta.creator.to_lowercase().contains(&needle))
+            .filter(|&(i, e)| query.is_empty() || query.matches(&e.meta, &e.label(), &facts(i, e)))
             .map(|(i, _)| i)
             .collect();
+        drop(info);
         self.sort_visible(library);
         self.regroup(library);
         match selected.and_then(|s| self.visible.iter().position(|&v| v == s)) {

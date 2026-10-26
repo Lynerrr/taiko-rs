@@ -541,6 +541,12 @@ fn assert_every_screen_fits() {
     check_draw("match scoreboard", &mut out, |c| multiplayer::draw_scoreboard(c, &room, &player));
     check_draw("match results", &mut out, |c| multiplayer::draw_results(c, &room));
 
+    // The exit question, over song select.
+    s.scene = Scene::Select;
+    s.quit_asked = true;
+    check(&mut s, "exit question", &mut out);
+    s.quit_asked = false;
+
     // Mapguessr: the lobby (after a game, so with points), a round, its answer, and picking a
     // guess in song select.
     let guessr_room = || {
@@ -576,4 +582,26 @@ fn assert_every_screen_fits() {
         eprintln!("{p}");
     }
     assert!(out.is_empty(), "{} layout problems", out.len());
+}
+
+#[test]
+fn exiting_asks_first() {
+    let mut s = state();
+    let key = |s: &mut State, code| s.key(code, false, None, Instant::now(), None);
+    key(&mut s, KeyCode::F12);
+    assert!(s.quit_asked && !s.quit);
+    // Esc says stay; other keys do nothing while it's asked.
+    key(&mut s, KeyCode::Escape);
+    assert!(!s.quit_asked && !s.quit);
+    key(&mut s, KeyCode::F12);
+    key(&mut s, KeyCode::KeyA);
+    assert!(s.quit_asked && !s.quit);
+    key(&mut s, KeyCode::Enter);
+    assert!(s.quit);
+    // The close button twice exits too.
+    let mut s = state();
+    s.ask_quit();
+    assert!(!s.quit);
+    s.ask_quit();
+    assert!(s.quit);
 }

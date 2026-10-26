@@ -85,6 +85,8 @@ pub struct Updater {
     /// Download progress: bytes so far and in total.
     done: Arc<AtomicU64>,
     total: Arc<AtomicU64>,
+    /// When the last check started (startup counts, checked or not).
+    last_check: Mutex<std::time::Instant>,
 }
 
 /// Short form of a commit hash for display.
@@ -100,6 +102,7 @@ impl Updater {
             channel: Arc::new(Mutex::new(BUILD_CHANNEL)),
             done: Arc::default(),
             total: Arc::default(),
+            last_check: Mutex::new(std::time::Instant::now()),
         };
         // An APK can't replace itself; Android installs updates.
         if check && !cfg!(target_os = "android") {
@@ -135,11 +138,23 @@ impl Updater {
         self.check();
     }
 
+    /// Checks again once `every` has passed since the last check, so a game left running hears
+    /// about newer builds. An update already found stays as it is (a failed look must not hide
+    /// its badge).
+    pub fn check_every(&self, every: Duration) {
+        let found = matches!(self.status(), Status::Available { .. });
+        if cfg!(target_os = "android") || found || self.last_check.lock().unwrap().elapsed() < every {
+            return;
+        }
+        self.check();
+    }
+
     pub fn check(&self) {
         let Some(build) = BUILD else { return };
         if matches!(self.status(), Status::Checking | Status::Downloading | Status::Installed) {
             return;
         }
+        *self.last_check.lock().unwrap() = std::time::Instant::now();
         *self.status.lock().unwrap() = Status::Checking;
         let (status, current) = (self.status.clone(), self.channel.clone());
         let channel = self.channel();
