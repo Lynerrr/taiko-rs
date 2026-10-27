@@ -11,6 +11,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL: u32 = 1;
+/// Most maps one `Request::SetStatuses` is answered for.
+pub const MAX_STATUS_MAPS: usize = 500;
 pub const DEFAULT_PORT: u16 = 7800;
 pub const DEFAULT_SERVER: &str = "jashincraft.space:7800";
 /// The website (profiles at /u/<name>).
@@ -32,8 +34,14 @@ pub enum Request {
     WhoAmI { token: String },
     Logout { token: String },
     ListRooms,
-    /// Opens a lobby on the server and joins it as its host.
-    CreateRoom { token: String, title: String },
+    /// Opens a lobby on the server and joins it as its host; `mapguessr`: one that plays
+    /// mapguessr.
+    CreateRoom {
+        token: String,
+        title: String,
+        #[serde(default)]
+        mapguessr: bool,
+    },
     JoinRoom { token: String, room: u32 },
     /// The social connection (friends, chat, watching): after `Reply::Account` the connection
     /// stays open, the game sending `Up` lines and the server `Down` lines.
@@ -46,6 +54,20 @@ pub enum Request {
     Profile { name: String },
     /// The presses of an online score, by its `OnlineScore::id` (`Reply::Replay`).
     Replay { id: u64 },
+    /// One online score, by its `OnlineScore::id` (`Reply::Score`): what a score link opens.
+    Score { id: u64 },
+    /// The statuses on osu! of the sets the maps are of, each as (set ID, the ID of one of its
+    /// maps): what the server knows now (`Reply::SetStatuses`), and it looks the rest up for
+    /// the next time (when `token` is a logged-in player's).
+    SetStatuses { token: String, maps: Vec<(u32, u32)> },
+    /// The map sets loved on the server (`Reply::LovedSets`): they give pp there.
+    LovedSets,
+    /// A loved nominator loves a map set on the server, or takes it back (`Reply::LovedSets`).
+    SetLoved { token: String, set: u32, loved: bool },
+    /// A play that isn't on the leaderboards (failed, quit, restarted, from a start point, in
+    /// a lobby): it counts in the profile's play count, and `ms` of playing in its play time
+    /// (`Reply::Counted`).
+    Played { token: String, ms: u64 },
 }
 
 /// A play sent to the server: what the leaderboards show, and the replay's presses (kept so
@@ -68,6 +90,12 @@ pub struct ScoreSubmit {
     /// Star rating at the rate played.
     #[serde(default)]
     pub stars: Option<f64>,
+    /// Real milliseconds spent playing it (pauses left out), for the profile's play time.
+    #[serde(default)]
+    pub play_ms: Option<u64>,
+    /// The scroll speed setting played at (pp count it).
+    #[serde(default)]
+    pub scroll_speed: Option<f64>,
 }
 
 /// A score on a leaderboard or a profile.
@@ -98,6 +126,9 @@ pub struct OnlineScore {
     /// replays).
     #[serde(default)]
     pub id: u64,
+    /// The scroll speed setting it was played at (None: sent before that was).
+    #[serde(default)]
+    pub scroll_speed: Option<f64>,
 }
 
 /// An online score's replay: its presses, the map they were played on and how they are judged
@@ -135,7 +166,8 @@ pub struct Profile {
     pub name: String,
     /// Unix seconds.
     pub joined: u64,
-    /// Plays sent, and their pp total (best per map, weighted like osu!).
+    /// Plays (sent to the leaderboards, and the others: failed, quit...), and their pp total
+    /// (best per map, weighted like osu!).
     pub plays: u32,
     pub pp: f64,
     /// Place among everyone by pp (1-based; None without pp yet).
@@ -150,6 +182,9 @@ pub struct Profile {
     pub firsts: Vec<OnlineScore>,
     #[serde(default)]
     pub online: bool,
+    /// Time spent playing (real milliseconds, pauses left out), counted since this was added.
+    #[serde(default)]
+    pub play_ms: u64,
 }
 
 /// A player's totals, like osu!'s profile.
@@ -193,6 +228,7 @@ pub const MAP_SCORES: usize = 50;
 
 /// A player's pp total from their pp on each map (best per map): highest first, each counting
 /// 5% less than the one before, like osu!.
+#[allow(dead_code)] // used by the online server (server/)
 pub fn weighted_pp(mut best: Vec<f64>) -> f64 {
     best.sort_by(|a, b| b.total_cmp(a));
     best.iter().enumerate().map(|(i, pp)| pp * 0.95f64.powi(i as i32)).sum()
@@ -299,8 +335,21 @@ pub enum Down {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Reply {
-    /// Logged in (or the token checked out): the account's name and a session token.
-    Account { name: String, token: String },
+    /// Logged in (or the token checked out): the account's name and a session token, and
+    /// whether it may love maps (a loved nominator or an admin).
+    Account {
+        name: String,
+        token: String,
+        #[serde(default)]
+        nominator: bool,
+    },
+    /// The map sets loved on the server.
+    LovedSets(Vec<u32>),
+    /// (set ID, status on osu!) of the sets asked about that the server knows ("ranked",
+    /// "loved", "graveyard"..., "missing" when osu! doesn't have it).
+    SetStatuses(Vec<(u32, String)>),
+    /// A `Played` play was counted.
+    Counted,
     LoggedOut,
     Rooms(Vec<RoomInfo>),
     /// In the room: from here on this connection speaks the room protocol. Send Hello with
@@ -313,6 +362,7 @@ pub enum Reply {
     Scores(Vec<OnlineScore>),
     Profile(Box<Profile>),
     Replay(Box<OnlineReplay>),
+    Score(Box<OnlineScore>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -323,6 +373,8 @@ pub struct RoomInfo {
     pub players: u32,
     pub map: Option<String>,
     pub in_match: bool,
+    #[serde(default)]
+    pub mapguessr: bool,
 }
 
 pub const NAME_RULES: &str = "3-16 letters, digits, _ or -";
@@ -342,10 +394,17 @@ pub fn clean_text(text: &str, max: usize) -> String {
 
 /// A lobby title, at most 32 characters.
 #[allow(dead_code)] // used by the online server (server/)
-pub fn clean_title(title: &str, owner: &str) -> String {
+/// `mapguessr`: the default title says it's a mapguessr lobby.
+pub fn clean_title(title: &str, owner: &str, mapguessr: bool) -> String {
     let t = clean_text(title, 32);
     let t = t.trim();
-    if t.is_empty() { format!("{owner}'s lobby") } else { t.to_string() }
+    if !t.is_empty() {
+        t.to_string()
+    } else if mapguessr {
+        format!("{owner}'s mapguessr")
+    } else {
+        format!("{owner}'s lobby")
+    }
 }
 
 /// One line of JSON (without the newline), at most `MAX_LINE` bytes.
@@ -547,8 +606,9 @@ mod tests {
         assert!(valid_name("Lynerrr") && valid_name("den4ik_228") && valid_name("a-b"));
         assert!(!valid_name("ab") && !valid_name("has space") && !valid_name("x".repeat(17).as_str()) && !valid_name("ünï"));
         assert!(valid_password("hunter2") && !valid_password("short"));
-        assert_eq!(clean_title("  ", "Lynerrr"), "Lynerrr's lobby");
-        assert_eq!(clean_title("taiko\u{7}  night", "x"), "taiko  night");
+        assert_eq!(clean_title("  ", "Lynerrr", false), "Lynerrr's lobby");
+        assert_eq!(clean_title("", "Lynerrr", true), "Lynerrr's mapguessr");
+        assert_eq!(clean_title("taiko\u{7}  night", "x", true), "taiko  night");
     }
 
     #[test]

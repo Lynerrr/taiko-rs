@@ -1,4 +1,4 @@
-//! taiko-rs online server: accounts (used by multiplayer for now) and lobbies hosted here, so
+//! taiko.rs online server: accounts (used by multiplayer for now) and lobbies hosted here, so
 //! players don't need an open port. Rooms run the game's own room code (`src/net.rs`); the
 //! protocol in front of them is `src/online.rs`.
 //!
@@ -15,6 +15,15 @@ mod net;
 #[allow(dead_code)]
 #[path = "../../src/online.rs"]
 mod online;
+mod avatars;
+mod card;
+mod covers;
+mod osustatus;
+mod discord;
+#[allow(dead_code)]
+#[path = "../../src/font.rs"]
+mod font;
+mod loved;
 mod scores;
 mod pages;
 mod web;
@@ -51,13 +60,33 @@ struct User {
     friends: Vec<String>,
     #[serde(default)]
     requests: Vec<String>,
+    /// May love maps (see `loved`); admins give and take it.
+    #[serde(default)]
+    nominator: bool,
 }
+
+/// Admins (lowercased names): they make loved nominators, and nominate themselves.
+const ADMINS: &[&str] = &["lynerrr", "auneu"];
+
+fn is_admin(key: &str) -> bool {
+    ADMINS.contains(&key)
+}
+
+/// Shown online all the time (in the menus), whether connected or not.
+const ALWAYS_ONLINE: &str = "claude";
+/// Claude's friends (made at startup, both ways, once their accounts exist).
+const CLAUDE_FRIENDS: &[&str] = &["lynerrr", "auneu"];
+
+/// How long a code for linking Discord to an account (`>verify`) lasts.
+const VERIFY_FOR: Duration = Duration::from_secs(30 * 60);
 
 const MAX_FRIENDS: usize = 200;
 /// Chat lines kept per pair of friends, and of the global chat (in memory only).
 const CHAT_HISTORY: usize = 100;
 /// How often a changed online list goes out to everyone.
 const PLAYERS_EVERY: Duration = Duration::from_secs(2);
+/// How often pp is counted again as map sets' statuses become known.
+const COUNT_PP_EVERY: Duration = Duration::from_secs(60);
 
 /// One open social connection (a player can have several, e.g. two PCs).
 struct Conn {
@@ -132,6 +161,9 @@ impl Hub {
     /// Everyone online, as `Down::Players`.
     fn players(&self) -> Down {
         let mut players: Vec<OnlinePlayer> = self.conns.values().filter_map(|v| v.last()).map(|c| OnlinePlayer { name: c.name.clone(), activity: c.activity.clone() }).collect();
+        if !self.conns.contains_key(ALWAYS_ONLINE) {
+            players.push(OnlinePlayer { name: ALWAYS_ONLINE.into(), activity: Activity::Menus });
+        }
         players.sort_by_key(|p| p.name.to_lowercase());
         let count = players.len() as u32;
         players.truncate(online::MAX_LISTED);
@@ -192,6 +224,8 @@ struct State {
     dummy_hash: String,
     hub: Mutex<Hub>,
     scores: Mutex<scores::Scores>,
+    /// Codes for `>verify` on Discord: code -> (lowercased name, when made).
+    verify_codes: Mutex<HashMap<String, (String, Instant)>>,
 }
 
 fn now_secs() -> u64 {
@@ -222,10 +256,30 @@ impl State {
         let mut accounts: Accounts = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         let cutoff = now_secs().saturating_sub(SESSION_DAYS * 86400);
         accounts.sessions.retain(|_, s| s.created >= cutoff);
+        // Claude's profile (its badge is in `pages`): a password nobody knows, so nobody logs in.
+        let mut save = !accounts.users.contains_key("claude");
+        if save {
+            let hash = hash_password(&new_token()).expect("argon2");
+            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false });
+        }
+        // And its friends, both ways.
+        for &friend in CLAUDE_FRIENDS {
+            if !accounts.users.contains_key(friend) || accounts.users["claude"].friends.iter().any(|f| f == friend) {
+                continue;
+            }
+            for (a, b) in [("claude", friend), (friend, "claude")] {
+                if let Some(u) = accounts.users.get_mut(a) {
+                    u.friends.retain(|f| f != b);
+                    u.friends.push(b.to_string());
+                    u.requests.retain(|r| r != b);
+                }
+            }
+            save = true;
+        }
         println!("{} accounts, {} sessions ({})", accounts.users.len(), accounts.sessions.len(), path.display());
         // Scores live next to the accounts.
         let scores = scores::Scores::load(Some(path.parent().map(|d| d.to_path_buf()).unwrap_or_default()));
-        State {
+        let state = State {
             accounts: Mutex::new(accounts),
             path,
             lobbies: Mutex::new(HashMap::new()),
@@ -234,7 +288,12 @@ impl State {
             dummy_hash: hash_password("not a real password").expect("argon2"),
             hub: Mutex::new(Hub::default()),
             scores: Mutex::new(scores),
+            verify_codes: Mutex::new(HashMap::new()),
+        };
+        if save {
+            state.save(&state.accounts.lock().unwrap());
         }
+        state
     }
 
     /// Writes accounts.json atomically (temp file, then rename), readable by its owner only.
@@ -258,7 +317,7 @@ impl State {
     /// Logs in from the website: the account's name as written and a new session token.
     fn web_login(&self, ip: IpAddr, name: &str, password: &str) -> Result<(String, String), String> {
         match login(self, ip, name, password) {
-            Reply::Account { name, token } => Ok((name, token)),
+            Reply::Account { name, token, .. } => Ok((name, token)),
             Reply::Error(e) => Err(e),
             _ => Err("couldn't log in".into()),
         }
@@ -302,7 +361,7 @@ impl State {
             .iter()
             .filter_map(|(&id, l)| {
                 let s = l.room.summary.lock().unwrap().clone();
-                (s.players > 0).then(|| RoomInfo { id, title: l.title.clone(), host: if s.host.is_empty() { l.owner.clone() } else { s.host }, players: s.players, map: s.map, in_match: s.in_match })
+                (s.players > 0).then(|| RoomInfo { id, title: l.title.clone(), host: if s.host.is_empty() { l.owner.clone() } else { s.host }, players: s.players, map: s.map, in_match: s.in_match, mapguessr: s.mapguessr })
             })
             .collect();
         out.sort_by_key(|r| r.id);
@@ -325,13 +384,13 @@ fn handle(state: &State, stream: TcpStream) {
         Err(_) => return reply(&mut reader, Reply::Error("bad request".into())),
     };
     if env.protocol != online::PROTOCOL {
-        return reply(&mut reader, Reply::Error(format!("update taiko-rs (server protocol {}, yours {})", online::PROTOCOL, env.protocol)));
+        return reply(&mut reader, Reply::Error(format!("update taiko.rs (server protocol {}, yours {})", online::PROTOCOL, env.protocol)));
     }
     let out = match env.request {
         Request::Register { name, password } => register(state, ip, &name, &password),
         Request::Login { name, password } => login(state, ip, &name, &password),
         Request::WhoAmI { token } => match state.user(&token) {
-            Some(name) => Reply::Account { name, token },
+            Some(name) => Reply::Account { nominator: state.is_nominator(&name.to_ascii_lowercase()), name, token },
             None => Reply::Error("your session expired: log in again".into()),
         },
         Request::Logout { token } => {
@@ -342,15 +401,15 @@ fn handle(state: &State, stream: TcpStream) {
             Reply::LoggedOut
         }
         Request::ListRooms => Reply::Rooms(state.rooms()),
-        Request::CreateRoom { token, title } => {
+        Request::CreateRoom { token, title, mapguessr } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to host a lobby".into())) };
             let mut lobbies = state.lobbies.lock().unwrap();
             if lobbies.len() >= MAX_ROOMS {
                 return reply(&mut reader, Reply::Error("the server is full, try again later".into()));
             }
             let id = state.next_room.fetch_add(1, Ordering::Relaxed);
-            let title = online::clean_title(&title, &name);
-            let room = net::open_room();
+            let title = online::clean_title(&title, &name, mapguessr);
+            let room = net::open_room(mapguessr);
             let host_token = room.token;
             println!("lobby {id} \"{title}\" opened by {name} ({ip})");
             reply(&mut reader, Reply::Joined { room: id, title: title.clone(), host_token: Some(host_token) });
@@ -361,7 +420,7 @@ fn handle(state: &State, stream: TcpStream) {
         }
         Request::Connect { token } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
-            reply(&mut reader, Reply::Account { name: name.clone(), token });
+            reply(&mut reader, Reply::Account { name: name.clone(), token, nominator: state.is_nominator(&name.to_ascii_lowercase()) });
             social_session(state, reader, name);
             return;
         }
@@ -369,6 +428,8 @@ fn handle(state: &State, stream: TcpStream) {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to send scores".into())) };
             let key = name.to_ascii_lowercase();
             let map = format!("{} - {} [{}]", play.map.artist, play.map.title, play.map.version);
+            // Whether the map gives pp, so the total sent back is right.
+            covers::learn(play.map.set_id);
             match state.scores.lock().unwrap().submit(&key, &name, *play, now_secs()) {
                 Ok((map_rank, pp, rank)) => {
                     println!("score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total");
@@ -382,6 +443,32 @@ fn handle(state: &State, stream: TcpStream) {
             Some(r) => Reply::Replay(Box::new(r)),
             None => Reply::Error("that replay isn't on the server".into()),
         },
+        Request::Score { id } => match state.scores.lock().unwrap().score(id) {
+            Some(s) => Reply::Score(Box::new(s)),
+            None => Reply::Error("that score isn't on the server".into()),
+        },
+        Request::Played { token, ms } => {
+            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
+            match state.scores.lock().unwrap().played(&name.to_ascii_lowercase(), ms) {
+                Ok(()) => Reply::Counted,
+                Err(e) => Reply::Error(e),
+            }
+        }
+        // What the server knows of the sets (asking osu! in the background about the rest, for
+        // logged-in players only: not anyone can spend the API's allowance).
+        Request::SetStatuses { token, maps } => {
+            let ask = state.user(&token).is_some();
+            let maps: Vec<(u32, u32)> = maps.into_iter().take(online::MAX_STATUS_MAPS).collect();
+            Reply::SetStatuses(osustatus::lookup(&maps, ask))
+        }
+        Request::LovedSets => Reply::LovedSets(loved::all().into_iter().map(|(set, _)| set).collect()),
+        Request::SetLoved { token, set, loved: on } => {
+            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
+            match state.love(&name.to_ascii_lowercase(), set, on) {
+                Ok(_) => Reply::LovedSets(loved::all().into_iter().map(|(set, _)| set).collect()),
+                Err(e) => Reply::Error(e),
+            }
+        }
         Request::Profile { name } => match state.profile(&name) {
             Some(p) => Reply::Profile(Box::new(p)),
             None => Reply::Error("no such player".into()),
@@ -420,13 +507,13 @@ fn register(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     if a.users.contains_key(&key) {
         return Reply::Error("that name is taken".into());
     }
-    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new() });
+    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false });
     let token = state.new_session(&mut a, &key);
     state.save(&a);
     drop(a);
     state.record(ip, |l| &mut l.registered);
     println!("account {name} created ({ip})");
-    Reply::Account { name: name.to_string(), token }
+    Reply::Account { name: name.to_string(), token, nominator: is_admin(&key) }
 }
 
 fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
@@ -444,7 +531,7 @@ fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     let mut a = state.accounts.lock().unwrap();
     let token = state.new_session(&mut a, &key);
     state.save(&a);
-    Reply::Account { name: user.name, token }
+    Reply::Account { name: user.name, token, nominator: is_admin(&key) || user.nominator }
 }
 
 impl State {
@@ -453,7 +540,7 @@ impl State {
         let key = name.trim().to_ascii_lowercase();
         let (name, joined) = self.accounts.lock().unwrap().users.get(&key).map(|u| (u.name.clone(), u.created))?;
         let mut p = self.scores.lock().unwrap().profile(&key, &name, joined);
-        p.online = self.hub.lock().unwrap().conns.contains_key(&key);
+        p.online = key == ALWAYS_ONLINE || self.hub.lock().unwrap().conns.contains_key(&key);
         Some(p)
     }
 
@@ -468,7 +555,8 @@ impl State {
     /// What `name` is doing, if they're online.
     fn activity(&self, name: &str) -> Option<Activity> {
         let key = name.trim().to_ascii_lowercase();
-        self.hub.lock().unwrap().conns.get(&key).and_then(|v| v.last()).map(|c| c.activity.clone())
+        let activity = self.hub.lock().unwrap().conns.get(&key).and_then(|v| v.last()).map(|c| c.activity.clone());
+        activity.or_else(|| (key == ALWAYS_ONLINE).then_some(Activity::Menus))
     }
 
     /// `name`'s friends as written, and whether each is online.
@@ -477,9 +565,80 @@ impl State {
         // Names first: the accounts and the hub are never locked at once here.
         let named: Vec<(String, String)> = self.friend_keys(&key).into_iter().map(|k| (self.display_name(&k), k)).collect();
         let hub = self.hub.lock().unwrap();
-        let mut out: Vec<(String, bool)> = named.into_iter().map(|(name, k)| (name, hub.conns.contains_key(&k))).collect();
+        let mut out: Vec<(String, bool)> = named.into_iter().map(|(name, k)| (name, k == ALWAYS_ONLINE || hub.conns.contains_key(&k))).collect();
         out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
         out
+    }
+
+    /// Admins, and those they've made loved nominators.
+    fn is_nominator(&self, key: &str) -> bool {
+        is_admin(key) || self.accounts.lock().unwrap().users.get(key).is_some_and(|u| u.nominator)
+    }
+
+    /// Admin `by` (lowercased) makes `name` a loved nominator, or not any more.
+    fn set_nominator(&self, by: &str, name: &str, on: bool) -> Result<String, String> {
+        if !is_admin(by) {
+            return Err("only admins can do that".into());
+        }
+        let key = name.trim().to_ascii_lowercase();
+        if is_admin(&key) {
+            return Err("admins are loved nominators already".into());
+        }
+        let mut a = self.accounts.lock().unwrap();
+        let user = a.users.get_mut(&key).ok_or("there's no player by that name")?;
+        user.nominator = on;
+        let shown = user.name.clone();
+        self.save(&a);
+        println!("{shown} {} loved nominator (by {by})", if on { "made" } else { "no longer" });
+        Ok(if on { format!("{shown} is a loved nominator now") } else { format!("{shown} isn't a loved nominator any more") })
+    }
+
+    /// Nominator `by` (lowercased) loves map set `set` here, or takes it back: plays on it give
+    /// pp (or don't) from now on, the ones already sent too.
+    fn love(&self, by: &str, set: u32, on: bool) -> Result<String, String> {
+        if !self.is_nominator(by) {
+            return Err("only loved nominators can love maps".into());
+        }
+        if on && loved::contains(Some(set)) {
+            return Err("that set is loved here already".into());
+        }
+        if on {
+            // Only maps that don't give pp already, and that the mirrors know.
+            covers::learn(Some(set));
+            match covers::osu_status(set).as_deref() {
+                None => return Err("couldn't look that set up on the beatmap mirrors: try again in a moment".into()),
+                Some("missing") => return Err("the beatmap mirrors don't know that set".into()),
+                Some("ranked" | "approved" | "loved") => return Err("that set gives pp already: it's ranked or loved on osu!".into()),
+                Some(_) => {}
+            }
+        }
+        let name = self.display_name(by);
+        if !loved::set(set, on, &name, now_secs()) {
+            return Err("that set isn't loved here".into());
+        }
+        self.scores.lock().unwrap().count_pp();
+        println!("set {set} {} by {name}", if on { "loved" } else { "unloved" });
+        Ok(if on { format!("Loved set {set}: its plays give pp now") } else { format!("Set {set} isn't loved here any more") })
+    }
+
+    /// A code `key` sends the Discord bot (`>verify`) to prove the Discord account is theirs.
+    fn verify_code(&self, key: &str) -> String {
+        let mut codes = self.verify_codes.lock().unwrap();
+        codes.retain(|_, (_, made)| made.elapsed() < VERIFY_FOR);
+        if let Some((code, _)) = codes.iter().find(|(_, (k, _))| k == key) {
+            return code.clone();
+        }
+        // Letters and digits that don't look alike.
+        const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        let code: String = random_bytes::<8>().iter().map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char).collect();
+        codes.insert(code.clone(), (key.to_string(), Instant::now()));
+        code
+    }
+
+    /// Whose a `>verify` code is (it works once).
+    fn take_verify_code(&self, code: &str) -> Option<String> {
+        let (key, made) = self.verify_codes.lock().unwrap().remove(&code.trim().to_ascii_uppercase())?;
+        (made.elapsed() < VERIFY_FOR).then_some(key)
     }
 
     fn display_name(&self, key: &str) -> String {
@@ -508,7 +667,10 @@ impl State {
         let hub = self.hub.lock().unwrap();
         let mut friends: Vec<Friend> = friends
             .into_iter()
-            .map(|(k, name)| Friend { name, activity: hub.conns.get(&k).and_then(|v| v.last()).map(|c| c.activity.clone()) })
+            .map(|(k, name)| {
+                let activity = hub.conns.get(&k).and_then(|v| v.last()).map(|c| c.activity.clone());
+                Friend { name, activity: activity.or_else(|| (k == ALWAYS_ONLINE).then_some(Activity::Menus)) }
+            })
             .collect();
         friends.sort_by_key(|f| (f.activity.is_none(), f.name.to_lowercase()));
         Down::Friends { friends, requests, sent }
@@ -882,10 +1044,15 @@ fn main() {
         }
     }
     std::fs::create_dir_all(&data).expect("data dir");
+    covers::init(data.clone());
+    osustatus::init(data.clone());
+    loved::init(data.clone());
+    avatars::init(data.clone());
     let state = Arc::new(State::load(data.join("accounts.json")));
     if http_port != 0 {
         web::serve(state.clone(), http_port, behind_proxy);
     }
+    discord::start(state.clone(), data.clone());
     {
         let state = state.clone();
         std::thread::spawn(move || reaper(state));
@@ -893,6 +1060,13 @@ fn main() {
     {
         let state = state.clone();
         std::thread::spawn(move || announcer(state));
+    }
+    {
+        let state = state.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(COUNT_PP_EVERY);
+            state.scores.lock().unwrap().count_pp();
+        });
     }
     // IPv6 and IPv4 (on Linux `::` is usually dual-stack and the second bind just fails).
     let mut listeners = Vec::new();

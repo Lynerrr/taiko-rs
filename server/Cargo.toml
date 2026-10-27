@@ -2,12 +2,20 @@
 name = "taiko-server"
 version = "0.1.0"
 edition = "2024"
-description = "taiko-rs online server: accounts and server-hosted multiplayer lobbies"
+description = "taiko.rs online server: accounts and server-hosted multiplayer lobbies"
 
 [dependencies]
 argon2 = "0.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# The Discord bot and the map cover check: HTTPS, and Discord's gateway (a websocket over TLS),
+# all on rustls with ring (static musl builds: see deploy/deploy.sh).
+ureq = "3"
+tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+# Score cards (`card.rs`) as PNGs.
+miniz_oxide = "0.8"
 
 [profile.release]
 lto = "thin"

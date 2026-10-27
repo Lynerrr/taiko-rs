@@ -106,6 +106,8 @@ pub struct Meta {
     pub format_version: i32,
     /// osu! beatmap set ID from [Metadata] (missing on old or unsubmitted maps).
     pub set_id: Option<u32>,
+    /// osu! beatmap ID of the difficulty (missing on old, unsubmitted or home-made ones).
+    pub beatmap_id: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -292,6 +294,7 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
                 Some(("Creator", v)) => meta.creator = v.to_owned(),
                 Some(("Version", v)) => meta.version = v.to_owned(),
                 Some(("BeatmapSetID", v)) => meta.set_id = v.trim().parse().ok().filter(|&id: &u32| id > 0),
+                Some(("BeatmapID", v)) => meta.beatmap_id = v.trim().parse().ok().filter(|&id: &u32| id > 0),
                 _ => {}
             },
             "Difficulty" => match kv(trimmed) {
@@ -497,8 +500,8 @@ fn convert(map: &mut Beatmap, mut body: Body) {
 pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
     let meta = Meta {
         title: "Offset calibration".into(),
-        artist: "taiko-rs".into(),
-        creator: "taiko-rs".into(),
+        artist: "taiko.rs".into(),
+        creator: "taiko.rs".into(),
         version: format!("{:.0} BPM click track", 60000.0 / beat_ms),
         mode: 1,
         // OD 0 gives the widest windows, so even a badly-off offset still registers as hits.

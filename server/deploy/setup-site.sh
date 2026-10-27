@@ -24,7 +24,7 @@ stamp=$(date +%Y%m%d%H%M)
 
 # The tunnel, a copy of the timing one on another port.
 sudo systemctl cat osu-timing-tunnel.service | grep -v '^#' \
-    | sed -e 's/127.0.0.1:18431:127.0.0.1:8431/127.0.0.1:18080:127.0.0.1:8080/' -e 's/^Description=.*/Description=SSH tunnel to the KZ server: taiko-rs website/' \
+    | sed -e 's/127.0.0.1:18431:127.0.0.1:8431/127.0.0.1:18080:127.0.0.1:8080/' -e 's/^Description=.*/Description=SSH tunnel to the KZ server: taiko.rs website/' \
     | sudo tee /etc/systemd/system/taiko-site-tunnel.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now taiko-site-tunnel.service
@@ -39,7 +39,7 @@ for r in $ips; do echo "$r 1;"; done | sudo tee /etc/nginx/taiko-cf-ips.conf >/d
 
 # nginx: the site's own file, included once from nginx.conf.
 sudo tee /etc/nginx/taiko-site.conf >/dev/null <<'CONF'
-# taiko-rs website (server/deploy/setup-site.sh in taiko-rs).
+# taiko.rs website (server/deploy/setup-site.sh in taiko-rs).
 # Requests from Cloudflare carry the visitor's address; anyone else is who they are.
 geo $remote_addr $taiko_cf_plain {
     default 0;

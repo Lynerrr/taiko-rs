@@ -8,12 +8,25 @@
 //!   /u/<name>         a profile         /api/u/<name>
 //!   /beatmaps         maps played       /api/beatmaps
 //!   /m/<map hash>     a map's scores    /api/m/<map hash>
+//!   /s/<id>           a score, and a button that opens it in the game (?watch: by itself)
+//!   /s/<id>/card.png  its card (`card.rs`), for Discord   /api/s/<id>
 //!   /mods             the mod select, and clips of what the mods do
+//!   /loved            the maps loved here (they give pp)
+//!   /a/<name>         a player's profile picture
+//!   /avatar           POST (a form with a file): set your picture; /avatar/remove takes it off
+//!   /u/<name>/avatar  POST: an admin sets (or with /remove takes off) someone else's picture
+//!   /love/<set>       POST: a loved nominator loves a map set here (on=0: takes it back)
+//!   /u/<name>/nominator  POST: an admin makes them a loved nominator (on=0: not any more)
+//!   /s/<id>/pp        POST: an admin sets a play's pp (empty: back to what was sent)
 //!   /login /logout    the website's session (the game's accounts)
 //!   /chat[/<name>]    the global chat and messages to friends, like the game's   /api/chat[/<name>]
 //!   /friend/<name>    POST: ask to be friends, or accept
 //!   /clips/<file>     the gameplay clips (with byte ranges, for video players)
 //!   /site/<file>      the font and the logo
+//!   /api/claude/pings?after=N   the developer's pings of the Discord bot, for Claude
+//!   /api/claude/reply           POST (channel, to, text): Claude's answer, posted by the bot
+//!   /api/claude/mark            POST (channel, message, tag): a forum post tagged done (else ✅)
+//!                               (both need `Authorization: Bearer` with DIR/claude-key)
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -34,6 +47,8 @@ const REQUESTS_PER_MINUTE: usize = 120;
 const MAX_REQUEST: u64 = 16 * 1024;
 /// Longest posted form.
 const MAX_FORM: usize = 4096;
+/// Longest form from Claude (an answer in Discord).
+const MAX_CLAUDE_FORM: usize = 256 * 1024;
 /// The session cookie (the same sessions the game logs in with), and how long it lasts.
 const COOKIE: &str = "rs_session";
 const COOKIE_DAYS: u64 = 180;
@@ -95,11 +110,15 @@ struct Req<'a> {
     query: &'a str,
     /// A posted form's fields.
     form: HashMap<String, String>,
+    /// The file posted to /avatar.
+    upload: Option<Vec<u8>>,
     os: Os,
     ip: IpAddr,
     /// The session cookie, and the account it belongs to (name as written).
     token: Option<String>,
     viewer: Option<String>,
+    /// It came with Claude's key (`discord::claude_key`).
+    claude: bool,
 }
 
 impl Req<'_> {
@@ -147,6 +166,8 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let mut token = None;
     let mut length = 0usize;
     let mut cross_site = false;
+    let mut content_type = String::new();
+    let mut bearer = None;
     loop {
         let mut h = String::new();
         match reader.read_line(&mut h) {
@@ -167,6 +188,10 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
                         length = v.parse().unwrap_or(usize::MAX);
                     } else if k.eq_ignore_ascii_case("sec-fetch-site") {
                         cross_site = v.eq_ignore_ascii_case("cross-site");
+                    } else if k.eq_ignore_ascii_case("content-type") {
+                        content_type = v.to_string();
+                    } else if k.eq_ignore_ascii_case("authorization") {
+                        bearer = v.strip_prefix("Bearer ").map(|t| t.trim().to_string());
                     }
                 }
             }
@@ -176,18 +201,27 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let mut parts = line.split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    // A picture upload may be bigger than a form.
+    let upload = method == "POST" && (path == "/avatar" || (path.starts_with("/u/") && path.ends_with("/avatar")));
+    // Claude's answers too (a long one in Cyrillic is ~6 bytes a letter).
+    let claude = bearer.as_deref().is_some_and(crate::discord::claude_key);
+    let max_body = if upload { crate::avatars::MAX_BYTES + MAX_FORM } else if claude { MAX_CLAUDE_FORM } else { MAX_FORM };
     let mut body = Vec::new();
-    if method == "POST" && length <= MAX_FORM {
+    if method == "POST" && length <= max_body {
+        if upload || claude {
+            reader.get_mut().set_limit(max_body as u64);
+        }
         body.resize(length, 0);
         if reader.read_exact(&mut body).is_err() {
             return;
         }
     }
     let viewer = token.as_deref().and_then(|t| state.user(t));
-    let req = Req { method, path, query, form: form(&body), os: Os::of(&agent), ip, token, viewer };
+    let file = upload.then(|| crate::avatars::multipart_file(&content_type, &body, "avatar").map(<[u8]>::to_vec)).flatten();
+    let req = Req { method, path, query, form: if upload { HashMap::new() } else { form(&body) }, upload: file, os: Os::of(&agent), ip, token, viewer, claude };
     let mut reply = if !web.allow(ip) {
         Reply::text(429, "too many requests, wait a minute")
-    } else if method == "POST" && (cross_site || length > MAX_FORM) {
+    } else if method == "POST" && (cross_site || length > max_body) {
         Reply::text(403, "no")
     } else if !matches!(method, "GET" | "HEAD" | "POST") {
         Reply::text(405, "only GET and POST")
@@ -400,7 +434,17 @@ fn route(state: &State, req: &Req) -> Reply {
                 let (activity, friends) = (state.activity(&p.name), state.friends_online(&p.name));
                 let tie = req.key().map(|me| state.friendship(&me, &key)).unwrap_or(pages::Friendship::None);
                 let notice = req.arg("msg");
-                req.page_with(200, &p.name, "rankings", &pages::profile_meta(&p), pages::profile(&p, &extras, activity.as_ref(), &friends, tie, notice.as_deref()))
+                let own = req.key().as_deref() == Some(key.as_str());
+                let nominator = state.is_nominator(&key);
+                let roles = pages::Roles {
+                    admin: crate::is_admin(&key),
+                    nominator,
+                    own,
+                    viewer_admin: req.key().is_some_and(|me| crate::is_admin(&me)),
+                    // Their own page tells a nominator how to love maps from Discord.
+                    verify_code: (own && nominator).then(|| state.verify_code(&key)),
+                };
+                req.page_with(200, &p.name, "rankings", &pages::profile_meta(&p), pages::profile(&p, &extras, activity.as_ref(), &friends, tie, notice.as_deref(), &roles))
             }
             None => req.not_found("There is no player by that name"),
         },
@@ -430,6 +474,10 @@ fn route(state: &State, req: &Req) -> Reply {
                 }
             }
         }
+        ["api", "claude", "pings"] if req.claude => {
+            let after = req.arg("after").and_then(|a| a.parse().ok()).unwrap_or(0);
+            Reply { cache: "no-store", ..Reply::json(&crate::discord::pings(after)) }
+        }
         ["api", "chat"] | ["api", "chat", _] => {
             let Some(key) = req.key() else { return Reply::text(401, "log in first") };
             match segs.get(2) {
@@ -447,11 +495,49 @@ fn route(state: &State, req: &Req) -> Reply {
                 return Reply::json(&rows);
             }
             match scores.map(map) {
-                Some(m) => req.page_with(200, &m.name, "beatmaps", &pages::map_meta(&m, &rows), pages::map_page(&m, &rows)),
+                Some(m) => {
+                    drop(scores);
+                    let love = pages::Love {
+                        loved: m.set_id.and_then(crate::loved::get),
+                        can_love: req.key().is_some_and(|me| state.is_nominator(&me)),
+                        notice: req.arg("msg"),
+                    };
+                    req.page_with(200, &m.name, "beatmaps", &pages::map_meta(&m, &rows), pages::map_page(&m, &rows, &love))
+                }
                 None => req.not_found("Nobody has sent a play on that map yet"),
             }
         }
+        ["s", id] | ["s", id, "card.png"] | ["api", "s", id] => {
+            let Ok(id) = id.parse::<u64>() else { return req.not_found("That is not a score link") };
+            let (score, place) = {
+                let scores = state.scores.lock().unwrap();
+                let Some(s) = scores.score(id) else { return req.not_found("That score isn't on the server") };
+                let place = scores.place_of(s.map_hash, id);
+                (s, place)
+            };
+            match segs.as_slice() {
+                ["api", ..] => Reply::json(&score),
+                [_, _, _] => Reply { cache: "public, max-age=86400", ..Reply::new(200, "image/png", crate::card::png(&score).into()) },
+                _ => {
+                    let admin = req.key().filter(|me| crate::is_admin(me)).and_then(|_| state.scores.lock().unwrap().pp_of(score.id));
+                    let notice = req.arg("msg");
+                    req.page_with(200, &score.map, "beatmaps", &pages::score_meta(&score), pages::score_page(&score, place, req.arg("watch").is_some(), admin, notice.as_deref()))
+                }
+            }
+        }
         ["mods"] => req.page(200, "Mods", "mods", pages::mods_page()),
+        ["loved"] => {
+            let sets: Vec<pages::LovedRow> = crate::loved::all()
+                .into_iter()
+                .rev()
+                .map(|(set, loved)| pages::LovedRow { set, names: crate::covers::names(set), loved })
+                .collect();
+            req.page(200, "Loved here", "loved", pages::loved(&sets))
+        }
+        ["a", name] => match crate::avatars::load(&name.to_ascii_lowercase()) {
+            Some((kind, bytes)) => Reply { cache: "public, max-age=86400", ..Reply::new(200, kind, bytes.into()) },
+            None => Reply::text(404, "no picture"),
+        },
         [dir @ ("clips" | "site"), name] => match pages::STATIC_FILES.iter().find(|(f, _)| f.strip_prefix(dir).and_then(|f| f.strip_prefix('/')) == Some(name)) {
             Some((f, bytes)) => Reply::file(f, bytes),
             None => req.not_found("There is no such file"),
@@ -477,6 +563,82 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             }
             Reply { cookie: Some(String::new()), ..Reply::see_other("/".into()) }
         }
+        ["avatar"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let msg = match &req.upload {
+                Some(file) => crate::avatars::save(&key, file, crate::now_secs()).map(|_| "Your picture is set".to_string()).unwrap_or_else(|e| e),
+                None => "pick a picture first".into(),
+            };
+            Reply::see_other(format!("/u/{}?msg={}", state.display_name(&key), encode(&msg)))
+        }
+        ["u", name, "avatar"] | ["u", name, "avatar", "remove"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Some(p) = state.profile(name) else { return req.not_found("There is no player by that name") };
+            let target = p.name.to_ascii_lowercase();
+            let msg = if !crate::is_admin(&key) {
+                "only admins can do that".to_string()
+            } else if segs.len() == 4 {
+                crate::avatars::remove(&target);
+                format!("{}'s picture is off", p.name)
+            } else {
+                match &req.upload {
+                    Some(file) => crate::avatars::save(&target, file, crate::now_secs()).map(|_| format!("{}'s picture is set", p.name)).unwrap_or_else(|e| e),
+                    None => "pick a picture first".into(),
+                }
+            };
+            println!("{key}: {msg}");
+            Reply::see_other(format!("/u/{}?msg={}", p.name, encode(&msg)))
+        }
+        ["avatar", "remove"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            crate::avatars::remove(&key);
+            Reply::see_other(format!("/u/{}?msg={}", state.display_name(&key), encode("Your picture is off")))
+        }
+        ["s", id, "pp"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Ok(id) = id.parse::<u64>() else { return req.not_found("That is not a score link") };
+            let value = req.field("pp").trim();
+            let msg = if !crate::is_admin(&key) {
+                "only admins can do that".to_string()
+            } else {
+                let pp = if value.is_empty() { Ok(None) } else { value.parse::<f64>().map(Some).map_err(|_| "pp is a number".to_string()) };
+                match pp.and_then(|pp| state.scores.lock().unwrap().set_pp(id, pp).map(|_| pp)) {
+                    Ok(pp) => {
+                        println!("score {id}: pp set to {pp:?} by {key}");
+                        match pp {
+                            Some(v) => format!("This play is worth {v:.2}pp now"),
+                            None => "This play is worth what it was sent with again".into(),
+                        }
+                    }
+                    Err(e) => e,
+                }
+            };
+            Reply::see_other(format!("/s/{id}?msg={}", encode(&msg)))
+        }
+        ["love", set] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Ok(set) = set.parse::<u32>() else { return req.not_found("That is not a map set") };
+            let back = req.field("back");
+            let back = if back.starts_with("/m/") { back.to_string() } else { "/loved".into() };
+            let msg = state.love(&key, set, req.field("on") != "0").unwrap_or_else(|e| e);
+            Reply::see_other(format!("{back}?msg={}", encode(&msg)))
+        }
+        ["u", name, "nominator"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let msg = state.set_nominator(&key, name, req.field("on") != "0").unwrap_or_else(|e| e);
+            Reply::see_other(format!("/u/{}?msg={}", encode(name), encode(&msg)))
+        }
+        ["api", "claude", "reply"] if req.claude => {
+            let to = Some(req.field("to")).filter(|t| !t.is_empty());
+            match crate::discord::say(req.field("channel"), to, req.field("text")) {
+                Ok(()) => Reply::text(200, "sent"),
+                Err(e) => Reply::text(502, &e),
+            }
+        }
+        ["api", "claude", "mark"] if req.claude => match crate::discord::mark(req.field("channel"), req.field("message"), req.field("tag")) {
+            Ok(done) => Reply::text(200, &done),
+            Err(e) => Reply::text(502, &e),
+        },
         ["friend", other] => {
             let (Some(me), Some(key)) = (req.viewer.as_deref(), req.key()) else { return Reply::see_other("/login".into()) };
             let Some(p) = state.profile(other) else { return req.not_found("There is no player by that name") };

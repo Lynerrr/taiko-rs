@@ -8,16 +8,35 @@ set -e
 vps=${1:-vps}
 here=$(cd "$(dirname "$0")" && pwd)
 bin="$here/../target/x86_64-unknown-linux-musl/release/taiko-server"
+# ring (TLS for the Discord bot) has C in it: clang builds it for musl without a musl gcc.
+export CC_x86_64_unknown_linux_musl="${CC_x86_64_unknown_linux_musl:-clang}"
+export CFLAGS_x86_64_unknown_linux_musl="${CFLAGS_x86_64_unknown_linux_musl:---target=x86_64-unknown-linux-musl}"
 cargo build --release --target x86_64-unknown-linux-musl --manifest-path "$here/../Cargo.toml"
 sum=$(sha256sum "$bin" | cut -d' ' -f1)
 scp -q "$bin" "$vps:/tmp/taiko-server.new"
 scp -q "$here/Dockerfile" "$here/docker-compose.yml" "$vps:/tmp/"
+# Claude's key for the Discord pings (/api/claude/...), when this machine has one.
+key=${CLAUDE_KEY_FILE:-$HOME/.config/claude-discord/key}
+if [ -f "$key" ]; then scp -q "$key" "$vps:/tmp/claude-key"; else ssh "$vps" rm -f /tmp/claude-key; fi
+# The osu! API client for map set statuses (two lines: client ID, secret), when this machine has one.
+osu=${OSU_API_FILE:-$HOME/.config/taiko-server/osu-api}
+if [ -f "$osu" ]; then scp -q "$osu" "$vps:/tmp/osu-api"; else ssh "$vps" rm -f /tmp/osu-api; fi
 # On the VPS: the account for the last hop is the one its tunnel service uses.
 ssh "$vps" sh -s "$sum" <<'EOF'
 set -e
 target=$(systemctl cat osu-timing-tunnel.service | grep -o "[^ ]*@jashincraft.space" | head -1)
 hop="ssh -F /dev/null -p 1337 -i $HOME/.ssh/xui_node -o IdentitiesOnly=yes"
 scp -q -F /dev/null -P 1337 -i ~/.ssh/xui_node -o IdentitiesOnly=yes /tmp/taiko-server.new /tmp/Dockerfile /tmp/docker-compose.yml "$target:taiko-server/"
+if [ -f /tmp/claude-key ]; then
+    scp -q -F /dev/null -P 1337 -i ~/.ssh/xui_node -o IdentitiesOnly=yes /tmp/claude-key "$target:taiko-server/data/claude-key"
+    rm -f /tmp/claude-key
+    $hop "$target" chmod 600 taiko-server/data/claude-key
+fi
+if [ -f /tmp/osu-api ]; then
+    scp -q -F /dev/null -P 1337 -i ~/.ssh/xui_node -o IdentitiesOnly=yes /tmp/osu-api "$target:taiko-server/data/osu-api"
+    rm -f /tmp/osu-api
+    $hop "$target" chmod 600 taiko-server/data/osu-api
+fi
 $hop "$target" "sh -s $1" <<'REMOTE'
 set -e
 cd ~/taiko-server

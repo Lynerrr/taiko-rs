@@ -27,7 +27,9 @@ mod results_tests;
 #[cfg(test)]
 mod settings_tests;
 mod library;
+mod link;
 mod logo;
+mod mapguessr;
 mod mapinfo;
 mod hud;
 mod keys;
@@ -41,6 +43,8 @@ mod profile;
 mod preview;
 mod render;
 mod scores;
+mod search;
+mod setstatus;
 mod settings;
 mod shapeshift;
 mod skin;
@@ -114,6 +118,9 @@ enum Scene {
     MpResults,
 }
 
+/// How often a running game looks for a newer build (with "Check for updates" on).
+const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
+
 /// How far behind the live match spectators watch, so players' presses arrive in time.
 const SPECTATE_DELAY: Duration = Duration::from_millis(1500);
 
@@ -125,6 +132,8 @@ struct SpectateView {
     from: Option<f64>,
     rate: f64,
     mods: Mods,
+    /// The match's map as the room named it, with the host's mod settings.
+    map: net::MapInfo,
     players: Vec<(u32, String)>,
     /// One game per player, fed with their presses.
     games: Vec<(u32, Box<Game>)>,
@@ -135,6 +144,10 @@ struct SpectateView {
     /// Players who skipped the intro; once all have, so does the view.
     skipped: std::collections::HashSet<u32>,
     skip_done: bool,
+    /// Watching everyone: what each player's strip shows (see `draw_spectate_all`), and when it
+    /// was last drawn.
+    zones: Vec<[f32; 4]>,
+    zones_at: Option<Instant>,
 }
 
 impl SpectateView {
@@ -236,6 +249,10 @@ struct State {
     hits: Vec<render::HitBox>,
     browse: browse::Browse,
     downloads: Vec<download::Job>,
+    /// Song select: the set being checked for a newer version on osu! (see `poll_set_check`),
+    /// and the one the selection rests on, since when.
+    set_check: Option<(u32, Receiver<Result<bool, String>>)>,
+    set_check_due: Option<(u32, Instant)>,
     /// Android: when the folder of .osz files opened with the game was last looked at.
     #[cfg(target_os = "android")]
     imports_checked: Instant,
@@ -284,6 +301,16 @@ struct State {
     shapeshift_setup: Option<shapeshift::Setup>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
     leaderboard: Vec<PathBuf>,
+    /// The leaderboard's rows scrolled past, for which map and tab (a new one starts at the
+    /// top), how far it goes, and where its rows were drawn (for the wheel).
+    board_scroll: usize,
+    board_for: (u64, bool),
+    board_max: usize,
+    board_rect: Option<[f32; 4]>,
+    /// A song select divider being dragged: which, where the pointer started (virtual units)
+    /// and the size it had then; and the last press on one (a second soon after resets it).
+    split_drag: Option<(render::Hit, f32, f32)>,
+    split_click: Option<(render::Hit, Instant)>,
     online_leaderboard: Vec<online::OnlineScore>,
     /// A video export in progress, and the editor's last message.
     export: Option<video::Export>,
@@ -325,10 +352,28 @@ struct State {
     set_status: std::collections::HashMap<u32, Option<String>>,
     set_status_tx: mpsc::Sender<(u32, Option<String>)>,
     set_status_rx: Receiver<(u32, Option<String>)>,
+    /// What the mirrors said about sets, kept between runs (see `setstatus`), when it was last
+    /// written, and when the list was last sorted again for new answers.
+    status_cache: setstatus::Cache,
+    status_saved: Instant,
+    status_resorted: Instant,
+    status_new: bool,
+    /// Maps came in (downloaded or dropped): when to ask about their sets' statuses (a while
+    /// later, so a batch of downloads is asked about once).
+    status_sweep_due: Option<Instant>,
+    /// Asking the online server which sets are loved there (or loving one: the set and which
+    /// way, for the message), and whether it's been asked since starting.
+    loved_call: Option<(Receiver<Result<online::Reply, String>>, Option<(u32, bool)>)>,
+    loved_asked: bool,
+    /// The live play going on (its time played so far), until it's sent to the leaderboards or
+    /// left some other way: then it's counted on the server as played (`Request::Played`).
+    playing: Option<f64>,
     /// The selected set and since when: asked about once the selection rests.
     status_wait: Option<(u32, Instant)>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
     lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
+    /// A score a `taiko-rs://` link asked for, until its results screen opens.
+    score_link: Option<ScoreLink>,
     /// Which screen was drawn last and since when, for the fade between screens.
     scene_kind: Option<std::mem::Discriminant<Scene>>,
     scene_since: Instant,
@@ -340,6 +385,10 @@ struct State {
     pending_screen_shots: Vec<&'static str>,
     exit_when_done: bool,
     quit: bool,
+    /// "Exit taiko.rs?" is up (Ctrl+Q, Esc in song select, the window's close button).
+    quit_asked: bool,
+    /// F12 was pressed: the next frame is saved as a picture.
+    screenshot_due: bool,
     smooth: Option<debug::Smoothness>,
     /// When the frame being built got its swapchain image (for the smoothness report).
     frame_acquired: Option<Instant>,
@@ -372,8 +421,11 @@ struct State {
     mp_connecting: Option<multiplayer::Connecting>,
     mp_menu: multiplayer::Menu,
     mp_status: String,
-    /// Song select is being used by the host to pick the lobby map.
+    /// Song select is being used by the host to pick the lobby map (in mapguessr, by anyone to
+    /// pick their guess).
     picking_lobby_map: bool,
+    /// Our side of a mapguessr room, while in one.
+    guessr: Option<mapguessr::Guessr>,
     /// Discord status: the connection thread (while enabled), the activity last set, and when
     /// it was last worked out.
     discord: Option<discord::Presence>,
@@ -414,6 +466,8 @@ struct State {
     preview: preview::Preview,
     /// Star ratings (rosu-pp), calculated in the background for the selected song.
     stars: stars::Stars,
+    /// The pp the selected map could give (song select's details).
+    potentials: pp::Potentials,
     /// Background brightness for this frame (0 hides it).
     bg_brightness: f32,
     /// Where the playfield size readout was drawn (virtual units), so it can be clicked.
@@ -496,21 +550,40 @@ fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool) -> [f32; 4] {
 }
 
 /// Every spectated player at once: one lane per player, stacked, with their numbers.
-fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[(u32, String)], scroll: f64) {
+/// Each player's strip shows where they play: the lane, or wherever the mods take it (rails,
+/// Multiverse's playfield in focus...), fitted in and followed smoothly. `zones` keeps what each
+/// strip shows between frames; `dt` is the time since the last one (s).
+fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[(u32, String)], scroll: f64, zones: &mut Vec<[f32; 4]>, dt: f32) {
     let n = games.len().max(1) as f32;
     let (band_top, band_h) = game::lane_band();
     let (top, bottom) = (40.0, 470.0);
     let strip = ((bottom - top) / n).min(120.0);
     let k = strip / band_h;
     let full_w = c.width;
+    // Drawn wider than the screen, so a plain lane fills the strip's width.
+    let plain = [0.0, band_top, full_w / k, band_h];
+    zones.resize(games.len(), [f32::NAN; 4]);
+    let follow = 1.0 - (-dt / 0.15).exp();
     c.text_centered(full_w / 2.0, 16.0, 9.0, rgba(0x4fb4ff, 1.0), "SPECTATING  -  everyone   Left/Right or A: one player   Esc leave");
     for (i, (id, g)) in games.iter_mut().enumerate() {
         let y = top + i as f32 * strip;
         let start = c.shapes.len();
         c.width = full_w / k;
         g.draw_playfield(c, scroll);
-        c.transform_since(start, [0.0, 0.0], k, 0.0, y - band_top * k);
         c.width = full_w;
+        let target = g.play_zone().filter(|z| z[2] > 1.0 && z[3] > 1.0).unwrap_or(plain);
+        let z = &mut zones[i];
+        if z[0].is_nan() {
+            *z = target;
+        } else {
+            for (v, t) in z.iter_mut().zip(target) {
+                *v += (t - *v) * follow;
+            }
+        }
+        let [zx, zy, zw, zh] = *z;
+        let scale = (full_w / zw).min(strip / zh);
+        let (dx, dy) = ((full_w - zw * scale) / 2.0 - zx * scale, y + (strip - zh * scale) / 2.0 - zy * scale);
+        c.transform_since(start, [0.0, 0.0], scale, dx, dy);
         c.clip_since(start, 0.0, y, full_w, strip - 2.0);
         let name = players.iter().find(|(p, _)| p == id).map(|(_, n)| n.as_str()).unwrap_or("?");
         let st = &g.stats;
@@ -537,7 +610,7 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
 }
 
 /// The server's scores for the selected map: each player's best (`board` None while loading).
-fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option<&Result<Vec<online::OnlineScore>, String>>, me: &str, fits: usize) {
+fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option<&Result<Vec<online::OnlineScore>, String>>, me: &str, fits: usize, first: usize) {
     let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true);
     let at = x + 4.0 + tabs_w + 10.0;
     let note = match board {
@@ -552,7 +625,9 @@ fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option
     }
     let Some(Ok(rows)) = board else { return };
     c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, w - 20.0 - tabs_w, "click: results and replay"));
-    for (k, r) in rows.iter().take(fits).enumerate() {
+    let shown = rows.len().saturating_sub(first).min(fits);
+    board_scrollbar(c, x + w + 5.0, y + 14.0, shown.max(1), first, rows.len());
+    for (k, r) in rows.iter().skip(first).take(fits).enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
         let mine = r.player.eq_ignore_ascii_case(me);
         let hover = c.hovered(x, ry, w, 16.0);
@@ -562,21 +637,19 @@ fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods.concat()) };
         let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!("#{}  {}  {:08}  {:.2}%{pp}  {}x", k + 1, r.player, r.score, r.accuracy * 100.0, r.max_combo);
+        let core = format!("#{}  {}  {:08}  {:.2}%{pp}  {}x", first + k + 1, r.player, r.score, r.accuracy * 100.0, r.max_combo);
         let room = w - 16.0;
         let right = Canvas::fit(6.5, room - Canvas::text_width(6.5, &core) - 12.0, &format!("{} miss  {}", r.miss, scores::age(r.date)));
         let left_room = room - if right.is_empty() { 0.0 } else { Canvas::text_width(6.5, &right) + 8.0 };
-        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
+        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
         c.text_right(x + w - 8.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
 }
 
-/// Local scores for the selected map, under the song select panel, and the player's pp total.
-fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow], total_pp: f64) {
-    let mut label_w = board_tabs(c, x + 4.0, y + 1.0, false);
-    if total_pp > 0.0 {
-        label_w += 10.0 + c.text(x + 14.0 + label_w, y + 2.5, 6.0, rgba(0xff8ad8, 1.0), &format!("{total_pp:.0} pp total"));
-    }
+/// Local scores for the selected map, under the song select panel: `rows` from place `first`
+/// on, of `total`.
+fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow], first: usize, total: usize) {
+    let label_w = board_tabs(c, x + 4.0, y + 1.0, false);
     if rows.is_empty() {
         let at = x + 4.0 + label_w + 14.0;
         c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, "none yet - finish a play to set one"));
@@ -592,7 +665,7 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods) };
         let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!("#{}  {:08}  {:.2}%{pp}  {}x", k + 1, r.score, r.accuracy * 100.0, r.max_combo);
+        let core = format!("#{}  {:08}  {:.2}%{pp}  {}x", first + k + 1, r.score, r.accuracy * 100.0, r.max_combo);
         // The video button sits on top of the row (drawn after it, so it wins the click).
         let bw = Canvas::text_width(6.0, "video") + 12.0;
         let bx = x + w - bw - 3.0;
@@ -600,10 +673,41 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
         let room = bx - 6.0 - (x + 8.0);
         let right = Canvas::fit(6.5, room - Canvas::text_width(6.5, &core) - 12.0, &format!("{}  {} miss  {}", r.player, r.miss, scores::age(r.date)));
         let left_room = room - if right.is_empty() { 0.0 } else { Canvas::text_width(6.5, &right) + 8.0 };
-        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
+        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
         c.button(bx, ry + 2.0, bw, 12.0, "video", 6.0, render::Hit::ScoreVideo(k), false);
         c.text_right(bx - 6.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
+    board_scrollbar(c, x + w + 5.0, y + 14.0, rows.len().max(1), first, total.max(rows.len()));
+}
+
+/// A song select divider in `rect` (`upright`: between left and right, else between top and
+/// bottom): a short grip, lit along its length while hovered or dragged. Only the grip takes the
+/// mouse, not the whole edge: passing along it shouldn't light it up.
+fn draw_divider(c: &mut Canvas, [x, y, w, h]: [f32; 4], upright: bool, dragging: bool, hit: render::Hit) {
+    const GRIP: f32 = 48.0;
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let [gx, gy, gw, gh] = if upright { [x, cy - GRIP / 2.0, w, GRIP] } else { [cx - GRIP / 2.0, y, GRIP, h] };
+    let lit = dragging || c.hovered(gx, gy, gw, gh);
+    if upright {
+        let len = if lit { h } else { 28.0 };
+        c.round_rect(cx - 1.0, cy - len / 2.0, 2.0, len, 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
+    } else {
+        let len = if lit { w } else { 28.0 };
+        c.round_rect(cx - len / 2.0, cy - 1.0, len, 2.0, 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
+    }
+    c.hit(gx, gy, gw, gh, hit);
+}
+
+/// A leaderboard's scroll bar right of its rows, when there are more than the `shown`.
+fn board_scrollbar(c: &mut Canvas, x: f32, y: f32, shown: usize, first: usize, total: usize) {
+    if total <= shown || shown == 0 {
+        return;
+    }
+    let h = shown as f32 * 18.0 - 2.0;
+    let thumb = (h * shown as f32 / total as f32).max(10.0);
+    let at = (h - thumb) * first as f32 / (total - shown) as f32;
+    c.round_rect(x, y, 3.0, h, 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+    c.round_rect(x, y + at, 3.0, thumb, 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
 }
 
 /// Sends a play to the online leaderboards on a background thread.
@@ -616,16 +720,29 @@ fn submit_score(server: String, token: String, play: online::ScoreSubmit) -> Rec
 }
 
 /// "Artist - Title [Version]  1.10x  +HDHR  from 1:23" for a results screen.
-fn results_title(m: &beatmap::Meta, rate: f64, mods: Mods, from: Option<f64>) -> String {
-    let rate = if (rate - 1.0).abs() > 1e-6 && mods.rate_override().is_none() { format!("  {rate:.2}x") } else { String::new() };
+fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
     let part = from.map(|t| format!("  from {}", fmt_time(t))).unwrap_or_default();
-    let mods = if mods.is_empty() { String::new() } else { format!("  +{}", mods.label()) };
-    format!("{} - {} [{}]{rate}{mods}{part}", m.artist, m.title, m.version)
+    format!("{} - {} [{}]{part}", m.artist, m.title, m.version)
 }
 
 /// A results screen's background work (`ui::Detail`): the pp breakdown of `play` on the map at
 /// `path`; with a replay file, the whole play's stats from it; with an online score id, its
 /// replay fetched from `server` first (and saved, see `scores::save_online`).
+/// Whether plays on library map `e` give pp (only ranked, approved and loved ones do, as on
+/// osu!), from the mirrors' status else osu!.db's; None when it isn't known. The server has the
+/// last word.
+fn map_gives_pp(e: &Entry, set_status: &std::collections::HashMap<u32, Option<String>>, db_status: &std::collections::HashMap<PathBuf, u8>, server_loved: &std::collections::HashSet<u32>) -> Option<bool> {
+    let Some(set) = e.meta.set_id else { return Some(false) };
+    // Loved on the online server: it gives pp there.
+    if server_loved.contains(&set) {
+        return Some(true);
+    }
+    if let Some(Some(s)) = set_status.get(&set).filter(|s| s.as_deref() != Some(setstatus::MISSING)) {
+        return Some(matches!(s.as_str(), "ranked" | "approved" | "loved"));
+    }
+    db_status.get(&e.path).filter(|&&s| s != 0).map(|s| matches!(s, 4 | 5 | 7))
+}
+
 fn results_job(path: PathBuf, play: pp::Play, local: Option<PathBuf>, online: Option<(String, online::OnlineScore, String)>) -> Receiver<ui::Detail> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -681,6 +798,7 @@ fn fetch_replay(server: &str, score: &online::OnlineScore, map_path: &std::path:
         keep_pitch: true,
         anti_mash: true,
         mods: score.mods.clone(),
+        scroll_speed: score.scroll_speed.unwrap_or(1.0),
         score: score.score,
         accuracy: score.accuracy,
         max_combo: score.max_combo,
@@ -689,6 +807,7 @@ fn fetch_replay(server: &str, score: &online::OnlineScore, map_path: &std::path:
         miss: score.miss,
         ur: 0.0,
         inputs: got.inputs,
+        seed: got.map.seed.unwrap_or(0),
     };
     let file = scores::save_online(score.id, &replay)?;
     Ok((file, replay))
@@ -725,6 +844,7 @@ fn open_url(url: &str) -> bool {
 }
 
 /// `file://` URI for a local path.
+#[cfg(not(windows))]
 fn file_uri(path: &std::path::Path) -> String {
     let mut uri = String::from("file://");
     for b in path.to_string_lossy().bytes() {
@@ -753,7 +873,7 @@ fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32, slide: f32) {
     c.text(x + 12.0, y + 40.0, 7.0, rgba(0x9a9ab0, a), &detail);
 }
 
-/// When each map was last played in taiko-rs (`plays.tsv`: Unix seconds, tab, path).
+/// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
 fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
     let mut out = std::collections::HashMap::new();
     let Some(text) = config::data_dir().and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok()) else { return out };
@@ -800,7 +920,7 @@ struct ExportView {
     last: bool,
 }
 
-/// Where downloaded maps go: the first Songs folder being scanned, else taiko-rs's own (which
+/// Where downloaded maps go: the first Songs folder being scanned, else taiko.rs's own (which
 /// is scanned at startup when it exists).
 fn download_dir(inputs: &[PathBuf]) -> PathBuf {
     if let Some(dir) = inputs.iter().find(|p| p.is_dir()) {
@@ -854,10 +974,15 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
     c.text(title_x, 22.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, title_end - title_x, &title));
 }
 
-/// How a map is named to other players (lobby map, a solo play friends watch).
+/// How a map is named to other players (lobby map, a solo play friends watch), with our
+/// settings of the mods that have them.
 fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
+    let (multiverse, shapeshift) = mod_settings(mods);
     net::MapInfo {
         mods: mods.list(),
+        multiverse,
+        shapeshift,
+        seed: None,
         hash: e.hash(),
         artist: e.meta.artist.clone(),
         title: e.meta.title.clone(),
@@ -868,10 +993,60 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
     }
 }
 
+/// A new seed for Random's colouring (never 0, the one from before seeds).
+fn fresh_seed() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64).max(1)
+}
+
+/// The Random colouring a lobby map plays with: the one it has, else a new one. Every map
+/// carries one, Random being each player's own mod: whoever plays it gets the same colouring,
+/// and watching everyone shows each player's.
+fn lobby_seed(had: Option<u64>) -> Option<u64> {
+    Some(had.unwrap_or_else(fresh_seed))
+}
+
+/// Our settings of the mods in `mods` that have them (Multiverse's universes, Shapeshift's
+/// setup), as the config writes them: what a lobby we host plays with.
+fn mod_settings(mods: Mods) -> (Option<String>, Option<String>) {
+    let universes = mods.has(mods::Mod::Multiverse).then(|| multiverse::format(&multiverse::get()));
+    let shapes = mods.has(mods::Mod::Shapeshift).then(|| shapeshift::get().format());
+    (universes, shapes)
+}
+
+/// Plays `game` with the mod settings `map` carries (the lobby host's, or the friend's being
+/// watched) where it has them; ours otherwise. Our config and presets aren't touched.
+fn use_mod_settings(game: &mut Game, map: &net::MapInfo) {
+    game.use_mod_settings(map.multiverse.as_deref().map(multiverse::parse), map.shapeshift.as_deref().map(shapeshift::Config::parse));
+}
+
 /// The library entry for a map someone else named: the file's content hash identifies it (the
 /// title can differ, e.g. romanised on one side and Cyrillic on the other).
 fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
     library.iter().position(|e| e.meta.version == m.version && e.hash() == m.hash)
+}
+
+/// A score a `taiko-rs://` link asked for: being fetched from the server, then waiting for its
+/// map (the library scan, or a download) and for the player to be out of a song.
+struct ScoreLink {
+    fetch: Option<Receiver<Result<online::OnlineScore, String>>>,
+    score: Option<online::OnlineScore>,
+    /// Its set is downloading, since then.
+    downloading: Option<Instant>,
+}
+
+/// How long a score link waits for its map's download.
+const SCORE_LINK_WAIT: Duration = Duration::from_secs(300);
+
+/// The map an online score was played on: only maps of its set or with its name are hashed
+/// (hashing reads the file).
+fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Option<usize> {
+    library.iter().position(|e| {
+        let candidate = match (s.set_id, e.meta.set_id) {
+            (Some(a), Some(b)) => a == b,
+            _ => online::clean_text(&e.label(), 160) == s.map,
+        };
+        candidate && e.hash() == s.map_hash
+    })
 }
 
 /// A character typed into a playfield size: a digit, or `x` between width and height.
@@ -937,13 +1112,24 @@ impl State {
     }
 
     /// Scenes that use the gameplay present mode; everything else is a menu.
+    /// In a song (or its pause menu's settings): what counts for pp stays as it started.
+    fn mid_song(&self) -> bool {
+        self.in_song() || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. } | Scene::MpPlay { .. }))
+    }
+
     fn in_song(&self) -> bool {
         matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. } | Scene::Spectate(_) | Scene::Watch(_))
     }
 
     /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
     /// uncapped, its near-empty frame runs at thousands of fps and the GPU whines.
+    ///
+    /// Without the focus (another window, the Snipping Tool's overlay) it's 30: an uncapped game
+    /// takes the whole GPU, and the screenshot tool then needs seconds to start.
     fn frame_cap(&self) -> u32 {
+        if !self.focused && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > UNFOCUSED_FPS) {
+            return UNFOCUSED_FPS;
+        }
         let menu = matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_some() && game.resuming.is_none());
         let screen = (self.refresh_hz.round() as u32).max(30);
         if menu && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > screen) { screen } else { self.cfg.fps_cap }
@@ -955,7 +1141,17 @@ impl State {
         if matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_) | Scene::Calibrate { vsync: true, .. }) {
             return PresentChoice::Fifo;
         }
-        if self.cfg.menu_vsync && !self.in_song() { PresentChoice::Fifo } else { self.cfg.present }
+        if self.cfg.menu_vsync && !self.player_plays() { PresentChoice::Fifo } else { self.cfg.present }
+    }
+
+    /// The player is hitting notes (the gameplay present mode's job): not a replay or autoplay,
+    /// not waiting for a multiplayer match to start.
+    fn player_plays(&self) -> bool {
+        match &self.scene {
+            Scene::Play { game, .. } => game.replay.is_none() && !self.auto && !game.mods.has(mods::Mod::Autoplay),
+            Scene::MpPlay { .. } | Scene::Calibrate { .. } => true,
+            _ => false,
+        }
     }
 
     /// How far ahead (real ms) notes are drawn for vsync: with it, a frame reaches the screen
@@ -1287,6 +1483,24 @@ impl State {
         self.scene = Scene::Loading { rx, label, entry, from: None };
     }
 
+    /// Song select's layout as it comes: the list's share and the preview's size.
+    fn song_layout_is_default(&self) -> bool {
+        let d = Config::default();
+        (self.cfg.song_list_share - d.song_list_share).abs() < 1e-4 && (self.cfg.song_preview_size - d.song_preview_size).abs() < 1e-4
+    }
+
+    /// Puts song select's divider `which` (both: None) back where it was at first.
+    fn reset_song_layout(&mut self, which: Option<render::Hit>) {
+        let d = Config::default();
+        if which != Some(render::Hit::SplitPreview) {
+            self.cfg.song_list_share = d.song_list_share;
+        }
+        if which != Some(render::Hit::SplitList) {
+            self.cfg.song_preview_size = d.song_preview_size;
+        }
+        self.cfg.save();
+    }
+
     /// The results screen of a local score on the selected map (its leaderboard row).
     fn open_local_score(&mut self, file: &std::path::Path) {
         let Some(entry) = self.select.selected() else { return };
@@ -1300,7 +1514,8 @@ impl State {
         let stats = game::Stats { great: r.great, ok: r.ok, miss: r.miss, max_combo: r.max_combo, score: r.score, ..Default::default() };
         let mods = Mods::from_list(&r.mods);
         let e = &self.library[entry];
-        let mut results = Results::new(results_title(&e.meta, r.rate, mods, None), stats, game::Windows::new(e.meta.od));
+        let mut results = Results::new(results_title(&e.meta, None), stats, game::Windows::new(e.meta.od));
+        results.set_mods(mods, r.rate);
         results.replay = Some(file.to_path_buf());
         results.partial = true;
         results.pp = self.scores.iter().find(|row| row.file == file).and_then(|row| row.pp);
@@ -1312,19 +1527,126 @@ impl State {
         self.scene = Scene::Results { results, entry, from: None };
     }
 
+    /// Opens what a `taiko-rs://` link asks for: a score's results, its replay ready to watch.
+    fn open_link(&mut self, link: link::Link) {
+        match link {
+            link::Link::Score(id) => {
+                let server = self.cfg.online_server.clone();
+                let (tx, rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let got = match online::call(&server, online::Request::Score { id }) {
+                        Ok(online::Reply::Score(s)) => Ok(*s),
+                        Ok(_) => Err("odd reply from the server".to_string()),
+                        Err(e) if e == "bad request" => Err("the server can't open score links yet".to_string()),
+                        Err(e) => Err(e),
+                    };
+                    let _ = tx.send(got);
+                });
+                self.score_link = Some(ScoreLink { fetch: Some(rx), score: None, downloading: None });
+                let later = if self.in_song() || self.mp.is_some() { " (it opens once you're back in song select)" } else { "" };
+                self.toast(format!("opening a score{later}..."));
+            }
+        }
+    }
+
+    /// Opens a linked score's results once it's here, its map is (downloading it if need be)
+    /// and the player is in song select.
+    fn poll_score_link(&mut self) {
+        let Some(l) = &mut self.score_link else { return };
+        if let Some(rx) = &l.fetch {
+            match rx.try_recv() {
+                Ok(Ok(s)) => {
+                    l.score = Some(s);
+                    l.fetch = None;
+                }
+                Ok(Err(e)) => {
+                    self.score_link = None;
+                    self.toast(format!("can't open that score: {e}"));
+                    return;
+                }
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.score_link = None;
+                    return;
+                }
+            }
+        }
+        let free = matches!(self.scene, Scene::Select | Scene::Results { .. } | Scene::Preview { .. } | Scene::Download) && self.mp.is_none();
+        if self.scan.is_some() || !free {
+            return;
+        }
+        let Some(score) = self.score_link.as_ref().and_then(|l| l.score.clone()) else { return };
+        if let Some(entry) = find_score_map(&self.library, &score) {
+            self.score_link = None;
+            self.scene = Scene::Select;
+            let path = self.library[entry].path.clone();
+            self.select.select_path(&self.library, &path);
+            if self.select.selected() != Some(entry) {
+                // Hidden by the search: show everything.
+                self.select.filter.clear();
+                self.select.refilter(&self.library);
+                self.select.select_path(&self.library, &path);
+            }
+            self.open_online_score_on(entry, score);
+            return;
+        }
+        let downloading = self.score_link.as_ref().and_then(|l| l.downloading);
+        match (downloading, score.set_id) {
+            (Some(since), _) => {
+                if since.elapsed() > SCORE_LINK_WAIT && !self.downloads.iter().any(|j| Some(j.set.id) == score.set_id) {
+                    self.score_link = None;
+                }
+            }
+            (None, Some(id)) if self.installed_sets().contains(&id) => {
+                self.score_link = None;
+                self.toast(format!("your copy of {} is a different version than the one played", score.map));
+            }
+            (None, Some(id)) => {
+                let song = score.map.rsplit_once(" [").map_or(score.map.as_str(), |(s, _)| s);
+                let (artist, title) = song.split_once(" - ").unwrap_or(("", song));
+                self.start_download(download::SetInfo {
+                    id,
+                    artist: artist.to_string(),
+                    title: title.to_string(),
+                    creator: String::new(),
+                    status: String::new(),
+                    diffs: Vec::new(),
+                    play_count: 0,
+                    favourite_count: 0,
+                    rating: 0.0,
+                    ranked_date: String::new(),
+                });
+                if let Some(l) = &mut self.score_link {
+                    l.downloading = Some(Instant::now());
+                }
+                self.toast(format!("downloading {song} for that score..."));
+            }
+            (None, None) => {
+                self.score_link = None;
+                self.toast(format!("you haven't got {}", score.map));
+            }
+        }
+    }
+
     /// The results screen of an online score on the selected map; its replay is fetched
     /// meanwhile.
     fn open_online_score(&mut self, score: online::OnlineScore) {
         let Some(entry) = self.select.selected() else { return };
+        self.open_online_score_on(entry, score);
+    }
+
+    /// The results screen of an online score on map `entry`.
+    fn open_online_score_on(&mut self, entry: usize, score: online::OnlineScore) {
         let stats = game::Stats { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, score: score.score, ..Default::default() };
         let mods = Mods::from_list(&score.mods);
         let e = &self.library[entry];
-        let mut results = Results::new(results_title(&e.meta, score.rate, mods, None), stats, game::Windows::new(e.meta.od));
+        let mut results = Results::new(results_title(&e.meta, None), stats, game::Windows::new(e.meta.od));
+        results.set_mods(mods, score.rate);
         results.partial = true;
         results.pp = score.pp;
         results.no_pp = mods.unranked().then_some("Autoplay and Relax get no pp");
         results.opened = Some(ui::Opened { player: score.player.clone(), date: score.date, online: true });
-        let play = pp::Play { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, rate: score.rate, mods };
+        let play = pp::Play { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, rate: score.rate, mods, scroll_speed: score.scroll_speed.unwrap_or(1.0) };
         let online = (self.cfg.online_server.clone(), score, e.label());
         results.job = Some(results_job(e.path.clone(), play, None, Some(online)));
         self.scene = Scene::Results { results, entry, from: None };
@@ -1563,6 +1885,7 @@ impl State {
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
             Item::Hotkey(i) => c.hotkeys.get(keys::Hotkey::ALL[i]).map(keys::Chord::name).unwrap_or_else(|| "none".into()),
             Item::TouchLayout => c.touch_layout.name().into(),
+            Item::Screenshots => c.screenshot_to.name().into(),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::WheelResize => on(c.wheel_resizes_playfield),
             Item::BackgroundDimBlack => on(c.bg_dim_black),
@@ -1627,6 +1950,8 @@ impl State {
                 }
             }
             Item::Changelog => "Enter to read".into(),
+            Item::SongSelectLayout if self.song_layout_is_default() => "default".into(),
+            Item::SongSelectLayout => "custom, Enter: default".into(),
             Item::KrokodilKoban => String::new(),
             Item::Fullscreen => on(self.fullscreen),
             Item::WindowSize if self.fullscreen => format!("fullscreen ({:.0}x{:.0})", self.window_w, self.window_h),
@@ -1675,6 +2000,10 @@ impl State {
     /// Changes a setting one step in `dir` (-1 / +1), applying it immediately.
     fn adjust_setting(&mut self, item: Item, dir: i32, window: Option<&Window>) {
         let d = dir as f64;
+        if item == Item::ScrollSpeed && self.mid_song() {
+            self.toast("change the scroll speed in song select, not during a song".into());
+            return;
+        }
         match item {
             Item::ScrollSpeed => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, d),
             Item::Offset => self.cfg.offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
@@ -1695,6 +2024,7 @@ impl State {
             // Open their lists on Enter.
             Item::InterfaceHides | Item::SkinParts | Item::SkinPart(_) => return,
             Item::TouchLayout => self.cfg.touch_layout = self.cfg.touch_layout.step(dir),
+            Item::Screenshots => self.cfg.screenshot_to = self.cfg.screenshot_to.step(dir),
             Item::Accent => {
                 let n = render::ACCENTS.len() as i32;
                 // A colour of your own goes to the first (or last) preset.
@@ -1759,7 +2089,7 @@ impl State {
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::CheckUpdates => self.cfg.check_updates = !self.cfg.check_updates,
             // Acts on Enter in `settings_key`.
-            Item::Update | Item::Changelog | Item::KrokodilKoban => return,
+            Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout => return,
             Item::Fullscreen => self.toggle_fullscreen(window),
             Item::WindowSize => {
                 // The next size up or down from the window's, in its aspect ratio while there is
@@ -1861,6 +2191,10 @@ impl State {
                 let all = config::TouchLayout::ALL;
                 (strings(&mut all.iter().map(|l| l.name())), all.iter().position(|&l| l == c.touch_layout), String::new())
             }
+            Item::Screenshots => {
+                let all = config::ScreenshotTo::ALL;
+                (strings(&mut all.iter().map(|t| t.name())), all.iter().position(|&t| t == c.screenshot_to), String::new())
+            }
             Item::PresentMode => {
                 let all = PresentChoice::ALL;
                 (strings(&mut all.iter().map(|p| p.name())), all.iter().position(|&p| p == c.present), "during songs".into())
@@ -1944,6 +2278,7 @@ impl State {
         let Some(name) = list.names.get(i) else { return };
         match list.item {
             Item::TouchLayout => self.cfg.touch_layout = config::TouchLayout::ALL[i],
+            Item::Screenshots => self.cfg.screenshot_to = config::ScreenshotTo::ALL[i],
             Item::PresentMode => self.cfg.present = PresentChoice::ALL[i],
             Item::AudioBuffer if Some(i) != list.current => self.set_audio_buffer(AUDIO_BUFFERS[i]),
             Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
@@ -2077,6 +2412,9 @@ impl State {
                 }
             }
             KeyCode::Backspace => edit.backspace(),
+            KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End | KeyCode::Delete => {
+                edit.nav(code);
+            }
             _ if ctrl => {}
             _ => {
                 if let Some(text) = text {
@@ -2088,6 +2426,9 @@ impl State {
 
     /// Sets `item` to a typed value.
     fn apply_typed(&mut self, item: Item, text: &str) -> Result<(), String> {
+        if item == Item::ScrollSpeed && self.mid_song() {
+            return Err("change the scroll speed in song select, not during a song".into());
+        }
         let number = || parse_number(text).ok_or_else(|| "type a number".to_string());
         let percent = || number().map(|n| (n / 100.0).clamp(0.0, 1.0) as f32);
         let c = &mut self.cfg;
@@ -2191,7 +2532,7 @@ impl State {
         }
     }
 
-    /// Moves the game's data (replays, scores, videos, taiko-rs's own Songs and Skins, caches)
+    /// Moves the game's data (replays, scores, videos, taiko.rs's own Songs and Skins, caches)
     /// into `target` (into a taiko-rs folder there, unless it is one; None: back to the usual
     /// places), on its own thread. `poll_data_move` takes it from there.
     fn move_data_to(&mut self, target: Option<PathBuf>) -> Result<(), String> {
@@ -2333,7 +2674,7 @@ impl State {
                 match update::restart() {
                     Ok(()) => self.quit = true,
                     Err(e) => {
-                        self.toast(format!("installed; restart taiko-rs ({e})"));
+                        self.toast(format!("installed; restart taiko.rs ({e})"));
                         self.updater = update::Updater::new(false);
                     }
                 }
@@ -2420,6 +2761,9 @@ impl State {
     fn append_maps(&mut self, fresh: Vec<Entry>) {
         let start = self.library.len();
         self.library.extend(fresh);
+        // What's known of their sets' statuses, and the rest asked about soon.
+        self.apply_cached_statuses();
+        self.status_sweep_due = Some(Instant::now() + Duration::from_secs(10));
         if let Some(info) = &self.mapinfo {
             info.extend(self.library[start..].iter().enumerate().map(|(k, e)| (start + k, e.path.clone(), e.modified, e.size)).collect());
             self.mapinfo_sorted = false;
@@ -2579,11 +2923,19 @@ impl State {
     /// Opens the file manager on `path`'s folder with the file selected where it can.
     fn show_in_folder(&mut self, path: &std::path::Path) {
         use std::process::Command;
-        let opened = if cfg!(windows) {
-            let mut arg = std::ffi::OsString::from("/select,");
-            arg.push(path);
-            Command::new("explorer").arg(arg).spawn().is_ok()
-        } else if cfg!(target_os = "macos") {
+        #[cfg(windows)]
+        let opened = {
+            // Explorer wants `/select,"C:\full\path"`: the whole argument quoted (as `arg` would,
+            // since video names have spaces) or a relative or forward-slashed path opens Documents.
+            use std::os::windows::process::CommandExt;
+            let full = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+            let mut arg = std::ffi::OsString::from("/select,\"");
+            arg.push(full.as_os_str());
+            arg.push("\"");
+            Command::new("explorer").raw_arg(arg).spawn().is_ok()
+        };
+        #[cfg(not(windows))]
+        let opened = if cfg!(target_os = "macos") {
             Command::new("open").arg("-R").arg(path).spawn().is_ok()
         } else {
             // The freedesktop file manager interface (Dolphin, Nautilus, ...) selects the file;
@@ -2764,6 +3116,10 @@ impl State {
                 Ok(()) => self.quit = true,
                 Err(e) => self.toast(e),
             },
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SongSelectLayout => {
+                self.reset_song_layout(None);
+                self.toast("song select: the usual layout".into());
+            }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Changelog => self.changelog = Some(changelog::View::recent(false)),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
                 self.cfg.playfield_area = Area::FULL;
@@ -2865,7 +3221,8 @@ impl State {
                 KeyCode::Enter | KeyCode::NumpadEnter => self.finish_calibration(),
                 KeyCode::Escape => self.leave_calibration(false),
                 KeyCode::F11 => self.toggle_fullscreen(window),
-                KeyCode::F12 => self.quit = true,
+                KeyCode::F12 => self.screenshot_due = true,
+                KeyCode::KeyQ if self.modifiers_ctrl => self.ask_quit(),
                 _ => {}
             }
             return;
@@ -2884,7 +3241,8 @@ impl State {
                 self.cfg.save();
             }
             KeyCode::F11 => self.toggle_fullscreen(window),
-            KeyCode::F12 => self.quit = true,
+            KeyCode::F12 => self.screenshot_due = true,
+            KeyCode::KeyQ if self.modifiers_ctrl => self.ask_quit(),
             _ => {}
         }
     }
@@ -3006,7 +3364,13 @@ impl State {
     fn handle_global_key(&mut self, key: KeyCode, window: Option<&Window>) -> bool {
         let step = if self.modifiers_shift { 5.0 } else { 1.0 };
         match key {
-            KeyCode::Minus | KeyCode::Equal if matches!(self.scene, Scene::Select) && !self.select.filter.is_empty() => return false,
+            // Song select's search box has the keys: they're letters of the search (there's an
+            // artist called -45).
+            KeyCode::Minus | KeyCode::Equal | KeyCode::NumpadSubtract | KeyCode::NumpadAdd
+                if matches!(self.scene, Scene::Select) && self.select.searching && !self.modifiers_ctrl =>
+            {
+                return false
+            }
             KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd if self.modifiers_ctrl => {
                 let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) { -step } else { step };
                 self.cfg.visual_offset_ms += d;
@@ -3032,12 +3396,17 @@ impl State {
                 }
                 return true;
             }
+            // Like the speed, only between songs: it counts for pp.
+            KeyCode::F3 | KeyCode::F4 if self.mid_song() => {
+                self.toast("change the scroll speed in song select, not during a song".into());
+                return true;
+            }
             KeyCode::F3 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, -1.0),
             KeyCode::F4 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, 1.0),
             KeyCode::F7 => {
                 self.cfg.present = self.cfg.present.next();
                 self.cfg.save();
-                let note = if self.cfg.menu_vsync && !self.in_song() { " (menus stay on vsync)" } else { "" };
+                let note = if self.cfg.menu_vsync && !self.player_plays() { " (menus stay on vsync)" } else { "" };
                 let text = format!("gameplay present mode: {}{note}", self.cfg.present.name());
                 self.toast(text);
                 return true;
@@ -3063,10 +3432,14 @@ impl State {
                 return true;
             }
             KeyCode::F12 => {
-                self.quit = true;
+                self.screenshot_due = true;
                 return true;
             }
-            KeyCode::KeyU if self.modifiers_ctrl && !self.in_song() => {
+            KeyCode::KeyQ if self.modifiers_ctrl => {
+                self.ask_quit();
+                return true;
+            }
+            KeyCode::KeyU if self.modifiers_ctrl && !self.modifiers_shift && !self.in_song() => {
                 self.update_now();
                 return true;
             }
@@ -3205,7 +3578,17 @@ impl State {
             self.toast(format!("{w}x{h} doesn't fit this window"));
             return;
         }
-        self.cfg.playfield_area = layout::preset_area(w, h, self.window_w, self.window_h);
+        // Where the size being left was, and where this one was last put (else the middle).
+        if let Some(old) = self.current_preset() {
+            let a = self.cfg.playfield_area;
+            self.cfg.preset_spots.retain(|(s, _)| *s != old);
+            self.cfg.preset_spots.push((old, (a.x, a.y)));
+        }
+        let mut area = layout::preset_area(w, h, self.window_w, self.window_h);
+        if let Some(&(_, (x, y))) = self.cfg.preset_spots.iter().find(|(s, _)| *s == (w, h)) {
+            area = Area { x, y, ..area }.clamped();
+        }
+        self.cfg.playfield_area = area;
         self.cfg.save();
         self.toast(format!("playfield {w}x{h}"));
     }
@@ -3241,8 +3624,9 @@ impl State {
         if let Some((_, text)) = &mut dd.editing {
             match code {
                 KeyCode::Escape => dd.editing = None,
-                KeyCode::Backspace => {
-                    text.pop();
+                KeyCode::Backspace => settings::caret_backspace(text, &mut dd.caret),
+                KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End | KeyCode::Delete => {
+                    settings::caret_nav(text, &mut dd.caret, code);
                 }
                 KeyCode::Enter | KeyCode::NumpadEnter => {
                     if let Some((index, text)) = dd.editing.take() {
@@ -3250,8 +3634,8 @@ impl State {
                     }
                 }
                 _ => {
-                    if let Some(ch) = size_char(code).filter(|_| text.len() < 11) {
-                        text.push(ch);
+                    if let Some(ch) = size_char(code) {
+                        settings::caret_insert(text, &mut dd.caret, ch.encode_utf8(&mut [0; 4]), 11);
                     }
                 }
             }
@@ -3302,11 +3686,14 @@ impl State {
             }
             PresetAction::Add => {
                 dd.editing = Some((None, String::new()));
+                dd.caret = 0;
                 return;
             }
             PresetAction::Edit if i < saved => {
                 let (w, h) = self.cfg.saved_presets[i];
-                dd.editing = Some((Some(i), format!("{w}x{h}")));
+                let text = format!("{w}x{h}");
+                dd.caret = text.len();
+                dd.editing = Some((Some(i), text));
                 return;
             }
             PresetAction::Delete if i < saved => {
@@ -3336,6 +3723,7 @@ impl State {
         let Some(size) = layout::parse_size(&text) else {
             self.toast("type a size like 1280x720".into());
             if let Some(dd) = &mut self.settings_ui.dropdown {
+                dd.caret = text.len();
                 dd.editing = Some((index, text));
             }
             return;
@@ -3428,13 +3816,22 @@ impl State {
             return;
         }
         let (vx, vy) = self.mouse_virtual();
+        if let Scene::Results { results, .. } = &mut self.scene {
+            results.scroll(notches < 0);
+            return;
+        }
+        let on_board = self.board_rect.is_some_and(|[bx, by, bw, bh]| vx >= bx && vx <= bx + bw && vy >= by && vy <= by + bh);
+        if matches!(self.scene, Scene::Select) && on_board && self.select.picker.is_none() {
+            self.board_scroll = (self.board_scroll as i64 - notches as i64).clamp(0, self.board_max as i64) as usize;
+            return;
+        }
         match &self.scene {
             Scene::Select if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Select if self.select.picker.is_some() => {
                 let n = self.select.picker_len() as i32;
                 self.select.picker = self.select.picker.map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
-            Scene::Select => self.select.step(-notches, &self.library),
+            Scene::Select => self.select.step(-notches, &self.library, false),
             Scene::Download if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Download => self.browse.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
@@ -3562,6 +3959,29 @@ impl State {
             }
             self.right_scroll = false;
         }
+        if let Some((h, from, start)) = self.split_drag {
+            if !matches!(self.scene, Scene::Select) {
+                self.split_drag = None;
+            } else {
+                let (vx, vy) = self.mouse_virtual();
+                let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
+                // A drag, not the first click of a double click.
+                if (if h == render::Hit::SplitList { vx } else { vy } - from).abs() > 3.0 {
+                    self.split_click = None;
+                }
+                if h == render::Hit::SplitList {
+                    // Kept where the list's width still follows it.
+                    if let Some((min, max)) = Select::share_range(width) {
+                        self.cfg.song_list_share = (start + (vx - from) / width).clamp(min, max);
+                    }
+                    return CursorIcon::EwResize;
+                }
+                let (min, max) = preview::PREVIEW_SIZE;
+                let max = self.preview.size_cap.clamp(min, max);
+                self.cfg.song_preview_size = (start + (vy - from) / self.preview.size_unit.max(1.0)).clamp(min, max);
+                return CursorIcon::NsResize;
+            }
+        }
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
         let (vx, vy) = self.mouse_virtual();
         let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
@@ -3614,7 +4034,11 @@ impl State {
                     game.paused = Some(i);
                 }
                 self.hover = None;
-                return CursorIcon::Pointer;
+                return match hit {
+                    render::Hit::SplitList => CursorIcon::EwResize,
+                    render::Hit::SplitPreview => CursorIcon::NsResize,
+                    _ => CursorIcon::Pointer,
+                };
             }
         }
         if matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
@@ -3841,6 +4265,10 @@ impl State {
         }
         if !pressed {
             self.scrollbar_drag = false;
+            if self.split_drag.take().is_some() {
+                self.cfg.save();
+                return;
+            }
             if let Some(d) = self.list_drag.take() {
                 if d.moved {
                     self.select.drag_end(&self.library);
@@ -3853,12 +4281,31 @@ impl State {
         if pressed {
             let (vx, vy) = self.mouse_virtual();
             let hit = self.hit_at(vx, vy);
+            // The search box takes the keys when clicked, and gives them back on a click elsewhere.
+            if matches!(self.scene, Scene::Select) {
+                self.select.searching = hit == Some(render::Hit::TextField);
+            }
             if self.select.picker.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::PickRow(_))) {
                 self.select.picker = None;
                 return;
             }
             if self.select.menu.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::SongMenu(_))) {
                 self.select.menu = None;
+                return;
+            }
+            if let (Scene::Select, Some(h @ (render::Hit::SplitList | render::Hit::SplitPreview))) = (&self.scene, hit) {
+                // Twice in quick succession: back to the usual size.
+                let now = Instant::now();
+                if self.split_click.take().is_some_and(|(last, at)| last == h && now.duration_since(at) < Duration::from_millis(400)) {
+                    self.reset_song_layout(Some(h));
+                    return;
+                }
+                self.split_click = Some((h, now));
+                let (from, start) = match h {
+                    render::Hit::SplitList => (vx, self.cfg.song_list_share),
+                    _ => (vy, self.preview.size_shown),
+                };
+                self.split_drag = Some((h, from, start));
                 return;
             }
             // A row acts on release, unless the press turns into dragging the list.
@@ -3915,7 +4362,17 @@ impl State {
 
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
-        let info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
+        if let (Some(s), Some(g)) = (self.mp.as_ref().filter(|s| s.mapguessr), &mut self.guessr) {
+            let e = &self.library[entry];
+            if g.can_guess(s) {
+                s.client.send(net::ClientMsg::Guess { hash: e.hash(), song: mapguessr::entry_song(e) });
+                g.last_guess = Some(format!("{} - {}", e.meta.artist, e.meta.title));
+            }
+            self.scene = Scene::Lobby;
+            return;
+        }
+        let mut info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
+        info.seed = lobby_seed(None);
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
@@ -3961,6 +4418,10 @@ impl State {
                     self.scene = Scene::MpMenu;
                     return;
                 };
+                if s.mapguessr {
+                    self.guessr_key(code);
+                    return;
+                }
                 match code {
                     KeyCode::Space | KeyCode::KeyR if s.me().is_some_and(|p| p.spectator) => {
                         self.toast("you're spectating: S to play instead".into());
@@ -3982,6 +4443,8 @@ impl State {
                         if let Some(mut m) = s.map.clone() {
                             m.rate = rate;
                             m.mods = mods.list();
+                            (m.multiverse, m.shapeshift) = mod_settings(mods);
+                            m.seed = lobby_seed(m.seed);
                             s.client.send(net::ClientMsg::SelectMap(m));
                         }
                         let text = format!("match rate {rate:.2}x");
@@ -4044,7 +4507,11 @@ impl State {
             }
             Scene::MpPlay { game, quit_armed } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
-                KeyCode::Tab => self.toggle_map_info(),
+                KeyCode::Tab => {
+                    self.cfg.mp_scoreboard = !self.cfg.mp_scoreboard;
+                    self.cfg.save();
+                    self.toast(if self.cfg.mp_scoreboard { "scoreboard shown (Tab)" } else { "scoreboard hidden (Tab)" }.into());
+                }
                 KeyCode::Space => {
                     if game.skip(self.audio.as_ref(), self.play_offset) {
                         if let Some(s) = &self.mp {
@@ -4072,6 +4539,46 @@ impl State {
                 if matches!(code, KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape) {
                     self.scene = Scene::Lobby;
                 }
+            }
+            _ => {}
+        }
+    }
+
+    /// A key in a mapguessr lobby.
+    fn guessr_key(&mut self, code: KeyCode) {
+        let (Some(s), Some(g)) = (&self.mp, &mut self.guessr) else { return };
+        let in_game = s.in_match;
+        match code {
+            KeyCode::KeyG | KeyCode::Tab | KeyCode::Space | KeyCode::Enter | KeyCode::NumpadEnter if in_game => {
+                if g.can_guess(s) {
+                    self.picking_lobby_map = true;
+                    self.scene = Scene::Select;
+                } else if s.me().is_some_and(|p| p.guessed) {
+                    self.toast("you've got this one".into());
+                }
+            }
+            KeyCode::BracketLeft | KeyCode::BracketRight if s.is_host() && !in_game => {
+                let step = if self.modifiers_shift { 5 } else { 1 };
+                // Past either end it comes round again (the button only goes up).
+                g.rounds = match code {
+                    KeyCode::BracketRight if g.rounds >= mapguessr::MAX_ROUNDS => 1,
+                    KeyCode::BracketRight => (g.rounds + step).min(mapguessr::MAX_ROUNDS),
+                    _ if g.rounds <= 1 => mapguessr::MAX_ROUNDS,
+                    _ => g.rounds.saturating_sub(step).max(1),
+                };
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter if s.is_host() && !in_game => {
+                s.client.send(net::ClientMsg::StartGuessr { rounds: g.rounds });
+            }
+            KeyCode::KeyS if !in_game => {
+                let on = !s.me().is_some_and(|p| p.spectator);
+                s.client.send(net::ClientMsg::Spectator(on));
+                self.toast(if on { "you'll watch the next game" } else { "you'll play the next game" }.into());
+            }
+            KeyCode::Tab => self.scene = Scene::Select,
+            KeyCode::Escape => {
+                let why = if s.owns_room() { "room closed" } else { "left the room" };
+                self.leave_room(why);
             }
             _ => {}
         }
@@ -4139,9 +4646,10 @@ impl State {
                         self.mp_menu.account_call(&server, online::Request::Logout { token });
                         self.sign_out("logged out");
                     }
-                    Row::HostOnline => {
-                        self.mp_status = "opening a lobby on the server...".into();
-                        let request = online::Request::CreateRoom { token, title: String::new() };
+                    Row::HostOnline | Row::HostGuessr => {
+                        let mapguessr = row == Row::HostGuessr;
+                        self.mp_status = if mapguessr { "opening a mapguessr lobby..." } else { "opening a lobby on the server..." }.into();
+                        let request = online::Request::CreateRoom { token, title: String::new(), mapguessr };
                         self.mp_connecting = Some(multiplayer::start_online(server, request, account));
                     }
                     Row::Lobby(k) => {
@@ -4152,7 +4660,7 @@ impl State {
                     }
                     Row::HostDirect => {
                         self.mp_status = format!("opening room on port {}...", self.cfg.mp_port);
-                        self.mp_connecting = Some(multiplayer::start_host(self.cfg.mp_port, name));
+                        self.mp_connecting = Some(multiplayer::start_host(self.cfg.mp_port, name, false));
                     }
                     Row::JoinDirect if self.cfg.mp_address.trim().is_empty() => self.mp_status = "type the host's address first".into(),
                     Row::JoinDirect => {
@@ -4190,6 +4698,7 @@ impl State {
     /// Forgets the saved online login.
     fn sign_out(&mut self, why: &str) {
         self.social = social::Social::default();
+        self.select.nominator = false;
         self.mp_menu.account = None;
         self.mp_menu.rooms.clear();
         self.cfg.online_token.clear();
@@ -4198,9 +4707,85 @@ impl State {
         self.mp_menu.cursor = 0;
     }
 
+    /// The time played so far of the live play going on: a song or a lobby match (also while
+    /// its pause menu's settings are open), not autoplay or a replay (Relax is still playing).
+    fn live_play_ms(&self) -> Option<f64> {
+        fn game_of(scene: &Scene) -> Option<&Game> {
+            match scene {
+                Scene::Play { game, .. } | Scene::MpPlay { game, .. } => Some(game),
+                Scene::Settings { prev } => game_of(prev),
+                _ => None,
+            }
+        }
+        let g = game_of(&self.scene)?;
+        (g.replay.is_none() && !self.auto && !g.mods.has(mods::Mod::Autoplay)).then_some(g.played_ms)
+    }
+
+    /// Follows the live play; once it's gone without going to the leaderboards (failed, quit,
+    /// restarted, from a start point, a lobby match), tells the server it was played, for the
+    /// profile's play count and play time.
+    fn track_play(&mut self) {
+        if let Some(ms) = self.live_play_ms() {
+            self.playing = Some(ms);
+            return;
+        }
+        let Some(ms) = self.playing.take() else { return };
+        // A start that's left at once isn't a play.
+        if ms < 1000.0 || self.cfg.online_token.is_empty() {
+            return;
+        }
+        let (server, token) = (self.cfg.online_server.clone(), self.cfg.online_token.clone());
+        std::thread::spawn(move || {
+            if let Err(e) = online::call(&server, online::Request::Played { token, ms: ms as u64 }) {
+                eprintln!("counting the play: {e}");
+            }
+        });
+    }
+
+    /// Asks the online server which map sets are loved there, or (`change`) loves one or takes
+    /// it back, in the background.
+    fn call_loved(&mut self, change: Option<(u32, bool)>) {
+        let request = match change {
+            Some((set, loved)) => online::Request::SetLoved { token: self.cfg.online_token.clone(), set, loved },
+            None => online::Request::LovedSets,
+        };
+        let (tx, rx) = mpsc::channel();
+        let server = self.cfg.online_server.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(online::call(&server, request));
+        });
+        self.loved_call = Some((rx, change));
+    }
+
+    /// The loved sets as the server has them, once it answers.
+    fn poll_loved(&mut self) {
+        if !self.loved_asked && self.loved_call.is_none() {
+            self.loved_asked = true;
+            self.call_loved(None);
+        }
+        let Some((rx, change)) = &self.loved_call else { return };
+        let Ok(result) = rx.try_recv() else { return };
+        let change = *change;
+        self.loved_call = None;
+        match (result, change) {
+            (Ok(online::Reply::LovedSets(sets)), _) => {
+                self.select.server_loved = sets.into_iter().collect();
+                if !self.select.filter.is_empty() {
+                    self.select.refilter(&self.library);
+                }
+                if let Some((set, loved)) = change {
+                    self.toast(if loved { format!("loved set {set} on taiko.rs: its plays give pp now") } else { format!("set {set} isn't loved on taiko.rs any more") });
+                }
+            }
+            (Err(e), Some(_)) => self.toast(format!("couldn't: {e}")),
+            _ => {}
+        }
+    }
+
     /// The online server's side of the multiplayer menu: the saved login, account replies and
     /// a lobby list kept fresh while the menu is open.
     fn poll_online(&mut self) {
+        self.poll_loved();
         let menu = &mut self.mp_menu;
         if !menu.session_loaded {
             menu.session_loaded = true;
@@ -4216,7 +4801,9 @@ impl State {
                 Ok(result) => {
                     menu.account_request = None;
                     match result {
-                        Ok(online::Reply::Account { name, token }) => {
+                        Ok(online::Reply::Account { name, token, nominator }) => {
+                            self.select.nominator = nominator;
+                            self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name) || self.cfg.online_token != token;
                             menu.account = Some(name.clone());
                             menu.online = Some(Ok(()));
@@ -4295,10 +4882,16 @@ impl State {
         // Keep whatever was typed into the search box while scanning, and the sort.
         let filter = std::mem::take(&mut self.select.filter);
         let played = std::mem::take(&mut self.select.played);
+        let status = std::mem::take(&mut self.select.status);
+        let server_loved = std::mem::take(&mut self.select.server_loved);
+        let nominator = self.select.nominator;
         let sort = self.select.sort;
         self.select = Select::new(&self.library);
         self.select.filter = filter;
         self.select.played = played;
+        self.select.status = status;
+        self.select.server_loved = server_loved;
+        self.select.nominator = nominator;
         self.select.sort = sort;
         self.select.mods_label = self.cfg.mods.label();
         let maps = self.library.iter().enumerate().map(|(i, e)| (i, e.path.clone(), e.modified, e.size)).collect();
@@ -4312,6 +4905,7 @@ impl State {
             let _ = tx.send(dirs.iter().find_map(|d| osudb::load(d)));
         });
         self.osudb_rx = Some(rx);
+        self.apply_cached_statuses();
         self.select.refilter(&self.library);
         // Start on a random song rather than the first one every time (not before a map given on
         // the command line, nor in scripted runs, whose screenshots expect the first song).
@@ -4349,15 +4943,19 @@ impl State {
                 if let Some(db) = db {
                     self.apply_osu_db(db);
                 }
+                // With osu!.db's statuses known, the mirrors are asked about the rest.
+                self.start_status_sweep();
             }
         }
         let Some(info) = &self.mapinfo else { return };
         let (done, total) = (info.done.load(Ordering::Relaxed), info.total.load(Ordering::Relaxed));
         let finished = info.finished();
-        self.select.info_progress = if !finished && self.select.sort.needs_info() { format!("  |  analysing {done}/{total}") } else { String::new() };
+        // Sorting or searching by stars, length or BPM waits on the analysis.
+        let needs_info = self.select.sort.needs_info() || search::Query::parse(&self.select.filter).needs_info();
+        self.select.info_progress = if !finished && needs_info { format!("  |  analysing {done}/{total}") } else { String::new() };
         if finished && !self.mapinfo_sorted {
             self.mapinfo_sorted = true;
-            if self.select.sort.needs_info() {
+            if needs_info {
                 self.select.refilter(&self.library);
             }
         }
@@ -4379,6 +4977,8 @@ impl State {
         for m in db.by_md5.values() {
             if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
                 self.db_status.insert(self.library[i].path.clone(), m.status);
+                // Unless the mirrors have said better already.
+                self.select.status.entry(self.library[i].path.clone()).or_insert(m.status);
             }
         }
         for m in db.by_md5.values().filter(|m| m.last_played > 0) {
@@ -4412,32 +5012,63 @@ impl State {
 
     /// F1 / the Mods button: the mod select, on the first mod that's on.
     fn open_mod_select(&mut self) {
-        if let Some(s) = &self.mp {
-            if matches!(self.scene, Scene::Lobby) && !s.is_host() {
-                self.toast("the host picks the mods".into());
-                return;
-            }
-        }
         let first = self.cfg.mods.iter().next().and_then(|m| mods::ALL.iter().position(|&x| x == m)).unwrap_or(0);
         self.mod_select = Some(first);
     }
 
+    /// The mods the mod select shows as on: in a lobby as a guest, the host's speed picked for
+    /// everyone (which can't be switched here) on top of our own.
+    fn shown_mods(&self) -> Mods {
+        match &self.mp {
+            Some(s) if matches!(self.scene, Scene::Lobby) && !s.is_host() => {
+                let lobby = s.map.as_ref().map(|m| Mods::from_list(&m.mods).shared()).unwrap_or(Mods::NONE);
+                lobby.plus(self.cfg.mods.free())
+            }
+            _ => self.cfg.mods,
+        }
+    }
+
     fn toggle_mod(&mut self, m: mods::Mod) {
+        // In a lobby the host picks the speed for everyone.
+        if m.shared() && matches!(self.scene, Scene::Lobby) && self.mp.as_ref().is_some_and(|s| !s.is_host()) {
+            self.toast(format!("the host picks the speed ({} is theirs to pick)", m.acronym()));
+            return;
+        }
         self.cfg.mods.toggle(m);
         self.mods_changed();
+    }
+
+    /// Tells the room the mods we picked ourselves, if it doesn't have them.
+    fn send_my_mods(&self) {
+        let Some(s) = &self.mp else { return };
+        let mine = self.cfg.mods.free().list();
+        if s.me().is_some_and(|p| p.mods != mine) {
+            s.client.send(net::ClientMsg::Mods(mine));
+        }
     }
 
     /// After the mods change: save them, and as the lobby host tell the room.
     fn mods_changed(&mut self) {
         self.cfg.save();
         self.select.mods_label = self.cfg.mods.label();
+        self.update_lobby_map();
+        self.send_my_mods();
+    }
+
+    /// As the lobby host: tells the room the match's rate, mods and mod settings as they are now.
+    fn update_lobby_map(&self) {
         let (rate, mods) = (self.play_speed().0, self.cfg.mods);
         if let Some(s) = &self.mp {
             if s.is_host() && !s.in_match {
                 if let Some(mut m) = s.map.clone() {
                     m.rate = rate;
-                    m.mods = mods.list();
-                    s.client.send(net::ClientMsg::SelectMap(m));
+                    // Only the speed's: everyone picks their other mods themselves.
+                    m.mods = mods.shared().list();
+                    (m.multiverse, m.shapeshift) = mod_settings(mods);
+                    m.seed = lobby_seed(m.seed);
+                    if Some(&m) != s.map.as_ref() {
+                        s.client.send(net::ClientMsg::SelectMap(m));
+                    }
                 }
             }
         }
@@ -4520,6 +5151,7 @@ impl State {
     fn shapeshift_changed(&mut self) {
         shapeshift::set(self.cfg.shapeshift);
         self.cfg.save();
+        self.update_lobby_map();
     }
 
     /// After a key or click in the Multiverse setup: the universes are saved and drawn with, or
@@ -4529,6 +5161,7 @@ impl State {
             multiverse::Action::Changed => {
                 multiverse::set(self.cfg.universes);
                 self.cfg.save();
+                self.update_lobby_map();
             }
             multiverse::Action::Close => self.universe_setup = None,
             multiverse::Action::None => {}
@@ -4667,6 +5300,45 @@ impl State {
         c.hit(0.0, 0.0, c.width, 31.0, render::Hit::TextField);
     }
 
+    /// `/np`'s line: the map on this screen, with its set's osu! link when it has one.
+    fn now_playing(&self) -> Option<String> {
+        let e = self.library.get(self.offset_entry()?)?;
+        let name = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
+        let set = e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder));
+        Some(match set {
+            Some(set) => format!("is playing {name} https://osu.ppy.sh/beatmapsets/{set}"),
+            None => format!("is playing {name}"),
+        })
+    }
+
+    /// A map set named in the chat, clicked: picked in song select when we have it, else downloaded.
+    fn open_chat_map(&mut self, set: u32) {
+        let have = self.library.iter().position(|e| e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)) == Some(set));
+        match have {
+            Some(i) if matches!(self.scene, Scene::Select) => {
+                let path = self.library[i].path.clone();
+                self.select.select_path(&self.library, &path);
+                self.social.close();
+            }
+            Some(i) => {
+                let label = self.library[i].label();
+                self.toast(format!("you have it: {label}"));
+            }
+            None => self.start_download(download::SetInfo {
+                id: set,
+                artist: String::new(),
+                title: format!("set {set}"),
+                creator: String::new(),
+                status: String::new(),
+                diffs: Vec::new(),
+                play_count: 0,
+                favourite_count: 0,
+                rating: 0.0,
+                ranked_date: String::new(),
+            }),
+        }
+    }
+
     /// What Ctrl+C copies here: the text being typed, else the map or set picked.
     fn copy_text(&self) -> Option<String> {
         if let Some(e) = &self.settings_ui.editing {
@@ -4688,17 +5360,24 @@ impl State {
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
         let Some(set) = e.meta.set_id else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
+        if self.select.server_loved.contains(&set) {
+            return Some(("LOVED HERE", 0xff66aa));
+        }
         if let Some(Some(s)) = self.set_status.get(&set) {
-            return Some(match s.as_str() {
-                "ranked" => ("RANKED", 0xb3ff66),
-                "approved" => ("APPROVED", 0xb3ff66),
-                "qualified" => ("QUALIFIED", 0x66ccff),
-                "loved" => ("LOVED", 0xff66aa),
-                "pending" => ("PENDING", 0xffd966),
-                "wip" => ("WIP", 0xffd966),
-                "graveyard" => ("GRAVEYARD", 0x8a8aa0),
-                _ => return None,
-            });
+            let known = match s.as_str() {
+                "ranked" => Some(("RANKED", 0xb3ff66)),
+                "approved" => Some(("APPROVED", 0xb3ff66)),
+                "qualified" => Some(("QUALIFIED", 0x66ccff)),
+                "loved" => Some(("LOVED", 0xff66aa)),
+                "pending" => Some(("PENDING", 0xffd966)),
+                "wip" => Some(("WIP", 0xffd966)),
+                "graveyard" => Some(("GRAVEYARD", 0x8a8aa0)),
+                _ => None,
+            };
+            // Not one the mirrors know (they don't have the set): osu!.db's.
+            if known.is_some() {
+                return known;
+            }
         }
         Some(match self.db_status.get(&e.path)? {
             4 => ("RANKED", 0xb3ff66),
@@ -4711,11 +5390,117 @@ impl State {
         })
     }
 
+    fn status_cache_due(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.status_saved) >= Duration::from_secs(15)
+    }
+
+    /// The sets' statuses the cache has, for the maps in the library (before osu!.db's).
+    fn apply_cached_statuses(&mut self) {
+        for e in &self.library {
+            let code = e.meta.set_id.and_then(|set| self.status_cache.status(set)).and_then(search::status_code);
+            if let Some(code) = code {
+                self.select.status.insert(e.path.clone(), code);
+            }
+        }
+    }
+
+    /// Asks the online server in the background about every set whose status isn't known or is
+    /// old (osu!.db knows a ranked, approved or loved one for sure): it answers what it has at
+    /// once and looks the rest up on osu! for the next round, so sorting by status works for the
+    /// whole library. The answers are kept (`setstatus`) for the next run. The mirrors aren't
+    /// asked: however many play, they hear nothing from us for this.
+    fn start_status_sweep(&mut self) {
+        // A newer sweep (more maps came in) takes over from one still asking.
+        static LATEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if cfg!(test) {
+            return;
+        }
+        let generation = LATEST.fetch_add(1, Ordering::SeqCst) + 1;
+        let now = setstatus::now();
+        let mut maps: Vec<(u32, u32)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for e in &self.library {
+            let (Some(set), Some(map)) = (e.meta.set_id, e.meta.beatmap_id) else { continue };
+            let sure = matches!(self.db_status.get(&e.path), Some(4 | 5 | 7));
+            if !sure && self.status_cache.due(set, now) && seen.insert(set) {
+                maps.push((set, map));
+            }
+        }
+        if maps.is_empty() {
+            return;
+        }
+        let (server, token) = (self.cfg.online_server.clone(), self.cfg.online_token.clone());
+        let tx = self.set_status_tx.clone();
+        std::thread::spawn(move || {
+            let mut failed = 0;
+            // The server looks up what it doesn't know in the background (some 45 maps a second):
+            // ask again, now and then, about what's left.
+            for round in 0..STATUS_ROUNDS {
+                if round > 0 {
+                    std::thread::sleep(Duration::from_secs(STATUS_ROUND_SECS));
+                }
+                if LATEST.load(Ordering::SeqCst) != generation {
+                    return;
+                }
+                let mut left = Vec::new();
+                for chunk in maps.chunks(online::MAX_STATUS_MAPS) {
+                    match online::call(&server, online::Request::SetStatuses { token: token.clone(), maps: chunk.to_vec() }) {
+                        Ok(online::Reply::SetStatuses(found)) => {
+                            failed = 0;
+                            let got: std::collections::HashSet<u32> = found.iter().map(|(set, _)| *set).collect();
+                            left.extend(chunk.iter().filter(|(set, _)| !got.contains(set)).copied());
+                            for (set, status) in found {
+                                if tx.send((set, Some(status))).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        // An older server, offline: leave it to the next run.
+                        _ => {
+                            failed += 1;
+                            left.extend_from_slice(chunk);
+                        }
+                    }
+                }
+                maps = left;
+                // Without a login the server only says what it has: nothing more will come.
+                if maps.is_empty() || failed >= 3 || token.is_empty() {
+                    break;
+                }
+            }
+        });
+    }
+
     /// Asks the mirrors for the selected set's status once the selection has rested a moment
     /// (scrolling past sets asks about none of them), and takes in what they say.
     fn poll_set_status(&mut self, now: Instant) {
         while let Ok((set, status)) = self.set_status_rx.try_recv() {
+            // The mirrors know graveyard from pending, which osu!.db doesn't: the search uses theirs.
+            if let Some(code) = status.as_deref().and_then(search::status_code) {
+                for e in self.library.iter().filter(|e| e.meta.set_id == Some(set)) {
+                    self.select.status.insert(e.path.clone(), code);
+                }
+            }
+            if let Some(status) = &status {
+                self.status_cache.put(set, status, setstatus::now());
+                self.status_new = true;
+            }
             self.set_status.insert(set, status);
+        }
+        if self.status_sweep_due.is_some_and(|t| now >= t) {
+            self.status_sweep_due = None;
+            self.start_status_sweep();
+        }
+        if self.status_cache_due(now) {
+            self.status_cache.save();
+            self.status_saved = now;
+        }
+        // The list sorted (or searched) by status follows what the mirrors have said since.
+        let by_status = self.select.sort == ui::SortMode::Status || self.select.filter.contains("status");
+        if self.status_new && by_status && now.saturating_duration_since(self.status_resorted) >= Duration::from_secs(10) {
+            self.status_new = false;
+            self.status_resorted = now;
+            self.select.refilter(&self.library);
         }
         let set = self.select.selected().and_then(|i| self.library.get(i)).and_then(|e| e.meta.set_id);
         let Some(set) = set.filter(|s| !self.set_status.contains_key(s)) else {
@@ -4836,7 +5621,17 @@ impl State {
             KeyCode::KeyP if self.modifiers_ctrl => self.social_action(social::Action::Profile),
             KeyCode::KeyJ if self.modifiers_ctrl => self.social_action(social::Action::Join),
             KeyCode::Enter | KeyCode::NumpadEnter => {
-                let text = self.social.input.trim().to_string();
+                let mut text = self.social.input.trim().to_string();
+                // `/np` in a chat: the map on screen, with its osu! link (a link others can click).
+                if text.eq_ignore_ascii_case("/np") && matches!(row, Row::Friend(_) | Row::Lobby | Row::Global) {
+                    match self.now_playing() {
+                        Some(np) => text = np,
+                        None => {
+                            self.toast("no map to share: pick one first".into());
+                            return;
+                        }
+                    }
+                }
                 match row {
                     Row::AddFriend if !text.is_empty() => {
                         if let Some(c) = &self.social.conn {
@@ -5133,7 +5928,7 @@ impl State {
                     }
                 }
             }
-            Down::Notice(text) => self.social.notify("taiko-rs", text, 0x9a9ab0, NoteAction::None),
+            Down::Notice(text) => self.social.notify("taiko.rs", text, 0x9a9ab0, NoteAction::None),
             Down::Players { count, players } => {
                 self.social.online_total = count as usize;
                 self.social.players = Some(players);
@@ -5235,7 +6030,7 @@ impl State {
             }
             game.log_inputs = true;
             let Some(e) = self.library.get(*entry) else { return };
-            conn.send(online::Up::PlayStart(online::SoloPlay { map: map_info(e, game.rate, game.mods), anti_mash: true }));
+            conn.send(online::Up::PlayStart(online::SoloPlay { map: net::MapInfo { seed: (game.seed != 0).then_some(game.seed), ..map_info(e, game.rate, game.mods) }, anti_mash: true }));
             self.stream = Some((id, 0, Instant::now() - Duration::from_secs(1)));
         }
         let Some((_, sent, last)) = self.stream.as_mut() else { return };
@@ -5277,8 +6072,12 @@ impl State {
                     v.rx = None;
                     let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
                     let mods = v.play.as_ref().map(|p| Mods::from_list(&p.map.mods)).unwrap_or_default();
-                    let mut g = Game::with_mods(map, track, self.audio.as_ref(), mods);
-                    g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods));
+                    let seed = v.play.as_ref().and_then(|p| p.map.seed).unwrap_or(0);
+                    let mut g = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
+                    g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods, 1.0));
+                    if let Some(p) = &v.play {
+                        use_mod_settings(&mut g, &p.map);
+                    }
                     g.replay = Some((std::mem::take(&mut v.inputs), 0));
                     g.watched = true;
                     g.banner = Some(format!("WATCHING  -  {}", v.player));
@@ -5337,20 +6136,45 @@ impl State {
                 Err(mpsc::TryRecvError::Disconnected) => self.mp_connecting = None,
             }
         }
+        if self.mp.is_none() {
+            self.guessr = None;
+        }
         let Some(s) = &mut self.mp else { return };
         for msg in s.client.poll() {
             self.handle_server_msg(msg);
+        }
+        if let (Some(s), Some(g)) = (&self.mp, &mut self.guessr) {
+            g.tick(s, Instant::now());
         }
     }
 
     fn handle_server_msg(&mut self, msg: net::ServerMsg) {
         use net::ServerMsg;
         match msg {
-            ServerMsg::Room { players, map, in_match } => {
+            ServerMsg::Room { players, map, in_match, mapguessr, common } => {
                 let library = &self.library;
                 let Some(s) = &mut self.mp else { return };
+                let game_over = s.in_match && !in_match;
                 s.players = players;
+                // The room learns our own mods (on joining, and if it has others).
+                let mine = self.cfg.mods.free().list();
+                if !mapguessr && s.me().is_some_and(|p| p.mods != mine) {
+                    s.client.send(net::ClientMsg::Mods(mine));
+                }
                 s.in_match = in_match;
+                s.mapguessr = mapguessr;
+                s.common = common;
+                if mapguessr {
+                    let g = self.guessr.get_or_insert_with(|| mapguessr::Guessr::new(library));
+                    if game_over {
+                        g.game_over();
+                        if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
+                            self.picking_lobby_map = false;
+                            self.scene = Scene::Lobby;
+                        }
+                    }
+                    return;
+                }
                 let hash = map.as_ref().map(|m| m.hash);
                 if hash != s.reported_map {
                     s.reported_map = hash;
@@ -5379,7 +6203,9 @@ impl State {
                         self.stop_audio();
                         self.picking_lobby_map = false;
                         self.preview.show_background_for(&self.library[i]);
-                        let rx = self.load_with(i, map.rate, Mods::from_list(&map.mods));
+                        // The host's speed mods, and our own others.
+                        let mods = Mods::from_list(&map.mods).shared().plus(self.cfg.mods.free());
+                        let rx = self.load_with(i, map.rate, mods);
                         self.scene = Scene::MpWait { rx: Some(rx), loaded: None, start: None, from: map.from };
                     }
                     None => s.client.send(net::ClientMsg::Loaded(false)),
@@ -5409,12 +6235,15 @@ impl State {
                             from: map.from,
                             rate: map.rate,
                             mods,
+                            map: map.clone(),
                             players,
                             games: Vec::new(),
                             focus: Some(0),
                             pending: std::collections::HashMap::new(),
                             skipped: std::collections::HashSet::new(),
                             skip_done: false,
+                            zones: Vec::new(),
+                            zones_at: None,
                         }));
                     }
                     None => {
@@ -5464,8 +6293,32 @@ impl State {
                     self.scene = Scene::MpMenu;
                 }
             }
+            ServerMsg::GuessRound { round, rounds, hash, from, seconds } => {
+                if let Some(g) = &mut self.guessr {
+                    g.start_round(round, rounds, hash, from, seconds);
+                }
+            }
+            ServerMsg::GuessWrong { tries } => {
+                if let Some(g) = &mut self.guessr {
+                    g.tries = tries;
+                }
+                self.toast(if tries == 0 { "wrong, and that was your last guess".into() } else { format!("wrong! {tries} left") });
+            }
+            ServerMsg::GuessReveal { hash, got, last } => {
+                if let Some(g) = &mut self.guessr {
+                    g.reveal(&self.library, hash, got, last);
+                }
+                // Picking a guess: back to the lobby to see the answer.
+                if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
+                    self.picking_lobby_map = false;
+                    self.scene = Scene::Lobby;
+                }
+            }
             ServerMsg::Chat { from, text } => {
                 let text = if self.cfg.chat_filter { net::censor(&text) } else { text };
+                if from == net::GUESSR_NAME {
+                    self.toast(text.clone());
+                }
                 if let Some(s) = &mut self.mp {
                     s.chat.push((from, text));
                     if s.chat.len() > 200 {
@@ -5480,7 +6333,49 @@ impl State {
 
     /// A key press: the player's own hotkeys (`keys::Bindings`) turned into the keys the game
     /// knows them by, then `key_inner`.
+    /// Asks whether to exit; asked again (Ctrl+Q or the close button twice), exits.
+    fn ask_quit(&mut self) {
+        if self.quit_asked {
+            self.quit = true;
+        } else {
+            self.quit_asked = true;
+        }
+    }
+
+    /// A key while "Exit taiko.rs?" is up: yes, no, or nothing. 1 and 2 answer like osu!'s.
+    fn quit_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::KeyY | KeyCode::Digit1 | KeyCode::Numpad1 => self.quit = true,
+            KeyCode::KeyQ if self.modifiers_ctrl => self.quit = true,
+            KeyCode::Escape | KeyCode::KeyN | KeyCode::Backspace | KeyCode::Digit2 | KeyCode::Numpad2 => self.quit_asked = false,
+            _ => {}
+        }
+    }
+
+    /// The exit question over everything.
+    fn draw_quit(&self, c: &mut Canvas) {
+        if !self.quit_asked {
+            return;
+        }
+        let w = c.width;
+        c.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
+        let (bw, bh) = (300.0f32.min(w - 32.0), 100.0);
+        let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
+        c.round_rect(x, y, bw, bh, 10.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
+        c.text_centered(w / 2.0, y + 18.0, 12.0, rgba(0xffffff, 1.0), "Exit taiko.rs?");
+        let gap = 10.0;
+        let button = (bw - 36.0 - gap) / 2.0;
+        c.button(x + 18.0, y + 56.0, button, 26.0, "1. Exit  (Enter)", 9.0, render::Hit::Key(KeyCode::KeyY), true);
+        c.button(x + 18.0 + button + gap, y + 56.0, button, 26.0, "2. Stay  (Esc)", 9.0, render::Hit::Key(KeyCode::KeyN), false);
+    }
+
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        if self.quit_asked {
+            if !repeat {
+                self.quit_key(code);
+            }
+            return;
+        }
         let pressed = keys::Chord { key: code, ctrl: self.modifiers_ctrl, shift: self.modifiers_shift, alt: self.modifiers_alt };
         match self.hotkey_place(code).map(|place| self.cfg.hotkeys.resolve(pressed, place)) {
             None | Some(keys::Resolved::Same) => self.key_inner(code, repeat, text, at, window),
@@ -5520,6 +6415,12 @@ impl State {
     }
 
     fn key_inner(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        if self.quit_asked {
+            if !repeat {
+                self.quit_key(code);
+            }
+            return;
+        }
         self.refresh_play_offset();
         if let Some(s) = &mut self.splash {
             // Any key skips the splash and does nothing else.
@@ -5709,13 +6610,14 @@ impl State {
             && matches!(self.scene, Scene::Select)
             && code == KeyCode::Escape
             && self.select.filter.is_empty()
+            && !self.select.searching
         {
             self.scene = Scene::Lobby;
             return;
         }
         if self.picking_lobby_map && matches!(self.scene, Scene::Select) && !repeat {
             match code {
-                KeyCode::Escape if self.select.filter.is_empty() => {
+                KeyCode::Escape if self.select.filter.is_empty() && !self.select.searching => {
                     self.picking_lobby_map = false;
                     self.scene = Scene::Lobby;
                     return;
@@ -5755,6 +6657,13 @@ impl State {
             return;
         }
         match &mut self.scene {
+            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyF => self.select.searching = true,
+            // In the search box the keys that have a job here otherwise (speed's [ and ]) type.
+            Scene::Select if self.select.searching && !self.modifiers_ctrl && matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) => {
+                if let Some(text) = text {
+                    self.select.type_text(text, &self.library);
+                }
+            }
             Scene::Select if self.modifiers_shift && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) && !self.picking_lobby_map => {
                 self.play_from_marker();
             }
@@ -5765,6 +6674,11 @@ impl State {
                 self.cycle_sort(dir);
             }
             Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyL => self.open_collections(),
+            Scene::Select if self.modifiers_ctrl && self.modifiers_shift && code == KeyCode::KeyU => {
+                if let Some(i) = self.select.selected() {
+                    self.update_set(i);
+                }
+            }
             Scene::Select if code == KeyCode::F2 => {
                 if self.modifiers_shift {
                     self.select.random_back();
@@ -5795,7 +6709,7 @@ impl State {
                 SelectAction::Play(i) => self.start_loading(i),
                 SelectAction::Settings => self.open_settings(),
                 SelectAction::Mods => self.open_mod_select(),
-                SelectAction::Quit => self.quit = true,
+                SelectAction::Quit => self.ask_quit(),
                 SelectAction::None => {
                     if let Some(text) = text {
                         self.select.type_text(text, &self.library);
@@ -5824,6 +6738,9 @@ impl State {
                 KeyCode::KeyR if self.modifiers_ctrl => self.restart_map(),
                 _ => {}
             },
+            Scene::Results { results, .. } if matches!(code, KeyCode::ArrowDown | KeyCode::ArrowUp | KeyCode::PageDown | KeyCode::PageUp | KeyCode::Home | KeyCode::End) => {
+                results.scroll(matches!(code, KeyCode::ArrowDown | KeyCode::PageDown | KeyCode::End));
+            }
             Scene::Results { .. } if code == KeyCode::KeyR && self.modifiers_ctrl => self.restart_map(),
             Scene::Results { results, .. } if code == KeyCode::KeyV && results.replay.is_some() => {
                 if let Some(file) = results.replay.clone() {
@@ -5924,7 +6841,7 @@ impl State {
             let in_menu = in_menu && self.splash.is_none();
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.play_offset, rate);
             self.stars.poll();
-            self.stars.set_mods(self.cfg.mods);
+            self.stars.set_mods(self.cfg.mods, self.cfg.scroll_speed);
             let play_rate = self.play_speed().0;
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
                 self.stars.request(i, &self.library[i].path, play_rate);
@@ -5949,7 +6866,13 @@ impl State {
 
         }
         self.poll_multiplayer();
+        self.track_play();
+        if self.cfg.check_updates {
+            self.updater.check_every(UPDATE_CHECK_EVERY);
+        }
         self.poll_downloads();
+        self.poll_score_link();
+        self.poll_set_check(now);
         self.poll_sorting();
         self.update_presence();
         if let Some(ex) = &self.export {
@@ -5971,6 +6894,9 @@ impl State {
         self.browse.poll(now);
         let mut next: Option<Scene> = None;
         let mut capture: Option<String> = None;
+        if std::mem::take(&mut self.screenshot_due) {
+            capture = Some(SCREENSHOT.to_string());
+        }
         let preview_target = self.preview_target();
         let lobby_download = self.lobby_download_status();
         let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
@@ -6084,14 +7010,24 @@ impl State {
                 };
                 let (stars, rate) = (&self.stars, self.play_speed().0);
                 self.select.instant = self.right_scroll || self.scrollbar_drag;
+                self.select.list_share = self.cfg.song_list_share;
                 self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate));
-                let x = 24.0 + Select::list_width(canvas.width) + 12.0;
+                let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
+                let x = 24.0 + lw + 12.0;
                 let pw = canvas.width - x - 24.0;
+                self.board_rect = None;
+                self.preview.size = self.cfg.song_preview_size;
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
+                self.preview.potential = match self.select.selected() {
+                    Some(i) => self.potentials.get(&self.library[i].path, rate, self.cfg.mods, self.cfg.scroll_speed),
+                    None => None,
+                };
                 self.leaderboard.clear();
                 if pw > 160.0 {
                     let status = self.select.selected().and_then(|i| self.map_status(i));
-                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, 380.0, self.cfg.scroll_speed, selected_stars, Some(("Play from", "Shift+Enter")), status) {
+                    // No taller than leaves the leaderboard three rows (its tabs, rows and gaps).
+                    let panel_h = 436.0 - 54.0 - 8.0 - (16.0 + 3.0 * 18.0 + 14.0);
+                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, panel_h, self.cfg.scroll_speed, selected_stars, Some(("Play from", "Shift+Enter")), status) {
                         self.frame_clip = Some(clip);
                     }
                     if let Some(i) = self.select.selected() {
@@ -6099,22 +7035,43 @@ impl State {
                         let fits = ((436.0 - top - 16.0) / 18.0).floor().max(0.0) as usize;
                         if fits > 0 {
                             let hash = self.library[i].hash();
+                            if self.board_for != (hash, self.board_online) {
+                                self.board_for = (hash, self.board_online);
+                                self.board_scroll = 0;
+                            }
+                            self.board_rect = Some([x, top + 12.0, pw, fits as f32 * 18.0]);
                             if self.board_online {
                                 let board = self.online_board(hash).cloned();
-                                draw_online_leaderboard(canvas, x, top, pw, board.as_ref(), &self.cfg.online_user, fits);
+                                let total = board.as_ref().and_then(|b| b.as_ref().ok()).map_or(0, Vec::len);
+                                self.board_max = total.saturating_sub(fits);
+                                self.board_scroll = self.board_scroll.min(self.board_max);
+                                draw_online_leaderboard(canvas, x, top, pw, board.as_ref(), &self.cfg.online_user, fits, self.board_scroll);
                                 self.online_leaderboard = match board {
-                                    Some(Ok(rows)) => rows.into_iter().take(fits).collect(),
+                                    Some(Ok(rows)) => rows.into_iter().skip(self.board_scroll).take(fits).collect(),
                                     _ => Vec::new(),
                                 };
                             } else {
-                                let rows = scores::top(&self.scores, hash, fits);
+                                let all = scores::top(&self.scores, hash, usize::MAX);
+                                self.board_max = all.len().saturating_sub(fits);
+                                self.board_scroll = self.board_scroll.min(self.board_max);
+                                let rows: Vec<&scores::ScoreRow> = all.iter().skip(self.board_scroll).take(fits).copied().collect();
                                 self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
-                                draw_leaderboard(canvas, x, top, pw, &rows, scores::total_pp(&self.scores));
+                                draw_leaderboard(canvas, x, top, pw, &rows, self.board_scroll, all.len());
                             }
                         }
+                        // The panel's bottom edge: dragged up, the preview shrinks and the
+                        // leaderboard gets more rows.
+                        let dragging = matches!(self.split_drag, Some((render::Hit::SplitPreview, ..)));
+                        draw_divider(canvas, [x, self.preview.panel_bottom + 1.0, pw, 6.0], false, dragging, render::Hit::SplitPreview);
                     }
+                    // The song list's right edge.
+                    let dragging = matches!(self.split_drag, Some((render::Hit::SplitList, ..)));
+                    draw_divider(canvas, [24.0 + lw + 2.0, 54.0, 8.0, 382.0], true, dragging, render::Hit::SplitList);
                 }
-                if self.picking_lobby_map {
+                let guessing = self.mp.as_ref().is_some_and(|s| s.mapguessr);
+                if let Some(g) = self.guessr.as_mut().filter(|_| self.picking_lobby_map && guessing) {
+                    mapguessr::draw_picking(canvas, g, self.cfg.scroll_speed, Instant::now());
+                } else if self.picking_lobby_map {
                     let w = canvas.width;
                     canvas.round_rect(24.0, 438.0, w - 48.0, 34.0, 8.0, rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0), rgba(accent(), 1.0), 1.5);
                     canvas.text_centered(w / 2.0, 450.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, w - 64.0, "Picking the lobby map: Enter to choose, Esc to cancel"));
@@ -6127,14 +7084,22 @@ impl State {
                 match rx.try_recv() {
                     Ok(Ok((map, track))) => {
                         let mods = std::mem::take(&mut self.pending_mods);
-                        let mut game = Game::with_mods(map, track, self.audio.as_ref(), mods);
-                        game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods);
+                        // Random: the replay's colouring, else a new one each play.
+                        let seed = match &self.pending_replay {
+                            Some(r) => r.seed,
+                            None if mods.has(mods::Mod::Random) => fresh_seed(),
+                            None => 0,
+                        };
+                        let mut game = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
+                        game.scroll_speed = self.cfg.scroll_speed;
+                        game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods, game.scroll_speed);
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
                         match self.pending_replay.take() {
                             Some(r) => {
                                 game.mash = r.mash();
+                                game.scroll_speed = r.scroll_speed;
                                 game.replay_of = Some(r.player.clone());
                                 game.banner = Some(format!("REPLAY  -  {}", r.player));
                                 game.replay = Some((r.inputs, 0));
@@ -6180,7 +7145,7 @@ impl State {
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
-                    game.draw_playfield(c, self.cfg.scroll_speed);
+                    game.draw_playfield(c, game.scroll_speed);
                 });
                 game.draw_hud(canvas);
                 if game.replay.is_some() && game.paused.is_none() {
@@ -6193,7 +7158,7 @@ impl State {
                     }
                 }
                 if done {
-                    let title = results_title(&game.map.meta, game.rate, game.mods, *from);
+                    let title = results_title(&game.map.meta, *from);
                     let failed = game.failed();
                     if game.failed_early() {
                         if let Some(a) = &self.audio {
@@ -6202,6 +7167,7 @@ impl State {
                         self.preview.invalidate_audio();
                     }
                     let mut results = Results::new(title, game.stats.clone(), game.windows);
+                    results.set_mods(game.mods, game.rate);
                     results.watched = game.replay_of.clone();
                     results.failed = failed;
                     // The song plays on under the results (not after a fail that stopped it),
@@ -6219,6 +7185,7 @@ impl State {
                         max_combo: game.stats.max_combo,
                         rate: game.rate,
                         mods: game.mods,
+                        scroll_speed: game.scroll_speed,
                     };
                     results.no_pp = if game.mods.unranked() {
                         Some("Autoplay and Relax get no pp")
@@ -6226,6 +7193,8 @@ impl State {
                         Some("failed plays get no pp")
                     } else if from.is_some() {
                         Some("plays from a start point get no pp")
+                    } else if map_gives_pp(&self.library[*entry], &self.set_status, &self.db_status, &self.select.server_loved) == Some(false) {
+                        Some("only ranked and loved maps give pp")
                     } else {
                         results.job = Some(results_job(e.path.clone(), play, None, None));
                         None
@@ -6245,6 +7214,7 @@ impl State {
                             keep_pitch: self.cfg.rate_keep_pitch,
                             anti_mash: true,
                             mods: game.mods.list(),
+                            scroll_speed: game.scroll_speed,
                             score: st.score,
                             accuracy: st.accuracy(),
                             max_combo: st.max_combo,
@@ -6253,9 +7223,10 @@ impl State {
                             miss: st.miss,
                             ur: st.unstable_rate(),
                             inputs: std::mem::take(&mut game.inputs),
+                            seed: game.seed,
                         };
                         let pp = pp::play_pp(&e.path, &replay.pp_play());
-                        results.pp = pp;
+                        results.pp = pp.filter(|_| results.no_pp.is_none());
                         if pp.is_none() && results.no_pp.is_none() {
                             results.no_pp = Some("the map couldn't be rated");
                         }
@@ -6272,6 +7243,9 @@ impl State {
                                     from: None,
                                     set_id: m.set_id,
                                     mods: replay.mods.clone(),
+                                    multiverse: None,
+                                    shapeshift: None,
+                                    seed: (replay.seed != 0).then_some(replay.seed),
                                 },
                                 score: replay.score,
                                 accuracy: replay.accuracy,
@@ -6284,19 +7258,19 @@ impl State {
                                 replay_version: replay.version,
                                 inputs: replay.inputs.clone(),
                                 stars: stars::star_rating(&e.path, replay.rate),
+                                scroll_speed: Some(replay.scroll_speed),
+                                play_ms: Some(game.played_ms as u64),
                             };
                             self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
+                            // Counted with the play itself.
+                            self.playing = None;
+                            results.total_due = true;
                             self.online_boards.remove(&replay.map_hash);
                         }
-                        let before = scores::total_pp(&self.scores);
                         match scores::save(&replay, pp) {
                             Ok(row) => {
                                 results.replay = Some(row.file.clone());
                                 self.scores.push(row);
-                                if pp.is_some() {
-                                    let after = scores::total_pp(&self.scores);
-                                    results.total = Some(ui::Total { before: Some(before), after, rank: None, online: false });
-                                }
                                 let all = scores::top(&self.scores, replay.map_hash, usize::MAX);
                                 let rank = all.iter().position(|r| r.date == replay.date && r.score == replay.score).map(|p| p + 1);
                                 results.rank = rank.map(|r| (r, all.len()));
@@ -6309,6 +7283,7 @@ impl State {
             }
             Scene::Results { results, .. } => {
                 results.poll();
+                results.animate(canvas.dt_ms);
                 // Back to the preview point when the song ends, like osu!.
                 if let (Some((track, again)), Some(a)) = (&results.music, &self.audio) {
                     let end = track.frames() as f64 / a.rate as f64 * 1000.0;
@@ -6321,7 +7296,8 @@ impl State {
             Scene::Download => {
                 let installed = self.installed_sets.take().unwrap_or_default();
                 let dir = self.songs_dir.display().to_string();
-                let lw = Select::list_width(canvas.width);
+                let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
+                self.preview.size = self.cfg.song_preview_size;
                 self.browse.draw(canvas, &self.downloads, &installed, &dir, lw);
                 self.installed_sets = Some(installed);
                 // The selected set's preview, like song select's.
@@ -6368,6 +7344,11 @@ impl State {
                 multiplayer::draw_menu(canvas, &self.mp_menu, &self.cfg.mp_name, self.cfg.mp_port, &self.cfg.mp_address, &self.cfg.online_server, &self.mp_status, self.mp_connecting.is_some());
             }
             Scene::Lobby => match &self.mp {
+                Some(s) if s.mapguessr => {
+                    if let Some(g) = &mut self.guessr {
+                        mapguessr::draw_lobby(canvas, s, g, self.cfg.scroll_speed, Instant::now());
+                    }
+                }
                 Some(s) => {
                     multiplayer::draw_lobby(canvas, s, s.have_map, lobby_download);
                 }
@@ -6396,9 +7377,14 @@ impl State {
                 }
                 if start.is_some_and(|at| now >= at) {
                     if let Some((map, track)) = loaded.take() {
-                        let mut game = Game::with_mods(map, track, self.audio.as_ref(), self.pending_mods);
+                        let seed = self.mp.as_ref().and_then(|s| s.map.as_ref()).and_then(|m| m.seed).unwrap_or(0);
+                        let mut game = Game::with_seed(map, track, self.audio.as_ref(), self.pending_mods, seed);
+                        game.scroll_speed = self.cfg.scroll_speed;
                         if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
-                            game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods);
+                            game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, game.scroll_speed);
+                        }
+                        if let Some(m) = self.mp.as_ref().and_then(|s| s.map.as_ref()) {
+                            use_mod_settings(&mut game, m);
                         }
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
@@ -6427,10 +7413,10 @@ impl State {
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
-                    game.draw_playfield(c, self.cfg.scroll_speed);
+                    game.draw_playfield(c, game.scroll_speed);
                 });
                 game.draw_hud(canvas);
-                if let Some(s) = mp {
+                if let Some(s) = mp.as_ref().filter(|_| self.cfg.mp_scoreboard && !hidden.has(hud::Part::Scoreboard)) {
                     multiplayer::draw_scoreboard(canvas, s, &live);
                 }
                 if let Some(s) = &mut self.mp {
@@ -6483,7 +7469,10 @@ impl State {
                         let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
                         audio.play(track.clone(), first_ms + behind);
                         for (k, (id, name)) in v.players.iter().enumerate() {
-                            let mut g = Game::with_mods(map.clone(), track.clone(), None, v.mods);
+                            // The lobby's speed mods, and the player's own others.
+                            let own = self.mp.as_ref().and_then(|s| s.players.iter().find(|p| p.id == *id)).map(|p| Mods::from_list(&p.mods).free()).unwrap_or(Mods::NONE);
+                            let mut g = Game::with_seed(map.clone(), track.clone(), None, v.mods.shared().plus(own), v.map.seed.unwrap_or(0));
+                            use_mod_settings(&mut g, &v.map);
                             if let Some(t) = v.from {
                                 g.skip_to(t);
                             }
@@ -6517,7 +7506,11 @@ impl State {
                         g.draw_hud(canvas);
                         canvas.text_centered(canvas.width / 2.0, 470.0, 7.0, rgba(0x9a9ab0, 1.0), "Left/Right: other player   A: everyone   Esc: leave");
                     }
-                    _ if !v.games.is_empty() => draw_spectate_all(canvas, &mut v.games, &v.players, scroll),
+                    _ if !v.games.is_empty() => {
+                        let dt = v.zones_at.map_or(0.0, |at| now.saturating_duration_since(at).as_secs_f32());
+                        v.zones_at = Some(now);
+                        draw_spectate_all(canvas, &mut v.games, &v.players, scroll, &mut v.zones, dt);
+                    }
                     _ => {}
                 }
             }
@@ -6648,7 +7641,7 @@ impl State {
             self.readout_rect = None;
         }
         if let Some(cur) = self.mod_select {
-            ui::draw_mod_select(canvas, self.cfg.mods, self.cfg.favourite_mods, cur);
+            ui::draw_mod_select(canvas, self.shown_mods(), self.cfg.favourite_mods, cur);
             if let Some(setup) = &self.universe_setup {
                 setup.draw(canvas, &self.cfg.universes, &self.cfg.universe_presets, game::FIRST_FOCUS);
             }
@@ -6766,6 +7759,7 @@ impl State {
         }
         self.draw_update(canvas);
         self.draw_drag_hover(canvas, now);
+        self.draw_quit(canvas);
         if self.splash.is_some() {
             let boot = self.boot_log();
             // Some window managers never report focus: don't wait forever.
@@ -6789,7 +7783,7 @@ impl State {
         let audio = self.audio.as_ref().map(|a| a.description.clone()).unwrap_or_else(|| "none (silent)".into());
         let skin = if self.cfg.skin.is_empty() { "built-in" } else { &self.cfg.skin };
         vec![
-            format!("taiko-rs {}", env!("CARGO_PKG_VERSION")),
+            format!("taiko.rs {}", env!("CARGO_PKG_VERSION")),
             format!("gpu    {}", self.adapter),
             format!("audio  {audio}"),
             songs,
@@ -7003,7 +7997,7 @@ impl State {
                     self.me = Some((pp, rank));
                     if let Scene::Results { results, .. } = &mut self.scene {
                         if results.opened.is_none() && results.replay.is_some() {
-                            results.total = Some(ui::Total { before, after: pp, rank, online: true });
+                            results.total = Some(ui::Total { before, after: pp, rank });
                         }
                     }
                     let place = map_rank.map(|r| format!("#{r} on this map")).unwrap_or_else(|| "sent (not your best here)".into());
@@ -7096,24 +8090,152 @@ impl State {
         let mut finished = Vec::new();
         self.downloads.retain(|job| match job.rx.try_recv() {
             Ok(result) => {
-                finished.push((job.set.clone(), result));
+                finished.push((job.set.clone(), job.update, result));
                 false
             }
             Err(mpsc::TryRecvError::Empty) => true,
             Err(mpsc::TryRecvError::Disconnected) => {
-                finished.push((job.set.clone(), Err("download stopped".into())));
+                finished.push((job.set.clone(), job.update, Err("download stopped".into())));
                 false
             }
         });
-        for (set, result) in finished {
+        for (set, update, result) in finished {
             match result {
+                Ok(folder) if update => self.add_updated(&set, &folder),
                 Ok(folder) => self.add_downloaded(&set, &folder),
                 Err(e) => {
+                    if update {
+                        self.select.updates.insert(set.id, ui::SetUpdate::Unknown);
+                    }
                     eprintln!("download {} failed: {e}", set.id);
                     self.toast(format!("download failed: {}", e.chars().take(80).collect::<String>()));
                 }
             }
         }
+    }
+
+    /// Song select: once the selection has rested on a song for a moment, asks a mirror whether
+    /// osu! has a newer version of its set (each set once a session; not while scrolling past).
+    fn poll_set_check(&mut self, now: Instant) {
+        if let Some((id, rx)) = &self.set_check {
+            let id = *id;
+            let state = match rx.try_recv() {
+                Ok(Ok(true)) => ui::SetUpdate::Available,
+                Ok(Ok(false)) => ui::SetUpdate::UpToDate,
+                Ok(Err(e)) => {
+                    eprintln!("checking set {id} for updates: {e}");
+                    ui::SetUpdate::Unknown
+                }
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => ui::SetUpdate::Unknown,
+            };
+            self.set_check = None;
+            // An update started meanwhile keeps its state.
+            self.select.updates.entry(id).and_modify(|s| if *s == ui::SetUpdate::Checking { *s = state }).or_insert(state);
+        }
+        if !self.cfg.check_updates || !matches!(self.scene, Scene::Select) {
+            self.set_check_due = None;
+            return;
+        }
+        let Some(entry) = self.select.selected() else { return };
+        let Some(id) = self.library[entry].set_id() else { return };
+        if self.select.updates.contains_key(&id) {
+            return;
+        }
+        match self.set_check_due {
+            Some((due, since)) if due == id => {
+                if self.set_check.is_some() || now.saturating_duration_since(since) < Duration::from_millis(800) {
+                    return;
+                }
+            }
+            _ => {
+                self.set_check_due = Some((id, now));
+                return;
+            }
+        }
+        // The set's difficulties here: beatmap ID and the MD5 osu! knows each version by.
+        let folder = self.library[entry].path.parent().map(|p| p.to_path_buf());
+        let maps: Vec<(Option<u32>, PathBuf)> = self
+            .library
+            .iter()
+            .filter(|e| e.set_id() == Some(id) && e.path.parent() == folder.as_deref() && !self.select.gone.contains(&e.path))
+            .map(|e| (e.meta.beatmap_id, e.path.clone()))
+            .collect();
+        self.select.updates.insert(id, ui::SetUpdate::Checking);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = download::set_checksums(id).map(|online| {
+                let here: Vec<(Option<u32>, String)> = maps.iter().filter_map(|(bid, p)| Some((*bid, download::md5_hex(&std::fs::read(p).ok()?)))).collect();
+                download::outdated(&here, &online)
+            });
+            let _ = tx.send(result);
+        });
+        self.set_check = Some((id, rx));
+    }
+
+    /// Downloads the newest version of map `entry`'s set into its folder: the set's own
+    /// difficulties are replaced, home-made ones (no beatmap ID) stay.
+    fn update_set(&mut self, entry: usize) {
+        let e = &self.library[entry];
+        let (Some(id), Some(folder)) = (e.set_id(), e.path.parent().map(|p| p.to_path_buf())) else {
+            self.toast("this map has no osu! set ID to update it by".into());
+            return;
+        };
+        if self.downloads.iter().any(|j| j.set.id == id) {
+            return;
+        }
+        let replaced: Vec<PathBuf> = self
+            .library
+            .iter()
+            .filter(|m| m.path.parent() == Some(folder.as_path()) && m.meta.beatmap_id.is_some() && m.set_id() == Some(id) && !self.select.gone.contains(&m.path))
+            .map(|m| m.path.clone())
+            .collect();
+        let set = download::SetInfo {
+            id,
+            artist: e.meta.artist.clone(),
+            title: e.meta.title.clone(),
+            creator: e.meta.creator.clone(),
+            status: String::new(),
+            diffs: Vec::new(),
+            play_count: 0,
+            favourite_count: 0,
+            rating: 0.0,
+            ranked_date: String::new(),
+        };
+        self.toast(format!("updating {} - {}...", set.artist, set.title));
+        self.select.updates.insert(id, ui::SetUpdate::Updating);
+        self.downloads.push(download::start_update(set, folder, replaced));
+    }
+
+    /// A set downloaded again (see `update_set`): its difficulties in the library are read anew in
+    /// place (indices stay valid), ones it no longer has leave the list, new ones join it.
+    fn add_updated(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
+        let mut fresh: std::collections::HashMap<PathBuf, Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0)).into_iter().map(|e| (e.path.clone(), e)).collect();
+        let mut changed = Vec::new();
+        for (i, e) in self.library.iter_mut().enumerate() {
+            if e.path.parent() != Some(folder) {
+                continue;
+            }
+            match fresh.remove(&e.path) {
+                Some(new) => {
+                    *e = new;
+                    self.select.gone.remove(&e.path);
+                    changed.push((i, e.path.clone(), e.modified, e.size));
+                }
+                None => {
+                    self.select.gone.insert(e.path.clone());
+                }
+            }
+        }
+        if let Some(info) = &self.mapinfo {
+            info.extend(changed);
+            self.mapinfo_sorted = false;
+        }
+        let mut added: Vec<Entry> = fresh.into_values().collect();
+        added.sort_by(|a, b| a.path.cmp(&b.path));
+        self.append_maps(added);
+        self.select.updates.insert(set.id, ui::SetUpdate::UpToDate);
+        self.toast(format!("updated {} - {}", set.artist, set.title));
     }
 
     /// Adds a freshly downloaded set to the library (appended, so existing indices stay valid).
@@ -7225,6 +8347,10 @@ impl State {
 
     fn click(&mut self, hit: render::Hit, window: Option<&Window>) {
         use render::Hit;
+        // The exit question takes only its own buttons.
+        if self.quit_asked && !matches!(hit, Hit::Key(KeyCode::KeyY | KeyCode::KeyN)) {
+            return;
+        }
         match hit {
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
@@ -7241,6 +8367,7 @@ impl State {
                 }
             }
             Hit::SocialToggle => self.toggle_social(),
+            Hit::ChatMap(set) => self.open_chat_map(set),
             // Tapped: brings up the on-screen keyboard (`keyboard_tap`); the keys type there anyway.
             Hit::SocialPanel | Hit::TextField => {}
             Hit::SocialTab(tab) => {
@@ -7302,6 +8429,8 @@ impl State {
                 None => self.goto_tab(2),
             },
             Hit::Overlay => {}
+            // Dragged (`mouse_button`).
+            Hit::SplitList | Hit::SplitPreview => {}
             Hit::ScoreVideo(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
                     self.open_video_editor(&file);
@@ -7330,6 +8459,7 @@ impl State {
                 self.download_key(KeyCode::Enter, None, window);
             }
             Hit::SongHeader(row) => self.click(Hit::SongRow(row), window),
+            Hit::SectionHeader(s) => self.select.click_section(s),
             Hit::ModsButton => self.open_mod_select(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
@@ -7366,9 +8496,19 @@ impl State {
                 let action = multiverse::Setup::delete(&mut self.cfg.universe_presets, i);
                 self.universe_action(action);
             }
+            Hit::UpdateSet(i) => self.update_set(i),
             Hit::SongMenu(k) => {
                 let action = self.select.menu_items(&self.library).get(k).map(|(_, a)| *a);
-                if let Some(what) = action.and_then(|a| self.select.hide(a, &self.library)) {
+                if let Some(ui::MenuAction::Love(set, loved)) = action {
+                    self.select.menu = None;
+                    self.toast(format!("{} set {set} on taiko.rs...", if loved { "loving" } else { "unloving" }));
+                    self.call_loved(Some((set, loved)));
+                } else if action == Some(ui::MenuAction::UpdateSong) {
+                    if let Some(i) = self.select.menu_map() {
+                        self.update_set(i);
+                    }
+                    self.select.menu = None;
+                } else if let Some(what) = action.and_then(|a| self.select.hide(a, &self.library)) {
                     self.toast(format!("hid {what}: Settings > Hidden maps brings it back"));
                 }
             }
@@ -7397,6 +8537,47 @@ impl State {
             }
         }
     }
+}
+
+/// Rounds of asking the server about statuses it didn't have yet, and the wait between them.
+const STATUS_ROUNDS: usize = 60;
+const STATUS_ROUND_SECS: u64 = 45;
+
+/// Frames per second drawn while the window doesn't have the focus.
+const UNFOCUSED_FPS: u32 = 30;
+
+/// The capture name of an F12 screenshot (scripted runs name theirs).
+const SCREENSHOT: &str = "screenshot";
+
+/// Puts an F12 screenshot on the clipboard, saves it as the next free `taiko-rs-N.png` in the
+/// Screenshots folder, or both (`cfg.screenshot_to`), off the render thread (the encoding takes
+/// a moment), and says where it went.
+fn save_screenshot(state: &Arc<Mutex<State>>, w: u32, h: u32, rgb: Vec<u8>) {
+    let state = state.clone();
+    std::thread::spawn(move || {
+        let to = lock(&state).cfg.screenshot_to;
+        let copied = to.clipboard() && clipboard::set_image(w, h, &rgb);
+        let text = if !to.folder() {
+            if copied { "screenshot copied".to_string() } else { "screenshot failed: no clipboard to copy to".to_string() }
+        } else {
+            let saved = (|| {
+                let dir = config::own_dir("Screenshots").ok_or("no folder to keep screenshots in")?;
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let path = (1..).map(|n| dir.join(format!("taiko-rs-{n}.png"))).find(|p| !p.exists()).unwrap();
+                image::save_buffer(&path, &rgb, w, h, image::ColorType::Rgb8).map_err(|e| e.to_string())?;
+                Ok::<_, String>(path)
+            })();
+            match saved {
+                Ok(path) => {
+                    let name = path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
+                    format!("screenshot {}saved: Screenshots/{name}", if copied { "copied and " } else { "" })
+                }
+                Err(e) => format!("screenshot {}failed: {e}", if copied { "copied, saving " } else { "" }),
+            }
+        };
+        eprintln!("{text}");
+        lock(&state).toast = Some(Toast { text, until: Instant::now() + Duration::from_millis(4000) });
+    });
 }
 
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -7437,6 +8618,9 @@ enum UserEvent {
     /// Android: the on-screen keyboard typed something (or came up or went away).
     #[cfg(target_os = "android")]
     Typed(android::Typed),
+    /// A `taiko-rs://` link opened while the game runs (`link::listen`).
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    Link(link::Link),
 }
 
 /// Files dragged over the window, or dropped on it.
@@ -7636,7 +8820,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             }
         }
         if let (Some(name), Some((w, h, rgb))) = (capture, shot) {
-            if let Some(dir) = lock(&state).shots.as_ref().map(|p| p.dir.clone()) {
+            if name == SCREENSHOT {
+                save_screenshot(&state, w, h, rgb);
+            } else if let Some(dir) = lock(&state).shots.as_ref().map(|p| p.dir.clone()) {
                 let path = dir.join(name);
                 match debug::write_png(&path, w, h, &rgb) {
                     Ok(()) => eprintln!("saved {}", path.display()),
@@ -7696,7 +8882,7 @@ impl App {
             }
         }
         match event {
-            WindowEvent::CloseRequested => lock(&self.state).quit = true,
+            WindowEvent::CloseRequested => lock(&self.state).ask_quit(),
             WindowEvent::HoveredFile(_) => lock(&self.state).file_drag(FileDrag::Hover),
             WindowEvent::HoveredFileCancelled => lock(&self.state).file_drag(FileDrag::Left),
             WindowEvent::DroppedFile(path) => lock(&self.state).file_drag(FileDrag::Drop(vec![path])),
@@ -7869,7 +9055,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
         let mut attrs = Window::default_attributes()
-            .with_title("taiko-rs")
+            .with_title("taiko.rs")
             .with_window_icon(logo::window_icon())
             .with_min_inner_size(winit::dpi::LogicalSize::new(MIN_WINDOW.0, MIN_WINDOW.1))
             .with_fullscreen(lock(&self.state).cfg.fullscreen.then_some(Fullscreen::Borderless(None)));
@@ -7969,6 +9155,13 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Stopped => event_loop.exit(),
             UserEvent::FileDrag(drag) => lock(&self.state).file_drag(drag),
             UserEvent::WindowRequest => self.apply_window_request(),
+            UserEvent::Link(link) => {
+                lock(&self.state).open_link(link);
+                if let Some(w) = &self.window {
+                    w.set_minimized(false);
+                    w.focus_window();
+                }
+            }
             #[cfg(target_os = "android")]
             UserEvent::Typed(typed) => lock(&self.state).soft_keyboard(typed, self.window.as_deref()),
             UserEvent::HideCursor(hide) => {
@@ -8022,6 +9215,7 @@ impl State {
         let library = Vec::new();
         let mut select = Select::new(&library);
         let (set_status_tx, set_status_rx) = mpsc::channel();
+        let status_cache = setstatus::Cache::load();
         select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
         select.mods_label = cfg.mods.label();
         select.played = load_plays();
@@ -8056,6 +9250,8 @@ impl State {
             hits: Vec::new(),
             browse: browse::Browse::default(),
             downloads: Vec::new(),
+            set_check: None,
+            set_check_due: None,
             #[cfg(target_os = "android")]
             imports_checked: Instant::now(),
             #[cfg(target_os = "android")]
@@ -8063,6 +9259,7 @@ impl State {
             songs_dir,
             installed_sets: None,
             lobby_lookup: None,
+            score_link: None,
             preview_remote: false,
             host_transfer: None,
             scores: scores::load_index(),
@@ -8083,6 +9280,12 @@ impl State {
             universe_setup: None,
             shapeshift_setup: None,
             leaderboard: Vec::new(),
+            board_scroll: 0,
+            board_for: (0, false),
+            board_max: 0,
+            board_rect: None,
+            split_drag: None,
+            split_click: None,
             online_leaderboard: Vec::new(),
             export: None,
             video_status: String::new(),
@@ -8102,9 +9305,17 @@ impl State {
             song_dirs,
             osudb_rx: None,
             db_status: Default::default(),
-            set_status: Default::default(),
+            set_status: status_cache.iter().map(|(set, status)| (set, Some(status.to_string()))).collect(),
+            status_cache,
+            status_saved: Instant::now(),
+            status_resorted: Instant::now(),
+            status_new: false,
+            status_sweep_due: None,
             set_status_tx,
             set_status_rx,
+            loved_call: None,
+            loved_asked: false,
+            playing: None,
             status_wait: None,
             scene_kind: None,
             scene_since: Instant::now(),
@@ -8114,6 +9325,8 @@ impl State {
             pending_screen_shots: vec!["select", "results"],
             exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
             quit: false,
+            quit_asked: false,
+            screenshot_due: false,
             smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
             frame_acquired: None,
             pace_shift_ms: 0.0,
@@ -8136,6 +9349,7 @@ impl State {
             mp_menu: multiplayer::Menu::default(),
             mp_status: String::new(),
             picking_lobby_map: false,
+            guessr: None,
             discord: None,
             map_offsets: config::load_map_offsets(),
             play_offset: 0.0,
@@ -8162,6 +9376,7 @@ impl State {
             mouse_moved_at: Instant::now(),
             preview: preview::Preview::default(),
             stars: stars::Stars::default(),
+            potentials: pp::Potentials::default(),
             bg_brightness: 0.0,
             resolutions: Vec::new(),
             monitor_modes: Vec::new(),
@@ -8196,8 +9411,15 @@ pub fn desktop_main() {
     let mut args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let auto = args.iter().any(|a| a == "--auto");
     args.retain(|a| a != "--auto");
+    // A `taiko-rs://` link (a score's "Watch replay" button): the running game opens it, else
+    // this one does.
+    let link = args.iter().find_map(|a| link::parse(&a.to_string_lossy()));
+    args.retain(|a| link::parse(&a.to_string_lossy()).is_none());
+    if link.is_some_and(link::forward) {
+        return;
+    }
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu]...");
+        println!("usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu | taiko-rs://score/<id>]...");
         println!("       taiko-rs --info file.osu...   print converted map stats");
         println!("With no arguments, scans osu! stable install locations and `songs =` lines in the config.");
         return;
@@ -8209,7 +9431,15 @@ pub fn desktop_main() {
         return;
     }
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
-    run(cfg, args, auto, event_loop);
+    // Scripted runs (tests) neither take links nor become their handler.
+    if std::env::var_os("TAIKO_SHOTS").is_none() && std::env::var_os("TAIKO_INPUT").is_none() {
+        let proxy = event_loop.create_proxy();
+        link::listen(move |l| {
+            let _ = proxy.send_event(UserEvent::Link(l));
+        });
+        link::register();
+    }
+    run(cfg, args, auto, link, event_loop);
 }
 
 /// Android entry point (the native activity's `android_main`): no command line, the app's own
@@ -8222,12 +9452,12 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     let cfg = Config::load();
     let event_loop = EventLoop::<UserEvent>::with_user_event().with_android_app(app).build().expect("event loop");
     android::set_proxy(event_loop.create_proxy());
-    run(cfg, Vec::new(), false, event_loop);
+    run(cfg, Vec::new(), false, None, event_loop);
 }
 
 /// Scans the library, opens audio and runs the game until it quits. `args`: songs folders, map
-/// folders, .osz or a single .osu to play; empty = the usual song folders.
-fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEvent>) {
+/// folders, .osz or a single .osu to play; empty = the usual song folders. `link`: a score to open.
+fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, link: Option<link::Link>, event_loop: EventLoop<UserEvent>) {
     config::set_data_folder(cfg.data_folder.clone());
     library::set_songs_folder(cfg.songs_folder.clone());
     multiverse::set(cfg.universes);
@@ -8261,6 +9491,9 @@ fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, event_loop: EventLoop<UserEv
     update::cleanup();
     let mut state = State::new(cfg, audio, splash, songs_dir, songs_dirs_for_db, Some(scan), play_when_scanned, auto);
     state.load_skin();
+    if let Some(l) = link {
+        state.open_link(l);
+    }
     let mut app = App {
         state: Arc::new(Mutex::new(state)),
         cursor: CursorIcon::Default,

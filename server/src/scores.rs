@@ -1,5 +1,6 @@
 //! The online leaderboards: every play sent in, one JSON line each in DIR/scores.jsonl (kept in
-//! memory too), and its presses in DIR/replays/<id>.json.
+//! memory too), and its presses in DIR/replays/<id>.json. Each play keeps the pp it was sent
+//! with, but only plays on ranked, approved and loved sets count it (see `count_pp`).
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -22,7 +23,10 @@ struct Stored {
     id: u64,
     /// Lowercased account name.
     player: String,
+    /// `score.pp` is what counts; this is what was sent (and is what's saved).
     score: OnlineScore,
+    #[serde(skip)]
+    sent_pp: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -32,12 +36,34 @@ struct StoredReplay<'a> {
     inputs: &'a [(f64, u8)],
 }
 
+/// A player's plays that aren't on the leaderboards (failed, quit, restarted...) and the time
+/// they've spent playing, all plays told.
+#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq)]
+pub struct Tally {
+    pub other_plays: u32,
+    pub ms: u64,
+}
+
+/// The most of one play's time counted (longer is an odd clock).
+const MAX_PLAY_MS: u64 = 2 * 3600 * 1000;
+/// `Played` reports one account may send per minute.
+const PLAYED_PER_MINUTE: usize = 30;
+
 pub struct Scores {
     file: Option<PathBuf>,
+    /// DIR/playtime.json: each player's `Tally`.
+    tally_file: Option<PathBuf>,
+    tallies: HashMap<String, Tally>,
+    reports: HashMap<String, Vec<Instant>>,
+    /// DIR/pp-overrides.json: pp admins have set for plays (by id), in place of what was sent.
+    overrides_file: Option<PathBuf>,
+    overrides: HashMap<u64, f64>,
     replays: Option<PathBuf>,
     all: Vec<Stored>,
     next_id: u64,
     submits: HashMap<String, Vec<Instant>>,
+    /// Whether plays on a set give pp (None: not known yet).
+    gives_pp: fn(Option<u32>) -> Option<bool>,
 }
 
 /// What's wrong with a play sent in, if anything.
@@ -47,7 +73,8 @@ fn check(play: &ScoreSubmit) -> Result<(), &'static str> {
         && (1..=100_000).contains(&hits)
         && play.max_combo as u64 <= hits
         && (0.25..=4.0).contains(&play.map.rate)
-        && play.pp.is_none_or(|pp| pp.is_finite() && (0.0..=5000.0).contains(&pp))
+        // No upper limit on pp for now (tests need it); just a real, non-negative number.
+        && play.pp.is_none_or(|pp| pp.is_finite() && pp >= 0.0)
         && play.inputs.len() <= 400_000
         && play.map.hash != 0;
     if !fine {
@@ -72,12 +99,98 @@ impl Scores {
         // Lines from before scores carried their id.
         for s in &mut all {
             s.score.id = s.id;
+            s.sent_pp = s.score.pp;
         }
         let next_id = all.iter().map(|s| s.id + 1).max().unwrap_or(1);
         if let Some(f) = &file {
             println!("{} scores ({})", all.len(), f.display());
         }
-        Scores { file, replays: dir.map(|d| d.join("replays")), all, next_id, submits: HashMap::new() }
+        let tally_file = dir.as_ref().map(|d| d.join("playtime.json"));
+        let tallies = tally_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let overrides_file = dir.as_ref().map(|d| d.join("pp-overrides.json"));
+        let overrides = overrides_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let mut scores = Scores {
+            file,
+            overrides_file,
+            overrides,
+            tally_file,
+            tallies,
+            reports: HashMap::new(),
+            replays: dir.map(|d| d.join("replays")),
+            all,
+            next_id,
+            submits: HashMap::new(),
+            gives_pp: crate::loved::gives_pp,
+        };
+        scores.count_pp();
+        scores
+    }
+
+    /// `player`'s plays off the leaderboards and time spent playing.
+    pub fn tally(&self, player: &str) -> Tally {
+        self.tallies.get(player).copied().unwrap_or_default()
+    }
+
+    /// Adds `ms` of playing to `player`'s time, and (`other`) a play off the leaderboards.
+    fn count_play(&mut self, player: &str, ms: u64, other: bool) {
+        let t = self.tallies.entry(player.to_string()).or_default();
+        t.ms += ms.min(MAX_PLAY_MS);
+        t.other_plays += other as u32;
+        if let Some(file) = &self.tally_file {
+            let tmp = file.with_extension("json.tmp");
+            let text = serde_json::to_string(&self.tallies).unwrap_or_default();
+            if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, file)) {
+                eprintln!("saving play time: {e}");
+            }
+        }
+    }
+
+    /// A play `player` didn't send to the leaderboards (`Request::Played`).
+    pub fn played(&mut self, player: &str, ms: u64) -> Result<(), String> {
+        let times = self.reports.entry(player.to_string()).or_default();
+        times.retain(|t| t.elapsed() < Duration::from_secs(60));
+        if times.len() >= PLAYED_PER_MINUTE {
+            return Err("too many plays at once, slow down".into());
+        }
+        times.push(Instant::now());
+        self.count_play(player, ms, true);
+        Ok(())
+    }
+
+    /// Counts the pp of plays on sets that give it, and not of the others. A set not known yet
+    /// counts until it is. Called again as sets become known.
+    pub fn count_pp(&mut self) {
+        let mut sets: HashMap<Option<u32>, bool> = HashMap::new();
+        for s in &mut self.all {
+            let gives = *sets.entry(s.score.set_id).or_insert_with(|| (self.gives_pp)(s.score.set_id) != Some(false));
+            let pp = self.overrides.get(&s.id).copied().or(s.sent_pp);
+            s.score.pp = pp.filter(|_| gives);
+        }
+    }
+
+    /// The pp play `id` was sent with, and what an admin set it to instead (if they did).
+    pub fn pp_of(&self, id: u64) -> Option<(Option<f64>, Option<f64>)> {
+        let s = self.all.iter().find(|s| s.id == id)?;
+        Some((s.sent_pp, self.overrides.get(&id).copied()))
+    }
+
+    /// An admin sets play `id`'s pp (None: back to what was sent); totals follow at once.
+    pub fn set_pp(&mut self, id: u64, pp: Option<f64>) -> Result<(), String> {
+        if !self.all.iter().any(|s| s.id == id) {
+            return Err("that score isn't on the server".into());
+        }
+        match pp {
+            Some(v) if v.is_finite() && v >= 0.0 => self.overrides.insert(id, v),
+            Some(_) => return Err("pp is a number, 0 or more".into()),
+            None => self.overrides.remove(&id),
+        };
+        if let Some(file) = &self.overrides_file {
+            let tmp = file.with_extension("json.tmp");
+            let text = serde_json::to_string_pretty(&self.overrides).unwrap_or_default();
+            std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, file)).map_err(|e| format!("couldn't save it: {e}"))?;
+        }
+        self.count_pp();
+        Ok(())
     }
 
     /// Takes a play by `player` (lowercased key, `name` as written). Returns its place on the map
@@ -114,7 +227,9 @@ impl Scores {
                 set_id: m.set_id,
                 stars: play.stars.filter(|s| s.is_finite() && (0.0..50.0).contains(s)),
                 id,
+                scroll_speed: play.scroll_speed.filter(|s| s.is_finite() && (0.1..=10.0).contains(s)),
             },
+            sent_pp: play.pp,
         };
         if let Some(dir) = &self.replays {
             let replay = StoredReplay { version: play.replay_version, map: &play.map, inputs: &play.inputs };
@@ -131,8 +246,15 @@ impl Scores {
                 return Err("the server couldn't save it".into());
             }
         }
+        if let Some(ms) = play.play_ms {
+            self.count_play(player, ms, false);
+        }
         let map = stored.score.map_hash;
+        let gives = (self.gives_pp)(stored.score.set_id) != Some(false);
         self.all.push(stored);
+        if let Some(s) = self.all.last_mut().filter(|_| !gives) {
+            s.score.pp = None;
+        }
         let board = self.best_on(map);
         let map_rank = board.iter().position(|s| s.id == id).map(|p| p as u32 + 1);
         let (pp, rank) = self.standing(player);
@@ -158,6 +280,35 @@ impl Scores {
         let dir = self.replays.as_ref()?;
         self.all.iter().any(|s| s.id == id).then_some(())?;
         serde_json::from_slice(&std::fs::read(dir.join(format!("{id}.json"))).ok()?).ok()
+    }
+
+    /// Score `id`.
+    pub fn score(&self, id: u64) -> Option<OnlineScore> {
+        self.all.iter().find(|s| s.id == id).map(|s| s.score.clone())
+    }
+
+    /// `player`'s plays (by their key), newest first.
+    pub fn plays_of(&self, player: &str) -> Vec<OnlineScore> {
+        self.all.iter().rev().filter(|s| s.player == player).map(|s| s.score.clone()).collect()
+    }
+
+    /// `player`'s best play on each map by pp, highest first.
+    pub fn best_of(&self, player: &str) -> Vec<OnlineScore> {
+        let mut best: HashMap<u64, &Stored> = HashMap::new();
+        for s in self.all.iter().filter(|s| s.player == player && s.score.pp.is_some()) {
+            let b = best.entry(s.score.map_hash).or_insert(s);
+            if s.score.pp > b.score.pp {
+                *b = s;
+            }
+        }
+        let mut top: Vec<OnlineScore> = best.into_values().map(|s| s.score.clone()).collect();
+        top.sort_by(|a, b| b.pp.unwrap_or(0.0).total_cmp(&a.pp.unwrap_or(0.0)));
+        top
+    }
+
+    /// Where play `id` stands on its map's leaderboard (1-based), if it's its player's best there.
+    pub fn place_of(&self, map: u64, id: u64) -> Option<u32> {
+        self.best_on(map).iter().position(|s| s.id == id).map(|p| p as u32 + 1)
     }
 
     pub fn map_scores(&self, map: u64) -> Vec<OnlineScore> {
@@ -195,7 +346,7 @@ impl Scores {
                     name: plays.last().map(|s| s.score.player.clone()).unwrap_or_default(),
                     pp,
                     accuracy: stats.accuracy,
-                    plays: plays.len() as u32,
+                    plays: plays.len() as u32 + self.tally(&plays[0].player).other_plays,
                     ss: stats.ss,
                     s: stats.s,
                     a: stats.a,
@@ -317,7 +468,8 @@ impl Scores {
             maps.into_iter().filter_map(|m| self.best_on(m).first().filter(|s| s.player == player).map(|s| s.score.clone())).collect();
         firsts.sort_by(|a, b| b.date.cmp(&a.date));
         firsts.truncate(PROFILE_PLAYS);
-        Profile { name: name.to_string(), joined, plays: mine.len() as u32, pp, rank, top, recent, stats, firsts, online: false }
+        let tally = self.tally(player);
+        Profile { name: name.to_string(), joined, plays: mine.len() as u32 + tally.other_plays, pp, rank, top, recent, stats, firsts, online: false, play_ms: tally.ms }
     }
 }
 
@@ -412,7 +564,7 @@ mod tests {
 
     fn play(map: u64, score: u64, pp: f64) -> ScoreSubmit {
         ScoreSubmit {
-            map: crate::net::MapInfo { hash: map, artist: "A".into(), title: "T".into(), version: "Oni".into(), rate: 1.0, from: None, set_id: None, mods: vec!["HD".into()] },
+            map: crate::net::MapInfo { hash: map, artist: "A".into(), title: "T".into(), version: "Oni".into(), rate: 1.0, from: None, set_id: None, mods: vec!["HD".into()], multiverse: None, shapeshift: None, seed: None },
             score,
             accuracy: 0.95,
             max_combo: 100,
@@ -424,7 +576,54 @@ mod tests {
             replay_version: 2,
             inputs: vec![(1000.0, 1)],
             stars: Some(5.0),
+            scroll_speed: Some(0.5),
+            play_ms: Some(60_000),
         }
+    }
+
+    #[test]
+    fn admins_can_set_a_plays_pp() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-ppfix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        let (_, total, _) = s.submit("a", "A", play(7, 500, 703.0), 1).unwrap();
+        assert_eq!(total, 703.0);
+        s.set_pp(1, Some(503.0)).unwrap();
+        assert_eq!(s.profile("a", "A", 0).pp, 503.0);
+        assert_eq!(s.score(1).unwrap().pp, Some(503.0));
+        assert_eq!(s.pp_of(1), Some((Some(703.0), Some(503.0))));
+        // Kept across a restart; the play's own line still says what was sent.
+        let again = Scores::load(Some(dir.clone()));
+        assert_eq!(again.profile("a", "A", 0).pp, 503.0);
+        assert!(std::fs::read_to_string(dir.join("scores.jsonl")).unwrap().contains("703"));
+        // Back to what was sent; odd numbers and missing plays are refused.
+        s.set_pp(1, None).unwrap();
+        assert_eq!(s.profile("a", "A", 0).pp, 703.0);
+        assert!(s.set_pp(1, Some(f64::NAN)).is_err() && s.set_pp(1, Some(-1.0)).is_err() && s.set_pp(99, Some(1.0)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plays_off_the_leaderboards_count_in_plays_and_time() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-playtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        s.played("a", 30_000).unwrap();
+        s.played("a", 99 * 3600 * 1000).unwrap();
+        let p = s.profile("a", "A", 0);
+        assert_eq!((p.plays, p.play_ms), (3, 60_000 + 30_000 + MAX_PLAY_MS));
+        assert_eq!(s.rankings(10)[0].plays, 3);
+        // Kept across a restart.
+        assert_eq!(Scores::load(Some(dir.clone())).tally("a"), Tally { other_plays: 2, ms: 60_000 + 30_000 + MAX_PLAY_MS });
+        // Not too many at once.
+        for _ in 0..PLAYED_PER_MINUTE {
+            let _ = s.played("b", 1);
+        }
+        assert!(s.played("b", 1).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -466,11 +665,44 @@ mod tests {
     }
 
     #[test]
+    fn only_plays_on_ranked_and_loved_sets_count_pp() {
+        let mut s = Scores::load(None);
+        // Set 1 ranked, 2 graveyard, 3 not known yet; maps with no set never give pp.
+        s.gives_pp = |set| match set {
+            Some(1) => Some(true),
+            Some(3) => None,
+            _ => Some(false),
+        };
+        let on = |map: u64, set: Option<u32>, pp: f64| {
+            let mut p = play(map, 100, pp);
+            p.map.set_id = set;
+            p
+        };
+        assert_eq!(s.submit("a", "A", on(7, Some(1), 100.0), 1).unwrap().1, 100.0);
+        assert_eq!(s.submit("a", "A", on(8, Some(2), 500.0), 2).unwrap().1, 100.0, "graveyard");
+        assert_eq!(s.submit("a", "A", on(9, None, 500.0), 3).unwrap().1, 100.0, "no set");
+        assert!((s.submit("a", "A", on(10, Some(3), 50.0), 4).unwrap().1 - (100.0 + 47.5)).abs() < 1e-9, "not known yet: counts for now");
+        let p = s.profile("a", "A", 0);
+        assert_eq!(p.top.iter().map(|t| t.map_hash).collect::<Vec<_>>(), [7, 10]);
+        assert_eq!(p.recent.iter().find(|r| r.map_hash == 8).map(|r| r.pp), Some(None), "shown without pp");
+        // Set 3 turns out graveyard, and set 2 gets loved.
+        s.gives_pp = |set| matches!(set, Some(1 | 2)).into();
+        s.count_pp();
+        assert!((s.profile("a", "A", 0).pp - (500.0 + 95.0)).abs() < 1e-9);
+        assert_eq!(s.rankings(10)[0].pp, s.profile("a", "A", 0).pp);
+    }
+
+    #[test]
     fn odd_plays_are_turned_away() {
         let mut s = Scores::load(None);
         let mut p = play(7, 1, 1.0);
         p.accuracy = 1.5;
         assert!(s.submit("a", "A", p, 0).is_err());
+        // Any amount of pp, but a real one.
+        assert!(s.submit("a", "A", play(7, 1, 12_345.0), 0).is_ok());
+        for pp in [-1.0, f64::NAN, f64::INFINITY] {
+            assert!(s.submit("a", "A", play(7, 1, pp), 0).is_err(), "{pp}");
+        }
         let mut p = play(7, 1, 1.0);
         p.map.mods = vec!["AT".into()];
         assert!(s.submit("a", "A", p, 0).is_err());
@@ -490,6 +722,7 @@ mod tests {
         assert!(dir.join("replays/1.json").is_file());
         let again = Scores::load(Some(dir.clone()));
         assert_eq!(again.map_scores(7)[0].id, 1, "scores carry their id to ask for the replay by");
+        assert_eq!(again.map_scores(7)[0].scroll_speed, Some(0.5), "and the scroll speed they were played at");
         let r = again.replay(1).unwrap();
         assert_eq!((r.version, r.inputs.clone()), (2, vec![(1000.0, 1)]));
         assert!(again.replay(99).is_none());

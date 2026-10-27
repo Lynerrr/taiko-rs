@@ -1,5 +1,5 @@
 //! osu! skins: the playfield's and interface's images, the hitsounds and the combo break sound
-//! of a skin from osu!'s `Skins` folder, or from an `.osk` dropped into taiko-rs's own one. Each
+//! of a skin from osu!'s `Skins` folder, or from an `.osk` dropped into taiko.rs's own one. Each
 //! part can come from a different skin (`Sources`); anything a skin doesn't have stays built-in.
 
 use std::collections::HashMap;
@@ -8,13 +8,13 @@ use std::path::{Path, PathBuf};
 use crate::audio;
 use crate::render::{Atlas, SkinLayout, Sprite, SPRITES};
 
-/// taiko-rs's own Skins folder, next to its Songs folder. `.osk` files dropped here are
+/// taiko.rs's own Skins folder, next to its Songs folder. `.osk` files dropped here are
 /// extracted into a folder of the same name.
 pub fn own_dir() -> Option<PathBuf> {
     crate::config::own_dir("Skins")
 }
 
-/// Folders holding skins: osu!'s next to each Songs folder it has, then taiko-rs's own.
+/// Folders holding skins: osu!'s next to each Songs folder it has, then taiko.rs's own.
 fn skin_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = crate::library::song_dirs().iter().filter_map(|s| Some(s.parent()?.join("Skins"))).collect();
     dirs.extend(own_dir());
@@ -45,7 +45,7 @@ pub fn list() -> Vec<(String, PathBuf)> {
                 p
             };
             let Some(name) = p.file_name().and_then(|n| n.to_str()).map(str::to_owned) else { continue };
-            // The first folder wins when osu! and taiko-rs both have a skin of that name.
+            // The first folder wins when osu! and taiko.rs both have a skin of that name.
             if p.is_dir() && !out.iter().any(|(n, _)| *n == name) {
                 out.push((name, p));
             }
@@ -118,7 +118,7 @@ impl Files {
     }
 }
 
-/// What taiko-rs reads from a skin's skin.ini.
+/// What taiko.rs reads from a skin's skin.ini.
 struct Ini {
     /// Where the score and combo fonts' images are (`score` for `score-0.png`...), lowercase,
     /// with `/` between folders.
@@ -255,7 +255,7 @@ impl Part {
 pub enum Source {
     /// The skin picked in Settings -> Skin.
     Main,
-    /// taiko-rs's own look.
+    /// taiko.rs's own look.
     BuiltIn,
     Skin(String),
 }

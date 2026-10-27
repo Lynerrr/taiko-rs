@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs or updates taiko-rs for the current user on Linux (no root needed).
+# Installs or updates taiko.rs for the current user on Linux (no root needed).
 #
 #   curl -fsSL https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.sh | sh
 #
@@ -17,6 +17,8 @@ bin_dir="$HOME/.local/bin"
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
 exe="$bin_dir/taiko-rs"
 desktop="$data_dir/applications/taiko-rs.desktop"
+# The hidden entry that opens taiko-rs:// links (a score's "Watch replay"), as the game writes it.
+link_desktop="$data_dir/applications/taiko-rs-link.desktop"
 icon="$data_dir/icons/hicolor/256x256/apps/taiko-rs.png"
 # Earlier installs put an SVG icon here.
 old_icon="$data_dir/icons/hicolor/scalable/apps/taiko-rs.svg"
@@ -26,8 +28,8 @@ for arg in "$@"; do
     case "$arg" in
         --no-launch) launch=0 ;;
         --uninstall)
-            rm -f "$exe" "$desktop" "$icon" "$old_icon"
-            echo "Removed taiko-rs. Settings ($HOME/.config/taiko-rs) and maps ($data_dir/taiko-rs) are kept."
+            rm -f "$exe" "$desktop" "$link_desktop" "$icon" "$old_icon"
+            echo "Removed taiko.rs. Settings ($HOME/.config/taiko-rs) and maps ($data_dir/taiko-rs) are kept."
             exit 0
             ;;
         *) echo "unknown option: $arg" >&2; exit 1 ;;
@@ -42,7 +44,7 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-echo "Downloading taiko-rs..."
+echo "Downloading taiko.rs..."
 if command -v curl >/dev/null 2>&1; then
     curl -fL --progress-bar "$url" -o "$tmp/taiko-rs.tar.gz"
 elif command -v wget >/dev/null 2>&1; then
@@ -63,14 +65,26 @@ rm -f "$old_icon"
 cat > "$desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=taiko-rs
+Name=taiko.rs
 Comment=Fast osu!taiko client
 Exec="$exe" %F
 Icon=taiko-rs
 Terminal=false
 Categories=Game;
 EOF
+cat > "$link_desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=taiko.rs
+Comment=Opens taiko.rs links (scores to watch)
+Exec="$exe" %u
+Icon=taiko-rs
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/taiko-rs;
+EOF
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$(dirname "$desktop")" 2>/dev/null || true
+command -v xdg-mime >/dev/null 2>&1 && xdg-mime default taiko-rs-link.desktop x-scheme-handler/taiko-rs 2>/dev/null || true
 
 echo "Installed $exe (added to the app menu)."
 
@@ -79,7 +93,7 @@ missing="$(ldd "$exe" 2>/dev/null | awk '/not found/ { print $1 }')"
 if [ -n "$missing" ]; then
     echo
     echo "Missing libraries: $(echo "$missing" | tr '\n' ' ')"
-    echo "Install them, then run taiko-rs:"
+    echo "Install them, then run taiko.rs:"
     echo "  Arch:          sudo pacman -S pipewire alsa-lib"
     echo "  Debian/Ubuntu: sudo apt install libpipewire-0.3-0 libasound2"
     echo "  Fedora:        sudo dnf install pipewire-libs alsa-lib"
@@ -90,7 +104,7 @@ case ":$PATH:" in
     *":$bin_dir:"*) ;;
     *) echo "Note: $bin_dir is not in your PATH; start it from the app menu or as $exe" ;;
 esac
-echo "Maps: taiko-rs reads your osu! Songs folder (osu-winello / Wine installs are found on their own)."
+echo "Maps: taiko.rs reads your osu! Songs folder (osu-winello / Wine installs are found on their own)."
 echo "No osu!? Put .osz files in $data_dir/taiko-rs/Songs"
 
 if [ "$launch" = 1 ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; }; then

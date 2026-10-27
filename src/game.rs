@@ -178,6 +178,24 @@ impl Mash {
     }
 }
 
+/// How a play's score is worked out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Scoring {
+    /// Replays from before it (versions 1 and 2): points per hit that grow with the combo, plus
+    /// drumrolls and swells, so a play's top score depended on the map.
+    Classic,
+    /// Like osu!'s ScoreV2: a clean play of any map with no mods is 1,000,000, and the mods
+    /// multiply that. 700,000 comes from the hits weighted by the combo they were made at, 300,000
+    /// from accuracy (to the 10th power), each as far as the play has got. Drumrolls and swells
+    /// don't count.
+    Standard,
+}
+
+/// What a hit is worth in the combo part of `Scoring::Standard`: later hits in a combo more.
+fn combo_weight(combo: u32) -> f64 {
+    (combo as f64 + 1.0).sqrt()
+}
+
 struct StrongPending {
     note: usize,
     kat: bool,
@@ -186,6 +204,9 @@ struct StrongPending {
 }
 
 pub struct Game {
+    /// Random's colouring of the notes: a new one each play, kept with the replay so it plays
+    /// back the same; 0 is the one per map from before seeds.
+    pub seed: u64,
     pub map: Beatmap,
     clock: GameClock,
     state: Vec<NoteState>,
@@ -219,6 +240,13 @@ pub struct Game {
     paused_at: Instant,
     /// Counting down to unpause: (started, ends). The menu is hidden meanwhile.
     pub resuming: Option<(Instant, Instant)>,
+    /// Real milliseconds spent playing (not paused, nor counting down to resume, nor failed),
+    /// for the profile's play time; and the frame they were last counted at.
+    pub played_ms: f64,
+    played_at: Option<Instant>,
+    /// The scroll speed setting this play is at: fixed when it starts (it counts for pp), and
+    /// a replay's own.
+    pub scroll_speed: f64,
     /// Calibration: draw no notes or barlines (play by ear) / play no hitsounds on presses.
     pub hide_notes: bool,
     /// Draw the HP bar (not in calibration).
@@ -235,6 +263,12 @@ pub struct Game {
     pub visual_offset: f64,
     /// How presses that don't make a hit are judged.
     pub mash: Mash,
+    pub scoring: Scoring,
+    /// Standard scoring: the combo points a clean play of the part played gives, and how many
+    /// notes it has. Worked out at the first hit (after the part skipped is known).
+    score_basis: Option<(f64, u32)>,
+    /// Standard scoring: the combo points made so far.
+    combo_points: f64,
     /// Presses let off as extra hits since a note was last judged (`judge_nearest`).
     extra_taps: u32,
     /// Record presses (map time judged at, key) for a replay.
@@ -279,7 +313,8 @@ pub struct Game {
     hp_exempt: bool,
     /// Failed by Sudden Death / Perfect: map time and when (the play ends a moment later).
     failed: Option<(f64, Instant)>,
-    /// Alternate: the hand of the last accepted press (true = left) and when.
+    /// Alternate: the hand of the last accepted press (true = left) and when; None while either
+    /// hand may hit (after a finisher, a drumroll or a swell, until a press hits a note).
     last_hand: Option<(bool, f64)>,
     /// Party: map time of the last big hit (the lane shakes).
     quake_at: f64,
@@ -313,6 +348,12 @@ pub struct Game {
     /// Shapeshift: its setup and the shape of each section (index into `SHAPESHIFT`).
     shapeshift: shapeshift::Config,
     shape_order: Vec<u8>,
+    /// Multiverse's universes when the play brought its own (a lobby host's); None: the
+    /// player's, as they set them up.
+    universes: Option<[Universe; multiverse::COUNT]>,
+    /// Where the playfield in play was drawn last frame (x, y, w, h on the canvas): the lane,
+    /// wherever the mods took it; with Multiverse, the playfield in focus.
+    zone: Option<[f32; 4]>,
 }
 
 /// Decoy: how opaque the fake notes are next to real ones.
@@ -508,6 +549,45 @@ fn bar_at(bars: &[beatmap::Barline], t: f64, fallback: f64) -> Option<(usize, f6
     let len = bars.get(i + 1).map_or(fallback, |b| b.time - start).max(1.0);
     Some((i, start, len))
 }
+
+/// Radar's beam.
+const RADAR_COL: u32 = 0x5ef0a0;
+/// Radar: notes this close to the drum are always fully lit.
+const RADAR_NEAR: f32 = 100.0;
+
+/// Radar: how many beats the beam takes to cross the lane, and in kiai.
+const RADAR_BEATS: (f32, f32) = (2.0, 1.0);
+
+/// Radar: where the beam is, 0 at the drum to 1 at the lane's end, `beats` since the red line.
+/// It leaves the drum every `RADAR_BEATS` beats.
+fn radar_sweep(beats: f32, kiai: bool) -> f32 {
+    (beats / if kiai { RADAR_BEATS.1 } else { RADAR_BEATS.0 }).rem_euclid(1.0)
+}
+
+/// Radar: how far a note `s` along a lane `len` long that comes `u` closer every sweep is from
+/// the beam's last pass (0) to its next (1), the beam at `sweep`. None if the note wasn't on
+/// screen yet when the beam last went by.
+fn radar_age(s: f32, u: f32, len: f32, sweep: f32) -> Option<f32> {
+    let b = sweep * len;
+    // How far the beam has gone since; the note came closer meanwhile, as the beam and the note
+    // close in on each other at `len + u` a sweep.
+    let back = if s <= b { b - s } else { b + len - s };
+    let u = u.max(0.0);
+    (s + u * back / (len + u) <= len).then_some(back / len)
+}
+
+/// Radar: how lit that note is: fully as the beam passes, gone by the next one (and unseen till
+/// it first passes them); always fully by the drum.
+fn radar_light(s: f32, u: f32, len: f32, sweep: f32) -> f32 {
+    let near = smooth((RADAR_NEAR + 50.0) as f64, RADAR_NEAR as f64, s as f64) as f32;
+    let lit = radar_age(s, u, len, sweep).map_or(0.0, |a| (1.0 - a).max(0.0).powf(1.5));
+    lit.max(near)
+}
+
+/// Echo: where its bar sits, under the lane.
+const ECHO_Y: f32 = LANE_Y + LANE_H / 2.0 + 50.0;
+/// Echo: how long a note rings once the cursor reaches it.
+const ECHO_RING_MS: f32 = 300.0;
 
 /// Rails: the lane bent into a curve. Distances along it (`s`) count from the hit target; it
 /// leaves the hit target heading right, so the drum stays where it is, and behind the hit
@@ -1090,6 +1170,17 @@ fn hash01(t: f64) -> f64 {
     (x >> 11) as f64 / (1u64 << 53) as f64
 }
 
+/// Shapeshift: the shape of each section, by `setup`.
+fn shape_order(map: &Beatmap, mods: Mods, setup: shapeshift::Config) -> Vec<u8> {
+    if !mods.has(Mod::Shapeshift) {
+        return Vec::new();
+    }
+    // Each map its own shuffle, the same every time it's played.
+    let m = &map.meta;
+    let seed = crate::net::map_hash(format!("{}\n{}\n{}\n{}", m.artist, m.title, m.creator, m.version).as_bytes());
+    setup.sequence(map.barlines.len() / setup.bars() + 1, seed)
+}
+
 /// The speed a play of `map` with `mods` at `rate` runs at (what `Game::with_mods` will use), to
 /// prepare its audio with.
 pub fn speed_for(map: &Beatmap, mods: Mods, rate: f64) -> Speed {
@@ -1097,14 +1188,14 @@ pub fn speed_for(map: &Beatmap, mods: Mods, rate: f64) -> Speed {
         return Speed::constant(rate);
     }
     let mut map = map.clone();
-    apply_to_map(&mut map, mods);
+    apply_to_map(&mut map, mods, 0);
     let first = map.notes.first().map(|n| n.time).unwrap_or(0.0);
     let end = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
     Speed::for_play(mods, rate.clamp(0.25, 4.0), first, end)
 }
 
 /// Changes the notes themselves for the mods that do (before anything is judged).
-fn apply_to_map(map: &mut Beatmap, mods: Mods) {
+fn apply_to_map(map: &mut Beatmap, mods: Mods, seed: u64) {
     let hit = |n: &beatmap::Note| matches!(n.kind, Kind::Don | Kind::Kat);
     if mods.has(Mod::Half) {
         let mut k = 0;
@@ -1121,7 +1212,9 @@ fn apply_to_map(map: &mut Beatmap, mods: Mods) {
             n.kind = if n.kind == Kind::Don { Kind::Kat } else { Kind::Don };
         }
         if mods.has(Mod::Random) {
-            n.kind = if hash01(n.time + 0.5) < 0.5 { Kind::Don } else { Kind::Kat };
+            // Seed 0: the colouring every play of the map had before seeds (old replays).
+            let salt = if seed == 0 { 0.0 } else { ((seed % 1_000_003) as f64 + 1.0) * 1.618 };
+            n.kind = if hash01(n.time + 0.5 + salt) < 0.5 { Kind::Don } else { Kind::Kat };
         }
         if mods.has(Mod::NoFinishers) {
             n.big = false;
@@ -1139,8 +1232,13 @@ impl Game {
     }
 
     /// A play with `mods` (the track is already at their speed, see `audio::change_speed`).
-    pub fn with_mods(mut map: Beatmap, track: Arc<Track>, audio: Option<&Engine>, mods: Mods) -> Game {
-        apply_to_map(&mut map, mods);
+    pub fn with_mods(map: Beatmap, track: Arc<Track>, audio: Option<&Engine>, mods: Mods) -> Game {
+        Game::with_seed(map, track, audio, mods, 0)
+    }
+
+    /// The same, with Random colouring the notes by `seed` (see `Game::seed`).
+    pub fn with_seed(mut map: Beatmap, track: Arc<Track>, audio: Option<&Engine>, mods: Mods, seed: u64) -> Game {
+        apply_to_map(&mut map, mods, seed);
         let first_note = map.notes.first().map(|n| n.time).unwrap_or(0.0);
         let end_time = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
         let start = (first_note - 2000.0).min(0.0).min(-map.meta.audio_lead_in);
@@ -1220,15 +1318,9 @@ impl Game {
         let min_velocity = decoys.iter().map(|n| n.velocity).fold(min_velocity, f64::min);
         let focus_switches = if mods.has(Mod::Multiverse) { focus_switches(&map) } else { Vec::new() };
         let shapeshift = shapeshift::get();
-        let shape_order = if mods.has(Mod::Shapeshift) {
-            // Each map its own shuffle, the same every time it's played.
-            let m = &map.meta;
-            let seed = crate::net::map_hash(format!("{}\n{}\n{}\n{}", m.artist, m.title, m.creator, m.version).as_bytes());
-            shapeshift.sequence(map.barlines.len() / shapeshift.bars() + 1, seed)
-        } else {
-            Vec::new()
-        };
+        let shape_order = shape_order(&map, mods, shapeshift);
         Game {
+            seed,
             windows: Windows::new(mods.od(map.meta.od)),
             map,
             clock: GameClock::new(track_start, audio.is_some()),
@@ -1254,6 +1346,9 @@ impl Game {
             paused: None,
             paused_at: Instant::now(),
             resuming: None,
+            played_ms: 0.0,
+            played_at: None,
+            scroll_speed: 1.0,
             hide_notes: false,
             show_hp: true,
             mute_hits: false,
@@ -1262,6 +1357,9 @@ impl Game {
             hidden: crate::hud::Parts::NONE,
             visual_offset: 0.0,
             mash: Mash::Nearest,
+            scoring: Scoring::Standard,
+            score_basis: None,
+            combo_points: 0.0,
             extra_taps: 0,
             record: false,
             log_inputs: false,
@@ -1302,6 +1400,26 @@ impl Game {
             focus_switches,
             shapeshift,
             shape_order,
+            universes: None,
+            zone: None,
+        }
+    }
+
+    /// Where the playfield in play was drawn last frame (x, y, w, h on the canvas it was drawn
+    /// on), for views that show only that (spectating everyone at once).
+    pub fn play_zone(&self) -> Option<[f32; 4]> {
+        self.zone
+    }
+
+    /// Plays with someone else's mod settings (a lobby host's): Multiverse's universes and
+    /// Shapeshift's setup, each when given. The player's own config is left alone.
+    pub fn use_mod_settings(&mut self, universes: Option<[Universe; multiverse::COUNT]>, shapeshift: Option<shapeshift::Config>) {
+        if universes.is_some() {
+            self.universes = universes;
+        }
+        if let Some(s) = shapeshift {
+            self.shapeshift = s;
+            self.shape_order = shape_order(&self.map, self.mods, s);
         }
     }
 
@@ -1326,7 +1444,31 @@ impl Game {
     }
 
     fn add_score(&mut self, base: f64) {
-        self.stats.score += (base * self.score_mult) as u64;
+        if self.scoring == Scoring::Classic {
+            self.stats.score += (base * self.score_mult) as u64;
+        }
+    }
+
+    /// Standard scoring after a hit or miss: the score of the play so far, mods included. `combo`
+    /// is the combo the note was judged at.
+    fn rescore(&mut self, judge: Judge, combo: u32) {
+        let (max_points, notes) = *self.score_basis.get_or_insert_with(|| {
+            // Notes skipped by `skip_to` aren't part of the play.
+            let n = self.map.notes.iter().zip(&self.state).filter(|(n, st)| matches!(n.kind, Kind::Don | Kind::Kat) && st.judged_at != f64::NEG_INFINITY).count() as u32;
+            (300.0 * (0..n).map(combo_weight).sum::<f64>(), n)
+        });
+        self.combo_points += match judge {
+            Judge::Great => 300.0 * combo_weight(combo),
+            Judge::Ok => 150.0 * combo_weight(combo),
+            Judge::Miss => 0.0,
+        };
+        let s = &self.stats;
+        let judged = (s.great + s.ok + s.miss).min(notes);
+        if max_points > 0.0 && notes > 0 {
+            let combo_part = 700_000.0 * (self.combo_points / max_points).min(1.0);
+            let accuracy_part = 300_000.0 * s.accuracy().powi(10) * judged as f64 / notes as f64;
+            self.stats.score = ((combo_part + accuracy_part) * self.score_mult).round() as u64;
+        }
     }
 
     fn fail(&mut self, t: f64) {
@@ -1338,6 +1480,12 @@ impl Game {
     /// Advances the clock. Returns true once the map is over.
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>, offset: f64) -> bool {
         self.offset = offset;
+        let playing = self.paused.is_none() && self.resuming.is_none() && self.failed.is_none();
+        if let Some(at) = self.played_at.filter(|_| playing) {
+            // A long stall (the window dragged, the machine asleep) counts as a second at most.
+            self.played_ms += now.saturating_duration_since(at).as_secs_f64().min(1.0) * 1000.0;
+        }
+        self.played_at = playing.then_some(now);
         if let Some(live) = &mut self.live_pp {
             let st = &self.stats;
             self.live_pp_value = live.update(st.great, st.ok, st.miss, st.max_combo);
@@ -1538,6 +1686,7 @@ impl Game {
         while self.cursor < self.map.notes.len() && self.state[self.cursor].finished {
             self.cursor += 1;
         }
+        self.score_basis = None;
         self.next_scare = self.scares.partition_point(|&at| at < t);
     }
 
@@ -1581,6 +1730,8 @@ impl Game {
         }
         self.cursor = 0;
         self.stats = Stats::default();
+        self.score_basis = None;
+        self.combo_points = 0.0;
         self.presses = [f64::NEG_INFINITY; 4];
         self.last_judge = None;
         self.recent_errors.clear();
@@ -1682,6 +1833,7 @@ impl Game {
             return;
         }
         let combo_mult = 1.0 + self.stats.combo.min(100) as f64 / 100.0;
+        let combo_before = self.stats.combo;
         match judge {
             Judge::Great => self.add_score(300.0 * combo_mult),
             Judge::Ok => self.add_score(150.0 * combo_mult),
@@ -1739,31 +1891,47 @@ impl Game {
             }
         }
         self.last_judge = Some((judge, t));
+        if self.scoring == Scoring::Standard {
+            self.rescore(judge, combo_before);
+        }
     }
 
     /// Handles a drum key (0 = left rim, 1 = left centre, 2 = right centre, 3 = right rim).
     pub fn press(&mut self, key: usize, at: Instant, audio: Option<&Engine>, offset: f64) {
         let t = self.speed.map(self.clock.at(at) - offset);
         self.offset = offset;
+        self.press_time(key, t, audio);
+    }
+
+    /// A live press at map time `t`.
+    fn press_time(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
         if self.failed.is_some() {
             return;
         }
-        // Alternate: the same hand twice in a row doesn't count (after a 2 s pause either may start).
-        if self.mods.has(Mod::Alternate) {
-            let left = key < 2;
-            if self.last_hand.is_some_and(|(hand, at)| hand == left && t - at < 2000.0) {
-                return;
-            }
-            self.last_hand = Some((left, t));
+        // Alternate: the same hand twice in a row doesn't count (after a 2 s pause either may
+        // start). Drumrolls and swells take either hand, as fast as you like.
+        let alternate = self.mods.has(Mod::Alternate);
+        let left = key < 2;
+        let free_run = alternate && (self.find_active(t, Kind::Roll).is_some() || self.find_active(t, Kind::Swell).is_some());
+        if alternate && !free_run && self.last_hand.is_some_and(|(hand, at)| hand == left && t - at < 2000.0) {
+            return;
         }
         if self.record || self.log_inputs {
             self.inputs.push((t, key as u8));
         }
-        self.press_at(key, t, audio);
+        let hits = self.stats.great + self.stats.ok;
+        let sfx = self.press_at(key, t, audio);
+        if alternate {
+            let hit = self.stats.great + self.stats.ok > hits;
+            let finisher = hit && matches!(sfx, Sfx::BigDon | Sfx::BigKat);
+            // A finisher counts as two notes, so either hand may hit next; after a drumroll or
+            // a swell, either hand may until one hits a note.
+            self.last_hand = if free_run || finisher || (self.last_hand.is_none() && !hit) { None } else { Some((left, t)) };
+        }
     }
 
-    /// A press judged at map time `t` (live, or from a replay).
-    fn press_at(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
+    /// A press judged at map time `t` (live, or from a replay); the sound it makes.
+    fn press_at(&mut self, key: usize, t: f64, audio: Option<&Engine>) -> Sfx {
         let kat = if self.mods.has(Mod::Relax) { self.relax_colour(t, key == 0 || key == 3) } else { key == 0 || key == 3 };
         self.presses[key] = t;
         let sfx = self.judge_press(key, kat, t);
@@ -1775,6 +1943,7 @@ impl Game {
             a.sfx_at(sfx, volume);
         }
         self.play_combo_break(audio);
+        sfx
     }
 
     /// Replays without audio: jumps to map time `t` (forwards only), judging the recorded presses
@@ -2077,6 +2246,9 @@ impl Game {
         if !mods.has(Mod::Shapeshift) {
             let len = if mods.has(Mod::Mania) {
                 MANIA_LANE
+            } else if mods.has(Mod::Crossfire) {
+                // From the drum in the middle to either edge.
+                w / 2.0
             } else if mods.has(Mod::Spin) {
                 SPIN_LANE
             } else {
@@ -2306,8 +2478,10 @@ impl Game {
         // Where each drum ends up on screen, for the sparks.
         let drum_x = if self.mods.has(Mod::Mirror) { inner - HIT_X } else { HIT_X };
         let mut drums = [(0.0f32, 0.0f32); FIELD_COUNT];
-        let universes = multiverse::get();
+        let universes = self.universes.unwrap_or_else(multiverse::get);
         let base = self.mods;
+        // The zone in play, summed weighted by focus, and the weights.
+        let mut zone = ([0.0f32; 4], 0.0f32);
         for i in order {
             let l = looks[i];
             let (left, mid, lean) = HOMES[i];
@@ -2319,6 +2493,7 @@ impl Game {
             self.draw_field(c, scroll_speed, l, &universes[i]);
             self.mods = base;
             c.width = w;
+            let field_zone = self.zone.take();
             // Out of focus it circles its home, each its own way round and at its own pace,
             // leaning and rocking. Called or in focus it parks where it fits on screen, holds
             // still and breathes with the beat.
@@ -2339,7 +2514,16 @@ impl Game {
             c.fade_since(start, 0.45 + 0.55 * l.focus + 0.4 * lit, 0.75 + 0.25 * l.focus + 0.2 * lit);
             c.rotate_since(start, [0.0, LANE_Y], angle, zoom, [x, y]);
             drums[i] = (x + drum_x * zoom * angle.cos(), y + drum_x * zoom * angle.sin());
+            // The zone in play: the one in focus, sliding to the next as the focus does.
+            if let Some(z) = field_zone.filter(|_| l.focus > 0.0) {
+                let z = turned_box(z, [0.0, LANE_Y], angle, zoom, [x, y]);
+                for (sum, v) in zone.0.iter_mut().zip(z) {
+                    *sum += v * l.focus;
+                }
+                zone.1 += l.focus;
+            }
         }
+        self.zone = (zone.1 > 0.0).then(|| zone.0.map(|v| v / zone.1));
         // The sparks: from the drum in focus to the drum of the one it's heading for.
         let to = (0..FIELD_COUNT).find(|&f| looks[f].aim > 0.0);
         let from = (0..FIELD_COUNT).filter(|&f| looks[f].aim == 0.0).max_by(|&a, &b| looks[a].focus.total_cmp(&looks[b].focus));
@@ -2370,6 +2554,10 @@ impl Game {
         let start_shape = c.shapes.len();
         let mods = self.mods;
         let party = mods.has(Mod::Party);
+        // Crossfire: the drum in the middle, kats coming from the left (laid out here the other
+        // way along the lane from it), dons from the right.
+        let crossfire = mods.has(Mod::Crossfire);
+        let side_of = |kind: Kind, s: f32| if crossfire && kind == Kind::Kat { -s } else { s };
         // Multiverse: a window, not the whole screen. Nothing may stick out of it.
         let boxed = mods.has(Mod::Multiverse);
         let lane_top = LANE_Y - LANE_H / 2.0;
@@ -2380,10 +2568,23 @@ impl Game {
         let pulse = (1.0 - beat_phase).powi(3);
         let kiai = cp.kiai && self.kiai_effects;
         let in_kiai = cp.kiai;
+        // Radar: where the beam is (see `radar_sweep`), and how long it takes to cross the lane.
+        let radar = mods.has(Mod::Radar);
+        let sweep = radar_sweep(beats, in_kiai);
+        let sweep_ms = cp.beat_length * if in_kiai { RADAR_BEATS.1 } else { RADAR_BEATS.0 } as f64;
 
         let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp);
         // The lane's shape, and how fast notes go along it (see `lane_stretch`).
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w);
+        // Where it's played before the whole-playfield moves (x0, y0, x1, y1): from the screen's
+        // left edge (the drum) along the lane, with room for the judgements.
+        let (band_top, band_h) = lane_band();
+        let local_zone = match &rail {
+            Some(r) => r.pts.iter().fold([0.0, band_top, HIT_X, band_top + band_h], |z, &(x, y, _)| {
+                [z[0], z[1].min(y - LANE_H / 2.0), z[2].max(x + LANE_H / 2.0), z[3].max(y + LANE_H / 2.0)]
+            }),
+            None => [0.0, band_top, (HIT_X + lane_len).max(HIT_X + BIG_R), band_top + band_h],
+        };
         let portal = self.portal_at(vt, lane_len);
         let scroll = Scroll {
             t: vt,
@@ -2477,6 +2678,10 @@ impl Game {
             }
             a
         };
+        // Radar: how far a note at map time `time` scrolling at `vel` comes in a sweep, and how
+        // lit it is `s` along the lane.
+        let radar_u = |time: f64, vel: f64| s_of(time + sweep_ms, vel) - s_of(time, vel);
+        let radar_lit = |s: f32, time: f64, vel: f64| if radar { radar_light(s, radar_u(time, vel), lane_len, sweep) } else { 1.0 };
         // A don or kat `s` along the lane (`k`th drawn, in a 1/`flow` stream): Snake swings it
         // sideways, Party pumps and squishes it. Nothing changes at the drum.
         let draw_hit = |c: &mut Canvas, s: f32, n: &beatmap::Note, k: usize, flow: u8, col: u32, a: f32| {
@@ -2496,7 +2701,7 @@ impl Game {
                 let jolt = beats.floor() + 1.0 - (1.0 - beat_phase).powi(3);
                 side += 32.0 * amp * f * (0.8 + 0.4 * pulse) * (TAU * 1.3 * u - PI * jolt + flip).sin();
             }
-            let (x, y, _, mut size) = place(s, side);
+            let (x, y, _, mut size) = place(side_of(n.kind, s), side);
             let mut squish = 1.0;
             if party {
                 // Each note pulses on its own grid: a 1/4 four times a beat.
@@ -2513,7 +2718,7 @@ impl Game {
                 c.stretch_since(first, [x, y], squish, 1.0 / squish);
             }
         };
-        let (don, kat) = if mods.has(Mod::Colorless) { (GREY, GREY) } else { (mix(uni.idle(), uni.don(), look.colour), mix(uni.idle(), uni.kat(), look.colour)) };
+        let (don, kat) = if mods.has(Mod::Colorless) || mods.has(Mod::Echo) { (GREY, GREY) } else { (mix(uni.idle(), uni.don(), look.colour), mix(uni.idle(), uni.kat(), look.colour)) };
         // Text is drawn last, after Mirror flips the rest (letters must stay readable), and so
         // are the skin's numbers and judgements (centre x, top, height).
         let mut texts: Vec<(f32, f32, f32, [f32; 4], String)> = Vec::new();
@@ -2530,12 +2735,16 @@ impl Game {
         }
 
         // Lane. When it turns, it reaches past the screen so its ends never show.
-        let turns = mods.has(Mod::Tilt) || mods.has(Mod::Spin) || mods.has(Mod::Mania) || mods.has(Mod::BarrelRoll);
+        let turns = mods.has(Mod::Tilt) || mods.has(Mod::Spin) || mods.has(Mod::Mania) || mods.has(Mod::BarrelRoll) || crossfire;
         let mut lane_col = if kiai { rgba(0x2b2433, 1.0) } else { rgba(0x20202b, 1.0) };
         let mut edge_col = rgba(0x3a3a4e, 1.0);
         let mut skin_lane_tint = rgba(WHITE, 1.0);
+        if radar {
+            lane_col = if in_kiai { rgba(0x17150d, 1.0) } else { rgba(0x0b110f, 1.0) };
+        }
         if kiai {
-            lane_col = tint(lane_col, 0xff8a3d, 0.05 + 0.06 * pulse);
+            // Radar's lane stays dark, a little warmer.
+            lane_col = tint(lane_col, 0xff8a3d, (0.05 + 0.06 * pulse) * if radar { 0.35 } else { 1.0 });
         }
         if party {
             // The lane flashes a new colour on every beat.
@@ -2571,7 +2780,8 @@ impl Game {
         } else {
             let (lane_x, lane_w) = if turns { (-w, 3.0 * w) } else { (0.0, w) };
             let glow = if kiai { 0.75 + 0.25 * pulse } else { 0.0 };
-            if !skin_lane(c, lane_x, lane_w, skin_lane_tint, glow) {
+            // Radar's lane is its own dark one.
+            if radar || !skin_lane(c, lane_x, lane_w, skin_lane_tint, glow) {
                 draw_lane(c, lane_x, lane_w, lane_col, edge_col);
             }
         }
@@ -2610,15 +2820,18 @@ impl Game {
                 break;
             }
             let s = s_of(b.time, b.velocity);
-            if s > PANEL_W - HIT_X && s < lane_len + 2.0 {
-                let (x, y, a, _) = place(s, 0.0);
-                if let Some([bw, bh]) = c.sprite_size(Sprite::Barline) {
-                    c.sprite_box(Sprite::Barline, x, y, (bw * LANE_PX / 2.0).max(0.6), bh * LANE_PX / 2.0, rgba(WHITE, 1.0));
-                    if let Some(sh) = c.shapes.last_mut() {
-                        sh.angle = -a;
+            let shown = if crossfire { s > 0.0 } else { s > PANEL_W - HIT_X };
+            if shown && s < lane_len + 2.0 {
+                for s in if crossfire { vec![s, -s] } else { vec![s] } {
+                    let (x, y, a, _) = place(s, 0.0);
+                    if let Some([bw, bh]) = c.sprite_size(Sprite::Barline) {
+                        c.sprite_box(Sprite::Barline, x, y, (bw * LANE_PX / 2.0).max(0.6), bh * LANE_PX / 2.0, rgba(WHITE, 1.0));
+                        if let Some(sh) = c.shapes.last_mut() {
+                            sh.angle = -a;
+                        }
+                    } else {
+                        lane_rect(c, (x, y, a), 1.6, LANE_H, rgba(WHITE, 0.28));
                     }
-                } else {
-                    lane_rect(c, (x, y, a), 1.6, LANE_H, rgba(WHITE, 0.28));
                 }
             }
         }
@@ -2635,6 +2848,23 @@ impl Game {
                 lane_rect(c, (x, y, a), 4.0, LANE_H, rgba(col, 0.8));
                 let (lx, ly, ..) = place(s + 18.0, -LANE_H / 2.0 + 10.0);
                 texts.push((lx, ly - 4.0, 8.0, rgba(col, 1.0), format!("x{k}")));
+            }
+        }
+
+        // Radar: the beam, a bright line with a trail fading out behind it.
+        if radar && !self.hide_notes {
+            let b = sweep * lane_len;
+            for d in if crossfire { vec![1.0, -1.0] } else { vec![1.0] } {
+                for k in 0..14 {
+                    let back = b - 6.0 * k as f32 - 3.0;
+                    if back > 0.0 {
+                        let (x, y, a, _) = place(d * back, 0.0);
+                        lane_rect(c, (x, y, a), 6.5, LANE_H, rgba(RADAR_COL, 0.16 * (1.0 - k as f32 / 14.0).powi(2)));
+                    }
+                }
+                let (x, y, a, _) = place(d * b, 0.0);
+                lane_rect(c, (x, y, a), 9.0, LANE_H, rgba(RADAR_COL, 0.2));
+                lane_rect(c, (x, y, a), 2.5, LANE_H, rgba(0xc8ffe0, 0.95));
             }
         }
 
@@ -2659,7 +2889,7 @@ impl Game {
                 }
                 let s = s_of(n.time, n.velocity);
                 // A little see-through, so a careful eye can tell them apart.
-                let a = DECOY_ALPHA * note_alpha(s) * smooth(0.22, 0.38, (s / lane_len) as f64) as f32;
+                let a = DECOY_ALPHA * note_alpha(s) * radar_lit(s, n.time, n.velocity) * smooth(0.22, 0.38, (s / lane_len) as f64) as f32;
                 if a > 0.01 && s < lane_len + BIG_R {
                     draw_hit(c, s, n, k, self.decoy_flows[k], if n.kind == Kind::Don { don } else { kat }, a);
                 }
@@ -2702,9 +2932,19 @@ impl Game {
                         judged => {
                             let s = note_s(i);
                             if on_lane(s, r) {
-                                let a = if judged.is_some() { 0.4 } else { note_alpha(s) };
+                                let a = if judged.is_some() { 0.4 } else { note_alpha(s) * radar_lit(s, n.time, n.velocity) };
                                 if a > 0.01 {
                                     draw_hit(c, s, n, i, self.flows[i], col, a);
+                                }
+                                // Radar: a note the beam just passed flashes and pings.
+                                let ping = radar_age(s, radar_u(n.time, n.velocity), lane_len, sweep).filter(|&age| radar && judged.is_none() && s > RADAR_NEAR && age < 0.35);
+                                if let Some(age) = ping {
+                                    let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
+                                    let k = age / 0.35;
+                                    let fade = note_alpha(s) * (1.0 - k);
+                                    let sprite = if n.big { Sprite::BigCircle } else { Sprite::HitCircle };
+                                    c.light(sprite, x, y, r * size, rgba(WHITE, 0.25 * fade * (1.0 - k)));
+                                    c.ring(x, y, (r + 3.0 + 16.0 * k) * size, rgba(RADAR_COL, 0.85 * fade), 1.0 + 2.5 * (1.0 - k));
                                 }
                             }
                         }
@@ -2799,7 +3039,7 @@ impl Game {
                     }
                     if vt < n.time {
                         let s = s_of(n.time, n.velocity);
-                        let a = note_alpha(s) * swell_fade(beatmap::control_point_at(&self.map.control_points, n.time).beat_length, n.time - vt);
+                        let a = note_alpha(s) * radar_lit(s, n.time, n.velocity) * swell_fade(beatmap::control_point_at(&self.map.control_points, n.time).beat_length, n.time - vt);
                         if s < lane_len + r && a > 0.01 {
                             let (x, y, _, size) = place(s, 0.0);
                             let r = r * size;
@@ -2845,7 +3085,7 @@ impl Game {
                 let (s, col, a) = match n.kind {
                     Kind::Don | Kind::Kat if self.state[i].judged.is_none() => {
                         let s = note_s(i);
-                        (s, WHITE, CIRCLE_FLASH * note_alpha(s))
+                        (s, WHITE, CIRCLE_FLASH * note_alpha(s) * radar_lit(s, n.time, n.velocity))
                     }
                     Kind::Roll if popup(n).is_some() => {
                         let (s, _, pa) = popup(n).unwrap();
@@ -2858,7 +3098,7 @@ impl Game {
                     _ => continue,
                 };
                 if a > 0.01 && on_lane(s, r) {
-                    let (x, y, _, size) = place(s, 0.0);
+                    let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
                     c.light(sprite, x, y, r * size, rgba(col, flash * a));
                 }
             }
@@ -2881,7 +3121,19 @@ impl Game {
 
         // Drum panel on top so passed notes slide underneath it.
         let flash = |at: f64| ((1.0 - (t - at) / 130.0).clamp(0.0, 1.0) * 0.95) as f32;
-        let drum_x = draw_drum(c, self.presses.map(flash), uni.don(), uni.kat());
+        let drum_x = if crossfire {
+            for (k, f) in self.presses.map(flash).into_iter().enumerate() {
+                if f > 0.0 {
+                    let col = if k == 0 || k == 3 { uni.kat() } else { uni.don() };
+                    c.glow(HIT_X, LANE_Y, NOTE_R, 18.0, rgba(col, 0.5 * f));
+                }
+            }
+            HIT_X
+        } else {
+            draw_drum(c, self.presses.map(flash), uni.don(), uni.kat())
+        };
+        // The combo: on the drum, or with Crossfire under the hit target.
+        let combo_y = |h: f32| if crossfire { lane_top + LANE_H + 8.0 } else { LANE_Y - h / 2.0 };
         for (p, big, col) in flying {
             let y = LANE_Y - 80.0 * p * (2.0 - p);
             let r = if big { BIG_R } else { NOTE_R } * (1.0 + 0.15 * p);
@@ -2895,10 +3147,11 @@ impl Game {
             let s = self.stats.combo.to_string();
             let skin_size = if s.len() > 3 { 17.0 } else { 22.0 };
             if c.number_width(Font::Combo, skin_size, &s).is_some() {
-                upright.push((drum_x, LANE_Y - skin_size / 2.0, skin_size, rgba(WHITE, 1.0), Upright::Number(Font::Combo, s)));
+                upright.push((drum_x, combo_y(skin_size), skin_size, rgba(WHITE, 1.0), Upright::Number(Font::Combo, s)));
             } else {
                 let size = if s.len() > 3 { 12.0 } else { 16.0 };
-                texts.push((drum_x, LANE_Y - size / 2.0, size, rgba(0x1d1d26, 1.0), s));
+                let col = if crossfire { 0xe8e8f0 } else { 0x1d1d26 };
+                texts.push((drum_x, combo_y(size), size, rgba(col, 1.0), s));
             }
         }
 
@@ -2912,9 +3165,12 @@ impl Game {
                     Judge::Ok => Sprite::JudgeOk,
                     Judge::Miss => Sprite::JudgeMiss,
                 };
-                // The skin's sits in the hit target, popping a little as it shows.
+                // The skin's sits in the hit target, popping a little as it shows. At its own size
+                // next to the notes as osu! draws it: lazer fits the 128 px hitcircle into a 95
+                // unit note but draws judgements pixel for pixel, so they're 128/95 of ours.
                 if let Some([_, sh]) = c.sprite_size(sprite) {
-                    let h = 2.0 * NOTE_R * sh * (1.0 + 0.12 * (1.0 - age / 90.0).max(0.0));
+                    const JUDGE_SCALE: f32 = 128.0 / 95.0;
+                    let h = 2.0 * NOTE_R * sh * JUDGE_SCALE * (1.0 + 0.12 * (1.0 - age / 90.0).max(0.0));
                     upright.push((HIT_X, LANE_Y - h / 2.0 - age * 0.02, h, rgba(WHITE, a), Upright::Image(sprite)));
                 } else {
                     texts.push((HIT_X, lane_top - 30.0 - age * 0.02, 15.0, rgba(j.color(), a), j.label().to_string()));
@@ -2985,6 +3241,9 @@ impl Game {
             }
         }
         let mut dest = pivot;
+        if crossfire {
+            dest = [w / 2.0, LANE_Y];
+        }
         if mods.has(Mod::Spin) {
             dest = [w / 2.0, 240.0];
         }
@@ -2998,6 +3257,9 @@ impl Game {
         if angle != 0.0 || zoom != 1.0 || dest != pivot {
             c.rotate_since(start_shape, pivot, angle, zoom, dest);
         }
+        let [x0, y0, x1, y1] = local_zone;
+        let (x0, x1) = (flip_x(x0).min(flip_x(x1)), flip_x(x0).max(flip_x(x1)));
+        self.zone = Some(turned_box([x0, y0, x1 - x0, y1 - y0], pivot, angle, zoom, dest));
         // Texts go where the playfield took them, but stay upright and readable: their centre x,
         // top and height there.
         let (sin, cos) = angle.sin_cos();
@@ -3040,6 +3302,66 @@ impl Game {
                 }
             }
         }
+        // Echo's bar stays where it is, whatever the playfield does.
+        if mods.has(Mod::Echo) && !self.hide_notes {
+            self.draw_echo(c, vt, w, uni);
+        }
+    }
+
+    /// Echo: the bar map time `t` is in and the one after it (start, length each). Before the
+    /// first barline, the bar leading up to it.
+    fn echo_bars(&self, t: f64) -> Option<[(f64, f64); 2]> {
+        let bars = &self.map.barlines;
+        let fallback = 4.0 * beatmap::control_point_at(&self.map.control_points, t).beat_length;
+        let len_of = |i: usize| bars.get(i + 1).map_or(fallback, |b| b.time - bars[i].time).max(1.0);
+        match bar_at(bars, t, fallback) {
+            Some((i, start, len)) => Some([(start, len), (start + len, if i + 1 < bars.len() { len_of(i + 1) } else { fallback })]),
+            None => {
+                let first = bars.first()?.time;
+                let len = len_of(0);
+                Some([(first - len, len), (first, len)])
+            }
+        }
+    }
+
+    /// Echo: the next bar's notes in colour on a line under the lane, and a cursor running along
+    /// it with the bar being played. Each note rings as the cursor reaches it, a bar before it's
+    /// hit; the line fades over to the next bar on the barline.
+    fn draw_echo(&self, c: &mut Canvas, vt: f64, w: f32, uni: &Universe) {
+        let Some([(start, len), (next, next_len)]) = self.echo_bars(vt) else { return };
+        let p = ((vt - start) / len).clamp(0.0, 1.0);
+        let fade = (smooth(0.0, 0.05, p) * (1.0 - smooth(0.94, 1.0, p))) as f32;
+        let p = p as f32;
+        let (x0, x1) = (HIT_X, w - 120.0);
+        let x_at = |f: f32| x0 + (x1 - x0) * f;
+        let line = rgba(0x4a4a60, fade);
+        c.rect(x0, ECHO_Y - 0.75, x1 - x0, 1.5, line);
+        for x in [x0, x1] {
+            c.rect(x - 0.75, ECHO_Y - 5.0, 1.5, 10.0, line);
+        }
+        let notes = &self.map.notes;
+        let from = notes.partition_point(|n| n.time < next - 1.0);
+        for n in notes[from..].iter().take_while(|n| n.time < next + next_len - 1.0) {
+            let col = match n.kind {
+                Kind::Don => uni.don(),
+                Kind::Kat => uni.kat(),
+                _ => continue,
+            };
+            let f = ((n.time - next) / next_len) as f32;
+            let (x, r) = (x_at(f), if n.big { 8.5 } else { 5.5 });
+            // Ms since the cursor got to it.
+            let age = (p - f) * len as f32;
+            if age >= 0.0 {
+                c.circle(x, ECHO_Y, r + 0.5, rgba(col, fade), rgba(WHITE, fade), 1.5);
+                if age < ECHO_RING_MS {
+                    let k = age / ECHO_RING_MS;
+                    c.ring(x, ECHO_Y, r + 3.0 + 10.0 * k, rgba(col, 0.8 * (1.0 - k) * fade), 1.0 + 2.0 * (1.0 - k));
+                }
+            } else {
+                c.circle(x, ECHO_Y, r, rgba(col, 0.6 * fade), rgba(col, 0.0), 0.0);
+            }
+        }
+        c.rect(x_at(p) - 1.0, ECHO_Y - 11.0, 2.0, 22.0, rgba(WHITE, 0.85 * fade));
     }
 
     /// The kiai flash at map time `t`, taiko_arranger's rule: 1 on each beat counted from the
@@ -3317,6 +3639,20 @@ fn darken_outside(c: &mut Canvas, x: f32, y: f32, r: f32, w: f32) {
     }
 }
 
+/// The box (x, y, w, h) around `rect` turned by `angle` and scaled by `scale` about `pivot`,
+/// which lands on `dest` (as `Canvas::rotate_since` moves shapes).
+fn turned_box(rect: [f32; 4], pivot: [f32; 2], angle: f32, scale: f32, dest: [f32; 2]) -> [f32; 4] {
+    let (sin, cos) = angle.sin_cos();
+    let [x, y, w, h] = rect;
+    let corners = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)].map(|(px, py)| {
+        let (dx, dy) = ((px - pivot[0]) * scale, (py - pivot[1]) * scale);
+        (dest[0] + dx * cos - dy * sin, dest[1] + dx * sin + dy * cos)
+    });
+    let (x0, x1) = corners.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+    let (y0, y1) = corners.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+    [x0, y0, x1 - x0, y1 - y0]
+}
+
 /// Vertical band (top, height) of the lane with a little room for judgements, for previews that
 /// show only the lane.
 pub fn lane_band() -> (f32, f32) {
@@ -3487,6 +3823,24 @@ mod tests {
         Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse(mods))
     }
 
+    #[test]
+    fn random_colours_each_play_its_own_way_and_replays_the_same() {
+        let colours = |seed: u64| {
+            let g = Game::with_seed(beatmap::calibration_map(500.0, 0, 64), Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse("RD"), seed);
+            g.map.notes.iter().map(|n| n.kind == Kind::Don).collect::<Vec<_>>()
+        };
+        // Seed 0 is how every play of a map looked before seeds (replays from then).
+        let before: Vec<bool> = modded("RD").map.notes.iter().map(|n| hash01(n.time + 0.5) < 0.5).collect();
+        assert_eq!(colours(0), before);
+        assert_eq!(colours(12345), colours(12345));
+        let plays: Vec<_> = [1u64, 2, 777, 1 << 40].into_iter().map(colours).collect();
+        for (i, a) in plays.iter().enumerate() {
+            assert!(plays[i + 1..].iter().all(|b| b != a), "seeds give different colourings");
+            let dons = a.iter().filter(|&&d| d).count();
+            assert!((16..=48).contains(&dons), "about half dons: {dons} of 64");
+        }
+    }
+
     /// Hits every note `err` ms off (centre key, so dons), then lets the map end.
     fn play_all(g: &mut Game, err: f64) {
         let times: Vec<f64> = g.map.notes.iter().map(|n| n.time).collect();
@@ -3495,6 +3849,83 @@ mod tests {
         }
         let end = g.end_time + 2000.0;
         g.set_time(end);
+    }
+
+    #[test]
+    fn play_time_leaves_out_pauses_and_the_resume_countdown() {
+        let mut g = game();
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
+        g.update(at(0), None, 0.0);
+        g.update(at(1000), None, 0.0);
+        g.update(at(1500), None, 0.0);
+        assert!((g.played_ms - 1500.0).abs() < 1.0, "{}", g.played_ms);
+        g.paused = Some(0);
+        g.update(at(9000), None, 0.0);
+        // Counting down to resume doesn't count either.
+        g.paused = None;
+        g.resuming = Some((at(9000), at(12_000)));
+        g.update(at(11_000), None, 0.0);
+        g.resuming = None;
+        g.update(at(12_000), None, 0.0);
+        g.update(at(12_500), None, 0.0);
+        assert!((g.played_ms - 2000.0).abs() < 1.0, "{}", g.played_ms);
+        // A stall counts as a second at most.
+        g.update(at(60_000), None, 0.0);
+        assert!((g.played_ms - 3000.0).abs() < 1.0, "{}", g.played_ms);
+    }
+
+    #[test]
+    fn alternate_lets_either_hand_follow_finishers_drumrolls_and_swells() {
+        // Dons 500 ms apart, with a finisher at 1000, a drumroll from 2500 to 3500 and a swell
+        // from 5000 to 6000.
+        let mut map = beatmap::calibration_map(500.0, 0, 15);
+        let base = map.notes[0].clone();
+        let at = |t: f64| beatmap::Note { time: t, end_time: t, ..base.clone() };
+        map.notes = vec![
+            at(0.0),
+            at(500.0),
+            beatmap::Note { big: true, ..at(1000.0) },
+            at(1500.0),
+            at(2000.0),
+            beatmap::Note { kind: Kind::Roll, end_time: 3500.0, tick_spacing: 125.0, ..at(2500.0) },
+            at(4000.0),
+            at(4500.0),
+            beatmap::Note { kind: Kind::Swell, end_time: 6000.0, required_hits: 6, ..at(5000.0) },
+            at(6500.0),
+        ];
+        let mut g = Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse("AL"));
+        let (l, r) = (1, 2); // left and right centre
+        g.press_time(l, 0.0, None);
+        g.press_time(r, 500.0, None);
+        // The finisher with the left hand only, then the left hand again.
+        g.press_time(l, 1000.0, None);
+        g.press_time(l, 1500.0, None);
+        // Back to alternating: a second left in a row is ignored, the right then hits.
+        g.press_time(l, 1990.0, None);
+        g.press_time(r, 2000.0, None);
+        // The drumroll mashed with the left hand, then the left hand again after it.
+        for k in 0..=8 {
+            g.press_time(l, 2500.0 + 125.0 * k as f64, None);
+        }
+        g.press_time(l, 4000.0, None);
+        g.press_time(l, 4490.0, None);
+        g.press_time(r, 4500.0, None);
+        // The swell with the left hand alone (centre, rim, centre...), then the left again.
+        for k in 0..6 {
+            g.press_time(if k % 2 == 0 { l } else { 0 }, 5100.0 + 100.0 * k as f64, None);
+        }
+        g.press_time(l, 6500.0, None);
+        g.set_time(9000.0);
+        let s = &g.stats;
+        assert_eq!((s.great, s.ok, s.miss), (8, 0, 0), "every don hit");
+        assert_eq!((s.roll_ticks, s.swells), (9, 1));
+        // Without the finisher, drumroll and swell rule, the same hand twice is still out.
+        let mut g = Game::with_mods(beatmap::calibration_map(500.0, 0, 4), Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse("AL"));
+        g.press_time(l, 0.0, None);
+        g.press_time(l, 500.0, None);
+        g.set_time(9000.0);
+        assert_eq!((g.stats.great, g.stats.miss), (1, 3));
     }
 
     #[test]
@@ -3624,6 +4055,38 @@ mod tests {
         play_all(&mut plain, 0.0);
         play_all(&mut hd, 0.0);
         assert!(hd.stats.score > plain.stats.score);
+    }
+
+    #[test]
+    fn a_clean_play_is_a_million_and_mods_go_above_or_below_it() {
+        let mut g = modded("");
+        let mut last = 0;
+        let times: Vec<(f64, bool)> = g.map.notes.iter().filter(|n| matches!(n.kind, Kind::Don | Kind::Kat)).map(|n| (n.time, n.kind == Kind::Kat)).collect();
+        for (t, kat) in times {
+            g.press_at(if kat { 0 } else { 1 }, t, None);
+            assert!(g.stats.score >= last, "the score only grows while nothing is missed");
+            last = g.stats.score;
+        }
+        assert_eq!(g.stats.score, 1_000_000);
+        // Rolls and swells aren't part of it.
+        g.set_time(g.end_time + 2000.0);
+        assert_eq!(g.stats.score, 1_000_000);
+        let mut hard = modded("HD,HR");
+        play_all(&mut hard, 0.0);
+        assert!(hard.stats.score > 1_000_000);
+        let mut easy = modded("EZ");
+        play_all(&mut easy, 0.0);
+        assert!(easy.stats.score < 1_000_000);
+        // An OK, and a miss, each cost something; a miss more.
+        let mut ok = modded("");
+        let first = ok.map.notes[0].time;
+        ok.press_at(1, first + 80.0, None);
+        let mut miss = modded("");
+        miss.set_time(first + 500.0);
+        assert!(ok.stats.ok == 1 && miss.stats.miss == 1);
+        play_all(&mut ok, 0.0);
+        play_all(&mut miss, 0.0);
+        assert!(miss.stats.score < ok.stats.score && ok.stats.score < 1_000_000, "{} {}", miss.stats.score, ok.stats.score);
     }
 
     #[test]
@@ -4005,6 +4468,67 @@ mod tests {
         let g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
         assert!(crawl < 0.01);
         assert_eq!(g.min_velocity, crawl);
+    }
+
+    #[test]
+    fn radar_lights_notes_as_the_beam_passes_them() {
+        // The beam leaves the drum every other beat and crosses the lane in two, in kiai in one.
+        assert_eq!(radar_sweep(0.5, false), 0.25);
+        assert_eq!(radar_sweep(3.0, false), 0.5);
+        assert_eq!(radar_sweep(4.5, true), 0.5);
+        let (len, u) = (600.0, 100.0);
+        // A note 300 along lights up as the beam gets there and is gone by the next one.
+        assert!(radar_light(300.0, u, len, 0.5) > 0.99);
+        assert!(radar_light(300.0, u, len, 0.75) > radar_light(300.0, u, len, 0.95));
+        assert!(radar_light(300.0, u, len, 0.499) < 1e-3);
+        // By the drum it's always lit.
+        assert_eq!(radar_light(50.0, u, len, 0.9), 1.0);
+        // One that came on screen after the beam went by stays dark till the next one.
+        assert_eq!(radar_age(590.0, u, len, 0.3), None);
+        assert_eq!(radar_light(590.0, u, len, 0.3), 0.0);
+        // Hidden decides when far notes show too: picking it switches Radar off.
+        assert!(!Mods::parse("RA,HD").has(Mod::Radar));
+    }
+
+    #[test]
+    fn echo_shows_the_next_bar_in_colour_and_the_lane_in_grey() {
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        for (k, n) in map.notes.iter_mut().enumerate() {
+            if k % 3 == 1 {
+                n.kind = Kind::Kat;
+            }
+        }
+        let mut g = Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse("EC"));
+        // Bars are 2 s: in the one from 2 s, the one from 4 s shows; before the first barline,
+        // the first bar.
+        assert_eq!(g.echo_bars(2500.0), Some([(2000.0, 2000.0), (4000.0, 2000.0)]));
+        assert_eq!(g.echo_bars(-500.0), Some([(-2000.0, 2000.0), (0.0, 2000.0)]));
+        g.time = 2500.0;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        let fill = |s: &Shape| (s.fill[0] * 255.0).round() as u32 * 65536 + (s.fill[1] * 255.0).round() as u32 * 256 + (s.fill[2] * 255.0).round() as u32;
+        let notes: Vec<u32> = c.shapes.iter().filter(|s| s.center[1] == LANE_Y && s.half[0] == NOTE_R && s.center[0] > HIT_X + 40.0).map(fill).collect();
+        assert!(!notes.is_empty() && notes.iter().all(|&f| f == GREY), "{notes:x?}");
+        let dots: std::collections::HashSet<u32> = c.shapes.iter().filter(|s| s.center[1] == ECHO_Y && s.half[0] < 10.0 && s.half[0] > 3.0).map(fill).collect();
+        assert!(dots.len() >= 2 && !dots.contains(&GREY), "{dots:x?}");
+    }
+
+    #[test]
+    fn a_lobby_hosts_mod_settings_are_what_the_match_plays_with() {
+        let mut g = kiai_game("MV");
+        g.use_mod_settings(Some(multiverse::classic()), None);
+        assert_eq!(g.universes, Some(multiverse::classic()));
+        let mut g = kiai_game("SS");
+        let host = shapeshift::Config::parse("every=4 order=fixed shapes=spiral,loop,-zigzag,-uturn,-elbow,-straight");
+        g.use_mod_settings(None, Some(host));
+        assert_eq!(g.shapeshift.bars(), 4);
+        assert_eq!(&g.shape_order[..4], &[2, 3, 2, 3]);
+        // Settings the host didn't send stay the player's own.
+        let mut g = kiai_game("SS");
+        let own = g.shape_order.clone();
+        g.use_mod_settings(None, None);
+        assert_eq!((g.universes, g.shape_order), (None, own));
     }
 
     #[test]

@@ -31,6 +31,16 @@ pub fn star_rating_with(path: &Path, rate: f64, mods: u32) -> Option<f64> {
     Difficulty::new().mods(mods).clock_rate(rate).calculate_for_mode::<Taiko>(&map).ok().map(|a| a.stars)
 }
 
+/// With mods and the scroll speed setting, the way pp counts them (`pp::formula_mods`: slower
+/// notes read easier, faster ones harder). Relax goes by its mod bits, scroll speed aside.
+pub fn star_rating_for(path: &Path, rate: f64, mods: crate::mods::Mods, scroll_speed: f64) -> Option<f64> {
+    if mods.has(crate::mods::Mod::Relax) {
+        return star_rating_with(path, rate, mod_bits(mods));
+    }
+    let map = load(path)?;
+    Difficulty::new().mods(crate::pp::formula_mods(mods, scroll_speed)).clock_rate(rate).calculate_for_mode::<Taiko>(&map).ok().map(|a| a.stars)
+}
+
 /// The mods of `mods` osu!taiko's star rating counts, as osu!'s mod bits (the speed is passed as
 /// a rate).
 pub fn mod_bits(mods: crate::mods::Mods) -> u32 {
@@ -56,45 +66,55 @@ fn rate_key(rate: f64) -> u32 {
     (rate * 100.0).round() as u32
 }
 
-/// Background star rating calculator with a cache keyed by library index, rate and mods.
+/// Library index, rate, mods (`mod_bits`) and scroll speed (both in hundredths).
+type Key = (usize, u32, u32, u32);
+
+/// Background star rating calculator with a cache keyed by library index, rate, mods and
+/// scroll speed.
 pub struct Stars {
-    tx: Sender<(usize, PathBuf, f64, u32)>,
-    rx: Receiver<((usize, u32, u32), Option<f32>)>,
-    cache: HashMap<(usize, u32, u32), Option<f32>>,
-    requested: HashSet<(usize, u32, u32)>,
-    /// The mods ratings are for now (`mod_bits`).
-    mods: u32,
+    tx: Sender<(Key, PathBuf, f64, crate::mods::Mods, f64)>,
+    rx: Receiver<(Key, Option<f32>)>,
+    cache: HashMap<Key, Option<f32>>,
+    requested: HashSet<Key>,
+    /// The mods and scroll speed ratings are for now.
+    mods: crate::mods::Mods,
+    scroll_speed: f64,
 }
 
 impl Default for Stars {
     fn default() -> Self {
-        let (tx, jobs) = mpsc::channel::<(usize, PathBuf, f64, u32)>();
+        let (tx, jobs) = mpsc::channel::<(Key, PathBuf, f64, crate::mods::Mods, f64)>();
         let (done, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("stars".into())
             .spawn(move || {
-                for (i, path, rate, mods) in jobs {
-                    let stars = std::panic::catch_unwind(|| star_rating_with(&path, rate, mods)).ok().flatten().map(|s| s as f32);
-                    if done.send(((i, rate_key(rate), mods), stars)).is_err() {
+                for (key, path, rate, mods, scroll_speed) in jobs {
+                    let stars = std::panic::catch_unwind(|| star_rating_for(&path, rate, mods, scroll_speed)).ok().flatten().map(|s| s as f32);
+                    if done.send((key, stars)).is_err() {
                         return;
                     }
                 }
             })
             .expect("spawn star worker");
-        Stars { tx, rx, cache: HashMap::new(), requested: HashSet::new(), mods: 0 }
+        Stars { tx, rx, cache: HashMap::new(), requested: HashSet::new(), mods: crate::mods::Mods::NONE, scroll_speed: 1.0 }
     }
 }
 
 impl Stars {
     /// Queues a calculation unless it is cached or already queued.
-    /// Ratings from now on are with `mods` (the ones osu!taiko's rating counts).
-    pub fn set_mods(&mut self, mods: crate::mods::Mods) {
-        self.mods = mod_bits(mods);
+    /// Ratings from now on are with `mods` and at `scroll_speed`.
+    pub fn set_mods(&mut self, mods: crate::mods::Mods, scroll_speed: f64) {
+        (self.mods, self.scroll_speed) = (mods, scroll_speed);
+    }
+
+    fn key(&self, index: usize, rate: f64) -> Key {
+        (index, rate_key(rate), mod_bits(self.mods), rate_key(self.scroll_speed))
     }
 
     pub fn request(&mut self, index: usize, path: &Path, rate: f64) {
-        if self.requested.insert((index, rate_key(rate), self.mods)) {
-            let _ = self.tx.send((index, path.to_path_buf(), rate, self.mods));
+        let key = self.key(index, rate);
+        if self.requested.insert(key) {
+            let _ = self.tx.send((key, path.to_path_buf(), rate, self.mods, self.scroll_speed));
         }
     }
 
@@ -105,7 +125,7 @@ impl Stars {
     }
 
     pub fn get(&self, index: usize, rate: f64) -> Option<f32> {
-        self.cache.get(&(index, rate_key(rate), self.mods)).copied().flatten()
+        self.cache.get(&self.key(index, rate)).copied().flatten()
     }
 
     /// Library indices changed (rescan): forget everything.
@@ -180,6 +200,12 @@ mod tests {
         let hr = star_rating_with(&path, 1.0, mod_bits(crate::mods::Mods::parse("HR"))).unwrap();
         let ez = star_rating_with(&path, 1.0, mod_bits(crate::mods::Mods::parse("EZ"))).unwrap();
         assert!(hr > nomod && ez < nomod, "nomod {nomod} HR {hr} EZ {ez}");
+        // The scroll speed counts as pp has it: slower reads easier.
+        let none = crate::mods::Mods::NONE;
+        let slow = star_rating_for(&path, 1.0, none, 0.5).unwrap();
+        assert!(slow < nomod, "nomod {nomod} at 0.5x scroll {slow}");
+        assert!((star_rating_for(&path, 1.0, none, 1.0).unwrap() - nomod).abs() < 1e-9);
+        assert!((star_rating_for(&path, 1.0, crate::mods::Mods::parse("HR"), 1.0).unwrap() - hr).abs() < 1e-9);
         // Mods the rating doesn't count don't change it.
         assert_eq!(mod_bits(crate::mods::Mods::parse("HD,FL,PF")), 0);
         let _ = std::fs::remove_file(&path);

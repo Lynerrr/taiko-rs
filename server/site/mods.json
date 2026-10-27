@@ -116,7 +116,7 @@
       },
       {
         "acronym": "AL",
-        "description": "The same hand can't hit twice in a row.",
+        "description": "Hands must alternate; either may follow a finisher, drumroll or swell.",
         "name": "Alternate"
       },
       {
@@ -306,6 +306,16 @@
         "acronym": "LI",
         "description": "Far off, triplets are spaced like 1/4s; their real spacing shows near the drum.",
         "name": "Liar"
+      },
+      {
+        "acronym": "RA",
+        "description": "The lane is dark: a beam sweeps it every other beat and lights notes up as it passes.",
+        "name": "Radar"
+      },
+      {
+        "acronym": "EC",
+        "description": "Notes are grey; the next bar shows in colour under the lane, a cursor running along it.",
+        "name": "Echo"
       }
     ],
     "title": "VISUAL"
@@ -347,6 +357,11 @@
         "acronym": "SK",
         "description": "Streams slither along the lane, triplets the other way; 1/1 notes fly straight.",
         "name": "Snake"
+      },
+      {
+        "acronym": "XF",
+        "description": "The drum sits in the middle: kats come from the left, dons from the right.",
+        "name": "Crossfire"
       }
     ],
     "title": "RAILS"

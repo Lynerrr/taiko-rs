@@ -1,4 +1,4 @@
-# taiko-rs
+# taiko.rs
 
 A small, fast osu!taiko client in Rust, built for Linux/Wayland, with Windows and Android builds.
 
@@ -64,8 +64,8 @@ Install `taiko-rs-android.apk` from the [releases](https://github.com/Lynerrr/ta
 (Android 8.0+, 64-bit ARM; allow installing from your browser or file manager when asked). To
 update, install the new APK over the old one.
 
-- **Maps**: open an `.osz` with taiko-rs (from a file manager, your browser's downloads, Telegram...)
-  or share it to taiko-rs, and it is imported; or get maps in **DOWNLOAD**. They live in
+- **Maps**: open an `.osz` with taiko.rs (from a file manager, your browser's downloads, Telegram...)
+  or share it to taiko.rs, and it is imported; or get maps in **DOWNLOAD**. They live in
   `Android/data/io.github.lynerrr.taiko/files/taiko-rs/Songs` (reachable over USB), with the
   settings, scores and skins next to them. Uninstalling the app deletes that folder.
 - **Touch**: during a song the screen is four columns, each a drum key, marked along the bottom.
@@ -102,7 +102,7 @@ Java class (`android/java`) for importing opened files; no Gradle. Logs go to lo
 
 ### Updates
 
-Installed builds update themselves: at startup taiko-rs asks GitHub whether the `latest` release
+Installed builds update themselves: at startup taiko.rs asks GitHub whether the `latest` release
 was built from a newer commit than it was, and if so a green **update** badge appears top right in
 the menus. Click it or press **Ctrl+U** (or Settings → Updates → *Update*) and it downloads the
 new build, swaps it in (on Windows the running exe is moved aside to `taiko-rs.exe.old`, deleted on
@@ -127,7 +127,7 @@ Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
 | [ / ] (Shift: ×5) | speed (rate) −/+ 0.05× on song select; host sets the match rate in the lobby |
 | F5 / F6 (rebindable) | previous / next playfield resolution preset, anywhere |
 | right mouse (hold and move, song select) | fly through the song list like osu!: the pointer's height over the list picks the song that far through it |
-| right click on a song / difficulty | menu: hide that difficulty or the whole song from the list (only in taiko-rs, files stay; Settings → *Hidden maps* brings them all back) |
+| right click on a song / difficulty | menu: hide that difficulty or the whole song from the list (only in taiko.rs, files stay; Settings → *Hidden maps* brings them all back) |
 | left mouse (hold and drag, song select) | drag the song list up and down; a click without dragging selects / plays as before |
 | mouse (in game) | drag inside the playfield to move it, drag its edges/corners to resize it, wheel to scale it |
 | Space | skip intro |
@@ -162,7 +162,7 @@ and the preview fades in on a new map. Gameplay itself is never animated or dela
 
 At startup a short **splash** plays (about 2.5 s), timed to its own voice clip: the screen powers
 on like a CRT, a boot log types out what is really starting (GPU, audio device, songs found, skin),
-a pixel portrait (one of nine, picked at random each start) assembles from don/kat coloured pixels and takes drum hits on the voice, *taiko-rs*
+a pixel portrait (one of nine, picked at random each start) assembles from don/kat coloured pixels and takes drum hits on the voice, *taiko.rs*
 drops in syllable by syllable, the hiss glitches the picture, a loading bar fills to READY and the
 screen powers off into song select, whose preview music waits until then. Effects follow the clip's
 loudness. Any key or click skips it; Settings → Video → *Startup splash* turns it off.
@@ -217,7 +217,7 @@ backwards) orders songs by artist, title, difficulty, length, BPM, recently play
 a song goes by its hardest / longest / most recently played difficulty. Difficulty, length and BPM
 come from a background pass over the library (osu!'s star ratings via rosu-pp, like the pills)
 that is cached, so only new maps are analysed on later starts; the header shows its progress.
-"Recently played" combines plays in taiko-rs with osu! stable's own history from `osu!.db`. If
+"Recently played" combines plays in taiko.rs with osu! stable's own history from `osu!.db`. If
 an osu! stable install owns the Songs folder, its collections (`collection.db`) are listed under
 the *Collection* button (or Ctrl+L) to show just one of them.
 
@@ -356,7 +356,7 @@ offset until notes land on the clicks.
 ## Skins
 
 Settings → Skin → **Skin** (Enter or click opens a list of every installed skin; Left/Right step through them) picks an osu! skin from osu!'s `Skins` folder (next to its
-Songs folder) or from taiko-rs's own, `~/.local/share/taiko-rs/Skins` / `%APPDATA%\taiko-rs\Skins`
+Songs folder) or from taiko.rs's own, `~/.local/share/taiko-rs/Skins` / `%APPDATA%\taiko-rs\Skins`
 (*Skins folder* opens it; `.osk` files dropped there are unpacked on their own).
 
 Its notes replace the drawn ones: `taikohitcircle` / `taikobigcircle` tinted red or blue with
@@ -418,7 +418,7 @@ and the cover are fetched, and cached.
 
 ## Multiplayer
 
-The **MULTIPLAYER** tab has two columns: **ONLINE** (lobbies on the taiko-rs server, no open
+The **MULTIPLAYER** tab has two columns: **ONLINE** (lobbies on the taiko.rs server, no open
 port needed) and **DIRECT (P2P)** (one player hosts on their own port), which still works when
 the server is down.
 
@@ -513,7 +513,7 @@ directly, a jump host (`ssh -J`, e.g. an alias from `~/.ssh/config`) goes throug
 
 ## Discord status
 
-While Discord is running, your status shows *Playing taiko-rs* with what you're doing: the map
+While Discord is running, your status shows *Playing taiko.rs* with what you're doing: the map
 (with stars and speed) while playing, paused or watching a replay; the multiplayer lobby, match
 or who you're spectating; song select, downloads, settings or the video editor; and how long
 you've been at it. It talks to Discord's local IPC socket directly (the desktop app, Flatpak,

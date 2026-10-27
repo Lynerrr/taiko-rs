@@ -1,4 +1,4 @@
-//! Mods: osu!'s (EZ, HR, HD, FL, DT...), lazer's taiko extras and taiko-rs's own (scroll speed
+//! Mods: osu!'s (EZ, HR, HD, FL, DT...), lazer's taiko extras and taiko.rs's own (scroll speed
 //! tricks, SV experiments, visual tricks, note paths, playfield moves and copies). A set of them is a bit mask; each has a two-letter acronym used in
 //! the config, replays and multiplayer.
 
@@ -66,6 +66,8 @@ pub enum Mod {
     Party,
     Overtime,
     Liar,
+    Radar,
+    Echo,
     // Rails: the lane bent into a shape.
     Zigzag,
     UTurn,
@@ -81,6 +83,7 @@ pub enum Mod {
     Mania,
     BarrelRoll,
     FlipFlop,
+    Crossfire,
     Shatter,
     Cracked,
     Crumble,
@@ -90,13 +93,13 @@ pub enum Mod {
 
 use Mod::*;
 
-pub const ALL: [Mod; 73] = [
+pub const ALL: [Mod; 76] = [
     Easy, NoFail, HalfTime, Daycore, Half, NoFinishers, HardRock, SuddenDeath, Perfect, DoubleTime, Nightcore, Hidden,
     Flashlight, Precise, GreatOrNothing, Relax, Autoplay, Swap, Random, ConstantSpeed, Alternate, WindUp, WindDown, AllBig,
     Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette, AntiSv, HyperSv, Even, Split, Swing,
     Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed, Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy,
-    Party, Overtime, Liar, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop,
-    Shatter, Cracked, Crumble, Portal, Multiverse,
+    Party, Overtime, Liar, Radar, Echo, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop,
+    Crossfire, Shatter, Cracked, Crumble, Portal, Multiverse,
 ];
 
 /// Mod select columns: (title, accent colour, mods).
@@ -106,8 +109,8 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
     ("CONVERSION", 0x4fb4ff, &[Relax, Autoplay, Swap, Random, ConstantSpeed, Alternate, WindUp, WindDown, AllBig]),
     ("SCROLL", 0xFFD34D, &[Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette]),
     ("SV LAB", 0xFF8A3D, &[AntiSv, HyperSv, Even, Split, Swing, Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed]),
-    ("VISUAL", 0xc77dff, &[Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Party, Overtime, Liar]),
-    ("RAILS", 0x5ee6c8, &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake]),
+    ("VISUAL", 0xc77dff, &[Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Party, Overtime, Liar, Radar, Echo]),
+    ("RAILS", 0x5ee6c8, &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Crossfire]),
     ("PLAYFIELD", 0xff5fa2, &[Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal, Multiverse]),
 ];
 
@@ -187,6 +190,8 @@ impl Mod {
             Party => "PY",
             Overtime => "OT",
             Liar => "LI",
+            Radar => "RA",
+            Echo => "EC",
             Zigzag => "ZZ",
             UTurn => "UT",
             Spiral => "SI",
@@ -200,6 +205,7 @@ impl Mod {
             Mania => "MN",
             BarrelRoll => "BA",
             FlipFlop => "FF",
+            Crossfire => "XF",
             Shatter => "SH",
             Cracked => "CK",
             Crumble => "CR",
@@ -265,6 +271,8 @@ impl Mod {
             Party => "Party",
             Overtime => "Overtime",
             Liar => "Liar",
+            Radar => "Radar",
+            Echo => "Echo",
             Zigzag => "Zigzag",
             UTurn => "U-Turn",
             Spiral => "Spiral",
@@ -278,6 +286,7 @@ impl Mod {
             Mania => "Mania",
             BarrelRoll => "Barrel Roll",
             FlipFlop => "Flip Flop",
+            Crossfire => "Crossfire",
             Shatter => "Shatter",
             Cracked => "Cracked",
             Crumble => "Crumble",
@@ -308,7 +317,7 @@ impl Mod {
             Swap => "Dons become kats and kats become dons.",
             Random => "Every note gets a random colour.",
             ConstantSpeed => "All notes scroll at one speed: no SV changes.",
-            Alternate => "The same hand can't hit twice in a row.",
+            Alternate => "Hands must alternate; either may follow a finisher, drumroll or swell.",
             WindUp => "The song speeds up from 1.0x to 1.5x of your speed.",
             WindDown => "The song slows down from 1.0x to 0.75x of your speed.",
             AllBig => "Every don and kat is a big note.",
@@ -342,6 +351,8 @@ impl Mod {
             Decoy => "See-through fake notes fly in between the real ones and vanish before the drum.",
             Overtime => "It's me.",
             Liar => "Far off, triplets are spaced like 1/4s; their real spacing shows near the drum.",
+            Radar => "The lane is dark: a beam sweeps it every other beat and lights notes up as it passes.",
+            Echo => "Notes are grey; the next bar shows in colour under the lane, a cursor running along it.",
             Party => "Everything flashy at once; notes pulse to their own rhythm, 1/4s four times a beat.",
             Zigzag => "The lane zigzags across the screen.",
             UTurn => "Notes come in along the top, make a U-turn and come back to the drum.",
@@ -356,6 +367,7 @@ impl Mod {
             Mania => "The lane stands up: notes fall down onto the drum.",
             BarrelRoll => "Every kiai starts with a full spin of the lane.",
             FlipFlop => "Every 8 bars the lane flips over to the other side.",
+            Crossfire => "The drum sits in the middle: kats come from the left, dons from the right.",
             Shatter => "The lane breaks into pieces that slide apart and back; further where streams are.",
             Cracked => "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
             Crumble => "Hits knock pieces out of the lane, harder as the combo grows; a miss puts them back.",
@@ -364,7 +376,7 @@ impl Mod {
         }
     }
 
-    /// Score multiplier: osu!'s for its mods, and on the same scale for taiko-rs's own by how
+    /// Score multiplier: osu!'s for its mods, and on the same scale for taiko.rs's own by how
     /// much harder they make a map to read or play (HR's 1.06 is "clearly harder", DT's 1.12
     /// "a lot"). Mods that help score below 1; ones that only look different stay at 1.
     pub fn multiplier(self) -> f64 {
@@ -379,11 +391,11 @@ impl Mod {
             Spotlight | Blackout | Memory | Colorless => 1.1,
             // Hard to read or to play: notes that lie about where or when they'll arrive.
             SvChaos | Even => 1.08,
-            Sudden | Blink | Decoy | Liar | Alternate | WindUp | Stutter | Roulette | HyperSv | Split | Leapfrog | LagSpike | Moonwalk => 1.06,
+            Sudden | Blink | Decoy | Liar | Radar | Echo | Alternate | WindUp | Stutter | Roulette | HyperSv | Split | Leapfrog | LagSpike | Moonwalk => 1.06,
             Spiral | Shapeshift | Spin | Portal => 1.06,
             // Noticeably harder.
             GreatOrNothing | Random | Accel | Brake | Pulse | Crescendo | Drop | Gearbox | AntiSv | Swing | Panic | SnapSpeed => 1.04,
-            UTurn | Loop | Snake | FlipFlop | Shatter | Crumble => 1.04,
+            UTurn | Loop | Snake | FlipFlop | Crossfire | Shatter | Crumble => 1.04,
             // A little harder: the lane moves or bends, the notes read as usual.
             AllBig | Wave | Zigzag | Elbow | Mirror | Tilt | Mania | BarrelRoll | Cracked | Party => 1.02,
             _ => 1.0,
@@ -411,11 +423,17 @@ impl Mod {
             Brake => &[Accel],
             Pulse => &[Stutter],
             Stutter => &[Pulse],
-            Hidden => &[Sudden, Memory],
-            Sudden => &[Hidden, Memory],
-            Memory => &[Hidden, Sudden],
-            Flashlight => &[Spotlight, Multiverse],
-            Spotlight => &[Flashlight, Multiverse],
+            Hidden => &[Sudden, Memory, Radar],
+            Sudden => &[Hidden, Memory, Radar],
+            Memory => &[Hidden, Sudden, Radar],
+            Flashlight => &[Spotlight, Multiverse, Radar],
+            Spotlight => &[Flashlight, Multiverse, Radar],
+            // Radar decides when far notes show and lights the whole lane: nothing else may hide
+            // them or keep the light to one spot. Its window-sized lanes are Multiverse's own.
+            Radar => &[Hidden, Sudden, Memory, Flashlight, Spotlight, Blackout, Multiverse],
+            // Echo's bar sits under the lane: nothing may move the lane over it. Colorless does
+            // its grey already, and Multiverse's colours are what the windows go by.
+            Echo => &[Colorless, Multiverse, Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift],
             // The map's own speeds are what these bend, so they don't mix with each other or
             // with one speed for everything.
             ConstantSpeed => &[AntiSv, HyperSv],
@@ -423,17 +441,23 @@ impl Mod {
             HyperSv => &[AntiSv, ConstantSpeed],
             Panic => &[Mercy],
             Mercy => &[Panic],
-            Spin => &[Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse],
-            Mania => &[Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse],
-            Zigzag | UTurn | Spiral | Loop | Elbow | Shapeshift => &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Mania, Spin, Multiverse],
+            Spin => &[Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Crossfire, Echo],
+            Mania => &[Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Crossfire, Echo],
+            Zigzag | UTurn | Spiral | Loop | Elbow | Shapeshift => &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Mania, Spin, Multiverse, Crossfire, Echo],
+            // The drum in the middle, a lane each way: nothing else may move the drum, bend the
+            // lane or break it into pieces.
+            Crossfire => &[Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Shatter, Cracked, Crumble, Portal],
+            Shatter | Portal => &[Crossfire],
             // Its playfields are small windows side by side: nothing may move them off their
             // spots, light only one of them or take its colours away.
-            Tilt | BarrelRoll | Colorless | Blackout => &[Multiverse],
+            Tilt | BarrelRoll => &[Multiverse],
+            Colorless => &[Multiverse, Echo],
+            Blackout => &[Multiverse, Radar],
             Multiverse => &[
-                Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Colorless, Flashlight, Spotlight, Blackout,
+                Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Colorless, Flashlight, Spotlight, Blackout, Crossfire, Radar, Echo,
             ],
-            Cracked => &[Crumble],
-            Crumble => &[Cracked],
+            Cracked => &[Crumble, Crossfire],
+            Crumble => &[Cracked, Crossfire],
             _ => &[],
         }
     }
@@ -448,7 +472,7 @@ impl Mod {
             Easy | HalfTime | Daycore => -2,
             NoFail | NoFinishers | ConstantSpeed | WindDown | Mercy => 0,
             DoubleTime | Nightcore | Flashlight | Spotlight | Colorless => 3,
-            HardRock | Hidden | Sudden | Blink | Decoy | Random | Alternate | WindUp => 2,
+            HardRock | Hidden | Sudden | Blink | Decoy | Radar | Echo | Random | Alternate | WindUp => 2,
             Stutter | SvChaos | Roulette | HyperSv | Even | Split | Leapfrog | Panic | LagSpike | Moonwalk => 2,
             Spiral | Shapeshift | Spin | FlipFlop | Portal | Multiverse => 2,
             _ => 1,
@@ -457,7 +481,7 @@ impl Mod {
 
     /// Mods that hide or disguise notes: one of them at a time is plenty.
     fn obscures(self) -> bool {
-        matches!(self, Hidden | Sudden | Flashlight | Spotlight | Blink | Colorless | Decoy | Liar | Multiverse)
+        matches!(self, Hidden | Sudden | Flashlight | Spotlight | Blink | Colorless | Decoy | Liar | Radar | Echo | Multiverse)
     }
 
     /// Mods that change where and how fast notes travel.
@@ -478,8 +502,29 @@ impl Mod {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Mods(u128);
 
+/// Mods that change the song's speed: everyone in a lobby plays the host's, so the song stays
+/// in step for all. The rest each player picks for themselves.
+const SPEED: [Mod; 6] = [Mod::DoubleTime, Mod::Nightcore, Mod::HalfTime, Mod::Daycore, Mod::WindUp, Mod::WindDown];
+
+impl Mod {
+    /// A lobby's host picks it for everyone (it changes the song's speed).
+    pub fn shared(self) -> bool {
+        SPEED.contains(&self)
+    }
+}
+
 impl Mods {
     pub const NONE: Mods = Mods(0);
+
+    /// The mods everyone in a lobby plays with (the host's): the speed's.
+    pub fn shared(self) -> Mods {
+        Mods(self.0 & SPEED.iter().fold(0, |bits, m| bits | m.bit()))
+    }
+
+    /// The rest: each player's own in a lobby.
+    pub fn free(self) -> Mods {
+        Mods(self.0 & !self.shared().0)
+    }
 
     pub fn has(self, m: Mod) -> bool {
         self.0 & m.bit() != 0
@@ -758,6 +803,17 @@ impl Speed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lobbies_share_the_speed_and_leave_the_rest_to_each_player() {
+        let host = Mods::parse("DT,HD,HR");
+        assert_eq!(host.shared(), Mods::parse("DT"));
+        assert_eq!(host.free(), Mods::parse("HD,HR"));
+        // A player's game: the host's speed, their own others (not the host's).
+        let mine = Mods::parse("HT,EZ,FL");
+        assert_eq!(host.shared().plus(mine.free()), Mods::parse("DT,EZ,FL"));
+        assert!(Mod::WindUp.shared() && Mod::Nightcore.shared() && !Mod::Hidden.shared() && !Mod::Random.shared());
+    }
 
     #[test]
     fn multipliers_follow_how_hard_a_mod_is() {

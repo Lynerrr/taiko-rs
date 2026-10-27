@@ -16,7 +16,7 @@ const SITE: &str = "https://rstaiko.auneu.space";
 const TAGLINE: &str = "A taiko client for osu! beatmaps, with 73 mods that bend, break and multiply the lane. Rankings, profiles, chat and downloads.";
 const RAW: &str = "https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client";
 
-/// A clip of taiko-rs's own mods: what it shows, the mods on, its file under /clips/, and the
+/// A clip of taiko.rs's own mods: what it shows, the mods on, its file under /clips/, and the
 /// hover effect its card plays (the mod done to the card itself).
 struct Clip {
     file: &'static str,
@@ -36,7 +36,7 @@ const CLIPS: [Clip; 6] = [
 ];
 
 /// Files served under /clips/ and /site/ (`web.rs`).
-pub const STATIC_FILES: [(&str, &[u8]); 16] = [
+pub const STATIC_FILES: [(&str, &[u8]); 18] = [
     ("clips/multiverse.mp4", include_bytes!("../site/clips/multiverse.mp4")),
     ("clips/multiverse.jpg", include_bytes!("../site/clips/multiverse.jpg")),
     ("clips/loop.mp4", include_bytes!("../site/clips/loop.mp4")),
@@ -52,6 +52,8 @@ pub const STATIC_FILES: [(&str, &[u8]); 16] = [
     ("site/taiko5x7.woff2", include_bytes!("../site/taiko5x7.woff2")),
     ("site/logo.png", include_bytes!("../../assets/icon-64.png")),
     ("site/chat.js", include_bytes!("../site/chat.js")),
+    ("site/copy.js", include_bytes!("../site/copy.js")),
+    ("site/watch.js", include_bytes!("../site/watch.js")),
     ("site/og.jpg", include_bytes!("../site/og.jpg")),
 ];
 
@@ -80,13 +82,17 @@ fn mod_count() -> usize {
 }
 
 /// A mod's column colour and name, by its acronym.
-fn mod_info(acronym: &str) -> Option<(&'static str, &'static str)> {
+pub(crate) fn mod_info(acronym: &str) -> Option<(&'static str, &'static str)> {
     groups().iter().find_map(|g| g.mods.iter().find(|m| m.acronym == acronym).map(|m| (g.colour.as_str(), m.name.as_str())))
 }
 
 /// Badges next to a player's name on their profile, like osu!'s groups: (lowercased name,
 /// label, colour, what it means).
-const BADGES: [(&str, &str, &str, &str); 1] = [("auneu", "DEV", "#EB452C", "taiko-rs developer")];
+const BADGES: [(&str, &str, &str, &str); 3] = [
+    ("auneu", "DEV", "#EB452C", "taiko.rs developer"),
+    ("lynerrr", "DEV", "#EB452C", "taiko.rs developer"),
+    ("claude", "MAIN DEV", "#d97757", "taiko.rs's main developer"),
+];
 
 fn badges(name: &str) -> String {
     let key = name.to_ascii_lowercase();
@@ -95,6 +101,114 @@ fn badges(name: &str) -> String {
         .filter(|b| b.0 == key)
         .map(|(_, label, colour, what)| format!("<span class=badge style=\"--c:{colour}\" title=\"{what}\">{label}</span>"))
         .collect()
+}
+
+/// A player's roles (their badges), and what the one looking at their profile may do there.
+pub struct Roles {
+    pub admin: bool,
+    pub nominator: bool,
+    /// It's the viewer's own profile.
+    pub own: bool,
+    pub viewer_admin: bool,
+    /// Their code for `>verify` on Discord (their own page, nominators only).
+    pub verify_code: Option<String>,
+}
+
+fn role_badges(r: &Roles) -> String {
+    let badge = |label: &str, colour: &str, what: &str| format!("<span class=badge style=\"--c:{colour}\" title=\"{what}\">{label}</span>");
+    if r.admin {
+        badge("ADMIN", "#9b59ff", "taiko.rs admin: makes loved nominators, and loves maps")
+    } else if r.nominator {
+        badge("LOVED", "#ff66aa", "loved nominator: loves graveyard maps so they give pp here")
+    } else {
+        String::new()
+    }
+}
+
+/// The profile's tools for whoever may use them: their picture and Discord code (their own
+/// page), loved nominator on or off (admins).
+fn profile_tools(p: &Profile, r: &Roles) -> String {
+    let mut parts = Vec::new();
+    if r.own {
+        let remove = if crate::avatars::version(&p.name.to_ascii_lowercase()).is_some() {
+            "<form method=post action=\"/avatar/remove\"><button class=\"btn small\">remove picture</button></form>"
+        } else {
+            ""
+        };
+        parts.push(format!(
+            "<div class=tool><b>PROFILE PICTURE</b><form method=post action=\"/avatar\" enctype=\"multipart/form-data\" class=upload>\
+             <input type=file name=avatar accept=\"image/png,image/jpeg,image/gif,image/webp\" required aria-label=\"picture\"><button class=\"btn small\">upload</button></form>{remove}\
+             <span class=dim>PNG, JPEG, GIF or WebP, at most {} MB. Square ones look best.</span></div>",
+            crate::avatars::MAX_BYTES / 1024 / 1024
+        ));
+    }
+    if let Some(code) = &r.verify_code {
+        parts.push(format!(
+            "<div class=tool><b>DISCORD</b><span>To love maps from Discord, send the taiko.rs bot <code>&gt;verify {}</code> (it works once, within 30 minutes).</span></div>",
+            esc(code)
+        ));
+    }
+    if r.viewer_admin && !r.own {
+        let nominator = if r.admin {
+            String::new()
+        } else {
+            let (on, label) = if r.nominator { ("0", "remove loved nominator") } else { ("1", "make loved nominator") };
+            format!("<form method=post action=\"/u/{}/nominator\"><input type=hidden name=on value={on}><button class=\"btn small\">{label}</button></form>", esc(&p.name))
+        };
+        let remove = if crate::avatars::version(&p.name.to_ascii_lowercase()).is_some() {
+            format!("<form method=post action=\"/u/{}/avatar/remove\"><button class=\"btn small\">remove picture</button></form>", esc(&p.name))
+        } else {
+            String::new()
+        };
+        parts.push(format!(
+            "<div class=tool><b>ADMIN</b>{nominator}<form method=post action=\"/u/{0}/avatar\" enctype=\"multipart/form-data\" class=upload>\
+             <input type=file name=avatar accept=\"image/png,image/jpeg,image/gif,image/webp\" required aria-label=\"their picture\"><button class=\"btn small\">set their picture</button></form>{remove}</div>",
+            esc(&p.name)
+        ));
+    }
+    if parts.is_empty() { String::new() } else { format!("<section class=\"panel tools\">{}</section>", parts.concat()) }
+}
+
+/// A map page's love button and state.
+pub struct Love {
+    /// Loved here: by whom and when.
+    pub loved: Option<crate::loved::Loved>,
+    /// The viewer is a loved nominator.
+    pub can_love: bool,
+    pub notice: Option<String>,
+}
+
+/// A set loved here, for the list of them.
+pub struct LovedRow {
+    pub set: u32,
+    /// Its artist and title, if looked up.
+    pub names: Option<(String, String)>,
+    pub loved: crate::loved::Loved,
+}
+
+pub fn loved(rows: &[LovedRow]) -> String {
+    let list = if rows.is_empty() {
+        "<p class=dim>Nothing yet. Loved nominators pick graveyard maps to love; then plays on them give pp.</p>".to_string()
+    } else {
+        rows.iter()
+            .map(|r| {
+                let (artist, title) = r.names.clone().unwrap_or_else(|| (String::new(), format!("set {}", r.set)));
+                format!(
+                    "<a class=mini href=\"https://osu.ppy.sh/beatmapsets/{0}\"{1}><span class=art></span><span class=mini-info><b>{2}</b><span class=dim>{3}</span></span><span class=dim>by {4}, {5}</span></a>",
+                    r.set,
+                    cover_style(Some(r.set), 0, "list@2x"),
+                    esc(&title),
+                    esc(&artist),
+                    esc(&r.loved.by),
+                    ago(r.loved.at)
+                )
+            })
+            .collect()
+    };
+    format!(
+        "<div class=band><div class=inner><h1 class=glitch data-text=\"LOVED\">LOVED</h1><p class=dim>Maps loved here by taiko.rs's loved nominators: they give pp on taiko.rs, whatever their status on osu!.</p></div></div>\
+         <div class=page><section class=panel>{list}</section></div>"
+    )
 }
 
 /// How the one looking at a profile stands with its player.
@@ -135,7 +249,7 @@ pub fn profile_meta(p: &Profile) -> Meta {
     let rank = p.rank.map(|r| format!("#{r} · ")).unwrap_or_default();
     Meta {
         description: format!(
-            "{rank}{}pp · {:.2}% accuracy · {} plays · level {:.0}. taiko-rs player since {}.",
+            "{rank}{}pp · {:.2}% accuracy · {} plays · level {:.0}. taiko.rs player since {}.",
             thousands(p.pp.round() as u64),
             p.stats.accuracy * 100.0,
             thousands(p.plays as u64),
@@ -154,12 +268,32 @@ fn card_version() -> String {
     format!("{:08x}", hash >> 32)
 }
 
+/// A score's preview: its numbers, with its card (`card.rs`) as the picture.
+pub fn score_meta(s: &OnlineScore) -> Meta {
+    let pp = s.pp.map(|p| format!("{p:.0}pp · ")).unwrap_or_default();
+    let mods = if s.mods.is_empty() { String::new() } else { format!(" +{}", s.mods.concat()) };
+    let rate = if (s.rate - 1.0).abs() > 1e-6 { format!(" {:.2}x", s.rate) } else { String::new() };
+    Meta {
+        description: format!(
+            "{} by {}: {pp}{:.2}% · {} · x{} · {} miss{}{mods}{rate}. Watch the replay in taiko.rs.",
+            s.grade(),
+            s.player,
+            s.accuracy * 100.0,
+            thousands(s.score),
+            thousands(s.max_combo as u64),
+            s.miss,
+            if s.miss == 1 { "" } else { "es" }
+        ),
+        image: Some(format!("{SITE}/s/{}/card.png", s.id)),
+    }
+}
+
 /// A beatmap's preview: stars, plays and who holds #1, over its cover.
 pub fn map_meta(m: &MapRow, rows: &[OnlineScore]) -> Meta {
     let (_, version) = split_map(&m.name);
     let stars = m.stars.map(|s| format!("{s:.2}* ")).unwrap_or_default();
     let top = rows.first().map(|r| format!(" #1: {} with {} ({:.2}%).", r.player, thousands(r.score), r.accuracy * 100.0)).unwrap_or_default();
-    Meta { description: format!("{stars}[{version}] · {} plays by {} players on taiko-rs.{top}", thousands(m.plays as u64), m.players), image: cover(m.set_id, "cover@2x") }
+    Meta { description: format!("{stars}[{version}] · {} plays by {} players on taiko.rs.{top}", thousands(m.plays as u64), m.players), image: cover(m.set_id, "cover@2x") }
 }
 
 /// What's live on the server, for the home page.
@@ -239,8 +373,9 @@ fn split_song(song: &str) -> (&str, &str) {
     song.split_once(" - ").unwrap_or(("", song))
 }
 
+/// A set's cover from osu!, unless it's NSFW, blocked or not checked yet (`covers`).
 fn cover(set: Option<u32>, size: &str) -> Option<String> {
-    set.map(|s| format!("https://assets.ppy.sh/beatmaps/{s}/covers/{size}.jpg"))
+    set.filter(|&s| crate::covers::allowed(s)).map(|s| format!("https://assets.ppy.sh/beatmaps/{s}/covers/{size}.jpg"))
 }
 
 /// The style for a block with a map's cover behind it: the map's own hue (for when it has no
@@ -251,7 +386,23 @@ fn cover_style(set: Option<u32>, hash: u64, size: &str) -> String {
 }
 
 /// A player's picture: their initial on a colour of their own.
+/// Time spent playing, like osu!'s: 3d 4h 12m.
+fn play_time(ms: u64) -> String {
+    let minutes = ms / 60_000;
+    let (d, h, m) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    match (d, h) {
+        (0, 0) => format!("{m}m"),
+        (0, _) => format!("{h}h {m}m"),
+        _ => format!("{d}d {h}h {m}m"),
+    }
+}
+
+/// A player's picture, or (without one) their initial on a colour of its own.
 fn avatar(name: &str, class: &str) -> String {
+    let key = name.to_ascii_lowercase();
+    if let Some(v) = crate::avatars::version(&key) {
+        return format!("<img class=\"avatar {class}\" src=\"/a/{}?v={v}\" alt=\"\" loading=lazy>", esc(&key));
+    }
     let hue = name.bytes().fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b.to_ascii_lowercase() as u32)) % 360;
     let initial = name.chars().next().map(|c| c.to_ascii_uppercase()).unwrap_or('?');
     format!("<span class=\"avatar {class}\" style=\"--h:{hue}\" aria-hidden=true>{}</span>", esc(&initial.to_string()))
@@ -284,7 +435,7 @@ fn mod_chips<S: AsRef<str>>(m: &[S], rate: f64) -> String {
 }
 
 /// osu!'s colour for a star rating: blue for easy through red and purple to black.
-fn star_colour(s: f64) -> [u8; 3] {
+pub(crate) fn star_colour(s: f64) -> [u8; 3] {
     const STOPS: [(f64, [u8; 3]); 11] = [
         (0.1, [0x42, 0x90, 0xfb]),
         (1.25, [0x4f, 0xc0, 0xff]),
@@ -350,15 +501,47 @@ impl Os {
 struct Build {
     os: Os,
     name: &'static str,
-    file: &'static str,
     note: &'static str,
+    /// The download (and what to call it), and the other way to get it.
+    file: &'static str,
+    kind: &'static str,
+    alt: Option<(&'static str, &'static str)>,
 }
 
 const BUILDS: [Build; 3] = [
-    Build { os: Os::Windows, name: "Windows", file: "taiko-rs-windows-x64.zip", note: "Windows 10 or 11, 64-bit" },
-    Build { os: Os::Linux, name: "Linux", file: "taiko-rs-linux-x64.tar.gz", note: "64-bit, glibc 2.39+ (Ubuntu 24.04, Debian 13, Fedora 40, Arch...)" },
-    Build { os: Os::Android, name: "Android", file: "taiko-rs-android.apk", note: "Android 8.0+, 64-bit ARM" },
+    Build {
+        os: Os::Windows,
+        name: "Windows",
+        note: "Windows 10 or 11, 64-bit. Installs for you alone (no admin), with a Start menu shortcut and an uninstaller; it then updates itself from the game.",
+        file: "taiko-rs-windows-x64-setup.exe",
+        kind: "installer",
+        alt: Some(("taiko-rs-windows-x64.zip", "portable .zip")),
+    },
+    Build {
+        os: Os::Linux,
+        name: "Linux",
+        note: "64-bit, glibc 2.39+ (Ubuntu 24.04, Debian 13, Fedora 40, Arch...). The command installs it, adds it to your apps and keeps it updated.",
+        file: "taiko-rs-linux-x64.tar.gz",
+        kind: ".tar.gz",
+        alt: None,
+    },
+    Build { os: Os::Android, name: "Android", note: "Android 8.0+, 64-bit ARM.", file: "taiko-rs-android.apk", kind: "APK", alt: None },
 ];
+
+/// The install commands.
+fn linux_command() -> String {
+    format!("curl -fsSL {RAW}/install.sh | sh")
+}
+
+fn powershell_command() -> String {
+    format!("irm {RAW}/install.ps1 | iex")
+}
+
+/// A command to paste, with a button that copies it (`site/copy.js`).
+fn cmd(command: &str) -> String {
+    let c = esc(command);
+    format!("<div class=cmd><code><span class=prompt>$ </span>{c}</code><button class=copy type=button data-copy=\"{c}\">copy</button></div>")
+}
 
 fn download_url(file: &str) -> String {
     format!("{REPO}/releases/download/latest/{file}")
@@ -369,6 +552,11 @@ fn download_url(file: &str) -> String {
 fn download_cta(os: Os, on_download_page: bool) -> String {
     let others = if on_download_page { String::new() } else { " &middot; <a href=\"/download\">other systems</a>".into() };
     match BUILDS.iter().find(|b| b.os == os) {
+        Some(b) if b.os == Os::Linux => format!(
+            "<div class=cta-label>Install on Linux: paste this in a terminal</div>{}<div class=hint>installs, adds it to your apps and keeps it updated &middot; <a href=\"{}\">or the .tar.gz</a>{others}</div>",
+            cmd(&linux_command()),
+            download_url(b.file)
+        ),
         Some(b) => format!(
             "<a class=\"btn hot\" href=\"{}\">Download for {}</a><div class=hint>{}{others}</div>",
             download_url(b.file),
@@ -376,7 +564,7 @@ fn download_cta(os: Os, on_download_page: bool) -> String {
             b.note
         ),
         None if on_download_page => "<p class=dim>Pick your system below.</p>".into(),
-        None => "<a class=\"btn hot\" href=\"/download\">Download taiko-rs</a><div class=hint>Windows, Linux and Android</div>".into(),
+        None => "<a class=\"btn hot\" href=\"/download\">Download taiko.rs</a><div class=hint>Windows, Linux and Android</div>".into(),
     }
 }
 
@@ -462,10 +650,10 @@ fn stage(players: usize, plays: usize, online: usize, bg: &str, cta: &str) -> St
     let mods = ["NM no mod", "TL tilt", "WV wave", "BA barrel roll", "MR mirror", "MV multiverse", "SH shatter"];
     let labels: String = mods.iter().chain(&mods[..1]).map(|m| format!("<span>{m}</span>")).collect();
     format!(
-        "{flashes}<section class=stage{bg} aria-label=\"taiko-rs gameplay, switching mods\">\
+        "{flashes}<section class=stage{bg} aria-label=\"taiko.rs gameplay, switching mods\">\
          <div class=hud-tl>{online} online &middot; {players} ranked &middot; server up</div>\
          <div class=hud-tr aria-hidden=true><div class=hud-score>{:08}</div><div class=hp><i></i></div><div class=modname><div class=ticker>{labels}</div></div></div>\
-         <div class=intro><h1 class=glitch data-text=\"TAIKO-RS\">TA<span class=narrow>I</span>KO-RS</h1>\
+         <div class=intro><h1 class=glitch data-text=\"TAIKO.RS\">TA<span class=narrow>I</span>KO.RS</h1>\
            <p>A taiko client for osu! beatmaps, with <em>{} mods</em> that bend, break and multiply the lane.</p></div>\
          <div class=field aria-hidden=true>{}{}{}{}<div class=hit-great>GREAT</div></div>\
          <div class=stage-cta>{}</div><div class=errbar aria-hidden=true><i></i><i></i><i></i><i></i><i></i></div></section>",
@@ -513,7 +701,7 @@ fn mod_board() -> String {
         })
         .collect();
     format!(
-        "<section class=\"panel board\"><div class=panel-head><h2>MODS</h2><span class=dim>{} of them, in the game's mod select order. Point at one to read it.</span></div>\
+        "<section class=\"panel board\"><div class=panel-head><h2>MODS</h2><span class=dim>{} of them, in the game's mod select order. Point at one (or tap it) to read it.</span></div>\
          <div class=cols>{cols}</div><div class=descbar>Point at a mod (or tab to it) to see what it does.</div></section>",
         mod_count()
     )
@@ -541,6 +729,7 @@ fn room_list(rooms: &[RoomInfo]) -> String {
         .take(8)
         .map(|r| {
             let state = if r.in_match { "<span class=\"tag live\">PLAYING</span>" } else { "<span class=tag>OPEN</span>" };
+            let state = if r.mapguessr { format!("<span class=tag>MAPGUESSR</span>{state}") } else { state.to_string() };
             let map = r.map.as_deref().map(|m| format!("<div class=\"dim small\">{}</div>", esc(m))).unwrap_or_default();
             format!("<div class=room><div class=room-top><b>{}</b>{state}</div><div class=dim>host {} &middot; {} player{}</div>{map}</div>", esc(&r.title), esc(&r.host), r.players, if r.players == 1 { "" } else { "s" })
         })
@@ -607,7 +796,7 @@ pub fn home(rankings: &[Ranked], maps: &[MapRow], players: usize, plays: usize, 
 pub fn mods_page() -> String {
     let clips: String = CLIPS.iter().map(clip_card).collect();
     format!(
-        "<div class=band><div class=inner><h1 class=glitch data-text=\"MODS\">MODS</h1><p class=dim>osu!'s mods, lazer's taiko extras and {} of taiko-rs's own. Stack as many as you like.</p></div></div>\
+        "<div class=band><div class=inner><h1 class=glitch data-text=\"MODS\">MODS</h1><p class=dim>osu!'s mods, lazer's taiko extras and {} of taiko.rs's own. Stack as many as you like.</p></div></div>\
          <div class=page><div class=section-head><h2>WHAT THEY LOOK LIKE</h2><span class=dim>Real plays, recorded in the game.</span></div><div class=clips>{clips}</div>{}</div>",
         mod_count().saturating_sub(24),
         mod_board()
@@ -663,7 +852,7 @@ fn pp_chart(history: &[(u64, f64)]) -> String {
     )
 }
 
-pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friends: &[(String, bool)], tie: Friendship, notice: Option<&str>) -> String {
+pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friends: &[(String, bool)], tie: Friendship, notice: Option<&str>, roles: &Roles) -> String {
     let st = &p.stats;
     let level = online::level(st.total_score);
     let cover = p.top.first().map(|s| cover_style(s.set_id, s.map_hash, "cover@2x")).unwrap_or_default();
@@ -682,6 +871,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
         Friendship::None => befriend("add friend"),
     };
     let notice = notice.map(|n| format!("<div class=notice>{}</div>", esc(n))).unwrap_or_default();
+    let notice = notice + &profile_tools(p, roles);
     let hud = |k: &str, v: String| format!("<div class=hudstat><span>{k}</span><b>{v}</b></div>");
     let stats = [
         hud("RANKED SCORE", format!("{:08}", st.ranked_score)),
@@ -690,6 +880,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
         hud("TOTAL SCORE", format!("{:08}", st.total_score)),
         hud("TOTAL HITS", thousands(st.total_hits)),
         hud("MAX COMBO", format!("{}x", thousands(st.max_combo as u64))),
+        hud("PLAY TIME", play_time(p.play_ms)),
     ]
     .concat();
     let grades = format!(
@@ -762,7 +953,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
            </aside></div></div>",
         avatar(&p.name, "big"),
         esc(&p.name),
-        badges(&p.name),
+        badges(&p.name) + &role_badges(roles),
         month_year(p.joined),
         thousands(p.pp.round() as u64),
         level.floor(),
@@ -803,10 +994,80 @@ fn play_row(s: &OnlineScore, weighted: Option<usize>, show_score: bool) -> Strin
     )
 }
 
-pub fn map_page(m: &MapRow, rows: &[OnlineScore]) -> String {
+/// One score: its numbers, and a button that opens it (and its replay) in the game, through
+/// the `taiko-rs://` link the game registers. `watch`: from a "Watch replay" button, so the
+/// page opens the game itself straight away (`site/watch.js`).
+/// `admin`: the viewer is an admin, and this play's pp as sent and as set by an admin (if).
+pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Option<(Option<f64>, Option<f64>)>, notice: Option<&str>) -> String {
+    let (song, version) = split_map(&s.map);
+    let (artist, title) = split_song(song);
+    let head = format!(
+        "<div class=\"cover map\"{}><div class=inner><div class=artist>{}</div><h1>{}</h1>\
+         <div class=sub>{}<span class=version>[{}]</span><a class=\"btn small\" href=\"/m/{:x}\">map leaderboard</a></div></div></div>",
+        cover_style(s.set_id, s.map_hash, "cover@2x"),
+        esc(artist),
+        esc(title),
+        stars(s.stars),
+        esc(version),
+        s.map_hash
+    );
+    let mods = if s.mods.is_empty() && (s.rate - 1.0).abs() < 1e-6 { "-".into() } else { mod_chips(&s.mods, s.rate) };
+    let place = place.map(|p| format!("<div class=place>#{p}</div>")).unwrap_or_default();
+    let top = format!(
+        "<div class=\"panel topscore\">{place}<span class=bigrade>{}</span><div class=who>{}<div>{}<div class=dim>{}</div></div></div>\
+         <div class=hudrow-in><div class=hudstat><span>PP</span><b class=pp>{}</b></div><div class=hudstat><span>ACCURACY</span><b>{:.2}%</b></div>\
+         <div class=hudstat><span>GREAT</span><b class=great>{}</b></div><div class=hudstat><span>OK</span><b class=ok>{}</b></div><div class=hudstat><span>MISS</span><b class=miss>{}</b></div>\
+         <div class=hudstat><span>COMBO</span><b>{}x</b></div><div class=hudstat><span>SCORE</span><b>{:08}</b></div><div class=hudstat><span>MODS</span><b class=mods>{mods}</b></div></div></div>",
+        grade(s.grade()),
+        avatar(&s.player, "mid"),
+        player_link(&s.player),
+        ago(s.date),
+        s.pp.map(|p| format!("{p:.0}")).unwrap_or_else(|| "-".into()),
+        s.accuracy * 100.0,
+        s.great,
+        s.ok,
+        s.miss,
+        thousands(s.max_combo as u64),
+        s.score,
+    );
+    let auto = if watch { " data-autoopen" } else { "" };
+    let watch_panel = format!(
+        "<section class=panel><a class=\"btn hot\" href=\"taiko-rs://score/{}\"{auto}>Watch replay in taiko.rs</a>\
+         <p class=hint>Opens the game on this score, ready to watch. It downloads the map if you haven't got it. \
+         Nothing happens? <a href=\"/download\">Get taiko.rs</a>, open it once, and try again.</p></section>",
+        s.id
+    );
+    let notice = notice.map(|n| format!("<div class=notice>{}</div>", esc(n))).unwrap_or_default();
+    let admin = admin
+        .map(|(sent, fixed)| {
+            let sent = sent.map(|p| format!("{p:.2}pp")).unwrap_or_else(|| "no pp".into());
+            let now = fixed.map(|p| format!("set to {p:.2}pp by an admin")).unwrap_or_else(|| "as sent".into());
+            format!(
+                "<section class=\"panel tools\"><div class=tool><b>ADMIN</b><form method=post action=\"/s/{}/pp\"><input name=pp inputmode=decimal placeholder=\"pp (empty: as sent)\" value=\"{}\" aria-label=pp><button class=\"btn small\">set pp</button></form>\
+                 <span class=dim>sent with {sent}; {now}</span></div></section>",
+                s.id,
+                fixed.map(|p| format!("{p:.2}")).unwrap_or_default()
+            )
+        })
+        .unwrap_or_default();
+    format!("{head}<div class=page>{notice}{top}{watch_panel}{admin}</div><script src=\"/site/watch.js\" defer></script>")
+}
+
+pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
     let (song, version) = split_map(&m.name);
     let (artist, title) = split_song(song);
-    let osu = m.set_id.map(|s| format!("<a class=\"btn small\" href=\"https://osu.ppy.sh/beatmapsets/{s}\">osu! page</a>")).unwrap_or_default();
+    let mut osu = m.set_id.map(|s| format!("<a class=\"btn small\" href=\"https://osu.ppy.sh/beatmapsets/{s}\">osu! page</a>")).unwrap_or_default();
+    if let Some(l) = &love.loved {
+        osu += &format!("<span class=\"tag loved\" title=\"loved by {0} {1}\">LOVED HERE</span>", esc(&l.by), ago(l.at));
+    }
+    if let (true, Some(set)) = (love.can_love, m.set_id) {
+        let (on, label) = if love.loved.is_some() { ("0", "unlove") } else { ("1", "love: give pp here") };
+        osu += &format!(
+            "<form method=post action=\"/love/{set}\" class=inline><input type=hidden name=on value={on}><input type=hidden name=back value=\"/m/{:x}\"><button class=\"btn small hot\">{label}</button></form>",
+            m.hash
+        );
+    }
+    let notice = love.notice.as_ref().map(|n| format!("<div class=notice>{}</div>", esc(n))).unwrap_or_default();
     let head = format!(
         "<div class=\"cover map\"{}><div class=inner><div class=artist>{}</div><h1>{}</h1>\
          <div class=sub>{}<span class=version>[{}]</span><span class=dim>{} plays &middot; {} players</span>{osu}</div></div></div>",
@@ -818,7 +1079,7 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore]) -> String {
         thousands(m.plays as u64),
         m.players
     );
-    let Some(first) = rows.first() else { return format!("{head}<div class=page><section class=panel><p class=dim>No scores yet.</p></section></div>") };
+    let Some(first) = rows.first() else { return format!("{head}<div class=page>{notice}<section class=panel><p class=dim>No scores yet.</p></section></div>") };
     let mods = if first.mods.is_empty() && (first.rate - 1.0).abs() < 1e-6 { "-".into() } else { mod_chips(&first.mods, first.rate) };
     let top = format!(
         "<div class=\"panel topscore\"><div class=place>#1</div><span class=bigrade>{}</span><div class=who>{}<div>{}<div class=dim>{}</div></div></div>\
@@ -857,7 +1118,7 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore]) -> String {
         })
         .collect();
     format!(
-        "{head}<div class=page>{top}<section class=panel><div class=scroll><table class=list><thead><tr><th>Rank</th><th></th><th>Score</th><th>Acc</th><th>Player</th><th class=wide>Combo</th><th class=wide>Great</th><th class=wide>Ok</th><th class=wide>Miss</th><th>pp</th><th class=wide>Mods</th><th></th></tr></thead><tbody>{body}</tbody></table></div></section></div>"
+        "{head}<div class=page>{notice}{top}<section class=panel><div class=scroll><table class=list><thead><tr><th>Rank</th><th></th><th>Score</th><th>Acc</th><th>Player</th><th class=wide>Combo</th><th class=wide>Great</th><th class=wide>Ok</th><th class=wide>Miss</th><th>pp</th><th class=wide>Mods</th><th></th></tr></thead><tbody>{body}</tbody></table></div></section></div>"
     )
 }
 
@@ -897,23 +1158,27 @@ pub fn download(os: Os) -> String {
         .iter()
         .map(|b| {
             let mine = b.os == os;
+            let hot = if mine { " hot" } else { "" };
+            let button = format!("<a class=\"btn{hot}\" href=\"{}\">Download {}</a>", download_url(b.file), b.kind);
+            let alt = |(file, label): (&str, &str)| format!("<a class=alt href=\"{}\">or the {label}</a>", download_url(file));
+            let how = match b.os {
+                // Linux: the command, the archive for those who'd rather.
+                Os::Linux => format!("<h3>In a terminal</h3>{}{}", cmd(&linux_command()), alt((b.file, b.kind))),
+                Os::Windows => format!("{button}{}<h3>Or from PowerShell</h3>{}", b.alt.map(alt).unwrap_or_default(), cmd(&powershell_command())),
+                _ => button,
+            };
             format!(
-                "<div class=\"panel build{}\"><h2>{}{}</h2><p class=dim>{}</p><a class=\"btn{}\" href=\"{}\">Download {}</a></div>",
+                "<div class=\"panel build{}\"><h2>{}{}</h2><p class=dim>{}</p>{how}</div>",
                 if mine { " mine" } else { "" },
                 b.name,
                 if mine { " <span class=yours>YOUR SYSTEM</span>" } else { "" },
                 b.note,
-                if mine { " hot" } else { "" },
-                download_url(b.file),
-                b.file
             )
         })
         .collect();
     format!(
-        "<div class=band><div class=inner><h1 class=glitch data-text=\"DOWNLOAD\">DOWNLOAD</h1>{}</div></div>\
+        "<div class=band><div class=inner><h1 class=glitch data-text=\"DOWNLOAD\">DOWNLOAD</h1><div class=band-cta>{}</div></div></div>\
          <div class=page><div class=builds>{builds}</div>\
-         <section class=panel><div class=panel-head><h2>ONE COMMAND</h2></div><p class=dim>Installs (or updates) taiko-rs and adds it to your apps; it then updates itself from the game.</p>\
-         <h3>Windows (PowerShell)</h3><pre>irm {RAW}/install.ps1 | iex</pre><h3>Linux</h3><pre>curl -fsSL {RAW}/install.sh | sh</pre></section>\
          <p class=dim>No macOS build yet. Source and every build: <a href=\"{REPO}/releases\">GitHub releases</a>.</p></div>",
         download_cta(os, true)
     )
@@ -981,7 +1246,7 @@ pub fn not_found(why: &str) -> String {
 pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &str) -> String {
     let image = meta.image.clone().unwrap_or_else(|| format!("{SITE}/site/og.jpg?v={}", card_version()));
     let og = format!(
-        "<meta name=description content=\"{0}\"><meta property=og:site_name content=taiko-rs><meta property=og:type content=website>\
+        "<meta name=description content=\"{0}\"><meta property=og:site_name content=taiko.rs><meta property=og:type content=website>\
          <meta property=og:title content=\"{1}\"><meta property=og:description content=\"{0}\"><meta property=og:image content=\"{2}\">\
          <meta name=twitter:card content=summary_large_image><meta name=twitter:title content=\"{1}\"><meta name=twitter:description content=\"{0}\"><meta name=twitter:image content=\"{2}\">",
         esc(&meta.description),
@@ -998,7 +1263,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
         }
         None => "<a class=\"navbtn hot\" href=\"/login\">log in</a>".into(),
     };
-    let links: String = [("rankings", "/rankings"), ("beatmaps", "/beatmaps"), ("mods", "/mods"), ("download", "/download")]
+    let links: String = [("rankings", "/rankings"), ("beatmaps", "/beatmaps"), ("loved", "/loved"), ("mods", "/mods"), ("download", "/download")]
         .iter()
         .map(|(name, href)| {
             let on = if *name == nav { " class=on aria-current=page" } else { "" };
@@ -1006,12 +1271,12 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
         })
         .collect();
     format!(
-        r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{} · taiko-rs</title>
+        r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{} · taiko.rs</title>
 <meta name=theme-color content=#EB452C><meta name=color-scheme content=dark><link rel=icon href="/site/logo.png">{og}
-<link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style></head>
-<body><nav><div class=inner><a class=logo href="/" aria-label="taiko-rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO-RS</a><div class=links>{links}</div>
+<link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style><script src="/site/copy.js" defer></script></head>
+<body><nav><div class=inner><a class=logo href="/" aria-label="taiko.rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO.RS</a><div class=links>{links}</div>
 <form action="/u" role=search><input name=name placeholder="find a player" maxlength=16 aria-label="Find a player"></form><div class=account>{account}</div></div></nav>
-<main>{}</main><footer><div class=inner><span class=brand>TAIKO-RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
+<main>{}</main><footer><div class=inner><span class=brand>TAIKO.RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
         esc(title),
         body
     )
@@ -1173,7 +1438,7 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 .ranks{margin-left:auto;display:flex;gap:36px;align-items:flex-end;flex-wrap:wrap}.bigstat span{display:block;color:var(--dim)}.bigstat b{font-size:48px;line-height:48px;color:var(--white)}.bigstat b.pp{color:var(--acc)}
 .level{min-width:220px}.level span{color:var(--dim)}.level b{color:var(--white)}
 .bar{height:16px;margin-top:6px;background:var(--panel2);border:2px solid var(--line2)}.bar i{display:block;height:100%;background:repeating-linear-gradient(90deg,var(--gold) 0 10px,transparent 10px 12px)}
-.hudrow{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:2px;background:var(--line);border:2px solid var(--line);margin-bottom:20px}
+.hudrow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px;background:var(--line);border:2px solid var(--line);margin-bottom:20px}
 .hudstat{background:var(--panel);padding:12px 14px}.hudstat span{display:block;color:var(--dim2)}.hudstat b{font-size:24px;line-height:32px;color:var(--white);white-space:nowrap}
 .hudrow-in{display:flex;gap:28px;flex-wrap:wrap;margin-left:auto}.hudrow-in .hudstat{background:none;padding:0}.hudstat b.mods{font-size:16px}
 .cols-side{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}
@@ -1207,6 +1472,8 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 .navbtn:hover,.navbtn.on{border-color:var(--acc);color:var(--white)}.navbtn.hot{background:var(--acc);border-color:var(--acc);color:var(--white)}
 button.btn{font:inherit;cursor:pointer}.actions{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}.actions form{margin:0}.actions .btn{min-height:36px;padding:0 14px}
 .btn.hot.small-hot{font-size:16px;min-height:36px;padding:0 14px;box-shadow:3px 3px 0 #6b1d12}
+img.avatar{object-fit:cover;background:var(--panel2)}.tag.loved{color:#ff66aa;border-color:#ff66aa}form.inline{display:inline;margin:0}
+.tools{display:flex;flex-direction:column;gap:14px}.tool{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.tool b{min-width:170px;letter-spacing:1px}.tool form{margin:0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tool input[name=pp]{font:inherit;background:var(--panel2);color:var(--white);border:2px solid var(--line2);padding:6px 10px;width:220px}.tool input[type=file]{font:inherit;color:var(--dim);max-width:100%}.tool code{color:var(--gold)}
 .notice{border:2px solid var(--gold);color:var(--gold);padding:8px 12px;margin:0 0 20px;background:rgba(255,211,77,.06)}.notice.bad{border-color:var(--acc);color:#ff8a78;background:rgba(235,69,44,.08)}
 .login{max-width:520px;margin:24px auto}.login h1{font-size:48px;line-height:56px;margin-bottom:8px}.login form{display:flex;flex-direction:column;gap:14px;margin:18px 0}
 .login label{display:flex;flex-direction:column;gap:6px;color:var(--dim)}
@@ -1224,8 +1491,14 @@ button.btn{font:inherit;cursor:pointer}.actions{display:flex;align-items:center;
 .log li.mine .player{color:var(--acc)}.log .empty{justify-content:center;padding:40px 0}
 .say{display:flex;gap:10px}.say input{flex:1;min-width:0}.say .btn.hot{font-size:16px;min-height:44px;box-shadow:3px 3px 0 #6b1d12}
 /* Download. */
-.builds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.build{display:flex;flex-direction:column;align-items:flex-start}.build h2{font-size:32px}.build .btn{margin-top:auto}.build p{margin-bottom:18px}
-.build.mine{border-color:var(--acc)}.yours{font-size:16px;color:var(--acc)}
+/* Install commands. */
+.cmd{display:flex;align-items:stretch;max-width:100%;border:2px solid var(--line2);background:var(--bg2);margin:8px 0}
+.cmd code{flex:1;min-width:0;padding:10px 14px;font:inherit;color:var(--green);word-break:break-all}.cmd .prompt{color:var(--dim2)}
+.copy{flex:none;font:inherit;border:0;border-left:2px solid var(--line2);background:var(--panel2);color:var(--white);padding:0 16px;cursor:pointer}.copy:hover{background:var(--acc)}
+.cta-label{color:var(--white);margin-bottom:2px}.stage-cta .cmd{max-width:820px;background:rgba(12,12,18,.92)}.alt{display:inline-block;margin-top:10px;color:var(--dim)}.alt:hover{color:var(--acc)}
+/* Download. */
+.builds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.build{display:flex;flex-direction:column;align-items:flex-start;min-width:0}.build h2{font-size:32px}.build p{margin-bottom:18px}.build .cmd{align-self:stretch}
+.build.mine{border-color:var(--acc)}.build .btn.hot{font-size:16px;min-height:44px;box-shadow:3px 3px 0 #6b1d12}.band-cta{margin-top:18px;max-width:820px}.yours{font-size:16px;color:var(--acc)}
 pre{background:var(--bg2);border:2px solid var(--line);padding:12px 14px;overflow-x:auto;font:16px/24px taiko5x7,monospace;color:var(--green)}h3{font-size:16px;margin-top:16px;color:var(--dim)}
 .lost{text-align:center;padding:56px 24px}.lost h1{font-size:96px;line-height:96px;color:var(--acc)}
 footer{border-top:2px solid var(--line);background:var(--bg2);padding:24px 0}footer .inner{display:flex;flex-wrap:wrap;align-items:center;gap:24px;color:var(--dim)}footer a{color:var(--dim)}footer .brand{color:var(--white)}
@@ -1236,7 +1509,8 @@ footer{border-top:2px solid var(--line);background:var(--bg2);padding:24px 0}foo
 .hud-tr{top:12px;right:16px}.errbar{display:none}.stage-cta{left:16px;right:16px;bottom:16px}.stage-cta .btn.hot{font-size:16px;min-height:44px}.hud-score{font-size:32px;line-height:32px}.hp{width:160px}.hud-tl{display:none}
 .field{top:300px;transform-origin:20% 50%}.n{width:40px;height:40px;margin:-20px 0 0 -20px;left:48px}.n.big{width:56px;height:56px;margin:-28px 0 0 -28px}.seg:first-child{flex-basis:96px}.drum{left:14px;transform:scale(.8)}.judge{left:112px}.track{left:96px}.hit-great{left:106px}
 .chat{grid-template-columns:minmax(0,1fr)}.chans{max-height:240px}.convo{min-height:480px}.me span{display:none}.me{padding:0 6px}.clips{grid-template-columns:minmax(0,1fr)}.clips:not(.three) .clip:first-child{grid-column:auto;grid-row:auto}.clips:not(.three) .clip:first-child .frame{flex:none;aspect-ratio:16/9;min-height:0}
-.cols{grid-template-columns:minmax(0,1fr)}.board{padding-bottom:120px}.descbar,.chip .desc{min-height:80px}
+.cols{grid-template-columns:minmax(0,1fr)}.board{padding-bottom:14px}.descbar{display:none}
+.chip{flex-wrap:wrap}.chip .desc{position:static;flex-basis:100%;min-height:0;padding:0 0 8px 34px;border:0;background:none}
 .panel{padding:14px}.play{gap:10px}.play .mods,.play .acc,.play .score,.weight{display:none}.play .pp{width:auto}.hudrow{grid-template-columns:repeat(2,minmax(0,1fr))}
 .avatar.big{width:88px;height:88px;font-size:64px}.who{gap:14px}.who h1{font-size:32px;line-height:40px;overflow-wrap:anywhere}.bigstat b{font-size:32px;line-height:32px}.ranks{gap:24px}
 .cover.map h1{font-size:32px;line-height:40px}.cover{height:180px}.band h1{font-size:48px;line-height:48px}.section-head h2{font-size:24px}}
@@ -1250,7 +1524,7 @@ mod tests {
     #[test]
     fn helpers() {
         assert_eq!(esc("<b>\"A&B'</b>"), "&lt;b&gt;&quot;A&amp;B&#39;&lt;/b&gt;");
-        assert!(page("<x>", "", None, &Meta::default(), "").contains("&lt;x&gt; · taiko-rs"));
+        assert!(page("<x>", "", None, &Meta::default(), "").contains("&lt;x&gt; · taiko.rs"));
         assert!(page("Rankings", "rankings", None, &Meta::default(), "").contains("href=\"/rankings\" class=on"));
         assert!(page("x", "", None, &Meta::default(), "").contains("href=\"/login\""));
         let card = page("A \"quote\"", "", None, &Meta { description: "d<b>".into(), image: None }, "");
@@ -1273,6 +1547,9 @@ mod tests {
     #[test]
     fn badges_go_by_name_in_any_case() {
         assert!(badges("Auneu").contains(">DEV<"));
+        assert!(badges("claude").contains(">MAIN DEV<"));
+        assert_eq!((play_time(59_999), play_time(3_660_000), play_time(90_061_000)), ("0m".into(), "1h 1m".into(), "1d 1h 1m".into()));
+        assert!(badges("lynerrr").contains(">DEV<"));
         assert!(badges("Ryuji").is_empty());
     }
 

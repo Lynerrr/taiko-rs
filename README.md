@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="assets/taiko-rs.png" width="112" alt="taiko-rs logo">
+<img src="assets/taiko-rs.png" width="112" alt="taiko.rs logo">
 
-# taiko-rs
+# taiko.rs
 
 **A small, fast taiko client for osu! beatmaps, written in Rust.**
 
@@ -36,12 +36,12 @@ Settings → Updates.
   WASAPI or AAudio with low latency.
 - **Your osu! library.** Taiko maps and osu!standard converts, lazer's conversion and hit windows,
   osu!'s star ratings, and collections and play history from osu!stable.
-- **73 mods.** osu!'s and lazer's mods, plus taiko-rs's own: scroll and SV experiments, visual
+- **74 mods.** osu!'s and lazer's mods, plus taiko.rs's own: scroll and SV experiments, visual
   tricks, lanes bent into rails, a moving playfield, and Multiverse's eight playfields, each with
   its own note colours, shapes, speed and mods. **C** in the mod select customizes the mods that have
   settings (Multiverse, Shapeshift) while they are on. Press **R**
   in the mod select for a playable random set.
-- **Online.** Lobbies on the taiko-rs server or direct P2P, live scoreboards, spectating, friends,
+- **Online.** Lobbies on the taiko.rs server or direct P2P, live scoreboards, spectating, friends,
   chat, watching friends' solo plays, and everyone's replays from the online leaderboards.
 - **pp like osu!.** A live pp counter while you play, and a results screen with osu!'s
   performance breakdown (and the song playing on). Click any score, local or online, for its
@@ -76,7 +76,7 @@ only). The APK is built with `android/build-apk.sh`, and the online server lives
 
 ## License
 
-MIT, see [LICENSE](LICENSE); libraries and assets in [THIRD-PARTY.md](THIRD-PARTY.md). taiko-rs is
+MIT, see [LICENSE](LICENSE); libraries and assets in [THIRD-PARTY.md](THIRD-PARTY.md). taiko.rs is
 not affiliated with or endorsed by ppy Pty Ltd ("osu!" is their trademark). It plays the beatmaps
 and skins you already have and bundles none of osu!'s.
 

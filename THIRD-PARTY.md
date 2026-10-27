@@ -1,10 +1,10 @@
 # Third-party notices
 
-taiko-rs itself is under the MIT license (see `LICENSE`).
+taiko.rs itself is under the MIT license (see `LICENSE`).
 
 ## osu!
 
-taiko-rs is an independent project. It is not affiliated with, or endorsed by, ppy Pty Ltd;
+taiko.rs is an independent project. It is not affiliated with, or endorsed by, ppy Pty Ltd;
 "osu!" is a trademark of ppy Pty Ltd.
 
 - It plays the beatmaps and skins the player already has (their osu! `Songs` and `Skins`

@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// 2: judged with `Mash::Nearest` (1: with the `anti_mash` setting).
-const REPLAY_VERSION: u32 = 2;
+/// 3: scored with `Scoring::Standard` (below: `Classic`). 2: judged with `Mash::Nearest` (1: with
+/// the `anti_mash` setting).
+const REPLAY_VERSION: u32 = 3;
 
 /// A recorded play: the map time each drum key was judged at, plus what the judging depended
 /// on. Playing the inputs back through the same map reproduces the play exactly.
@@ -29,6 +30,9 @@ pub struct Replay {
     /// Mods played with (acronyms); `rate` already includes DT/HT.
     #[serde(default)]
     pub mods: Vec<String>,
+    /// The scroll speed setting played at (replays from before it: the usual).
+    #[serde(default = "usual_scroll_speed")]
+    pub scroll_speed: f64,
     pub score: u64,
     pub accuracy: f64,
     pub max_combo: u32,
@@ -38,6 +42,9 @@ pub struct Replay {
     pub ur: f64,
     /// (map time ms, key 0-3: left rim, left centre, right centre, right rim).
     pub inputs: Vec<(f64, u8)>,
+    /// Random's colouring (`Game::seed`; 0 for plays from before it).
+    #[serde(default)]
+    pub seed: u64,
 }
 
 /// One line of the score index.
@@ -142,8 +149,13 @@ impl Replay {
             max_combo: self.max_combo,
             rate: self.rate,
             mods: crate::mods::Mods::from_list(&self.mods),
+            scroll_speed: self.scroll_speed,
         }
     }
+}
+
+fn usual_scroll_speed() -> f64 {
+    1.0
 }
 
 /// Works out the pp of saved scores from before pp (on a background thread): (replay file, pp)
@@ -186,6 +198,11 @@ impl Replay {
     /// How the play's presses are judged.
     pub fn mash(&self) -> crate::game::Mash {
         if self.version >= 2 { crate::game::Mash::Nearest } else { crate::game::Mash::legacy(self.anti_mash) }
+    }
+
+    /// How its score was worked out.
+    pub fn scoring(&self) -> crate::game::Scoring {
+        if self.version >= 3 { crate::game::Scoring::Standard } else { crate::game::Scoring::Classic }
     }
 }
 
@@ -233,18 +250,6 @@ pub fn top(rows: &[ScoreRow], map_hash: u64, n: usize) -> Vec<&ScoreRow> {
     v.sort_by(|a, b| b.score.cmp(&a.score).then(b.date.cmp(&a.date)));
     v.truncate(n);
     v
-}
-
-/// The pp total of the local scores: the best pp on each map, weighted like osu!.
-pub fn total_pp(rows: &[ScoreRow]) -> f64 {
-    let mut best: std::collections::HashMap<u64, f64> = std::collections::HashMap::new();
-    for r in rows {
-        if let Some(pp) = r.pp {
-            let b = best.entry(r.map_hash).or_insert(0.0);
-            *b = b.max(pp);
-        }
-    }
-    crate::pp::total(best.into_values().collect())
 }
 
 /// "3 d ago" style age of a Unix time.

@@ -91,6 +91,7 @@ pub enum Hotkey {
     FpsOverlay,
     Fullscreen,
     Quit,
+    Screenshot,
     Friends,
     Update,
     Mods,
@@ -117,7 +118,7 @@ pub enum Hotkey {
 const ANYWHERE: &[Place] = &[Place::Select, Place::Play, Place::Paused, Place::Results, Place::Other];
 
 impl Hotkey {
-    pub const ALL: [Hotkey; 32] = [
+    pub const ALL: [Hotkey; 33] = [
         Hotkey::Pause,
         Hotkey::SkipIntro,
         Hotkey::QuickRetry,
@@ -149,6 +150,7 @@ impl Hotkey {
         Hotkey::FpsCap,
         Hotkey::FpsOverlay,
         Hotkey::Update,
+        Hotkey::Screenshot,
         Hotkey::Quit,
     ];
 
@@ -167,7 +169,8 @@ impl Hotkey {
             Hotkey::FpsCap => const { &[Chord::plain(F8)] },
             Hotkey::FpsOverlay => const { &[Chord::plain(F10)] },
             Hotkey::Fullscreen => const { &[Chord::plain(F11)] },
-            Hotkey::Quit => const { &[Chord::plain(F12)] },
+            Hotkey::Quit => const { &[Chord::ctrl(KeyQ)] },
+            Hotkey::Screenshot => const { &[Chord::plain(F12)] },
             Hotkey::Friends => const { &[Chord::plain(F9)] },
             Hotkey::Update => const { &[Chord::ctrl(KeyU)] },
             Hotkey::Mods => const { &[Chord::plain(F1)] },
@@ -238,7 +241,8 @@ impl Hotkey {
             Hotkey::FpsCap => "Next FPS cap",
             Hotkey::FpsOverlay => "FPS overlay",
             Hotkey::Fullscreen => "Fullscreen",
-            Hotkey::Quit => "Quit taiko-rs",
+            Hotkey::Quit => "Quit taiko.rs",
+            Hotkey::Screenshot => "Screenshot",
             Hotkey::Friends => "Friends and chat",
             Hotkey::Update => "Update",
             Hotkey::Mods => "Song select: mods",
@@ -277,6 +281,7 @@ impl Hotkey {
             Hotkey::FpsOverlay => "fps_overlay",
             Hotkey::Fullscreen => "fullscreen",
             Hotkey::Quit => "quit",
+            Hotkey::Screenshot => "screenshot",
             Hotkey::Friends => "friends",
             Hotkey::Update => "update",
             Hotkey::Mods => "mods",

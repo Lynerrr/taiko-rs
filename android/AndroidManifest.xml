@@ -10,7 +10,7 @@
     <uses-feature android:name="android.hardware.touchscreen.multitouch.distinct" android:required="false" />
 
     <application
-        android:label="taiko-rs"
+        android:label="taiko.rs"
         android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
         android:isGame="true"

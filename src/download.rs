@@ -16,6 +16,8 @@ const USER_AGENT: &str = concat!("taiko-rs/", env!("CARGO_PKG_VERSION"), " (+htt
 struct Mirror {
     name: &'static str,
     search: &'static str,
+    /// A set's details (osu! API v2 beatmapset) by its ID.
+    set: &'static str,
     query_key: &'static str,
     amount_key: &'static str,
     download: &'static str,
@@ -24,8 +26,8 @@ struct Mirror {
 /// In the order they're tried. osu.direct first: it can sort searches on its side, and
 /// catboy.best rate-limits downloads per IP (425) after a handful of sets.
 const MIRRORS: [Mirror; 2] = [
-    Mirror { name: "osu.direct", search: "https://osu.direct/api/v2/search", query_key: "query", amount_key: "amount", download: "https://osu.direct/api/d/" },
-    Mirror { name: "catboy.best", search: "https://catboy.best/api/v2/search", query_key: "q", amount_key: "limit", download: "https://catboy.best/d/" },
+    Mirror { name: "osu.direct", search: "https://osu.direct/api/v2/search", set: "https://osu.direct/api/v2/s/", query_key: "query", amount_key: "amount", download: "https://osu.direct/api/d/" },
+    Mirror { name: "catboy.best", search: "https://catboy.best/api/v2/search", set: "https://catboy.best/api/v2/s/", query_key: "q", amount_key: "limit", download: "https://catboy.best/d/" },
 ];
 
 /// Search categories, like the osu! website's (beatmap status filters).
@@ -282,7 +284,8 @@ fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Op
     Err(errors.join("; "))
 }
 
-/// A set's status on osu! ("ranked", "loved", "graveyard"...), from the mirrors.
+/// A set's status on osu! ("ranked", "loved", "graveyard"...), from the mirrors; `setstatus::MISSING`
+/// when they all say they don't have the set.
 pub fn set_status(set: u32) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Set {
@@ -290,18 +293,25 @@ pub fn set_status(set: u32) -> Result<String, String> {
     }
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(8))).build().into();
     let mut errors = Vec::new();
+    let mut not_found = 0;
     for base in ["https://osu.direct/api/v2/s/", "https://catboy.best/api/v2/s/"] {
         let result = agent
             .get(&format!("{base}{set}"))
             .header("User-Agent", USER_AGENT)
             .call()
-            .map_err(|e| e.to_string())
+            .map_err(|e| {
+                not_found += matches!(e, ureq::Error::StatusCode(404)) as usize;
+                e.to_string()
+            })
             .and_then(|mut r| r.body_mut().read_to_string().map_err(|e| e.to_string()))
             .and_then(|body| serde_json::from_str::<Set>(&body).map_err(|e| e.to_string()));
         match result {
             Ok(s) => return Ok(s.status),
             Err(e) => errors.push(e),
         }
+    }
+    if not_found == errors.len() {
+        return Ok(crate::setstatus::MISSING.to_string());
     }
     Err(errors.join("; "))
 }
@@ -373,6 +383,8 @@ pub struct Job {
     /// Content hashes of the difficulties an import brings (empty for downloads), so the same
     /// set dropped twice isn't unpacked twice.
     pub maps: Vec<u64>,
+    /// A newer version of a set that's already here (see [`start_update`]).
+    pub update: bool,
 }
 
 impl Job {
@@ -393,7 +405,115 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     std::thread::spawn(move || {
         let _ = tx.send(fetch(id, &name, &songs, &d, &t));
     });
-    Job { set, done, total, rx, maps: Vec::new() }
+    Job { set, done, total, rx, maps: Vec::new(), update: false }
+}
+
+/// Downloads set `set` again into its folder `folder`, for the newer version osu! has. The
+/// difficulties in `replaced` (the set's own, as they were) make way for the new ones; anything
+/// else in the folder (a difficulty of your own) stays. If the download fails they're put back.
+pub fn start_update(set: SetInfo, folder: PathBuf, replaced: Vec<PathBuf>) -> Job {
+    let (tx, rx) = mpsc::channel();
+    let done = Arc::new(AtomicU64::new(0));
+    let total = Arc::new(AtomicU64::new(0));
+    let (d, t) = (done.clone(), total.clone());
+    let id = set.id;
+    std::thread::spawn(move || {
+        let result = (|| {
+            let songs = folder.parent().ok_or("no Songs folder")?;
+            let name = folder.file_name().ok_or("no set folder")?.to_string_lossy().into_owned();
+            replacing(&replaced, || fetch(id, &name, songs, &d, &t))
+        })();
+        let _ = tx.send(result);
+    });
+    Job { set, done, total, rx, maps: Vec::new(), update: true }
+}
+
+/// Runs `get` (which brings the new files) with `old` set aside, not deleted, until it worked;
+/// if it fails they're put back.
+fn replacing<T>(old: &[PathBuf], get: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    let aside: Vec<(&PathBuf, PathBuf)> = old.iter().map(|p| (p, p.with_extension("osu.old"))).filter(|(p, o)| std::fs::rename(p, o).is_ok()).collect();
+    let result = get();
+    for (p, o) in &aside {
+        if result.is_ok() {
+            let _ = std::fs::remove_file(o);
+        } else {
+            let _ = std::fs::rename(o, p);
+        }
+    }
+    result
+}
+
+#[derive(Deserialize)]
+struct ApiSetMaps {
+    #[serde(default)]
+    beatmaps: Vec<ApiChecksum>,
+}
+
+#[derive(Deserialize)]
+struct ApiChecksum {
+    id: u32,
+    #[serde(default)]
+    checksum: Option<String>,
+}
+
+/// The MD5 of each difficulty of set `id` as osu! has it now, by beatmap ID (from the first
+/// mirror that answers).
+pub fn set_checksums(id: u32) -> Result<std::collections::HashMap<u32, String>, String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).build().into();
+    let mut errors = Vec::new();
+    for m in &MIRRORS {
+        let reply = agent.get(&format!("{}{id}", m.set)).header("User-Agent", USER_AGENT).call().map_err(|e| e.to_string()).and_then(|mut r| r.body_mut().read_to_string().map_err(|e| e.to_string()));
+        match reply.and_then(|json| serde_json::from_str::<ApiSetMaps>(&json).map_err(|e| format!("unexpected reply: {e}"))) {
+            Ok(set) if !set.beatmaps.is_empty() => return Ok(set.beatmaps.into_iter().filter_map(|b| Some((b.id, b.checksum?.to_ascii_lowercase()))).collect()),
+            Ok(_) => errors.push(format!("{}: no such set", m.name)),
+            Err(e) => errors.push(format!("{}: {e}", m.name)),
+        }
+    }
+    Err(errors.join("; "))
+}
+
+/// Whether osu! has a newer version of a set than the difficulties here (beatmap ID and the
+/// `.osu`'s MD5 each): one of them changed or is gone from the set. Difficulties without an ID
+/// (home-made) don't count.
+pub fn outdated(local: &[(Option<u32>, String)], online: &std::collections::HashMap<u32, String>) -> bool {
+    local.iter().any(|(id, md5)| id.is_some_and(|id| online.get(&id) != Some(md5)))
+}
+
+/// MD5 (RFC 1321) of `data` in lowercase hex: how osu! tells versions of a difficulty apart.
+pub fn md5_hex(data: &[u8]) -> String {
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15,
+        21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    let k: Vec<u32> = (0..64).map(|i| ((i as f64 + 1.0).sin().abs() * 4_294_967_296.0) as u32).collect();
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&((data.len() as u64).wrapping_mul(8)).to_le_bytes());
+    let mut h: [u32; 4] = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
+    for chunk in msg.chunks(64) {
+        let m: Vec<u32> = chunk.chunks(4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]])).collect();
+        let [mut a, mut b, mut c, mut d] = h;
+        for i in 0..64 {
+            let (f, g) = match i / 16 {
+                0 => ((b & c) | (!b & d), i),
+                1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
+                2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                _ => (c ^ (b | !d), (7 * i) % 16),
+            };
+            let f = f.wrapping_add(a).wrapping_add(k[i]).wrapping_add(m[g]);
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(f.rotate_left(S[i]));
+        }
+        for (x, y) in h.iter_mut().zip([a, b, c, d]) {
+            *x = x.wrapping_add(y);
+        }
+    }
+    h.iter().flat_map(|x| x.to_le_bytes()).map(|b| format!("{b:02x}")).collect()
 }
 
 /// Passes over the mirrors before a download gives up: osu.direct often answers 503 for a
@@ -595,7 +715,7 @@ pub fn receive(set: SetInfo, name: String, total: u64, songs: PathBuf) -> (Job, 
         })();
         let _ = tx.send(result);
     });
-    (Job { set, done, total: total_bytes, rx, maps: Vec::new() }, feed)
+    (Job { set, done, total: total_bytes, rx, maps: Vec::new(), update: false }, feed)
 }
 
 /// Imports an `.osz` that is already on disk (dropped on the window, opened with the game on
@@ -628,7 +748,7 @@ pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool, maps: 
         }
         let _ = tx.send(result);
     });
-    Job { set, done: Arc::default(), total: Arc::default(), rx, maps }
+    Job { set, done: Arc::default(), total: Arc::default(), rx, maps, update: false }
 }
 
 /// The difficulties in an `.osz`: each `.osu`'s header and content hash (the same hash as
@@ -773,6 +893,48 @@ mod tests {
         assert_eq!(sets[0].folder_name(), "7 A - T_ x_");
         assert_eq!(set_id_of_folder(Path::new("/s/7 A - T_ x_")), Some(7));
         assert_eq!(set_id_of_folder(Path::new("/s/Some folder")), None);
+    }
+
+    #[test]
+    fn md5_matches_the_rfc_examples() {
+        assert_eq!(md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(md5_hex(b"message digest"), "f96b697d7cb7938d525a2f31aaf161d0");
+        assert_eq!(md5_hex(b"12345678901234567890123456789012345678901234567890123456789012345678901234567890"), "57edf4a22be3c955ac49da2e2107b67a");
+    }
+
+    #[test]
+    fn a_set_is_outdated_when_a_difficulty_changed_or_left_it() {
+        let online: std::collections::HashMap<u32, String> = [(1, "aa".to_string()), (2, "bb".to_string())].into();
+        let here = |v: &[(Option<u32>, &str)]| v.iter().map(|(id, m)| (*id, m.to_string())).collect::<Vec<_>>();
+        assert!(!outdated(&here(&[(Some(1), "aa"), (Some(2), "bb"), (None, "home-made")]), &online));
+        // A new difficulty online alone doesn't make the ones here outdated.
+        assert!(!outdated(&here(&[(Some(1), "aa")]), &online));
+        assert!(outdated(&here(&[(Some(1), "aa"), (Some(2), "old")]), &online));
+        assert!(outdated(&here(&[(Some(3), "cc")]), &online));
+    }
+
+    #[test]
+    fn an_update_replaces_the_old_difficulties_or_puts_them_back_if_it_fails() {
+        let dir = std::env::temp_dir().join(format!("taiko-rs-update-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (kept, renamed) = (dir.join("A - T [Oni].osu"), dir.join("A - T [Muzukashii].osu"));
+        let own = dir.join("A - T [mine].osu");
+        for p in [&kept, &renamed, &own] {
+            std::fs::write(p, "old").unwrap();
+        }
+        let old = [kept.clone(), renamed.clone()];
+        assert!(replacing(&old, || Err::<(), _>("mirror down".into())).is_err());
+        for p in [&kept, &renamed, &own] {
+            assert_eq!(std::fs::read_to_string(p).unwrap(), "old");
+        }
+        // The new version keeps one difficulty's name and drops the other's.
+        replacing(&old, || std::fs::write(&kept, "new").map_err(|e| e.to_string())).unwrap();
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "new");
+        assert!(!renamed.exists());
+        assert_eq!(std::fs::read_to_string(&own).unwrap(), "old");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "nothing set aside is left behind");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

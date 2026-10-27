@@ -25,6 +25,8 @@ pub enum Item {
     ResumeDelay,
     Interface,
     InterfaceHides,
+    /// Song select's layout (dragged): Enter puts it back.
+    SongSelectLayout,
     InterfaceKey,
     /// Which skin each part of the playfield and interface comes from.
     SkinParts,
@@ -36,6 +38,7 @@ pub enum Item {
     /// `keys::Hotkey::ALL[i]`'s key.
     Hotkey(usize),
     TouchLayout,
+    Screenshots,
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
@@ -69,7 +72,7 @@ pub enum Item {
     Update,
     /// Opens what's new.
     Changelog,
-    /// Only for krokodil_koban: closes taiko-rs and starts osu!stable.
+    /// Only for krokodil_koban: closes taiko.rs and starts osu!stable.
     KrokodilKoban,
     Fullscreen,
     WindowSize,
@@ -83,11 +86,12 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 102] = [
+pub const ITEMS: [(&str, Item); 104] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
     ("LIBRARY", Item::DataFolder),
+    ("LIBRARY", Item::Screenshots),
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -95,6 +99,7 @@ pub const ITEMS: [(&str, Item); 102] = [
     ("GAMEPLAY", Item::Interface),
     ("GAMEPLAY", Item::InterfaceHides),
     ("GAMEPLAY", Item::InterfaceKey),
+    ("GAMEPLAY", Item::SongSelectLayout),
     ("PLAYFIELD", Item::PlayfieldArea),
     ("PLAYFIELD", Item::PlayfieldPreset),
     ("PLAYFIELD", Item::PlayfieldReset),
@@ -190,7 +195,7 @@ pub const ITEMS: [(&str, Item); 102] = [
 
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 10] = [
-    ("LIBRARY", "Songs folder, game data"),
+    ("LIBRARY", "Songs folder, data, screenshots"),
     ("GAMEPLAY", "speed, rate, interface"),
     ("PLAYFIELD", "size, position"),
     ("INPUT", "drum keys, hotkeys, touch"),
@@ -246,11 +251,13 @@ impl Item {
             Item::Interface => "Interface",
             Item::InterfaceHides => "Interface toggle hides",
             Item::InterfaceKey => "Interface toggle key",
+            Item::SongSelectLayout => "Song select layout",
             Item::Key(i) => KEY_LABELS[i],
             Item::PresetKey(0) => "Previous preset key",
             Item::PresetKey(_) => "Next preset key",
             Item::Hotkey(i) => crate::keys::Hotkey::ALL[i].label(),
             Item::TouchLayout => "Touch layout",
+            Item::Screenshots => "Screenshots (F12)",
             Item::ShowPlayfieldSize => "Show playfield size",
             Item::WheelResize => "Wheel resizes playfield",
             Item::KiaiEffects => "Kiai effects",
@@ -318,6 +325,7 @@ impl Item {
             | Item::KatColour => Kind::Value,
             Item::PlayfieldPreset
             | Item::TouchLayout
+            | Item::Screenshots
             | Item::AudioBuffer
             | Item::PresentMode
             | Item::UpdateChannel
@@ -357,7 +365,7 @@ impl Item {
             | Item::Fullscreen
             | Item::DiscordPresence => Kind::Toggle,
             Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => Kind::Key,
-            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SkinFolder => Kind::Action,
+            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout | Item::SkinFolder => Kind::Action,
         }
     }
 
@@ -384,6 +392,7 @@ impl Item {
             Item::Key(_) => "Enter, then press the new key (Delete: none, Esc: cancel). Backspace: back to the default.",
             Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key. Delete: none.",
             Item::Hotkey(_) => "Enter, then press the new key, Ctrl / Alt / Shift too (Delete: none, Esc: cancel). Backspace: the default.",
+            Item::Screenshots => "Where F12 puts a screenshot: on the clipboard to paste, as a picture in the Screenshots folder, or both.",
             Item::TouchLayout => "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
             Item::WheelResize => "During play, the mouse wheel makes the playfield bigger or smaller (it always does in its editor).",
@@ -406,25 +415,26 @@ impl Item {
             Item::BackgroundDim => "How dark the map background is during play. 100% hides it.",
             Item::BackgroundDimBlack => "On: in songs the background dims to pure black, and is black when there's none. Off: the interface's grey.",
             Item::PresentMode => "Used during songs. vsync is smoothest on Wayland; mailbox/immediate add judder.",
-            Item::MenuVsync => "Song select (and its autoplay preview), settings and results always use vsync.",
+            Item::MenuVsync => "Everything but playing a song uses vsync: song select (and its autoplay preview), settings, results, replays and autoplay.",
             Item::HalfResolution => "Draw at half resolution, scaled up exactly 2x: chunky, crisp pixels and a quarter of the GPU work. For high-DPI screens.",
             Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",
             Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
             Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
-            Item::Splash => "The animated intro when taiko-rs starts (any key or click skips it).",
+            Item::Splash => "The animated intro when taiko.rs starts (any key or click skips it).",
             Item::VisualOffset => "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
             Item::UpdateChannel => "dev: test builds that haven't reached everyone yet (may break). Switch, then Update installs that channel's build.",
-            Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko-rs restarts into it.",
+            Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko.rs restarts into it.",
             // No explanation: krokodil_koban knows.
             Item::KrokodilKoban => "",
+            Item::SongSelectLayout => "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
             Item::Changelog => "Enter: the latest changes. They also show by themselves after an update.",
-            Item::CheckUpdates => "Look for a newer build each time taiko-rs starts; a badge top right says when there is one.",
+            Item::CheckUpdates => "Look for a newer build each time taiko.rs starts (a badge top right says when there is one), and for newer versions of the songs you pick on osu!.",
             Item::Fullscreen => "Shortcut: F11.",
             Item::WindowSize => "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
             Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",
-            Item::Skin => "Enter opens the list. osu! skins from osu!'s or taiko-rs's Skins folder.",
+            Item::Skin => "Enter opens the list. osu! skins from osu!'s or taiko.rs's Skins folder.",
             Item::SkinParts | Item::SkinPart(_) => "What's drawn from a skin, and which: the skin above, built-in, or any other (mix them). Enter opens the list.",
-            Item::SkinFolder => "Enter: open taiko-rs's Skins folder. Drop .osk files there, then pick them above.",
+            Item::SkinFolder => "Enter: open taiko.rs's Skins folder. Drop .osk files there, then pick them above.",
             Item::Accent => "The interface's accent; any but red tints the greys too. Left/Right: presets (or #rrggbb in the config).",
             Item::AccentHue => "Left/Right: turn the UI colour round the colour wheel, for any colour in between.",
             Item::NoteColours => "Dons' and kats' colours (Multiverse's universes have their own: M in the mod select).",
@@ -464,6 +474,8 @@ pub struct Dropdown {
     pub bounds: [f32; 4],
     /// Typing a size: for a new saved one (None) or saved one `i`, and the text so far.
     pub editing: Option<(Option<usize>, String)>,
+    /// Where typing goes in that text (a character index).
+    pub caret: usize,
     /// Buttons drawn last frame.
     pub buttons: Vec<(PresetAction, [f32; 4])>,
 }
@@ -584,9 +596,11 @@ impl Dropdown {
         let focus_y = focus.map(|l| l.1).unwrap_or(0.0);
         self.scroll = (focus_y - view / 2.0).clamp(0.0, (y - view).max(0.0));
         self.rows.clear();
+        let caret = self.caret;
         let text_input = |c: &mut Canvas, ry: f32, text: &str| {
             c.round_rect(bx + 8.0, ry, bw - 16.0, ROW - 2.0, 4.0, rgba(0x1d1d27, 1.0), rgba(0xFFD34D, 1.0), 1.0);
-            c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), &format!("{text}_"));
+            c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), text);
+            c.rect(bx + 22.0 + caret_x(7.0, text, caret), ry + 2.5, 1.0, 9.0, rgba(0xFFD34D, 1.0));
             c.text_right(bx + bw - 22.0, ry + 3.5, 6.0, rgba(0x8a8aa0, 1.0), "width x height");
         };
         for (line, ly) in layout {
@@ -656,36 +670,93 @@ impl Dropdown {
 pub struct Edit {
     pub item: Item,
     pub text: String,
+    /// Where typing goes: a character index into `text`.
+    pub caret: usize,
     /// Still the value it opened with: the first key typed replaces it.
     pub fresh: bool,
 }
 
 impl Edit {
     pub fn new(item: Item, text: String) -> Edit {
-        Edit { item, text, fresh: true }
+        Edit { item, caret: text.chars().count(), text, fresh: true }
     }
 
-    /// Adds typed text (control characters dropped), up to `max` characters.
+    /// Adds typed text at the caret (control characters dropped), up to `max` characters.
     pub fn type_text(&mut self, typed: &str, max: usize) {
         if self.fresh {
             self.text.clear();
+            self.caret = 0;
             self.fresh = false;
         }
-        for ch in typed.chars().filter(|ch| !ch.is_control()) {
-            if self.text.chars().count() < max {
-                self.text.push(ch);
-            }
-        }
+        caret_insert(&mut self.text, &mut self.caret, typed, max);
     }
 
     pub fn backspace(&mut self) {
         if self.fresh {
             self.text.clear();
+            self.caret = 0;
             self.fresh = false;
         } else {
-            self.text.pop();
+            caret_backspace(&mut self.text, &mut self.caret);
         }
     }
+
+    /// Left / Right / Home / End move the caret, Delete removes the character after it.
+    /// Says whether the key was one of those.
+    pub fn nav(&mut self, code: winit::keyboard::KeyCode) -> bool {
+        // The value that opened is replaced by typing; moving into it keeps it to edit.
+        let used = caret_nav(&mut self.text, &mut self.caret, code);
+        if used {
+            self.fresh = false;
+        }
+        used
+    }
+}
+
+/// Inserts `typed` (control characters dropped) at char index `caret`, up to `max` characters.
+pub fn caret_insert(text: &mut String, caret: &mut usize, typed: &str, max: usize) {
+    for ch in typed.chars().filter(|ch| !ch.is_control()) {
+        if text.chars().count() < max {
+            text.insert(byte_at(text, *caret), ch);
+            *caret += 1;
+        }
+    }
+}
+
+pub fn caret_backspace(text: &mut String, caret: &mut usize) {
+    if *caret > 0 {
+        *caret -= 1;
+        text.remove(byte_at(text, *caret));
+    }
+}
+
+/// Moves the caret (Left, Right, Home, End) or deletes after it (Delete); false for other keys.
+pub fn caret_nav(text: &mut String, caret: &mut usize, code: winit::keyboard::KeyCode) -> bool {
+    use winit::keyboard::KeyCode::*;
+    let len = text.chars().count();
+    *caret = (*caret).min(len);
+    match code {
+        ArrowLeft => *caret = caret.saturating_sub(1),
+        ArrowRight => *caret = (*caret + 1).min(len),
+        Home => *caret = 0,
+        End => *caret = len,
+        Delete => {
+            if *caret < len {
+                text.remove(byte_at(text, *caret));
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+fn byte_at(text: &str, caret: usize) -> usize {
+    text.char_indices().nth(caret).map_or(text.len(), |(b, _)| b)
+}
+
+/// Where the caret is drawn: the text before it, in `size`, from the text's left edge.
+pub fn caret_x(size: f32, text: &str, caret: usize) -> f32 {
+    Canvas::text_width(size, &text.chars().take(caret).collect::<String>())
 }
 
 /// A setting's choices in one list (skins, present modes, ...), so picking one isn't stepping
@@ -857,7 +928,9 @@ impl SettingsUi {
                     c.rect(right - 7.0 - tw, y + 7.0, tw + 2.0, ROW - 18.0, rgba(accent(), 0.45));
                 }
                 c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
-                c.text(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), "_");
+                // At the caret in the text (at the end when the start was cut off to fit).
+                let at = if text == edit.text { caret_x(8.0, &text, edit.caret) } else { tw };
+                c.rect(right - 6.0 - tw + at, y + 7.0, 1.0, ROW - 18.0, rgba(0xFFD34D, 1.0));
                 continue;
             }
             let v = if selected && self.binding.is_some() {
@@ -915,10 +988,10 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
     crate::logo::draw(c, 22.0, 18.0, 26.0);
     // The name like the wordmark: letters alternating white and red, "-rs" red.
     let mut tx = 54.0;
-    for (i, ch) in "taiko-rs".chars().enumerate() {
+    for (i, ch) in "taiko.rs".chars().enumerate() {
         let s = ch.to_string();
         let col = match ch {
-            '-' => 0x6f6f86,
+            '.' => 0x6f6f86,
             'r' | 's' => 0xEB452C,
             _ if i % 2 == 0 => 0xffffff,
             _ => 0xEB452C,

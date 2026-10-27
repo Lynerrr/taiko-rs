@@ -100,13 +100,14 @@ fn check_draw(what: &str, out: &mut Vec<String>, mut draw: impl FnMut(&mut Canva
 
 const LONG_NAME: &str = "FriendWithAVeryLongName";
 
-/// A room hosted on this machine, filled with long names (its lobby, match and result screens).
-fn session() -> multiplayer::Session {
+/// A room hosted on this machine (`mapguessr`: playing mapguessr), filled with long names (its
+/// lobby, match and result screens).
+fn session(mapguessr: bool) -> multiplayer::Session {
     // Another test can take the free port found here before the room listens on it: try again.
     let mut s = (0..10)
         .find_map(|_| {
             let port = std::net::TcpListener::bind("127.0.0.1:0").ok()?.local_addr().ok()?.port();
-            multiplayer::start_host(port, LONG_NAME.into()).recv_timeout(Duration::from_secs(5)).ok()?.ok()
+            multiplayer::start_host(port, LONG_NAME.into(), mapguessr).recv_timeout(Duration::from_secs(5)).ok()?.ok()
         })
         .expect("host a room on this machine");
     let e = entry(0, 0, true);
@@ -119,6 +120,9 @@ fn session() -> multiplayer::Session {
         from: Some(61_000.0),
         set_id: Some(1),
         mods: Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR").list(),
+        multiverse: None,
+        shapeshift: None,
+        seed: None,
     });
     let live = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
     let result = net::Final { score: 1_234_567, accuracy: 0.9876, max_combo: 1290, great: 1234, ok: 56, miss: 7, ur: 123.4, quit: false };
@@ -133,6 +137,11 @@ fn session() -> multiplayer::Session {
             live: live.clone(),
             result: Some(result.clone()),
             spectator: i == 7,
+            points: 12_345 * i,
+            guessed: i % 2 == 0,
+            tries: (i % 4) as u8,
+            maps: (i != 3).then_some(123_456),
+            mods: if i % 2 == 0 { vec!["HD".into(), "HR".into(), "FL".into(), "PR".into()] } else { Vec::new() },
         })
         .collect();
     s.results = Some(s.players.clone());
@@ -165,7 +174,11 @@ fn assert_every_screen_fits() {
     s.select.filter = "camellia long search query that is typed".into();
     s.select.refilter(&s.library);
     check(&mut s, "select filtered", &mut out);
+    s.select.searching = true;
+    check(&mut s, "select filtered, typing", &mut out);
     s.select.filter.clear();
+    check(&mut s, "select, typing", &mut out);
+    s.select.searching = false;
     s.select.collection = None;
     s.select.refilter(&s.library);
 
@@ -186,6 +199,26 @@ fn assert_every_screen_fits() {
         })
         .collect();
     check(&mut s, "select with scores", &mut out);
+    // Many scores, scrolled, with the song list and the preview dragged to their limits.
+    let more: Vec<scores::ScoreRow> = (5..40)
+        .map(|i| {
+            let mut r = s.scores[0].clone();
+            r.date += i;
+            r.score -= i * 1000;
+            r
+        })
+        .collect();
+    s.scores.extend(more);
+    for (share, size) in [(ui::LIST_SHARE.0, preview::PREVIEW_SIZE.0), (ui::LIST_SHARE.1, preview::PREVIEW_SIZE.0), (ui::LIST_SHARE.1, preview::PREVIEW_SIZE.1), (ui::LIST_SHARE.0, preview::PREVIEW_SIZE.1)] {
+        s.cfg.song_list_share = share;
+        s.cfg.song_preview_size = size;
+        s.board_scroll = 10;
+        check(&mut s, &format!("select resized {share} {size}"), &mut out);
+    }
+    s.cfg.song_list_share = ui::LIST_SHARE.2;
+    s.cfg.song_preview_size = preview::PREVIEW_SIZE.1;
+    s.scores.truncate(5);
+    s.board_scroll = 0;
     // The online tab: other players, long names and mods, still loading, and the server away.
     s.board_online = true;
     let online_rows: Vec<online::OnlineScore> = (0..8)
@@ -207,13 +240,21 @@ fn assert_every_screen_fits() {
     s.cfg.online_user = "player2".into();
     s.online_boards.insert(hash, (Instant::now(), Ok(online_rows)));
     check(&mut s, "select online scores", &mut out);
+    s.board_scroll = 3;
+    check(&mut s, "select online scores scrolled", &mut out);
+    s.board_scroll = 0;
     s.online_boards.insert(hash, (Instant::now(), Err("the server is offline (connection refused)".into())));
     check(&mut s, "select online scores, server away", &mut out);
     s.online_boards.clear();
     s.board_online = false;
+    // Every song has a newer version on osu! (one being downloaded).
+    let sets: Vec<u32> = s.library.iter().filter_map(|e| e.set_id()).collect();
+    s.select.updates = sets.iter().map(|&id| (id, if id == 2 { ui::SetUpdate::Updating } else { ui::SetUpdate::Available })).collect();
+    check(&mut s, "select updates", &mut out);
     s.select.menu = Some(ui::SongMenu { row: s.select.cursor(), header: true, x: 2000.0, y: 300.0 });
     check(&mut s, "song menu", &mut out);
     s.select.menu = None;
+    s.select.updates.clear();
 
     s.open_preview();
     check(&mut s, "preview", &mut out);
@@ -435,7 +476,9 @@ fn assert_every_screen_fits() {
         r.failed = failed;
         r.pp = (!failed).then_some(456.7);
         r.no_pp = failed.then_some("failed plays get no pp");
-        r.total = (!failed).then_some(ui::Total { before: Some(12_333.3), after: 12_345.6, rank: Some(99_999), online: true });
+        // Lots of mods (two rows and a count of the rest) and a speed of its own.
+        r.set_mods(Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR,SK,TL,FF,SH,CK,PT,LI,DY,MM,OT,BL,ST,SG,LF,PN,MW,SR"), if failed { 1.25 } else { 1.0 });
+        r.total = (!failed).then_some(ui::Total { before: Some(12_333.3), after: 12_345.6, rank: Some(99_999) });
         r.breakdown = (!failed).then_some(pp::Breakdown {
             pp: 456.7,
             difficulty: 1234.5,
@@ -465,6 +508,13 @@ fn assert_every_screen_fits() {
     opened.replay_error = Some("that replay isn't on the server".into());
     s.scene = Scene::Results { results: opened, entry: 0, from: None };
     check(&mut s, "results of an online score", &mut out);
+    // Scrolled down to the pp.
+    for failed in [false, true] {
+        let mut r = results(failed);
+        (r.scroll, r.scroll_to) = (ui::RESULTS_SCROLL, ui::RESULTS_SCROLL);
+        s.scene = Scene::Results { results: r, entry: 0, from: None };
+        check(&mut s, if failed { "results failed, performance" } else { "results, performance" }, &mut out);
+    }
     s.mp_menu.account = None;
     s.me = None;
     s.scene = Scene::Select;
@@ -497,15 +547,320 @@ fn assert_every_screen_fits() {
     s.library = library;
     s.select = Select::new(&s.library);
 
-    let room = session();
+    let room = session(false);
     let player = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
     check_draw("lobby", &mut out, |c| multiplayer::draw_lobby(c, &room, false, Some("downloading the map: 45% of 12.3 MB".into())));
     check_draw("match waiting", &mut out, |c| multiplayer::draw_waiting(c, &room, None, false, Instant::now()));
     check_draw("match scoreboard", &mut out, |c| multiplayer::draw_scoreboard(c, &room, &player));
     check_draw("match results", &mut out, |c| multiplayer::draw_results(c, &room));
 
+    // The exit question, over song select.
+    s.scene = Scene::Select;
+    s.quit_asked = true;
+    check(&mut s, "exit question", &mut out);
+    s.quit_asked = false;
+
+    // Mapguessr: the lobby (after a game, so with points), a round, its answer, and picking a
+    // guess in song select.
+    let guessr_room = || {
+        let mut room = session(true);
+        room.mapguessr = true;
+        room.common = Some(123_456);
+        room
+    };
+    let mut room = guessr_room();
+    let mut g = mapguessr::Guessr::new(&[]);
+    g.rounds = 50;
+    g.test_round(None);
+    check_draw("mapguessr lobby", &mut out, |c| mapguessr::draw_lobby(c, &room, &mut g, 1.0, Instant::now()));
+    room.in_match = true;
+    g.test_round(Some(beatmap::calibration_map(250.0, 0, 600)));
+    g.tries = 2;
+    g.last_guess = Some(format!("{LONG_NAME} - a song with a very long title (TV Size) [Extra Oni]"));
+    // A few seconds in, so the notes are on the lane.
+    for k in 0..4 {
+        g.tick(&room, Instant::now() + Duration::from_secs(k));
+    }
+    check_draw("mapguessr round", &mut out, |c| mapguessr::draw_lobby(c, &room, &mut g, 1.0, Instant::now()));
+    g.reveal = Some(mapguessr::Reveal { label: format!("{LONG_NAME} - a song with a very long title (TV Size) [Extra Oni]"), got: vec![(0, 199), (2, 150)], last: true });
+    check_draw("mapguessr answer", &mut out, |c| mapguessr::draw_lobby(c, &room, &mut g, 1.0, Instant::now()));
+    g.reveal = None;
+    s.mp = Some(guessr_room());
+    s.guessr = Some(g);
+    s.picking_lobby_map = true;
+    s.scene = Scene::Select;
+    check(&mut s, "mapguessr picking", &mut out);
+
     for p in &out {
         eprintln!("{p}");
     }
     assert!(out.is_empty(), "{} layout problems", out.len());
+}
+
+#[test]
+fn statuses_from_the_cache_reach_the_song_list_before_osu_db_does() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    for e in s.library.iter_mut().take(3) {
+        e.meta.set_id = Some(77);
+    }
+    let sets = [77];
+    s.select.status.clear();
+    s.status_cache.put(sets[0], "graveyard", 1);
+    s.apply_cached_statuses();
+    let with: Vec<_> = s.library.iter().filter(|e| e.meta.set_id == Some(sets[0])).collect();
+    assert!(with.iter().all(|e| s.select.status.get(&e.path) == Some(&search::GRAVEYARD)));
+    // osu!.db's doesn't overwrite what the mirrors said.
+    s.db_status.insert(with[0].path.clone(), 4);
+    s.select.status.entry(with[0].path.clone()).or_insert(4);
+    assert_eq!(s.select.status[&with[0].path], search::GRAVEYARD);
+}
+
+#[test]
+fn an_unfocused_window_draws_at_most_30_fps() {
+    let mut s = state();
+    s.cfg.fps_cap = 0;
+    assert_eq!(s.frame_cap(), 0);
+    s.focused = false;
+    assert_eq!(s.frame_cap(), 30);
+    s.cfg.fps_cap = 20;
+    assert_eq!(s.frame_cap(), 20, "a lower cap of the player's stays");
+    s.cfg.fps_cap = 240;
+    assert_eq!(s.frame_cap(), 30);
+    s.focused = true;
+    assert_eq!(s.frame_cap(), 240);
+}
+
+#[test]
+fn exiting_asks_first() {
+    let mut s = state();
+    let key = |s: &mut State, code| {
+        // Ctrl+Q asks; F12 is the screenshot.
+        s.modifiers_ctrl = code == KeyCode::KeyQ;
+        s.key(code, false, None, Instant::now(), None);
+        s.modifiers_ctrl = false;
+    };
+    key(&mut s, KeyCode::F12);
+    assert!(!s.quit_asked && s.screenshot_due, "F12 takes a screenshot");
+    key(&mut s, KeyCode::KeyQ);
+    assert!(s.quit_asked && !s.quit);
+    // Esc says stay; other keys do nothing while it's asked.
+    key(&mut s, KeyCode::Escape);
+    assert!(!s.quit_asked && !s.quit);
+    key(&mut s, KeyCode::KeyQ);
+    key(&mut s, KeyCode::KeyA);
+    assert!(s.quit_asked && !s.quit);
+    key(&mut s, KeyCode::Enter);
+    assert!(s.quit);
+    // Like osu!: 2 stays, 1 exits.
+    let mut s = state();
+    key(&mut s, KeyCode::KeyQ);
+    key(&mut s, KeyCode::Digit2);
+    assert!(!s.quit_asked && !s.quit);
+    key(&mut s, KeyCode::KeyQ);
+    key(&mut s, KeyCode::Digit1);
+    assert!(s.quit);
+    // The close button twice exits too.
+    let mut s = state();
+    s.ask_quit();
+    assert!(!s.quit);
+    s.ask_quit();
+    assert!(s.quit);
+}
+
+/// Watching everyone at once, each player's strip follows where they play: a plain lane, rails
+/// lanes, Shapeshift's and Multiverse's playfield in focus all land in their strip.
+#[test]
+fn watching_everyone_shows_where_each_player_plays() {
+    let mods = ["", "SI", "LP", "SS", "MV", "UT,MV"];
+    let players: Vec<(u32, String)> = (0..mods.len() as u32).map(|i| (i, format!("player {i}"))).collect();
+    for &w in widths() {
+        let mut games: Vec<(u32, Box<Game>)> = mods
+            .iter()
+            .enumerate()
+            .map(|(i, mods)| {
+                let mut map = beatmap::calibration_map(500.0, 4, 64);
+                map.meta = entry(0, 0, false).meta;
+                let mut g = Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse(mods));
+                g.set_time(9000.0);
+                (i as u32, Box::new(g))
+            })
+            .collect();
+        let mut zones = Vec::new();
+        let mut c = Canvas::default();
+        c.clear(w);
+        draw_spectate_all(&mut c, &mut games, &players, 1.0, &mut zones, 0.0);
+        if let Some(dir) = std::env::var_os("TAIKO_LAYOUT_SHOTS") {
+            let (iw, ih, rgb) = debug::rasterize(&c, 2.0);
+            debug::write_png(&std::path::Path::new(&dir).join(format!("spectate_everyone-{w:.0}.png")), iw, ih, &rgb).unwrap();
+        }
+        assert_eq!(c.clips.len(), games.len());
+        for (k, (range, [x, y, cw, ch])) in c.clips.iter().enumerate() {
+            let shapes = &c.shapes[range.clone()];
+            let inside = shapes.iter().filter(|s| (*x..x + cw).contains(&s.center[0]) && (*y..y + ch + 2.0).contains(&s.center[1])).count();
+            // Multiverse's other playfields circle off the strip (and are clipped): the one in
+            // focus is there.
+            let share = if mods[k].contains("MV") { 0.125 } else { 0.9 };
+            assert!(inside as f32 >= shapes.len() as f32 * share, "{} at {w}: {inside} of {} shapes in their strip", mods[k], shapes.len());
+        }
+    }
+}
+
+#[test]
+fn song_select_search_takes_the_keys_only_once_clicked() {
+    let mut s = state();
+    let press = |s: &mut State, code: KeyCode, text: &str| s.key_inner(code, false, Some(text), Instant::now(), None);
+    press(&mut s, KeyCode::KeyA, "a");
+    assert_eq!(s.select.filter, "", "typing does nothing until the search box is clicked");
+    s.select.searching = true;
+    for (code, text) in [(KeyCode::Minus, "-"), (KeyCode::Digit4, "4"), (KeyCode::Digit5, "5"), (KeyCode::BracketLeft, "[")] {
+        press(&mut s, code, text);
+    }
+    assert_eq!(s.select.filter, "-45[", "in the box every key types, - and [ too");
+    press(&mut s, KeyCode::Escape, "");
+    assert!(!s.select.searching && s.select.filter == "-45[", "Escape leaves the box, keeping the search");
+    assert!(matches!(s.scene, Scene::Select));
+}
+
+#[test]
+fn songs_sort_by_hp_od_and_status() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    for (k, e) in s.library.iter_mut().enumerate() {
+        e.meta.hp = ((k * 7) % 11) as f64;
+        e.meta.od = ((k * 5) % 9) as f64;
+    }
+    // A song's value is its highest difficulty's, songs in order of it.
+    let song_values = |s: &State, of: fn(&Entry) -> f64| {
+        s.select.songs().iter().map(|song| song.iter().map(|&i| of(&s.library[i])).fold(f64::MIN, f64::max)).collect::<Vec<f64>>()
+    };
+    s.select.sort = ui::SortMode::Hp;
+    s.select.refilter(&s.library);
+    assert!(s.select.songs().len() == 12 && song_values(&s, |e| e.meta.hp).is_sorted());
+    s.select.sort = ui::SortMode::Od;
+    s.select.refilter(&s.library);
+    assert!(song_values(&s, |e| e.meta.od).is_sorted());
+    // Status: ranked before loved before pending, the unknown last.
+    let codes = [search::PENDING, search::RANKED, search::LOVED, search::UNKNOWN];
+    let paths: Vec<PathBuf> = s.library.iter().map(|e| e.path.clone()).collect();
+    for (k, p) in paths.iter().enumerate() {
+        s.select.status.insert(p.clone(), codes[(k / 3) % codes.len()]);
+    }
+    s.select.sort = ui::SortMode::Status;
+    s.select.refilter(&s.library);
+    let first: Vec<u8> = s.select.songs().iter().map(|song| s.select.status[&s.library[song[0]].path]).collect();
+    let rank = |c: u8| [search::LOVED, search::RANKED, search::PENDING, search::UNKNOWN].iter().position(|&x| x == c).unwrap();
+    assert!(first.iter().map(|&c| rank(c)).collect::<Vec<_>>().is_sorted(), "{first:?}");
+    // A song whose difficulties differ in status is listed under its best one, never splitting
+    // a heading: the same status doesn't come twice.
+    let first_song = s.select.songs()[0].clone();
+    for (k, &i) in first_song.iter().enumerate() {
+        s.select.status.insert(s.library[i].path.clone(), if k == 0 { search::NOT_SUBMITTED } else { search::RANKED });
+    }
+    s.select.refilter(&s.library);
+    let names: Vec<String> = s.select.sections().into_iter().map(|x| x.0).collect();
+    let mut unique = names.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(names.len(), unique.len(), "{names:?}");
+    // Each status is a section of its own, with its songs counted; every sort has its headings.
+    let sections = s.select.sections();
+    assert_eq!(sections.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["Loved", "Ranked", "Pending / Graveyard", "Status not known yet"]);
+    assert_eq!(sections.iter().map(|x| x.1).sum::<usize>(), s.select.songs().len());
+    for sort in ui::SortMode::ALL {
+        s.select.sort = sort;
+        s.select.refilter(&s.library);
+        let sections = s.select.sections();
+        assert!(!sections.is_empty() && sections.iter().map(|x| x.1).sum::<usize>() == s.select.songs().len(), "{sort:?}");
+        assert!(sections.iter().all(|x| !x.0.is_empty()), "{sort:?}");
+    }
+}
+
+#[test]
+fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let paths: Vec<PathBuf> = s.library.iter().map(|e| e.path.clone()).collect();
+    for (k, p) in paths.iter().enumerate() {
+        s.select.status.insert(p.clone(), [search::LOVED, search::RANKED, search::PENDING][(k / 3) % 3]);
+    }
+    s.select.sort = ui::SortMode::Status;
+    s.select.refilter(&s.library);
+    assert!(s.select.sections().len() >= 3);
+    // The heading holding the selection is open, the rest closed.
+    assert_eq!(s.select.open_sections(), vec![0]);
+    // A click opens another without selecting anything, and closes it again.
+    let at = s.select.cursor();
+    s.select.click_section(1);
+    assert_eq!(s.select.open_sections(), vec![0, 1]);
+    assert_eq!(s.select.cursor(), at);
+    s.select.click_section(1);
+    assert_eq!(s.select.open_sections(), vec![0]);
+    // The open one closes too, with the selection in it, and opens again.
+    s.select.click_section(0);
+    assert!(s.select.open_sections().is_empty());
+    check_draw("sections closed", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None));
+    s.select.click_section(0);
+    assert_eq!(s.select.open_sections(), vec![0]);
+    // The wheel and right-click scrolling stay in the open heading, however far they go.
+    s.select.step(-50, &s.library, false);
+    s.select.step(500, &s.library, false);
+    assert_eq!(s.select.open_sections(), vec![0], "the wheel opened nothing");
+    s.select.scroll_to(1000.0, &s.library);
+    assert_eq!(s.select.open_sections(), vec![0], "right-click scrolling opened nothing");
+    let in_first = |s: &State| s.select.current_song().is_some_and(|g| g < s.select.sections_end(0));
+    assert!(in_first(&s), "and the selection never left it");
+    s.select.scroll_to(-1000.0, &s.library);
+    assert!(in_first(&s));
+    // The arrow keys, past the last song listed, open the next heading and go on into it.
+    s.select.step(500, &s.library, false);
+    let _ = s.select.key(KeyCode::ArrowDown, &s.library);
+    for _ in 0..20 {
+        let _ = s.select.key(KeyCode::ArrowDown, &s.library);
+    }
+    let open = s.select.open_sections();
+    assert!(open.len() == 1 && open[0] > 0, "the keys went on into the next heading, and the one they left closed: {open:?}");
+    // Moving the selection to another heading that is open closes the one it leaves.
+    s.select.click_section(0);
+    assert_eq!(s.select.open_sections().len(), 2);
+    s.select.scroll_to(-1000.0, &s.library);
+    let open = s.select.open_sections();
+    assert!(open.len() == 1 && open[0] == 0, "scrolling back up left the other heading and closed it: {open:?}");
+    // It all draws.
+    check_draw("sections", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None));
+}
+
+#[test]
+fn a_guests_mod_select_shows_the_hosts_speed_mods_on() {
+    let mut s = state();
+    let mut room = session(false);
+    // We're player 1; player 0 hosts.
+    room.client.id = Some(1);
+    room.map.as_mut().unwrap().mods = Mods::parse("DT,HD").list();
+    s.mp = Some(room);
+    s.scene = Scene::Lobby;
+    s.cfg.mods = Mods::parse("FL");
+    let shown = s.shown_mods();
+    assert!(shown.has(mods::Mod::DoubleTime) && shown.has(mods::Mod::Flashlight), "the host's speed and our own");
+    assert!(!shown.has(mods::Mod::Hidden), "the host's other mods aren't forced on us");
+    // Not in a lobby (or as the host), the mod select shows just ours.
+    s.scene = Scene::Select;
+    assert_eq!(s.shown_mods(), s.cfg.mods);
+}
+
+#[test]
+fn np_names_the_map_on_screen_with_a_link_others_can_click() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let np = s.now_playing().expect("a map is selected");
+    let e = &s.library[s.select.selected().unwrap()];
+    assert!(np.starts_with("is playing ") && np.contains(&e.meta.title) && np.contains(&format!("[{}]", e.meta.version)), "{np}");
+    if let Some(set) = e.meta.set_id {
+        assert_eq!(social::map_set_in(&np), Some(set));
+    }
+    assert_eq!(social::map_set_in("look https://osu.ppy.sh/beatmapsets/1234#taiko/99 ok"), Some(1234));
+    assert_eq!(social::map_set_in("osu.ppy.sh/beatmapsets/"), None);
+    assert_eq!(social::map_set_in("no link"), None);
 }
