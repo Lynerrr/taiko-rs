@@ -55,8 +55,10 @@ const COMBO_BREAK_GAIN: f32 = 1.2;
 pub const DON: u32 = 0xEB452C;
 pub const KAT: u32 = 0x438EAD;
 const ROLL: u32 = 0xFCB806;
-/// Drumroll ticks (`sliderscorepoint`): the roll's yellow, halfway to white so they show on it.
-const ROLL_TICK: u32 = 0xFDDB83;
+/// Drumroll ticks (`sliderscorepoint`), as stable tints them (owner's screenshot, IT'S SOOOO
+/// CREATIVE): yellow on the beat, pale orange on the half beat, the image's own colour elsewhere.
+const ROLL_TICK_BEAT: u32 = 0xFFFF00;
+const ROLL_TICK_HALF: u32 = 0xFFE696;
 const SWELL: u32 = 0xF39A2B;
 const WHITE: u32 = 0xFFFFFF;
 /// Colorless: dons and kats alike.
@@ -897,10 +899,14 @@ const POPUP_FROM_LENGTH: f32 = 215.0;
 // ponytail: guessed from "too fast"; measure stable's if it still looks off.
 const POPUP_FADE_MS: f64 = 666.0;
 
-/// Whether roll tick `k` takes the roll's yellow. At 125 BPM or slower (`slow`, a beat of 480 ms or
-/// more) ticks are 1/8 apart and only every other one is on the 1/4 grid; otherwise all are.
-fn tick_tinted(slow: bool, k: usize) -> bool {
-    !slow || k % 2 == 0
+/// A roll tick's tint at map time `t`, on the beat grid of its red line (`origin`, `beat`):
+/// yellow on a beat, pale orange on a half beat, white (the image's own colour) elsewhere.
+fn tick_tint(t: f64, origin: f64, beat: f64) -> u32 {
+    let at = |division: f64| {
+        let x = (t - origin) / beat * division;
+        (x - x.round()).abs() < 0.02 * division
+    };
+    if at(1.0) { ROLL_TICK_BEAT } else if at(2.0) { ROLL_TICK_HALF } else { WHITE }
 }
 
 /// A swell's alpha `until` ms before it starts: hidden, then fading in (easing in) from 1.5 beats
@@ -3019,14 +3025,12 @@ impl Game {
                     if cut {
                         continue;
                     }
-                    // The yellow only on the rule's 1/4 (or 1/2) grid: a slow roll's 1/8 ticks
-                    // between keep the image's own colour (owner, 2026-10-28).
-                    let slow = beatmap::control_point_at(&self.map.control_points, n.time).beat_length >= 480.0;
+                    let cp = beatmap::control_point_at(&self.map.control_points, n.time);
                     for (k, hit) in st.ticks.iter().enumerate() {
                         let ts = s_of(n.time + k as f64 * n.tick_spacing, n.velocity);
                         if !hit && ts > s0 && ts < lane_len {
                             let (x, y, ..) = place(ts, 0.0);
-                            let tint = if tick_tinted(slow, k) { ROLL_TICK } else { WHITE };
+                            let tint = tick_tint(n.time + k as f64 * n.tick_spacing, cp.beat_origin, cp.beat_length);
                             if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(tint, a)) {
                                 c.circle(x, y, 4.0, rgba(WHITE, 0.85 * a), rgba(WHITE, 0.0), 0.0);
                             }
@@ -4436,10 +4440,12 @@ mod tests {
     }
 
     #[test]
-    fn only_a_slow_rolls_quarter_ticks_are_tinted() {
-        let slow: Vec<bool> = (0..5).map(|k| tick_tinted(true, k)).collect();
-        assert_eq!(slow, [true, false, true, false, true]);
-        assert!((0..5).all(|k| tick_tinted(false, k)));
+    fn roll_ticks_are_yellow_on_the_beat_and_orange_on_the_half() {
+        // 1/4 ticks from a red line at 100 with a 400 ms beat: beat, 1/4, half, 3/4, beat.
+        let tints: Vec<u32> = (0..5).map(|k| tick_tint(100.0 + k as f64 * 100.0, 100.0, 400.0)).collect();
+        assert_eq!(tints, [ROLL_TICK_BEAT, WHITE, ROLL_TICK_HALF, WHITE, ROLL_TICK_BEAT]);
+        // A roll off the grid takes none.
+        assert_eq!(tick_tint(130.0, 100.0, 400.0), WHITE);
     }
 
     #[test]
