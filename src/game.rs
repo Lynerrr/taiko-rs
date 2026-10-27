@@ -60,7 +60,18 @@ const WHITE: u32 = 0xFFFFFF;
 /// Colorless: dons and kats alike.
 const GREY: u32 = 0x8c8ca6;
 
-pub const PAUSE_ITEMS: [&str; 5] = ["Continue", "Retry", "Playfield size", "Settings", "Quit to song select"];
+pub const PAUSE_ITEMS: usize = 5;
+
+/// Pause menu item `i`'s name.
+fn pause_item(i: usize) -> &'static str {
+    match i {
+        0 => tr!("Continue", "続ける", "Продолжить"),
+        1 => tr!("Retry", "やり直す", "Заново"),
+        2 => tr!("Playfield size", "プレイフィールドのサイズ", "Размер игрового поля"),
+        3 => tr!("Settings", "設定", "Настройки"),
+        _ => tr!("Quit to song select", "選曲に戻る", "Выйти к выбору песни"),
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Judge {
@@ -3384,19 +3395,27 @@ impl Game {
             && let Some(h) = self.offset_suggestion(self.offset)
         {
             let e = &h.estimate;
-            let building = if e.hits < h.needed { format!("  confidence {}/{}", e.hits, h.needed) } else { String::new() };
-            let stats = format!("UR {:.0}, {} hits", e.ur, e.hits);
+            let (hits, needed) = (e.hits, h.needed);
+            let building = if hits < needed { tr!("  confidence {hits}/{needed}", "  信頼度 {hits}/{needed}", "  надёжность {hits}/{needed}";) } else { String::new() };
+            let ur = e.ur;
+            let hits_ru = crate::lang::ru_plural(hits, ["удар", "удара", "ударов"]);
+            let stats = tr!("UR {ur:.0}, {hits} hits", "UR {ur:.0}、{hits}回", "UR {ur:.0}, {hits} {hits_ru}";);
+            let (error, margin, suggested) = (e.error_ms.abs(), e.margin_ms, e.suggested_offset);
             if h.significant {
-                let dir = if e.error_ms > 0.0 { "late" } else { "early" };
-                let text = format!(
-                    "{:.1} +-{:.1} ms {dir} ({stats})  |  suggested offset {:+.0} ms  |  O: this map  Shift+O: all{building}",
-                    e.error_ms.abs(),
-                    e.margin_ms,
-                    e.suggested_offset
+                let dir = if e.error_ms > 0.0 { tr!("late", "遅い", "поздно") } else { tr!("early", "早い", "рано") };
+                let text = tr!(
+                    "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms  |  O: this map  Shift+O: all{building}",
+                    "{error:.1} ±{margin:.1} ms {dir} ({stats})  |  提案オフセット {suggested:+.0} ms  |  O: この譜面  Shift+O: 全体{building}",
+                    "{error:.1} +-{margin:.1} мс {dir} ({stats})  |  смещение {suggested:+.0} мс  |  O: эта карта  Shift+O: все{building}";
                 );
                 c.text_centered(cx, my + 20.0, 8.0, rgba(0xFFD34D, 0.95), &text);
             } else {
-                let text = format!("offset looks good: {:+.1} +-{:.1} ms ({stats}){building}", e.error_ms, e.margin_ms);
+                let error = e.error_ms;
+                let text = tr!(
+                    "offset looks good: {error:+.1} +-{margin:.1} ms ({stats}){building}",
+                    "オフセットは良好: {error:+.1} ±{margin:.1} ms ({stats}){building}",
+                    "смещение в порядке: {error:+.1} +-{margin:.1} мс ({stats}){building}";
+                );
                 c.text_centered(cx, my + 20.0, 8.0, rgba(0x86E05A, 0.9), &text);
             }
         }
@@ -3407,7 +3426,7 @@ impl Game {
         }
 
         if self.can_skip() && self.paused.is_none() && !self.mute_hits && !self.watched {
-            c.text_centered(w / 2.0, 330.0, 12.0, rgba(WHITE, 0.7), "SPACE to skip intro");
+            c.text_centered(w / 2.0, 330.0, 12.0, rgba(WHITE, 0.7), tr!("SPACE to skip intro", "SPACEでイントロを飛ばす", "ПРОБЕЛ: пропустить вступление"));
         }
         if let (Some(_), Some((start, end))) = (self.paused, self.resuming) {
             // Resume countdown: the playfield stays visible, lightly dimmed.
@@ -3424,19 +3443,19 @@ impl Game {
                 c.circle(cx + a.cos() * 26.0, cy + a.sin() * 26.0, 2.2, rgba(accent(), 1.0), rgba(accent(), 1.0), 0.0);
             }
             c.text_centered(cx, cy - 7.0, 14.0, rgba(WHITE, 1.0), &format!("{:.1}", left));
-            c.text_centered(cx, cy + 36.0, 8.0, rgba(0x9a9ab0, 1.0), "get ready   (Esc: back to menu)");
+            c.text_centered(cx, cy + 36.0, 8.0, rgba(0x9a9ab0, 1.0), tr!("get ready   (Esc: back to menu)", "準備して   (Esc: メニューに戻る)", "приготовьтесь   (Esc: назад в меню)"));
         } else if let Some(cursor) = self.paused.filter(|_| !self.watched) {
             let t = progress(self.paused_at, 180.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78 * t));
             let rise = (1.0 - t) * 12.0;
-            c.text_centered(w / 2.0, 98.0 - rise, 32.0, rgba(WHITE, t), "PAUSED");
+            c.text_centered(w / 2.0, 98.0 - rise, 32.0, rgba(WHITE, t), tr!("PAUSED", "ポーズ", "ПАУЗА"));
             // The map's name lives here rather than under the lane, where moved lanes ran into it.
             let m = &self.map.meta;
             let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("   {:.2}x", self.rate) } else { String::new() };
             let fit = (w - 80.0).min(520.0);
             c.text_centered(w / 2.0, 140.0 - rise, 9.0, rgba(0x9a9ab0, t), &Canvas::fit(9.0, fit, &format!("{} - {}", m.artist, m.title)));
             c.text_centered(w / 2.0, 153.0 - rise, 9.0, rgba(0x6f6f86, t), &Canvas::fit(9.0, fit, &format!("[{}]  OD {:.1}{rate}", m.version, m.od)));
-            for (i, item) in PAUSE_ITEMS.iter().enumerate() {
+            for (i, item) in (0..PAUSE_ITEMS).map(pause_item).enumerate() {
                 // Items slide up one after another.
                 let ti = progress(self.paused_at + std::time::Duration::from_millis(25 * i as u64), 180.0);
                 let y = 170.0 + i as f32 * 38.0 + (1.0 - ti) * 18.0;
@@ -3446,15 +3465,15 @@ impl Game {
                 c.hit(w / 2.0 - 140.0, y, 280.0, 32.0, Hit::PauseItem(i));
                 c.text_centered(w / 2.0, y + 10.0, 12.0, rgba(if selected { WHITE } else { 0xc8c8d8 }, 1.0), item);
             }
-            let hint_y = 170.0 + PAUSE_ITEMS.len() as f32 * 38.0 + 8.0;
+            let hint_y = 170.0 + PAUSE_ITEMS as f32 * 38.0 + 8.0;
             // Fades in once the items have slid past it.
             let th = progress(self.paused_at + std::time::Duration::from_millis(220), 150.0);
-            c.text_centered(w / 2.0, hint_y, 9.0, rgba(0x8a8aa0, th), "Up/Down + Enter    Esc: continue");
+            c.text_centered(w / 2.0, hint_y, 9.0, rgba(0x8a8aa0, th), tr!("Up/Down + Enter    Esc: continue", "上下 + Enter    Esc: 続ける", "Вверх/вниз + Enter    Esc: продолжить"));
         }
         if let Some((_, at)) = self.failed {
             let p = progress(at, 400.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.6 * p));
-            c.text_centered(w / 2.0, 200.0, 32.0, rgba(0xEB452C, p), "FAILED");
+            c.text_centered(w / 2.0, 200.0, 32.0, rgba(0xEB452C, p), tr!("FAILED", "失敗", "ПРОВАЛ"));
         }
     }
 }
@@ -3673,7 +3692,7 @@ pub fn draw_preview(c: &mut Canvas) {
         }
     }
     draw_drum(c, [0.0; 4], colours.don(), colours.kat());
-    c.text_centered(w / 2.0, 300.0, 14.0, rgba(WHITE, 0.85), "drag to move, edges to resize");
+    c.text_centered(w / 2.0, 300.0, 14.0, rgba(WHITE, 0.85), tr!("drag to move, edges to resize", "ドラッグで移動、端でサイズ変更", "тяните — двигать, края — размер"));
 }
 
 /// The editor's stand-in score, where the real HUD goes: fixed on screen, whatever the area.

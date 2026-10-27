@@ -65,7 +65,7 @@ impl View {
                 Ok(Ok(changes)) => self.state = State::Loaded(changes),
                 Ok(Err(e)) => self.state = State::Failed(e),
                 Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => self.state = State::Failed("couldn't get the changes".into()),
+                Err(mpsc::TryRecvError::Disconnected) => self.state = State::Failed(tr!("couldn't get the changes", "変更点を取得できませんでした", "не удалось получить изменения").into()),
             }
         }
     }
@@ -101,19 +101,19 @@ impl View {
         let pw = (w - 32.0).min(640.0);
         let (px, py, ph) = ((w - pw) / 2.0, 36.0, 420.0);
         c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
-        c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), "What's new");
+        c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), tr!("What's new", "更新内容", "Что нового"));
         let about = match (self.after_update, crate::update::BUILD) {
-            (true, Some(b)) => format!("updated to {}", crate::update::short(b)),
-            (false, Some(b)) => format!("this build: {}", crate::update::short(b)),
-            (_, None) => "a local build: the latest changes".into(),
+            (true, Some(b)) => tr!("updated to {}", "{}に更新しました", "обновлено до {}"; crate::update::short(b)),
+            (false, Some(b)) => tr!("this build: {}", "このビルド: {}", "эта сборка: {}"; crate::update::short(b)),
+            (_, None) => tr!("a local build: the latest changes", "ローカルビルド: 最新の変更", "локальная сборка: последние изменения").into(),
         };
         c.text_right(px + pw - 16.0, py + 16.0, 7.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(7.0, pw - 180.0, &about));
         let (by, bw) = (py + ph - 26.0, 64.0);
-        c.button(px + pw - bw - 12.0, by, bw, 16.0, "Close", 7.0, Hit::Key(KeyCode::Escape), true);
-        c.text(px + 16.0, by + 4.5, 6.0, rgba(0x6f6f86, 1.0), "Up/Down, wheel: scroll   Esc: close");
+        c.button(px + pw - bw - 12.0, by, bw, 16.0, tr!("Close", "閉じる", "Закрыть"), 7.0, Hit::Key(KeyCode::Escape), true);
+        c.text(px + 16.0, by + 4.5, 6.0, rgba(0x6f6f86, 1.0), tr!("Up/Down, wheel: scroll   Esc: close", "上下、ホイール: スクロール   Esc: 閉じる", "Вверх/вниз, колесо: прокрутка   Esc: закрыть"));
         let changes = match &self.state {
             State::Loading(_) => {
-                c.text_centered(px + pw / 2.0, py + ph / 2.0, 9.0, rgba(0xc8c8d8, 1.0), "getting the changes...");
+                c.text_centered(px + pw / 2.0, py + ph / 2.0, 9.0, rgba(0xc8c8d8, 1.0), tr!("getting the changes...", "変更点を取得中...", "получаем изменения..."));
                 return;
             }
             State::Failed(e) => {
@@ -121,7 +121,7 @@ impl View {
                 return;
             }
             State::Loaded(changes) if changes.is_empty() => {
-                c.text_centered(px + pw / 2.0, py + ph / 2.0, 9.0, rgba(0xc8c8d8, 1.0), "nothing new");
+                c.text_centered(px + pw / 2.0, py + ph / 2.0, 9.0, rgba(0xc8c8d8, 1.0), tr!("nothing new", "新しいものはありません", "ничего нового"));
                 return;
             }
             State::Loaded(changes) => changes,

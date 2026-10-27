@@ -96,7 +96,13 @@ fn one() -> f64 {
 impl MapInfo {
     pub fn label(&self) -> String {
         let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", self.rate) } else { String::new() };
-        let from = self.from.map(|t| format!("  from {}:{:02}", (t / 1000.0) as u64 / 60, (t / 1000.0) as u64 % 60)).unwrap_or_default();
+        let from = self
+            .from
+            .map(|t| {
+                let (m, s) = ((t / 1000.0) as u64 / 60, (t / 1000.0) as u64 % 60);
+                tr!("  from {m}:{s:02}", "  {m}:{s:02}から", "  с {m}:{s:02}";)
+            })
+            .unwrap_or_default();
         let mods = if self.mods.is_empty() { String::new() } else { format!("  +{}", self.mods.concat()) };
         format!("{} - {} [{}]{rate}{mods}{from}", self.artist, self.title, self.version)
     }
@@ -264,9 +270,9 @@ fn send_line<T: Serialize>(w: &mut TcpStream, msg: &T) -> std::io::Result<()> {
     w.write_all(line.as_bytes())
 }
 
-/// Printable ASCII and Cyrillic: what the built-in font draws.
+/// Printable ASCII, Cyrillic and Japanese: what the built-in font draws.
 pub fn drawable_char(c: char) -> bool {
-    c.is_ascii_graphic() || c == ' ' || matches!(c, 'А'..='я' | 'Ё' | 'ё')
+    c.is_ascii_graphic() || c == ' ' || (!c.is_ascii() && !c.is_control() && crate::font::drawable(c))
 }
 
 /// A chat line: what the font draws, at most 200 characters, trimmed.
@@ -459,7 +465,7 @@ pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
     }
     if listeners.is_empty() {
         let e = last_err.map(|e| e.to_string()).unwrap_or_default();
-        return Err(format!("can't listen on port {port}: {e}"));
+        return Err(tr!("can't listen on port {port}: {e}", "ポート{port}で待ち受けできません: {e}", "не удаётся слушать порт {port}: {e}";));
     }
     for l in &listeners {
         l.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -1137,15 +1143,15 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
     };
     with_port
         .to_socket_addrs()
-        .map_err(|e| format!("can't resolve {addr}: {e}"))?
+        .map_err(|e| tr!("can't resolve {addr}: {e}", "{addr}が見つかりません: {e}", "не удаётся найти {addr}: {e}";))?
         .next()
-        .ok_or_else(|| format!("can't resolve {addr}"))
+        .ok_or_else(|| tr!("can't resolve {addr}", "{addr}が見つかりません", "не удаётся найти {addr}";))
 }
 
 impl Client {
     pub fn connect(addr: &str, name: &str, host_token: Option<u64>) -> Result<Client, String> {
         let sa = resolve(addr)?;
-        let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(5)).map_err(|e| format!("can't connect to {sa}: {e}"))?;
+        let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(5)).map_err(|e| tr!("can't connect to {sa}: {e}", "{sa}に接続できません: {e}", "не удаётся подключиться к {sa}: {e}";))?;
         Client::over(BufReader::new(stream), name, host_token)
     }
 
@@ -1182,7 +1188,7 @@ impl Client {
                     }
                 }
             }
-            let _ = inbox.send((Instant::now(), ServerMsg::Disconnected("connection closed".into())));
+            let _ = inbox.send((Instant::now(), ServerMsg::Disconnected(tr!("connection closed", "接続が切れました", "соединение закрыто").into())));
         });
         // Ping quickly at first to sync clocks, then once a second to track drift.
         let pinger = tx.clone();

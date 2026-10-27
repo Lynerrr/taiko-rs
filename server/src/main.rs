@@ -9,6 +9,11 @@
 //!
 //! Accounts and sessions live in DIR/accounts.json (passwords as argon2 hashes).
 
+// The game's `tr!`, for the text in its files below (the server always speaks English).
+#[allow(dead_code)]
+#[macro_use]
+#[path = "../../src/lang.rs"]
+mod lang;
 #[allow(dead_code)]
 #[path = "../../src/net.rs"]
 mod net;

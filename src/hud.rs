@@ -38,18 +38,18 @@ impl Part {
     /// For the settings list.
     pub fn label(self) -> &'static str {
         match self {
-            Part::Score => "Score",
-            Part::Accuracy => "Accuracy",
-            Part::Pp => "pp counter",
-            Part::Combo => "Combo (on the drum)",
-            Part::Progress => "Progress bar",
-            Part::Health => "Health bar",
-            Part::Mods => "Mods",
-            Part::HitError => "Hit error bar",
-            Part::OffsetHint => "Offset suggestion",
+            Part::Score => tr!("Score", "スコア", "Счёт"),
+            Part::Accuracy => tr!("Accuracy", "精度", "Точность"),
+            Part::Pp => tr!("pp counter", "ppカウンター", "Счётчик pp"),
+            Part::Combo => tr!("Combo (on the drum)", "コンボ (太鼓の上)", "Комбо (на барабане)"),
+            Part::Progress => tr!("Progress bar", "進行バー", "Полоса прогресса"),
+            Part::Health => tr!("Health bar", "ゲージ", "Полоса здоровья"),
+            Part::Mods => tr!("Mods", "Mod", "Моды"),
+            Part::HitError => tr!("Hit error bar", "判定ズレのバー", "Полоса ошибок попаданий"),
+            Part::OffsetHint => tr!("Offset suggestion", "オフセットの提案", "Подсказка смещения"),
             Part::Judgements => "GREAT / OK / MISS",
-            Part::HitAnimation => "Note hit animation",
-            Part::Scoreboard => "Match scoreboard",
+            Part::HitAnimation => tr!("Note hit animation", "ノーツを叩いた時の動き", "Анимация удара по ноте"),
+            Part::Scoreboard => tr!("Match scoreboard", "対戦のスコアボード", "Таблица матча"),
         }
     }
 

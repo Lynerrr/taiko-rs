@@ -121,6 +121,8 @@ pub struct Config {
     pub touch_layout: TouchLayout,
     /// Where F12 screenshots go.
     pub screenshot_to: ScreenshotTo,
+    /// The interface's language.
+    pub language: crate::lang::Lang,
     /// Positive when your audio reaches you late; notes are shifted later by this much.
     pub offset_ms: f64,
     /// Notes are drawn this many ms ahead to make up for display latency (judging is unaffected).
@@ -273,6 +275,7 @@ impl Default for Config {
             touch_layout: TouchLayout::Kddk,
             // Android has no clipboard to put pictures on here.
             screenshot_to: if cfg!(target_os = "android") { ScreenshotTo::Folder } else { ScreenshotTo::Clipboard },
+            language: crate::lang::Lang::En,
             offset_ms: 0.0,
             visual_offset_ms: 0.0,
             vsync_compensation: true,
@@ -683,6 +686,7 @@ impl Config {
                 }
                 "touch_layout" => cfg.touch_layout = TouchLayout::parse(v).unwrap_or(cfg.touch_layout),
                 "screenshot_to" => cfg.screenshot_to = ScreenshotTo::parse(v).unwrap_or(cfg.screenshot_to),
+                "language" => cfg.language = crate::lang::Lang::parse(v).unwrap_or(cfg.language),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
@@ -748,6 +752,8 @@ impl Config {
              touch_layout = {}\n\
              # where F12 screenshots go: clipboard, folder (Screenshots) or both\n\
              screenshot_to = {}\n\
+             # the interface's language: en, ja or ru\n\
+             language = {}\n\
              show_playfield_size = {}\n\
              # your own playfield sizes (preset list, in this order)\n\
              saved_presets = {}\n\
@@ -802,6 +808,7 @@ impl Config {
             self.preset_keys.iter().map(|k| key_name(*k)).collect::<Vec<_>>().join(", "),
             self.touch_layout.name(),
             self.screenshot_to.key(),
+            self.language.code(),
             self.show_playfield_size,
             self.saved_presets.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(", "),
             self.preset_spots.iter().map(|((w, h), (x, y))| format!("{w}x{h}@{x:.4}/{y:.4}")).collect::<Vec<_>>().join(", "),

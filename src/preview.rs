@@ -658,25 +658,26 @@ const STAT_GAP: f32 = 10.0;
 /// `s` as up to `lines` lines of text `size` tall within `max_w`, broken at spaces (or mid-word
 /// when a word alone is too long); what still doesn't fit ends the last line with "...".
 fn wrap(size: f32, max_w: f32, s: &str, lines: usize) -> Vec<String> {
-    let per_line = ((max_w / Canvas::char_width(size)) as usize).max(4);
+    let max_w = max_w.max(Canvas::char_width(size) * 4.0);
     let mut out: Vec<String> = Vec::new();
-    let mut rest: Vec<char> = s.chars().collect();
+    let mut rest = s;
     while !rest.is_empty() && out.len() < lines {
-        if rest.len() <= per_line {
-            out.push(rest.drain(..).collect());
+        // At least one character a line, however narrow.
+        let fits = Canvas::fitting_prefix(size, max_w, rest).max(rest.chars().next().map_or(0, char::len_utf8));
+        if fits == rest.len() {
+            out.push(rest.to_string());
+            rest = "";
             break;
         }
         // Break after the last space that keeps the line within the width, else at the width.
-        let at = rest[..=per_line].iter().rposition(|&ch| ch == ' ').filter(|&p| p > 0).unwrap_or(per_line);
-        out.push(rest[..at].iter().collect::<String>().trim_end().to_string());
-        rest.drain(..at);
-        while rest.first() == Some(&' ') {
-            rest.remove(0);
-        }
+        let next = fits + rest[fits..].chars().next().map_or(0, char::len_utf8);
+        let at = rest[..next].rfind(' ').filter(|&p| p > 0).unwrap_or(fits);
+        out.push(rest[..at].trim_end().to_string());
+        rest = rest[at..].trim_start_matches(' ');
     }
     if !rest.is_empty() {
         if let Some(last) = out.last_mut() {
-            *last = Canvas::fit(size, max_w, &format!("{last} {}", rest.iter().collect::<String>()));
+            *last = Canvas::fit(size, max_w, &format!("{last} {rest}"));
         }
     }
     out
