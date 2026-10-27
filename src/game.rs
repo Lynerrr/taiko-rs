@@ -897,6 +897,12 @@ const POPUP_FROM_LENGTH: f32 = 215.0;
 // ponytail: guessed from "too fast"; measure stable's if it still looks off.
 const POPUP_FADE_MS: f64 = 666.0;
 
+/// Whether roll tick `k` takes the roll's yellow. At 125 BPM or slower (`slow`, a beat of 480 ms or
+/// more) ticks are 1/8 apart and only every other one is on the 1/4 grid; otherwise all are.
+fn tick_tinted(slow: bool, k: usize) -> bool {
+    !slow || k % 2 == 0
+}
+
 /// A swell's alpha `until` ms before it starts: hidden, then fading in (easing in) from 1.5 beats
 /// before it, over lazer's 666 ms or half a beat if shorter (ppy/osu#21769, owner 2026-10-28;
 /// taiko_arranger's `spinner_fade` too).
@@ -3013,11 +3019,15 @@ impl Game {
                     if cut {
                         continue;
                     }
+                    // The yellow only on the rule's 1/4 (or 1/2) grid: a slow roll's 1/8 ticks
+                    // between keep the image's own colour (owner, 2026-10-28).
+                    let slow = beatmap::control_point_at(&self.map.control_points, n.time).beat_length >= 480.0;
                     for (k, hit) in st.ticks.iter().enumerate() {
                         let ts = s_of(n.time + k as f64 * n.tick_spacing, n.velocity);
                         if !hit && ts > s0 && ts < lane_len {
                             let (x, y, ..) = place(ts, 0.0);
-                            if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(ROLL_TICK, a)) {
+                            let tint = if tick_tinted(slow, k) { ROLL_TICK } else { WHITE };
+                            if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(tint, a)) {
                                 c.circle(x, y, 4.0, rgba(WHITE, 0.85 * a), rgba(WHITE, 0.0), 0.0);
                             }
                         }
@@ -4423,6 +4433,13 @@ mod tests {
         g.press_at(1, t + 500.0, None);
         assert_eq!(g.state[4].judged, Some(Judge::Miss));
         assert_eq!(g.state[5].judged, Some(Judge::Great), "the press went on to the next note");
+    }
+
+    #[test]
+    fn only_a_slow_rolls_quarter_ticks_are_tinted() {
+        let slow: Vec<bool> = (0..5).map(|k| tick_tinted(true, k)).collect();
+        assert_eq!(slow, [true, false, true, false, true]);
+        assert!((0..5).all(|k| tick_tinted(false, k)));
     }
 
     #[test]
