@@ -1,4 +1,5 @@
-//! The system clipboard: Ctrl+V pastes into whatever text is being typed, Ctrl+C copies.
+//! The system clipboard: Ctrl+V pastes into whatever text is being typed, Ctrl+C copies, and
+//! F12 can put a screenshot on it.
 //! arboard does it natively (Windows, macOS, X11 and Wayland); on Linux the usual command line
 //! tools stand in when it can't (a Wayland compositor without the data-control protocol).
 
@@ -34,13 +35,31 @@ pub fn set(text: &str) -> bool {
     if with_board(|b| b.set_text(text).ok()).is_some() {
         return true;
     }
-    tool(&[("wl-copy", &[]), ("xclip", &["-selection", "clipboard"]), ("xsel", &["-ib"])], Some(text)).is_some()
+    tool(&[("wl-copy", &[]), ("xclip", &["-selection", "clipboard"]), ("xsel", &["-ib"])], Some(text.as_bytes())).is_some()
+}
+
+/// Puts a `w` x `h` RGB picture on the clipboard; false if there's none to put it on.
+pub fn set_image(w: u32, h: u32, rgb: &[u8]) -> bool {
+    #[cfg(not(target_os = "android"))]
+    {
+        let rgba: Vec<u8> = rgb.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        let image = arboard::ImageData { width: w as usize, height: h as usize, bytes: rgba.into() };
+        if with_board(|b| b.set_image(image).ok()).is_some() {
+            return true;
+        }
+    }
+    let mut png = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut png);
+    if image::ImageEncoder::write_image(encoder, rgb, w, h, image::ExtendedColorType::Rgb8).is_err() {
+        return false;
+    }
+    tool(&[("wl-copy", &["--type", "image/png"]), ("xclip", &["-selection", "clipboard", "-t", "image/png"])], Some(&png)).is_some()
 }
 
 /// The first of the clipboard tools that works (Linux only): reading its output, or writing
 /// `input` to it.
 #[allow(unused_variables)]
-fn tool(tries: &[(&str, &[&str])], input: Option<&str>) -> Option<String> {
+fn tool(tries: &[(&str, &[&str])], input: Option<&[u8]>) -> Option<String> {
     #[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
     {
         use std::io::Write;
@@ -51,9 +70,9 @@ fn tool(tries: &[(&str, &[&str])], input: Option<&str>) -> Option<String> {
             if let Some(text) = input {
                 let Ok(mut child) = c.stdin(Stdio::piped()).stdout(Stdio::null()).spawn() else { continue };
                 if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(text.as_bytes());
+                    let _ = stdin.write_all(text);
                 }
-                // wl-copy stays behind to serve the text; don't wait for it.
+                // wl-copy stays behind to serve it; don't wait for it.
                 return Some(String::new());
             }
             if let Ok(out) = c.stdin(Stdio::null()).output() {

@@ -38,6 +38,7 @@ pub enum Item {
     /// `keys::Hotkey::ALL[i]`'s key.
     Hotkey(usize),
     TouchLayout,
+    Screenshots,
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
@@ -85,11 +86,12 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 103] = [
+pub const ITEMS: [(&str, Item); 104] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
     ("LIBRARY", Item::DataFolder),
+    ("LIBRARY", Item::Screenshots),
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -193,7 +195,7 @@ pub const ITEMS: [(&str, Item); 103] = [
 
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 10] = [
-    ("LIBRARY", "Songs folder, game data"),
+    ("LIBRARY", "Songs folder, data, screenshots"),
     ("GAMEPLAY", "speed, rate, interface"),
     ("PLAYFIELD", "size, position"),
     ("INPUT", "drum keys, hotkeys, touch"),
@@ -255,6 +257,7 @@ impl Item {
             Item::PresetKey(_) => "Next preset key",
             Item::Hotkey(i) => crate::keys::Hotkey::ALL[i].label(),
             Item::TouchLayout => "Touch layout",
+            Item::Screenshots => "Screenshots (F12)",
             Item::ShowPlayfieldSize => "Show playfield size",
             Item::WheelResize => "Wheel resizes playfield",
             Item::KiaiEffects => "Kiai effects",
@@ -322,6 +325,7 @@ impl Item {
             | Item::KatColour => Kind::Value,
             Item::PlayfieldPreset
             | Item::TouchLayout
+            | Item::Screenshots
             | Item::AudioBuffer
             | Item::PresentMode
             | Item::UpdateChannel
@@ -388,6 +392,7 @@ impl Item {
             Item::Key(_) => "Enter, then press the new key (Delete: none, Esc: cancel). Backspace: back to the default.",
             Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key. Delete: none.",
             Item::Hotkey(_) => "Enter, then press the new key, Ctrl / Alt / Shift too (Delete: none, Esc: cancel). Backspace: the default.",
+            Item::Screenshots => "Where F12 puts a screenshot: on the clipboard to paste, as a picture in the Screenshots folder, or both.",
             Item::TouchLayout => "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",
             Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
             Item::WheelResize => "During play, the mouse wheel makes the playfield bigger or smaller (it always does in its editor).",

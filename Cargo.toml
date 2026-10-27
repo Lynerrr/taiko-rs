@@ -26,8 +26,9 @@ wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-# The clipboard (Ctrl+C / Ctrl+V): Windows, macOS, X11 and Wayland compositors with data-control.
-arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
+# The clipboard (Ctrl+C / Ctrl+V, F12 screenshots): Windows, macOS, X11 and Wayland compositors
+# with data-control.
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control", "image-data"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # The APK is a plain NativeActivity (no Java): see android/build-apk.sh.

@@ -1885,6 +1885,7 @@ impl State {
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
             Item::Hotkey(i) => c.hotkeys.get(keys::Hotkey::ALL[i]).map(keys::Chord::name).unwrap_or_else(|| "none".into()),
             Item::TouchLayout => c.touch_layout.name().into(),
+            Item::Screenshots => c.screenshot_to.name().into(),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::WheelResize => on(c.wheel_resizes_playfield),
             Item::BackgroundDimBlack => on(c.bg_dim_black),
@@ -2023,6 +2024,7 @@ impl State {
             // Open their lists on Enter.
             Item::InterfaceHides | Item::SkinParts | Item::SkinPart(_) => return,
             Item::TouchLayout => self.cfg.touch_layout = self.cfg.touch_layout.step(dir),
+            Item::Screenshots => self.cfg.screenshot_to = self.cfg.screenshot_to.step(dir),
             Item::Accent => {
                 let n = render::ACCENTS.len() as i32;
                 // A colour of your own goes to the first (or last) preset.
@@ -2189,6 +2191,10 @@ impl State {
                 let all = config::TouchLayout::ALL;
                 (strings(&mut all.iter().map(|l| l.name())), all.iter().position(|&l| l == c.touch_layout), String::new())
             }
+            Item::Screenshots => {
+                let all = config::ScreenshotTo::ALL;
+                (strings(&mut all.iter().map(|t| t.name())), all.iter().position(|&t| t == c.screenshot_to), String::new())
+            }
             Item::PresentMode => {
                 let all = PresentChoice::ALL;
                 (strings(&mut all.iter().map(|p| p.name())), all.iter().position(|&p| p == c.present), "during songs".into())
@@ -2272,6 +2278,7 @@ impl State {
         let Some(name) = list.names.get(i) else { return };
         match list.item {
             Item::TouchLayout => self.cfg.touch_layout = config::TouchLayout::ALL[i],
+            Item::Screenshots => self.cfg.screenshot_to = config::ScreenshotTo::ALL[i],
             Item::PresentMode => self.cfg.present = PresentChoice::ALL[i],
             Item::AudioBuffer if Some(i) != list.current => self.set_audio_buffer(AUDIO_BUFFERS[i]),
             Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
@@ -8539,21 +8546,31 @@ const UNFOCUSED_FPS: u32 = 30;
 /// The capture name of an F12 screenshot (scripted runs name theirs).
 const SCREENSHOT: &str = "screenshot";
 
-/// Saves an F12 screenshot as the next free `taiko-rs-N.png` in the Screenshots folder, off the
-/// render thread (the encoding takes a moment), and says where it went.
+/// Puts an F12 screenshot on the clipboard, saves it as the next free `taiko-rs-N.png` in the
+/// Screenshots folder, or both (`cfg.screenshot_to`), off the render thread (the encoding takes
+/// a moment), and says where it went.
 fn save_screenshot(state: &Arc<Mutex<State>>, w: u32, h: u32, rgb: Vec<u8>) {
     let state = state.clone();
     std::thread::spawn(move || {
-        let saved = (|| {
-            let dir = config::own_dir("Screenshots").ok_or("no folder to keep screenshots in")?;
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let path = (1..).map(|n| dir.join(format!("taiko-rs-{n}.png"))).find(|p| !p.exists()).unwrap();
-            image::save_buffer(&path, &rgb, w, h, image::ColorType::Rgb8).map_err(|e| e.to_string())?;
-            Ok::<_, String>(path)
-        })();
-        let text = match saved {
-            Ok(path) => format!("screenshot saved: Screenshots/{}", path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned())),
-            Err(e) => format!("screenshot failed: {e}"),
+        let to = lock(&state).cfg.screenshot_to;
+        let copied = to.clipboard() && clipboard::set_image(w, h, &rgb);
+        let text = if !to.folder() {
+            if copied { "screenshot copied".to_string() } else { "screenshot failed: no clipboard to copy to".to_string() }
+        } else {
+            let saved = (|| {
+                let dir = config::own_dir("Screenshots").ok_or("no folder to keep screenshots in")?;
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let path = (1..).map(|n| dir.join(format!("taiko-rs-{n}.png"))).find(|p| !p.exists()).unwrap();
+                image::save_buffer(&path, &rgb, w, h, image::ColorType::Rgb8).map_err(|e| e.to_string())?;
+                Ok::<_, String>(path)
+            })();
+            match saved {
+                Ok(path) => {
+                    let name = path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
+                    format!("screenshot {}saved: Screenshots/{name}", if copied { "copied and " } else { "" })
+                }
+                Err(e) => format!("screenshot {}failed: {e}", if copied { "copied, saving " } else { "" }),
+            }
         };
         eprintln!("{text}");
         lock(&state).toast = Some(Toast { text, until: Instant::now() + Duration::from_millis(4000) });

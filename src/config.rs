@@ -69,9 +69,58 @@ impl TouchLayout {
     }
 }
 
+/// Where an F12 screenshot goes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ScreenshotTo {
+    Clipboard,
+    Folder,
+    Both,
+}
+
+impl ScreenshotTo {
+    pub const ALL: [ScreenshotTo; 3] = [ScreenshotTo::Clipboard, ScreenshotTo::Folder, ScreenshotTo::Both];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ScreenshotTo::Clipboard => "Clipboard",
+            ScreenshotTo::Folder => "Screenshots folder",
+            ScreenshotTo::Both => "Clipboard and folder",
+        }
+    }
+
+    /// Its name in the config file.
+    fn key(self) -> &'static str {
+        match self {
+            ScreenshotTo::Clipboard => "clipboard",
+            ScreenshotTo::Folder => "folder",
+            ScreenshotTo::Both => "both",
+        }
+    }
+
+    fn parse(s: &str) -> Option<ScreenshotTo> {
+        ScreenshotTo::ALL.into_iter().find(|t| t.key().eq_ignore_ascii_case(s))
+    }
+
+    /// The choice `dir` steps away (wrapping).
+    pub fn step(self, dir: i32) -> ScreenshotTo {
+        let i = ScreenshotTo::ALL.iter().position(|&t| t == self).unwrap_or(0) as i32;
+        ScreenshotTo::ALL[(i + dir).rem_euclid(3) as usize]
+    }
+
+    pub fn clipboard(self) -> bool {
+        self != ScreenshotTo::Folder
+    }
+
+    pub fn folder(self) -> bool {
+        self != ScreenshotTo::Clipboard
+    }
+}
+
 pub struct Config {
     /// Columns of the touch drum, left to right.
     pub touch_layout: TouchLayout,
+    /// Where F12 screenshots go.
+    pub screenshot_to: ScreenshotTo,
     /// Positive when your audio reaches you late; notes are shifted later by this much.
     pub offset_ms: f64,
     /// Notes are drawn this many ms ahead to make up for display latency (judging is unaffected).
@@ -222,6 +271,8 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             touch_layout: TouchLayout::Kddk,
+            // Android has no clipboard to put pictures on here.
+            screenshot_to: if cfg!(target_os = "android") { ScreenshotTo::Folder } else { ScreenshotTo::Clipboard },
             offset_ms: 0.0,
             visual_offset_ms: 0.0,
             vsync_compensation: true,
@@ -631,6 +682,7 @@ impl Config {
                     }
                 }
                 "touch_layout" => cfg.touch_layout = TouchLayout::parse(v).unwrap_or(cfg.touch_layout),
+                "screenshot_to" => cfg.screenshot_to = ScreenshotTo::parse(v).unwrap_or(cfg.screenshot_to),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
@@ -694,6 +746,8 @@ impl Config {
              preset_keys = {}\n\
              # touch columns left to right: KDDK, KKDD, DKKD or DDKK (K = rim, D = centre)\n\
              touch_layout = {}\n\
+             # where F12 screenshots go: clipboard, folder (Screenshots) or both\n\
+             screenshot_to = {}\n\
              show_playfield_size = {}\n\
              # your own playfield sizes (preset list, in this order)\n\
              saved_presets = {}\n\
@@ -747,6 +801,7 @@ impl Config {
             keys.join(", "),
             self.preset_keys.iter().map(|k| key_name(*k)).collect::<Vec<_>>().join(", "),
             self.touch_layout.name(),
+            self.screenshot_to.key(),
             self.show_playfield_size,
             self.saved_presets.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(", "),
             self.preset_spots.iter().map(|((w, h), (x, y))| format!("{w}x{h}@{x:.4}/{y:.4}")).collect::<Vec<_>>().join(", "),
@@ -865,6 +920,17 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screenshot_choices_read_back_and_go_to_the_clipboard_first() {
+        assert_eq!(Config::default().screenshot_to, ScreenshotTo::Clipboard);
+        for to in ScreenshotTo::ALL {
+            assert_eq!(ScreenshotTo::parse(to.key()), Some(to));
+        }
+        assert!(ScreenshotTo::Both.clipboard() && ScreenshotTo::Both.folder());
+        assert!(!ScreenshotTo::Clipboard.folder() && !ScreenshotTo::Folder.clipboard());
+        assert_eq!(ScreenshotTo::Clipboard.step(-1), ScreenshotTo::Both);
+    }
 
     #[test]
     fn touch_layouts_match_their_names_and_split_hands() {
