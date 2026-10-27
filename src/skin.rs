@@ -512,6 +512,15 @@ fn read_skins(main: &str, parts: &Sources) -> (Vec<Loaded>, [Option<usize>; PART
     (loaded.into_iter().map(|(_, l)| l).collect(), of_part)
 }
 
+// ponytail: global, since there's one skin loaded at a time; a field on Skin if that changes.
+static MAP_SPINNER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the skin last loaded took `spinner-warning` from the map's folder (a gimmick map's
+/// beatmap skin): its swells are then drawn as small notes, over the notes on their ms.
+pub fn map_has_spinner_warning() -> bool {
+    MAP_SPINNER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Whether the map folder `dir` carries any skin images of its own (a beatmap skin).
 pub fn map_has_images(dir: &Path) -> bool {
     let map = Loaded::read(dir);
@@ -539,6 +548,8 @@ pub fn load(main: &str, parts: &Sources, rate: Option<u32>, map_dir: Option<&Pat
             }
         }
     }
+    let map_spinner = map.as_ref().is_some_and(|m| m.files.image(&image_names(Sprite::SpinnerWarning, &m.ini)).is_some());
+    MAP_SPINNER.store(map_spinner, std::sync::atomic::Ordering::Relaxed);
     let hitsounds = match (rate, skin_of(Part::Hitsounds)) {
         (Some(rate), Some(skin)) => hitsounds_of(&skin.files, rate),
         _ => audio::Custom::default(),
