@@ -1547,7 +1547,9 @@ impl Game {
                         self.auto_hit(other, time, audio);
                     }
                 }
-                Kind::Roll if !st.finished => {
+                // A roll mapped across notes is played as the notes alone (owner, 2026-10-28):
+                // a tick press would land in a note's window and hit it early, or miss a kat.
+                Kind::Roll if !st.finished && !self.roll_over_notes(i) => {
                     let spacing = self.map.notes[i].tick_spacing;
                     let k = ((t - time) / spacing).floor().max(0.0) as usize;
                     if self.state[i].ticks.get(k).is_some_and(|hit| !hit) {
@@ -1564,6 +1566,16 @@ impl Game {
                 _ => {}
             }
         }
+    }
+
+    /// Whether roll `i` has a hittable don/kat anywhere in its span.
+    fn roll_over_notes(&self, i: usize) -> bool {
+        let notes = &self.map.notes;
+        let n = &notes[i];
+        notes[notes.partition_point(|m| m.time < n.time)..]
+            .iter()
+            .take_while(|m| m.time <= n.end_time)
+            .any(|m| matches!(m.kind, Kind::Don | Kind::Kat) && !m.unhittable)
     }
 
     fn auto_hit(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
@@ -4472,6 +4484,33 @@ mod tests {
         let under: Vec<_> = (0..g.map.notes.len()).filter(|&i| g.map.notes[i].kind == Kind::Don && (2000.0..=4000.0).contains(&g.map.notes[i].time)).collect();
         assert_eq!(under.len(), 5);
         assert!(under.iter().all(|&i| g.state[i].judged == Some(Judge::Great)), "notes under the swell were swallowed");
+    }
+
+    #[test]
+    fn a_roll_over_notes_is_played_as_the_notes() {
+        // A roll from 1900 to 4100 over the calibration dons, one of them a kat.
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let kat = map.notes.iter().position(|n| n.time == 3000.0).unwrap();
+        map.notes[kat].kind = Kind::Kat;
+        let roll = beatmap::Note { time: 1900.0, end_time: 4100.0, kind: Kind::Roll, tick_spacing: 125.0, ..map.notes[0].clone() };
+        map.notes.insert(4, roll);
+        let under = |g: &Game| -> Vec<Option<Judge>> {
+            (0..g.map.notes.len()).filter(|&i| matches!(g.map.notes[i].kind, Kind::Don | Kind::Kat) && (2000.0..=4000.0).contains(&g.map.notes[i].time)).map(|i| g.state[i].judged).collect()
+        };
+        // Autoplay: every note Great, no tick taken.
+        let mut g = Game::new(map.clone(), Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        let mut t = 1800.0;
+        while t < 4300.0 {
+            g.time = t;
+            g.autoplay(None);
+            t += 4.0;
+        }
+        assert_eq!(under(&g), vec![Some(Judge::Great); 5]);
+        assert_eq!(g.stats.roll_ticks, 0);
+        // A player: a press on the kat inside the roll is the kat's, not a tick.
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        g.press_at(0, 3000.0, None);
+        assert_eq!(g.state[kat + 1].judged, Some(Judge::Great));
     }
 
     #[test]
