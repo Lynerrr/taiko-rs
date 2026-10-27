@@ -2906,12 +2906,15 @@ impl State {
 
     /// Swaps the playing map's own skin images in, and out again after: only when it has some,
     /// so ordinary maps never reload the skin.
-    // ponytail: Play only (and its settings); multiplayer / spectating keep your skin.
+    // ponytail: Play and song select's preview only (and their settings); multiplayer /
+    // spectating keep your skin.
     fn follow_map_skin(&mut self) {
         let entry = match &self.scene {
             Scene::Play { entry, .. } => Some(*entry),
+            Scene::Select | Scene::Preview { .. } => self.preview_target(),
             Scene::Settings { prev } => match **prev {
                 Scene::Play { entry, .. } => Some(entry),
+                Scene::Select => self.preview_target(),
                 _ => None,
             },
             _ => None,

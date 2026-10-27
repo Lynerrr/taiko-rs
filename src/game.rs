@@ -55,6 +55,10 @@ const COMBO_BREAK_GAIN: f32 = 1.2;
 pub const DON: u32 = 0xEB452C;
 pub const KAT: u32 = 0x438EAD;
 const ROLL: u32 = 0xFCB806;
+/// Drumroll ticks (`sliderscorepoint`), as stable tints them (owner's screenshot, IT'S SOOOO
+/// CREATIVE): yellow on the beat, pale orange on the half beat, the image's own colour elsewhere.
+const ROLL_TICK_BEAT: u32 = 0xFFFF00;
+const ROLL_TICK_HALF: u32 = 0xFFE696;
 const SWELL: u32 = 0xF39A2B;
 const WHITE: u32 = 0xFFFFFF;
 /// Colorless: dons and kats alike.
@@ -237,6 +241,8 @@ pub struct Game {
     recent_errors: VecDeque<(f64, f64, Judge)>,
     strong: Option<StrongPending>,
     min_velocity: f64,
+    /// The beat length covering the most map time: what pop-up fake sliders fade in by.
+    main_beat: f64,
     visible: Vec<usize>,
     /// Raw audio position seen by the last update, for diagnostics.
     pub last_audio_ms: Option<f64>,
@@ -874,6 +880,59 @@ fn overshoot(x: f32) -> f32 {
     1.0 + (C + 1.0) * y * y * y + C * y * y
 }
 
+/// A pop-up fake slider at map time `vt`: (lane distance of its head, half its body, alpha), or
+/// None for any other note. A long fake slider on a gimmick red line (a 1 ms beat) is too fast to
+/// ever be on screen; stable shows it standing still, farther out the longer it is, for
+/// |length| / (100 × SliderMultiplier × SV) of the map's main beats before its time (the mapping
+/// doc: "-100 at x1.00 disappears in exactly 1 beat"), fading in from then over POPUP_FADE_MS and
+/// gone at its time, no fade out (owner, checked in stable; senpai, notice me! [w], 2026-10-28).
+/// `sm` is the map's SliderMultiplier, `sv` the note's.
+// ponytail: "too fast" is crossing the lane within a 60 Hz frame; refine if a map shows a middle
+// case.
+fn popup(n: &beatmap::Note, vt: f64, lane_len: f32, speed: f64, main_beat: f64, sm: f64, sv: f64) -> Option<(f32, f32, f32)> {
+    let fast = (lane_len as f64) < 16.0 * n.velocity * speed;
+    let until = n.time - vt;
+    (n.kind == Kind::Roll && n.fake_len > 0.0 && !n.fake_fades && fast && until > 0.0).then(|| {
+        let per = POPUP_PER_LENGTH * lane_len;
+        let len = n.fake_length as f32;
+        let lead = n.fake_length / (100.0 * sm * sv) * main_beat;
+        ((len - POPUP_FROM_LENGTH).max(0.0) * per, len * per, fade_from(lead, POPUP_FADE_MS, until))
+    })
+}
+
+/// Where a pop-up head stands, fitted to the owner's stable screenshot (1080p): heads 95 px apart
+/// per 30 of length, the -300 one 270 px past the target, on a 1560 px lane. So lane fractions per
+/// unit of length, counted from length 215: -510, the farthest, at 60%.
+// ponytail: a fit to one screenshot; re-measure if another map disagrees.
+const POPUP_PER_LENGTH: f32 = 95.0 / 30.0 / 1560.0;
+const POPUP_FROM_LENGTH: f32 = 215.0;
+/// A pop-up head's fade in: lazer's swell 666 ms (owner: a half beat was too fast, 2026-10-28).
+// ponytail: guessed from "too fast"; measure stable's if it still looks off.
+const POPUP_FADE_MS: f64 = 666.0;
+
+/// A roll tick's tint at map time `t`, on the beat grid of its red line (`origin`, `beat`):
+/// yellow on a beat, pale orange on a half beat, white (the image's own colour) elsewhere.
+fn tick_tint(t: f64, origin: f64, beat: f64) -> u32 {
+    let at = |division: f64| {
+        let x = (t - origin) / beat * division;
+        (x - x.round()).abs() < 0.02 * division
+    };
+    if at(1.0) { ROLL_TICK_BEAT } else if at(2.0) { ROLL_TICK_HALF } else { WHITE }
+}
+
+/// A swell's alpha `until` ms before it starts: hidden, then fading in (easing in) from 1.5 beats
+/// before it, over lazer's 666 ms or half a beat if shorter (ppy/osu#21769, owner 2026-10-28;
+/// taiko_arranger's `spinner_fade` too).
+fn swell_fade(beat: f64, until: f64) -> f32 {
+    fade_from(1.5 * beat, (beat / 2.0).min(666.0), until)
+}
+
+/// Hidden until `lead` ms before, then fading in (easing in) over `fade` ms.
+fn fade_from(lead: f64, fade: f64, until: f64) -> f32 {
+    let p = ((lead - until) / fade).clamp(0.0, 1.0) as f32;
+    p * p
+}
+
 /// Flip Flop's horizontal scale at map time `t`: 1, or -1 on every other 8-bar section, turning
 /// over (through 0) in the first 350 ms of each.
 fn flip_flop(bars: &[beatmap::Barline], t: f64) -> f32 {
@@ -1226,7 +1285,23 @@ impl Game {
                 ..Default::default()
             })
             .collect();
-        let min_velocity = map.notes.iter().map(|n| n.velocity).fold(f64::INFINITY, f64::min).max(0.01);
+        // Barlines too: a gimmick's bars can scroll slower than any note, and the lookahead is
+        // sized from this.
+        // Floored only against 0: SV 0.02 at 120 BPM is already under 0.01, and a fake slider
+        // in it is on screen ~40 s ahead, and nothing caps the lookahead (the whole map can be).
+        let min_velocity = map.notes.iter().map(|n| n.velocity).chain(map.barlines.iter().map(|b| b.velocity)).fold(f64::INFINITY, f64::min).max(1e-6);
+        let main_beat = {
+            let cps = &map.control_points;
+            let mut spans: Vec<(f64, f64)> = Vec::new();
+            for (i, cp) in cps.iter().enumerate() {
+                let ms = (cps.get(i + 1).map_or(end_time, |n| n.time) - cp.time).max(0.0);
+                match spans.iter_mut().find(|s| (s.0 - cp.beat_length).abs() < 0.01) {
+                    Some(s) => s.1 += ms,
+                    None => spans.push((cp.beat_length, ms)),
+                }
+            }
+            spans.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)).map_or(500.0, |s| s.0)
+        };
         // osu!lazer's TaikoHealthProcessor.
         let hits = map.notes.iter().filter(|n| matches!(n.kind, Kind::Don | Kind::Kat)).count().max(1) as f64;
         let hp_drain = mods.hp(map.meta.hp);
@@ -1286,6 +1361,7 @@ impl Game {
             recent_errors: VecDeque::new(),
             strong: None,
             min_velocity,
+            main_beat,
             visible: Vec::new(),
             last_audio_ms: None,
             raw_time: track_start,
@@ -1472,7 +1548,7 @@ impl Game {
             let (time, kind, big) = (n.time, n.kind, n.big);
             let st = &self.state[i];
             match kind {
-                Kind::Don | Kind::Kat if st.judged.is_none() => {
+                Kind::Don | Kind::Kat if st.judged.is_none() && !n.unhittable => {
                     let kat = kind == Kind::Kat;
                     self.auto_key ^= 1;
                     let key = match (kat, self.auto_key) { (true, 0) => 0, (true, _) => 3, (false, 0) => 1, (false, _) => 2 };
@@ -1482,7 +1558,9 @@ impl Game {
                         self.auto_hit(other, time, audio);
                     }
                 }
-                Kind::Roll if !st.finished => {
+                // A roll mapped across notes is played as the notes alone (owner, 2026-10-28):
+                // a tick press would land in a note's window and hit it early, or miss a kat.
+                Kind::Roll if !st.finished && !self.roll_over_notes(i) => {
                     let spacing = self.map.notes[i].tick_spacing;
                     let k = ((t - time) / spacing).floor().max(0.0) as usize;
                     if self.state[i].ticks.get(k).is_some_and(|hit| !hit) {
@@ -1499,6 +1577,16 @@ impl Game {
                 _ => {}
             }
         }
+    }
+
+    /// Whether roll `i` has a hittable don/kat anywhere in its span.
+    fn roll_over_notes(&self, i: usize) -> bool {
+        let notes = &self.map.notes;
+        let n = &notes[i];
+        notes[notes.partition_point(|m| m.time < n.time)..]
+            .iter()
+            .take_while(|m| m.time <= n.end_time)
+            .any(|m| matches!(m.kind, Kind::Don | Kind::Kat) && !m.unhittable)
     }
 
     fn auto_hit(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
@@ -1934,6 +2022,9 @@ impl Game {
             return s.kat;
         }
         if let Some(i) = self.find_active(t, Kind::Swell) {
+            if let Some(j) = self.note_under_swell(t, None) {
+                return self.map.notes[j].kind == Kind::Kat;
+            }
             return self.state[i].last_was_kat != Some(true);
         }
         match self.next_hittable(t) {
@@ -1958,8 +2049,9 @@ impl Game {
             }
         }
 
-        // An active swell swallows every hit and must be alternated centre/rim.
-        if let Some(i) = self.find_active(t, Kind::Swell) {
+        // An active swell swallows every hit and must be alternated centre/rim, except one that
+        // hits a note under it.
+        if let Some(i) = self.find_active(t, Kind::Swell).filter(|_| self.note_under_swell(t, Some(kat)).is_none()) {
             let required = self.map.notes[i].required_hits;
             let st = &mut self.state[i];
             if st.last_was_kat != Some(kat) {
@@ -2068,7 +2160,7 @@ impl Game {
             if n.time - t > self.windows.miss {
                 return None;
             }
-            if matches!(n.kind, Kind::Don | Kind::Kat) && self.state[k].judged.is_none() {
+            if matches!(n.kind, Kind::Don | Kind::Kat) && self.state[k].judged.is_none() && !n.unhittable {
                 return Some(k);
             }
         }
@@ -2096,11 +2188,21 @@ impl Game {
             if n.time - t > self.windows.miss {
                 return None;
             }
-            if matches!(n.kind, Kind::Don | Kind::Kat) && self.state[i].judged.is_none() {
+            // An unhittable note (before a NaN slider) lets presses through, then expires a miss.
+            if matches!(n.kind, Kind::Don | Kind::Kat) && self.state[i].judged.is_none() && !n.unhittable {
                 return Some(i);
             }
         }
         None
+    }
+
+    /// The next note, if a press at `t` (of colour `kat`, or either) would hit it: what a swell
+    /// over it lets through.
+    fn note_under_swell(&self, t: f64, kat: Option<bool>) -> Option<usize> {
+        self.next_hittable(t).filter(|&i| {
+            let n = &self.map.notes[i];
+            kat.is_none_or(|k| (n.kind == Kind::Kat) == k) && self.timing(t - n.time) != Judge::Miss
+        })
     }
 
     fn find_active(&self, t: f64, kind: Kind) -> Option<usize> {
@@ -2529,10 +2631,14 @@ impl Game {
         };
         // Distance along the lane of something at map time `time` scrolling at `vel`.
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
-        let lookahead = ((lane_len + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs()).min(30_000.0);
+        // Uncapped: extremely slow notes are common, so the whole map may be on screen at once,
+        // its last object included (owner, 2026-10-28).
+        // ponytail: one map-wide lookahead, so a slow section anywhere widens every frame's scan
+        // to the whole map; per-section reach (like barline_times) if that gets slow.
+        let lookahead = (lane_len + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs();
 
         // Notes on screen, nearest first.
-        let start = self.map.notes.partition_point(|n| n.time < vt.min(t) - 20_000.0);
+        let start = self.map.notes.partition_point(|n| n.time < vt.min(t) - lookahead.max(20_000.0));
         self.visible.clear();
         for i in start..self.map.notes.len() {
             let n = &self.map.notes[i];
@@ -2741,7 +2847,8 @@ impl Game {
         }
 
         // Barlines.
-        let first_bar = self.map.barlines.partition_point(|b| b.time < vt - 3000.0);
+        // As far back as ahead: a slow bar can still be on screen long after it passed.
+        let first_bar = self.map.barlines.partition_point(|b| b.time < vt - lookahead);
         let bars = if self.hide_notes { &[][..] } else { &self.map.barlines[first_bar..] };
         for b in bars {
             if b.time - vt > lookahead {
@@ -2829,7 +2936,19 @@ impl Game {
         let mut flying: Vec<(f32, bool, u32)> = Vec::new();
         let behind = |r: f32| if boxed { r - HIT_X } else { -HIT_X - r };
         let on_lane = |s: f32, r: f32| s > behind(r) && s < lane_len + r;
-        for &i in self.visible.iter().rev() {
+        // On one ms, a fake slider sits over the don/kat it's stacked on (and, with the map's
+        // own spinner-warning, a swell head too).
+        let map_spinner = crate::skin::map_has_spinner_warning();
+        let over = |n: &beatmap::Note| n.kind == Kind::Roll || (map_spinner && n.kind == Kind::Swell);
+        let main_beat = self.main_beat;
+        let sm = self.map.meta.slider_multiplier;
+        let popup = |n: &beatmap::Note| popup(n, vt, lane_len, scroll.speed, main_beat, sm, beatmap::control_point_at(&self.map.control_points, n.time).sv);
+        let mut order = self.visible.clone();
+        order.sort_by(|&a, &b| {
+            let (na, nb) = (&self.map.notes[a], &self.map.notes[b]);
+            nb.time.total_cmp(&na.time).then(over(na).cmp(&over(nb))).then(b.cmp(&a))
+        });
+        for i in order {
             let n = &self.map.notes[i];
             let st = &self.state[i];
             let r = if n.big { BIG_R } else { NOTE_R };
@@ -2867,25 +2986,33 @@ impl Game {
                     }
                 }
                 Kind::Roll => {
-                    let s0 = s_of(n.time, n.velocity);
+                    let pop = popup(n);
+                    let s0 = pop.map_or_else(|| s_of(n.time, n.velocity), |p| p.0);
                     // A fake slider, as stable draws it: body right of the head by its length,
-                    // cap *left* of it by the same. Head and cap are cut when the cap reaches the
-                    // drum; the body goes when it does (fading, if short). Nothing shows before the
+                    // cap *left* of it by the same. A long one's head and cap are cut when the cap
+                    // reaches the drum; a short one's pass through it like a real roll's (owner,
+                    // 2026-10-28). The body goes when it does (fading, if short). Nothing shows before the
                     // head is on screen, so a long one is only ever body. Still drawn at the
                     // head's speed, and gimmick sections run past the BPM / SV limits this game
                     // clamps to, so long ones aren't exact.
+                    // A pop-up one (see `popup`) stands still, fading in, and is never cut.
                     let fake = n.fake_len > 0.0;
-                    let mut fake_a = 1.0;
-                    if fake && vt >= n.time {
+                    let mut fake_a = pop.map_or(1.0, |p| p.2);
+                    if fake && pop.is_none() && vt >= n.time {
                         let p = ((vt - n.time) / FAKE_FADE_MS) as f32;
                         if !n.fake_fades || p >= 1.0 {
                             continue;
                         }
                         fake_a = 1.0 - p;
                     }
-                    let cut = fake && vt >= n.time - n.fake_len;
-                    let s_cap = s_of(n.time - n.fake_len, n.velocity);
-                    let s1 = s_of(n.end_time + n.fake_len, n.velocity);
+                    if fake_a < 0.01 {
+                        continue;
+                    }
+                    let cut = pop.is_none() && fake && !n.fake_fades && vt >= n.time - n.fake_len;
+                    let (s_cap, s1) = match pop {
+                        Some((s, d, _)) => (s - d, s + d),
+                        None => (s_of(n.time - n.fake_len, n.velocity), s_of(n.end_time + n.fake_len, n.velocity)),
+                    };
                     if s1 < -HIT_X - r || s0 > lane_len + r {
                         continue;
                     }
@@ -2921,11 +3048,13 @@ impl Game {
                     if cut {
                         continue;
                     }
+                    let cp = beatmap::control_point_at(&self.map.control_points, n.time);
                     for (k, hit) in st.ticks.iter().enumerate() {
                         let ts = s_of(n.time + k as f64 * n.tick_spacing, n.velocity);
                         if !hit && ts > s0 && ts < lane_len {
                             let (x, y, ..) = place(ts, 0.0);
-                            if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(WHITE, a)) {
+                            let tint = tick_tint(n.time + k as f64 * n.tick_spacing, cp.beat_origin, cp.beat_length);
+                            if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(tint, a)) {
                                 c.circle(x, y, 4.0, rgba(WHITE, 0.85 * a), rgba(WHITE, 0.0), 0.0);
                             }
                         }
@@ -2947,11 +3076,18 @@ impl Game {
                     }
                     if vt < n.time {
                         let s = s_of(n.time, n.velocity);
-                        let a = note_alpha(s) * radar_lit(s, n.time, n.velocity);
+                        let a = note_alpha(s) * radar_lit(s, n.time, n.velocity) * swell_fade(beatmap::control_point_at(&self.map.control_points, n.time).beat_length, n.time - vt);
                         if s < lane_len + r && a > 0.01 {
                             let (x, y, _, size) = place(s, 0.0);
                             let r = r * size;
-                            if !c.sprite(Sprite::SpinnerWarning, x, y, r, rgba(WHITE, a)) {
+                            // A map shipping its own spinner-warning draws its swells as small notes.
+                            let drawn = if map_spinner && c.sprite_size(Sprite::SpinnerWarning).is_some() {
+                                c.sprite_box(Sprite::SpinnerWarning, x, y, NOTE_R * size, NOTE_R * size, rgba(WHITE, a));
+                                true
+                            } else {
+                                c.sprite(Sprite::SpinnerWarning, x, y, r, rgba(WHITE, a))
+                            };
+                            if !drawn {
                                 c.circle(x, y, r, rgba(SWELL, a), rgba(WHITE, a), r * 0.1);
                                 c.ring(x, y, r * 0.55, rgba(WHITE, 0.8 * a), 3.0);
                             }
@@ -2988,7 +3124,11 @@ impl Game {
                         let s = note_s(i);
                         (s, WHITE, CIRCLE_FLASH * note_alpha(s) * radar_lit(s, n.time, n.velocity))
                     }
-                    Kind::Roll if !(n.fake_len > 0.0 && vt >= n.time - n.fake_len) => {
+                    Kind::Roll if popup(n).is_some() => {
+                        let (s, _, pa) = popup(n).unwrap();
+                        (s, ROLL, if memory_over { 0.0 } else { pa })
+                    }
+                    Kind::Roll if !(n.fake_len > 0.0 && !n.fake_fades && vt >= n.time - n.fake_len) => {
                         let s = s_of(n.time, n.velocity);
                         (s, ROLL, if memory_over { 0.0 } else { fade_in(s) })
                     }
@@ -4122,6 +4262,8 @@ mod tests {
                 required_hits: 0,
                 fake_len: 0.0,
                 fake_fades: false,
+                fake_length: 0.0,
+                unhittable: false,
             })
             .collect();
         let mut map = beatmap::calibration_map(500.0, 4, 1);
@@ -4295,6 +4437,121 @@ mod tests {
     }
 
     #[test]
+    fn a_pop_up_fake_slider_stands_by_its_length_and_fades_in() {
+        let head = beatmap::calibration_map(387.0, 0, 4).notes[0].clone();
+        // On a 1 ms red line (velocity ~302), lengths -300, -450 and -510, at 1000.
+        let fake = |len: f64, velocity: f64| beatmap::Note { time: 1000.0, kind: Kind::Roll, fake_len: 1.0, fake_fades: false, fake_length: len, velocity, ..head.clone() };
+        let lane = 640.0;
+        let at = |len: f64, vt: f64| popup(&fake(len, 302.0), vt, lane, 1.0, 387.0, 1.8, 1.0);
+        let s = |len: f64| at(len, 950.0).unwrap().0 / lane;
+        // Stable: -300 at ~17% of the lane, the farthest well inside its first 75%.
+        assert!((s(300.0) - 0.17).abs() < 0.01 && s(510.0) < 0.75, "{} {}", s(300.0), s(510.0));
+        assert!((s(450.0) - s(300.0) - 150.0 / 30.0 * 95.0 / 1560.0).abs() < 1e-4);
+        // Shown 300 / 180 beats before (645 ms), -510 2.83 beats (1097 ms), fading in over
+        // 666 ms; gone at its time, no fade out (stable).
+        assert_eq!(at(300.0, 1000.0 - 650.0).unwrap().2, 0.0);
+        assert!(at(300.0, 1000.0 - 600.0).unwrap().2 > 0.0);
+        assert!(at(510.0, 1000.0 - 1050.0).unwrap().2 > 0.0);
+        assert_eq!(at(510.0, 1000.0 - 400.0).unwrap().2, 1.0);
+        assert!(at(300.0, 1000.0).is_none());
+        // At an ordinary speed it's the usual fake slider.
+        assert!(popup(&fake(300.0, 0.78), 950.0, lane, 1.0, 387.0, 1.8, 1.0).is_none());
+    }
+
+    #[test]
+    fn a_note_before_a_nan_slider_cannot_be_hit() {
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        map.notes[4].unhittable = true;
+        let t = map.notes[4].time;
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        g.press_at(1, t, None);
+        g.press_at(1, t + 500.0, None);
+        assert_eq!(g.state[4].judged, Some(Judge::Miss));
+        assert_eq!(g.state[5].judged, Some(Judge::Great), "the press went on to the next note");
+    }
+
+    #[test]
+    fn roll_ticks_are_yellow_on_the_beat_and_orange_on_the_half() {
+        // 1/4 ticks from a red line at 100 with a 400 ms beat: beat, 1/4, half, 3/4, beat.
+        let tints: Vec<u32> = (0..5).map(|k| tick_tint(100.0 + k as f64 * 100.0, 100.0, 400.0)).collect();
+        assert_eq!(tints, [ROLL_TICK_BEAT, WHITE, ROLL_TICK_HALF, WHITE, ROLL_TICK_BEAT]);
+        // A roll off the grid takes none.
+        assert_eq!(tick_tint(130.0, 100.0, 400.0), WHITE);
+    }
+
+    #[test]
+    fn a_swell_fades_in_from_a_beat_and_a_half_before_it() {
+        // 120 BPM: hidden until 750 ms before, fully in by 500 ms before.
+        assert_eq!(swell_fade(500.0, 850.0), 0.0);
+        assert_eq!(swell_fade(500.0, 625.0), 0.25);
+        assert_eq!(swell_fade(500.0, 500.0), 1.0);
+        assert_eq!(swell_fade(500.0, 0.0), 1.0);
+        // 30 BPM: from 3000 ms before, in over lazer's 666 ms.
+        assert_eq!(swell_fade(2000.0, 3000.0), 0.0);
+        assert_eq!(swell_fade(2000.0, 2334.0), 1.0);
+    }
+
+    #[test]
+    fn notes_under_a_swell_still_take_their_hits() {
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let swell = beatmap::Note { time: 1900.0, end_time: 4100.0, kind: Kind::Swell, required_hits: 50, ..map.notes[0].clone() };
+        map.notes.insert(4, swell);
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        for t in [2000.0, 2500.0, 3000.0, 3500.0, 4000.0] {
+            g.press_at(1, t, None);
+        }
+        let under: Vec<_> = (0..g.map.notes.len()).filter(|&i| g.map.notes[i].kind == Kind::Don && (2000.0..=4000.0).contains(&g.map.notes[i].time)).collect();
+        assert_eq!(under.len(), 5);
+        assert!(under.iter().all(|&i| g.state[i].judged == Some(Judge::Great)), "notes under the swell were swallowed");
+    }
+
+    #[test]
+    fn a_roll_over_notes_is_played_as_the_notes() {
+        // A roll from 1900 to 4100 over the calibration dons, one of them a kat.
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let kat = map.notes.iter().position(|n| n.time == 3000.0).unwrap();
+        map.notes[kat].kind = Kind::Kat;
+        let roll = beatmap::Note { time: 1900.0, end_time: 4100.0, kind: Kind::Roll, tick_spacing: 125.0, ..map.notes[0].clone() };
+        map.notes.insert(4, roll);
+        let under = |g: &Game| -> Vec<Option<Judge>> {
+            (0..g.map.notes.len()).filter(|&i| matches!(g.map.notes[i].kind, Kind::Don | Kind::Kat) && (2000.0..=4000.0).contains(&g.map.notes[i].time)).map(|i| g.state[i].judged).collect()
+        };
+        // Autoplay: every note Great, no tick taken.
+        let mut g = Game::new(map.clone(), Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        let mut t = 1800.0;
+        while t < 4300.0 {
+            g.time = t;
+            g.autoplay(None);
+            t += 4.0;
+        }
+        assert_eq!(under(&g), vec![Some(Judge::Great); 5]);
+        assert_eq!(g.stats.roll_ticks, 0);
+        // A player: a press on the kat inside the roll is the kat's, not a tick.
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        g.press_at(0, 3000.0, None);
+        assert_eq!(g.state[kat + 1].judged, Some(Judge::Great));
+    }
+
+    #[test]
+    fn a_barline_slower_than_every_note_sizes_the_lookahead() {
+        // An anti-barline wall / scenery bar scrolling a tenth of the notes' speed.
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let slow = map.notes[0].velocity / 10.0;
+        map.barlines.push(beatmap::Barline { time: 40_000.0, velocity: slow });
+        let g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        assert_eq!(g.min_velocity, slow);
+
+        // A fake slider at SV 0.02 (120 BPM): ~0.008, under the old 0.01 floor, so it was looked
+        // for only once it was already well onto the lane.
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let crawl = map.notes[0].velocity * 0.02;
+        map.notes[10].velocity = crawl;
+        let g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        assert!(crawl < 0.01);
+        assert_eq!(g.min_velocity, crawl);
+    }
+
+    #[test]
     fn radar_lights_notes_as_the_beam_passes_them() {
         // The beam leaves the drum every other beat and crosses the lane in two, in kiai in one.
         assert_eq!(radar_sweep(0.5, false), 0.25);
@@ -4438,6 +4695,20 @@ mod tests {
         }
         // Sudden in a universe would hide every note with the play's Hidden: it's left out.
         assert_eq!(Mods::parse("HD").plus(Mods::parse("SU,SK")), Mods::parse("HD,SK"));
+    }
+
+    #[test]
+    fn a_crawling_note_at_the_end_of_the_map_is_looked_for_from_the_start() {
+        // Ten minutes out, slow enough to be on the lane already: no lookahead cap hides it.
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let last = map.notes.len() - 1;
+        map.notes[last].time = 600_000.0;
+        map.notes[last].end_time = 600_000.0;
+        map.notes[last].velocity = 1e-4;
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        g.set_time(1000.0);
+        g.draw_playfield(&mut Canvas { width: 853.3, ..Default::default() }, 1.0);
+        assert!(g.visible.contains(&last));
     }
 
     #[test]

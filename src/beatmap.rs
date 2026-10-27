@@ -35,6 +35,11 @@ pub struct Note {
     /// A fake slider shorter than `FAKE_LINGER_LENGTH`: its body fades as it reaches the drum
     /// instead of vanishing.
     pub fake_fades: bool,
+    /// A fake slider's |length| × spans, as written: where a pop-up one stands (see game.rs).
+    /// `fake_len` can't give it back: it went through the clamped beat length.
+    pub fake_length: f64,
+    /// A don/kat right before a slider of length NaN: stable can't hit it (owner, 2026-10-28).
+    pub unhittable: bool,
 }
 
 /// A fake slider this long (osu! px) or longer loses its body the instant it reaches the drum;
@@ -380,6 +385,9 @@ fn convert(map: &mut Beatmap, mut body: Body) {
     let swell_hit_multiplier = difficulty_range(meta.od, 3.0, 5.0, 7.5) * 1.65;
 
     let mut notes = Vec::with_capacity(body.objects.len());
+    // Sliders of length NaN: drawn as nothing, and in stable the don/kat right before each one
+    // (left of it on the lane), however close, can't be hit (owner, 2026-10-28).
+    let mut nan_sliders = Vec::new();
     for line in &body.objects {
         let f: Vec<&str> = line.split(',').collect();
         if f.len() < 5 {
@@ -395,6 +403,10 @@ fn convert(map: &mut Beatmap, mut body: Body) {
             // Slider: drumroll, or a stream of hits for short standard sliders.
             let spans = f[6].trim().parse::<u32>().unwrap_or(1).max(1);
             let raw_length = f[7].trim().parse::<f64>().unwrap_or(0.0);
+            if raw_length.is_nan() {
+                nan_sliders.push(time);
+                continue;
+            }
             let length = raw_length.max(0.0);
             let cp = control_point_at(&cps, time);
             let distance = length * TAIKO_VELOCITY_MULTIPLIER * spans as f64;
@@ -431,7 +443,10 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                     t += spacing;
                 }
             } else {
+                // 1/4 (1/3 at tick rate 3); twice as dense at 125 BPM or slower, half above 250.
                 let roll_tick_rate = if tick_rate == 3.0 { 3.0 } else { 4.0 };
+                let bpm = 60_000.0 / cp.beat_length;
+                let roll_tick_rate = if bpm <= 125.0 { roll_tick_rate * 2.0 } else if bpm > 250.0 { roll_tick_rate / 2.0 } else { roll_tick_rate };
                 notes.push(Note {
                     time,
                     end_time: time + duration,
@@ -442,6 +457,8 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                     required_hits: 0,
                     fake_len,
                     fake_fades: raw_length < 0.0 && raw_length > -FAKE_LINGER_LENGTH,
+                    fake_length: (-raw_length).max(0.0) * spans as f64,
+                    unhittable: false,
                 });
             }
         } else if ty & 8 != 0 {
@@ -457,12 +474,20 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                 required_hits: required,
                 fake_len: 0.0,
                 fake_fades: false,
+                fake_length: 0.0,
+                unhittable: false,
             });
         } else if ty & 1 != 0 {
             notes.push(hit(time, sound, velocity));
         }
     }
     notes.sort_by(|a, b| a.time.total_cmp(&b.time));
+    for t in nan_sliders {
+        let before = notes.partition_point(|n| n.time < t);
+        if let Some(n) = notes[..before].iter_mut().rev().find(|n| matches!(n.kind, Kind::Don | Kind::Kat)) {
+            n.unhittable = true;
+        }
+    }
 
     let end = notes.last().map(|n| n.end_time).unwrap_or(0.0);
     map.barlines = build_barlines(&body.timing, end, &velocity_at);
@@ -506,6 +531,8 @@ fn hit(time: f64, sound: u32, velocity: f64) -> Note {
         required_hits: 0,
         fake_len: 0.0,
         fake_fades: false,
+        fake_length: 0.0,
+        unhittable: false,
     }
 }
 
@@ -634,13 +661,32 @@ SliderTickRate:1
         let roll = map.notes.iter().find(|n| n.kind == Kind::Roll).expect("drumroll");
         assert_eq!(roll.time, 5000.0);
         assert_eq!(roll.end_time, 7000.0);
-        assert_eq!(roll.tick_spacing, 125.0);
+        // 120 BPM: 1/8 ticks.
+        assert_eq!(roll.tick_spacing, 62.5);
         let swell = map.notes.iter().find(|n| n.kind == Kind::Swell).expect("swell");
         assert_eq!(swell.end_time, 11000.0);
         // OD5: 5 * 1.65 hits per second over 2 seconds.
         assert_eq!(swell.required_hits, 16);
         // Velocity doubles under the 2x SV point.
         assert!((roll.velocity / map.notes[0].velocity - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_nan_slider_is_nothing_and_takes_the_note_before_it() {
+        // A don at 1000, a kat at 1500, a NaN slider at 1499: the note before it is the don,
+        // however close the kat is.
+        let map = parse("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0\n142,139,1499,2,0,B|403:151|269:178,1,NaN\n256,192,1500,1,2\n");
+        let kinds: Vec<_> = map.notes.iter().map(|n| (n.time, n.kind, n.unhittable)).collect();
+        assert_eq!(kinds, [(1000.0, Kind::Don, true), (1500.0, Kind::Kat, false)]);
+    }
+
+    #[test]
+    fn a_pop_up_fake_slider_keeps_its_written_length() {
+        // senpai, notice me! [w] at 189607: a 1 ms red line under the slider, 387 ms after it.
+        let map = parse("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.8\n\n[TimingPoints]\n0,387.096774193548,4,1,0,90,1,0\n1000,1,4,1,0,90,1,8\n1001,387.096774193548,4,1,0,90,1,8\n\n[HitObjects]\n166,117,1000,2,4,L|181:87,1,-300\n166,117,1000,2,0,L|181:87,1,-450\n");
+        let px: Vec<f64> = map.notes.iter().map(|n| n.fake_length).collect();
+        assert!(px == [300.0, 450.0], "{px:?}");
+        assert!(map.notes.iter().all(|n| !n.fake_fades && n.velocity > 100.0));
     }
 
     #[test]
