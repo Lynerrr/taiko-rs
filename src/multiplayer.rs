@@ -211,7 +211,7 @@ impl Menu {
         std::thread::spawn(move || {
             let result = online::call(&server, online::Request::ListRooms).and_then(|r| match r {
                 online::Reply::Rooms(rooms) => Ok(rooms),
-                _ => Err("odd reply from the server".into()),
+                _ => Err(crate::lang::odd_reply()),
             });
             let _ = tx.send(result);
         });
@@ -241,7 +241,7 @@ pub fn start_online(server: String, request: online::Request, name: String) -> C
                 Ok(s)
             }
             (online::Reply::Error(e), _) => Err(e),
-            _ => Err("odd reply from the server".to_string()),
+            _ => Err(crate::lang::odd_reply()),
         })();
         let _ = tx.send(result);
     });

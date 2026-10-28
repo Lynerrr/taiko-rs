@@ -248,11 +248,11 @@ pub enum Activity {
 impl Activity {
     pub fn describe(&self) -> String {
         match self {
-            Activity::Menus => "in the menus".into(),
-            Activity::Playing { map } => format!("playing {map}"),
-            Activity::Lobby { title, .. } => format!("in lobby {title}"),
-            Activity::Match { map } => format!("in a match: {map}"),
-            Activity::Watching { name } => format!("watching {name}"),
+            Activity::Menus => tr!("in the menus", "メニュー中", "в меню").into(),
+            Activity::Playing { map } => tr!("playing {map}", "プレイ中: {map}", "играет: {map}";),
+            Activity::Lobby { title, .. } => tr!("in lobby {title}", "ロビー: {title}", "в лобби {title}";),
+            Activity::Match { map } => tr!("in a match: {map}", "対戦中: {map}", "в матче: {map}";),
+            Activity::Watching { name } => tr!("watching {name}", "{name}を観戦中", "смотрит {name}";),
         }
     }
 }
@@ -327,7 +327,8 @@ pub enum Down {
     WatchStopped(String),
     Pong,
     /// Everyone online (sorted by name, at most `MAX_LISTED`) and how many that is. Sent on
-    /// connecting and then whenever it changes (at most every couple of seconds).
+    /// connecting and then whenever it changes (at most every couple of seconds, less often
+    /// with thousands online).
     Players { count: u32, players: Vec<OnlinePlayer> },
     /// A global chat line (the recent ones again on connecting).
     GlobalChat(ChatLine),
@@ -387,9 +388,10 @@ pub fn valid_password(password: &str) -> bool {
     (6..=128).contains(&password.chars().count())
 }
 
-/// Text the built-in font draws (printable ASCII and Cyrillic), at most `max` characters.
+/// Text the built-in font draws (printable ASCII, Cyrillic and Japanese), at most `max`
+/// characters.
 pub fn clean_text(text: &str, max: usize) -> String {
-    text.chars().filter(|c| c.is_ascii_graphic() || *c == ' ' || matches!(c, 'А'..='я' | 'Ё' | 'ё')).take(max).collect()
+    text.chars().filter(|&c| c.is_ascii_graphic() || c == ' ' || (!c.is_control() && !c.is_ascii() && crate::font::drawable(c))).take(max).collect()
 }
 
 /// A lobby title, at most 32 characters.
@@ -429,8 +431,8 @@ pub fn write_line<T: Serialize>(w: &mut impl Write, msg: &T) -> Result<(), Strin
 fn connect(server: &str) -> Result<TcpStream, String> {
     let server = server.trim();
     let with_port = if server.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok()) { server.to_string() } else { format!("{server}:{DEFAULT_PORT}") };
-    let addrs: Vec<_> = with_port.to_socket_addrs().map_err(|e| format!("can't find the server: {e}"))?.collect();
-    let mut last = String::from("no address");
+    let addrs: Vec<_> = with_port.to_socket_addrs().map_err(|e| tr!("can't find the server: {e}", "サーバーが見つかりません: {e}", "сервер не найден: {e}";))?.collect();
+    let mut last = String::from(tr!("no address", "アドレスなし", "нет адреса"));
     for a in addrs {
         match TcpStream::connect_timeout(&a, Duration::from_secs(4)) {
             Ok(s) => {
@@ -441,7 +443,7 @@ fn connect(server: &str) -> Result<TcpStream, String> {
             Err(e) => last = e.to_string(),
         }
     }
-    Err(format!("the server is offline ({last})"))
+    Err(tr!("the server is offline ({last})", "サーバーはオフラインです ({last})", "сервер недоступен ({last})";))
 }
 
 /// Sends one request; returns the reply and the connection (still open).
@@ -450,7 +452,7 @@ pub fn exchange(server: &str, request: Request) -> Result<(Reply, BufReader<TcpS
     write_line(&mut stream, &Envelope { protocol: PROTOCOL, request })?;
     let mut reader = BufReader::new(stream);
     let line = read_line(&mut reader)?;
-    let reply: Reply = serde_json::from_str(&line).map_err(|e| format!("odd reply from the server: {e}"))?;
+    let reply: Reply = serde_json::from_str(&line).map_err(|e| tr!("odd reply from the server: {e}", "サーバーからの応答がおかしい: {e}", "странный ответ сервера: {e}";))?;
     Ok((reply, reader))
 }
 
@@ -566,7 +568,7 @@ impl Social {
                     }
                 }
                 let _ = stream.shutdown(std::net::Shutdown::Both);
-                let _ = events.send(SocialEvent::Disconnected("lost the connection".into()));
+                let _ = events.send(SocialEvent::Disconnected(tr!("lost the connection", "接続が切れました", "соединение потеряно").into()));
                 announced_down = true;
                 std::thread::sleep(Duration::from_secs(2));
             }

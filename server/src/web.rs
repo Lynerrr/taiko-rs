@@ -74,11 +74,15 @@ pub fn serve(state: Arc<State>, port: u16, behind_proxy: bool) {
                     web.busy.fetch_sub(1, Ordering::Relaxed);
                     continue;
                 }
-                let (state, web) = (state.clone(), web.clone());
-                std::thread::spawn(move || {
-                    answer(&state, &web, stream);
-                    web.busy.fetch_sub(1, Ordering::Relaxed);
+                let (state, web2) = (state.clone(), web.clone());
+                let answering = std::thread::Builder::new().spawn(move || {
+                    answer(&state, &web2, stream);
+                    web2.busy.fetch_sub(1, Ordering::Relaxed);
                 });
+                // Out of threads: this request goes unanswered, the site stays up.
+                if answering.is_err() {
+                    web.busy.fetch_sub(1, Ordering::Relaxed);
+                }
             }
         });
     }

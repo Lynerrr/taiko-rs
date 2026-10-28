@@ -61,6 +61,9 @@ pub(crate) struct Bot {
     shown: Mutex<HashMap<String, u64>>,
     /// The bot's own user id (from READY), to know when it's mentioned.
     me: Mutex<String>,
+    /// The role Discord gives the bot in each server: "@taiko-rs" may be it rather than the bot,
+    /// and mentioning it is mentioning the bot too.
+    my_roles: Mutex<HashSet<String>>,
     /// The latest pings for Claude, oldest first.
     pings: Mutex<Vec<Value>>,
     /// The gateway session to resume after a dropped connection (Discord then sends what came
@@ -81,7 +84,7 @@ pub fn start(state: Arc<State>, dir: PathBuf) {
     let verified = std::fs::read_to_string(dir.join("discord-verified.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let pings: Vec<Value> = std::fs::read_to_string(dir.join("claude-pings.jsonl")).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
     let pings = pings[pings.len().saturating_sub(PINGS_KEPT)..].to_vec();
-    let bot = Arc::new(Bot { token, dir, state, links: Mutex::new(links), verified: Mutex::new(verified), last_map: Mutex::default(), shown: Mutex::default(), me: Mutex::default(), pings: Mutex::new(pings), resume: Mutex::default(), http });
+    let bot = Arc::new(Bot { token, dir, state, links: Mutex::new(links), verified: Mutex::new(verified), last_map: Mutex::default(), shown: Mutex::default(), me: Mutex::default(), my_roles: Mutex::default(), pings: Mutex::new(pings), resume: Mutex::default(), http });
     let _ = BOT.set(bot.clone());
     {
         let bot = bot.clone();
@@ -210,6 +213,12 @@ fn session(bot: &Arc<Bot>) -> Result<Stop, String> {
                     *bot.resume.lock().unwrap() = event["d"]["session_id"].as_str().map(|id| (id.to_string(), host, seq.clone()));
                 }
                 Some("RESUMED") => println!("discord: resumed, missed messages replayed"),
+                Some("GUILD_CREATE") => {
+                    for role in event["d"]["roles"].as_array().into_iter().flatten() {
+                        bot.learn_role(role);
+                    }
+                }
+                Some("GUILD_ROLE_CREATE" | "GUILD_ROLE_UPDATE") => bot.learn_role(&event["d"]["role"]),
                 Some("MESSAGE_CREATE") => {
                     let message = event["d"].clone();
                     if message["author"]["bot"].as_bool() == Some(true) {
@@ -694,10 +703,21 @@ impl Bot {
     // -----------------------------------------------------------------------------------------
     // Pings for Claude.
 
-    /// Whether `message` mentions the bot.
+    /// Whether `message` mentions the bot, or its role.
     fn mentioned(&self, message: &Value) -> bool {
         let me = self.me.lock().unwrap();
-        !me.is_empty() && message["mentions"].as_array().is_some_and(|m| m.iter().any(|u| u["id"].as_str() == Some(me.as_str())))
+        let roles = self.my_roles.lock().unwrap();
+        let user = message["mentions"].as_array().into_iter().flatten().any(|u| !me.is_empty() && u["id"].as_str() == Some(me.as_str()));
+        let role = message["mention_roles"].as_array().into_iter().flatten().any(|r| r.as_str().is_some_and(|r| roles.contains(r)));
+        user || role
+    }
+
+    /// Keeps `role` if it's the bot's own (one Discord made for it: tagged with its id).
+    fn learn_role(&self, role: &Value) {
+        let me = self.me.lock().unwrap();
+        if let Some(id) = role["id"].as_str().filter(|_| !me.is_empty() && role["tags"]["bot_id"].as_str() == Some(me.as_str())) {
+            self.my_roles.lock().unwrap().insert(id.to_string());
+        }
     }
 
     /// Keeps a mention of the bot by the developer for Claude, with the thread around it, and
@@ -1151,7 +1171,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("taiko-server-discord-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let state = Arc::new(State::load(dir.join("accounts.json")));
+        let state = Arc::new(State::load(dir.join("accounts.json")).0);
         {
             let mut a = state.accounts.lock().unwrap();
             for name in ["Ryuji", "Lynerrr"] {
@@ -1176,7 +1196,19 @@ mod tests {
         };
         state.scores.lock().unwrap().submit("ryuji", "Ryuji", play, 1_792_990_923).unwrap();
         let http: ureq::Agent = ureq::Agent::config_builder().build().into();
-        Arc::new(Bot { token: String::new(), dir, state, links: Mutex::default(), verified: Mutex::default(), last_map: Mutex::default(), shown: Mutex::default(), me: Mutex::default(), pings: Mutex::default(), resume: Mutex::default(), http })
+        Arc::new(Bot { token: String::new(), dir, state, links: Mutex::default(), verified: Mutex::default(), last_map: Mutex::default(), shown: Mutex::default(), me: Mutex::default(), my_roles: Mutex::default(), pings: Mutex::default(), resume: Mutex::default(), http })
+    }
+
+    #[test]
+    fn the_bot_or_its_role_mentioned() {
+        let bot = bot();
+        *bot.me.lock().unwrap() = "42".into();
+        bot.learn_role(&json!({ "id": "7", "tags": { "bot_id": "42" } }));
+        bot.learn_role(&json!({ "id": "8", "tags": { "bot_id": "99" } }));
+        bot.learn_role(&json!({ "id": "9" }));
+        assert!(bot.mentioned(&json!({ "mentions": [{ "id": "42" }], "mention_roles": [] })));
+        assert!(bot.mentioned(&json!({ "mentions": [], "mention_roles": ["7"] })), "its role");
+        assert!(!bot.mentioned(&json!({ "mentions": [{ "id": "1" }], "mention_roles": ["8", "9"] })), "another bot's role, a plain role");
     }
 
     fn answer(bot: &Bot, text: &str, author: &str, map: Option<u64>) -> (Answer, Option<u64>) {

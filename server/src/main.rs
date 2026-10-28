@@ -9,6 +9,11 @@
 //!
 //! Accounts and sessions live in DIR/accounts.json (passwords as argon2 hashes).
 
+// The game's `tr!`, for the text in its files below (the server always speaks English).
+#[allow(dead_code)]
+#[macro_use]
+#[path = "../../src/lang.rs"]
+mod lang;
 #[allow(dead_code)]
 #[path = "../../src/net.rs"]
 mod net;
@@ -29,7 +34,7 @@ mod pages;
 mod web;
 
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -83,17 +88,40 @@ const VERIFY_FOR: Duration = Duration::from_secs(30 * 60);
 const MAX_FRIENDS: usize = 200;
 /// Chat lines kept per pair of friends, and of the global chat (in memory only).
 const CHAT_HISTORY: usize = 100;
-/// How often a changed online list goes out to everyone.
+/// How often a changed online list goes out to everyone (at most; see `announcer`).
 const PLAYERS_EVERY: Duration = Duration::from_secs(2);
 /// How often pp is counted again as map sets' statuses become known.
 const COUNT_PP_EVERY: Duration = Duration::from_secs(60);
+
+/// One message of JSON with its newline, made once and shared by every connection it goes to.
+type Line = Arc<str>;
+
+fn line(d: &Down) -> Line {
+    let mut s = serde_json::to_string(d).unwrap_or_default();
+    s.push('\n');
+    s.into()
+}
+
+/// The sending end of a social connection (its writer thread writes what comes through).
+#[derive(Clone)]
+struct Tx(mpsc::Sender<Line>);
+
+impl Tx {
+    fn send(&self, d: Down) -> Result<(), mpsc::SendError<Line>> {
+        self.0.send(line(&d))
+    }
+
+    fn send_line(&self, l: &Line) -> Result<(), mpsc::SendError<Line>> {
+        self.0.send(l.clone())
+    }
+}
 
 /// One open social connection (a player can have several, e.g. two PCs).
 struct Conn {
     id: u64,
     /// The account's name as written.
     name: String,
-    tx: mpsc::Sender<Down>,
+    tx: Tx,
     activity: Activity,
     /// Whose solo play this connection watches (lowercased name).
     watching: Option<String>,
@@ -122,18 +150,46 @@ struct Hub {
     next_conn: u64,
     /// Messages sent from the website lately, per account (its own rate limit).
     web_chat: HashMap<String, VecDeque<Instant>>,
+    /// How many connections watch each player (lowercased name), so a play's frames are only
+    /// looked at for watchers when there are some.
+    watchers: HashMap<String, u32>,
 }
 
 impl Hub {
     fn send_to(&self, key: &str, d: &Down) {
+        let l = line(d);
         for c in self.conns.get(key).into_iter().flatten() {
-            let _ = c.tx.send(d.clone());
+            let _ = c.tx.send_line(&l);
         }
     }
 
     fn send_to_watchers(&self, key: &str, d: &Down) {
+        if !self.watchers.contains_key(key) {
+            return;
+        }
+        let l = line(d);
         for c in self.conns.values().flatten().filter(|c| c.watching.as_deref() == Some(key)) {
-            let _ = c.tx.send(d.clone());
+            let _ = c.tx.send_line(&l);
+        }
+    }
+
+    /// Points connection `id` of `key` at the player `whom` watches (or at nobody).
+    fn set_watching(&mut self, key: &str, id: u64, whom: Option<String>) {
+        let Some(c) = self.conn(key, id) else { return };
+        if let Some(old) = std::mem::replace(&mut c.watching, whom.clone()) {
+            self.unwatch(&old);
+        }
+        if let Some(w) = whom {
+            *self.watchers.entry(w).or_default() += 1;
+        }
+    }
+
+    fn unwatch(&mut self, whom: &str) {
+        if let Some(n) = self.watchers.get_mut(whom) {
+            *n -= 1;
+            if *n == 0 {
+                self.watchers.remove(whom);
+            }
         }
     }
 
@@ -142,8 +198,9 @@ impl Hub {
     }
 
     fn send_to_all(&self, d: &Down) {
+        let l = line(d);
         for c in self.conns.values().flatten() {
-            let _ = c.tx.send(d.clone());
+            let _ = c.tx.send_line(&l);
         }
     }
 
@@ -164,7 +221,7 @@ impl Hub {
         if !self.conns.contains_key(ALWAYS_ONLINE) {
             players.push(OnlinePlayer { name: ALWAYS_ONLINE.into(), activity: Activity::Menus });
         }
-        players.sort_by_key(|p| p.name.to_lowercase());
+        players.sort_by_cached_key(|p| p.name.to_lowercase());
         let count = players.len() as u32;
         players.truncate(online::MAX_LISTED);
         Down::Players { count, players }
@@ -187,18 +244,55 @@ fn pair(a: &str, b: &str) -> (String, String) {
     if a < b { (a.to_string(), b.to_string()) } else { (b.to_string(), a.to_string()) }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Session {
     /// Lowercased account name (the key in `users`).
     user: String,
     created: u64,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 struct Accounts {
     /// By lowercased name: names are unique ignoring case.
     users: HashMap<String, User>,
     sessions: HashMap<String, Session>,
+    /// Whom each account has asked to be friends: `requests` the other way round, kept in
+    /// memory so a friend list doesn't go through every account.
+    #[serde(skip)]
+    asked: HashMap<String, Vec<String>>,
+}
+
+impl Accounts {
+    fn index_requests(&mut self) {
+        self.asked.clear();
+        for (key, u) in &self.users {
+            for from in &u.requests {
+                self.asked.entry(from.clone()).or_default().push(key.clone());
+            }
+        }
+    }
+
+    /// `from` asks `to` to be friends (once).
+    fn ask(&mut self, from: &str, to: &str) {
+        let Some(them) = self.users.get_mut(to) else { return };
+        if !them.requests.iter().any(|r| r == from) {
+            them.requests.push(from.to_string());
+            self.asked.entry(from.to_string()).or_default().push(to.to_string());
+        }
+    }
+
+    /// Drops `from`'s request to `to`, if there is one.
+    fn unask(&mut self, from: &str, to: &str) {
+        if let Some(them) = self.users.get_mut(to) {
+            them.requests.retain(|r| r != from);
+        }
+        if let Some(v) = self.asked.get_mut(from) {
+            v.retain(|k| k != to);
+            if v.is_empty() {
+                self.asked.remove(from);
+            }
+        }
+    }
 }
 
 struct Lobby {
@@ -217,6 +311,8 @@ struct Limits {
 struct State {
     accounts: Mutex<Accounts>,
     path: PathBuf,
+    /// Wakes `saver` to write accounts.json.
+    saves: mpsc::Sender<()>,
     lobbies: Mutex<HashMap<u32, Lobby>>,
     next_room: AtomicU32,
     limits: Mutex<HashMap<IpAddr, Limits>>,
@@ -252,7 +348,8 @@ fn verify_password(password: &str, hash: &str) -> bool {
 }
 
 impl State {
-    fn load(path: PathBuf) -> State {
+    /// The state, and what wakes the saver (see `saver`).
+    fn load(path: PathBuf) -> (State, mpsc::Receiver<()>) {
         let mut accounts: Accounts = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         let cutoff = now_secs().saturating_sub(SESSION_DAYS * 86400);
         accounts.sessions.retain(|_, s| s.created >= cutoff);
@@ -276,12 +373,15 @@ impl State {
             }
             save = true;
         }
+        accounts.index_requests();
         println!("{} accounts, {} sessions ({})", accounts.users.len(), accounts.sessions.len(), path.display());
         // Scores live next to the accounts.
         let scores = scores::Scores::load(Some(path.parent().map(|d| d.to_path_buf()).unwrap_or_default()));
+        let (saves, wake) = mpsc::channel();
         let state = State {
             accounts: Mutex::new(accounts),
             path,
+            saves,
             lobbies: Mutex::new(HashMap::new()),
             next_room: AtomicU32::new(1),
             limits: Mutex::new(HashMap::new()),
@@ -291,13 +391,18 @@ impl State {
             verify_codes: Mutex::new(HashMap::new()),
         };
         if save {
-            state.save(&state.accounts.lock().unwrap());
+            state.save();
         }
-        state
+        (state, wake)
+    }
+
+    /// Has accounts.json written (by `saver`, right away but outside the lock).
+    fn save(&self) {
+        let _ = self.saves.send(());
     }
 
     /// Writes accounts.json atomically (temp file, then rename), readable by its owner only.
-    fn save(&self, accounts: &Accounts) {
+    fn write(&self, accounts: &Accounts) {
         let tmp = self.path.with_extension("json.tmp");
         let Ok(text) = serde_json::to_string_pretty(accounts) else { return };
         if let Err(e) = std::fs::write(&tmp, text) {
@@ -326,7 +431,7 @@ impl State {
     fn logout(&self, token: &str) {
         let mut a = self.accounts.lock().unwrap();
         if a.sessions.remove(token).is_some() {
-            self.save(&a);
+            self.save();
         }
     }
 
@@ -396,7 +501,7 @@ fn handle(state: &State, stream: TcpStream) {
         Request::Logout { token } => {
             let mut a = state.accounts.lock().unwrap();
             if a.sessions.remove(&token).is_some() {
-                state.save(&a);
+                state.save();
             }
             Reply::LoggedOut
         }
@@ -509,7 +614,7 @@ fn register(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     }
     a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false });
     let token = state.new_session(&mut a, &key);
-    state.save(&a);
+    state.save();
     drop(a);
     state.record(ip, |l| &mut l.registered);
     println!("account {name} created ({ip})");
@@ -530,7 +635,7 @@ fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     };
     let mut a = state.accounts.lock().unwrap();
     let token = state.new_session(&mut a, &key);
-    state.save(&a);
+    state.save();
     Reply::Account { name: user.name, token, nominator: is_admin(&key) || user.nominator }
 }
 
@@ -588,7 +693,7 @@ impl State {
         let user = a.users.get_mut(&key).ok_or("there's no player by that name")?;
         user.nominator = on;
         let shown = user.name.clone();
-        self.save(&a);
+        self.save();
         println!("{shown} {} loved nominator (by {by})", if on { "made" } else { "no longer" });
         Ok(if on { format!("{shown} is a loved nominator now") } else { format!("{shown} isn't a loved nominator any more") })
     }
@@ -661,7 +766,7 @@ impl State {
             let name = |k: &String| a.users.get(k).map(|u| u.name.clone()).unwrap_or_else(|| k.clone());
             let friends: Vec<(String, String)> = u.friends.iter().map(|k| (k.clone(), name(k))).collect();
             let requests = u.requests.iter().map(name).collect();
-            let sent = a.users.iter().filter(|(_, o)| o.requests.iter().any(|r| r == key)).map(|(_, o)| o.name.clone()).collect();
+            let sent = a.asked.get(key).into_iter().flatten().map(name).collect();
             (friends, requests, sent)
         };
         let hub = self.hub.lock().unwrap();
@@ -754,18 +859,14 @@ impl State {
                 Err("your friend list is full".to_string())
             } else if a.users[key].requests.contains(&other) {
                 // They asked first: now friends.
-                let me = a.users.get_mut(key).unwrap();
-                me.requests.retain(|r| *r != other);
-                me.friends.push(other.clone());
+                a.unask(&other, key);
+                a.users.get_mut(key).unwrap().friends.push(other.clone());
                 a.users.get_mut(&other).unwrap().friends.push(key.to_string());
-                self.save(&a);
+                self.save();
                 Ok((true, a.users[&other].name.clone()))
             } else {
-                let them = a.users.get_mut(&other).unwrap();
-                if !them.requests.iter().any(|r| r == key) {
-                    them.requests.push(key.to_string());
-                }
-                self.save(&a);
+                a.ask(key, &other);
+                self.save();
                 Ok((false, a.users[&other].name.clone()))
             }
         };
@@ -837,22 +938,28 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String)
     let key = name.to_ascii_lowercase();
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(90)));
     let Ok(mut writer) = reader.get_ref().try_clone() else { return };
-    let (tx, rx) = mpsc::channel::<Down>();
+    let (tx, rx) = mpsc::channel::<Line>();
+    let tx = Tx(tx);
     // A quiet connection gets a Pong every 20 s anyway: games that only ping while they send
     // nothing else went 70 s without hearing from us during a solo play and dropped the link.
-    std::thread::spawn(move || {
+    let pong = line(&Down::Pong);
+    let writing = std::thread::Builder::new().spawn(move || {
         loop {
-            let d = match rx.recv_timeout(Duration::from_secs(20)) {
-                Ok(d) => d,
-                Err(mpsc::RecvTimeoutError::Timeout) => Down::Pong,
+            let l = match rx.recv_timeout(Duration::from_secs(20)) {
+                Ok(l) => l,
+                Err(mpsc::RecvTimeoutError::Timeout) => pong.clone(),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
-            if online::write_line(&mut writer, &d).is_err() {
+            if writer.write_all(l.as_bytes()).is_err() {
                 break;
             }
         }
         let _ = writer.shutdown(std::net::Shutdown::Both);
     });
+    if let Err(e) = writing {
+        eprintln!("social connection of {name}: {e}");
+        return;
+    }
     let id = {
         let mut hub = state.hub.lock().unwrap();
         hub.next_conn += 1;
@@ -882,6 +989,7 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String)
     }
     {
         let mut hub = state.hub.lock().unwrap();
+        hub.set_watching(&key, id, None);
         if let Some(v) = hub.conns.get_mut(&key) {
             v.retain(|c| c.id != id);
             if v.is_empty() {
@@ -897,7 +1005,7 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String)
     state.tell_friends(&key);
 }
 
-fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Down>, up: Up) {
+fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &Tx, up: Up) {
     match up {
         Up::Ping => {
             let _ = tx.send(Down::Pong);
@@ -922,13 +1030,13 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
                 let mut a = state.accounts.lock().unwrap();
                 if let Some(me) = a.users.get_mut(key) {
                     me.friends.retain(|f| *f != other);
-                    me.requests.retain(|r| *r != other);
                 }
                 if let Some(them) = a.users.get_mut(&other) {
                     them.friends.retain(|f| f != key);
-                    them.requests.retain(|r| r != key);
                 }
-                state.save(&a);
+                a.unask(&other, key);
+                a.unask(key, &other);
+                state.save();
             }
             state.push_friends(key);
             state.push_friends(&other);
@@ -949,9 +1057,7 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
             }
             let other_name = state.display_name(&other);
             let mut hub = state.hub.lock().unwrap();
-            if let Some(c) = hub.conn(key, id) {
-                c.watching = Some(other.clone());
-            }
+            hub.set_watching(key, id, Some(other.clone()));
             match hub.plays.get(&other) {
                 Some(p) => {
                     let _ = tx.send(Down::WatchStart { player: other_name, play: p.play.clone(), t: p.t, paused: p.paused, inputs: p.inputs.clone() });
@@ -962,9 +1068,7 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
             }
         }
         Up::StopWatching => {
-            if let Some(c) = state.hub.lock().unwrap().conn(key, id) {
-                c.watching = None;
-            }
+            state.hub.lock().unwrap().set_watching(key, id, None);
         }
         Up::PlayStart(play) => {
             let mut hub = state.hub.lock().unwrap();
@@ -992,6 +1096,17 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &mpsc::Sender<Do
     }
 }
 
+/// Writes accounts.json each time it changes: a copy is taken under the lock and written
+/// after, so logins and friend requests don't wait on the disk (changes made while one is being
+/// written go out with the next).
+fn saver(state: Arc<State>, wake: mpsc::Receiver<()>) {
+    while wake.recv().is_ok() {
+        while wake.try_recv().is_ok() {}
+        let copy = state.accounts.lock().unwrap().clone();
+        state.write(&copy);
+    }
+}
+
 /// Closes lobbies that have been empty for a while.
 fn reaper(state: Arc<State>) {
     loop {
@@ -1015,12 +1130,53 @@ fn reaper(state: Arc<State>) {
 
 /// Sends the online list to everyone when it has changed.
 fn announcer(state: Arc<State>) {
+    let mut wait = PLAYERS_EVERY;
     loop {
-        std::thread::sleep(PLAYERS_EVERY);
+        std::thread::sleep(wait);
         let mut hub = state.hub.lock().unwrap();
         if std::mem::take(&mut hub.players_changed) {
             let d = hub.players();
             hub.send_to_all(&d);
+            // With many online the list is long and changes all the time: it goes out less
+            // often then (10 ms per connection), so the traffic stays about the same however many
+            // there are (~2 MB/s at most).
+            let conns: usize = hub.conns.values().map(Vec::len).sum();
+            wait = PLAYERS_EVERY.max(Duration::from_millis(conns as u64 * 10));
+        }
+    }
+}
+
+/// Connections open at once from one address: a whole LAN party behind one router fits, a
+/// flood of idle connections from one place doesn't take every thread.
+const PER_ADDRESS: usize = 200;
+
+/// Connections open per address.
+#[derive(Default)]
+struct Open(Mutex<HashMap<IpAddr, usize>>);
+
+/// One open connection, counted until it's dropped.
+struct Slot(Arc<Open>, IpAddr);
+
+impl Open {
+    fn take(self: &Arc<Open>, ip: IpAddr) -> Option<Slot> {
+        let mut open = self.0.lock().unwrap();
+        let n = open.entry(ip).or_default();
+        if *n >= PER_ADDRESS {
+            return None;
+        }
+        *n += 1;
+        Some(Slot(self.clone(), ip))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut open = self.0 .0.lock().unwrap();
+        if let Some(n) = open.get_mut(&self.1) {
+            *n -= 1;
+            if *n == 0 {
+                open.remove(&self.1);
+            }
         }
     }
 }
@@ -1048,7 +1204,12 @@ fn main() {
     osustatus::init(data.clone());
     loved::init(data.clone());
     avatars::init(data.clone());
-    let state = Arc::new(State::load(data.join("accounts.json")));
+    let (state, wake) = State::load(data.join("accounts.json"));
+    let state = Arc::new(state);
+    {
+        let state = state.clone();
+        std::thread::spawn(move || saver(state, wake));
+    }
     if http_port != 0 {
         web::serve(state.clone(), http_port, behind_proxy);
     }
@@ -1079,19 +1240,59 @@ fn main() {
     }
     assert!(!listeners.is_empty(), "can't listen: {}", errors.join(", "));
     println!("taiko-server listening on port {port} (protocol {}, rooms protocol {})", online::PROTOCOL, net::PROTOCOL);
+    let open = Arc::new(Open::default());
     let threads: Vec<_> = listeners
         .into_iter()
         .map(|l| {
             let state = state.clone();
+            let open = open.clone();
             std::thread::spawn(move || {
                 for stream in l.incoming().flatten() {
+                    let ip = stream.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
+                    let Some(slot) = open.take(ip) else { continue };
                     let state = state.clone();
-                    std::thread::spawn(move || handle(&state, stream));
+                    // Out of threads (or memory): this one connection is turned away, not the server.
+                    if let Err(e) = std::thread::Builder::new().spawn(move || {
+                        let _slot = slot;
+                        handle(&state, stream)
+                    }) {
+                        eprintln!("connection from {ip}: {e}");
+                    }
                 }
             })
         })
         .collect();
     for t in threads {
         let _ = t.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user(name: &str) -> User {
+        User { name: name.into(), hash: String::new(), created: 0, friends: Vec::new(), requests: Vec::new(), nominator: false }
+    }
+
+    #[test]
+    fn asked_follows_the_requests() {
+        let mut a = Accounts::default();
+        for n in ["a", "b", "c"] {
+            a.users.insert(n.into(), user(n));
+        }
+        a.ask("a", "b");
+        a.ask("a", "b");
+        a.ask("a", "c");
+        a.ask("c", "b");
+        a.unask("a", "c");
+        let kept = a.asked.clone();
+        a.index_requests();
+        assert_eq!(kept, a.asked);
+        assert_eq!(a.asked.get("a"), Some(&vec!["b".to_string()]));
+        assert_eq!(a.users["b"].requests, ["a", "c"]);
+        a.unask("a", "b");
+        a.unask("c", "b");
+        assert!(a.asked.is_empty() && a.users["b"].requests.is_empty());
     }
 }

@@ -1,4 +1,5 @@
-//! Classic 5x7 LCD font for printable ASCII and Cyrillic. Each glyph is 5 columns, bit 0 = top row.
+//! Classic 5x7 LCD font for printable ASCII and Cyrillic, and 7x7 Japanese (Misaki Gothic 2nd:
+//! kana, kanji and the rest of JIS X 0208). Each glyph is a row of columns, bit 0 = top row.
 
 const GLYPHS: [[u8; 5]; 95] = [
     [0x00, 0x00, 0x00, 0x00, 0x00], // ' '
@@ -168,10 +169,27 @@ const CYRILLIC: [[u8; 5]; 66] = [
     [0x38, 0x55, 0x54, 0x55, 0x18], // ё
 ];
 
-/// How many glyphs there are: ASCII, then Cyrillic (`index` numbers them in that order).
-pub const COUNT: usize = 95 + 66;
+/// Japanese, and whatever else Misaki Gothic 2nd has that the glyphs above don't: 12 bytes each,
+/// in codepoint order (see assets/font/misaki.py): the codepoint, the width, 7 columns.
+static MISAKI: &[u8] = include_bytes!("../assets/font/misaki.bin");
+const MISAKI_GLYPHS: usize = MISAKI.len() / 12;
+const MISAKI_BASE: usize = 95 + 66;
 
-/// The glyph `c` draws as, numbered 0..COUNT: printable ASCII from 0, Cyrillic from 95.
+/// How many glyphs there are: ASCII, then Cyrillic, then Misaki's (`index` numbers them in that
+/// order).
+pub const COUNT: usize = MISAKI_BASE + MISAKI_GLYPHS;
+
+/// Glyphs per row of the atlas, each in a cell `CELL_W` x 7.
+pub const ATLAS_COLS: usize = 128;
+pub const CELL_W: usize = 8;
+
+fn misaki(k: usize) -> (u32, &'static [u8]) {
+    let g = &MISAKI[k * 12..k * 12 + 12];
+    (u32::from_le_bytes([g[0], g[1], g[2], g[3]]), &g[5..5 + g[4] as usize])
+}
+
+/// The glyph `c` draws as, numbered 0..COUNT: printable ASCII from 0, Cyrillic from 95, then
+/// Misaki's.
 pub fn index(c: char) -> usize {
     let i = c as u32;
     match c {
@@ -186,28 +204,58 @@ pub fn index(c: char) -> usize {
         '…' => index('.'),
         '№' => index('#'),
         '\u{a0}' => index(' '),
-        _ => index('?'),
+        _ => {
+            let (mut lo, mut hi) = (0, MISAKI_GLYPHS);
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                match misaki(mid).0.cmp(&i) {
+                    std::cmp::Ordering::Less => lo = mid + 1,
+                    std::cmp::Ordering::Greater => hi = mid,
+                    std::cmp::Ordering::Equal => return MISAKI_BASE + mid,
+                }
+            }
+            index('?')
+        }
     }
 }
 
-pub fn glyph(c: char) -> &'static [u8; 5] {
+/// `c`'s columns: 5 (7 for Japanese, 3 for halfwidth kana).
+pub fn glyph(c: char) -> &'static [u8] {
     by_index(index(c))
 }
 
-fn by_index(i: usize) -> &'static [u8; 5] {
-    if i < 95 { &GLYPHS[i] } else { &CYRILLIC[i - 95] }
+fn by_index(i: usize) -> &'static [u8] {
+    if i < 95 {
+        &GLYPHS[i]
+    } else if i < MISAKI_BASE {
+        &CYRILLIC[i - 95]
+    } else {
+        misaki(i - MISAKI_BASE).1
+    }
 }
 
-/// Every glyph side by side as one 8-bit image (`COUNT * 5` x 7, 255 = ink), for the GPU: glyph
-/// `i`'s column `c`, row `r` is at (`i * 5 + c`, `r`).
+/// How many columns glyph `i` (`index`) is: it advances one more, the gap.
+pub fn columns(i: usize) -> usize {
+    if i < MISAKI_BASE { 5 } else { by_index(i).len() }
+}
+
+/// How far `c` advances the text, in font pixels (6, or 8 for Japanese).
+pub fn advance(c: char) -> usize {
+    columns(index(c)) + 1
+}
+
+/// Every glyph as one 8-bit image (255 = ink), for the GPU: `ATLAS_COLS` cells of `CELL_W` x 7
+/// to a row, glyph `i`'s column `c`, row `r` at (`i % ATLAS_COLS * CELL_W + c`,
+/// `i / ATLAS_COLS * 7 + r`).
 pub fn atlas() -> (u32, u32, Vec<u8>) {
-    let (w, h) = (COUNT * 5, 7);
+    let (w, h) = (ATLAS_COLS * CELL_W, COUNT.div_ceil(ATLAS_COLS) * 7);
     let mut px = vec![0u8; w * h];
     for i in 0..COUNT {
+        let (x0, y0) = (i % ATLAS_COLS * CELL_W, i / ATLAS_COLS * 7);
         for (c, bits) in by_index(i).iter().enumerate() {
             for r in 0..7 {
                 if bits & (1 << r) != 0 {
-                    px[r * w + i * 5 + c] = 255;
+                    px[(y0 + r) * w + x0 + c] = 255;
                 }
             }
         }
@@ -217,7 +265,7 @@ pub fn atlas() -> (u32, u32, Vec<u8>) {
 
 /// The font has a real glyph for `c` (anything else draws as `?`).
 pub fn drawable(c: char) -> bool {
-    !std::ptr::eq(glyph(c), glyph('?')) || c == '?'
+    c == '?' || index(c) != index('?')
 }
 
 #[cfg(test)]
@@ -230,9 +278,26 @@ mod tests {
             assert!(drawable(c), "{c}");
             assert!(glyph(c).iter().any(|&b| b != 0), "{c} is blank");
         }
-        assert!(!drawable('漢'));
         // Shared shapes are exactly the Latin ones.
         assert_eq!(glyph('А'), glyph('A'));
         assert_eq!(glyph('о'), glyph('o'));
+    }
+
+    #[test]
+    fn japanese_has_glyphs_seven_wide() {
+        let kana = ('ぁ'..='ん').chain('ァ'..='ヶ').chain(['ー', '、', '。', '「', '」', '・']);
+        for c in kana.chain("設定音量譜面難易度速度曲選択終了".chars()) {
+            assert!(drawable(c), "{c}");
+            assert_eq!(glyph(c).len(), 7, "{c}");
+            assert!(glyph(c).iter().any(|&b| b != 0), "{c} is blank");
+            assert_eq!(advance(c), 8);
+        }
+        assert_eq!(glyph('ｱ').len(), 3);
+        assert_eq!(advance('a'), 6);
+        assert_eq!(advance('я'), 6);
+        assert!(!drawable('\u{1F600}'));
+        // Misaki's own Latin and Cyrillic stay out: the 5x7 ones draw them.
+        assert_eq!(glyph('A').len(), 5);
+        assert!(COUNT.div_ceil(ATLAS_COLS) * 7 <= 2048);
     }
 }

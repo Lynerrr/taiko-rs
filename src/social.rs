@@ -151,16 +151,20 @@ pub fn key(name: &str) -> String {
     name.to_ascii_lowercase()
 }
 
-/// Splits `text` into lines of at most `width` characters, at spaces where possible.
+/// Splits `text` into lines at most `width` Latin characters wide (a Japanese one is 4/3 of
+/// one), at spaces where possible.
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    // In font pixels.
+    let px = |s: &mut dyn Iterator<Item = char>| s.map(crate::font::advance).sum::<usize>();
+    let width = width * crate::font::advance(' ');
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in text.split(' ') {
         let mut word: Vec<char> = word.chars().collect();
         loop {
-            let len = line.chars().count();
-            let room = if len == 0 { width } else { width.saturating_sub(len + 1) };
-            if word.len() <= room {
+            let len = px(&mut line.chars());
+            let room = if len == 0 { width } else { width.saturating_sub(len + crate::font::advance(' ')) };
+            if px(&mut word.iter().copied()) <= room {
                 if len > 0 {
                     line.push(' ');
                 }
@@ -171,8 +175,14 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
                 lines.push(std::mem::take(&mut line));
                 continue;
             }
-            // A word longer than a line: cut it.
-            let rest = word.split_off(width.max(1));
+            // A word longer than a line (or Japanese, which has no spaces): cut it.
+            let mut fits = 0;
+            let mut w = 0;
+            while fits < word.len() && w + crate::font::advance(word[fits]) <= width {
+                w += crate::font::advance(word[fits]);
+                fits += 1;
+            }
+            let rest = word.split_off(fits.max(1));
             lines.push(word.iter().collect());
             word = rest;
         }
@@ -695,6 +705,8 @@ mod tests {
         assert_eq!(wrap("abcdefghij", 4), vec!["abcd", "efgh", "ij"]);
         assert_eq!(wrap("", 5), vec![""]);
         assert_eq!(wrap("привет как дела", 10), vec!["привет как", "дела"]);
+        // Japanese is 4/3 as wide and has no spaces: 6 to an 8-character line.
+        assert_eq!(wrap("こんにちは、元気ですか", 8), vec!["こんにちは、", "元気ですか"]);
     }
 
     fn player(name: &str) -> OnlinePlayer {

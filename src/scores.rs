@@ -252,15 +252,15 @@ pub fn top(rows: &[ScoreRow], map_hash: u64, n: usize) -> Vec<&ScoreRow> {
     v
 }
 
-/// "3 d ago" style age of a Unix time.
+/// "3d" style age of a Unix time (for "3d ago").
 pub fn age(date: u64) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let s = now.saturating_sub(date);
     match s {
-        0..=59 => "now".into(),
-        60..=3599 => format!("{}m", s / 60),
-        3600..=86_399 => format!("{}h", s / 3600),
-        86_400..=2_591_999 => format!("{}d", s / 86_400),
-        _ => format!("{}mo", s / 2_592_000),
+        0..=59 => tr!("now", "今", "сейчас").into(),
+        60..=3599 => tr!("{}m", "{}分", "{}м"; s / 60),
+        3600..=86_399 => tr!("{}h", "{}時間", "{}ч"; s / 3600),
+        86_400..=2_591_999 => tr!("{}d", "{}日", "{}д"; s / 86_400),
+        _ => tr!("{}mo", "{}ヶ月", "{}мес"; s / 2_592_000),
     }
 }

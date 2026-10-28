@@ -1231,8 +1231,7 @@ impl Select {
         }
         let list_start = c.shapes.len();
         let hits_start = c.hits.len();
-        let max_chars = |size: f32, room: f32| (room / Canvas::char_width(size)).max(4.0) as usize;
-        let fit = |s: String, n: usize| if s.chars().count() > n { s.chars().take(n.saturating_sub(3)).collect::<String>() + "..." } else { s };
+        let fit = |s: String, size: f32, room: f32| Canvas::fit(size, room.max(Canvas::char_width(size) * 4.0), &s);
         for (row, ry, rh, alpha) in &rows {
             let y = top + ry - self.scroll;
             if y + rh < top || y > bottom || *alpha < 0.02 {
@@ -1251,7 +1250,7 @@ impl Select {
                     let n = sec.groups.len();
                     c.text(34.0, y + 6.0, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
                     let label = format!("{}  |  {n} song{}", sec.label, if n == 1 { "" } else { "s" });
-                    c.text(48.0, y + 6.0, 7.0, rgba(col, 1.0), &fit(label, max_chars(7.0, lw - 60.0)));
+                    c.text(48.0, y + 6.0, 7.0, rgba(col, 1.0), &fit(label, 7.0, lw - 60.0));
                 }
                 Row::Song(g) => {
                     let e = &library[self.visible[g.start]];
@@ -1264,14 +1263,14 @@ impl Select {
                     let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
                     let tag = if any_taiko { 0xEB452C } else { 0x438EAD };
                     c.round_rect(32.0, y + 8.0, 5.0, rh - 20.0, 2.5, rgba(tag, 1.0), rgba(tag, 1.0), 0.0);
-                    c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &fit(e.meta.title.clone(), max_chars(10.0, lw - 110.0)));
+                    c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &fit(e.meta.title.clone(), 10.0, lw - 110.0));
                     let sub = format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator);
                     // Centred at y + 23.5, in what's left between the title (taller on a text
                     // grid) and the bottom of the box, so the two never touch.
                     let title_bottom = 11.0 + Canvas::text_height(10.0) / 2.0;
                     let room = 2.0 * (23.5 - title_bottom - 1.5).min(rh - 4.0 - 1.5 - 23.5);
                     let sub_size = Canvas::fit_height(7.0, room);
-                    c.text(44.0, y + 20.0 + (7.0 - sub_size) / 2.0, sub_size, rgba(0x9a9ab0, 1.0), &fit(sub, max_chars(sub_size, lw - 110.0)));
+                    c.text(44.0, y + 20.0 + (7.0 - sub_size) / 2.0, sub_size, rgba(0x9a9ab0, 1.0), &fit(sub, sub_size, lw - 110.0));
                     // A newer version on osu!: click (or Ctrl+Shift+U) to get it. Under the
                     // difficulty count (moved up for it), inside the row (not on one cut off at
                     // the list's end).
@@ -1307,7 +1306,7 @@ impl Select {
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
                     let pill = if a > 0.6 { crate::stars::draw_pill(c, 24.0 + lw - 10.0, y + 6.0, 7.0, stars(self.visible[*i])) } else { 40.0 };
                     c.text_right(24.0 + lw - 18.0 - pill, y + 6.0, 7.0, rgba(0x8a8aa0, a), &format!("OD {:.1}", e.meta.od));
-                    c.text(56.0, y + 6.0, 8.0, rgba(col, a), &fit(format!("{}{convert}", e.meta.version), max_chars(8.0, lw - 170.0)));
+                    c.text(56.0, y + 6.0, 8.0, rgba(col, a), &fit(format!("{}{convert}", e.meta.version), 8.0, lw - 170.0));
                 }
             }
         }

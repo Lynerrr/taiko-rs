@@ -547,9 +547,14 @@ fn fs(i: V) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// The shapes shader, its `sprites` array as long as there are sprites.
+/// The shapes shader, its `sprites` array as long as there are sprites and the font atlas laid
+/// out like `font::atlas`.
 fn shape_shader() -> String {
-    SHADER.replace("SPRITE_COUNT", &SPRITES.to_string()).replace("SPRITE_LAST", &(SPRITES - 1).to_string())
+    SHADER
+        .replace("SPRITE_COUNT", &SPRITES.to_string())
+        .replace("SPRITE_LAST", &(SPRITES - 1).to_string())
+        .replace("FONT_COLS", &crate::font::ATLAS_COLS.to_string())
+        .replace("FONT_CELL_W", &crate::font::CELL_W.to_string())
 }
 
 const SHADER: &str = r#"
@@ -623,8 +628,12 @@ fn shade(in: VOut) -> vec4<f32> {
     if (in.params.w > 99.5) {
         // A character: how much of this pixel the font pixels under it cover (a box filter, so
         // edges look like single rects did, with no seams between neighbouring font pixels).
+        // Glyphs are 7 font pixels tall and as many wide as their quad (5, or 7 for Japanese),
+        // in cells of the atlas (`font::atlas`).
         let g = i32(in.params.w - 99.5);
-        let fpx = in.half.x * 0.4;
+        let fpx = in.half.y / 3.5;
+        let cols = i32(round(in.half.x * 2.0 / fpx));
+        let cell = vec2<i32>(g % FONT_COLS * FONT_CELL_W, g / FONT_COLS * 7);
         let p = (in.local + in.half) / fpx;
         let r = 0.5 / fpx;
         let lo = p - vec2<f32>(r);
@@ -632,9 +641,9 @@ fn shade(in: VOut) -> vec4<f32> {
         var cover = 0.0;
         for (var y = max(i32(floor(lo.y)), 0); y < min(i32(ceil(hi.y)), 7); y++) {
             let oy = min(hi.y, f32(y + 1)) - max(lo.y, f32(y));
-            for (var x = max(i32(floor(lo.x)), 0); x < min(i32(ceil(hi.x)), 5); x++) {
+            for (var x = max(i32(floor(lo.x)), 0); x < min(i32(ceil(hi.x)), cols); x++) {
                 let ox = min(hi.x, f32(x + 1)) - max(lo.x, f32(x));
-                cover += textureLoad(font, vec2<i32>(g * 5 + x, y), 0).r * ox * oy;
+                cover += textureLoad(font, cell + vec2<i32>(x, y), 0).r * ox * oy;
             }
         }
         let a = in.fill.a * cover / (4.0 * r * r);
@@ -2150,12 +2159,13 @@ impl Canvas {
         let mut cx = x;
         let first = self.shapes.len();
         if !self.audit {
-            // One quad per character; the shader fills in its font pixels.
-            let half = [px * 2.5, px * 3.5];
+            // One quad per character, as wide as its glyph; the shader fills in its font pixels.
             for ch in s.chars() {
                 let i = font::index(ch);
+                let cols = font::columns(i) as f32;
                 // Blank (space): nothing to draw.
                 if i != 0 {
+                    let half = [px * cols / 2.0, px * 3.5];
                     self.shapes.push(Shape {
                         center: [cx + half[0], y + half[1]],
                         half,
@@ -2165,7 +2175,7 @@ impl Canvas {
                         angle: 0.0,
                     });
                 }
-                cx += px * 6.0;
+                cx += px * (cols + 1.0);
             }
             return cx - x;
         }
@@ -2195,7 +2205,7 @@ impl Canvas {
                     }
                 }
             }
-            cx += px * 6.0;
+            cx += px * (cols.len() + 1) as f32;
         }
         if self.audit {
             self.texts.push((first..self.shapes.len(), s.to_string()));
@@ -2204,12 +2214,25 @@ impl Canvas {
     }
 
     pub fn text_width(size: f32, s: &str) -> f32 {
-        s.chars().count() as f32 * Self::char_width(size)
+        s.chars().map(font::advance).sum::<usize>() as f32 * font_px(size)
     }
 
-    /// The advance of one character of text `size` tall.
+    /// The advance of one Latin character of text `size` tall (Japanese takes 4/3 of it).
     pub fn char_width(size: f32) -> f32 {
         font_px(size) * 6.0
+    }
+
+    /// The longest start of `s` (in bytes) that is at most `max_w` wide at `size`.
+    pub fn fitting_prefix(size: f32, max_w: f32, s: &str) -> usize {
+        let room = (max_w / font_px(size) + 1e-3).floor() as usize;
+        let mut w = 0;
+        for (at, ch) in s.char_indices() {
+            w += font::advance(ch);
+            if w > room {
+                return at;
+            }
+        }
+        s.len()
     }
 
     /// How tall text `size` comes out (`size`, or more on a text grid).
@@ -2243,11 +2266,11 @@ impl Canvas {
         if Self::text_width(size, s) <= max_w {
             return s.to_string();
         }
-        let room = (max_w / (font_px(size) * 6.0)).floor() as usize;
-        if room <= 3 {
+        let dots = Self::text_width(size, "...");
+        if max_w < dots + Self::char_width(size) {
             return String::new();
         }
-        format!("{}...", s.chars().take(room - 3).collect::<String>().trim_end())
+        format!("{}...", s[..Self::fitting_prefix(size, max_w - dots, s)].trim_end())
     }
 
     /// Like `fit`, but keeps the end (what is being typed) and cuts the start.
@@ -2255,12 +2278,14 @@ impl Canvas {
         if Self::text_width(size, s) <= max_w {
             return s.to_string();
         }
-        let room = (max_w / (font_px(size) * 6.0)).floor() as usize;
-        if room <= 3 {
+        let dots = Self::text_width(size, "...");
+        if max_w < dots + Self::char_width(size) {
             return String::new();
         }
-        let n = s.chars().count();
-        format!("...{}", s.chars().skip(n + 3 - room).collect::<String>())
+        // The longest end that fits after the dots.
+        let room = max_w - dots;
+        let start = s.char_indices().map(|(at, _)| at).find(|&at| Self::text_width(size, &s[at..]) <= room).unwrap_or(s.len());
+        format!("...{}", &s[start..])
     }
 
     /// A line of key hints ("Enter play  Esc back"; items apart by two or more spaces) as it
@@ -2290,8 +2315,8 @@ impl Canvas {
         let grid = TEXT_GRID.with(std::cell::Cell::get);
         if grid > 0.0 {
             // Font pixels come in whole render pixels: the biggest that fits.
-            let per_char = max_w / s.chars().count().max(1) as f32 / 6.0;
-            return ((per_char * grid).floor().max(1.0) / grid * 7.0).max(min);
+            let per_px = max_w / s.chars().map(font::advance).sum::<usize>().max(1) as f32;
+            return ((per_px * grid).floor().max(1.0) / grid * 7.0).max(min);
         }
         (size * max_w / w).max(min)
     }

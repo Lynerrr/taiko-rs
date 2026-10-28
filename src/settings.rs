@@ -43,6 +43,7 @@ pub enum Item {
     Hotkey(usize),
     TouchLayout,
     Screenshots,
+    Language,
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
@@ -90,12 +91,13 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 107] = [
-    ("LIBRARY", Item::SongsFolder),
-    ("LIBRARY", Item::ShowConverts),
-    ("LIBRARY", Item::HiddenMaps),
-    ("LIBRARY", Item::DataFolder),
-    ("LIBRARY", Item::Screenshots),
+pub const ITEMS: [(&str, Item); 105] = [
+    ("GENERAL", Item::Language),
+    ("GENERAL", Item::SongsFolder),
+    ("GENERAL", Item::ShowConverts),
+    ("GENERAL", Item::HiddenMaps),
+    ("GENERAL", Item::DataFolder),
+    ("GENERAL", Item::Screenshots),
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
@@ -204,6 +206,7 @@ pub const ITEMS: [(&str, Item); 107] = [
 pub const SECTIONS: [(&str, &str); 10] = [
     ("LIBRARY", "Songs folder, data, screenshots"),
     ("GAMEPLAY", "speed, rate, interface, autoplay"),
+    ("GENERAL", "language, Songs folder, data"),
     ("PLAYFIELD", "size, position"),
     ("INPUT", "drum keys, hotkeys, touch"),
     ("OFFSET", "audio offset, calibration"),
@@ -217,6 +220,40 @@ pub const SECTIONS: [(&str, &str); 10] = [
 /// First item of section `s`.
 pub fn section_start(s: usize) -> usize {
     ITEMS.iter().position(|(sec, _)| *sec == SECTIONS[s].0).unwrap_or(0)
+}
+
+/// Section `s`'s name, as shown (`SECTIONS` has the English, which `ITEMS` refers to it by).
+pub fn section_name(s: usize) -> &'static str {
+    match SECTIONS.get(s).map_or("", |s| s.0) {
+        "GENERAL" => tr!("GENERAL", "一般", "ОБЩИЕ"),
+        "GAMEPLAY" => tr!("GAMEPLAY", "ゲームプレイ", "ИГРА"),
+        "PLAYFIELD" => tr!("PLAYFIELD", "プレイフィールド", "ИГРОВОЕ ПОЛЕ"),
+        "INPUT" => tr!("INPUT", "入力", "УПРАВЛЕНИЕ"),
+        "OFFSET" => tr!("OFFSET", "オフセット", "СМЕЩЕНИЕ"),
+        "AUDIO" => tr!("AUDIO", "オーディオ", "ЗВУК"),
+        "VIDEO" => tr!("VIDEO", "グラフィック", "ГРАФИКА"),
+        "SKIN" => tr!("SKIN", "スキン", "СКИН"),
+        "ONLINE" => tr!("ONLINE", "オンライン", "ОНЛАЙН"),
+        "UPDATES" => tr!("UPDATES", "アップデート", "ОБНОВЛЕНИЯ"),
+        other => other,
+    }
+}
+
+/// Section `s`'s one-line summary for the sidebar.
+pub fn section_summary(s: usize) -> &'static str {
+    match SECTIONS.get(s).map_or("", |s| s.0) {
+        "GENERAL" => tr!("language, Songs folder, data", "言語、Songsフォルダ、データ", "язык, папка Songs, данные"),
+        "GAMEPLAY" => tr!("speed, rate, interface", "速度、レート、インターフェース", "скорость, рейт, интерфейс"),
+        "PLAYFIELD" => tr!("size, position", "サイズ、位置", "размер, положение"),
+        "INPUT" => tr!("drum keys, hotkeys, touch", "太鼓のキー、ショートカット、タッチ", "клавиши, горячие клавиши"),
+        "OFFSET" => tr!("audio offset, calibration", "音声オフセット、調整", "смещение звука, калибровка"),
+        "AUDIO" => tr!("volume, latency", "音量、遅延", "громкость, задержка"),
+        "VIDEO" => tr!("frame pacing, display, Discord", "フレーム、画面、Discord", "кадры, экран, Discord"),
+        "SKIN" => tr!("notes, hitsounds, colour", "ノーツ、ヒット音、色", "ноты, хитсаунды, цвет"),
+        "ONLINE" => tr!("chat filter, notifications", "チャットフィルター、通知", "фильтр чата, уведомления"),
+        "UPDATES" => tr!("new versions", "新しいバージョン", "новые версии"),
+        _ => "",
+    }
 }
 
 /// What Enter does to a setting.
@@ -234,85 +271,95 @@ pub enum Kind {
     Action,
 }
 
-const KEY_LABELS: [&str; 4] = ["Left rim (kat)", "Left centre (don)", "Right centre (don)", "Right rim (kat)"];
+/// Drum key `i`'s name: left rim, left centre, right centre, right rim.
+pub fn key_label(i: usize) -> &'static str {
+    match i {
+        0 => tr!("Left rim (kat)", "左ふち (カッ)", "Левый край (кат)"),
+        1 => tr!("Left centre (don)", "左面 (ドン)", "Левый центр (дон)"),
+        2 => tr!("Right centre (don)", "右面 (ドン)", "Правый центр (дон)"),
+        _ => tr!("Right rim (kat)", "右ふち (カッ)", "Правый край (кат)"),
+    }
+}
 
 impl Item {
     pub fn label(self) -> &'static str {
         match self {
-            Item::ScrollSpeed => "Scroll speed",
-            Item::PlayfieldArea => "Playfield area",
-            Item::PlayfieldReset => "Reset playfield area",
-            Item::PlayfieldPreset => "Playfield preset",
-            Item::Rate => "Speed (rate)",
-            Item::RateKeepPitch => "Rate keeps pitch",
-            Item::Offset => "Audio offset",
-            Item::VisualOffset => "Visual offset",
-            Item::Calibrate => "Offset calibration",
-            Item::CalibrationBpm => "Calibration tempo",
-            Item::LiveOffset => "Live offset suggestion",
-            Item::LiveOffsetUr => "Scale suggestion to UR",
-            Item::VsyncCompensation => "Vsync compensation",
-            Item::VsyncTune => "Vsync compensation: fine tune",
-            Item::VsyncCalibrate => "Vsync calibration",
-            Item::ResumeDelay => "Resume delay",
-            Item::Interface => "Interface",
-            Item::InterfaceHides => "Interface toggle hides",
-            Item::InterfaceKey => "Interface toggle key",
-            Item::SongSelectLayout => "Song select layout",
+            Item::ScrollSpeed => tr!("Scroll speed", "スクロール速度", "Скорость прокрутки"),
+            Item::PlayfieldArea => tr!("Playfield area", "プレイフィールドの範囲", "Область игрового поля"),
+            Item::PlayfieldReset => tr!("Reset playfield area", "プレイフィールドを元に戻す", "Сбросить игровое поле"),
+            Item::PlayfieldPreset => tr!("Playfield preset", "プレイフィールドのプリセット", "Пресет игрового поля"),
+            Item::Rate => tr!("Speed (rate)", "再生速度 (レート)", "Скорость (рейт)"),
+            Item::RateKeepPitch => tr!("Rate keeps pitch", "レートで音程を保つ", "Рейт сохраняет тон"),
+            Item::Offset => tr!("Audio offset", "音声オフセット", "Смещение звука"),
+            Item::VisualOffset => tr!("Visual offset", "表示オフセット", "Смещение картинки"),
+            Item::Calibrate => tr!("Offset calibration", "オフセット調整", "Калибровка смещения"),
+            Item::CalibrationBpm => tr!("Calibration tempo", "調整のテンポ", "Темп калибровки"),
+            Item::LiveOffset => tr!("Live offset suggestion", "プレイ中のオフセット提案", "Подсказка смещения в игре"),
+            Item::LiveOffsetUr => tr!("Scale suggestion to UR", "提案をURに合わせる", "Подсказка с учётом UR"),
+            Item::VsyncCompensation => tr!("Vsync compensation", "垂直同期の補正", "Компенсация vsync"),
+            Item::VsyncTune => tr!("Vsync compensation: fine tune", "垂直同期の補正: 微調整", "Компенсация vsync: точно"),
+            Item::VsyncCalibrate => tr!("Vsync calibration", "垂直同期の調整", "Калибровка vsync"),
+            Item::ResumeDelay => tr!("Resume delay", "再開までの待ち時間", "Задержка продолжения"),
+            Item::Interface => tr!("Interface", "インターフェース", "Интерфейс"),
+            Item::InterfaceHides => tr!("Interface toggle hides", "切り替えで隠すもの", "Что скрывает переключение"),
+            Item::InterfaceKey => tr!("Interface toggle key", "インターフェースの切替キー", "Клавиша интерфейса"),
+            Item::SongSelectLayout => tr!("Song select layout", "選曲画面のレイアウト", "Макет выбора песни"),
             Item::AutoplayStyle => "Autoplay playstyle",
             Item::AutoplayBinding => "Autoplay binding",
             Item::AutoplayLeftHanded => "Autoplay left-handed",
-            Item::Key(i) => KEY_LABELS[i],
-            Item::PresetKey(0) => "Previous preset key",
-            Item::PresetKey(_) => "Next preset key",
+            Item::Key(i) => key_label(i),
+            Item::PresetKey(0) => tr!("Previous preset key", "前のプリセットのキー", "Клавиша: пред. пресет"),
+            Item::PresetKey(_) => tr!("Next preset key", "次のプリセットのキー", "Клавиша: след. пресет"),
             Item::Hotkey(i) => crate::keys::Hotkey::ALL[i].label(),
-            Item::TouchLayout => "Touch layout",
-            Item::Screenshots => "Screenshots (F12)",
-            Item::ShowPlayfieldSize => "Show playfield size",
-            Item::WheelResize => "Wheel resizes playfield",
-            Item::KiaiEffects => "Kiai effects",
-            Item::HideGreat => "Hide GREAT splash",
-            Item::ChatFilter => "Chat filter",
-            Item::MessageSound => "Message sound",
-            Item::NotifyMessages => "Notify: messages",
-            Item::NotifyMentions => "Notify: chat mentions",
-            Item::NotifyRequests => "Notify: friend requests",
-            Item::NotifyOnline => "Notify: friend online",
-            Item::NotifyPlaying => "Notify: friend playing",
-            Item::ShowConverts => "Show osu!standard converts",
-            Item::HiddenMaps => "Hidden maps",
-            Item::SongsFolder => "Songs folder",
-            Item::DataFolder => "Game data folder",
-            Item::MasterVolume => "Master volume",
-            Item::MusicVolume => "Music volume",
-            Item::FxVolume => "Hitsound volume",
-            Item::AudioBuffer => "Audio buffer",
-            Item::BackgroundDim => "Background dim",
-            Item::BackgroundDimBlack => "Dim to black",
-            Item::PresentMode => "Present mode (gameplay)",
-            Item::MenuVsync => "Menus use vsync",
-            Item::HalfResolution => "Half resolution",
-            Item::FpsCap => "FPS cap",
-            Item::ShowFps => "FPS overlay",
-            Item::Animations => "UI animations",
-            Item::Splash => "Startup splash",
-            Item::UpdateChannel => "Build channel",
-            Item::Update => "Update",
-            Item::Changelog => "What's new",
-            Item::KrokodilKoban => "krokodil_koban mode",
-            Item::CheckUpdates => "Check at startup",
-            Item::Fullscreen => "Fullscreen",
-            Item::WindowSize => "Window size",
-            Item::DiscordPresence => "Discord status",
-            Item::Skin => "Skin",
-            Item::SkinParts => "Skin parts",
-            Item::SkinPart(i) => crate::skin::Part::ALL.get(i).map_or("Skin part", |p| p.label()),
-            Item::SkinFolder => "Skins folder",
-            Item::Accent => "UI colour",
-            Item::AccentHue => "UI colour: fine tune",
-            Item::NoteColours => "Note colours",
-            Item::DonColour => "Don colour",
-            Item::KatColour => "Kat colour",
+            Item::TouchLayout => tr!("Touch layout", "タッチの配置", "Сенсорная раскладка"),
+            Item::Screenshots => tr!("Screenshots (F12)", "スクリーンショット (F12)", "Скриншоты (F12)"),
+            // Also in English, so anyone who picked a language by mistake finds their way back.
+            Item::Language => tr!("Language", "言語 (Language)", "Язык (Language)"),
+            Item::ShowPlayfieldSize => tr!("Show playfield size", "プレイフィールドのサイズを表示", "Показывать размер поля"),
+            Item::WheelResize => tr!("Wheel resizes playfield", "ホイールでサイズを変える", "Колесо меняет размер поля"),
+            Item::KiaiEffects => tr!("Kiai effects", "キアイの演出", "Эффекты киай"),
+            Item::HideGreat => tr!("Hide GREAT splash", "GREATの表示を隠す", "Скрыть вспышку GREAT"),
+            Item::ChatFilter => tr!("Chat filter", "チャットフィルター", "Фильтр чата"),
+            Item::MessageSound => tr!("Message sound", "メッセージの音", "Звук сообщений"),
+            Item::NotifyMessages => tr!("Notify: messages", "通知: メッセージ", "Уведомлять: сообщения"),
+            Item::NotifyMentions => tr!("Notify: chat mentions", "通知: チャットでの呼びかけ", "Уведомлять: упоминания"),
+            Item::NotifyRequests => tr!("Notify: friend requests", "通知: フレンド申請", "Уведомлять: заявки в друзья"),
+            Item::NotifyOnline => tr!("Notify: friend online", "通知: フレンドのログイン", "Уведомлять: друг в сети"),
+            Item::NotifyPlaying => tr!("Notify: friend playing", "通知: フレンドのプレイ", "Уведомлять: друг играет"),
+            Item::ShowConverts => tr!("Show osu!standard converts", "osu!standardの変換譜面を表示", "Карты osu!standard (конверты)"),
+            Item::HiddenMaps => tr!("Hidden maps", "非表示の譜面", "Скрытые карты"),
+            Item::SongsFolder => tr!("Songs folder", "Songsフォルダ", "Папка Songs"),
+            Item::DataFolder => tr!("Game data folder", "ゲームデータのフォルダ", "Папка данных игры"),
+            Item::MasterVolume => tr!("Master volume", "全体の音量", "Общая громкость"),
+            Item::MusicVolume => tr!("Music volume", "音楽の音量", "Громкость музыки"),
+            Item::FxVolume => tr!("Hitsound volume", "ヒット音の音量", "Громкость хитсаундов"),
+            Item::AudioBuffer => tr!("Audio buffer", "オーディオバッファ", "Аудиобуфер"),
+            Item::BackgroundDim => tr!("Background dim", "背景の暗さ", "Затемнение фона"),
+            Item::BackgroundDimBlack => tr!("Dim to black", "黒まで暗くする", "Затемнять до чёрного"),
+            Item::PresentMode => tr!("Present mode (gameplay)", "表示モード (プレイ中)", "Режим вывода (в игре)"),
+            Item::MenuVsync => tr!("Menus use vsync", "メニューは垂直同期", "Vsync в меню"),
+            Item::HalfResolution => tr!("Half resolution", "半分の解像度", "Половинное разрешение"),
+            Item::FpsCap => tr!("FPS cap", "FPSの上限", "Ограничение FPS"),
+            Item::ShowFps => tr!("FPS overlay", "FPSの表示", "Счётчик FPS"),
+            Item::Animations => tr!("UI animations", "UIのアニメーション", "Анимации интерфейса"),
+            Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
+            Item::UpdateChannel => tr!("Build channel", "ビルドのチャンネル", "Канал сборок"),
+            Item::Update => tr!("Update", "アップデート", "Обновление"),
+            Item::Changelog => tr!("What's new", "更新内容", "Что нового"),
+            Item::KrokodilKoban => tr!("krokodil_koban mode", "krokodil_kobanモード", "Режим krokodil_koban"),
+            Item::CheckUpdates => tr!("Check at startup", "起動時に確認", "Проверять при запуске"),
+            Item::Fullscreen => tr!("Fullscreen", "フルスクリーン", "Полный экран"),
+            Item::WindowSize => tr!("Window size", "ウィンドウのサイズ", "Размер окна"),
+            Item::DiscordPresence => tr!("Discord status", "Discordのステータス", "Статус в Discord"),
+            Item::Skin => tr!("Skin", "スキン", "Скин"),
+            Item::SkinParts => tr!("Skin parts", "スキンのパーツ", "Части скина"),
+            Item::SkinPart(i) => crate::skin::Part::ALL.get(i).map_or(tr!("Skin part", "スキンのパーツ", "Часть скина"), |p| p.label()),
+            Item::SkinFolder => tr!("Skins folder", "スキンのフォルダ", "Папка скинов"),
+            Item::Accent => tr!("UI colour", "UIの色", "Цвет интерфейса"),
+            Item::AccentHue => tr!("UI colour: fine tune", "UIの色: 微調整", "Цвет интерфейса: точно"),
+            Item::NoteColours => tr!("Note colours", "ノーツの色", "Цвета нот"),
+            Item::DonColour => tr!("Don colour", "ドンの色", "Цвет дона"),
+            Item::KatColour => tr!("Kat colour", "カッの色", "Цвет ката"),
         }
     }
 
@@ -336,6 +383,7 @@ impl Item {
             Item::PlayfieldPreset
             | Item::TouchLayout
             | Item::Screenshots
+            | Item::Language
             | Item::AudioBuffer
             | Item::PresentMode
             | Item::UpdateChannel
@@ -384,77 +432,338 @@ impl Item {
 
     pub fn help(self) -> &'static str {
         match self {
-            Item::ScrollSpeed => "How fast notes travel. Shortcut: F3 / F4.",
-            Item::PlayfieldArea => "Enter: edit where gameplay is drawn (drag, its edges, the wheel). In game: drag it about too.",
-            Item::PlayfieldReset => "Enter: make gameplay fill the whole screen again.",
-            Item::PlayfieldPreset => "Enter: pick from a list (grouped by aspect ratio). Left/Right: previous/next.",
-            Item::Rate => "Song speed like DT (1.50x) / HT (0.75x). Song select: [ and ] (Shift = 0.25x steps).",
-            Item::RateKeepPitch => "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore).",
-            Item::Offset => "For every map; raise it if you hit late. In a song, - / + (and O) set that map's own offset on top.",
-            Item::Calibrate => "Enter: play a click track with notes exactly on the beat; it measures and sets your offset.",
-            Item::CalibrationBpm => "Tempo of the calibration click track. Pick one close to the maps you play.",
-            Item::LiveOffset => "While playing, suggest an offset from your recent hits; press O to apply it.",
-            Item::LiveOffsetUr => "On: more hits and a +- margin when your UR is high. Off: plain average of the last 40 hits.",
-            Item::VsyncCompensation => "With vsync, notes are drawn where they'll be once the frame is on screen, as with unlimited fps.",
-            Item::VsyncTune => "Added to the vsync compensation: raise it if you hit late by sight with vsync. Vsync calibration finds it.",
-            Item::VsyncCalibrate => "Enter: hit notes by sight, sound off, in vsync; it sets the fine tune. Calibrate the offset first.",
-            Item::ResumeDelay => "Countdown before the song continues after the pause menu (0 = at once).",
-            Item::Interface => "Score, accuracy, bars and more during play. Its key (Shift+Tab unless changed below) toggles it in a song.",
-            Item::InterfaceHides => "What hiding the interface hides. Enter opens the list; Enter or a click ticks a part on or off.",
-            Item::InterfaceKey => "Enter, then press the key (with Shift or not) that shows / hides the interface in a song. Delete: none.",
-            Item::Key(_) => "Enter, then press the new key (Delete: none, Esc: cancel). Backspace: back to the default.",
-            Item::PresetKey(_) => "Steps through playfield presets anywhere (also in game). Enter, then press a key. Delete: none.",
-            Item::Hotkey(_) => "Enter, then press the new key, Ctrl / Alt / Shift too (Delete: none, Esc: cancel). Backspace: the default.",
-            Item::Screenshots => "Where F12 puts a screenshot: on the clipboard to paste, as a picture in the Screenshots folder, or both.",
-            Item::TouchLayout => "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",
-            Item::ShowPlayfieldSize => "Show the playfield's resolution in the bottom-right corner during play.",
-            Item::WheelResize => "During play, the mouse wheel makes the playfield bigger or smaller (it always does in its editor).",
-            Item::ShowConverts => "Also list standard maps, converted to taiko like osu! does.",
-            Item::HiddenMaps => "Right-click a song to hide it here (files stay). Enter lists them all again.",
-            Item::SongsFolder => "The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.",
-            Item::DataFolder => "Replays, scores, videos, downloaded maps, skins and caches. Enter: move them to another folder or drive.",
-            Item::KiaiEffects => "During kiai time, tint the lane and pulse the hit target with the beat.",
-            Item::HideGreat => "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",
-            Item::ChatFilter => "Stars out swear words in friends' messages, the global chat and lobby chats.",
-            Item::MessageSound => "A soft chime when a friend messages you (not while you're playing).",
-            Item::NotifyMessages => "A pop-up when a friend messages you (they still count as unread when off).",
-            Item::NotifyMentions => "A pop-up when someone says your name in the global chat.",
-            Item::NotifyRequests => "A pop-up when someone sends you a friend request.",
-            Item::NotifyOnline => "A pop-up when a friend comes online.",
-            Item::NotifyPlaying => "A pop-up each time a friend starts a map (click it to watch).",
-            Item::MasterVolume => "Scales music and hitsounds. Anywhere: hold Alt and scroll the mouse wheel.",
-            Item::MusicVolume | Item::FxVolume => "Left / Right to adjust.",
-            Item::AudioBuffer => "Smaller = less audio latency; raise it if you hear crackling.",
-            Item::BackgroundDim => "How dark the map background is during play. 100% hides it.",
-            Item::BackgroundDimBlack => "On: in songs the background dims to pure black, and is black when there's none. Off: the interface's grey.",
-            Item::PresentMode => "Used during songs. vsync is smoothest on Wayland; mailbox/immediate add judder.",
-            Item::MenuVsync => "Everything but playing a song uses vsync: song select (and its autoplay preview), settings, results, replays and autoplay.",
-            Item::HalfResolution => "Draw at half resolution, scaled up exactly 2x: chunky, crisp pixels and a quarter of the GPU work. For high-DPI screens.",
-            Item::FpsCap => "mailbox/immediate only. A few times your refresh rate is plenty.",
-            Item::ShowFps => "Frame rate and frame time in the corner. Shortcut: F10.",
-            Item::Animations => "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
-            Item::Splash => "The animated intro when taiko.rs starts (any key or click skips it).",
-            Item::VisualOffset => "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
-            Item::UpdateChannel => "dev: test builds that haven't reached everyone yet (may break). Switch, then Update installs that channel's build.",
-            Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko.rs restarts into it.",
+            Item::ScrollSpeed => tr!(
+                "How fast notes travel. Shortcut: F3 / F4.",
+                "ノーツが流れる速さ。ショートカット: F3 / F4。",
+                "Как быстро летят ноты. Клавиши: F3 / F4."
+            ),
+            Item::PlayfieldArea => tr!(
+                "Enter: edit where gameplay is drawn (drag, its edges, the wheel). In game: drag it about too.",
+                "Enter: プレイを描く範囲を編集 (ドラッグ、端、ホイール)。プレイ中もドラッグで動かせます。",
+                "Enter: где рисуется игра (тяните поле, его края, колесо). В игре его тоже можно тянуть."
+            ),
+            Item::PlayfieldReset => tr!(
+                "Enter: make gameplay fill the whole screen again.",
+                "Enter: プレイ画面を再び全画面にします。",
+                "Enter: игра снова на весь экран."
+            ),
+            Item::PlayfieldPreset => tr!(
+                "Enter: pick from a list (grouped by aspect ratio). Left/Right: previous/next.",
+                "Enter: リストから選ぶ (縦横比ごと)。左/右: 前/次。",
+                "Enter: выбрать из списка (по соотношению сторон). Влево/вправо: пред./след."
+            ),
+            Item::Rate => tr!(
+                "Song speed like DT (1.50x) / HT (0.75x). Song select: [ and ] (Shift = 0.25x steps).",
+                "DT (1.50x) / HT (0.75x) のような曲の速さ。選曲画面: [ と ] (Shiftで0.25x刻み)。",
+                "Скорость песни, как DT (1.50x) / HT (0.75x). В выборе песни: [ и ] (Shift = шаг 0.25x)."
+            ),
+            Item::RateKeepPitch => tr!(
+                "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore).",
+                "オン: 音程はそのまま速くなる (DT)。オフ: 速さと共に音程も上がる (nightcore)。",
+                "Вкл: музыка просто быстрее (DT). Выкл: тон растёт со скоростью (nightcore)."
+            ),
+            Item::Offset => tr!(
+                "For every map; raise it if you hit late. In a song, - / + (and O) set that map's own offset on top.",
+                "全譜面に共通。叩くのが遅れるなら上げます。曲中の - / + (と O) でその譜面だけのオフセットを足せます。",
+                "Для всех карт; увеличьте, если бьёте поздно. В песне - / + (и O) задают смещение этой карты сверху."
+            ),
+            Item::Calibrate => tr!(
+                "Enter: play a click track with notes exactly on the beat; it measures and sets your offset.",
+                "Enter: 拍ぴったりのノーツでクリック音を流し、オフセットを測って設定します。",
+                "Enter: метроном с нотами точно в такт; игра измерит и выставит смещение."
+            ),
+            Item::CalibrationBpm => tr!(
+                "Tempo of the calibration click track. Pick one close to the maps you play.",
+                "調整用クリック音のテンポ。よく遊ぶ譜面に近いものを選んでください。",
+                "Темп метронома для калибровки. Выберите близкий к вашим картам."
+            ),
+            Item::LiveOffset => tr!(
+                "While playing, suggest an offset from your recent hits; press O to apply it.",
+                "プレイ中、最近の叩きからオフセットを提案します。Oで適用。",
+                "Во время игры подсказывает смещение по последним ударам; O применяет его."
+            ),
+            Item::LiveOffsetUr => tr!(
+                "On: more hits and a +- margin when your UR is high. Off: plain average of the last 40 hits.",
+                "オン: URが高いと多めの叩きと±の幅を使う。オフ: 直近40回の単純な平均。",
+                "Вкл: при высоком UR больше ударов и запас +-. Выкл: среднее последних 40 ударов."
+            ),
+            Item::VsyncCompensation => tr!(
+                "With vsync, notes are drawn where they'll be once the frame is on screen, as with unlimited fps.",
+                "垂直同期でも、FPS無制限と同じくフレームが映る時の位置にノーツを描きます。",
+                "С vsync ноты рисуются там, где будут, когда кадр покажется, как без ограничения FPS."
+            ),
+            Item::VsyncTune => tr!(
+                "Added to the vsync compensation: raise it if you hit late by sight with vsync. Vsync calibration finds it.",
+                "垂直同期の補正に足す値。垂直同期で見て叩くと遅れるなら上げます。垂直同期の調整で求まります。",
+                "Добавка к компенсации vsync: увеличьте, если с vsync бьёте поздно на глаз. Её находит калибровка vsync."
+            ),
+            Item::VsyncCalibrate => tr!(
+                "Enter: hit notes by sight, sound off, in vsync; it sets the fine tune. Calibrate the offset first.",
+                "Enter: 音なし・垂直同期で見て叩き、微調整を設定します。先にオフセットを調整してください。",
+                "Enter: бейте ноты на глаз без звука с vsync; выставит точную настройку. Сначала смещение."
+            ),
+            Item::ResumeDelay => tr!(
+                "Countdown before the song continues after the pause menu (0 = at once).",
+                "ポーズメニューの後、曲が再開するまでのカウントダウン (0 = すぐ)。",
+                "Отсчёт перед продолжением после паузы (0 = сразу)."
+            ),
+            Item::Interface => tr!(
+                "Score, accuracy, bars and more during play. Its key (Shift+Tab unless changed below) toggles it in a song.",
+                "プレイ中のスコア、精度、バーなど。そのキー (変更しなければShift+Tab) で曲中に切り替えます。",
+                "Счёт, точность, полосы и прочее в игре. Его клавиша (Shift+Tab, если не изменить) переключает в песне."
+            ),
+            Item::InterfaceHides => tr!(
+                "What hiding the interface hides. Enter opens the list; Enter or a click ticks a part on or off.",
+                "インターフェースを隠す時に隠すもの。Enterでリスト。Enterかクリックで項目をオン/オフ。",
+                "Что прячется вместе с интерфейсом. Enter открывает список; Enter или клик отмечает часть."
+            ),
+            Item::InterfaceKey => tr!(
+                "Enter, then press the key (with Shift or not) that shows / hides the interface in a song. Delete: none.",
+                "Enterを押してから、曲中にインターフェースを出し入れするキー (Shiftも可) を押す。Delete: なし。",
+                "Enter, затем клавиша (можно с Shift), что прячет / показывает интерфейс в песне. Delete: нет."
+            ),
+            Item::Key(_) => tr!(
+                "Enter, then press the new key (Delete: none, Esc: cancel). Backspace: back to the default.",
+                "Enterを押してから新しいキーを押す (Delete: なし、Esc: 取消)。Backspace: 初期設定に戻す。",
+                "Enter, затем новая клавиша (Delete: нет, Esc: отмена). Backspace: по умолчанию."
+            ),
+            Item::PresetKey(_) => tr!(
+                "Steps through playfield presets anywhere (also in game). Enter, then press a key. Delete: none.",
+                "どこでも (プレイ中も) プレイフィールドのプリセットを切り替えます。Enterの後にキー。Delete: なし。",
+                "Листает пресеты поля везде (и в игре). Enter, затем клавиша. Delete: нет."
+            ),
+            Item::Hotkey(_) => tr!(
+                "Enter, then press the new key, Ctrl / Alt / Shift too (Delete: none, Esc: cancel). Backspace: the default.",
+                "Enterの後に新しいキー (Ctrl / Alt / Shiftも可)。Delete: なし、Esc: 取消。Backspace: 初期設定。",
+                "Enter, затем новая клавиша, можно с Ctrl / Alt / Shift (Delete: нет, Esc: отмена). Backspace: исходная."
+            ),
+            Item::Language => tr!(
+                "The language of menus, settings and messages. Song titles stay as their maps have them.",
+                "メニュー、設定、メッセージの言語。曲名は譜面のままです。",
+                "Язык меню, настроек и сообщений. Названия песен остаются как в картах."
+            ),
+            Item::Screenshots => tr!(
+                "Where F12 puts a screenshot: on the clipboard to paste, as a picture in the Screenshots folder, or both.",
+                "F12のスクリーンショットの行き先: 貼り付け用のクリップボード、Screenshotsフォルダの画像、またはその両方。",
+                "Куда F12 кладёт скриншот: в буфер обмена, картинкой в папку Screenshots или туда и туда."
+            ),
+            Item::TouchLayout => tr!(
+                "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",
+                "タッチ画面: 画面を左から4列に分けます (K = ふち / カッ、D = 面 / ドン)。",
+                "Сенсорный экран: четыре столбца слева направо (K = край / кат, D = центр / дон)."
+            ),
+            Item::ShowPlayfieldSize => tr!(
+                "Show the playfield's resolution in the bottom-right corner during play.",
+                "プレイ中、右下にプレイフィールドの解像度を表示します。",
+                "Показывать разрешение поля в правом нижнем углу во время игры."
+            ),
+            Item::WheelResize => tr!(
+                "During play, the mouse wheel makes the playfield bigger or smaller (it always does in its editor).",
+                "プレイ中、マウスホイールでプレイフィールドを拡大・縮小します (エディタでは常に)。",
+                "В игре колесо мыши увеличивает или уменьшает поле (в его редакторе всегда)."
+            ),
+            Item::ShowConverts => tr!(
+                "Also list standard maps, converted to taiko like osu! does.",
+                "standardの譜面も、osu!と同じく太鼓に変換して並べます。",
+                "Показывать и карты standard, переделанные в taiko, как в osu!."
+            ),
+            Item::HiddenMaps => tr!(
+                "Right-click a song to hide it here (files stay). Enter lists them all again.",
+                "曲を右クリックでここから隠せます (ファイルは残ります)。Enterで全て再表示。",
+                "Правый клик по песне прячет её здесь (файлы остаются). Enter показывает все снова."
+            ),
+            Item::SongsFolder => tr!(
+                "The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.",
+                "譜面のあるフォルダ。Enter: 参照、パスを入力、またはosu!のものを探すに戻す。",
+                "Папка с вашими картами. Enter: обзор, ввести путь или снова искать папку osu!."
+            ),
+            Item::DataFolder => tr!(
+                "Replays, scores, videos, downloaded maps, skins and caches. Enter: move them to another folder or drive.",
+                "リプレイ、スコア、動画、ダウンロードした譜面、スキン、キャッシュ。Enter: 別のフォルダやドライブへ移動。",
+                "Повторы, рекорды, видео, скачанные карты, скины и кэш. Enter: перенести в другую папку или на диск."
+            ),
+            Item::KiaiEffects => tr!(
+                "During kiai time, tint the lane and pulse the hit target with the beat.",
+                "キアイタイム中、レーンに色を付け、判定枠を拍に合わせて脈打たせます。",
+                "В киай подкрашивать дорожку и пульсировать мишень в такт."
+            ),
+            Item::HideGreat => tr!(
+                "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",
+                "300で光らず\"GREAT\"も出しません (空のhit300のスキンと同じ)。OKとミスだけが出ます。",
+                "Без вспышки и \"GREAT\" на 300, как у скинов с пустым hit300: видны только OK и промахи."
+            ),
+            Item::ChatFilter => tr!(
+                "Stars out swear words in friends' messages, the global chat and lobby chats.",
+                "フレンドのメッセージ、全体チャット、ロビーのチャットの悪口を伏せ字にします。",
+                "Заменяет мат звёздочками в сообщениях друзей, общем чате и чатах лобби."
+            ),
+            Item::MessageSound => tr!(
+                "A soft chime when a friend messages you (not while you're playing).",
+                "フレンドからメッセージが届くと小さく鳴ります (プレイ中は鳴りません)。",
+                "Тихий звон, когда друг пишет вам (не во время игры)."
+            ),
+            Item::NotifyMessages => tr!(
+                "A pop-up when a friend messages you (they still count as unread when off).",
+                "フレンドからメッセージが届くとポップアップ (オフでも未読として数えます)。",
+                "Всплывашка, когда друг пишет вам (выключено — всё равно считаются непрочитанными)."
+            ),
+            Item::NotifyMentions => tr!(
+                "A pop-up when someone says your name in the global chat.",
+                "全体チャットで誰かがあなたの名前を出すとポップアップ。",
+                "Всплывашка, когда кто-то называет вас в общем чате."
+            ),
+            Item::NotifyRequests => tr!(
+                "A pop-up when someone sends you a friend request.",
+                "フレンド申請が届くとポップアップ。",
+                "Всплывашка, когда вам присылают заявку в друзья."
+            ),
+            Item::NotifyOnline => tr!(
+                "A pop-up when a friend comes online.",
+                "フレンドがログインするとポップアップ。",
+                "Всплывашка, когда друг заходит в сеть."
+            ),
+            Item::NotifyPlaying => tr!(
+                "A pop-up each time a friend starts a map (click it to watch).",
+                "フレンドが譜面を始めるたびにポップアップ (クリックで観戦)。",
+                "Всплывашка, когда друг начинает карту (клик — смотреть)."
+            ),
+            Item::MasterVolume => tr!(
+                "Scales music and hitsounds. Anywhere: hold Alt and scroll the mouse wheel.",
+                "音楽とヒット音の音量。どこでも: Altを押しながらマウスホイール。",
+                "Громкость музыки и хитсаундов. Везде: Alt и колесо мыши."
+            ),
+            Item::MusicVolume | Item::FxVolume => tr!("Left / Right to adjust.", "左 / 右で調整。", "Влево / вправо — изменить."),
+            Item::AudioBuffer => tr!(
+                "Smaller = less audio latency; raise it if you hear crackling.",
+                "小さいほど音の遅延が少ない。ノイズが聞こえたら上げます。",
+                "Меньше = меньше задержка звука; увеличьте, если трещит."
+            ),
+            Item::BackgroundDim => tr!(
+                "How dark the map background is during play. 100% hides it.",
+                "プレイ中の譜面の背景の暗さ。100%で見えなくなります。",
+                "Насколько тёмен фон карты в игре. 100% прячет его."
+            ),
+            Item::BackgroundDimBlack => tr!(
+                "On: in songs the background dims to pure black, and is black when there's none. Off: the interface's grey.",
+                "オン: 曲中の背景は真っ黒まで暗くなり、背景がなければ黒。オフ: インターフェースの灰色。",
+                "Вкл: в песне фон темнеет до чёрного и чёрный, если фона нет. Выкл: серый цвет интерфейса."
+            ),
+            Item::PresentMode => tr!(
+                "Used during songs. vsync is smoothest on Wayland; mailbox/immediate add judder.",
+                "曲中に使います。Waylandではvsyncが一番なめらか。mailbox/immediateはカクつきます。",
+                "Для песен. На Wayland плавнее всего vsync; mailbox/immediate дёргаются."
+            ),
+            Item::MenuVsync => tr!(
+                "Everything but playing a song uses vsync: song select (and its autoplay preview), settings, results, replays and autoplay.",
+                "曲のプレイ以外は垂直同期: 選曲 (とオートのプレビュー)、設定、リザルト、リプレイ、オート。",
+                "Всё, кроме игры, с vsync: выбор песни (и превью автоплея), настройки, итоги, повторы и автоплей."
+            ),
+            Item::HalfResolution => tr!(
+                "Draw at half resolution, scaled up exactly 2x: chunky, crisp pixels and a quarter of the GPU work. For high-DPI screens.",
+                "半分の解像度で描き、ちょうど2倍に拡大: くっきり大きな画素、GPUの負荷は1/4。高DPIの画面向け。",
+                "Рисовать в половинном разрешении и растягивать ровно в 2x: чёткие крупные пиксели, четверть работы GPU."
+            ),
+            Item::FpsCap => tr!(
+                "mailbox/immediate only. A few times your refresh rate is plenty.",
+                "mailbox/immediateのみ。リフレッシュレートの数倍で十分です。",
+                "Только mailbox/immediate. Хватит нескольких частот обновления экрана."
+            ),
+            Item::ShowFps => tr!(
+                "Frame rate and frame time in the corner. Shortcut: F10.",
+                "隅にフレームレートとフレーム時間。ショートカット: F10。",
+                "Частота и время кадра в углу. Клавиша: F10."
+            ),
+            Item::Animations => tr!(
+                "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",
+                "メニューの動き: 画面のフェード、ハイライトの移動、リストの開閉、リザルトのカウント。プレイは変わりません。",
+                "Движение меню: переходы, скользящая подсветка, списки, отсчёт итогов. На игру не влияет."
+            ),
+            Item::Splash => tr!(
+                "The animated intro when taiko.rs starts (any key or click skips it).",
+                "taiko.rs起動時のアニメーション (キーかクリックで飛ばせます)。",
+                "Анимация при запуске taiko.rs (любая клавиша или клик пропускает)."
+            ),
+            Item::VisualOffset => tr!(
+                "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
+                "画面の遅れを補うためノーツを早めに描きます。拍より遅れて届くなら上げます。判定は音のまま。曲中: Ctrl + - / +。",
+                "Рисует ноты раньше, чтобы скрыть задержку экрана; увеличьте, если ноты опаздывают. Судит по звуку. В песне: Ctrl + - / +."
+            ),
+            Item::UpdateChannel => tr!(
+                "dev: test builds that haven't reached everyone yet (may break). Switch, then Update installs that channel's build.",
+                "dev: まだ全員に届いていない試験ビルド (壊れるかも)。切り替えてからアップデートでそのビルドを入れます。",
+                "dev: тестовые сборки, ещё не для всех (могут сломаться). Переключите, и Обновление поставит сборку канала."
+            ),
+            Item::Update => tr!(
+                "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko.rs restarts into it.",
+                "Enter: 新しいビルドを探す、または入れる (どのメニューでもCtrl+U)。taiko.rsが再起動します。",
+                "Enter: найти новую сборку или поставить её (Ctrl+U в любом меню). taiko.rs перезапустится."
+            ),
             // No explanation: krokodil_koban knows.
             Item::KrokodilKoban => "",
             Item::AutoplayStyle => "Which hand autoplay hits each note with: kddk full / semi alternate, single tap, roll, or ddkk.",
             Item::AutoplayBinding => "The order autoplay's four keys light the drum in (kddk): 1324 puts each hand's don on the other side.",
             Item::AutoplayLeftHanded => "Autoplay leads with the left hand instead of the right.",
-            Item::SongSelectLayout => "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
-            Item::Changelog => "Enter: the latest changes. They also show by themselves after an update.",
-            Item::CheckUpdates => "Look for a newer build each time taiko.rs starts (a badge top right says when there is one), and for newer versions of the songs you pick on osu!.",
-            Item::Fullscreen => "Shortcut: F11.",
-            Item::WindowSize => "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
-            Item::DiscordPresence => "Show the map you're playing, your lobby or who you spectate in your Discord status.",
-            Item::Skin => "Enter opens the list. osu! skins from osu!'s or taiko.rs's Skins folder.",
-            Item::SkinParts | Item::SkinPart(_) => "What's drawn from a skin, and which: the skin above, built-in, or any other (mix them). Enter opens the list.",
-            Item::SkinFolder => "Enter: open taiko.rs's Skins folder. Drop .osk files there, then pick them above.",
-            Item::Accent => "The interface's accent; any but red tints the greys too. Left/Right: presets (or #rrggbb in the config).",
-            Item::AccentHue => "Left/Right: turn the UI colour round the colour wheel, for any colour in between.",
-            Item::NoteColours => "Dons' and kats' colours (Multiverse's universes have their own: M in the mod select).",
-            Item::DonColour | Item::KatColour => "Enter: type a colour like #eb452c. Left/Right turn it round the colour wheel. Makes the colours your own.",
+            Item::SongSelectLayout => tr!(
+                "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
+                "曲リスト、譜面パネル、ランキングの間の境目をドラッグ。Enter: 初期設定に戻す。",
+                "Тяните границы между списком песен, панелью карты и таблицей рекордов. Enter: по умолчанию."
+            ),
+            Item::Changelog => tr!(
+                "Enter: the latest changes. They also show by themselves after an update.",
+                "Enter: 最新の変更点。アップデート後にも自動で表示されます。",
+                "Enter: последние изменения. После обновления они показываются сами."
+            ),
+            Item::CheckUpdates => tr!(
+                "Look for a newer build each time taiko.rs starts (a badge top right says when there is one), and for newer versions of the songs you pick on osu!.",
+                "起動のたびに新しいビルドを探し (あれば右上に表示)、選んだ曲のosu!での新しい版も探します。",
+                "Искать новую сборку при каждом запуске (значок справа вверху) и новые версии выбранных песен на osu!."
+            ),
+            Item::Fullscreen => tr!("Shortcut: F11.", "ショートカット: F11。", "Клавиша: F11."),
+            Item::WindowSize => tr!(
+                "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
+                "Enter: サイズを選ぶ (入力も可)。左/右: 次のサイズ。ウィンドウの端のドラッグでも変えられます。",
+                "Enter: выбрать размер (или ввести); влево/вправо: следующий. Можно тянуть края окна."
+            ),
+            Item::DiscordPresence => tr!(
+                "Show the map you're playing, your lobby or who you spectate in your Discord status.",
+                "Discordのステータスに、プレイ中の譜面、ロビー、観戦相手を表示します。",
+                "Показывать в статусе Discord карту, лобби или того, кого вы смотрите."
+            ),
+            Item::Skin => tr!(
+                "Enter opens the list. osu! skins from osu!'s or taiko.rs's Skins folder.",
+                "Enterでリスト。osu!かtaiko.rsのSkinsフォルダにあるosu!のスキン。",
+                "Enter открывает список. Скины osu! из папки Skins osu! или taiko.rs."
+            ),
+            Item::SkinParts | Item::SkinPart(_) => tr!(
+                "What's drawn from a skin, and which: the skin above, built-in, or any other (mix them). Enter opens the list.",
+                "スキンから描くものとその出どころ: 上のスキン、内蔵、または他のどれか (混ぜられます)。Enterでリスト。",
+                "Что берётся из скина и из какого: скин выше, встроенный или любой другой (можно смешивать). Enter: список."
+            ),
+            Item::SkinFolder => tr!(
+                "Enter: open taiko.rs's Skins folder. Drop .osk files there, then pick them above.",
+                "Enter: taiko.rsのSkinsフォルダを開く。.oskファイルを置いて、上で選びます。",
+                "Enter: открыть папку Skins taiko.rs. Положите туда файлы .osk и выберите выше."
+            ),
+            Item::Accent => tr!(
+                "The interface's accent; any but red tints the greys too. Left/Right: presets (or #rrggbb in the config).",
+                "インターフェースのアクセント色。赤以外は灰色にも色が付きます。左/右: プリセット (設定ファイルで#rrggbbも可)。",
+                "Акцент интерфейса; любой, кроме красного, подкрашивает и серые. Влево/вправо: пресеты (или #rrggbb в конфиге)."
+            ),
+            Item::AccentHue => tr!(
+                "Left/Right: turn the UI colour round the colour wheel, for any colour in between.",
+                "左/右: UIの色を色相環で回し、間のどんな色にもできます。",
+                "Влево/вправо: крутить цвет интерфейса по цветовому кругу, для любого оттенка."
+            ),
+            Item::NoteColours => tr!(
+                "Dons' and kats' colours (Multiverse's universes have their own: M in the mod select).",
+                "ドンとカッの色 (Multiverseの宇宙にはそれぞれの色: Mod選択でM)。",
+                "Цвета донов и катов (у вселенных Multiverse свои: M в выборе модов)."
+            ),
+            Item::DonColour | Item::KatColour => tr!(
+                "Enter: type a colour like #eb452c. Left/Right turn it round the colour wheel. Makes the colours your own.",
+                "Enter: #eb452cのように色を入力。左/右で色相環を回します。自分だけの色になります。",
+                "Enter: введите цвет вроде #eb452c. Влево/вправо крутят его по кругу. Цвета станут вашими."
+            ),
         }
     }
 }
@@ -595,12 +904,12 @@ impl Dropdown {
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         self.bounds = [bx, by, bw, bh];
         c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
-        let title_w = c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), "Playfield preset");
-        let screen = format!("screen {}x{}", native.0, native.1);
+        let title_w = c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), Item::PlayfieldPreset.label());
+        let screen = tr!("screen {}x{}", "画面 {}x{}", "экран {}x{}"; native.0, native.1);
         c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, bw - 28.0 - title_w - 10.0, &screen));
-        let save_label = format!("+ Save current {}x{}", playfield.0, playfield.1);
+        let save_label = tr!("+ Save current {}x{}", "+ 今の{}x{}を保存", "+ Сохранить текущий {}x{}"; playfield.0, playfield.1);
         let bw0 = self.button(c, bx + 14.0, by + 28.0, &save_label, PresetAction::SaveCurrent);
-        self.button(c, bx + 20.0 + bw0, by + 28.0, "+ Add size", PresetAction::Add);
+        self.button(c, bx + 20.0 + bw0, by + 28.0, tr!("+ Add size", "+ サイズを追加", "+ Добавить размер"), PresetAction::Add);
 
         let (top, view) = (by + 48.0, bh - 78.0);
         let focus = layout.iter().find(|(l, _)| match (l, &self.editing) {
@@ -617,7 +926,7 @@ impl Dropdown {
             c.round_rect(bx + 8.0, ry, bw - 16.0, ROW - 2.0, 4.0, rgba(0x1d1d27, 1.0), rgba(0xFFD34D, 1.0), 1.0);
             c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), text);
             c.rect(bx + 22.0 + caret_x(7.0, text, caret), ry + 2.5, 1.0, 9.0, rgba(0xFFD34D, 1.0));
-            c.text_right(bx + bw - 22.0, ry + 3.5, 6.0, rgba(0x8a8aa0, 1.0), "width x height");
+            c.text_right(bx + bw - 22.0, ry + 3.5, 6.0, rgba(0x8a8aa0, 1.0), tr!("width x height", "幅 x 高さ", "ширина x высота"));
         };
         for (line, ly) in layout {
             let ry = top + ly - self.scroll;
@@ -626,10 +935,20 @@ impl Dropdown {
             }
             match line {
                 Line::Head(name) => {
+                    let name = match name {
+                        SAVED => tr!("Saved", "保存済み", "Сохранённые"),
+                        "Other" => tr!("Other", "その他", "Другие"),
+                        _ => name,
+                    };
                     c.text(bx + 14.0, ry + 5.0, 7.0, rgba(accent(), 1.0), name);
                 }
                 Line::Hint => {
-                    c.text(bx + 22.0, ry + 3.5, 6.0, rgba(0x6f6f86, 1.0), "none yet: S saves the playfield's size, A adds one");
+                    let hint = tr!(
+                        "none yet: S saves the playfield's size, A adds one",
+                        "まだありません: Sで今のサイズを保存、Aで追加",
+                        "пока нет: S сохраняет размер поля, A добавляет"
+                    );
+                    c.text(bx + 22.0, ry + 3.5, 6.0, rgba(0x6f6f86, 1.0), hint);
                 }
                 Line::Input => {
                     if let Some((_, text)) = &self.editing {
@@ -653,7 +972,12 @@ impl Dropdown {
                     let mut right = bx + bw - 22.0;
                     if selected && i < saved {
                         // Buttons for the saved size, right to left.
-                        for (label, action) in [("del", PresetAction::Delete), ("edit", PresetAction::Edit), ("down", PresetAction::Down), ("up", PresetAction::Up)] {
+                        for (label, action) in [
+                            (tr!("del", "削除", "удалить"), PresetAction::Delete),
+                            (tr!("edit", "編集", "изменить"), PresetAction::Edit),
+                            (tr!("down", "下へ", "вниз"), PresetAction::Down),
+                            (tr!("up", "上へ", "вверх"), PresetAction::Up),
+                        ] {
                             let lw = Canvas::text_width(6.0, label) + 10.0;
                             right -= lw;
                             self.button(c, right, ry + 0.5, label, action);
@@ -662,9 +986,9 @@ impl Dropdown {
                         right -= 6.0;
                     }
                     let (tag, col) = if !fits {
-                        ("too big", 0x8a8aa0)
+                        (tr!("too big", "大きすぎ", "слишком большой"), 0x8a8aa0)
                     } else if Some((rw, rh)) == current {
-                        ("current", 0x86E05A)
+                        (current_tag(), 0x86E05A)
                     } else {
                         ("", 0)
                     };
@@ -673,9 +997,16 @@ impl Dropdown {
             }
         }
         let (line1, line2) = if self.editing.is_some() {
-            ("type a size like 1280x720   Enter save   Esc cancel", "")
+            (tr!("type a size like 1280x720   Enter save   Esc cancel", "1280x720のように入力   Enter 保存   Esc 取消", "введите размер вроде 1280x720   Enter сохранить   Esc отмена"), "")
         } else {
-            ("Up/Down or mouse choose   Enter/click apply   Esc close", "S save current   A add   E edit   Del delete   Shift+Up/Down move")
+            (
+                tr!("Up/Down or mouse choose   Enter/click apply   Esc close", "上下かマウスで選択   Enter/クリック 適用   Esc 閉じる", "Вверх/вниз или мышь   Enter/клик применить   Esc закрыть"),
+                tr!(
+                    "S save current   A add   E edit   Del delete   Shift+Up/Down move",
+                    "S 今のを保存   A 追加   E 編集   Del 削除   Shift+上下 移動",
+                    "S сохранить   A добавить   E изменить   Del удалить   Shift+вверх/вниз двигать"
+                ),
+            )
         };
         c.text_centered(w / 2.0, by + bh - 20.0, 6.0, rgba(0x6f6f86, 1.0), line1);
         c.text_centered(w / 2.0, by + bh - 10.0, 6.0, rgba(0x6f6f86, 1.0), line2);
@@ -822,14 +1153,20 @@ impl Choices {
             }
             c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::ChoiceRow(i));
             let current = self.current == Some(i);
-            let room = bw - 40.0 - if current { Canvas::text_width(7.0, "current") + 8.0 } else { 0.0 };
+            let room = bw - 40.0 - if current { Canvas::text_width(7.0, current_tag()) + 8.0 } else { 0.0 };
             c.text(bx + 20.0, y + 5.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &Canvas::fit(7.0, room, name));
             if current {
-                c.text_right(bx + bw - 20.0, y + 5.0, 7.0, rgba(0x86E05A, 1.0), "current");
+                c.text_right(bx + bw - 20.0, y + 5.0, 7.0, rgba(0x86E05A, 1.0), current_tag());
             }
         }
-        c.text_centered(w / 2.0, by + bh - 11.0, 6.0, rgba(0x6f6f86, 1.0), "Up/Down or mouse   Enter/click use   Esc close");
+        let hint = tr!("Up/Down or mouse   Enter/click use   Esc close", "上下かマウス   Enter/クリック 使う   Esc 閉じる", "Вверх/вниз или мышь   Enter/клик выбрать   Esc закрыть");
+        c.text_centered(w / 2.0, by + bh - 11.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, bw - 16.0, hint));
     }
+}
+
+/// The mark on the choice in use.
+fn current_tag() -> &'static str {
+    tr!("current", "使用中", "текущий")
 }
 
 fn inside(r: &[f32; 4], x: f32, y: f32) -> bool {
@@ -878,7 +1215,8 @@ impl SettingsUi {
         let section = self.section();
 
         // Sidebar.
-        for (i, (name, about)) in SECTIONS.iter().enumerate() {
+        for i in 0..SECTIONS.len() {
+            let (name, about) = (section_name(i), section_summary(i));
             let y = TOP + i as f32 * 40.0;
             let on = i == section;
             let hover = !on && c.hovered(x0, y, side_w, 34.0);
@@ -891,7 +1229,7 @@ impl SettingsUi {
 
         // The section's settings.
         let rows: Vec<(usize, Item)> = ITEMS.iter().enumerate().filter(|(_, (sec, it))| *sec == SECTIONS[section].0 && self.shows(*it)).map(|(i, (_, it))| (i, *it)).collect();
-        c.text(cx, TOP - 2.0, 11.0, rgba(accent(), 1.0), SECTIONS[section].0);
+        c.text(cx, TOP - 2.0, 11.0, rgba(accent(), 1.0), section_name(section));
         let first = rows.first().map(|r| r.0).unwrap_or(0);
         // A long section (the hotkeys) scrolls to keep the cursor in sight, leaving room for the
         // help underneath.
@@ -950,7 +1288,7 @@ impl SettingsUi {
                 continue;
             }
             let v = if selected && self.binding.is_some() {
-                "press a key...".to_string()
+                tr!("press a key...", "キーを押してください...", "нажмите клавишу...").to_string()
             } else if selected && item.kind() != Kind::Key {
                 format!("<  {}  >", Canvas::fit(8.0, room - Canvas::text_width(8.0, "<    >"), &value(*item)))
             } else {
@@ -974,8 +1312,7 @@ impl SettingsUi {
         let line_h = glyph_h + 4.0;
         c.round_rect(cx, help_y, col, line_h * 2.0 + 8.0, 6.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
         let help = self.item().help();
-        let max = ((col - 20.0) / Canvas::char_width(7.0)) as usize;
-        let (line1, line2) = split_help(help, max);
+        let (line1, line2) = split_help(help, 7.0, col - 20.0);
         // `text` centres taller glyphs on the line; this puts their top 6 below the box's.
         let first = help_y + 6.0 + (glyph_h - 7.0) / 2.0;
         c.text(cx + 10.0, first, 7.0, rgba(0x9a9ab0, 1.0), &line1);
@@ -984,15 +1321,26 @@ impl SettingsUi {
     }
 }
 
-/// Wraps help text onto two lines of at most `max` characters.
-fn split_help(text: &str, max: usize) -> (String, String) {
-    if text.chars().count() <= max {
+/// Wraps help text onto two lines at most `max_w` wide.
+fn split_help(text: &str, size: f32, max_w: f32) -> (String, String) {
+    if Canvas::text_width(size, text) <= max_w {
         return (text.to_string(), String::new());
     }
-    let cut = text.char_indices().take_while(|(i, _)| *i <= max).filter(|(_, ch)| *ch == ' ').map(|(i, _)| i).last().unwrap_or(max.min(text.len()));
-    let rest = text[cut..].trim_start();
-    let rest = if rest.chars().count() > max { format!("{}...", rest.chars().take(max.saturating_sub(3)).collect::<String>().trim_end()) } else { rest.to_string() };
-    (text[..cut].to_string(), rest)
+    // After the last space (or Japanese comma or full stop) that keeps the line within the
+    // width, else where it's full.
+    let full = Canvas::fitting_prefix(size, max_w, text);
+    let next = full + text[full..].chars().next().map_or(0, char::len_utf8);
+    let cut = text[..next]
+        .char_indices()
+        .filter_map(|(i, ch)| match ch {
+            ' ' => Some(i),
+            '、' | '。' => Some(i + ch.len_utf8()).filter(|&end| end <= full),
+            _ => None,
+        })
+        .last()
+        .filter(|&i| i > 0)
+        .unwrap_or(full);
+    (text[..cut].to_string(), Canvas::fit(size, max_w, text[cut..].trim_start()))
 }
 
 /// Top bar shared by the song list, settings and multiplayer: logo plus the three tabs.
@@ -1015,7 +1363,12 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
         tx += c.text(tx, 24.0, 16.0, rgba(col, 1.0), &s);
     }
     let x0 = tx + 24.0;
-    let names = ["SONGS", "SETTINGS", "MULTIPLAYER", "DOWNLOAD"];
+    let names = [
+        tr!("SONGS", "曲", "ПЕСНИ"),
+        tr!("SETTINGS", "設定", "НАСТРОЙКИ"),
+        tr!("MULTIPLAYER", "マルチ", "МУЛЬТИПЛЕЕР"),
+        tr!("DOWNLOAD", "ダウンロード", "ЗАГРУЗКА"),
+    ];
     let mut x = x0;
     let mut target = (x0, 0.0);
     for (i, name) in names.iter().enumerate() {
