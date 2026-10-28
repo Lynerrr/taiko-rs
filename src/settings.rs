@@ -91,7 +91,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 105] = [
+pub const ITEMS: [(&str, Item); 108] = [
     ("GENERAL", Item::Language),
     ("GENERAL", Item::SongsFolder),
     ("GENERAL", Item::ShowConverts),
@@ -203,7 +203,7 @@ pub const ITEMS: [(&str, Item); 105] = [
 ];
 
 /// The sections in order, with a one-line summary for the sidebar.
-pub const SECTIONS: [(&str, &str); 10] = [
+pub const SECTIONS: [(&str, &str); 11] = [
     ("LIBRARY", "Songs folder, data, screenshots"),
     ("GAMEPLAY", "speed, rate, interface, autoplay"),
     ("GENERAL", "language, Songs folder, data"),
