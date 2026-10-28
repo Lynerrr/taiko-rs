@@ -188,6 +188,8 @@ pub struct Config {
     pub show_fps: bool,
     /// Kiai time effects on the lane (tint, pulsing glow).
     pub kiai_effects: bool,
+    /// How autoplay hits: playstyle, binding and hand (taiko_arranger's).
+    pub autoplay: crate::autoplay::Settings,
     /// GREAT hits without their flash and label (only OKs and misses show).
     pub hide_great: bool,
     /// The interface's accent colour (`render::ACCENTS`, or any other).
@@ -324,6 +326,7 @@ impl Default for Config {
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
             kiai_effects: true,
+            autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
             accent: crate::render::DEFAULT_ACCENT,
             discord_presence: true,
@@ -649,6 +652,9 @@ impl Config {
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
+                "autoplay_style" => cfg.autoplay.style = crate::autoplay::Style::parse(v).unwrap_or(cfg.autoplay.style),
+                "autoplay_binding" => cfg.autoplay.binding = crate::autoplay::BINDINGS.iter().position(|b| *b == v).unwrap_or(cfg.autoplay.binding),
+                "autoplay_left_handed" => cfg.autoplay.left_handed = v == "true",
                 "hide_great" => cfg.hide_great = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
                 "discord_presence" => cfg.discord_presence = v != "false",
@@ -843,6 +849,12 @@ impl Config {
             self.mods.to_config(),
         );
         out.push_str(&format!("# the live scoreboard in lobby matches (Tab toggles)\nmp_scoreboard = {}\n", self.mp_scoreboard));
+        out.push_str(&format!(
+            "# how autoplay hits: full, semi, single, roll or ddkk; binding 1234, 1324 or 4231; left-handed\nautoplay_style = {}\nautoplay_binding = {}\nautoplay_left_handed = {}\n",
+            self.autoplay.style.key(),
+            crate::autoplay::BINDINGS[self.autoplay.binding],
+            self.autoplay.left_handed
+        ));
         out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
         out.push_str("# parts of the skin from elsewhere: skin_part = <part> = <skin folder name> (or <built-in>)\n");
         for line in self.skin_parts.to_config() {

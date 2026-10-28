@@ -32,20 +32,19 @@ pub struct Note {
     /// scroll its body reaches right of its head, and its cap left of it. Only drawn; it plays
     /// as the zero-length roll it is. 0 for everything else.
     pub fake_len: f64,
-    /// A fake slider shorter than `FAKE_LINGER_LENGTH`: its body fades as it reaches the drum
-    /// instead of vanishing.
+    /// A fake slider whose cap lands under a ms ahead of its head (-0.0001): the head gets there
+    /// first, so head and cap pass through the drum and the body fades instead of vanishing.
     pub fake_fades: bool,
     /// A fake slider's |length| × spans, as written: where a pop-up one stands (see game.rs).
     /// `fake_len` can't give it back: it went through the clamped beat length.
     pub fake_length: f64,
+    /// A fake slider: written under 0.1 long, any negative included. Autoplay leaves it alone: a
+    /// press for its zero-length roll went to the next note, a miss on a kat (owner,
+    /// 2026-10-28).
+    pub tiny: bool,
     /// A don/kat right before a slider of length NaN: stable can't hit it (owner, 2026-10-28).
     pub unhittable: bool,
 }
-
-/// A fake slider this long (osu! px) or longer loses its body the instant it reaches the drum;
-/// a shorter one fades out over 250 ms. Stable, by eye.
-// ponytail: the cutoff is "somewhere before -200"; measure it if a map disagrees.
-pub const FAKE_LINGER_LENGTH: f64 = 200.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Barline {
@@ -456,8 +455,10 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                     tick_spacing: cp.beat_length / roll_tick_rate,
                     required_hits: 0,
                     fake_len,
-                    fake_fades: raw_length < 0.0 && raw_length > -FAKE_LINGER_LENGTH,
+                    // The cap is fake_len ahead of the head; osu! counts whole ms (owner, 2026-10-28).
+                    fake_fades: raw_length < 0.0 && fake_len < 1.0,
                     fake_length: (-raw_length).max(0.0) * spans as f64,
+                    tiny: raw_length <= 0.1,
                     unhittable: false,
                 });
             }
@@ -475,6 +476,7 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                 fake_len: 0.0,
                 fake_fades: false,
                 fake_length: 0.0,
+                tiny: false,
                 unhittable: false,
             });
         } else if ty & 1 != 0 {
@@ -532,6 +534,7 @@ fn hit(time: f64, sound: u32, velocity: f64) -> Note {
         fake_len: 0.0,
         fake_fades: false,
         fake_length: 0.0,
+        tiny: false,
         unhittable: false,
     }
 }
@@ -591,7 +594,7 @@ fn build_barlines(raw: &[RawTimingPoint], end: f64, velocity_at: &dyn Fn(f64) ->
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const MAP: &str = "osu file format v14
@@ -618,7 +621,7 @@ SliderTickRate:1
 256,192,9000,12,0,11000,0:0:0:0:
 ";
 
-    fn parse(text: &str) -> Beatmap {
+    pub(crate) fn parse(text: &str) -> Beatmap {
         let (meta, body) = parse_sections(text, false);
         let mut map = Beatmap { meta, notes: Vec::new(), barlines: Vec::new(), control_points: Vec::new() };
         convert(&mut map, body);
@@ -708,9 +711,9 @@ SliderTickRate:1
     fn a_negative_length_slider_draws_a_body_but_plays_as_a_bare_head() {
         let map = parse("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,2,0,L|356:192,1,-70\n256,192,2000,2,0,L|356:192,1,-0.0001\n256,192,3000,2,0,L|356:192,1,70\n256,192,4000,2,0,L|356:192,1,-300\n");
         let rolls: Vec<(f64, f64)> = map.notes.iter().map(|n| (n.end_time - n.time, n.fake_len)).collect();
-        // Short ones fade at the drum, long ones vanish.
+        // Only one whose cap can't land before its head fades at the drum; the rest vanish.
         let fades: Vec<bool> = map.notes.iter().map(|n| n.fake_fades).collect();
-        assert_eq!(fades, [true, true, false, false]);
+        assert_eq!(fades, [false, true, false, false]);
         // -70px at 1.4 SM is half a beat (250 ms) of body; it lasts no time at all.
         assert_eq!(rolls[0].0, 0.0);
         assert!((rolls[0].1 - 250.0).abs() < 1e-9);
@@ -718,6 +721,15 @@ SliderTickRate:1
         assert!(rolls[1].1 > 0.0 && rolls[1].1 < 0.01);
         // A real roll has no fake body.
         assert_eq!(rolls[2], (250.0, 0.0));
+    }
+
+    #[test]
+    fn sliders_written_under_0_1_long_are_tiny() {
+        let lengths = ["0.1", "-0.1", "0.001", "-0.001", "0.11", "-0.11", "-50"];
+        let objects: String = lengths.iter().enumerate().map(|(i, l)| format!("256,192,{},2,0,L|356:192,1,{l}\n", 1000 * (i + 1))).collect();
+        let map = parse(&format!("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n{objects}"));
+        let tiny: Vec<bool> = map.notes.iter().map(|n| n.tiny).collect();
+        assert_eq!(tiny, [true, true, true, true, false, true, true]);
     }
 
     #[test]

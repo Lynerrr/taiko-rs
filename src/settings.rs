@@ -28,6 +28,10 @@ pub enum Item {
     /// Song select's layout (dragged): Enter puts it back.
     SongSelectLayout,
     InterfaceKey,
+    /// How autoplay hits (taiko_arranger's): playstyle, binding, hand.
+    AutoplayStyle,
+    AutoplayBinding,
+    AutoplayLeftHanded,
     /// Which skin each part of the playfield and interface comes from.
     SkinParts,
     /// The choices for one of them (`skin::Part::ALL[i]`): the list it opens, not a row.
@@ -87,7 +91,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 105] = [
+pub const ITEMS: [(&str, Item); 108] = [
     ("GENERAL", Item::Language),
     ("GENERAL", Item::SongsFolder),
     ("GENERAL", Item::ShowConverts),
@@ -102,6 +106,9 @@ pub const ITEMS: [(&str, Item); 105] = [
     ("GAMEPLAY", Item::InterfaceHides),
     ("GAMEPLAY", Item::InterfaceKey),
     ("GAMEPLAY", Item::SongSelectLayout),
+    ("GAMEPLAY", Item::AutoplayStyle),
+    ("GAMEPLAY", Item::AutoplayBinding),
+    ("GAMEPLAY", Item::AutoplayLeftHanded),
     ("PLAYFIELD", Item::PlayfieldArea),
     ("PLAYFIELD", Item::PlayfieldPreset),
     ("PLAYFIELD", Item::PlayfieldReset),
@@ -198,7 +205,7 @@ pub const ITEMS: [(&str, Item); 105] = [
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 10] = [
     ("GENERAL", "language, Songs folder, data"),
-    ("GAMEPLAY", "speed, rate, interface"),
+    ("GAMEPLAY", "speed, rate, interface, autoplay"),
     ("PLAYFIELD", "size, position"),
     ("INPUT", "drum keys, hotkeys, touch"),
     ("OFFSET", "audio offset, calibration"),
@@ -296,6 +303,9 @@ impl Item {
             Item::InterfaceHides => tr!("Interface toggle hides", "切り替えで隠すもの", "Что скрывает переключение"),
             Item::InterfaceKey => tr!("Interface toggle key", "インターフェースの切替キー", "Клавиша интерфейса"),
             Item::SongSelectLayout => tr!("Song select layout", "選曲画面のレイアウト", "Макет выбора песни"),
+            Item::AutoplayStyle => tr!("Autoplay playstyle", "オートプレイの叩き方", "Стиль автоигры"),
+            Item::AutoplayBinding => tr!("Autoplay binding", "オートプレイのキー配置", "Раскладка автоигры"),
+            Item::AutoplayLeftHanded => tr!("Autoplay left-handed", "オートプレイを左利きに", "Автоигра левой рукой"),
             Item::Key(i) => key_label(i),
             Item::PresetKey(0) => tr!("Previous preset key", "前のプリセットのキー", "Клавиша: пред. пресет"),
             Item::PresetKey(_) => tr!("Next preset key", "次のプリセットのキー", "Клавиша: след. пресет"),
@@ -381,6 +391,8 @@ impl Item {
             | Item::SkinPart(_)
             | Item::NoteColours
             | Item::InterfaceHides
+            | Item::AutoplayStyle
+            | Item::AutoplayBinding
             | Item::WindowSize
             | Item::Accent
             | Item::SongsFolder
@@ -394,6 +406,7 @@ impl Item {
             | Item::BackgroundDimBlack
             | Item::Interface
             | Item::KiaiEffects
+            | Item::AutoplayLeftHanded
             | Item::HideGreat
             | Item::ChatFilter
             | Item::MessageSound
@@ -686,6 +699,21 @@ impl Item {
             ),
             // No explanation: krokodil_koban knows.
             Item::KrokodilKoban => "",
+            Item::AutoplayStyle => tr!(
+                "Which hand autoplay hits each note with: kddk full / semi alternate, single tap, roll, or ddkk.",
+                "オートプレイが各ノーツをどちらの手で叩くか: kddkのフル/セミ交互、片手、ロール、ddkk。",
+                "Какой рукой автоигра бьёт каждую ноту: kddk полное / частичное чередование, одной рукой, ролл или ddkk."
+            ),
+            Item::AutoplayBinding => tr!(
+                "The order autoplay's four keys light the drum in (kddk): 1324 puts each hand's don on the other side.",
+                "オートプレイの4つのキーが太鼓を光らせる順番 (kddk): 1324は各手のドンを反対側にします。",
+                "Порядок, в котором четыре клавиши автоигры зажигают барабан (kddk): 1324 ставит дон каждой руки на другую сторону."
+            ),
+            Item::AutoplayLeftHanded => tr!(
+                "Autoplay leads with the left hand instead of the right.",
+                "オートプレイが右手ではなく左手から叩きます。",
+                "Автоигра начинает с левой руки, а не с правой."
+            ),
             Item::SongSelectLayout => tr!(
                 "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
                 "曲リスト、譜面パネル、ランキングの間の境目をドラッグ。Enter: 初期設定に戻す。",
