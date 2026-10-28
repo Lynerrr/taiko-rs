@@ -2,7 +2,7 @@
 //! memory too), and its presses in DIR/replays/<id>.json. Each play keeps the pp it was sent
 //! with, but only plays on ranked, approved and loved sets count it (see `count_pp`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -64,6 +64,21 @@ pub struct Scores {
     submits: HashMap<String, Vec<Instant>>,
     /// Whether plays on a set give pp (None: not known yet).
     gives_pp: fn(Option<u32>) -> Option<bool>,
+    /// Indexes into `all` (oldest first): each player's plays and each map's, so a submit, a
+    /// profile or a page looks at those plays only, however many there are in all.
+    by_player: HashMap<String, Vec<usize>>,
+    by_map: HashMap<u64, Vec<usize>>,
+    /// Each player's ranking row, redone whenever their plays or their pp change.
+    standings: HashMap<String, Standing>,
+    /// Each map's row, and who has played it.
+    map_rows: HashMap<u64, (MapRow, HashSet<String>)>,
+}
+
+/// A player's ranking row (`plays` without the ones off the leaderboards); only players with a
+/// play that has pp are ranked.
+struct Standing {
+    row: Ranked,
+    has_pp: bool,
 }
 
 /// What's wrong with a play sent in, if anything.
@@ -101,6 +116,8 @@ impl Scores {
             s.score.id = s.id;
             s.sent_pp = s.score.pp;
         }
+        // In the order of their ids (as they were sent), which `stored` looks them up by.
+        all.sort_by_key(|s| s.id);
         let next_id = all.iter().map(|s| s.id + 1).max().unwrap_or(1);
         if let Some(f) = &file {
             println!("{} scores ({})", all.len(), f.display());
@@ -121,9 +138,74 @@ impl Scores {
             next_id,
             submits: HashMap::new(),
             gives_pp: crate::loved::gives_pp,
+            by_player: HashMap::new(),
+            by_map: HashMap::new(),
+            standings: HashMap::new(),
+            map_rows: HashMap::new(),
         };
+        for i in 0..scores.all.len() {
+            scores.index(i);
+        }
         scores.count_pp();
+        let players: Vec<String> = scores.by_player.keys().cloned().collect();
+        for p in players {
+            scores.restand(&p);
+        }
         scores
+    }
+
+    /// Adds `all[i]` to the indexes and its map's row.
+    fn index(&mut self, i: usize) {
+        let s = &self.all[i];
+        let sc = &s.score;
+        self.by_player.entry(s.player.clone()).or_default().push(i);
+        self.by_map.entry(sc.map_hash).or_default().push(i);
+        let (row, players) = self.map_rows.entry(sc.map_hash).or_insert_with(|| {
+            (MapRow { hash: sc.map_hash, name: sc.map.clone(), set_id: None, stars: None, plays: 0, players: 0, last: 0 }, HashSet::new())
+        });
+        row.plays += 1;
+        row.last = row.last.max(sc.date);
+        row.set_id = sc.set_id.or(row.set_id);
+        // Stars at 1.0x, if anyone played it so.
+        if (sc.rate - 1.0).abs() < 1e-6 {
+            row.stars = sc.stars.or(row.stars);
+        }
+        if players.insert(s.player.clone()) {
+            row.players += 1;
+        }
+    }
+
+    /// Redoes `player`'s ranking row from their plays.
+    fn restand(&mut self, player: &str) {
+        let plays = self.stored_of(player);
+        let (stats, pp) = stats_of(&plays);
+        let row = Ranked {
+            rank: 0,
+            name: plays.last().map(|s| s.score.player.clone()).unwrap_or_default(),
+            pp,
+            accuracy: stats.accuracy,
+            plays: plays.len() as u32,
+            ss: stats.ss,
+            s: stats.s,
+            a: stats.a,
+        };
+        let has_pp = plays.iter().any(|s| s.score.pp.is_some());
+        self.standings.insert(player.to_string(), Standing { row, has_pp });
+    }
+
+    /// `player`'s plays, oldest first.
+    fn stored_of(&self, player: &str) -> Vec<&Stored> {
+        self.by_player.get(player).map(|v| v.iter().map(|&i| &self.all[i]).collect()).unwrap_or_default()
+    }
+
+    /// `map`'s plays, oldest first.
+    fn plays_on(&self, map: u64) -> impl Iterator<Item = &Stored> {
+        self.by_map.get(&map).into_iter().flatten().map(|&i| &self.all[i])
+    }
+
+    /// Play `id` (plays are kept in the order of their ids).
+    fn stored(&self, id: u64) -> Option<&Stored> {
+        self.all.binary_search_by_key(&id, |s| s.id).ok().map(|i| &self.all[i])
     }
 
     /// `player`'s plays off the leaderboards and time spent playing.
@@ -161,22 +243,29 @@ impl Scores {
     /// counts until it is. Called again as sets become known.
     pub fn count_pp(&mut self) {
         let mut sets: HashMap<Option<u32>, bool> = HashMap::new();
+        let mut changed: HashSet<String> = HashSet::new();
         for s in &mut self.all {
             let gives = *sets.entry(s.score.set_id).or_insert_with(|| (self.gives_pp)(s.score.set_id) != Some(false));
-            let pp = self.overrides.get(&s.id).copied().or(s.sent_pp);
-            s.score.pp = pp.filter(|_| gives);
+            let pp = self.overrides.get(&s.id).copied().or(s.sent_pp).filter(|_| gives);
+            if pp != s.score.pp {
+                s.score.pp = pp;
+                changed.insert(s.player.clone());
+            }
+        }
+        for p in changed {
+            self.restand(&p);
         }
     }
 
     /// The pp play `id` was sent with, and what an admin set it to instead (if they did).
     pub fn pp_of(&self, id: u64) -> Option<(Option<f64>, Option<f64>)> {
-        let s = self.all.iter().find(|s| s.id == id)?;
+        let s = self.stored(id)?;
         Some((s.sent_pp, self.overrides.get(&id).copied()))
     }
 
     /// An admin sets play `id`'s pp (None: back to what was sent); totals follow at once.
     pub fn set_pp(&mut self, id: u64, pp: Option<f64>) -> Result<(), String> {
-        if !self.all.iter().any(|s| s.id == id) {
+        if self.stored(id).is_none() {
             return Err("that score isn't on the server".into());
         }
         match pp {
@@ -255,6 +344,8 @@ impl Scores {
         if let Some(s) = self.all.last_mut().filter(|_| !gives) {
             s.score.pp = None;
         }
+        self.index(self.all.len() - 1);
+        self.restand(player);
         let board = self.best_on(map);
         let map_rank = board.iter().position(|s| s.id == id).map(|p| p as u32 + 1);
         let (pp, rank) = self.standing(player);
@@ -264,7 +355,7 @@ impl Scores {
     /// Each player's best score (by score) on `map`, highest first.
     fn best_on(&self, map: u64) -> Vec<&Stored> {
         let mut best: HashMap<&str, &Stored> = HashMap::new();
-        for s in self.all.iter().filter(|s| s.score.map_hash == map) {
+        for s in self.plays_on(map) {
             let b = best.entry(&s.player).or_insert(s);
             if s.score.score > b.score.score {
                 *b = s;
@@ -275,27 +366,35 @@ impl Scores {
         v
     }
 
+    /// The best score on `map` (the earliest of equal ones): the top of `best_on`.
+    fn leader(&self, map: u64) -> Option<&Stored> {
+        self.plays_on(map).fold(None, |b: Option<&Stored>, s| match b {
+            Some(b) if b.score.score >= s.score.score => Some(b),
+            _ => Some(s),
+        })
+    }
+
     /// The presses of score `id`, as they were sent in.
     pub fn replay(&self, id: u64) -> Option<online::OnlineReplay> {
         let dir = self.replays.as_ref()?;
-        self.all.iter().any(|s| s.id == id).then_some(())?;
+        self.stored(id)?;
         serde_json::from_slice(&std::fs::read(dir.join(format!("{id}.json"))).ok()?).ok()
     }
 
     /// Score `id`.
     pub fn score(&self, id: u64) -> Option<OnlineScore> {
-        self.all.iter().find(|s| s.id == id).map(|s| s.score.clone())
+        self.stored(id).map(|s| s.score.clone())
     }
 
     /// `player`'s plays (by their key), newest first.
     pub fn plays_of(&self, player: &str) -> Vec<OnlineScore> {
-        self.all.iter().rev().filter(|s| s.player == player).map(|s| s.score.clone()).collect()
+        self.stored_of(player).into_iter().rev().map(|s| s.score.clone()).collect()
     }
 
     /// `player`'s best play on each map by pp, highest first.
     pub fn best_of(&self, player: &str) -> Vec<OnlineScore> {
         let mut best: HashMap<u64, &Stored> = HashMap::new();
-        for s in self.all.iter().filter(|s| s.player == player && s.score.pp.is_some()) {
+        for s in self.stored_of(player).into_iter().filter(|s| s.score.pp.is_some()) {
             let b = best.entry(s.score.map_hash).or_insert(s);
             if s.score.pp > b.score.pp {
                 *b = s;
@@ -315,50 +414,15 @@ impl Scores {
         self.best_on(map).into_iter().take(online::MAP_SCORES).map(|s| s.score.clone()).collect()
     }
 
-    /// Everyone's pp total, by player key.
-    fn totals(&self) -> HashMap<&str, f64> {
-        let mut best: HashMap<(&str, u64), f64> = HashMap::new();
-        for s in &self.all {
-            if let Some(pp) = s.score.pp {
-                let b = best.entry((s.player.as_str(), s.score.map_hash)).or_insert(0.0);
-                *b = b.max(pp);
-            }
-        }
-        let mut per: HashMap<&str, Vec<f64>> = HashMap::new();
-        for ((p, _), pp) in best {
-            per.entry(p).or_default().push(pp);
-        }
-        per.into_iter().map(|(p, v)| (p, online::weighted_pp(v))).collect()
-    }
-
     /// Everyone with pp, highest first, with osu!'s ranking columns.
     pub fn rankings(&self, limit: usize) -> Vec<Ranked> {
-        let mut per: HashMap<&str, Vec<&Stored>> = HashMap::new();
-        for s in &self.all {
-            per.entry(s.player.as_str()).or_default().push(s);
-        }
-        let mut out: Vec<Ranked> = per
-            .values()
-            .filter_map(|plays| {
-                let (stats, pp) = stats_of(plays);
-                (pp > 0.0).then(|| Ranked {
-                    rank: 0,
-                    name: plays.last().map(|s| s.score.player.clone()).unwrap_or_default(),
-                    pp,
-                    accuracy: stats.accuracy,
-                    plays: plays.len() as u32 + self.tally(&plays[0].player).other_plays,
-                    ss: stats.ss,
-                    s: stats.s,
-                    a: stats.a,
-                })
-            })
-            .collect();
-        out.sort_by(|a, b| b.pp.total_cmp(&a.pp).then_with(|| a.name.cmp(&b.name)));
-        out.truncate(limit);
-        for (i, r) in out.iter_mut().enumerate() {
-            r.rank = i as u32 + 1;
-        }
-        out
+        let mut out: Vec<(&str, &Ranked)> = self.standings.iter().map(|(k, s)| (k.as_str(), &s.row)).filter(|(_, r)| r.pp > 0.0).collect();
+        out.sort_by(|a, b| b.1.pp.total_cmp(&a.1.pp).then_with(|| a.1.name.cmp(&b.1.name)));
+        out.into_iter()
+            .take(limit)
+            .enumerate()
+            .map(|(i, (k, r))| Ranked { rank: i as u32 + 1, plays: r.plays + self.tally(k).other_plays, ..r.clone() })
+            .collect()
     }
 
     /// Plays sent, all told.
@@ -368,42 +432,20 @@ impl Scores {
 
     /// A map someone has played: its name, cover, stars, and how much it's played.
     pub fn map(&self, map: u64) -> Option<MapRow> {
-        self.maps(usize::MAX).into_iter().find(|m| m.hash == map)
+        self.map_rows.get(&map).map(|(r, _)| r.clone())
     }
 
     /// The maps played, the most lately played first.
     pub fn maps(&self, limit: usize) -> Vec<MapRow> {
-        let mut rows: HashMap<u64, (MapRow, Vec<&str>)> = HashMap::new();
-        for s in &self.all {
-            let sc = &s.score;
-            let (row, players) = rows.entry(sc.map_hash).or_insert_with(|| {
-                (MapRow { hash: sc.map_hash, name: sc.map.clone(), set_id: None, stars: None, plays: 0, players: 0, last: 0 }, Vec::new())
-            });
-            row.plays += 1;
-            row.last = row.last.max(sc.date);
-            row.set_id = sc.set_id.or(row.set_id);
-            // Stars at 1.0x, if anyone played it so.
-            if (sc.rate - 1.0).abs() < 1e-6 {
-                row.stars = sc.stars.or(row.stars);
-            }
-            if !players.contains(&s.player.as_str()) {
-                players.push(&s.player);
-            }
-        }
-        let mut out: Vec<MapRow> = rows.into_values().map(|(mut r, p)| {
-            r.players = p.len() as u32;
-            r
-        }).collect();
-        out.sort_by(|a, b| b.last.cmp(&a.last));
-        out.truncate(limit);
-        out
+        let mut rows: Vec<&MapRow> = self.map_rows.values().map(|(r, _)| r).collect();
+        rows.sort_by_key(|r| std::cmp::Reverse(r.last));
+        rows.into_iter().take(limit).cloned().collect()
     }
 
     /// A player's pp total and rank among everyone with pp.
     fn standing(&self, player: &str) -> (f64, Option<u32>) {
-        let totals = self.totals();
-        let Some(&mine) = totals.get(player) else { return (0.0, None) };
-        let above = totals.values().filter(|&&pp| pp > mine).count();
+        let Some(mine) = self.standings.get(player).filter(|s| s.has_pp).map(|s| s.row.pp) else { return (0.0, None) };
+        let above = self.standings.values().filter(|s| s.has_pp && s.row.pp > mine).count();
         (mine, Some(above as u32 + 1))
     }
 
@@ -414,7 +456,7 @@ impl Scores {
 
     /// `player`'s pp history, most played maps and mods (see `Extras`).
     pub fn extras(&self, player: &str) -> Extras {
-        let mut mine: Vec<&Stored> = self.all.iter().filter(|s| s.player == player).collect();
+        let mut mine = self.stored_of(player);
         mine.sort_by_key(|s| (s.score.date, s.id));
         let mut best: HashMap<u64, f64> = HashMap::new();
         let mut history: Vec<(u64, f64)> = Vec::new();
@@ -434,8 +476,7 @@ impl Scores {
                 *mods.entry(m.as_str()).or_default() += 1;
             }
         }
-        let rows = self.maps(usize::MAX);
-        let mut most_played: Vec<(MapRow, u32)> = rows.into_iter().filter_map(|r| count.get(&r.hash).map(|&n| (r, n))).collect();
+        let mut most_played: Vec<(MapRow, u32)> = count.into_iter().filter_map(|(m, n)| Some((self.map(m)?, n))).collect();
         most_played.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.last.cmp(&a.0.last)));
         most_played.truncate(PROFILE_MAPS);
         let mut mods: Vec<(String, u32)> = mods.into_iter().map(|(m, n)| (m.to_string(), n)).collect();
@@ -445,7 +486,7 @@ impl Scores {
 
     /// `player`'s profile (`name` as written, `joined` when the account was made).
     pub fn profile(&self, player: &str, name: &str, joined: u64) -> Profile {
-        let mine: Vec<&Stored> = self.all.iter().filter(|s| s.player == player).collect();
+        let mine = self.stored_of(player);
         // Best pp per map.
         let mut best: HashMap<u64, &Stored> = HashMap::new();
         for s in mine.iter().filter(|s| s.score.pp.is_some()) {
@@ -465,7 +506,7 @@ impl Scores {
         maps.sort_unstable();
         maps.dedup();
         let mut firsts: Vec<OnlineScore> =
-            maps.into_iter().filter_map(|m| self.best_on(m).first().filter(|s| s.player == player).map(|s| s.score.clone())).collect();
+            maps.into_iter().filter_map(|m| self.leader(m).filter(|s| s.player == player).map(|s| s.score.clone())).collect();
         firsts.sort_by(|a, b| b.date.cmp(&a.date));
         firsts.truncate(PROFILE_PLAYS);
         let tally = self.tally(player);
@@ -710,6 +751,57 @@ mod tests {
             s.submit("c", "C", play(7, 1, 1.0), 0).unwrap();
         }
         assert!(s.submit("c", "C", play(7, 1, 1.0), 0).is_err(), "slowed down");
+    }
+
+    #[test]
+    fn kept_up_rows_match_a_fresh_count() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-rows-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        let mut r = 7u64;
+        for i in 0..400u64 {
+            r = r.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let (player, map) = (format!("p{}", r >> 60), 1 + (r >> 40) % 9);
+            // Distinct pp: plays with equal pp may be listed either way round.
+            let mut p = play(map, (r >> 20) % 1000, ((r >> 8) % 500) as f64 + i as f64 / 1000.0);
+            p.map.rate = if i % 3 == 0 { 1.5 } else { 1.0 };
+            p.map.set_id = Some(map as u32);
+            p.pp = p.pp.filter(|_| i % 5 != 0);
+            // Past the per-minute limit, which isn't what this is about.
+            s.submits.clear();
+            s.submit(&player, &player.to_uppercase(), p, i).unwrap();
+        }
+        let again = Scores::load(Some(dir.clone()));
+        assert_eq!(s.rankings(usize::MAX), again.rankings(usize::MAX));
+        assert_eq!(s.maps(usize::MAX), again.maps(usize::MAX));
+        for p in s.by_player.keys() {
+            assert_eq!(s.profile(p, p, 0), again.profile(p, p, 0));
+            assert_eq!(s.extras(p), again.extras(p));
+            // The rank as everyone's pp totals have it.
+            let mut totals: HashMap<&str, HashMap<u64, f64>> = HashMap::new();
+            for st in s.all.iter().filter(|st| st.score.pp.is_some()) {
+                let b = totals.entry(&st.player).or_default().entry(st.score.map_hash).or_insert(0.0);
+                *b = b.max(st.score.pp.unwrap());
+            }
+            let total = |k: &str| totals.get(k).map(|m| online::weighted_pp(m.values().copied().collect()));
+            let rank = total(p).map(|mine| totals.keys().filter(|k| total(k).unwrap() > mine).count() as u32 + 1);
+            assert_eq!(s.standing(p).1, rank);
+        }
+        for m in 1..=9 {
+            assert_eq!(s.leader(m).map(|l| l.id), s.best_on(m).first().map(|l| l.id));
+        }
+        // Sets that stop giving pp take it out of the rows too.
+        s.gives_pp = |set| Some(set.is_some_and(|set| set % 2 == 0));
+        s.count_pp();
+        let mut fresh = Scores::load(Some(dir.clone()));
+        fresh.gives_pp = s.gives_pp;
+        fresh.count_pp();
+        for p in s.by_player.keys() {
+            fresh.restand(p);
+        }
+        assert_eq!(s.rankings(usize::MAX), fresh.rankings(usize::MAX));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

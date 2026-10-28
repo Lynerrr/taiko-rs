@@ -327,7 +327,8 @@ pub enum Down {
     WatchStopped(String),
     Pong,
     /// Everyone online (sorted by name, at most `MAX_LISTED`) and how many that is. Sent on
-    /// connecting and then whenever it changes (at most every couple of seconds).
+    /// connecting and then whenever it changes (at most every couple of seconds, less often
+    /// with thousands online).
     Players { count: u32, players: Vec<OnlinePlayer> },
     /// A global chat line (the recent ones again on connecting).
     GlobalChat(ChatLine),
