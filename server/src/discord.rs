@@ -1151,7 +1151,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("taiko-server-discord-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let state = Arc::new(State::load(dir.join("accounts.json")));
+        let state = Arc::new(State::load(dir.join("accounts.json")).0);
         {
             let mut a = state.accounts.lock().unwrap();
             for name in ["Ryuji", "Lynerrr"] {
