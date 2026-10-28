@@ -28,6 +28,10 @@ pub enum Item {
     /// Song select's layout (dragged): Enter puts it back.
     SongSelectLayout,
     InterfaceKey,
+    /// How autoplay hits (taiko_arranger's): playstyle, binding, hand.
+    AutoplayStyle,
+    AutoplayBinding,
+    AutoplayLeftHanded,
     /// Which skin each part of the playfield and interface comes from.
     SkinParts,
     /// The choices for one of them (`skin::Part::ALL[i]`): the list it opens, not a row.
@@ -86,7 +90,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 104] = [
+pub const ITEMS: [(&str, Item); 107] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -100,6 +104,9 @@ pub const ITEMS: [(&str, Item); 104] = [
     ("GAMEPLAY", Item::InterfaceHides),
     ("GAMEPLAY", Item::InterfaceKey),
     ("GAMEPLAY", Item::SongSelectLayout),
+    ("GAMEPLAY", Item::AutoplayStyle),
+    ("GAMEPLAY", Item::AutoplayBinding),
+    ("GAMEPLAY", Item::AutoplayLeftHanded),
     ("PLAYFIELD", Item::PlayfieldArea),
     ("PLAYFIELD", Item::PlayfieldPreset),
     ("PLAYFIELD", Item::PlayfieldReset),
@@ -196,7 +203,7 @@ pub const ITEMS: [(&str, Item); 104] = [
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 10] = [
     ("LIBRARY", "Songs folder, data, screenshots"),
-    ("GAMEPLAY", "speed, rate, interface"),
+    ("GAMEPLAY", "speed, rate, interface, autoplay"),
     ("PLAYFIELD", "size, position"),
     ("INPUT", "drum keys, hotkeys, touch"),
     ("OFFSET", "audio offset, calibration"),
@@ -252,6 +259,9 @@ impl Item {
             Item::InterfaceHides => "Interface toggle hides",
             Item::InterfaceKey => "Interface toggle key",
             Item::SongSelectLayout => "Song select layout",
+            Item::AutoplayStyle => "Autoplay playstyle",
+            Item::AutoplayBinding => "Autoplay binding",
+            Item::AutoplayLeftHanded => "Autoplay left-handed",
             Item::Key(i) => KEY_LABELS[i],
             Item::PresetKey(0) => "Previous preset key",
             Item::PresetKey(_) => "Next preset key",
@@ -334,6 +344,8 @@ impl Item {
             | Item::SkinPart(_)
             | Item::NoteColours
             | Item::InterfaceHides
+            | Item::AutoplayStyle
+            | Item::AutoplayBinding
             | Item::WindowSize
             | Item::Accent
             | Item::SongsFolder
@@ -347,6 +359,7 @@ impl Item {
             | Item::BackgroundDimBlack
             | Item::Interface
             | Item::KiaiEffects
+            | Item::AutoplayLeftHanded
             | Item::HideGreat
             | Item::ChatFilter
             | Item::MessageSound
@@ -426,6 +439,9 @@ impl Item {
             Item::Update => "Enter: look for a newer build, or install it (Ctrl+U in any menu). taiko.rs restarts into it.",
             // No explanation: krokodil_koban knows.
             Item::KrokodilKoban => "",
+            Item::AutoplayStyle => "Which hand autoplay hits each note with: kddk full / semi alternate, single tap, roll, or ddkk.",
+            Item::AutoplayBinding => "The order autoplay's four keys light the drum in (kddk): 1324 puts each hand's don on the other side.",
+            Item::AutoplayLeftHanded => "Autoplay leads with the left hand instead of the right.",
             Item::SongSelectLayout => "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
             Item::Changelog => "Enter: the latest changes. They also show by themselves after an update.",
             Item::CheckUpdates => "Look for a newer build each time taiko.rs starts (a badge top right says when there is one), and for newer versions of the songs you pick on osu!.",

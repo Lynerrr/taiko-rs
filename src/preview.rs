@@ -114,8 +114,9 @@ pub struct Preview {
     /// New background for the renderer: `Some(None)` clears it.
     pub bg_upload: Option<Option<Image>>,
     pub has_background: bool,
-    /// Passed on to the autoplay preview (the kiai effects setting).
+    /// Passed on to the autoplay preview (the kiai effects setting, how autoplay hits).
     pub kiai_effects: bool,
+    pub autoplay: crate::autoplay::Settings,
     /// The list is being dragged through (scrollbar, right-click scrolling): the selection
     /// races past songs, so nothing loads until it is let go. Loading each song paused on
     /// (decoding its music, parsing it) is what made dragging stutter.
@@ -384,6 +385,7 @@ impl Preview {
         }
         game.update(now, Some(engine), offset);
         self.last_time = game.time;
+        game.autoplay_style = self.autoplay;
         game.autoplay(None);
     }
 

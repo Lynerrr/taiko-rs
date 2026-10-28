@@ -4,6 +4,7 @@
 #[cfg(target_os = "android")]
 mod android;
 mod audio;
+mod autoplay;
 mod beatmap;
 mod browse;
 mod calibrate;
@@ -1885,6 +1886,9 @@ impl State {
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
             Item::Hotkey(i) => c.hotkeys.get(keys::Hotkey::ALL[i]).map(keys::Chord::name).unwrap_or_else(|| "none".into()),
             Item::TouchLayout => c.touch_layout.name().into(),
+            Item::AutoplayStyle => c.autoplay.style.name().into(),
+            Item::AutoplayBinding => autoplay::BINDINGS[c.autoplay.binding].into(),
+            Item::AutoplayLeftHanded => on(c.autoplay.left_handed),
             Item::Screenshots => c.screenshot_to.name().into(),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::WheelResize => on(c.wheel_resizes_playfield),
@@ -2024,6 +2028,12 @@ impl State {
             // Open their lists on Enter.
             Item::InterfaceHides | Item::SkinParts | Item::SkinPart(_) => return,
             Item::TouchLayout => self.cfg.touch_layout = self.cfg.touch_layout.step(dir),
+            Item::AutoplayStyle => self.cfg.autoplay.style = self.cfg.autoplay.style.step(dir),
+            Item::AutoplayBinding => {
+                let n = autoplay::BINDINGS.len() as i32;
+                self.cfg.autoplay.binding = (self.cfg.autoplay.binding as i32 + dir).rem_euclid(n) as usize;
+            }
+            Item::AutoplayLeftHanded => self.cfg.autoplay.left_handed = !self.cfg.autoplay.left_handed,
             Item::Screenshots => self.cfg.screenshot_to = self.cfg.screenshot_to.step(dir),
             Item::Accent => {
                 let n = render::ACCENTS.len() as i32;
@@ -2195,6 +2205,11 @@ impl State {
                 let all = config::ScreenshotTo::ALL;
                 (strings(&mut all.iter().map(|t| t.name())), all.iter().position(|&t| t == c.screenshot_to), String::new())
             }
+            Item::AutoplayStyle => {
+                let all = autoplay::Style::ALL;
+                (strings(&mut all.iter().map(|s| s.name())), all.iter().position(|&s| s == c.autoplay.style), String::new())
+            }
+            Item::AutoplayBinding => (strings(&mut autoplay::BINDINGS.iter().copied()), Some(c.autoplay.binding), String::new()),
             Item::PresentMode => {
                 let all = PresentChoice::ALL;
                 (strings(&mut all.iter().map(|p| p.name())), all.iter().position(|&p| p == c.present), "during songs".into())
@@ -2279,6 +2294,8 @@ impl State {
         match list.item {
             Item::TouchLayout => self.cfg.touch_layout = config::TouchLayout::ALL[i],
             Item::Screenshots => self.cfg.screenshot_to = config::ScreenshotTo::ALL[i],
+            Item::AutoplayStyle => self.cfg.autoplay.style = autoplay::Style::ALL[i],
+            Item::AutoplayBinding => self.cfg.autoplay.binding = i,
             Item::PresentMode => self.cfg.present = PresentChoice::ALL[i],
             Item::AudioBuffer if Some(i) != list.current => self.set_audio_buffer(AUDIO_BUFFERS[i]),
             Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
@@ -6836,6 +6853,7 @@ impl State {
             let (entries, selected) = if browsing { (&self.browse.remote, self.browse.shown) } else { (&self.library, self.preview_target()) };
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
+            self.preview.autoplay = self.cfg.autoplay;
             self.preview.hold = self.dragging_list();
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
@@ -7126,6 +7144,7 @@ impl State {
             Scene::Play { game, entry, from } => {
                 let done = game.update(now, self.audio.as_ref(), self.play_offset);
                 if (self.auto || game.mods.has(mods::Mod::Autoplay)) && game.replay.is_none() {
+                    game.autoplay_style = self.cfg.autoplay;
                     game.autoplay(self.audio.as_ref());
                 }
                 if let Some(sm) = &mut self.smooth {
@@ -7403,6 +7422,7 @@ impl State {
             Scene::MpPlay { game, .. } => {
                 let done = game.update(now, self.audio.as_ref(), self.play_offset);
                 if self.auto || game.mods.has(mods::Mod::Autoplay) {
+                    game.autoplay_style = self.cfg.autoplay;
                     game.autoplay(self.audio.as_ref());
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
@@ -7572,6 +7592,7 @@ impl State {
                     finish_calibration = true;
                 }
                 if self.auto {
+                    game.autoplay_style = self.cfg.autoplay;
                     game.autoplay(self.audio.as_ref());
                 }
                 let offset = if *vsync { self.cfg.vsync_tune_ms } else { self.cfg.offset_ms };

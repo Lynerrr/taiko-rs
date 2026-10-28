@@ -41,13 +41,18 @@ const SPIN_R: f32 = 50.0;
 /// Second key of a big note must land within this window of the first.
 const STRONG_WINDOW: f64 = 30.0;
 const HIT_ANIM_MS: f64 = 160.0;
-/// How long a short fake slider's body takes to fade once it reaches the drum.
-const FAKE_FADE_MS: f64 = 250.0;
-/// The kiai beat flash on each note: its strength on the beat (fading to 0 by the next), how
-/// much of it a circle takes, and the shortest beat that still counts as one.
-const KIAI_FLASH_ALPHA: f32 = 0.337;
-const CIRCLE_FLASH: f32 = 0.3;
-const KIAI_FLASH_MIN_BEAT_MS: f64 = 50.0;
+/// A fake slider fades out over this once its cap reaches the drum, and stops scrolling after this
+/// much more of slider length (owner's stable test map, 2026-10-28: -200 at 3x stops 238 ms on).
+/// ponytail: the fade is only known to be 238..714 ms; measure it if a map looks off.
+const FAKE_FADE_MS: f64 = 500.0;
+const FAKE_FREEZE_LENGTH: f64 = 200.0;
+/// The kiai beat flash on each note at its start: stable's `UpdateKiai` (ppy/osu#26990).
+const KIAI_FLASH_ALPHA: f32 = 0.3;
+/// How far ahead of the beat, in first-red-line beats, objects take its flash: stable lit ~22
+/// notes 250 ms apart at 30 BPM, short of the screen (owner, 2026-10-28).
+/// ponytail: one measurement; stable's spawn window may also scale with SliderMultiplier (1.4
+/// there). Re-measure at another BPM or multiplier if a map looks off.
+const KIAI_FLASH_REACH: f64 = 2.625;
 /// The combo break plays a little louder than a hitsound (about +1.6 dB): noticeable over the
 /// music without being jarring.
 const COMBO_BREAK_GAIN: f32 = 1.2;
@@ -236,7 +241,10 @@ pub struct Game {
     /// Raw audio position seen by the last update, for diagnostics.
     pub last_audio_ms: Option<f64>,
     pub raw_time: f64,
-    auto_key: usize,
+    /// How autoplay hits (Settings → Gameplay), and the keys that gives each note (by note index,
+    /// empty for all but dons and kats), worked out once for those settings.
+    pub autoplay_style: crate::autoplay::Settings,
+    auto_plan: Option<(crate::autoplay::Settings, Vec<Vec<usize>>)>,
     /// Pause menu cursor while paused.
     pub paused: Option<usize>,
     paused_at: Instant,
@@ -329,8 +337,6 @@ pub struct Game {
     misses: VecDeque<f64>,
     /// Drop / Barrel Roll: where each kiai starts (map ms) and the beat length there.
     kiai_starts: Vec<(f64, f64)>,
-    /// Each kiai's (start, end) map ms; the last may run to infinity.
-    kiai_bands: Vec<(f64, f64)>,
     /// Roulette: where each 4-bar section starts (map ms), its speed, and the velocity its
     /// marker scrolls at.
     sections: Vec<(f64, f64, f64)>,
@@ -869,6 +875,13 @@ fn overshoot(x: f32) -> f32 {
     1.0 + (C + 1.0) * y * y * y + C * y * y
 }
 
+/// How long a fake slider has been standing still at `vt`: it scrolls on after its cap reaches
+/// the drum, for FAKE_FREEZE_LENGTH more of slider length, then stops (see `draw_playfield`).
+fn fake_freeze(n: &beatmap::Note, vt: f64) -> f64 {
+    let moving = n.fake_len / n.fake_length.max(1e-9) * FAKE_FREEZE_LENGTH;
+    (vt - (n.time - n.fake_len) - moving).max(0.0)
+}
+
 /// A pop-up fake slider at map time `vt`: (lane distance of its head, half its body, alpha), or
 /// None for any other note. A long fake slider on a gimmick red line (a 1 ms beat) is too fast to
 /// ever be on screen; stable shows it standing still, farther out the longer it is, for
@@ -898,6 +911,13 @@ const POPUP_FROM_LENGTH: f32 = 215.0;
 /// A pop-up head's fade in: lazer's swell 666 ms (owner: a half beat was too fast, 2026-10-28).
 // ponytail: guessed from "too fast"; measure stable's if it still looks off.
 const POPUP_FADE_MS: f64 = 666.0;
+
+/// A kiai flash's colour: the object's own, each channel up by max(25, 300 − R − G − B) (stable).
+fn kiai_brighten(col: u32) -> u32 {
+    let ch = |k: u32| (col >> k) & 0xff;
+    let add = 300u32.saturating_sub(ch(16) + ch(8) + ch(0)).max(25);
+    (ch(16) + add).min(255) << 16 | (ch(8) + add).min(255) << 8 | (ch(0) + add).min(255)
+}
 
 /// A roll tick's tint at map time `t`, on the beat grid of its red line (`origin`, `beat`):
 /// yellow on a beat, pale orange on a half beat, white (the image's own colour) elsewhere.
@@ -1266,7 +1286,8 @@ impl Game {
             .notes
             .iter()
             .map(|n| NoteState {
-                ticks: if n.kind == Kind::Roll && n.tick_spacing > 0.0 {
+                // A fake slider has none (taiko_arranger's `drumroll_tick_times`).
+                ticks: if n.kind == Kind::Roll && n.tick_spacing > 0.0 && !n.tiny {
                     vec![false; ((n.end_time - n.time) / n.tick_spacing + 0.5).floor() as usize + 1]
                 } else {
                     Vec::new()
@@ -1292,19 +1313,15 @@ impl Game {
             spans.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)).map_or(500.0, |s| s.0)
         };
         // osu!lazer's TaikoHealthProcessor.
-        let hits = map.notes.iter().filter(|n| matches!(n.kind, Kind::Don | Kind::Kat)).count().max(1) as f64;
+        let hits = map.notes.iter().filter(|n| matches!(n.kind, Kind::Don | Kind::Kat) && !n.unhittable).count().max(1) as f64;
         let hp_drain = mods.hp(map.meta.hp);
         let hp_hit = 1.0 / (3.0 * hits * beatmap::difficulty_range(hp_drain, 0.5, 0.75, 0.98));
         let hp_miss = beatmap::difficulty_range(hp_drain, 0.0018, 0.0075, 0.0120);
         let mut kiai_starts = Vec::new();
-        let mut kiai_bands: Vec<(f64, f64)> = Vec::new();
         let mut was_kiai = false;
         for cp in &map.control_points {
             if cp.kiai && !was_kiai {
                 kiai_starts.push((cp.time, cp.beat_length));
-                kiai_bands.push((cp.time, f64::INFINITY));
-            } else if !cp.kiai && was_kiai && let Some(band) = kiai_bands.last_mut() {
-                band.1 = cp.time;
             }
             was_kiai = cp.kiai;
         }
@@ -1354,7 +1371,8 @@ impl Game {
             visible: Vec::new(),
             last_audio_ms: None,
             raw_time: track_start,
-            auto_key: 0,
+            autoplay_style: crate::autoplay::Settings::default(),
+            auto_plan: None,
             paused: None,
             paused_at: Instant::now(),
             resuming: None,
@@ -1401,7 +1419,6 @@ impl Game {
             crumbs: Vec::new(),
             misses: VecDeque::new(),
             kiai_starts,
-            kiai_bands,
             sections,
             decoys,
             flows,
@@ -1466,7 +1483,7 @@ impl Game {
     fn rescore(&mut self, judge: Judge, combo: u32) {
         let (max_points, notes) = *self.score_basis.get_or_insert_with(|| {
             // Notes skipped by `skip_to` aren't part of the play.
-            let n = self.map.notes.iter().zip(&self.state).filter(|(n, st)| matches!(n.kind, Kind::Don | Kind::Kat) && st.judged_at != f64::NEG_INFINITY).count() as u32;
+            let n = self.map.notes.iter().zip(&self.state).filter(|(n, st)| matches!(n.kind, Kind::Don | Kind::Kat) && !n.unhittable && st.judged_at != f64::NEG_INFINITY).count() as u32;
             (300.0 * (0..n).map(combo_weight).sum::<f64>(), n)
         });
         self.combo_points += match judge {
@@ -1526,7 +1543,24 @@ impl Game {
         self.time > self.end_time + 1500.0 || raw > self.track_ms + 500.0
     }
 
-    /// Autoplay: hits every object exactly on time, alternating hands. Used to sanity-check judging.
+    /// The keys autoplay hits each note with (`autoplay::note_keys`), worked out again only when
+    /// its settings change. Groups and rests are judged against the map's main beat: a gimmick's
+    /// 60000 BPM line would make every gap a rest. Unhittable notes aren't played.
+    fn auto_keys(&mut self) -> &[Vec<usize>] {
+        let style = self.autoplay_style;
+        if self.auto_plan.as_ref().is_none_or(|(s, _)| *s != style) {
+            let hits: Vec<usize> = (0..self.map.notes.len()).filter(|&i| matches!(self.map.notes[i].kind, Kind::Don | Kind::Kat) && !self.map.notes[i].unhittable).collect();
+            let notes: Vec<(f64, bool, bool)> = hits.iter().map(|&i| (self.map.notes[i].time, self.map.notes[i].kind == Kind::Kat, self.map.notes[i].big)).collect();
+            let mut plan = vec![Vec::new(); self.map.notes.len()];
+            for (&i, keys) in hits.iter().zip(crate::autoplay::note_keys(&notes, self.main_beat, style)) {
+                plan[i] = keys;
+            }
+            self.auto_plan = Some((style, plan));
+        }
+        &self.auto_plan.as_ref().unwrap().1
+    }
+
+    /// Autoplay: hits every object exactly on time, with the hands its playstyle says.
     pub fn autoplay(&mut self, audio: Option<&Engine>) {
         let t = self.time;
         for i in self.cursor..self.map.notes.len() {
@@ -1534,32 +1568,32 @@ impl Game {
             if n.time > t {
                 break;
             }
-            let (time, kind, big) = (n.time, n.kind, n.big);
+            let (time, kind) = (n.time, n.kind);
             let st = &self.state[i];
             match kind {
                 Kind::Don | Kind::Kat if st.judged.is_none() && !n.unhittable => {
-                    let kat = kind == Kind::Kat;
-                    self.auto_key ^= 1;
-                    let key = match (kat, self.auto_key) { (true, 0) => 0, (true, _) => 3, (false, 0) => 1, (false, _) => 2 };
-                    self.auto_hit(key, time, audio);
-                    if big {
-                        let other = 3 - key;
-                        self.auto_hit(other, time, audio);
+                    for key in self.auto_keys()[i].clone() {
+                        self.auto_hit(key, time, audio);
                     }
                 }
                 // A roll mapped across notes is played as the notes alone (owner, 2026-10-28):
                 // a tick press would land in a note's window and hit it early, or miss a kat.
-                Kind::Roll if !st.finished && !self.roll_over_notes(i) => {
+                // A fake slider (written under 0.1 long, any negative) isn't played at all (owner,
+                // 2026-10-28).
+                Kind::Roll if !st.finished && !n.tiny && !self.roll_over_notes(i) => {
                     let spacing = self.map.notes[i].tick_spacing;
                     let k = ((t - time) / spacing).floor().max(0.0) as usize;
                     if self.state[i].ticks.get(k).is_some_and(|hit| !hit) {
-                        self.auto_key ^= 1;
-                        self.auto_hit(if self.auto_key == 0 { 1 } else { 2 }, time + k as f64 * spacing, audio);
+                        let key = crate::autoplay::roll_key(k, self.autoplay_style.left_handed);
+                        self.auto_hit(key, time + k as f64 * spacing, audio);
                     }
                 }
+                // One swell at a time (`judge_press` gives the earliest every press), at most every
+                // 40 ms: a swell too rapid for that goes unfinished (owner, 2026-10-28). A press
+                // that would take a note under it early waits for the note's own hit instead.
                 Kind::Swell if !st.finished => {
                     let next_kat = st.last_was_kat != Some(true);
-                    if t - self.presses.iter().cloned().fold(f64::NEG_INFINITY, f64::max) > 40.0 {
+                    if t - self.presses.iter().cloned().fold(f64::NEG_INFINITY, f64::max) > 40.0 && self.note_under_swell(t, Some(next_kat)).is_none() {
                         self.auto_hit(if next_kat { 0 } else { 1 }, t, audio);
                     }
                 }
@@ -1812,8 +1846,9 @@ impl Game {
             }
             let st = &mut self.state[i];
             match n.kind {
+                // One before a NaN slider is never judged, not even a miss (owner, 2026-10-28).
                 Kind::Don | Kind::Kat => {
-                    if st.judged.is_none() && t - n.time > self.windows.ok {
+                    if st.judged.is_none() && !n.unhittable && t - n.time > self.windows.ok {
                         self.apply(i, Judge::Miss, t, None);
                     }
                 }
@@ -1834,8 +1869,9 @@ impl Game {
         }
         while self.cursor < self.map.notes.len() {
             let st = &self.state[self.cursor];
-            let done = match self.map.notes[self.cursor].kind {
-                Kind::Don | Kind::Kat => st.judged.is_some(),
+            let n = &self.map.notes[self.cursor];
+            let done = match n.kind {
+                Kind::Don | Kind::Kat => st.judged.is_some() || (n.unhittable && t - n.time > self.windows.ok),
                 Kind::Roll | Kind::Swell => st.finished,
             };
             if !done {
@@ -2038,9 +2074,11 @@ impl Game {
             }
         }
 
-        // An active swell swallows every hit and must be alternated centre/rim, except one that
-        // hits a note under it.
-        if let Some(i) = self.find_active(t, Kind::Swell).filter(|_| self.note_under_swell(t, Some(kat)).is_none()) {
+        // An active swell (the earliest, one at a time) takes every hit alternated centre/rim and
+        // swallows the rest, except one that hits a note under it: that one goes on to the note,
+        // and counts for the swell too if it swaps colour (owner, 2026-10-28).
+        if let Some(i) = self.find_active(t, Kind::Swell) {
+            let to_note = self.note_under_swell(t, Some(kat)).is_some();
             let required = self.map.notes[i].required_hits;
             let st = &mut self.state[i];
             if st.last_was_kat != Some(kat) {
@@ -2055,7 +2093,9 @@ impl Game {
                 }
                 self.add_score(if done { 1100.0 } else { 100.0 });
             }
-            return normal;
+            if !to_note {
+                return normal;
+            }
         }
 
         if let Some(i) = self.next_hittable(t) {
@@ -2177,7 +2217,7 @@ impl Game {
             if n.time - t > self.windows.miss {
                 return None;
             }
-            // An unhittable note (before a NaN slider) lets presses through, then expires a miss.
+            // An unhittable note (before a NaN slider) lets presses through and is never judged.
             if matches!(n.kind, Kind::Don | Kind::Kat) && self.state[i].judged.is_none() && !n.unhittable {
                 return Some(i);
             }
@@ -2976,20 +3016,32 @@ impl Game {
                 }
                 Kind::Roll => {
                     let pop = popup(n);
-                    let s0 = pop.map_or_else(|| s_of(n.time, n.velocity), |p| p.0);
-                    // A fake slider, as stable draws it: body right of the head by its length,
-                    // cap *left* of it by the same. A long one's head and cap are cut when the cap
-                    // reaches the drum; a short one's pass through it like a real roll's (owner,
-                    // 2026-10-28). The body goes when it does (fading, if short). Nothing shows before the
-                    // head is on screen, so a long one is only ever body. Still drawn at the
-                    // head's speed, and gimmick sections run past the BPM / SV limits this game
-                    // clamps to, so long ones aren't exact.
-                    // A pop-up one (see `popup`) stands still, fading in, and is never cut.
+                    // A fake slider, as stable draws it (owner's test map, 2026-10-28): body right
+                    // of the head by its length, cap *left* of it by the same. When the cap reaches
+                    // the drum the head is gone, and body and cap scroll on, fading out over
+                    // FAKE_FADE_MS, until they've gone FAKE_FREEZE_LENGTH of slider length further;
+                    // there they stop (a -200 at 3x stops with its body just right of the drum).
+                    // A -0.0001 one's cap lands with its head. Nothing shows before the head is on
+                    // screen, so a long one is only ever body. Still drawn at the head's speed, and
+                    // gimmick sections run past the BPM / SV limits this game clamps to, so long
+                    // ones aren't exact.
+                    // A pop-up one (see `popup`) stands still, fading in, and is gone at its time.
                     let fake = n.fake_len > 0.0;
+                    // A +0.0001 is gone at the drum, not passing through like a real roll
+                    // (Lunatic Rough Party!!'s first object; owner, 2026-10-28, stable).
+                    if n.tiny && !fake && vt >= n.time {
+                        continue;
+                    }
+                    let live = fake && pop.is_none();
+                    let lands = n.time - n.fake_len;
+                    let shift = if live { fake_freeze(n, vt) } else { 0.0 };
+                    let at = |time: f64| s_of(time + shift, n.velocity);
+                    let s0 = pop.map_or_else(|| at(n.time), |p| p.0);
                     let mut fake_a = pop.map_or(1.0, |p| p.2);
-                    if fake && pop.is_none() && vt >= n.time {
-                        let p = ((vt - n.time) / FAKE_FADE_MS) as f32;
-                        if !n.fake_fades || p >= 1.0 {
+                    let landed = live && vt >= lands;
+                    if landed {
+                        let p = ((vt - lands) / FAKE_FADE_MS) as f32;
+                        if p >= 1.0 {
                             continue;
                         }
                         fake_a = 1.0 - p;
@@ -2997,10 +3049,9 @@ impl Game {
                     if fake_a < 0.01 {
                         continue;
                     }
-                    let cut = pop.is_none() && fake && !n.fake_fades && vt >= n.time - n.fake_len;
                     let (s_cap, s1) = match pop {
                         Some((s, d, _)) => (s - d, s + d),
-                        None => (s_of(n.time - n.fake_len, n.velocity), s_of(n.end_time + n.fake_len, n.velocity)),
+                        None => (at(n.time - n.fake_len), at(n.end_time + n.fake_len)),
                     };
                     if s1 < -HIT_X - r || s0 > lane_len + r {
                         continue;
@@ -3024,17 +3075,17 @@ impl Game {
                         // The skin's body stretched from the head to the end, its cap just past that.
                         let (x0, x1) = (HIT_X + s0, HIT_X + s1);
                         c.sprite_box(Sprite::RollMiddle, (x0 + x1) / 2.0, LANE_Y, (x1 - x0) / 2.0, r * sy, rgba(ROLL, a));
-                        if let Some([ex, ey]) = c.sprite_size(Sprite::RollEnd).filter(|_| !cut) {
+                        if let Some([ex, ey]) = c.sprite_size(Sprite::RollEnd) {
                             let xe = if fake { HIT_X + s_cap } else { x1 };
                             c.sprite_box(Sprite::RollEnd, xe + r * ex, LANE_Y, r * ex, r * ey, rgba(ROLL, a));
                         }
                     } else {
                         c.capsule(HIT_X + s0, HIT_X + s1, LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
-                        if fake && !cut {
+                        if fake {
                             c.circle(HIT_X + s_cap, LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
                         }
                     }
-                    if cut {
+                    if landed {
                         continue;
                     }
                     let cp = beatmap::control_point_at(&self.map.control_points, n.time);
@@ -3098,12 +3149,10 @@ impl Game {
             }
         }
 
-        // Kiai: every head on screen takes its own flash on the beat, added over everything drawn,
-        // so a pile of fake sliders under one note (a "shiny") lights it brighter the deeper it
-        // is. A circle glows a little white, a roll head fully in its own yellow (taiko_arranger).
-        // Not on gimmick beats (60000 BPM lines), which would strobe.
-        let flash = if self.kiai_effects { self.kiai_flash(vt) * KIAI_FLASH_ALPHA } else { 0.0 };
-        if flash > 0.0 && !self.hide_notes {
+        // Kiai: every head on screen takes its own flash on the beat, in its own colour
+        // brightened, added over everything drawn, so a pile of fake sliders under one note (a
+        // "shiny") lights it brighter the deeper it is. Stable's `UpdateKiai`; see `kiai_flash`.
+        if self.kiai_effects && !self.hide_notes {
             for &i in &self.visible {
                 let n = &self.map.notes[i];
                 let r = if n.big { BIG_R } else { NOTE_R };
@@ -3111,19 +3160,22 @@ impl Game {
                 let (s, col, a) = match n.kind {
                     Kind::Don | Kind::Kat if self.state[i].judged.is_none() => {
                         let s = note_s(i);
-                        (s, WHITE, CIRCLE_FLASH * note_alpha(s) * radar_lit(s, n.time, n.velocity))
+                        (s, if n.kind == Kind::Kat { KAT } else { DON }, note_alpha(s) * radar_lit(s, n.time, n.velocity))
                     }
                     Kind::Roll if popup(n).is_some() => {
                         let (s, _, pa) = popup(n).unwrap();
                         (s, ROLL, if memory_over { 0.0 } else { pa })
                     }
-                    Kind::Roll if !(n.fake_len > 0.0 && !n.fake_fades && vt >= n.time - n.fake_len) => {
+                    Kind::Roll if !(n.fake_len > 0.0 && vt >= n.time - n.fake_len) => {
                         let s = s_of(n.time, n.velocity);
                         (s, ROLL, if memory_over { 0.0 } else { fade_in(s) })
                     }
                     _ => continue,
                 };
-                if a > 0.01 && on_lane(s, r) {
+                // A fake slider ends at its head (its end_time is its time).
+                let flash = self.kiai_flash(vt, n.time, n.end_time) * KIAI_FLASH_ALPHA;
+                let col = kiai_brighten(col);
+                if flash > 0.0 && a > 0.01 && on_lane(s, r) {
                     let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
                     c.light(sprite, x, y, r * size, rgba(col, flash * a));
                 }
@@ -3390,23 +3442,25 @@ impl Game {
         c.rect(x_at(p) - 1.0, ECHO_Y - 11.0, 2.0, 22.0, rgba(WHITE, 0.85 * fade));
     }
 
-    /// The kiai flash at map time `t`, taiko_arranger's rule: 1 on each beat counted from the
-    /// kiai's start, fading linearly to 0 by the next. The beat is the last real one (gimmick
-    /// lines under `KIAI_FLASH_MIN_BEAT_MS` are skipped). Past the kiai's end only a beat over a
-    /// second long finishes fading; a faster one just stops, as a chorus ending should.
-    fn kiai_flash(&self, t: f64) -> f32 {
-        let i = self.kiai_bands.partition_point(|&(start, _)| start <= t);
-        let Some(&(start, end)) = i.checked_sub(1).and_then(|i| self.kiai_bands.get(i)) else { return 0.0 };
-        let cps = &self.map.control_points;
-        let beat_at = |t: f64| cps[..cps.partition_point(|c| c.time <= t)].iter().rev().map(|c| c.beat_length).find(|&b| b >= KIAI_FLASH_MIN_BEAT_MS);
-        if t >= end {
-            let Some(b) = beat_at(start).filter(|&b| b > 1000.0) else { return 0.0 };
-            if t >= start + ((end - start) / b).ceil() * b {
-                return 0.0;
-            }
+    /// The kiai flash at map time `t` on an object from `start` to `end`, stable's `UpdateKiai`
+    /// (ppy/osu#26990): on each beat, if kiai is on then, 1 fading linearly to 0 over int(¾ beat)
+    /// ms, or until the object's end if that's sooner. So a kiai with no beat in it never
+    /// flashes, and the last flash finishes after the kiai ends.
+    ///
+    /// The beat is the first red line's, all map long, whatever line is in force (owner's
+    /// source, 2026-10-28), and only objects starting within `KIAI_FLASH_REACH` of its beats
+    /// ahead take it: a 2222 BPM first line lights only what's at the drum.
+    fn kiai_flash(&self, t: f64, start: f64, end: f64) -> f32 {
+        let Some(first) = self.map.control_points.first() else { return 0.0 };
+        let beat = first.beat_origin + ((t - first.beat_origin) / first.beat_length).floor() * first.beat_length;
+        if !beatmap::control_point_at(&self.map.control_points, beat).kiai || start - beat > KIAI_FLASH_REACH * first.beat_length {
+            return 0.0;
         }
-        let Some(beat) = beat_at(t) else { return 0.0 };
-        1.0 - ((t - start) / beat).rem_euclid(1.0) as f32
+        let len = (first.beat_length * 0.75).floor().min(end - beat);
+        if len <= 0.0 || t - beat >= len {
+            return 0.0;
+        }
+        1.0 - ((t - beat) / len) as f32
     }
 
     /// Sets `visual_offset`, except while paused: the vsync lead in it moves a little every frame,
@@ -4244,6 +4298,7 @@ mod tests {
                 fake_len: 0.0,
                 fake_fades: false,
                 fake_length: 0.0,
+                tiny: false,
                 unhittable: false,
             })
             .collect();
@@ -4399,22 +4454,43 @@ mod tests {
     }
 
     #[test]
-    fn the_kiai_flash_fades_over_each_beat_from_the_kiais_start() {
-        let mut map = beatmap::calibration_map(500.0, 0, 64);
-        let cp = map.control_points[0];
-        // Kiai 8100..9000 (off the red line's beats), then a gimmick line inside it.
-        map.control_points.push(beatmap::ControlPoint { time: 8100.0, kiai: true, ..cp });
-        map.control_points.push(beatmap::ControlPoint { time: 8600.0, kiai: true, beat_length: 6.0, ..cp });
-        map.control_points.push(beatmap::ControlPoint { time: 9000.0, kiai: false, ..cp });
-        let g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
-        let f = |t: f64| g.kiai_flash(t);
-        assert_eq!(f(8000.0), 0.0);
-        assert_eq!(f(8100.0), 1.0);
-        assert!((f(8350.0) - 0.5).abs() < 1e-6, "linear, from the kiai's start");
-        // The gimmick line's 6 ms beat is skipped for the real 500 ms one.
-        assert!((f(8725.0) - 0.75).abs() < 1e-6);
-        // A 120 BPM kiai ending mid-beat just stops.
-        assert_eq!(f(9000.0), 0.0);
+    fn the_kiai_flash_is_stables_three_quarter_beat_on_the_first_red_lines_beats() {
+        // 500 ms beats from 0; green lines toggle kiai at `kiai`, a 6 ms red line from 20.1 s.
+        let game = |kiai: &[(f64, bool)]| {
+            let mut map = beatmap::calibration_map(500.0, 0, 64);
+            let cp = map.control_points[0];
+            for &(time, on) in kiai {
+                map.control_points.push(beatmap::ControlPoint { time, kiai: on, ..cp });
+            }
+            map.control_points.push(beatmap::ControlPoint { time: 20100.0, beat_origin: 20100.0, beat_length: 6.0, kiai: true, ..cp });
+            Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None)
+        };
+        let inf = f64::INFINITY;
+        // An object at `t` itself, so always within reach.
+        let at = |g: &Game, t: f64, end: f64| g.kiai_flash(t, t, end);
+        // Kiai 8100..8700, off the beat: nothing until the red line's beat at 8500.
+        let g = game(&[(8100.0, true), (8700.0, false)]);
+        assert_eq!(at(&g, 8100.0, inf), 0.0);
+        assert_eq!(at(&g, 8500.0, inf), 1.0);
+        // Linear over int(375) ms, then dark for the last quarter.
+        assert!((at(&g, 8687.5, inf) - 0.5).abs() < 1e-6);
+        // The kiai ends at 8700, mid-flash: the flash finishes anyway.
+        assert!((at(&g, 8800.0, inf) - 0.2).abs() < 1e-6);
+        assert_eq!(at(&g, 8875.0, inf), 0.0);
+        assert_eq!(at(&g, 9000.0, inf), 0.0);
+        // A note's flash stops at the note: fading over the 50 ms left to it.
+        assert!((at(&g, 8525.0, 8550.0) - 0.5).abs() < 1e-6);
+        assert_eq!(at(&g, 8560.0, 8550.0), 0.0);
+        // Only objects up to 2.625 first-line beats past the beat take it.
+        assert_eq!(g.kiai_flash(8500.0, 9812.0, inf), 1.0);
+        assert_eq!(g.kiai_flash(8500.0, 9813.0, inf), 0.0);
+        // A kiai with no beat in it never flashes.
+        let g = game(&[(8100.0, true), (8300.0, false), (19000.0, true)]);
+        assert!((8000..9000).all(|t| at(&g, t as f64, inf) == 0.0));
+        // A gimmick red line keeps the first line's beats: 20000's flash, 100 ms in.
+        assert!((at(&g, 20100.0, inf) - (1.0 - 100.0 / 375.0)).abs() < 1e-6);
+        // Colours: don and kat brightened by 25 each.
+        assert_eq!((kiai_brighten(DON), kiai_brighten(KAT)), (0xFF5E45, 0x5CA7C6));
     }
 
     #[test]
@@ -4447,8 +4523,54 @@ mod tests {
         let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
         g.press_at(1, t, None);
         g.press_at(1, t + 500.0, None);
-        assert_eq!(g.state[4].judged, Some(Judge::Miss));
+        // The four before it went unpressed; it isn't a fifth miss.
+        assert_eq!((g.state[4].judged, g.stats.miss), (None, 4), "not even a miss");
         assert_eq!(g.state[5].judged, Some(Judge::Great), "the press went on to the next note");
+        // Nor under autoplay.
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        map.notes[4].unhittable = true;
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        for k in 0..800 {
+            g.time = k as f64 * 10.0;
+            g.autoplay(None);
+            g.expire(g.time);
+        }
+        assert_eq!((g.state[4].judged, g.stats.miss), (None, 0));
+        assert_eq!(g.state[5].judged, Some(Judge::Great));
+    }
+
+    #[test]
+    fn autoplay_leaves_a_sub_ms_fake_slider_alone() {
+        // Notes 4 and 5 become tiny rolls (written 0.1 to -0.1 long), one with a tick to play.
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        for (i, len) in [(4, 0.001), (5, 0.0)] {
+            let n = &mut map.notes[i];
+            (n.kind, n.end_time, n.tick_spacing, n.tiny) = (Kind::Roll, n.time + len, 125.0, true);
+        }
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        for k in 0..800 {
+            g.time = k as f64 * 10.0;
+            g.autoplay(None);
+            g.expire(g.time);
+        }
+        for i in [4, 5] {
+            assert!(g.state[i].ticks.iter().all(|hit| !hit), "roll {i} was played");
+        }
+        assert_eq!((g.state[6].judged, g.stats.miss), (Some(Judge::Great), 0));
+    }
+
+    #[test]
+    fn autoplay_never_misses_over_a_negative_fake_slider() {
+        // A -50 fake slider (a zero-length roll, as parsed) 50 ms before a kat.
+        let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\nOverallDifficulty:5\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n256,192,1450,2,0,L|356:192,1,-50\n256,192,1500,1,2,0:0:0:0:\n256,192,2000,1,0,0:0:0:0:\n";
+        let map = beatmap::tests::parse(osu);
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        for k in 0..300 {
+            g.time = k as f64 * 10.0;
+            g.autoplay(None);
+            g.expire(g.time);
+        }
+        assert_eq!(g.stats.miss, 0);
     }
 
     #[test]
@@ -4484,6 +4606,30 @@ mod tests {
         let under: Vec<_> = (0..g.map.notes.len()).filter(|&i| g.map.notes[i].kind == Kind::Don && (2000.0..=4000.0).contains(&g.map.notes[i].time)).collect();
         assert_eq!(under.len(), 5);
         assert!(under.iter().all(|&i| g.state[i].judged == Some(Judge::Great)), "notes under the swell were swallowed");
+        // Each counts for the swell too when it swaps colour: five dons are one swap.
+        assert_eq!(g.state[4].hits, 1);
+    }
+
+    #[test]
+    fn autoplay_hits_the_notes_under_a_swell_and_spins_it_between() {
+        // A swell from 1900 to 4100 over the calibration dons, one of them a kat.
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let kat = map.notes.iter().position(|n| n.time == 3000.0).unwrap();
+        map.notes[kat].kind = Kind::Kat;
+        let swell = beatmap::Note { time: 1900.0, end_time: 4100.0, kind: Kind::Swell, required_hits: 1000, ..map.notes[0].clone() };
+        map.notes.insert(4, swell);
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        let mut t = 1800.0;
+        while t < 4300.0 {
+            g.time = t;
+            g.autoplay(None);
+            t += 4.0;
+        }
+        let under: Vec<_> = (0..g.map.notes.len()).filter(|&i| matches!(g.map.notes[i].kind, Kind::Don | Kind::Kat) && (2000.0..=4000.0).contains(&g.map.notes[i].time)).map(|i| g.state[i].judged).collect();
+        assert_eq!(under, vec![Some(Judge::Great); 5]);
+        // 2.2 s at one press per 40+ ms: dozens of swaps, but nowhere near 1000.
+        let hits = g.state[4].hits;
+        assert!((30..60).contains(&hits) && g.state[4].judged.is_none(), "{hits}");
     }
 
     #[test]
@@ -4990,5 +5136,40 @@ mod tests {
         assert!(!in_stream.is_empty() && in_stream.len() <= 5, "{in_stream:?}");
         assert!(in_stream.windows(2).all(|p| p[1] - p[0] > 100.0), "{in_stream:?}");
         assert!(g.decoys.iter().filter(|n| n.time > 6720.0).all(|n| !n.big));
+    }
+
+    #[test]
+    fn a_tiny_positive_roll_is_gone_at_the_drum() {
+        // Lunatic Rough Party!!'s first object: drawn just before 1000, not after.
+        let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n136,208,1000,6,2,L|224:200,1,0.0001\n";
+        let map = beatmap::tests::parse(osu);
+        assert!(map.notes[0].tiny && map.notes[0].fake_len == 0.0);
+        let shapes = |map: beatmap::Beatmap, t: f64| {
+            let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+            g.time = t;
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            g.draw_playfield(&mut c, 1.0);
+            c.shapes.len()
+        };
+        let none = |t| shapes(beatmap::tests::parse(&osu.replace("136,208,1000,6,2,L|224:200,1,0.0001\n", "")), t);
+        assert!(shapes(map.clone(), 990.0) > none(990.0));
+        assert_eq!(shapes(map, 1010.0), none(1010.0));
+    }
+
+    #[test]
+    fn a_fake_slider_stops_200_of_length_after_its_cap_lands() {
+        // 120 BPM, SM 1.4, 3x: -200 is 238 ms of cap ahead of its head at 2000, -100 half that.
+        let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n0,-33.3333333333333,4,1,0,100,0,0\n\n[HitObjects]\n256,192,2000,2,0,L|356:192,1,-200\n256,192,5000,2,0,L|356:192,1,-100\n";
+        let map = beatmap::tests::parse(osu);
+        let (long, short) = (&map.notes[0], &map.notes[1]);
+        assert!((long.fake_len - 238.095).abs() < 0.01);
+        // -200's cap lands at ~1762 and it stops 238 ms on: at its head's time, its body's
+        // left end just at the drum (owner's screenshot).
+        assert_eq!(fake_freeze(long, 2000.0), 0.0);
+        assert!((fake_freeze(long, 2100.0) - 100.0).abs() < 0.01);
+        // -100 lands at ~4881 and stops at the same ~238 ms on: 119 ms past its head's time, its
+        // body's right end at the drum.
+        assert!((fake_freeze(short, 5119.05 + 50.0) - 50.0).abs() < 0.05);
     }
 }
