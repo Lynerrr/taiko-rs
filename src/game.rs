@@ -933,6 +933,30 @@ fn kiai_brighten(col: u32) -> u32 {
     (ch(16) + add).min(255) << 16 | (ch(8) + add).min(255) << 8 | (ch(0) + add).min(255)
 }
 
+/// Stable's taiko PreEmpt (ms): how long 1000 osu!px take at the map's *first* timing point
+/// (`first_velocity`, osu!px per ms), once for the whole map, at most 5 s. Read from osu!.exe
+/// (`min(5000, 600 / VelocityAt(first timing point) / 0.6 * 1000)`; KatsuDonEditor's
+/// `stable_preempt`, 2026-10-30).
+fn stable_preempt(first_velocity: f64) -> f64 {
+    if first_velocity <= 0.0 {
+        return 5000.0;
+    }
+    (1000.0 / first_velocity).min(5000.0).floor()
+}
+
+/// A swell's alpha `until` ms before it starts: stable's SpinnerTaiko fades it in linearly from
+/// PreEmpt before to 0.6 PreEmpt before. The PreEmpt is the map's, from its first SV, not the
+/// swell's: a map starting at 10x shows its swells only just before they're hit, however slow
+/// they scroll, and one starting slow shows a fast swell as soon as it's on the lane (owner,
+/// 2026-10-30). The swell still scrolls at its own SV.
+fn swell_fade(preempt: f64, until: f64) -> f32 {
+    let end = (preempt * 0.6).floor();
+    if preempt <= end {
+        return 1.0;
+    }
+    ((preempt - until) / (preempt - end)).clamp(0.0, 1.0) as f32
+}
+
 /// Hidden until `lead` ms before, then fading in (easing in) over `fade` ms.
 fn fade_from(lead: f64, fade: f64, until: f64) -> f32 {
     let p = ((lead - until) / fade).clamp(0.0, 1.0) as f32;
@@ -3113,8 +3137,8 @@ impl Game {
                     }
                     if vt < n.time {
                         let s = s_of(n.time, n.velocity);
-                        // Scrolls in like a note (at the map's first SV, see beatmap.rs), no fade.
-                        let a = note_alpha(s) * radar_lit(s, n.time, n.velocity);
+                        let preempt = stable_preempt(self.map.first_velocity * self.mods.scroll());
+                        let a = note_alpha(s) * radar_lit(s, n.time, n.velocity) * swell_fade(preempt, n.time - vt);
                         if s < lane_len + r && a > 0.01 {
                             let (x, y, _, size) = place(s, 0.0);
                             let r = r * size;
@@ -4632,25 +4656,36 @@ mod tests {
     }
 
     #[test]
-    fn a_swell_scrolls_in_at_the_maps_first_sv() {
-        for (first, later) in [(1.0, 1.0), (1.0, 0.5), (0.5, 2.0), (2.0, 0.5)] {
+    fn stables_preempt_comes_from_the_first_timing_point() {
+        // 1.4 x 1.4 x 100 / 333.33 = 0.588 osu!px per ms at 1x: 1000 px in 1700 ms.
+        for (first, later, preempt) in [(1.0, 1.0, 1700.0), (1.0, 0.5, 1700.0), (10.0, 1.0, 170.0), (0.5, 2.0, 3401.0), (0.1, 1.0, 5000.0)] {
             let map = swell_map(first, later);
-            let (head, near, swell) = (&map.notes[0], &map.notes[1], &map.notes[2]);
+            assert_eq!(stable_preempt(map.first_velocity), preempt, "SV {first} then {later}");
+            // The swell itself scrolls at its own SV.
+            let (head, swell) = (&map.notes[0], &map.notes[2]);
             assert_eq!(swell.kind, Kind::Swell);
-            assert!((swell.velocity - head.velocity).abs() < 1e-9, "SV {first} then {later}: swell at {}, first SV {}", swell.velocity, head.velocity);
-            assert!((near.velocity / head.velocity - later / first).abs() < 1e-9);
+            assert!((swell.velocity / head.velocity - later / first).abs() < 1e-9);
         }
     }
 
     #[test]
-    fn a_swell_is_on_the_lane_as_soon_as_it_scrolls_onto_it() {
-        // Constant SV: 900 ms before (nearly three beats), a swell is halfway along the lane, fully
-        // there, like any note that far out (it used to show only 1.5 beats before).
-        let swell_drawn = |c: &Canvas| c.shapes.iter().any(|sh| sh.params[3] == 0.0 && sh.fill[..3] == rgba(SWELL, 1.0)[..3] && sh.fill[3] > 0.99);
-        assert!(swell_drawn(&drawn(swell_map(1.0, 1.0), 3100.0)));
-        // Coming at a fast first SV, it's only on the lane shortly before.
-        assert!(!swell_drawn(&drawn(swell_map(4.0, 0.5), 3100.0)));
-        assert!(swell_drawn(&drawn(swell_map(4.0, 0.5), 3800.0)));
+    fn a_swell_fades_in_from_preempt_to_six_tenths_of_it_before() {
+        assert_eq!(swell_fade(1700.0, 1800.0), 0.0);
+        assert_eq!(swell_fade(1700.0, 1700.0), 0.0);
+        assert_eq!(swell_fade(1700.0, 1360.0), 0.5);
+        assert_eq!(swell_fade(1700.0, 1020.0), 1.0);
+        assert_eq!(swell_fade(1700.0, 0.0), 1.0);
+    }
+
+    #[test]
+    fn when_a_swell_shows_depends_on_the_first_sv_not_its_own() {
+        let swell_alpha = |c: &Canvas| c.shapes.iter().filter(|sh| sh.params[3] == 0.0 && sh.fill[..3] == rgba(SWELL, 1.0)[..3]).map(|sh| sh.fill[3]).fold(0.0, f32::max);
+        // Starting at 10x: PreEmpt 170 ms, so a 0.5x swell 400 ms out (well on the lane) is still
+        // hidden, and only fully there 102 ms before.
+        assert_eq!(swell_alpha(&drawn(swell_map(10.0, 0.5), 3600.0)), 0.0);
+        assert!(swell_alpha(&drawn(swell_map(10.0, 0.5), 3920.0)) > 0.99);
+        // Starting at 1x, the same swell is fully there 1 s out.
+        assert!(swell_alpha(&drawn(swell_map(1.0, 0.5), 3000.0)) > 0.99);
     }
 
     #[test]

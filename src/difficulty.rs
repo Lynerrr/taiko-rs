@@ -177,7 +177,7 @@ mod tests {
             ControlPoint { time: 20_000.0, beat_origin: 0.0, beat_length: 500.0, sv: 1.0, kiai: true, volume: 1.0 },
             ControlPoint { time: 24_000.0, beat_origin: 0.0, beat_length: 500.0, sv: 1.0, kiai: false, volume: 1.0 },
         ];
-        Beatmap { meta: Meta::default(), notes, barlines: Vec::new(), control_points }
+        Beatmap { meta: Meta::default(), notes, barlines: Vec::new(), control_points, first_velocity: 0.0 }
     }
 
     #[test]
