@@ -404,7 +404,9 @@ fn assert_every_screen_fits() {
     s.mp_menu.code = "123456".into();
     check(&mut s, "multiplayer menu code", &mut out);
     s.mp_menu.code_for = Some(multiplayer::CodeFor::Reset);
+    s.mp_status = "code sent to g******@gmail.com (check spam too): type it and a new password, then SET NEW PASSWORD".into();
     check(&mut s, "multiplayer menu reset", &mut out);
+    s.mp_status.clear();
     // An old account without an email, with a full lobby list, and linking one.
     s.mp_menu.code_for = None;
     s.mp_menu.account = Some("MyOwnAccountName".into());

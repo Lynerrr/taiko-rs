@@ -5126,10 +5126,11 @@ impl State {
                         Ok(online::Reply::CodeSent(to)) => {
                             menu.code_for = menu.asking.take();
                             menu.code.clear();
+                            // The server's mail is new to the big mail services: it may land in spam.
                             self.mp_status = match menu.code_for {
-                                Some(multiplayer::CodeFor::Reset) => format!("code sent to {to}: type it and a new password, then SET NEW PASSWORD"),
-                                Some(multiplayer::CodeFor::Link) => format!("code sent to {to}: type it, then LINK EMAIL"),
-                                _ => format!("code sent to {to}: type it, then CREATE ACCOUNT"),
+                                Some(multiplayer::CodeFor::Reset) => format!("code sent to {to} (check spam too): type it and a new password, then SET NEW PASSWORD"),
+                                Some(multiplayer::CodeFor::Link) => format!("code sent to {to} (check spam too): type it, then LINK EMAIL"),
+                                _ => format!("code sent to {to} (check spam too): type it, then CREATE ACCOUNT"),
                             };
                             menu.select(multiplayer::Row::Code);
                         }
