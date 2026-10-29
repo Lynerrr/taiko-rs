@@ -79,6 +79,7 @@ pub enum Item {
     Changelog,
     /// Only for krokodil_koban: closes taiko.rs and starts osu!stable.
     KrokodilKoban,
+    HitFlash,
     Fullscreen,
     WindowSize,
     DiscordPresence,
@@ -91,7 +92,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 108] = [
+pub const ITEMS: [(&str, Item); 109] = [
     ("GENERAL", Item::Language),
     ("GENERAL", Item::SongsFolder),
     ("GENERAL", Item::ShowConverts),
@@ -183,6 +184,7 @@ pub const ITEMS: [(&str, Item); 108] = [
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinParts),
     ("SKIN", Item::SkinFolder),
+    ("SKIN", Item::HitFlash),
     ("SKIN", Item::NoteColours),
     ("SKIN", Item::DonColour),
     ("SKIN", Item::KatColour),
@@ -318,6 +320,7 @@ impl Item {
             Item::WheelResize => tr!("Wheel resizes playfield", "ホイールでサイズを変える", "Колесо меняет размер поля"),
             Item::KiaiEffects => tr!("Kiai effects", "キアイの演出", "Эффекты киай"),
             Item::HideGreat => tr!("Hide GREAT splash", "GREATの表示を隠す", "Скрыть вспышку GREAT"),
+            Item::HitFlash => tr!("Hit flash", "ヒット時の光", "Вспышка при попадании"),
             Item::ChatFilter => tr!("Chat filter", "チャットフィルター", "Фильтр чата"),
             Item::MessageSound => tr!("Message sound", "メッセージの音", "Звук сообщений"),
             Item::NotifyMessages => tr!("Notify: messages", "通知: メッセージ", "Уведомлять: сообщения"),
@@ -408,6 +411,7 @@ impl Item {
             | Item::KiaiEffects
             | Item::AutoplayLeftHanded
             | Item::HideGreat
+            | Item::HitFlash
             | Item::ChatFilter
             | Item::MessageSound
             | Item::NotifyPlaying
@@ -590,6 +594,11 @@ impl Item {
                 "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",
                 "300で光らず\"GREAT\"も出しません (空のhit300のスキンと同じ)。OKとミスだけが出ます。",
                 "Без вспышки и \"GREAT\" на 300, как у скинов с пустым hit300: видны только OK и промахи."
+            ),
+            Item::HitFlash => tr!(
+                "The coloured glow on the hit target as a note is hit (OKs light it up orange). Off: none.",
+                "ノーツを叩いたときの判定枠の色付きの光 (OKはオレンジ)。オフ: 光りません。",
+                "Цветное свечение мишени при попадании (на OK — оранжевое). Выкл.: без него."
             ),
             Item::ChatFilter => tr!(
                 "Stars out swear words in friends' messages, the global chat and lobby chats.",

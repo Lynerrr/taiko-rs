@@ -2009,6 +2009,7 @@ impl State {
             Item::BackgroundDimBlack => on(c.bg_dim_black),
             Item::KiaiEffects => on(c.kiai_effects),
             Item::HideGreat => on(c.hide_great),
+            Item::HitFlash => on(c.hit_flash),
             Item::DiscordPresence => on(c.discord_presence),
             Item::ChatFilter => on(c.chat_filter),
             Item::MessageSound => on(c.message_sound),
@@ -2202,6 +2203,7 @@ impl State {
             Item::BackgroundDimBlack => self.cfg.bg_dim_black = !self.cfg.bg_dim_black,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
+            Item::HitFlash => self.cfg.hit_flash = !self.cfg.hit_flash,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
             Item::ChatFilter => {
                 self.cfg.chat_filter = !self.cfg.chat_filter;
@@ -7045,6 +7047,7 @@ impl State {
         render::set_animations(self.cfg.animations);
         render::set_accent(self.cfg.accent);
         game::set_hide_great(self.cfg.hide_great);
+        game::set_hit_flash(self.cfg.hit_flash);
         // Screen changes fade in.
         let kind = std::mem::discriminant(&self.scene);
         if self.scene_kind != Some(kind) {

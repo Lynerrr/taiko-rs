@@ -6,11 +6,18 @@ use std::sync::Arc;
 use std::time::Instant;
 
 static HIDE_GREAT: AtomicBool = AtomicBool::new(true);
+static HIT_FLASH: AtomicBool = AtomicBool::new(true);
 
 /// GREAT hits without their splash (no flash on the hit target, no "GREAT"), like osu! skins
 /// with an empty taiko-hit300: only OKs and misses stand out (Settings -> Playfield).
 pub fn set_hide_great(on: bool) {
     HIDE_GREAT.store(on, Ordering::Relaxed);
+}
+
+/// The coloured flash on the hit target as a note is hit (Settings -> Skin): off, OKs don't
+/// light it up either.
+pub fn set_hit_flash(on: bool) {
+    HIT_FLASH.store(on, Ordering::Relaxed);
 }
 
 /// Whether `j` gets its flash and label.
@@ -2950,7 +2957,7 @@ impl Game {
         }
         if let Some((j, at)) = self.last_judge.filter(|_| !self.hidden.has(Part::Judgements)) {
             let a = (1.0 - (t - at) / 220.0).clamp(0.0, 1.0) as f32;
-            if a > 0.0 && j != Judge::Miss && splashes(j) {
+            if a > 0.0 && j != Judge::Miss && splashes(j) && HIT_FLASH.load(Ordering::Relaxed) {
                 c.glow(HIT_X, LANE_Y, NOTE_R + 2.0, 26.0, rgba(j.color(), 0.55 * a));
             }
         }
