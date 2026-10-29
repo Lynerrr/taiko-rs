@@ -27,6 +27,9 @@ struct Stored {
     score: OnlineScore,
     #[serde(skip)]
     sent_pp: Option<f64>,
+    /// MD5 of the `.osu` played (from games that send it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    md5: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -64,6 +67,8 @@ pub struct Scores {
     submits: HashMap<String, Vec<Instant>>,
     /// Whether plays on a set give pp (None: not known yet).
     gives_pp: fn(Option<u32>) -> Option<bool>,
+    /// Whether a `.osu` (by MD5) is one of the set's own on osu! (not an edited copy).
+    official: fn(Option<u32>, &str) -> bool,
     /// Indexes into `all` (oldest first): each player's plays and each map's, so a submit, a
     /// profile or a page looks at those plays only, however many there are in all.
     by_player: HashMap<String, Vec<usize>>,
@@ -138,6 +143,7 @@ impl Scores {
             next_id,
             submits: HashMap::new(),
             gives_pp: crate::loved::gives_pp,
+            official: crate::covers::official,
             by_player: HashMap::new(),
             by_map: HashMap::new(),
             standings: HashMap::new(),
@@ -245,7 +251,8 @@ impl Scores {
         let mut sets: HashMap<Option<u32>, bool> = HashMap::new();
         let mut changed: HashSet<String> = HashSet::new();
         for s in &mut self.all {
-            let gives = *sets.entry(s.score.set_id).or_insert_with(|| (self.gives_pp)(s.score.set_id) != Some(false));
+            let set = *sets.entry(s.score.set_id).or_insert_with(|| (self.gives_pp)(s.score.set_id) != Some(false));
+            let gives = set && s.md5.as_deref().is_none_or(|m| (self.official)(s.score.set_id, m));
             let pp = self.overrides.get(&s.id).copied().or(s.sent_pp).filter(|_| gives);
             if pp != s.score.pp {
                 s.score.pp = pp;
@@ -319,6 +326,7 @@ impl Scores {
                 scroll_speed: play.scroll_speed.filter(|s| s.is_finite() && (0.1..=10.0).contains(s)),
             },
             sent_pp: play.pp,
+            md5: play.md5.as_deref().map(|m| online::clean_text(m, 32).to_ascii_lowercase()),
         };
         if let Some(dir) = &self.replays {
             let replay = StoredReplay { version: play.replay_version, map: &play.map, inputs: &play.inputs };
@@ -339,7 +347,7 @@ impl Scores {
             self.count_play(player, ms, false);
         }
         let map = stored.score.map_hash;
-        let gives = (self.gives_pp)(stored.score.set_id) != Some(false);
+        let gives = (self.gives_pp)(stored.score.set_id) != Some(false) && stored.md5.as_deref().is_none_or(|m| (self.official)(stored.score.set_id, m));
         self.all.push(stored);
         if let Some(s) = self.all.last_mut().filter(|_| !gives) {
             s.score.pp = None;
@@ -619,6 +627,7 @@ mod tests {
             stars: Some(5.0),
             scroll_speed: Some(0.5),
             play_ms: Some(60_000),
+            md5: None,
         }
     }
 
@@ -731,6 +740,24 @@ mod tests {
         s.count_pp();
         assert!((s.profile("a", "A", 0).pp - (500.0 + 95.0)).abs() < 1e-9);
         assert_eq!(s.rankings(10)[0].pp, s.profile("a", "A", 0).pp);
+    }
+
+    #[test]
+    fn an_edited_copy_of_a_ranked_map_gives_no_pp() {
+        let mut s = Scores::load(None);
+        s.gives_pp = |_| Some(true);
+        s.official = |_, md5| md5 == "aa11";
+        let on = |map: u64, md5: Option<&str>| {
+            let mut p = play(map, 100, 100.0);
+            p.map.set_id = Some(1);
+            p.md5 = md5.map(String::from);
+            p
+        };
+        assert_eq!(s.submit("a", "A", on(7, Some("AA11")), 1).unwrap().1, 100.0);
+        assert_eq!(s.submit("a", "A", on(8, Some("cc33")), 2).unwrap().1, 100.0, "OD10 copy");
+        assert!((s.submit("a", "A", on(9, None), 3).unwrap().1 - 195.0).abs() < 1e-9, "older games don't say: counts");
+        s.count_pp();
+        assert!((s.profile("a", "A", 0).pp - 195.0).abs() < 1e-9, "and the recount agrees");
     }
 
     #[test]

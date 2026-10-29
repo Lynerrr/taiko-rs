@@ -96,6 +96,10 @@ pub struct ScoreSubmit {
     /// The scroll speed setting played at (pp count it).
     #[serde(default)]
     pub scroll_speed: Option<f64>,
+    /// MD5 of the `.osu` played: a difficulty edited from a ranked one (OD changed, a rate
+    /// baked in) isn't osu!'s and gives no pp.
+    #[serde(default)]
+    pub md5: Option<String>,
 }
 
 /// A score on a leaderboard or a profile.

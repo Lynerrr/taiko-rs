@@ -261,7 +261,9 @@ struct State {
     downloads: Vec<download::Job>,
     /// Song select: the set being checked for a newer version on osu! (see `poll_set_check`),
     /// and the one the selection rests on, since when.
-    set_check: Option<(u32, Receiver<Result<bool, String>>)>,
+    /// The set being checked against osu!: whether it's outdated, and its difficulties here
+    /// that aren't osu!'s.
+    set_check: Option<(u32, Receiver<Result<(bool, Vec<PathBuf>), String>>)>,
     set_check_due: Option<(u32, Instant)>,
     /// Android: when the folder of .osz files opened with the game was last looked at.
     #[cfg(target_os = "android")]
@@ -5580,7 +5582,7 @@ impl State {
     /// else osu!.db's (which can't tell graveyard from pending).
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
-        let Some(set) = e.meta.set_id else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
+        let Some(set) = e.meta.set_id.filter(|_| !self.select.edited.contains(&e.path)) else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
         if self.select.server_loved.contains(&set) {
             return Some(("LOVED HERE", 0xff66aa));
         }
@@ -7496,6 +7498,7 @@ impl State {
                                 stars: stars::star_rating(&e.path, replay.rate),
                                 scroll_speed: Some(replay.scroll_speed),
                                 play_ms: Some(game.played_ms as u64),
+                                md5: std::fs::read(&e.path).ok().map(|b| download::md5_hex(&b)),
                             };
                             self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
                             // Counted with the play itself.
@@ -8368,8 +8371,15 @@ impl State {
         if let Some((id, rx)) = &self.set_check {
             let id = *id;
             let state = match rx.try_recv() {
-                Ok(Ok(true)) => ui::SetUpdate::Available,
-                Ok(Ok(false)) => ui::SetUpdate::UpToDate,
+                Ok(Ok((outdated, edited))) => {
+                    // Like osu!stable: a difficulty whose file osu! doesn't know (edited from a
+                    // ranked one) isn't ranked, whatever its set is.
+                    if !edited.is_empty() {
+                        self.select.edited.extend(edited);
+                        self.select.refilter(&self.library);
+                    }
+                    if outdated { ui::SetUpdate::Available } else { ui::SetUpdate::UpToDate }
+                }
                 Ok(Err(e)) => {
                     eprintln!("checking set {id} for updates: {e}");
                     ui::SetUpdate::Unknown
@@ -8413,8 +8423,10 @@ impl State {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = download::set_checksums(id).map(|online| {
-                let here: Vec<(Option<u32>, String)> = maps.iter().filter_map(|(bid, p)| Some((*bid, download::md5_hex(&std::fs::read(p).ok()?)))).collect();
-                download::outdated(&here, &online)
+                let here: Vec<(Option<u32>, String, &PathBuf)> = maps.iter().filter_map(|(bid, p)| Some((*bid, download::md5_hex(&std::fs::read(p).ok()?), p))).collect();
+                let ids: Vec<(Option<u32>, String)> = here.iter().map(|(bid, md5, _)| (*bid, md5.clone())).collect();
+                let edited = here.iter().filter(|(_, md5, _)| !download::is_osus(md5, &online)).map(|(_, _, p)| (*p).clone()).collect();
+                (download::outdated(&ids, &online), edited)
             });
             let _ = tx.send(result);
         });

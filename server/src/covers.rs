@@ -40,6 +40,9 @@ pub struct Info {
     /// Unix seconds it was looked up (0: before this was kept).
     #[serde(default)]
     pub checked: u64,
+    /// MD5 of each difficulty's `.osu` on osu! (empty: before these were kept).
+    #[serde(default)]
+    pub checksums: Vec<String>,
 }
 
 /// Sets whose status can still change (qualified, pending...) are looked up again this often.
@@ -65,7 +68,7 @@ fn gives_pp_by(set: Option<&Set>) -> Option<bool> {
 /// status may have changed since.
 fn stale(set: &Set, now: u64) -> bool {
     match set {
-        Set::Found(info) => info.status.is_empty() || (!status_gives_pp(&info.status) && now.saturating_sub(info.checked) >= RECHECK_SECS),
+        Set::Found(info) => info.status.is_empty() || info.checksums.is_empty() || (!status_gives_pp(&info.status) && now.saturating_sub(info.checked) >= RECHECK_SECS),
         Set::Missing => false,
     }
 }
@@ -167,6 +170,21 @@ pub fn gives_pp(set: Option<u32>) -> Option<bool> {
     gives_pp_by(c.known(set).as_ref())
 }
 
+/// Whether a `.osu` with this MD5 is one of `set`'s difficulties on osu!: an edited copy (OD
+/// changed, a rate baked in) isn't, and gives no pp even on a ranked set. True while it can't be
+/// told (the set not looked up yet, or before checksums were kept).
+pub fn official(set: Option<u32>, md5: &str) -> bool {
+    let (Some(c), Some(set)) = (COVERS.get(), set) else { return true };
+    official_by(c.known(set).as_ref(), md5)
+}
+
+fn official_by(set: Option<&Set>, md5: &str) -> bool {
+    match set {
+        Some(Set::Found(info)) if !info.checksums.is_empty() => info.checksums.iter().any(|m| m.eq_ignore_ascii_case(md5)),
+        _ => true,
+    }
+}
+
 /// The artist and title of `set`, if it's been looked up.
 pub fn names(set: u32) -> Option<(String, String)> {
     match COVERS.get()?.sets.lock().unwrap().get(&set)? {
@@ -207,6 +225,8 @@ fn look_up(set: u32) -> Option<Set> {
     struct Beatmap {
         #[serde(default)]
         version: String,
+        #[serde(default)]
+        checksum: Option<String>,
     }
     #[derive(Deserialize)]
     struct Remote {
@@ -239,6 +259,7 @@ fn look_up(set: u32) -> Option<Set> {
                     artist: r.artist,
                     title: r.title,
                     nsfw: r.nsfw,
+                    checksums: r.beatmaps.iter().filter_map(|b| b.checksum.as_ref().map(|m| m.to_ascii_lowercase())).collect(),
                     versions: r.beatmaps.into_iter().map(|b| b.version).collect(),
                     status: r.status,
                     checked: now_secs(),
@@ -256,6 +277,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_osus_own_difficulties_are_official() {
+        let set = Set::Found(Info { status: "ranked".into(), checksums: vec!["aa11".into(), "bb22".into()], ..Default::default() });
+        assert!(official_by(Some(&set), "BB22"));
+        assert!(!official_by(Some(&set), "cc33"), "an edited copy");
+        // Not known yet, or looked up before checksums were kept: can't tell.
+        assert!(official_by(None, "cc33"));
+        assert!(official_by(Some(&Set::Found(Info { status: "ranked".into(), ..Default::default() })), "cc33"));
+    }
+
+    #[test]
     fn nsfw_and_blocked_sets_hide_their_cover_and_unknown_ones_wait() {
         let safe = Set::Found(Info { nsfw: false, ..Default::default() });
         let nsfw = Set::Found(Info { nsfw: true, ..Default::default() });
@@ -268,7 +299,7 @@ mod tests {
 
     #[test]
     fn only_ranked_approved_and_loved_sets_give_pp() {
-        let with = |status: &str| Set::Found(Info { status: status.into(), checked: 100, ..Default::default() });
+        let with = |status: &str| Set::Found(Info { status: status.into(), checked: 100, checksums: vec!["aa11".into()], ..Default::default() });
         for (status, gives) in [("ranked", true), ("approved", true), ("loved", true), ("qualified", false), ("pending", false), ("wip", false), ("graveyard", false)] {
             assert_eq!(gives_pp_by(Some(&with(status))), Some(gives), "{status}");
         }
@@ -280,6 +311,8 @@ mod tests {
         assert!(!stale(&with("ranked"), 100 + RECHECK_SECS * 10));
         assert!(!stale(&with("qualified"), 100 + RECHECK_SECS - 1));
         assert!(stale(&with("qualified"), 100 + RECHECK_SECS));
+        // Looked up before the difficulties' checksums were kept: again, for them.
+        assert!(stale(&Set::Found(Info { status: "ranked".into(), checked: 100, ..Default::default() }), 101));
     }
 
     #[test]
