@@ -315,7 +315,20 @@ pub fn scan(inputs: &[PathBuf], found: &AtomicUsize) -> Vec<Entry> {
     scan_cached(inputs, found, &library_cache())
 }
 
+/// Where `p` really is: the same folder reached two ways (a link, another case on Windows) is
+/// the same place.
+fn place(p: &Path) -> PathBuf {
+    let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    if cfg!(windows) { PathBuf::from(p.to_string_lossy().to_lowercase()) } else { p }
+}
+
 fn scan_cached(inputs: &[PathBuf], found: &AtomicUsize, cache_path: &Path) -> Vec<Entry> {
+    // A folder named twice (osu!'s install found both where it usually is and where the registry
+    // says, in another case; a `songs =` line repeating it) is scanned once: twice listed every
+    // map in it twice.
+    let mut places = std::collections::HashSet::new();
+    let inputs: Vec<PathBuf> = inputs.iter().filter(|p| places.insert(place(p))).cloned().collect();
+    let inputs = inputs.as_slice();
     let mut cache = load_cache(cache_path);
     let mut kept: Vec<CachedFolder> = Vec::new();
     // Files to read, with the set folder (index into `walked`) they are cached under, if any.
@@ -409,6 +422,13 @@ fn scan_cached(inputs: &[PathBuf], found: &AtomicUsize, cache_path: &Path) -> Ve
         let key = |e: &Entry| (e.meta.artist.to_lowercase(), e.meta.title.to_lowercase(), e.path.parent().map(|p| p.to_path_buf()));
         key(a).cmp(&key(b)).then(a.size.cmp(&b.size))
     });
+    // The same difficulty in two folders (a set downloaded again, a copy of the folder) is
+    // listed once.
+    let mut copies = std::collections::HashSet::new();
+    entries.retain(|e| {
+        let m = &e.meta;
+        m.beatmap_id.is_none() || copies.insert((m.set_id, m.beatmap_id, m.version.clone(), m.title.clone(), m.artist.clone(), e.size))
+    });
     entries
 }
 
@@ -495,6 +515,26 @@ mod tests {
         assert_eq!(scan(), names);
         // And again, all from the cache.
         assert_eq!(scan(), names);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_folder_or_difficulty_found_twice_is_listed_once() {
+        let root = std::env::temp_dir().join(format!("taiko-rs-twice-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let songs = root.join("Songs");
+        let osu = |version: &str| format!("osu file format v14\n\n[General]\nMode: 1\n\n[Metadata]\nTitle:T\nArtist:A\nVersion:{version}\nBeatmapID:7\nBeatmapSetID:3\n");
+        for set in ["3 A - T", "3 A - T (1)"] {
+            std::fs::create_dir_all(songs.join(set)).unwrap();
+            std::fs::write(songs.join(set).join("oni.osu"), osu("Oni")).unwrap();
+        }
+        // Edited (another difficulty name): a map of its own.
+        std::fs::write(songs.join("3 A - T (1)").join("od10.osu"), osu("Oni OD10")).unwrap();
+        let found = AtomicUsize::new(0);
+        let scanned = scan_cached(&[songs.clone(), songs.join(".")], &found, &root.join("library.json"));
+        let mut versions: Vec<String> = scanned.into_iter().map(|e| e.meta.version).collect();
+        versions.sort();
+        assert_eq!(versions, ["Oni", "Oni OD10"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 
