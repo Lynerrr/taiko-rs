@@ -399,6 +399,8 @@ struct State {
     quit: bool,
     /// "Exit taiko.rs?" is up (Ctrl+Q, Esc in song select, the window's close button).
     quit_asked: bool,
+    /// The game crashed last time: its report, offered to copy (`draw_crash`).
+    crash: Option<String>,
     /// F12 was pressed: the next frame is saved as a picture.
     screenshot_due: bool,
     smooth: Option<debug::Smoothness>,
@@ -6689,6 +6691,58 @@ impl State {
         }
     }
 
+    /// The crash question is up: after the splash, over everything but the exit question.
+    fn crash_shown(&self) -> bool {
+        self.crash.is_some() && self.splash.is_none() && !self.quit_asked
+    }
+
+    /// A key while "taiko.rs crashed last time" is up: copy the report, or not.
+    fn crash_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::KeyC | KeyCode::Digit1 | KeyCode::Numpad1 => {
+                let Some(report) = self.crash.take() else { return };
+                let text = if clipboard::set(&report) {
+                    tr!("crash log copied: paste it in #bugs on Discord", "クラッシュログをコピーしました: Discordの#bugsに貼ってください", "лог краша скопирован: вставьте его в #bugs в Discord")
+                } else {
+                    tr!("couldn't copy it: send crash.log from the game's data folder", "コピーできませんでした: データフォルダのcrash.logを送ってください", "не удалось скопировать: пришлите crash.log из папки данных игры")
+                };
+                self.toast = Some(Toast { text: text.into(), until: Instant::now() + Duration::from_secs(6) });
+            }
+            KeyCode::Escape | KeyCode::Backspace | KeyCode::Digit2 | KeyCode::Numpad2 => self.crash = None,
+            _ => {}
+        }
+    }
+
+    /// "taiko.rs crashed last time": the report to copy and send in.
+    fn draw_crash(&self, c: &mut Canvas) {
+        if !self.crash_shown() {
+            return;
+        }
+        let w = c.width;
+        c.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
+        let (bw, bh) = (380.0f32.min(w - 32.0), 132.0);
+        let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
+        c.round_rect(x, y, bw, bh, 10.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
+        c.text_centered(w / 2.0, y + 18.0, 12.0, rgba(0xffffff, 1.0), tr!("taiko.rs crashed last time", "前回taiko.rsがクラッシュしました", "taiko.rs вылетел в прошлый раз"));
+        let room = bw - 32.0;
+        for (k, line) in [
+            tr!("Copy the crash log and paste it in #bugs", "クラッシュログをコピーして", "Скопируйте лог краша и вставьте его"),
+            tr!("on the taiko.rs Discord, so it gets fixed.", "Discordの#bugsに貼ってください。", "в #bugs в Discord taiko.rs, чтобы мы починили."),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let size = Canvas::fit_size(8.0, 6.5, room, line);
+            c.text_centered(w / 2.0, y + 42.0 + 13.0 * k as f32, size, rgba(0xc8c8d8, 1.0), &Canvas::fit(size, room, line));
+        }
+        let gap = 10.0;
+        let button = (bw - 36.0 - gap) / 2.0;
+        let copy = tr!("1. Copy log  (Enter)", "1. コピー  (Enter)", "1. Копировать  (Enter)");
+        let close = tr!("2. Close  (Esc)", "2. 閉じる  (Esc)", "2. Закрыть  (Esc)");
+        c.button(x + 18.0, y + 88.0, button, 26.0, copy, 9.0, render::Hit::Key(KeyCode::KeyC), true);
+        c.button(x + 18.0 + button + gap, y + 88.0, button, 26.0, close, 9.0, render::Hit::Key(KeyCode::Escape), false);
+    }
+
     /// The exit question over everything.
     fn draw_quit(&self, c: &mut Canvas) {
         if !self.quit_asked {
@@ -6710,6 +6764,12 @@ impl State {
         if self.quit_asked {
             if !repeat {
                 self.quit_key(code);
+            }
+            return;
+        }
+        if self.crash_shown() {
+            if !repeat {
+                self.crash_key(code);
             }
             return;
         }
@@ -6755,6 +6815,12 @@ impl State {
         if self.quit_asked {
             if !repeat {
                 self.quit_key(code);
+            }
+            return;
+        }
+        if self.crash_shown() {
+            if !repeat {
+                self.crash_key(code);
             }
             return;
         }
@@ -8114,6 +8180,7 @@ impl State {
         }
         self.draw_update(canvas);
         self.draw_drag_hover(canvas, now);
+        self.draw_crash(canvas);
         self.draw_quit(canvas);
         if self.splash.is_some() {
             let boot = self.boot_log();
@@ -8713,6 +8780,9 @@ impl State {
         use render::Hit;
         // The exit question takes only its own buttons.
         if self.quit_asked && !matches!(hit, Hit::Key(KeyCode::KeyY | KeyCode::KeyN)) {
+            return;
+        }
+        if self.crash_shown() && !matches!(hit, Hit::Key(KeyCode::KeyC | KeyCode::Escape)) {
             return;
         }
         match hit {
@@ -9733,6 +9803,7 @@ impl State {
             exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
             quit: false,
             quit_asked: false,
+            crash: crash_report(),
             screenshot_due: false,
             smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
             frame_acquired: None,
@@ -9851,27 +9922,69 @@ pub fn desktop_main() {
     run(cfg, args, auto, link, event_loop);
 }
 
+/// The latest crash's report, kept until the next start has offered to copy it.
+const CRASH_REPORT: &str = "crash-report.txt";
+
 /// A crash leaves `crash.log` next to the scores (release builds on Windows have no console to
-/// print it to), so a player can send it in.
+/// print it to), and the report on its own for the next start to offer (`crash_report`). On
+/// Windows the report also goes on the clipboard and a message box says to send it in, since
+/// the game just vanishes otherwise.
 fn log_crashes() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let thread = std::thread::current().name().unwrap_or("?").to_string();
+        let text = format!(
+            "--- taiko.rs crash at unix {at}, build {} ({}, {})\nthread {thread}: {info}\n{}\n",
+            update::BUILD.unwrap_or("local"),
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::backtrace::Backtrace::force_capture()
+        );
         if let Some(dir) = config::data_dir() {
-            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            let thread = std::thread::current().name().unwrap_or("?").to_string();
-            let text = format!(
-                "--- crash at unix {at}, build {} ({})\nthread {thread}: {info}\n{}\n",
-                update::BUILD.unwrap_or("local"),
-                env!("CARGO_PKG_VERSION"),
-                std::backtrace::Backtrace::force_capture()
-            );
             let _ = std::fs::create_dir_all(&dir);
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
                 let _ = std::io::Write::write_all(&mut f, text.as_bytes());
             }
+            if cfg!(panic = "abort") {
+                let _ = std::fs::write(dir.join(CRASH_REPORT), &text);
+            }
         }
         default(info);
+        // Only where a panic ends the game (release builds): a debug build's caught one isn't a crash.
+        #[cfg(all(windows, panic = "abort"))]
+        {
+            // A clipboard of its own: the game's may be what was held when it crashed.
+            let copied = arboard::Clipboard::new().and_then(|mut b| b.set_text(text.clone())).is_ok();
+            let what = if copied { "The crash log is copied: paste it (Ctrl+V)" } else { "Send the crash log (crash.log in the game's data folder)" };
+            crash_box(&format!("taiko.rs crashed.\n\n{what} in #bugs on the taiko.rs Discord, so it can be fixed.\n\n{}", info));
+        }
     }));
+}
+
+/// A message box (Windows), there even without a window of the game's.
+#[cfg(all(windows, panic = "abort"))]
+fn crash_box(text: &str) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(hwnd: *mut std::ffi::c_void, text: *const u16, caption: *const u16, kind: u32) -> i32;
+    }
+    const MB_ICONERROR: u32 = 0x10;
+    const MB_TOPMOST: u32 = 0x4_0000;
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (text, caption) = (wide(text), wide("taiko.rs crashed"));
+    // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call; no owner window.
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_ICONERROR | MB_TOPMOST);
+    }
+}
+
+/// The report of a crash last time that hasn't been offered yet (and forgets it).
+fn crash_report() -> Option<String> {
+    let file = config::data_dir()?.join(CRASH_REPORT);
+    let text = std::fs::read_to_string(&file).ok()?;
+    let _ = std::fs::remove_file(&file);
+    Some(text).filter(|t| !t.trim().is_empty())
 }
 
 /// Android entry point (the native activity's `android_main`): no command line, the app's own

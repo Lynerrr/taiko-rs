@@ -398,6 +398,10 @@ fn assert_every_screen_fits() {
     check(&mut s, "download results", &mut out);
     s.scene = Scene::MpMenu;
     check(&mut s, "multiplayer menu", &mut out);
+    s.crash = Some("--- taiko.rs crash".into());
+    check(&mut s, "crash report", &mut out);
+    s.key(KeyCode::Escape, false, None, Instant::now(), None);
+    assert!(s.crash.is_none(), "Esc closes it");
     // Signing up with a code, and resetting a password.
     s.mp_menu.email = "a.rather.long.email.address@example-mail.com".into();
     s.mp_menu.code_for = Some(multiplayer::CodeFor::Register);
