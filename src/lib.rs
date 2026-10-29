@@ -5695,11 +5695,22 @@ impl State {
     /// Asks the mirrors for the selected set's status once the selection has rested a moment
     /// (scrolling past sets asks about none of them), and takes in what they say.
     fn poll_set_status(&mut self, now: Instant) {
+        // A sweep's answers come thousands at a time: the library is gone through once for them.
+        let mut by_set: Option<std::collections::HashMap<u32, Vec<usize>>> = None;
         while let Ok((set, status)) = self.set_status_rx.try_recv() {
             // The mirrors know graveyard from pending, which osu!.db doesn't: the search uses theirs.
             if let Some(code) = status.as_deref().and_then(search::status_code) {
-                for e in self.library.iter().filter(|e| e.meta.set_id == Some(set)) {
-                    self.select.status.insert(e.path.clone(), code);
+                let by_set = by_set.get_or_insert_with(|| {
+                    let mut m: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
+                    for (i, e) in self.library.iter().enumerate() {
+                        if let Some(set) = e.meta.set_id {
+                            m.entry(set).or_default().push(i);
+                        }
+                    }
+                    m
+                });
+                for &i in by_set.get(&set).into_iter().flatten() {
+                    self.select.status.insert(self.library[i].path.clone(), code);
                 }
             }
             if let Some(status) = &status {
@@ -9688,6 +9699,8 @@ fn whats_new(cfg: &mut Config) -> Option<changelog::View> {
 /// Desktop entry point: the command line, then the game.
 pub fn desktop_main() {
     let cfg = Config::load();
+    config::set_data_folder(cfg.data_folder.clone());
+    log_crashes();
     let mut args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let auto = args.iter().any(|a| a == "--auto");
     args.retain(|a| a != "--auto");
@@ -9720,6 +9733,29 @@ pub fn desktop_main() {
         link::register();
     }
     run(cfg, args, auto, link, event_loop);
+}
+
+/// A crash leaves `crash.log` next to the scores (release builds on Windows have no console to
+/// print it to), so a player can send it in.
+fn log_crashes() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(dir) = config::data_dir() {
+            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let thread = std::thread::current().name().unwrap_or("?").to_string();
+            let text = format!(
+                "--- crash at unix {at}, build {} ({})\nthread {thread}: {info}\n{}\n",
+                update::BUILD.unwrap_or("local"),
+                env!("CARGO_PKG_VERSION"),
+                std::backtrace::Backtrace::force_capture()
+            );
+            let _ = std::fs::create_dir_all(&dir);
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+                let _ = std::io::Write::write_all(&mut f, text.as_bytes());
+            }
+        }
+        default(info);
+    }));
 }
 
 /// Android entry point (the native activity's `android_main`): no command line, the app's own
