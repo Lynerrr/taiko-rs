@@ -67,10 +67,6 @@ const COMBO_BREAK_GAIN: f32 = 1.2;
 pub const DON: u32 = 0xEB452C;
 pub const KAT: u32 = 0x438EAD;
 const ROLL: u32 = 0xFCB806;
-/// Drumroll ticks (`sliderscorepoint`), as stable tints them (owner's screenshot, IT'S SOOOO
-/// CREATIVE): yellow on the beat, pale orange on the half beat, the image's own colour elsewhere.
-const ROLL_TICK_BEAT: u32 = 0xFFFF00;
-const ROLL_TICK_HALF: u32 = 0xFFE696;
 const SWELL: u32 = 0xF39A2B;
 const WHITE: u32 = 0xFFFFFF;
 /// Colorless: dons and kats alike.
@@ -937,21 +933,28 @@ fn kiai_brighten(col: u32) -> u32 {
     (ch(16) + add).min(255) << 16 | (ch(8) + add).min(255) << 8 | (ch(0) + add).min(255)
 }
 
-/// A roll tick's tint at map time `t`, on the beat grid of its red line (`origin`, `beat`):
-/// yellow on a beat, pale orange on a half beat, white (the image's own colour) elsewhere.
-fn tick_tint(t: f64, origin: f64, beat: f64) -> u32 {
-    let at = |division: f64| {
-        let x = (t - origin) / beat * division;
-        (x - x.round()).abs() < 0.02 * division
-    };
-    if at(1.0) { ROLL_TICK_BEAT } else if at(2.0) { ROLL_TICK_HALF } else { WHITE }
+/// Stable's taiko PreEmpt (ms): how long 1000 osu!px take at the map's *first* timing point
+/// (`first_velocity`, osu!px per ms), once for the whole map, at most 5 s. Read from osu!.exe
+/// (`min(5000, 600 / VelocityAt(first timing point) / 0.6 * 1000)`; KatsuDonEditor's
+/// `stable_preempt`, 2026-10-30).
+fn stable_preempt(first_velocity: f64) -> f64 {
+    if first_velocity <= 0.0 {
+        return 5000.0;
+    }
+    (1000.0 / first_velocity).min(5000.0).floor()
 }
 
-/// A swell's alpha `until` ms before it starts: hidden, then fading in (easing in) from 1.5 beats
-/// before it, over lazer's 666 ms or half a beat if shorter (ppy/osu#21769, owner 2026-10-28;
-/// taiko_arranger's `spinner_fade` too).
-fn swell_fade(beat: f64, until: f64) -> f32 {
-    fade_from(1.5 * beat, (beat / 2.0).min(666.0), until)
+/// A swell's alpha `until` ms before it starts: stable's SpinnerTaiko fades it in linearly from
+/// PreEmpt before to 0.6 PreEmpt before. The PreEmpt is the map's, from its first SV, not the
+/// swell's: a map starting at 10x shows its swells only just before they're hit, however slow
+/// they scroll, and one starting slow shows a fast swell as soon as it's on the lane (owner,
+/// 2026-10-30). The swell still scrolls at its own SV.
+fn swell_fade(preempt: f64, until: f64) -> f32 {
+    let end = (preempt * 0.6).floor();
+    if preempt <= end {
+        return 1.0;
+    }
+    ((preempt - until) / (preempt - end)).clamp(0.0, 1.0) as f32
 }
 
 /// Hidden until `lead` ms before, then fading in (easing in) over `fade` ms.
@@ -3106,13 +3109,13 @@ impl Game {
                     if landed {
                         continue;
                     }
-                    let cp = beatmap::control_point_at(&self.map.control_points, n.time);
+                    // Ticks in sliderscorepoint's own colour, as stable draws them, and only on
+                    // the body: a last one rounded past the end isn't drawn beyond it.
                     for (k, hit) in st.ticks.iter().enumerate() {
                         let ts = s_of(n.time + k as f64 * n.tick_spacing, n.velocity);
-                        if !hit && ts > s0 && ts < lane_len {
+                        if !hit && ts > s0 && ts <= s1 && ts < lane_len {
                             let (x, y, ..) = place(ts, 0.0);
-                            let tint = tick_tint(n.time + k as f64 * n.tick_spacing, cp.beat_origin, cp.beat_length);
-                            if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(tint, a)) {
+                            if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(WHITE, a)) {
                                 c.circle(x, y, 4.0, rgba(WHITE, 0.85 * a), rgba(WHITE, 0.0), 0.0);
                             }
                         }
@@ -3134,7 +3137,8 @@ impl Game {
                     }
                     if vt < n.time {
                         let s = s_of(n.time, n.velocity);
-                        let a = note_alpha(s) * radar_lit(s, n.time, n.velocity) * swell_fade(beatmap::control_point_at(&self.map.control_points, n.time).beat_length, n.time - vt);
+                        let preempt = stable_preempt(self.map.first_velocity * self.mods.scroll());
+                        let a = note_alpha(s) * radar_lit(s, n.time, n.velocity) * swell_fade(preempt, n.time - vt);
                         if s < lane_len + r && a > 0.01 {
                             let (x, y, _, size) = place(s, 0.0);
                             let r = r * size;
@@ -4599,25 +4603,89 @@ mod tests {
         assert_eq!(g.stats.miss, 0);
     }
 
+    /// The playfield of `map` drawn at map time `t`, with a skin's `sliderscorepoint` (so ticks
+    /// are sprites, tinted as the game tints them).
+    fn drawn(map: beatmap::Beatmap, t: f64) -> Canvas {
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        g.set_time(t);
+        let mut c = Canvas { width: 853.3, ..Default::default() };
+        c.sprites[Sprite::RollTick as usize] = Some([0.4, 0.4]);
+        g.draw_playfield(&mut c, 1.0);
+        c
+    }
+
+    fn is_sprite(sh: &Shape, sprite: Sprite) -> bool {
+        sh.params[3] == 10.0 + sprite as usize as f32
+    }
+
+    // Base mechanics the gimmick fixes broke once (owner, 2026-10-30): these keep them as stable
+    // has them.
+
     #[test]
-    fn roll_ticks_are_yellow_on_the_beat_and_orange_on_the_half() {
-        // 1/4 ticks from a red line at 100 with a 400 ms beat: beat, 1/4, half, 3/4, beat.
-        let tints: Vec<u32> = (0..5).map(|k| tick_tint(100.0 + k as f64 * 100.0, 100.0, 400.0)).collect();
-        assert_eq!(tints, [ROLL_TICK_BEAT, WHITE, ROLL_TICK_HALF, WHITE, ROLL_TICK_BEAT]);
-        // A roll off the grid takes none.
-        assert_eq!(tick_tint(130.0, 100.0, 400.0), WHITE);
+    fn roll_ticks_stay_on_the_body_in_sliderscorepoints_own_colour() {
+        // 100 BPM (1/8 ticks, 75 ms apart) and 180 BPM (1/4): each roll 7.6 ticks long, so its
+        // last tick is rounded half a tick past its end.
+        for beat in [600.0, 333.3] {
+            let mut map = beatmap::calibration_map(beat, 0, 16);
+            let spacing = if beat > 480.0 { beat / 8.0 } else { beat / 4.0 };
+            let head = map.notes[4].clone();
+            let roll = beatmap::Note { kind: Kind::Roll, end_time: head.time + 7.6 * spacing, tick_spacing: spacing, ..head.clone() };
+            map.notes.retain(|n| n.time < head.time || n.time > roll.end_time + 1000.0);
+            map.notes.insert(4, roll);
+            let c = drawn(map, head.time - 50.0);
+            let body = c.shapes.iter().find(|sh| sh.params[3] == 0.0 && sh.half[0] > sh.half[1] * 2.0 && sh.fill[..3] == rgba(ROLL, 1.0)[..3]).expect("roll body");
+            let body_end = body.center[0] + body.half[0] - body.half[1];
+            let ticks: Vec<&Shape> = c.shapes.iter().filter(|sh| is_sprite(sh, Sprite::RollTick)).collect();
+            // k = 0 is under the head, k = 8 past the end: 1..=7 drawn.
+            assert_eq!(ticks.len(), 7, "beat {beat}");
+            for t in ticks {
+                assert!(t.center[0] <= body_end + 0.01, "beat {beat}: a tick at {} past the body's end at {body_end}", t.center[0]);
+                assert_eq!(t.fill[..3], [1.0, 1.0, 1.0], "beat {beat}: ticks aren't tinted");
+            }
+        }
+    }
+
+    /// A map: `first` SV from the start, a 333 ms beat, SV `later` from 2000 on, a swell at 4000.
+    fn swell_map(first: f64, later: f64) -> beatmap::Beatmap {
+        let sv = |x: f64| -100.0 / x;
+        beatmap::tests::parse(&format!(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\nOverallDifficulty:5\n\n[TimingPoints]\n0,333.333333333333,4,1,0,100,1,0\n0,{},4,1,0,100,0,0\n2000,{},4,1,0,100,0,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n256,192,3000,1,0,0:0:0:0:\n256,192,4000,12,0,6000,0:0:0:0:\n",
+            sv(first),
+            sv(later)
+        ))
     }
 
     #[test]
-    fn a_swell_fades_in_from_a_beat_and_a_half_before_it() {
-        // 120 BPM: hidden until 750 ms before, fully in by 500 ms before.
-        assert_eq!(swell_fade(500.0, 850.0), 0.0);
-        assert_eq!(swell_fade(500.0, 625.0), 0.25);
-        assert_eq!(swell_fade(500.0, 500.0), 1.0);
-        assert_eq!(swell_fade(500.0, 0.0), 1.0);
-        // 30 BPM: from 3000 ms before, in over lazer's 666 ms.
-        assert_eq!(swell_fade(2000.0, 3000.0), 0.0);
-        assert_eq!(swell_fade(2000.0, 2334.0), 1.0);
+    fn stables_preempt_comes_from_the_first_timing_point() {
+        // 1.4 x 1.4 x 100 / 333.33 = 0.588 osu!px per ms at 1x: 1000 px in 1700 ms.
+        for (first, later, preempt) in [(1.0, 1.0, 1700.0), (1.0, 0.5, 1700.0), (10.0, 1.0, 170.0), (0.5, 2.0, 3401.0), (0.1, 1.0, 5000.0)] {
+            let map = swell_map(first, later);
+            assert_eq!(stable_preempt(map.first_velocity), preempt, "SV {first} then {later}");
+            // The swell itself scrolls at its own SV.
+            let (head, swell) = (&map.notes[0], &map.notes[2]);
+            assert_eq!(swell.kind, Kind::Swell);
+            assert!((swell.velocity / head.velocity - later / first).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_swell_fades_in_from_preempt_to_six_tenths_of_it_before() {
+        assert_eq!(swell_fade(1700.0, 1800.0), 0.0);
+        assert_eq!(swell_fade(1700.0, 1700.0), 0.0);
+        assert_eq!(swell_fade(1700.0, 1360.0), 0.5);
+        assert_eq!(swell_fade(1700.0, 1020.0), 1.0);
+        assert_eq!(swell_fade(1700.0, 0.0), 1.0);
+    }
+
+    #[test]
+    fn when_a_swell_shows_depends_on_the_first_sv_not_its_own() {
+        let swell_alpha = |c: &Canvas| c.shapes.iter().filter(|sh| sh.params[3] == 0.0 && sh.fill[..3] == rgba(SWELL, 1.0)[..3]).map(|sh| sh.fill[3]).fold(0.0, f32::max);
+        // Starting at 10x: PreEmpt 170 ms, so a 0.5x swell 400 ms out (well on the lane) is still
+        // hidden, and only fully there 102 ms before.
+        assert_eq!(swell_alpha(&drawn(swell_map(10.0, 0.5), 3600.0)), 0.0);
+        assert!(swell_alpha(&drawn(swell_map(10.0, 0.5), 3920.0)) > 0.99);
+        // Starting at 1x, the same swell is fully there 1 s out.
+        assert!(swell_alpha(&drawn(swell_map(1.0, 0.5), 3000.0)) > 0.99);
     }
 
     #[test]

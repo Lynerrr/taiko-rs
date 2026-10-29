@@ -115,6 +115,9 @@ pub struct Beatmap {
     pub notes: Vec<Note>,
     pub barlines: Vec<Barline>,
     pub control_points: Vec<ControlPoint>,
+    /// Scroll velocity (osu!px per ms) at the first timing point: what stable's PreEmpt, and so
+    /// when spinners show, comes from (see game.rs).
+    pub first_velocity: f64,
 }
 
 impl Meta {
@@ -220,7 +223,7 @@ pub fn load(path: &Path) -> Result<Beatmap, String> {
     if !meta.is_playable() {
         return Err(format!("unsupported mode {} (only osu!standard converts and taiko)", meta.mode));
     }
-    let mut map = Beatmap { meta, notes: Vec::new(), barlines: Vec::new(), control_points: Vec::new() };
+    let mut map = Beatmap { meta, notes: Vec::new(), barlines: Vec::new(), control_points: Vec::new(), first_velocity: 0.0 };
     convert(&mut map, body);
     if map.notes.is_empty() {
         return Err("beatmap has no hit objects".into());
@@ -495,6 +498,7 @@ fn convert(map: &mut Beatmap, mut body: Body) {
     map.barlines = build_barlines(&body.timing, end, &velocity_at);
     map.notes = notes;
     map.control_points = cps;
+    map.first_velocity = scroll[0].1;
 }
 
 /// The offset-calibration chart: one don on every beat from `first_beat` to `beats`, matching
@@ -518,7 +522,7 @@ pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
     let notes = (first_beat..beats).map(|b| hit(b as f64 * beat_ms, 0, velocity)).collect();
     let barlines = (0..beats).step_by(4).map(|b| Barline { time: b as f64 * beat_ms, velocity }).collect();
     let control_points = vec![ControlPoint { time: 0.0, beat_origin: 0.0, beat_length: beat_ms, sv: 1.0, kiai: false, volume: 1.0 }];
-    Beatmap { meta, notes, barlines, control_points }
+    Beatmap { meta, notes, barlines, control_points, first_velocity: velocity }
 }
 
 fn hit(time: f64, sound: u32, velocity: f64) -> Note {
@@ -623,7 +627,7 @@ SliderTickRate:1
 
     pub(crate) fn parse(text: &str) -> Beatmap {
         let (meta, body) = parse_sections(text, false);
-        let mut map = Beatmap { meta, notes: Vec::new(), barlines: Vec::new(), control_points: Vec::new() };
+        let mut map = Beatmap { meta, notes: Vec::new(), barlines: Vec::new(), control_points: Vec::new(), first_velocity: 0.0 };
         convert(&mut map, body);
         map
     }
