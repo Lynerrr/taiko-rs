@@ -489,7 +489,8 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
 
     let msg = if busy { "connecting..." } else { status };
     let room = w - 48.0;
-    c.text_centered(w / 2.0, 432.0, 9.0, rgba(0xFFD34D, 1.0), &Canvas::fit(9.0, room, msg));
+    let size = Canvas::fit_size(9.0, 6.5, room, msg);
+    c.text_centered(w / 2.0, 432.0 + (9.0 - size) / 2.0, size, rgba(0xFFD34D, 1.0), &Canvas::fit(size, room, msg));
     let note = "Everyone needs the same map in their Songs folder (or gets it from the host).";
     let size = Canvas::fit_size(8.0, 6.5, room, note);
     c.text_centered(w / 2.0, 450.0, size, rgba(0x8a8aa0, 1.0), &Canvas::fit(size, room, note));
