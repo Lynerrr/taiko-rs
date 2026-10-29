@@ -27,6 +27,8 @@
 //!   /api/claude/reply           POST (channel, to, text): Claude's answer, posted by the bot
 //!   /api/claude/mark            POST (channel, message, tag): a forum post tagged done (else ✅)
 //!                               (both need `Authorization: Bearer` with DIR/claude-key)
+//!   /api/mail/next              the oldest letter waiting (`mail.rs`), taken out; empty when
+//!                               none is (needs `Authorization: Bearer` with DIR/mail-key)
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -123,6 +125,8 @@ struct Req<'a> {
     viewer: Option<String>,
     /// It came with Claude's key (`discord::claude_key`).
     claude: bool,
+    /// It came with the mailer's key (`mail::mailer_key`).
+    mailer: bool,
 }
 
 impl Req<'_> {
@@ -209,6 +213,7 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let upload = method == "POST" && (path == "/avatar" || (path.starts_with("/u/") && path.ends_with("/avatar")));
     // Claude's answers too (a long one in Cyrillic is ~6 bytes a letter).
     let claude = bearer.as_deref().is_some_and(crate::discord::claude_key);
+    let mailer = bearer.as_deref().is_some_and(crate::mail::mailer_key);
     let max_body = if upload { crate::avatars::MAX_BYTES + MAX_FORM } else if claude { MAX_CLAUDE_FORM } else { MAX_FORM };
     let mut body = Vec::new();
     if method == "POST" && length <= max_body {
@@ -222,8 +227,8 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     }
     let viewer = token.as_deref().and_then(|t| state.user(t));
     let file = upload.then(|| crate::avatars::multipart_file(&content_type, &body, "avatar").map(<[u8]>::to_vec)).flatten();
-    let req = Req { method, path, query, form: if upload { HashMap::new() } else { form(&body) }, upload: file, os: Os::of(&agent), ip, token, viewer, claude };
-    let mut reply = if !web.allow(ip) {
+    let req = Req { method, path, query, form: if upload { HashMap::new() } else { form(&body) }, upload: file, os: Os::of(&agent), ip, token, viewer, claude, mailer };
+    let mut reply = if !mailer && !web.allow(ip) {
         Reply::text(429, "too many requests, wait a minute")
     } else if method == "POST" && (cross_site || length > max_body) {
         Reply::text(403, "no")
@@ -477,6 +482,11 @@ fn route(state: &State, req: &Req) -> Reply {
                     req.page(200, &format!("Chat with {}", p.name), "chat", pages::chat(me, Some(&p.name), &lines, &people, friends, error.as_deref()))
                 }
             }
+        }
+        ["api", "mail", "next"] if req.mailer => {
+            let mut r = Reply::text(200, &crate::mail::next().unwrap_or_default());
+            r.cache = "no-store";
+            r
         }
         ["api", "claude", "pings"] if req.claude => {
             let after = req.arg("after").and_then(|a| a.parse().ok()).unwrap_or(0);

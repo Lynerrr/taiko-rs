@@ -4830,6 +4830,12 @@ impl State {
                     Row::Password => {
                         self.mp_menu.password.pop();
                     }
+                    Row::Email => {
+                        self.mp_menu.email.pop();
+                    }
+                    Row::Code => {
+                        self.mp_menu.code.pop();
+                    }
                     Row::Name => {
                         self.cfg.mp_name.pop();
                     }
@@ -4848,23 +4854,82 @@ impl State {
                 let name = self.cfg.mp_name.clone();
                 let token = self.cfg.online_token.clone();
                 let account = self.mp_menu.account.clone().unwrap_or_default();
+                use multiplayer::CodeFor;
+                let menu = &mut self.mp_menu;
+                let code = (!menu.code.trim().is_empty()).then(|| menu.code.trim().to_string());
+                let email = menu.email.trim().to_string();
                 match row {
                     Row::User => self.mp_menu.select(Row::Password),
-                    Row::LogIn | Row::Register | Row::Password if self.mp_menu.account_request.is_some() => {}
+                    Row::Email | Row::Code => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
+                    Row::LogIn | Row::Register | Row::Password | Row::Forgot | Row::LinkEmail if menu.account_request.is_some() => {}
+                    // A new password typed for a reset goes with the code.
+                    Row::Password if menu.code_for == Some(CodeFor::Reset) => self.mp_menu.select(Row::Forgot),
+                    Row::Forgot => {
+                        let who = if menu.user.trim().is_empty() { email.clone() } else { menu.user.trim().to_string() };
+                        if who.is_empty() {
+                            self.mp_status = "type your username (or email) first".into();
+                            self.mp_menu.select(Row::User);
+                        } else if menu.code_for == Some(CodeFor::Reset) && code.is_some() {
+                            if !online::valid_password(&menu.password) {
+                                self.mp_status = "type a new password of at least 6 characters".into();
+                                self.mp_menu.select(Row::Password);
+                            } else {
+                                let password = Some(menu.password.clone());
+                                self.mp_status = "setting the new password...".into();
+                                menu.account_call(&server, online::Request::ResetPassword { who, code, password });
+                            }
+                        } else {
+                            menu.asking = Some(CodeFor::Reset);
+                            self.mp_status = "sending a code to the account's email...".into();
+                            menu.account_call(&server, online::Request::ResetPassword { who, code: None, password: None });
+                        }
+                    }
+                    Row::LinkEmail if !menu.linking => {
+                        menu.linking = true;
+                        menu.code_for = None;
+                        menu.cursor = 0;
+                        self.mp_status = "type your email, then SEND CODE".into();
+                    }
+                    Row::LinkEmail => {
+                        if !email.contains('@') {
+                            self.mp_status = "type your email first".into();
+                            self.mp_menu.select(Row::Email);
+                        } else if menu.code_for == Some(CodeFor::Link) && code.is_some() {
+                            self.mp_status = "linking the email...".into();
+                            menu.account_call(&server, online::Request::LinkEmail { token, email, code });
+                        } else {
+                            menu.asking = Some(CodeFor::Link);
+                            self.mp_status = format!("sending a code to {email}...");
+                            menu.account_call(&server, online::Request::LinkEmail { token, email, code: None });
+                        }
+                    }
+                    Row::LinkBack => {
+                        menu.linking = false;
+                        menu.code_for = None;
+                        menu.cursor = 0;
+                        self.mp_status.clear();
+                    }
                     Row::LogIn | Row::Register | Row::Password => {
-                        let (user, password) = (self.mp_menu.user.trim().to_string(), std::mem::take(&mut self.mp_menu.password));
+                        let user = menu.user.trim().to_string();
+                        // Logging in forgets the typed password; a new account's waits for its code.
+                        let password = if row == Row::Register { menu.password.clone() } else { std::mem::take(&mut menu.password) };
                         if !online::valid_name(&user) {
                             self.mp_status = format!("usernames are {}", online::NAME_RULES);
                             self.mp_menu.select(Row::User);
                         } else if row == Row::Register && !online::valid_password(&password) {
                             self.mp_status = "pick a password of at least 6 characters".into();
                             self.mp_menu.select(Row::Password);
+                        } else if row == Row::Register && !email.contains('@') {
+                            self.mp_status = "type your email: a code to create the account goes there".into();
+                            self.mp_menu.select(Row::Email);
                         } else if row == Row::Register {
-                            self.mp_status = format!("creating {user}...");
-                            self.mp_menu.account_call(&server, online::Request::Register { name: user, password });
+                            let code = code.filter(|_| menu.code_for == Some(CodeFor::Register));
+                            self.mp_status = if code.is_some() { format!("creating {user}...") } else { format!("sending a code to {email}...") };
+                            menu.asking = Some(CodeFor::Register);
+                            menu.account_call(&server, online::Request::Register { name: user, password, email: Some(email), code });
                         } else {
                             self.mp_status = format!("logging in as {user}...");
-                            self.mp_menu.account_call(&server, online::Request::Login { name: user, password });
+                            menu.account_call(&server, online::Request::Login { name: user, password });
                         }
                     }
                     Row::LogOut => {
@@ -4902,6 +4967,8 @@ impl State {
                     match row {
                         Row::User if self.mp_menu.user.len() < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') => self.mp_menu.user.push(ch),
                         Row::Password if self.mp_menu.password.chars().count() < 128 => self.mp_menu.password.push(ch),
+                        Row::Email if self.mp_menu.email.len() < 254 && ch.is_ascii_graphic() => self.mp_menu.email.push(ch),
+                        Row::Code if self.mp_menu.code.len() < 6 && ch.is_ascii_digit() => self.mp_menu.code.push(ch),
                         Row::Name if self.cfg.mp_name.chars().count() < 20 => self.cfg.mp_name.push(ch),
                         Row::Port => {
                             if let Some(d) = ch.to_digit(10) {
@@ -4925,6 +4992,9 @@ impl State {
         self.social = social::Social::default();
         self.select.nominator = false;
         self.mp_menu.account = None;
+        self.mp_menu.has_email = None;
+        self.mp_menu.linking = false;
+        self.mp_menu.code_for = None;
         self.mp_menu.rooms.clear();
         self.cfg.online_token.clear();
         self.cfg.save();
@@ -5026,22 +5096,50 @@ impl State {
                 Ok(result) => {
                     menu.account_request = None;
                     match result {
-                        Ok(online::Reply::Account { name, token, nominator }) => {
+                        Ok(online::Reply::Account { name, token, nominator, email }) => {
                             self.select.nominator = nominator;
                             self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name) || self.cfg.online_token != token;
                             menu.account = Some(name.clone());
                             menu.online = Some(Ok(()));
+                            menu.has_email = email;
+                            menu.asking = None;
+                            if menu.code_for.take().is_some() {
+                                menu.code.clear();
+                                menu.password.clear();
+                            }
                             if fresh {
                                 self.mp_status = format!("logged in as {name}");
                                 menu.cursor = 0;
                                 // A new login: reconnect the social side with its token.
                                 self.social = social::Social::default();
+                                // Accounts from before emails: a word about linking one.
+                                if email == Some(false) {
+                                    self.toast = Some(Toast { text: "no email on your account: link one in the Online menu to reset a forgotten password".into(), until: Instant::now() + Duration::from_secs(8) });
+                                }
                             }
                             self.cfg.online_user = name;
                             self.cfg.online_token = token;
                             self.cfg.save();
                             self.mp_menu.refresh(&self.cfg.online_server);
+                        }
+                        Ok(online::Reply::CodeSent(to)) => {
+                            menu.code_for = menu.asking.take();
+                            menu.code.clear();
+                            self.mp_status = match menu.code_for {
+                                Some(multiplayer::CodeFor::Reset) => format!("code sent to {to}: type it and a new password, then SET NEW PASSWORD"),
+                                Some(multiplayer::CodeFor::Link) => format!("code sent to {to}: type it, then LINK EMAIL"),
+                                _ => format!("code sent to {to}: type it, then CREATE ACCOUNT"),
+                            };
+                            menu.select(multiplayer::Row::Code);
+                        }
+                        Ok(online::Reply::EmailLinked(to)) => {
+                            menu.has_email = Some(true);
+                            menu.linking = false;
+                            menu.code_for = None;
+                            menu.code.clear();
+                            menu.cursor = 0;
+                            self.mp_status = format!("email linked: {to}");
                         }
                         Ok(_) => {}
                         Err(e) if e.contains("session") => self.sign_out(&e),
@@ -5504,6 +5602,8 @@ impl State {
             return match self.mp_menu.row() {
                 Row::User => Some(("Username".into(), self.mp_menu.user.clone())),
                 Row::Password => Some(("Password".into(), "*".repeat(self.mp_menu.password.chars().count()))),
+                Row::Email => Some(("Email".into(), self.mp_menu.email.clone())),
+                Row::Code => Some(("Code".into(), self.mp_menu.code.clone())),
                 Row::Name => Some(("Your name".into(), self.cfg.mp_name.clone())),
                 Row::Port => Some(("Host on port".into(), self.cfg.mp_port.to_string())),
                 Row::Address => Some(("Join address".into(), self.cfg.mp_address.clone())),

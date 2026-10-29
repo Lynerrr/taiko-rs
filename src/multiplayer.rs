@@ -133,8 +133,19 @@ pub fn final_from(stats: &Stats, quit: bool) -> Final {
 pub enum Row {
     User,
     Password,
+    /// For a new account (where codes go), or an old one's to link.
+    Email,
+    /// The code mailed (`Menu::code_for`).
+    Code,
     LogIn,
     Register,
+    /// Forgot the password: a code to the account's email, then a new one.
+    Forgot,
+    /// Logged in without an email: link one (opens `Menu::linking`, then sends the code and
+    /// checks it).
+    LinkEmail,
+    /// Out of linking an email, back to the lobbies.
+    LinkBack,
     HostOnline,
     HostGuessr,
     Lobby(usize),
@@ -149,8 +160,16 @@ pub enum Row {
 impl Row {
     /// Enter (or a click) does something; other rows are text fields.
     pub fn is_action(self) -> bool {
-        !matches!(self, Row::User | Row::Password | Row::Name | Row::Port | Row::Address)
+        !matches!(self, Row::User | Row::Password | Row::Email | Row::Code | Row::Name | Row::Port | Row::Address)
     }
+}
+
+/// What a mailed code is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeFor {
+    Register,
+    Reset,
+    Link,
 }
 
 #[derive(Default)]
@@ -159,8 +178,17 @@ pub struct Menu {
     /// The login form.
     pub user: String,
     pub password: String,
+    pub email: String,
+    pub code: String,
+    /// A code was mailed for this (the Code row shows), and the one asked for, until answered.
+    pub code_for: Option<CodeFor>,
+    pub asking: Option<CodeFor>,
     /// Logged in as (a saved session).
     pub account: Option<String>,
+    /// Whether the account has an email (None: the server doesn't say).
+    pub has_email: Option<bool>,
+    /// Linking an email: its rows in place of the lobbies.
+    pub linking: bool,
     pub rooms: Vec<online::RoomInfo>,
     /// Whether the server answered the last request (None: not asked yet).
     pub online: Option<Result<(), String>>,
@@ -177,13 +205,26 @@ const LOBBY_ROWS: usize = 5;
 impl Menu {
     pub fn rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
-        if self.account.is_some() {
+        if self.account.is_some() && self.linking {
+            rows.push(Row::Email);
+            if self.code_for == Some(CodeFor::Link) {
+                rows.push(Row::Code);
+            }
+            rows.extend([Row::LinkEmail, Row::LinkBack]);
+        } else if self.account.is_some() {
             rows.push(Row::HostOnline);
             rows.push(Row::HostGuessr);
             rows.extend((0..self.rooms.len()).map(Row::Lobby));
             rows.push(Row::LogOut);
+            if self.has_email == Some(false) {
+                rows.push(Row::LinkEmail);
+            }
         } else {
-            rows.extend([Row::User, Row::Password, Row::LogIn, Row::Register]);
+            rows.extend([Row::User, Row::Password, Row::Email]);
+            if matches!(self.code_for, Some(CodeFor::Register | CodeFor::Reset)) {
+                rows.push(Row::Code);
+            }
+            rows.extend([Row::LogIn, Row::Register, Row::Forgot]);
         }
         rows.extend([Row::Name, Row::Port, Row::HostDirect, Row::Address, Row::JoinDirect]);
         rows
@@ -306,8 +347,36 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
             }
             Row::Password => {
                 let stars = "*".repeat(menu.password.chars().count());
-                row(c, i, left, y, 30.0, "Password", Some((&stars, false)));
+                let label = if menu.code_for == Some(CodeFor::Reset) { "New password" } else { "Password" };
+                row(c, i, left, y, 30.0, label, Some((&stars, false)));
                 y += 38.0;
+            }
+            Row::Email => {
+                let hint = if menu.account.is_some() { "your email" } else { "for a new account" };
+                row(c, i, left, y, 30.0, "Email", Some(if menu.email.is_empty() { (hint, true) } else { (&menu.email, false) }));
+                y += 38.0;
+            }
+            Row::Code => {
+                row(c, i, left, y, 30.0, "Code from the email", Some(if menu.code.is_empty() { ("6 digits", true) } else { (&menu.code, false) }));
+                y += 38.0;
+            }
+            Row::Forgot => {
+                let label = if menu.code_for == Some(CodeFor::Reset) { "SET NEW PASSWORD" } else { "FORGOT PASSWORD" };
+                y += 6.0;
+                row(c, i, left, y, 24.0, label, None);
+            }
+            Row::LinkEmail if menu.linking => {
+                let label = if menu.code_for == Some(CodeFor::Link) { "LINK EMAIL" } else { "SEND CODE" };
+                row(c, i, left, y, 30.0, label, None);
+                y += 38.0;
+            }
+            Row::LinkBack => {
+                row(c, i, left, y, 24.0, "BACK", None);
+                y += 32.0;
+                for (k, line) in ["A code goes to the email: type it above and LINK EMAIL.", "Then a forgotten password can be reset with it."].iter().enumerate() {
+                    let size = Canvas::fit_size(7.0, 6.0, col, line);
+                    c.text_centered(left + col / 2.0, y + 4.0 + 14.0 * k as f32, size, rgba(0x6f6f86, 1.0), &Canvas::fit(size, col, line));
+                }
             }
             Row::LogIn => {
                 row(c, i, left, y, 30.0, "LOG IN", None);
@@ -320,11 +389,18 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                     let size = Canvas::fit_size(7.0, 6.0, col, line);
                     c.text_centered(left + col / 2.0, y + 4.0 + 14.0 * k as f32, size, rgba(0x6f6f86, 1.0), &Canvas::fit(size, col, line));
                 }
+                y += 30.0;
             }
             Row::HostOnline => {
                 let who = menu.account.as_deref().unwrap_or("");
                 c.text(left, y - 2.0, 8.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(8.0, col, &format!("logged in as {who}")));
                 y += 12.0;
+                if menu.has_email == Some(false) {
+                    let line = "no email yet: link one to reset a lost password";
+                    let size = Canvas::fit_size(7.0, 6.0, col, line);
+                    c.text(left, y - 2.0, size, rgba(0xFFD34D, 1.0), &Canvas::fit(size, col, line));
+                    y += 11.0;
+                }
                 row(c, i, left, y, 30.0, "HOST AN ONLINE LOBBY", None);
                 y += 36.0;
             }
@@ -374,7 +450,12 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                     y += 12.0;
                 }
                 y += 4.0;
-                row(c, i, left, y, 24.0, "LOG OUT", None);
+                // Beside it, linking an email.
+                let half = if menu.has_email == Some(false) { (col - 8.0) / 2.0 } else { col };
+                half_row(c, i == cursor, i, left, y, half, "LOG OUT");
+                if half < col {
+                    half_row(c, i + 1 == cursor, i + 1, left + half + 8.0, y, half, "LINK AN EMAIL");
+                }
             }
             _ => {}
         }
@@ -413,6 +494,16 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
     let size = Canvas::fit_size(8.0, 6.5, room, note);
     c.text_centered(w / 2.0, 450.0, size, rgba(0x8a8aa0, 1.0), &Canvas::fit(size, room, note));
     c.text_centered(w / 2.0, 464.0, 8.0, rgba(0x55556a, 1.0), &Canvas::fit_hints(8.0, room, "Up/Down select   Left/Right column   type to edit   Enter   F5 refresh   Tab or Esc back"));
+}
+
+/// An action row narrower than a column (two side by side), 24 tall.
+fn half_row(c: &mut Canvas, sel: bool, i: usize, x: f32, y: f32, w: f32, label: &str) {
+    let (bg, border) = if sel { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
+    let bg = if !sel && c.hovered(x, y, w, 24.0) { 0x262634 } else { bg };
+    c.round_rect(x, y, w, 24.0, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
+    c.hit(x, y, w, 24.0, Hit::MpRow(i));
+    let size = Canvas::fit_size(11.0, 7.0, w - 12.0, label);
+    c.text_centered(x + w / 2.0, y + 12.0 - size / 2.0, size, rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
 }
 
 // ---------------------------------------------------------------------------------------------

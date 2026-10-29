@@ -1175,7 +1175,7 @@ mod tests {
         {
             let mut a = state.accounts.lock().unwrap();
             for name in ["Ryuji", "Lynerrr"] {
-                a.users.insert(name.to_ascii_lowercase(), crate::User { name: name.into(), hash: String::new(), created: 1_700_000_000, friends: Vec::new(), requests: Vec::new(), nominator: false });
+                a.users.insert(name.to_ascii_lowercase(), crate::User { name: name.into(), hash: String::new(), created: 1_700_000_000, friends: Vec::new(), requests: Vec::new(), nominator: false, email: None });
             }
         }
         let play = online::ScoreSubmit {

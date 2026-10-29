@@ -398,6 +398,23 @@ fn assert_every_screen_fits() {
     check(&mut s, "download results", &mut out);
     s.scene = Scene::MpMenu;
     check(&mut s, "multiplayer menu", &mut out);
+    // Signing up with a code, and resetting a password.
+    s.mp_menu.email = "a.rather.long.email.address@example-mail.com".into();
+    s.mp_menu.code_for = Some(multiplayer::CodeFor::Register);
+    s.mp_menu.code = "123456".into();
+    check(&mut s, "multiplayer menu code", &mut out);
+    s.mp_menu.code_for = Some(multiplayer::CodeFor::Reset);
+    check(&mut s, "multiplayer menu reset", &mut out);
+    // An old account without an email, with a full lobby list, and linking one.
+    s.mp_menu.code_for = None;
+    s.mp_menu.account = Some("MyOwnAccountName".into());
+    s.mp_menu.has_email = Some(false);
+    s.mp_menu.rooms = (0..8).map(|i| online::RoomInfo { id: i, title: format!("{LONG_NAME}'s lobby {i}"), host: LONG_NAME.into(), players: 3, map: Some(entry(0, 0, true).label()), in_match: i % 2 == 0, mapguessr: false }).collect();
+    check(&mut s, "multiplayer menu no email", &mut out);
+    s.mp_menu.linking = true;
+    s.mp_menu.code_for = Some(multiplayer::CodeFor::Link);
+    check(&mut s, "multiplayer menu linking", &mut out);
+    s.mp_menu = Default::default();
     s.scene = Scene::Select;
 
     s.mp_menu.account = Some("MyOwnAccountName".into());
