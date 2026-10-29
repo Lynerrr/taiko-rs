@@ -29,6 +29,7 @@ mod discord;
 #[path = "../../src/font.rs"]
 mod font;
 mod loved;
+mod mail;
 mod scores;
 mod pages;
 mod web;
@@ -54,6 +55,8 @@ const MAX_ROOMS: usize = 200;
 /// Per IP: new accounts per hour, failed logins per 10 minutes.
 const REGISTER_PER_HOUR: usize = 5;
 const FAILED_LOGINS: usize = 10;
+/// Per IP: codes mailed per hour.
+const MAILS_PER_HOUR: usize = 10;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct User {
@@ -68,6 +71,10 @@ struct User {
     /// May love maps (see `loved`); admins give and take it.
     #[serde(default)]
     nominator: bool,
+    /// Where codes for resetting the password go (lowercase; accounts from before emails have
+    /// none until linked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
 }
 
 /// Admins (lowercased names): they make loved nominators, and nominate themselves.
@@ -306,6 +313,8 @@ struct Lobby {
 struct Limits {
     registered: Vec<Instant>,
     failed: Vec<Instant>,
+    /// Codes mailed at this address's asking.
+    mails: Vec<Instant>,
 }
 
 struct State {
@@ -357,7 +366,7 @@ impl State {
         let mut save = !accounts.users.contains_key("claude");
         if save {
             let hash = hash_password(&new_token()).expect("argon2");
-            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false });
+            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, email: None });
         }
         // And its friends, both ways.
         for &friend in CLAUDE_FRIENDS {
@@ -442,6 +451,29 @@ impl State {
         a.users.get(&s.user).map(|u| u.name.clone())
     }
 
+    /// The reply for a logged-in `name` (as written) with session `token`.
+    fn account(&self, name: String, token: String) -> Reply {
+        let key = name.to_ascii_lowercase();
+        let email = self.accounts.lock().unwrap().users.get(&key).map(|u| u.email.is_some());
+        Reply::Account { nominator: self.is_nominator(&key), name, token, email }
+    }
+
+    /// Mails a code (`mail::send_code`), a few an hour per address.
+    fn mail_code(&self, ip: IpAddr, for_: &str, email: &str, what: &str) -> Result<(), String> {
+        if !self.allow(ip, |l| &mut l.mails, Duration::from_secs(3600), MAILS_PER_HOUR) {
+            return Err("too many codes asked for from here, try again in an hour".into());
+        }
+        mail::send_code(for_, email, what)?;
+        self.record(ip, |l| &mut l.mails);
+        Ok(())
+    }
+
+    /// The account (lowercased name) `email` belongs to.
+    fn email_owner(&self, email: &str) -> Option<String> {
+        let email = mail::normal(email);
+        self.accounts.lock().unwrap().users.iter().find(|(_, u)| u.email.as_deref() == Some(email.as_str())).map(|(k, _)| k.clone())
+    }
+
     fn new_session(&self, accounts: &mut Accounts, key: &str) -> String {
         let token = new_token();
         accounts.sessions.insert(token.clone(), Session { user: key.to_string(), created: now_secs() });
@@ -492,10 +524,12 @@ fn handle(state: &State, stream: TcpStream) {
         return reply(&mut reader, Reply::Error(format!("update taiko.rs (server protocol {}, yours {})", online::PROTOCOL, env.protocol)));
     }
     let out = match env.request {
-        Request::Register { name, password } => register(state, ip, &name, &password),
+        Request::Register { name, password, email, code } => register(state, ip, &name, &password, email.as_deref(), code.as_deref()),
         Request::Login { name, password } => login(state, ip, &name, &password),
+        Request::ResetPassword { who, code, password } => reset_password(state, ip, &who, code.as_deref(), password.as_deref()),
+        Request::LinkEmail { token, email, code } => link_email(state, ip, &token, &email, code.as_deref()),
         Request::WhoAmI { token } => match state.user(&token) {
-            Some(name) => Reply::Account { nominator: state.is_nominator(&name.to_ascii_lowercase()), name, token },
+            Some(name) => state.account(name, token),
             None => Reply::Error("your session expired: log in again".into()),
         },
         Request::Logout { token } => {
@@ -525,7 +559,7 @@ fn handle(state: &State, stream: TcpStream) {
         }
         Request::Connect { token } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
-            reply(&mut reader, Reply::Account { name: name.clone(), token, nominator: state.is_nominator(&name.to_ascii_lowercase()) });
+            reply(&mut reader, state.account(name.clone(), token));
             social_session(state, reader, name);
             return;
         }
@@ -591,7 +625,7 @@ fn handle(state: &State, stream: TcpStream) {
     reply(&mut reader, out);
 }
 
-fn register(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
+fn register(state: &State, ip: IpAddr, name: &str, password: &str, email: Option<&str>, code: Option<&str>) -> Reply {
     let name = name.trim();
     if !online::valid_name(name) {
         return Reply::Error(format!("names are {}", online::NAME_RULES));
@@ -606,19 +640,134 @@ fn register(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     if state.accounts.lock().unwrap().users.contains_key(&key) {
         return Reply::Error("that name is taken".into());
     }
+    // Where mail goes out, an account comes with an email, proven by a code sent there.
+    let mut verified = None;
+    if mail::on() {
+        let Some(email) = email.map(mail::normal).filter(|e| !e.is_empty()) else {
+            return Reply::Error("an email is needed for a new account (update taiko.rs if there's no field for it)".into());
+        };
+        if !mail::valid_email(&email) {
+            return Reply::Error("that email doesn't look right".into());
+        }
+        if state.email_owner(&email).is_some() {
+            return Reply::Error("that email is already used by an account".into());
+        }
+        let for_ = format!("reg:{key}");
+        match code.map(str::trim).filter(|c| !c.is_empty()) {
+            None => {
+                return match state.mail_code(ip, &for_, &email, &format!("for creating the account {name}")) {
+                    Ok(()) => {
+                        println!("sign-up code for {name} sent ({ip})");
+                        Reply::CodeSent(mail::masked(&email))
+                    }
+                    Err(e) => Reply::Error(e),
+                };
+            }
+            Some(code) => {
+                if mail::pending_email(&for_).is_some_and(|e| e != email) {
+                    return Reply::Error("the code was sent to another email: ask for a new one".into());
+                }
+                match mail::check_code(&for_, code) {
+                    Ok(e) => verified = Some(e),
+                    Err(e) => return Reply::Error(e),
+                }
+            }
+        }
+    }
     // Hash outside the lock (it takes a moment), then check again.
     let Ok(hash) = hash_password(password) else { return Reply::Error("server error".into()) };
     let mut a = state.accounts.lock().unwrap();
     if a.users.contains_key(&key) {
         return Reply::Error("that name is taken".into());
     }
-    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false });
+    let has_email = verified.is_some();
+    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, email: verified });
     let token = state.new_session(&mut a, &key);
     state.save();
     drop(a);
     state.record(ip, |l| &mut l.registered);
     println!("account {name} created ({ip})");
-    Reply::Account { name: name.to_string(), token, nominator: is_admin(&key) }
+    Reply::Account { name: name.to_string(), token, nominator: is_admin(&key), email: Some(has_email) }
+}
+
+/// A forgotten password (see `Request::ResetPassword`).
+fn reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, password: Option<&str>) -> Reply {
+    if !state.allow(ip, |l| &mut l.failed, Duration::from_secs(600), FAILED_LOGINS) {
+        return Reply::Error("too many tries, wait a few minutes".into());
+    }
+    let who = who.trim();
+    let key = if who.contains('@') { state.email_owner(who) } else { Some(who.to_ascii_lowercase()) };
+    let user = key.as_ref().and_then(|k| state.accounts.lock().unwrap().users.get(k).cloned());
+    let (Some(key), Some(user)) = (key, user) else {
+        state.record(ip, |l| &mut l.failed);
+        return Reply::Error("no account by that name or email".into());
+    };
+    let Some(email) = user.email.clone() else {
+        return Reply::Error("that account has no email linked: ask an admin on Discord".into());
+    };
+    let for_ = format!("reset:{key}");
+    let Some(code) = code.map(str::trim).filter(|c| !c.is_empty()) else {
+        return match state.mail_code(ip, &for_, &email, &format!("for a new password for {}", user.name)) {
+            Ok(()) => {
+                println!("password reset code for {} sent ({ip})", user.name);
+                Reply::CodeSent(mail::masked(&email))
+            }
+            Err(e) => Reply::Error(e),
+        };
+    };
+    let Some(password) = password.filter(|p| online::valid_password(p)) else {
+        return Reply::Error("type a new password of at least 6 characters with the code".into());
+    };
+    if let Err(e) = mail::check_code(&for_, code) {
+        state.record(ip, |l| &mut l.failed);
+        return Reply::Error(e);
+    }
+    let Ok(hash) = hash_password(password) else { return Reply::Error("server error".into()) };
+    let mut a = state.accounts.lock().unwrap();
+    let Some(u) = a.users.get_mut(&key) else { return Reply::Error("no account by that name or email".into()) };
+    u.hash = hash;
+    // Whoever had the old password is logged out everywhere.
+    a.sessions.retain(|_, s| s.user != key);
+    let token = state.new_session(&mut a, &key);
+    state.save();
+    drop(a);
+    println!("password of {} reset ({ip})", user.name);
+    state.account(user.name, token)
+}
+
+/// Links an email to a logged-in account (see `Request::LinkEmail`).
+fn link_email(state: &State, ip: IpAddr, token: &str, email: &str, code: Option<&str>) -> Reply {
+    let Some(name) = state.user(token) else { return Reply::Error("your session expired: log in again".into()) };
+    let key = name.to_ascii_lowercase();
+    let email = mail::normal(email);
+    if !mail::valid_email(&email) {
+        return Reply::Error("that email doesn't look right".into());
+    }
+    if state.email_owner(&email).is_some_and(|owner| owner != key) {
+        return Reply::Error("that email is already used by another account".into());
+    }
+    let for_ = format!("link:{key}");
+    let Some(code) = code.map(str::trim).filter(|c| !c.is_empty()) else {
+        return match state.mail_code(ip, &for_, &email, &format!("for linking this email to {name}")) {
+            Ok(()) => Reply::CodeSent(mail::masked(&email)),
+            Err(e) => Reply::Error(e),
+        };
+    };
+    if mail::pending_email(&for_).is_some_and(|e| e != email) {
+        return Reply::Error("the code was sent to another email: ask for a new one".into());
+    }
+    let email = match mail::check_code(&for_, code) {
+        Ok(e) => e,
+        Err(e) => return Reply::Error(e),
+    };
+    let mut a = state.accounts.lock().unwrap();
+    if let Some(u) = a.users.get_mut(&key) {
+        u.email = Some(email.clone());
+    }
+    state.save();
+    drop(a);
+    println!("{name} linked an email");
+    Reply::EmailLinked(mail::masked(&email))
 }
 
 fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
@@ -636,7 +785,7 @@ fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     let mut a = state.accounts.lock().unwrap();
     let token = state.new_session(&mut a, &key);
     state.save();
-    Reply::Account { name: user.name, token, nominator: is_admin(&key) || user.nominator }
+    Reply::Account { name: user.name, token, nominator: is_admin(&key) || user.nominator, email: Some(user.email.is_some()) }
 }
 
 impl State {
@@ -1204,6 +1353,7 @@ fn main() {
     osustatus::init(data.clone());
     loved::init(data.clone());
     avatars::init(data.clone());
+    mail::init(data.clone());
     let (state, wake) = State::load(data.join("accounts.json"));
     let state = Arc::new(state);
     {
@@ -1272,7 +1422,47 @@ mod tests {
     use super::*;
 
     fn user(name: &str) -> User {
-        User { name: name.into(), hash: String::new(), created: 0, friends: Vec::new(), requests: Vec::new(), nominator: false }
+        User { name: name.into(), hash: String::new(), created: 0, friends: Vec::new(), requests: Vec::new(), nominator: false, email: None }
+    }
+
+    #[test]
+    fn accounts_come_with_an_email_and_its_code_resets_the_password() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-mail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        mail::init_for_tests(dir.clone());
+        let (state, _wake) = State::load(dir.join("accounts.json"));
+        let ip: IpAddr = [10, 0, 0, 1].into();
+        let code = || {
+            let letter = mail::next().expect("a letter");
+            letter.lines().find_map(|l| l.trim().parse::<u32>().ok().filter(|_| l.trim().len() == 6)).map(|c| format!("{c:06}")).expect("a code in it")
+        };
+        let err = |r: Reply| match r {
+            Reply::Error(e) => e,
+            _ => panic!("not an error"),
+        };
+        assert!(err(register(&state, ip, "newbie", "secret1", None, None)).contains("email"));
+        assert!(matches!(register(&state, ip, "newbie", "secret1", Some("New@Mail.ru"), None), Reply::CodeSent(to) if to == "n**@mail.ru"));
+        let right = code();
+        assert_eq!(err(register(&state, ip, "newbie", "secret1", Some("new@mail.ru"), Some("000000"))), "wrong code");
+        assert!(matches!(register(&state, ip, "newbie", "secret1", Some("new@mail.ru"), Some(&right)), Reply::Account { email: Some(true), .. }));
+        assert!(err(register(&state, ip, "other", "secret1", Some("NEW@mail.ru"), None)).contains("already used"));
+        // Forgot it: a code to the email, by name or by the email itself.
+        assert!(matches!(reset_password(&state, ip, "new@mail.ru", None, None), Reply::CodeSent(_)));
+        let right = code();
+        assert!(err(reset_password(&state, ip, "Newbie", Some(&right), Some("x"))).contains("6 characters"));
+        assert!(matches!(reset_password(&state, ip, "Newbie", Some(&right), Some("better1")), Reply::Account { .. }));
+        assert!(matches!(login(&state, ip, "newbie", "better1"), Reply::Account { .. }));
+        assert!(matches!(login(&state, ip, "newbie", "secret1"), Reply::Error(_)));
+        // An account from before emails links one.
+        state.accounts.lock().unwrap().users.insert("old".into(), user("Old"));
+        let token = state.new_session(&mut state.accounts.lock().unwrap(), "old");
+        assert!(matches!(state.account("Old".into(), token.clone()), Reply::Account { email: Some(false), .. }));
+        assert!(err(reset_password(&state, ip, "old", None, None)).contains("no email"));
+        assert!(matches!(link_email(&state, ip, &token, "old@x.io", None), Reply::CodeSent(_)));
+        let right = code();
+        assert!(matches!(link_email(&state, ip, &token, "old@x.io", Some(&right)), Reply::EmailLinked(_)));
+        assert!(matches!(state.account("Old".into(), token), Reply::Account { email: Some(true), .. }));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

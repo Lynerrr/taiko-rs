@@ -113,6 +113,9 @@ pub struct Select {
     pub updates: std::collections::HashMap<u32, SetUpdate>,
     /// Difficulties an update took out of their set (renamed or dropped on osu!): not listed.
     pub gone: std::collections::HashSet<std::path::PathBuf>,
+    /// Difficulties osu! doesn't have though their set is on it (edited copies: OD changed, a
+    /// rate baked in): not submitted, whatever the set's status.
+    pub edited: std::collections::HashSet<std::path::PathBuf>,
     /// The list being dragged with the left button.
     drag: Option<ListDrag>,
     /// Where each song's own row is in the list as last drawn (list units, top = 0).
@@ -264,6 +267,7 @@ impl Select {
             hidden: Hidden::load(),
             menu: None,
             updates: std::collections::HashMap::new(),
+            edited: std::collections::HashSet::new(),
             gone: std::collections::HashSet::new(),
             drag: None,
             song_y: Vec::new(),
@@ -362,6 +366,9 @@ impl Select {
 
     /// A map's status on osu! (`search`'s codes), loved here counting as loved.
     fn status_of(&self, e: &Entry) -> u8 {
+        if self.edited.contains(&e.path) {
+            return crate::search::NOT_SUBMITTED;
+        }
         match e.meta.set_id {
             Some(set) if self.server_loved.contains(&set) => crate::search::LOVED,
             set => self.status.get(&e.path).copied().unwrap_or(if set.is_some() { crate::search::UNKNOWN } else { crate::search::NOT_SUBMITTED }),

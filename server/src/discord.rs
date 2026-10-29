@@ -1175,7 +1175,7 @@ mod tests {
         {
             let mut a = state.accounts.lock().unwrap();
             for name in ["Ryuji", "Lynerrr"] {
-                a.users.insert(name.to_ascii_lowercase(), crate::User { name: name.into(), hash: String::new(), created: 1_700_000_000, friends: Vec::new(), requests: Vec::new(), nominator: false });
+                a.users.insert(name.to_ascii_lowercase(), crate::User { name: name.into(), hash: String::new(), created: 1_700_000_000, friends: Vec::new(), requests: Vec::new(), nominator: false, email: None });
             }
         }
         let play = online::ScoreSubmit {
@@ -1193,6 +1193,7 @@ mod tests {
             stars: Some(6.0),
             scroll_speed: Some(1.0),
             play_ms: None,
+            md5: None,
         };
         state.scores.lock().unwrap().submit("ryuji", "Ryuji", play, 1_792_990_923).unwrap();
         let http: ureq::Agent = ureq::Agent::config_builder().build().into();

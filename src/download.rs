@@ -479,6 +479,12 @@ pub fn outdated(local: &[(Option<u32>, String)], online: &std::collections::Hash
     local.iter().any(|(id, md5)| id.is_some_and(|id| online.get(&id) != Some(md5)))
 }
 
+/// Whether a `.osu` with this MD5 is one of the set's on osu! (any of its difficulties; an
+/// edited copy, OD changed or a rate baked in, isn't).
+pub fn is_osus(md5: &str, online: &std::collections::HashMap<u32, String>) -> bool {
+    online.values().any(|m| m == md5)
+}
+
 /// MD5 (RFC 1321) of `data` in lowercase hex: how osu! tells versions of a difficulty apart.
 pub fn md5_hex(data: &[u8]) -> String {
     const S: [u32; 64] = [

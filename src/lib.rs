@@ -261,7 +261,9 @@ struct State {
     downloads: Vec<download::Job>,
     /// Song select: the set being checked for a newer version on osu! (see `poll_set_check`),
     /// and the one the selection rests on, since when.
-    set_check: Option<(u32, Receiver<Result<bool, String>>)>,
+    /// The set being checked against osu!: whether it's outdated, and its difficulties here
+    /// that aren't osu!'s.
+    set_check: Option<(u32, Receiver<Result<(bool, Vec<PathBuf>), String>>)>,
     set_check_due: Option<(u32, Instant)>,
     /// Android: when the folder of .osz files opened with the game was last looked at.
     #[cfg(target_os = "android")]
@@ -2007,6 +2009,7 @@ impl State {
             Item::BackgroundDimBlack => on(c.bg_dim_black),
             Item::KiaiEffects => on(c.kiai_effects),
             Item::HideGreat => on(c.hide_great),
+            Item::HitFlash => on(c.hit_flash),
             Item::DiscordPresence => on(c.discord_presence),
             Item::ChatFilter => on(c.chat_filter),
             Item::MessageSound => on(c.message_sound),
@@ -2200,6 +2203,7 @@ impl State {
             Item::BackgroundDimBlack => self.cfg.bg_dim_black = !self.cfg.bg_dim_black,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
+            Item::HitFlash => self.cfg.hit_flash = !self.cfg.hit_flash,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
             Item::ChatFilter => {
                 self.cfg.chat_filter = !self.cfg.chat_filter;
@@ -4826,6 +4830,12 @@ impl State {
                     Row::Password => {
                         self.mp_menu.password.pop();
                     }
+                    Row::Email => {
+                        self.mp_menu.email.pop();
+                    }
+                    Row::Code => {
+                        self.mp_menu.code.pop();
+                    }
                     Row::Name => {
                         self.cfg.mp_name.pop();
                     }
@@ -4844,23 +4854,82 @@ impl State {
                 let name = self.cfg.mp_name.clone();
                 let token = self.cfg.online_token.clone();
                 let account = self.mp_menu.account.clone().unwrap_or_default();
+                use multiplayer::CodeFor;
+                let menu = &mut self.mp_menu;
+                let code = (!menu.code.trim().is_empty()).then(|| menu.code.trim().to_string());
+                let email = menu.email.trim().to_string();
                 match row {
                     Row::User => self.mp_menu.select(Row::Password),
-                    Row::LogIn | Row::Register | Row::Password if self.mp_menu.account_request.is_some() => {}
+                    Row::Email | Row::Code => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
+                    Row::LogIn | Row::Register | Row::Password | Row::Forgot | Row::LinkEmail if menu.account_request.is_some() => {}
+                    // A new password typed for a reset goes with the code.
+                    Row::Password if menu.code_for == Some(CodeFor::Reset) => self.mp_menu.select(Row::Forgot),
+                    Row::Forgot => {
+                        let who = if menu.user.trim().is_empty() { email.clone() } else { menu.user.trim().to_string() };
+                        if who.is_empty() {
+                            self.mp_status = "type your username (or email) first".into();
+                            self.mp_menu.select(Row::User);
+                        } else if menu.code_for == Some(CodeFor::Reset) && code.is_some() {
+                            if !online::valid_password(&menu.password) {
+                                self.mp_status = "type a new password of at least 6 characters".into();
+                                self.mp_menu.select(Row::Password);
+                            } else {
+                                let password = Some(menu.password.clone());
+                                self.mp_status = "setting the new password...".into();
+                                menu.account_call(&server, online::Request::ResetPassword { who, code, password });
+                            }
+                        } else {
+                            menu.asking = Some(CodeFor::Reset);
+                            self.mp_status = "sending a code to the account's email...".into();
+                            menu.account_call(&server, online::Request::ResetPassword { who, code: None, password: None });
+                        }
+                    }
+                    Row::LinkEmail if !menu.linking => {
+                        menu.linking = true;
+                        menu.code_for = None;
+                        menu.cursor = 0;
+                        self.mp_status = "type your email, then SEND CODE".into();
+                    }
+                    Row::LinkEmail => {
+                        if !email.contains('@') {
+                            self.mp_status = "type your email first".into();
+                            self.mp_menu.select(Row::Email);
+                        } else if menu.code_for == Some(CodeFor::Link) && code.is_some() {
+                            self.mp_status = "linking the email...".into();
+                            menu.account_call(&server, online::Request::LinkEmail { token, email, code });
+                        } else {
+                            menu.asking = Some(CodeFor::Link);
+                            self.mp_status = format!("sending a code to {email}...");
+                            menu.account_call(&server, online::Request::LinkEmail { token, email, code: None });
+                        }
+                    }
+                    Row::LinkBack => {
+                        menu.linking = false;
+                        menu.code_for = None;
+                        menu.cursor = 0;
+                        self.mp_status.clear();
+                    }
                     Row::LogIn | Row::Register | Row::Password => {
-                        let (user, password) = (self.mp_menu.user.trim().to_string(), std::mem::take(&mut self.mp_menu.password));
+                        let user = menu.user.trim().to_string();
+                        // Logging in forgets the typed password; a new account's waits for its code.
+                        let password = if row == Row::Register { menu.password.clone() } else { std::mem::take(&mut menu.password) };
                         if !online::valid_name(&user) {
                             self.mp_status = format!("usernames are {}", online::NAME_RULES);
                             self.mp_menu.select(Row::User);
                         } else if row == Row::Register && !online::valid_password(&password) {
                             self.mp_status = "pick a password of at least 6 characters".into();
                             self.mp_menu.select(Row::Password);
+                        } else if row == Row::Register && !email.contains('@') {
+                            self.mp_status = "type your email: a code to create the account goes there".into();
+                            self.mp_menu.select(Row::Email);
                         } else if row == Row::Register {
-                            self.mp_status = format!("creating {user}...");
-                            self.mp_menu.account_call(&server, online::Request::Register { name: user, password });
+                            let code = code.filter(|_| menu.code_for == Some(CodeFor::Register));
+                            self.mp_status = if code.is_some() { format!("creating {user}...") } else { format!("sending a code to {email}...") };
+                            menu.asking = Some(CodeFor::Register);
+                            menu.account_call(&server, online::Request::Register { name: user, password, email: Some(email), code });
                         } else {
                             self.mp_status = format!("logging in as {user}...");
-                            self.mp_menu.account_call(&server, online::Request::Login { name: user, password });
+                            menu.account_call(&server, online::Request::Login { name: user, password });
                         }
                     }
                     Row::LogOut => {
@@ -4898,6 +4967,8 @@ impl State {
                     match row {
                         Row::User if self.mp_menu.user.len() < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') => self.mp_menu.user.push(ch),
                         Row::Password if self.mp_menu.password.chars().count() < 128 => self.mp_menu.password.push(ch),
+                        Row::Email if self.mp_menu.email.len() < 254 && ch.is_ascii_graphic() => self.mp_menu.email.push(ch),
+                        Row::Code if self.mp_menu.code.len() < 6 && ch.is_ascii_digit() => self.mp_menu.code.push(ch),
                         Row::Name if self.cfg.mp_name.chars().count() < 20 => self.cfg.mp_name.push(ch),
                         Row::Port => {
                             if let Some(d) = ch.to_digit(10) {
@@ -4921,6 +4992,9 @@ impl State {
         self.social = social::Social::default();
         self.select.nominator = false;
         self.mp_menu.account = None;
+        self.mp_menu.has_email = None;
+        self.mp_menu.linking = false;
+        self.mp_menu.code_for = None;
         self.mp_menu.rooms.clear();
         self.cfg.online_token.clear();
         self.cfg.save();
@@ -5022,22 +5096,50 @@ impl State {
                 Ok(result) => {
                     menu.account_request = None;
                     match result {
-                        Ok(online::Reply::Account { name, token, nominator }) => {
+                        Ok(online::Reply::Account { name, token, nominator, email }) => {
                             self.select.nominator = nominator;
                             self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name) || self.cfg.online_token != token;
                             menu.account = Some(name.clone());
                             menu.online = Some(Ok(()));
+                            menu.has_email = email;
+                            menu.asking = None;
+                            if menu.code_for.take().is_some() {
+                                menu.code.clear();
+                                menu.password.clear();
+                            }
                             if fresh {
                                 self.mp_status = format!("logged in as {name}");
                                 menu.cursor = 0;
                                 // A new login: reconnect the social side with its token.
                                 self.social = social::Social::default();
+                                // Accounts from before emails: a word about linking one.
+                                if email == Some(false) {
+                                    self.toast = Some(Toast { text: "no email on your account: link one in the Online menu to reset a forgotten password".into(), until: Instant::now() + Duration::from_secs(8) });
+                                }
                             }
                             self.cfg.online_user = name;
                             self.cfg.online_token = token;
                             self.cfg.save();
                             self.mp_menu.refresh(&self.cfg.online_server);
+                        }
+                        Ok(online::Reply::CodeSent(to)) => {
+                            menu.code_for = menu.asking.take();
+                            menu.code.clear();
+                            self.mp_status = match menu.code_for {
+                                Some(multiplayer::CodeFor::Reset) => format!("code sent to {to}: type it and a new password, then SET NEW PASSWORD"),
+                                Some(multiplayer::CodeFor::Link) => format!("code sent to {to}: type it, then LINK EMAIL"),
+                                _ => format!("code sent to {to}: type it, then CREATE ACCOUNT"),
+                            };
+                            menu.select(multiplayer::Row::Code);
+                        }
+                        Ok(online::Reply::EmailLinked(to)) => {
+                            menu.has_email = Some(true);
+                            menu.linking = false;
+                            menu.code_for = None;
+                            menu.code.clear();
+                            menu.cursor = 0;
+                            self.mp_status = format!("email linked: {to}");
                         }
                         Ok(_) => {}
                         Err(e) if e.contains("session") => self.sign_out(&e),
@@ -5500,6 +5602,8 @@ impl State {
             return match self.mp_menu.row() {
                 Row::User => Some(("Username".into(), self.mp_menu.user.clone())),
                 Row::Password => Some(("Password".into(), "*".repeat(self.mp_menu.password.chars().count()))),
+                Row::Email => Some(("Email".into(), self.mp_menu.email.clone())),
+                Row::Code => Some(("Code".into(), self.mp_menu.code.clone())),
                 Row::Name => Some(("Your name".into(), self.cfg.mp_name.clone())),
                 Row::Port => Some(("Host on port".into(), self.cfg.mp_port.to_string())),
                 Row::Address => Some(("Join address".into(), self.cfg.mp_address.clone())),
@@ -5580,7 +5684,7 @@ impl State {
     /// else osu!.db's (which can't tell graveyard from pending).
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
-        let Some(set) = e.meta.set_id else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
+        let Some(set) = e.meta.set_id.filter(|_| !self.select.edited.contains(&e.path)) else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
         if self.select.server_loved.contains(&set) {
             return Some(("LOVED HERE", 0xff66aa));
         }
@@ -5695,11 +5799,22 @@ impl State {
     /// Asks the mirrors for the selected set's status once the selection has rested a moment
     /// (scrolling past sets asks about none of them), and takes in what they say.
     fn poll_set_status(&mut self, now: Instant) {
+        // A sweep's answers come thousands at a time: the library is gone through once for them.
+        let mut by_set: Option<std::collections::HashMap<u32, Vec<usize>>> = None;
         while let Ok((set, status)) = self.set_status_rx.try_recv() {
             // The mirrors know graveyard from pending, which osu!.db doesn't: the search uses theirs.
             if let Some(code) = status.as_deref().and_then(search::status_code) {
-                for e in self.library.iter().filter(|e| e.meta.set_id == Some(set)) {
-                    self.select.status.insert(e.path.clone(), code);
+                let by_set = by_set.get_or_insert_with(|| {
+                    let mut m: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
+                    for (i, e) in self.library.iter().enumerate() {
+                        if let Some(set) = e.meta.set_id {
+                            m.entry(set).or_default().push(i);
+                        }
+                    }
+                    m
+                });
+                for &i in by_set.get(&set).into_iter().flatten() {
+                    self.select.status.insert(self.library[i].path.clone(), code);
                 }
             }
             if let Some(status) = &status {
@@ -7032,6 +7147,7 @@ impl State {
         render::set_animations(self.cfg.animations);
         render::set_accent(self.cfg.accent);
         game::set_hide_great(self.cfg.hide_great);
+        game::set_hit_flash(self.cfg.hit_flash);
         // Screen changes fade in.
         let kind = std::mem::discriminant(&self.scene);
         if self.scene_kind != Some(kind) {
@@ -7485,6 +7601,7 @@ impl State {
                                 stars: stars::star_rating(&e.path, replay.rate),
                                 scroll_speed: Some(replay.scroll_speed),
                                 play_ms: Some(game.played_ms as u64),
+                                md5: std::fs::read(&e.path).ok().map(|b| download::md5_hex(&b)),
                             };
                             self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
                             // Counted with the play itself.
@@ -8357,8 +8474,15 @@ impl State {
         if let Some((id, rx)) = &self.set_check {
             let id = *id;
             let state = match rx.try_recv() {
-                Ok(Ok(true)) => ui::SetUpdate::Available,
-                Ok(Ok(false)) => ui::SetUpdate::UpToDate,
+                Ok(Ok((outdated, edited))) => {
+                    // Like osu!stable: a difficulty whose file osu! doesn't know (edited from a
+                    // ranked one) isn't ranked, whatever its set is.
+                    if !edited.is_empty() {
+                        self.select.edited.extend(edited);
+                        self.select.refilter(&self.library);
+                    }
+                    if outdated { ui::SetUpdate::Available } else { ui::SetUpdate::UpToDate }
+                }
                 Ok(Err(e)) => {
                     eprintln!("checking set {id} for updates: {e}");
                     ui::SetUpdate::Unknown
@@ -8402,8 +8526,10 @@ impl State {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = download::set_checksums(id).map(|online| {
-                let here: Vec<(Option<u32>, String)> = maps.iter().filter_map(|(bid, p)| Some((*bid, download::md5_hex(&std::fs::read(p).ok()?)))).collect();
-                download::outdated(&here, &online)
+                let here: Vec<(Option<u32>, String, &PathBuf)> = maps.iter().filter_map(|(bid, p)| Some((*bid, download::md5_hex(&std::fs::read(p).ok()?), p))).collect();
+                let ids: Vec<(Option<u32>, String)> = here.iter().map(|(bid, md5, _)| (*bid, md5.clone())).collect();
+                let edited = here.iter().filter(|(_, md5, _)| !download::is_osus(md5, &online)).map(|(_, _, p)| (*p).clone()).collect();
+                (download::outdated(&ids, &online), edited)
             });
             let _ = tx.send(result);
         });
@@ -9688,6 +9814,8 @@ fn whats_new(cfg: &mut Config) -> Option<changelog::View> {
 /// Desktop entry point: the command line, then the game.
 pub fn desktop_main() {
     let cfg = Config::load();
+    config::set_data_folder(cfg.data_folder.clone());
+    log_crashes();
     let mut args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let auto = args.iter().any(|a| a == "--auto");
     args.retain(|a| a != "--auto");
@@ -9720,6 +9848,29 @@ pub fn desktop_main() {
         link::register();
     }
     run(cfg, args, auto, link, event_loop);
+}
+
+/// A crash leaves `crash.log` next to the scores (release builds on Windows have no console to
+/// print it to), so a player can send it in.
+fn log_crashes() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(dir) = config::data_dir() {
+            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let thread = std::thread::current().name().unwrap_or("?").to_string();
+            let text = format!(
+                "--- crash at unix {at}, build {} ({})\nthread {thread}: {info}\n{}\n",
+                update::BUILD.unwrap_or("local"),
+                env!("CARGO_PKG_VERSION"),
+                std::backtrace::Backtrace::force_capture()
+            );
+            let _ = std::fs::create_dir_all(&dir);
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+                let _ = std::io::Write::write_all(&mut f, text.as_bytes());
+            }
+        }
+        default(info);
+    }));
 }
 
 /// Android entry point (the native activity's `android_main`): no command line, the app's own

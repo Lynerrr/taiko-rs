@@ -28,8 +28,35 @@ pub struct Envelope {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
-    Register { name: String, password: String },
+    /// A new account. Where the server sends mail, it takes an `email`: asked without `code`, it
+    /// mails one there (`Reply::CodeSent`); asked again with it, the account is made.
+    Register {
+        name: String,
+        password: String,
+        #[serde(default)]
+        email: Option<String>,
+        #[serde(default)]
+        code: Option<String>,
+    },
     Login { name: String, password: String },
+    /// A forgotten password: `who` is the name or the email. Without `code` one is mailed to the
+    /// account's email (`Reply::CodeSent`); with it and the new `password`, the password is
+    /// changed, every other session logged out, and this one logged in (`Reply::Account`).
+    ResetPassword {
+        who: String,
+        #[serde(default)]
+        code: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+    },
+    /// Links `email` to the account (accounts from before emails have none): without `code`
+    /// one is mailed there (`Reply::CodeSent`), with it the email is linked (`Reply::EmailLinked`).
+    LinkEmail {
+        token: String,
+        email: String,
+        #[serde(default)]
+        code: Option<String>,
+    },
     /// Checks a saved session token.
     WhoAmI { token: String },
     Logout { token: String },
@@ -96,6 +123,10 @@ pub struct ScoreSubmit {
     /// The scroll speed setting played at (pp count it).
     #[serde(default)]
     pub scroll_speed: Option<f64>,
+    /// MD5 of the `.osu` played: a difficulty edited from a ranked one (OD changed, a rate
+    /// baked in) isn't osu!'s and gives no pp.
+    #[serde(default)]
+    pub md5: Option<String>,
 }
 
 /// A score on a leaderboard or a profile.
@@ -343,7 +374,14 @@ pub enum Reply {
         token: String,
         #[serde(default)]
         nominator: bool,
+        /// Whether the account has an email (None: a server from before emails).
+        #[serde(default)]
+        email: Option<bool>,
     },
+    /// A code was mailed: where to ("g*****@gmail.com").
+    CodeSent(String),
+    /// The email is linked to the account.
+    EmailLinked(String),
     /// The map sets loved on the server.
     LovedSets(Vec<u32>),
     /// (set ID, status on osu!) of the sets asked about that the server knows ("ranked",
