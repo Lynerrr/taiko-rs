@@ -59,3 +59,7 @@ opt-level = 3
 # wasapi/stream.rs (`output_timestamp`).
 [patch.crates-io]
 cpal = { path = "vendor/cpal" }
+
+# The Windows exe's icon (build.rs).
+[build-dependencies]
+embed-resource = "3.0.12"

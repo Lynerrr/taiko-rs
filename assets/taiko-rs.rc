@@ -1,0 +1,2 @@
+// The exe's icon (build.rs). The first icon in the file is the one Windows shows.
+1 ICON "taiko-rs.ico"
