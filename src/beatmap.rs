@@ -470,7 +470,9 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                 end_time: end,
                 kind: Kind::Swell,
                 big: false,
-                velocity,
+                // Stable scrolls a spinner in at the map's first SV, whatever the SV where it is:
+                // a map that speeds up has its spinners come in slow (owner, 2026-10-30).
+                velocity: scroll[0].1,
                 tick_spacing: 0.0,
                 required_hits: required,
                 fake_len: 0.0,
