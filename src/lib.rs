@@ -934,16 +934,29 @@ fn open_url(url: &str) -> bool {
     if cfg!(target_os = "android") {
         return false;
     }
-    let mut cmd = if cfg!(windows) {
-        let mut c = std::process::Command::new("rundll32");
-        c.args(["url.dll,FileProtocolHandler", url]);
-        c
-    } else {
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(url);
-        c
-    };
-    cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().is_ok()
+    #[cfg(windows)]
+    {
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn ShellExecuteW(
+                hwnd: *mut std::ffi::c_void,
+                verb: *const u16,
+                file: *const u16,
+                parameters: *const u16,
+                directory: *const u16,
+                show: i32,
+            ) -> *mut std::ffi::c_void;
+        }
+        const SW_SHOWNORMAL: i32 = 1;
+        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let (verb, file) = (wide("open"), wide(url));
+        // SAFETY: both strings are nul-terminated and live through the call; the rest may be null.
+        let result = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+        // Above 32 is success, the rest are error codes.
+        return result as usize > 32;
+    }
+    #[cfg(not(windows))]
+    std::process::Command::new("xdg-open").arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().is_ok()
 }
 
 /// `file://` URI for a local path.

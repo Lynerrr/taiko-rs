@@ -1,2 +1,33 @@
-// The exe's icon (build.rs). The first icon in the file is the one Windows shows.
+// The exe's icon, version details and manifest (build.rs). The first icon in the file is the one
+// Windows shows.
 1 ICON "taiko-rs.ico"
+1 24 "taiko-rs.manifest"
+
+#define STRINGIZE_(x) #x
+#define STRINGIZE(x) STRINGIZE_(x)
+
+1 VERSIONINFO
+FILEVERSION VERSION_NUMBERS
+PRODUCTVERSION VERSION_NUMBERS
+FILEOS 0x40004
+FILETYPE 1
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "taiko.rs contributors"
+            VALUE "FileDescription", "taiko.rs"
+            VALUE "FileVersion", STRINGIZE(VERSION_TEXT)
+            VALUE "InternalName", "taiko-rs"
+            VALUE "LegalCopyright", "Copyright (c) 2026 taiko.rs contributors"
+            VALUE "OriginalFilename", "taiko-rs.exe"
+            VALUE "ProductName", "taiko.rs"
+            VALUE "ProductVersion", STRINGIZE(VERSION_TEXT)
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
