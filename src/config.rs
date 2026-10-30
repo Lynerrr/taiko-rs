@@ -939,13 +939,57 @@ impl Config {
         for s in &self.songs {
             out.push_str(&format!("songs = {}\n", s.display()));
         }
+        keep_unknown(&mut out, &std::fs::read_to_string(&path).unwrap_or_default());
         let _ = std::fs::write(path, out);
+    }
+}
+
+/// The setting on a config line, if it has one.
+fn setting(line: &str) -> Option<&str> {
+    let line = line.trim();
+    (!line.starts_with('#')).then(|| line.split_once('=').map(|(k, _)| k.trim())).flatten()
+}
+
+/// Adds to `out` (the config about to be written) what's in `old` (the file as it is) that this
+/// build doesn't know: a newer build's settings. Without it, one start of an older build (another
+/// channel, a checkout) loses them for good, hotkeys moved and all.
+fn keep_unknown(out: &mut String, old: &str) {
+    let known: std::collections::HashSet<&str> = out.lines().filter_map(setting).collect();
+    // These have a line each only when there's something to say; none left means none left.
+    let ours = |k: &str| known.contains(k) || matches!(k, "songs" | "multiverse_preset" | "skin_part") || k.strip_prefix("hotkey.").is_some_and(crate::keys::Hotkey::known);
+    let kept: Vec<&str> = old.lines().filter(|l| setting(l).is_some_and(|k| !ours(k))).collect();
+    if !kept.is_empty() {
+        out.push_str("# from another version of the game, kept for it\n");
+        out.push_str(&(kept.join("\n") + "\n"));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saving_keeps_the_settings_of_a_newer_build() {
+        let old = "# a comment\nkeys = D, F, J, K\nfuture_setting = 3\nhotkey.future_hotkey = none\n";
+        let mut out = "keys = A, S, K, L\n".to_string();
+        keep_unknown(&mut out, old);
+        assert_eq!(out, "keys = A, S, K, L\n# from another version of the game, kept for it\nfuture_setting = 3\nhotkey.future_hotkey = none\n");
+        // Written again, they stay once, and a build that knows them takes over.
+        let mut again = "keys = A, S, K, L\n".to_string();
+        keep_unknown(&mut again, &out);
+        assert_eq!(again, out);
+        let mut newer = "keys = A, S, K, L\nfuture_setting = 4\nhotkey.future_hotkey = none\n".to_string();
+        keep_unknown(&mut newer, &out);
+        assert_eq!(newer, "keys = A, S, K, L\nfuture_setting = 4\nhotkey.future_hotkey = none\n");
+    }
+
+    #[test]
+    fn saving_doesnt_bring_back_what_was_taken_out() {
+        // A hotkey back on its default, the last extra song folder removed: no line for them now.
+        let mut out = "keys = A, S, K, L\n".to_string();
+        keep_unknown(&mut out, "hotkey.apply_offset = none\nsongs = /a\nmultiverse_preset = x: y\nskin_part = a = b\n");
+        assert_eq!(out, "keys = A, S, K, L\n");
+    }
 
     #[test]
     fn screenshot_choices_read_back_and_go_to_the_clipboard_first() {

@@ -309,6 +309,11 @@ impl Hotkey {
     fn index(self) -> usize {
         Hotkey::ALL.iter().position(|&h| h == self).unwrap_or(0)
     }
+
+    /// Whether `name` is a hotkey of this build (see `Hotkey::key`).
+    pub fn known(name: &str) -> bool {
+        Hotkey::ALL.iter().any(|h| h.key() == name)
+    }
 }
 
 /// What a key press does once the bindings have had their say.
