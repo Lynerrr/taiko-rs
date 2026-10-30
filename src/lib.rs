@@ -5902,6 +5902,10 @@ impl State {
 
     fn cycle_sort(&mut self, dir: i32) {
         self.select.cycle_sort(dir, &self.library);
+        self.sort_changed();
+    }
+
+    fn sort_changed(&mut self) {
         self.cfg.sort = self.select.sort.name().to_string();
         self.cfg.save();
         self.toast(format!("sorted by {}", self.select.sort.name()));
@@ -5911,7 +5915,23 @@ impl State {
         if self.select.collections.is_empty() {
             self.toast("no osu! collections found (collection.db next to your Songs folder)".into());
         } else {
+            self.select.sorting = false;
             self.select.picker = Some(self.select.collection.map(|c| c + 1).unwrap_or(0));
+        }
+    }
+
+    fn open_sorts(&mut self) {
+        self.select.sorting = true;
+        self.select.picker = ui::SortMode::ALL.iter().position(|&m| m == self.select.sort);
+    }
+
+    /// Row `i` of the collection or sort list.
+    fn pick_row(&mut self, i: usize) {
+        if !self.select.sorting {
+            self.select.pick_collection(i, &self.library);
+        } else if let Some(&sort) = ui::SortMode::ALL.get(i) {
+            self.select.set_sort(sort, &self.library);
+            self.sort_changed();
         }
     }
 
@@ -6972,7 +6992,7 @@ impl State {
                 KeyCode::ArrowDown => self.select.picker = Some((cursor + 1).min(n - 1)),
                 KeyCode::PageUp => self.select.picker = Some(cursor.saturating_sub(10)),
                 KeyCode::PageDown => self.select.picker = Some((cursor + 10).min(n - 1)),
-                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.select.pick_collection(cursor, &self.library),
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.pick_row(cursor),
                 KeyCode::Escape | KeyCode::Backspace => self.select.picker = None,
                 _ => {}
             }
@@ -8893,12 +8913,9 @@ impl State {
                 self.settings_ui.binding = None;
                 self.settings_ui.cursor = settings::section_start(i);
             }
-            Hit::SortCycle => {
-                let dir = if self.modifiers_shift { -1 } else { 1 };
-                self.cycle_sort(dir);
-            }
+            Hit::SortList => self.open_sorts(),
             Hit::CollectionPick => self.open_collections(),
-            Hit::PickRow(i) => self.select.pick_collection(i, &self.library),
+            Hit::PickRow(i) => self.pick_row(i),
             Hit::ChoiceRow(i) => self.pick_choice(i),
             Hit::SongsFolder => self.browse_songs_folder(),
             // Taken when pressed (`mouse_button`).

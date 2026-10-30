@@ -1650,7 +1650,7 @@ pub enum Hit {
     DlRow(usize),
     DlGet(usize),
     /// Song select: next sort mode / open the collection list / a row of that list.
-    SortCycle,
+    SortList,
     CollectionPick,
     PickRow(usize),
     /// A row of a setting's list of choices.
