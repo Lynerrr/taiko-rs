@@ -47,6 +47,8 @@ pub struct Info {
 
 /// Sets whose status can still change (qualified, pending...) are looked up again this often.
 const RECHECK_SECS: u64 = 24 * 3600;
+/// How often a set no mirror knew is asked about again: it may just not have been there yet.
+const MISSING_RECHECK_SECS: u64 = 7 * 24 * 3600;
 /// How long a submit waits on the mirrors for a set never looked up.
 const SUBMIT_WAIT: Duration = Duration::from_secs(10);
 
@@ -73,6 +75,15 @@ fn stale(set: &Set, now: u64) -> bool {
     }
 }
 
+/// Whether a set known as missing should be asked about now (and notes that it is).
+fn missing_due(asked: &mut HashMap<u32, u64>, set: u32, now: u64) -> bool {
+    let due = asked.get(&set).is_none_or(|at| now.saturating_sub(*at) >= MISSING_RECHECK_SECS);
+    if due {
+        asked.insert(set, now);
+    }
+    due
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -82,6 +93,8 @@ struct Covers {
     blocked_file: PathBuf,
     sets: Mutex<HashMap<u32, Set>>,
     asked: Mutex<HashSet<u32>>,
+    /// When a set known as missing was last asked about since the server started.
+    missing_asked: Mutex<HashMap<u32, u64>>,
     tx: Mutex<Sender<u32>>,
 }
 
@@ -110,7 +123,7 @@ pub fn init(dir: PathBuf) {
         .unwrap_or_default();
     println!("{} map sets' covers known ({})", sets.len(), file.display());
     let (tx, rx) = mpsc::channel::<u32>();
-    let covers = Covers { file, blocked_file: dir.join("covers-blocked.txt"), sets: Mutex::new(sets), asked: Mutex::new(HashSet::new()), tx: Mutex::new(tx) };
+    let covers = Covers { file, blocked_file: dir.join("covers-blocked.txt"), sets: Mutex::new(sets), asked: Mutex::new(HashSet::new()), missing_asked: Mutex::new(HashMap::new()), tx: Mutex::new(tx) };
     if COVERS.set(covers).is_err() {
         return;
     }
@@ -148,7 +161,12 @@ impl Covers {
     /// What's known of `set`, asking the lookup thread about it if nothing is or it's stale.
     fn known(&self, set: u32) -> Option<Set> {
         let known = self.sets.lock().unwrap().get(&set).cloned();
-        if known.as_ref().is_none_or(|s| stale(s, now_secs())) && self.asked.lock().unwrap().insert(set) {
+        let now = now_secs();
+        let due = match &known {
+            Some(Set::Missing) => missing_due(&mut self.missing_asked.lock().unwrap(), set, now),
+            known => known.as_ref().is_none_or(|s| stale(s, now)),
+        };
+        if due && self.asked.lock().unwrap().insert(set) {
             let _ = self.tx.lock().unwrap().send(set);
         }
         known
@@ -304,6 +322,10 @@ mod tests {
             assert_eq!(gives_pp_by(Some(&with(status))), Some(gives), "{status}");
         }
         assert_eq!(gives_pp_by(Some(&Set::Missing)), Some(false));
+        let mut asked = HashMap::new();
+        assert!(missing_due(&mut asked, 1, 1000));
+        assert!(!missing_due(&mut asked, 1, 1000 + MISSING_RECHECK_SECS - 1));
+        assert!(missing_due(&mut asked, 1, 1000 + MISSING_RECHECK_SECS));
         assert_eq!(gives_pp_by(Some(&with(""))), None, "looked up before statuses were kept");
         assert_eq!(gives_pp_by(None), None);
         // Statuses that may still change are asked about again, a day on.

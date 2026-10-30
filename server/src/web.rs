@@ -99,7 +99,7 @@ pub fn serve(state: Arc<State>, port: u16, behind_proxy: bool) {
 impl Web {
     fn allow(&self, ip: IpAddr) -> bool {
         let mut recent = self.recent.lock().unwrap();
-        let list = recent.entry(ip).or_default();
+        let list = recent.entry(crate::limit_key(ip)).or_default();
         list.retain(|t| t.elapsed() < Duration::from_secs(60));
         if list.len() >= REQUESTS_PER_MINUTE {
             return false;

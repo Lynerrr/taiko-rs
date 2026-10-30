@@ -160,10 +160,11 @@ fn token(s: &Status, agent: &ureq::Agent) -> Option<String> {
     Some(t.access_token)
 }
 
-/// The API's answer for a batch of maps: (set, status) of each map it knows.
-fn ask(agent: &ureq::Agent, token: &str, maps: &[u32]) -> Result<Vec<(u32, String)>, Duration> {
+/// The API's answer for a batch of maps: (map, set, status) of each map it knows.
+fn ask(agent: &ureq::Agent, token: &str, maps: &[u32]) -> Result<Vec<(u32, u32, String)>, Duration> {
     #[derive(Deserialize)]
     struct Map {
+        id: u32,
         beatmapset_id: u32,
         status: String,
     }
@@ -186,13 +187,19 @@ fn ask(agent: &ureq::Agent, token: &str, maps: &[u32]) -> Result<Vec<(u32, Strin
                 eprintln!("osu statuses: unreadable answer: {e}");
                 SLOW_DOWN
             })?;
-            Ok(a.beatmaps.into_iter().map(|m| (m.beatmapset_id, m.status)).collect())
+            Ok(a.beatmaps.into_iter().map(|m| (m.id, m.beatmapset_id, m.status)).collect())
         }
         code => {
             eprintln!("osu statuses: the API answered {code}");
             Err(SLOW_DOWN)
         }
     }
+}
+
+/// The sets of a batch whose map osu! doesn't have. The pairs come from players: a map it does
+/// have, under some other set, says nothing about that set.
+fn unanswered(batch: &[(u32, u32)], found: &[(u32, u32, String)]) -> Vec<u32> {
+    batch.iter().filter(|(set, map)| !found.iter().any(|(m, s, _)| m == map || s == set)).map(|(set, _)| *set).collect()
 }
 
 fn worker() {
@@ -219,16 +226,17 @@ fn worker() {
             Ok(found) => {
                 let mut inner = s.inner.lock().unwrap();
                 let at = now();
-                let seen: HashSet<u32> = found.iter().map(|(set, _)| *set).collect();
-                for (set, status) in found {
-                    inner.known.insert(set, (status, at));
-                }
                 // A map osu! doesn't have: its set is looked up again in a while.
-                for &(set, _) in &batch {
-                    if !seen.contains(&set) {
+                for set in unanswered(&batch, &found) {
+                    if inner.known.get(&set).is_none_or(|(status, _)| status == MISSING) {
                         inner.known.insert(set, (MISSING.to_string(), at));
                     }
-                    inner.queued.remove(&set);
+                }
+                for (_, set, status) in found {
+                    inner.known.insert(set, (status, at));
+                }
+                for (set, _) in &batch {
+                    inner.queued.remove(set);
                 }
                 inner.dirty = true;
                 batches += 1;
@@ -262,6 +270,13 @@ fn requeue(s: &Status, batch: &[(u32, u32)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_map_of_another_set_doesnt_make_a_set_missing() {
+        let found = vec![(10, 1, "ranked".to_string()), (20, 2, "ranked".to_string())];
+        let batch = [(1, 10), (2, 11), (3, 20), (4, 30)];
+        assert_eq!(unanswered(&batch, &found), [4]);
+    }
 
     #[test]
     fn statuses_that_may_change_are_asked_again_sooner() {
