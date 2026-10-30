@@ -2695,6 +2695,7 @@ dependencies = [
  "libc",
  "pollster",
  "rosu-pp",
+ "rustls",
  "serde",
  "serde_json",
  "symphonia",

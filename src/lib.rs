@@ -19,6 +19,7 @@ mod cursor;
 mod debug;
 mod discord;
 mod online;
+mod tls;
 mod difficulty;
 mod download;
 mod font;

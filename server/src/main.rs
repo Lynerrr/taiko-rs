@@ -20,6 +20,8 @@ mod net;
 #[allow(dead_code)]
 #[path = "../../src/online.rs"]
 mod online;
+#[path = "../../src/tls.rs"]
+mod tls;
 mod avatars;
 mod card;
 mod covers;
@@ -600,8 +602,7 @@ impl State {
 }
 
 /// Handles one connection: a request, its reply, and for a lobby the hand-over to the room.
-fn handle(state: &State, stream: TcpStream, slot: Slot) {
-    let ip = stream.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
+fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
     let mut reader = BufReader::new(stream);
@@ -1449,10 +1450,17 @@ impl Drop for Slot {
     }
 }
 
+/// Listens on `port`, on IPv6 and IPv4 (on Linux `::` is usually dual-stack and the second bind
+/// just fails).
+fn bind(port: u16) -> Vec<TcpListener> {
+    ["::", "0.0.0.0"].iter().filter_map(|addr| TcpListener::bind((*addr, port)).ok()).collect()
+}
+
 fn main() {
     let mut port = online::DEFAULT_PORT;
     let mut data = PathBuf::from(".");
     let mut http_port = 0;
+    let mut tls_port = 0;
     let mut behind_proxy = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -1460,9 +1468,10 @@ fn main() {
             "--port" => port = args.next().and_then(|p| p.parse().ok()).expect("--port N"),
             "--data" => data = PathBuf::from(args.next().expect("--data DIR")),
             "--http-port" => http_port = args.next().and_then(|p| p.parse().ok()).expect("--http-port N"),
+            "--tls-port" => tls_port = args.next().and_then(|p| p.parse().ok()).expect("--tls-port N"),
             "--behind-proxy" => behind_proxy = true,
             _ => {
-                eprintln!("usage: taiko-server [--port 7800] [--data DIR] [--http-port 8080 [--behind-proxy]]");
+                eprintln!("usage: taiko-server [--port 7800] [--tls-port 7801] [--data DIR] [--http-port 8080 [--behind-proxy]]");
                 std::process::exit(2);
             }
         }
@@ -1498,21 +1507,26 @@ fn main() {
             state.scores.lock().unwrap().count_pp();
         });
     }
-    // IPv6 and IPv4 (on Linux `::` is usually dual-stack and the second bind just fails).
-    let mut listeners = Vec::new();
-    let mut errors = Vec::new();
-    for addr in ["::", "0.0.0.0"] {
-        match TcpListener::bind((addr, port)) {
-            Ok(l) => listeners.push(l),
-            Err(e) => errors.push(format!("[{addr}]:{port}: {e}")),
+    let mut listeners = bind(port);
+    assert!(!listeners.is_empty(), "can't listen on port {port}");
+    println!("taiko-server listening on port {port} (protocol {}, rooms protocol {})", online::PROTOCOL, net::PROTOCOL);
+    let mut listeners: Vec<(TcpListener, Option<Arc<rustls::ServerConfig>>)> = listeners.drain(..).map(|l| (l, None)).collect();
+    if tls_port != 0 {
+        // Without its certificate the plain port still serves everyone.
+        match tls::server_config(&data.join("tls-cert.der"), &data.join("tls-key.der")) {
+            Ok(config) => {
+                let encrypted = bind(tls_port);
+                assert!(!encrypted.is_empty(), "can't listen on port {tls_port}");
+                listeners.extend(encrypted.into_iter().map(|l| (l, Some(config.clone()))));
+                println!("encrypted on port {tls_port}");
+            }
+            Err(e) => eprintln!("not encrypted: {e}"),
         }
     }
-    assert!(!listeners.is_empty(), "can't listen: {}", errors.join(", "));
-    println!("taiko-server listening on port {port} (protocol {}, rooms protocol {})", online::PROTOCOL, net::PROTOCOL);
     let open = Arc::new(Open::default());
     let threads: Vec<_> = listeners
         .into_iter()
-        .map(|l| {
+        .map(|(l, config)| {
             let state = state.clone();
             let open = open.clone();
             std::thread::spawn(move || {
@@ -1520,9 +1534,17 @@ fn main() {
                     let ip = stream.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
                     let Some(slot) = open.take(ip) else { continue };
                     let state = state.clone();
+                    let config = config.clone();
                     // Out of threads (or memory): this one connection is turned away, not the server.
                     if let Err(e) = std::thread::Builder::new().spawn(move || {
-                        handle(&state, stream, slot)
+                        let stream = match config {
+                            Some(config) => match tls::accept(stream, config) {
+                                Ok(plain) => plain,
+                                Err(_) => return,
+                            },
+                            None => stream,
+                        };
+                        handle(&state, stream, slot, ip)
                     }) {
                         eprintln!("connection from {ip}: {e}");
                     }

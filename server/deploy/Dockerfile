@@ -3,7 +3,7 @@
 # and put it next to this file as `taiko-server`.
 FROM scratch
 COPY taiko-server /taiko-server
-EXPOSE 7800
+EXPOSE 7800 7801
 # The website on 8080, reached only through the German VPS (nginx there passes the visitor's
 # address in a header, hence --behind-proxy).
-ENTRYPOINT ["/taiko-server", "--port", "7800", "--data", "/data", "--http-port", "8080", "--behind-proxy"]
+ENTRYPOINT ["/taiko-server", "--port", "7800", "--tls-port", "7801", "--data", "/data", "--http-port", "8080", "--behind-proxy"]
