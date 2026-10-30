@@ -25,6 +25,8 @@ const PACE: Duration = Duration::from_millis(1100);
 const SLOW_DOWN: Duration = Duration::from_secs(60);
 /// How many sets wait to be looked up, at most: a flood of made-up IDs can't fill the memory.
 const MAX_QUEUE: usize = 100_000;
+/// How many sets are remembered, at most: far more than osu! has.
+const MAX_KNOWN: usize = 2_000_000;
 /// Seconds before a status is asked again: ranked, approved and loved ones hardly change.
 const FINAL_TTL: u64 = 60 * 86_400;
 const MISSING_TTL: u64 = 14 * 86_400;
@@ -88,14 +90,15 @@ pub fn init(dir: PathBuf) {
 }
 
 /// What's known of the sets `maps` are (set ID, the ID of one of its maps): (set, status), the
-/// sets not known yet left out. With `ask`, those and the ones that may have changed are looked
-/// up in the background, for the next time.
-pub fn lookup(maps: &[(u32, u32)], ask: bool) -> Vec<(u32, String)> {
-    let Some(s) = STATUS.get() else { return Vec::new() };
+/// sets not known yet left out. Up to `budget` of those and the ones that may have changed are looked
+/// up in the background, for the next time (and how many that was comes back too).
+pub fn lookup(maps: &[(u32, u32)], budget: usize) -> (Vec<(u32, String)>, usize) {
+    let Some(s) = STATUS.get() else { return (Vec::new(), 0) };
     let mut inner = s.inner.lock().unwrap();
     let now = now();
     let mut out = Vec::new();
     let mut woke = false;
+    let mut queued = 0;
     for &(set, map) in maps {
         // Something the covers' mirror lookups have seen costs nothing.
         let mirror = crate::covers::osu_status(set).filter(|m| m != MISSING);
@@ -104,15 +107,16 @@ pub fn lookup(maps: &[(u32, u32)], ask: bool) -> Vec<(u32, String)> {
         if let Some((status, _)) = known {
             out.push((set, status));
         }
-        if ask && stale && s.credentials.is_some() && map > 0 && inner.queue.len() < MAX_QUEUE && inner.queued.insert(set) {
+        if queued < budget && stale && s.credentials.is_some() && map > 0 && inner.queue.len() < MAX_QUEUE && inner.known.len() < MAX_KNOWN && inner.queued.insert(set) {
             inner.queue.push_back((set, map));
+            queued += 1;
             woke = true;
         }
     }
     if woke {
         s.wake.notify_one();
     }
-    out
+    (out, queued)
 }
 
 impl Status {
@@ -287,6 +291,6 @@ mod tests {
 
     #[test]
     fn nothing_is_answered_without_the_service() {
-        assert!(lookup(&[(1, 2)], true).is_empty());
+        assert!(lookup(&[(1, 2)], 1).0.is_empty());
     }
 }

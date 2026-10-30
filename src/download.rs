@@ -686,7 +686,7 @@ pub fn safe_folder_name(name: &str) -> String {
 
 /// Receives a map set from the multiplayer host: feed the parts (None aborts); the job
 /// reports the unpacked folder like a mirror download.
-pub fn receive(set: SetInfo, name: String, total: u64, songs: PathBuf) -> (Job, Sender<Option<Vec<u8>>>) {
+pub fn receive(set: SetInfo, name: String, total: u64, map: u64, songs: PathBuf) -> (Job, Sender<Option<Vec<u8>>>) {
     let (feed, parts) = mpsc::channel::<Option<Vec<u8>>>();
     let (tx, rx) = mpsc::channel();
     let done = Arc::new(AtomicU64::new(0));
@@ -696,7 +696,6 @@ pub fn receive(set: SetInfo, name: String, total: u64, songs: PathBuf) -> (Job, 
         let result = (|| {
             std::fs::create_dir_all(&songs).map_err(|e| e.to_string())?;
             let name = safe_folder_name(&name);
-            let dest = songs.join(&name);
             let archive = songs.join(format!("{name}.osz.part"));
             let mut file = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
             let mut got = 0u64;
@@ -715,9 +714,13 @@ pub fn receive(set: SetInfo, name: String, total: u64, songs: PathBuf) -> (Job, 
                 }
             }
             drop(file);
-            let result = extract(&archive, &dest);
+            let result = holds_map(&archive, map).and_then(|_| {
+                // In a folder of its own: what the host sent doesn't touch what's there.
+                let dest = free_folder(&songs, &name);
+                extract(&archive, &dest).map(|_| dest)
+            });
             let _ = std::fs::remove_file(&archive);
-            result.map(|_| dest)
+            result
         })();
         let _ = tx.send(result);
     });
@@ -759,6 +762,79 @@ pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool, maps: 
 
 /// The difficulties in an `.osz`: each `.osu`'s header and content hash (the same hash as
 /// `Entry::hash`), to tell whether the set is already in the list before unpacking it.
+/// Whether the archive has the map with this content hash.
+fn holds_map(archive: &Path, map: u64) -> Result<(), String> {
+    if archive_maps(archive)?.iter().any(|(_, hash)| *hash == map) { Ok(()) } else { Err("that isn't the lobby's map".into()) }
+}
+
+/// `name` in `songs`, or with a number if that's taken.
+fn free_folder(songs: &Path, name: &str) -> PathBuf {
+    let dest = songs.join(name);
+    if !dest.exists() {
+        return dest;
+    }
+    (2..).map(|n| songs.join(format!("{name} ({n})"))).find(|d| !d.exists()).unwrap_or(dest)
+}
+
+/// Where `dest` is unpacked to first. Added to the name, not replacing its end: a set called
+/// "A.B" shouldn't share this with "A.C".
+pub fn partial_of(dest: &Path) -> PathBuf {
+    let mut name = dest.file_name().unwrap_or_default().to_os_string();
+    name.push(".partial");
+    dest.with_file_name(name)
+}
+
+/// Biggest archive taken from a lobby host: more than a host sends (`pack_folder`).
+pub const MAX_HOST_MAP: u64 = 512 << 20;
+
+/// Most an archive may unpack to, and the most files in it: sets and skins are far under
+/// these, and a few bytes of zip can claim to be (or turn out to be) any size.
+const MAX_UNPACKED: u64 = 2 << 30;
+const MAX_ENTRIES: usize = 20_000;
+
+/// Unpacks a zip into `to`, which is gone again if it fails. Entries that would land outside
+/// `to` fail it (zip-slip), and links aren't made.
+pub fn unpack(archive: &Path, to: &Path) -> Result<(), String> {
+    let _ = std::fs::remove_dir_all(to);
+    let result = unpack_within(archive, to, MAX_UNPACKED);
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(to);
+    }
+    result
+}
+
+fn unpack_within(archive: &Path, to: &Path, limit: u64) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("not a beatmap archive ({e})"))?;
+    if zip.len() > MAX_ENTRIES {
+        return Err("too many files in the archive".into());
+    }
+    std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    let mut left = limit;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        if entry.is_symlink() {
+            continue;
+        }
+        let path = entry.enclosed_name().map(|p| to.join(p)).ok_or("the archive has a bad file path")?;
+        if entry.is_dir() {
+            std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let mut out = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+        // One byte past what's left tells a file that fits exactly from one that doesn't.
+        let written = std::io::copy(&mut entry.by_ref().take(left + 1), &mut out).map_err(|e| e.to_string())?;
+        if written > left {
+            return Err("the archive unpacks to too much".into());
+        }
+        left -= written;
+    }
+    Ok(())
+}
+
 pub fn archive_maps(archive: &Path) -> Result<Vec<(crate::beatmap::Meta, u64)>, String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("not a beatmap archive ({e})"))?;
@@ -779,12 +855,8 @@ pub fn archive_maps(archive: &Path) -> Result<Vec<(crate::beatmap::Meta, u64)>, 
 /// A set that is already there gets the archive's files on top: what else is in its folder (a
 /// difficulty of your own) stays.
 fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
-    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("not a beatmap archive ({e})"))?;
-    let tmp = dest.with_extension("partial");
-    let _ = std::fs::remove_dir_all(&tmp);
-    // `extract` rejects entries that would escape the destination (zip-slip).
-    zip.extract(&tmp).map_err(|e| e.to_string())?;
+    let tmp = partial_of(dest);
+    unpack(archive, &tmp)?;
     if dest.is_dir() {
         merge(&tmp, dest).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_dir_all(&tmp);
@@ -883,6 +955,64 @@ pub fn set_id_of_folder(path: &Path) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A zip of (name, bytes) at a temporary path.
+    fn a_zip(tag: &str, entries: &[(&str, &[u8])]) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("taiko-unpack-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("a.osz");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in entries {
+            zip.start_file(*name, stored).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+        (dir, archive)
+    }
+
+    #[test]
+    fn unpacking_stops_at_the_limit_and_leaves_nothing() {
+        let (dir, archive) = a_zip("limit", &[("a/map.osu", &[b'x'; 600]), ("b.bin", &[b'y'; 600])]);
+        let to = dir.join("set");
+        assert!(unpack_within(&archive, &to, 1200).is_ok());
+        assert_eq!(std::fs::read(to.join("a/map.osu")).unwrap().len(), 600);
+        assert!(unpack_within(&archive, &dir.join("over"), 1199).is_err());
+        assert!(unpack(&archive, &to).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_archive_reaching_outside_fails_and_is_cleaned_up() {
+        let (dir, archive) = a_zip("slip", &[("ok.txt", b"fine"), ("../escape.txt", b"no")]);
+        let to = dir.join("set");
+        assert!(unpack(&archive, &to).is_err());
+        assert!(!to.exists() && !dir.join("escape.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn what_the_host_sends_leaves_existing_sets_alone() {
+        let (dir, archive) = a_zip("host", &[("map [Oni].osu", b"the lobby map"), ("run-me.bat", b"x")]);
+        let songs = dir.join("Songs");
+        let theirs = songs.join("999 Someone - Set");
+        std::fs::create_dir_all(&theirs).unwrap();
+        std::fs::write(theirs.join("map [Oni].osu"), b"mine").unwrap();
+        let map = crate::net::map_hash(b"the lobby map");
+        assert!(holds_map(&archive, map).is_ok());
+        assert!(holds_map(&archive, map + 1).is_err());
+        let dest = free_folder(&songs, "999 Someone - Set");
+        extract(&archive, &dest).unwrap();
+        assert_eq!(dest, songs.join("999 Someone - Set (2)"));
+        assert_eq!(std::fs::read(theirs.join("map [Oni].osu")).unwrap(), b"mine");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dotted_names_keep_their_own_partial_folder() {
+        assert_ne!(partial_of(Path::new("Songs/A.B")), partial_of(Path::new("Songs/A.C")));
+    }
 
     #[test]
     fn parses_search_results_and_keeps_taiko_difficulties() {

@@ -237,12 +237,8 @@ fn extract_osz(path: &Path) -> Result<PathBuf, String> {
     if dest.is_dir() {
         return Ok(dest);
     }
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-    let tmp = dest.with_extension("partial");
-    let _ = std::fs::remove_dir_all(&tmp);
-    // `extract` rejects entries that would escape the destination (zip-slip).
-    zip.extract(&tmp).map_err(|e| e.to_string())?;
+    let tmp = crate::download::partial_of(&dest);
+    crate::download::unpack(path, &tmp)?;
     std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
     Ok(dest)
 }

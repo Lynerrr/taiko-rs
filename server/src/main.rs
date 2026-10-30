@@ -56,6 +56,9 @@ const EMPTY_ROOM: Duration = Duration::from_secs(20);
 const MAX_ROOMS: usize = 200;
 /// Per IP: new accounts per hour, failed logins per 10 minutes.
 const REGISTER_PER_HOUR: usize = 5;
+/// Sets one address can have looked up on osu! an hour: a big library in a few hours, and the
+/// lookups stay shared. What's known already is answered regardless.
+const LOOKUPS_PER_HOUR: usize = 20_000;
 const FAILED_LOGINS: usize = 10;
 /// Per IP: codes mailed per hour.
 const MAILS_PER_HOUR: usize = 10;
@@ -350,6 +353,8 @@ struct Limits {
     failed: Vec<Instant>,
     /// Codes mailed at this address's asking.
     mails: Vec<Instant>,
+    /// When its hour of map status lookups began, and how many it has asked for in it.
+    lookups: Option<(Instant, usize)>,
 }
 
 struct State {
@@ -578,6 +583,25 @@ impl State {
         Some(slot)
     }
 
+    /// How many more map status lookups `ip` may start this hour.
+    fn lookups_left(&self, ip: IpAddr) -> usize {
+        let mut limits = self.limits.lock().unwrap();
+        let spent = &mut limits.entry(limit_key(ip)).or_default().lookups;
+        match spent {
+            Some((since, n)) if since.elapsed() < Duration::from_secs(3600) => LOOKUPS_PER_HOUR.saturating_sub(*n),
+            _ => {
+                *spent = Some((Instant::now(), 0));
+                LOOKUPS_PER_HOUR
+            }
+        }
+    }
+
+    fn spend_lookups(&self, ip: IpAddr, n: usize) {
+        if let Some((_, spent)) = &mut self.limits.lock().unwrap().entry(limit_key(ip)).or_default().lookups {
+            *spent += n;
+        }
+    }
+
     /// Gives a slot back: what it was taken for didn't count after all.
     fn give_back(&self, ip: IpAddr, pick: fn(&mut Limits) -> &mut Vec<Instant>, slot: Instant) {
         let mut limits = self.limits.lock().unwrap();
@@ -687,9 +711,11 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
         // What the server knows of the sets (asking osu! in the background about the rest, for
         // logged-in players only: not anyone can spend the API's allowance).
         Request::SetStatuses { token, maps } => {
-            let ask = state.user(&token).is_some();
+            let budget = if state.user(&token).is_some() { state.lookups_left(ip) } else { 0 };
             let maps: Vec<(u32, u32)> = maps.into_iter().take(online::MAX_STATUS_MAPS).collect();
-            Reply::SetStatuses(osustatus::lookup(&maps, ask))
+            let (found, queued) = osustatus::lookup(&maps, budget);
+            state.spend_lookups(ip, queued);
+            Reply::SetStatuses(found)
         }
         Request::LovedSets => Reply::LovedSets(loved::all().into_iter().map(|(set, _)| set).collect()),
         Request::SetLoved { token, set, loved: on } => {
@@ -1690,6 +1716,17 @@ mod tests {
         assert!(open.take(ip("2001:db8::ffff")).is_none());
         drop(slots);
         assert!(open.take(ip("2001:db8::ffff")).is_some());
+    }
+
+    #[test]
+    fn map_status_lookups_run_out_by_the_hour() {
+        let state = test_state("lookups");
+        let ip = IpAddr::from([127, 0, 0, 1]);
+        assert_eq!(state.lookups_left(ip), LOOKUPS_PER_HOUR);
+        state.spend_lookups(ip, LOOKUPS_PER_HOUR - 3);
+        assert_eq!(state.lookups_left(ip), 3);
+        state.spend_lookups(ip, 10);
+        assert_eq!(state.lookups_left(ip), 0);
     }
 
     #[test]
