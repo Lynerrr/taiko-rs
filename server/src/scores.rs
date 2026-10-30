@@ -13,6 +13,8 @@ use crate::online::{self, OnlineScore, Profile, ScoreSubmit, Stats};
 
 /// Plays one account may send per minute.
 const SUBMITS_PER_MINUTE: usize = 20;
+/// The most key presses a play can have: on a submitted one, and kept of a live one.
+pub const MAX_INPUTS: usize = 400_000;
 /// Plays a profile lists (best and latest).
 const PROFILE_PLAYS: usize = 20;
 /// Most played maps a profile lists.
@@ -95,7 +97,7 @@ fn check(play: &ScoreSubmit) -> Result<(), &'static str> {
         && (0.25..=4.0).contains(&play.map.rate)
         // No upper limit on pp for now (tests need it); just a real, non-negative number.
         && play.pp.is_none_or(|pp| pp.is_finite() && pp >= 0.0)
-        && play.inputs.len() <= 400_000
+        && play.inputs.len() <= MAX_INPUTS
         && play.map.hash != 0;
     if !fine {
         return Err("that play doesn't add up");
