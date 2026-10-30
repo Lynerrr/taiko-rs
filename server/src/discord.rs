@@ -794,10 +794,16 @@ pub fn pings(after: u64) -> Vec<Value> {
     BOT.get().map(|b| b.pings.lock().unwrap().iter().filter(|p| p["id"].as_u64().is_some_and(|n| n > after)).cloned().collect()).unwrap_or_default()
 }
 
+/// A Discord id, which goes into the API's paths: only digits, so it can't steer them elsewhere.
+fn snowflake(id: &str) -> Result<(), String> {
+    if (1..=20).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit()) { Ok(()) } else { Err("that's not a Discord id".into()) }
+}
+
 /// Claude marks a report done: the forum's tag whose name has `tag` in it on thread `channel`,
 /// or where there's no such tag (not a forum post, or a forum without one) a ✅ on its message
 /// `message`. Says which it did.
 pub fn mark(channel: &str, message: &str, tag: &str) -> Result<String, String> {
+    snowflake(channel)?;
     let bot = BOT.get().ok_or("the bot is off")?;
     let thread = bot.get(&format!("{API}/channels/{channel}"))?;
     if let Some(parent) = thread["parent_id"].as_str() {
@@ -819,6 +825,7 @@ pub fn mark(channel: &str, message: &str, tag: &str) -> Result<String, String> {
             return Ok(format!("tagged {name}"));
         }
     }
+    snowflake(message)?;
     bot.send_json("PUT", &format!("{API}/channels/{channel}/messages/{message}/reactions/%E2%9C%85/@me"), &Value::Null)?;
     Ok("reacted ✅".into())
 }
@@ -826,6 +833,8 @@ pub fn mark(channel: &str, message: &str, tag: &str) -> Result<String, String> {
 /// Claude's answer: `text` in `channel`, the first part replying to message `to`, in parts of
 /// Discord's size.
 pub fn say(channel: &str, to: Option<&str>, text: &str) -> Result<(), String> {
+    snowflake(channel)?;
+    to.map_or(Ok(()), snowflake)?;
     let bot = BOT.get().ok_or("the bot is off")?;
     for (i, part) in parts(text, 1900).into_iter().enumerate() {
         bot.reply(channel, to.filter(|_| i == 0), &Answer::Text(part))?;
@@ -1214,6 +1223,14 @@ mod tests {
 
     fn answer(bot: &Bot, text: &str, author: &str, map: Option<u64>) -> (Answer, Option<u64>) {
         bot.respond(&parse(text).unwrap(), author, map).unwrap()
+    }
+
+    #[test]
+    fn only_digits_go_into_discord_paths() {
+        assert!(snowflake("1098765432109876543").is_ok());
+        for id in ["", "1/../2", "1?", "%2e%2e", "123456789012345678901"] {
+            assert!(snowflake(id).is_err());
+        }
     }
 
     fn says(a: &Answer) -> String {

@@ -157,6 +157,17 @@ impl Req<'_> {
     }
 }
 
+/// A POST that didn't come from the site's own pages: the browser says so, or its origin isn't
+/// the host asked (a subdomain next to ours counts as elsewhere: SameSite doesn't stop those).
+fn from_elsewhere(fetch_site: &str, origin: Option<&str>, host: &str) -> bool {
+    matches!(fetch_site, "cross-site" | "same-site") || origin.is_some_and(|o| !o.split_once("://").is_some_and(|(_, h)| h.eq_ignore_ascii_case(host)))
+}
+
+/// Where a form on a map's page goes back to, with nothing in it but the map's hash.
+fn map_page(back: &str) -> bool {
+    back.strip_prefix("/m/").is_some_and(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 fn answer(state: &State, web: &Web, stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
@@ -173,7 +184,9 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let mut range = None;
     let mut token = None;
     let mut length = 0usize;
-    let mut cross_site = false;
+    let mut fetch_site = String::new();
+    let mut origin = None;
+    let mut host = String::new();
     let mut content_type = String::new();
     let mut bearer = None;
     loop {
@@ -195,7 +208,11 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
                     } else if k.eq_ignore_ascii_case("content-length") {
                         length = v.parse().unwrap_or(usize::MAX);
                     } else if k.eq_ignore_ascii_case("sec-fetch-site") {
-                        cross_site = v.eq_ignore_ascii_case("cross-site");
+                        fetch_site = v.to_ascii_lowercase();
+                    } else if k.eq_ignore_ascii_case("origin") {
+                        origin = Some(v.to_string());
+                    } else if k.eq_ignore_ascii_case("host") {
+                        host = v.to_string();
                     } else if k.eq_ignore_ascii_case("content-type") {
                         content_type = v.to_string();
                     } else if k.eq_ignore_ascii_case("authorization") {
@@ -230,7 +247,7 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     let req = Req { method, path, query, form: if upload { HashMap::new() } else { form(&body) }, upload: file, os: Os::of(&agent), ip, token, viewer, claude, mailer };
     let mut reply = if !mailer && !web.allow(ip) {
         Reply::text(429, "too many requests, wait a minute")
-    } else if method == "POST" && (cross_site || length > max_body) {
+    } else if method == "POST" && (from_elsewhere(&fetch_site, origin.as_deref(), &host) || length > max_body) {
         Reply::text(403, "no")
     } else if !matches!(method, "GET" | "HEAD" | "POST") {
         Reply::text(405, "only GET and POST")
@@ -633,7 +650,7 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
             let Ok(set) = set.parse::<u32>() else { return req.not_found("That is not a map set") };
             let back = req.field("back");
-            let back = if back.starts_with("/m/") { back.to_string() } else { "/loved".into() };
+            let back = if map_page(back) { back.to_string() } else { "/loved".into() };
             let msg = state.love(&key, set, req.field("on") != "0").unwrap_or_else(|e| e);
             Reply::see_other(format!("{back}?msg={}", encode(&msg)))
         }
@@ -682,7 +699,27 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
 
 #[cfg(test)]
 mod tests {
-    use super::{byte_range, decode, encode, form};
+    use super::{byte_range, decode, encode, form, from_elsewhere, map_page};
+
+    #[test]
+    fn posts_only_come_from_the_site_itself() {
+        let site = "rstaiko.auneu.space";
+        assert!(!from_elsewhere("same-origin", Some("https://rstaiko.auneu.space"), site));
+        assert!(!from_elsewhere("", None, site));
+        assert!(!from_elsewhere("", Some("http://localhost:8080"), "localhost:8080"));
+        assert!(from_elsewhere("cross-site", None, site));
+        assert!(from_elsewhere("same-site", None, site));
+        assert!(from_elsewhere("", Some("https://other.auneu.space"), site));
+        assert!(from_elsewhere("", Some("null"), site));
+    }
+
+    #[test]
+    fn going_back_is_only_to_a_map() {
+        assert!(map_page("/m/1f3a"));
+        assert!(!map_page("/m/"));
+        assert!(!map_page("/m/1\r\nSet-Cookie: x=1"));
+        assert!(!map_page("/m/1/../../x"));
+    }
 
     #[test]
     fn forms_and_queries_decode() {

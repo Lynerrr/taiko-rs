@@ -803,6 +803,10 @@ fn try_reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, 
 fn link_email(state: &State, ip: IpAddr, token: &str, email: &str, code: Option<&str>) -> Reply {
     let Some(name) = state.user(token) else { return Reply::Error("your session expired: log in again".into()) };
     let key = name.to_ascii_lowercase();
+    // The email gets the account back after a lost password: a session alone can't move that.
+    if state.accounts.lock().unwrap().users.get(&key).is_some_and(|u| u.email.is_some()) {
+        return Reply::Error("this account already has an email: ask an admin on Discord to change it".into());
+    }
     let email = mail::normal(email);
     if !mail::valid_email(&email) {
         return Reply::Error("that email doesn't look right".into());
@@ -1576,6 +1580,21 @@ mod tests {
 
     fn lines(rx: &mpsc::Receiver<Line>) -> Vec<String> {
         rx.try_iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn a_linked_email_stays_put() {
+        let state = test_state("linked");
+        let ip = IpAddr::from([127, 0, 0, 1]);
+        let token = {
+            let mut a = state.accounts.lock().unwrap();
+            a.users.insert("alice".into(), User { email: Some("a@mail.ru".into()), ..user("alice") });
+            state.new_session(&mut a, "alice")
+        };
+        for code in [None, Some("000000")] {
+            assert!(matches!(link_email(&state, ip, &token, "evil@mail.ru", code), Reply::Error(e) if e.contains("already has an email")));
+        }
+        assert_eq!(state.accounts.lock().unwrap().users["alice"].email.as_deref(), Some("a@mail.ru"));
     }
 
     #[test]
