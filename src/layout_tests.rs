@@ -800,6 +800,62 @@ fn songs_sort_by_hp_od_and_status() {
 }
 
 #[test]
+fn by_difficulty_each_is_listed_under_its_own_stars() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // A song of 3, 4 and 5 stars, with two of them next to each other across a heading.
+    let songs = s.select.songs();
+    let total = songs.iter().map(Vec::len).sum::<usize>();
+    let (spread, other) = (songs[0].clone(), songs[1].clone());
+    assert!(spread.len() >= 3 && other.len() >= 2);
+    let mut info = vec![None; s.library.len()];
+    let mut stars = |i: usize, stars: f32| info[i] = Some(crate::mapinfo::Info { stars, length_ms: 60_000.0, bpm: 120.0 });
+    for &i in s.select.songs().iter().flatten() {
+        stars(i, 7.0);
+    }
+    stars(spread[0], 3.5);
+    stars(spread[1], 4.99);
+    stars(spread[2], 5.0);
+    // Two of a song under one heading stay one song there.
+    stars(other[0], 5.2);
+    stars(other[1], 5.3);
+    s.select.info = Some(std::sync::Arc::new(std::sync::Mutex::new(info)));
+    s.select.sort = ui::SortMode::Difficulty;
+    s.select.refilter(&s.library);
+    let songs = s.select.songs();
+    assert_eq!(songs[0], [spread[0]]);
+    assert_eq!(songs[1], [spread[1]]);
+    assert_eq!(songs[2], [spread[2]]);
+    assert_eq!(songs[3], other[..2]);
+    let sections = s.select.sections();
+    assert_eq!(sections[..3].iter().map(|x| (x.0.as_str(), x.1)).collect::<Vec<_>>(), [("3.00 - 3.99 stars", 1), ("4.00 - 4.99 stars", 1), ("5.00 - 5.99 stars", 2)]);
+    assert_eq!(songs.iter().map(Vec::len).sum::<usize>(), total);
+    // Other sorts keep a song in one piece.
+    s.select.sort = ui::SortMode::Length;
+    s.select.refilter(&s.library);
+    assert!(s.select.songs().iter().any(|song| song.contains(&spread[0]) && song.contains(&spread[2])));
+}
+
+#[test]
+fn the_sort_button_lists_the_sorts() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let before = s.select.sort;
+    s.click(render::Hit::SortList, None);
+    assert_eq!(s.select.sort, before, "the button only opens the list");
+    assert_eq!(s.select.picker_len(), ui::SortMode::ALL.len());
+    let mut problems = Vec::new();
+    check_draw("sort list", &mut problems, |c| s.select.draw_popups(c, &s.library));
+    assert!(problems.is_empty(), "{problems:?}");
+    let row = ui::SortMode::ALL.iter().position(|&m| m == ui::SortMode::Added).unwrap();
+    s.click(render::Hit::PickRow(row), None);
+    assert_eq!(s.select.sort, ui::SortMode::Added);
+    assert_eq!(s.select.picker, None);
+    assert_eq!(s.cfg.sort, "date added");
+}
+
+#[test]
 fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
