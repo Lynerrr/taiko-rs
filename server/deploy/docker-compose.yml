@@ -14,6 +14,8 @@ services:
         hard: 65536
     ports:
       - "7800:7800"
+      # The same, encrypted: what the game uses (7800 is for builds from before that).
+      - "7801:7801"
       # The website (rankings, profiles): only for the German VPS's tunnel, which serves it.
       - "127.0.0.1:8080:8080"
     volumes:

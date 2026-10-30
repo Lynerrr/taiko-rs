@@ -468,12 +468,23 @@ pub fn write_line<T: Serialize>(w: &mut impl Write, msg: &T) -> Result<(), Strin
 
 fn connect(server: &str) -> Result<TcpStream, String> {
     let server = server.trim();
-    let with_port = if server.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok()) { server.to_string() } else { format!("{server}:{DEFAULT_PORT}") };
+    let has_port = server.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok());
+    let host = if has_port { server.rsplit_once(':').map_or(server, |(h, _)| h) } else { server };
+    // The real server only ever encrypted, whatever port an older config has for it.
+    let secure = host.eq_ignore_ascii_case(crate::tls::SERVER_HOST);
+    let with_port = if secure {
+        format!("{host}:{}", crate::tls::PORT)
+    } else if has_port {
+        server.to_string()
+    } else {
+        format!("{server}:{DEFAULT_PORT}")
+    };
     let addrs: Vec<_> = with_port.to_socket_addrs().map_err(|e| tr!("can't find the server: {e}", "サーバーが見つかりません: {e}", "сервер не найден: {e}";))?.collect();
     let mut last = String::from(tr!("no address", "アドレスなし", "нет адреса"));
     for a in addrs {
         match TcpStream::connect_timeout(&a, Duration::from_secs(4)) {
             Ok(s) => {
+                let s = if secure { crate::tls::connect(s).map_err(|e| tr!("couldn't connect securely ({e})", "安全に接続できません ({e})", "не удалось безопасно подключиться ({e})";))? } else { s };
                 let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
                 let _ = s.set_write_timeout(Some(Duration::from_secs(10)));
                 return Ok(s);
