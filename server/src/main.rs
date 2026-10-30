@@ -366,6 +366,24 @@ struct State {
     verify_codes: Mutex<HashMap<String, (String, Instant)>>,
 }
 
+/// What's saved at `path`: the default when there's no such file yet, an error when there is
+/// one and it can't be read (starting empty then would overwrite it with nothing).
+fn try_load<T: serde::de::DeserializeOwned + Default>(path: &std::path::Path) -> Result<T, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+/// `try_load`, or the server doesn't start: better down than with its data gone.
+fn load_saved<T: serde::de::DeserializeOwned + Default>(path: &std::path::Path) -> T {
+    try_load(path).unwrap_or_else(|e| {
+        eprintln!("can't read saved data, not starting: {e}");
+        std::process::exit(1);
+    })
+}
+
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -392,7 +410,7 @@ fn verify_password(password: &str, hash: &str) -> bool {
 impl State {
     /// The state, and what wakes the saver (see `saver`).
     fn load(path: PathBuf) -> (State, mpsc::Receiver<()>) {
-        let mut accounts: Accounts = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let mut accounts: Accounts = load_saved(&path);
         let cutoff = now_secs().saturating_sub(SESSION_DAYS * 86400);
         accounts.sessions.retain(|_, s| s.created >= cutoff);
         // Claude's profile (its badge is in `pages`): a password nobody knows, so nobody logs in.
@@ -1595,6 +1613,21 @@ mod tests {
             assert!(matches!(link_email(&state, ip, &token, "evil@mail.ru", code), Reply::Error(e) if e.contains("already has an email")));
         }
         assert_eq!(state.accounts.lock().unwrap().users["alice"].email.as_deref(), Some("a@mail.ru"));
+    }
+
+    #[test]
+    fn saved_data_that_cant_be_read_is_an_error_not_a_blank_start() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-{}-load", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("accounts.json");
+        assert!(try_load::<Accounts>(&file).unwrap().users.is_empty());
+        std::fs::write(&file, "{ \"users\": {},, }").unwrap();
+        assert!(try_load::<Accounts>(&file).is_err());
+        std::fs::write(&file, [0xff, 0xfe]).unwrap();
+        assert!(try_load::<Accounts>(&file).is_err());
+        std::fs::write(&file, serde_json::to_string(&Accounts::default()).unwrap()).unwrap();
+        assert!(try_load::<Accounts>(&file).is_ok());
     }
 
     #[test]

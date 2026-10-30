@@ -30,7 +30,7 @@ fn store() -> &'static Store {
 /// Reads DIR/loved.json. Without it (tests) the list starts empty and lives in memory.
 pub fn init(dir: PathBuf) {
     let file = dir.join("loved.json");
-    let sets: BTreeMap<u32, Loved> = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let sets: BTreeMap<u32, Loved> = crate::load_saved(&file);
     println!("{} map sets loved here ({})", sets.len(), file.display());
     let _ = STORE.set(Store { file: Some(file), sets: Mutex::new(sets) });
 }

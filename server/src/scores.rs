@@ -130,9 +130,9 @@ impl Scores {
             println!("{} scores ({})", all.len(), f.display());
         }
         let tally_file = dir.as_ref().map(|d| d.join("playtime.json"));
-        let tallies = tally_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let tallies = tally_file.as_ref().map(|f| crate::load_saved(f)).unwrap_or_default();
         let overrides_file = dir.as_ref().map(|d| d.join("pp-overrides.json"));
-        let overrides = overrides_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let overrides = overrides_file.as_ref().map(|f| crate::load_saved(f)).unwrap_or_default();
         let mut scores = Scores {
             file,
             overrides_file,

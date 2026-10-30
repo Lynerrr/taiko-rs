@@ -79,9 +79,9 @@ pub fn start(state: Arc<State>, dir: PathBuf) {
         println!("discord: no token (DISCORD_TOKEN or discord-token), the bot is off");
         return;
     }
-    let links = std::fs::read_to_string(dir.join("discord-links.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let links = crate::load_saved(&dir.join("discord-links.json"));
     let http: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).http_status_as_error(false).build().into();
-    let verified = std::fs::read_to_string(dir.join("discord-verified.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let verified = crate::load_saved(&dir.join("discord-verified.json"));
     let pings: Vec<Value> = std::fs::read_to_string(dir.join("claude-pings.jsonl")).unwrap_or_default().lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
     let pings = pings[pings.len().saturating_sub(PINGS_KEPT)..].to_vec();
     let bot = Arc::new(Bot { token, dir, state, links: Mutex::new(links), verified: Mutex::new(verified), last_map: Mutex::default(), shown: Mutex::default(), me: Mutex::default(), my_roles: Mutex::default(), pings: Mutex::new(pings), resume: Mutex::default(), http });
