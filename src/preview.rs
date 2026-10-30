@@ -336,11 +336,13 @@ impl Preview {
         let (Some(engine), true) = (engine, in_menu) else { return };
         if let Some(song) = &self.audio {
             let end_ms = song.end_ms(engine.rate);
-            let restart = !self.audio_active || engine.position_ms(now).is_some_and(|p| p > end_ms - 30.0);
-            if restart {
+            // A seek past the quick part waits, silent, for the full song; it's not the end.
+            let ended = self.audio_rx.is_none() && engine.position_ms(now).is_some_and(|p| p > end_ms - 30.0);
+            if !self.audio_active || ended {
                 let at = self.resume_at.take().map(|t| t / song.rate).unwrap_or(song.start);
                 engine.play_part(song.track.clone(), song.base, at);
                 self.audio_active = true;
+                self.pending_seek = None; // the music won't reach it now
             }
         }
 
@@ -432,7 +434,7 @@ impl Preview {
         let map = self.map.as_ref().is_some_and(|(mi, ..)| *mi == i) && self.seen == Some(i) && self.game.is_some();
         let music = self.audio_active
             && self.audio.as_ref().is_some_and(|s| s.path == audio_path(e) && (s.rate, s.keep_pitch) == self.requested_rate);
-        map && music && self.pending_seek.is_none()
+        map && music
     }
 
     /// The autoplay preview of library entry `i`, once it is ready.
@@ -449,7 +451,8 @@ impl Preview {
         let loaded = self.map.as_ref().filter(|(mi, ..)| Some(*mi) == self.seen);
         let (Some((_, _, _, graph)), Some(game)) = (loaded, self.game.as_ref()) else { return };
         let marker = self.marker(e);
-        self.timeline = draw_graph(c, graph, rect, game.time, e.meta.preview_time, marker);
+        // The playhead goes where it was sent at once, not when the music gets there.
+        self.timeline = draw_graph(c, graph, rect, self.pending_seek.unwrap_or(game.time), e.meta.preview_time, marker);
         self.graph_rect = Some(rect);
         self.play_rect = draw_play_button(c, rect[0] + rect[2] / 2.0, rect[1] + rect[3] + 17.0, marker, button);
     }

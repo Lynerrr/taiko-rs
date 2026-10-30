@@ -392,8 +392,9 @@ struct State {
     /// Which screen was drawn last and since when, for the fade between screens.
     scene_kind: Option<std::mem::Discriminant<Scene>>,
     scene_since: Instant,
-    /// Dragging along the song select difficulty timeline; last seek time for throttling.
-    scrubbing: Option<Instant>,
+    /// Dragging along the song select difficulty timeline: when it last seeked (for throttling)
+    /// and to which map time.
+    scrubbing: Option<(Instant, f64)>,
     auto: bool,
     shots: Option<debug::ShotPlan>,
     /// Screens still to capture once each when a shot plan is active.
@@ -4272,13 +4273,14 @@ impl State {
             }
         }
         if matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
-            if let Some(last) = self.scrubbing {
+            if let Some((last, at)) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
                 if last.elapsed() >= Duration::from_millis(33) {
-                    if let Some(t) = self.preview.time_at(vx, vy) {
+                    let t = self.preview.time_at(vx, vy).filter(|&t| t != at);
+                    if let Some(t) = t {
                         self.preview.seek(t, self.audio.as_ref());
                     }
-                    self.scrubbing = Some(Instant::now());
+                    self.scrubbing = Some((Instant::now(), t.unwrap_or(at)));
                 }
                 return CursorIcon::Pointer;
             }
@@ -4441,12 +4443,13 @@ impl State {
                 }
                 if let Some(t) = self.preview.time_at(vx, vy) {
                     self.preview.seek(t, self.audio.as_ref());
-                    self.scrubbing = Some(Instant::now());
+                    self.scrubbing = Some((Instant::now(), t));
                     return;
                 }
-            } else if self.scrubbing.take().is_some() {
-                // Land exactly where the pointer was released.
-                if let Some(t) = self.preview.time_at(vx, vy) {
+            } else if let Some((_, at)) = self.scrubbing.take() {
+                // Land exactly where the pointer was released. Already there (a plain click): the
+                // music has moved on from it, and seeking again would throw it back.
+                if let Some(t) = self.preview.time_at(vx, vy).filter(|&t| t != at) {
                     self.preview.seek(t, self.audio.as_ref());
                 }
                 return;
