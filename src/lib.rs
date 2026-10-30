@@ -279,6 +279,8 @@ struct State {
     preview_remote: bool,
     /// Receiving the lobby map from the host: where its parts go.
     host_transfer: Option<std::sync::mpsc::Sender<Option<Vec<u8>>>>,
+    /// The lobby map was asked of the host: only then is what the host sends taken.
+    host_map_asked: bool,
     /// Local scores (index of saved replays).
     scores: Vec<scores::ScoreRow>,
     /// Working out the pp of scores saved before pp (started once, on the first frame).
@@ -4701,6 +4703,7 @@ impl State {
                     KeyCode::KeyD | KeyCode::KeyH if !s.have_map && s.map.is_some() && !s.is_host() => {
                         if self.host_transfer.is_none() {
                             s.client.send(net::ClientMsg::RequestMap);
+                            self.host_map_asked = true;
                             self.toast("getting the map from the host...".into());
                         }
                     }
@@ -8322,8 +8325,12 @@ impl State {
 
     /// Player: a piece of the lobby map from the host.
     fn receive_map_part(&mut self, part: net::MapPart) {
+        if !self.host_map_asked && self.host_transfer.is_none() {
+            return;
+        }
         if let Some(e) = part.error {
             // Fall back to the mirrors.
+            self.host_map_asked = false;
             self.host_transfer = None;
             self.toast(format!("the host couldn't send it ({e}); trying the mirrors"));
             self.download_lobby_map();
@@ -8331,6 +8338,12 @@ impl State {
         }
         if part.offset == 0 {
             let Some(m) = self.mp.as_ref().and_then(|s| s.map.clone()) else { return };
+            self.host_map_asked = false;
+            if part.total > download::MAX_HOST_MAP {
+                self.toast("the host's map is too big; trying the mirrors".into());
+                self.download_lobby_map();
+                return;
+            }
             let set = download::SetInfo {
                 id: m.set_id.unwrap_or(0),
                 artist: m.artist.clone(),
@@ -8343,7 +8356,7 @@ impl State {
                 rating: 0.0,
                 ranked_date: String::new(),
             };
-            let (job, feed) = download::receive(set, part.name.clone(), part.total, self.songs_dir.clone());
+            let (job, feed) = download::receive(set, part.name.clone(), part.total, m.hash, self.songs_dir.clone());
             self.downloads.push(job);
             self.host_transfer = Some(feed);
         }
@@ -9739,6 +9752,7 @@ impl State {
             score_link: None,
             preview_remote: false,
             host_transfer: None,
+            host_map_asked: false,
             scores: scores::load_index(),
             pp_backfill: None,
             pp_backfill_started: false,

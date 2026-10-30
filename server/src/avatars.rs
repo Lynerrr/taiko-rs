@@ -8,6 +8,8 @@ use std::sync::{Mutex, OnceLock};
 
 /// Largest picture taken.
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
+/// Widest and tallest picture taken: every visitor's browser unpacks it, whatever it weighs.
+const MAX_SIDE: u32 = 4096;
 
 struct Store {
     dir: PathBuf,
@@ -47,6 +49,41 @@ pub fn kind(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// Width and height, from the picture's header.
+fn size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let be16 = |at: usize| Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?) as u32);
+    let le16 = |at: usize| Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?) as u32);
+    let be32 = |at: usize| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+    let le24 = |at: usize| Some(le16(at)? | (*bytes.get(at + 2)? as u32) << 16);
+    match kind(bytes)? {
+        "image/png" => Some((be32(16)?, be32(20)?)),
+        "image/gif" => Some((le16(6)?, le16(8)?)),
+        "image/webp" => match bytes.get(12..16)? {
+            b"VP8X" => Some((le24(24)? + 1, le24(27)? + 1)),
+            b"VP8 " => Some((le16(26)? & 0x3fff, le16(28)? & 0x3fff)),
+            b"VP8L" => {
+                let bits = le16(21)? | le16(23)? << 16;
+                Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
+            }
+            _ => None,
+        },
+        _ => {
+            // JPEG: segments, each with its length, up to the frame header.
+            let mut at = 2;
+            loop {
+                let marker = *bytes.get(at + 1)?;
+                if *bytes.get(at)? != 0xFF {
+                    return None;
+                }
+                if matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+                    return Some((be16(at + 7)?, be16(at + 5)?));
+                }
+                at += 2 + be16(at + 2)? as usize;
+            }
+        }
+    }
+}
+
 /// The version of `key`'s picture, if they have one.
 pub fn version(key: &str) -> Option<u64> {
     STORE.get()?.has.lock().unwrap().get(key).copied()
@@ -68,6 +105,10 @@ pub fn save(key: &str, bytes: &[u8], now: u64) -> Result<(), String> {
         return Err(format!("that picture is too big (at most {} MB)", MAX_BYTES / 1024 / 1024));
     }
     kind(bytes).ok_or("pick a PNG, JPEG, GIF or WebP picture")?;
+    let (w, h) = size(bytes).ok_or("that picture can't be read")?;
+    if w > MAX_SIDE || h > MAX_SIDE {
+        return Err(format!("that picture is too large (at most {MAX_SIDE} by {MAX_SIDE})"));
+    }
     let s = STORE.get().ok_or("pictures can't be set here")?;
     std::fs::create_dir_all(&s.dir).map_err(|e| e.to_string())?;
     let tmp = s.dir.join(format!("{key}.tmp"));
@@ -113,6 +154,34 @@ pub fn multipart_file<'a>(content_type: &str, body: &'a [u8], field: &str) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_come_from_each_formats_header() {
+        let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+        png.extend([0, 0, 1, 0, 0, 1, 0, 0]);
+        assert_eq!(size(&png), Some((256, 65536)));
+        assert_eq!(size(&[b'G', b'I', b'F', b'8', b'9', b'a', 0, 2, 0, 1]), Some((512, 256)));
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0];
+        jpeg.extend([0xFF, 0xC0, 0, 11, 8, 1, 0, 2, 0, 3]);
+        assert_eq!(size(&jpeg), Some((512, 256)));
+        let mut webp = b"RIFF\0\0\0\0WEBPVP8X".to_vec();
+        webp.extend([0; 8]);
+        webp.extend([255, 1, 0, 255, 0, 0]);
+        assert_eq!(size(&webp), Some((512, 256)));
+        let mut lossless = b"RIFF\0\0\0\0WEBPVP8L".to_vec();
+        lossless.extend([0, 0, 0, 0, 0x2F]);
+        lossless.extend(((511u32) | (255 << 14)).to_le_bytes());
+        assert_eq!(size(&lossless), Some((512, 256)));
+        assert_eq!(size(&[0x89, b'P', b'N', b'G']), None);
+        assert_eq!(size(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0]), None);
+    }
+
+    #[test]
+    fn a_huge_picture_is_refused_whatever_it_weighs() {
+        let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+        png.extend([0, 1, 0, 0, 0, 1, 0, 0]);
+        assert!(save("x", &png, 1).unwrap_err().contains("too large"));
+    }
 
     #[test]
     fn pictures_go_by_their_first_bytes() {
