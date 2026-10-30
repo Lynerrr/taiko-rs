@@ -49,8 +49,8 @@ pub enum Request {
         #[serde(default)]
         password: Option<String>,
     },
-    /// Links `email` to the account (accounts from before emails have none): without `code`
-    /// one is mailed there (`Reply::CodeSent`), with it the email is linked (`Reply::EmailLinked`).
+    /// Links `email` to an account without one (those from before emails; one that has an email
+    /// keeps it): without `code` one is mailed there (`Reply::CodeSent`), with it the email is linked (`Reply::EmailLinked`).
     LinkEmail {
         token: String,
         email: String,
