@@ -729,9 +729,10 @@ pub fn receive(set: SetInfo, name: String, total: u64, map: u64, songs: PathBuf)
 
 /// Imports an `.osz` that is already on disk (dropped on the window, opened with the game on
 /// Android) like a download: unpacked into `songs/<name>/` on a background thread.
-/// `remove`: delete the archive once unpacked (a temporary copy, not the player's own file).
+/// The archive is deleted once unpacked; if that fails it stays, unless it's `temporary` (a copy,
+/// not the player's own file).
 /// `maps`: the content hashes of its difficulties ([`archive_maps`]).
-pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool, maps: Vec<u64>) -> Job {
+pub fn import(archive: PathBuf, name: &str, songs: PathBuf, temporary: bool, maps: Vec<u64>) -> Job {
     let name = safe_folder_name(name);
     let set = SetInfo {
         // osu! names its exports "<set id> <artist> - <title>.osz".
@@ -752,7 +753,7 @@ pub fn import(archive: PathBuf, name: &str, songs: PathBuf, remove: bool, maps: 
             let dest = songs.join(&name);
             extract(&archive, &dest).map(|_| dest)
         });
-        if remove {
+        if temporary || result.is_ok() {
             let _ = std::fs::remove_file(&archive);
         }
         let _ = tx.send(result);
@@ -1105,6 +1106,33 @@ mod tests {
         assert!(!dest.with_extension("partial").exists());
         let maps = archive_maps(&archive).unwrap();
         assert_eq!(maps.iter().map(|m| m.1).collect::<Vec<_>>(), [crate::net::map_hash(b"new")]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_imported_archive_is_deleted_only_once_it_is_unpacked() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("taiko-rs-import-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let songs = root.join("Songs");
+
+        let good = root.join("good.osz");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&good).unwrap());
+        zip.start_file("map [Oni].osu", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"map").unwrap();
+        zip.finish().unwrap();
+        let unpacked = import(good.clone(), "good", songs.clone(), false, Vec::new()).rx.recv().unwrap().unwrap();
+        assert!(unpacked.join("map [Oni].osu").is_file());
+        assert!(!good.exists());
+
+        let broken = root.join("broken.osz");
+        std::fs::write(&broken, b"not a zip").unwrap();
+        assert!(import(broken.clone(), "broken", songs.clone(), false, Vec::new()).rx.recv().unwrap().is_err());
+        assert!(broken.exists());
+        // A temporary copy doesn't stay around either way.
+        assert!(import(broken.clone(), "broken", songs, true, Vec::new()).rx.recv().unwrap().is_err());
+        assert!(!broken.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

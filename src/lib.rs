@@ -2983,7 +2983,7 @@ impl State {
     }
 
     /// Files dragged over the window and dropped on it: .osz maps are unpacked into the Songs
-    /// folder (the file itself stays where it was) and join the list.
+    /// folder, join the list, and the file is deleted (it stays if unpacking fails).
     fn file_drag(&mut self, drag: FileDrag) {
         match drag {
             FileDrag::Hover => {
@@ -3007,13 +3007,13 @@ impl State {
 
     /// Unpacks an `.osz` into the Songs folder, unless everything in it is already in the list or
     /// on its way (the same file dropped twice). A set that's partly here (a new difficulty) is
-    /// unpacked into its own folder when that's in the Songs folder. `remove`: delete the
-    /// archive afterwards (a temporary copy).
-    fn import_osz(&mut self, archive: PathBuf, name: &str, remove: bool) {
+    /// unpacked into its own folder when that's in the Songs folder. `temporary`: delete the
+    /// archive whatever happens (a copy, not the player's own file).
+    fn import_osz(&mut self, archive: PathBuf, name: &str, temporary: bool) {
         let maps = match download::archive_maps(&archive) {
             Ok(maps) if !maps.is_empty() => maps,
             result => {
-                if remove {
+                if temporary {
                     let _ = std::fs::remove_file(&archive);
                 }
                 self.toast(match result {
@@ -3026,7 +3026,7 @@ impl State {
         let pending: std::collections::HashSet<u64> = self.downloads.iter().flat_map(|j| j.maps.iter().copied()).collect();
         let (fresh, home) = library::osz_news(&self.library, &pending, &maps);
         if fresh == 0 {
-            if remove {
+            if temporary {
                 let _ = std::fs::remove_file(&archive);
             }
             self.toast(tr!("{name} is already in your songs", "{name}はもう曲の中にあります", "{name} уже есть среди ваших песен";));
@@ -3034,7 +3034,7 @@ impl State {
         }
         let folder = home.filter(|d| d.parent() == Some(self.songs_dir.as_path())).and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned());
         self.toast(tr!("importing {name}...", "{name}を取り込み中...", "добавляем {name}...";));
-        let job = download::import(archive, folder.as_deref().unwrap_or(name), self.songs_dir.clone(), remove, maps.into_iter().map(|m| m.1).collect());
+        let job = download::import(archive, folder.as_deref().unwrap_or(name), self.songs_dir.clone(), temporary, maps.into_iter().map(|m| m.1).collect());
         self.downloads.push(job);
     }
 
