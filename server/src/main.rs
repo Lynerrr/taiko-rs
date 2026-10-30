@@ -121,6 +121,12 @@ impl Tx {
     fn send_line(&self, l: &Line) -> Result<(), mpsc::SendError<Line>> {
         self.0.send(l.clone())
     }
+
+    /// Has the writer close the connection, after what's already queued (an empty line: real
+    /// ones end in a newline).
+    fn close(&self) {
+        let _ = self.0.send(Line::from(""));
+    }
 }
 
 /// One open social connection (a player can have several, e.g. two PCs).
@@ -128,6 +134,8 @@ struct Conn {
     id: u64,
     /// The account's name as written.
     name: String,
+    /// The session it was opened with: logging that out closes it.
+    token: String,
     tx: Tx,
     activity: Activity,
     /// Whose solo play this connection watches (lowercased name).
@@ -197,6 +205,31 @@ impl Hub {
             if *n == 0 {
                 self.watchers.remove(whom);
             }
+        }
+    }
+
+    /// Stops `key` watching `whom` on all of `key`'s connections.
+    fn stop_watching(&mut self, key: &str, whom: &str) {
+        let ids: Vec<u64> = self.conns.get(key).into_iter().flatten().filter(|c| c.watching.as_deref() == Some(whom)).map(|c| c.id).collect();
+        for id in ids {
+            self.set_watching(key, id, None);
+            if let Some(c) = self.conn(key, id) {
+                let _ = c.tx.send(Down::WatchStopped("you can only watch friends".into()));
+            }
+        }
+    }
+
+    /// Closes every connection of `key`.
+    fn close_account(&self, key: &str) {
+        for c in self.conns.get(key).into_iter().flatten() {
+            c.tx.close();
+        }
+    }
+
+    /// Closes every connection opened with `token`.
+    fn close_session(&self, token: &str) {
+        for c in self.conns.values().flatten().filter(|c| c.token == token) {
+            c.tx.close();
         }
     }
 
@@ -438,10 +471,13 @@ impl State {
     }
 
     fn logout(&self, token: &str) {
-        let mut a = self.accounts.lock().unwrap();
-        if a.sessions.remove(token).is_some() {
-            self.save();
+        {
+            let mut a = self.accounts.lock().unwrap();
+            if a.sessions.remove(token).is_some() {
+                self.save();
+            }
         }
+        self.hub.lock().unwrap().close_session(token);
     }
 
     /// The account name behind a session token.
@@ -460,12 +496,14 @@ impl State {
 
     /// Mails a code (`mail::send_code`), a few an hour per address.
     fn mail_code(&self, ip: IpAddr, for_: &str, email: &str, what: &str) -> Result<(), String> {
-        if !self.allow(ip, |l| &mut l.mails, Duration::from_secs(3600), MAILS_PER_HOUR) {
+        let Some(slot) = self.take_slot(ip, |l| &mut l.mails, Duration::from_secs(3600), MAILS_PER_HOUR) else {
             return Err("too many codes asked for from here, try again in an hour".into());
+        };
+        let sent = mail::send_code(for_, email, what);
+        if sent.is_err() {
+            self.give_back(ip, |l| &mut l.mails, slot);
         }
-        mail::send_code(for_, email, what)?;
-        self.record(ip, |l| &mut l.mails);
-        Ok(())
+        sent
     }
 
     /// The account (lowercased name) `email` belongs to.
@@ -480,16 +518,27 @@ impl State {
         token
     }
 
-    /// Counts an event for `ip` inside `window`; false when it's over `max`.
-    fn allow(&self, ip: IpAddr, pick: fn(&mut Limits) -> &mut Vec<Instant>, window: Duration, max: usize) -> bool {
+    /// Takes one of `max` slots `ip` has inside `window`, None when they're gone. Taken before
+    /// the slow work: requests arriving during it have to see this one.
+    fn take_slot(&self, ip: IpAddr, pick: fn(&mut Limits) -> &mut Vec<Instant>, window: Duration, max: usize) -> Option<Instant> {
         let mut limits = self.limits.lock().unwrap();
         let list = pick(limits.entry(ip).or_default());
         list.retain(|t| t.elapsed() < window);
-        list.len() < max
+        if list.len() >= max {
+            return None;
+        }
+        let slot = Instant::now();
+        list.push(slot);
+        Some(slot)
     }
 
-    fn record(&self, ip: IpAddr, pick: fn(&mut Limits) -> &mut Vec<Instant>) {
-        pick(self.limits.lock().unwrap().entry(ip).or_default()).push(Instant::now());
+    /// Gives a slot back: what it was taken for didn't count after all.
+    fn give_back(&self, ip: IpAddr, pick: fn(&mut Limits) -> &mut Vec<Instant>, slot: Instant) {
+        let mut limits = self.limits.lock().unwrap();
+        let list = pick(limits.entry(ip).or_default());
+        if let Some(i) = list.iter().position(|t| *t == slot) {
+            list.remove(i);
+        }
     }
 
     fn rooms(&self) -> Vec<RoomInfo> {
@@ -533,10 +582,7 @@ fn handle(state: &State, stream: TcpStream) {
             None => Reply::Error("your session expired: log in again".into()),
         },
         Request::Logout { token } => {
-            let mut a = state.accounts.lock().unwrap();
-            if a.sessions.remove(&token).is_some() {
-                state.save();
-            }
+            state.logout(&token);
             Reply::LoggedOut
         }
         Request::ListRooms => Reply::Rooms(state.rooms()),
@@ -559,8 +605,8 @@ fn handle(state: &State, stream: TcpStream) {
         }
         Request::Connect { token } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
-            reply(&mut reader, state.account(name.clone(), token));
-            social_session(state, reader, name);
+            reply(&mut reader, state.account(name.clone(), token.clone()));
+            social_session(state, reader, name, token);
             return;
         }
         Request::SubmitScore { token, play } => {
@@ -633,9 +679,17 @@ fn register(state: &State, ip: IpAddr, name: &str, password: &str, email: Option
     if !online::valid_password(password) {
         return Reply::Error("the password needs at least 6 characters".into());
     }
-    if !state.allow(ip, |l| &mut l.registered, Duration::from_secs(3600), REGISTER_PER_HOUR) {
+    let Some(slot) = state.take_slot(ip, |l| &mut l.registered, Duration::from_secs(3600), REGISTER_PER_HOUR) else {
         return Reply::Error("too many new accounts from here, try again later".into());
+    };
+    let reply = create_account(state, ip, name, password, email, code);
+    if !matches!(reply, Reply::Account { .. }) {
+        state.give_back(ip, |l| &mut l.registered, slot);
     }
+    reply
+}
+
+fn create_account(state: &State, ip: IpAddr, name: &str, password: &str, email: Option<&str>, code: Option<&str>) -> Reply {
     let key = name.to_ascii_lowercase();
     if state.accounts.lock().unwrap().users.contains_key(&key) {
         return Reply::Error("that name is taken".into());
@@ -685,21 +739,30 @@ fn register(state: &State, ip: IpAddr, name: &str, password: &str, email: Option
     let token = state.new_session(&mut a, &key);
     state.save();
     drop(a);
-    state.record(ip, |l| &mut l.registered);
     println!("account {name} created ({ip})");
     Reply::Account { name: name.to_string(), token, nominator: is_admin(&key), email: Some(has_email) }
 }
 
 /// A forgotten password (see `Request::ResetPassword`).
 fn reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, password: Option<&str>) -> Reply {
-    if !state.allow(ip, |l| &mut l.failed, Duration::from_secs(600), FAILED_LOGINS) {
+    let Some(slot) = state.take_slot(ip, |l| &mut l.failed, Duration::from_secs(600), FAILED_LOGINS) else {
         return Reply::Error("too many tries, wait a few minutes".into());
+    };
+    let mut failed = false;
+    let reply = try_reset_password(state, ip, who, code, password, &mut failed);
+    if !failed {
+        state.give_back(ip, |l| &mut l.failed, slot);
     }
+    reply
+}
+
+/// Sets `failed` when this try counts against the address's limit.
+fn try_reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, password: Option<&str>, failed: &mut bool) -> Reply {
     let who = who.trim();
     let key = if who.contains('@') { state.email_owner(who) } else { Some(who.to_ascii_lowercase()) };
     let user = key.as_ref().and_then(|k| state.accounts.lock().unwrap().users.get(k).cloned());
     let (Some(key), Some(user)) = (key, user) else {
-        state.record(ip, |l| &mut l.failed);
+        *failed = true;
         return Reply::Error("no account by that name or email".into());
     };
     let Some(email) = user.email.clone() else {
@@ -719,7 +782,7 @@ fn reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, pass
         return Reply::Error("type a new password of at least 6 characters with the code".into());
     };
     if let Err(e) = mail::check_code(&for_, code) {
-        state.record(ip, |l| &mut l.failed);
+        *failed = true;
         return Reply::Error(e);
     }
     let Ok(hash) = hash_password(password) else { return Reply::Error("server error".into()) };
@@ -731,6 +794,7 @@ fn reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, pass
     let token = state.new_session(&mut a, &key);
     state.save();
     drop(a);
+    state.hub.lock().unwrap().close_account(&key);
     println!("password of {} reset ({ip})", user.name);
     state.account(user.name, token)
 }
@@ -771,17 +835,17 @@ fn link_email(state: &State, ip: IpAddr, token: &str, email: &str, code: Option<
 }
 
 fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
-    if !state.allow(ip, |l| &mut l.failed, Duration::from_secs(600), FAILED_LOGINS) {
+    let Some(slot) = state.take_slot(ip, |l| &mut l.failed, Duration::from_secs(600), FAILED_LOGINS) else {
         return Reply::Error("too many wrong passwords, wait a few minutes".into());
-    }
+    };
     let key = name.trim().to_ascii_lowercase();
     let user = state.accounts.lock().unwrap().users.get(&key).cloned();
     let ok = verify_password(password, user.as_ref().map(|u| u.hash.as_str()).unwrap_or(&state.dummy_hash)) && user.is_some();
     let Some(user) = user.filter(|_| ok) else {
-        state.record(ip, |l| &mut l.failed);
         std::thread::sleep(Duration::from_millis(400));
         return Reply::Error("wrong name or password".into());
     };
+    state.give_back(ip, |l| &mut l.failed, slot);
     let mut a = state.accounts.lock().unwrap();
     let token = state.new_session(&mut a, &key);
     state.save();
@@ -1083,7 +1147,7 @@ impl State {
 }
 
 /// A player's social connection: friend list, chat, watching and streaming solo plays.
-fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String) {
+fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String, token: String) {
     let key = name.to_ascii_lowercase();
     let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(90)));
     let Ok(mut writer) = reader.get_ref().try_clone() else { return };
@@ -1099,7 +1163,7 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String)
                 Err(mpsc::RecvTimeoutError::Timeout) => pong.clone(),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
-            if writer.write_all(l.as_bytes()).is_err() {
+            if l.is_empty() || writer.write_all(l.as_bytes()).is_err() {
                 break;
             }
         }
@@ -1113,7 +1177,7 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String)
         let mut hub = state.hub.lock().unwrap();
         hub.next_conn += 1;
         let id = hub.next_conn;
-        hub.conns.entry(key.clone()).or_default().push(Conn { id, name: name.clone(), tx: tx.clone(), activity: Activity::Menus, watching: None, chat_times: VecDeque::new() });
+        hub.conns.entry(key.clone()).or_default().push(Conn { id, name: name.clone(), token, tx: tx.clone(), activity: Activity::Menus, watching: None, chat_times: VecDeque::new() });
         hub.players_changed = true;
         let _ = tx.send(hub.players());
         for line in &hub.global {
@@ -1187,6 +1251,11 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &Tx, up: Up) {
                 a.unask(key, &other);
                 state.save();
             }
+            {
+                let mut hub = state.hub.lock().unwrap();
+                hub.stop_watching(key, &other);
+                hub.stop_watching(&other, key);
+            }
             state.push_friends(key);
             state.push_friends(&other);
         }
@@ -1232,7 +1301,8 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &Tx, up: Up) {
             let Some(p) = hub.plays.get_mut(key).filter(|p| p.conn == id) else { return };
             p.t = t;
             p.paused = paused;
-            p.inputs.extend_from_slice(&inputs);
+            let room = scores::MAX_INPUTS.saturating_sub(p.inputs.len());
+            p.inputs.extend_from_slice(&inputs[..inputs.len().min(room)]);
             hub.send_to_watchers(key, &Down::WatchFrame { t, paused, inputs });
         }
         Up::PlayEnd => {
@@ -1484,5 +1554,120 @@ mod tests {
         a.unask("a", "b");
         a.unask("c", "b");
         assert!(a.asked.is_empty() && a.users["b"].requests.is_empty());
+    }
+
+    fn test_state(tag: &str) -> State {
+        let dir = std::env::temp_dir().join(format!("taiko-server-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        State::load(dir.join("accounts.json")).0
+    }
+
+    /// Adds a connection for `key`, as `social_session` does.
+    fn connect(state: &State, key: &str, token: &str) -> (u64, Tx, mpsc::Receiver<Line>) {
+        let (tx, rx) = mpsc::channel();
+        let tx = Tx(tx);
+        let mut hub = state.hub.lock().unwrap();
+        hub.next_conn += 1;
+        let id = hub.next_conn;
+        hub.conns.entry(key.to_string()).or_default().push(Conn { id, name: key.to_string(), token: token.to_string(), tx: tx.clone(), activity: Activity::Menus, watching: None, chat_times: VecDeque::new() });
+        (id, tx, rx)
+    }
+
+    fn lines(rx: &mpsc::Receiver<Line>) -> Vec<String> {
+        rx.try_iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn slots_run_out_and_come_back() {
+        let state = test_state("slots");
+        let ip = IpAddr::from([127, 0, 0, 1]);
+        let take = || state.take_slot(ip, |l| &mut l.failed, Duration::from_secs(60), 2);
+        let first = take().unwrap();
+        take().unwrap();
+        assert!(take().is_none());
+        state.give_back(ip, |l| &mut l.failed, first);
+        assert!(take().is_some() && take().is_none());
+    }
+
+    #[test]
+    fn wrong_logins_all_at_once_stay_inside_the_limit() {
+        let state = test_state("logins");
+        let ip = IpAddr::from([127, 0, 0, 1]);
+        let wrong = std::thread::scope(|s| {
+            let tries: Vec<_> = (0..FAILED_LOGINS * 3).map(|_| s.spawn(|| login(&state, ip, "nobody", "wrong password"))).collect();
+            tries.into_iter().map(|t| t.join().unwrap()).filter(|r| matches!(r, Reply::Error(e) if e.contains("wrong name"))).count()
+        });
+        assert_eq!(wrong, FAILED_LOGINS);
+    }
+
+    #[test]
+    fn a_good_login_leaves_no_failure_behind() {
+        let state = test_state("good-login");
+        let ip = IpAddr::from([127, 0, 0, 1]);
+        let hash = hash_password("a good password").unwrap();
+        state.accounts.lock().unwrap().users.insert("alice".into(), User { hash, ..user("alice") });
+        for _ in 0..FAILED_LOGINS + 1 {
+            assert!(matches!(login(&state, ip, "alice", "a good password"), Reply::Account { .. }));
+        }
+    }
+
+    #[test]
+    fn a_taken_name_uses_up_no_registration() {
+        let state = test_state("taken");
+        let ip = IpAddr::from([127, 0, 0, 1]);
+        state.accounts.lock().unwrap().users.insert("alice".into(), user("alice"));
+        for _ in 0..REGISTER_PER_HOUR + 1 {
+            assert!(matches!(register(&state, ip, "alice", "a good password", None, None), Reply::Error(e) if e.contains("taken")));
+        }
+    }
+
+    #[test]
+    fn unfriending_ends_the_watch_both_ways() {
+        let state = test_state("unfriend");
+        {
+            let mut a = state.accounts.lock().unwrap();
+            for n in ["alice", "bob"] {
+                a.users.insert(n.into(), user(n));
+            }
+            a.users.get_mut("alice").unwrap().friends.push("bob".into());
+            a.users.get_mut("bob").unwrap().friends.push("alice".into());
+        }
+        let (alice, alice_tx, alice_rx) = connect(&state, "alice", "a");
+        let (bob, bob_tx, bob_rx) = connect(&state, "bob", "b");
+        social_up(&state, "alice", "alice", alice, &alice_tx, Up::Watch("bob".into()));
+        social_up(&state, "bob", "bob", bob, &bob_tx, Up::Watch("alice".into()));
+        lines(&alice_rx);
+        lines(&bob_rx);
+        social_up(&state, "alice", "alice", alice, &alice_tx, Up::RemoveFriend("bob".into()));
+        for rx in [&alice_rx, &bob_rx] {
+            assert!(lines(rx).iter().any(|l| l.contains("WatchStopped")));
+        }
+        let hub = state.hub.lock().unwrap();
+        assert!(hub.conns.values().flatten().all(|c| c.watching.is_none()));
+        assert!(hub.watchers.is_empty());
+    }
+
+    #[test]
+    fn logging_out_closes_that_sessions_connections_only() {
+        let state = test_state("logout");
+        let (_, _, gone) = connect(&state, "alice", "old");
+        let (_, _, stays) = connect(&state, "alice", "other");
+        state.logout("old");
+        assert!(lines(&gone).iter().any(|l| l.is_empty()));
+        assert!(lines(&stays).is_empty());
+    }
+
+    #[test]
+    fn a_live_play_keeps_at_most_max_inputs() {
+        let state = test_state("inputs");
+        let (id, tx, _rx) = connect(&state, "alice", "a");
+        let map = serde_json::from_str(r#"{"hash":1,"artist":"a","title":"t","version":"v"}"#).unwrap();
+        social_up(&state, "alice", "alice", id, &tx, Up::PlayStart(SoloPlay { map, anti_mash: false }));
+        for _ in 0..3 {
+            let inputs = vec![(0.0, 1); scores::MAX_INPUTS / 2];
+            social_up(&state, "alice", "alice", id, &tx, Up::PlayFrame { t: 0.0, paused: false, inputs });
+        }
+        assert_eq!(state.hub.lock().unwrap().plays["alice"].inputs.len(), scores::MAX_INPUTS);
     }
 }

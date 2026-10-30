@@ -1545,6 +1545,13 @@ mod tests {
     }
 
     #[test]
+    fn install_commands_ask_for_https() {
+        for command in [linux_command(), powershell_command()] {
+            assert!(command.contains("https://"));
+        }
+    }
+
+    #[test]
     fn badges_go_by_name_in_any_case() {
         assert!(badges("Auneu").contains(">DEV<"));
         assert!(badges("claude").contains(">MAIN DEV<"));
