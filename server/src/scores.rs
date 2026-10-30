@@ -15,6 +15,10 @@ use crate::online::{self, OnlineScore, Profile, ScoreSubmit, Stats};
 const SUBMITS_PER_MINUTE: usize = 20;
 /// The most key presses a play can have: on a submitted one, and kept of a live one.
 pub const MAX_INPUTS: usize = 400_000;
+/// The biggest score a play can have, far past any real one: totals of them stay in a u64.
+const MAX_SCORE: u64 = 1_000_000_000_000;
+/// All replays together: past this new plays still count, their replays just aren't kept.
+const MAX_REPLAY_BYTES: u64 = 10 << 30;
 /// Plays a profile lists (best and latest).
 const PROFILE_PLAYS: usize = 20;
 /// Most played maps a profile lists.
@@ -64,6 +68,9 @@ pub struct Scores {
     overrides_file: Option<PathBuf>,
     overrides: HashMap<u64, f64>,
     replays: Option<PathBuf>,
+    /// How much DIR/replays holds, and how much it may.
+    replay_bytes: u64,
+    replay_limit: u64,
     all: Vec<Stored>,
     next_id: u64,
     submits: HashMap<String, Vec<Instant>>,
@@ -98,6 +105,7 @@ fn check(play: &ScoreSubmit) -> Result<(), &'static str> {
         // No upper limit on pp for now (tests need it); just a real, non-negative number.
         && play.pp.is_none_or(|pp| pp.is_finite() && pp >= 0.0)
         && play.inputs.len() <= MAX_INPUTS
+        && play.score <= MAX_SCORE
         && play.map.hash != 0;
     if !fine {
         return Err("that play doesn't add up");
@@ -108,13 +116,19 @@ fn check(play: &ScoreSubmit) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The size of the files in `dir`.
+fn dir_bytes(dir: &std::path::Path) -> u64 {
+    let Ok(files) = std::fs::read_dir(dir) else { return 0 };
+    files.flatten().filter_map(|f| f.metadata().ok()).map(|m| m.len()).sum()
+}
+
 impl Scores {
     /// Reads DIR/scores.jsonl (`dir` None: in memory only, for tests).
     pub fn load(dir: Option<PathBuf>) -> Scores {
         let file = dir.as_ref().map(|d| d.join("scores.jsonl"));
         let all: Vec<Stored> = file
             .as_ref()
-            .and_then(|f| std::fs::read_to_string(f).ok())
+            .and_then(|f| crate::load_text(f))
             .map(|text| text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
             .unwrap_or_default();
         let mut all = all;
@@ -130,9 +144,9 @@ impl Scores {
             println!("{} scores ({})", all.len(), f.display());
         }
         let tally_file = dir.as_ref().map(|d| d.join("playtime.json"));
-        let tallies = tally_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let tallies = tally_file.as_ref().map(|f| crate::load_saved(f)).unwrap_or_default();
         let overrides_file = dir.as_ref().map(|d| d.join("pp-overrides.json"));
-        let overrides = overrides_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let overrides = overrides_file.as_ref().map(|f| crate::load_saved(f)).unwrap_or_default();
         let mut scores = Scores {
             file,
             overrides_file,
@@ -140,6 +154,8 @@ impl Scores {
             tally_file,
             tallies,
             reports: HashMap::new(),
+            replay_bytes: dir.as_ref().map_or(0, |d| dir_bytes(&d.join("replays"))),
+            replay_limit: MAX_REPLAY_BYTES,
             replays: dir.map(|d| d.join("replays")),
             all,
             next_id,
@@ -332,9 +348,14 @@ impl Scores {
         };
         if let Some(dir) = &self.replays {
             let replay = StoredReplay { version: play.replay_version, map: &play.map, inputs: &play.inputs };
-            let saved = std::fs::create_dir_all(dir).and_then(|_| std::fs::write(dir.join(format!("{id}.json")), serde_json::to_vec(&replay).unwrap_or_default()));
-            if let Err(e) = saved {
-                eprintln!("saving replay {id}: {e}");
+            let bytes = serde_json::to_vec(&replay).unwrap_or_default();
+            if self.replay_bytes + bytes.len() as u64 > self.replay_limit {
+                eprintln!("replay {id} isn't kept: the replays have taken all their room");
+            } else {
+                match std::fs::create_dir_all(dir).and_then(|_| std::fs::write(dir.join(format!("{id}.json")), &bytes)) {
+                    Ok(()) => self.replay_bytes += bytes.len() as u64,
+                    Err(e) => eprintln!("saving replay {id}: {e}"),
+                }
             }
         }
         if let Some(file) = &self.file {
@@ -841,6 +862,16 @@ mod tests {
         let mut s = Scores::load(Some(dir.clone()));
         s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
         assert!(dir.join("replays/1.json").is_file());
+        // Out of room: the play still counts, its replay isn't kept.
+        let kept = s.replay_bytes;
+        assert!(kept > 0);
+        s.replay_limit = kept;
+        let id = s.next_id;
+        assert!(s.submit("a", "A", play(2, 1, 1.0), 0).is_ok());
+        assert!(!dir.join(format!("replays/{id}.json")).exists());
+        assert_eq!(s.replay_bytes, kept);
+        assert_eq!(Scores::load(Some(dir.clone())).replay_bytes, kept);
+        assert!(s.submit("a", "A", play(3, MAX_SCORE + 1, 1.0), 0).is_err());
         let again = Scores::load(Some(dir.clone()));
         assert_eq!(again.map_scores(7)[0].id, 1, "scores carry their id to ask for the replay by");
         assert_eq!(again.map_scores(7)[0].scroll_speed, Some(0.5), "and the scroll speed they were played at");
@@ -849,7 +880,7 @@ mod tests {
         assert!(again.replay(99).is_none());
         let again = Scores::load(Some(dir.clone()));
         assert_eq!(again.map_scores(7).len(), 1);
-        assert_eq!(again.next_id, 2);
+        assert_eq!(again.next_id, 3);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -366,6 +366,50 @@ struct State {
     verify_codes: Mutex<HashMap<String, (String, Instant)>>,
 }
 
+/// What's saved at `path`: the default when there's no such file yet, an error when there is
+/// one and it can't be read (starting empty then would overwrite it with nothing).
+fn try_load<T: serde::de::DeserializeOwned + Default>(path: &std::path::Path) -> Result<T, String> {
+    match try_text(path)? {
+        Some(text) => serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display())),
+        None => Ok(T::default()),
+    }
+}
+
+/// The file at `path`, None when there's no such file yet.
+fn try_text(path: &std::path::Path) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+/// `try_load`, or the server doesn't start: better down than with its data gone.
+fn load_saved<T: serde::de::DeserializeOwned + Default>(path: &std::path::Path) -> T {
+    try_load(path).unwrap_or_else(|e| refuse_to_start(&e))
+}
+
+/// `try_text`, or the server doesn't start.
+fn load_text(path: &std::path::Path) -> Option<String> {
+    try_text(path).unwrap_or_else(|e| refuse_to_start(&e))
+}
+
+fn refuse_to_start(why: &str) -> ! {
+    eprintln!("can't read saved data, not starting: {why}");
+    std::process::exit(1);
+}
+
+/// What limits count by: the address, or for IPv6 its /64, which one home has all of.
+fn limit_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6((u128::from(v6) & (!0u128 << 64)).into()),
+        },
+        v4 => v4,
+    }
+}
+
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -392,7 +436,7 @@ fn verify_password(password: &str, hash: &str) -> bool {
 impl State {
     /// The state, and what wakes the saver (see `saver`).
     fn load(path: PathBuf) -> (State, mpsc::Receiver<()>) {
-        let mut accounts: Accounts = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let mut accounts: Accounts = load_saved(&path);
         let cutoff = now_secs().saturating_sub(SESSION_DAYS * 86400);
         accounts.sessions.retain(|_, s| s.created >= cutoff);
         // Claude's profile (its badge is in `pages`): a password nobody knows, so nobody logs in.
@@ -522,7 +566,7 @@ impl State {
     /// the slow work: requests arriving during it have to see this one.
     fn take_slot(&self, ip: IpAddr, pick: fn(&mut Limits) -> &mut Vec<Instant>, window: Duration, max: usize) -> Option<Instant> {
         let mut limits = self.limits.lock().unwrap();
-        let list = pick(limits.entry(ip).or_default());
+        let list = pick(limits.entry(limit_key(ip)).or_default());
         list.retain(|t| t.elapsed() < window);
         if list.len() >= max {
             return None;
@@ -535,7 +579,7 @@ impl State {
     /// Gives a slot back: what it was taken for didn't count after all.
     fn give_back(&self, ip: IpAddr, pick: fn(&mut Limits) -> &mut Vec<Instant>, slot: Instant) {
         let mut limits = self.limits.lock().unwrap();
-        let list = pick(limits.entry(ip).or_default());
+        let list = pick(limits.entry(limit_key(ip)).or_default());
         if let Some(i) = list.iter().position(|t| *t == slot) {
             list.remove(i);
         }
@@ -556,7 +600,7 @@ impl State {
 }
 
 /// Handles one connection: a request, its reply, and for a lobby the hand-over to the room.
-fn handle(state: &State, stream: TcpStream) {
+fn handle(state: &State, stream: TcpStream, slot: Slot) {
     let ip = stream.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
@@ -599,7 +643,7 @@ fn handle(state: &State, stream: TcpStream) {
             println!("lobby {id} \"{title}\" opened by {name} ({ip})");
             reply(&mut reader, Reply::Joined { room: id, title: title.clone(), host_token: Some(host_token) });
             let _ = reader.get_ref().set_read_timeout(None);
-            room.attach(reader, Some(name.clone()));
+            room.attach(reader, Some(name.clone()), slot);
             lobbies.insert(id, Lobby { room, title, owner: name, empty_since: Some(Instant::now()) });
             return;
         }
@@ -664,7 +708,7 @@ fn handle(state: &State, stream: TcpStream) {
             let Some(l) = lobbies.get(&room) else { return reply(&mut reader, Reply::Error("that lobby is gone".into())) };
             reply(&mut reader, Reply::Joined { room, title: l.title.clone(), host_token: None });
             let _ = reader.get_ref().set_read_timeout(None);
-            l.room.attach(reader, Some(name));
+            l.room.attach(reader, Some(name), slot);
             return;
         }
     };
@@ -1382,6 +1426,7 @@ struct Slot(Arc<Open>, IpAddr);
 
 impl Open {
     fn take(self: &Arc<Open>, ip: IpAddr) -> Option<Slot> {
+        let ip = limit_key(ip);
         let mut open = self.0.lock().unwrap();
         let n = open.entry(ip).or_default();
         if *n >= PER_ADDRESS {
@@ -1477,8 +1522,7 @@ fn main() {
                     let state = state.clone();
                     // Out of threads (or memory): this one connection is turned away, not the server.
                     if let Err(e) = std::thread::Builder::new().spawn(move || {
-                        let _slot = slot;
-                        handle(&state, stream)
+                        handle(&state, stream, slot)
                     }) {
                         eprintln!("connection from {ip}: {e}");
                     }
@@ -1595,6 +1639,35 @@ mod tests {
             assert!(matches!(link_email(&state, ip, &token, "evil@mail.ru", code), Reply::Error(e) if e.contains("already has an email")));
         }
         assert_eq!(state.accounts.lock().unwrap().users["alice"].email.as_deref(), Some("a@mail.ru"));
+    }
+
+    #[test]
+    fn saved_data_that_cant_be_read_is_an_error_not_a_blank_start() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-{}-load", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("accounts.json");
+        assert!(try_load::<Accounts>(&file).unwrap().users.is_empty());
+        std::fs::write(&file, "{ \"users\": {},, }").unwrap();
+        assert!(try_load::<Accounts>(&file).is_err());
+        std::fs::write(&file, [0xff, 0xfe]).unwrap();
+        assert!(try_load::<Accounts>(&file).is_err());
+        std::fs::write(&file, serde_json::to_string(&Accounts::default()).unwrap()).unwrap();
+        assert!(try_load::<Accounts>(&file).is_ok());
+    }
+
+    #[test]
+    fn limits_count_a_whole_ipv6_home_as_one() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert_eq!(limit_key(ip("2001:db8:1:2:aaaa::1")), limit_key(ip("2001:db8:1:2:bbbb::2")));
+        assert_ne!(limit_key(ip("2001:db8:1:2::1")), limit_key(ip("2001:db8:1:3::1")));
+        assert_eq!(limit_key(ip("::ffff:1.2.3.4")), ip("1.2.3.4"));
+        assert_eq!(limit_key(ip("1.2.3.4")), ip("1.2.3.4"));
+        let open = Arc::new(Open::default());
+        let slots: Vec<_> = (0..PER_ADDRESS).map(|i| open.take(ip(&format!("2001:db8::{i:x}"))).unwrap()).collect();
+        assert!(open.take(ip("2001:db8::ffff")).is_none());
+        drop(slots);
+        assert!(open.take(ip("2001:db8::ffff")).is_some());
     }
 
     #[test]

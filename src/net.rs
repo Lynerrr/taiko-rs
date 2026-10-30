@@ -484,7 +484,7 @@ pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
                     for listener in &listeners {
                         if let Ok((stream, _)) = listener.accept() {
                             let _ = stream.set_nonblocking(false);
-                            spawn_connection(BufReader::new(stream), next_id, events.clone(), None);
+                            spawn_connection(BufReader::new(stream), next_id, events.clone(), None, ());
                             next_id += 1;
                             accepted = true;
                         }
@@ -562,17 +562,19 @@ pub fn open_room(mapguessr: bool) -> Room {
 impl Room {
     /// Hands over a connection (its reader may already hold buffered input). `name` replaces
     /// the one the client sends in Hello.
-    pub fn attach(&self, reader: BufReader<TcpStream>, name: Option<String>) {
+    /// `keep` lives as long as the connection does.
+    pub fn attach<K: Send + 'static>(&self, reader: BufReader<TcpStream>, name: Option<String>, keep: K) {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        spawn_connection(reader, id, self.events.clone(), name);
+        spawn_connection(reader, id, self.events.clone(), name, keep);
     }
 }
 
-fn spawn_connection(mut reader: BufReader<TcpStream>, id: u32, events: Sender<Event>, name: Option<String>) {
+fn spawn_connection<K: Send + 'static>(mut reader: BufReader<TcpStream>, id: u32, events: Sender<Event>, name: Option<String>, keep: K) {
     let _ = reader.get_ref().set_nodelay(true);
     let Ok(mut writer) = reader.get_ref().try_clone() else { return };
     let (tx, rx) = mpsc::channel::<ServerMsg>();
-    thread::spawn(move || {
+    // Out of threads: this connection is turned away, not whoever is starting it.
+    let writing = thread::Builder::new().spawn(move || {
         for msg in rx {
             if send_line(&mut writer, &msg).is_err() {
                 break;
@@ -581,7 +583,11 @@ fn spawn_connection(mut reader: BufReader<TcpStream>, id: u32, events: Sender<Ev
         // The room dropped this player (left, kicked or room closed): end the reader too.
         let _ = writer.shutdown(Shutdown::Both);
     });
-    thread::spawn(move || {
+    if writing.is_err() {
+        return;
+    }
+    let _ = thread::Builder::new().spawn(move || {
+        let _keep = keep;
         if events.send(Event::Joined(id, tx, name)).is_err() {
             return;
         }
