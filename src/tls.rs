@@ -8,7 +8,7 @@
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -103,29 +103,52 @@ fn pump(raw: TcpStream, conn: impl Into<Connection>) -> io::Result<TcpStream> {
     raw.set_write_timeout(Some(WRITE_STALL))?;
     let _ = raw.set_nodelay(true);
     let conn = Arc::new(Mutex::new(conn.into()));
-    let (raw_up, inner_up, conn_up) = (raw.try_clone()?, inner.try_clone()?, conn.clone());
+    let turn = Arc::new(Mutex::new(()));
+    let (raw_up, inner_up, conn_up, turn_up) = (raw.try_clone()?, inner.try_clone()?, conn.clone(), turn.clone());
     std::thread::Builder::new().spawn(move || {
-        from_network(&raw_up, &inner_up, &conn_up);
+        from_network(&raw_up, &inner_up, &conn_up, &turn_up);
         let _ = raw_up.shutdown(Shutdown::Both);
         let _ = inner_up.shutdown(Shutdown::Both);
     })?;
     std::thread::Builder::new().spawn(move || {
-        to_network(&raw, &inner, &conn);
+        to_network(&raw, &inner, &conn, &turn);
         let _ = raw.shutdown(Shutdown::Both);
         let _ = inner.shutdown(Shutdown::Both);
     })?;
     Ok(plain)
 }
 
-fn send_pending(conn: &mut Connection, mut raw: &TcpStream) -> io::Result<()> {
-    while conn.wants_write() {
-        conn.write_tls(&mut raw)?;
+/// Sends what `conn` has for the network, with the turn to send (records can't change places).
+/// The socket is never written with `conn` locked: both ends stuck writing, each with a full
+/// buffer the other can't read because reading needs that lock, would wait for each other.
+fn send_pending<'a>(turn: MutexGuard<()>, mut locked: MutexGuard<'a, Connection>, conn: &'a Mutex<Connection>, mut raw: &TcpStream) -> io::Result<()> {
+    loop {
+        let mut out = Vec::new();
+        while locked.wants_write() {
+            locked.write_tls(&mut out)?;
+        }
+        if out.is_empty() {
+            // The turn goes first: whoever adds more once `conn` is free then gets it.
+            drop(turn);
+            return Ok(());
+        }
+        drop(locked);
+        raw.write_all(&out)?;
+        locked = conn.lock().unwrap();
     }
-    Ok(())
+}
+
+/// `send_pending` from the reading side, which mustn't wait to send or it stops reading: if
+/// someone has the turn, they send this too.
+fn answer<'a>(locked: MutexGuard<'a, Connection>, conn: &'a Mutex<Connection>, turn: &Mutex<()>, raw: &TcpStream) -> io::Result<()> {
+    match turn.try_lock() {
+        Ok(turn) => send_pending(turn, locked, conn, raw),
+        Err(_) => Ok(()),
+    }
 }
 
 /// Decrypts what comes in, until either side is done.
-fn from_network(mut raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connection>) {
+fn from_network(mut raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connection>, turn: &Mutex<()>) {
     let mut buf = [0u8; 16 * 1024];
     let mut plain = [0u8; 16 * 1024];
     loop {
@@ -137,17 +160,17 @@ fn from_network(mut raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connect
         let mut out = Vec::new();
         let mut closed = false;
         {
-            let mut conn = conn.lock().unwrap();
+            let mut locked = conn.lock().unwrap();
             while !rest.is_empty() {
-                if conn.read_tls(&mut rest).is_err() {
+                if locked.read_tls(&mut rest).is_err() {
                     return;
                 }
-                if conn.process_new_packets().is_err() {
-                    let _ = send_pending(&mut conn, raw);
+                if locked.process_new_packets().is_err() {
+                    let _ = answer(locked, conn, turn, raw);
                     return;
                 }
                 loop {
-                    match conn.reader().read(&mut plain) {
+                    match locked.reader().read(&mut plain) {
                         Ok(0) => {
                             closed = true;
                             break;
@@ -158,7 +181,7 @@ fn from_network(mut raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connect
                     }
                 }
             }
-            if send_pending(&mut conn, raw).is_err() {
+            if answer(locked, conn, turn, raw).is_err() {
                 return;
             }
         }
@@ -170,20 +193,21 @@ fn from_network(mut raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connect
 }
 
 /// Encrypts what goes out, until either side is done.
-fn to_network(raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connection>) {
+fn to_network(raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connection>, turn: &Mutex<()>) {
     let mut buf = [0u8; 16 * 1024];
     loop {
         let n = match inner.read(&mut buf) {
             Ok(n) => n,
             Err(_) => 0,
         };
-        let mut conn = conn.lock().unwrap();
+        let my_turn = turn.lock().unwrap();
+        let mut locked = conn.lock().unwrap();
         if n == 0 {
-            conn.send_close_notify();
-            let _ = send_pending(&mut conn, raw);
+            locked.send_close_notify();
+            let _ = send_pending(my_turn, locked, conn, raw);
             return;
         }
-        if conn.writer().write_all(&buf[..n]).is_err() || send_pending(&mut conn, raw).is_err() {
+        if locked.writer().write_all(&buf[..n]).is_err() || send_pending(my_turn, locked, conn, raw).is_err() {
             return;
         }
     }
