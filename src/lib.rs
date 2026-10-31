@@ -25,6 +25,7 @@ mod download;
 mod font;
 mod game;
 mod genres;
+mod guide;
 mod layout;
 #[cfg(test)]
 mod layout_tests;
@@ -131,6 +132,9 @@ enum Scene {
 
 /// How slowly a new background comes in on the main menu, where it's the whole picture.
 const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
+
+/// How long "Reset map offsets" waits for its second press.
+const RESET_CONFIRM: Duration = Duration::from_secs(4);
 
 /// How far the player's arrow keys and wheel move the music.
 const MUSIC_SEEK_MS: f64 = 5000.0;
@@ -269,6 +273,14 @@ struct State {
     main_menu: Option<menu::Menu>,
     /// When dragging the player's timeline last moved the music.
     music_seeked: Option<Instant>,
+    /// The first steps guide is up, on this page.
+    guide: Option<usize>,
+    /// The drum (`Config::keys`) the guide is waiting for a new key for.
+    guide_binding: Option<usize>,
+    /// The page to go back to once calibrating from the guide is done.
+    guide_after: Option<usize>,
+    /// When "Reset map offsets" was pressed once, waiting for the second.
+    reset_armed: Option<Instant>,
     /// The music player, instead of the main menu.
     player: Option<Box<player::Player>>,
     /// The main menu's music is paused.
@@ -2009,6 +2021,63 @@ impl State {
         self.settings_ui.krokodil = self.is_krokodil();
     }
 
+    /// Puts a drum on `code`; false if that key is taken. In Settings and the guide alike.
+    fn bind_drum_key(&mut self, slot: usize, code: KeyCode) -> bool {
+        if self.cfg.preset_keys.contains(&code) {
+            self.toast(tr!("{} is a playfield preset key", "{}はプリセットのキーです", "{} — клавиша пресета поля"; config::key_name(code)));
+            return false;
+        }
+        // Swap if the key was already bound to another drum.
+        if let Some(other) = self.cfg.keys.iter().position(|&k| k == code) {
+            self.cfg.keys[other] = self.cfg.keys[slot];
+        }
+        self.cfg.keys[slot] = code;
+        true
+    }
+
+    fn guide_action(&mut self, action: guide::Action) {
+        let Some(page) = self.guide else { return };
+        self.guide_binding = None;
+        match action {
+            guide::Action::Bind(slot) => self.guide_binding = Some(slot),
+            guide::Action::Back => self.guide = Some(page.saturating_sub(1)),
+            guide::Action::Next if page + 1 < guide::PAGES => self.guide = Some(page + 1),
+            guide::Action::Next | guide::Action::Close => self.guide = None,
+            guide::Action::Page(i) => self.guide = Some(i),
+            guide::Action::Calibrate => {
+                self.guide = None;
+                self.guide_after = Some(page + 1);
+                self.start_calibration_as(false);
+            }
+        }
+        // Once closed, it doesn't come up by itself again.
+        if self.guide.is_none() && !self.cfg.guide_seen {
+            self.cfg.guide_seen = true;
+            self.cfg.save();
+        }
+    }
+
+    fn reset_is_armed(&self) -> bool {
+        self.reset_armed.is_some_and(|at| at.elapsed() < RESET_CONFIRM)
+    }
+
+    /// The first press of "Reset map offsets" only asks: it's a lot to lose to a stray click.
+    fn press_reset_map_offsets(&mut self) {
+        if self.map_offsets.is_empty() {
+            return;
+        }
+        if !self.reset_is_armed() {
+            self.reset_armed = Some(Instant::now());
+            return;
+        }
+        self.reset_armed = None;
+        let n = self.map_offsets.len();
+        config::reset_map_offsets();
+        self.map_offsets.clear();
+        self.refresh_play_offset();
+        self.toast(tr!("offsets of {n} maps reset", "{n}譜面のオフセットをリセットしました", "сброшены оффсеты карт: {n}";));
+    }
+
     /// Ctrl+O: settings over whatever is on (a solo song pauses first), or back out of them.
     /// Scenes that have to keep running (a match, spectating, loading) say so instead.
     fn settings_anywhere(&mut self) {
@@ -2433,6 +2502,13 @@ impl State {
             }
             Item::WindowSize => format!("{:.0}x{:.0}", self.window_w, self.window_h),
             Item::Calibrate => enter_to_start().into(),
+            Item::Guide => enter_to_start().into(),
+            Item::ResetMapOffsets if self.map_offsets.is_empty() => tr!("none set", "なし", "их нет").into(),
+            Item::ResetMapOffsets if self.reset_is_armed() => tr!("Enter again to reset", "もう一度Enterでリセット", "Enter ещё раз — сбросить").into(),
+            Item::ResetMapOffsets => {
+                let n = self.map_offsets.len();
+                tr!("{n} maps", "{n}譜面", "карт: {n}";)
+            }
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
             Item::LiveOffset => on(c.show_offset_hint),
             Item::LiveOffsetUr => on(c.offset_hint_ur_scaled),
@@ -2622,7 +2698,7 @@ impl State {
                 return;
             }
             // Started with Enter in `settings_key`; arrows do nothing.
-            Item::Calibrate => return,
+            Item::Calibrate | Item::ResetMapOffsets | Item::Guide => return,
             Item::LiveOffset => self.cfg.show_offset_hint = !self.cfg.show_offset_hint,
             Item::LiveOffsetUr => self.cfg.offset_hint_ur_scaled = !self.cfg.offset_hint_ur_scaled,
             Item::VsyncCompensation => self.cfg.vsync_compensation = !self.cfg.vsync_compensation,
@@ -3185,7 +3261,7 @@ impl State {
     fn draw_update(&mut self, c: &mut Canvas) {
         // What's new, top right in the menus (left of the update badge when there is one).
         let menus = matches!(self.scene, Scene::Select | Scene::Settings { .. } | Scene::MpMenu | Scene::Download);
-        if menus && self.splash.is_none() && self.changelog.is_none() && self.player.is_none() {
+        if menus && self.splash.is_none() && self.changelog.is_none() && self.player.is_none() && self.guide.is_none() {
             let badge = match self.updater.status() {
                 update::Status::Available { commit, .. } => Canvas::text_width(7.0, &update_badge(&commit)) + 20.0,
                 update::Status::Downloading => Canvas::text_width(7.0, &updating_badge(1.0)) + 20.0,
@@ -3604,15 +3680,9 @@ impl State {
                         self.cfg.interface_key = (self.modifiers_shift, code);
                     }
                     Item::Key(slot) => {
-                        if self.cfg.preset_keys.contains(&code) {
-                            self.toast(tr!("{} is a playfield preset key", "{}はプリセットのキーです", "{} — клавиша пресета поля"; config::key_name(code)));
+                        if !self.bind_drum_key(slot, code) {
                             return;
                         }
-                        // Swap if the key was already bound to another drum.
-                        if let Some(other) = self.cfg.keys.iter().position(|&k| k == code) {
-                            self.cfg.keys[other] = self.cfg.keys[slot];
-                        }
-                        self.cfg.keys[slot] = code;
                     }
                     Item::PresetKey(slot) => {
                         if self.cfg.keys.contains(&code) {
@@ -3649,7 +3719,7 @@ impl State {
                 Item::InterfaceKey => self.cfg.interface_key = d.interface_key,
                 Item::Hotkey(i) => {
                     let h = keys::Hotkey::ALL[i];
-                    if let Some(other) = self.cfg.hotkeys.set(h, Some(h.default())) {
+                    if let Some(other) = self.cfg.hotkeys.set(h, h.first_key()) {
                         self.toast(tr!("{} now has no key", "{}はキーなしになりました", "у «{}» больше нет клавиши"; other.label()));
                     }
                 }
@@ -3670,6 +3740,8 @@ impl State {
             KeyCode::ArrowLeft => self.adjust_setting(item, -1, window),
             KeyCode::ArrowRight => self.adjust_setting(item, 1, window),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => self.start_calibration_as(false),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Guide => self.guide = Some(0),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::ResetMapOffsets => self.press_reset_map_offsets(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::VsyncCalibrate => self.start_calibration_as(true),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldArea => self.open_layout_editor(),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldPreset => self.open_dropdown(),
@@ -3824,6 +3896,10 @@ impl State {
     /// Applies the live offset suggestion from the song being played (O key).
     /// Applies the live offset suggestion from the song being played (O key) to that map.
     fn apply_live_offset(&mut self) {
+        // Shift+O and a match don't go through the hotkey, so this says it for them all.
+        if self.cfg.hotkeys.get(keys::Hotkey::ApplyOffset).is_none() {
+            return;
+        }
         let Some(entry) = self.song_entry() else { return };
         let (Scene::Play { game, .. } | Scene::MpPlay { game, .. }) = &self.scene else { return };
         match game.offset_suggestion(self.play_offset) {
@@ -7247,6 +7323,34 @@ impl State {
             }
             return;
         }
+        if let Some(slot) = self.guide_binding.filter(|_| self.guide.is_some()) {
+            let modifier = matches!(
+                code,
+                KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::ControlLeft | KeyCode::ControlRight | KeyCode::AltLeft | KeyCode::AltRight | KeyCode::SuperLeft | KeyCode::SuperRight
+            );
+            if repeat || modifier {
+                return;
+            }
+            self.guide_binding = None;
+            if code != KeyCode::Escape && self.bind_drum_key(slot, code) {
+                self.cfg.save();
+            }
+            return;
+        }
+        if self.guide.is_some() {
+            match code {
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space | KeyCode::ArrowRight => self.guide_action(guide::Action::Next),
+                KeyCode::ArrowLeft | KeyCode::Backspace => self.guide_action(guide::Action::Back),
+                KeyCode::Escape => self.guide_action(guide::Action::Close),
+                KeyCode::KeyC if self.guide == Some(guide::OFFSET_PAGE) => self.guide_action(guide::Action::Calibrate),
+                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 if self.guide == Some(0) => {
+                    let slot = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4].iter().position(|&k| k == code);
+                    self.guide_binding = slot;
+                }
+                _ => {}
+            }
+            return;
+        }
         // Being typed or bound, Ctrl+O is just a key.
         let free = self.settings_ui.binding.is_none() && self.settings_ui.editing.is_none();
         if free && code == KeyCode::KeyO && self.modifiers_ctrl && !self.modifiers_shift && !self.modifiers_alt {
@@ -7840,6 +7944,10 @@ impl State {
         if matches!(self.scene, Scene::Loading { .. } | Scene::Play { .. } | Scene::Results { .. } | Scene::Preview { .. } | Scene::Watch(_) | Scene::VideoEdit(_)) {
             self.main_menu = None;
         }
+        // Back from calibrating: on with the guide.
+        if self.guide_after.is_some() && !matches!(self.scene, Scene::Calibrate { .. } | Scene::CalibrateDone { .. }) {
+            self.guide = self.guide_after.take();
+        }
         if !self.on_menu() {
             if let Some(m) = &mut self.main_menu {
                 m.cancel_leaving();
@@ -8053,6 +8161,7 @@ impl State {
                 }
                 // Offset advice is for live play (and its line would sit on the replay timeline).
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
+                game.offset_key = self.cfg.hotkeys.get(keys::Hotkey::ApplyOffset).map(keys::Chord::name);
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
@@ -8327,6 +8436,7 @@ impl State {
                     game.autoplay(self.audio.as_ref());
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
+                game.offset_key = self.cfg.hotkeys.get(keys::Hotkey::ApplyOffset).map(keys::Chord::name);
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
@@ -8652,6 +8762,9 @@ impl State {
                 social::draw_chip(canvas, &self.social, lobby_unread);
             }
             social::draw_notes(canvas, &self.social);
+        }
+        if let Some(page) = self.guide.filter(|_| self.splash.is_none()) {
+            guide::draw(canvas, page, self.guide_binding, &self.cfg);
         }
         if let Some(p) = &self.profile {
             p.draw(canvas);
@@ -9323,6 +9436,12 @@ impl State {
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),
+            Hit::Guide(action) => self.guide_action(action),
+            Hit::DiscordServer => {
+                if !open_url(menu::DISCORD_INVITE) {
+                    self.toast(menu::DISCORD_INVITE.into());
+                }
+            }
             Hit::Music(control) => self.music_control(control),
             Hit::MusicBar => {
                 if let Some(p) = &mut self.player {
@@ -10316,6 +10435,10 @@ impl State {
             volume_shown: None,
             splash,
             main_menu: None,
+            guide: None,
+            guide_binding: None,
+            guide_after: None,
+            reset_armed: None,
             music_seeked: None,
             player: None,
             music_paused: false,
@@ -10641,8 +10764,10 @@ fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, link: Option<link::Link>, ev
     let splash = if want_splash { splash::Splash::new(audio.as_ref().map(|a| a.rate)) } else { None };
     update::cleanup();
     let main_menu = cfg.main_menu && !play_when_scanned && !scripted;
+    let guide = !cfg.guide_seen && !play_when_scanned && !scripted;
     let mut state = State::new(cfg, audio, splash, songs_dir, songs_dirs_for_db, Some(scan), play_when_scanned, auto);
     state.main_menu = main_menu.then(menu::Menu::new);
+    state.guide = guide.then_some(0);
     state.load_skin();
     if let Some(l) = link {
         state.open_link(l);

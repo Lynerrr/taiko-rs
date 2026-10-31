@@ -73,6 +73,10 @@ pub enum Item {
     Animations,
     Splash,
     MainMenu,
+    /// Clears every map's own offset, on a second press.
+    ResetMapOffsets,
+    /// Shows the first launch's guide again.
+    Guide,
     CheckUpdates,
     UpdateChannel,
     Update,
@@ -93,7 +97,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 110] = [
+pub const ITEMS: [(&str, Item); 112] = [
     ("GENERAL", Item::Language),
     ("GENERAL", Item::SongsFolder),
     ("GENERAL", Item::ShowConverts),
@@ -162,6 +166,7 @@ pub const ITEMS: [(&str, Item); 110] = [
     ("OFFSET", Item::Offset),
     ("OFFSET", Item::VisualOffset),
     ("OFFSET", Item::Calibrate),
+    ("OFFSET", Item::ResetMapOffsets),
     ("OFFSET", Item::CalibrationBpm),
     ("OFFSET", Item::LiveOffset),
     ("OFFSET", Item::LiveOffsetUr),
@@ -183,6 +188,7 @@ pub const ITEMS: [(&str, Item); 110] = [
     ("VIDEO", Item::DiscordPresence),
     ("VIDEO", Item::Splash),
     ("VIDEO", Item::MainMenu),
+    ("VIDEO", Item::Guide),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinParts),
     ("SKIN", Item::SkinFolder),
@@ -348,6 +354,8 @@ impl Item {
             Item::Animations => tr!("UI animations", "UIのアニメーション", "Анимации интерфейса"),
             Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
             Item::MainMenu => tr!("Main menu", "メインメニュー", "Главное меню"),
+            Item::ResetMapOffsets => tr!("Reset map offsets", "譜面のオフセットをリセット", "Сбросить оффсеты карт"),
+            Item::Guide => tr!("First steps guide", "はじめてのガイド", "Первые шаги"),
             Item::UpdateChannel => tr!("Build channel", "ビルドのチャンネル", "Канал сборок"),
             Item::Update => tr!("Update", "アップデート", "Обновление"),
             Item::Changelog => tr!("What's new", "更新内容", "Что нового"),
@@ -433,7 +441,7 @@ impl Item {
             | Item::Fullscreen
             | Item::DiscordPresence => Kind::Toggle,
             Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => Kind::Key,
-            Item::PlayfieldArea | Item::PlayfieldReset | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout | Item::SkinFolder => Kind::Action,
+            Item::PlayfieldArea | Item::PlayfieldReset | Item::ResetMapOffsets | Item::Guide | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout | Item::SkinFolder => Kind::Action,
         }
     }
 
@@ -470,8 +478,8 @@ impl Item {
                 "Вкл: музыка просто быстрее (DT). Выкл: тон растёт со скоростью (nightcore)."
             ),
             Item::Offset => tr!(
-                "For every map; raise it if you hit late. In a song, - / + (and O) set that map's own offset on top.",
-                "全譜面に共通。叩くのが遅れるなら上げます。曲中の - / + (と O) でその譜面だけのオフセットを足せます。",
+                "For every map; raise it if you hit late. In a song, - / + set that map's own offset on top.",
+                "全譜面に共通。叩くのが遅れるなら上げます。曲中の - / + でその譜面だけのオフセットを足せます。",
                 "Для всех карт; увеличьте, если бьёте поздно. В песне - / + (и O) задают смещение этой карты сверху."
             ),
             Item::Calibrate => tr!(
@@ -485,9 +493,9 @@ impl Item {
                 "Темп метронома для калибровки. Выберите близкий к вашим картам."
             ),
             Item::LiveOffset => tr!(
-                "While playing, suggest an offset from your recent hits; press O to apply it.",
-                "プレイ中、最近の叩きからオフセットを提案します。Oで適用。",
-                "Во время игры подсказывает смещение по последним ударам; O применяет его."
+                "While playing, suggest an offset from your recent hits. To apply it with a key, give \"Song: apply offset suggestion\" one in the hotkeys.",
+                "プレイ中、最近の叩きからオフセットを提案します。キーで適用するには、ホットキーで「曲: オフセットの提案を適用」に割り当ててください。",
+                "Во время игры подсказывает смещение по последним ударам. Чтобы применять клавишей, назначьте \"Песня: применить подсказку смещения\" в хоткеях."
             ),
             Item::LiveOffsetUr => tr!(
                 "On: more hits and a +- margin when your UR is high. Off: plain average of the last 40 hits.",
@@ -694,6 +702,16 @@ impl Item {
                 "The animated intro when taiko.rs starts (any key or click skips it).",
                 "taiko.rs起動時のアニメーション (キーかクリックで飛ばせます)。",
                 "Анимация при запуске taiko.rs (любая клавиша или клик пропускает)."
+            ),
+            Item::ResetMapOffsets => tr!(
+                "Clears the offset each map has of its own, back to just the audio offset. Press twice. They're kept in map_offsets.backup.tsv.",
+                "譜面ごとのオフセットを消して、全体のオフセットだけに戻します。2回押してください。map_offsets.backup.tsvに残ります。",
+                "Убирает оффсеты отдельных карт, остаётся только общий. Нажмите дважды. Копия остаётся в map_offsets.backup.tsv."
+            ),
+            Item::Guide => tr!(
+                "The short guide shown on the first launch.",
+                "初回起動時の短いガイドをもう一度表示します。",
+                "Короткая подсказка с первого запуска."
             ),
             Item::MainMenu => tr!(
                 "Starts on the main menu, and Esc in song select goes back to it. Off: straight to song select, and Esc there asks to quit.",

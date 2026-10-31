@@ -205,6 +205,15 @@ fn assert_every_screen_fits() {
     s.music_paused = false;
     s.main_menu = None;
     s.scene = Scene::Select;
+    for page in 0..guide::PAGES {
+        s.guide = Some(page);
+        check(&mut s, &format!("guide page {page}"), &mut out);
+    }
+    s.guide = Some(0);
+    s.guide_binding = Some(3);
+    check(&mut s, "guide waiting for a key", &mut out);
+    s.guide_binding = None;
+    s.guide = None;
     s.select.collection = Some(0);
     s.select.filter = "camellia long search query that is typed".into();
     s.select.refilter(&s.library);

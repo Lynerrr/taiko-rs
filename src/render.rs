@@ -1748,6 +1748,10 @@ pub enum Hit {
     Tab(usize),
     /// A note of the main menu (index into `menu::ITEMS`).
     MenuItem(usize),
+    /// A button of the first steps guide.
+    Guide(crate::guide::Action),
+    /// The main menu's button to our Discord server.
+    DiscordServer,
     /// A music button of the main menu or the player, and the player's timeline.
     Music(crate::player::Control),
     MusicBar,

@@ -127,6 +127,139 @@ fn the_menus_song_gives_way_to_the_next_when_it_ends() {
 }
 
 #[test]
+fn applying_the_offset_suggestion_has_no_key_until_given_one() {
+    use keys::{Bindings, Chord, Hotkey, Place, Resolved};
+    let (o, shift_o) = (Chord::plain(KeyCode::KeyO), Chord { shift: true, ..Chord::plain(KeyCode::KeyO) });
+    let mut b = Bindings::default();
+    assert_eq!(b.get(Hotkey::ApplyOffset), None);
+    assert_eq!(b.resolve(o, Place::Play), Resolved::Nothing, "O does nothing in a song");
+    assert_eq!(b.resolve(o, Place::Paused), Resolved::Nothing);
+    assert!(!b.config_lines().contains("apply_offset"), "nothing to write down");
+    // Given a key, it comes back through the config, O or any other.
+    b.set(Hotkey::ApplyOffset, Some(o));
+    assert_eq!(b.resolve(o, Place::Play), Resolved::Same);
+    assert!(b.config_lines().contains("hotkey.apply_offset = O"));
+    let mut again = Bindings::default();
+    again.parse_line("apply_offset", "O");
+    assert_eq!(again.get(Hotkey::ApplyOffset), Some(o));
+
+    // Without a key, nothing reaches it: not Shift+O or a match, which skip the hotkey.
+    let mut s = layout_tests::state();
+    let before = (s.cfg.offset_ms, s.map_offsets.len());
+    s.modifiers_shift = true;
+    s.apply_live_offset();
+    assert_eq!((s.cfg.offset_ms, s.map_offsets.len()), before);
+    assert!(s.toast.is_none());
+    assert_eq!(s.cfg.hotkeys.resolve(shift_o, Place::Play), Resolved::Same, "why the check is in the handler");
+}
+
+#[test]
+fn map_offsets_reset_only_on_the_second_press() {
+    let _folders = FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = layout_tests::state();
+    assert!(!s.reset_is_armed());
+    s.press_reset_map_offsets();
+    assert!(!s.reset_is_armed(), "none to reset: nothing to ask");
+    s.map_offsets.insert(1, 12.0);
+    s.map_offsets.insert(2, -7.0);
+    s.press_reset_map_offsets();
+    assert_eq!(s.map_offsets.len(), 2, "the first press only asks");
+    assert!(s.reset_is_armed());
+    s.reset_armed = Some(Instant::now() - RESET_CONFIRM);
+    s.press_reset_map_offsets();
+    assert_eq!(s.map_offsets.len(), 2, "too long after: asks again");
+    s.press_reset_map_offsets();
+    assert!(s.map_offsets.is_empty());
+    assert!(!s.reset_is_armed());
+}
+
+#[test]
+fn the_guide_turns_its_pages_and_takes_the_keys() {
+    let key = |s: &mut State, code| s.key_inner(code, false, None, Instant::now(), None);
+    let mut s = layout_tests::state();
+    s.guide = Some(0);
+    key(&mut s, KeyCode::F2);
+    assert_eq!(s.guide, Some(0), "other keys wait");
+    key(&mut s, KeyCode::KeyC);
+    assert_eq!(s.guide, Some(0), "C only calibrates on its page");
+    key(&mut s, KeyCode::ArrowLeft);
+    assert_eq!(s.guide, Some(0), "nothing before the first");
+    key(&mut s, KeyCode::Enter);
+    assert_eq!(s.guide, Some(guide::OFFSET_PAGE));
+    for _ in 1..guide::PAGES {
+        assert!(s.guide.is_some());
+        key(&mut s, KeyCode::ArrowRight);
+    }
+    assert_eq!(s.guide, None, "past the last it closes");
+    s.guide = Some(3);
+    key(&mut s, KeyCode::Escape);
+    assert_eq!(s.guide, None);
+    assert!(!s.quit_asked, "Esc only closes it");
+}
+
+#[test]
+fn the_guide_counts_as_seen_once_closed_and_old_configs_havent_seen_it() {
+    assert!(!Config::default().guide_seen, "a config without the line: not seen");
+    let mut s = layout_tests::state();
+    s.guide = Some(2);
+    s.guide_action(guide::Action::Next);
+    assert!(!s.cfg.guide_seen, "still reading");
+    s.guide_action(guide::Action::Close);
+    assert!(s.cfg.guide_seen);
+}
+
+#[test]
+fn the_guide_rebinds_the_drum_like_settings_do() {
+    let key = |s: &mut State, code| s.key_inner(code, false, None, Instant::now(), None);
+    let mut s = layout_tests::state();
+    s.guide = Some(0);
+    let d = s.cfg.keys;
+    s.guide_action(guide::Action::Bind(1));
+    key(&mut s, KeyCode::ShiftLeft);
+    assert_eq!(s.guide_binding, Some(1), "a modifier isn't a drum key");
+    key(&mut s, KeyCode::Escape);
+    assert_eq!((s.cfg.keys, s.guide_binding, s.guide), (d, None, Some(0)), "Esc keeps the key, and the guide");
+    s.guide_action(guide::Action::Bind(1));
+    key(&mut s, KeyCode::KeyG);
+    assert_eq!(s.cfg.keys[1], KeyCode::KeyG);
+    assert_eq!(s.guide, Some(0), "still on its page");
+    // A key that's another drum's swaps with it.
+    key(&mut s, KeyCode::Digit1);
+    key(&mut s, KeyCode::KeyG);
+    assert_eq!((s.cfg.keys[0], s.cfg.keys[1]), (KeyCode::KeyG, d[0]));
+    // What Settings refuses, this does too.
+    s.guide_action(guide::Action::Bind(2));
+    let preset = s.cfg.preset_keys[0];
+    key(&mut s, preset);
+    assert_eq!(s.cfg.keys[2], d[2]);
+}
+
+#[test]
+fn calibrating_from_the_guide_comes_back_to_it() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.play_when_scanned = false;
+    s.scene = Scene::Select;
+    s.guide = Some(guide::OFFSET_PAGE);
+    s.guide_action(guide::Action::Calibrate);
+    assert_eq!(s.guide, None);
+    assert_eq!(s.guide_after, Some(guide::OFFSET_PAGE + 1));
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(matches!(s.scene, Scene::Calibrate { .. }));
+    assert_eq!(s.guide, None, "not over the calibration");
+    // Its results, as they really end: out the way the player leaves them.
+    let estimate = calibrate::Estimate { hits: 40, error_ms: 3.0, ur: 90.0, margin_ms: 2.0, suggested_offset: 12.0 };
+    let Scene::Calibrate { back, .. } = std::mem::replace(&mut s.scene, Scene::Select) else { unreachable!() };
+    s.scene = Scene::CalibrateDone { estimate, back, vsync: false };
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert_eq!(s.guide, None, "not over its results either");
+    s.leave_calibration(true);
+    assert_eq!(s.cfg.offset_ms, 12.0);
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert_eq!(s.guide, Some(guide::OFFSET_PAGE + 1), "back on the next page");
+}
+
+#[test]
 fn typed_numbers_take_units_and_commas() {
     assert_eq!(parse_number("1.25x"), Some(1.25));
     assert_eq!(parse_number(" -12 ms"), Some(-12.0));
