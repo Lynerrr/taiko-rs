@@ -582,11 +582,12 @@ fn route(state: &State, req: &Req) -> Reply {
         }
         ["mods"] => req.page(200, "Mods", "mods", pages::mods_page()),
         ["loved"] => {
-            let sets: Vec<pages::LovedRow> = crate::loved::all()
+            let mut sets: Vec<pages::LovedRow> = crate::loved::all()
                 .into_iter()
-                .rev()
                 .map(|(set, loved)| pages::LovedRow { set, names: crate::covers::names(set), loved })
                 .collect();
+            // The latest loved first.
+            sets.sort_by_key(|r| std::cmp::Reverse(r.loved.at));
             req.page(200, "Loved here", "loved", pages::loved(&sets))
         }
         ["a", name] => match crate::avatars::load(&name.to_ascii_lowercase()) {

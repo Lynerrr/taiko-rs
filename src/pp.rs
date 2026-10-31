@@ -23,6 +23,8 @@ pub struct Play {
     /// and give less pp, faster ones more (lazer's Difficulty Adjust). HR's faster notes slowed
     /// back down don't count as HR's.
     pub scroll_speed: f64,
+    /// Random's colouring (`Game::seed`).
+    pub seed: u64,
 }
 
 /// The mods pp is worked out with: osu!'s that change the formula (`FORMULA`), and a scroll
@@ -66,7 +68,7 @@ pub fn play_pp(path: &Path, p: &Play) -> Option<f64> {
     if p.mods.unranked() {
         return None;
     }
-    let map = crate::stars::load(path)?;
+    let map = crate::stars::load_played(path, p.mods, p.seed)?;
     let attrs = TaikoPerformance::new(&map)
         .mods(formula_mods(p.mods, p.scroll_speed))
         .clock_rate(p.rate)
@@ -102,7 +104,7 @@ pub fn breakdown(path: &Path, p: &Play) -> Option<Breakdown> {
     if p.mods.unranked() {
         return None;
     }
-    let map = crate::stars::load(path)?;
+    let map = crate::stars::load_played(path, p.mods, p.seed)?;
     let k = custom_factor(p.mods);
     let base = TaikoPerformance::new(&map).mods(formula_mods(p.mods, p.scroll_speed)).clock_rate(p.rate);
     let attrs = base.clone().n300(p.great).n100(p.ok).misses(p.miss).combo(p.max_combo).calculate().ok()?;
@@ -131,7 +133,7 @@ pub fn potential(path: &Path, rate: f64, mods: Mods, scroll_speed: f64) -> Optio
     if mods.unranked() {
         return None;
     }
-    let map = crate::stars::load(path)?;
+    let map = crate::stars::load_played(path, mods, 0)?;
     let base = TaikoPerformance::new(&map).mods(formula_mods(mods, scroll_speed)).clock_rate(rate).misses(0);
     let mut out = [0.0; 3];
     for (pp, acc) in out.iter_mut().zip(POTENTIAL) {
@@ -205,7 +207,7 @@ type Counts = (u32, u32, u32, u32);
 
 impl Live {
     /// None for Autoplay / Relax (they get no pp).
-    pub fn start(path: PathBuf, rate: f64, mods: Mods, scroll_speed: f64) -> Option<Live> {
+    pub fn start(path: PathBuf, rate: f64, mods: Mods, scroll_speed: f64, seed: u64) -> Option<Live> {
         if mods.unranked() {
             return None;
         }
@@ -216,7 +218,7 @@ impl Live {
         std::thread::Builder::new()
             .name("live pp".into())
             .spawn(move || {
-                let Some(map) = crate::stars::load(&path) else { return };
+                let Some(map) = crate::stars::load_played(&path, mods, seed) else { return };
                 let fresh = || TaikoGradualPerformance::new(Difficulty::new().mods(formula.clone()).clock_rate(rate), &map).ok();
                 let Some(mut gradual) = fresh() else { return };
                 // Notes the calculator has walked past.
@@ -293,6 +295,32 @@ mod tests {
     }
 
     #[test]
+    fn half_counts_the_notes_it_leaves() {
+        let dir = std::env::temp_dir().join(format!("taiko-rs-pp-half-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("map.osu");
+        let mut text = String::from("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nHPDrainRate:5\nCircleSize:5\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n0,300,4,1,0,100,1,0\n\n[HitObjects]\n");
+        for k in 0..800 {
+            text += &format!("256,192,{},1,{},0:0:0:0:\n", 1000 + k * 100, if k % 3 == 0 { 2 } else { 0 });
+        }
+        std::fs::write(&path, text).unwrap();
+        let (none, half) = (Mods::NONE, Mods::parse("HA"));
+        let full = crate::stars::star_rating_for(&path, 1.0, none, 1.0).unwrap();
+        let cut = crate::stars::star_rating_for(&path, 1.0, half, 1.0).unwrap();
+        assert!(cut < full * 0.8, "{cut} of {full}");
+        let play = Play { great: 400, ok: 0, miss: 0, max_combo: 400, rate: 1.0, mods: half, scroll_speed: 1.0, seed: 0 };
+        let b = breakdown(&path, &play).unwrap();
+        assert_eq!(b.max_combo, 400);
+        assert!((b.stars - cut).abs() < 1e-9);
+        assert!((b.pp - b.if_ss).abs() < 1e-6, "400 GREATs are all of what's left");
+        assert!(b.pp < play_pp(&path, &Play { great: 800, max_combo: 800, mods: none, ..play }).unwrap() * 0.5);
+        // Colours count too, and Random goes by its seed.
+        let random = |seed| crate::stars::star_rating_played(&path, 1.0, Mods::parse("RD"), 1.0, seed).unwrap();
+        assert!(random(1) != full && random(1) != random(2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_play_gets_pp_from_its_map() {
         let dir = std::env::temp_dir().join(format!("taiko-rs-pp-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -303,7 +331,7 @@ mod tests {
             text += &format!("256,192,{},1,{sound},0:0:0:0:\n", 1000 + k * 150);
         }
         std::fs::write(&path, text).unwrap();
-        let play = Play { great: 400, ok: 0, miss: 0, max_combo: 400, rate: 1.0, mods: Mods::NONE, scroll_speed: 1.0 };
+        let play = Play { great: 400, ok: 0, miss: 0, max_combo: 400, rate: 1.0, mods: Mods::NONE, scroll_speed: 1.0, seed: 0 };
         let ss = play_pp(&path, &play).unwrap();
         assert!(ss > 1.0, "{ss}");
         let worse = play_pp(&path, &Play { great: 360, ok: 30, miss: 10, max_combo: 200, ..play }).unwrap();
@@ -330,7 +358,7 @@ mod tests {
         assert_eq!(got, Some([p100, p99, p98]));
 
         // The live counter climbs as notes are hit and ends where the whole play's pp is.
-        let mut live = Live::start(path.clone(), 1.0, Mods::NONE, 1.0).unwrap();
+        let mut live = Live::start(path.clone(), 1.0, Mods::NONE, 1.0, 0).unwrap();
         let read = |live: &mut Live, n: u32| {
             for _ in 0..1000 {
                 let pp = live.update(n, 0, 0, n);
@@ -347,7 +375,7 @@ mod tests {
         assert!((all - ss).abs() / ss < 0.01, "{all} vs {ss}");
         // Seeking back (a replay) works it out again from the start.
         assert!((read(&mut live, 200) - half).abs() < 1e-9);
-        assert!(Live::start(path.clone(), 1.0, Mods::parse("AT"), 1.0).is_none());
+        assert!(Live::start(path.clone(), 1.0, Mods::parse("AT"), 1.0, 0).is_none());
 
         // Scroll speed: HR's faster notes slowed back down are worth about nomod's reading, not
         // HR's; the usual speed is exactly what it always was; faster notes are worth more.

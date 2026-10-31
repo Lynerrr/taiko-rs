@@ -127,7 +127,16 @@ pub struct ScoreSubmit {
     /// baked in) isn't osu!'s and gives no pp.
     #[serde(default)]
     pub md5: Option<String>,
+    /// How the game worked out `pp` and `stars` (`PP_VERSION`; 0: before it said).
+    #[serde(default)]
+    pub pp_version: u32,
 }
+
+/// 1: on the notes `NOTE_MODS` leave, not the whole map.
+pub const PP_VERSION: u32 = 1;
+/// The mods that change the notes: older games' pp of plays with them are wrong.
+#[allow(dead_code)] // used by the online server (server/)
+pub const NOTE_MODS: [&str; 3] = ["HA", "SW", "RD"];
 
 /// A score on a leaderboard or a profile.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]

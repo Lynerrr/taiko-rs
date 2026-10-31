@@ -157,6 +157,14 @@ fn check(play: &ScoreSubmit) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A play worked out again (`taiko-rs --recalc-pp`): what it counts for now, in place of what it
+/// was sent with. pp an admin set go first.
+#[derive(Deserialize)]
+struct Recalculated {
+    pp: f64,
+    stars: Option<f64>,
+}
+
 /// The size of the files in `dir`.
 fn dir_bytes(dir: &std::path::Path) -> u64 {
     let Ok(files) = std::fs::read_dir(dir) else { return 0 };
@@ -183,6 +191,13 @@ impl Scores {
         let next_id = all.iter().map(|s| s.id + 1).max().unwrap_or(1);
         if let Some(f) = &file {
             println!("{} scores ({})", all.len(), f.display());
+        }
+        let recalculated: HashMap<u64, Recalculated> = dir.as_ref().map(|d| crate::load_saved(&d.join("recalculated.json"))).unwrap_or_default();
+        for s in &mut all {
+            if let Some(r) = recalculated.get(&s.id) {
+                s.sent_pp = Some(r.pp);
+                s.score.stars = r.stars;
+            }
         }
         let tally_file = dir.as_ref().map(|d| d.join("playtime.json"));
         let tallies = tally_file.as_ref().map(|f| crate::load_saved(f)).unwrap_or_default();
@@ -431,8 +446,12 @@ impl Scores {
 
     /// Takes a play by `player` (lowercased key, `name` as written). Returns its place on the map
     /// (if it's their best there), and their pp total and rank.
-    pub fn submit(&mut self, player: &str, name: &str, play: ScoreSubmit, now: u64) -> Result<(Option<u32>, f64, Option<u32>), String> {
+    pub fn submit(&mut self, player: &str, name: &str, mut play: ScoreSubmit, now: u64) -> Result<(Option<u32>, f64, Option<u32>), String> {
         check(&play)?;
+        // Older games work these out on the whole map.
+        if play.pp_version < online::PP_VERSION && play.map.mods.iter().any(|m| online::NOTE_MODS.contains(&m.as_str())) {
+            (play.pp, play.stars) = (None, None);
+        }
         let times = self.submits.entry(player.to_string()).or_default();
         times.retain(|t| t.elapsed() < Duration::from_secs(60));
         if times.len() >= SUBMITS_PER_MINUTE {
@@ -823,6 +842,7 @@ mod tests {
             scroll_speed: Some(0.5),
             play_ms: Some(60_000),
             md5: None,
+            pp_version: 0,
         }
     }
 
@@ -1118,6 +1138,41 @@ mod tests {
         s.set_banned("a", false);
         assert_eq!(names(&s), ["A", "B"]);
         assert_eq!(s.map_scores(7)[0].player, "A");
+    }
+
+    #[test]
+    fn older_games_get_no_pp_with_mods_that_change_the_notes() {
+        let mut s = Scores::load(None);
+        let with = |mods: &[&str], version: u32| {
+            let mut p = play(7, 500, 100.0);
+            p.map.mods = mods.iter().map(|m| m.to_string()).collect();
+            p.pp_version = version;
+            p
+        };
+        s.submit("a", "A", with(&["HA"], 0), 1).unwrap();
+        s.submit("b", "B", with(&["HA"], online::PP_VERSION), 2).unwrap();
+        s.submit("c", "C", with(&["HD"], 0), 3).unwrap();
+        assert_eq!(s.profile("a", "A", 0).pp, 0.0);
+        assert!(s.profile("b", "B", 0).pp > 0.0 && s.profile("c", "C", 0).pp > 0.0);
+    }
+
+    #[test]
+    fn recalculated_plays_count_for_what_they_came_to() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-recalc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        s.submit("a", "A", play(7, 500, 900.0), 1).unwrap();
+        s.submit("a", "A", play(8, 500, 800.0), 2).unwrap();
+        s.set_pp(2, Some(70.0)).unwrap();
+        std::fs::write(dir.join("recalculated.json"), r#"{"1":{"pp":90.0,"stars":3.5},"2":{"pp":80.0,"stars":null}}"#).unwrap();
+        let s = Scores::load(Some(dir.clone()));
+        assert_eq!((s.score(1).unwrap().pp, s.score(1).unwrap().stars), (Some(90.0), Some(3.5)));
+        assert_eq!(s.score(2).unwrap().pp, Some(70.0), "an admin's pp stand");
+        assert_eq!(s.pp_of(1), Some((Some(90.0), None)));
+        // Every line stays as sent.
+        assert!(std::fs::read_to_string(dir.join("scores.jsonl")).unwrap().contains("900"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

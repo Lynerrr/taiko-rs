@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use rosu_pp::taiko::Taiko;
+use rosu_pp::model::mode::GameMode;
 use rosu_pp::{Beatmap, Difficulty};
 
 use crate::render::{rgba, Canvas};
@@ -17,6 +18,39 @@ pub(crate) fn load(path: &Path) -> Option<Beatmap> {
     let map = Beatmap::from_path(path).ok()?;
     // Maps built to break calculators (absurd density/length) are skipped, as osu! would time out.
     map.check_suspicion().ok()?;
+    Some(map)
+}
+
+/// The map at `path` as a play with `mods` has it: Half takes every other note off, Swap and
+/// Random change their colours (like `game::apply_to_map`), and pp and star ratings go by what's
+/// left. `seed`: Random's colouring (`Game::seed`).
+pub(crate) fn load_played(path: &Path, mods: crate::mods::Mods, seed: u64) -> Option<Beatmap> {
+    use crate::mods::Mod;
+    let mut map = load(path)?;
+    let (half, swap, random) = (mods.has(Mod::Half), mods.has(Mod::Swap), mods.has(Mod::Random));
+    if !(half || swap || random) {
+        return Some(map);
+    }
+    // A convert's notes only exist once it's converted.
+    map.convert_mut(GameMode::Taiko, &Default::default()).ok()?;
+    const RIM: u8 = 2 | 8; // Whistle and clap: kats.
+    let objects = std::mem::take(&mut map.hit_objects);
+    let sounds = std::mem::take(&mut map.hit_sounds);
+    let mut k = 0;
+    for (object, sound) in objects.into_iter().zip(sounds) {
+        let mut bits = u8::from(sound);
+        if object.is_circle() {
+            k += 1;
+            if half && k % 2 == 0 {
+                continue;
+            }
+            let kat = (bits & RIM != 0) != swap;
+            let kat = if random { !crate::game::random_don(object.start_time, seed) } else { kat };
+            bits = if kat { bits | 8 } else { bits & !RIM };
+        }
+        map.hit_objects.push(object);
+        map.hit_sounds.push(bits.into());
+    }
     Some(map)
 }
 
@@ -34,11 +68,18 @@ pub fn star_rating_with(path: &Path, rate: f64, mods: u32) -> Option<f64> {
 /// With mods and the scroll speed setting, the way pp counts them (`pp::formula_mods`: slower
 /// notes read easier, faster ones harder). Relax goes by its mod bits, scroll speed aside.
 pub fn star_rating_for(path: &Path, rate: f64, mods: crate::mods::Mods, scroll_speed: f64) -> Option<f64> {
-    if mods.has(crate::mods::Mod::Relax) {
-        return star_rating_with(path, rate, mod_bits(mods));
-    }
-    let map = load(path)?;
-    Difficulty::new().mods(crate::pp::formula_mods(mods, scroll_speed)).clock_rate(rate).calculate_for_mode::<Taiko>(&map).ok().map(|a| a.stars)
+    star_rating_played(path, rate, mods, scroll_speed, 0)
+}
+
+/// The same for a play, whose `seed` says how Random coloured it.
+pub fn star_rating_played(path: &Path, rate: f64, mods: crate::mods::Mods, scroll_speed: f64, seed: u64) -> Option<f64> {
+    let map = load_played(path, mods, seed)?;
+    let difficulty = if mods.has(crate::mods::Mod::Relax) {
+        Difficulty::new().mods(mod_bits(mods))
+    } else {
+        Difficulty::new().mods(crate::pp::formula_mods(mods, scroll_speed))
+    };
+    difficulty.clock_rate(rate).calculate_for_mode::<Taiko>(&map).ok().map(|a| a.stars)
 }
 
 /// The mods of `mods` osu!taiko's star rating counts, as osu!'s mod bits (the speed is passed as
@@ -46,6 +87,12 @@ pub fn star_rating_for(path: &Path, rate: f64, mods: crate::mods::Mods, scroll_s
 pub fn mod_bits(mods: crate::mods::Mods) -> u32 {
     use crate::mods::Mod;
     [(Mod::Easy, 2), (Mod::HardRock, 16), (Mod::Relax, 128)].into_iter().filter(|(m, _)| mods.has(*m)).map(|(_, b)| b).sum()
+}
+
+/// The mods that change the notes (`load_played`), as bits next to `mod_bits` in a rating's key.
+fn note_bits(mods: crate::mods::Mods) -> u32 {
+    use crate::mods::Mod;
+    [(Mod::Half, 1 << 16), (Mod::Swap, 1 << 17), (Mod::Random, 1 << 18)].into_iter().filter(|(m, _)| mods.has(*m)).map(|(_, b)| b).sum()
 }
 
 /// Combined skill strain per section, the map time the first section starts at, and the
@@ -66,7 +113,7 @@ fn rate_key(rate: f64) -> u32 {
     (rate * 100.0).round() as u32
 }
 
-/// Library index, rate, mods (`mod_bits`) and scroll speed (both in hundredths).
+/// Library index, rate, mods (`mod_bits`, `note_bits`) and scroll speed (both in hundredths).
 type Key = (usize, u32, u32, u32);
 
 /// Background star rating calculator with a cache keyed by library index, rate, mods and
@@ -108,7 +155,7 @@ impl Stars {
     }
 
     fn key(&self, index: usize, rate: f64) -> Key {
-        (index, rate_key(rate), mod_bits(self.mods), rate_key(self.scroll_speed))
+        (index, rate_key(rate), mod_bits(self.mods) | note_bits(self.mods), rate_key(self.scroll_speed))
     }
 
     pub fn request(&mut self, index: usize, path: &Path, rate: f64) {

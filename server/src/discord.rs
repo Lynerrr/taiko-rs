@@ -1214,6 +1214,7 @@ mod tests {
             scroll_speed: Some(1.0),
             play_ms: None,
             md5: None,
+            pp_version: 0,
         };
         state.scores.lock().unwrap().submit("ryuji", "Ryuji", play, 1_792_990_923).unwrap();
         let http: ureq::Agent = ureq::Agent::config_builder().build().into();
