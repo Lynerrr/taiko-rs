@@ -1233,7 +1233,7 @@ pub fn register_code(error: Option<&str>, sent_to: Option<&str>, name: &str, ema
         "<div class=page><section class=\"panel login\"><h1 class=glitch data-text=\"SIGN UP\">SIGN UP</h1>{sent}{error}\
          <form method=post action=\"/register\"><input type=hidden name=name value=\"{name}\"><input type=hidden name=email value=\"{email}\">\
          {CODE}{PASSWORD}<button class=\"btn hot\">create account</button></form>\
-         <form method=post action=\"/register\"><input type=hidden name=name value=\"{name}\"><input type=hidden name=email value=\"{email}\">\
+         <form method=post action=\"/register\"><input type=hidden name=name value=\"{name}\"><input type=hidden name=email value=\"{email}\"><input type=hidden name=again value=1>\
          <button class=\"btn small\">send a new code</button></form></section></div>"
     )
 }
@@ -1258,7 +1258,7 @@ pub fn reset_code(error: Option<&str>, sent_to: Option<&str>, who: &str) -> Stri
         "<div class=page><section class=\"panel login\"><h1 class=glitch data-text=\"RESET PASSWORD\">RESET PASSWORD</h1>{sent}{error}\
          <form method=post action=\"/reset\"><input type=hidden name=who value=\"{who}\">\
          {CODE}{NEW_PASSWORD}<button class=\"btn hot\">set password</button></form>\
-         <form method=post action=\"/reset\"><input type=hidden name=who value=\"{who}\"><button class=\"btn small\">send a new code</button></form>\
+         <form method=post action=\"/reset\"><input type=hidden name=who value=\"{who}\"><input type=hidden name=again value=1><button class=\"btn small\">send a new code</button></form>\
          <p class=dim>This logs the account out everywhere else.</p></section></div>"
     )
 }
@@ -1598,6 +1598,8 @@ mod tests {
         assert!(!register(None, "Ryuji", "r@c.io", true).contains("name=password"));
         assert!(!register(None, "Ryuji", "", false).contains("name=email"));
         assert!(reset_code(None, Some("r***@c.io"), "Ryuji").contains("r***@c.io"));
+        // Asking for another code says so, to come back here if that fails.
+        assert!(code.contains("name=again") && reset_code(None, None, "Ryuji").contains("name=again"));
     }
 
     #[test]

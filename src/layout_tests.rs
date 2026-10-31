@@ -979,8 +979,23 @@ fn added_maps_show_past_the_filters() {
     assert_eq!(s.select.songs().len(), 1);
     s.select.hidden.maps.insert(s.library[1].path.clone());
     let path = s.library[1].path.clone();
-    s.select.reveal(&s.library, vec![path]);
+    s.select.reveal(&s.library, vec![path.clone()]);
     assert_eq!(s.select.songs().len(), 1, "hidden stays hidden");
+
+    // The first of them hidden: the next one gets selected.
+    let next = s.library[2].path.clone();
+    s.select.reveal(&s.library, vec![path, next]);
+    assert_eq!(s.select.selected(), Some(2));
+
+    // Added during a game: listed, and the cursor stays.
+    s.select.filter = "a".into();
+    s.select.refilter(&s.library);
+    s.select.filter = "alpha".into();
+    s.select.refilter(&s.library);
+    assert_eq!(s.select.songs().len(), 1);
+    s.select.pin(&s.library, vec![s.library[3].path.clone()]);
+    assert_eq!(s.select.songs().len(), 2);
+    assert_eq!(s.select.selected(), Some(0));
 }
 
 #[test]

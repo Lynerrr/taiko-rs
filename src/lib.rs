@@ -4944,7 +4944,8 @@ impl State {
                         let user = menu.user.trim().to_string();
                         // Logging in forgets the typed password; a new account's waits for its code.
                         let password = if row == Row::Register { menu.password.clone() } else { std::mem::take(&mut menu.password) };
-                        if !online::valid_name(&user) {
+                        let valid = if row == Row::Register { online::valid_name(&user) } else { online::valid_login(&user) };
+                        if !valid {
                             self.mp_status = format!("usernames are {}", online::NAME_RULES);
                             self.mp_menu.select(Row::User);
                         } else if row == Row::Register && !online::valid_password(&password) {
@@ -4996,7 +4997,7 @@ impl State {
                 let Some(text) = text else { return };
                 for ch in text.chars().filter(|c| net::drawable_char(*c)) {
                     match row {
-                        Row::User if self.mp_menu.user.len() < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') => self.mp_menu.user.push(ch),
+                        Row::User if self.mp_menu.user.len() < 254 && ch.is_ascii_graphic() => self.mp_menu.user.push(ch),
                         Row::Password if self.mp_menu.password.chars().count() < 128 => self.mp_menu.password.push(ch),
                         Row::Email if self.mp_menu.email.len() < 254 && ch.is_ascii_graphic() => self.mp_menu.email.push(ch),
                         Row::Code if self.mp_menu.code.len() < 6 && ch.is_ascii_digit() => self.mp_menu.code.push(ch),
@@ -5632,7 +5633,7 @@ impl State {
         if matches!(self.scene, Scene::MpMenu) {
             use multiplayer::Row;
             return match self.mp_menu.row() {
-                Row::User => Some(("Username".into(), self.mp_menu.user.clone())),
+                Row::User => Some(("Name or email".into(), self.mp_menu.user.clone())),
                 Row::Password => Some(("Password".into(), "*".repeat(self.mp_menu.password.chars().count()))),
                 Row::Email => Some(("Email".into(), self.mp_menu.email.clone())),
                 Row::Code => Some(("Code".into(), self.mp_menu.code.clone())),
@@ -7605,7 +7606,7 @@ impl State {
                     game.draw_playfield(c, game.scroll_speed);
                 });
                 game.draw_hud(canvas);
-                if game.replay.is_none() && !hidden.has(hud::Part::Spectators) {
+                if game.replay.is_none() && game.paused.is_none() && !hidden.has(hud::Part::Spectators) {
                     social::draw_spectators(canvas, &self.social.spectators());
                 }
                 if game.replay.is_some() && game.paused.is_none() {
@@ -8731,18 +8732,22 @@ impl State {
         self.toast(format!("updated {} - {}", set.artist, set.title));
     }
 
-    /// Adds a freshly downloaded set to the library (appended, so existing indices stay valid).
-    /// Song select goes to the maps just added, whatever its filters (not during a game).
+    /// Song select goes to the maps just added, whatever its filters. During a game they're only
+    /// listed: the cursor stays where the player left it.
     fn reveal_maps(&mut self, maps: Vec<PathBuf>) {
         if !matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. }) && self.mp.is_none() {
             self.select.reveal(&self.library, maps);
+        } else {
+            self.select.pin(&self.library, maps);
         }
     }
 
+    /// Adds a freshly downloaded set to the library (appended, so existing indices stay valid).
     fn add_downloaded(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
         let known: std::collections::HashSet<PathBuf> = self.library.iter().filter(|e| e.path.starts_with(folder)).map(|e| e.path.clone()).collect();
         let fresh: Vec<Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0)).into_iter().filter(|e| !known.contains(&e.path)).collect();
-        let maps = main_maps(fresh.iter());
+        // Nothing new (unpacked over the same files): the set that's there is what was added.
+        let maps = if fresh.is_empty() { main_maps(self.library.iter().filter(|e| e.path.starts_with(folder))) } else { main_maps(fresh.iter()) };
         let n = fresh.len();
         self.append_maps(fresh);
         self.installed_sets().insert(set.id);

@@ -342,7 +342,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
     for (i, r) in rows.iter().enumerate() {
         match *r {
             Row::User => {
-                row(c, i, left, y, 30.0, "Username", Some(if menu.user.is_empty() { (online::NAME_RULES, true) } else { (&menu.user, false) }));
+                row(c, i, left, y, 30.0, "Name or email", Some(if menu.user.is_empty() { (online::NAME_RULES, true) } else { (&menu.user, false) }));
                 y += 38.0;
             }
             Row::Password => {

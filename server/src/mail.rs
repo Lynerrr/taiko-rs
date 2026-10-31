@@ -104,6 +104,9 @@ fn six_digits() -> String {
     format!("{:06}", u64::from_le_bytes(b) % 1_000_000)
 }
 
+/// Why a code wasn't sent: the last one is still on its way.
+pub const JUST_SENT: &str = "a code was just sent: wait a minute before asking again";
+
 /// Mails a new code for `for_` (what it unlocks, e.g. "reg:name") to `email`; `what` says in the
 /// letter what it's for. Err: too many asked for lately, or mail is off.
 pub fn send_code(for_: &str, email: &str, what: &str) -> Result<(), String> {
@@ -118,7 +121,7 @@ pub fn send_code(for_: &str, email: &str, what: &str) -> Result<(), String> {
             let times = sent.get(&who).map(Vec::as_slice).unwrap_or_default();
             // A minute apart for the same thing; another (a sign-up, then a reset) may follow.
             if who == for_ && times.iter().filter(|t| t.elapsed() < Duration::from_secs(60)).count() >= PER_MINUTE {
-                return Err("a code was just sent: wait a minute before asking again".into());
+                return Err(JUST_SENT.into());
             }
             if times.len() >= PER_HOUR {
                 return Err("too many codes asked for, try again in an hour".into());

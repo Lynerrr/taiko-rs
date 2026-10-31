@@ -82,6 +82,9 @@ impl Part {
 }
 
 /// A set of interface parts.
+/// The parts a saved config's line may be older than.
+const NEWER: [Part; 3] = [Part::Pp, Part::Scoreboard, Part::Spectators];
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Parts(u16);
 
@@ -108,15 +111,23 @@ impl Parts {
         Part::ALL.iter().filter(|&&p| self.has(p)).map(|p| p.key()).collect::<Vec<_>>().join(",")
     }
 
+    /// The config's line: `format`, and the parts that came later and aren't hidden, marked with
+    /// `!`, so that `parse_saved` can tell those from a part the line is older than.
+    pub fn format_saved(self) -> String {
+        let shown = NEWER.iter().filter(|&&p| !self.has(p)).map(|p| format!("!{}", p.key()));
+        std::iter::once(self.format()).filter(|s| !s.is_empty()).chain(shown).collect::<Vec<_>>().join(",")
+    }
+
     /// The config's line: saved before parts that came later (the pp counter, the scoreboard, the
-    /// spectators),
-    /// hiding all it knew of still hides those too.
+    /// spectators), hiding all it knew of still hides those too. All but the judgements counts:
+    /// that's what the toggle hides to begin with.
     pub fn parse_saved(s: &str) -> Parts {
         let mut parts = Parts::parse(s);
-        let newer = [Part::Pp, Part::Scoreboard, Part::Spectators];
-        let saved = |p: Part| s.split(',').any(|k| k.trim() == p.key());
-        if Part::ALL.iter().all(|&p| parts.has(p) || (newer.contains(&p) && !saved(p))) {
-            parts = Parts::ALL;
+        let saved = |p: Part| s.split(',').map(str::trim).any(|k| k.strip_prefix('!').unwrap_or(k) == p.key());
+        if Part::ALL.iter().all(|&p| p == Part::Judgements || parts.has(p) || (NEWER.contains(&p) && !saved(p))) {
+            for &p in NEWER.iter().filter(|&&p| !saved(p)) {
+                parts.0 |= p.bit();
+            }
         }
         parts
     }
@@ -144,6 +155,21 @@ mod tests {
         let some = Parts::parse_saved("score,pp");
         assert!(some.has(Part::Score) && !some.has(Part::Scoreboard) && some.len() == 2);
         assert_eq!(Parts::parse_saved(&Parts::DEFAULT_HIDES.format()), Parts::DEFAULT_HIDES);
+        // The old default, which leaves the judgements out, takes in the newer parts too.
+        let default = "score,accuracy,pp,combo,progress,health,mods,hit_error,offset_hint,hit_animation,scoreboard";
+        assert_eq!(Parts::parse_saved(default), Parts::DEFAULT_HIDES);
+    }
+
+    #[test]
+    fn a_newer_part_taken_off_the_list_stays_off() {
+        let mut parts = Parts::ALL;
+        parts.toggle(Part::Spectators);
+        assert_eq!(Parts::parse_saved(&parts.format_saved()), parts);
+        parts.toggle(Part::Judgements);
+        assert_eq!(Parts::parse_saved(&parts.format_saved()), parts);
+        for p in [Parts::NONE, Parts::ALL, Parts::DEFAULT_HIDES] {
+            assert_eq!(Parts::parse_saved(&p.format_saved()), p);
+        }
     }
 
     #[test]

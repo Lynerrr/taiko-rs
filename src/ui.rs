@@ -643,18 +643,24 @@ impl Select {
         (self.filter.clone(), self.collection, self.show_converts)
     }
 
-    /// Goes to the first of `maps`, just added: they're listed even if the filters would hide
-    /// them, which stay as they are until the player changes them (then the maps go by them too).
-    pub fn reveal(&mut self, library: &[Entry], maps: Vec<std::path::PathBuf>) {
-        let Some(first) = maps.first().cloned() else { return };
+    /// Lists `maps`, just added, even if the filters would hide them, which stay as they are
+    /// until the player changes them (then the maps go by them too).
+    pub fn pin(&mut self, library: &[Entry], maps: Vec<std::path::PathBuf>) {
         if self.pinned_view != self.view() {
             self.pinned.clear();
             self.pinned_view = self.view();
         }
         self.pinned.extend(maps);
         self.refilter(library);
-        self.select_path(library, &first);
-        self.open_cursor_section();
+    }
+
+    /// Pins `maps` and goes to the first of them that shows (one may be hidden by hand).
+    pub fn reveal(&mut self, library: &[Entry], maps: Vec<std::path::PathBuf>) {
+        self.pin(library, maps.clone());
+        if let Some(path) = maps.iter().find(|p| self.visible.iter().any(|&i| library[i].path == **p)) {
+            self.select_path(library, path);
+            self.open_cursor_section();
+        }
     }
 
     pub fn key(&mut self, key: KeyCode, library: &[Entry]) -> SelectAction {

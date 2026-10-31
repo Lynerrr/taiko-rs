@@ -159,6 +159,12 @@ impl Req<'_> {
         Reply { cache: "no-store", ..self.page(status, title, "", body) }
     }
 
+    /// Whether a failed step of an account form goes back to where the code is typed: a code was
+    /// typed, or one is on its way, or it failed asking for another (the last one still works).
+    fn at_code(&self, error: &str) -> bool {
+        self.form.contains_key("code") || self.form.contains_key("again") || error == crate::mail::JUST_SENT
+    }
+
     fn not_found(&self, why: &str) -> Reply {
         self.page(404, "Not found", "", pages::not_found(why))
     }
@@ -597,7 +603,7 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             let name = req.field("name").trim();
             match state.web_login(req.ip, name, req.field("password")) {
                 Ok((name, token)) => Reply { cookie: Some(token), ..Reply::see_other(format!("/u/{name}")) },
-                Err(e) => req.page(401, "Log in", "", pages::login(Some(&e), name)),
+                Err(e) => req.account_step(401, "Log in", pages::login(Some(&e), name)),
             }
         }
         // Forms come in two steps: without `code` a code is mailed, then with it (and the
@@ -608,7 +614,7 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             match state.web_register(req.ip, name, password, email, code) {
                 WebAuth::LoggedIn { name, token } => Reply { cookie: Some(token), ..Reply::see_other(format!("/u/{name}")) },
                 WebAuth::CodeSent(to) => req.account_step(200, "Sign up", pages::register_code(None, Some(&to), name, email)),
-                WebAuth::Failed(e) if code.is_some() => req.account_step(400, "Sign up", pages::register_code(Some(&e), None, name, email)),
+                WebAuth::Failed(e) if req.at_code(&e) => req.account_step(400, "Sign up", pages::register_code(Some(&e), None, name, email)),
                 WebAuth::Failed(e) => req.account_step(400, "Sign up", pages::register(Some(&e), name, email, crate::mail::on())),
             }
         }
@@ -618,7 +624,7 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             match state.web_reset(req.ip, who, code, password) {
                 WebAuth::LoggedIn { name, token } => Reply { cookie: Some(token), ..Reply::see_other(format!("/u/{name}")) },
                 WebAuth::CodeSent(to) => req.account_step(200, "Reset password", pages::reset_code(None, Some(&to), who)),
-                WebAuth::Failed(e) if code.is_some() => req.account_step(400, "Reset password", pages::reset_code(Some(&e), None, who)),
+                WebAuth::Failed(e) if req.at_code(&e) => req.account_step(400, "Reset password", pages::reset_code(Some(&e), None, who)),
                 WebAuth::Failed(e) => req.account_step(400, "Reset password", pages::reset(Some(&e), who)),
             }
         }
