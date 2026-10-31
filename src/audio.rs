@@ -514,6 +514,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// `ogg` with the position of its `page`th page moved `by` frames (and the page's checksum put
+    /// right, or readers would skip it).
+    fn with_ogg_position_moved(mut ogg: Vec<u8>, page: usize, by: i64) -> Vec<u8> {
+        let mut at = 0;
+        for _ in 0..page {
+            at += 27 + ogg[at + 26] as usize + ogg[at + 27..at + 27 + ogg[at + 26] as usize].iter().map(|&s| s as usize).sum::<usize>();
+        }
+        let segments = ogg[at + 26] as usize;
+        let end = at + 27 + segments + ogg[at + 27..at + 27 + segments].iter().map(|&s| s as usize).sum::<usize>();
+        let position = i64::from_le_bytes(ogg[at + 6..at + 14].try_into().unwrap()) + by;
+        ogg[at + 6..at + 14].copy_from_slice(&position.to_le_bytes());
+        ogg[at + 22..at + 26].fill(0);
+        let crc = ogg[at..end].iter().fold(0u32, |crc, &byte| {
+            (0..8).fold(crc ^ (byte as u32) << 24, |c, _| if c & 0x8000_0000 != 0 { c << 1 ^ 0x04c1_1db7 } else { c << 1 })
+        });
+        ogg[at + 22..at + 26].copy_from_slice(&crc.to_le_bytes());
+        ogg
+    }
+
+    #[test]
+    fn a_wrong_position_on_an_ogg_page_loses_no_music() {
+        // Real maps' OGGs have such pages: Clublionx lost 412 frames at each of 27 of them, so its
+        // music ended 252 ms ahead of its notes and of BASS.
+        let clean = include_bytes!("../assets/splash.ogg").to_vec();
+        let bent = with_ogg_position_moved(clean.clone(), 2, 412);
+        let decoded = |ogg: Vec<u8>| decode_source(Box::new(std::io::Cursor::new(ogg)), Some("ogg"), 48000, None).unwrap().0;
+        let (clean, bent) = (decoded(clean), decoded(bent));
+        assert_eq!(clean.frames(), bent.frames());
+        assert_eq!(clean.samples, bent.samples);
+    }
+
+    /// A silent MP3 of `frames` frames after an Info tag naming `encoder`, with `trim` in the tag's
+    /// delay and padding field (12 bits each).
+    fn mp3_with_info_tag(encoder: &[u8; 9], trim: [u8; 3], frames: usize) -> Vec<u8> {
+        const HEADER: [u8; 4] = [0xFF, 0xFB, 0x90, 0x44]; // MPEG-1 layer III, 128 kb/s, 44100 Hz.
+        const FRAME: usize = 417;
+        const TAG: usize = 4 + 32; // Past the header and the stereo side information.
+        let mut silent = vec![0; FRAME];
+        silent[..4].copy_from_slice(&HEADER);
+        let mut mp3 = silent.clone();
+        mp3[TAG..TAG + 4].copy_from_slice(b"Info");
+        mp3[TAG + 7] = 1; // Flags: the number of frames comes next, and nothing else.
+        mp3[TAG + 8..TAG + 12].copy_from_slice(&(frames as u32).to_be_bytes());
+        mp3[TAG + 12..TAG + 21].copy_from_slice(encoder);
+        mp3[TAG + 33..TAG + 36].copy_from_slice(&trim);
+        mp3.extend(silent.repeat(frames));
+        mp3
+    }
+
+    #[test]
+    fn the_delay_in_an_mp3_tag_is_cut_whoever_encoded_it() {
+        // Mythologia's End's own tag: 576 + 529 frames of delay, 2088 - 529 of padding. BASS (and
+        // so osu!, stable and lazer alike) cuts them; left in, its music came 25 ms late.
+        let frames = |encoder: &[u8; 9], trim| {
+            let mp3 = mp3_with_info_tag(encoder, trim, 20);
+            decode_source(Box::new(std::io::Cursor::new(mp3)), Some("mp3"), 44100, None).unwrap().0.frames()
+        };
+        let whole = 20 * 1152;
+        assert_eq!(frames(b"SIT4.50.0", [0x24, 0x08, 0x28]), whole - 1105 - 1559);
+        assert_eq!(frames(b"GOGO\0\0\0\0\0", [0x24, 0x08, 0x28]), whole - 1105 - 1559);
+        // And what BASS doesn't cut, left alone: no name, or an empty field.
+        assert_eq!(frames(b"\0ABCDEFGH", [0x24, 0x08, 0x28]), whole);
+        assert_eq!(frames(b"SIT4.50.0", [0, 0, 0]), whole);
+    }
+
     /// Real files (paths in TAIKO_TEST_AUDIO, one per line in that file): a part decoded after a
     /// seek must line up with the full decode. `cargo test -- --ignored --nocapture part_of_real`.
     #[test]
@@ -820,8 +885,12 @@ fn decode_source(
     let mut src_start: Option<i64> = part.is_none().then_some(0);
     let mut stereo: Vec<f32> = Vec::new();
     let mut packet_buf: Vec<f32> = Vec::new();
+    // Frames to cut off the end of the song. Only the end: an OGG page whose position is a little
+    // off has the reader cut the packet it ends on, mid-song. That's music, BASS plays it, and
+    // everything after it would come that much early.
+    let mut tail = 0;
     loop {
-        let packet = match format.next_packet() {
+        let mut packet = match format.next_packet() {
             Ok(Some(p)) => p,
             Ok(None) => break,
             Err(Error::IoError(_)) => break,
@@ -830,12 +899,15 @@ fn decode_source(
         if packet.track_id != track_id {
             continue;
         }
+        let cut = std::mem::take(&mut packet.trim_end).get() as usize;
         let pts = packet.pts.get();
         let buf = match decoder.decode(&packet) {
             Ok(b) => b,
             Err(Error::DecodeError(_)) => continue,
             Err(e) => return Err(format!("decode: {e}")),
         };
+        // (A packet can ask to cut more than it holds: the rest of the padding, counted again.)
+        tail = if cut == 0 { 0 } else { tail + cut.min(buf.frames()) };
         src_rate = buf.spec().rate();
         if src_start.is_none() {
             // After a seek, a decoder may give back less than the packet's frames (Vorbis's first
@@ -864,6 +936,7 @@ fn decode_source(
             }
         }
     }
+    stereo.truncate(stereo.len().saturating_sub(tail * 2));
     let Some(src_start) = src_start.filter(|_| !stereo.is_empty() && src_rate != 0) else {
         return Err("audio file decoded to nothing".into());
     };

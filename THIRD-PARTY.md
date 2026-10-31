@@ -33,7 +33,8 @@ taiko.rs is an independent project. It is not affiliated with, or endorsed by, p
 The game and the server are built from crates.io libraries under their own licenses, all
 permissive: MIT and/or Apache-2.0 for most, and some under BSD-2-Clause, BSD-3-Clause, ISC, Zlib,
 Unlicense or 0BSD. The [Symphonia](https://github.com/pdeljanov/Symphonia) audio decoders are
-under MPL-2.0 and are used unmodified. `cargo metadata` (or `cargo about`) lists every crate with
+under MPL-2.0 and are used unmodified, but for one change to its MP3 reader, in
+[vendor/symphonia-bundle-mp3](vendor/symphonia-bundle-mp3). `cargo metadata` (or `cargo about`) lists every crate with
 its license and authors.
 
 Notable ones: [wgpu](https://github.com/gfx-rs/wgpu) and [winit](https://github.com/rust-windowing/winit)
