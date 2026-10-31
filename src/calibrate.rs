@@ -1,5 +1,5 @@
-//! Offset calibration: play a click track with notes exactly on the beat, then turn the hit
-//! errors into a suggested offset.
+//! Offset calibration: hit along to a click track by ear, then turn the hit errors into a
+//! suggested offset. The vsync compensation's is the same notes by sight, with the sound off.
 
 use crate::game::Game;
 use crate::render::{accent, rgba, Canvas, Hit};
@@ -50,17 +50,53 @@ pub fn estimate(errors: &[f64], current_offset: f64) -> Option<Estimate> {
     })
 }
 
-/// `vsync`: the vsync calibration (by sight, no sound; `current_offset` is the fine tune).
-pub fn draw_overlay(c: &mut Canvas, game: &Game, current_offset: f64, hide_notes: bool, vsync: bool) {
+/// With no note to tell centre from rim by, any drum key is a hit: the rims (the outer keys of
+/// `Config::keys`) count as the centre next to them.
+pub fn centre_key(key: usize) -> usize {
+    match key {
+        0 => 1,
+        3 => 2,
+        k => k,
+    }
+}
+
+/// A line across the screen, smaller if it has to be to fit.
+fn line(c: &mut Canvas, y: f32, size: f32, color: [f32; 4], text: &str) {
+    let room = c.width - 48.0;
+    let size = Canvas::fit_size(size, 6.0, room, text);
+    c.text_centered(c.width / 2.0, y, size, color, &Canvas::fit(size, room, text));
+}
+
+/// The calibration by ear. Nothing here moves with the beat or tells how the hits are going: with
+/// notes to watch it measures the eyes, and with early / late to read people steer by it, so the
+/// offset it suggests isn't the sound's.
+pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
+    line(c, 70.0, 14.0, rgba(0x9a9ab0, 1.0), tr!("OFFSET CALIBRATION", "オフセット調整", "КАЛИБРОВКА СМЕЩЕНИЯ"));
+    let first = game.map.notes.first().map_or(0.0, |n| n.time);
+    let beat = game.map.control_points.first().map_or(500.0, |p| p.beat_length);
+    // Between two clicks, so the words changing isn't a beat to follow.
+    let hitting = game.time >= first - beat / 2.0;
+    let headline = if hitting { tr!("Hit on every click", "クリックごとに叩いて", "Бейте на каждый клик") } else { tr!("Listen to the clicks", "クリック音を聞いて", "Слушайте клики") };
+    line(c, 160.0, 20.0, rgba(0xffffff, 1.0), headline);
+    line(c, 204.0, 10.0, rgba(0xc8c8d8, 1.0), tr!("By ear, with any drum key. It works best with your eyes closed", "耳だけで、どのドラムキーでも。目を閉じるのがおすすめです", "Только на слух, любой клавишей барабана. Лучше с закрытыми глазами"));
+    let hits = game.stats.errors.len();
+    if hitting {
+        let count = if hits < MIN_HITS { tr!("{hits} of {MIN_HITS} hits", "{hits} / {MIN_HITS} 打", "ударов: {hits} из {MIN_HITS}";) } else { tr!("{hits} hits", "{hits} 打", "ударов: {hits}";) };
+        line(c, 262.0, 10.0, rgba(0xFFD34D, 1.0), &count);
+    }
+    let w = (c.width - 48.0).min(320.0);
+    let x = c.width / 2.0 - w / 2.0;
+    c.rect(x, 292.0, w, 4.0, rgba(0xffffff, 0.12));
+    c.rect(x, 292.0, w * game.progress() as f32, 4.0, rgba(accent(), 0.9));
+    let hints = tr!("Enter finish early    Esc cancel", "Enter 早めに終了    Esc 中止", "Enter закончить раньше    Esc отмена");
+    c.text_centered(c.width / 2.0, 448.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(8.0, c.width - 48.0, hints));
+}
+
+/// Over the playfield in the vsync calibration (`current_offset` is the fine tune).
+pub fn draw_by_sight(c: &mut Canvas, game: &Game, current_offset: f64) {
     let w = c.width;
-    let line = if vsync {
-        "Hit centre (F/J) as notes reach the drum, by sight (no sound)"
-    } else if hide_notes {
-        "Notes hidden: hit centre (F/J) on every click, by ear"
-    } else {
-        "Hit centre (F/J) on every click. Follow the sound, not the notes"
-    };
-    let what = if vsync { "fine tune" } else { "offset" };
+    let line = "Hit any drum key as notes reach the drum, by sight (no sound)";
+    let what = "fine tune";
     let status = match estimate(&game.stats.errors, current_offset) {
         Some(e) => {
             let dir = if e.error_ms >= 0.0 { "late" } else { "early" };
@@ -78,15 +114,14 @@ pub fn draw_overlay(c: &mut Canvas, game: &Game, current_offset: f64, hide_notes
     let widest = Canvas::text_width(8.0, line).max(Canvas::text_width(9.0, &status)) + 40.0;
     let bw = widest.max(500.0).min(w - 32.0);
     c.round_rect(w / 2.0 - bw / 2.0, 26.0, bw, 70.0, 10.0, rgba(0x000000, 0.6), rgba(accent(), 0.8), 1.5);
-    c.text_centered(w / 2.0, 36.0, 12.0, rgba(0xffffff, 1.0), if vsync { "VSYNC CALIBRATION" } else { "OFFSET CALIBRATION" });
+    c.text_centered(w / 2.0, 36.0, 12.0, rgba(0xffffff, 1.0), "VSYNC CALIBRATION");
     let room = bw - 24.0;
     let size = Canvas::fit_size(8.0, 6.0, room, line);
     c.text_centered(w / 2.0, 56.0, size, rgba(0xc8c8d8, 1.0), &Canvas::fit(size, room, line));
     let size = Canvas::fit_size(9.0, 6.0, room, &status);
     c.text_centered(w / 2.0, 74.0, size, rgba(0xFFD34D, 1.0), &Canvas::fit(size, room, &status));
     // Above the playfield size readout in the bottom-right corner.
-    let hints = if vsync { "Enter finish early    Esc cancel" } else { "H hide/show notes    Enter finish early    Esc cancel" };
-    c.text_centered(w / 2.0, 448.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(8.0, w - 48.0, hints));
+    c.text_centered(w / 2.0, 448.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(8.0, w - 48.0, "Enter finish early    Esc cancel"));
 }
 
 /// `vsync`: the result of the vsync calibration (`current_offset` is the fine tune).
