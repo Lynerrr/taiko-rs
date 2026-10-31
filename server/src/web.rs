@@ -19,6 +19,8 @@
 //!   /u/<name>/nominator  POST: an admin makes them a loved nominator (on=0: not any more)
 //!   /s/<id>/pp        POST: an admin sets a play's pp (empty: back to what was sent)
 //!   /login /logout    the website's session (the game's accounts)
+//!   /register         a new account, with a code mailed to its email
+//!   /reset            a new password, with a code mailed to the account's email
 //!   /chat[/<name>]    the global chat and messages to friends, like the game's   /api/chat[/<name>]
 //!   /friend/<name>    POST: ask to be friends, or accept
 //!   /clips/<file>     the gameplay clips (with byte ranges, for video players)
@@ -39,7 +41,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::pages::{self, Os};
-use crate::State;
+use crate::{State, WebAuth};
 
 /// Connections being answered at once; more are closed straight away.
 const MAX_CONNECTIONS: usize = 128;
@@ -150,6 +152,11 @@ impl Req<'_> {
     /// A page with its own link preview.
     fn page_with(&self, status: u16, title: &str, nav: &str, meta: &pages::Meta, body: String) -> Reply {
         Reply::html(status, title, nav, self.viewer.as_deref(), meta, body)
+    }
+
+    /// A step of an account form: never kept, it has the email typed in it.
+    fn account_step(&self, status: u16, title: &str, body: String) -> Reply {
+        Reply { cache: "no-store", ..self.page(status, title, "", body) }
     }
 
     fn not_found(&self, why: &str) -> Reply {
@@ -486,6 +493,11 @@ fn route(state: &State, req: &Req) -> Reply {
             Some(me) => Reply::redirect(format!("/u/{me}")),
             None => req.page(200, "Log in", "", pages::login(None, "")),
         },
+        ["register"] => match &req.viewer {
+            Some(me) => Reply::redirect(format!("/u/{me}")),
+            None => req.page(200, "Sign up", "", pages::register(None, "", "", crate::mail::on())),
+        },
+        ["reset"] => req.page(200, "Reset password", "", pages::reset(None, "")),
         ["chat"] | ["chat", _] => {
             let (Some(me), Some(key)) = (req.viewer.as_deref(), req.key()) else { return Reply::redirect("/login".into()) };
             let people = state.conversations(&key);
@@ -586,6 +598,28 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             match state.web_login(req.ip, name, req.field("password")) {
                 Ok((name, token)) => Reply { cookie: Some(token), ..Reply::see_other(format!("/u/{name}")) },
                 Err(e) => req.page(401, "Log in", "", pages::login(Some(&e), name)),
+            }
+        }
+        // Forms come in two steps: without `code` a code is mailed, then with it (and the
+        // password) the account is made.
+        ["register"] => {
+            let (name, email) = (req.field("name").trim(), req.field("email").trim());
+            let (code, password) = (req.form.get("code").map(String::as_str), req.form.get("password").map(String::as_str));
+            match state.web_register(req.ip, name, password, email, code) {
+                WebAuth::LoggedIn { name, token } => Reply { cookie: Some(token), ..Reply::see_other(format!("/u/{name}")) },
+                WebAuth::CodeSent(to) => req.account_step(200, "Sign up", pages::register_code(None, Some(&to), name, email)),
+                WebAuth::Failed(e) if code.is_some() => req.account_step(400, "Sign up", pages::register_code(Some(&e), None, name, email)),
+                WebAuth::Failed(e) => req.account_step(400, "Sign up", pages::register(Some(&e), name, email, crate::mail::on())),
+            }
+        }
+        ["reset"] => {
+            let who = req.field("who").trim();
+            let (code, password) = (req.form.get("code").map(String::as_str), req.form.get("password").map(String::as_str));
+            match state.web_reset(req.ip, who, code, password) {
+                WebAuth::LoggedIn { name, token } => Reply { cookie: Some(token), ..Reply::see_other(format!("/u/{name}")) },
+                WebAuth::CodeSent(to) => req.account_step(200, "Reset password", pages::reset_code(None, Some(&to), who)),
+                WebAuth::Failed(e) if code.is_some() => req.account_step(400, "Reset password", pages::reset_code(Some(&e), None, who)),
+                WebAuth::Failed(e) => req.account_step(400, "Reset password", pages::reset(Some(&e), who)),
             }
         }
         ["logout"] => {

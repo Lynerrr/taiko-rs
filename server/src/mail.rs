@@ -130,7 +130,7 @@ pub fn send_code(for_: &str, email: &str, what: &str) -> Result<(), String> {
     }
     let code = six_digits();
     let body = format!(
-        "Your taiko.rs code {what}:\n\n    {code}\n\nType it in the game. It works for 15 minutes.\n\nIf you didn't ask for it, ignore this letter: nothing changes without the code.\n\n-- \ntaiko.rs  https://rstaiko.auneu.space\n"
+        "Your taiko.rs code {what}:\n\n    {code}\n\nType it where you asked for it. It works for 15 minutes.\n\nIf you didn't ask for it, ignore this letter: nothing changes without the code.\n\n-- \ntaiko.rs  https://rstaiko.auneu.space\n"
     );
     let letter = letter(&m.from, email, &format!("taiko.rs code: {code}"), &body);
     let mut outbox = m.outbox.lock().unwrap();
