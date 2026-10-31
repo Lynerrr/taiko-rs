@@ -31,6 +31,10 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 # with data-control.
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control", "image-data"] }
 
+# Media keys and the desktop's media controls (the music player).
+[target.'cfg(any(target_os = "linux", windows))'.dependencies]
+souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 # The APK is a plain NativeActivity (no Java): see android/build-apk.sh.
 winit = { version = "0.30", features = ["android-native-activity"] }

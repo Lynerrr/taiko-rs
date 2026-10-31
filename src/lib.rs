@@ -36,6 +36,7 @@ mod link;
 mod logo;
 mod mapguessr;
 mod mapinfo;
+mod media;
 mod menu;
 mod hud;
 mod keys;
@@ -44,6 +45,8 @@ mod multiverse;
 mod multiplayer;
 mod net;
 mod osudb;
+mod player;
+mod playlist;
 mod pp;
 mod profile;
 mod preview;
@@ -124,6 +127,9 @@ enum Scene {
     VideoEdit(Box<video::Editor>),
     MpResults,
 }
+
+/// How far the player's arrow keys and wheel move the music.
+const MUSIC_SEEK_MS: f64 = 5000.0;
 
 /// How often a running game looks for a newer build (with "Check for updates" on).
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
@@ -257,6 +263,18 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
+    /// When dragging the player's timeline last moved the music.
+    music_seeked: Option<Instant>,
+    /// The music player, instead of the main menu.
+    player: Option<Box<player::Player>>,
+    /// The main menu's music is paused.
+    music_paused: bool,
+    /// Media keys and the desktop's media controls, from the first time the player opens.
+    media: Option<media::Media>,
+    /// The track the desktop was last told about, and whether it's playing.
+    media_told: Option<(usize, bool)>,
+    /// The window's handle, for the media controls on Windows.
+    window_handle: Option<usize>,
     updater: update::Updater,
     /// When the overlay appeared (it slides in once, not on every notch).
     volume_since: Option<Instant>,
@@ -1332,6 +1350,9 @@ impl State {
         let lobby_rate = self.mp.as_ref().and_then(|s| s.map.as_ref().filter(|_| s.map_entry.is_some() && s.map_entry == self.preview_target()).map(|m| m.rate));
         let lobby = matches!(self.scene, Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_))
             || matches!(&self.scene, Scene::Preview { back } | Scene::Settings { prev: back } if matches!(**back, Scene::Lobby));
+        if let Some(p) = &self.player {
+            return p.rate();
+        }
         let (rate, keep_pitch) = self.play_speed();
         (lobby_rate.filter(|_| lobby).unwrap_or(rate), keep_pitch)
     }
@@ -1811,6 +1832,9 @@ impl State {
     /// The map the preview shows: the lobby map in the lobby (and its preview), else the song
     /// select selection.
     fn preview_target(&self) -> Option<usize> {
+        if let Some(entry) = self.player.as_ref().and_then(|p| p.list.entry()).filter(|_| self.on_menu()) {
+            return Some(entry);
+        }
         let lobby = match &self.scene {
             Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) => true,
             Scene::Preview { back } | Scene::Settings { prev: back } => matches!(**back, Scene::Lobby),
@@ -2021,6 +2045,180 @@ impl State {
             (KeyCode::ArrowRight, _) | (_, Some(3)) => self.menu_step(1),
             (KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space, _) | (_, Some(1 | 2)) => self.menu_hit(),
             _ => {}
+        }
+    }
+
+    /// A key in the music player: the drum's rim changes song, its face pauses.
+    fn player_key(&mut self, code: KeyCode, text: Option<&str>) {
+        let Some(p) = &mut self.player else { return };
+        if p.searching {
+            let mut filter = p.list.filter.clone();
+            match code {
+                KeyCode::Escape => {
+                    p.searching = false;
+                    filter.clear();
+                }
+                KeyCode::Enter | KeyCode::NumpadEnter => {
+                    p.searching = false;
+                    let first = p.list.shown.first().copied();
+                    if let Some(track) = first {
+                        self.music_play(track);
+                    }
+                    return;
+                }
+                KeyCode::Backspace => {
+                    filter.pop();
+                }
+                _ => filter.extend(text.into_iter().flat_map(str::chars).filter(|c| !c.is_control())),
+            }
+            p.search(filter);
+            return;
+        }
+        if self.modifiers_ctrl {
+            if code == KeyCode::KeyF {
+                p.searching = true;
+            }
+            return;
+        }
+        match (code, self.cfg.keys.iter().position(|&k| k == code)) {
+            (KeyCode::Escape, _) => self.close_player(),
+            (KeyCode::BracketLeft, _) => p.move_pitch(-1),
+            (KeyCode::BracketRight, _) => p.move_pitch(1),
+            (KeyCode::ArrowUp, _) => p.scroll_by(-1),
+            (KeyCode::ArrowDown, _) => p.scroll_by(1),
+            (KeyCode::ArrowLeft, _) => self.music_seek_by(-MUSIC_SEEK_MS),
+            (KeyCode::ArrowRight, _) => self.music_seek_by(MUSIC_SEEK_MS),
+            (_, Some(0)) => self.music_control(player::Control::Prev),
+            (_, Some(3)) => self.music_control(player::Control::Next),
+            (KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space, _) | (_, Some(1 | 2)) => self.music_control(player::Control::Toggle),
+            _ => {}
+        }
+    }
+
+    fn music_control(&mut self, control: player::Control) {
+        match control {
+            player::Control::Prev => self.music_step(-1),
+            player::Control::Next => self.music_step(1),
+            player::Control::Toggle => self.set_music_paused(!self.music_paused),
+            player::Control::Open => {
+                self.player = Some(Box::new(player::Player::new(&self.library, self.select.selected())));
+                if self.media.is_none() {
+                    self.media = Some(media::Media::start(self.window_handle));
+                }
+            }
+            player::Control::Shuffle => {
+                if let Some(p) = &mut self.player {
+                    p.list.toggle_shuffle(fresh_seed());
+                }
+            }
+            player::Control::Repeat => {
+                if let Some(p) = &mut self.player {
+                    p.list.cycle_repeat();
+                }
+            }
+            player::Control::PlayMap => {
+                self.select.filter.clear();
+                self.select.refilter(&self.library);
+                self.close_player();
+                self.main_menu = None;
+            }
+        }
+    }
+
+    /// Back to the menu, the song playing still selected there.
+    fn close_player(&mut self) {
+        let Some(p) = self.player.take() else { return };
+        if let Some(e) = p.list.entry().and_then(|i| self.library.get(i)) {
+            self.select.select_path(&self.library, &e.path);
+        }
+        self.media_told = None;
+        if let Some(m) = &self.media {
+            m.stopped();
+        }
+    }
+
+    /// Plays this track of the player's list.
+    fn music_play(&mut self, track: usize) {
+        self.set_music_paused(false);
+        if let Some(p) = &mut self.player {
+            p.list.play(track);
+        }
+    }
+
+    /// Moves the player's volume to where the pointer is.
+    fn music_volume_to_pointer(&mut self) {
+        let (vx, _) = self.mouse_virtual();
+        if let Some((left, w)) = self.player.as_ref().map(|p| p.volume_bar) {
+            self.cfg.music_volume = ((vx - left) / w).clamp(0.0, 1.0);
+            self.apply_volume();
+        }
+    }
+
+    /// Takes what the media keys pressed, and tells the desktop what's on.
+    fn poll_media(&mut self) {
+        let Some(media) = &self.media else { return };
+        let keys: Vec<media::Key> = media.keys.try_iter().collect();
+        if self.on_menu() {
+            for key in keys {
+                match key {
+                    media::Key::Toggle => self.set_music_paused(!self.music_paused),
+                    media::Key::Play => self.set_music_paused(false),
+                    media::Key::Pause => self.set_music_paused(true),
+                    media::Key::Next => self.music_step(1),
+                    media::Key::Prev => self.music_step(-1),
+                }
+            }
+        }
+        let Some((p, media)) = self.player.as_ref().zip(self.media.as_ref()) else { return };
+        let state = (p.list.now(), !self.music_paused);
+        if self.media_told != Some(state) {
+            if self.media_told.is_none_or(|t| t.0 != state.0) {
+                if let Some(e) = p.list.entry().and_then(|i| self.library.get(i)) {
+                    media.song(e.meta.title.clone(), e.meta.artist.clone());
+                }
+            }
+            media.playing(state.1);
+            self.media_told = Some(state);
+        }
+    }
+
+    fn set_music_paused(&mut self, paused: bool) {
+        self.music_paused = paused;
+        if let Some(a) = &self.audio {
+            a.set_paused(paused);
+        }
+    }
+
+    /// The next or previous song of the list, round from one end to the other.
+    fn music_step(&mut self, by: i32) {
+        self.set_music_paused(false);
+        if let Some(p) = &mut self.player {
+            if by < 0 {
+                p.list.prev();
+            } else if !p.list.next() {
+                self.set_music_paused(true);
+            }
+            return;
+        }
+        let was = self.select.selected();
+        self.select.jump_songs(by, &self.library);
+        if self.select.selected() == was {
+            self.select.jump_songs(-by * self.library.len() as i32, &self.library);
+        }
+    }
+
+    fn music_seek_by(&mut self, ms: f64) {
+        if let Some((at, _)) = self.preview.music_times(self.audio.as_ref(), Instant::now()) {
+            self.preview.seek_music(at + ms, self.audio.as_ref());
+        }
+    }
+
+    /// Moves the music to where the pointer is on the player's timeline.
+    fn music_seek_to_pointer(&mut self) {
+        let (vx, _) = self.mouse_virtual();
+        if let Some((left, w, len)) = self.player.as_ref().map(|p| p.timeline) {
+            let at = ((vx - left) / w).clamp(0.0, 1.0) as f64 * len;
+            self.preview.seek_music(at, self.audio.as_ref());
         }
     }
 
@@ -2963,7 +3161,7 @@ impl State {
     fn draw_update(&mut self, c: &mut Canvas) {
         // What's new, top right in the menus (left of the update badge when there is one).
         let menus = matches!(self.scene, Scene::Select | Scene::Settings { .. } | Scene::MpMenu | Scene::Download);
-        if menus && self.splash.is_none() && self.changelog.is_none() {
+        if menus && self.splash.is_none() && self.changelog.is_none() && self.player.is_none() {
             let badge = match self.updater.status() {
                 update::Status::Available { commit, .. } => Canvas::text_width(7.0, &update_badge(&commit)) + 20.0,
                 update::Status::Downloading => Canvas::text_width(7.0, &updating_badge(1.0)) + 20.0,
@@ -3261,6 +3459,10 @@ impl State {
             // Anywhere else while in a room (its lobby, or song select picking its map).
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
             Scene::MpMenu => (tr!("Multiplayer menu", "マルチのメニュー", "Меню мультиплеера").into(), String::new()),
+            Scene::Select if self.player.is_some() => {
+                let song = self.player.as_ref().and_then(|p| p.list.entry()).and_then(|i| self.library.get(i)).map(Entry::label);
+                (tr!("Listening to music", "音楽を聴いている", "Слушает музыку").into(), song.unwrap_or_default())
+            }
             Scene::Download => (tr!("Looking for new maps", "新しい譜面を探しています", "Ищет новые карты").into(), String::new()),
             Scene::Settings { .. } | Scene::LayoutEdit { .. } => (tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(), String::new()),
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => (tr!("Calibrating", "調整中", "Калибровка").into(), String::new()),
@@ -3715,7 +3917,7 @@ impl State {
             // Song select's search box has the keys: they're letters of the search (there's an
             // artist called -45).
             KeyCode::Minus | KeyCode::Equal | KeyCode::NumpadSubtract | KeyCode::NumpadAdd
-                if matches!(self.scene, Scene::Select) && self.select.searching && !self.modifiers_ctrl =>
+                if self.player.as_ref().is_some_and(|p| p.searching) || (matches!(self.scene, Scene::Select) && self.select.searching && !self.modifiers_ctrl) =>
             {
                 return false
             }
@@ -4173,7 +4375,11 @@ impl State {
             return;
         }
         if self.on_menu() {
-            if !self.main_menu.as_ref().is_some_and(menu::Menu::is_leaving) {
+            if let Some(p) = self.player.as_mut().filter(|p| p.over_list(vx)) {
+                p.wheel(notches);
+            } else if self.player.is_some() {
+                self.music_seek_by(notches as f64 * MUSIC_SEEK_MS);
+            } else if !self.main_menu.as_ref().is_some_and(menu::Menu::is_leaving) {
                 self.menu_step(-notches.signum());
             }
             return;
@@ -4399,6 +4605,17 @@ impl State {
                 };
             }
         }
+        if let Some(drag) = self.player.as_ref().and_then(|p| p.drag) {
+            match drag {
+                player::Drag::Volume => self.music_volume_to_pointer(),
+                player::Drag::Timeline if self.music_seeked.is_none_or(|t| t.elapsed() >= Duration::from_millis(33)) => {
+                    self.music_seeked = Some(Instant::now());
+                    self.music_seek_to_pointer();
+                }
+                player::Drag::Timeline => {}
+            }
+            return CursorIcon::Pointer;
+        }
         if !self.on_menu() && matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
             if let Some((last, at)) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
@@ -4560,6 +4777,11 @@ impl State {
             let (vx, vy) = self.mouse_virtual();
             if let Some(hit) = self.hit_at(vx, vy).filter(|_| pressed) {
                 self.click(hit, window);
+            }
+            if let Some(p) = self.player.as_mut().filter(|_| !pressed) {
+                if p.drag.take() == Some(player::Drag::Volume) {
+                    self.cfg.save();
+                }
             }
             return;
         }
@@ -5645,6 +5867,7 @@ impl State {
     fn takes_text(&self) -> bool {
         self.social.open
             || self.settings_ui.editing.is_some()
+            || self.player.as_ref().is_some_and(|p| p.searching)
             || self.universe_setup.as_ref().is_some_and(|u| u.typing.is_some())
             || (self.mod_select.is_none() && !self.on_menu() && matches!(self.scene, Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby))
     }
@@ -7236,7 +7459,11 @@ impl State {
             return;
         }
         if self.on_menu() {
-            self.menu_key(code);
+            if self.player.is_some() {
+                self.player_key(code, text);
+            } else {
+                self.menu_key(code);
+            }
             return;
         }
         match &mut self.scene {
@@ -7424,6 +7651,8 @@ impl State {
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
             self.preview.autoplay = self.cfg.autoplay;
+            self.preview.player = self.player.is_some();
+            self.preview.pitch = self.player.as_ref().map_or(1.0, |p| p.pitch());
             self.preview.hold = self.dragging_list();
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
@@ -7448,7 +7677,7 @@ impl State {
             self.bg_brightness = match self.scene {
                 _ if !has_bg => 0.0,
                 _ if self.dims_background() => 1.0 - self.cfg.bg_dim,
-                _ if self.on_menu() => 0.5,
+                _ if self.on_menu() => if self.player.is_some() { 0.25 } else { 0.5 },
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
@@ -7589,7 +7818,26 @@ impl State {
             if let Some(m) = &mut self.main_menu {
                 m.cancel_leaving();
             }
+            self.close_player();
+            if self.music_paused {
+                self.set_music_paused(false);
+            }
         }
+        if self.preview.take_finished() {
+            match self.player.as_ref().map(|p| p.list.repeat) {
+                Some(playlist::Repeat::One) => {
+                    self.preview.seek_music(0.0, self.audio.as_ref());
+                }
+                Some(_) => self.music_step(1),
+                None => {}
+            }
+        }
+        if let Some(p) = self.player.as_ref().filter(|p| p.library_len != self.library.len()) {
+            // The library changed under the list: same song on, if it's still there.
+            let entry = p.list.entry();
+            self.player = Some(Box::new(player::Player::new(&self.library, entry)));
+        }
+        self.poll_media();
         if let Some(item) = self.main_menu.as_mut().and_then(menu::Menu::ready) {
             self.menu_open(item);
         }
@@ -7606,12 +7854,31 @@ impl State {
             Scene::Select if on_menu => {
                 self.board_rect = None;
                 self.leaderboard.clear();
-                let song = self.select.selected().and_then(|i| self.library.get(i)).map(Entry::label);
+                let shown = self.player.as_ref().and_then(|p| p.list.entry()).or(self.select.selected());
+                let song = shown.and_then(|i| self.library.get(i)).map(Entry::label);
                 let k = |i: usize| config::key_name(self.cfg.keys[i]);
                 let (a, b, d, e) = (k(0), k(3), k(1), k(2));
                 let hint = tr!("{a} {b} move   {d} {e} choose", "{a} {b} 移動   {d} {e} 決定", "{a} {b} листать   {d} {e} выбрать";);
-                let frame = menu::Frame { beat: self.preview.beat(), song: song.as_deref(), hint: &hint, maps: self.library.len() };
-                if let Some(m) = &mut self.main_menu {
+                let paused = self.music_paused;
+                if let Some(p) = &mut self.player {
+                    let now = Instant::now();
+                    let engine = self.audio.as_ref();
+                    let sounding = !paused && self.preview.sounding(engine, now, &mut p.samples);
+                    let hint = tr!("{a} {b} song   {d} {e} pause   arrows seek", "{a} {b} 曲   {d} {e} ポーズ   矢印 シーク", "{a} {b} трек   {d} {e} пауза   стрелки мотают";);
+                    let volume = self.cfg.music_volume;
+                    let frame = player::Frame {
+                        song: song.as_deref().unwrap_or_default(),
+                        hint: &hint,
+                        paused,
+                        times: self.preview.music_times(engine, now),
+                        pictured: self.preview.has_background,
+                        sounding,
+                        rate: engine.map_or(48_000, |a| a.rate),
+                        volume,
+                    };
+                    p.draw(canvas, &frame);
+                } else if let Some(m) = &mut self.main_menu {
+                    let frame = menu::Frame { beat: self.preview.beat(), song: song.as_deref(), hint: &hint, maps: self.library.len(), paused };
                     m.draw(canvas, &frame);
                 }
             }
@@ -8351,7 +8618,7 @@ impl State {
                     sh.fill[3] *= 1.0 - p;
                     sh.border[3] *= 1.0 - p;
                 }
-            } else if logged_in && !self.in_song() {
+            } else if logged_in && !self.in_song() && self.player.is_none() {
                 social::draw_chip(canvas, &self.social, lobby_unread);
             }
             social::draw_notes(canvas, &self.social);
@@ -9026,6 +9293,47 @@ impl State {
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),
+            Hit::Music(control) => self.music_control(control),
+            Hit::MusicBar => {
+                if let Some(p) = &mut self.player {
+                    p.drag = Some(player::Drag::Timeline);
+                }
+                self.music_seek_to_pointer();
+            }
+            Hit::PlayerVolume => {
+                if let Some(p) = &mut self.player {
+                    p.drag = Some(player::Drag::Volume);
+                }
+                self.music_volume_to_pointer();
+            }
+            Hit::PlayerSearch => {
+                if let Some(p) = &mut self.player {
+                    p.searching = true;
+                }
+            }
+            Hit::PlayerRow(track) => self.music_play(track),
+            Hit::PlayerQueue(track) => {
+                if let Some(p) = &mut self.player {
+                    p.list.queue.push_back(track);
+                    let n = p.list.queue.len();
+                    self.toast(tr!("queued: {n}", "キュー: {n}", "в очереди: {n}";));
+                }
+            }
+            Hit::PlayerUnqueue(row) => {
+                if let Some(p) = &mut self.player {
+                    p.list.queue.remove(row);
+                }
+            }
+            Hit::PlayerSpeed(i) => {
+                if let Some(p) = &mut self.player {
+                    p.toggle_speed(player::Speed::ALL[i]);
+                }
+            }
+            Hit::PlayerPitch => {
+                if let Some(p) = &mut self.player {
+                    p.semitones = 0;
+                }
+            }
             Hit::Presets => self.open_dropdown(),
             Hit::Update => self.update_now(),
             Hit::ScoreRow(k) => {
@@ -9448,6 +9756,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             .map(to_fraction);
         let mut clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clip.into_iter().map(|(range, a)| (range, [a.x, a.y, a.w, a.h])).collect();
         clips.extend(canvas.clips.drain(..).map(|(range, r)| (range, to_fraction(r))));
+        renderer.disc = canvas.disc.map(|d| (d, vw));
         let t1 = timing.then(Instant::now);
         let shot = renderer.submit(frame, &canvas.shapes, backdrop, capture.is_some(), clips, opaque);
         if let (Some(t0), Some(t1)) = (t0, t1) {
@@ -9777,6 +10086,13 @@ impl ApplicationHandler<UserEvent> for App {
             None => attrs.with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0)),
         };
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
+        #[cfg(windows)]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(RawWindowHandle::Win32(h)) = window.window_handle().map(|h| h.as_raw()) {
+                lock(&self.state).window_handle = Some(h.hwnd.get() as usize);
+            }
+        }
         #[cfg(target_os = "linux")]
         {
             use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
@@ -9958,6 +10274,12 @@ impl State {
             volume_shown: None,
             splash,
             main_menu: None,
+            music_seeked: None,
+            player: None,
+            music_paused: false,
+            media: None,
+            media_told: None,
+            window_handle: None,
             updater,
             volume_since: None,
             hits: Vec::new(),

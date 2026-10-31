@@ -71,6 +71,38 @@ fn the_main_menu_sits_over_song_select_and_esc_comes_back_to_it() {
 }
 
 #[test]
+fn the_player_opens_from_the_menu_and_closes_with_it() {
+    let key = |s: &mut State, code| s.key_inner(code, false, None, Instant::now(), None);
+    let mut s = layout_tests::state();
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    s.music_control(player::Control::Open);
+    assert!(s.player.is_some());
+    s.player.as_mut().unwrap().move_pitch(3);
+    assert!((s.player.as_ref().unwrap().pitch() - 2f64.powf(0.25)).abs() < 1e-9);
+    key(&mut s, KeyCode::BracketLeft);
+    assert_eq!(s.player.as_ref().unwrap().semitones, 2, "[ takes the pitch down");
+    s.player.as_mut().unwrap().toggle_speed(player::Speed::Nightcore);
+    assert_eq!(s.preview_rate(), (1.5, false), "the player's own speed, not the game's");
+    assert_eq!(s.cfg.rate, 1.0);
+    s.player.as_mut().unwrap().toggle_speed(player::Speed::Nightcore);
+    key(&mut s, KeyCode::Space);
+    assert!(s.music_paused, "Space pauses in the player");
+    key(&mut s, KeyCode::KeyF);
+    assert!(!s.music_paused, "so does a don key");
+    key(&mut s, KeyCode::Escape);
+    assert!(s.player.is_none() && s.on_menu(), "Esc goes back to the menu");
+    assert!(!s.quit_asked);
+
+    // Leaving the menu closes it and the music carries on.
+    s.music_control(player::Control::Open);
+    s.set_music_paused(true);
+    s.scene = Scene::Download;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(s.player.is_none() && !s.music_paused);
+}
+
+#[test]
 fn typed_numbers_take_units_and_commas() {
     assert_eq!(parse_number("1.25x"), Some(1.25));
     assert_eq!(parse_number(" -12 ms"), Some(-12.0));

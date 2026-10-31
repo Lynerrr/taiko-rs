@@ -179,6 +179,23 @@ fn assert_every_screen_fits() {
         s.scene = Scene::Select;
         check(&mut s, &format!("main menu, {item:?}"), &mut out);
     }
+    for paused in [false, true] {
+        s.main_menu = Some(menu::Menu::new());
+        s.scene = Scene::Select;
+        s.music_control(player::Control::Open);
+        s.music_paused = paused;
+        if paused {
+            // Everything long at once: a search, a full queue, the longest labels.
+            let p = s.player.as_mut().unwrap();
+            p.list.queue.extend((0..30).map(|i| i % p.list.tracks.len().max(1)).filter(|_| !p.list.tracks.is_empty()));
+            p.semitones = -12;
+            p.speed = Some(player::Speed::Nightcore);
+            p.search("camellia".into());
+        }
+        check(&mut s, &format!("music player, paused {paused}"), &mut out);
+    }
+    s.player = None;
+    s.music_paused = false;
     s.main_menu = None;
     s.scene = Scene::Select;
     s.select.collection = Some(0);
