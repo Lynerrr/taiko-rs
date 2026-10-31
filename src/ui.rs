@@ -326,6 +326,15 @@ impl Select {
         s
     }
 
+    /// Lists converts too if the settings say so (`Select::new` only does for a list without
+    /// any taiko maps).
+    pub fn keep_converts(&mut self, library: &[Entry], on: bool) {
+        if on && !self.show_converts {
+            self.show_converts = true;
+            self.refilter(library);
+        }
+    }
+
     pub fn refilter(&mut self, library: &[Entry]) {
         if self.pinned_view != self.view() {
             self.pinned.clear();
