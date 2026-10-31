@@ -150,6 +150,7 @@ impl Replay {
             rate: self.rate,
             mods: crate::mods::Mods::from_list(&self.mods),
             scroll_speed: self.scroll_speed,
+            seed: self.seed,
         }
     }
 }

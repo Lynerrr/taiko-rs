@@ -1247,7 +1247,14 @@ pub fn speed_for(map: &Beatmap, mods: Mods, rate: f64) -> Speed {
     Speed::for_play(mods, rate.clamp(0.25, 4.0), first, end)
 }
 
+/// Whether Random makes the note at `time` a don.
+pub(crate) fn random_don(time: f64, seed: u64) -> bool {
+    let salt = if seed == 0 { 0.0 } else { ((seed % 1_000_003) as f64 + 1.0) * 1.618 };
+    hash01(time + 0.5 + salt) < 0.5
+}
+
 /// Changes the notes themselves for the mods that do (before anything is judged).
+/// `stars::load_played` does the same to the map pp and star ratings are worked out on.
 fn apply_to_map(map: &mut Beatmap, mods: Mods, seed: u64) {
     let hit = |n: &beatmap::Note| matches!(n.kind, Kind::Don | Kind::Kat);
     if mods.has(Mod::Half) {
@@ -1266,8 +1273,7 @@ fn apply_to_map(map: &mut Beatmap, mods: Mods, seed: u64) {
         }
         if mods.has(Mod::Random) {
             // Seed 0: the colouring every play of the map had before seeds (old replays).
-            let salt = if seed == 0 { 0.0 } else { ((seed % 1_000_003) as f64 + 1.0) * 1.618 };
-            n.kind = if hash01(n.time + 0.5 + salt) < 0.5 { Kind::Don } else { Kind::Kat };
+            n.kind = if random_don(n.time, seed) { Kind::Don } else { Kind::Kat };
         }
         if mods.has(Mod::NoFinishers) {
             n.big = false;
