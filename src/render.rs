@@ -1571,9 +1571,16 @@ fn font_px(size: f32) -> f32 {
 }
 
 /// `v` moved onto the text grid (unchanged without one).
-fn snap_to_grid(v: f32) -> f32 {
+pub fn snap_to_grid(v: f32) -> f32 {
     let grid = TEXT_GRID.with(std::cell::Cell::get);
     if grid > 0.0 { (v * grid).round() / grid } else { v }
+}
+
+/// `want` (virtual units) as a whole number of screen pixels, so pixel art stays square and
+/// even at any window size (unchanged without a grid).
+pub fn pixel_size(want: f32) -> f32 {
+    let grid = TEXT_GRID.with(std::cell::Cell::get);
+    if grid > 0.0 { (want * grid).round().max(1.0) / grid } else { want }
 }
 
 static ANIMATIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -1626,6 +1633,8 @@ pub enum Hit {
     Key(winit::keyboard::KeyCode),
     /// Top bar tab: 0 songs, 1 settings, 2 multiplayer.
     Tab(usize),
+    /// A note of the main menu (index into `menu::ITEMS`).
+    MenuItem(usize),
     /// A row of the song list (index into its visible list): a difficulty, or a song's own row
     /// (pointing at its first difficulty).
     SongRow(usize),

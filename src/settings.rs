@@ -72,6 +72,7 @@ pub enum Item {
     ShowFps,
     Animations,
     Splash,
+    MainMenu,
     CheckUpdates,
     UpdateChannel,
     Update,
@@ -92,7 +93,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 109] = [
+pub const ITEMS: [(&str, Item); 110] = [
     ("GENERAL", Item::Language),
     ("GENERAL", Item::SongsFolder),
     ("GENERAL", Item::ShowConverts),
@@ -181,6 +182,7 @@ pub const ITEMS: [(&str, Item); 109] = [
     ("VIDEO", Item::Animations),
     ("VIDEO", Item::DiscordPresence),
     ("VIDEO", Item::Splash),
+    ("VIDEO", Item::MainMenu),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinParts),
     ("SKIN", Item::SkinFolder),
@@ -345,6 +347,7 @@ impl Item {
             Item::ShowFps => tr!("FPS overlay", "FPSの表示", "Счётчик FPS"),
             Item::Animations => tr!("UI animations", "UIのアニメーション", "Анимации интерфейса"),
             Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
+            Item::MainMenu => tr!("Main menu", "メインメニュー", "Главное меню"),
             Item::UpdateChannel => tr!("Build channel", "ビルドのチャンネル", "Канал сборок"),
             Item::Update => tr!("Update", "アップデート", "Обновление"),
             Item::Changelog => tr!("What's new", "更新内容", "Что нового"),
@@ -425,6 +428,7 @@ impl Item {
             | Item::ShowFps
             | Item::Animations
             | Item::Splash
+            | Item::MainMenu
             | Item::CheckUpdates
             | Item::Fullscreen
             | Item::DiscordPresence => Kind::Toggle,
@@ -690,6 +694,11 @@ impl Item {
                 "The animated intro when taiko.rs starts (any key or click skips it).",
                 "taiko.rs起動時のアニメーション (キーかクリックで飛ばせます)。",
                 "Анимация при запуске taiko.rs (любая клавиша или клик пропускает)."
+            ),
+            Item::MainMenu => tr!(
+                "Starts on the main menu, and Esc in song select goes back to it. Off: straight to song select, and Esc there asks to quit.",
+                "メインメニューから始まり、選曲画面のEscでそこに戻ります。オフ: すぐに選曲画面になり、そこでEscを押すと終了を確認します。",
+                "Игра открывается с главного меню, Esc в выборе песни возвращает в него. Выкл.: сразу выбор песни, а Esc там спрашивает о выходе."
             ),
             Item::VisualOffset => tr!(
                 "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
@@ -1363,12 +1372,8 @@ fn split_help(text: &str, size: f32, max_w: f32) -> (String, String) {
     (text[..cut].to_string(), Canvas::fit(size, max_w, text[cut..].trim_start()))
 }
 
-/// Top bar shared by the song list, settings and multiplayer: logo plus the three tabs.
-pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
-    thread_local! {
-        /// Where the active tab's highlight is (x, width), so it slides between tabs.
-        static PILL: Cell<(f32, f32)> = const { Cell::new((f32::NAN, 0.0)) };
-    }
+/// The logo and the name, top left; returns where they end.
+pub fn brand(c: &mut Canvas) -> f32 {
     crate::logo::draw(c, 22.0, 18.0, 26.0);
     // The name like the wordmark: letters alternating white and red, "-rs" red.
     let mut tx = 54.0;
@@ -1382,7 +1387,16 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
         };
         tx += c.text(tx, 24.0, 16.0, rgba(col, 1.0), &s);
     }
-    let x0 = tx + 24.0;
+    tx
+}
+
+/// Top bar shared by the song list, settings and multiplayer: logo plus the three tabs.
+pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
+    thread_local! {
+        /// Where the active tab's highlight is (x, width), so it slides between tabs.
+        static PILL: Cell<(f32, f32)> = const { Cell::new((f32::NAN, 0.0)) };
+    }
+    let x0 = brand(c) + 24.0;
     let names = [
         tr!("SONGS", "曲", "ПЕСНИ"),
         tr!("SETTINGS", "設定", "НАСТРОЙКИ"),

@@ -224,6 +224,8 @@ pub struct Config {
     pub animations: bool,
     /// The animated splash screen at startup.
     pub splash: bool,
+    /// Start on the main menu (off: straight to song select).
+    pub main_menu: bool,
     /// Look for a newer build at startup.
     pub check_updates: bool,
     /// Start in (borderless) fullscreen; F11 toggles and remembers it.
@@ -327,6 +329,7 @@ impl Default for Config {
             data_folder: None,
             animations: true,
             splash: true,
+            main_menu: true,
             check_updates: true,
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
@@ -655,6 +658,7 @@ impl Config {
                 "data_folder" => cfg.data_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
                 "animations" => cfg.animations = v != "false",
                 "splash" => cfg.splash = v != "false",
+                "main_menu" => cfg.main_menu = v != "false",
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
@@ -804,6 +808,7 @@ impl Config {
              fullscreen = {}\n\
              animations = {}\n\
              splash = {}\n\
+             main_menu = {}\n\
              check_updates = {}\n\
              # countdown before play continues after pausing (ms)\n\
              resume_delay_ms = {:.0}\n\
@@ -848,6 +853,7 @@ impl Config {
             self.fullscreen,
             self.animations,
             self.splash,
+            self.main_menu,
             self.check_updates,
             self.resume_delay_ms,
             self.sort,

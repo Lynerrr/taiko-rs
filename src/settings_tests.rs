@@ -7,6 +7,70 @@ use super::*;
 static FOLDERS: Mutex<()> = Mutex::new(());
 
 #[test]
+fn ctrl_o_opens_settings_from_anywhere_and_closes_them() {
+    let press = |s: &mut State| {
+        s.modifiers_ctrl = true;
+        s.key_inner(KeyCode::KeyO, false, None, Instant::now(), None);
+        s.modifiers_ctrl = false;
+    };
+    let mut s = layout_tests::state();
+    for scene in [Scene::Select, Scene::Download, Scene::MpMenu] {
+        s.scene = scene;
+        press(&mut s);
+        assert!(matches!(s.scene, Scene::Settings { .. }));
+        press(&mut s);
+        assert!(!matches!(s.scene, Scene::Settings { .. }));
+    }
+    // Over the main menu too, and back to it.
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    press(&mut s);
+    assert!(!s.on_menu() && matches!(s.scene, Scene::Settings { .. }));
+    press(&mut s);
+    assert!(s.on_menu());
+    // Typing a value, it's only a key.
+    s.main_menu = None;
+    press(&mut s);
+    s.settings_ui.editing = Some(settings::Edit::new(Item::Offset, "12".into()));
+    press(&mut s);
+    assert!(matches!(s.scene, Scene::Settings { .. }));
+    assert_eq!(keys::Hotkey::OpenSettings.default().name(), "Ctrl+O");
+}
+
+#[test]
+fn the_main_menu_sits_over_song_select_and_esc_comes_back_to_it() {
+    let esc = |s: &mut State| s.key_inner(KeyCode::Escape, false, None, Instant::now(), None);
+    let mut s = layout_tests::state();
+    esc(&mut s);
+    assert!(s.on_menu(), "Esc in song select");
+    assert!(!s.takes_text(), "drum keys aren't a search");
+    esc(&mut s);
+    assert!(s.quit_asked, "Esc in the menu asks to quit");
+    s.quit_asked = false;
+    s.cfg.main_menu = false;
+    s.main_menu = None;
+    esc(&mut s);
+    assert!(s.quit_asked && !s.on_menu(), "menu switched off: as before");
+    s.quit_asked = false;
+    s.cfg.main_menu = true;
+
+    // Download opens and comes back to it; the SONGS tab leaves it for the songs.
+    s.main_menu = Some(menu::Menu::new());
+    s.menu_open(menu::Item::Download);
+    assert!(matches!(s.scene, Scene::Download));
+    s.scene = Scene::Select;
+    assert!(s.on_menu());
+    s.scene = Scene::Download;
+    s.goto_tab(0);
+    assert!(matches!(s.scene, Scene::Select) && !s.on_menu());
+
+    // Picking a lobby map shows the songs, not the menu.
+    s.main_menu = Some(menu::Menu::new());
+    s.picking_lobby_map = true;
+    assert!(!s.on_menu());
+}
+
+#[test]
 fn typed_numbers_take_units_and_commas() {
     assert_eq!(parse_number("1.25x"), Some(1.25));
     assert_eq!(parse_number(" -12 ms"), Some(-12.0));

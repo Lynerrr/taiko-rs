@@ -36,6 +36,7 @@ mod link;
 mod logo;
 mod mapguessr;
 mod mapinfo;
+mod menu;
 mod hud;
 mod keys;
 mod mods;
@@ -254,6 +255,8 @@ struct State {
     volume_shown: Option<Instant>,
     /// The startup splash while it plays.
     splash: Option<splash::Splash>,
+    /// The main menu, up over song select (`on_menu`).
+    main_menu: Option<menu::Menu>,
     updater: update::Updater,
     /// When the overlay appeared (it slides in once, not on every notch).
     volume_since: Option<Instant>,
@@ -1657,6 +1660,7 @@ impl State {
 
     /// Opens what a `taiko-rs://` link asks for: a score's results, its replay ready to watch.
     fn open_link(&mut self, link: link::Link) {
+        self.main_menu = None;
         match link {
             link::Link::Score(id) => {
                 let server = self.cfg.online_server.clone();
@@ -1977,6 +1981,96 @@ impl State {
         self.settings_ui.krokodil = self.is_krokodil();
     }
 
+    /// Ctrl+O: settings over whatever is on (a solo song pauses first), or back out of them.
+    /// Scenes that have to keep running (a match, spectating, loading) say so instead.
+    fn settings_anywhere(&mut self) {
+        if matches!(self.scene, Scene::Settings { .. }) {
+            self.settings_ui.dropdown = None;
+            self.settings_ui.choices = None;
+            self.close_settings();
+            return;
+        }
+        match &mut self.scene {
+            Scene::Play { game, .. } => game.pause(self.audio.as_ref()),
+            Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby | Scene::Results { .. } | Scene::Preview { .. } => {}
+            _ => {
+                self.toast(tr!("settings can't open here", "ここでは設定を開けません", "здесь настройки не открыть").into());
+                return;
+            }
+        }
+        self.changelog = None;
+        self.profile = None;
+        self.social.close();
+        self.mod_select = None;
+        self.open_settings();
+    }
+
+    /// The main menu is what's showing.
+    fn on_menu(&self) -> bool {
+        self.main_menu.is_some() && matches!(self.scene, Scene::Select) && self.mp.is_none() && !self.picking_lobby_map
+    }
+
+    fn menu_key(&mut self, code: KeyCode) {
+        if self.modifiers_ctrl || self.main_menu.as_ref().is_none_or(menu::Menu::is_leaving) {
+            return;
+        }
+        // Rim keys on the outside, like on the drum.
+        match (code, self.cfg.keys.iter().position(|&k| k == code)) {
+            (KeyCode::Escape, _) => self.ask_quit(),
+            (KeyCode::ArrowLeft, _) | (_, Some(0)) => self.menu_step(-1),
+            (KeyCode::ArrowRight, _) | (_, Some(3)) => self.menu_step(1),
+            (KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space, _) | (_, Some(1 | 2)) => self.menu_hit(),
+            _ => {}
+        }
+    }
+
+    fn menu_step(&mut self, by: i32) {
+        if let Some(m) = &mut self.main_menu {
+            m.step(by);
+            self.sfx(audio::Sfx::Kat);
+        }
+    }
+
+    /// A note clicked: the one in the circle is hit, any other rides up to it.
+    fn menu_click(&mut self, i: usize) {
+        let Some(m) = self.main_menu.as_mut().filter(|m| !m.is_leaving()) else { return };
+        if m.is_selected(i) {
+            self.menu_hit();
+        } else {
+            m.pick(i);
+            self.sfx(audio::Sfx::Kat);
+        }
+    }
+
+    fn menu_hit(&mut self) {
+        let Some(m) = &mut self.main_menu else { return };
+        let sound = match m.hit() {
+            menu::Item::Editor => audio::Sfx::ComboBreak,
+            menu::Item::Play => audio::Sfx::BigDon,
+            _ => audio::Sfx::Don,
+        };
+        self.sfx(sound);
+    }
+
+    fn sfx(&self, sound: audio::Sfx) {
+        if let Some(a) = &self.audio {
+            a.sfx(sound);
+        }
+    }
+
+    /// Opens the screen of the note that was hit. Coming back from those lands here again,
+    /// except from the songs, which is what the menu is for leaving to.
+    fn menu_open(&mut self, item: menu::Item) {
+        match item {
+            menu::Item::Play => self.main_menu = None,
+            menu::Item::Multiplayer => self.open_multiplayer(),
+            menu::Item::Download => self.open_download(),
+            menu::Item::Editor => {}
+            menu::Item::Settings => self.open_settings(),
+            menu::Item::Exit => self.ask_quit(),
+        }
+    }
+
     /// Logged in as krokodil_koban (their settings row shows).
     fn is_krokodil(&self) -> bool {
         self.mp_menu.account.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("krokodil_koban"))
@@ -2085,6 +2179,7 @@ impl State {
             Item::ShowFps => on(c.show_fps),
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
+            Item::MainMenu => on(c.main_menu),
             Item::CheckUpdates => on(c.check_updates),
             Item::Update => {
                 let build = update::BUILD.map(update::short);
@@ -2273,6 +2368,7 @@ impl State {
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Splash => self.cfg.splash = !self.cfg.splash,
+            Item::MainMenu => self.cfg.main_menu = !self.cfg.main_menu,
             Item::CheckUpdates => self.cfg.check_updates = !self.cfg.check_updates,
             // Acts on Enter in `settings_key`.
             Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout => return,
@@ -4076,6 +4172,12 @@ impl State {
             results.scroll(notches < 0);
             return;
         }
+        if self.on_menu() {
+            if !self.main_menu.as_ref().is_some_and(menu::Menu::is_leaving) {
+                self.menu_step(-notches.signum());
+            }
+            return;
+        }
         let on_board = self.board_rect.is_some_and(|[bx, by, bw, bh]| vx >= bx && vx <= bx + bw && vy >= by && vy <= by + bh);
         if matches!(self.scene, Scene::Select) && on_board && self.select.picker.is_none() {
             self.board_scroll = (self.board_scroll as i64 - notches as i64).clamp(0, self.board_max as i64) as usize;
@@ -4297,7 +4399,7 @@ impl State {
                 };
             }
         }
-        if matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
+        if !self.on_menu() && matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
             if let Some((last, at)) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
                 if last.elapsed() >= Duration::from_millis(33) {
@@ -4343,6 +4445,9 @@ impl State {
                     self.toggle_favourite(mods::ALL[i]);
                 }
             }
+            return;
+        }
+        if self.on_menu() {
             return;
         }
         let free = self.splash.is_none() && self.select.picker.is_none() && self.settings_ui.dropdown.is_none();
@@ -4450,6 +4555,13 @@ impl State {
                     return;
                 }
             }
+        }
+        if self.on_menu() {
+            let (vx, vy) = self.mouse_virtual();
+            if let Some(hit) = self.hit_at(vx, vy).filter(|_| pressed) {
+                self.click(hit, window);
+            }
+            return;
         }
         if matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
             let (vx, vy) = self.mouse_virtual();
@@ -5534,7 +5646,7 @@ impl State {
         self.social.open
             || self.settings_ui.editing.is_some()
             || self.universe_setup.as_ref().is_some_and(|u| u.typing.is_some())
-            || (self.mod_select.is_none() && matches!(self.scene, Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby))
+            || (self.mod_select.is_none() && !self.on_menu() && matches!(self.scene, Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby))
     }
 
     /// Android: something is being typed that took the keys by itself (not a field that was
@@ -5675,6 +5787,7 @@ impl State {
 
     /// A map set named in the chat, clicked: picked in song select when we have it, else downloaded.
     fn open_chat_map(&mut self, set: u32) {
+        self.main_menu = None;
         let have = self.library.iter().position(|e| e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)) == Some(set));
         match have {
             Some(i) if matches!(self.scene, Scene::Select) => {
@@ -6857,6 +6970,7 @@ impl State {
             return None;
         }
         Some(match &self.scene {
+            Scene::Select if self.on_menu() => keys::Place::Other,
             Scene::Select if self.select.picker.is_none() && self.select.menu.is_none() => keys::Place::Select,
             Scene::Play { game, .. } if game.paused.is_some() => keys::Place::Paused,
             Scene::Play { .. } => keys::Place::Play,
@@ -6883,6 +6997,14 @@ impl State {
             // Any key skips the splash and does nothing else.
             if !repeat {
                 s.skip(at, self.audio.as_ref(), &format!("key {code:?}"));
+            }
+            return;
+        }
+        // Being typed or bound, Ctrl+O is just a key.
+        let free = self.settings_ui.binding.is_none() && self.settings_ui.editing.is_none();
+        if free && code == KeyCode::KeyO && self.modifiers_ctrl && !self.modifiers_shift && !self.modifiers_alt {
+            if !repeat {
+                self.settings_anywhere();
             }
             return;
         }
@@ -7113,6 +7235,10 @@ impl State {
         if self.handle_global_key(code, window) {
             return;
         }
+        if self.on_menu() {
+            self.menu_key(code);
+            return;
+        }
         match &mut self.scene {
             Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyF => self.select.searching = true,
             // In the search box the keys that have a job here otherwise (speed's [ and ]) type.
@@ -7166,6 +7292,7 @@ impl State {
                 SelectAction::Play(i) => self.start_loading(i),
                 SelectAction::Settings => self.open_settings(),
                 SelectAction::Mods => self.open_mod_select(),
+                SelectAction::Quit if self.cfg.main_menu => self.main_menu = Some(menu::Menu::new()),
                 SelectAction::Quit => self.ask_quit(),
                 SelectAction::None => {
                     if let Some(text) = text {
@@ -7291,7 +7418,7 @@ impl State {
             let in_select = matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download);
             let in_menu = in_select
                 || matches!(&self.scene, Scene::Results { results, .. } if results.opened.is_some() && results.music.is_none())
-                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby))
+                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::Preview { .. }))
                 || matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::Download);
             let (entries, selected) = if browsing { (&self.browse.remote, self.browse.shown) } else { (&self.library, self.preview_target()) };
             let rate = self.preview_rate();
@@ -7321,6 +7448,7 @@ impl State {
             self.bg_brightness = match self.scene {
                 _ if !has_bg => 0.0,
                 _ if self.dims_background() => 1.0 - self.cfg.bg_dim,
+                _ if self.on_menu() => 0.5,
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
@@ -7453,6 +7581,19 @@ impl State {
         if !matches!(self.scene, Scene::Select | Scene::Lobby) {
             self.mod_select = None;
         }
+        // A song or a replay opened by any road leaves the menu behind.
+        if matches!(self.scene, Scene::Loading { .. } | Scene::Play { .. } | Scene::Results { .. } | Scene::Preview { .. } | Scene::Watch(_) | Scene::VideoEdit(_)) {
+            self.main_menu = None;
+        }
+        if !self.on_menu() {
+            if let Some(m) = &mut self.main_menu {
+                m.cancel_leaving();
+            }
+        }
+        if let Some(item) = self.main_menu.as_mut().and_then(menu::Menu::ready) {
+            self.menu_open(item);
+        }
+        let on_menu = self.on_menu();
         if !matches!(self.scene, Scene::Select) {
             self.select.menu = None;
             self.list_drag = None;
@@ -7462,6 +7603,18 @@ impl State {
         // last frame's bar like real input does).
         self.replay_bar = None;
         match &mut self.scene {
+            Scene::Select if on_menu => {
+                self.board_rect = None;
+                self.leaderboard.clear();
+                let song = self.select.selected().and_then(|i| self.library.get(i)).map(Entry::label);
+                let k = |i: usize| config::key_name(self.cfg.keys[i]);
+                let (a, b, d, e) = (k(0), k(3), k(1), k(2));
+                let hint = tr!("{a} {b} move   {d} {e} choose", "{a} {b} 移動   {d} {e} 決定", "{a} {b} листать   {d} {e} выбрать";);
+                let frame = menu::Frame { beat: self.preview.beat(), song: song.as_deref(), hint: &hint, maps: self.library.len() };
+                if let Some(m) = &mut self.main_menu {
+                    m.draw(canvas, &frame);
+                }
+            }
             Scene::Select => {
                 // DT / HT show on the Mods button instead.
                 self.select.rate_label = if (self.cfg.rate - 1.0).abs() > 1e-6 && self.cfg.mods.rate_override().is_none() {
@@ -8822,6 +8975,12 @@ impl State {
         self.hits.iter().rev().find(|h| h.contains(x, y)).map(|h| h.hit)
     }
 
+    /// The SONGS tab: the songs themselves, not the menu over them.
+    fn to_songs(&mut self) {
+        self.main_menu = None;
+        self.scene = Scene::Select;
+    }
+
     /// Switches between the top bar's tabs (songs, settings, multiplayer) from the screens that
     /// show it.
     fn goto_tab(&mut self, tab: usize) {
@@ -8834,20 +8993,20 @@ impl State {
             }
             (Scene::Settings { .. }, 0) if settings_from_menu => {
                 self.close_settings();
-                self.scene = Scene::Select;
+                self.to_songs();
             }
             (Scene::Settings { .. }, 2) if settings_from_menu => {
                 self.close_settings();
                 self.open_multiplayer();
             }
-            (Scene::MpMenu | Scene::Lobby, 0) => self.scene = Scene::Select,
+            (Scene::MpMenu | Scene::Lobby, 0) => self.to_songs(),
             (Scene::MpMenu | Scene::Lobby, 1) => self.open_settings(),
             (Scene::Select | Scene::MpMenu | Scene::Lobby, 3) => self.open_download(),
             (Scene::Settings { .. }, 3) if settings_from_menu => {
                 self.close_settings();
                 self.open_download();
             }
-            (Scene::Download, 0) => self.scene = Scene::Select,
+            (Scene::Download, 0) => self.to_songs(),
             (Scene::Download, 1) => self.open_settings(),
             (Scene::Download, 2) => self.open_multiplayer(),
             _ => {}
@@ -8866,6 +9025,7 @@ impl State {
         match hit {
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
+            Hit::MenuItem(i) => self.menu_click(i),
             Hit::Presets => self.open_dropdown(),
             Hit::Update => self.update_now(),
             Hit::ScoreRow(k) => {
@@ -9797,6 +9957,7 @@ impl State {
             modifiers_alt: false,
             volume_shown: None,
             splash,
+            main_menu: None,
             updater,
             volume_since: None,
             hits: Vec::new(),
@@ -10115,7 +10276,9 @@ fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, link: Option<link::Link>, ev
     let want_splash = std::env::var_os("TAIKO_SPLASH").is_some() || (cfg.splash && !play_when_scanned && !scripted);
     let splash = if want_splash { splash::Splash::new(audio.as_ref().map(|a| a.rate)) } else { None };
     update::cleanup();
+    let main_menu = cfg.main_menu && !play_when_scanned && !scripted;
     let mut state = State::new(cfg, audio, splash, songs_dir, songs_dirs_for_db, Some(scan), play_when_scanned, auto);
+    state.main_menu = main_menu.then(menu::Menu::new);
     state.load_skin();
     if let Some(l) = link {
         state.open_link(l);
