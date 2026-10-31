@@ -765,9 +765,12 @@ fn top_player(r: &Ranked) -> String {
     )
 }
 
+/// How many of the rankings the home page lists.
+const TOP_PLAYERS: usize = 20;
+
 pub fn home(rankings: &[Ranked], maps: &[MapRow], players: usize, plays: usize, os: Os, live: Live) -> String {
     let bg = maps.iter().find_map(|m| cover(m.set_id, "cover@2x")).map(|u| format!(" style=\"--cover:url('{u}')\"")).unwrap_or_default();
-    let top: String = rankings.iter().take(8).map(top_player).collect();
+    let top: String = rankings.iter().take(TOP_PLAYERS).map(top_player).collect();
     let top = if top.is_empty() { "<p class=dim>Nobody has sent a play yet.</p>".into() } else { format!("<ol class=board-list>{top}</ol>") };
     let latest: String = live.latest.iter().take(8).map(feed_row).collect();
     let latest = if latest.is_empty() { "<p class=dim>No plays yet.</p>".into() } else { format!("<ul class=feed>{latest}</ul>") };
