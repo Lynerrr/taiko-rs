@@ -75,8 +75,13 @@ opt-level = 3
 # cpal 0.18.2 with one fix: on Windows (WASAPI) it counted the stream latency twice when
 # reporting when audio is heard, making the game clock lag the sound. See vendor/cpal/src/host/
 # wasapi/stream.rs (`output_timestamp`).
+#
+# symphonia-bundle-mp3 0.6.1 with one fix: it only took the encoder delay from an MP3's tag for
+# encoders it knows by name, where BASS takes it from any. See vendor/symphonia-bundle-mp3/src/
+# demuxer.rs (`enc_delay`).
 [patch.crates-io]
 cpal = { path = "vendor/cpal" }
+symphonia-bundle-mp3 = { path = "vendor/symphonia-bundle-mp3" }
 
 # The Windows exe's icon (build.rs).
 [build-dependencies]
