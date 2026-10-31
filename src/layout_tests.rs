@@ -881,7 +881,7 @@ fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
     // The open one closes too, with the selection in it, and opens again.
     s.select.click_section(0);
     assert!(s.select.open_sections().is_empty());
-    check_draw("sections closed", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None));
+    check_draw("sections closed", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None, &|_| Some("SS")));
     s.select.click_section(0);
     assert_eq!(s.select.open_sections(), vec![0]);
     // The wheel and right-click scrolling stay in the open heading, however far they go.
@@ -909,7 +909,7 @@ fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
     let open = s.select.open_sections();
     assert!(open.len() == 1 && open[0] == 0, "scrolling back up left the other heading and closed it: {open:?}");
     // It all draws.
-    check_draw("sections", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None));
+    check_draw("sections", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None, &|_| Some("SS")));
 }
 
 #[test]
@@ -1012,4 +1012,14 @@ fn spectators_are_the_friends_watching_us() {
     s.me = Some("me".into());
     s.connected = true;
     assert_eq!(s.spectators(), ["Ann"]);
+}
+
+#[test]
+fn a_map_shows_the_best_letter_of_its_plays() {
+    let row = |map_hash, accuracy, miss| scores::ScoreRow { map_hash, date: 0, score: 0, accuracy, max_combo: 0, miss, rate: 1.0, player: String::new(), file: PathBuf::new(), mods: String::new(), pp: None };
+    let rows = [row(1, 0.85, 3), row(1, 0.97, 0), row(1, 0.96, 2), row(2, 1.0, 0), row(3, 0.91, 1)];
+    assert_eq!(scores::best_grade(&rows, 1), Some("S"));
+    assert_eq!(scores::best_grade(&rows, 2), Some("SS"));
+    assert_eq!(scores::best_grade(&rows, 3), Some("A"));
+    assert_eq!(scores::best_grade(&rows, 4), None);
 }

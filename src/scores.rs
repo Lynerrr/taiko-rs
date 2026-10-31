@@ -252,6 +252,17 @@ pub fn top(rows: &[ScoreRow], map_hash: u64, n: usize) -> Vec<&ScoreRow> {
     v
 }
 
+/// The letter of a saved play (the index has no counts: only an all-GREAT play is at 100%).
+fn row_grade(row: &ScoreRow) -> &'static str {
+    crate::online::grade(1, u32::from(row.accuracy < 1.0), row.miss, row.accuracy)
+}
+
+/// The best letter of the plays on a map, like osu!'s song select shows.
+pub fn best_grade(rows: &[ScoreRow], map_hash: u64) -> Option<&'static str> {
+    let rank = |g: &str| ["D", "C", "B", "A", "S", "SS"].iter().position(|l| *l == g);
+    rows.iter().filter(|r| r.map_hash == map_hash).map(row_grade).max_by_key(|g| rank(g))
+}
+
 /// "3d" style age of a Unix time (for "3d ago").
 pub fn age(date: u64) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
