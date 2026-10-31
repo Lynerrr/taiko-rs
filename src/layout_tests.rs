@@ -570,6 +570,8 @@ fn assert_every_screen_fits() {
     s.library = library;
     s.select = Select::new(&s.library);
 
+    check_draw("spectators", &mut out, |c| social::draw_spectators(c, &["Ryuji", "a_sixteen_letter", "x", "y", "z", "u", "v", "w", "q", "r"]));
+
     let room = session(false);
     let player = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
     check_draw("lobby", &mut out, |c| multiplayer::draw_lobby(c, &room, false, Some("downloading the map: 45% of 12.3 MB".into())));
@@ -942,4 +944,57 @@ fn np_names_the_map_on_screen_with_a_link_others_can_click() {
     assert_eq!(social::map_set_in("look https://osu.ppy.sh/beatmapsets/1234#taiko/99 ok"), Some(1234));
     assert_eq!(social::map_set_in("osu.ppy.sh/beatmapsets/"), None);
     assert_eq!(social::map_set_in("no link"), None);
+}
+
+/// A map just added shows and gets selected whatever the filters, until they change.
+#[test]
+fn added_maps_show_past_the_filters() {
+    let mut s = state();
+    let map = |set: usize, title: &str, mode: u8| {
+        let e = entry(set, 0, false);
+        Entry::new(e.path, beatmap::Meta { title: title.into(), mode, ..e.meta })
+    };
+    s.library = vec![map(0, "Alpha", 1), map(1, "Beta", 1), map(2, "Gamma", 1), map(3, "Delta", 0)];
+    s.select = Select::new(&s.library);
+    s.select.filter = "alpha".into();
+    s.select.refilter(&s.library);
+    assert_eq!(s.select.songs().len(), 1);
+
+    let path = s.library[1].path.clone();
+    s.select.reveal(&s.library, vec![path.clone()]);
+    assert_eq!(s.select.selected(), Some(1));
+    assert_eq!(s.select.songs().len(), 2);
+    // A set with no taiko difficulties goes past hidden converts too.
+    let path = s.library[3].path.clone();
+    s.select.reveal(&s.library, vec![path]);
+    assert_eq!(s.select.selected(), Some(3));
+    assert_eq!(s.select.songs().len(), 3);
+
+    s.select.filter = "gamma".into();
+    s.select.refilter(&s.library);
+    assert_eq!(s.select.songs().len(), 1);
+    // Back to the old search: they're gone for good.
+    s.select.filter = "alpha".into();
+    s.select.refilter(&s.library);
+    assert_eq!(s.select.songs().len(), 1);
+    s.select.hidden.maps.insert(s.library[1].path.clone());
+    let path = s.library[1].path.clone();
+    s.select.reveal(&s.library, vec![path]);
+    assert_eq!(s.select.songs().len(), 1, "hidden stays hidden");
+}
+
+#[test]
+fn spectators_are_the_friends_watching_us() {
+    let mut s = social::Social::default();
+    let friend = |name: &str, activity| online::Friend { name: name.into(), activity };
+    s.friends = vec![
+        friend("Ann", Some(online::Activity::Watching { name: "ME".into() })),
+        friend("Bob", Some(online::Activity::Watching { name: "someone".into() })),
+        friend("Cid", Some(online::Activity::Menus)),
+        friend("Dee", None),
+    ];
+    assert!(s.spectators().is_empty(), "not connected");
+    s.me = Some("me".into());
+    s.connected = true;
+    assert_eq!(s.spectators(), ["Ann"]);
 }

@@ -1095,6 +1095,13 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
     c.text(title_x, 22.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, title_end - title_x, &title));
 }
 
+/// Of a set's maps, the ones to show: its taiko difficulties, else (a set of converts) all.
+fn main_maps<'a>(maps: impl Iterator<Item = &'a Entry>) -> Vec<PathBuf> {
+    let maps: Vec<&Entry> = maps.collect();
+    let taiko = maps.iter().any(|e| e.meta.mode == 1);
+    maps.into_iter().filter(|e| !taiko || e.meta.mode == 1).map(|e| e.path.clone()).collect()
+}
+
 /// How a map is named to other players (lobby map, a solo play friends watch), with our
 /// settings of the mods that have them.
 fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
@@ -3042,6 +3049,8 @@ impl State {
             if temporary {
                 let _ = std::fs::remove_file(&archive);
             }
+            let here = home.map(|home| main_maps(self.library.iter().filter(|e| e.path.parent() == Some(home))));
+            self.reveal_maps(here.unwrap_or_default());
             self.toast(tr!("{name} is already in your songs", "{name}はもう曲の中にあります", "{name} уже есть среди ваших песен";));
             return;
         }
@@ -7596,6 +7605,9 @@ impl State {
                     game.draw_playfield(c, game.scroll_speed);
                 });
                 game.draw_hud(canvas);
+                if game.replay.is_none() && !hidden.has(hud::Part::Spectators) {
+                    social::draw_spectators(canvas, &self.social.spectators());
+                }
                 if game.replay.is_some() && game.paused.is_none() {
                     self.replay_bar = Some(draw_replay_bar(canvas, game, self.replay_scrub.is_some()));
                 }
@@ -8720,10 +8732,17 @@ impl State {
     }
 
     /// Adds a freshly downloaded set to the library (appended, so existing indices stay valid).
+    /// Song select goes to the maps just added, whatever its filters (not during a game).
+    fn reveal_maps(&mut self, maps: Vec<PathBuf>) {
+        if !matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. }) && self.mp.is_none() {
+            self.select.reveal(&self.library, maps);
+        }
+    }
+
     fn add_downloaded(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
         let known: std::collections::HashSet<PathBuf> = self.library.iter().filter(|e| e.path.starts_with(folder)).map(|e| e.path.clone()).collect();
         let fresh: Vec<Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0)).into_iter().filter(|e| !known.contains(&e.path)).collect();
-        let first = fresh.iter().find(|e| e.meta.mode == 1).or(fresh.first()).map(|e| e.path.clone());
+        let maps = main_maps(fresh.iter());
         let n = fresh.len();
         self.append_maps(fresh);
         self.installed_sets().insert(set.id);
@@ -8741,11 +8760,7 @@ impl State {
                 }
             }
         }
-        if !matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. }) && self.mp.is_none() {
-            if let Some(path) = &first {
-                self.select.select_path(&self.library, path);
-            }
-        }
+        self.reveal_maps(maps);
         let text = lobby_note.unwrap_or_else(|| match set.artist.is_empty() {
             // An imported .osz: only its file name is known.
             true if n == 0 => format!("{} is already in the list", set.title),

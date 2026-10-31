@@ -17,10 +17,12 @@ pub enum Part {
     HitAnimation,
     /// A multiplayer match's scoreboard.
     Scoreboard,
+    /// The friends watching a solo play.
+    Spectators,
 }
 
 impl Part {
-    pub const ALL: [Part; 12] = [
+    pub const ALL: [Part; 13] = [
         Part::Score,
         Part::Accuracy,
         Part::Pp,
@@ -33,6 +35,7 @@ impl Part {
         Part::Judgements,
         Part::HitAnimation,
         Part::Scoreboard,
+        Part::Spectators,
     ];
 
     /// For the settings list.
@@ -50,6 +53,7 @@ impl Part {
             Part::Judgements => "GREAT / OK / MISS",
             Part::HitAnimation => tr!("Note hit animation", "ノーツを叩いた時の動き", "Анимация удара по ноте"),
             Part::Scoreboard => tr!("Match scoreboard", "対戦のスコアボード", "Таблица матча"),
+            Part::Spectators => tr!("Spectators", "観戦者", "Зрители"),
         }
     }
 
@@ -68,6 +72,7 @@ impl Part {
             Part::Judgements => "judgements",
             Part::HitAnimation => "hit_animation",
             Part::Scoreboard => "scoreboard",
+            Part::Spectators => "spectators",
         }
     }
 
@@ -103,11 +108,12 @@ impl Parts {
         Part::ALL.iter().filter(|&&p| self.has(p)).map(|p| p.key()).collect::<Vec<_>>().join(",")
     }
 
-    /// The config's line: saved before parts that came later (the pp counter, the scoreboard),
+    /// The config's line: saved before parts that came later (the pp counter, the scoreboard, the
+    /// spectators),
     /// hiding all it knew of still hides those too.
     pub fn parse_saved(s: &str) -> Parts {
         let mut parts = Parts::parse(s);
-        let newer = [Part::Pp, Part::Scoreboard];
+        let newer = [Part::Pp, Part::Scoreboard, Part::Spectators];
         let saved = |p: Part| s.split(',').any(|k| k.trim() == p.key());
         if Part::ALL.iter().all(|&p| parts.has(p) || (newer.contains(&p) && !saved(p))) {
             parts = Parts::ALL;

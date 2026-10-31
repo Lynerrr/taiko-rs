@@ -127,6 +127,10 @@ pub struct Select {
     /// Difficulties osu! doesn't have though their set is on it (edited copies: OD changed, a
     /// rate baked in): not submitted, whatever the set's status.
     pub edited: std::collections::HashSet<std::path::PathBuf>,
+    /// Maps just added: listed whatever the filters say, until they change (`pinned_view`).
+    pinned: std::collections::HashSet<std::path::PathBuf>,
+    /// The filters `pinned` was made under.
+    pinned_view: View,
     /// The list being dragged with the left button.
     drag: Option<ListDrag>,
     /// Where each song's own row is in the list as last drawn (list units, top = 0).
@@ -172,6 +176,9 @@ pub struct Select {
     /// The song list's share of the width (`Config::song_list_share`).
     pub list_share: f32,
 }
+
+/// The filters on the song list: the search, the collection and whether converts show.
+type View = (String, Option<usize>, bool);
 
 /// Song list motion. Each selection change starts one eased transition from wherever things
 /// are to where they end up, so the scroll, the newly opened song, the closing one and the
@@ -281,6 +288,8 @@ impl Select {
             updates: std::collections::HashMap::new(),
             edited: std::collections::HashSet::new(),
             gone: std::collections::HashSet::new(),
+            pinned: std::collections::HashSet::new(),
+            pinned_view: Default::default(),
             drag: None,
             song_y: Vec::new(),
             visible: Vec::new(),
@@ -307,6 +316,9 @@ impl Select {
     }
 
     pub fn refilter(&mut self, library: &[Entry]) {
+        if self.pinned_view != self.view() {
+            self.pinned.clear();
+        }
         let selected = self.visible.get(self.cursor).copied();
         let query = crate::search::Query::parse(&self.filter);
         let only = self.collection.and_then(|c| self.collections.get(c)).map(|(_, set)| set);
@@ -325,10 +337,11 @@ impl Select {
         self.visible = library
             .iter()
             .enumerate()
-            .filter(|(_, e)| self.show_converts || e.meta.mode == 1)
-            .filter(|(i, _)| only.is_none_or(|set| set.contains(i)))
             .filter(|(_, e)| !self.hidden.contains(&e.path) && !self.gone.contains(&e.path))
-            .filter(|&(i, e)| query.is_empty() || query.matches(&e.meta, &e.label(), &facts(i, e)))
+            .filter(|&(i, e)| {
+                self.pinned.contains(&e.path)
+                    || ((self.show_converts || e.meta.mode == 1) && only.is_none_or(|set| set.contains(&i)) && (query.is_empty() || query.matches(&e.meta, &e.label(), &facts(i, e))))
+            })
             .map(|(i, _)| i)
             .collect();
         drop(info);
@@ -623,6 +636,25 @@ impl Select {
         if let Some(pos) = self.visible.iter().position(|&i| library[i].path == path) {
             self.cursor = pos;
         }
+    }
+
+    /// The filters a pin holds under.
+    fn view(&self) -> View {
+        (self.filter.clone(), self.collection, self.show_converts)
+    }
+
+    /// Goes to the first of `maps`, just added: they're listed even if the filters would hide
+    /// them, which stay as they are until the player changes them (then the maps go by them too).
+    pub fn reveal(&mut self, library: &[Entry], maps: Vec<std::path::PathBuf>) {
+        let Some(first) = maps.first().cloned() else { return };
+        if self.pinned_view != self.view() {
+            self.pinned.clear();
+            self.pinned_view = self.view();
+        }
+        self.pinned.extend(maps);
+        self.refilter(library);
+        self.select_path(library, &first);
+        self.open_cursor_section();
     }
 
     pub fn key(&mut self, key: KeyCode, library: &[Entry]) -> SelectAction {
