@@ -193,6 +193,13 @@ fn assert_every_screen_fits() {
             p.search("camellia".into());
         }
         check(&mut s, &format!("music player, paused {paused}"), &mut out);
+        // The folders, every genre having songs.
+        let p = s.player.as_mut().unwrap();
+        p.folders_open = true;
+        for t in p.list.tracks.iter_mut() {
+            t.genres = (1 << genres::GENRES.len()) - 1;
+        }
+        check(&mut s, &format!("music player folders, paused {paused}"), &mut out);
     }
     s.player = None;
     s.music_paused = false;

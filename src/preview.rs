@@ -119,9 +119,16 @@ pub struct Preview {
     pub has_background: bool,
     /// The music player is open: songs play whole, and don't loop.
     pub player: bool,
+    /// The main menu is showing: a song that ends gives way to the next too.
+    pub menu: bool,
+    /// The next song came on by itself: it plays from its start, not its preview point.
+    pub from_top: bool,
     /// How far the player moves the music's pitch (1 = not at all).
     pub pitch: f64,
-    /// In the player, the song has played to its end.
+    /// The last song decoded whole and its length in map ms, which no speed changes: while its
+    /// quick part stands in after a new speed, that's still how long it is.
+    known_length: Option<(PathBuf, f64)>,
+    /// In the player or the main menu, the song has played to its end.
     finished: bool,
     ended_at: Option<Instant>,
     /// Passed on to the autoplay preview (the kiai effects setting, how autoplay hits).
@@ -158,6 +165,12 @@ fn beat_at(points: &[crate::beatmap::ControlPoint], t: f64) -> Option<(f64, f64)
 
 /// How long the player waits at a song's end for the next to load before playing it again.
 const NEXT_SONG_WAIT: Duration = Duration::from_millis(1500);
+
+/// How long a song is, in map ms: as decoded whole (`whole`), else as last known, else about what
+/// its notes span.
+fn song_length(whole: Option<f64>, known: Option<&(PathBuf, f64)>, path: &Path, map_end: f64) -> f64 {
+    whole.or(known.filter(|k| k.0 == path).map(|k| k.1)).unwrap_or(map_end)
+}
 
 fn audio_path(e: &Entry) -> PathBuf {
     e.path.parent().unwrap_or(Path::new(".")).join(&e.meta.audio_file)
@@ -270,7 +283,7 @@ impl Preview {
                     if let Some(sr) = engine.map(|a| a.rate) {
                         let (tx, rx) = mpsc::channel();
                         // Quick part first: from where the music was (speed change) or the preview point.
-                        let part_from = self.resume_at.or(self.player.then_some(0.0)).unwrap_or(e.meta.preview_time);
+                        let part_from = self.resume_at.or((self.player || self.from_top).then_some(0.0)).unwrap_or(e.meta.preview_time);
                         let clip_at = e.meta.preview_time.max(0.0);
                         let is_clip = song.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::download::CLIP_PREFIX));
                         std::thread::spawn(move || {
@@ -346,7 +359,7 @@ impl Preview {
             // In map ms (the track plays `speed` map ms per ms).
             let len_ms = track.frames() as f64 / engine.rate as f64 * 1000.0 * speed;
             let preview_time = e.meta.preview_time;
-            let start = if self.player { 0.0 } else { (if preview_time >= 0.0 && (!full || preview_time < len_ms) { preview_time } else { len_ms * 0.4 }) / speed };
+            let start = if self.player || self.from_top { 0.0 } else { (if preview_time >= 0.0 && (!full || preview_time < len_ms) { preview_time } else { len_ms * 0.4 }) / speed };
             // The full song takes over from the part that's already playing without a gap.
             let playing_part = self.audio.as_ref().is_some_and(|s| s.path == path && !s.full && (s.rate, s.keep_pitch) == (speed, keep_pitch) && s.pitch == self.requested_pitch);
             if full && playing_part && self.audio_active && in_menu {
@@ -354,7 +367,12 @@ impl Preview {
             } else {
                 self.audio_active = false;
             }
+            if full {
+                self.known_length = Some((path.clone(), len_ms));
+            }
             self.ended_at = None;
+            // The quick part comes first; the whole song is the last of it.
+            self.from_top &= !full;
             self.audio = Some(Song { path, track, base, full, start, rate: speed, keep_pitch, pitch: self.requested_pitch });
         }
 
@@ -364,8 +382,8 @@ impl Preview {
             let end_ms = song.end_ms(engine.rate);
             // A seek past the quick part waits, silent, for the full song; it's not the end.
             let ended = self.audio_rx.is_none() && engine.position_ms(now).is_some_and(|p| p > end_ms - 30.0);
-            // In the player the next song takes over; if none does, this one goes round again.
-            let next_coming = ended && self.player && {
+            // There the next song takes over; if none does, this one goes round again.
+            let next_coming = ended && (self.player || self.menu) && {
                 let at = *self.ended_at.get_or_insert_with(|| {
                     self.finished = true;
                     now
@@ -373,7 +391,7 @@ impl Preview {
                 now.duration_since(at) < NEXT_SONG_WAIT
             };
             if (!self.audio_active || ended) && !next_coming {
-                let from_top = ended && self.player;
+                let from_top = ended && (self.player || self.from_top);
                 let at = self.resume_at.take().map(|t| t / song.rate).unwrap_or(if from_top { 0.0 } else { song.start });
                 engine.play_part(song.track.clone(), song.base, at);
                 self.audio_active = true;
@@ -451,7 +469,12 @@ impl Preview {
         Some(t)
     }
 
-    /// The song played to its end in the player (once per end).
+    #[cfg(test)]
+    pub fn song_ended(&mut self) {
+        self.finished = true;
+    }
+
+    /// The song played to its end in the player or the main menu (once per end).
     pub fn take_finished(&mut self) -> bool {
         std::mem::take(&mut self.finished)
     }
@@ -462,8 +485,8 @@ impl Preview {
         let (engine, song) = (engine?, self.audio.as_ref().filter(|_| self.audio_active)?);
         let at = engine.position_ms(now)? * song.rate;
         let map_end = self.map.as_ref().map_or(0.0, |(_, _, d, _)| d.length_ms);
-        let len = if song.full { song.end_ms(engine.rate) * song.rate } else { map_end };
-        Some((at, len))
+        let whole = song.full.then(|| song.end_ms(engine.rate) * song.rate);
+        Some((at, song_length(whole, self.known_length.as_ref(), &song.path, map_end)))
     }
 
     /// Fills `out` with the last mono samples played; false if nothing is.
@@ -852,6 +875,15 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Game {
 mod beat_tests {
     use super::*;
     use crate::beatmap::ControlPoint;
+
+    #[test]
+    fn a_new_speed_doesnt_change_how_long_the_song_is() {
+        let known = (PathBuf::from("a.mp3"), 214_000.0);
+        assert_eq!(song_length(Some(214_500.0), Some(&known), Path::new("a.mp3"), 180_000.0), 214_500.0);
+        assert_eq!(song_length(None, Some(&known), Path::new("a.mp3"), 180_000.0), 214_000.0, "its quick part stands in");
+        assert_eq!(song_length(None, Some(&known), Path::new("b.mp3"), 180_000.0), 180_000.0, "a song not heard whole yet");
+        assert_eq!(song_length(None, None, Path::new("a.mp3"), 180_000.0), 180_000.0);
+    }
 
     #[test]
     fn green_lines_dont_move_the_beat() {

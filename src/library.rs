@@ -281,8 +281,10 @@ struct CachedFolder {
     maps: Vec<CachedMap>,
 }
 
+/// Named for what its maps hold: a new field needs every map read again, once.
 fn library_cache() -> PathBuf {
-    cache_dir().join("library.json")
+    let _ = std::fs::remove_file(cache_dir().join("library.json"));
+    cache_dir().join("library-v2.json")
 }
 
 fn load_cache(path: &Path) -> std::collections::HashMap<PathBuf, CachedFolder> {

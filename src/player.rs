@@ -4,7 +4,8 @@
 
 use crate::game::DON;
 use crate::library::Entry;
-use crate::playlist::{Playlist, Repeat};
+use crate::genres::GENRES;
+use crate::playlist::{Folder, Playlist, Repeat};
 use crate::render::{pixel_size, rgba, snap_to_grid, Canvas, Hit};
 
 /// Spectrum bands, each drawn twice (mirrored left and right).
@@ -52,6 +53,8 @@ pub enum Control {
     Open,
     Shuffle,
     Repeat,
+    /// Love the song playing, or not any more.
+    Favourite,
     /// To the current song in song select.
     PlayMap,
 }
@@ -101,6 +104,7 @@ const PREV: Icon = ["##.....##", "##....###", "##...####", "##..#####", "##.####
 const NEXT: Icon = ["##.....##", "###....##", "####...##", "#####..##", "######.##", "#####..##", "####...##", "###....##", "##.....##"];
 const PLAY: Icon = ["##.......", "####.....", "######...", "########.", "#########", "########.", "######...", "####.....", "##......."];
 const PAUSE: Icon = ["###...###", "###...###", "###...###", "###...###", "###...###", "###...###", "###...###", "###...###", "###...###"];
+const HEART: Icon = [".........", ".##...##.", "####.####", "#########", "#########", ".#######.", "..#####..", "...###...", "....#...."];
 const SHUFFLE: Icon = [".........", ".......#.", "###...###", "...#.#.#.", "....#....", "...#.#.#.", "###...###", ".......#.", "........."];
 const LOOP: Icon = ["....#....", "..#####..", ".##.#..#.", ".#.....#.", ".#.....#.", ".#..#.##.", "..#####..", "....#....", "........."];
 const DISC: Icon = ["..#####..", ".#######.", "###...###", "##..#..##", "##.###.##", "##..#..##", "###...###", ".#######.", "..#####.."];
@@ -124,6 +128,7 @@ pub fn button(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32, control: Control, 
         Control::Open | Control::PlayMap => &DISC,
         Control::Shuffle => &SHUFFLE,
         Control::Repeat => &LOOP,
+        Control::Favourite => &HEART,
     };
     let px = pixel_size(1.34);
     let (left, top) = (snap_to_grid(x + w / 2.0 - 4.5 * px), snap_to_grid(y + h / 2.0 - 4.5 * px));
@@ -167,6 +172,8 @@ pub struct Player {
     /// The speed mod on, if any, and how many semitones the pitch is moved.
     pub speed: Option<Speed>,
     pub semitones: i32,
+    /// The folders are showing, instead of the list.
+    pub folders_open: bool,
     /// The first row of the list on screen, and the track that was last scrolled to.
     scroll: usize,
     followed: Option<usize>,
@@ -223,6 +230,7 @@ impl Player {
             volume_bar: (0.0, 1.0),
             speed: None,
             semitones: 0,
+            folders_open: false,
             scroll: 0,
             followed: None,
             angle: 0.0,
@@ -264,6 +272,16 @@ impl Player {
     /// Over the list of songs.
     pub fn over_list(&self, x: f32) -> bool {
         x < LIST_W + 10.0
+    }
+
+    /// Goes into folder `i` of the list's folders.
+    pub fn open_folder(&mut self, i: usize, seed: u64) {
+        if let Some(&(folder, _)) = self.list.folders().get(i) {
+            self.list.set_folder(folder, seed);
+            self.folders_open = false;
+            self.scroll = 0;
+            self.followed = None;
+        }
     }
 
     /// Typed into the search.
@@ -319,16 +337,23 @@ impl Player {
             }
         }
         c.button(10.0, 24.0, 74.0, 20.0, tr!("< menu", "< メニュー", "< меню"), 8.0, Hit::Key(winit::keyboard::KeyCode::Escape), false);
-        c.text_right(c.width - 14.0, 14.0, 7.0, rgba(0x9a9ab0, 1.0), f.hint);
-        self.draw_list(c);
+        if wide {
+            c.text_right(c.width - 14.0, 34.0, 7.0, rgba(0x9a9ab0, 1.0), f.hint);
+        }
+        if self.folders_open {
+            self.draw_folders(c);
+        } else {
+            self.draw_list(c);
+        }
         if wide {
             self.draw_queue(c, c.width - QUEUE_W - 10.0);
         }
         c.text_centered(x, BAR_Y - 18.0, 9.0, rgba(0xffffff, 1.0), &Canvas::fit(9.0, right - left, f.song));
         self.draw_timeline(c, x, right - left);
         let (w, gap, y) = (40.0, 6.0, BAR_Y + 18.0);
-        let start = x - (w * 5.0 + gap * 4.0) / 2.0;
-        let row = [(Control::Shuffle, self.list.is_shuffled()), (Control::Prev, false), (Control::Toggle, true), (Control::Next, false), (Control::Repeat, self.list.repeat != Repeat::Off)];
+        let start = x - (w * 6.0 + gap * 5.0) / 2.0;
+        let loved = self.list.is_favourite(self.list.now());
+        let row = [(Control::Shuffle, self.list.is_shuffled()), (Control::Prev, false), (Control::Toggle, true), (Control::Next, false), (Control::Repeat, self.list.repeat != Repeat::Off), (Control::Favourite, loved)];
         for (i, (control, on)) in row.into_iter().enumerate() {
             button(c, start + i as f32 * (w + gap), y, w, 26.0, control, f.paused, on);
         }
@@ -338,9 +363,55 @@ impl Player {
         self.draw_sound(c, x, y + 34.0, f.volume);
     }
 
-    /// The song list: a search box, then a row for each song, with a `+` for the queue.
+    /// The name of a folder.
+    fn folder_name(folder: Folder) -> &'static str {
+        match folder {
+            Folder::All => tr!("All songs", "すべての曲", "Все песни"),
+            Folder::Favourites => tr!("Favourites", "お気に入り", "Любимые"),
+            Folder::Genre(i) => (GENRES[i].name)(),
+            Folder::Other => tr!("No genre", "ジャンルなし", "Без жанра"),
+        }
+    }
+
+    /// The button at the list's top that goes to the folders, showing the one that's open.
+    fn draw_folder_button(&self, c: &mut Canvas) {
+        let hover = c.hovered(10.0 + 84.0, 24.0, LIST_W - 84.0, 20.0);
+        let open = self.folders_open;
+        c.round_rect(94.0, 24.0, LIST_W - 84.0, 20.0, 4.0, rgba(if hover { 0x34344a } else { 0x23232f }, 1.0), rgba(if open { crate::render::accent() } else { 0x3a3a4e }, 1.0), 1.0);
+        draw_folder_icon(c, 100.0, 29.0, pixel_size(1.0), folder_colour(self.list.folder));
+        c.text(120.0, 30.5, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, LIST_W - 118.0, Self::folder_name(self.list.folder)));
+        c.hit(94.0, 24.0, LIST_W - 84.0, 20.0, Hit::PlayerFolders);
+    }
+
+    /// The folders, one to a row: a pixel folder in its colour, its name and how many.
+    fn draw_folders(&self, c: &mut Canvas) {
+        const X: f32 = 10.0;
+        const GAP: f32 = 3.0;
+        self.draw_folder_button(c);
+        let folders = self.list.folders();
+        let room = ROWS as f32 * ROW_H + 26.0;
+        let h = ((room + GAP) / folders.len().max(1) as f32 - GAP).clamp(17.0, 36.0);
+        for (i, &(folder, count)) in folders.iter().enumerate() {
+            let y = LIST_TOP + i as f32 * (h + GAP);
+            let on = folder == self.list.folder;
+            let hover = c.hovered(X, y, LIST_W, h);
+            let colour = folder_colour(folder);
+            c.round_rect(X, y, LIST_W, h, 4.0, rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.92), rgba(if on { colour } else { 0x3a3a4e }, 1.0), 1.0);
+            let px = pixel_size(1.0);
+            draw_folder_icon(c, X + 7.0, y + (h - 12.0 * px) / 2.0, px, colour);
+            let count = count.to_string();
+            let name_x = X + 8.0 + 16.0 * px + 8.0;
+            let room = X + LIST_W - 8.0 - Canvas::text_width(7.0, &count) - 8.0 - name_x;
+            c.text(name_x, y + (h - 7.0) / 2.0, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, room, Self::folder_name(folder)));
+            c.text_right(X + LIST_W - 8.0, y + (h - 7.0) / 2.0, 7.0, rgba(0x9a9ab0, 1.0), &count);
+            c.hit(X, y, LIST_W, h, Hit::PlayerFolder(i));
+        }
+    }
+
+    /// The song list: a search box, then a row for each song, with a heart and a `+`.
     fn draw_list(&mut self, c: &mut Canvas) {
         const X: f32 = 10.0;
+        self.draw_folder_button(c);
         let border = if self.searching { rgba(crate::render::accent(), 1.0) } else { rgba(0x3a3a4e, 1.0) };
         c.round_rect(X, LIST_TOP, LIST_W, 18.0, 4.0, rgba(0x15151d, 0.95), border, 1.0);
         let filter = self.list.filter.clone();
@@ -362,6 +433,7 @@ impl Player {
             }
         }
         const ADD_W: f32 = 18.0;
+        const HEART_W: f32 = 16.0;
         for (row, &track) in self.list.shown.iter().skip(self.scroll).take(ROWS).enumerate() {
             let y = top + 2.0 + row as f32 * ROW_H;
             let hover = c.hovered(X, y, LIST_W, ROW_H);
@@ -370,9 +442,15 @@ impl Player {
             } else if hover {
                 c.rect(X + 2.0, y, LIST_W - 4.0, ROW_H, rgba(0x34344a, 0.8));
             }
-            let room = LIST_W - 14.0 - ADD_W;
+            let room = LIST_W - 14.0 - ADD_W - HEART_W;
             c.text(X + 7.0, y + 6.5, 7.0, rgba(if track == now { 0xffffff } else { 0xc8c8d8 }, 1.0), &Canvas::fit(7.0, room, &self.list.tracks[track].label));
-            c.hit(X, y, LIST_W - ADD_W - 2.0, ROW_H, Hit::PlayerRow(track));
+            let heart_x = X + LIST_W - ADD_W - HEART_W - 2.0;
+            c.hit(X, y, heart_x - X, ROW_H, Hit::PlayerRow(track));
+            let loved = self.list.is_favourite(track);
+            if loved || hover {
+                draw_heart(c, heart_x + 4.0, y + 6.0, pixel_size(1.0), if loved { 0xff5fa2 } else { 0x6a6a88 });
+            }
+            c.hit(heart_x, y, HEART_W, ROW_H, Hit::PlayerFavourite(track));
             if hover {
                 c.text_centered(X + LIST_W - ADD_W / 2.0 - 2.0, y + 6.5, 7.0, rgba(0xffffff, 1.0), "+");
             }
@@ -381,7 +459,7 @@ impl Player {
         if self.list.shown.is_empty() {
             c.text(X + 7.0, top + 9.0, 7.0, rgba(0x9a9ab0, 1.0), tr!("nothing found", "見つかりません", "ничего не нашлось"));
         }
-        let count = self.list.tracks.len();
+        let count = self.list.shown.len();
         c.text(X + 2.0, top + ROWS as f32 * ROW_H + 9.0, 7.0, rgba(0x9a9ab0, 1.0), &tr!("{count} songs", "{count}曲", "{count} песен";));
     }
 
@@ -479,6 +557,58 @@ impl Player {
         let clock = |ms: f64| format!("{}:{:02}", (ms / 60_000.0) as u32, (ms / 1000.0) as u32 % 60);
         c.text_right(left - 8.0, BAR_Y, 7.0, rgba(0xc8c8d8, 1.0), &clock(at.max(0.0)));
         c.text(left + w + 8.0, BAR_Y, 7.0, rgba(0xc8c8d8, 1.0), &clock(len));
+    }
+}
+
+/// A small heart, its top left at (`x`, `y`).
+fn draw_heart(c: &mut Canvas, x: f32, y: f32, px: f32, colour: u32) {
+    let (x, y) = (snap_to_grid(x), snap_to_grid(y));
+    for (row, line) in HEART.iter().skip(1).enumerate() {
+        for (col, b) in line.bytes().enumerate() {
+            if b == b'#' {
+                c.rect(x + col as f32 * px, y + row as f32 * px, px, px, rgba(colour, 1.0));
+            }
+        }
+    }
+}
+
+fn folder_colour(folder: Folder) -> u32 {
+    match folder {
+        Folder::All => 0xc8c8d8,
+        Folder::Favourites => 0xff5fa2,
+        Folder::Genre(i) => GENRES[i].colour,
+        Folder::Other => 0x6f6f86,
+    }
+}
+
+/// A pixel folder, 16 by 12 pixels, its top left at (`x`, `y`): a tab, a lit front, a shaded base.
+fn draw_folder_icon(c: &mut Canvas, x: f32, y: f32, px: f32, colour: u32) {
+    const ART: [&str; 12] = [
+        ".######.........",
+        "#++++++#........",
+        "#++++++########.",
+        "#++++++++++++++#",
+        "################",
+        "#++++++++++++++#",
+        "#++++++++++++++#",
+        "#++++++++++++++#",
+        "#++++++++++++++#",
+        "#--------------#",
+        "#--------------#",
+        ".##############.",
+    ];
+    let (x, y) = (snap_to_grid(x), snap_to_grid(y));
+    let (line_colour, front, base) = (crate::menu::tint(colour, 0x000000, 0.55), colour, crate::menu::tint(colour, 0x000000, 0.25));
+    for (row, line) in ART.iter().enumerate() {
+        for (col, b) in line.bytes().enumerate() {
+            let shade = match b {
+                b'#' => line_colour,
+                b'+' => front,
+                b'-' => base,
+                _ => continue,
+            };
+            c.rect(x + col as f32 * px, y + row as f32 * px, px, px, rgba(shade, 1.0));
+        }
     }
 }
 
