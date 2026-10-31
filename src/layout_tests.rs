@@ -170,6 +170,12 @@ fn assert_every_screen_fits() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.select.collections = vec![("My Favourite Tech Maps For Practice".into(), Default::default()), ("dans".into(), Default::default())];
     check(&mut s, "select", &mut out);
+    s.main_menu = Some(menu::Menu::new());
+    for item in menu::ITEMS {
+        check(&mut s, &format!("main menu, {item:?}"), &mut out);
+        s.main_menu.as_mut().unwrap().step(1);
+    }
+    s.main_menu = None;
     s.select.collection = Some(0);
     s.select.filter = "camellia long search query that is typed".into();
     s.select.refilter(&s.library);

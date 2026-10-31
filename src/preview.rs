@@ -139,6 +139,13 @@ pub struct Preview {
     audio_active: bool,
 }
 
+/// How far map time `t` is past the red line the beats count from, and the beat's length. Green
+/// lines are control points too, but they don't move the beat.
+fn beat_at(points: &[crate::beatmap::ControlPoint], t: f64) -> Option<(f64, f64)> {
+    let line = points.iter().rev().find(|p| p.time <= t).or(points.first())?;
+    Some((t - line.beat_origin, line.beat_length))
+}
+
 fn audio_path(e: &Entry) -> PathBuf {
     e.path.parent().unwrap_or(Path::new(".")).join(&e.meta.audio_file)
 }
@@ -405,6 +412,13 @@ impl Preview {
         engine.seek(t / song.rate);
         self.pending_seek = Some(t);
         self.marker = Some((song.path.clone(), t));
+    }
+
+    /// How far (ms) the song is into the current beat and how long that beat is, for things
+    /// that pulse with the music.
+    pub fn beat(&self) -> Option<(f64, f64)> {
+        let (_, map, _, _) = self.map.as_ref().filter(|_| self.audio_active)?;
+        beat_at(&map.control_points, self.last_time)
     }
 
     pub fn seek_by(&mut self, delta_ms: f64, engine: Option<&Engine>) {
@@ -767,4 +781,19 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Game {
     let mut g = Game::new(map.clone(), Arc::new(Track { samples: Vec::new(), rate }), None);
     g.mute_hits = true;
     g
+}
+
+#[cfg(test)]
+mod beat_tests {
+    use super::*;
+    use crate::beatmap::ControlPoint;
+
+    #[test]
+    fn green_lines_dont_move_the_beat() {
+        let line = |time: f64, sv: f64| ControlPoint { time, beat_origin: 100.0, beat_length: 400.0, sv, kiai: false, volume: 1.0 };
+        let points = [line(100.0, 1.0), line(1234.0, 1.5), line(2345.0, 0.75)];
+        for t in [1200.0, 1300.0, 2400.0] {
+            assert_eq!(beat_at(&points, t), Some((t - 100.0, 400.0)));
+        }
+    }
 }

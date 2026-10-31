@@ -59,6 +59,7 @@ Settings → Updates.
 | `Space` | skip intro | `F3` `F4` | scroll speed |
 | `Tab` | songs ⇄ settings | `F9` | friends & chat |
 | `Shift+Tab` | hide the interface in a song | `Ctrl+C` `Ctrl+V` | copy · paste |
+| `Ctrl+O` | settings, from anywhere | | |
 
 Everything is clickable too. Every key here can be moved (Ctrl, Alt and Shift included) or taken
 away in Settings → Input, and on touch screens the screen becomes four drum columns.

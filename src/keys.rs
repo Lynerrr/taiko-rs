@@ -93,6 +93,7 @@ pub enum Hotkey {
     Quit,
     Screenshot,
     Friends,
+    OpenSettings,
     Update,
     Mods,
     Settings,
@@ -118,7 +119,7 @@ pub enum Hotkey {
 const ANYWHERE: &[Place] = &[Place::Select, Place::Play, Place::Paused, Place::Results, Place::Other];
 
 impl Hotkey {
-    pub const ALL: [Hotkey; 33] = [
+    pub const ALL: [Hotkey; 34] = [
         Hotkey::Pause,
         Hotkey::SkipIntro,
         Hotkey::QuickRetry,
@@ -145,6 +146,7 @@ impl Hotkey {
         Hotkey::VisualOffsetDown,
         Hotkey::VisualOffsetUp,
         Hotkey::Friends,
+        Hotkey::OpenSettings,
         Hotkey::Fullscreen,
         Hotkey::PresentMode,
         Hotkey::FpsCap,
@@ -172,6 +174,7 @@ impl Hotkey {
             Hotkey::Quit => const { &[Chord::ctrl(KeyQ)] },
             Hotkey::Screenshot => const { &[Chord::plain(F12)] },
             Hotkey::Friends => const { &[Chord::plain(F9)] },
+            Hotkey::OpenSettings => const { &[Chord::ctrl(KeyO)] },
             Hotkey::Update => const { &[Chord::ctrl(KeyU)] },
             Hotkey::Mods => const { &[Chord::plain(F1)] },
             Hotkey::Settings => const { &[Chord::plain(Tab)] },
@@ -244,6 +247,7 @@ impl Hotkey {
             Hotkey::Quit => tr!("Quit taiko.rs", "taiko.rsを終了", "Выйти из taiko.rs"),
             Hotkey::Screenshot => tr!("Screenshot", "スクリーンショット", "Скриншот"),
             Hotkey::Friends => tr!("Friends and chat", "フレンドとチャット", "Друзья и чат"),
+            Hotkey::OpenSettings => tr!("Settings, from anywhere", "設定 (どこからでも)", "Настройки откуда угодно"),
             Hotkey::Update => tr!("Update", "アップデート", "Обновление"),
             Hotkey::Mods => tr!("Song select: mods", "選曲: Mod", "Выбор песни: моды"),
             Hotkey::Settings => tr!("Song select: settings", "選曲: 設定", "Выбор песни: настройки"),
@@ -283,6 +287,7 @@ impl Hotkey {
             Hotkey::Quit => "quit",
             Hotkey::Screenshot => "screenshot",
             Hotkey::Friends => "friends",
+            Hotkey::OpenSettings => "open_settings",
             Hotkey::Update => "update",
             Hotkey::Mods => "mods",
             Hotkey::Settings => "settings",
