@@ -273,10 +273,9 @@ pub struct Game {
     /// The scroll speed setting this play is at: fixed when it starts (it counts for pp), and
     /// a replay's own.
     pub scroll_speed: f64,
-    /// Calibration: draw no notes or barlines (play by ear) / play no hitsounds on presses.
-    pub hide_notes: bool,
     /// Draw the HP bar (not in calibration).
     pub show_hp: bool,
+    /// Calibration: play no hitsounds on presses.
     pub mute_hits: bool,
     /// Show the live offset suggestion under the hit error meter.
     pub show_offset_hint: bool,
@@ -1423,7 +1422,6 @@ impl Game {
             played_ms: 0.0,
             played_at: None,
             scroll_speed: 1.0,
-            hide_notes: false,
             show_hp: true,
             mute_hits: false,
             show_offset_hint: false,
@@ -2724,9 +2722,6 @@ impl Game {
             }
             self.visible.push(i);
         }
-        if self.hide_notes {
-            self.visible.clear();
-        }
         // Distance along the lane of note `i`. Liar: far off, a triplet sits where a 1/4 would,
         // sliding to its real place on the way in.
         let note_s = |i: usize| -> f32 {
@@ -2923,7 +2918,7 @@ impl Game {
         // Barlines.
         // As far back as ahead: a slow bar can still be on screen long after it passed.
         let first_bar = self.map.barlines.partition_point(|b| b.time < vt - lookahead);
-        let bars = if self.hide_notes { &[][..] } else { &self.map.barlines[first_bar..] };
+        let bars = &self.map.barlines[first_bar..];
         for b in bars {
             if b.time - vt > lookahead {
                 break;
@@ -2947,7 +2942,7 @@ impl Game {
         // Roulette: where the speed changes, and to what.
         let first_section = self.sections.partition_point(|s| s.0 < vt - 3000.0);
         for &(time, k, vel) in &self.sections[first_section..] {
-            if time - vt > lookahead || self.hide_notes {
+            if time - vt > lookahead {
                 break;
             }
             let s = s_of(time, vel);
@@ -2961,7 +2956,7 @@ impl Game {
         }
 
         // Radar: the beam, a bright line with a trail fading out behind it.
-        if radar && !self.hide_notes {
+        if radar {
             let b = sweep * lane_len;
             for d in if crossfire { vec![1.0, -1.0] } else { vec![1.0] } {
                 for k in 0..14 {
@@ -2990,18 +2985,16 @@ impl Game {
         }
 
         // Decoys, under the real notes: gone before they'd have to be hit.
-        if !self.hide_notes {
-            let first = self.decoys.partition_point(|n| n.time < vt);
-            for (k, n) in self.decoys.iter().enumerate().skip(first) {
-                if n.time - vt > lookahead {
-                    break;
-                }
-                let s = s_of(n.time, n.velocity);
-                // A little see-through, so a careful eye can tell them apart.
-                let a = DECOY_ALPHA * note_alpha(s) * radar_lit(s, n.time, n.velocity) * smooth(0.22, 0.38, (s / lane_len) as f64) as f32;
-                if a > 0.01 && s < lane_len + BIG_R {
-                    draw_hit(c, s, n, k, self.decoy_flows[k], if n.kind == Kind::Don { don } else { kat }, a);
-                }
+        let first = self.decoys.partition_point(|n| n.time < vt);
+        for (k, n) in self.decoys.iter().enumerate().skip(first) {
+            if n.time - vt > lookahead {
+                break;
+            }
+            let s = s_of(n.time, n.velocity);
+            // A little see-through, so a careful eye can tell them apart.
+            let a = DECOY_ALPHA * note_alpha(s) * radar_lit(s, n.time, n.velocity) * smooth(0.22, 0.38, (s / lane_len) as f64) as f32;
+            if a > 0.01 && s < lane_len + BIG_R {
+                draw_hit(c, s, n, k, self.decoy_flows[k], if n.kind == Kind::Don { don } else { kat }, a);
             }
         }
 
@@ -3198,7 +3191,7 @@ impl Game {
         // Kiai: every head on screen takes its own flash on the beat, in its own colour
         // brightened, added over everything drawn, so a pile of fake sliders under one note (a
         // "shiny") lights it brighter the deeper it is. Stable's `UpdateKiai`; see `kiai_flash`.
-        if self.kiai_effects && !self.hide_notes {
+        if self.kiai_effects {
             for &i in &self.visible {
                 let n = &self.map.notes[i];
                 let r = if n.big { BIG_R } else { NOTE_R };
@@ -3427,7 +3420,7 @@ impl Game {
             }
         }
         // Echo's bar stays where it is, whatever the playfield does.
-        if mods.has(Mod::Echo) && !self.hide_notes {
+        if mods.has(Mod::Echo) {
             self.draw_echo(c, vt, w, uni);
         }
     }

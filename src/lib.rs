@@ -3851,10 +3851,10 @@ impl State {
     }
 
     fn calibration_key(&mut self, code: KeyCode, repeat: bool, at: Instant, window: Option<&Window>) {
-        if let Scene::Calibrate { game, vsync, .. } = &mut self.scene {
+        if let Scene::Calibrate { game, .. } = &mut self.scene {
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
                 if !repeat {
-                    game.press(k, at, self.audio.as_ref(), self.play_offset);
+                    game.press(calibrate::centre_key(k), at, self.audio.as_ref(), self.play_offset);
                 }
                 return;
             }
@@ -3862,8 +3862,6 @@ impl State {
                 return;
             }
             match code {
-                // By sight (vsync), hiding the notes would leave nothing to go by.
-                KeyCode::KeyH if !*vsync => game.hide_notes = !game.hide_notes,
                 KeyCode::Enter | KeyCode::NumpadEnter => self.finish_calibration(),
                 KeyCode::Escape => self.leave_calibration(false),
                 KeyCode::F11 => self.toggle_fullscreen(window),
@@ -8606,13 +8604,16 @@ impl State {
                     game.autoplay_style = self.cfg.autoplay;
                     game.autoplay(self.audio.as_ref());
                 }
-                let offset = if *vsync { self.cfg.vsync_tune_ms } else { self.cfg.offset_ms };
-                game.set_visual_offset(visual_offset);
-                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
-                    game.draw_playfield(c, self.cfg.scroll_speed);
-                });
-                game.draw_hud(canvas);
-                calibrate::draw_overlay(canvas, game, offset, game.hide_notes, *vsync);
+                if *vsync {
+                    game.set_visual_offset(visual_offset);
+                    draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
+                        game.draw_playfield(c, self.cfg.scroll_speed);
+                    });
+                    game.draw_hud(canvas);
+                    calibrate::draw_by_sight(canvas, game, self.cfg.vsync_tune_ms);
+                } else {
+                    calibrate::draw_by_ear(canvas, game);
+                }
             }
             Scene::CalibrateDone { estimate, vsync, .. } => {
                 let current = if *vsync { self.cfg.vsync_tune_ms } else { self.cfg.offset_ms };

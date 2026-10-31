@@ -483,9 +483,9 @@ impl Item {
                 "Для всех карт; увеличьте, если бьёте поздно. В песне - / + (и O) задают смещение этой карты сверху."
             ),
             Item::Calibrate => tr!(
-                "Enter: play a click track with notes exactly on the beat; it measures and sets your offset.",
-                "Enter: 拍ぴったりのノーツでクリック音を流し、オフセットを測って設定します。",
-                "Enter: метроном с нотами точно в такт; игра измерит и выставит смещение."
+                "Enter: hit along to a click track by ear, with no notes to watch; it measures and sets your offset.",
+                "Enter: ノーツなしのクリック音に耳だけで合わせて叩き、オフセットを測って設定します。",
+                "Enter: бейте под метроном на слух, нот на экране нет; игра измерит и выставит смещение."
             ),
             Item::CalibrationBpm => tr!(
                 "Tempo of the calibration click track. Pick one close to the maps you play.",
