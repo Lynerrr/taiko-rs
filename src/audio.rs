@@ -257,12 +257,54 @@ fn start_voice(voices: &mut Vec<Voice>, sound: Sfx, volume: f32) {
     }
 }
 
+/// Callbacks left to a stream's start (about 0.6 s of WASAPI's), then to judge its latency by.
+const LATENCY_SETTLE: u32 = 64;
+const LATENCY_SAMPLES: usize = 64;
+
+/// The latency of a stream from what it held once settled. WASAPI's device position can't be
+/// relied on over a session: on a player's Realtek it slipped by whole engine periods every few
+/// minutes (multiples of 2), 130 ms over 78 minutes, while the sound itself came no later. They
+/// went on hitting the same spot in the music and the clock moved away from it, even with the
+/// game sat in a menu, down to 26% accuracy. What a stream holds doesn't grow: its buffer is
+/// always topped up, so only the frames it asks for say how late a callback came.
+struct SteadyLatency {
+    callbacks: u32,
+    seen: Vec<f64>,
+    /// Seconds of latency plus frames asked for: the same in every callback.
+    total: Option<f64>,
+}
+
+impl SteadyLatency {
+    fn new() -> SteadyLatency {
+        SteadyLatency { callbacks: 0, seen: Vec::with_capacity(LATENCY_SAMPLES), total: None }
+    }
+
+    /// The latency of a callback asked for `frames`, `reported` being what the stream says.
+    fn of(&mut self, reported: Duration, frames: usize, rate: u32) -> Duration {
+        let asked = frames as f64 / rate as f64;
+        if let Some(total) = self.total {
+            return Duration::from_secs_f64((total - asked).max(0.0));
+        }
+        self.callbacks += 1;
+        if self.callbacks > LATENCY_SETTLE {
+            self.seen.push(reported.as_secs_f64() + asked);
+            if self.seen.len() == LATENCY_SAMPLES {
+                self.seen.sort_by(f64::total_cmp);
+                self.total = Some(self.seen[LATENCY_SAMPLES / 2]);
+            }
+        }
+        reported
+    }
+}
+
 struct Mixer {
     rx: Receiver<Cmd>,
     gc: Sender<Garbage>,
     stamp: Arc<Mutex<Stamp>>,
     volume: Arc<[AtomicU32; 2]>,
     channels: usize,
+    rate: u32,
+    steady: SteadyLatency,
     track: Option<Arc<Track>>,
     /// Song frame of the track's first sample.
     base: i64,
@@ -284,7 +326,7 @@ impl Mixer {
         channels: usize,
     ) -> Mixer {
         let sounds = Arc::new(hitsound_set(rate, Custom::default()));
-        Mixer { rx, gc, stamp, volume, channels, track: None, base: 0, frame: 0, epoch: 0, paused: false, voices: Vec::with_capacity(64), sounds, limiter: Limiter::new(rate) }
+        Mixer { rx, gc, stamp, volume, channels, rate, steady: SteadyLatency::new(), track: None, base: 0, frame: 0, epoch: 0, paused: false, voices: Vec::with_capacity(64), sounds, limiter: Limiter::new(rate) }
     }
 
     fn render<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T], info: &OutputCallbackInfo) {
@@ -324,6 +366,7 @@ impl Mixer {
 
         let ts = info.timestamp();
         let latency = ts.playback.duration_since(ts.callback);
+        let latency = if cfg!(windows) { self.steady.of(latency, out.len() / self.channels, self.rate) } else { latency };
         if let Ok(mut s) = self.stamp.try_lock() {
             *s = Stamp { playing: self.track.is_some() && !self.paused, frame: self.frame, at: now, latency, epoch: self.epoch };
         }
@@ -512,6 +555,31 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_slipping_device_position_leaves_the_latency_alone() {
+        // A player's stream: 448 frames asked per callback, 1429 frames (32.4 ms) reported.
+        let rate = 44100;
+        let frames = |n: usize| Duration::from_secs_f64(n as f64 / rate as f64);
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        let mut steady = SteadyLatency::new();
+        // While it starts up, what it says goes.
+        assert_eq!(steady.of(frames(0), 448, rate), frames(0));
+        for _ in 1..LATENCY_SETTLE {
+            steady.of(frames(700), 448, rate);
+        }
+        for k in 0..LATENCY_SAMPLES {
+            // A stray reading while judging it doesn't count.
+            steady.of(frames(if k == 3 { 2000 } else { 1429 }), 448, rate);
+        }
+        // Slipped either way, by whole periods: it's the position that moved, not the sound.
+        for slipped in [1429 + 12 * 448, 1429 - 448, 1429 - 2 * 448] {
+            assert!((ms(steady.of(frames(slipped), 448, rate)) - 32.4).abs() < 0.05);
+        }
+        // A callback a period late is asked for a period more, and the buffer really is that low.
+        let expected = (1429 - 448) as f64 / rate as f64 * 1000.0;
+        assert!((ms(steady.of(frames(1429), 896, rate)) - expected).abs() < 0.05);
     }
 
     /// `ogg` with the position of its `page`th page moved `by` frames (and the page's checksum put
