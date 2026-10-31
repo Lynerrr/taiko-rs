@@ -2248,6 +2248,8 @@ impl State {
             Item::ShowConverts => {
                 self.select.show_converts = !self.select.show_converts;
                 self.select.refilter(&self.library);
+                self.cfg.show_converts = self.select.show_converts;
+                self.cfg.save();
                 return;
             }
             // Act on Enter in `settings_key`.
@@ -5244,6 +5246,7 @@ impl State {
         let nominator = self.select.nominator;
         let sort = self.select.sort;
         self.select = Select::new(&self.library);
+        self.select.keep_converts(&self.library, self.cfg.show_converts);
         self.select.filter = filter;
         self.select.played = played;
         self.select.status = status;

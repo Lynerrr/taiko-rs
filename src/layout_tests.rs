@@ -1023,3 +1023,20 @@ fn a_map_shows_the_best_letter_of_its_plays() {
     assert_eq!(scores::best_grade(&rows, 3), Some("A"));
     assert_eq!(scores::best_grade(&rows, 4), None);
 }
+
+#[test]
+fn converts_stay_listed_when_the_settings_say_so() {
+    let mut s = state();
+    let map = |set: usize, mode: u8| {
+        let e = entry(set, 0, false);
+        Entry::new(e.path, beatmap::Meta { mode, ..e.meta })
+    };
+    s.library = vec![map(0, 1), map(1, 0)];
+    s.select = Select::new(&s.library);
+    assert_eq!(s.select.songs().len(), 1);
+    s.select.keep_converts(&s.library, false);
+    assert_eq!(s.select.songs().len(), 1);
+    s.select.keep_converts(&s.library, true);
+    assert!(s.select.show_converts);
+    assert_eq!(s.select.songs().len(), 2);
+}
