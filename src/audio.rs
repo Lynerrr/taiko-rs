@@ -893,6 +893,22 @@ pub fn change_rate(track: Track, sample_rate: u32, rate: f64, keep_pitch: bool) 
     Track { samples, rate }
 }
 
+/// `change_rate` with the pitch moved `shift` times further on top, the speed staying: resampling
+/// moves both, stretching puts the speed back.
+pub fn shifted(track: Track, sample_rate: u32, rate: f64, keep_pitch: bool, shift: f64) -> Track {
+    if (shift - 1.0).abs() < 1e-6 {
+        return change_rate(track, sample_rate, rate, keep_pitch);
+    }
+    if track.samples.is_empty() {
+        return track;
+    }
+    let pitch = if keep_pitch { shift } else { rate * shift };
+    let moved = resample_ratio(&track.samples, pitch);
+    let stretch = rate / pitch;
+    let frames = moved.len() / 2;
+    Track { samples: time_stretch(&moved, sample_rate, |n| n * stretch, (frames as f64 / stretch) as usize), rate }
+}
+
 /// Like `change_rate`, for a speed that changes over the song (Wind Up / Down): output (song)
 /// time t plays the map at `speed.map(t)`. The track's `rate` is the starting speed.
 pub fn change_speed(track: Track, sample_rate: u32, speed: &crate::mods::Speed, keep_pitch: bool) -> Track {

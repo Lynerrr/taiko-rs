@@ -3,6 +3,7 @@
 //! music and the background just carry on.
 
 use crate::game::{DON, KAT};
+use crate::player::Control;
 use crate::render::{self, approach, pixel_size, rgba, snap_to_grid, Canvas, Hit};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -255,7 +256,7 @@ impl Item {
 }
 
 /// `col` moved `t` of the way to `to`.
-fn tint(col: u32, to: u32, t: f32) -> u32 {
+pub fn tint(col: u32, to: u32, t: f32) -> u32 {
     let mix = |shift: u32| {
         let (a, b) = ((col >> shift & 255) as f32, (to >> shift & 255) as f32);
         ((a + (b - a) * t) as u32) << shift
@@ -270,6 +271,7 @@ pub struct Frame<'a> {
     pub song: Option<&'a str>,
     pub hint: &'a str,
     pub maps: usize,
+    pub paused: bool,
 }
 
 pub struct Menu {
@@ -525,11 +527,20 @@ fn draw_footer(c: &mut Canvas, f: &Frame) {
     c.round_rect(c.width - 14.0 - hint_w, Y + 12.0, hint_w, 20.0, 6.0, rgba(0x15151d, 0.88), rgba(0x3a3a4e, 1.0), 1.0);
     c.text(c.width - 6.0 - hint_w, Y + 18.5, 7.0, rgba(0xc8c8d8, 1.0), f.hint);
     let Some(song) = f.song else { return };
-    let song = Canvas::fit(8.0, (c.width - hint_w - 70.0).max(80.0), song);
-    let w = Canvas::text_width(8.0, &song).max(Canvas::text_width(7.0, tr!("NOW PLAYING", "再生中", "СЕЙЧАС ИГРАЕТ"))) + 22.0;
+    const BUTTON_W: f32 = 26.0;
+    const BUTTON_GAP: f32 = 4.0;
+    const SONG_W: f32 = 240.0;
+    // The same size whatever plays: a long name is cut, and the buttons stay put.
+    let w = SONG_W.min((c.width - hint_w - 50.0 - (BUTTON_W + BUTTON_GAP) * 4.0).max(120.0));
+    let song = Canvas::fit(8.0, w - 22.0, song);
     c.round_rect(14.0, Y - 6.0, w, 38.0, 6.0, rgba(0x15151d, 0.88), rgba(0x3a3a4e, 1.0), 1.0);
     c.text(25.0, Y + 1.0, 7.0, rgba(0x9a9ab0, 1.0), tr!("NOW PLAYING", "再生中", "СЕЙЧАС ИГРАЕТ"));
     c.text(25.0, Y + 16.0, 8.0, rgba(0xffffff, 1.0), &song);
+    let controls = [Control::Prev, Control::Toggle, Control::Next, Control::Open];
+    for (i, control) in controls.into_iter().enumerate() {
+        let x = 14.0 + w + 6.0 + i as f32 * (BUTTON_W + BUTTON_GAP);
+        crate::player::button(c, x, Y + 1.0, BUTTON_W, 24.0, control, f.paused, control == Control::Open);
+    }
 }
 
 #[cfg(test)]

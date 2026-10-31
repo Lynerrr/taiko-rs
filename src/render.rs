@@ -307,6 +307,10 @@ pub struct Renderer {
     /// Indexed [capture][opaque]: an opaque layer is drawn without blending, so the GPU doesn't
     /// read back the pixels under it.
     bg_pipelines: [[wgpu::RenderPipeline; 2]; 2],
+    disc_pipelines: [wgpu::RenderPipeline; 2],
+    /// The music player's disc this frame: centre and radius in virtual units, its angle, and
+    /// how wide the virtual screen is.
+    pub disc: Option<([f32; 4], f32)>,
     bg_layout: wgpu::BindGroupLayout,
     bg_sampler: wgpu::Sampler,
     /// Bind group and image aspect (w / h) of the current background.
@@ -516,6 +520,9 @@ struct BgLayer {
     uniform: wgpu::Buffer,
     /// Its opacity this frame (1: it covers everything under it).
     alpha: f32,
+    /// The same image for the music player's disc, with its own uniform.
+    disc_bind_group: wgpu::BindGroup,
+    disc_uniform: wgpu::Buffer,
 }
 
 const BG_SHADER: &str = r#"
@@ -544,6 +551,54 @@ fn fs(i: V) -> @location(0) vec4<f32> {
     let rgb = vec3<f32>(y + 1.402 * c.y, y - 0.344136 * c.x - 0.714136 * c.y, y + 1.772 * c.x);
     // params: brightness, opacity (for cross-fading into a new background).
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * bg.params.x, bg.params.y);
+}
+"#;
+
+/// The background once more, as the music player's turning disc: a circle of it, cut square from
+/// its middle. `rect`: the disc's centre and half size in clip space; `turn`: cos and sin of its
+/// angle and how much of the image's width and height the square takes.
+const DISC_SHADER: &str = r#"
+struct Disc { rect: vec4<f32>, turn: vec4<f32> };
+@group(0) @binding(0) var<uniform> disc: Disc;
+@group(0) @binding(1) var luma: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var chroma: texture_2d<f32>;
+
+struct V { @builtin(position) pos: vec4<f32>, @location(0) p: vec2<f32> };
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> V {
+    let c = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u)) * 2.0 - vec2<f32>(1.0);
+    var o: V;
+    o.pos = vec4<f32>(disc.rect.x + c.x * disc.rect.z, disc.rect.y - c.y * disc.rect.w, 0.0, 1.0);
+    o.p = c;
+    return o;
+}
+
+@fragment
+fn fs(i: V) -> @location(0) vec4<f32> {
+    let r = length(i.p);
+    let edge = fwidth(r);
+    let alpha = 1.0 - smoothstep(1.0 - edge, 1.0, r);
+    let q = vec2<f32>(i.p.x * disc.turn.x + i.p.y * disc.turn.y, i.p.y * disc.turn.x - i.p.x * disc.turn.y);
+    let uv = vec2<f32>(0.5) + q * disc.turn.zw * 0.5;
+    // The image is much bigger than the disc and has no mipmaps: averaging what one screen pixel
+    // covers keeps it from shimmering as it turns.
+    let dx = dpdx(uv);
+    let dy = dpdy(uv);
+    var y = 0.0;
+    var c = vec2<f32>(0.0);
+    for (var a = 0; a < 4; a++) {
+        for (var b = 0; b < 4; b++) {
+            let at = uv + dx * ((f32(a) + 0.5) / 4.0 - 0.5) + dy * ((f32(b) + 0.5) / 4.0 - 0.5);
+            y += textureSample(luma, samp, at).r;
+            c += textureSample(chroma, samp, at).rg;
+        }
+    }
+    y /= 16.0;
+    c = c / 16.0 - vec2<f32>(0.5);
+    let rgb = vec3<f32>(y + 1.402 * c.y, y - 0.344136 * c.x - 0.714136 * c.y, y + 1.772 * c.x);
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), alpha);
 }
 "#;
 
@@ -907,6 +962,28 @@ impl Renderer {
             })
         };
         let bg_pipelines = [format, wgpu::TextureFormat::Rgba8Unorm].map(|f| [make_bg_pipeline(f, false), make_bg_pipeline(f, true)]);
+        let disc_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("disc"),
+            source: wgpu::ShaderSource::Wgsl(DISC_SHADER.into()),
+        });
+        let disc_pipelines = [format, wgpu::TextureFormat::Rgba8Unorm].map(|format| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("disc"),
+                layout: Some(&bg_pipeline_layout),
+                vertex: wgpu::VertexState { module: &disc_shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &disc_shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        });
         let bg_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("background"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -971,6 +1048,8 @@ impl Renderer {
             supported_modes: caps.present_modes,
             capture_pipeline,
             bg_pipelines,
+            disc_pipelines,
+            disc: None,
             bg_layout,
             bg_sampler,
             bg: None,
@@ -1062,6 +1141,17 @@ impl Renderer {
         })
     }
 
+    /// Puts this frame's disc in its uniform.
+    fn write_disc(&self) {
+        let (Some(([x, y, r, angle], width)), Some(l)) = (self.disc, &self.bg) else { return };
+        let (sin, cos) = angle.sin_cos();
+        // A square from the image's middle.
+        let (u, v) = if l.aspect > 1.0 { (1.0 / l.aspect, 1.0) } else { (1.0, l.aspect) };
+        let half_y = VIRTUAL_HEIGHT / 2.0;
+        let uniform = [x / width * 2.0 - 1.0, 1.0 - y / half_y, r / width * 2.0, r / half_y, cos, sin, u, v];
+        self.queue.write_buffer(&l.disc_uniform, 0, bytemuck::cast_slice(&uniform));
+    }
+
     /// Replaces the background image, or removes it with `None`. The old one stays drawn
     /// underneath while the new one fades in over it (`bg_mix`).
     pub fn set_background(&mut self, image: Option<BgImage>) {
@@ -1112,7 +1202,23 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&chroma) },
             ],
         });
-        self.bg = Some(BgLayer { bind_group, aspect: w as f32 / h as f32, uniform, alpha: 1.0 });
+        let disc_uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("disc"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let disc_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("disc"),
+            layout: &self.bg_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: disc_uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&luma) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.bg_sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&chroma) },
+            ],
+        });
+        self.bg = Some(BgLayer { bind_group, aspect: w as f32 / h as f32, uniform, alpha: 1.0, disc_bind_group, disc_uniform });
     }
 
     /// Applies a present mode, falling back toward vsync if the compositor lacks it.
@@ -1270,6 +1376,7 @@ impl Renderer {
                 l.alpha = alpha;
             }
         }
+        self.write_disc();
         // The pixels wholly inside the opaque rect (its anti-aliased edge still shows what is
         // under it).
         let hole = opaque.and_then(|[x, y, rw, rh]| {
@@ -1378,6 +1485,7 @@ impl Renderer {
             self.queue.write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
             l.alpha = 1.0;
         }
+        self.write_disc();
         // Only the current background (no cross-fade) in a video frame.
         let prev = self.bg_prev.take();
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -1526,6 +1634,11 @@ impl Renderer {
         if !layers.is_empty() {
             pass.set_scissor_rect(0, 0, w, h);
         }
+        if let (Some(_), Some(l)) = (self.disc, &self.bg) {
+            pass.set_pipeline(&self.disc_pipelines[capture as usize]);
+            pass.set_bind_group(0, &l.disc_bind_group, &[]);
+            pass.draw(0..4, 0..1);
+        }
         pass.set_pipeline(if capture { &self.capture_pipeline } else { &self.pipeline });
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instances.slice(..));
@@ -1635,6 +1748,18 @@ pub enum Hit {
     Tab(usize),
     /// A note of the main menu (index into `menu::ITEMS`).
     MenuItem(usize),
+    /// A music button of the main menu or the player, and the player's timeline.
+    Music(crate::player::Control),
+    MusicBar,
+    /// The player: its search box, a song (index into the list's tracks), its `+`, a row of the
+    /// queue, the volume, a speed mod (`player::Speed::ALL`) and the pitch (resets it).
+    PlayerSearch,
+    PlayerRow(usize),
+    PlayerQueue(usize),
+    PlayerUnqueue(usize),
+    PlayerVolume,
+    PlayerSpeed(usize),
+    PlayerPitch,
     /// A row of the song list (index into its visible list): a difficulty, or a song's own row
     /// (pointing at its first difficulty).
     SongRow(usize),
@@ -1737,6 +1862,8 @@ impl HitBox {
 #[derive(Default)]
 pub struct Canvas {
     pub shapes: Vec<Shape>,
+    /// The music player's disc: centre, radius, angle (drawn under every shape, see `DISC_SHADER`).
+    pub disc: Option<[f32; 4]>,
     pub width: f32,
     /// Clickable areas, in drawing order (later ones are on top).
     pub hits: Vec<HitBox>,
@@ -1879,6 +2006,7 @@ const CLEAR: [f32; 4] = [0.0; 4];
 impl Canvas {
     pub fn clear(&mut self, width: f32) {
         self.shapes.clear();
+        self.disc = None;
         self.hits.clear();
         self.clips.clear();
         self.texts.clear();
@@ -2359,7 +2487,7 @@ mod tests {
     #[test]
     fn shaders_compile() {
         let shapes = super::shape_shader();
-        for (name, src) in [("shapes", shapes.as_str()), ("background", super::BG_SHADER), ("upscale", super::UPSCALE_SHADER)] {
+        for (name, src) in [("shapes", shapes.as_str()), ("background", super::BG_SHADER), ("disc", super::DISC_SHADER), ("upscale", super::UPSCALE_SHADER)] {
             let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
             naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default())
                 .validate(&module)

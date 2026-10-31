@@ -35,6 +35,8 @@ struct Song {
     /// Speed it was prepared for (the track plays `rate` map ms per ms) and how.
     rate: f64,
     keep_pitch: bool,
+    /// How far its pitch is moved on top of that (the player's `[` `]`).
+    pitch: f64,
 }
 
 impl Song {
@@ -88,6 +90,7 @@ pub struct Preview {
     map_rx: Option<Receiver<(usize, Result<Beatmap, String>, Option<(Vec<f64>, f64, f64)>)>>,
     /// Speed (and keep-pitch) the loaded preview was prepared for.
     requested_rate: (f64, bool),
+    requested_pitch: f64,
     /// After a speed change: map time to continue the music from once the new track is ready.
     resume_at: Option<f64>,
     bg_rx: Option<Receiver<(PathBuf, Option<Image>)>>,
@@ -114,6 +117,13 @@ pub struct Preview {
     /// New background for the renderer: `Some(None)` clears it.
     pub bg_upload: Option<Option<Image>>,
     pub has_background: bool,
+    /// The music player is open: songs play whole, and don't loop.
+    pub player: bool,
+    /// How far the player moves the music's pitch (1 = not at all).
+    pub pitch: f64,
+    /// In the player, the song has played to its end.
+    finished: bool,
+    ended_at: Option<Instant>,
     /// Passed on to the autoplay preview (the kiai effects setting, how autoplay hits).
     pub kiai_effects: bool,
     pub autoplay: crate::autoplay::Settings,
@@ -145,6 +155,9 @@ fn beat_at(points: &[crate::beatmap::ControlPoint], t: f64) -> Option<(f64, f64)
     let line = points.iter().rev().find(|p| p.time <= t).or(points.first())?;
     Some((t - line.beat_origin, line.beat_length))
 }
+
+/// How long the player waits at a song's end for the next to load before playing it again.
+const NEXT_SONG_WAIT: Duration = Duration::from_millis(1500);
 
 fn audio_path(e: &Entry) -> PathBuf {
     e.path.parent().unwrap_or(Path::new(".")).join(&e.meta.audio_file)
@@ -180,7 +193,7 @@ impl Preview {
 
     /// The decoded song, for reuse when that map is played at the same speed.
     pub fn cached_track(&self, e: &Entry, rate: f64, keep_pitch: bool) -> Option<Arc<Track>> {
-        let same = |s: &&Song| s.full && s.path == audio_path(e) && (s.rate - rate).abs() < 1e-6 && (s.keep_pitch == keep_pitch || (rate - 1.0).abs() < 1e-6);
+        let same = |s: &&Song| s.full && s.pitch == 1.0 && s.path == audio_path(e) && (s.rate - rate).abs() < 1e-6 && (s.keep_pitch == keep_pitch || (rate - 1.0).abs() < 1e-6);
         self.audio.as_ref().filter(same).map(|s| s.track.clone())
     }
 
@@ -215,7 +228,7 @@ impl Preview {
         let rate = if (rate.0 - 1.0).abs() < 1e-6 { (1.0, false) } else { rate };
         // A new speed changes the music and the strain curve: reload as if the selection
         // changed, carrying on from where the music was.
-        if rate != self.requested_rate && self.requested.is_some() {
+        if (rate != self.requested_rate || self.pitch != self.requested_pitch) && self.requested.is_some() {
             if self.audio_active && self.requested == selected {
                 // Where the music is now, in map time (the playing track's own speed).
                 let playing = engine.and_then(|e| e.position_ms(now)).zip(self.audio.as_ref()).map(|(p, s)| p * s.rate);
@@ -235,8 +248,10 @@ impl Preview {
         if self.seen != self.requested && !self.hold && self.changed_at.is_some_and(|t| now - t >= DEBOUNCE) {
             self.requested = self.seen;
             self.requested_rate = rate;
+            self.requested_pitch = self.pitch;
             self.game = None;
             let (speed, keep_pitch) = rate;
+            let shift = self.pitch;
             if let Some(i) = self.seen.filter(|&i| i < library.len()) {
                 let e = &library[i];
                 let path = e.path.clone();
@@ -250,12 +265,12 @@ impl Preview {
                 self.map_rx = Some(rx);
                 self.show_background_for(e);
                 let song = audio_path(e);
-                let loaded = self.audio.as_ref().is_some_and(|s| s.path == song && (s.rate, s.keep_pitch) == rate);
+                let loaded = self.audio.as_ref().is_some_and(|s| s.path == song && (s.rate, s.keep_pitch) == rate && s.pitch == shift);
                 if !loaded {
                     if let Some(sr) = engine.map(|a| a.rate) {
                         let (tx, rx) = mpsc::channel();
                         // Quick part first: from where the music was (speed change) or the preview point.
-                        let part_from = self.resume_at.unwrap_or(e.meta.preview_time);
+                        let part_from = self.resume_at.or(self.player.then_some(0.0)).unwrap_or(e.meta.preview_time);
                         let clip_at = e.meta.preview_time.max(0.0);
                         let is_clip = song.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::download::CLIP_PREFIX));
                         std::thread::spawn(move || {
@@ -263,7 +278,7 @@ impl Preview {
                                 // A download preview: ~10 s of music from the preview point, placed there.
                                 let clip = audio::decode(&song, sr).ok().map(|t| {
                                     let base = (clip_at / 1000.0 * sr as f64 / speed).round() as i64;
-                                    (Arc::new(audio::change_rate(t, sr, speed, keep_pitch)), base, false)
+                                    (Arc::new(audio::shifted(t, sr, speed, keep_pitch, shift)), base, false)
                                 });
                                 let failed = clip.is_none();
                                 let _ = tx.send((song.clone(), clip));
@@ -275,14 +290,17 @@ impl Preview {
                             if part_from >= 0.0 {
                                 // SNIPPET_MS of playback covers that much more map time when sped up.
                                 if let Ok((part, base)) = audio::decode_part(&song, sr, Some((part_from, SNIPPET_MS * speed))) {
-                                    let part = audio::change_rate(part, sr, speed, keep_pitch);
+                                    let part = audio::shifted(part, sr, speed, keep_pitch, shift);
                                     let base = (base as f64 / speed).round() as i64;
                                     if tx.send((song.clone(), Some((Arc::new(part), base, false)))).is_err() {
                                         return; // the selection moved on
                                     }
                                 }
                             }
-                            let track = audio::decode_shared(&song, sr).ok().map(|t| (audio::with_rate(t, sr, speed, keep_pitch), 0, true));
+                            let track = audio::decode_shared(&song, sr).ok().map(|t| {
+                                let track = if shift == 1.0 { audio::with_rate(t, sr, speed, keep_pitch) } else { Arc::new(audio::shifted(Track { samples: t.samples.clone(), rate: t.rate }, sr, speed, keep_pitch, shift)) };
+                                (track, 0, true)
+                            });
                             let _ = tx.send((song, track));
                         });
                         self.audio_rx = Some(rx);
@@ -328,15 +346,16 @@ impl Preview {
             // In map ms (the track plays `speed` map ms per ms).
             let len_ms = track.frames() as f64 / engine.rate as f64 * 1000.0 * speed;
             let preview_time = e.meta.preview_time;
-            let start = (if preview_time >= 0.0 && (!full || preview_time < len_ms) { preview_time } else { len_ms * 0.4 }) / speed;
+            let start = if self.player { 0.0 } else { (if preview_time >= 0.0 && (!full || preview_time < len_ms) { preview_time } else { len_ms * 0.4 }) / speed };
             // The full song takes over from the part that's already playing without a gap.
-            let playing_part = self.audio.as_ref().is_some_and(|s| s.path == path && !s.full && (s.rate, s.keep_pitch) == (speed, keep_pitch));
+            let playing_part = self.audio.as_ref().is_some_and(|s| s.path == path && !s.full && (s.rate, s.keep_pitch) == (speed, keep_pitch) && s.pitch == self.requested_pitch);
             if full && playing_part && self.audio_active && in_menu {
                 engine.swap(track.clone(), base);
             } else {
                 self.audio_active = false;
             }
-            self.audio = Some(Song { path, track, base, full, start, rate: speed, keep_pitch });
+            self.ended_at = None;
+            self.audio = Some(Song { path, track, base, full, start, rate: speed, keep_pitch, pitch: self.requested_pitch });
         }
 
         // Music: start at the preview point, loop back to it at the end.
@@ -345,10 +364,20 @@ impl Preview {
             let end_ms = song.end_ms(engine.rate);
             // A seek past the quick part waits, silent, for the full song; it's not the end.
             let ended = self.audio_rx.is_none() && engine.position_ms(now).is_some_and(|p| p > end_ms - 30.0);
-            if !self.audio_active || ended {
-                let at = self.resume_at.take().map(|t| t / song.rate).unwrap_or(song.start);
+            // In the player the next song takes over; if none does, this one goes round again.
+            let next_coming = ended && self.player && {
+                let at = *self.ended_at.get_or_insert_with(|| {
+                    self.finished = true;
+                    now
+                });
+                now.duration_since(at) < NEXT_SONG_WAIT
+            };
+            if (!self.audio_active || ended) && !next_coming {
+                let from_top = ended && self.player;
+                let at = self.resume_at.take().map(|t| t / song.rate).unwrap_or(if from_top { 0.0 } else { song.start });
                 engine.play_part(song.track.clone(), song.base, at);
                 self.audio_active = true;
+                self.ended_at = None;
                 self.pending_seek = None; // the music won't reach it now
             }
         }
@@ -401,9 +430,16 @@ impl Preview {
     /// Jumps the preview music (and the autoplay) to map time `t`, and remembers it as the
     /// start point (the blue flag): wherever you last scrolled to is where "Play from" starts.
     pub fn seek(&mut self, t: f64, engine: Option<&Engine>) {
-        let (Some(engine), Some(song)) = (engine, &self.audio) else { return };
+        if let Some(t) = self.seek_music(t, engine) {
+            self.marker = self.audio.as_ref().map(|s| (s.path.clone(), t));
+        }
+    }
+
+    /// Jumps the preview music (and the autoplay) to map time `t`; returns where it landed.
+    pub fn seek_music(&mut self, t: f64, engine: Option<&Engine>) -> Option<f64> {
+        let (Some(engine), Some(song)) = (engine, &self.audio) else { return None };
         if !self.audio_active {
-            return;
+            return None;
         }
         // Until the full decode replaces the quick part, the song's length isn't known; seeking
         // outside the part is silent for that moment instead of being refused.
@@ -411,7 +447,36 @@ impl Preview {
         let t = t.clamp(0.0, last);
         engine.seek(t / song.rate);
         self.pending_seek = Some(t);
-        self.marker = Some((song.path.clone(), t));
+        self.ended_at = None;
+        Some(t)
+    }
+
+    /// The song played to its end in the player (once per end).
+    pub fn take_finished(&mut self) -> bool {
+        std::mem::take(&mut self.finished)
+    }
+
+    /// Where the music is and how long it is, in map ms. While only a part of the song is
+    /// decoded its length is the map's.
+    pub fn music_times(&self, engine: Option<&Engine>, now: Instant) -> Option<(f64, f64)> {
+        let (engine, song) = (engine?, self.audio.as_ref().filter(|_| self.audio_active)?);
+        let at = engine.position_ms(now)? * song.rate;
+        let map_end = self.map.as_ref().map_or(0.0, |(_, _, d, _)| d.length_ms);
+        let len = if song.full { song.end_ms(engine.rate) * song.rate } else { map_end };
+        Some((at, len))
+    }
+
+    /// Fills `out` with the last mono samples played; false if nothing is.
+    pub fn sounding(&self, engine: Option<&Engine>, now: Instant, out: &mut [f32]) -> bool {
+        let (Some(engine), Some(song)) = (engine, self.audio.as_ref().filter(|_| self.audio_active)) else { return false };
+        let Some(at) = engine.position_ms(now) else { return false };
+        let last = (at / 1000.0 * engine.rate as f64) as i64 - song.base;
+        let first = last - out.len() as i64;
+        for (i, s) in out.iter_mut().enumerate() {
+            let frame = first + i as i64;
+            *s = usize::try_from(frame).ok().and_then(|f| song.track.samples.get(f * 2..f * 2 + 2)).map_or(0.0, |lr| (lr[0] + lr[1]) / 2.0);
+        }
+        true
     }
 
     /// How far (ms) the song is into the current beat and how long that beat is, for things
