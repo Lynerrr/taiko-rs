@@ -17,7 +17,10 @@
 //!   /u/<name>/avatar  POST: an admin sets (or with /remove takes off) someone else's picture
 //!   /love/<set>       POST: a loved nominator loves a map set here (on=0: takes it back)
 //!   /u/<name>/nominator  POST: an admin makes them a loved nominator (on=0: not any more)
+//!   /u/<name>/ban     POST: an admin bans them (on=0: lets them back)
+//!   /u/<name>/rename  POST (name): an admin gives them a new name
 //!   /s/<id>/pp        POST: an admin sets a play's pp (empty: back to what was sent)
+//!   /s/<id>/delete    POST: an admin deletes a play
 //!   /login /logout    the website's session (the game's accounts)
 //!   /register         a new account, with a code mailed to its email
 //!   /reset            a new password, with a code mailed to the account's email
@@ -482,6 +485,7 @@ fn route(state: &State, req: &Req) -> Reply {
                     nominator,
                     own,
                     viewer_admin: req.key().is_some_and(|me| crate::is_admin(&me)),
+                    banned: state.is_banned(&key),
                     // Their own page tells a nominator how to love maps from Discord.
                     verify_code: (own && nominator).then(|| state.verify_code(&key)),
                 };
@@ -687,6 +691,35 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
                 }
             };
             Reply::see_other(format!("/s/{id}?msg={}", encode(&msg)))
+        }
+        ["s", id, "delete"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Ok(id) = id.parse::<u64>() else { return req.not_found("That is not a score link") };
+            if !crate::is_admin(&key) {
+                return Reply::see_other(format!("/s/{id}?msg={}", encode("only admins can do that")));
+            }
+            let removed = state.scores.lock().unwrap().remove(id);
+            match removed {
+                Ok(player) => {
+                    println!("score {id} by {player} deleted by {key}");
+                    Reply::see_other(format!("/u/{player}?msg={}", encode(&format!("Score {id} is deleted"))))
+                }
+                Err(e) => Reply::see_other(format!("/s/{id}?msg={}", encode(&e))),
+            }
+        }
+        ["u", name, "ban"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Some(p) = state.profile(name) else { return req.not_found("There is no player by that name") };
+            let msg = state.set_banned(&key, &p.name, req.field("on") != "0").unwrap_or_else(|e| e);
+            Reply::see_other(format!("/u/{}?msg={}", p.name, encode(&msg)))
+        }
+        ["u", name, "rename"] => {
+            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Some(p) = state.profile(name) else { return req.not_found("There is no player by that name") };
+            match state.rename(&key, &p.name, req.field("name")) {
+                Ok(new) => Reply::see_other(format!("/u/{new}?msg={}", encode(&format!("{} is {new} now", p.name)))),
+                Err(e) => Reply::see_other(format!("/u/{}?msg={}", p.name, encode(&e))),
+            }
         }
         ["love", set] => {
             let Some(key) = req.key() else { return Reply::see_other("/login".into()) };

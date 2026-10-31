@@ -127,6 +127,20 @@ pub fn remove(key: &str) {
     }
 }
 
+/// `old`'s picture is `new`'s from now on.
+pub fn rename(old: &str, new: &str) {
+    let Some(s) = STORE.get().filter(|_| old != new) else { return };
+    let mut has = s.has.lock().unwrap();
+    let Some(version) = has.remove(old) else { return };
+    match std::fs::rename(s.dir.join(old), s.dir.join(new)) {
+        Ok(()) => has.insert(new.to_string(), version),
+        Err(e) => {
+            eprintln!("renaming a picture: {e}");
+            has.insert(old.to_string(), version)
+        }
+    };
+}
+
 /// The file in a `multipart/form-data` body (its field `field`), given the Content-Type
 /// header's value.
 pub fn multipart_file<'a>(content_type: &str, body: &'a [u8], field: &str) -> Option<&'a [u8]> {
