@@ -7,6 +7,7 @@ mod lang;
 #[cfg(target_os = "android")]
 mod android;
 mod audio;
+mod audiolog;
 mod autoplay;
 mod beatmap;
 mod browse;
@@ -1837,6 +1838,7 @@ impl State {
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
         let mut label = self.library[entry].label();
+        audiolog::line(&format!("play {label} audio={} global_offset={} map_offset={} visual_offset={} present={} fps_cap={}", self.library[entry].meta.audio_file, self.cfg.offset_ms, self.map_offset(Some(entry)), self.cfg.visual_offset_ms, self.cfg.present.name(), self.cfg.fps_cap));
         if let Some(t) = from {
             let at = fmt_time(t);
             label.push_str(&tr!("  (from {at})", "  ({at}から)", "  (с {at})";));
@@ -3821,7 +3823,11 @@ impl State {
         self.stop_audio();
         // By sight in vsync, hitting late means the frames reach the screen later than assumed.
         let current = if vsync { self.cfg.vsync_tune_ms } else { self.cfg.offset_ms };
-        match calibrate::estimate(&game.stats.errors, current) {
+        let found = calibrate::estimate(&game.stats.errors, current);
+        if let Some(e) = &found {
+            audiolog::line(&format!("calibration vsync={vsync} hits={} error={:.1} margin={:.1} ur={:.0} suggested={} current={current}", e.hits, e.error_ms, e.margin_ms, e.ur, e.suggested_offset));
+        }
+        match found {
             Some(estimate) if estimate.hits >= 4 => self.scene = Scene::CalibrateDone { estimate, back, vsync },
             _ => {
                 self.scene = *back;
@@ -3962,7 +3968,11 @@ impl State {
     }
 
     fn refresh_play_offset(&mut self) {
+        let was = self.play_offset;
         self.play_offset = self.cfg.offset_ms + self.map_offset(self.offset_entry());
+        if self.play_offset != was {
+            audiolog::line(&format!("offset total={} global={}", self.play_offset, self.cfg.offset_ms));
+        }
         self.preview.map_offset = self.map_offset(self.offset_entry());
     }
 

@@ -155,6 +155,38 @@ impl Stats {
     }
 }
 
+impl Drop for Game {
+    /// The audio log's line for a play, however it ended: the offset it really wanted, overall and
+    /// by thirds of the hits (a clock drifting mid-song shows as thirds that differ).
+    fn drop(&mut self) {
+        let s = &self.stats;
+        if self.replay.is_some() || s.errors.len() < 30 {
+            return;
+        }
+        // An error e under offset o would have been e + o under no offset at all.
+        let wanted: Vec<f64> = s.errors.iter().zip(&s.error_offsets).map(|(e, o)| e + o).collect();
+        let robust = |part: &[f64]| calibrate::estimate(part, 0.0).map_or(f64::NAN, |e| e.error_ms);
+        let third = |k: usize| robust(&wanted[k * wanted.len() / 3..(k + 1) * wanted.len() / 3]);
+        let (sum, frames, most) = self.clock_vs_audio;
+        crate::audiolog::line(&format!(
+            "end {} - {} [{}] hits={} mean_error={:.1} wanted={:.1} thirds={:.1}/{:.1}/{:.1} ur={:.0} played_s={:.0} clock_vs_audio={:.3}/{:.1}",
+            self.map.meta.artist,
+            self.map.meta.title,
+            self.map.meta.version,
+            wanted.len(),
+            s.mean_error(),
+            robust(&wanted),
+            third(0),
+            third(1),
+            third(2),
+            s.unstable_rate(),
+            self.played_ms / 1000.0,
+            sum / frames.max(1) as f64,
+            most,
+        ));
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Windows {
     pub great: f64,
@@ -256,6 +288,9 @@ pub struct Game {
     visible: Vec<usize>,
     /// Raw audio position seen by the last update, for diagnostics.
     pub last_audio_ms: Option<f64>,
+    /// Over the frames with an audio position: how far the clock was from it (sum, frames, most
+    /// either way).
+    clock_vs_audio: (f64, u64, f64),
     pub raw_time: f64,
     /// How autoplay hits (Settings → Gameplay), and the keys that gives each note (by note index,
     /// empty for all but dons and kats), worked out once for those settings.
@@ -1414,6 +1449,7 @@ impl Game {
             main_beat,
             visible: Vec::new(),
             last_audio_ms: None,
+            clock_vs_audio: (0.0, 0, 0.0),
             raw_time: track_start,
             autoplay_style: crate::autoplay::Settings::default(),
             auto_plan: None,
@@ -1575,6 +1611,10 @@ impl Game {
         let audio_ms = audio.and_then(|a| a.position_ms(now));
         let raw = self.clock.update(now, audio_ms);
         self.last_audio_ms = audio_ms;
+        if let Some(a) = audio_ms {
+            let off = raw - a;
+            self.clock_vs_audio = (self.clock_vs_audio.0 + off, self.clock_vs_audio.1 + 1, self.clock_vs_audio.2.max(off.abs()));
+        }
         self.raw_time = raw;
         self.time = self.speed.map(raw - offset);
         // Failed: the lane keeps scrolling under the FAILED sign, but nothing more is judged.
@@ -4855,7 +4895,7 @@ mod tests {
         let mut g = kiai_game("SS");
         let own = g.shape_order.clone();
         g.use_mod_settings(None, None);
-        assert_eq!((g.universes, g.shape_order), (None, own));
+        assert_eq!((g.universes, g.shape_order.clone()), (None, own));
     }
 
     #[test]
