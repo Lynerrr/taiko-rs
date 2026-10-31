@@ -170,12 +170,17 @@ fn assert_every_screen_fits() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.select.collections = vec![("My Favourite Tech Maps For Practice".into(), Default::default()), ("dans".into(), Default::default())];
     check(&mut s, "select", &mut out);
-    s.main_menu = Some(menu::Menu::new());
-    for item in menu::ITEMS {
+    // Each from scratch: the map this state plays once scanned may start loading meanwhile, and
+    // that leaves the menu.
+    for (i, item) in menu::ITEMS.iter().enumerate() {
+        let mut m = menu::Menu::new();
+        m.pick(i);
+        s.main_menu = Some(m);
+        s.scene = Scene::Select;
         check(&mut s, &format!("main menu, {item:?}"), &mut out);
-        s.main_menu.as_mut().unwrap().step(1);
     }
     s.main_menu = None;
+    s.scene = Scene::Select;
     s.select.collection = Some(0);
     s.select.filter = "camellia long search query that is typed".into();
     s.select.refilter(&s.library);
