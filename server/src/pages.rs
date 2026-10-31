@@ -1006,7 +1006,8 @@ fn play_row(s: &OnlineScore, weighted: Option<usize>, show_score: bool) -> Strin
     };
     let score = if show_score { format!("<span class=\"dim score\">{:08}</span>", s.score) } else { String::new() };
     format!(
-        "<div class=play>{}<div class=what><a href=\"/m/{:x}\">{}</a><div class=meta>{}<span class=version>{}</span><span class=dim>{}</span></div></div><div class=mods>{}</div>{score}<div class=acc>{:.2}%</div>{pp}</div>",
+        "<div class=play><a href=\"/s/{}\" title=\"this play\">{}</a><div class=what><a href=\"/m/{:x}\">{}</a><div class=meta>{}<span class=version>{}</span><span class=dim>{}</span></div></div><div class=mods>{}</div>{score}<div class=acc>{:.2}%</div>{pp}</div>",
+        s.id,
         grade(s.grade()),
         s.map_hash,
         esc(song),
@@ -1107,9 +1108,10 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
     let Some(first) = rows.first() else { return format!("{head}<div class=page>{notice}<section class=panel><p class=dim>No scores yet.</p></section></div>") };
     let mods = if first.mods.is_empty() && (first.rate - 1.0).abs() < 1e-6 { "-".into() } else { mod_chips(&first.mods, first.rate) };
     let top = format!(
-        "<div class=\"panel topscore\"><div class=place>#1</div><span class=bigrade>{}</span><div class=who>{}<div>{}<div class=dim>{}</div></div></div>\
+        "<div class=\"panel topscore\"><a class=place href=\"/s/{}\" title=\"this play\">#1</a><span class=bigrade>{}</span><div class=who>{}<div>{}<div class=dim>{}</div></div></div>\
          <div class=hudrow-in><div class=hudstat><span>SCORE</span><b>{:08}</b></div><div class=hudstat><span>ACCURACY</span><b>{:.2}%</b></div><div class=hudstat><span>COMBO</span><b>{}x</b></div>\
          <div class=hudstat><span>PP</span><b class=pp>{}</b></div><div class=hudstat><span>MODS</span><b class=mods>{mods}</b></div></div></div>",
+        first.id,
         grade(first.grade()),
         avatar(&first.player, "mid"),
         player_link(&first.player),
@@ -1124,8 +1126,9 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
         .enumerate()
         .map(|(i, r)| {
             format!(
-                "<tr class=\"p{}\"><td class=place>#{}</td><td>{}</td><td>{:08}</td><td>{:.2}%</td><td>{}{}</td><td class=wide>{}x</td><td class=\"wide great\">{}</td><td class=\"wide ok\">{}</td><td class=\"wide miss\">{}</td><td class=pp>{}</td><td class=\"wide mods\">{}</td><td class=dim>{}</td></tr>",
+                "<tr class=\"p{}\"><td class=place><a href=\"/s/{}\" title=\"this play\">#{}</a></td><td>{}</td><td>{:08}</td><td>{:.2}%</td><td>{}{}</td><td class=wide>{}x</td><td class=\"wide great\">{}</td><td class=\"wide ok\">{}</td><td class=\"wide miss\">{}</td><td class=pp>{}</td><td class=\"wide mods\">{}</td><td class=dim>{}</td></tr>",
                 (i + 1).min(4),
+                r.id,
                 i + 1,
                 grade(r.grade()),
                 r.score,
