@@ -93,6 +93,17 @@ pub fn start(state: Arc<State>, dir: PathBuf) {
     std::thread::Builder::new().name("changelog".into()).spawn(move || changelog(bot)).expect("changelog thread");
 }
 
+/// Discord accounts linked to `old` are linked to `new` from now on.
+pub fn rename_player(old: &str, new: &str) {
+    let Some(bot) = BOT.get().filter(|_| old != new) else { return };
+    for map in [&bot.links, &bot.verified] {
+        for key in map.lock().unwrap().values_mut().filter(|k| *k == old) {
+            *key = new.to_string();
+        }
+    }
+    bot.save_links();
+}
+
 // ---------------------------------------------------------------------------------------------
 // The gateway: messages in.
 
@@ -1184,7 +1195,7 @@ mod tests {
         {
             let mut a = state.accounts.lock().unwrap();
             for name in ["Ryuji", "Lynerrr"] {
-                a.users.insert(name.to_ascii_lowercase(), crate::User { name: name.into(), hash: String::new(), created: 1_700_000_000, friends: Vec::new(), requests: Vec::new(), nominator: false, email: None });
+                a.users.insert(name.to_ascii_lowercase(), crate::User { name: name.into(), hash: String::new(), created: 1_700_000_000, friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None });
             }
         }
         let play = online::ScoreSubmit {

@@ -103,6 +103,10 @@ fn badges(name: &str) -> String {
         .collect()
 }
 
+/// What a form that can't be taken back asks for (the site's scripts are its own files only, so
+/// no `confirm()`).
+const SURE: &str = "<label><input type=checkbox required> sure</label>";
+
 /// A player's roles (their badges), and what the one looking at their profile may do there.
 pub struct Roles {
     pub admin: bool,
@@ -110,13 +114,16 @@ pub struct Roles {
     /// It's the viewer's own profile.
     pub own: bool,
     pub viewer_admin: bool,
+    pub banned: bool,
     /// Their code for `>verify` on Discord (their own page, nominators only).
     pub verify_code: Option<String>,
 }
 
 fn role_badges(r: &Roles) -> String {
     let badge = |label: &str, colour: &str, what: &str| format!("<span class=badge style=\"--c:{colour}\" title=\"{what}\">{label}</span>");
-    if r.admin {
+    if r.banned {
+        badge("BANNED", "#8a8a9a", "banned: can't log in, and their plays are off the boards")
+    } else if r.admin {
         badge("ADMIN", "#9b59ff", "taiko.rs admin: makes loved nominators, and loves maps")
     } else if r.nominator {
         badge("LOVED", "#ff66aa", "loved nominator: loves graveyard maps so they give pp here")
@@ -160,8 +167,22 @@ fn profile_tools(p: &Profile, r: &Roles) -> String {
         } else {
             String::new()
         };
+        // Admins' and Claude's roles go by their names.
+        let moderation = if r.admin || p.name.eq_ignore_ascii_case(crate::ALWAYS_ONLINE) {
+            String::new()
+        } else {
+            let ban = if r.banned {
+                format!("<form method=post action=\"/u/{}/ban\"><input type=hidden name=on value=0><button class=\"btn small\">unban</button></form>", esc(&p.name))
+            } else {
+                format!("<form method=post action=\"/u/{}/ban\"><input type=hidden name=on value=1>{SURE}<button class=\"btn small\">ban</button></form>", esc(&p.name))
+            };
+            format!(
+                "<form method=post action=\"/u/{0}/rename\"><input name=name value=\"{0}\" minlength=3 maxlength=16 required aria-label=\"new name\"><button class=\"btn small\">rename</button></form>{ban}",
+                esc(&p.name)
+            )
+        };
         parts.push(format!(
-            "<div class=tool><b>ADMIN</b>{nominator}<form method=post action=\"/u/{0}/avatar\" enctype=\"multipart/form-data\" class=upload>\
+            "<div class=tool><b>ADMIN</b>{nominator}{moderation}<form method=post action=\"/u/{0}/avatar\" enctype=\"multipart/form-data\" class=upload>\
              <input type=file name=avatar accept=\"image/png,image/jpeg,image/gif,image/webp\" required aria-label=\"their picture\"><button class=\"btn small\">set their picture</button></form>{remove}</div>",
             esc(&p.name)
         ));
@@ -1046,7 +1067,8 @@ pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Optio
             let sent = sent.map(|p| format!("{p:.2}pp")).unwrap_or_else(|| "no pp".into());
             let now = fixed.map(|p| format!("set to {p:.2}pp by an admin")).unwrap_or_else(|| "as sent".into());
             format!(
-                "<section class=\"panel tools\"><div class=tool><b>ADMIN</b><form method=post action=\"/s/{}/pp\"><input name=pp inputmode=decimal placeholder=\"pp (empty: as sent)\" value=\"{}\" aria-label=pp><button class=\"btn small\">set pp</button></form>\
+                "<section class=\"panel tools\"><div class=tool><b>ADMIN</b><form method=post action=\"/s/{0}/pp\"><input name=pp inputmode=decimal placeholder=\"pp (empty: as sent)\" value=\"{1}\" aria-label=pp><button class=\"btn small\">set pp</button></form>\
+                 <form method=post action=\"/s/{0}/delete\">{SURE}<button class=\"btn small\">delete this play</button></form>\
                  <span class=dim>sent with {sent}; {now}</span></div></section>",
                 s.id,
                 fixed.map(|p| format!("{p:.2}")).unwrap_or_default()
@@ -1592,6 +1614,20 @@ footer{border-top:2px solid var(--line);background:var(--bg2);padding:24px 0}foo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_admins_get_the_moderation_forms() {
+        let p = Profile { name: "Ryuji".into(), ..Default::default() };
+        let roles = |viewer_admin, banned, admin| Roles { admin, nominator: false, own: false, viewer_admin, banned, verify_code: None };
+        assert!(profile_tools(&p, &roles(false, false, false)).is_empty());
+        let tools = profile_tools(&p, &roles(true, false, false));
+        assert!(tools.contains("/u/Ryuji/rename") && tools.contains("/u/Ryuji/ban") && tools.contains("value=1") && tools.contains("type=checkbox"));
+        assert!(profile_tools(&p, &roles(true, true, false)).contains(">unban<"));
+        assert!(!profile_tools(&p, &roles(true, false, true)).contains("/rename"));
+        let claude = Profile { name: "claude".into(), ..Default::default() };
+        assert!(!profile_tools(&claude, &roles(true, false, false)).contains("/ban"));
+        assert!(role_badges(&roles(false, true, false)).contains("BANNED"));
+    }
 
     #[test]
     fn account_forms() {

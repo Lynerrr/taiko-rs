@@ -76,11 +76,17 @@ struct User {
     /// May love maps (see `loved`); admins give and take it.
     #[serde(default)]
     nominator: bool,
+    /// Can't log in, and their plays are off the boards; admins give and take it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    banned: bool,
     /// Where codes for resetting the password go (lowercase; accounts from before emails have
     /// none until linked).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     email: Option<String>,
 }
+
+/// What a banned account is told.
+const BANNED: &str = "this account is banned";
 
 /// Admins (lowercased names): they make loved nominators, and nominate themselves.
 const ADMINS: &[&str] = &["lynerrr", "auneu"];
@@ -229,6 +235,20 @@ impl Hub {
         for c in self.conns.get(key).into_iter().flatten() {
             c.tx.close();
         }
+    }
+
+    /// `old` is called `new` from now on: their chats go along, their connections close and come
+    /// back under the new name.
+    fn rename(&mut self, old: &str, new: &str) {
+        let chats: Vec<(String, String)> = self.history.keys().filter(|(a, b)| a == old || b == old).cloned().collect();
+        for chat in chats {
+            let other = if chat.0 == old { &chat.1 } else { &chat.0 };
+            let moved = pair(new, other);
+            if let Some(log) = self.history.remove(&chat) {
+                self.history.insert(moved, log);
+            }
+        }
+        self.close_account(old);
     }
 
     /// Closes every connection opened with `token`.
@@ -470,7 +490,7 @@ impl State {
         let mut save = !accounts.users.contains_key("claude");
         if save {
             let hash = hash_password(&new_token()).expect("argon2");
-            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, email: None });
+            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None });
         }
         // And its friends, both ways.
         for &friend in CLAUDE_FRIENDS {
@@ -489,7 +509,10 @@ impl State {
         accounts.index_requests();
         println!("{} accounts, {} sessions ({})", accounts.users.len(), accounts.sessions.len(), path.display());
         // Scores live next to the accounts.
-        let scores = scores::Scores::load(Some(path.parent().map(|d| d.to_path_buf()).unwrap_or_default()));
+        let mut scores = scores::Scores::load(Some(path.parent().map(|d| d.to_path_buf()).unwrap_or_default()));
+        for key in accounts.users.iter().filter(|(_, u)| u.banned).map(|(k, _)| k) {
+            scores.set_banned(key, true);
+        }
         let (saves, wake) = mpsc::channel();
         let state = State {
             accounts: Mutex::new(accounts),
@@ -838,7 +861,7 @@ fn create_account(state: &State, ip: IpAddr, name: &str, password: Option<&str>,
         return Reply::Error("that name is taken".into());
     }
     let has_email = verified.is_some();
-    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, email: verified });
+    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: verified });
     let token = state.new_session(&mut a, &key);
     state.save();
     drop(a);
@@ -868,6 +891,9 @@ fn try_reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, 
         *failed = true;
         return Reply::Error("no account by that name or email".into());
     };
+    if user.banned {
+        return Reply::Error(BANNED.into());
+    }
     let Some(email) = user.email.clone() else {
         return Reply::Error("that account has no email linked: ask an admin on Discord".into());
     };
@@ -954,6 +980,9 @@ fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
         return Reply::Error("wrong name or password".into());
     };
     state.give_back(ip, |l| &mut l.failed, slot);
+    if user.banned {
+        return Reply::Error(BANNED.into());
+    }
     let mut a = state.accounts.lock().unwrap();
     let token = state.new_session(&mut a, &key);
     state.save();
@@ -998,7 +1027,90 @@ impl State {
 
     /// Admins, and those they've made loved nominators.
     fn is_nominator(&self, key: &str) -> bool {
-        is_admin(key) || self.accounts.lock().unwrap().users.get(key).is_some_and(|u| u.nominator)
+        is_admin(key) || self.accounts.lock().unwrap().users.get(key).is_some_and(|u| u.nominator && !u.banned)
+    }
+
+    fn is_banned(&self, key: &str) -> bool {
+        self.accounts.lock().unwrap().users.get(key).is_some_and(|u| u.banned)
+    }
+
+    /// Whom admin `by` may ban or rename: anyone but admins and Claude, whose roles go by their
+    /// names. Their key and name as written.
+    fn admin_target(&self, by: &str, name: &str) -> Result<(String, String), String> {
+        if !is_admin(by) {
+            return Err("only admins can do that".into());
+        }
+        let key = name.trim().to_ascii_lowercase();
+        if is_admin(&key) || key == ALWAYS_ONLINE {
+            return Err("that can't be done to an admin or to Claude".into());
+        }
+        let shown = self.accounts.lock().unwrap().users.get(&key).map(|u| u.name.clone());
+        Ok((key, shown.ok_or("there's no player by that name")?))
+    }
+
+    /// Admin `by` bans `name`: logged out everywhere, unable to log in or reset their password,
+    /// and off the boards. Or lets them back.
+    fn set_banned(&self, by: &str, name: &str, on: bool) -> Result<String, String> {
+        let (key, shown) = self.admin_target(by, name)?;
+        {
+            let mut a = self.accounts.lock().unwrap();
+            let user = a.users.get_mut(&key).ok_or("there's no player by that name")?;
+            user.banned = on;
+            if on {
+                a.sessions.retain(|_, s| s.user != key);
+            }
+            self.save();
+        }
+        self.scores.lock().unwrap().set_banned(&key, on);
+        if on {
+            self.hub.lock().unwrap().close_account(&key);
+        }
+        println!("{shown} {} (by {by})", if on { "banned" } else { "unbanned" });
+        Ok(if on { format!("{shown} is banned") } else { format!("{shown} isn't banned any more") })
+    }
+
+    /// Admin `by` renames `name` to `new`: everything of theirs goes along, and the old name is
+    /// free for anyone. Returns the new name.
+    fn rename(&self, by: &str, name: &str, new: &str) -> Result<String, String> {
+        let (key, shown) = self.admin_target(by, name)?;
+        let new = new.trim();
+        if !online::valid_name(new) {
+            return Err(format!("names are {}", online::NAME_RULES));
+        }
+        if new == shown {
+            return Err("that's their name already".into());
+        }
+        let new_key = new.to_ascii_lowercase();
+        {
+            let mut a = self.accounts.lock().unwrap();
+            if new_key != key && (a.users.contains_key(&new_key) || is_admin(&new_key) || new_key == ALWAYS_ONLINE) {
+                return Err("that name is taken".into());
+            }
+            let mut user = a.users.remove(&key).ok_or("there's no player by that name")?;
+            user.name = new.to_string();
+            a.users.insert(new_key.clone(), user);
+            for user in a.users.values_mut() {
+                for k in user.friends.iter_mut().chain(&mut user.requests).filter(|k| **k == key) {
+                    *k = new_key.clone();
+                }
+            }
+            for session in a.sessions.values_mut().filter(|s| s.user == key) {
+                session.user = new_key.clone();
+            }
+            a.index_requests();
+            self.save();
+        }
+        self.verify_codes.lock().unwrap().retain(|_, (k, _)| *k != key);
+        let plays = self.scores.lock().unwrap().rename(&key, &new_key, new);
+        avatars::rename(&key, &new_key);
+        discord::rename_player(&key, &new_key);
+        self.hub.lock().unwrap().rename(&key, &new_key);
+        for friend in self.friend_keys(&new_key) {
+            self.push_friends(&friend);
+        }
+        println!("{shown} renamed to {new} (by {by})");
+        plays.map_err(|e| format!("renamed, but their plays weren't: {e}"))?;
+        Ok(new.to_string())
     }
 
     /// Admin `by` (lowercased) makes `name` a loved nominator, or not any more.
@@ -1621,7 +1733,7 @@ mod tests {
     use super::*;
 
     fn user(name: &str) -> User {
-        User { name: name.into(), hash: String::new(), created: 0, friends: Vec::new(), requests: Vec::new(), nominator: false, email: None }
+        User { name: name.into(), hash: String::new(), created: 0, friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None }
     }
 
     #[test]
@@ -1715,6 +1827,81 @@ mod tests {
 
     fn lines(rx: &mpsc::Receiver<Line>) -> Vec<String> {
         rx.try_iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn banned_accounts_are_out_until_let_back() {
+        let state = test_state("ban");
+        let ip = IpAddr::from([127, 0, 0, 1]);
+        let hash = hash_password("secret1").unwrap();
+        {
+            let mut a = state.accounts.lock().unwrap();
+            a.users.insert("troll".into(), User { hash, nominator: true, email: Some("t@mail.ru".into()), ..user("troll") });
+            a.users.insert("auneu".into(), user("auneu"));
+        }
+        let Reply::Account { token, .. } = login(&state, ip, "troll", "secret1") else { panic!("logs in") };
+        let (_, _, rx) = connect(&state, "troll", &token);
+
+        assert!(state.set_banned("troll", "auneu", true).is_err(), "only admins");
+        assert!(state.set_banned("auneu", "auneu", true).is_err() && state.set_banned("auneu", "claude", true).is_err());
+        assert!(state.set_banned("auneu", "nobody", true).is_err());
+        assert!(state.set_banned("lynerrr", "Troll", true).is_ok());
+
+        assert!(state.user(&token).is_none(), "logged out");
+        assert!(rx.try_iter().any(|l| l.is_empty()), "connection closed");
+        assert!(matches!(login(&state, ip, "troll", "secret1"), Reply::Error(e) if e == BANNED));
+        assert!(matches!(login(&state, ip, "troll", "wrong"), Reply::Error(e) if e != BANNED), "only with the password");
+        assert!(matches!(reset_password(&state, ip, "troll", None, None), Reply::Error(e) if e == BANNED));
+        assert!(!state.is_nominator("troll"));
+
+        // Still banned after a restart.
+        state.write(&state.accounts.lock().unwrap());
+        let (again, _wake) = State::load(state.path.clone());
+        assert!(matches!(login(&again, ip, "troll", "secret1"), Reply::Error(e) if e == BANNED));
+
+        state.set_banned("auneu", "troll", false).unwrap();
+        assert!(matches!(login(&state, ip, "troll", "secret1"), Reply::Account { .. }));
+        assert!(state.is_nominator("troll"));
+    }
+
+    #[test]
+    fn a_rename_keeps_the_session_friends_and_chats() {
+        let state = test_state("rename");
+        let ip = IpAddr::from([127, 0, 0, 1]);
+        let hash = hash_password("secret1").unwrap();
+        {
+            let mut a = state.accounts.lock().unwrap();
+            a.users.insert("troll".into(), User { hash, friends: vec!["ann".into()], requests: vec!["bob".into()], ..user("Troll") });
+            a.users.insert("ann".into(), User { friends: vec!["troll".into()], ..user("Ann") });
+            a.users.insert("bob".into(), user("Bob"));
+            a.index_requests();
+        }
+        let Reply::Account { token, .. } = login(&state, ip, "troll", "secret1") else { panic!("logs in") };
+        state.hub.lock().unwrap().history.insert(pair("ann", "troll"), VecDeque::new());
+
+        assert!(state.rename("ann", "troll", "x12").is_err(), "only admins");
+        assert!(state.rename("auneu", "auneu", "boss").is_err() && state.rename("auneu", "claude", "gpt").is_err());
+        assert!(state.rename("auneu", "troll", "no good!").is_err());
+        assert!(state.rename("auneu", "troll", "Troll").is_err());
+        for taken in ["ann", "ANN", "claude", "lynerrr"] {
+            assert!(state.rename("auneu", "troll", taken).is_err(), "{taken} is taken");
+        }
+
+        assert_eq!(state.rename("auneu", "Troll", "Nice").unwrap(), "Nice");
+        assert_eq!(state.user(&token).as_deref(), Some("Nice"));
+        assert!(matches!(login(&state, ip, "nice", "secret1"), Reply::Account { name, .. } if name == "Nice"));
+        assert!(matches!(login(&state, ip, "troll", "secret1"), Reply::Error(_)));
+        assert!(state.are_friends("ann", "nice") && state.are_friends("nice", "ann"));
+        {
+            let a = state.accounts.lock().unwrap();
+            assert_eq!(a.users["nice"].requests, ["bob"]);
+            assert_eq!(a.asked["bob"], ["nice"]);
+        }
+        assert!(state.hub.lock().unwrap().history.contains_key(&pair("ann", "nice")));
+
+        // Case only.
+        assert_eq!(state.rename("auneu", "nice", "NICE").unwrap(), "NICE");
+        assert_eq!(state.user(&token).as_deref(), Some("NICE"));
     }
 
     #[test]

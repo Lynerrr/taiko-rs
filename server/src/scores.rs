@@ -62,6 +62,34 @@ const MAX_PLAY_MS: u64 = 2 * 3600 * 1000;
 /// `Played` reports one account may send per minute.
 const PLAYED_PER_MINUTE: usize = 30;
 
+/// A player's new name. Plays are saved as they were sent, so this goes over the ones older than
+/// it when they're read: the old name may be someone else's by now.
+#[derive(Serialize, Deserialize)]
+struct Rename {
+    from: String,
+    to: String,
+    /// As written.
+    name: String,
+    /// The first play id it doesn't go for.
+    before: u64,
+}
+
+impl Rename {
+    fn apply(&self, all: &mut [Stored]) {
+        for s in all.iter_mut().filter(|s| s.id < self.before && s.player == self.from) {
+            s.player = self.to.clone();
+            s.score.player = self.name.clone();
+        }
+    }
+}
+
+/// Writes `value` to `file` atomically.
+fn save_json<T: Serialize>(file: &PathBuf, value: &T) -> Result<(), String> {
+    let tmp = file.with_extension("json.tmp");
+    let text = serde_json::to_string_pretty(value).unwrap_or_default();
+    std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, file)).map_err(|e| format!("couldn't save it: {e}"))
+}
+
 pub struct Scores {
     file: Option<PathBuf>,
     /// DIR/playtime.json: each player's `Tally`.
@@ -71,6 +99,15 @@ pub struct Scores {
     /// DIR/pp-overrides.json: pp admins have set for plays (by id), in place of what was sent.
     overrides_file: Option<PathBuf>,
     overrides: HashMap<u64, f64>,
+    /// DIR/scores-removed.json: plays admins have deleted (by id). Their lines stay in
+    /// scores.jsonl and their replays on disk, so an id is never used twice.
+    removed_file: Option<PathBuf>,
+    removed: HashSet<u64>,
+    /// DIR/renames.json: players' new names, oldest first.
+    renames_file: Option<PathBuf>,
+    renames: Vec<Rename>,
+    /// Banned players (by key): their plays stay on their profile only.
+    banned: HashSet<String>,
     replays: Option<PathBuf>,
     /// How much DIR/replays holds, and how much it may.
     replay_bytes: u64,
@@ -151,10 +188,23 @@ impl Scores {
         let tallies = tally_file.as_ref().map(|f| crate::load_saved(f)).unwrap_or_default();
         let overrides_file = dir.as_ref().map(|d| d.join("pp-overrides.json"));
         let overrides = overrides_file.as_ref().map(|f| crate::load_saved(f)).unwrap_or_default();
+        let removed_file = dir.as_ref().map(|d| d.join("scores-removed.json"));
+        let removed: HashSet<u64> = removed_file.as_ref().map(|f| crate::load_saved(f)).unwrap_or_default();
+        let renames_file = dir.as_ref().map(|d| d.join("renames.json"));
+        let renames: Vec<Rename> = renames_file.as_ref().map(|f| crate::load_saved(f)).unwrap_or_default();
+        all.retain(|s| !removed.contains(&s.id));
+        for r in &renames {
+            r.apply(&mut all);
+        }
         let mut scores = Scores {
             file,
             overrides_file,
             overrides,
+            removed_file,
+            removed,
+            renames_file,
+            renames,
+            banned: HashSet::new(),
             tally_file,
             tallies,
             reports: HashMap::new(),
@@ -171,23 +221,38 @@ impl Scores {
             standings: HashMap::new(),
             map_rows: HashMap::new(),
         };
-        for i in 0..scores.all.len() {
-            scores.index(i);
-        }
+        scores.reindex();
         scores.count_pp();
-        let players: Vec<String> = scores.by_player.keys().cloned().collect();
-        for p in players {
-            scores.restand(&p);
-        }
         scores
+    }
+
+    /// Redoes the indexes, the maps' rows and the rankings from the plays.
+    fn reindex(&mut self) {
+        self.by_player.clear();
+        self.by_map.clear();
+        self.map_rows.clear();
+        self.standings.clear();
+        for i in 0..self.all.len() {
+            self.index(i);
+        }
+        let players: Vec<String> = self.by_player.keys().cloned().collect();
+        for p in players {
+            self.restand(&p);
+        }
+    }
+
+    /// Whether a play is on its player's profile only.
+    fn off_boards(&self, s: &Stored) -> bool {
+        s.hidden || self.banned.contains(&s.player)
     }
 
     /// Adds `all[i]` to the indexes and its map's row.
     fn index(&mut self, i: usize) {
+        let off = self.off_boards(&self.all[i]);
         let s = &self.all[i];
         let sc = &s.score;
         self.by_player.entry(s.player.clone()).or_default().push(i);
-        if s.hidden {
+        if off {
             return;
         }
         self.by_map.entry(sc.map_hash).or_default().push(i);
@@ -208,7 +273,7 @@ impl Scores {
 
     /// Redoes `player`'s ranking row from their plays.
     fn restand(&mut self, player: &str) {
-        let plays: Vec<&Stored> = self.stored_of(player).into_iter().filter(|s| !s.hidden).collect();
+        let plays: Vec<&Stored> = self.stored_of(player).into_iter().filter(|s| !self.off_boards(s)).collect();
         let (stats, pp) = stats_of(&plays);
         let row = Ranked {
             rank: 0,
@@ -249,6 +314,10 @@ impl Scores {
         let t = self.tallies.entry(player.to_string()).or_default();
         t.ms += ms.min(MAX_PLAY_MS);
         t.other_plays += other as u32;
+        self.save_tallies();
+    }
+
+    fn save_tallies(&self) {
         if let Some(file) = &self.tally_file {
             let tmp = file.with_extension("json.tmp");
             let text = serde_json::to_string(&self.tallies).unwrap_or_default();
@@ -306,12 +375,58 @@ impl Scores {
             None => self.overrides.remove(&id),
         };
         if let Some(file) = &self.overrides_file {
-            let tmp = file.with_extension("json.tmp");
-            let text = serde_json::to_string_pretty(&self.overrides).unwrap_or_default();
-            std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, file)).map_err(|e| format!("couldn't save it: {e}"))?;
+            save_json(file, &self.overrides)?;
         }
         self.count_pp();
         Ok(())
+    }
+
+    /// An admin deletes play `id`; everything goes as if it was never sent. Returns whose it was
+    /// (as written).
+    pub fn remove(&mut self, id: u64) -> Result<String, String> {
+        let at = self.all.binary_search_by_key(&id, |s| s.id).map_err(|_| "that score isn't on the server".to_string())?;
+        self.removed.insert(id);
+        if let Some(Err(e)) = self.removed_file.as_ref().map(|f| save_json(f, &self.removed)) {
+            self.removed.remove(&id);
+            return Err(e);
+        }
+        let gone = self.all.remove(at);
+        self.reindex();
+        Ok(gone.score.player)
+    }
+
+    /// `from`'s plays and play time are `to`'s from now on (`name`: as written).
+    pub fn rename(&mut self, from: &str, to: &str, name: &str) -> Result<(), String> {
+        self.renames.push(Rename { from: from.to_string(), to: to.to_string(), name: name.to_string(), before: self.next_id });
+        if let Some(Err(e)) = self.renames_file.as_ref().map(|f| save_json(f, &self.renames)) {
+            self.renames.pop();
+            return Err(e);
+        }
+        if let Some(r) = self.renames.last() {
+            r.apply(&mut self.all);
+        }
+        if from != to {
+            if let Some(t) = self.tallies.remove(from) {
+                self.tallies.insert(to.to_string(), t);
+                self.save_tallies();
+            }
+            if self.banned.remove(from) {
+                self.banned.insert(to.to_string());
+            }
+        }
+        self.reindex();
+        Ok(())
+    }
+
+    /// Takes `player`'s plays off the boards (the accounts remember who's banned), or puts them
+    /// back.
+    pub fn set_banned(&mut self, player: &str, on: bool) {
+        if on {
+            self.banned.insert(player.to_string());
+        } else {
+            self.banned.remove(player);
+        }
+        self.reindex();
     }
 
     /// Takes a play by `player` (lowercased key, `name` as written). Returns its place on the map
@@ -515,7 +630,7 @@ impl Scores {
 
     /// Plays sent, all told.
     pub fn play_count(&self) -> usize {
-        self.all.iter().filter(|s| !s.hidden).count()
+        self.all.iter().filter(|s| !self.off_boards(s)).count()
     }
 
     /// A map someone has played: its name, cover, stars, and how much it's played.
@@ -539,7 +654,7 @@ impl Scores {
 
     /// The latest plays by anyone, newest first.
     pub fn latest(&self, limit: usize) -> Vec<OnlineScore> {
-        self.all.iter().rev().filter(|s| !s.hidden).take(limit).map(|s| s.score.clone()).collect()
+        self.all.iter().rev().filter(|s| !self.off_boards(s)).take(limit).map(|s| s.score.clone()).collect()
     }
 
     /// `player`'s pp history, most played maps and mods (see `Extras`).
@@ -933,6 +1048,76 @@ mod tests {
             assert_eq!(s.profile("a", "A", 0).rank, Some(1));
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_removed_play_is_gone_for_good() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-removed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        s.submit("b", "B", play(7, 400, 50.0), 2).unwrap();
+        s.submit("a", "A", play(8, 400, 900.0), 3).unwrap();
+        assert_eq!(s.remove(3).unwrap(), "A");
+        assert!(s.remove(3).is_err() && s.remove(99).is_err());
+        for s in [&s, &Scores::load(Some(dir.clone()))] {
+            assert!(s.score(3).is_none() && s.map(8).is_none());
+            assert_eq!(s.profile("a", "A", 0).pp, online::weighted_pp(vec![100.0]));
+            assert_eq!(s.latest(10).len(), 2);
+            assert_eq!(s.rankings(10).len(), 2);
+        }
+        // Its id isn't used again.
+        let mut again = Scores::load(Some(dir.clone()));
+        again.submit("a", "A", play(9, 400, 1.0), 4).unwrap();
+        assert_eq!(again.latest(1)[0].id, 4);
+        // The last play of a player takes them off the rankings.
+        again.remove(2).unwrap();
+        assert_eq!(again.rankings(10).iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["A"]);
+        assert_eq!(again.map(7).map(|m| (m.plays, m.players)), Some((1, 1)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_name_takes_the_old_plays_along() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        s.submit("troll", "Troll", play(7, 500, 100.0), 1).unwrap();
+        s.played("troll", 5000).unwrap();
+        s.rename("troll", "nice", "Nice").unwrap();
+        // Someone new takes the old name.
+        s.submit("troll", "TROLL", play(8, 400, 50.0), 2).unwrap();
+        s.rename("nice", "nice", "NICE").unwrap();
+        for s in [&s, &Scores::load(Some(dir.clone()))] {
+            assert_eq!(s.plays_of("nice").iter().map(|p| (p.player.as_str(), p.map_hash)).collect::<Vec<_>>(), [("NICE", 7)]);
+            assert_eq!(s.plays_of("troll").iter().map(|p| (p.player.as_str(), p.map_hash)).collect::<Vec<_>>(), [("TROLL", 8)]);
+            // The newcomer's play time is theirs alone.
+            assert_eq!(s.tally("nice").ms, s.tally("troll").ms + 5000);
+            assert_eq!(s.map_scores(7)[0].player, "NICE");
+            assert_eq!(s.rankings(10).iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["NICE", "TROLL"]);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_banned_player_is_off_the_boards() {
+        let mut s = Scores::load(None);
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        s.submit("b", "B", play(7, 400, 50.0), 2).unwrap();
+        s.set_banned("a", true);
+        let names = |s: &Scores| s.rankings(10).iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&s), ["B"]);
+        assert_eq!(s.map_scores(7).len(), 1);
+        assert_eq!((s.latest(10).len(), s.play_count()), (1, 1));
+        assert_eq!(s.map(7).map(|m| m.plays), Some(1));
+        let p = s.profile("a", "A", 0);
+        assert_eq!((p.rank, p.recent.len(), p.firsts.len()), (None, 1, 0));
+        assert_eq!(s.profile("b", "B", 0).rank, Some(1));
+        s.set_banned("a", false);
+        assert_eq!(names(&s), ["A", "B"]);
+        assert_eq!(s.map_scores(7)[0].player, "A");
     }
 
     #[test]
