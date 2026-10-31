@@ -202,6 +202,13 @@ impl Hotkey {
         self.defaults()[0]
     }
 
+    /// The key it starts on. Applying the offset suggestion starts on none: O is right by the
+    /// drum keys, and a stray press quietly moved the map's offset mid-song. It stays known by O
+    /// to the handlers, like any hotkey by its default.
+    pub fn first_key(self) -> Option<Chord> {
+        (self != Hotkey::ApplyOffset).then(|| self.default())
+    }
+
     /// Shift held with it does more of it, or the other way (Shift+F2 goes back, Shift + - / +
     /// moves 5 ms): it stays a modifier wherever the hotkey is bound.
     fn shift_free(self) -> bool {
@@ -338,7 +345,7 @@ pub struct Bindings(pub [Option<Chord>; Hotkey::ALL.len()]);
 
 impl Default for Bindings {
     fn default() -> Self {
-        Bindings(Hotkey::ALL.map(|h| Some(h.default())))
+        Bindings(Hotkey::ALL.map(Hotkey::first_key))
     }
 }
 
@@ -369,7 +376,7 @@ impl Bindings {
         let mut out = String::from("# hotkeys moved or removed: hotkey.<name> = a key with Ctrl+ / Alt+ / Shift+ before it, or none\n");
         for h in Hotkey::ALL {
             let c = self.get(h);
-            if c != Some(h.default()) {
+            if c != h.first_key() {
                 out.push_str(&format!("hotkey.{} = {}\n", h.key(), c.map(Chord::name).unwrap_or_else(|| "none".into())));
             }
         }

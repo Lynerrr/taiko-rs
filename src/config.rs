@@ -226,6 +226,9 @@ pub struct Config {
     pub splash: bool,
     /// Start on the main menu (off: straight to song select).
     pub main_menu: bool,
+    /// The first steps guide has been seen through. A config from before it says nothing, so
+    /// players already playing get it once too.
+    pub guide_seen: bool,
     /// Look for a newer build at startup.
     pub check_updates: bool,
     /// Start in (borderless) fullscreen; F11 toggles and remembers it.
@@ -330,6 +333,7 @@ impl Default for Config {
             animations: true,
             splash: true,
             main_menu: true,
+            guide_seen: false,
             check_updates: true,
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
@@ -566,6 +570,13 @@ pub fn save_map_offsets(offsets: &std::collections::HashMap<u64, f64>) {
     let _ = std::fs::write(dir.join("map_offsets.tsv"), lines.join("\n") + "\n");
 }
 
+/// Clears every map's own offset, keeping them in `map_offsets.backup.tsv` to go back to by hand.
+pub fn reset_map_offsets() {
+    if let Some(dir) = data_dir() {
+        let _ = std::fs::rename(dir.join("map_offsets.tsv"), dir.join("map_offsets.backup.tsv"));
+    }
+}
+
 pub fn config_path() -> Option<PathBuf> {
     Some(user_dir(false)?.join("config.txt"))
 }
@@ -659,6 +670,7 @@ impl Config {
                 "animations" => cfg.animations = v != "false",
                 "splash" => cfg.splash = v != "false",
                 "main_menu" => cfg.main_menu = v != "false",
+                "guide_seen" => cfg.guide_seen = v == "true",
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
@@ -809,6 +821,7 @@ impl Config {
              animations = {}\n\
              splash = {}\n\
              main_menu = {}\n\
+             guide_seen = {}\n\
              check_updates = {}\n\
              # countdown before play continues after pausing (ms)\n\
              resume_delay_ms = {:.0}\n\
@@ -854,6 +867,7 @@ impl Config {
             self.animations,
             self.splash,
             self.main_menu,
+            self.guide_seen,
             self.check_updates,
             self.resume_delay_ms,
             self.sort,

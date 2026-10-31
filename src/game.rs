@@ -280,6 +280,8 @@ pub struct Game {
     pub mute_hits: bool,
     /// Show the live offset suggestion under the hit error meter.
     pub show_offset_hint: bool,
+    /// The key that applies it, if it has one.
+    pub offset_key: Option<String>,
     /// Kiai time tints the lane and pulses the hit target.
     pub kiai_effects: bool,
     /// Interface parts hidden (the interface toggle).
@@ -1425,6 +1427,7 @@ impl Game {
             show_hp: true,
             mute_hits: false,
             show_offset_hint: false,
+            offset_key: None,
             kiai_effects: true,
             hidden: crate::hud::Parts::NONE,
             visual_offset: 0.0,
@@ -3629,10 +3632,11 @@ impl Game {
             let (error, margin, suggested) = (e.error_ms.abs(), e.margin_ms, e.suggested_offset);
             if h.significant {
                 let dir = if e.error_ms > 0.0 { tr!("late", "遅い", "поздно") } else { tr!("early", "早い", "рано") };
+                let apply = self.offset_key.as_ref().map_or(String::new(), |k| tr!("  |  {k}: this map  Shift+{k}: all", "  |  {k}: この譜面  Shift+{k}: 全体", "  |  {k}: эта карта  Shift+{k}: все";));
                 let text = tr!(
-                    "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms  |  O: this map  Shift+O: all{building}",
-                    "{error:.1} ±{margin:.1} ms {dir} ({stats})  |  提案オフセット {suggested:+.0} ms  |  O: この譜面  Shift+O: 全体{building}",
-                    "{error:.1} +-{margin:.1} мс {dir} ({stats})  |  смещение {suggested:+.0} мс  |  O: эта карта  Shift+O: все{building}";
+                    "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms{apply}{building}",
+                    "{error:.1} ±{margin:.1} ms {dir} ({stats})  |  提案オフセット {suggested:+.0} ms{apply}{building}",
+                    "{error:.1} +-{margin:.1} мс {dir} ({stats})  |  смещение {suggested:+.0} мс{apply}{building}";
                 );
                 c.text_centered(cx, my + 20.0, 8.0, rgba(0xFFD34D, 0.95), &text);
             } else {

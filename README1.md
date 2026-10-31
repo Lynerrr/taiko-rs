@@ -138,7 +138,7 @@ Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
 | Shift+Enter | play the selected map from the start point picked on its timeline |
 | Ctrl+Enter / click the autoplay box | fullscreen preview (song select); P in the multiplayer lobby |
 | Alt + wheel | master volume (anywhere) |
-| O (in game or pause menu) | apply the live offset suggestion to this map (Shift+O: to the global offset) |
+| no key by default: Settings > Hotkeys | apply the live offset suggestion to this map (with Shift: to the global offset) |
 | `` ` `` or Ctrl+R | restart map (Ctrl+R also works paused and on the results screen) |
 | Esc (song select) | clear search / quit |
 | - / = (Shift: ×5) | offset −/+ 1 ms: this map's own during a song or on its results, else the global one |
@@ -335,8 +335,9 @@ so the suggestion settles instead of overshooting. Toggle it with Settings → L
 
 **Per-map offsets.** The offset from calibration (and Settings → Audio offset) is global. Each map
 can have its own offset on top, like osu!'s local offset: during a song or on its results, **-** /
-**=** (Shift ×5) change that map's offset, and **O** applies the live suggestion to it
-(**Shift+O** applies it to the global offset instead, for when every map suggests the same). The
+**=** (Shift ×5) change that map's offset. The hotkey "Song: apply offset suggestion" has no key
+until you give it one: it applies the live suggestion to the map, and with Shift to the global
+offset, for when every map suggests the same. The
 map's offset shows in song select next to its length; they're saved in `map_offsets.tsv` in the
 config folder. In menus, - / = change the global offset.
 

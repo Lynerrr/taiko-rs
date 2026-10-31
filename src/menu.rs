@@ -33,6 +33,25 @@ const NOTE_GAP: f32 = 132.0;
 
 const COMING_SOON: &str = "Coming soon";
 
+/// Our Discord server.
+pub const DISCORD_INVITE: &str = "https://discord.gg/6JUm46p9Zz";
+const DISCORD_BLURPLE: u32 = 0x5865F2;
+/// The face on its button, 16 by 12: `#` white, the rest the button's colour.
+const DISCORD_FACE: [&str; 12] = [
+    "...##......##...",
+    "..############..",
+    ".##############.",
+    ".##############.",
+    ".####..##..####.",
+    "#####..##..#####",
+    "#####..##..#####",
+    "################",
+    "################",
+    ".######..######.",
+    "..###......###..",
+    "...#........#...",
+];
+
 /// A note as pixel art, like the logo: `ART` x `ART` pixels, 0 = none.
 const ART: usize = 36;
 type Art = [[u32; ART]; ART];
@@ -491,7 +510,7 @@ fn draw_note(c: &mut Canvas, art: &Art, x: f32, y: f32, r: f32, alpha: f32) {
 
 /// A ring `width` thick inside radius `r` in pixels `px` across (as wide as `r`: a disc). `side`:
 /// only the left (-1) or right (1) half; 0 the whole of it.
-fn pixel_ring(c: &mut Canvas, x: f32, y: f32, r: f32, width: f32, side: i32, px: f32, col: [f32; 4]) {
+pub fn pixel_ring(c: &mut Canvas, x: f32, y: f32, r: f32, width: f32, side: i32, px: f32, col: [f32; 4]) {
     let (x, y) = (snap_to_grid(x), snap_to_grid(y));
     let (outer, inner) = (r / px, (r - width) / px);
     let n = outer.ceil() as i32;
@@ -514,6 +533,11 @@ fn pixel_ring(c: &mut Canvas, x: f32, y: f32, r: f32, width: f32, side: i32, px:
     }
 }
 
+/// An item's note on its own (the guide's pictures).
+pub fn note(c: &mut Canvas, item: Item, x: f32, y: f32, r: f32) {
+    draw_note(c, &item.art(), x, y, r, 1.0);
+}
+
 fn tooltip(c: &mut Canvas, x: f32, y: f32) {
     let w = Canvas::text_width(8.0, COMING_SOON) + 16.0;
     let left = (x - w / 2.0).clamp(8.0, (c.width - w - 8.0).max(8.0));
@@ -521,8 +545,31 @@ fn tooltip(c: &mut Canvas, x: f32, y: f32) {
     c.text(left + 8.0, y + 5.5, 8.0, rgba(0xFFD34D, 1.0), COMING_SOON);
 }
 
+/// The way to our Discord server, in pixels like the notes.
+fn draw_discord(c: &mut Canvas, right: f32, bottom: f32) {
+    let px = pixel_size(1.5);
+    let (w, h) = (16.0 * px + 12.0, 12.0 * px + 10.0);
+    let (x, y) = (right - w, bottom - h);
+    let hover = c.hovered(x, y, w, h);
+    let fill = if hover { tint(DISCORD_BLURPLE, 0xffffff, 0.15) } else { DISCORD_BLURPLE };
+    c.round_rect(x, y, w, h, 5.0, rgba(fill, 1.0), rgba(if hover { 0xffffff } else { tint(DISCORD_BLURPLE, 0x000000, 0.3) }, 1.0), 1.0);
+    let (left, top) = (snap_to_grid(x + 6.0), snap_to_grid(y + 5.0));
+    for (row, line) in DISCORD_FACE.iter().enumerate() {
+        for (col, b) in line.bytes().enumerate() {
+            if b == b'#' {
+                c.rect(left + col as f32 * px, top + row as f32 * px, px, px, rgba(0xffffff, 1.0));
+            }
+        }
+    }
+    c.hit(x, y, w, h, Hit::DiscordServer);
+    if hover {
+        c.text_right(x - 6.0, y + (h - 7.0) / 2.0, 7.0, rgba(0xffffff, 1.0), "Discord");
+    }
+}
+
 fn draw_footer(c: &mut Canvas, f: &Frame) {
     const Y: f32 = 436.0;
+    draw_discord(c, c.width - 14.0, Y + 6.0);
     let hint_w = Canvas::text_width(7.0, f.hint) + 16.0;
     c.round_rect(c.width - 14.0 - hint_w, Y + 12.0, hint_w, 20.0, 6.0, rgba(0x15151d, 0.88), rgba(0x3a3a4e, 1.0), 1.0);
     c.text(c.width - 6.0 - hint_w, Y + 18.5, 7.0, rgba(0xc8c8d8, 1.0), f.hint);
@@ -581,5 +628,11 @@ mod tests {
         }
         assert_eq!(tint(0x204060, 0xffffff, 0.0), 0x204060);
         assert_eq!(tint(0x204060, 0x000000, 1.0), 0x000000);
+    }
+
+    #[test]
+    fn the_discord_face_is_16_by_12() {
+        assert!(DISCORD_FACE.iter().all(|row| row.len() == 16));
+        assert!(DISCORD_INVITE.starts_with("https://discord.gg/"));
     }
 }
