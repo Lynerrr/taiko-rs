@@ -24,6 +24,7 @@ mod difficulty;
 mod download;
 mod font;
 mod game;
+mod genres;
 mod layout;
 #[cfg(test)]
 mod layout_tests;
@@ -2081,7 +2082,13 @@ impl State {
             return;
         }
         match (code, self.cfg.keys.iter().position(|&k| k == code)) {
+            (KeyCode::Escape, _) if p.folders_open => p.folders_open = false,
             (KeyCode::Escape, _) => self.close_player(),
+            (KeyCode::KeyL, _) => {
+                let now = p.list.now();
+                self.music_favourite(now);
+            }
+            (KeyCode::Tab, _) => p.folders_open = !p.folders_open,
             (KeyCode::BracketLeft, _) => p.move_pitch(-1),
             (KeyCode::BracketRight, _) => p.move_pitch(1),
             (KeyCode::ArrowUp, _) => p.scroll_by(-1),
@@ -2102,7 +2109,7 @@ impl State {
             player::Control::Toggle => self.set_music_paused(!self.music_paused),
             player::Control::Open => {
                 self.player = Some(Box::new(player::Player::new(&self.library, self.select.selected())));
-                if self.media.is_none() {
+                if self.media.is_none() && !cfg!(test) {
                     self.media = Some(media::Media::start(self.window_handle));
                 }
             }
@@ -2116,12 +2123,25 @@ impl State {
                     p.list.cycle_repeat();
                 }
             }
+            player::Control::Favourite => {
+                if let Some(now) = self.player.as_ref().map(|p| p.list.now()) {
+                    self.music_favourite(now);
+                }
+            }
             player::Control::PlayMap => {
                 self.select.filter.clear();
                 self.select.refilter(&self.library);
                 self.close_player();
                 self.main_menu = None;
             }
+        }
+    }
+
+    /// Loves a song, or not any more; the list is kept on disk.
+    fn music_favourite(&mut self, track: usize) {
+        if let Some(p) = &mut self.player {
+            p.list.toggle_favourite(track, fresh_seed());
+            playlist::save_favourites(&p.list.favourites);
         }
     }
 
@@ -7864,7 +7884,7 @@ impl State {
                     let now = Instant::now();
                     let engine = self.audio.as_ref();
                     let sounding = !paused && self.preview.sounding(engine, now, &mut p.samples);
-                    let hint = tr!("{a} {b} song   {d} {e} pause   arrows seek", "{a} {b} 曲   {d} {e} ポーズ   矢印 シーク", "{a} {b} трек   {d} {e} пауза   стрелки мотают";);
+                    let hint = tr!("{a} {b} song   {d} {e} pause   L love   Tab folders", "{a} {b} 曲   {d} {e} ポーズ   L お気に入り   Tab フォルダ", "{a} {b} трек   {d} {e} пауза   L любимое   Tab папки";);
                     let volume = self.cfg.music_volume;
                     let frame = player::Frame {
                         song: song.as_deref().unwrap_or_default(),
@@ -9312,6 +9332,17 @@ impl State {
                 }
             }
             Hit::PlayerRow(track) => self.music_play(track),
+            Hit::PlayerFavourite(track) => self.music_favourite(track),
+            Hit::PlayerFolders => {
+                if let Some(p) = &mut self.player {
+                    p.folders_open = !p.folders_open;
+                }
+            }
+            Hit::PlayerFolder(i) => {
+                if let Some(p) = &mut self.player {
+                    p.open_folder(i, fresh_seed());
+                }
+            }
             Hit::PlayerQueue(track) => {
                 if let Some(p) = &mut self.player {
                     p.list.queue.push_back(track);

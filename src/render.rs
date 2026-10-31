@@ -1755,6 +1755,10 @@ pub enum Hit {
     /// queue, the volume, a speed mod (`player::Speed::ALL`) and the pitch (resets it).
     PlayerSearch,
     PlayerRow(usize),
+    /// Its heart on a song, the folders button, and a folder (index into `Playlist::folders`).
+    PlayerFavourite(usize),
+    PlayerFolders,
+    PlayerFolder(usize),
     PlayerQueue(usize),
     PlayerUnqueue(usize),
     PlayerVolume,
