@@ -765,8 +765,8 @@ fn top_player(r: &Ranked) -> String {
     )
 }
 
-/// How many of the rankings the home page lists.
-const TOP_PLAYERS: usize = 20;
+/// How many of the rankings the home page lists: as tall as the latest plays beside them.
+const TOP_PLAYERS: usize = 13;
 
 pub fn home(rankings: &[Ranked], maps: &[MapRow], players: usize, plays: usize, os: Os, live: Live) -> String {
     let bg = maps.iter().find_map(|m| cover(m.set_id, "cover@2x")).map(|u| format!(" style=\"--cover:url('{u}')\"")).unwrap_or_default();
