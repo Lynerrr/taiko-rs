@@ -146,6 +146,29 @@ pub struct Social {
     pub sent_activity: Option<Activity>,
 }
 
+/// The most spectators listed by name during a play.
+const SPECTATORS_LISTED: usize = 8;
+
+/// Who watches a solo play, by name, where a multiplayer match has its scoreboard.
+pub fn draw_spectators(c: &mut Canvas, names: &[&str]) {
+    if names.is_empty() {
+        return;
+    }
+    let n = names.len();
+    let (x, y0, h) = (18.0, 282.0, 14.0);
+    let more = n.saturating_sub(SPECTATORS_LISTED);
+    let title = tr!("Spectators ({n})", "観戦者 ({n})", "Зрители ({n})";);
+    let rest = (more > 0).then(|| tr!("and {more} more", "他{more}人", "и ещё {more}";));
+    let listed = &names[..n.min(SPECTATORS_LISTED)];
+    let lines = 1 + listed.len() + usize::from(rest.is_some());
+    let longest = listed.iter().copied().chain(rest.as_deref()).chain([title.as_str()]).map(|l| Canvas::text_width(7.0, l)).fold(0.0, f32::max);
+    c.round_rect(x - 6.0, y0 - 6.0, longest + 12.0, lines as f32 * h + 8.0, 6.0, rgba(0x000000, 0.45), rgba(0, 0.0), 0.0);
+    c.text(x, y0, 7.0, rgba(0x4fb4ff, 1.0), &title);
+    for (i, line) in listed.iter().copied().chain(rest.as_deref()).enumerate() {
+        c.text(x, y0 + (i + 1) as f32 * h, 7.0, rgba(0xc8c8d8, 1.0), line);
+    }
+}
+
 /// Conversation key for a friend.
 pub fn key(name: &str) -> String {
     name.to_ascii_lowercase()
@@ -209,6 +232,12 @@ impl Social {
     pub fn closing(&self) -> Option<f32> {
         let p = crate::render::progress(self.closed_at?, SLIDE_MS);
         (!self.open && p < 1.0).then_some(p)
+    }
+
+    /// Who's watching us: friends whose activity is watching us (only friends can).
+    pub fn spectators(&self) -> Vec<&str> {
+        let Some(me) = self.me.as_deref().filter(|_| self.connected) else { return Vec::new() };
+        self.friends.iter().filter(|f| matches!(&f.activity, Some(Activity::Watching { name }) if key(name) == key(me))).map(|f| f.name.as_str()).collect()
     }
 
     pub fn notify(&mut self, title: impl Into<String>, body: impl Into<String>, colour: u32, action: NoteAction) {

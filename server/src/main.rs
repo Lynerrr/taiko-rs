@@ -357,6 +357,26 @@ struct Limits {
     lookups: Option<(Instant, usize)>,
 }
 
+/// What a step of an account form on the website came to.
+enum WebAuth {
+    /// Done, and logged in: the account's name as written and a new session token.
+    LoggedIn { name: String, token: String },
+    /// A code is on its way to this (masked) email.
+    CodeSent(String),
+    Failed(String),
+}
+
+impl From<Reply> for WebAuth {
+    fn from(reply: Reply) -> WebAuth {
+        match reply {
+            Reply::Account { name, token, .. } => WebAuth::LoggedIn { name, token },
+            Reply::CodeSent(to) => WebAuth::CodeSent(to),
+            Reply::Error(e) => WebAuth::Failed(e),
+            _ => WebAuth::Failed("server error".into()),
+        }
+    }
+}
+
 struct State {
     accounts: Mutex<Accounts>,
     path: PathBuf,
@@ -512,6 +532,16 @@ impl State {
         }
     }
 
+    /// A step of signing up on the website (see `register`).
+    fn web_register(&self, ip: IpAddr, name: &str, password: Option<&str>, email: &str, code: Option<&str>) -> WebAuth {
+        WebAuth::from(register(self, ip, name, password, Some(email), code))
+    }
+
+    /// A step of resetting a password on the website (see `reset_password`).
+    fn web_reset(&self, ip: IpAddr, who: &str, code: Option<&str>, password: Option<&str>) -> WebAuth {
+        WebAuth::from(reset_password(self, ip, who, code, password))
+    }
+
     /// Logs in from the website: the account's name as written and a new session token.
     fn web_login(&self, ip: IpAddr, name: &str, password: &str) -> Result<(String, String), String> {
         match login(self, ip, name, password) {
@@ -642,7 +672,7 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
         return reply(&mut reader, Reply::Error(format!("update taiko.rs (server protocol {}, yours {})", online::PROTOCOL, env.protocol)));
     }
     let out = match env.request {
-        Request::Register { name, password, email, code } => register(state, ip, &name, &password, email.as_deref(), code.as_deref()),
+        Request::Register { name, password, email, code } => register(state, ip, &name, Some(&password), email.as_deref(), code.as_deref()),
         Request::Login { name, password } => login(state, ip, &name, &password),
         Request::ResetPassword { who, code, password } => reset_password(state, ip, &who, code.as_deref(), password.as_deref()),
         Request::LinkEmail { token, email, code } => link_email(state, ip, &token, &email, code.as_deref()),
@@ -742,12 +772,14 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
     reply(&mut reader, out);
 }
 
-fn register(state: &State, ip: IpAddr, name: &str, password: &str, email: Option<&str>, code: Option<&str>) -> Reply {
+/// `password` can wait while only a code is asked for (the website asks for it with the code).
+fn register(state: &State, ip: IpAddr, name: &str, password: Option<&str>, email: Option<&str>, code: Option<&str>) -> Reply {
     let name = name.trim();
     if !online::valid_name(name) {
         return Reply::Error(format!("names are {}", online::NAME_RULES));
     }
-    if !online::valid_password(password) {
+    let asks_for_code = mail::on() && code.is_none_or(|c| c.trim().is_empty());
+    if !password.map_or(asks_for_code, online::valid_password) {
         return Reply::Error("the password needs at least 6 characters".into());
     }
     let Some(slot) = state.take_slot(ip, |l| &mut l.registered, Duration::from_secs(3600), REGISTER_PER_HOUR) else {
@@ -760,7 +792,7 @@ fn register(state: &State, ip: IpAddr, name: &str, password: &str, email: Option
     reply
 }
 
-fn create_account(state: &State, ip: IpAddr, name: &str, password: &str, email: Option<&str>, code: Option<&str>) -> Reply {
+fn create_account(state: &State, ip: IpAddr, name: &str, password: Option<&str>, email: Option<&str>, code: Option<&str>) -> Reply {
     let key = name.to_ascii_lowercase();
     if state.accounts.lock().unwrap().users.contains_key(&key) {
         return Reply::Error("that name is taken".into());
@@ -800,7 +832,7 @@ fn create_account(state: &State, ip: IpAddr, name: &str, password: &str, email: 
         }
     }
     // Hash outside the lock (it takes a moment), then check again.
-    let Ok(hash) = hash_password(password) else { return Reply::Error("server error".into()) };
+    let Some(Ok(hash)) = password.map(hash_password) else { return Reply::Error("server error".into()) };
     let mut a = state.accounts.lock().unwrap();
     if a.users.contains_key(&key) {
         return Reply::Error("that name is taken".into());
@@ -913,7 +945,8 @@ fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     let Some(slot) = state.take_slot(ip, |l| &mut l.failed, Duration::from_secs(600), FAILED_LOGINS) else {
         return Reply::Error("too many wrong passwords, wait a few minutes".into());
     };
-    let key = name.trim().to_ascii_lowercase();
+    let name = name.trim();
+    let key = if name.contains('@') { state.email_owner(name).unwrap_or_default() } else { name.to_ascii_lowercase() };
     let user = state.accounts.lock().unwrap().users.get(&key).cloned();
     let ok = verify_password(password, user.as_ref().map(|u| u.hash.as_str()).unwrap_or(&state.dummy_hash)) && user.is_some();
     let Some(user) = user.filter(|_| ok) else {
@@ -1606,12 +1639,22 @@ mod tests {
             Reply::Error(e) => e,
             _ => panic!("not an error"),
         };
-        assert!(err(register(&state, ip, "newbie", "secret1", None, None)).contains("email"));
-        assert!(matches!(register(&state, ip, "newbie", "secret1", Some("New@Mail.ru"), None), Reply::CodeSent(to) if to == "n**@mail.ru"));
+        let pass = Some("secret1");
+        assert!(err(register(&state, ip, "newbie", pass, None, None)).contains("email"));
+        assert!(matches!(register(&state, ip, "newbie", pass, Some("New@Mail.ru"), None), Reply::CodeSent(to) if to == "n**@mail.ru"));
         let right = code();
-        assert_eq!(err(register(&state, ip, "newbie", "secret1", Some("new@mail.ru"), Some("000000"))), "wrong code");
-        assert!(matches!(register(&state, ip, "newbie", "secret1", Some("new@mail.ru"), Some(&right)), Reply::Account { email: Some(true), .. }));
-        assert!(err(register(&state, ip, "other", "secret1", Some("NEW@mail.ru"), None)).contains("already used"));
+        assert_eq!(err(register(&state, ip, "newbie", pass, Some("new@mail.ru"), Some("000000"))), "wrong code");
+        // The code isn't used up by coming without a password.
+        assert!(err(register(&state, ip, "newbie", None, Some("new@mail.ru"), Some(&right))).contains("password"));
+        assert!(matches!(register(&state, ip, "newbie", pass, Some("new@mail.ru"), Some(&right)), Reply::Account { email: Some(true), .. }));
+        assert!(err(register(&state, ip, "other", pass, Some("NEW@mail.ru"), None)).contains("already used"));
+        // The website's order: the name and email for a code, the password with it.
+        assert!(matches!(state.web_register(ip, "webby", None, "web@mail.ru", None), WebAuth::CodeSent(_)));
+        assert!(!state.accounts.lock().unwrap().users.contains_key("webby"));
+        let right = code();
+        assert!(matches!(state.web_register(ip, "webby", Some("secret2"), "web@mail.ru", Some(&right)), WebAuth::LoggedIn { name, .. } if name == "webby"));
+        assert!(matches!(login(&state, ip, "WEB@mail.ru", "secret2"), Reply::Account { name, .. } if name == "webby"));
+        assert!(matches!(login(&state, ip, "nobody@mail.ru", "secret2"), Reply::Error(_)));
         // Forgot it: a code to the email, by name or by the email itself.
         assert!(matches!(reset_password(&state, ip, "new@mail.ru", None, None), Reply::CodeSent(_)));
         let right = code();
@@ -1769,7 +1812,7 @@ mod tests {
         let ip = IpAddr::from([127, 0, 0, 1]);
         state.accounts.lock().unwrap().users.insert("alice".into(), user("alice"));
         for _ in 0..REGISTER_PER_HOUR + 1 {
-            assert!(matches!(register(&state, ip, "alice", "a good password", None, None), Reply::Error(e) if e.contains("taken")));
+            assert!(matches!(register(&state, ip, "alice", Some("a good password"), None, None), Reply::Error(e) if e.contains("taken")));
         }
     }
 

@@ -1184,19 +1184,88 @@ pub fn download(os: Os) -> String {
     )
 }
 
-/// The login form; accounts are made in the game.
+fn error_notice(error: Option<&str>) -> String {
+    error.map(|e| format!("<div class=\"notice bad\">{}</div>", esc(e))).unwrap_or_default()
+}
+
+fn sent_notice(to: Option<&str>) -> String {
+    to.map(|to| format!("<div class=notice>We sent a code to {}. It works for 15 minutes.</div>", esc(to))).unwrap_or_default()
+}
+
+/// The login form.
 pub fn login(error: Option<&str>, name: &str) -> String {
-    let error = error.map(|e| format!("<div class=\"notice bad\">{}</div>", esc(e))).unwrap_or_default();
+    let error = error_notice(error);
     format!(
         "<div class=page><section class=\"panel login\"><h1 class=glitch data-text=\"LOG IN\">LOG IN</h1>\
          <p class=dim>The same name and password as in the game.</p>{error}\
-         <form method=post action=\"/login\"><label>name<input name=name value=\"{}\" maxlength=16 autocomplete=username required autofocus></label>\
+         <form method=post action=\"/login\"><label>name or email<input name=name value=\"{}\" maxlength=254 autocomplete=username required autofocus></label>\
          <label>password<input name=password type=password maxlength=128 autocomplete=current-password required></label>\
          <button class=\"btn hot\">log in</button></form>\
-         <p class=dim>No account yet? Make one in the game: Multiplayer, then \"create account\".</p></section></div>",
+         <p class=dim><a href=\"/reset\">Forgot your password?</a></p>\
+         <p class=dim>No account yet? <a href=\"/register\">Sign up</a>, here or in the game.</p></section></div>",
         esc(name)
     )
 }
+
+/// Signing up, first step: the name and the email a code goes to. Where no mail goes out there
+/// are no codes: the name and a password are all it takes.
+pub fn register(error: Option<&str>, name: &str, email: &str, mail: bool) -> String {
+    let error = error_notice(error);
+    let (name, email) = (esc(name), esc(email));
+    let (field, button) = if mail {
+        (format!("<label>email<input name=email type=email value=\"{email}\" maxlength=254 autocomplete=email required></label>"), "send me a code")
+    } else {
+        (PASSWORD.to_string(), "sign up")
+    };
+    format!(
+        "<div class=page><section class=\"panel login\"><h1 class=glitch data-text=\"SIGN UP\">SIGN UP</h1>\
+         <p class=dim>One account for the site and the game.</p>{error}\
+         <form method=post action=\"/register\"><label>name<input name=name value=\"{name}\" minlength=3 maxlength=16 autocomplete=username required autofocus></label>\
+         {field}<button class=\"btn hot\">{button}</button></form>\
+         <p class=dim>Have an account? <a href=\"/login\">Log in</a></p></section></div>"
+    )
+}
+
+/// Signing up, second step: the code that was mailed and the password.
+pub fn register_code(error: Option<&str>, sent_to: Option<&str>, name: &str, email: &str) -> String {
+    let (error, sent, name, email) = (error_notice(error), sent_notice(sent_to), esc(name), esc(email));
+    format!(
+        "<div class=page><section class=\"panel login\"><h1 class=glitch data-text=\"SIGN UP\">SIGN UP</h1>{sent}{error}\
+         <form method=post action=\"/register\"><input type=hidden name=name value=\"{name}\"><input type=hidden name=email value=\"{email}\">\
+         {CODE}{PASSWORD}<button class=\"btn hot\">create account</button></form>\
+         <form method=post action=\"/register\"><input type=hidden name=name value=\"{name}\"><input type=hidden name=email value=\"{email}\"><input type=hidden name=again value=1>\
+         <button class=\"btn small\">send a new code</button></form></section></div>"
+    )
+}
+
+/// A forgotten password, first step: whose.
+pub fn reset(error: Option<&str>, who: &str) -> String {
+    let error = error_notice(error);
+    format!(
+        "<div class=page><section class=\"panel login\"><h1 class=glitch data-text=\"RESET PASSWORD\">RESET PASSWORD</h1>\
+         <p class=dim>We'll mail a code to the account's email.</p>{error}\
+         <form method=post action=\"/reset\"><label>name or email<input name=who value=\"{}\" maxlength=254 autocomplete=username required autofocus></label>\
+         <button class=\"btn hot\">send me a code</button></form>\
+         <p class=dim><a href=\"/login\">Back to logging in</a></p></section></div>",
+        esc(who)
+    )
+}
+
+/// A forgotten password, second step: the code that was mailed and a new password.
+pub fn reset_code(error: Option<&str>, sent_to: Option<&str>, who: &str) -> String {
+    let (error, sent, who) = (error_notice(error), sent_notice(sent_to), esc(who));
+    format!(
+        "<div class=page><section class=\"panel login\"><h1 class=glitch data-text=\"RESET PASSWORD\">RESET PASSWORD</h1>{sent}{error}\
+         <form method=post action=\"/reset\"><input type=hidden name=who value=\"{who}\">\
+         {CODE}{NEW_PASSWORD}<button class=\"btn hot\">set password</button></form>\
+         <form method=post action=\"/reset\"><input type=hidden name=who value=\"{who}\"><input type=hidden name=again value=1><button class=\"btn small\">send a new code</button></form>\
+         <p class=dim>This logs the account out everywhere else.</p></section></div>"
+    )
+}
+
+const CODE: &str = "<label>code<input name=code inputmode=numeric pattern=\"[0-9 ]*\" maxlength=7 autocomplete=one-time-code required autofocus></label>";
+const PASSWORD: &str = "<label>password<input name=password type=password minlength=6 maxlength=128 autocomplete=new-password required></label>";
+const NEW_PASSWORD: &str = "<label>new password<input name=password type=password minlength=6 maxlength=128 autocomplete=new-password required></label>";
 
 fn chat_line(l: &ChatLine) -> String {
     let t = l.at % 86_400;
@@ -1261,7 +1330,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
                  <form method=post action=\"/logout\"><button class=navbtn title=\"log out\" aria-label=\"log out\">x</button></form>"
             )
         }
-        None => "<a class=\"navbtn hot\" href=\"/login\">log in</a>".into(),
+        None => "<a class=\"navbtn join\" href=\"/register\">sign up</a><a class=\"navbtn hot\" href=\"/login\">log in</a>".into(),
     };
     let links: String = [("rankings", "/rankings"), ("beatmaps", "/beatmaps"), ("loved", "/loved"), ("mods", "/mods"), ("download", "/download")]
         .iter()
@@ -1468,7 +1537,7 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 .account{display:flex;align-items:center;gap:8px}.account form{margin:0}
 .me{display:flex;align-items:center;gap:8px;height:36px;padding:0 10px 0 6px;border:2px solid var(--line2);background:var(--panel)}.me:hover{border-color:var(--acc);color:var(--white)}
 .me span{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.navbtn{display:inline-flex;align-items:center;height:36px;padding:0 12px;border:2px solid var(--line2);background:var(--panel);color:var(--dim);font:inherit;cursor:pointer}
+.navbtn{display:inline-flex;align-items:center;height:36px;padding:0 12px;white-space:nowrap;border:2px solid var(--line2);background:var(--panel);color:var(--dim);font:inherit;cursor:pointer}
 .navbtn:hover,.navbtn.on{border-color:var(--acc);color:var(--white)}.navbtn.hot{background:var(--acc);border-color:var(--acc);color:var(--white)}
 button.btn{font:inherit;cursor:pointer}.actions{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}.actions form{margin:0}.actions .btn{min-height:36px;padding:0 14px}
 .btn.hot.small-hot{font-size:16px;min-height:36px;padding:0 14px;box-shadow:3px 3px 0 #6b1d12}
@@ -1504,7 +1573,7 @@ pre{background:var(--bg2);border:2px solid var(--line);padding:12px 14px;overflo
 footer{border-top:2px solid var(--line);background:var(--bg2);padding:24px 0}footer .inner{display:flex;flex-wrap:wrap;align-items:center;gap:24px;color:var(--dim)}footer a{color:var(--dim)}footer .brand{color:var(--white)}
 @media(max-width:1100px){.cols{grid-template-columns:repeat(2,minmax(0,1fr))}.hudrow{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:1000px){.cols-side,.builds,.hub{grid-template-columns:minmax(0,1fr)}.clips{grid-template-columns:repeat(2,minmax(0,1fr))}.wide{display:none}.head{margin-top:-64px}.ranks{margin-left:0}.hudrow-in{margin-left:0}}
-@media(max-width:700px){.inner,.page{padding:0 16px}.page{padding-top:16px}nav .inner{gap:4px}.links{overflow-x:auto;scrollbar-width:none}.links a{padding:0 8px;flex:none}nav form{display:none}.logo{font-size:0;gap:0}
+@media(max-width:700px){.inner,.page{padding:0 16px}.page{padding-top:16px}nav .inner{gap:4px}.navbtn.join{display:none}.links{overflow-x:auto;scrollbar-width:none}.links a{padding:0 8px;flex:none}nav form{display:none}.logo{font-size:0;gap:0}
 .stage{height:600px}.intro{top:116px;left:16px;right:16px}.intro h1{font-size:48px;line-height:56px}.intro p{font-size:16px;line-height:24px}
 .hud-tr{top:12px;right:16px}.errbar{display:none}.stage-cta{left:16px;right:16px;bottom:16px}.stage-cta .btn.hot{font-size:16px;min-height:44px}.hud-score{font-size:32px;line-height:32px}.hp{width:160px}.hud-tl{display:none}
 .field{top:300px;transform-origin:20% 50%}.n{width:40px;height:40px;margin:-20px 0 0 -20px;left:48px}.n.big{width:56px;height:56px;margin:-28px 0 0 -28px}.seg:first-child{flex-basis:96px}.drum{left:14px;transform:scale(.8)}.judge{left:112px}.track{left:96px}.hit-great{left:106px}
@@ -1520,6 +1589,18 @@ footer{border-top:2px solid var(--line);background:var(--bg2);padding:24px 0}foo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_forms() {
+        // Never the password: it isn't kept between the steps.
+        let code = register_code(Some("wrong <code>"), None, "Ryuji", "a\"b@c.io");
+        assert!(code.contains("name=code") && code.contains("value=\"a&quot;b@c.io\"") && code.contains("wrong &lt;code&gt;"));
+        assert!(!register(None, "Ryuji", "r@c.io", true).contains("name=password"));
+        assert!(!register(None, "Ryuji", "", false).contains("name=email"));
+        assert!(reset_code(None, Some("r***@c.io"), "Ryuji").contains("r***@c.io"));
+        // Asking for another code says so, to come back here if that fails.
+        assert!(code.contains("name=again") && reset_code(None, None, "Ryuji").contains("name=again"));
+    }
 
     #[test]
     fn helpers() {

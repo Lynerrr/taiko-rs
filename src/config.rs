@@ -901,9 +901,9 @@ impl Config {
         out.push_str(&format!("# the mouse wheel resizes the playfield during play\nwheel_resizes_playfield = {}\n", self.wheel_resizes_playfield));
         out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));
         out.push_str(&format!(
-            "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
+            "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators; ! before one that came later: not hidden) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
             self.interface_hidden,
-            self.interface_hides.format(),
+            self.interface_hides.format_saved(),
             interface_key_name(self.interface_key)
         ));
         out.push_str(&format!(

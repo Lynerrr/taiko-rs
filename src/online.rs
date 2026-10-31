@@ -422,6 +422,11 @@ pub fn valid_name(name: &str) -> bool {
     (3..=16).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// What logging in takes: an account's name, or its email.
+pub fn valid_login(who: &str) -> bool {
+    valid_name(who) || (who.contains('@') && who.len() <= 254)
+}
+
 pub fn valid_password(password: &str) -> bool {
     (6..=128).contains(&password.chars().count())
 }
@@ -656,6 +661,8 @@ mod tests {
     fn names_and_titles() {
         assert!(valid_name("Lynerrr") && valid_name("den4ik_228") && valid_name("a-b"));
         assert!(!valid_name("ab") && !valid_name("has space") && !valid_name("x".repeat(17).as_str()) && !valid_name("ünï"));
+        assert!(valid_login("Lynerrr") && valid_login("a.long.name+taiko@mail.ru"));
+        assert!(!valid_login("ab") && !valid_login("no.at.sign") && !valid_name("me@mail.ru"));
         assert!(valid_password("hunter2") && !valid_password("short"));
         assert_eq!(clean_title("  ", "Lynerrr", false), "Lynerrr's lobby");
         assert_eq!(clean_title("", "Lynerrr", true), "Lynerrr's mapguessr");
