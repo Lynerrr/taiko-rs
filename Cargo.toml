@@ -23,6 +23,8 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 # Drag and drop on Wayland, which winit 0.30 doesn't do: a data device of our own on winit's
 # connection (src/wayland_dnd.rs). The versions winit already uses.
 [target.'cfg(target_os = "linux")'.dependencies]
+# Checks there's a session bus before the media controls need one (`media::run`).
+zbus = "3"
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 

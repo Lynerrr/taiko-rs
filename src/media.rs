@@ -55,7 +55,16 @@ fn run(window: Option<usize>, rx: Receiver<Message>, keys: Sender<Key>) {
     let _ = hwnd;
     #[cfg(not(windows))]
     let hwnd = None;
-    let config = PlatformConfig { dbus_name: "taiko_rs", display_name: "taiko.rs", hwnd };
+    // souvlaki's thread unwraps its connection and its bus name, and a panic ends the whole game
+    // (release builds abort): no session bus means no media keys, and each running copy gets a
+    // name of its own, as MPRIS has it.
+    #[cfg(target_os = "linux")]
+    if let Err(e) = zbus::blocking::Connection::session() {
+        eprintln!("media keys unavailable: {e}");
+        return;
+    }
+    let name = format!("taiko_rs.instance{}", std::process::id());
+    let config = PlatformConfig { dbus_name: &name, display_name: "taiko.rs", hwnd };
     let mut controls = match MediaControls::new(config) {
         Ok(c) => c,
         Err(e) => {
