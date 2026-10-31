@@ -108,7 +108,7 @@ fn an_online_score_fetches_its_replay() {
     let id = 4_000_000_000 + std::process::id() as u64;
     let _ = std::fs::remove_file(scores::online_replay_path(id).unwrap());
     let score = online::OnlineScore { player: "friend".into(), map_hash: 1, score: 1_000_000, accuracy: 1.0, max_combo: 400, great: 400, rate: 1.0, id, ..Default::default() };
-    let play = pp::Play { great: 400, ok: 0, miss: 0, max_combo: 400, rate: 1.0, mods: Mods::NONE, scroll_speed: 1.0, seed: 0 };
+    let play = pp::Play { great: 400, ok: 0, miss: 0, max_combo: 400, rate: 1.0, mods: Mods::NONE, scroll_speed: 1.0, seed: 0, half: Default::default() };
     let d = wait(&results_job(path.clone(), play, None, Some((server, score, "map".into()))));
     assert_eq!(serve.join().unwrap(), id);
     let file = d.replay.expect("fetched").expect("saved");
@@ -125,7 +125,7 @@ fn an_online_score_fetches_its_replay() {
 fn servers_without_replays_say_so() {
     let (dir, path) = map("old-server");
     let score = online::OnlineScore { player: "friend".into(), id: 0, ..Default::default() };
-    let play = pp::Play { great: 400, ok: 0, miss: 0, max_combo: 400, rate: 1.0, mods: Mods::NONE, scroll_speed: 1.0, seed: 0 };
+    let play = pp::Play { great: 400, ok: 0, miss: 0, max_combo: 400, rate: 1.0, mods: Mods::NONE, scroll_speed: 1.0, seed: 0, half: Default::default() };
     let d = wait(&results_job(path, play, None, Some(("127.0.0.1:9".into(), score, "map".into()))));
     assert_eq!(d.replay, Some(Err("the server doesn't keep replays yet".into())));
     assert!(d.stats.is_none() && d.breakdown.is_some());

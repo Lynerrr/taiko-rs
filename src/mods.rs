@@ -2,6 +2,75 @@
 //! tricks, SV experiments, visual tricks, note paths, playfield moves and copies). A set of them is a bit mask; each has a two-letter acronym used in
 //! the config, replays and multiplayer.
 
+/// How Half picks the notes it takes off.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum HalfRule {
+    /// Off each stream, its finest subdivision (see `half_keeps`).
+    #[default]
+    OnTheBeat,
+    /// Every other note, plays of pp version 1 and before, replay version 3 and before.
+    EveryOther,
+}
+
+impl HalfRule {
+    /// The rule of a play sent with `pp_version` (`online::PP_VERSION`).
+    pub fn of_pp_version(pp_version: u32) -> HalfRule {
+        if pp_version >= 2 { HalfRule::OnTheBeat } else { HalfRule::EveryOther }
+    }
+}
+
+/// How far from a stream's grid still counts as on it, in ms (`.osu` times are whole ms).
+const GRID_TOLERANCE: f64 = 3.0;
+/// Notes closer than this are a stream whatever the beat says (a map with a made-up BPM), in ms.
+const ALWAYS_THINNED: f64 = 100.0;
+
+/// Which of the notes at `times` (ascending; dons and kats) Half keeps. `beat_at`: the beat a
+/// time is in, as where it starts and its length.
+///
+/// A stream (notes evenly spaced under a beat apart) keeps the notes on the grid twice as coarse:
+/// 1/4 becomes 1/2, 1/2 becomes 1/1, 1/6 becomes 1/3. Where that isn't a grid (1/3), it goes to
+/// the beat; a stream off the beat keeps every other note. Notes a beat or more apart all stay,
+/// so what's left is still on the music.
+pub fn half_keeps(times: &[f64], rule: HalfRule, beat_at: &dyn Fn(f64) -> (f64, f64)) -> Vec<bool> {
+    if rule == HalfRule::EveryOther {
+        return (0..times.len()).map(|k| k % 2 == 0).collect();
+    }
+    let mut keep = vec![true; times.len()];
+    let gap = |k: usize| times[k + 1] - times[k];
+    let mut start = 0;
+    while start + 1 < times.len() {
+        let spacing = gap(start);
+        let mut end = start + 1;
+        while end + 1 < times.len() && (gap(end) - spacing).abs() <= GRID_TOLERANCE.max(spacing * 0.08) {
+            end += 1;
+        }
+        let (origin, beat) = beat_at(times[start]);
+        let steps = (beat / spacing).round() as i64;
+        if spacing < beat * 0.98 || spacing < ALWAYS_THINNED {
+            let step = beat / steps.max(1) as f64;
+            // The notes' places on the stream's grid, if they're on it (a grid too fine to tell
+            // isn't one).
+            let places: Option<Vec<i64>> = times[start..=end]
+                .iter()
+                .map(|t| {
+                    let place = (t - origin) / step;
+                    (steps >= 2 && step > GRID_TOLERANCE * 2.0 && (place - place.round()).abs() * step <= GRID_TOLERANCE).then_some(place.round() as i64)
+                })
+                .collect();
+            for k in start..=end {
+                keep[k] &= match &places {
+                    Some(p) if steps % 2 == 0 => p[k - start].rem_euclid(2) == 0,
+                    Some(p) => p[k - start].rem_euclid(steps) == 0,
+                    None => (k - start) % 2 == 0,
+                };
+            }
+        }
+        // The note between two streams is in both.
+        start = end;
+    }
+    keep
+}
+
 /// Every mod, in the order the mod select shows them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mod {
@@ -301,7 +370,7 @@ impl Mod {
             NoFail => "You can't fail, whatever the HP bar says.",
             HalfTime => "0.75x speed, same pitch.",
             Daycore => "0.75x speed, lower pitch.",
-            Half => "Every other don/kat is gone. For learning hard maps.",
+            Half => "Streams lose their finest notes, on the beat. For learning hard maps.",
             NoFinishers => "Big notes become normal ones.",
             HardRock => "Tighter windows (OD x1.4), much faster notes, a stricter HP bar.",
             SuddenDeath => "The first miss fails the play.",
@@ -803,6 +872,55 @@ impl Speed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Half of notes at these divisions of a 500 ms beat: the numbers of the ones it keeps.
+    fn kept(beats: &[f64]) -> Vec<f64> {
+        let times: Vec<f64> = beats.iter().map(|b| (b * 500.0_f64).round()).collect();
+        let keep = half_keeps(&times, HalfRule::OnTheBeat, &|_| (0.0, 500.0));
+        beats.iter().zip(keep).filter(|(_, k)| *k).map(|(b, _)| *b).collect()
+    }
+
+    #[test]
+    fn half_takes_the_finest_division_off_a_stream() {
+        let quarters: Vec<f64> = (0..=8).map(|k| k as f64 / 4.0).collect();
+        assert_eq!(kept(&quarters), [0.0, 0.5, 1.0, 1.5, 2.0]);
+        let halves: Vec<f64> = (0..=4).map(|k| k as f64 / 2.0).collect();
+        assert_eq!(kept(&halves), [0.0, 1.0, 2.0]);
+        let sixths: Vec<f64> = (0..=6).map(|k| k as f64 / 6.0).collect();
+        let thirds: Vec<f64> = (0..=3).map(|k| k as f64 * 2.0 / 6.0).collect();
+        assert_eq!(kept(&sixths), thirds);
+        // A triplet goes to the beat.
+        assert_eq!(kept(&[0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]), [0.0, 1.0]);
+        // Whatever the length of the stream, the beat stays.
+        let odd: Vec<f64> = (0..=4).map(|k| 1.0 + k as f64 / 4.0).chain([3.0, 3.25, 3.5]).collect();
+        assert_eq!(kept(&odd), [1.0, 1.5, 2.0, 3.0, 3.5]);
+    }
+
+    #[test]
+    fn half_leaves_notes_a_beat_apart_alone() {
+        assert_eq!(kept(&[0.0, 1.0, 2.0, 3.0, 5.0]), [0.0, 1.0, 2.0, 3.0, 5.0]);
+        // A stream off the beat, all on one division, keeps every other one.
+        assert_eq!(kept(&[0.25, 0.75, 1.25, 1.75]), [0.25, 1.25]);
+    }
+
+    #[test]
+    fn half_thins_a_stream_with_no_grid_to_go_by() {
+        // A made-up BPM: 1 ms apart, 30 ms apart a beat of 30 ms.
+        let times: Vec<f64> = (0..100).map(|k| k as f64).collect();
+        let keep = half_keeps(&times, HalfRule::OnTheBeat, &|_| (0.0, 60.0));
+        assert_eq!(keep.iter().filter(|k| **k).count(), 50);
+        let times: Vec<f64> = (0..100).map(|k| k as f64 * 30.0).collect();
+        let keep = half_keeps(&times, HalfRule::OnTheBeat, &|_| (0.0, 30.0));
+        assert_eq!(keep.iter().filter(|k| **k).count(), 50);
+    }
+
+    #[test]
+    fn old_plays_keep_every_other_note() {
+        let times = [0.0, 100.0, 300.0, 500.0, 700.0];
+        assert_eq!(half_keeps(&times, HalfRule::EveryOther, &|_| (0.0, 500.0)), [true, false, true, false, true]);
+        assert_eq!(HalfRule::of_pp_version(1), HalfRule::EveryOther);
+        assert_eq!(HalfRule::of_pp_version(crate::online::PP_VERSION), HalfRule::OnTheBeat);
+    }
 
     #[test]
     fn lobbies_share_the_speed_and_leave_the_rest_to_each_player() {

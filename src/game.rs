@@ -228,6 +228,8 @@ pub struct Game {
     /// Random's colouring of the notes: a new one each play, kept with the replay so it plays
     /// back the same; 0 is the one per map from before seeds.
     pub seed: u64,
+    /// Which notes Half took off.
+    pub half: crate::mods::HalfRule,
     pub map: Beatmap,
     clock: GameClock,
     state: Vec<NoteState>,
@@ -1241,7 +1243,7 @@ pub fn speed_for(map: &Beatmap, mods: Mods, rate: f64) -> Speed {
         return Speed::constant(rate);
     }
     let mut map = map.clone();
-    apply_to_map(&mut map, mods, 0);
+    apply_to_map(&mut map, mods, 0, Default::default());
     let first = map.notes.first().map(|n| n.time).unwrap_or(0.0);
     let end = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
     Speed::for_play(mods, rate.clamp(0.25, 4.0), first, end)
@@ -1255,16 +1257,23 @@ pub(crate) fn random_don(time: f64, seed: u64) -> bool {
 
 /// Changes the notes themselves for the mods that do (before anything is judged).
 /// `stars::load_played` does the same to the map pp and star ratings are worked out on.
-fn apply_to_map(map: &mut Beatmap, mods: Mods, seed: u64) {
+fn apply_to_map(map: &mut Beatmap, mods: Mods, seed: u64, half: crate::mods::HalfRule) {
     let hit = |n: &beatmap::Note| matches!(n.kind, Kind::Don | Kind::Kat);
     if mods.has(Mod::Half) {
+        let points = &map.control_points;
+        let beat_at = |t: f64| {
+            let k = points.partition_point(|p| p.time <= t).saturating_sub(1);
+            points.get(k).map_or((0.0, 500.0), |p| (p.beat_origin, p.beat_length))
+        };
+        let times: Vec<f64> = map.notes.iter().filter(|n| hit(n)).map(|n| n.time).collect();
+        let keep = crate::mods::half_keeps(&times, half, &beat_at);
         let mut k = 0;
         map.notes.retain(|n| {
             if !hit(n) {
                 return true;
             }
             k += 1;
-            k % 2 == 1
+            keep[k - 1]
         });
     }
     for n in map.notes.iter_mut().filter(|n| hit(n)) {
@@ -1296,8 +1305,13 @@ impl Game {
     }
 
     /// The same, with Random colouring the notes by `seed` (see `Game::seed`).
-    pub fn with_seed(mut map: Beatmap, track: Arc<Track>, audio: Option<&Engine>, mods: Mods, seed: u64) -> Game {
-        apply_to_map(&mut map, mods, seed);
+    pub fn with_seed(map: Beatmap, track: Arc<Track>, audio: Option<&Engine>, mods: Mods, seed: u64) -> Game {
+        Game::with_half(map, track, audio, mods, seed, Default::default())
+    }
+
+    /// The same, with Half taking off the notes it did then (a replay's).
+    pub fn with_half(mut map: Beatmap, track: Arc<Track>, audio: Option<&Engine>, mods: Mods, seed: u64, half: crate::mods::HalfRule) -> Game {
+        apply_to_map(&mut map, mods, seed, half);
         let first_note = map.notes.first().map(|n| n.time).unwrap_or(0.0);
         let end_time = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
         let start = (first_note - 2000.0).min(0.0).min(-map.meta.audio_lead_in);
@@ -1377,6 +1391,7 @@ impl Game {
         let shape_order = shape_order(&map, mods, shapeshift);
         Game {
             seed,
+            half,
             windows: Windows::new(mods.od(map.meta.od)),
             map,
             clock: GameClock::new(track_start, audio.is_some()),
@@ -4149,9 +4164,9 @@ mod tests {
         let mut g = modded("GN");
         g.press_at(1, g.map.notes[0].time + 80.0, None);
         assert_eq!((g.stats.ok, g.stats.miss), (0, 1));
-        // Swap turns the dons into kats; Half keeps every other one.
+        // Swap turns the dons into kats; Half leaves notes a beat apart alone.
         assert!(modded("SW").map.notes.iter().all(|n| n.kind == Kind::Kat));
-        assert_eq!(modded("HA").map.notes.len(), 32);
+        assert_eq!(modded("HA").map.notes.len(), 64);
         assert!(modded("AB").map.notes.iter().all(|n| n.big));
         // Random: a mix, the same every time.
         let kinds = |g: &Game| g.map.notes.iter().map(|n| n.kind).collect::<Vec<_>>();
