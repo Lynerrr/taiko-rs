@@ -28,7 +28,9 @@
 //!   /api/claude/pings?after=N   the developer's pings of the Discord bot, for Claude
 //!   /api/claude/reply           POST (channel, to, text): Claude's answer, posted by the bot
 //!   /api/claude/mark            POST (channel, message, tag): a forum post tagged done (else ✅)
-//!                               (both need `Authorization: Bearer` with DIR/claude-key)
+//!   /api/claude/score           POST (map hex, pp, score, mods a,b): a play on Claude's profile
+//!                               only, off every board (`Scores::add_hidden`)
+//!                               (all need `Authorization: Bearer` with DIR/claude-key)
 //!   /api/mail/next              the oldest letter waiting (`mail.rs`), taken out; empty when
 //!                               none is (needs `Authorization: Bearer` with DIR/mail-key)
 
@@ -704,6 +706,17 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             match crate::discord::say(req.field("channel"), to, req.field("text")) {
                 Ok(()) => Reply::text(200, "sent"),
                 Err(e) => Reply::text(502, &e),
+            }
+        }
+        ["api", "claude", "score"] if req.claude => {
+            let map = u64::from_str_radix(req.field("map"), 16).map_err(|_| "map is its hash, in hex".to_string());
+            let pp = req.field("pp").parse::<f64>().map_err(|_| "pp is a number".to_string());
+            let score = req.field("score").parse::<u64>().unwrap_or(1_000_000);
+            let mods = req.field("mods").split(',').map(|m| crate::online::clean_text(m.trim(), 4)).filter(|m| !m.is_empty()).take(40).collect();
+            let name = state.display_name("claude");
+            match map.and_then(|map| state.scores.lock().unwrap().add_hidden("claude", &name, map, pp?, score, mods, crate::now_secs())) {
+                Ok(id) => Reply::text(200, &format!("score {id}")),
+                Err(e) => Reply::text(400, &e),
             }
         }
         ["api", "claude", "mark"] if req.claude => match crate::discord::mark(req.field("channel"), req.field("message"), req.field("tag")) {

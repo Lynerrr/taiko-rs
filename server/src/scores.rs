@@ -36,6 +36,10 @@ struct Stored {
     /// MD5 of the `.osu` played (from games that send it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     md5: Option<String>,
+    /// Shown on its player's profile only: off the maps' boards, the rankings, the beatmaps and
+    /// the latest plays (Claude's showpiece, `/api/claude/score`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    hidden: bool,
 }
 
 #[derive(Serialize)]
@@ -183,6 +187,9 @@ impl Scores {
         let s = &self.all[i];
         let sc = &s.score;
         self.by_player.entry(s.player.clone()).or_default().push(i);
+        if s.hidden {
+            return;
+        }
         self.by_map.entry(sc.map_hash).or_default().push(i);
         let (row, players) = self.map_rows.entry(sc.map_hash).or_insert_with(|| {
             (MapRow { hash: sc.map_hash, name: sc.map.clone(), set_id: None, stars: None, plays: 0, players: 0, last: 0 }, HashSet::new())
@@ -201,7 +208,7 @@ impl Scores {
 
     /// Redoes `player`'s ranking row from their plays.
     fn restand(&mut self, player: &str) {
-        let plays = self.stored_of(player);
+        let plays: Vec<&Stored> = self.stored_of(player).into_iter().filter(|s| !s.hidden).collect();
         let (stats, pp) = stats_of(&plays);
         let row = Ranked {
             rank: 0,
@@ -345,6 +352,7 @@ impl Scores {
             },
             sent_pp: play.pp,
             md5: play.md5.as_deref().map(|m| online::clean_text(m, 32).to_ascii_lowercase()),
+            hidden: false,
         };
         if let Some(dir) = &self.replays {
             let replay = StoredReplay { version: play.replay_version, map: &play.map, inputs: &play.inputs };
@@ -358,14 +366,7 @@ impl Scores {
                 }
             }
         }
-        if let Some(file) = &self.file {
-            let line = serde_json::to_string(&stored).map_err(|e| e.to_string())? + "\n";
-            let written = std::fs::OpenOptions::new().create(true).append(true).open(file).and_then(|mut f| f.write_all(line.as_bytes()));
-            if let Err(e) = written {
-                eprintln!("saving score {id}: {e}");
-                return Err("the server couldn't save it".into());
-            }
-        }
+        self.save(&stored)?;
         if let Some(ms) = play.play_ms {
             self.count_play(player, ms, false);
         }
@@ -381,6 +382,62 @@ impl Scores {
         let map_rank = board.iter().position(|s| s.id == id).map(|p| p as u32 + 1);
         let (pp, rank) = self.standing(player);
         Ok((map_rank, pp, rank))
+    }
+
+    /// Adds a play to DIR/scores.jsonl.
+    fn save(&self, stored: &Stored) -> Result<(), String> {
+        let Some(file) = &self.file else { return Ok(()) };
+        let line = serde_json::to_string(stored).map_err(|e| e.to_string())? + "\n";
+        let written = std::fs::OpenOptions::new().create(true).append(true).open(file).and_then(|mut f| f.write_all(line.as_bytes()));
+        written.map_err(|e| {
+            eprintln!("saving score {}: {e}", stored.id);
+            "the server couldn't save it".into()
+        })
+    }
+
+    /// A play on `map` shown on `player`'s profile only (see `Stored::hidden`): all greats, full
+    /// combo, worth `pp`, with the map's name, set, stars and notes from the plays already on it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_hidden(&mut self, player: &str, name: &str, map: u64, pp: f64, score: u64, mods: Vec<String>, now: u64) -> Result<u64, String> {
+        if !pp.is_finite() || pp < 0.0 {
+            return Err("pp is a number, 0 or more".into());
+        }
+        let row = self.map(map).ok_or("nobody has played that map here")?;
+        let notes = self.plays_on(map).map(|s| s.score.great + s.score.ok + s.score.miss).max().unwrap_or(1);
+        let id = self.next_id;
+        self.next_id += 1;
+        let stored = Stored {
+            id,
+            player: player.to_string(),
+            score: OnlineScore {
+                player: name.to_string(),
+                map: row.name,
+                map_hash: map,
+                score,
+                accuracy: 1.0,
+                max_combo: notes,
+                miss: 0,
+                rate: 1.0,
+                mods,
+                pp: Some(pp),
+                date: now,
+                great: notes,
+                ok: 0,
+                set_id: row.set_id,
+                stars: row.stars,
+                id,
+                scroll_speed: None,
+            },
+            sent_pp: Some(pp),
+            md5: None,
+            hidden: true,
+        };
+        self.save(&stored)?;
+        self.all.push(stored);
+        self.index(self.all.len() - 1);
+        self.count_pp();
+        self.restand(player);
+        Ok(id)
     }
 
     /// Each player's best score (by score) on `map`, highest first.
@@ -458,7 +515,7 @@ impl Scores {
 
     /// Plays sent, all told.
     pub fn play_count(&self) -> usize {
-        self.all.len()
+        self.all.iter().filter(|s| !s.hidden).count()
     }
 
     /// A map someone has played: its name, cover, stars, and how much it's played.
@@ -482,7 +539,7 @@ impl Scores {
 
     /// The latest plays by anyone, newest first.
     pub fn latest(&self, limit: usize) -> Vec<OnlineScore> {
-        self.all.iter().rev().take(limit).map(|s| s.score.clone()).collect()
+        self.all.iter().rev().filter(|s| !s.hidden).take(limit).map(|s| s.score.clone()).collect()
     }
 
     /// `player`'s pp history, most played maps and mods (see `Extras`).
@@ -530,8 +587,8 @@ impl Scores {
         top.sort_by(|a, b| b.pp.unwrap_or(0.0).total_cmp(&a.pp.unwrap_or(0.0)));
         top.truncate(PROFILE_PLAYS);
         let recent = mine.iter().rev().take(PROFILE_PLAYS).map(|s| s.score.clone()).collect();
-        let (pp, rank) = self.standing(player);
-        let (stats, _) = stats_of(&mine);
+        let (_, rank) = self.standing(player);
+        let (stats, pp) = stats_of(&mine);
         // First places: maps where theirs is the best score.
         let mut maps: Vec<u64> = mine.iter().map(|s| s.score.map_hash).collect();
         maps.sort_unstable();
@@ -851,6 +908,30 @@ mod tests {
             fresh.restand(p);
         }
         assert_eq!(s.rankings(usize::MAX), fresh.rankings(usize::MAX));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hidden_plays_are_on_their_profile_only() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-hidden-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        assert!(s.add_hidden("claude", "claude", 9, 1.0, 1, vec![], 2).is_err(), "only maps someone has played");
+        let id = s.add_hidden("claude", "claude", 7, 100_000.0, 1_000_000, vec!["HD".into()], 2).unwrap();
+        for s in [&s, &Scores::load(Some(dir.clone()))] {
+            let p = s.profile("claude", "claude", 0);
+            assert_eq!((p.pp, p.rank, p.top[0].id, p.recent.len(), p.firsts.len()), (100_000.0, None, id, 1, 0));
+            assert_eq!((p.top[0].great, p.top[0].max_combo, p.top[0].grade()), (100, 100, "SS"));
+            assert_eq!(s.rankings(10).iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["A"]);
+            assert_eq!(s.map_scores(7).iter().map(|r| r.player.as_str()).collect::<Vec<_>>(), ["A"]);
+            assert_eq!(s.latest(10).len(), 1);
+            assert_eq!(s.play_count(), 1);
+            assert_eq!(s.maps(10).len(), 1);
+            assert_eq!(s.map(7).map(|m| (m.plays, m.players)), Some((1, 1)));
+            assert_eq!(s.profile("a", "A", 0).rank, Some(1));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
