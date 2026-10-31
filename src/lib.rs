@@ -7466,10 +7466,10 @@ impl State {
                 } else {
                     String::new()
                 };
-                let (stars, rate) = (&self.stars, self.play_speed().0);
+                let (stars, rate, plays) = (&self.stars, self.play_speed().0, &self.scores);
                 self.select.instant = self.right_scroll || self.scrollbar_drag;
                 self.select.list_share = self.cfg.song_list_share;
-                self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate));
+                self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate), &|e| scores::best_grade(plays, e.hash()));
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
                 let x = 24.0 + lw + 12.0;
                 let pw = canvas.width - x - 24.0;

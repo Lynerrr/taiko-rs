@@ -177,6 +177,17 @@ pub struct Select {
     pub list_share: f32,
 }
 
+/// A play's letter in its colour, the same as on the website.
+fn grade_colour(grade: &str) -> u32 {
+    match grade {
+        "SS" | "S" => 0xFFD34D,
+        "A" => 0x86E05A,
+        "B" => 0x4fb4ff,
+        "C" => 0xc77dff,
+        _ => 0xEB452C,
+    }
+}
+
 /// The filters on the song list: the search, the collection and whether converts show.
 type View = (String, Option<usize>, bool);
 
@@ -1101,7 +1112,8 @@ impl Select {
     }
 
     /// `stars` looks up a difficulty's star rating (library index) if it has been calculated.
-    pub fn draw(&mut self, c: &mut Canvas, library: &[Entry], dt_ms: f64, status: &str, stars: &dyn Fn(usize) -> Option<f32>) {
+    /// `grade`: the best letter of the plays on a map.
+    pub fn draw(&mut self, c: &mut Canvas, library: &[Entry], dt_ms: f64, status: &str, stars: &dyn Fn(usize) -> Option<f32>, grade: &dyn Fn(&Entry) -> Option<&'static str>) {
         self.open_cursor_section();
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
@@ -1375,7 +1387,15 @@ impl Select {
                     let col = if selected { 0xffffff } else { 0xc8c8d8 };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
                     let pill = if a > 0.6 { crate::stars::draw_pill(c, 24.0 + lw - 10.0, y + 6.0, 7.0, stars(self.visible[*i])) } else { 40.0 };
-                    c.text_right(24.0 + lw - 18.0 - pill, y + 6.0, 7.0, rgba(0x8a8aa0, a), &format!("OD {:.1}", e.meta.od));
+                    if let Some(g) = grade(e) {
+                        let right = 24.0 + lw - 18.0 - pill;
+                        // SS is split into don and kat colours, like on the website.
+                        if g == "SS" {
+                            c.text_right(right - 1.0, y + 5.0, 9.0, rgba(0xEB452C, a), g);
+                            c.text_right(right + 1.0, y + 5.0, 9.0, rgba(0x4fb4ff, a), g);
+                        }
+                        c.text_right(right, y + 5.0, 9.0, rgba(grade_colour(g), a), g);
+                    }
                     c.text(56.0, y + 6.0, 8.0, rgba(col, a), &fit(format!("{}{convert}", e.meta.version), 8.0, lw - 170.0));
                 }
             }
