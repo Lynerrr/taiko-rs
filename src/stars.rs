@@ -21,10 +21,10 @@ pub(crate) fn load(path: &Path) -> Option<Beatmap> {
     Some(map)
 }
 
-/// The map at `path` as a play with `mods` has it: Half takes every other note off, Swap and
+/// The map at `path` as a play with `mods` has it: Half takes notes off (by `half`), Swap and
 /// Random change their colours (like `game::apply_to_map`), and pp and star ratings go by what's
 /// left. `seed`: Random's colouring (`Game::seed`).
-pub(crate) fn load_played(path: &Path, mods: crate::mods::Mods, seed: u64) -> Option<Beatmap> {
+pub(crate) fn load_played(path: &Path, mods: crate::mods::Mods, seed: u64, half_rule: crate::mods::HalfRule) -> Option<Beatmap> {
     use crate::mods::Mod;
     let mut map = load(path)?;
     let (half, swap, random) = (mods.has(Mod::Half), mods.has(Mod::Swap), mods.has(Mod::Random));
@@ -34,6 +34,17 @@ pub(crate) fn load_played(path: &Path, mods: crate::mods::Mods, seed: u64) -> Op
     // A convert's notes only exist once it's converted.
     map.convert_mut(GameMode::Taiko, &Default::default()).ok()?;
     const RIM: u8 = 2 | 8; // Whistle and clap: kats.
+    let keep = if half {
+        let points = &map.timing_points;
+        let beat_at = |t: f64| {
+            let k = points.partition_point(|p| p.time <= t).saturating_sub(1);
+            points.get(k).map_or((0.0, 500.0), |p| (p.time, p.beat_len))
+        };
+        let times: Vec<f64> = map.hit_objects.iter().filter(|o| o.is_circle()).map(|o| o.start_time).collect();
+        crate::mods::half_keeps(&times, half_rule, &beat_at)
+    } else {
+        Vec::new()
+    };
     let objects = std::mem::take(&mut map.hit_objects);
     let sounds = std::mem::take(&mut map.hit_sounds);
     let mut k = 0;
@@ -41,7 +52,7 @@ pub(crate) fn load_played(path: &Path, mods: crate::mods::Mods, seed: u64) -> Op
         let mut bits = u8::from(sound);
         if object.is_circle() {
             k += 1;
-            if half && k % 2 == 0 {
+            if half && !keep[k - 1] {
                 continue;
             }
             let kat = (bits & RIM != 0) != swap;
@@ -68,12 +79,12 @@ pub fn star_rating_with(path: &Path, rate: f64, mods: u32) -> Option<f64> {
 /// With mods and the scroll speed setting, the way pp counts them (`pp::formula_mods`: slower
 /// notes read easier, faster ones harder). Relax goes by its mod bits, scroll speed aside.
 pub fn star_rating_for(path: &Path, rate: f64, mods: crate::mods::Mods, scroll_speed: f64) -> Option<f64> {
-    star_rating_played(path, rate, mods, scroll_speed, 0)
+    star_rating_played(path, rate, mods, scroll_speed, 0, Default::default())
 }
 
 /// The same for a play, whose `seed` says how Random coloured it.
-pub fn star_rating_played(path: &Path, rate: f64, mods: crate::mods::Mods, scroll_speed: f64, seed: u64) -> Option<f64> {
-    let map = load_played(path, mods, seed)?;
+pub fn star_rating_played(path: &Path, rate: f64, mods: crate::mods::Mods, scroll_speed: f64, seed: u64, half_rule: crate::mods::HalfRule) -> Option<f64> {
+    let map = load_played(path, mods, seed, half_rule)?;
     let difficulty = if mods.has(crate::mods::Mod::Relax) {
         Difficulty::new().mods(mod_bits(mods))
     } else {

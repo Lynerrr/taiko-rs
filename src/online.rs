@@ -132,8 +132,8 @@ pub struct ScoreSubmit {
     pub pp_version: u32,
 }
 
-/// 1: on the notes `NOTE_MODS` leave, not the whole map.
-pub const PP_VERSION: u32 = 1;
+/// 1: on the notes `NOTE_MODS` leave, not the whole map. 2: Half keeps to the beat.
+pub const PP_VERSION: u32 = 2;
 /// The mods that change the notes: older games' pp of plays with them are wrong.
 #[allow(dead_code)] // used by the online server (server/)
 pub const NOTE_MODS: [&str; 3] = ["HA", "SW", "RD"];
@@ -169,6 +169,9 @@ pub struct OnlineScore {
     /// The scroll speed setting it was played at (None: sent before that was).
     #[serde(default)]
     pub scroll_speed: Option<f64>,
+    /// `ScoreSubmit::pp_version`.
+    #[serde(default)]
+    pub pp_version: u32,
 }
 
 /// An online score's replay: its presses, the map they were played on and how they are judged

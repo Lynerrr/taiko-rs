@@ -1784,7 +1784,7 @@ impl State {
         results.pp = score.pp;
         results.no_pp = mods.unranked().then_some(tr!("Autoplay and Relax get no pp", "AutoplayとRelaxではppは付きません", "Autoplay и Relax не дают pp"));
         results.opened = Some(ui::Opened { player: score.player.clone(), date: score.date, online: true });
-        let play = pp::Play { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, rate: score.rate, mods, scroll_speed: score.scroll_speed.unwrap_or(1.0), seed: 0 };
+        let play = pp::Play { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, rate: score.rate, mods, scroll_speed: score.scroll_speed.unwrap_or(1.0), seed: 0, half: mods::HalfRule::of_pp_version(score.pp_version) };
         let online = (self.cfg.online_server.clone(), score, e.label());
         results.job = Some(results_job(e.path.clone(), play, None, Some(online)));
         self.scene = Scene::Results { results, entry, from: None };
@@ -6464,7 +6464,7 @@ impl State {
                     let mods = v.play.as_ref().map(|p| Mods::from_list(&p.map.mods)).unwrap_or_default();
                     let seed = v.play.as_ref().and_then(|p| p.map.seed).unwrap_or(0);
                     let mut g = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
-                    g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods, 1.0, seed));
+                    g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods, 1.0, seed, Default::default()));
                     if let Some(p) = &v.play {
                         use_mod_settings(&mut g, &p.map);
                     }
@@ -7548,9 +7548,10 @@ impl State {
                             None if mods.has(mods::Mod::Random) => fresh_seed(),
                             None => 0,
                         };
-                        let mut game = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
+                        let half = self.pending_replay.as_ref().map_or(Default::default(), |r| r.half_rule());
+                        let mut game = Game::with_half(map, track, self.audio.as_ref(), mods, seed, half);
                         game.scroll_speed = self.cfg.scroll_speed;
-                        game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods, game.scroll_speed, game.seed);
+                        game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods, game.scroll_speed, game.seed, half);
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
@@ -7649,6 +7650,7 @@ impl State {
                         mods: game.mods,
                         scroll_speed: game.scroll_speed,
                         seed: game.seed,
+                        half: game.half,
                     };
                     results.no_pp = if game.mods.unranked() {
                         Some("Autoplay and Relax get no pp")
@@ -7720,7 +7722,7 @@ impl State {
                                 date: replay.date,
                                 replay_version: replay.version,
                                 inputs: replay.inputs.clone(),
-                                stars: stars::star_rating_played(&e.path, replay.rate, game.mods, game.scroll_speed, game.seed),
+                                stars: stars::star_rating_played(&e.path, replay.rate, game.mods, game.scroll_speed, game.seed, replay.half_rule()),
                                 pp_version: online::PP_VERSION,
                                 scroll_speed: Some(replay.scroll_speed),
                                 play_ms: Some(game.played_ms as u64),
@@ -7846,7 +7848,7 @@ impl State {
                         let mut game = Game::with_seed(map, track, self.audio.as_ref(), self.pending_mods, seed);
                         game.scroll_speed = self.cfg.scroll_speed;
                         if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
-                            game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, game.scroll_speed, game.seed);
+                            game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, game.scroll_speed, game.seed, Default::default());
                         }
                         if let Some(m) = self.mp.as_ref().and_then(|s| s.map.as_ref()) {
                             use_mod_settings(&mut game, m);

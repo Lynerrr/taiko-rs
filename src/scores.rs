@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// 3: scored with `Scoring::Standard` (below: `Classic`). 2: judged with `Mash::Nearest` (1: with
 /// the `anti_mash` setting).
-const REPLAY_VERSION: u32 = 3;
+const REPLAY_VERSION: u32 = 4;
 
 /// A recorded play: the map time each drum key was judged at, plus what the judging depended
 /// on. Playing the inputs back through the same map reproduces the play exactly.
@@ -151,6 +151,7 @@ impl Replay {
             mods: crate::mods::Mods::from_list(&self.mods),
             scroll_speed: self.scroll_speed,
             seed: self.seed,
+            half: self.half_rule(),
         }
     }
 }
@@ -199,6 +200,11 @@ impl Replay {
     /// How the play's presses are judged.
     pub fn mash(&self) -> crate::game::Mash {
         if self.version >= 2 { crate::game::Mash::Nearest } else { crate::game::Mash::legacy(self.anti_mash) }
+    }
+
+    /// Which notes Half took off.
+    pub fn half_rule(&self) -> crate::mods::HalfRule {
+        if self.version >= 4 { crate::mods::HalfRule::OnTheBeat } else { crate::mods::HalfRule::EveryOther }
     }
 
     /// How its score was worked out.
