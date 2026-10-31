@@ -104,7 +104,7 @@ const CLAUDE_FRIENDS: &[&str] = &["lynerrr", "auneu"];
 const VERIFY_FOR: Duration = Duration::from_secs(30 * 60);
 
 const MAX_FRIENDS: usize = 200;
-/// Chat lines kept per pair of friends, and of the global chat (in memory only).
+/// Chat lines kept per pair of friends, and of the global chat (see `SavedChat`).
 const CHAT_HISTORY: usize = 100;
 /// How often a changed online list goes out to everyone (at most; see `announcer`).
 const PLAYERS_EVERY: Duration = Duration::from_secs(2);
@@ -164,6 +164,13 @@ struct Play {
     conn: u64,
 }
 
+/// DIR/chat.json: the chats as they stood, so a restart doesn't lose them.
+#[derive(Serialize, Deserialize, Default)]
+struct SavedChat {
+    global: VecDeque<ChatLine>,
+    friends: Vec<(String, String, VecDeque<ChatLine>)>,
+}
+
 #[derive(Default)]
 struct Hub {
     conns: HashMap<String, Vec<Conn>>,
@@ -171,6 +178,8 @@ struct Hub {
     /// By (a, b) with a < b.
     history: HashMap<(String, String), VecDeque<ChatLine>>,
     global: VecDeque<ChatLine>,
+    /// A chat changed since they were last written to chat.json.
+    chat_changed: bool,
     /// Someone came, left or changed what they're doing since the online list last went out.
     players_changed: bool,
     next_conn: u64,
@@ -240,6 +249,7 @@ impl Hub {
     /// `old` is called `new` from now on: their chats go along, their connections close and come
     /// back under the new name.
     fn rename(&mut self, old: &str, new: &str) {
+        self.chat_changed = true;
         let chats: Vec<(String, String)> = self.history.keys().filter(|(a, b)| a == old || b == old).cloned().collect();
         for chat in chats {
             let other = if chat.0 == old { &chat.1 } else { &chat.0 };
@@ -441,6 +451,18 @@ fn load_text(path: &std::path::Path) -> Option<String> {
     try_text(path).unwrap_or_else(|e| refuse_to_start(&e))
 }
 
+/// Writes a file atomically (temp file, then rename), readable by its owner only.
+fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, path)
+}
+
 fn refuse_to_start(why: &str) -> ! {
     eprintln!("can't read saved data, not starting: {why}");
     std::process::exit(1);
@@ -513,6 +535,8 @@ impl State {
         for key in accounts.users.iter().filter(|(_, u)| u.banned).map(|(k, _)| k) {
             scores.set_banned(key, true);
         }
+        let chat: SavedChat = load_saved(&path.with_file_name("chat.json"));
+        let history = chat.friends.into_iter().map(|(a, b, log)| ((a, b), log)).collect();
         let (saves, wake) = mpsc::channel();
         let state = State {
             accounts: Mutex::new(accounts),
@@ -522,7 +546,7 @@ impl State {
             next_room: AtomicU32::new(1),
             limits: Mutex::new(HashMap::new()),
             dummy_hash: hash_password("not a real password").expect("argon2"),
-            hub: Mutex::new(Hub::default()),
+            hub: Mutex::new(Hub { history, global: chat.global, ..Hub::default() }),
             scores: Mutex::new(scores),
             verify_codes: Mutex::new(HashMap::new()),
         };
@@ -537,21 +561,27 @@ impl State {
         let _ = self.saves.send(());
     }
 
-    /// Writes accounts.json atomically (temp file, then rename), readable by its owner only.
+    /// Writes accounts.json.
     fn write(&self, accounts: &Accounts) {
-        let tmp = self.path.with_extension("json.tmp");
         let Ok(text) = serde_json::to_string_pretty(accounts) else { return };
-        if let Err(e) = std::fs::write(&tmp, text) {
+        if let Err(e) = write_private(&self.path, &text) {
             eprintln!("saving accounts: {e}");
-            return;
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-        }
-        if let Err(e) = std::fs::rename(&tmp, &self.path) {
-            eprintln!("saving accounts: {e}");
+    }
+
+    /// Writes chat.json if a chat has changed.
+    fn write_chat(&self) {
+        let saved = {
+            let mut hub = self.hub.lock().unwrap();
+            if !std::mem::take(&mut hub.chat_changed) {
+                return;
+            }
+            let friends = hub.history.iter().map(|((a, b), log)| (a.clone(), b.clone(), log.clone())).collect();
+            SavedChat { global: hub.global.clone(), friends }
+        };
+        let Ok(text) = serde_json::to_string(&saved) else { return };
+        if let Err(e) = write_private(&self.path.with_file_name("chat.json"), &text) {
+            eprintln!("saving the chats: {e}");
         }
     }
 
@@ -1105,6 +1135,7 @@ impl State {
         avatars::rename(&key, &new_key);
         discord::rename_player(&key, &new_key);
         self.hub.lock().unwrap().rename(&key, &new_key);
+        self.save();
         for friend in self.friend_keys(&new_key) {
             self.push_friends(&friend);
         }
@@ -1339,9 +1370,12 @@ impl State {
         if log.len() > CHAT_HISTORY {
             log.pop_front();
         }
+        hub.chat_changed = true;
         let d = Down::Chat(line.clone());
         hub.send_to(key, &d);
         hub.send_to(&to, &d);
+        drop(hub);
+        self.save();
         Ok(line)
     }
 
@@ -1361,7 +1395,10 @@ impl State {
         if hub.global.len() > CHAT_HISTORY {
             hub.global.pop_front();
         }
+        hub.chat_changed = true;
         hub.send_to_all(&Down::GlobalChat(line.clone()));
+        drop(hub);
+        self.save();
         Ok(line)
     }
 }
@@ -1543,6 +1580,7 @@ fn saver(state: Arc<State>, wake: mpsc::Receiver<()>) {
         while wake.try_recv().is_ok() {}
         let copy = state.accounts.lock().unwrap().clone();
         state.write(&copy);
+        state.write_chat();
     }
 }
 
@@ -1902,6 +1940,41 @@ mod tests {
         // Case only.
         assert_eq!(state.rename("auneu", "nice", "NICE").unwrap(), "NICE");
         assert_eq!(state.user(&token).as_deref(), Some("NICE"));
+    }
+
+    #[test]
+    fn chats_survive_a_restart() {
+        let state = test_state("chat-saved");
+        {
+            let mut a = state.accounts.lock().unwrap();
+            a.users.insert("ann".into(), User { friends: vec!["bob".into()], ..user("Ann") });
+            a.users.insert("bob".into(), User { friends: vec!["ann".into()], ..user("Bob") });
+        }
+        state.post_chat("ann", "Ann", "bob", "hi bob", |_| true).unwrap();
+        state.post_global("Ann", "hi all", |_| true).unwrap();
+        state.write_chat();
+        let file = state.path.with_file_name("chat.json");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600, "private messages");
+        }
+
+        let (again, _wake) = State::load(state.path.clone());
+        assert_eq!(again.global_chat()[0].text, "hi all");
+        assert_eq!(again.chat_with("bob", "ann")[0].text, "hi bob");
+
+        // Nothing new, nothing written; and the newest lines are the ones kept.
+        std::fs::remove_file(&file).unwrap();
+        state.write_chat();
+        assert!(!file.exists());
+        for k in 0..CHAT_HISTORY + 5 {
+            state.post_global("Ann", &format!("line {k}"), |_| true).unwrap();
+        }
+        state.write_chat();
+        let (again, _wake) = State::load(state.path.clone());
+        assert_eq!(again.global_chat().len(), CHAT_HISTORY);
+        assert_eq!(again.global_chat().last().unwrap().text, format!("line {}", CHAT_HISTORY + 4));
     }
 
     #[test]
