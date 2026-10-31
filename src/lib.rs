@@ -129,6 +129,9 @@ enum Scene {
     MpResults,
 }
 
+/// How slowly a new background comes in on the main menu, where it's the whole picture.
+const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
+
 /// How far the player's arrow keys and wheel move the music.
 const MUSIC_SEEK_MS: f64 = 5000.0;
 
@@ -2212,6 +2215,7 @@ impl State {
     /// The next or previous song of the list, round from one end to the other.
     fn music_step(&mut self, by: i32) {
         self.set_music_paused(false);
+        self.preview.from_top = false;
         if let Some(p) = &mut self.player {
             if by < 0 {
                 p.list.prev();
@@ -7672,6 +7676,8 @@ impl State {
             self.preview.kiai_effects = self.cfg.kiai_effects;
             self.preview.autoplay = self.cfg.autoplay;
             self.preview.player = self.player.is_some();
+            self.preview.menu = self.on_menu();
+            self.preview.from_top &= self.preview.menu;
             self.preview.pitch = self.player.as_ref().map_or(1.0, |p| p.pitch());
             self.preview.hold = self.dragging_list();
             // The splash has its own sound: the preview music waits for it.
@@ -7849,6 +7855,10 @@ impl State {
                     self.preview.seek_music(0.0, self.audio.as_ref());
                 }
                 Some(_) => self.music_step(1),
+                None if self.on_menu() => {
+                    self.music_step(1);
+                    self.preview.from_top = true;
+                }
                 None => {}
             }
         }
@@ -9776,7 +9786,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             }
             renderer.bg_brightness = s.bg_brightness;
             // A new background cross-fades from the previous one.
-            renderer.bg_mix = s.bg_changed.map(|t| render::progress(t, 300.0)).unwrap_or(1.0);
+            let fade = if s.on_menu() { MENU_BACKGROUND_FADE_MS } else { 300.0 };
+            renderer.bg_mix = s.bg_changed.map(|t| render::progress(t, fade)).unwrap_or(1.0);
             (capture, s.frame_clip.take(), s.backdrop(s.dims_background()))
         };
         // The playfield / preview clip (fractions) plus the lists' (virtual units).

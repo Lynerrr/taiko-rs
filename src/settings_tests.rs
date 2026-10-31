@@ -103,6 +103,30 @@ fn the_player_opens_from_the_menu_and_closes_with_it() {
 }
 
 #[test]
+fn the_menus_song_gives_way_to_the_next_when_it_ends() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.play_when_scanned = false;
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    let first = s.select.selected();
+    assert!(first.is_some());
+    s.preview.song_ended();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let second = s.select.selected();
+    assert_ne!(second, first, "the next song");
+    assert!(s.preview.from_top, "from its start");
+    s.music_step(1);
+    assert!(!s.preview.from_top, "a song picked by hand plays from its preview point");
+    let second = s.select.selected();
+    // In song select, it just goes round as it always has.
+    s.main_menu = None;
+    s.preview.song_ended();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert_eq!(s.select.selected(), second);
+}
+
+#[test]
 fn typed_numbers_take_units_and_commas() {
     assert_eq!(parse_number("1.25x"), Some(1.25));
     assert_eq!(parse_number(" -12 ms"), Some(-12.0));
