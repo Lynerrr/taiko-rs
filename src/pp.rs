@@ -54,8 +54,8 @@ pub(crate) fn formula_mods(mods: Mods, scroll_speed: f64) -> rosu_pp::model::mod
 
 /// osu!'s mods that change the pp formula itself, with their (legacy) bits.
 const FORMULA: [(Mod, u32); 4] = [(Mod::Easy, 2), (Mod::Hidden, 8), (Mod::HardRock, 16), (Mod::Flashlight, 1024)];
-/// osu!'s mods whose only effect on pp is the speed (or none).
-const NEUTRAL: [Mod; 7] = [Mod::NoFail, Mod::SuddenDeath, Mod::Perfect, Mod::DoubleTime, Mod::Nightcore, Mod::HalfTime, Mod::Daycore];
+/// Mods whose only effect on pp is the speed or the notes (`stars::load_played`), or none.
+const NEUTRAL: [Mod; 8] = [Mod::NoFail, Mod::SuddenDeath, Mod::Perfect, Mod::DoubleTime, Mod::Nightcore, Mod::HalfTime, Mod::Daycore, Mod::Half];
 
 /// What the play's other mods (taiko.rs's own, and osu!'s that pp doesn't know) do to its pp:
 /// their score multipliers.
@@ -291,7 +291,7 @@ mod tests {
     fn own_mods_scale_pp_and_osu_ones_go_to_the_formula() {
         assert_eq!(custom_factor(Mods::parse("HD,HR,DT,NF")), 1.0);
         assert!((custom_factor(Mods::parse("HD,CH")) - Mod::SvChaos.multiplier()).abs() < 1e-12);
-        assert!(custom_factor(Mods::parse("HA")) < 1.0, "Half removes notes: less pp");
+        assert_eq!(custom_factor(Mods::parse("HA")), 1.0, "Half's pp go by the notes it leaves");
     }
 
     #[test]
@@ -313,7 +313,7 @@ mod tests {
         assert_eq!(b.max_combo, 400);
         assert!((b.stars - cut).abs() < 1e-9);
         assert!((b.pp - b.if_ss).abs() < 1e-6, "400 GREATs are all of what's left");
-        assert!(b.pp < play_pp(&path, &Play { great: 800, max_combo: 800, mods: none, ..play }).unwrap() * 0.5);
+        assert!(b.pp < play_pp(&path, &Play { great: 800, max_combo: 800, mods: none, ..play }).unwrap());
         // Colours count too, and Random goes by its seed.
         let random = |seed| crate::stars::star_rating_played(&path, 1.0, Mods::parse("RD"), 1.0, seed).unwrap();
         assert!(random(1) != full && random(1) != random(2));
