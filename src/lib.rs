@@ -9797,6 +9797,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     // can cost microseconds a time (HPET).
     let timing = profile || std::env::var_os("TAIKO_STATS").is_some();
     let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) = (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
+    let (mut prof_acquire, mut prof_acquire_max) = (0.0f64, 0.0f64);
     // TAIKO_LAYOUT=1: print each text that doesn't fit (once), see `debug::layout_problems`.
     canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
     let mut layout_seen = std::collections::HashSet::new();
@@ -9940,6 +9941,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             waits = ((acquired - t0).as_secs_f64() * 1000.0, (presented - t1).as_secs_f64() * 1000.0, sample_age);
             if profile {
                 prof_n += 1;
+                prof_acquire += waits.0;
+                prof_acquire_max = prof_acquire_max.max(waits.0);
                 prof_build += (t1 - now).as_secs_f64() * 1000.0;
                 prof_submit += (presented - t1).as_secs_f64() * 1000.0;
                 prof_shapes = prof_shapes.max(canvas.shapes.len());
@@ -9956,8 +9959,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                     let screen = (renderer.size().0 * renderer.size().1).max(1) as f32;
                     let cover: f32 = canvas.shapes.iter().map(area).sum::<f32>() / screen;
                     eprintln!(
-                        "profile: {:.0} fps  build {:.2} ms  submit {:.2} ms  shapes {}{gpu}  cover {cover:.2}",
-                        n / prof_start.elapsed().as_secs_f64(), prof_build / n, prof_submit / n, prof_shapes
+                        "profile: {:.0} fps  acquire {:.2} ms (max {:.2})  build {:.2} ms  submit {:.2} ms  shapes {}{gpu}  cover {cover:.2}",
+                        n / prof_start.elapsed().as_secs_f64(), prof_acquire / n, prof_acquire_max, prof_build / n, prof_submit / n, prof_shapes
                     );
                     if std::env::var("TAIKO_PROFILE").is_ok_and(|v| v == "shapes") {
                         let mut big: Vec<&render::Shape> = canvas.shapes.iter().collect();
@@ -9967,6 +9970,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                         }
                     }
                     (prof_start, prof_n, prof_build, prof_submit, prof_shapes) = (Instant::now(), 0, 0.0, 0.0, 0);
+                    (prof_acquire, prof_acquire_max) = (0.0, 0.0);
                 }
             }
         }
