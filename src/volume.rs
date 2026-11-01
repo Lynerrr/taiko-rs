@@ -16,6 +16,9 @@ pub const HITSOUNDS: usize = 2;
 const NOTES: usize = 3;
 
 const GOLD: u32 = 0xFFD34D;
+/// What a miss says it in.
+const MISS_RED: u32 = 0xFF4B4B;
+const MUTE: &str = "MUTE";
 const OUTLINE: u32 = 0x0f0f16;
 const EMPTY: u32 = 0x23232f;
 const GLITCH_RED: u32 = 0x9f2137;
@@ -147,7 +150,7 @@ impl Overlay {
             return false;
         }
         self.word = if turned <= 0.0 {
-            Some((note, tr!("MUTE", "ミュート", "ТИШИНА"), self.clock))
+            Some((note, MUTE, self.clock))
         } else if turned >= 1.0 {
             Some((note, "MAX", self.clock))
         } else {
@@ -173,7 +176,9 @@ impl Overlay {
             let k = (self.clock - at) / WORD_MS;
             if k < 1.0 {
                 let cx = px + 8.0 + CELL * (note as f32 + 0.5);
-                c.text_centered(cx, py - 14.0 - k * 14.0, 10.0, rgba(GOLD, a * (1.0 - k * k)), word);
+                // MAX rises; MUTE is a miss: red, and it drops.
+                let (col, y) = if word == MUTE { (MISS_RED, py - 26.0 + k * 12.0) } else { (GOLD, py - 14.0 - k * 14.0) };
+                c.text_centered(cx, y, 12.0, rgba(col, a * (1.0 - k * k)), word);
             }
         }
     }
@@ -323,6 +328,7 @@ mod tests {
         assert!(!v.turn(&mut cfg, 1, now), "already there");
         v.turn(&mut cfg, -100, now);
         assert_eq!(cfg.music_volume, 0.0);
+        assert_eq!(v.word.map(|w| w.1), Some(MUTE));
     }
 
     #[test]
