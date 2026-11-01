@@ -1074,10 +1074,9 @@ fn bake_speeds(map: &mut Beatmap, mods: Mods) {
         if mods.has(Mod::Drop) && cp.kiai {
             v *= 1.4;
         }
-        if mods.has(Mod::Gearbox) {
-            if let Some((_, start, _)) = bar_at(&bars, t, 1.0) {
-                v *= 1.0 + 0.15 * ((t - start) / cp.beat_length + 0.01).floor().clamp(0.0, 7.0);
-            }
+        if mods.has(Mod::Gearbox)
+            && let Some((_, start, _)) = bar_at(&bars, t, 1.0) {
+            v *= 1.0 + 0.15 * ((t - start) / cp.beat_length + 0.01).floor().clamp(0.0, 7.0);
         }
         if mods.has(Mod::Roulette) {
             let i = sections.partition_point(|s| s.0 <= t + 1.0);
@@ -1205,7 +1204,7 @@ fn lies(map: &Beatmap) -> Vec<f64> {
         .iter()
         .map(|n| {
             let d = snap_of(&map.control_points, n.time);
-            if !matches!(n.kind, Kind::Don | Kind::Kat) || d == 0 || d % 3 != 0 {
+            if !matches!(n.kind, Kind::Don | Kind::Kat) || d == 0 || !d.is_multiple_of(3) {
                 return n.time;
             }
             let cp = beatmap::control_point_at(&map.control_points, n.time);
@@ -1713,10 +1712,9 @@ impl Game {
 
     pub fn resume(&mut self, audio: Option<&Engine>) {
         self.resuming = None;
-        if self.paused.take().is_some() {
-            if let Some(a) = audio {
-                a.set_paused(false);
-            }
+        if self.paused.take().is_some()
+            && let Some(a) = audio {
+            a.set_paused(false);
         }
     }
 
@@ -2166,13 +2164,12 @@ impl Game {
         if let Some(i) = self.find_active(t, Kind::Roll) {
             let n = &self.map.notes[i];
             let k = ((t - n.time) / n.tick_spacing).round().max(0.0) as usize;
-            if let Some(tick) = self.state[i].ticks.get_mut(k) {
-                if !*tick {
-                    *tick = true;
-                    self.stats.roll_ticks += 1;
-                    let points = if n.big { 200.0 } else { 100.0 };
-                    self.add_score(points);
-                }
+            if let Some(tick) = self.state[i].ticks.get_mut(k)
+                && !*tick {
+                *tick = true;
+                self.stats.roll_ticks += 1;
+                let points = if n.big { 200.0 } else { 100.0 };
+                self.add_score(points);
             }
         }
         normal
@@ -2811,7 +2808,7 @@ impl Game {
                 // Each note pulses on its own grid: a 1/4 four times a beat.
                 let own = (1.0 - (beats * flow.clamp(1, 8) as f32).rem_euclid(1.0)).powi(3);
                 size *= 1.0 + 0.22 * own;
-                squish = 1.0 + 0.3 * own * if k % 2 == 0 { 1.0 } else { -1.0 };
+                squish = 1.0 + 0.3 * own * if k.is_multiple_of(2) { 1.0 } else { -1.0 };
             }
             let r = if n.big { BIG_R } else { NOTE_R } * size;
             let first = c.shapes.len();
@@ -2834,7 +2831,7 @@ impl Game {
         if boxed && halo > 0.01 {
             for (k, a) in [0.3, 0.16, 0.08, 0.03].into_iter().enumerate() {
                 let d = 3.0 + 6.0 * k as f32;
-                c.round_rect(-d, lane_top - 3.0 - d, w + 2.0 * d, LANE_H + 6.0 + 2.0 * d, 4.0 + d, rgba(0, 0.0), rgba(FOCUS_COL, a * halo), 6.0);
+                c.round_rect([-d, lane_top - 3.0 - d], [w + 2.0 * d, LANE_H + 6.0 + 2.0 * d], 4.0 + d, rgba(0, 0.0), rgba(FOCUS_COL, a * halo), 6.0);
             }
         }
 
@@ -3118,7 +3115,7 @@ impl Game {
                             c.sprite_box(Sprite::RollEnd, xe + r * ex, LANE_Y, r * ex, r * ey, rgba(ROLL, a));
                         }
                     } else {
-                        c.capsule(HIT_X + s0, HIT_X + s1, LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
+                        c.capsule([HIT_X + s0, HIT_X + s1], LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
                         if fake {
                             c.circle(HIT_X + s_cap, LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
                         }
@@ -3299,7 +3296,7 @@ impl Game {
         // the focus: a flash and a ring off the drum.
         if boxed && !geo.bent() {
             let frame = tint(rgba(0x3a3a4e, 1.0), FOCUS_COL, look.focus.max(look.aim));
-            c.round_rect(0.0, lane_top - 3.0, w, LANE_H + 6.0, 4.0, rgba(0, 0.0), frame, 2.0);
+            c.round_rect([0.0, lane_top - 3.0], [w, LANE_H + 6.0], 4.0, rgba(0, 0.0), frame, 2.0);
         }
         // Called: a ping off the drum on each beat.
         if boxed && look.aim > 0.0 {
@@ -3351,10 +3348,9 @@ impl Game {
         }
         if mods.has(Mod::BarrelRoll) {
             let i = self.kiai_starts.partition_point(|&(k, _)| k <= vt);
-            if let Some(&(k, b)) = i.checked_sub(1).and_then(|i| self.kiai_starts.get(i)) {
-                if vt - k < 2.0 * b {
-                    angle += TAU * smooth(0.0, 2.0 * b, vt - k) as f32;
-                }
+            if let Some(&(k, b)) = i.checked_sub(1).and_then(|i| self.kiai_starts.get(i))
+                && vt - k < 2.0 * b {
+                angle += TAU * smooth(0.0, 2.0 * b, vt - k) as f32;
             }
         }
         let mut dest = pivot;
@@ -3521,8 +3517,8 @@ impl Game {
         let t = self.time;
         let w = c.width;
         if let Some(text) = &self.banner {
-            let tw = Canvas::text_width(9.0, &text);
-            c.round_rect(w / 2.0 - tw / 2.0 - 12.0, 14.0, tw + 24.0, 20.0, 10.0, rgba(0x173049, 0.9), rgba(0x4fb4ff, 1.0), 1.0);
+            let tw = Canvas::text_width(9.0, text);
+            c.round_rect([w / 2.0 - tw / 2.0 - 12.0, 14.0], [tw + 24.0, 20.0], 10.0, rgba(0x173049, 0.9), rgba(0x4fb4ff, 1.0), 1.0);
             c.text_centered(w / 2.0, 19.5, 9.0, rgba(WHITE, 1.0), text);
         }
 
@@ -3576,10 +3572,10 @@ impl Game {
                 c.clip_since(start, fx, fy, fill_w * hp, fill_h);
                 c.rect(fx + fill_w / 2.0 - 0.75, fy - 2.0, 1.5, fill_h + 4.0, rgba(WHITE, 0.8));
             } else {
-                c.round_rect(hx, hy, hw, 8.0, 3.0, rgba(0x15151d, 0.85), rgba(0x3a3a4e, 1.0), 1.0);
+                c.round_rect([hx, hy], [hw, 8.0], 3.0, rgba(0x15151d, 0.85), rgba(0x3a3a4e, 1.0), 1.0);
                 let fill = if hp >= 0.5 { 0xFFD34D } else { 0xEB452C };
                 if hp > 0.0 {
-                    c.round_rect(hx + 1.0, hy + 1.0, (hw - 2.0) * hp, 6.0, 2.5, rgba(fill, 0.95), rgba(0, 0.0), 0.0);
+                    c.round_rect([hx + 1.0, hy + 1.0], [(hw - 2.0) * hp, 6.0], 2.5, rgba(fill, 0.95), rgba(0, 0.0), 0.0);
                 }
                 c.rect(hx + hw / 2.0 - 0.75, hy - 2.0, 1.5, 12.0, rgba(WHITE, 0.8));
             }
@@ -3595,9 +3591,9 @@ impl Game {
         if shown(Part::HitError) {
         let scale = 150.0 / self.windows.miss as f32;
         let wnd = |ms: f64| ms as f32 * scale;
-        c.round_rect(cx - wnd(self.windows.miss), my - 3.0, wnd(self.windows.miss) * 2.0, 6.0, 3.0, rgba(Judge::Miss.color(), 0.25), rgba(0, 0.0), 0.0);
-        c.round_rect(cx - wnd(self.windows.ok), my - 3.0, wnd(self.windows.ok) * 2.0, 6.0, 3.0, rgba(Judge::Ok.color(), 0.4), rgba(0, 0.0), 0.0);
-        c.round_rect(cx - wnd(self.windows.great), my - 3.0, wnd(self.windows.great) * 2.0, 6.0, 3.0, rgba(Judge::Great.color(), 0.6), rgba(0, 0.0), 0.0);
+        c.round_rect([cx - wnd(self.windows.miss), my - 3.0], [wnd(self.windows.miss) * 2.0, 6.0], 3.0, rgba(Judge::Miss.color(), 0.25), rgba(0, 0.0), 0.0);
+        c.round_rect([cx - wnd(self.windows.ok), my - 3.0], [wnd(self.windows.ok) * 2.0, 6.0], 3.0, rgba(Judge::Ok.color(), 0.4), rgba(0, 0.0), 0.0);
+        c.round_rect([cx - wnd(self.windows.great), my - 3.0], [wnd(self.windows.great) * 2.0, 6.0], 3.0, rgba(Judge::Great.color(), 0.6), rgba(0, 0.0), 0.0);
         for &(err, at, j) in &self.recent_errors {
             let age = (t - at) as f32;
             if age < 4000.0 {
@@ -3684,7 +3680,7 @@ impl Game {
                 let y = 170.0 + i as f32 * 38.0 + (1.0 - ti) * 18.0;
                 let selected = i == cursor;
                 let (bg, border) = if selected { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
-                c.round_rect(w / 2.0 - 140.0, y, 280.0, 32.0, 8.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 2.0 } else { 1.0 });
+                c.round_rect([w / 2.0 - 140.0, y], [280.0, 32.0], 8.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 2.0 } else { 1.0 });
                 c.hit(w / 2.0 - 140.0, y, 280.0, 32.0, Hit::PauseItem(i));
                 c.text_centered(w / 2.0, y + 10.0, 12.0, rgba(if selected { WHITE } else { 0xc8c8d8 }, 1.0), item);
             }
@@ -3734,9 +3730,9 @@ fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
         c.circle(side * 62.0, -50.0, 5.0, rgba(0xffffff, 1.0), rgba(0xffffff, 1.0), 0.0);
     }
     // Snout, nose, and the jaw hanging open, teeth top and bottom.
-    c.round_rect(-95.0, -5.0, 190.0, 95.0, 45.0, rgba(snout, 1.0), rgba(dark, 1.0), 4.0);
-    c.round_rect(-26.0, -8.0, 52.0, 30.0, 12.0, rgba(0x0b0b0b, 1.0), rgba(0x0b0b0b, 1.0), 0.0);
-    c.round_rect(-85.0, 55.0, 170.0, 110.0, 30.0, rgba(0x1a0404, 1.0), rgba(dark, 1.0), 5.0);
+    c.round_rect([-95.0, -5.0], [190.0, 95.0], 45.0, rgba(snout, 1.0), rgba(dark, 1.0), 4.0);
+    c.round_rect([-26.0, -8.0], [52.0, 30.0], 12.0, rgba(0x0b0b0b, 1.0), rgba(0x0b0b0b, 1.0), 0.0);
+    c.round_rect([-85.0, 55.0], [170.0, 110.0], 30.0, rgba(0x1a0404, 1.0), rgba(dark, 1.0), 5.0);
     for i in 0..7 {
         let x = -72.0 + i as f32 * 21.0;
         c.rect(x, 58.0, 15.0, 22.0, rgba(0xe8e0c8, 1.0));
@@ -3744,7 +3740,7 @@ fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
     }
     // Bow tie under the chin.
     for side in [-1.0, 1.0] {
-        c.round_rect(side * 34.0 - 30.0, 168.0, 60.0, 34.0, 8.0, rgba(0x0b0b0b, 1.0), rgba(0x0b0b0b, 1.0), 0.0);
+        c.round_rect([side * 34.0 - 30.0, 168.0], [60.0, 34.0], 8.0, rgba(0x0b0b0b, 1.0), rgba(0x0b0b0b, 1.0), 0.0);
     }
     c.circle(0.0, 185.0, 12.0, rgba(0x0b0b0b, 1.0), rgba(0x0b0b0b, 1.0), 0.0);
     // Everything but the backdrop was drawn about (0, 0): scale and shake it into place.
@@ -3873,16 +3869,16 @@ fn draw_drum(c: &mut Canvas, flash: [f32; 4], don: u32, kat: u32) -> f32 {
     if skinned_panel {
         // The panel has its drum drawn on: light it the built-in way.
         for (side, r, col, a) in [(1, 46.0, kat, flash[0]), (2, 46.0, kat, flash[3]), (1, 32.0, don, flash[1]), (2, 32.0, don, flash[2])] {
-            c.half_circle(drum_x, LANE_Y, r, side, rgba(col, a * 0.7), rgba(col, 0.0), 0.0);
+            c.half_circle([drum_x, LANE_Y], r, side, rgba(col, a * 0.7), rgba(col, 0.0), 0.0);
         }
         return drum_x;
     }
     c.circle(drum_x, LANE_Y, 46.0, rgba(0x2f2f3e, 1.0), rgba(0x4a4a60, 1.0), 2.0);
-    c.half_circle(drum_x, LANE_Y, 46.0, 1, rgba(kat, flash[0]), rgba(kat, 0.0), 0.0);
-    c.half_circle(drum_x, LANE_Y, 46.0, 2, rgba(kat, flash[3]), rgba(kat, 0.0), 0.0);
+    c.half_circle([drum_x, LANE_Y], 46.0, 1, rgba(kat, flash[0]), rgba(kat, 0.0), 0.0);
+    c.half_circle([drum_x, LANE_Y], 46.0, 2, rgba(kat, flash[3]), rgba(kat, 0.0), 0.0);
     c.circle(drum_x, LANE_Y, 32.0, rgba(0xe9dcc3, 1.0), rgba(0x8a7b63, 1.0), 2.0);
-    c.half_circle(drum_x, LANE_Y, 32.0, 1, rgba(don, flash[1]), rgba(don, 0.0), 0.0);
-    c.half_circle(drum_x, LANE_Y, 32.0, 2, rgba(don, flash[2]), rgba(don, 0.0), 0.0);
+    c.half_circle([drum_x, LANE_Y], 32.0, 1, rgba(don, flash[1]), rgba(don, 0.0), 0.0);
+    c.half_circle([drum_x, LANE_Y], 32.0, 2, rgba(don, flash[2]), rgba(don, 0.0), 0.0);
     drum_x
 }
 
@@ -3905,7 +3901,7 @@ pub fn draw_preview(c: &mut Canvas) {
     }
     draw_hit_target(c);
     // Back to front, like gameplay.
-    c.capsule(HIT_X + 560.0, HIT_X + 760.0, LANE_Y, NOTE_R * 0.86, rgba(ROLL, 1.0), rgba(WHITE, 1.0), 2.5);
+    c.capsule([HIT_X + 560.0, HIT_X + 760.0], LANE_Y, NOTE_R * 0.86, rgba(ROLL, 1.0), rgba(WHITE, 1.0), 2.5);
     c.circle(HIT_X + 560.0, LANE_Y, NOTE_R, rgba(ROLL, 1.0), rgba(WHITE, 1.0), NOTE_R * 0.1);
     let colours = multiverse::note_colours();
     for (dx, col, big) in [(400.0, colours.don(), true), (260.0, colours.kat(), false), (150.0, colours.don(), false)] {
@@ -4230,7 +4226,7 @@ mod tests {
 
     fn hits(g: &mut Game, errors: &[f64], offset: f64) {
         g.stats.errors.extend_from_slice(errors);
-        g.stats.error_offsets.extend(std::iter::repeat(offset).take(errors.len()));
+        g.stats.error_offsets.extend(std::iter::repeat_n(offset, errors.len()));
     }
 
     /// Deterministic spread around `mean` with standard deviation close to `sd`.

@@ -375,11 +375,10 @@ pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
                 let visible = sh.fill[3] > 0.1 || (sh.border[3] > 0.1 && sh.params[1] > 0.0);
                 visible && contains(bounds(b), x, mid_y)
             });
-            if let Some(&b) = holder {
-                if !inside(seen, bounds(b)) {
-                    out.push(format!("sticks out: \"{}\" {} past its box {}", short(s), fmt(seen), fmt(bounds(b))));
-                    break;
-                }
+            if let Some(&b) = holder
+                && !inside(seen, bounds(b)) {
+                out.push(format!("sticks out: \"{}\" {} past its box {}", short(s), fmt(seen), fmt(bounds(b))));
+                break;
             }
         }
         texts.push((range.start, range.end, ink, seen, s));

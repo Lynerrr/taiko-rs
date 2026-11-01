@@ -162,7 +162,7 @@ pub fn draw_spectators(c: &mut Canvas, names: &[&str]) {
     let listed = &names[..n.min(SPECTATORS_LISTED)];
     let lines = 1 + listed.len() + usize::from(rest.is_some());
     let longest = listed.iter().copied().chain(rest.as_deref()).chain([title.as_str()]).map(|l| Canvas::text_width(7.0, l)).fold(0.0, f32::max);
-    c.round_rect(x - 6.0, y0 - 6.0, longest + 12.0, lines as f32 * h + 8.0, 6.0, rgba(0x000000, 0.45), rgba(0, 0.0), 0.0);
+    c.round_rect([x - 6.0, y0 - 6.0], [longest + 12.0, lines as f32 * h + 8.0], 6.0, rgba(0x000000, 0.45), rgba(0, 0.0), 0.0);
     c.text(x, y0, 7.0, rgba(0x4fb4ff, 1.0), &title);
     for (i, line) in listed.iter().copied().chain(rest.as_deref()).enumerate() {
         c.text(x, y0 + (i + 1) as f32 * h, 7.0, rgba(0xc8c8d8, 1.0), line);
@@ -350,10 +350,9 @@ impl Social {
     /// Selects the conversation with `name` (opening the overlay on it).
     pub fn select_friend(&mut self, name: &str, in_lobby: bool) {
         self.set_tab(Tab::Friends);
-        if let Some(i) = self.friends.iter().position(|f| key(&f.name) == key(name)) {
-            if let Some(r) = self.rows(in_lobby).iter().position(|r| *r == Row::Friend(i)) {
-                self.cursor = r;
-            }
+        if let Some(i) = self.friends.iter().position(|f| key(&f.name) == key(name))
+            && let Some(r) = self.rows(in_lobby).iter().position(|r| *r == Row::Friend(i)) {
+            self.cursor = r;
         }
     }
 
@@ -402,7 +401,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
     let x = c.width - PANEL_W - 6.0 + (1.0 - slide) * 30.0;
     let (y, h) = (24.0, 480.0 - 30.0);
     let a = slide;
-    c.round_rect(x, y, PANEL_W, h, 8.0, rgba(0x0b0b12, 0.84 * a), rgba(0x3a3a4e, 0.9 * a), 1.0);
+    c.round_rect([x, y], [PANEL_W, h], 8.0, rgba(0x0b0b12, 0.84 * a), rgba(0x3a3a4e, 0.9 * a), 1.0);
     c.hit(x, y, PANEL_W, h, Hit::SocialPanel);
     let inner = x + 8.0;
     let iw = PANEL_W - 16.0;
@@ -529,7 +528,7 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
         let sel = i == cursor;
         let hover = c.hovered(inner, ry, iw, rh - 3.0);
         let bg = if sel { 0x2b2b3d } else if hover { 0x1d1d27 } else { 0x15151d };
-        c.round_rect(inner, ry, iw, rh - 3.0, 5.0, rgba(bg, 0.85 * a), rgba(if sel { accent() } else { 0x2a2a38 }, a), 1.0);
+        c.round_rect([inner, ry], [iw, rh - 3.0], 5.0, rgba(bg, 0.85 * a), rgba(if sel { accent() } else { 0x2a2a38 }, a), 1.0);
         c.hit(inner, ry, iw, rh - 3.0, Hit::SocialRow(i));
         let ty = ry + (rh - 3.0) / 2.0 - 3.5;
         match *r {
@@ -637,7 +636,7 @@ pub fn map_set_in(text: &str) -> Option<u32> {
 
 /// The message box at `input_y`.
 fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hint: &str, a: f32) {
-    c.round_rect(inner, input_y, iw, 18.0, 5.0, rgba(0x15151d, 0.9 * a), rgba(0x3a3a4e, a), 1.0);
+    c.round_rect([inner, input_y], [iw, 18.0], 5.0, rgba(0x15151d, 0.9 * a), rgba(0x3a3a4e, a), 1.0);
     let text = if s.input.is_empty() { hint.to_string() } else { format!("{}_", s.input) };
     let width = ((iw - 12.0) / Canvas::text_width(7.0, "x")) as usize;
     let shown: String = text.chars().rev().take(width).collect::<Vec<_>>().into_iter().rev().collect();
@@ -649,7 +648,7 @@ fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hi
 fn tag(c: &mut Canvas, right: f32, y: f32, label: &str, a: f32) -> f32 {
     let w = Canvas::text_width(6.0, label) + 10.0;
     let x = right - w;
-    c.round_rect(x, y, w, 12.0, 4.0, rgba(0x15151d, a), rgba(0x2a2a38, a), 1.0);
+    c.round_rect([x, y], [w, 12.0], 4.0, rgba(0x15151d, a), rgba(0x2a2a38, a), 1.0);
     c.text(x + 5.0, y + 3.0, 6.0, rgba(0x8a8aa0, a), label);
     x
 }
@@ -659,7 +658,7 @@ fn button(c: &mut Canvas, right: f32, y: f32, label: &str, hit: Hit, a: f32) -> 
     let w = Canvas::text_width(6.0, label) + 10.0;
     let x = right - w;
     let hover = c.hovered(x, y, w, 12.0);
-    c.round_rect(x, y, w, 12.0, 4.0, rgba(if hover { 0x3a3a4e } else { 0x23232f }, a), rgba(0x4a4a5e, a), 1.0);
+    c.round_rect([x, y], [w, 12.0], 4.0, rgba(if hover { 0x3a3a4e } else { 0x23232f }, a), rgba(0x4a4a5e, a), 1.0);
     c.text(x + 5.0, y + 3.0, 6.0, rgba(0xffffff, a), label);
     c.hit(x, y, w, 12.0, hit);
     x
@@ -671,7 +670,7 @@ fn badge(c: &mut Canvas, cx: f32, cy: f32, n: usize, a: f32) {
     }
     let label = if n > 9 { "9+".to_string() } else { n.to_string() };
     let w = Canvas::text_width(6.0, &label) + 6.0;
-    c.round_rect(cx - w / 2.0, cy - 5.0, w, 10.0, 5.0, rgba(accent(), a), rgba(accent(), a), 0.0);
+    c.round_rect([cx - w / 2.0, cy - 5.0], [w, 10.0], 5.0, rgba(accent(), a), rgba(accent(), a), 0.0);
     c.text_centered(cx, cy - 3.0, 6.0, rgba(0xffffff, a), &label);
 }
 
@@ -687,7 +686,7 @@ pub fn draw_notes(c: &mut Canvas, s: &Social) {
         let slide = (1.0 - (age / 0.2).min(1.0)) * 24.0;
         let h = 30.0;
         let hover = c.hovered(x, y, w, h);
-        c.round_rect(x + slide, y, w, h, 6.0, rgba(if hover { 0x1d1d27 } else { 0x0b0b12 }, 0.86 * a), rgba(n.colour, a), 1.0);
+        c.round_rect([x + slide, y], [w, h], 6.0, rgba(if hover { 0x1d1d27 } else { 0x0b0b12 }, 0.86 * a), rgba(n.colour, a), 1.0);
         c.rect(x + slide + 1.0, y + 4.0, 2.0, h - 8.0, rgba(n.colour, a));
         c.text(x + slide + 9.0, y + 6.0, 7.0, rgba(n.colour, a), &Canvas::fit(7.0, w - 15.0, &n.title));
         c.text(x + slide + 9.0, y + 17.0, 6.5, rgba(0xdedeea, a), &Canvas::fit(6.5, w - 15.0, &n.body));
@@ -714,7 +713,7 @@ pub fn draw_chip(c: &mut Canvas, s: &Social, lobby_unread: usize) {
     // Just under the tab bar's right-hand text.
     let (x, y) = (c.width - w - 8.0, 41.0);
     let hover = c.hovered(x, y, w, 13.0);
-    c.round_rect(x, y, w, 13.0, 6.0, rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.85), rgba(0x3a3a4e, 1.0), 1.0);
+    c.round_rect([x, y], [w, 13.0], 6.0, rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.85), rgba(0x3a3a4e, 1.0), 1.0);
     if let Some(online) = &online {
         c.circle(x + 10.0, y + 6.5, 2.5, rgba(GREEN, 1.0), rgba(0x000000, 0.0), 0.0);
         c.text(x + 16.0, y + 3.5, 6.5, rgba(0xc8c8d8, 1.0), online);

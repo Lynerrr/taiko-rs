@@ -291,17 +291,17 @@ impl Editor {
         c.rect(fx, cy + ch, fw, fy + fh - cy - ch, shade);
         c.rect(fx, cy, cx - fx, ch, shade);
         c.rect(cx + cw, cy, fx + fw - cx - cw, ch, shade);
-        c.round_rect(cx, cy, cw, ch, 2.0, rgba(0, 0.0), rgba(0x4fb4ff, 1.0), 1.5);
+        c.round_rect([cx, cy], [cw, ch], 2.0, rgba(0, 0.0), rgba(0x4fb4ff, 1.0), 1.5);
         let (pw, ph, _, _) = self.crop_px();
         c.text(cx + 6.0, cy + 5.0, 7.0, rgba(0x4fb4ff, 1.0), &format!("{pw}x{ph}  (drag to move, edges to resize)"));
-        c.round_rect(fx, fy, fw, fh, 2.0, rgba(0, 0.0), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect([fx, fy], [fw, fh], 2.0, rgba(0, 0.0), rgba(0x3a3a4e, 1.0), 1.0);
 
         // Timeline: the exported part highlighted, its ends, and the cursor.
         let (tx, ty, tw, th) = (fx, fy + fh + 12.0, fw, 14.0);
         self.timeline_rect = [tx, ty, tw, th];
         let span = (self.last - self.first).max(1.0);
         let x_of = |t: f64| tx + (((t - self.first) / span).clamp(0.0, 1.0) as f32) * tw;
-        c.round_rect(tx, ty, tw, th, 4.0, rgba(0x15151d, 0.95), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect([tx, ty], [tw, th], 4.0, rgba(0x15151d, 0.95), rgba(0x2a2a38, 1.0), 1.0);
         let (sx, ex) = (x_of(self.start), x_of(self.end));
         c.rect(sx, ty + 1.0, (ex - sx).max(1.0), th - 2.0, rgba(accent(), 0.35));
         c.rect(sx - 1.0, ty - 3.0, 2.0, th + 6.0, rgba(0x86E05A, 1.0));
@@ -377,8 +377,8 @@ impl Editor {
             c.rect(0.0, 0.0, w, VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
             let (bw, bx, by) = (360.0, (w - 360.0) / 2.0, 220.0);
             c.text_centered(w / 2.0, by - 22.0, 11.0, rgba(0xffffff, 1.0), &format!("{what}  {:.0}%", p * 100.0));
-            c.round_rect(bx, by, bw, 12.0, 6.0, rgba(0x15151d, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
-            c.round_rect(bx + 1.0, by + 1.0, (bw - 2.0) * p.clamp(0.0, 1.0), 10.0, 5.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
+            c.round_rect([bx, by], [bw, 12.0], 6.0, rgba(0x15151d, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+            c.round_rect([bx + 1.0, by + 1.0], [(bw - 2.0) * p.clamp(0.0, 1.0), 10.0], 5.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
             c.text_centered(w / 2.0, by + 22.0, 7.0, rgba(0x9a9ab0, 1.0), "Esc: cancel");
         }
     }

@@ -37,13 +37,15 @@ fn entry(set: usize, diff: usize, long: bool) -> Entry {
 }
 
 pub(crate) fn state() -> State {
-    let mut cfg = Config::default();
-    cfg.check_updates = false;
-    cfg.mods = Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR");
-    cfg.master_volume = 0.0;
-    cfg.animations = false;
-    // Nothing to connect to: the menus show the server as offline instead of asking it.
-    cfg.online_server = "127.0.0.1:9".into();
+    let mut cfg = Config {
+        check_updates: false,
+        mods: Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR"),
+        master_volume: 0.0,
+        animations: false,
+        // Nothing to connect to: the menus show the server as offline instead of asking it.
+        online_server: "127.0.0.1:9".into(),
+        ..Config::default()
+    };
     if let Some(a) = std::env::var("TAIKO_LAYOUT_ACCENT").ok().and_then(|a| render::parse_accent(&a)) {
         cfg.accent = a;
     }

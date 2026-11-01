@@ -229,11 +229,11 @@ pub fn draw_pill(c: &mut Canvas, right: f32, y: f32, size: f32, stars: Option<f3
         }
         None => (0x2a2a38, 0x8a8aa0),
     };
-    c.round_rect(x, y - 3.0, w, h, h / 2.0, rgba(bg, 1.0), rgba(bg, 1.0), 0.0);
+    c.round_rect([x, y - 3.0], [w, h], h / 2.0, rgba(bg, 1.0), rgba(bg, 1.0), 0.0);
     // A small diamond stands in for the star glyph the pixel font doesn't have.
     let d = size * 0.32;
     let (dx, dy) = (x + size * 0.6 + 2.0, y - 3.0 + h / 2.0);
-    c.round_rect(dx - d, dy - d, d * 2.0, d * 2.0, d * 0.4, rgba(fg, 1.0), rgba(fg, 1.0), 0.0);
+    c.round_rect([dx - d, dy - d], [d * 2.0, d * 2.0], d * 0.4, rgba(fg, 1.0), rgba(fg, 1.0), 0.0);
     c.text(x + size * 1.3 + 4.0, y, size, rgba(fg, 1.0), &text);
     w
 }

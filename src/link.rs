@@ -90,6 +90,7 @@ fn serve(listener: TcpListener, on_link: impl Fn(Link) + Send + 'static) {
 
 /// A build run from its cargo `target` folder: it doesn't take links over from an installed
 /// game that still exists.
+#[cfg(any(windows, target_os = "linux", test))]
 fn dev_build(exe: &Path) -> bool {
     exe.components().any(|c| c.as_os_str() == "target")
 }

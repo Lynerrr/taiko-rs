@@ -50,7 +50,7 @@ impl View {
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.72));
         let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
-        c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         let (by, bw) = (py + ph - 26.0, 56.0);
         c.button(px + pw - bw - 12.0, by, bw, 16.0, tr!("Back", "戻る", "Назад"), 7.0, Hit::Key(KeyCode::Escape), true);
         let p = match &self.state {
@@ -114,7 +114,7 @@ fn score_rows(c: &mut Canvas, rows: &[OnlineScore], x: f32, top: f32, w: f32, bo
         if y + ROW - 3.0 > bottom {
             break;
         }
-        c.round_rect(x, y, w, ROW - 3.0, 5.0, rgba(0x1d1d27, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect([x, y], [w, ROW - 3.0], 5.0, rgba(0x1d1d27, 1.0), rgba(0x2a2a38, 1.0), 1.0);
         let pp = r.pp.map(|p| format!("{p:.0}pp")).unwrap_or_else(|| "-".into());
         let pp_w = Canvas::text_width(8.0, &pp);
         c.text_right(x + w - 8.0, y + 7.0, 8.0, rgba(0xff8ad8, 1.0), &pp);

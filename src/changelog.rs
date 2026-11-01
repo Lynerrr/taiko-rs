@@ -100,7 +100,7 @@ impl View {
         c.hit(0.0, 0.0, w, 480.0, Hit::Overlay);
         let pw = (w - 32.0).min(640.0);
         let (px, py, ph) = ((w - pw) / 2.0, 36.0, 420.0);
-        c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), tr!("What's new", "更新内容", "Что нового"));
         let about = match (self.after_update, crate::update::BUILD) {
             (true, Some(b)) => tr!("updated to {}", "{}に更新しました", "обновлено до {}"; crate::update::short(b)),
@@ -153,9 +153,9 @@ impl View {
         if lines.len() > fits {
             let (bar_h, all) = (fits as f32 * line_h, lines.len() as f32);
             let x = px + pw - 10.0;
-            c.round_rect(x, top, 3.0, bar_h, 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+            c.round_rect([x, top], [3.0, bar_h], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
             let len = (fits as f32 / all * bar_h).max(12.0);
-            c.round_rect(x, top + scroll as f32 / all * bar_h, 3.0, len, 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
+            c.round_rect([x, top + scroll as f32 / all * bar_h], [3.0, len], 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
         }
     }
 }
@@ -240,11 +240,10 @@ pub fn parse(message: &str, date: &str) -> Option<Change> {
         }
         if let Some(point) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
             points.push(point.trim().to_string());
-        } else if line.starts_with("  ") && !line.trim().is_empty() {
-            if let Some(last) = points.last_mut() {
-                last.push(' ');
-                last.push_str(line.trim());
-            }
+        } else if line.starts_with("  ") && !line.trim().is_empty()
+            && let Some(last) = points.last_mut() {
+            last.push(' ');
+            last.push_str(line.trim());
         }
     }
     Some(Change { date: date.get(..10).unwrap_or(date).to_string(), title, points })

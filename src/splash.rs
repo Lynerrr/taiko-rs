@@ -397,7 +397,7 @@ impl Splash {
         let lane_in = ease_out_cubic((t - 200.0) / 300.0);
         if lane_in > 0.0 {
             let lw = lane_w * lane_in;
-            c.round_rect(cx - lw / 2.0, lane_y - 13.0, lw, 26.0, 13.0, rgba(0x20202b, 1.0), rgba(0x3a3a4e, 1.0), 1.5);
+            c.round_rect([cx - lw / 2.0, lane_y - 13.0], [lw, 26.0], 13.0, rgba(0x20202b, 1.0), rgba(0x3a3a4e, 1.0), 1.5);
             let hit_x = cx - lw / 2.0 + 20.0;
             c.ring(hit_x, lane_y, 9.0, rgba(0xffffff, 0.4 * lane_in), 1.5);
             for &(at, kat, strength) in &HITS {
@@ -422,7 +422,7 @@ impl Splash {
             }
             let shown = (((t - at) * 0.14) as usize).min(line.chars().count());
             let text: String = line.chars().take(shown).collect();
-            let cursor = if shown < line.chars().count() || (t / 250.0) as u32 % 2 == 0 { "_" } else { " " };
+            let cursor = if shown < line.chars().count() || ((t / 250.0) as u32).is_multiple_of(2) { "_" } else { " " };
             let y = 400.0 - (boot.len() - 1 - i) as f32 * 11.0;
             c.text(16.0, y, 7.0, rgba(0x7fbf7f, 0.85), &format!("> {text}{cursor}"));
         }
@@ -431,15 +431,15 @@ impl Splash {
         let progress = keyframes(&LOADING, t);
         let (bw, by) = (260.0f32.min(w - 40.0), 440.0);
         let bx = cx - bw / 2.0;
-        c.round_rect(bx, by, bw, 10.0, 3.0, rgba(0x15151d, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect([bx, by], [bw, 10.0], 3.0, rgba(0x15151d, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
         if progress > 0.0 {
-            c.round_rect(bx + 2.0, by + 2.0, (bw - 4.0) * progress, 6.0, 2.0, rgba(DON, 1.0), rgba(DON, 1.0), 0.0);
+            c.round_rect([bx + 2.0, by + 2.0], [(bw - 4.0) * progress, 6.0], 2.0, rgba(DON, 1.0), rgba(DON, 1.0), 0.0);
             // A shine running along the filled part.
             let shine = bx + 2.0 + ((t * 0.4) % ((bw - 4.0) * progress).max(1.0));
             c.rect(shine, by + 2.0, 6.0, 6.0, rgba(0xffffff, 0.35));
         }
         let label = if progress >= 1.0 {
-            if (t / 120.0) as u32 % 2 == 0 { "READY".to_string() } else { String::new() }
+            if ((t / 120.0) as u32).is_multiple_of(2) { "READY".to_string() } else { String::new() }
         } else {
             format!("LOADING {:>3.0}%", progress * 100.0)
         };

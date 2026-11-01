@@ -417,8 +417,7 @@ fn calibrating_by_ear_shows_no_notes_and_nothing_about_the_hits() {
     // 20 hits, all 37 ms early, well into the song.
     game.stats.errors = vec![-37.0; 20];
     game.time = game.map.notes[10].time;
-    let mut c = Canvas::default();
-    c.audit = true;
+    let mut c = Canvas { audit: true, ..Canvas::default() };
     calibrate::draw_by_ear(&mut c, game);
     let texts: Vec<&str> = c.texts.iter().map(|(_, t)| t.as_str()).collect();
     assert!(!texts.is_empty());

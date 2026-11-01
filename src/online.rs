@@ -548,7 +548,7 @@ pub enum SocialEvent {
     Disconnected(String),
     /// The saved login is no longer valid.
     SessionExpired,
-    Down(Down),
+    Down(Box<Down>),
 }
 
 /// The game's social connection (friends, chat, watching). It reconnects by itself while the
@@ -615,10 +615,9 @@ impl Social {
                     std::thread::spawn(move || {
                         let mut reader = reader;
                         while let Ok(line) = read_line(&mut reader) {
-                            if let Ok(d) = serde_json::from_str::<Down>(&line) {
-                                if events.send(SocialEvent::Down(d)).is_err() {
-                                    break;
-                                }
+                            if let Ok(d) = serde_json::from_str::<Down>(&line)
+                                && events.send(SocialEvent::Down(Box::new(d))).is_err() {
+                                break;
                             }
                         }
                         alive.store(false, Ordering::Relaxed);

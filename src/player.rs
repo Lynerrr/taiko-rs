@@ -110,7 +110,7 @@ const LOOP: Icon = ["....#....", "..#####..", ".##.#..#.", ".#.....#.", ".#.....
 const DISC: Icon = ["..#####..", ".#######.", "###...###", "##..#..##", "##.###.##", "##..#..##", "###...###", ".#######.", "..#####.."];
 
 /// One of the small buttons, its icon in whole screen pixels.
-pub fn button(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32, control: Control, paused: bool, accent: bool) {
+pub fn button(c: &mut Canvas, [x, y, w, h]: [f32; 4], control: Control, paused: bool, accent: bool) {
     let hover = c.hovered(x, y, w, h);
     let (fill, border) = match (accent, hover) {
         (true, false) => (0x2b1a17, DON),
@@ -118,7 +118,7 @@ pub fn button(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32, control: Control, 
         (false, false) => (0x23232f, 0x3a3a4e),
         (false, true) => (0x34344a, 0x6a6a88),
     };
-    c.round_rect(x, y, w, h, 5.0, rgba(fill, 1.0), rgba(border, 1.0), 1.0);
+    c.round_rect([x, y], [w, h], 5.0, rgba(fill, 1.0), rgba(border, 1.0), 1.0);
     c.hit(x, y, w, h, Hit::Music(control));
     let icon = match control {
         Control::Prev => &PREV,
@@ -355,7 +355,7 @@ impl Player {
         let loved = self.list.is_favourite(self.list.now());
         let row = [(Control::Shuffle, self.list.is_shuffled()), (Control::Prev, false), (Control::Toggle, true), (Control::Next, false), (Control::Repeat, self.list.repeat != Repeat::Off), (Control::Favourite, loved)];
         for (i, (control, on)) in row.into_iter().enumerate() {
-            button(c, start + i as f32 * (w + gap), y, w, 26.0, control, f.paused, on);
+            button(c, [start + i as f32 * (w + gap), y, w, 26.0], control, f.paused, on);
         }
         if self.list.repeat == Repeat::One {
             c.text(start + 4.0 * (w + gap) + w - 9.0, y + 3.0, 7.0, rgba(0xffffff, 1.0), "1");
@@ -377,7 +377,7 @@ impl Player {
     fn draw_folder_button(&self, c: &mut Canvas) {
         let hover = c.hovered(10.0 + 84.0, 24.0, LIST_W - 84.0, 20.0);
         let open = self.folders_open;
-        c.round_rect(94.0, 24.0, LIST_W - 84.0, 20.0, 4.0, rgba(if hover { 0x34344a } else { 0x23232f }, 1.0), rgba(if open { crate::render::accent() } else { 0x3a3a4e }, 1.0), 1.0);
+        c.round_rect([94.0, 24.0], [LIST_W - 84.0, 20.0], 4.0, rgba(if hover { 0x34344a } else { 0x23232f }, 1.0), rgba(if open { crate::render::accent() } else { 0x3a3a4e }, 1.0), 1.0);
         draw_folder_icon(c, 100.0, 29.0, pixel_size(1.0), folder_colour(self.list.folder));
         c.text(120.0, 30.5, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, LIST_W - 118.0, Self::folder_name(self.list.folder)));
         c.hit(94.0, 24.0, LIST_W - 84.0, 20.0, Hit::PlayerFolders);
@@ -396,7 +396,7 @@ impl Player {
             let on = folder == self.list.folder;
             let hover = c.hovered(X, y, LIST_W, h);
             let colour = folder_colour(folder);
-            c.round_rect(X, y, LIST_W, h, 4.0, rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.92), rgba(if on { colour } else { 0x3a3a4e }, 1.0), 1.0);
+            c.round_rect([X, y], [LIST_W, h], 4.0, rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.92), rgba(if on { colour } else { 0x3a3a4e }, 1.0), 1.0);
             let px = pixel_size(1.0);
             draw_folder_icon(c, X + 7.0, y + (h - 12.0 * px) / 2.0, px, colour);
             let count = count.to_string();
@@ -413,23 +413,22 @@ impl Player {
         const X: f32 = 10.0;
         self.draw_folder_button(c);
         let border = if self.searching { rgba(crate::render::accent(), 1.0) } else { rgba(0x3a3a4e, 1.0) };
-        c.round_rect(X, LIST_TOP, LIST_W, 18.0, 4.0, rgba(0x15151d, 0.95), border, 1.0);
+        c.round_rect([X, LIST_TOP], [LIST_W, 18.0], 4.0, rgba(0x15151d, 0.95), border, 1.0);
         let filter = self.list.filter.clone();
         let (text, col) = if filter.is_empty() && !self.searching { (tr!("search (Ctrl+F)", "検索 (Ctrl+F)", "поиск (Ctrl+F)").to_string(), 0x6f6f86) } else { (format!("{filter}_"), 0xffffff) };
         c.text(X + 7.0, LIST_TOP + 5.5, 7.0, rgba(col, 1.0), &Canvas::fit_end(7.0, LIST_W - 14.0, &text));
         c.hit(X, LIST_TOP, LIST_W, 18.0, Hit::PlayerSearch);
 
         let top = LIST_TOP + 22.0;
-        c.round_rect(X, top, LIST_W, ROWS as f32 * ROW_H + 4.0, 4.0, rgba(0x15151d, 0.82), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect([X, top], [LIST_W, ROWS as f32 * ROW_H + 4.0], 4.0, rgba(0x15151d, 0.82), rgba(0x3a3a4e, 1.0), 1.0);
         let now = self.list.now();
         // A new song comes into view; scrolling away from it stays.
         if self.followed != Some(now) {
             self.followed = Some(now);
-            if let Some(pos) = self.list.shown.iter().position(|&t| t == now) {
-                if pos < self.scroll || pos >= self.scroll + ROWS {
-                    self.scroll = pos.saturating_sub(ROWS / 2);
-                    self.scroll_by(0);
-                }
+            if let Some(pos) = self.list.shown.iter().position(|&t| t == now)
+                && (pos < self.scroll || pos >= self.scroll + ROWS) {
+                self.scroll = pos.saturating_sub(ROWS / 2);
+                self.scroll_by(0);
             }
         }
         const ADD_W: f32 = 18.0;
@@ -467,7 +466,7 @@ impl Player {
     fn draw_queue(&self, c: &mut Canvas, x: f32) {
         c.text(x + 2.0, LIST_TOP + 5.5, 7.0, rgba(0x9a9ab0, 1.0), tr!("UP NEXT", "次に再生", "ДАЛЬШЕ"));
         let top = LIST_TOP + 22.0;
-        c.round_rect(x, top, QUEUE_W, ROWS as f32 * ROW_H + 4.0, 4.0, rgba(0x15151d, 0.82), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect([x, top], [QUEUE_W, ROWS as f32 * ROW_H + 4.0], 4.0, rgba(0x15151d, 0.82), rgba(0x3a3a4e, 1.0), 1.0);
         for (row, &track) in self.list.queue.iter().take(ROWS).enumerate() {
             let y = top + 2.0 + row as f32 * ROW_H;
             if c.hovered(x, y, QUEUE_W, ROW_H) {
@@ -499,7 +498,7 @@ impl Player {
             let on = self.speed == Some(speed);
             let hover = c.hovered(x, y, MOD_W, H);
             let fill = if on { crate::render::accent() } else if hover { 0x34344a } else { 0x23232f };
-            c.round_rect(x, y, MOD_W, H, 4.0, rgba(fill, 1.0), rgba(if on { 0xffffff } else { 0x3a3a4e }, 1.0), 1.0);
+            c.round_rect([x, y], [MOD_W, H], 4.0, rgba(fill, 1.0), rgba(if on { 0xffffff } else { 0x3a3a4e }, 1.0), 1.0);
             c.text_centered(x + MOD_W / 2.0, y + 5.5, 7.0, rgba(0xffffff, 1.0), speed.name());
             c.hit(x, y, MOD_W, H, Hit::PlayerSpeed(i));
             x += MOD_W + GAP;

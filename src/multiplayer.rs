@@ -310,7 +310,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
         let sel = i == cursor;
         let (bg, border) = if sel { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
         let bg = if !sel && c.hovered(x, y, col, h) { 0x262634 } else { bg };
-        c.round_rect(x, y, col, h, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
+        c.round_rect([x, y], [col, h], 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
         c.hit(x, y, col, h, Hit::MpRow(i));
         match value {
             Some((v, placeholder)) => {
@@ -427,7 +427,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                 let sel = i == cursor;
                 let (bg, border) = if sel { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
                 let bg = if !sel && c.hovered(left, y, col, 32.0) { 0x262634 } else { bg };
-                c.round_rect(left, y, col, 32.0, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
+                c.round_rect([left, y], [col, 32.0], 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
                 c.hit(left, y, col, 32.0, Hit::MpRow(i));
                 let state = if r.in_match { "in a match" } else { "in the lobby" };
                 c.text(left + 12.0, y + 6.0, 9.0, rgba(0xffffff, 1.0), &Canvas::fit(9.0, col - 32.0 - Canvas::text_width(8.0, state), &r.title));
@@ -501,7 +501,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
 fn half_row(c: &mut Canvas, sel: bool, i: usize, x: f32, y: f32, w: f32, label: &str) {
     let (bg, border) = if sel { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
     let bg = if !sel && c.hovered(x, y, w, 24.0) { 0x262634 } else { bg };
-    c.round_rect(x, y, w, 24.0, 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
+    c.round_rect([x, y], [w, 24.0], 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
     c.hit(x, y, w, 24.0, Hit::MpRow(i));
     let size = Canvas::fit_size(11.0, 7.0, w - 12.0, label);
     c.text_centered(x + w / 2.0, y + 12.0 - size / 2.0, size, rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
@@ -533,7 +533,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
 
     let can_preview = s.map.is_some() && have_map;
     let hover = can_preview && c.hovered(x0, 62.0, col, 46.0);
-    c.round_rect(x0, 62.0, col, 46.0, 8.0, rgba(if hover { 0x262634 } else { 0x1d1d27 }, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+    c.round_rect([x0, 62.0], [col, 46.0], 8.0, rgba(if hover { 0x262634 } else { 0x1d1d27 }, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
     if can_preview {
         c.hit(x0, 62.0, col, 46.0, Hit::Key(KeyCode::KeyP));
         c.text_right(x0 + col - 14.0, 70.0, 7.0, rgba(0x6f6f86, 1.0), "click to preview");
@@ -560,7 +560,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
     for (i, p) in s.players.iter().enumerate().take(10) {
         let y = 136.0 + i as f32 * 26.0;
         let me = Some(p.id) == my_id;
-        c.round_rect(x0, y, col, 22.0, 6.0, rgba(if me { 0x2b2b3d } else { 0x1d1d27 }, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect([x0, y], [col, 22.0], 6.0, rgba(if me { 0x2b2b3d } else { 0x1d1d27 }, 1.0), rgba(0x2a2a38, 1.0), 1.0);
         // The name gets what the status (and the host's "make host" button) leave.
         let mut name_end = x0 + col - 110.0;
         if s.is_host() && !me && !s.in_match {
@@ -695,7 +695,7 @@ pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
             (p.name.clone(), live, me, p.result.as_ref().is_some_and(|r| r.quit))
         })
         .collect();
-    rows.sort_by(|a, b| b.1.score.cmp(&a.1.score));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.1.score));
     let x = 18.0;
     let h = 16.0;
     let lines: Vec<(String, u32)> = rows
@@ -710,7 +710,7 @@ pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
         .collect();
     // As wide as its longest line (wider when text comes out bigger).
     let bw = lines.iter().map(|(l, _)| Canvas::text_width(8.0, l) + 12.0).fold(300.0, f32::max);
-    c.round_rect(x - 6.0, y0 - 6.0, bw, lines.len() as f32 * h + 10.0, 6.0, rgba(0x000000, 0.45), rgba(0, 0.0), 0.0);
+    c.round_rect([x - 6.0, y0 - 6.0], [bw, lines.len() as f32 * h + 10.0], 6.0, rgba(0x000000, 0.45), rgba(0, 0.0), 0.0);
     for (i, (line, color)) in lines.iter().enumerate() {
         c.text(x, y0 + i as f32 * h, 8.0, rgba(*color, 1.0), line);
     }
@@ -737,7 +737,7 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
         let y = 118.0 + i as f32 * 28.0;
         let me = Some(p.id) == s.client.id;
         let border = if i == 0 && final_results.is_some() { 0xFFD34D } else { 0x2a2a38 };
-        c.round_rect(x0, y, col, 24.0, 6.0, rgba(if me { 0x2b2b3d } else { 0x1d1d27 }, 1.0), rgba(border, 1.0), 1.0);
+        c.round_rect([x0, y], [col, 24.0], 6.0, rgba(if me { 0x2b2b3d } else { 0x1d1d27 }, 1.0), rgba(border, 1.0), 1.0);
         let name: String = p.name.chars().take(14).collect();
         let line = match &p.result {
             Some(r) => format!(

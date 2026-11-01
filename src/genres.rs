@@ -38,7 +38,7 @@ pub fn of(tags: &str) -> u32 {
         let wanted: Vec<&str> = phrase.split(' ').collect();
         words.windows(wanted.len()).any(|w| w == wanted.as_slice())
     };
-    GENRES.iter().enumerate().filter(|(_, g)| g.words.iter().any(|w| says(&w))).fold(0, |bits, (i, _)| bits | 1 << i)
+    GENRES.iter().enumerate().filter(|(_, g)| g.words.iter().any(&says)).fold(0, |bits, (i, _)| bits | 1 << i)
 }
 
 #[cfg(test)]

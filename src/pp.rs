@@ -389,10 +389,10 @@ mod tests {
         let hr_slow = play_pp(&path, &Play { scroll_speed: 0.5, ..hr }).unwrap();
         assert!(hr_slow < hr_pp, "{hr_slow} vs {hr_pp}");
         assert!(play_pp(&path, &Play { scroll_speed: 1.5, ..play }).unwrap() > ss);
-        let bits = TaikoPerformance::new(&crate::stars::load(&path).unwrap()).mods(16u32).n300(400).calculate().unwrap().pp;
+        let bits = TaikoPerformance::new(crate::stars::load(&path).unwrap()).mods(16u32).n300(400).calculate().unwrap().pp;
         assert!((hr_pp - bits).abs() < 1e-9, "the usual speed changes nothing");
         // The lazer form of HR at a scroll speed of exactly 1 is HR.
-        let lazer_one = TaikoPerformance::new(&crate::stars::load(&path).unwrap()).mods(formula_mods(Mods::parse("HR"), 1.0 + 1e-3)).n300(400).calculate().unwrap().pp;
+        let lazer_one = TaikoPerformance::new(crate::stars::load(&path).unwrap()).mods(formula_mods(Mods::parse("HR"), 1.0 + 1e-3)).n300(400).calculate().unwrap().pp;
         assert!((lazer_one - bits).abs() / bits < 0.01, "{lazer_one} vs {bits}");
         let _ = std::fs::remove_dir_all(&dir);
     }

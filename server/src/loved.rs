@@ -53,13 +53,12 @@ pub fn set(set: u32, love: bool, by: &str, now: u64) -> bool {
     let s = store();
     let mut sets = s.sets.lock().unwrap();
     let changed = if love { sets.insert(set, Loved { by: by.to_string(), at: now }).is_none() } else { sets.remove(&set).is_some() };
-    if changed {
-        if let Some(file) = &s.file {
-            let tmp = file.with_extension("json.tmp");
-            let text = serde_json::to_string_pretty(&*sets).unwrap_or_default();
-            if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, file)) {
-                eprintln!("loved: saving {}: {e}", file.display());
-            }
+    if changed
+        && let Some(file) = &s.file {
+        let tmp = file.with_extension("json.tmp");
+        let text = serde_json::to_string_pretty(&*sets).unwrap_or_default();
+        if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, file)) {
+            eprintln!("loved: saving {}: {e}", file.display());
         }
     }
     changed
