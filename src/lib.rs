@@ -994,7 +994,7 @@ fn open_url(url: &str) -> bool {
         // SAFETY: both strings are nul-terminated and live through the call; the rest may be null.
         let result = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
         // Above 32 is success, the rest are error codes.
-        return result as usize > 32;
+        result as usize > 32
     }
     #[cfg(not(windows))]
     std::process::Command::new("xdg-open").arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().is_ok()
