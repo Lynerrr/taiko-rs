@@ -973,3 +973,24 @@ fn a_volume_is_dragged_along_its_bar_and_saved_on_letting_go() {
     s.mouse_button(false, None);
     assert_eq!(s.settings_level, None);
 }
+
+#[test]
+fn alt_wheel_turns_the_note_under_the_pointer_and_the_lane_then_needs_no_alt() {
+    let mut s = settings_screen();
+    s.cfg.master_volume = 0.5;
+    s.cfg.fx_volume = 0.5;
+    s.mouse = (-1000.0, -1000.0);
+    s.modifiers_alt = true;
+    s.wheel(1);
+    assert_eq!(s.cfg.master_volume, 0.55, "the master first");
+    s.modifiers_alt = false;
+    // Hovering the hitsounds note picks it, before the wheel moves at all.
+    let (w, h) = (s.window_w, s.window_h);
+    let width = render::VIRTUAL_HEIGHT * w / h;
+    point(&mut s, width - 40.0, 400.0);
+    s.mouse_moved(s.mouse.0, s.mouse.1);
+    assert_eq!(s.volume.selected, volume::HITSOUNDS);
+    s.wheel(-2);
+    assert_eq!(s.cfg.fx_volume, 0.4, "no Alt needed over the lane");
+    assert_eq!(s.cfg.master_volume, 0.55);
+}

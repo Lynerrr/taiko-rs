@@ -72,7 +72,7 @@ fn page(i: usize, cfg: &Config) -> Page {
                 ("Ctrl+O".into(), tr!("Settings from anywhere: keys are in Input", "どこからでも設定へ。キーは入力の項目に", "настройки откуда угодно, клавиши в разделе Управление")),
                 (key(cfg, Settings), tr!("songs and settings", "曲と設定を切り替え", "песни и настройки")),
                 ("Esc".into(), tr!("back; from the main menu, it asks to quit", "戻る (メインメニューでは終了の確認)", "назад, а в главном меню спросит о выходе")),
-                ("Alt+wheel".into(), tr!("volume, anywhere", "音量 (どこでも)", "громкость, где угодно")),
+                ("Alt+wheel".into(), tr!("volume, anywhere; point at music or hitsounds", "音量 (どこでも)、音楽やヒット音にポインタを合わせて", "громкость, где угодно; наведи на музыку или хитсаунды")),
                 (cap(tr!("mouse", "マウス", "мышь")), tr!("everything can be clicked too, the wheel scrolls", "すべてクリックでも操作できます", "всё можно нажимать мышью, колесо листает")),
             ],
         },

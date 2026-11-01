@@ -388,6 +388,8 @@ fn assert_every_screen_fits() {
         check(&mut s, &format!("settings search {query}"), &mut out);
     }
     s.settings_ui.clear_search();
+    s.volume.touch(Instant::now());
+    check(&mut s, "volume lane", &mut out);
     let skins = vec!["built-in".into(), s.cfg.skin.clone(), "- Rafis 2017 Remake (Taiko HD) by somebody".into()];
     s.settings_ui.choices = Some(settings::Choices::new(Item::Skin, skins, Some(1), "2 installed".into()));
     check(&mut s, "skin picker", &mut out);
