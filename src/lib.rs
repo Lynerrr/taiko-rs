@@ -4491,7 +4491,7 @@ impl State {
                 let n = self.select.picker_len() as i32;
                 self.select.picker = self.select.picker.map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
-            Scene::Select => self.select.step(-notches, &self.library, false),
+            Scene::Select => self.select.scroll_by(-notches, &self.library),
             Scene::Download if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Download => self.browse.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
@@ -4744,8 +4744,8 @@ impl State {
     }
 
     /// Right button on song select: hold it and move up and down to fly through the list, like
-    /// osu!'s right-click scrolling.
-    /// Released without moving, it opens the row's menu (or, off the rows, jumps there).
+    /// osu!'s right-click scrolling. The selection stays.
+    /// Released without moving, it opens the row's menu; on the scrollbar, it goes there.
     fn right_button(&mut self, pressed: bool) {
         if self.mod_select.is_some() {
             // Right-clicking a mod makes it a favourite (or not any more).
@@ -4776,8 +4776,8 @@ impl State {
         match press {
             Some((x, y, Some(render::Hit::SongRow(row)))) => self.select.menu = Some(ui::SongMenu { row, header: false, x, y }),
             Some((x, y, Some(render::Hit::SongHeader(row)))) => self.select.menu = Some(ui::SongMenu { row, header: true, x, y }),
-            Some((_, y, _)) => self.select.scroll_to(y, &self.library),
-            None => {}
+            Some((_, y, Some(render::Hit::SongScrollbar))) => self.select.scroll_to(y, &self.library),
+            _ => {}
         }
     }
 
@@ -6326,11 +6326,6 @@ impl State {
         });
     }
 
-    /// Song select: the list is being dragged through by its scrollbar or right-click scrolling.
-    fn dragging_list(&self) -> bool {
-        matches!(self.scene, Scene::Select) && (self.scrollbar_drag || self.right_scroll)
-    }
-
     /// Showing a song, its background dimmed by the background dim setting.
     fn dims_background(&self) -> bool {
         matches!(
@@ -7761,7 +7756,6 @@ impl State {
             self.preview.menu = self.on_menu();
             self.preview.from_top &= self.preview.menu;
             self.preview.pitch = self.player.as_ref().map_or(1.0, |p| p.pitch());
-            self.preview.hold = self.dragging_list();
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.play_offset, rate);
@@ -7773,8 +7767,7 @@ impl State {
             }
             if matches!(self.scene, Scene::Select) {
                 self.poll_set_status(now);
-                let sets = if self.dragging_list() { Vec::new() } else { self.select.selected_set() };
-                for i in sets {
+                for i in self.select.selected_set() {
                     self.stars.request(i, &self.library[i].path, play_rate);
                 }
                 let (stars, rate) = (&self.stars, play_rate);
@@ -8013,7 +8006,7 @@ impl State {
                     String::new()
                 };
                 let (stars, rate, plays) = (&self.stars, self.play_speed().0, &self.scores);
-                self.select.instant = self.right_scroll || self.scrollbar_drag;
+                self.select.scrubbing = (self.right_scroll || self.scrollbar_drag).then(|| self.mouse_virtual().1);
                 self.select.list_share = self.cfg.song_list_share;
                 self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate), &|e| scores::best_grade(plays, e.hash()));
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
@@ -9071,7 +9064,7 @@ impl State {
     /// The online leaderboard of map `hash` (fetched in the background; again after a minute).
     fn online_board(&mut self, hash: u64) -> Option<&Result<Vec<online::OnlineScore>, String>> {
         let stale = self.online_boards.get(&hash).is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(60));
-        if stale && self.board_fetch.is_none() && !self.dragging_list() {
+        if stale && self.board_fetch.is_none() {
             self.board_fetch = Some((hash, fetch_board(self.cfg.online_server.clone(), hash)));
         }
         self.online_boards.get(&hash).map(|(_, rows)| rows)
@@ -9604,7 +9597,8 @@ impl State {
                 self.download_key(KeyCode::Enter, None, window);
             }
             Hit::SongHeader(row) => self.click(Hit::SongRow(row), window),
-            Hit::SectionHeader(s) => self.select.click_section(s),
+            Hit::SectionHeader(s) => self.select.click_section(s, &self.library),
+            Hit::ListBack => self.select.follow_selection(),
             Hit::ModsButton => self.open_mod_select(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
