@@ -1086,3 +1086,38 @@ fn converts_stay_listed_when_the_settings_say_so() {
     assert!(s.select.show_converts);
     assert_eq!(s.select.songs().len(), 2);
 }
+
+#[test]
+fn empty_update_notes_stay_closed_but_manual_view_stays_open() {
+    let mut s = state();
+    s.pending_changelog = Some(changelog::View::loaded(Vec::new()));
+    s.poll_changelog();
+    assert!(s.pending_changelog.is_none());
+    assert!(s.changelog.is_none());
+
+    let mut manual = changelog::View::loaded(Vec::new());
+    manual.after_update = false;
+    s.changelog = Some(manual);
+    s.poll_changelog();
+    let view = s.changelog.as_ref().expect("manual empty results remain visible");
+    assert!(!view.after_update);
+    assert!(matches!(&view.state, changelog::State::Loaded(changes) if changes.is_empty()));
+}
+
+#[test]
+fn update_notes_open_when_ready_without_replacing_a_manual_view() {
+    let mut s = state();
+    let change = changelog::parse("fix(audio): align hitsounds\n\nChangelog: Hitsounds stay in sync.", "2026-10-26").unwrap();
+    s.pending_changelog = Some(changelog::View::loaded(vec![change.clone()]));
+    s.poll_changelog();
+    assert!(s.pending_changelog.is_none());
+    assert!(s.changelog.as_ref().is_some_and(|view| view.after_update));
+
+    let mut manual = changelog::View::loaded(Vec::new());
+    manual.after_update = false;
+    s.changelog = Some(manual);
+    s.pending_changelog = Some(changelog::View::loaded(vec![change]));
+    s.poll_changelog();
+    assert!(s.pending_changelog.is_none());
+    assert!(!s.changelog.as_ref().unwrap().after_update);
+}

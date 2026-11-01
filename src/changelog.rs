@@ -8,7 +8,7 @@ use winit::keyboard::KeyCode;
 
 use crate::render::{accent, rgba, Canvas, Hit};
 
-/// One change: when and the explicitly marked player-facing notes.
+/// One change: when and its player-facing notes (including legacy history).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Change {
     pub date: String,
@@ -30,6 +30,21 @@ pub struct View {
     scroll: usize,
     /// Lines that fit, and how many there are (as last drawn).
     shown: std::cell::Cell<(usize, usize)>,
+}
+
+/// Update notes stay in the background until there is something to show.
+/// Empty results and fetch failures must not interrupt startup with an automatic popup.
+pub fn poll_automatic(pending: &mut Option<View>) -> Option<View> {
+    let view = pending.as_mut()?;
+    view.poll();
+    match &view.state {
+        State::Loading(_) => None,
+        State::Loaded(changes) if !changes.is_empty() => pending.take(),
+        State::Loaded(_) | State::Failed(_) => {
+            *pending = None;
+            None
+        }
+    }
 }
 
 impl View {
@@ -219,13 +234,13 @@ fn commits(path: &str) -> Result<Vec<Change>, String> {
     Ok(items.drain(..).filter_map(|i| parse(&i.commit.message, &i.commit.author.date)).collect())
 }
 
-/// A commit as a change, using only its explicit `Changelog: ...` lines.
+/// A commit as a change, with explicit notes for Conventional Commits and legacy fallback.
 pub fn parse(message: &str, date: &str) -> Option<Change> {
     let entry = crate::changelog_entry::parse(message)?;
     Some(Change {
         date: date.get(..10).unwrap_or(date).to_string(),
-        title: entry.title.to_string(),
-        points: entry.points.into_iter().map(str::to_string).collect(),
+        title: entry.title,
+        points: entry.points,
     })
 }
 
@@ -244,6 +259,52 @@ mod tests {
         assert!(parse("Merge remote-tracking branch 'origin/x'\n\nChangelog: An update", "2026-10-26").is_none());
         assert!(parse("chore(server): update internals\n\nChangelog: skip\n", "2026-10-26").is_none());
         assert!(parse("feat(mods): add Krokodil_Koban mode\n\nChangelog: A private mode", "2026-10-26").is_none());
+    }
+
+    #[test]
+    fn old_windows_notes_keep_their_title_points_and_date() {
+        let title = "Windows: the offset no longer drifts the longer the game stays open.";
+        let change = parse(&format!("{title}\n\n- Hits stay aligned\n  throughout long sessions\n\nCo-Authored-By: Someone <x@y>"), "2026-10-26T01:02:03Z").unwrap();
+        assert_eq!(change.title, title);
+        assert_eq!(change.points, ["Hits stay aligned throughout long sessions"]);
+        assert_eq!(change.date, "2026-10-26");
+        assert!(parse("chore(x): y\n\n* Fixed lint errors", "2026-10-26").is_none());
+    }
+
+    #[test]
+    fn automatic_notes_wait_for_nonempty_results() {
+        let (tx, rx) = mpsc::channel();
+        let mut view = View::loaded(Vec::new());
+        view.state = State::Loading(rx);
+        let mut pending = Some(view);
+        assert!(poll_automatic(&mut pending).is_none());
+        assert!(pending.is_some());
+        let change = parse("fix(audio): align hitsounds\n\nChangelog: Hitsounds stay in sync.", "2026-10-26").unwrap();
+        tx.send(Ok(vec![change.clone()])).unwrap();
+        let shown = poll_automatic(&mut pending).unwrap();
+        assert!(pending.is_none());
+        let State::Loaded(changes) = shown.state else { panic!("notes should be loaded") };
+        assert_eq!(changes, [change]);
+    }
+
+    #[test]
+    fn automatic_empty_or_failed_results_are_discarded() {
+        for result in [Ok(Vec::new()), Err("offline".to_string())] {
+            let (tx, rx) = mpsc::channel();
+            let mut view = View::loaded(Vec::new());
+            view.state = State::Loading(rx);
+            let mut pending = Some(view);
+            tx.send(result).unwrap();
+            assert!(poll_automatic(&mut pending).is_none());
+            assert!(pending.is_none());
+        }
+        let (tx, rx) = mpsc::channel();
+        drop(tx);
+        let mut view = View::loaded(Vec::new());
+        view.state = State::Loading(rx);
+        let mut pending = Some(view);
+        assert!(poll_automatic(&mut pending).is_none());
+        assert!(pending.is_none());
     }
 
     #[test]

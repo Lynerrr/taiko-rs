@@ -1,13 +1,13 @@
-//! Explicit player-facing notes shared by the game and the Discord bot.
+//! Player-facing notes shared by the game and the Discord bot, including legacy history.
 
-pub struct Entry<'a> {
-    pub title: &'a str,
-    pub points: Vec<&'a str>,
+pub struct Entry {
+    pub title: String,
+    pub points: Vec<String>,
 }
 
-/// Only standalone `Changelog: ...` lines in the commit body are public notes.
-/// Additional marked lines become points; unmarked prose, bullets and trailers stay private.
-pub fn parse(message: &str) -> Option<Entry<'_>> {
+/// Conventional Commits require explicit notes; older subjects keep their title and bullets.
+/// Explicit notes always take precedence, and `Changelog: skip` hides either format.
+pub fn parse(message: &str) -> Option<Entry> {
     let mut lines = message.lines();
     let subject = lines.next()?.trim();
     if subject.is_empty() || subject.starts_with("Merge ") || message.to_ascii_lowercase().contains("krokodil") {
@@ -28,12 +28,52 @@ pub fn parse(message: &str) -> Option<Entry<'_>> {
             continue;
         }
         if title.is_none() {
-            title = Some(text);
+            title = Some(text.to_string());
         } else {
-            points.push(text);
+            points.push(text.to_string());
         }
     }
-    Some(Entry { title: title?, points })
+    if let Some(title) = title {
+        return Some(Entry { title, points });
+    }
+    if conventional(subject) {
+        return None;
+    }
+    let mut points: Vec<String> = Vec::new();
+    for line in message.lines().skip(1) {
+        let lower = line.to_ascii_lowercase();
+        if ["co-authored-by:", "claude-session:", "signed-off-by:"].iter().any(|key| lower.starts_with(key)) {
+            continue;
+        }
+        if let Some(point) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+            points.push(point.trim().to_string());
+        } else if line.starts_with("  ") && !line.trim().is_empty()
+            && let Some(last) = points.last_mut()
+        {
+            last.push(' ');
+            last.push_str(line.trim());
+        }
+    }
+    Some(Entry { title: subject.to_string(), points })
+}
+
+/// Recognize only the project's known types, never arbitrary prefixes such as `Windows:`.
+fn conventional(subject: &str) -> bool {
+    let Some((header, description)) = subject.split_once(": ") else { return false };
+    if description.trim().is_empty() {
+        return false;
+    }
+    let header = header.strip_suffix('!').unwrap_or(header);
+    let kind = if let Some((kind, scope)) = header.split_once('(') {
+        let Some(scope) = scope.strip_suffix(')') else { return false };
+        if scope.trim().is_empty() || scope.contains(['(', ')']) {
+            return false;
+        }
+        kind
+    } else {
+        header
+    };
+    matches!(kind, "feat" | "fix" | "refactor" | "perf" | "test" | "docs" | "build" | "ci" | "chore")
 }
 
 #[cfg(test)]
@@ -55,10 +95,35 @@ mod tests {
             "\nChangelog: No subject",
             "fix(lint): fix warnings\n\n* Fixed lint errors",
             "feat(player): add search\n\nChangelog:   ",
-            "Changelog: This is the subject, not a body note",
             "docs(changelog): document the format\n\nUse Changelog: to describe a feature.\n* Changelog: A quoted bullet",
         ] {
             assert!(parse(message).is_none(), "{message:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_titles_and_bullets_keep_their_history() {
+        let title = "Windows: the offset no longer drifts the longer the game stays open.";
+        let entry = parse(&format!("{title}\n\n- Hits stay in sync\n  during long sessions\n* Timing is stable\n\nCo-Authored-By: Someone <x@y>\nSigned-off-by: Someone\nClaude-Session: https://example.com\n")).unwrap();
+        assert_eq!(entry.title, title);
+        assert_eq!(entry.points, ["Hits stay in sync during long sessions", "Timing is stable"]);
+        assert_eq!(parse("A new mod").unwrap().title, "A new mod");
+        assert!(parse("Windows: a private change\n\nChangelog: skip").is_none());
+        let marked = parse("Windows: technical subject\n\nChangelog: Player-facing text\n* Fixed lint errors").unwrap();
+        assert_eq!(marked.title, "Player-facing text");
+        assert!(marked.points.is_empty());
+    }
+
+    #[test]
+    fn only_known_conventional_types_require_explicit_notes() {
+        for kind in ["feat", "fix", "refactor", "perf", "test", "docs", "build", "ci", "chore"] {
+            for subject in [format!("{kind}(scope): change"), format!("{kind}: change"), format!("{kind}(scope)!: change"), format!("{kind}!: change")] {
+                assert!(parse(&format!("{subject}\n\n* Fixed lint errors")).is_none(), "{subject}");
+                assert_eq!(parse(&format!("{subject}\n\nChangelog: Player-facing text")).unwrap().title, "Player-facing text");
+            }
+        }
+        for subject in ["Windows: fix audio", "Audio: fix timing", "unknown(scope): old title", "fix(): old malformed title", "fix(scope: old malformed title"] {
+            assert_eq!(parse(subject).unwrap().title, subject);
         }
     }
 

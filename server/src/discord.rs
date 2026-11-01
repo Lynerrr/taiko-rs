@@ -1018,12 +1018,12 @@ struct Posted {
     posted: Vec<String>,
 }
 
-/// Only commits with explicit player-facing notes go in the changelog.
+/// Explicit notes for Conventional Commits, with legacy history preserved.
 pub(crate) fn worth_posting(message: &str) -> bool {
     crate::changelog_entry::parse(message).is_some()
 }
 
-/// Explicit player notes as a post, within Discord's embed limits.
+/// Player notes as a post, within Discord's embed limits.
 pub(crate) fn post_text(message: &str) -> (String, String) {
     let Some(entry) = crate::changelog_entry::parse(message) else { return (String::new(), String::new()) };
     let title = entry.title.chars().take(256).collect();
@@ -1161,6 +1161,15 @@ mod tests {
         assert_eq!(body.chars().count(), 3500);
         assert!(title.chars().all(|c| c == '界'));
         assert!(body.starts_with("- 曲"));
+    }
+
+    #[test]
+    fn legacy_changelog_posts_preserve_player_history() {
+        let title = "Windows: the offset no longer drifts the longer the game stays open.";
+        let message = format!("{title}\n\n- Hits stay in sync\n  during long sessions\n\nCo-Authored-By: Someone <x@y>");
+        assert!(worth_posting(&message));
+        assert_eq!(post_text(&message), (title.to_string(), "- Hits stay in sync during long sessions".into()));
+        assert!(!worth_posting("chore(x): y\n\n* Fixed lint errors"));
     }
 
     #[test]

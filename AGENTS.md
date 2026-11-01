@@ -17,11 +17,14 @@
 - Describe the feature or fix and its effect on players. Do not use implementation notes,
   lint fixes, test output, or a copy of the technical commit subject as the player description.
 - The first nonempty `Changelog:` line is the displayed title. Additional `Changelog:` lines
-  become detail points. Unmarked body text and bullets are never published.
-- Internal-only changes should omit `Changelog:` and will not appear in the game or Discord.
+  become detail points. For Conventional Commits, unmarked body text and bullets are never published.
+- Internal-only Conventional Commits should omit `Changelog:` and will not appear in the game or Discord.
   `Changelog: skip` explicitly hides the entire commit, even if it has other changelog lines.
 - Preserve the player-facing `Changelog:` lines in the final squash commit body. A PR
   description alone does not publish release notes.
+- Preserve historical notes for non-Conventional subjects: their first line and bullet points
+  remain visible. Recognize Conventional subjects only for the types listed above; a historical
+  prefix such as `Windows:` is not a commit type. New commits must still follow the required format.
 
 ## Pull requests
 

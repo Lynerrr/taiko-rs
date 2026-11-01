@@ -343,6 +343,8 @@ struct State {
     profile: Option<profile::View>,
     /// What's new, over everything else.
     changelog: Option<changelog::View>,
+    /// Update notes being fetched without opening an overlay or intercepting input.
+    pending_changelog: Option<changelog::View>,
     /// Online leaderboards fetched (by map hash: when, and the rows or why not), and the one
     /// being fetched.
     online_boards: std::collections::HashMap<u64, (Instant, Result<Vec<online::OnlineScore>, String>)>,
@@ -9098,6 +9100,20 @@ impl State {
         }
     }
 
+    fn poll_changelog(&mut self) {
+        if let Some(view) = &mut self.changelog {
+            view.poll();
+        }
+        // A delayed response must not open an overlay in the middle of a song or replace
+        // a changelog the player has already opened manually.
+        if !self.in_song()
+            && let Some(view) = changelog::poll_automatic(&mut self.pending_changelog)
+            && self.changelog.is_none()
+        {
+            self.changelog = Some(view);
+        }
+    }
+
     fn poll_downloads(&mut self) {
         self.poll_me();
         self.poll_pp_backfill();
@@ -9105,9 +9121,7 @@ impl State {
         if let Some(p) = &mut self.profile {
             p.poll();
         }
-        if let Some(view) = &mut self.changelog {
-            view.poll();
-        }
+        self.poll_changelog();
         #[cfg(target_os = "android")]
         if self.imports_checked.elapsed() >= Duration::from_secs(1) {
             self.imports_checked = Instant::now();
@@ -10394,7 +10408,7 @@ impl State {
         select.mods_label = cfg.mods.label();
         select.played = load_plays();
         let updater = update::Updater::new(cfg.check_updates);
-        let changelog = whats_new(&mut cfg);
+        let pending_changelog = whats_new(&mut cfg);
         let present = cfg.present;
         let fullscreen = cfg.fullscreen;
         State {
@@ -10461,7 +10475,8 @@ impl State {
             online_boards: std::collections::HashMap::new(),
             board_fetch: None,
             pending_replay: None,
-            changelog,
+            changelog: None,
+            pending_changelog,
             pending_mods: Mods::NONE,
             mod_select: None,
             universe_setup: None,
@@ -10575,8 +10590,8 @@ impl State {
     }
 }
 
-/// What's new after an update: the changes since the build last started (the latest ones when
-/// the build before didn't note itself). Notes this build as started.
+/// Starts loading update notes in the background, and notes this build as started.
+/// The caller keeps the view pending until a nonempty list of changes is available.
 fn whats_new(cfg: &mut Config) -> Option<changelog::View> {
     let build = update::BUILD?;
     if cfg.last_build == build {
