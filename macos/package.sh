@@ -21,7 +21,7 @@ rm -rf "$dist"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
 lipo -create -output "$binary" target/aarch64-apple-darwin/release/taiko-rs target/x86_64-apple-darwin/release/taiko-rs
-lipo -verify_arch arm64 x86_64 "$binary"
+lipo "$binary" -verify_arch arm64 x86_64
 strip -x "$binary"
 
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
@@ -39,7 +39,7 @@ for size in 16 32 64 128 256; do
     fi
 done
 # iconutil only takes the sizes Apple lists.
-rm "$iconset/icon_64x64.png"
+rm "$iconset/icon_64x64.png" "$iconset/icon_64x64@2x.png"
 iconutil -c icns -o "$app/Contents/Resources/taiko-rs.icns" "$iconset"
 rm -rf "$iconset"
 
