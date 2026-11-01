@@ -148,6 +148,10 @@ Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
 | F10 / F11 | FPS overlay / fullscreen (the game starts fullscreen; F11 is remembered) |
 
+**Letterbox:** Settings > Video > *Letterbox* runs the whole game at a resolution of your own in
+fullscreen, black all round, moved anywhere on the screen. It lists every mode the monitor reports,
+custom ones from the graphics driver included, and any size can be typed.
+
 **Mouse:** everything can also be clicked. The back button at the top leaves a screen and the
 buttons along the bottom of song select open the others (Settings > System > *Legacy menu* brings
 back the old tabs, without the main menu); in the song list the

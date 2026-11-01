@@ -326,6 +326,8 @@ pub struct Renderer {
     /// 2: draw at half the screen's resolution, then scale up exactly 2x (crisp pixels, a
     /// quarter of the work); 1: full resolution.
     pub pixel_scale: u32,
+    /// The game's `[x, y, w, h]` on the screen, in pixels, black all round; None: all of it.
+    pub letterbox: Option<[u32; 4]>,
     /// The last image came Suboptimal: configure the surface again before the next.
     reconfigure: bool,
     /// The half-resolution image and its bind group for the upscale, sized for the screen.
@@ -430,14 +432,23 @@ impl GpuTimer {
 struct LowRes {
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
+    /// Where it goes on the screen (`UPSCALE_SHADER`'s `place`).
+    place: wgpu::Buffer,
     width: u32,
     height: u32,
 }
 
-/// Integer upscale: each screen pixel copies texel (pixel / 2), so every texel becomes a sharp
-/// 2x2 block (no filtering).
+/// Integer upscale: each screen pixel copies the texel under it, so every texel becomes a sharp
+/// block `scale` pixels across (no filtering). Puts the image at `origin` on the screen.
 const UPSCALE_SHADER: &str = r#"
+struct Place {
+    origin: vec2<f32>,
+    scale: f32,
+    pad: f32,
+}
+
 @group(0) @binding(0) var image: texture_2d<f32>;
+@group(0) @binding(1) var<uniform> place: Place;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -448,7 +459,7 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
 
 @fragment
 fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let texel = min(vec2<u32>(pos.xy) / 2u, textureDimensions(image) - 1u);
+    let texel = min(vec2<u32>((pos.xy - place.origin) / place.scale), textureDimensions(image) - 1u);
     return textureLoad(image, texel, 0);
 }
 "#;
@@ -994,16 +1005,24 @@ impl Renderer {
         let instances = Self::make_instance_buffer(&device, capacity);
         let upscale_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("upscale"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
         });
         let upscale_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("upscale"),
@@ -1059,6 +1078,7 @@ impl Renderer {
             present,
             adapter_name,
             pixel_scale: 1,
+            letterbox: None,
             reconfigure: false,
             low: None,
             upscale_layout,
@@ -1270,17 +1290,24 @@ impl Renderer {
     /// Render pixels per virtual unit for crisp text (`set_text_grid`) when drawing at half
     /// resolution.
     pub fn text_grid(&self) -> Option<f32> {
-        (self.pixel_scale > 1).then(|| (self.config.height / self.pixel_scale).max(1) as f32 / VIRTUAL_HEIGHT)
+        (self.pixel_scale > 1).then(|| (self.size().1 / self.pixel_scale).max(1) as f32 / VIRTUAL_HEIGHT)
     }
 
-    /// The screen in pixels.
+    /// Where the game goes, if not on all of the screen. Only a place on the screen as it is now:
+    /// one left over from another size would draw outside it.
+    fn placed(&self) -> Option<[u32; 4]> {
+        self.letterbox.filter(|&[x, y, w, h]| w > 0 && h > 0 && x + w <= self.config.width && y + h <= self.config.height)
+    }
+
+    /// The game in pixels: the screen, or its part of it.
     pub fn size(&self) -> (u32, u32) {
-        (self.config.width, self.config.height)
+        self.placed().map_or((self.config.width, self.config.height), |[_, _, w, h]| (w, h))
     }
 
     /// Canvas width in virtual units.
     pub fn virtual_width(&self) -> f32 {
-        VIRTUAL_HEIGHT * self.config.width as f32 / self.config.height.max(1) as f32
+        let (w, h) = self.size();
+        VIRTUAL_HEIGHT * w as f32 / h.max(1) as f32
     }
 
     /// Waits for a swapchain image. Under vsync this is where the frame may block, so callers
@@ -1318,13 +1345,12 @@ impl Renderer {
         clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
         opaque: Option<[f32; 4]>,
     ) -> Option<(u32, u32, Vec<u8>)> {
-        // What the shapes are drawn at: the screen, or half of it to be scaled up after.
-        let scaled = self.pixel_scale > 1;
-        let (w, h) = if scaled {
-            ((self.config.width / self.pixel_scale).max(1), (self.config.height / self.pixel_scale).max(1))
-        } else {
-            (self.config.width, self.config.height)
-        };
+        // What the shapes are drawn at: the game's size, or half of it to be scaled up after. Either
+        // goes through an image of its own to get to its place on a black screen.
+        let place = self.placed();
+        let scaled = self.pixel_scale > 1 || place.is_some();
+        let (gw, gh) = self.size();
+        let (w, h) = ((gw / self.pixel_scale).max(1), (gh / self.pixel_scale).max(1));
         if scaled {
             self.ensure_low(w, h);
         }
@@ -1396,7 +1422,11 @@ impl Renderer {
         match self.low.as_ref().filter(|_| scaled) {
             Some(low) => {
                 self.encode_pass(&mut encoder, &low.view, false, shapes.len(), clear, &into, timer.and_then(|t| t.writes(true, false)));
-                self.encode_upscale(&mut encoder, &view, low, clear, timer.and_then(|t| t.writes(false, true)));
+                let origin = place.map_or([0, 0], |[x, y, ..]| [x, y]);
+                let round = if place.is_some() { [0.0; 3] } else { clear };
+                let uniform = [origin[0] as f32, origin[1] as f32, self.pixel_scale as f32, 0.0];
+                self.queue.write_buffer(&low.place, 0, bytemuck::cast_slice(&uniform));
+                self.encode_upscale(&mut encoder, &view, low, origin, self.pixel_scale, round, timer.and_then(|t| t.writes(false, true)));
             }
             None => self.encode_pass(&mut encoder, &view, false, shapes.len(), clear, &into, timer.and_then(|t| t.writes(true, true))),
         }
@@ -1542,21 +1572,33 @@ impl Renderer {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let place = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("upscale place"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("half resolution"),
             layout: &self.upscale_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }],
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: place.as_entire_binding() },
+            ],
         });
-        self.low = Some(LowRes { view, bind_group, width, height });
+        self.low = Some(LowRes { view, bind_group, place, width, height });
     }
 
-    /// Scales the half-resolution image up to the screen, exactly 2x. An odd last row or column
-    /// of the screen keeps the clear colour.
+    /// Puts the image on the screen at `origin`, `scale` times its size exactly. What it doesn't
+    /// cover (an odd last row or column of the screen, a letterbox's bars) keeps `clear`.
+    #[allow(clippy::too_many_arguments)]
     fn encode_upscale(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         low: &LowRes,
+        origin: [u32; 2],
+        scale: u32,
         clear: [f64; 3],
         timestamp_writes: Option<wgpu::RenderPassTimestampWrites>,
     ) {
@@ -1574,7 +1616,7 @@ impl Renderer {
             timestamp_writes,
             ..Default::default()
         });
-        pass.set_viewport(0.0, 0.0, (low.width * 2) as f32, (low.height * 2) as f32, 0.0, 1.0);
+        pass.set_viewport(origin[0] as f32, origin[1] as f32, (low.width * scale) as f32, (low.height * scale) as f32, 0.0, 1.0);
         pass.set_pipeline(&self.upscale_pipeline);
         pass.set_bind_group(0, &low.bind_group, &[]);
         pass.draw(0..3, 0..1);

@@ -1045,3 +1045,58 @@ fn the_back_button_of_a_screen_does_what_esc_does() {
     s.click(render::Hit::Key(KeyCode::Escape), None);
     assert!(matches!(s.scene, Scene::Select));
 }
+
+#[test]
+fn letterbox_lists_what_the_monitor_reports_custom_ones_too() {
+    let mut s = settings_screen();
+    s.monitor_size = (2560, 1440);
+    s.monitor_modes = vec![(2560, 1440), (1337, 777), (1920, 1080)];
+    assert!(s.letterbox_sizes().contains(&(1337, 777)), "a size only the driver knows");
+    s.open_choices(Item::LetterboxSize);
+    let list = s.settings_ui.choices.take().unwrap();
+    let at = list.names.iter().position(|n| n.starts_with("1337 x 777")).expect("listed");
+    s.open_choices(Item::LetterboxSize);
+    s.pick_choice(at);
+    assert_eq!(s.cfg.letterbox_size, (1337, 777));
+    // Or typed, as long as it fits.
+    s.apply_typed(Item::LetterboxSize, "1111x600").unwrap();
+    assert_eq!(s.cfg.letterbox_size, (1111, 600));
+    assert!(s.apply_typed(Item::LetterboxSize, "3840x2160").is_err());
+    assert!(s.apply_typed(Item::LetterboxSize, "100x100").is_err());
+    assert_eq!(s.cfg.letterbox_size, (1111, 600));
+}
+
+#[test]
+fn with_letterbox_the_game_is_its_own_size_and_the_pointer_lands_on_it() {
+    let mut s = settings_screen();
+    s.set_window(1920.0, 1080.0);
+    s.fullscreen = true;
+    s.cfg.letterbox = true;
+    s.cfg.letterbox_size = (1280, 720);
+    assert_eq!(s.sync_letterbox(), Some([320, 180, 1280, 720]));
+    assert_eq!((s.window_w, s.window_h), (1280.0, 720.0), "all of the game goes by this");
+    assert_eq!(s.to_game(320.0, 180.0), (0.0, 0.0), "the game's corner");
+    assert_eq!(s.to_game(100.0, 100.0), (-220.0, -80.0), "a bar: off the game, so nothing's there");
+    let (x, y) = s.to_game(320.0 + 640.0, 180.0 + 360.0);
+    s.mouse_moved(x, y);
+    let (vx, vy) = s.mouse_virtual();
+    assert!((vx - render::VIRTUAL_HEIGHT * 640.0 / 720.0).abs() < 0.01 && (vy - render::VIRTUAL_HEIGHT / 2.0).abs() < 0.01, "the middle of the game: {vx}, {vy}");
+    assert_eq!(s.setting_value(Item::WindowSize), "fullscreen (1920x1080)");
+    // Moved towards a corner.
+    s.cfg.letterbox_pos = (100.0, -100.0);
+    assert_eq!(s.sync_letterbox(), Some([640, 0, 1280, 720]));
+    // Out of fullscreen, or off: the game is the window again.
+    s.fullscreen = false;
+    assert_eq!(s.sync_letterbox(), None);
+    assert_eq!((s.window_w, s.window_h), (1920.0, 1080.0));
+    assert_eq!(s.to_game(5.0, 6.0), (5.0, 6.0));
+}
+
+#[test]
+fn letterbox_settings_survive_a_restart() {
+    let cfg = Config { letterbox: true, letterbox_size: (1337, 777), letterbox_pos: (-25.0, 40.0), ..Config::default() };
+    let text = cfg.to_text();
+    let back = Config::parse_text(&text);
+    assert!(back.letterbox);
+    assert_eq!((back.letterbox_size, back.letterbox_pos), ((1337, 777), (-25.0, 40.0)));
+}

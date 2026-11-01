@@ -264,6 +264,21 @@ pub fn parse_size(s: &str) -> Option<(u32, u32)> {
     (parts.next().is_none() && (320..=7680).contains(&w) && (240..=4320).contains(&h)).then_some((w, h))
 }
 
+/// Where a game of `size` pixels goes on a black `screen`: `[x, y, w, h]` in pixels. `pos` moves it
+/// from the centre towards the edges, -100 to 100 percent of the room there is each way. None if
+/// it fills the screen. Never bigger than the screen, nor uselessly small whatever the config says.
+pub fn letterbox(screen: (u32, u32), size: (u32, u32), pos: (f32, f32)) -> Option<[u32; 4]> {
+    if screen.0 == 0 || screen.1 == 0 {
+        return None;
+    }
+    let (w, h) = (size.0.clamp(320.min(screen.0), screen.0), size.1.clamp(240.min(screen.1), screen.1));
+    if (w, h) == screen {
+        return None;
+    }
+    let at = |room: u32, pos: f32| (room as f32 * (0.5 + pos.clamp(-100.0, 100.0) / 200.0)).round() as u32;
+    Some([at(screen.0 - w, pos.0), at(screen.1 - h, pos.1), w, h])
+}
+
 /// A centred area the size of a `w` x `h` window on a `screen_w` x `screen_h` screen.
 pub fn preset_area(w: u32, h: u32, screen_w: f32, screen_h: f32) -> Area {
     let (fw, fh) = (w as f32 / screen_w.max(1.0), h as f32 / screen_h.max(1.0));
@@ -309,6 +324,19 @@ pub fn draw_frame(c: &mut Canvas, area: Area, strong: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn letterbox_centres_the_game_moves_it_and_stays_on_the_screen() {
+        let screen = (1920, 1080);
+        assert_eq!(letterbox(screen, (1280, 720), (0.0, 0.0)), Some([320, 180, 1280, 720]));
+        assert_eq!(letterbox(screen, (1280, 720), (-100.0, 100.0)), Some([0, 360, 1280, 720]));
+        assert_eq!(letterbox(screen, (1280, 720), (500.0, -500.0)), Some([640, 0, 1280, 720]), "held to the screen");
+        assert_eq!(letterbox(screen, (1920, 1080), (0.0, 0.0)), None, "nothing to put around it");
+        assert_eq!(letterbox(screen, (3840, 2160), (0.0, 0.0)), None, "too big: all of the screen");
+        assert_eq!(letterbox(screen, (3840, 720), (0.0, 0.0)), Some([0, 180, 1920, 720]), "bars one way only");
+        assert_eq!(letterbox(screen, (1, 1), (0.0, 0.0)), Some([800, 420, 320, 240]));
+        assert_eq!(letterbox((0, 0), (1280, 720), (0.0, 0.0)), None, "a window with no size yet");
+    }
 
     const W: f64 = 1920.0;
     const H: f64 = 1080.0;
