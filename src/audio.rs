@@ -82,6 +82,8 @@ struct Stamp {
     at: Instant,
     /// Delay from callback to the samples reaching the speakers.
     latency: Duration,
+    /// That delay as the stream reported it (`SteadyLatency`).
+    reported: Duration,
     /// The last Play / Seek the callback had applied.
     epoch: u64,
 }
@@ -110,7 +112,7 @@ impl Engine {
             config.buffer_size = cpal::BufferSize::Fixed(buffer_frames.clamp(*min, *max));
         }
 
-        let stamp = Arc::new(Mutex::new(Stamp { playing: false, frame: 0, at: Instant::now(), latency: Duration::ZERO, epoch: 0 }));
+        let stamp = Arc::new(Mutex::new(Stamp { playing: false, frame: 0, at: Instant::now(), latency: Duration::ZERO, reported: Duration::ZERO, epoch: 0 }));
         let volume = Arc::new([AtomicU32::new(0.8f32.to_bits()), AtomicU32::new(1.0f32.to_bits())]);
         let fmt = supported.sample_format();
         let open = |config: StreamConfig| -> Result<(cpal::Stream, Sender<Cmd>, Receiver<Garbage>), String> {
@@ -196,6 +198,12 @@ impl Engine {
     pub fn set_volume(&self, music: f32, effects: f32) {
         self.volume[0].store(music.to_bits(), Ordering::Relaxed);
         self.volume[1].store(effects.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The output latency (ms) the clock goes by, and what the stream reports.
+    pub fn latencies_ms(&self) -> (f64, f64) {
+        let s = *self.stamp.lock().unwrap();
+        (s.latency.as_secs_f64() * 1000.0, s.reported.as_secs_f64() * 1000.0)
     }
 
     /// Song position (ms) audible at `now`, or None when nothing is playing yet.
@@ -365,10 +373,10 @@ impl Mixer {
         }
 
         let ts = info.timestamp();
-        let latency = ts.playback.duration_since(ts.callback);
-        let latency = if cfg!(windows) { self.steady.of(latency, out.len() / self.channels, self.rate) } else { latency };
+        let reported = ts.playback.duration_since(ts.callback);
+        let latency = if cfg!(windows) { self.steady.of(reported, out.len() / self.channels, self.rate) } else { reported };
         if let Ok(mut s) = self.stamp.try_lock() {
-            *s = Stamp { playing: self.track.is_some() && !self.paused, frame: self.frame, at: now, latency, epoch: self.epoch };
+            *s = Stamp { playing: self.track.is_some() && !self.paused, frame: self.frame, at: now, latency, reported, epoch: self.epoch };
         }
 
         let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed));

@@ -8287,6 +8287,17 @@ impl State {
                                 scroll_speed: Some(replay.scroll_speed),
                                 play_ms: Some(game.played_ms as u64),
                                 md5: std::fs::read(&e.path).ok().map(|b| download::md5_hex(&b)),
+                                timing: {
+                                    let (latency_ms, reported_latency_ms) = self.audio.as_ref().map(|a| a.latencies_ms()).unwrap_or_default();
+                                    Some(online::PlayTiming {
+                                        os: std::env::consts::OS.into(),
+                                        present: self.present.name().into(),
+                                        offset_ms: self.play_offset,
+                                        visual_lead_ms: visual_offset - self.pace_shift_ms,
+                                        latency_ms,
+                                        reported_latency_ms,
+                                    })
+                                },
                             };
                             self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
                             // Counted with the play itself.
