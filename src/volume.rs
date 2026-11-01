@@ -1,6 +1,6 @@
 //! The volume overlay: three notes on a little lane, each filled as far as its volume goes. Alt +
-//! wheel turns the one picked; the pointer picks whichever note it's over, and while the lane is
-//! up the wheel works over a note without Alt, like osu!. A change hits the note: it glitches like
+//! wheel turns the overall volume; only moving the pointer onto another note picks that one, and
+//! over it the wheel works without Alt, like osu!. A change hits the note: it glitches like
 //! the logo, its fill sloshes, and the ends of the range get a word of their own.
 
 use std::time::{Duration, Instant};
@@ -83,6 +83,9 @@ fn note_in(px: f32, py: f32, x: f32, y: f32) -> Option<usize> {
 pub struct Overlay {
     /// The note the wheel turns.
     pub selected: usize,
+    /// The pointer was moved onto a note and is still there. One the lane just came up under
+    /// doesn't count: nobody aimed it.
+    hovering: bool,
     /// When it was last touched, and when it came up: None while it's away.
     touched: Option<Instant>,
     opened: Option<Instant>,
@@ -98,7 +101,7 @@ pub struct Overlay {
 
 impl Overlay {
     pub fn new() -> Overlay {
-        Overlay { selected: MASTER, touched: None, opened: None, clock: 0.0, hit: [f32::MIN; NOTES], shown: [f32::NAN; NOTES], word: None }
+        Overlay { selected: MASTER, hovering: false, touched: None, opened: None, clock: 0.0, hit: [f32::MIN; NOTES], shown: [f32::NAN; NOTES], word: None }
     }
 
     pub fn visible(&self, now: Instant) -> bool {
@@ -110,24 +113,47 @@ impl Overlay {
         if !self.visible(now) {
             self.opened = Some(now);
             self.hit = [self.clock; NOTES];
+            self.selected = MASTER;
+            self.hovering = false;
         }
         self.touched = Some(now);
     }
 
-    /// The pointer moved to `x, y`: the note under it is the picked one, and the lane stays up.
-    /// True if it's over a note.
-    pub fn point(&mut self, x: f32, y: f32, width: f32, now: Instant) -> bool {
+    /// The pointer moved to `x, y`: the note it's moved onto is the picked one, and moving off
+    /// goes back to the overall volume.
+    pub fn point(&mut self, x: f32, y: f32, width: f32, now: Instant) {
         if !self.visible(now) {
-            return false;
+            self.hovering = false;
+            return;
         }
         let [px, py] = panel(width);
-        let Some(note) = note_in(px, py, x, y) else { return false };
-        self.touched = Some(now);
-        if note != self.selected {
-            self.selected = note;
-            self.hit[note] = self.clock;
+        match note_in(px, py, x, y) {
+            Some(note) => {
+                self.hovering = true;
+                self.touched = Some(now);
+                if note != self.selected {
+                    self.selected = note;
+                    self.hit[note] = self.clock;
+                }
+            }
+            None if self.hovering => {
+                self.hovering = false;
+                self.selected = MASTER;
+            }
+            None => {}
         }
-        true
+    }
+
+    /// The pointer is on a note on purpose: the wheel turns it without Alt.
+    pub fn hovering(&self, now: Instant) -> bool {
+        self.hovering && self.visible(now)
+    }
+
+    /// Keeps the lane up while the pointer's on a note.
+    pub fn hold(&mut self, now: Instant) {
+        if self.hovering(now) {
+            self.touched = Some(now);
+        }
     }
 
     /// The next note along (Alt + Left / Right).
@@ -318,6 +344,7 @@ mod tests {
         let (mut v, mut cfg, now) = (Overlay::new(), Config::default(), Instant::now());
         cfg.music_volume = 0.52;
         cfg.master_volume = 0.5;
+        v.touch(now);
         v.selected = MUSIC;
         assert!(v.turn(&mut cfg, 1, now));
         assert_eq!(cfg.music_volume, 0.55);
@@ -332,24 +359,48 @@ mod tests {
     }
 
     #[test]
-    fn the_pointer_picks_the_note_it_is_over_only_while_the_lane_is_up() {
+    fn only_moving_the_pointer_onto_a_note_picks_it() {
         let (mut v, now) = (Overlay::new(), Instant::now());
         let [px, py] = panel(853.3);
         let over = |k: f32| px + 8.0 + CELL * k;
-        assert!(!v.point(over(0.5), py + 40.0, 853.3, now));
+        v.point(over(0.5), py + 40.0, 853.3, now);
         assert_eq!(v.selected, MASTER, "nothing to point at yet");
+        assert!(!v.hovering(now));
+        // The lane comes up under a pointer that's just sitting there: still the overall volume.
         v.touch(now);
-        assert!(v.point(over(0.5), py + 40.0, 853.3, now));
+        assert_eq!(v.selected, MASTER);
+        assert!(!v.hovering(now));
+        v.point(over(0.5), py + 40.0, 853.3, now);
         assert_eq!(v.selected, MUSIC);
-        assert!(v.point(over(2.5), py + 40.0, 853.3, now));
+        assert!(v.hovering(now));
+        v.point(over(2.5), py + 40.0, 853.3, now);
         assert_eq!(v.selected, HITSOUNDS);
-        assert!(!v.point(px - 50.0, py + 40.0, 853.3, now));
-        assert_eq!(v.selected, HITSOUNDS, "moving off keeps the pick");
-        // Over a note it stays up; off it, it goes.
+        v.point(px - 50.0, py + 40.0, 853.3, now);
+        assert_eq!(v.selected, MASTER, "moving off goes back");
+        assert!(!v.hovering(now));
+    }
+
+    #[test]
+    fn the_lane_stays_up_over_a_note_and_starts_over_each_time() {
+        let (mut v, now) = (Overlay::new(), Instant::now());
+        let [px, py] = panel(853.3);
+        v.touch(now);
+        v.point(px + 8.0 + CELL / 2.0, py + 40.0, 853.3, now);
         let later = now + SHOWN - Duration::from_millis(1);
-        assert!(v.point(over(0.5), py + 40.0, 853.3, later));
+        v.hold(later);
         assert!(v.visible(later + SHOWN - Duration::from_millis(1)));
-        assert!(!v.point(over(0.5), py + 40.0, 853.3, later + SHOWN));
+        // Gone, then up again: back to the overall volume, whatever it was left on.
+        let again = later + SHOWN * 2;
+        v.touch(again);
+        assert_eq!(v.selected, MASTER);
+    }
+
+    #[test]
+    fn a_note_picked_by_arrow_outlasts_a_pointer_that_was_never_on_one() {
+        let (mut v, now) = (Overlay::new(), Instant::now());
+        v.pick_next(1, now);
+        v.point(10.0, 10.0, 853.3, now);
+        assert_eq!(v.selected, HITSOUNDS);
     }
 
     #[test]
