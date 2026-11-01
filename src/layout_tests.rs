@@ -172,6 +172,12 @@ fn assert_every_screen_fits() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.select.collections = vec![("My Favourite Tech Maps For Practice".into(), Default::default()), ("dans".into(), Default::default())];
     check(&mut s, "select", &mut out);
+    s.cfg.main_menu = false;
+    check(&mut s, "select, legacy menu", &mut out);
+    s.open_settings();
+    check(&mut s, "settings, legacy menu", &mut out);
+    s.close_settings();
+    s.cfg.main_menu = true;
     // Each from scratch: the map this state plays once scanned may start loading meanwhile, and
     // that leaves the menu.
     for (i, item) in menu::ITEMS.iter().enumerate() {

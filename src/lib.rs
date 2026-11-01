@@ -41,6 +41,7 @@ mod mapguessr;
 mod mapinfo;
 mod media;
 mod menu;
+mod menu_notes;
 mod hud;
 mod keys;
 mod mods;
@@ -278,6 +279,8 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
+    /// What drifts behind it.
+    menu_notes: menu_notes::Notes,
     /// When dragging the player's timeline last moved the music.
     music_seeked: Option<Instant>,
     /// The first steps guide is up, on this page.
@@ -2520,7 +2523,8 @@ impl State {
             Item::ShowFps => on(c.show_fps),
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
-            Item::MainMenu => on(c.main_menu),
+            Item::LegacyMenu => on(!c.main_menu),
+            Item::MenuNotes => on(c.menu_notes),
             Item::CheckUpdates => on(c.check_updates),
             Item::Update => {
                 let build = update::BUILD.map(update::short);
@@ -2716,7 +2720,14 @@ impl State {
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Splash => self.cfg.splash = !self.cfg.splash,
-            Item::MainMenu => self.cfg.main_menu = !self.cfg.main_menu,
+            Item::LegacyMenu => {
+                self.cfg.main_menu = !self.cfg.main_menu;
+                // Gone at once, not just from the next start.
+                if !self.cfg.main_menu {
+                    self.main_menu = None;
+                }
+            }
+            Item::MenuNotes => self.cfg.menu_notes = !self.cfg.menu_notes,
             Item::CheckUpdates => self.cfg.check_updates = !self.cfg.check_updates,
             // Acts on Enter in `settings_key`.
             Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout => return,
@@ -7767,6 +7778,10 @@ impl State {
     fn build_frame(&mut self, canvas: &mut Canvas, now: Instant, width: f32) -> Option<String> {
         // Here too, so a new choice (or a test's) shows from the next frame on.
         lang::set(self.cfg.language);
+        render::set_legacy_menu(!self.cfg.main_menu);
+        self.select.legacy = !self.cfg.main_menu;
+        self.select.to_menu = self.mp.is_none() && !self.picking_lobby_map;
+        self.select.covered = self.customization_tab().is_some();
         self.refresh_play_offset();
         self.follow_map_skin();
         if self.window_resized_at.is_some_and(|t| now.saturating_duration_since(t) > Duration::from_secs(1)) {
@@ -7836,6 +7851,10 @@ impl State {
             self.stars.poll();
             self.stars.set_mods(self.cfg.mods, self.cfg.scroll_speed);
             let play_rate = self.play_speed().0;
+            if self.cfg.menu_notes && self.on_menu() {
+                let playing = self.preview_target();
+                self.menu_notes.update(playing, &self.library, &mut self.stars, play_rate);
+            }
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
                 self.stars.request(i, &self.library[i].path, play_rate);
             }
@@ -8069,7 +8088,9 @@ impl State {
                     p.draw(canvas, &frame);
                 } else if let Some(m) = &mut self.main_menu {
                     let kiai = self.cfg.kiai_effects && !paused && self.preview.kiai();
-                    let frame = menu::Frame { beat: self.preview.beat(), kiai, song: song.as_deref(), hint: &hint, maps: self.library.len(), paused };
+                    let shows = self.cfg.menu_notes && render::animations();
+                    let ghosts = self.preview.map_time(self.menu_notes.entry()).filter(|_| shows).and_then(|t| self.menu_notes.view(t));
+                    let frame = menu::Frame { beat: self.preview.beat(), kiai, ghosts, song: song.as_deref(), hint: &hint, maps: self.library.len(), paused };
                     m.draw(canvas, &frame);
                 }
             }
@@ -9678,6 +9699,11 @@ impl State {
             Hit::SongHeader(row) => self.click(Hit::SongRow(row), window),
             Hit::SectionHeader(s) => self.select.click_section(s, &self.library),
             Hit::ListBack => self.select.follow_selection(),
+            Hit::ToMenu if self.select.to_menu => {
+                self.select.searching = false;
+                self.main_menu = Some(menu::Menu::new());
+            }
+            Hit::ToMenu => self.key_inner(KeyCode::Escape, false, None, Instant::now(), window),
             Hit::ModsButton => self.open_mod_select(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
@@ -10526,6 +10552,7 @@ impl State {
             volume: volume::Overlay::new(),
             splash,
             main_menu: None,
+            menu_notes: Default::default(),
             guide: None,
             guide_binding: None,
             guide_after: None,

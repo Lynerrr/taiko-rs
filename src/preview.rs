@@ -505,6 +505,12 @@ impl Preview {
         beat_at(&map.control_points, self.last_time)
     }
 
+    /// Where the music is in map time, while `entry`'s song plays.
+    pub fn map_time(&self, entry: Option<usize>) -> Option<f64> {
+        let (i, ..) = self.map.as_ref().filter(|_| self.audio_active)?;
+        (Some(*i) == entry && self.last_time.is_finite()).then_some(self.last_time)
+    }
+
     /// Whether the music is in a kiai now.
     pub fn kiai(&self) -> bool {
         let Some((_, map, _, _)) = self.map.as_ref().filter(|_| self.audio_active) else { return false };

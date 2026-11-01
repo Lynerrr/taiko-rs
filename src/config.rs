@@ -226,6 +226,8 @@ pub struct Config {
     pub splash: bool,
     /// Start on the main menu (off: straight to song select).
     pub main_menu: bool,
+    /// The song's notes drift behind the main menu.
+    pub menu_notes: bool,
     /// The first steps guide has been seen through. A config from before it says nothing, so
     /// players already playing get it once too.
     pub guide_seen: bool,
@@ -333,6 +335,7 @@ impl Default for Config {
             animations: true,
             splash: true,
             main_menu: true,
+            menu_notes: true,
             guide_seen: false,
             check_updates: true,
             resume_delay_ms: 1000.0,
@@ -670,6 +673,7 @@ impl Config {
                 "animations" => cfg.animations = v != "false",
                 "splash" => cfg.splash = v != "false",
                 "main_menu" => cfg.main_menu = v != "false",
+                "menu_notes" => cfg.menu_notes = v != "false",
                 "guide_seen" => cfg.guide_seen = v == "true",
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
@@ -821,6 +825,7 @@ impl Config {
              animations = {}\n\
              splash = {}\n\
              main_menu = {}\n\
+             menu_notes = {}\n\
              guide_seen = {}\n\
              check_updates = {}\n\
              # countdown before play continues after pausing (ms)\n\
@@ -867,6 +872,7 @@ impl Config {
             self.animations,
             self.splash,
             self.main_menu,
+            self.menu_notes,
             self.guide_seen,
             self.check_updates,
             self.resume_delay_ms,

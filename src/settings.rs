@@ -72,7 +72,10 @@ pub enum Item {
     ShowFps,
     Animations,
     Splash,
-    MainMenu,
+    /// The old layout: tabs on top and no main menu (`Config::main_menu` off).
+    LegacyMenu,
+    /// The song's notes behind the main menu.
+    MenuNotes,
     /// Clears every map's own offset, on a second press.
     ResetMapOffsets,
     /// Shows the first launch's guide again.
@@ -97,7 +100,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 114] = [
+pub const ITEMS: [(&str, Item); 115] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -206,7 +209,8 @@ pub const ITEMS: [(&str, Item); 114] = [
     ("ONLINE", Item::KrokodilKoban),
     ("SYSTEM", Item::Language),
     ("SYSTEM", Item::Splash),
-    ("SYSTEM", Item::MainMenu),
+    ("SYSTEM", Item::LegacyMenu),
+    ("SYSTEM", Item::MenuNotes),
     ("SYSTEM", Item::Guide),
     ("SYSTEM", Item::UpdateChannel),
     ("SYSTEM", Item::Update),
@@ -388,7 +392,8 @@ impl Item {
             Item::ShowFps => tr!("FPS overlay", "FPSの表示", "Счётчик FPS"),
             Item::Animations => tr!("UI animations", "UIのアニメーション", "Анимации интерфейса"),
             Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
-            Item::MainMenu => tr!("Main menu", "メインメニュー", "Главное меню"),
+            Item::LegacyMenu => tr!("Legacy menu", "旧メニュー", "Старое меню"),
+            Item::MenuNotes => tr!("Notes behind the main menu", "メインメニューの背景のノーツ", "Ноты за главным меню"),
             Item::ResetMapOffsets => tr!("Reset map offsets", "譜面のオフセットをリセット", "Сбросить оффсеты карт"),
             Item::Guide => tr!("First steps guide", "はじめてのガイド", "Первые шаги"),
             Item::UpdateChannel => tr!("Build channel", "ビルドのチャンネル", "Канал сборок"),
@@ -471,7 +476,8 @@ impl Item {
             | Item::ShowFps
             | Item::Animations
             | Item::Splash
-            | Item::MainMenu
+            | Item::LegacyMenu
+            | Item::MenuNotes
             | Item::CheckUpdates
             | Item::Fullscreen
             | Item::DiscordPresence => Kind::Toggle,
@@ -748,10 +754,15 @@ impl Item {
                 "初回起動時の短いガイドをもう一度表示します。",
                 "Короткая подсказка с первого запуска."
             ),
-            Item::MainMenu => tr!(
-                "Starts on the main menu, and Esc in song select goes back to it. Off: straight to song select, and Esc there asks to quit.",
-                "メインメニューから始まり、選曲画面のEscでそこに戻ります。オフ: すぐに選曲画面になり、そこでEscを押すと終了を確認します。",
-                "Игра открывается с главного меню, Esc в выборе песни возвращает в него. Выкл.: сразу выбор песни, а Esc там спрашивает о выходе."
+            Item::LegacyMenu => tr!(
+                "The old layout: straight to song select with tabs along the top, no main menu, and Esc asks to quit.",
+                "旧レイアウト: メインメニューなしですぐ選曲画面になり、上にタブが並び、Escは終了を確認します。",
+                "Старый вид: сразу выбор песни с вкладками сверху, без главного меню, Esc спрашивает о выходе."
+            ),
+            Item::MenuNotes => tr!(
+                "The playing song's notes drift along routes behind the main menu, one for each Multiverse universe.",
+                "再生中の曲のノーツが、Multiverseのユニバースごとの道筋を流れていきます。",
+                "Ноты играющей песни плывут по маршрутам за главным меню, по одному на вселенную Multiverse."
             ),
             Item::VisualOffset => tr!(
                 "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
@@ -1654,8 +1665,38 @@ pub fn brand(c: &mut Canvas) -> f32 {
     tx
 }
 
+/// The way back, as a button: what Esc does here.
+pub fn back_button(c: &mut Canvas, y: f32, label: &str, hit: Hit) -> f32 {
+    let w = Canvas::text_width(8.0, label) + 20.0;
+    c.button(24.0, y, w, 20.0, label, 8.0, hit, false);
+    w
+}
+
+/// Top of a screen: the way back, what the screen is, and `right_text` to the side.
+fn header(c: &mut Canvas, active: usize, right_text: &str) {
+    let w = back_button(c, 21.0, tr!("< BACK", "< 戻る", "< НАЗАД"), Hit::Key(winit::keyboard::KeyCode::Escape));
+    let title = [
+        tr!("SONGS", "曲", "ПЕСНИ"),
+        tr!("SETTINGS", "設定", "НАСТРОЙКИ"),
+        tr!("MULTIPLAYER", "マルチ", "МУЛЬТИПЛЕЕР"),
+        tr!("DOWNLOAD", "ダウンロード", "ЗАГРУЗКА"),
+    ][active.min(3)];
+    let x = 24.0 + w + 12.0;
+    let used = c.text(x, 26.0, 11.0, rgba(accent(), 1.0), title);
+    let right = c.width - 24.0;
+    let room = right - (x + used + 16.0);
+    if Canvas::text_width(8.0, right_text) <= room {
+        c.text_right(right, 28.0, 8.0, rgba(0x9a9ab0, 1.0), right_text);
+    } else {
+        c.text(x, 45.0, 6.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(6.0, c.width - 110.0 - x, right_text));
+    }
+}
+
 /// Top bar shared by the song list, settings and multiplayer: logo plus the three tabs.
 pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
+    if !crate::render::legacy_menu() {
+        return header(c, active, right_text);
+    }
     thread_local! {
         /// Where the active tab's highlight is (x, width), so it slides between tabs.
         static PILL: Cell<(f32, f32)> = const { Cell::new((f32::NAN, 0.0)) };

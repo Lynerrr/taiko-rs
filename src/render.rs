@@ -1683,6 +1683,19 @@ fn font_px(size: f32) -> f32 {
     }
 }
 
+thread_local! {
+    /// The Legacy menu setting, for the frame being built.
+    static LEGACY_MENU: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub fn set_legacy_menu(on: bool) {
+    LEGACY_MENU.with(|l| l.set(on));
+}
+
+pub fn legacy_menu() -> bool {
+    LEGACY_MENU.with(std::cell::Cell::get)
+}
+
 /// `v` moved onto the text grid (unchanged without one).
 pub fn snap_to_grid(v: f32) -> f32 {
     let grid = TEXT_GRID.with(std::cell::Cell::get);
@@ -1774,6 +1787,8 @@ pub enum Hit {
     MenuStep(i32),
     /// Takes the song list back to the selection it was scrolled away from.
     ListBack,
+    /// Song select's way out: the main menu, or back where it came from.
+    ToMenu,
     /// A button of the first steps guide.
     Guide(crate::guide::Action),
     /// The main menu's button to our Discord server.
