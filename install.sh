@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs or updates taiko.rs for the current user on Linux (no root needed).
+# Installs or updates taiko.rs for the current user on Linux or macOS (no root needed).
 #
 #   curl -fsSL https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.sh | sh
 #
@@ -12,7 +12,12 @@ case "${TAIKO_RS_CHANNEL:-}" in
     dev) tag=dev ;;
     *) tag=latest ;;
 esac
-url="${TAIKO_RS_URL:-https://github.com/Lynerrr/taiko-rs/releases/download/$tag/taiko-rs-linux-x64.tar.gz}"
+system="$(uname -s)"
+case "$system" in
+    Darwin) asset=taiko-rs-macos.tar.gz ;;
+    *) asset=taiko-rs-linux-x64.tar.gz ;;
+esac
+url="${TAIKO_RS_URL:-https://github.com/Lynerrr/taiko-rs/releases/download/$tag/$asset}"
 bin_dir="$HOME/.local/bin"
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
 exe="$bin_dir/taiko-rs"
@@ -22,12 +27,21 @@ link_desktop="$data_dir/applications/taiko-rs-link.desktop"
 icon="$data_dir/icons/hicolor/256x256/apps/taiko-rs.png"
 # Earlier installs put an SVG icon here.
 old_icon="$data_dir/icons/hicolor/scalable/apps/taiko-rs.svg"
+# macOS: Applications if this user may write there (an admin may), else their own.
+apps=/Applications
+[ -w "$apps" ] || apps="$HOME/Applications"
+app="$apps/taiko-rs.app"
 
 launch=1
 for arg in "$@"; do
     case "$arg" in
         --no-launch) launch=0 ;;
         --uninstall)
+            if [ "$system" = Darwin ]; then
+                rm -rf "$app"
+                echo "Removed taiko.rs. Settings ($HOME/.config/taiko-rs) and maps ($data_dir/taiko-rs) are kept."
+                exit 0
+            fi
             rm -f "$exe" "$desktop" "$link_desktop" "$icon" "$old_icon"
             echo "Removed taiko.rs. Settings ($HOME/.config/taiko-rs) and maps ($data_dir/taiko-rs) are kept."
             exit 0
@@ -36,7 +50,8 @@ for arg in "$@"; do
     esac
 done
 
-if [ "$(uname -m)" != "x86_64" ]; then
+# The macOS build is universal.
+if [ "$system" != Darwin ] && [ "$(uname -m)" != "x86_64" ]; then
     echo "There is only an x86_64 build. Build from source instead: https://github.com/Lynerrr/taiko-rs" >&2
     exit 1
 fi
@@ -54,6 +69,20 @@ else
     exit 1
 fi
 tar -xzf "$tmp/taiko-rs.tar.gz" -C "$tmp"
+
+# Files that curl saves aren't quarantined, so Gatekeeper lets this unnotarized app start. A
+# running game keeps going from the old files it has open.
+if [ "$system" = Darwin ]; then
+    mkdir -p "$apps"
+    rm -rf "$app"
+    mv "$tmp/taiko-rs.app" "$app"
+    echo "Installed $app."
+    echo "Maps: point it at your osu! Songs folder in Settings -> Library, or put .osz files in $data_dir/taiko-rs/Songs"
+    if [ "$launch" = 1 ]; then
+        open "$app"
+    fi
+    exit 0
+fi
 
 # Updating works while the old version runs: the new binary is a new file renamed over it.
 mkdir -p "$bin_dir" "$(dirname "$desktop")" "$(dirname "$icon")"

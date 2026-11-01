@@ -1,7 +1,7 @@
 name: Release build
 
-# Builds taiko.rs for Windows and Linux on every push to the main branch and publishes both as
-# the rolling "latest" release, which install.ps1 / install.sh download. Pushes to `dev` publish
+# Builds taiko.rs for Windows, Linux and macOS on every push to the main branch and publishes them
+# as the rolling "latest" release, which install.ps1 / install.sh download. Pushes to `dev` publish
 # the "dev" pre-release instead (test builds; the game's Build channel setting switches to them).
 # Pull requests are checked by pre-merge.yml; packaging and release builds run after merging.
 on:
@@ -102,6 +102,25 @@ jobs:
           name: linux
           path: taiko-rs-linux-x64.tar.gz
 
+  # A universal .app (macos/package.sh). Tests run in pre-merge.yml on macOS; a repeat here would
+  # only let the flaky network test there hold up the release for every platform.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build and package
+        run: macos/package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: taiko-rs-macos.tar.gz
+
   # The APK (android/build-apk.sh). The runner image has the SDK, NDK and a JDK. Signed with the
   # key in the ANDROID_KEYSTORE_BASE64 / _PASS / ANDROID_KEY_ALIAS secrets when they are set (so
   # each build installs over the last); otherwise with a throwaway debug key.
@@ -163,8 +182,36 @@ jobs:
           sh install.sh --uninstall
           test ! -e ~/.local/bin/taiko-rs
 
+  # install.sh against the archive just built, on both of the binary's architectures, before
+  # anything is published. Starting it writes the settings, which proves it runs (the runner may
+  # have no GPU, so it may exit right after).
+  macos-install-check:
+    needs: macos
+    strategy:
+      matrix:
+        os: [macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+      - name: Install from the build
+        run: |
+          TAIKO_RS_URL="file://$PWD/taiko-rs-macos.tar.gz" sh install.sh --no-launch
+          app=/Applications/taiko-rs.app
+          codesign --verify --strict "$app"
+          "$app/Contents/MacOS/taiko-rs" --help
+          "$app/Contents/MacOS/taiko-rs" &
+          pid=$!
+          sleep 8
+          kill "$pid" 2>/dev/null || true
+          test -f ~/.config/taiko-rs/config.txt
+          sh install.sh --uninstall
+          test ! -e "$app"
+
   publish:
-    needs: [windows, linux, linux-install-check, android]
+    needs: [windows, linux, linux-install-check, macos, macos-install-check, android]
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/worktree-taiko-client' || github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest
     steps:
@@ -181,8 +228,8 @@ jobs:
           # Recreate the release so its tag always points at this commit.
           gh release delete latest --yes --cleanup-tag || true
           raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/worktree-taiko-client"
-          notes=$(printf 'Build of %s.\n\nOn Windows: run `taiko-rs-windows-x64-setup.exe`, or install or update from PowerShell:\n```powershell\nirm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | sh\n```\n\nOn Android (8.0+, 64-bit ARM): install `taiko-rs-android.apk`.' "$GITHUB_SHA" "$raw" "$raw")
-          gh release create latest taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-android.apk --title "taiko.rs (latest build)" --notes "$notes" --target "$GITHUB_SHA"
+          notes=$(printf 'Build of %s.\n\nOn Windows: run `taiko-rs-windows-x64-setup.exe`, or install or update from PowerShell:\n```powershell\nirm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | sh\n```\n\nOn macOS (11+, Apple silicon or Intel), the same command in Terminal: `taiko-rs-macos.tar.gz` is not signed by Apple, so macOS stops it when it comes through a browser.\n\nOn Android (8.0+, 64-bit ARM): install `taiko-rs-android.apk`.' "$GITHUB_SHA" "$raw" "$raw")
+          gh release create latest taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs (latest build)" --notes "$notes" --target "$GITHUB_SHA"
 
       - name: Publish "dev" pre-release
         if: github.ref == 'refs/heads/dev'
@@ -192,8 +239,8 @@ jobs:
         run: |
           gh release delete dev --yes --cleanup-tag || true
           raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/worktree-taiko-client"
-          notes=$(printf 'Test build of %s (the `dev` branch); it may be broken.\n\nIn the game: Settings -> Updates -> Build channel: dev, then Update. Or install it directly on Windows (PowerShell):\n```powershell\n$env:TAIKO_RS_CHANNEL="dev"; irm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | TAIKO_RS_CHANNEL=dev sh\n```' "$GITHUB_SHA" "$raw" "$raw")
-          gh release create dev taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-android.apk --title "taiko.rs (dev build)" --notes "$notes" --target "$GITHUB_SHA" --prerelease --latest=false
+          notes=$(printf 'Test build of %s (the `dev` branch); it may be broken.\n\nIn the game: Settings -> Updates -> Build channel: dev, then Update. Or install it directly on Windows (PowerShell):\n```powershell\n$env:TAIKO_RS_CHANNEL="dev"; irm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | TAIKO_RS_CHANNEL=dev sh\n```\n\nOn macOS, the same command in Terminal.' "$GITHUB_SHA" "$raw" "$raw")
+          gh release create dev taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs (dev build)" --notes "$notes" --target "$GITHUB_SHA" --prerelease --latest=false
 
   # Runs the same one-line install command users run, on a fresh machine, against the release
   # that was just published.
@@ -229,3 +276,13 @@ jobs:
           sudo apt-get update && sudo apt-get install -y libpipewire-0.3-0t64 libasound2t64
           curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh | sh -s -- --no-launch
           ~/.local/bin/taiko-rs --help
+
+  install-test-macos:
+    needs: publish
+    if: github.ref == 'refs/heads/worktree-taiko-client'
+    runs-on: macos-latest
+    steps:
+      - name: Install with the published command
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh | sh -s -- --no-launch
+          /Applications/taiko-rs.app/Contents/MacOS/taiko-rs --help
