@@ -97,6 +97,21 @@ pub enum Request {
     Played { token: String, ms: u64 },
 }
 
+/// What a replay's presses can't say about a play's timing: with it, how far off a play was can
+/// be told from where it asked for the offset to be. Kept with the replay and shown to no one.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct PlayTiming {
+    pub os: String,
+    pub present: String,
+    /// The offset in effect (the global one and the map's).
+    pub offset_ms: f64,
+    /// How far ahead the notes were drawn: the visual offset and any vsync compensation.
+    pub visual_lead_ms: f64,
+    /// The output latency the clock took off, and what the stream itself said it was.
+    pub latency_ms: f64,
+    pub reported_latency_ms: f64,
+}
+
 /// A play sent to the server: what the leaderboards show, and the replay's presses (kept so
 /// plays can be watched and checked later).
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -130,6 +145,9 @@ pub struct ScoreSubmit {
     /// How the game worked out `pp` and `stars` (`PP_VERSION`; 0: before it said).
     #[serde(default)]
     pub pp_version: u32,
+    /// How the game's timing was set up (none from older games).
+    #[serde(default)]
+    pub timing: Option<PlayTiming>,
 }
 
 /// 1: on the notes `NOTE_MODS` leave, not the whole map. 2: Half keeps to the beat.

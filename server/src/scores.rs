@@ -47,6 +47,9 @@ struct StoredReplay<'a> {
     version: u32,
     map: &'a crate::net::MapInfo,
     inputs: &'a [(f64, u8)],
+    /// For working out how far off plays are; `replay` doesn't hand it out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timing: Option<online::PlayTiming>,
 }
 
 /// A player's plays that aren't on the leaderboards (failed, quit, restarted...) and the time
@@ -490,7 +493,8 @@ impl Scores {
             hidden: false,
         };
         if let Some(dir) = &self.replays {
-            let replay = StoredReplay { version: play.replay_version, map: &play.map, inputs: &play.inputs };
+            let timing = play.timing.clone().map(|t| online::PlayTiming { os: online::clean_text(&t.os, 16), present: online::clean_text(&t.present, 16), ..t });
+            let replay = StoredReplay { version: play.replay_version, map: &play.map, inputs: &play.inputs, timing };
             let bytes = serde_json::to_vec(&replay).unwrap_or_default();
             if self.replay_bytes + bytes.len() as u64 > self.replay_limit {
                 eprintln!("replay {id} isn't kept: the replays have taken all their room");
@@ -845,6 +849,7 @@ mod tests {
             play_ms: Some(60_000),
             md5: None,
             pp_version: 0,
+            timing: None,
         }
     }
 
@@ -1174,6 +1179,25 @@ mod tests {
         assert_eq!(s.pp_of(1), Some((Some(90.0), None)));
         // Every line stays as sent.
         assert!(std::fs::read_to_string(dir.join("scores.jsonl")).unwrap().contains("900"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_plays_timing_stays_with_its_replay_and_is_shown_to_no_one() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-timing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        let timing = online::PlayTiming { os: format!("windows{}", "x".repeat(100)), present: "immediate".into(), offset_ms: -20.0, visual_lead_ms: 0.0, latency_ms: 32.4, reported_latency_ms: 144.2 };
+        s.submit("a", "A", ScoreSubmit { timing: Some(timing), ..play(7, 500, 100.0) }, 1).unwrap();
+        s.submit("a", "A", play(8, 500, 100.0), 1).unwrap();
+        let stored = |id: u64| serde_json::from_slice::<serde_json::Value>(&std::fs::read(dir.join(format!("replays/{id}.json"))).unwrap()).unwrap();
+        let first = stored(1);
+        assert_eq!((first["timing"]["offset_ms"].as_f64(), first["timing"]["reported_latency_ms"].as_f64()), (Some(-20.0), Some(144.2)));
+        assert_eq!(first["timing"]["os"].as_str().unwrap().chars().count(), 16, "a client can't fill the disk with it");
+        assert!(stored(2).get("timing").is_none(), "games from before it send none");
+        let handed_out = serde_json::to_value(s.replay(1).unwrap()).unwrap();
+        assert!(handed_out.get("timing").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
