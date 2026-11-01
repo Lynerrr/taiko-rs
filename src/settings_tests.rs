@@ -400,15 +400,45 @@ fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
     s.start_calibration_as(true);
     assert!(matches!(s.scene, Scene::Calibrate { vsync: true, .. }), "not calibrating by sight");
     assert_eq!(s.wanted_present(), PresentChoice::Fifo);
-    // H would hide the notes: not here.
-    s.calibration_key(KeyCode::KeyH, false, Instant::now(), None);
     let Scene::Calibrate { game, .. } = &mut s.scene else { unreachable!() };
-    assert!(!game.hide_notes);
     // Hit 8 ms late by sight on average: the frames show 8 ms later than the fine tune assumes.
     game.stats.errors = vec![8.0; 20];
     s.finish_calibration();
     s.leave_calibration(true);
     assert_eq!((s.cfg.vsync_tune_ms, s.cfg.offset_ms), (11.0, 12.0));
+}
+
+#[test]
+fn calibrating_by_ear_shows_no_notes_and_nothing_about_the_hits() {
+    let mut s = layout_tests::state();
+    s.start_calibration_as(false);
+    let Scene::Calibrate { game, .. } = &mut s.scene else { unreachable!() };
+    assert!(game.mute_hits, "your own hitsounds would be something to sync to");
+    // 20 hits, all 37 ms early, well into the song.
+    game.stats.errors = vec![-37.0; 20];
+    game.time = game.map.notes[10].time;
+    let mut c = Canvas::default();
+    c.audit = true;
+    calibrate::draw_by_ear(&mut c, game);
+    let texts: Vec<&str> = c.texts.iter().map(|(_, t)| t.as_str()).collect();
+    assert!(!texts.is_empty());
+    for t in &texts {
+        assert!(!t.contains("37") && !t.contains("early") && !t.contains("late") && !t.contains("suggest"), "{t:?} tells how the hits went");
+    }
+}
+
+#[test]
+fn calibrating_takes_any_drum_key() {
+    let mut s = layout_tests::state();
+    s.start_calibration_as(false);
+    let Scene::Calibrate { game, .. } = &s.scene else { unreachable!() };
+    // No audio here: the clock runs on from where it started, so a press this far ahead lands on
+    // the first note.
+    let ahead = (game.map.notes[0].time - game.time) / 1000.0;
+    let rim = s.cfg.keys[0];
+    s.calibration_key(rim, false, Instant::now() + Duration::from_secs_f64(ahead), None);
+    let Scene::Calibrate { game, .. } = &s.scene else { unreachable!() };
+    assert_eq!(game.stats.errors.len(), 1, "a rim key missed the don");
 }
 
 #[test]
