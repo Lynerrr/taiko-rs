@@ -75,10 +75,10 @@ fn tool(tries: &[(&str, &[&str])], input: Option<&[u8]>) -> Option<String> {
                 // wl-copy stays behind to serve it; don't wait for it.
                 return Some(String::new());
             }
-            if let Ok(out) = c.stdin(Stdio::null()).output() {
-                if out.status.success() {
-                    return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-                }
+            if let Ok(out) = c.stdin(Stdio::null()).output()
+                && out.status.success()
+            {
+                return Some(String::from_utf8_lossy(&out.stdout).into_owned());
             }
         }
     }
