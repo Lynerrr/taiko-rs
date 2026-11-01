@@ -167,10 +167,10 @@ impl Dispatch<WlDataDevice, ()> for Dnd {
 
 impl Dispatch<WlDataOffer, Files> for Dnd {
     fn event(_: &mut Self, _: &WlDataOffer, event: wl_data_offer::Event, files: &Files, _: &Connection, _: &QueueHandle<Self>) {
-        if let wl_data_offer::Event::Offer { mime_type } = event {
-            if mime_type == URI_LIST {
-                files.0.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
+        if let wl_data_offer::Event::Offer { mime_type } = event
+            && mime_type == URI_LIST
+        {
+            files.0.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
