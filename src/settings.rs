@@ -76,6 +76,11 @@ pub enum Item {
     LegacyMenu,
     /// The song's notes behind the main menu.
     MenuNotes,
+    /// The game smaller than the screen, black around it: on or off, its size, and where it sits.
+    Letterbox,
+    LetterboxSize,
+    LetterboxX,
+    LetterboxY,
     /// Clears every map's own offset, on a second press.
     ResetMapOffsets,
     /// Shows the first launch's guide again.
@@ -100,7 +105,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 115] = [
+pub const ITEMS: [(&str, Item); 119] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::HiddenMaps),
@@ -189,6 +194,10 @@ pub const ITEMS: [(&str, Item); 115] = [
     ("VIDEO", Item::Fullscreen),
     ("VIDEO", Item::WindowSize),
     ("VIDEO", Item::Animations),
+    ("VIDEO", Item::Letterbox),
+    ("VIDEO", Item::LetterboxSize),
+    ("VIDEO", Item::LetterboxX),
+    ("VIDEO", Item::LetterboxY),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinParts),
     ("SKIN", Item::SkinFolder),
@@ -286,6 +295,7 @@ pub fn group_heading(item: Item) -> Option<&'static str> {
         Item::Hotkey(19) => tr!("Anywhere", "どこでも", "Везде"),
         Item::VsyncCompensation => tr!("Vsync", "垂直同期", "Vsync"),
         Item::NoteColours => tr!("Colours", "色", "Цвета"),
+        Item::Letterbox => tr!("Black bars", "黒帯", "Чёрные поля"),
         Item::NotifyMessages => tr!("Notifications", "通知", "Уведомления"),
         Item::UpdateChannel => tr!("Updates", "アップデート", "Обновления"),
         _ => return None,
@@ -393,6 +403,10 @@ impl Item {
             Item::Animations => tr!("UI animations", "UIのアニメーション", "Анимации интерфейса"),
             Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
             Item::LegacyMenu => tr!("Legacy menu", "旧メニュー", "Старое меню"),
+            Item::Letterbox => tr!("Letterbox", "レターボックス", "Чёрные поля (letterbox)"),
+            Item::LetterboxSize => tr!("Letterbox resolution", "レターボックスの解像度", "Разрешение с полями"),
+            Item::LetterboxX => tr!("Letterbox position: sideways", "レターボックスの位置: 横", "Положение: по горизонтали"),
+            Item::LetterboxY => tr!("Letterbox position: up and down", "レターボックスの位置: 縦", "Положение: по вертикали"),
             Item::MenuNotes => tr!("Notes behind the main menu", "メインメニューの背景のノーツ", "Ноты за главным меню"),
             Item::ResetMapOffsets => tr!("Reset map offsets", "譜面のオフセットをリセット", "Сбросить оффсеты карт"),
             Item::Guide => tr!("First steps guide", "はじめてのガイド", "Первые шаги"),
@@ -432,7 +446,9 @@ impl Item {
             | Item::AccentHue
             | Item::VsyncTune
             | Item::DonColour
-            | Item::KatColour => Kind::Value,
+            | Item::KatColour
+            | Item::LetterboxX
+            | Item::LetterboxY => Kind::Value,
             Item::PlayfieldPreset
             | Item::TouchLayout
             | Item::Screenshots
@@ -448,6 +464,7 @@ impl Item {
             | Item::AutoplayStyle
             | Item::AutoplayBinding
             | Item::WindowSize
+            | Item::LetterboxSize
             | Item::Accent
             | Item::SongsFolder
             | Item::DataFolder => Kind::List,
@@ -477,6 +494,7 @@ impl Item {
             | Item::Animations
             | Item::Splash
             | Item::LegacyMenu
+            | Item::Letterbox
             | Item::MenuNotes
             | Item::CheckUpdates
             | Item::Fullscreen
@@ -753,6 +771,26 @@ impl Item {
                 "The short guide shown on the first launch.",
                 "初回起動時の短いガイドをもう一度表示します。",
                 "Короткая подсказка с первого запуска."
+            ),
+            Item::Letterbox => tr!(
+                "In fullscreen, the whole game runs at a resolution of your own with black around it. Turning it on goes fullscreen.",
+                "フルスクリーンで、ゲーム全体を好きな解像度で動かし、周りを黒くします。オンにするとフルスクリーンになります。",
+                "В полном экране вся игра идёт в своём разрешении, а вокруг чёрное. Включение переводит в полный экран."
+            ),
+            Item::LetterboxSize => tr!(
+                "Every resolution the monitor reports, custom ones from the graphics driver too, or type your own.",
+                "モニターが報告するすべての解像度 (ドライバーで追加したものも含む)。自分で入力もできます。",
+                "Все разрешения, что отдаёт монитор, включая кастомные из драйвера. Или введите своё."
+            ),
+            Item::LetterboxX => tr!(
+                "Where the game sits between the sides of the screen: -100 left, 0 the middle, 100 right.",
+                "画面の左右のどこに置くか: -100 左、0 中央、100 右。",
+                "Где игра стоит по ширине экрана: -100 слева, 0 по центру, 100 справа."
+            ),
+            Item::LetterboxY => tr!(
+                "Where the game sits between the top and the bottom: -100 top, 0 the middle, 100 bottom.",
+                "画面の上下のどこに置くか: -100 上、0 中央、100 下。",
+                "Где игра стоит по высоте экрана: -100 сверху, 0 по центру, 100 снизу."
             ),
             Item::LegacyMenu => tr!(
                 "The old layout: straight to song select with tabs along the top, no main menu, and Esc asks to quit.",
@@ -1351,9 +1389,11 @@ impl SettingsUi {
         ((x - left) / w.max(1.0)).clamp(0.0, 1.0)
     }
 
-    /// Whether `item` is in the list (krokodil_koban mode is only for them).
+    /// Whether `item` is in the list (krokodil_koban mode is only for them, and a phone's screen
+    /// has no use for black bars).
     pub fn shows(&self, item: Item) -> bool {
-        item != Item::KrokodilKoban || self.krokodil
+        let letterbox = matches!(item, Item::Letterbox | Item::LetterboxSize | Item::LetterboxX | Item::LetterboxY);
+        (item != Item::KrokodilKoban || self.krokodil) && !(letterbox && cfg!(target_os = "android"))
     }
 
     /// Section of the selected item.

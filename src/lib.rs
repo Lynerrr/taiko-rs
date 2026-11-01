@@ -526,8 +526,12 @@ struct State {
     mouse: (f64, f64),
     grip: Option<(Grip, (f64, f64), Area)>,
     hover: Option<Grip>,
+    /// The game's size in pixels: the window, or its part of it with Letterbox on.
     window_w: f32,
     window_h: f32,
+    /// The window's own size, and where the game is in it with Letterbox on.
+    real_window: (f32, f32),
+    letterbox: Option<[u32; 4]>,
     /// Shapes of this frame to clip to the playfield area.
     frame_clip: Option<(std::ops::Range<usize>, Area)>,
     /// Song select preview: background, preview music, autoplay preview.
@@ -2381,6 +2385,44 @@ impl State {
         }
     }
 
+    /// The window has a new size.
+    fn set_window(&mut self, w: f32, h: f32) {
+        self.real_window = (w, h);
+        self.window_w = w;
+        self.window_h = h;
+    }
+
+    /// Works out where the game goes in the window, for this frame.
+    fn sync_letterbox(&mut self) -> Option<[u32; 4]> {
+        let (w, h) = self.real_window;
+        let on = self.cfg.letterbox && self.fullscreen;
+        self.letterbox = layout::letterbox((w as u32, h as u32), self.cfg.letterbox_size, self.cfg.letterbox_pos).filter(|_| on);
+        let (gw, gh) = self.letterbox.map_or((w, h), |[_, _, gw, gh]| (gw as f32, gh as f32));
+        if (gw, gh) != (self.window_w, self.window_h) {
+            (self.window_w, self.window_h) = (gw, gh);
+            self.refresh_presets();
+        }
+        self.letterbox
+    }
+
+    /// A point of the window as the game sees it: from the game's own corner.
+    fn to_game(&self, x: f64, y: f64) -> (f64, f64) {
+        self.letterbox.map_or((x, y), |[gx, gy, ..]| (x - gx as f64, y - gy as f64))
+    }
+
+    /// The window's size in pixels.
+    fn window_px(&self) -> (f32, f32) {
+        if self.letterbox.is_some() { self.real_window } else { (self.window_w, self.window_h) }
+    }
+
+    /// The resolutions Letterbox can use: all the monitor reports, custom ones from the driver
+    /// too, and the usual ones, grouped by aspect ratio.
+    fn letterbox_sizes(&self) -> Vec<(u32, u32)> {
+        let (mw, mh) = self.monitor_size;
+        let sizes = layout::presets(&self.monitor_modes, mw, mh);
+        layout::group_presets(&sizes, self.monitor_size).into_iter().flat_map(|(_, l)| l).collect()
+    }
+
     /// How a setting's row shows its value.
     fn setting_control(&self, item: Item) -> settings::Control {
         use settings::Control;
@@ -2524,6 +2566,10 @@ impl State {
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
             Item::LegacyMenu => on(!c.main_menu),
+            Item::Letterbox => on(c.letterbox),
+            Item::LetterboxSize => format!("{}x{}", c.letterbox_size.0, c.letterbox_size.1),
+            Item::LetterboxX => format!("{:+.0}%", c.letterbox_pos.0),
+            Item::LetterboxY => format!("{:+.0}%", c.letterbox_pos.1),
             Item::MenuNotes => on(c.menu_notes),
             Item::CheckUpdates => on(c.check_updates),
             Item::Update => {
@@ -2551,10 +2597,13 @@ impl State {
             Item::KrokodilKoban => String::new(),
             Item::Fullscreen => on(self.fullscreen),
             Item::WindowSize if self.fullscreen => {
-                let (w, h) = (self.window_w, self.window_h);
+                let (w, h) = self.window_px();
                 tr!("fullscreen ({w:.0}x{h:.0})", "フルスクリーン ({w:.0}x{h:.0})", "полный экран ({w:.0}x{h:.0})";)
             }
-            Item::WindowSize => format!("{:.0}x{:.0}", self.window_w, self.window_h),
+            Item::WindowSize => {
+                let (w, h) = self.window_px();
+                format!("{w:.0}x{h:.0}")
+            }
             Item::Calibrate => enter_to_start().into(),
             Item::Guide => enter_to_start().into(),
             Item::ResetMapOffsets if self.map_offsets.is_empty() => tr!("none set", "なし", "их нет").into(),
@@ -2728,6 +2777,23 @@ impl State {
                 }
             }
             Item::MenuNotes => self.cfg.menu_notes = !self.cfg.menu_notes,
+            Item::Letterbox => {
+                self.cfg.letterbox = !self.cfg.letterbox;
+                if self.cfg.letterbox && !self.fullscreen {
+                    self.toggle_fullscreen(window);
+                }
+            }
+            Item::LetterboxSize => {
+                let sizes = self.letterbox_sizes();
+                let area = |&(w, h): &(u32, u32)| w as u64 * h as u64;
+                let now = area(&self.cfg.letterbox_size);
+                let next = if dir > 0 { sizes.iter().filter(|s| area(s) > now).min_by_key(|s| area(s)) } else { sizes.iter().filter(|s| area(s) < now).max_by_key(|s| area(s)) };
+                if let Some(&size) = next {
+                    self.cfg.letterbox_size = size;
+                }
+            }
+            Item::LetterboxX => self.cfg.letterbox_pos.0 = (self.cfg.letterbox_pos.0 + 5.0 * dir as f32).clamp(-100.0, 100.0),
+            Item::LetterboxY => self.cfg.letterbox_pos.1 = (self.cfg.letterbox_pos.1 + 5.0 * dir as f32).clamp(-100.0, 100.0),
             Item::CheckUpdates => self.cfg.check_updates = !self.cfg.check_updates,
             // Acts on Enter in `settings_key`.
             Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout => return,
@@ -2879,6 +2945,14 @@ impl State {
                 let (mw, mh) = self.monitor_size;
                 (names, current, tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}";))
             }
+            Item::LetterboxSize => {
+                let sizes = self.letterbox_sizes();
+                let type_size = tr!("Type a size", "サイズを入力", "Ввести размер").to_string();
+                let names = std::iter::once(type_size).chain(sizes.iter().map(|&(w, h)| format!("{w} x {h}   {}", layout::aspect_name(w, h)))).collect();
+                let current = sizes.iter().position(|&s| s == c.letterbox_size).map(|i| i + 1);
+                let (mw, mh) = self.monitor_size;
+                (names, current, tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}";))
+            }
             Item::InterfaceHides => {
                 let names = hud::Part::ALL.iter().map(|&p| format!("{}  {}", if c.interface_hides.has(p) { "[x]" } else { "[ ]" }, p.label())).collect();
                 (names, None, tr!("hidden when toggled off", "オフにした時に隠すもの", "прячется при выключении").into())
@@ -2972,6 +3046,15 @@ impl State {
                 self.start_edit(Item::WindowSize);
                 return;
             }
+            Item::LetterboxSize if i == 0 => {
+                self.start_edit(Item::LetterboxSize);
+                return;
+            }
+            Item::LetterboxSize => {
+                if let Some(&size) = self.letterbox_sizes().get(i - 1) {
+                    self.cfg.letterbox_size = size;
+                }
+            }
             Item::WindowSize => {
                 self.window_request = self.window_sizes().get(i - 1).copied();
                 return;
@@ -3043,6 +3126,9 @@ impl State {
     fn start_edit(&mut self, item: Item) {
         let c = &self.cfg;
         let text = match item {
+            Item::LetterboxSize => format!("{}x{}", c.letterbox_size.0, c.letterbox_size.1),
+            Item::LetterboxX => format!("{:.0}", c.letterbox_pos.0),
+            Item::LetterboxY => format!("{:.0}", c.letterbox_pos.1),
             Item::ScrollSpeed => format!("{:.2}", c.scroll_speed),
             Item::Rate => format!("{:.2}", c.rate),
             Item::Offset => format!("{:.0}", c.offset_ms),
@@ -3105,6 +3191,8 @@ impl State {
         let percent = || number().map(|n| (n / 100.0).clamp(0.0, 1.0) as f32);
         let c = &mut self.cfg;
         match item {
+            Item::LetterboxX => c.letterbox_pos.0 = number()?.round().clamp(-100.0, 100.0) as f32,
+            Item::LetterboxY => c.letterbox_pos.1 = number()?.round().clamp(-100.0, 100.0) as f32,
             Item::ScrollSpeed => c.scroll_speed = ((number()? * 100.0).round() / 100.0).clamp(0.3, 4.0),
             Item::Rate => c.rate = ((number()? * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
             Item::Offset => c.offset_ms = number()?.round().clamp(-1000.0, 1000.0),
@@ -3124,6 +3212,17 @@ impl State {
                 let t = text.trim();
                 let hex = if t.starts_with('#') { t.to_string() } else { format!("#{t}") };
                 c.accent = render::parse_accent(t).or_else(|| render::parse_accent(&hex)).ok_or(tr!("type a colour like #ff8800", "#ff8800のように色を入力", "введите цвет вроде #ff8800"))?;
+            }
+            Item::LetterboxSize => {
+                let (w, h) = layout::parse_size(text).ok_or(tr!("type a size like 1280x720", "1280x720のようにサイズを入力", "введите размер вроде 1280x720"))?;
+                let (mw, mh) = self.monitor_size;
+                if w > mw || h > mh {
+                    return Err(tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})";));
+                }
+                if w < MIN_WINDOW.0 as u32 || h < MIN_WINDOW.1 as u32 {
+                    return Err(tr!("at least {}x{}", "{}x{}以上", "минимум {}x{}"; MIN_WINDOW.0, MIN_WINDOW.1));
+                }
+                c.letterbox_size = (w, h);
             }
             Item::WindowSize => {
                 let (w, h) = layout::parse_size(text).ok_or(tr!("type a size like 1280x720", "1280x720のようにサイズを入力", "введите размер вроде 1280x720"))?;
@@ -9916,6 +10015,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             if let Some((w, h)) = s.want_size.take() {
                 renderer.resize(w, h);
             }
+            renderer.letterbox = s.sync_letterbox();
             // Switch present mode when entering/leaving songs (menus can stay on vsync). Compare
             // with what was requested, not what was granted, so an unsupported mode that falls
             // back isn't re-applied every frame.
@@ -10217,10 +10317,16 @@ impl App {
             }
             WindowEvent::Touch(t) => {
                 let at = Instant::now();
-                lock(&self.state).touch(t.id, t.phase, t.location.x, t.location.y, at, self.window.as_deref());
+                let mut s = lock(&self.state);
+                let (x, y) = s.to_game(t.location.x, t.location.y);
+                s.touch(t.id, t.phase, x, y, at, self.window.as_deref());
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let icon = lock(&self.state).mouse_moved(position.x, position.y);
+                let icon = {
+                    let mut s = lock(&self.state);
+                    let (x, y) = s.to_game(position.x, position.y);
+                    s.mouse_moved(x, y)
+                };
                 if icon != self.cursor {
                     self.cursor = icon;
                     self.set_cursor(icon);
@@ -10278,8 +10384,7 @@ impl App {
         self.read_monitor();
         let mut s = lock(&self.state);
         s.want_size = Some((size.width, size.height));
-        s.window_w = size.width as f32;
-        s.window_h = size.height as f32;
+        s.set_window(size.width as f32, size.height as f32);
         s.refresh_presets();
         // Out of fullscreen, the size is remembered for the next start (saved once it stops
         // changing: dragging an edge resizes many times a second).
@@ -10340,8 +10445,7 @@ impl ApplicationHandler<UserEvent> for App {
                 Ok(surface) => {
                     let mut s = lock(&self.state);
                     s.surface_swap = Some((Some(surface), size.width, size.height));
-                    s.window_w = size.width as f32;
-                    s.window_h = size.height as f32;
+                    s.set_window(size.width as f32, size.height as f32);
                     s.set_background(false);
                 }
                 Err(e) => eprintln!("can't draw to the new window: {e}"),
@@ -10401,8 +10505,7 @@ impl ApplicationHandler<UserEvent> for App {
         {
             let mut s = lock(&self.state);
             s.adapter = renderer.adapter_name.clone();
-            s.window_w = window.inner_size().width as f32;
-            s.window_h = window.inner_size().height as f32;
+            s.set_window(window.inner_size().width as f32, window.inner_size().height as f32);
             s.monitor_modes = window
                 .current_monitor()
                 .map(|m| m.video_modes().map(|v| (v.size().width, v.size().height)).collect())
@@ -10689,6 +10792,8 @@ impl State {
             hover: None,
             window_w: 1280.0,
             window_h: 720.0,
+            real_window: (1280.0, 720.0),
+            letterbox: None,
             frame_clip: None,
             guides: Vec::new(),
             readout_rect: None,

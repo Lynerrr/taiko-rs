@@ -237,6 +237,11 @@ pub struct Config {
     pub fullscreen: bool,
     /// The window's size out of fullscreen (pixels), as last left; None = the default.
     pub window_size: Option<(u32, u32)>,
+    /// In fullscreen, the game at `letterbox_size` with black around it, moved from the centre by
+    /// `letterbox_pos` (percent, -100 to 100).
+    pub letterbox: bool,
+    pub letterbox_size: (u32, u32),
+    pub letterbox_pos: (f32, f32),
     /// Where the game's data was moved to (see `data_folder()`); None = the usual places.
     pub data_folder: Option<PathBuf>,
     /// Left rim, left centre, right centre, right rim.
@@ -331,6 +336,9 @@ impl Default for Config {
             show_fps: true,
             fullscreen: true,
             window_size: None,
+            letterbox: false,
+            letterbox_size: (1280, 720),
+            letterbox_pos: (0.0, 0.0),
             data_folder: None,
             animations: true,
             splash: true,
@@ -634,10 +642,14 @@ impl Config {
     }
 
     pub fn load() -> Config {
-        let mut cfg = Config::default();
-        let Some(path) = config_path() else { return cfg };
-        let Ok(text) = std::fs::read_to_string(&path) else { return cfg };
-        cfg.existed = true;
+        let Some(path) = config_path() else { return Config::default() };
+        let Ok(text) = std::fs::read_to_string(&path) else { return Config::default() };
+        Config::parse_text(&text)
+    }
+
+    /// The settings in the config file's `text`.
+    pub(crate) fn parse_text(text: &str) -> Config {
+        let mut cfg = Config { existed: true, ..Config::default() };
         let mut osu_scroll_speed = false;
         for line in text.lines() {
             let line = line.trim();
@@ -669,6 +681,10 @@ impl Config {
                 "show_fps" => cfg.show_fps = v == "true",
                 "fullscreen" => cfg.fullscreen = v != "false",
                 "window_size" => cfg.window_size = crate::layout::parse_size(v),
+                "letterbox" => cfg.letterbox = v == "true",
+                "letterbox_size" => cfg.letterbox_size = crate::layout::parse_size(v).unwrap_or(cfg.letterbox_size),
+                "letterbox_x" => cfg.letterbox_pos.0 = v.parse().unwrap_or(0.0),
+                "letterbox_y" => cfg.letterbox_pos.1 = v.parse().unwrap_or(0.0),
                 "data_folder" => cfg.data_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
                 "animations" => cfg.animations = v != "false",
                 "splash" => cfg.splash = v != "false",
@@ -770,11 +786,8 @@ impl Config {
         cfg
     }
 
-    pub fn save(&self) {
-        let Some(path) = config_path() else { return };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
+    /// The settings as the config file has them.
+    pub(crate) fn to_text(&self) -> String {
         let keys: Vec<String> = self.keys.iter().map(|k| key_name(*k)).collect();
         let mut out = format!(
             "# taiko.rs settings\n\
@@ -922,6 +935,11 @@ impl Config {
             "# with vsync, draw notes where they'll be once the frame is on screen; ms added to that\nvsync_compensation = {}\nvsync_tune_ms = {:.0}\n",
             self.vsync_compensation, self.vsync_tune_ms
         ));
+        let (lw, lh) = self.letterbox_size;
+        out.push_str(&format!(
+            "# in fullscreen, the game at this size with black around it, moved from the centre (percent)\nletterbox = {}\nletterbox_size = {lw}x{lh}\nletterbox_x = {}\nletterbox_y = {}\n",
+            self.letterbox, self.letterbox_pos.0, self.letterbox_pos.1
+        ));
         let window = self.window_size.map(|(w, h)| format!("{w}x{h}")).unwrap_or_default();
         out.push_str(&format!("# the window's size out of fullscreen (empty = 1280x720)\nwindow_size = {window}\n"));
         let data = self.data_folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
@@ -970,6 +988,15 @@ impl Config {
         for s in &self.songs {
             out.push_str(&format!("songs = {}\n", s.display()));
         }
+        out
+    }
+
+    pub fn save(&self) {
+        let Some(path) = config_path() else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let mut out = self.to_text();
         keep_unknown(&mut out, &std::fs::read_to_string(&path).unwrap_or_default());
         let _ = std::fs::write(path, out);
     }

@@ -34,6 +34,7 @@ fn words(item: Item) -> &'static str {
         Item::ShowFps => "fps framerate counter фпс кадры счетчик",
         Item::HalfResolution => "performance weak gpu lag производительность слабый лаги",
         Item::Fullscreen | Item::WindowSize => "resolution borderless windowed разрешение окно",
+        Item::Letterbox | Item::LetterboxSize | Item::LetterboxX | Item::LetterboxY => "resolution custom black bars driver window разрешение кастомное черные полосы окно драйвер",
         Item::PlayfieldArea | Item::PlayfieldPreset | Item::PlayfieldReset | Item::ShowPlayfieldSize | Item::WheelResize => "size position resolution tablet размер позиция разрешение",
         Item::Skin | Item::SkinParts | Item::SkinFolder => "theme notes look тема внешний вид ноты",
         Item::Accent | Item::AccentHue => "theme color hue тема цвет оттенок",
