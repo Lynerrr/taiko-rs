@@ -396,6 +396,14 @@ fn assert_every_screen_fits() {
     s.settings_ui.clear_search();
     s.volume.touch(Instant::now());
     check(&mut s, "volume lane", &mut out);
+    let was = s.mapinfo.take();
+    let mut info = mapinfo::MapInfo::spawn(vec![(0, PathBuf::from("/nonexistent/a.osu"), 0, 0)], 1, true);
+    info.started -= Duration::from_secs(60);
+    info.total.store(123_456, std::sync::atomic::Ordering::Relaxed);
+    s.mapinfo = Some(info);
+    check(&mut s, "analysing maps", &mut out);
+    s.mapinfo.take().unwrap().hold(false);
+    s.mapinfo = was;
     let skins = vec!["built-in".into(), s.cfg.skin.clone(), "- Rafis 2017 Remake (Taiko HD) by somebody".into()];
     s.settings_ui.choices = Some(settings::Choices::new(Item::Skin, skins, Some(1), "2 installed".into()));
     check(&mut s, "skin picker", &mut out);

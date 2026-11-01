@@ -105,8 +105,6 @@ pub struct Select {
     pub picker: Option<usize>,
     /// The open list is the sort modes, not the collections.
     pub sorting: bool,
-    /// Shown in the header while the analysis for the current sort is running.
-    pub info_progress: String,
     /// Files read so far while the library is still being scanned.
     pub scanning: Option<usize>,
     /// The folder dialog is open (from the button shown when there are no maps at all).
@@ -322,7 +320,6 @@ impl Select {
             collection: None,
             picker: None,
             sorting: false,
-            info_progress: String::new(),
             scanning: None,
             picking_folder: false,
             rate_label: String::new(),
@@ -1221,7 +1218,7 @@ impl Select {
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
         let groups = &self.groups;
-        let summary = format!("{} songs, {} maps  |  {mode}{}{}", groups.len(), self.visible.len(), self.rate_label, self.info_progress);
+        let summary = format!("{} songs, {} maps  |  {mode}{}", groups.len(), self.visible.len(), self.rate_label);
         let lw = Self::list_width(w, self.list_share);
         let legacy = self.legacy;
         // The row with the search: under the tabs, or at the top beside the way back.
