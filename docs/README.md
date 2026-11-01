@@ -122,7 +122,7 @@ Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
 | D / F / J / K | left rim (kat) / left centre (don) / right centre / right rim |
 | Enter, ↑/↓, ←/→ | play, select difficulty, jump between sets |
 | type, Backspace | search |
-| Tab | switch between the SONGS and SETTINGS tabs |
+| Tab | switch between the songs and settings |
 | F1 / the Mods button | mod select (song select; the host in a multiplayer lobby) |
 | [ / ] (Shift: ×5) | speed (rate) −/+ 0.05× on song select; host sets the match rate in the lobby |
 | F5 / F6 (rebindable) | previous / next playfield resolution preset, anywhere |
@@ -148,7 +148,9 @@ Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
 | F10 / F11 | FPS overlay / fullscreen (the game starts fullscreen; F11 is remembered) |
 
-**Mouse:** everything can also be clicked. The top tabs switch screens; in the song list the
+**Mouse:** everything can also be clicked. The back button at the top leaves a screen and the
+buttons along the bottom of song select open the others (Settings > System > *Legacy menu* brings
+back the old tabs, without the main menu); in the song list the
 first click selects a song or difficulty and clicking the selected difficulty plays it; settings
 rows select on the first click and toggle/open on the second, and `<` / `>` step values; the pause
 menu follows the pointer; results, calibration and the multiplayer menu, lobby and results have

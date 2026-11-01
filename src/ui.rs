@@ -184,6 +184,12 @@ pub struct Select {
     rng: u64,
     /// The song list's share of the width (`Config::song_list_share`).
     pub list_share: f32,
+    /// The Legacy menu setting: tabs on top, keys spelled out at the bottom.
+    pub legacy: bool,
+    /// The way back leads to the main menu, not to a lobby.
+    pub to_menu: bool,
+    /// A mod's customization is open over the top of the screen: no way back to show.
+    pub covered: bool,
 }
 
 /// A play's letter in its colour, the same as on the website.
@@ -251,8 +257,10 @@ const THROW_TAU: f32 = 130.0;
 
 /// Length of a song list transition.
 const LIST_ANIM_MS: f32 = 200.0;
-/// Top and bottom of the song list (virtual units).
-const LIST_TOP: f32 = 86.0;
+/// Top and bottom of the song list (virtual units): with the tabs of the Legacy menu above it,
+/// and without.
+const LIST_TOP_LEGACY: f32 = 86.0;
+const LIST_TOP: f32 = 52.0;
 /// The song list's share of the width: least, most and usual (dragging its edge).
 pub const LIST_SHARE: (f32, f32, f32) = (0.3, 0.7, 0.52);
 /// The narrowest the song list and the panel beside it get (virtual units).
@@ -299,6 +307,9 @@ impl Select {
         let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9e37_79b9_7f4a_7c15);
         let mut s = Select {
             list_share: LIST_SHARE.2,
+            legacy: false,
+            to_menu: true,
+            covered: false,
             filter: String::new(),
             searching: false,
             sort: SortMode::Artist,
@@ -729,6 +740,10 @@ impl Select {
         &mut free.glide
     }
 
+    fn list_top(&self) -> f32 {
+        if self.legacy { LIST_TOP_LEGACY } else { LIST_TOP }
+    }
+
     /// The wheel: moves the list `notches` on, the selection staying where it is.
     pub fn scroll_by(&mut self, notches: i32, library: &[Entry]) {
         let max = self.scroll_max;
@@ -1142,8 +1157,9 @@ impl Select {
     /// The scrollbar and osu!'s right-click scrolling: the pointer's height (`y`, virtual units)
     /// is where the list is, all of it, closed headings too. The thumb stays under the pointer.
     pub fn scroll_to(&mut self, y: f32, library: &[Entry]) {
-        let (track, thumb) = (LIST_BOTTOM - LIST_TOP, self.thumb);
-        let frac = ((y - LIST_TOP - thumb / 2.0) / (track - thumb).max(1.0)).clamp(0.0, 1.0);
+        let top = self.list_top();
+        let (track, thumb) = (LIST_BOTTOM - top, self.thumb);
+        let frac = ((y - top - thumb / 2.0) / (track - thumb).max(1.0)).clamp(0.0, 1.0);
         let max = self.scroll_max;
         self.free(library, SCRUB_TAU).goal = frac * max;
     }
@@ -1205,9 +1221,27 @@ impl Select {
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
         let groups = &self.groups;
-        crate::settings::tab_bar(c, 0, &format!("{} songs, {} maps  |  {mode}{}{}", groups.len(), self.visible.len(), self.rate_label, self.info_progress));
-
+        let summary = format!("{} songs, {} maps  |  {mode}{}{}", groups.len(), self.visible.len(), self.rate_label, self.info_progress);
         let lw = Self::list_width(w, self.list_share);
+        let legacy = self.legacy;
+        // The row with the search: under the tabs, or at the top beside the way back.
+        let row = if legacy { 54.0 } else { 20.0 };
+        let mut left = 24.0;
+        if legacy {
+            crate::settings::tab_bar(c, 0, &summary);
+        } else {
+            let back = if self.to_menu { tr!("< MENU", "< メニュー", "< МЕНЮ") } else { tr!("< BACK", "< 戻る", "< НАЗАД") };
+            if self.covered {
+                left += Canvas::text_width(8.0, back) + 26.0;
+            } else {
+                left += crate::settings::back_button(c, row + 2.0, back, Hit::ToMenu) + 6.0;
+            }
+            // Over the panel beside the list, where there is one.
+            let (x, right) = (24.0 + lw + 12.0, w - 24.0);
+            if right - x > 60.0 {
+                c.text_right(right, row + 8.0, 7.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(7.0, right - x, &summary));
+            }
+        }
         // Mods, sort and collection buttons share the search row, right to left. On a narrow
         // screen the widest of them switches to a shorter label until the search box gets at
         // least SEARCH_MIN; past that the widest give up room (their labels get cut).
@@ -1218,13 +1252,16 @@ impl Select {
             vec![format!("Mods: {}", self.mods_label), format!("Mods ({})", self.mods_label.len() / 2)]
         };
         let sort = self.sort.name();
-        let mut buttons = vec![(mods, Hit::ModsButton, !self.mods_label.is_empty()), (vec![format!("Sort: {sort}"), sort.to_string()], Hit::SortList, false)];
+        let mut buttons = vec![(vec![format!("Sort: {sort}"), sort.to_string()], Hit::SortList, false)];
+        if legacy {
+            buttons.insert(0, (mods.clone(), Hit::ModsButton, !self.mods_label.is_empty()));
+        }
         if !self.collections.is_empty() {
             let name = self.collection.and_then(|c| self.collections.get(c)).map_or("all", |(name, _)| name.as_str());
             buttons.push((vec![format!("Collection: {name}"), name.to_string()], Hit::CollectionPick, self.collection.is_some()));
         }
         let width = |label: &str| Canvas::text_width(7.0, label) + 20.0;
-        let budget = lw - SEARCH_MIN - 6.0 * buttons.len() as f32;
+        let budget = lw - (left - 24.0) - SEARCH_MIN - 6.0 * buttons.len() as f32;
         let mut pick = vec![0; buttons.len()];
         loop {
             let widths: Vec<f32> = buttons.iter().zip(&pick).map(|((labels, ..), &k)| width(&labels[k])).collect();
@@ -1242,12 +1279,12 @@ impl Select {
         for ((label, (_, hit, accent)), nw) in labels.iter().zip(&buttons).zip(natural) {
             let bw = nw.min(cap);
             bx -= bw;
-            c.button(bx, 56.0, bw, 20.0, label, 7.0, *hit, *accent);
+            c.button(bx, row + 2.0, bw, 20.0, label, 7.0, *hit, *accent);
             bx -= 6.0;
         }
-        let search_w = bx - 24.0;
+        let search_w = bx - left;
         let edge = if self.searching { rgba(crate::render::accent(), 1.0) } else { rgba(0x3a3a4e, 1.0) };
-        c.round_rect([24.0, 54.0], [search_w, 24.0], 6.0, rgba(0x23232f, 0.9), edge, 1.0);
+        c.round_rect([left, row], [search_w, 24.0], 6.0, rgba(0x23232f, 0.9), edge, 1.0);
         let room = search_w - 20.0;
         let caret = if self.searching { "_" } else { "" };
         let (search, search_col) = if self.filter.is_empty() {
@@ -1259,8 +1296,8 @@ impl Select {
             let text = if Canvas::text_width(10.0, &full) <= room { full } else { Canvas::fit_end(10.0, room, &format!("{}{caret}", self.filter)) };
             (text, 0xffffff)
         };
-        c.text(34.0, 61.0, 10.0, rgba(search_col, 1.0), &search);
-        c.hit(24.0, 54.0, search_w, 24.0, Hit::TextField);
+        c.text(left + 10.0, row + 7.0, 10.0, rgba(search_col, 1.0), &search);
+        c.hit(left, row, search_w, 24.0, Hit::TextField);
 
         if let Some(n) = self.scanning {
             c.text_centered(24.0 + lw / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "Scanning your Songs folder...");
@@ -1299,7 +1336,7 @@ impl Select {
             Diff(usize),
         }
         let _ = dt_ms;
-        let (top, bottom) = (LIST_TOP, LIST_BOTTOM);
+        let (top, bottom) = (self.list_top(), LIST_BOTTOM);
         let view = bottom - top;
         // Where everything ends up: the selected song open, the others closed.
         let open_start = self.group_of.get(self.cursor).map(|&g| groups[g].start);
@@ -1545,12 +1582,29 @@ impl Select {
             c.button(24.0 + (lw - bw) / 2.0, bottom - 24.0, bw, 20.0, label, 7.0, Hit::ListBack, true);
         }
 
+        if !legacy {
+            let random = tr!("Random", "ランダム", "Случайная");
+            let (download, settings, online) = (tr!("Download", "ダウンロード", "Загрузка"), tr!("Settings", "設定", "Настройки"), tr!("Multiplayer", "マルチ", "Мультиплеер"));
+            let accent_mods = !self.mods_label.is_empty();
+            c.button_row(
+                444.0,
+                &[
+                    (&mods[0], Hit::ModsButton, accent_mods),
+                    (random, Hit::Key(KeyCode::F2), false),
+                    (download, Hit::Tab(3), false),
+                    (settings, Hit::Tab(1), false),
+                    (online, Hit::Tab(2), false),
+                ],
+            );
+        }
         let hints = tr!(
             "Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit",
             "Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替え  Ctrl+L コレクション  Tab 設定  Esc 終了",
             "Enter играть  Вверх/вниз сложность  Влево/вправо песня  Колесо или правый драг: прокрутка  F1 моды  F2 случайная  [ ] рейт  Ctrl+S сортировка  Ctrl+L коллекция  Tab настройки  Esc выход"
         );
-        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hints));
+        if legacy {
+            c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hints));
+        }
         // The status line gives way (smaller) when the hints above come out taller.
         let status_size = Canvas::fit_height(7.0, 2.0 * (469.5 - (455.5 + Canvas::text_height(7.0) / 2.0) - 3.0));
         c.text(24.0, 466.0 + (7.0 - status_size) / 2.0, status_size, rgba(0x55556a, 1.0), &Canvas::fit(status_size, w - 48.0, status));

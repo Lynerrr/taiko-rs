@@ -301,6 +301,8 @@ pub struct Frame<'a> {
     pub beat: Option<(f64, f64)>,
     /// The music is in a kiai, and the menu's to join in.
     pub kiai: bool,
+    /// The song's notes for the background.
+    pub ghosts: Option<crate::menu_notes::View<'a>>,
     pub song: Option<&'a str>,
     pub hint: &'a str,
     pub maps: usize,
@@ -331,6 +333,8 @@ pub struct Menu {
     sparks: Vec<Spark>,
     /// For where the sparks go.
     rng: u32,
+    /// How far the universes have moved along the routes behind the menu.
+    universe: usize,
     arts: Box<[Art; ITEMS.len()]>,
 }
 
@@ -344,7 +348,7 @@ struct Spark {
 
 impl Menu {
     pub fn new() -> Menu {
-        Menu { selected: 0, shown: 0.0, clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, arts: Box::new(ITEMS.map(Item::art)) }
+        Menu { selected: 0, shown: 0.0, clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
     }
 
     fn index(&self) -> usize {
@@ -420,6 +424,9 @@ impl Menu {
         let pulse = if render::animations() { (1.0 - phase).powi(3) } else { 0.0 };
         self.feel_kiai(f.kiai && render::animations(), f.beat.filter(|b| b.1 > 1.0), c.dt_ms);
 
+        if let Some(ghosts) = &f.ghosts {
+            crate::menu_notes::draw(c, ghosts, self.clock, self.kiai, self.kick(), self.universe);
+        }
         crate::settings::brand(c);
         self.draw_flashes(c);
         self.draw_lane(c, bar, pulse);
@@ -445,12 +452,17 @@ impl Menu {
         }
         if on && !self.in_kiai {
             self.kiai_at = self.clock;
+            self.universe += 1;
             self.throw_sparks(SPARKS_OPENING);
         }
         self.in_kiai = on;
         let no = beat.map_or(i64::MIN, |(into, length)| (into / length).floor() as i64);
         if on && no != self.beat_no {
             self.beat_at = self.clock;
+            // Every two bars the universes change places, like Multiverse's focus.
+            if no.rem_euclid(8) == 0 {
+                self.universe += 1;
+            }
             if no % 2 == 0 {
                 self.rim = (self.clock, if no % 4 == 0 { -1 } else { 1 });
             } else {

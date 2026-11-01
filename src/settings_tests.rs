@@ -944,7 +944,7 @@ fn the_wheel_scrolls_the_settings_and_stays_in_the_section() {
 #[test]
 fn one_click_works_a_row_and_every_hotkey_has_one() {
     let mut s = settings_screen();
-    let row = settings::ITEMS.iter().position(|(_, it)| *it == Item::MainMenu).unwrap();
+    let row = settings::ITEMS.iter().position(|(_, it)| *it == Item::LegacyMenu).unwrap();
     let was = s.cfg.main_menu;
     s.click(render::Hit::SettingRow(row), None);
     assert_ne!(s.cfg.main_menu, was);
@@ -1013,4 +1013,35 @@ fn a_lane_coming_up_under_a_parked_pointer_turns_the_overall_volume() {
     s.wheel(1);
     assert_eq!(s.cfg.master_volume, 0.6);
     assert_eq!(s.cfg.fx_volume, 0.5);
+}
+
+#[test]
+fn the_tabs_only_come_back_with_the_legacy_menu() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = None;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let tab = |s: &State| s.hits.iter().any(|h| matches!(h.hit, render::Hit::Tab(i) if h.rect[1] < 50.0 && i < 4));
+    assert!(!tab(&s), "no tabs on top");
+    assert!(s.hits.iter().any(|h| h.hit == render::Hit::ToMenu));
+    assert!(s.hits.iter().any(|h| h.hit == render::Hit::Tab(3)), "download along the bottom");
+    s.click(render::Hit::ToMenu, None);
+    assert!(s.on_menu());
+
+    s.click(render::Hit::SettingRow(settings::ITEMS.iter().position(|(_, it)| *it == Item::LegacyMenu).unwrap()), None);
+    assert!(!s.cfg.main_menu);
+    assert!(s.main_menu.is_none(), "the menu goes at once");
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(tab(&s), "the old tabs");
+    assert!(!s.hits.iter().any(|h| h.hit == render::Hit::ToMenu));
+}
+
+#[test]
+fn the_back_button_of_a_screen_does_what_esc_does() {
+    let mut s = settings_screen();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(s.hits.iter().any(|h| h.hit == render::Hit::Key(KeyCode::Escape)));
+    s.click(render::Hit::Key(KeyCode::Escape), None);
+    assert!(matches!(s.scene, Scene::Select));
 }
