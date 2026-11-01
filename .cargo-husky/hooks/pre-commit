@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+for manifest in Cargo.toml server/Cargo.toml; do
+    printf 'Checking %s with Clippy (warnings are errors)...\n' "$manifest"
+    if ! cargo clippy --locked --manifest-path "$manifest" --all-targets -- -D warnings; then
+        printf '\nCommit blocked: fix the Clippy diagnostics above and try again.\n' >&2
+        exit 1
+    fi
+done

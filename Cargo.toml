@@ -86,3 +86,8 @@ symphonia-bundle-mp3 = { path = "vendor/symphonia-bundle-mp3" }
 # The Windows exe's icon (build.rs).
 [build-dependencies]
 embed-resource = "3.0.12"
+
+[dev-dependencies.cargo-husky]
+version = "1"
+default-features = false
+features = ["user-hooks"]
