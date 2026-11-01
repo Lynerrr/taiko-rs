@@ -993,4 +993,24 @@ fn alt_wheel_turns_the_note_under_the_pointer_and_the_lane_then_needs_no_alt() {
     s.wheel(-2);
     assert_eq!(s.cfg.fx_volume, 0.4, "no Alt needed over the lane");
     assert_eq!(s.cfg.master_volume, 0.55);
+    // Moved away, Alt + wheel is the overall volume again.
+    point(&mut s, 10.0, 10.0);
+    s.modifiers_alt = true;
+    s.wheel(1);
+    assert_eq!(s.cfg.master_volume, 0.6);
+    assert_eq!(s.cfg.fx_volume, 0.4);
+}
+
+#[test]
+fn a_lane_coming_up_under_a_parked_pointer_turns_the_overall_volume() {
+    let mut s = settings_screen();
+    s.cfg.master_volume = 0.5;
+    s.cfg.fx_volume = 0.5;
+    let width = render::VIRTUAL_HEIGHT * s.window_w / s.window_h;
+    point(&mut s, width - 40.0, 400.0);
+    s.modifiers_alt = true;
+    s.wheel(1);
+    s.wheel(1);
+    assert_eq!(s.cfg.master_volume, 0.6);
+    assert_eq!(s.cfg.fx_volume, 0.5);
 }

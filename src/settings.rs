@@ -633,9 +633,9 @@ impl Item {
                 "Повторы, рекорды, видео, скачанные карты, скины и кэш. Enter: перенести в другую папку или на диск."
             ),
             Item::KiaiEffects => tr!(
-                "During kiai time, tint the lane and pulse the hit target with the beat.",
-                "キアイタイム中、レーンに色を付け、判定枠を拍に合わせて脈打たせます。",
-                "В киай подкрашивать дорожку и пульсировать мишень в такт."
+                "During kiai time, tint the lane and pulse the hit target with the beat. The main menu joins in too.",
+                "キアイタイム中、レーンに色を付け、判定枠を拍に合わせて脈打たせます。メインメニューも盛り上がります。",
+                "В киай подкрашивать дорожку и пульсировать мишень в такт. Главное меню тоже оживает."
             ),
             Item::HideGreat => tr!(
                 "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",

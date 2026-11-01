@@ -33,9 +33,15 @@ const NOTE_GAP: f32 = 132.0;
 /// The row naming every section, and the hint under it.
 const STRIP_Y: f32 = 348.0;
 const HINT_Y: f32 = 376.0;
-/// How long the lane sits still before the next note starts nudging at the circle (ms).
-const NUDGE_AFTER: f32 = 6000.0;
-const NUDGE_EVERY: f32 = 2400.0;
+/// Kiai: how long a beat's kick and the opening's flash last, and a spark's life (ms).
+const BEAT_MS: f32 = 300.0;
+const OPENING_MS: f32 = 420.0;
+const SPARK_MS: f32 = 750.0;
+/// How many sparks can be in the air, and how many a beat and the opening throw.
+const SPARKS: usize = 64;
+const SPARKS_A_BEAT: usize = 5;
+const SPARKS_OPENING: usize = 18;
+const GOLD: u32 = 0xFFD34D;
 
 const COMING_SOON: &str = "Coming soon";
 
@@ -293,6 +299,8 @@ pub fn tint(col: u32, to: u32, t: f32) -> u32 {
 pub struct Frame<'a> {
     /// Into the beat (ms) and the beat's length, while a song plays.
     pub beat: Option<(f64, f64)>,
+    /// The music is in a kiai, and the menu's to join in.
+    pub kiai: bool,
     pub song: Option<&'a str>,
     pub hint: &'a str,
     pub maps: usize,
@@ -313,14 +321,30 @@ pub struct Menu {
     burst: Option<(f32, Item)>,
     shake: f32,
     leaving: Option<(Item, f32)>,
-    /// When the lane last moved, for the nudge at a player who hasn't found out it does.
-    moved: f32,
+    /// Kiai: how far into it (0 to 1, easing both ways), whether it's on, when it opened, the
+    /// beat it's on and when that came, and what's flying.
+    kiai: f32,
+    in_kiai: bool,
+    kiai_at: f32,
+    beat_no: i64,
+    beat_at: f32,
+    sparks: Vec<Spark>,
+    /// For where the sparks go.
+    rng: u32,
     arts: Box<[Art; ITEMS.len()]>,
+}
+
+/// A pixel thrown from the hit circle: where it is, its speed (units a ms), when it left.
+struct Spark {
+    at: [f32; 2],
+    speed: [f32; 2],
+    born: f32,
+    col: u32,
 }
 
 impl Menu {
     pub fn new() -> Menu {
-        Menu { selected: 0, shown: 0.0, clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, moved: 0.0, arts: Box::new(ITEMS.map(Item::art)) }
+        Menu { selected: 0, shown: 0.0, clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, arts: Box::new(ITEMS.map(Item::art)) }
     }
 
     fn index(&self) -> usize {
@@ -338,7 +362,6 @@ impl Menu {
     pub fn step(&mut self, by: i32) {
         self.selected += by;
         self.rim = (self.clock, by);
-        self.moved = self.clock;
     }
 
     /// Brings note `i` to the circle the short way round.
@@ -395,14 +418,126 @@ impl Menu {
         let phase = (into / beat).rem_euclid(1.0) as f32;
         let bar = (into / (beat * 4.0)).rem_euclid(1.0) as f32;
         let pulse = if render::animations() { (1.0 - phase).powi(3) } else { 0.0 };
+        self.feel_kiai(f.kiai && render::animations(), f.beat.filter(|b| b.1 > 1.0), c.dt_ms);
 
         crate::settings::brand(c);
+        self.draw_flashes(c);
         self.draw_lane(c, bar, pulse);
         self.draw_drum(c);
         self.draw_burst(c);
+        self.draw_kiai(c);
         self.draw_title(c, f.maps);
         self.draw_strip(c, f.hint);
         draw_footer(c, f);
+    }
+
+    /// What's left of this beat's kick, 1 to 0.
+    fn kick(&self) -> f32 {
+        (1.0 - (self.clock - self.beat_at) / BEAT_MS).clamp(0.0, 1.0) * self.kiai
+    }
+
+    /// A frame of the kiai: eases in and out of it, and on each beat in it the drum plays itself
+    /// (rim, face, other rim, face) and the circle throws sparks.
+    fn feel_kiai(&mut self, on: bool, beat: Option<(f64, f64)>, dt_ms: f32) {
+        approach(&mut self.kiai, if on { 1.0 } else { 0.0 }, dt_ms, if on { 90.0 } else { 260.0 });
+        if self.kiai < 0.002 && !on {
+            self.kiai = 0.0;
+        }
+        if on && !self.in_kiai {
+            self.kiai_at = self.clock;
+            self.throw_sparks(SPARKS_OPENING);
+        }
+        self.in_kiai = on;
+        let no = beat.map_or(i64::MIN, |(into, length)| (into / length).floor() as i64);
+        if on && no != self.beat_no {
+            self.beat_at = self.clock;
+            if no % 2 == 0 {
+                self.rim = (self.clock, if no % 4 == 0 { -1 } else { 1 });
+            } else {
+                self.face = self.clock;
+            }
+            self.throw_sparks(SPARKS_A_BEAT);
+        }
+        self.beat_no = no;
+        let (clock, step) = (self.clock, dt_ms);
+        self.sparks.retain(|s| clock - s.born < SPARK_MS);
+        for s in &mut self.sparks {
+            s.at[0] += s.speed[0] * step;
+            s.at[1] += s.speed[1] * step;
+            s.speed[1] += 0.0006 * step;
+        }
+    }
+
+    /// A number from 0 to 1 for where a spark goes.
+    fn roll(&mut self) -> f32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 17;
+        self.rng ^= self.rng << 5;
+        (self.rng >> 8) as f32 / (1u32 << 24) as f32
+    }
+
+    fn throw_sparks(&mut self, n: usize) {
+        for _ in 0..n {
+            if self.sparks.len() >= SPARKS {
+                break;
+            }
+            let angle = -std::f32::consts::FRAC_PI_2 + (self.roll() - 0.5) * 2.6;
+            let speed = 0.12 + self.roll() * 0.22;
+            let col = [DON, KAT, GOLD, 0xffffff][(self.roll() * 4.0) as usize % 4];
+            self.sparks.push(Spark { at: [CIRCLE_X, LANE_MID], speed: [angle.cos() * speed, angle.sin() * speed], born: self.clock, col });
+        }
+    }
+
+    /// Light from the screen's edges, left and right in turn on the beat, like osu!'s.
+    fn draw_flashes(&self, c: &mut Canvas) {
+        let kick = self.kick();
+        if kick <= 0.0 {
+            return;
+        }
+        const BANDS: usize = 7;
+        const BAND: f32 = 13.0;
+        let right = self.beat_no.rem_euclid(2) == 1;
+        for band in 0..BANDS {
+            let x = band as f32 * BAND;
+            let a = kick * 0.34 * (1.0 - band as f32 / BANDS as f32);
+            c.rect(if right { c.width - x - BAND } else { x }, 0.0, BAND, render::VIRTUAL_HEIGHT, rgba(GOLD, a));
+        }
+    }
+
+    /// Over the lane: the gold it takes on, the opening's flash and tears, the rings and sparks.
+    fn draw_kiai(&self, c: &mut Canvas) {
+        if self.kiai <= 0.0 && self.sparks.is_empty() {
+            return;
+        }
+        let kick = self.kick();
+        let px = pixel_size(LANE_PIXEL);
+        c.rect(DRUM_W + 2.0, LANE_TOP, c.width, LANE_H, rgba(GOLD, self.kiai * 0.05 + kick * 0.11));
+        for y in [LANE_TOP - 2.0, LANE_TOP + LANE_H] {
+            c.rect(0.0, y, c.width, 2.0, rgba(GOLD, self.kiai * (0.55 + kick * 0.45)));
+        }
+        if kick > 0.0 {
+            let k = 1.0 - kick / self.kiai.max(0.01);
+            let col = if self.beat_no.rem_euclid(2) == 0 { KAT } else { DON };
+            pixel_ring(c, [CIRCLE_X, LANE_MID], 46.0 + k * 34.0, px * 2.0, 0, px, rgba(col, kick * 0.9));
+        }
+        let opening = 1.0 - (self.clock - self.kiai_at) / OPENING_MS;
+        if opening > 0.0 {
+            c.rect(0.0, LANE_TOP, c.width, LANE_H, rgba(0xffffff, opening * opening * 0.55));
+            // The lane torn, in the logo's colours, a new tear every 40 ms.
+            let seed = (self.clock / 40.0) as u32;
+            for tear in 0..6u32 {
+                let mix = (tear + 1).wrapping_mul(2_654_435_761) ^ seed.wrapping_mul(40_503);
+                let (y, x) = (LANE_TOP + ((mix >> 8) % LANE_H as u32) as f32, ((mix >> 16) % 240) as f32);
+                c.rect(x, y, c.width - x, 3.0, rgba(if tear % 2 == 0 { GLITCH_RED } else { GLITCH_CYAN }, opening));
+            }
+            let up = (1.0 - opening) * 16.0;
+            c.text_centered(CIRCLE_X, LANE_TOP - 26.0 - up, 16.0, rgba(GOLD, opening.min(0.5) * 2.0), "KIAI!");
+        }
+        for s in &self.sparks {
+            let a = 1.0 - (self.clock - s.born) / SPARK_MS;
+            let size = px * if a > 0.5 { 3.0 } else { 2.0 };
+            c.rect(snap_to_grid(s.at[0]), snap_to_grid(s.at[1]), size, size, rgba(s.col, a));
+        }
     }
 
     fn draw_lane(&self, c: &mut Canvas, bar: f32, pulse: f32) {
@@ -431,7 +566,7 @@ impl Menu {
         for k in (0..=n).rev() {
             let i = (first + k).rem_euclid(n) as usize;
             let item = ITEMS[i];
-            let x = CIRCLE_X + (first + k) as f32 * NOTE_GAP - self.shown * NOTE_GAP - if k == 1 { self.nudge() } else { 0.0 };
+            let x = CIRCLE_X + (first + k) as f32 * NOTE_GAP - self.shown * NOTE_GAP;
             if x > c.width + 60.0 {
                 continue;
             }
@@ -440,7 +575,9 @@ impl Menu {
             let fade = ((x - 130.0) / 50.0).clamp(0.2, 1.0);
             let shaking = item == Item::Editor && self.is_selected(i) && self.clock - self.shake < SHAKE_MS;
             let dx = if shaking { (self.clock / 18.0).sin() * 5.0 * (1.0 - (self.clock - self.shake) / SHAKE_MS) } else { 0.0 };
-            draw_note(c, &self.arts[i], x + dx, LANE_MID, r, fade);
+            // In a kiai they hop on the beat, every other one higher.
+            let hop = self.kick() * if (first + k).rem_euclid(2) as i64 == self.beat_no.rem_euclid(2) { 12.0 } else { 5.0 };
+            draw_note(c, &self.arts[i], x + dx, LANE_MID - hop, r, fade);
             // A note just coming on screen shows its name once all of it fits.
             if close < 0.5 && x + Canvas::text_width(7.0, item.name()) / 2.0 < c.width - 4.0 {
                 c.text_centered(x, LANE_MID + r + 9.0, 7.0, rgba(0xc8c8d8, fade), item.name());
@@ -491,17 +628,17 @@ impl Menu {
 
     fn draw_title(&self, c: &mut Canvas, maps: usize) {
         let item = self.current();
+        // A kiai's beat shakes the title apart into red and cyan for a moment.
+        let split = self.kick() * 3.0;
+        if split > 0.2 {
+            c.text(40.0 - split, 274.0, 34.0, rgba(GLITCH_RED, 0.9), item.name());
+            c.text(40.0 + split, 274.0, 34.0, rgba(GLITCH_CYAN, 0.9), item.name());
+        }
         let width = c.text(40.0, 274.0, 34.0, rgba(0xffffff, 1.0), item.name());
         c.text(42.0, 318.0, 10.0, rgba(0xc8c8d8, 1.0), &item.about(maps));
         if item == Item::Editor {
             tooltip(c, 40.0 + width + 62.0, 281.0);
         }
-    }
-
-    /// How far the next note leans towards the circle: a small hop now and then while nothing
-    /// has moved, showing the lane is there to be moved.
-    fn nudge(&self) -> f32 {
-        if render::animations() { nudge_after(self.clock - self.moved) } else { 0.0 }
     }
 
     /// Every section by name with arrows at the ends: nothing has to be found by scrolling, and
@@ -536,16 +673,6 @@ impl Menu {
         c.button(x - gap + 8.0, STRIP_Y - 5.0, ARROW, 20.0, ">", 8.0, Hit::MenuStep(1), false);
         c.text(LEFT + 2.0, HINT_Y, 7.0, rgba(0x9a9ab0, 1.0), &Canvas::fit_hints(7.0, c.width - 2.0 * LEFT, hint));
     }
-}
-
-/// The next note's lean after `still` ms without the lane moving.
-fn nudge_after(still: f32) -> f32 {
-    let idle = still - NUDGE_AFTER;
-    if idle < 0.0 {
-        return 0.0;
-    }
-    let t = (idle % NUDGE_EVERY) / 420.0;
-    if t < 1.0 { (t * std::f32::consts::PI).sin() * 16.0 } else { 0.0 }
 }
 
 /// A note `r` units in radius, its pixels a whole number of screen pixels: it grows in steps,
@@ -677,15 +804,39 @@ mod tests {
     }
 
     #[test]
-    fn the_next_note_only_nudges_once_the_lane_has_sat_still() {
-        assert_eq!(nudge_after(0.0), 0.0);
-        assert_eq!(nudge_after(NUDGE_AFTER - 1.0), 0.0);
-        assert!(nudge_after(NUDGE_AFTER + 210.0) > 15.0);
-        assert_eq!(nudge_after(NUDGE_AFTER + 1000.0), 0.0, "a hop, then still until the next");
+    fn a_kiai_opens_with_sparks_and_each_beat_plays_the_drum() {
         let mut m = Menu::new();
-        m.clock = NUDGE_AFTER * 2.0;
-        m.step(1);
-        assert_eq!(m.clock - m.moved, 0.0, "moving it starts the wait over");
+        m.clock = 1000.0;
+        m.feel_kiai(false, Some((0.0, 500.0)), 16.0);
+        assert_eq!((m.kiai, m.sparks.len()), (0.0, 0), "nothing before it");
+        m.feel_kiai(true, Some((1010.0, 500.0)), 16.0);
+        assert_eq!(m.kiai_at, 1000.0);
+        assert_eq!(m.sparks.len(), SPARKS_OPENING + SPARKS_A_BEAT);
+        assert_eq!(m.rim, (1000.0, 1), "beat 2: the right rim");
+        m.clock = 1100.0;
+        m.feel_kiai(true, Some((1100.0, 500.0)), 16.0);
+        assert_eq!(m.beat_at, 1000.0, "the same beat");
+        m.clock = 1500.0;
+        m.feel_kiai(true, Some((1500.0, 500.0)), 16.0);
+        assert_eq!(m.beat_at, 1500.0);
+        assert_eq!(m.face, 1500.0, "beat 3: the face");
+    }
+
+    #[test]
+    fn sparks_stop_at_their_limit_and_die_out_after_a_kiai() {
+        let mut m = Menu::new();
+        for beat in 0..40 {
+            m.clock += 10.0;
+            m.feel_kiai(true, Some((beat as f64 * 500.0, 500.0)), 10.0);
+            assert!(m.sparks.len() <= SPARKS);
+        }
+        m.clock += SPARK_MS;
+        m.feel_kiai(false, Some((99_000.0, 500.0)), 16.0);
+        assert!(m.sparks.is_empty());
+        let beat_at = m.beat_at;
+        m.clock += 500.0;
+        m.feel_kiai(false, Some((99_500.0, 500.0)), 16.0);
+        assert_eq!(m.beat_at, beat_at, "the drum rests outside a kiai");
     }
 
     #[test]

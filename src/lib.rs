@@ -4465,11 +4465,9 @@ impl State {
         if notches == 0 {
             return;
         }
-        // Alt anywhere; once the volume's lane is up, also without Alt over its notes.
+        // Alt anywhere; with the pointer moved onto one of the volume's notes, also without Alt.
         let now = Instant::now();
-        let (vx, vy) = self.mouse_virtual();
-        let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
-        if self.volume.point(vx, vy, width, now) || self.modifiers_alt {
+        if self.volume.hovering(now) || self.modifiers_alt {
             let changed = self.volume.turn(&mut self.cfg, notches, now);
             self.apply_volume();
             self.cfg.save();
@@ -8070,7 +8068,8 @@ impl State {
                     };
                     p.draw(canvas, &frame);
                 } else if let Some(m) = &mut self.main_menu {
-                    let frame = menu::Frame { beat: self.preview.beat(), song: song.as_deref(), hint: &hint, maps: self.library.len(), paused };
+                    let kiai = self.cfg.kiai_effects && !paused && self.preview.kiai();
+                    let frame = menu::Frame { beat: self.preview.beat(), kiai, song: song.as_deref(), hint: &hint, maps: self.library.len(), paused };
                     m.draw(canvas, &frame);
                 }
             }
@@ -8800,6 +8799,10 @@ impl State {
             let tw = Canvas::text_width(8.0, &text);
             canvas.round_rect([6.0, 6.0], [tw + 12.0, 16.0], 4.0, rgba(0x000000, 0.55), rgba(0, 0.0), 0.0);
             canvas.text(12.0, 10.0, 8.0, rgba(0x9fe09f, 1.0), &text);
+        }
+        // Not during a song, where a pointer left there would hold it over the notes for good.
+        if !self.in_song() {
+            self.volume.hold(now);
         }
         if self.volume.visible(now) {
             self.volume.draw(canvas, &self.cfg, now);
