@@ -82,5 +82,5 @@ not affiliated with or endorsed by ppy Pty Ltd ("osu!" is their trademark). It p
 and skins you already have and bundles none of osu!'s.
 
 <div align="center">
-<sub>📖 The <a href="README1.md">full guide</a> covers every setting, mod and screen.</sub>
+<sub>📖 The <a href="docs/README.md">full guide</a> covers every setting, mod and screen.</sub>
 </div>

@@ -2,11 +2,13 @@
 
 ## Commit messages
 
-- Use Conventional Commits: `<type>[optional scope][!]: <description>`.
+- Use Conventional Commits with a required scope: `<type>(<scope>)[!]: <description>`.
+- Use a lowercase, kebab-case scope that names the affected area or task, for example `move-guide-to-docs`.
 - Write commit subjects and bodies in English.
 - Use a concise, imperative description, for example `fix(audio): reduce playback latency`.
+- For a guide move, use `chore(move-guide-to-docs): move README1.md to docs`.
 - Choose the appropriate type, such as `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, or `chore`.
-- Mark breaking changes with `!` after the type or scope, or a `BREAKING CHANGE:` footer.
+- Mark breaking changes with `!` after the scope, or a `BREAKING CHANGE:` footer.
 
 ## Branch integration
 
