@@ -4,7 +4,7 @@ use winit::keyboard::KeyCode;
 
 use crate::game::{Stats, Windows};
 use crate::library::Entry;
-use crate::render::{accent, progress, rgba, Canvas, Hit};
+use crate::render::{accent, progress, rgba, Canvas, Glide, Hit};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SortMode {
@@ -133,8 +133,6 @@ pub struct Select {
     pinned_view: View,
     /// The list being dragged with the left button.
     drag: Option<ListDrag>,
-    /// Where each song's own row is in the list as last drawn (list units, top = 0).
-    song_y: Vec<f32>,
     visible: Vec<usize>,
     /// Songs (beatmap sets) as ranges of `visible`: consecutive difficulties sharing a folder.
     /// Rebuilt when `visible` changes, not per frame (big libraries have tens of thousands of maps).
@@ -146,13 +144,19 @@ pub struct Select {
     sections: Vec<Section>,
     /// The section of each song (`groups`).
     section_of: Vec<usize>,
-    /// The headings (by name) whose songs are listed: the ones opened by clicking them, and the
-    /// one the selection moved into. Scrolling never opens or closes any.
-    open: std::collections::HashSet<String>,
-    /// The sort `open` is for (another starts over with the selection's section).
+    /// The headings (by name) the other way round from how this list starts (`starts_open`):
+    /// only the player's clicks and the selection change them. Scrolling never does.
+    flipped: std::collections::HashSet<String>,
+    /// What `flipped` was before a search, which opens everything: it comes back with the search
+    /// cleared.
+    flipped_before_search: Option<std::collections::HashSet<String>>,
+    /// The sort `flipped` is for (another starts over).
     open_for: SortMode,
-    /// The heading the selection was last under: when it moves to another, this one closes.
+    /// The heading the selection was last under.
     cursor_label: Option<String>,
+    /// The heading the selection opened by moving in: it closes when the selection moves out.
+    /// One the player opened stays until they close it.
+    auto_open: Option<String>,
     /// The cursor when the player closed the heading it was under: it stays closed until the
     /// selection moves.
     closed_at: Option<usize>,
@@ -167,9 +171,14 @@ pub struct Select {
     /// Entered this song (first visible row) on its hardest difficulty: keep it there when the
     /// difficulties get sorted by stars.
     hardest_pending: Option<usize>,
-    /// Selection changes jump instead of gliding (while right-click scrolling, where they come
-    /// faster than the motion could follow).
-    pub instant: bool,
+    /// The list moved by hand, away from the selection. Left out, it follows the selection.
+    free: Option<FreeScroll>,
+    /// How far the list scrolls and the scrollbar's thumb, as last drawn.
+    scroll_max: f32,
+    thumb: f32,
+    /// Where the pointer is while flying through the list (right drag, scrollbar): the heading
+    /// passing by shows beside it.
+    pub scrubbing: Option<f32>,
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
     random_history: Vec<usize>,
     rng: u64,
@@ -218,13 +227,27 @@ struct ListAnim {
 
 /// The list held by the pointer: it scrolls with it, then flies on and settles on a song.
 struct ListDrag {
-    /// Scroll and outline when the drag began.
+    /// Scroll when the drag began.
     scroll: f32,
-    outline: f32,
     /// Scroll now, and recent (time, scroll) samples for the release speed.
     now: f32,
     samples: std::collections::VecDeque<(std::time::Instant, f32)>,
 }
+
+/// The list somewhere of the player's choosing. Selecting another song ends it.
+struct FreeScroll {
+    glide: Glide,
+    /// How quickly it gets there (ms).
+    tau: f32,
+    /// The song that was selected (its folder).
+    song: Option<std::path::PathBuf>,
+}
+
+/// How far a notch of the wheel moves the list, and how quickly.
+const WHEEL_STEP: f32 = SONG_ROW_H * 3.0;
+const WHEEL_TAU: f32 = 45.0;
+const SCRUB_TAU: f32 = 20.0;
+const THROW_TAU: f32 = 130.0;
 
 /// Length of a song list transition.
 const LIST_ANIM_MS: f32 = 200.0;
@@ -302,15 +325,16 @@ impl Select {
             pinned: std::collections::HashSet::new(),
             pinned_view: Default::default(),
             drag: None,
-            song_y: Vec::new(),
             visible: Vec::new(),
             groups: Vec::new(),
             group_of: Vec::new(),
             sections: Vec::new(),
             section_of: Vec::new(),
-            open: Default::default(),
+            flipped: Default::default(),
+            flipped_before_search: None,
             open_for: SortMode::Artist,
             cursor_label: None,
+            auto_open: None,
             closed_at: None,
             row_value: Vec::new(),
             cursor: 0,
@@ -318,7 +342,10 @@ impl Select {
             anim: ListAnim::default(),
             remembered: std::collections::HashMap::new(),
             hardest_pending: None,
-            instant: false,
+            free: None,
+            scroll_max: 0.0,
+            thumb: 0.0,
+            scrubbing: None,
             random_history: Vec::new(),
             rng: seed | 1,
         };
@@ -338,6 +365,19 @@ impl Select {
     pub fn refilter(&mut self, library: &[Entry]) {
         if self.pinned_view != self.view() {
             self.pinned.clear();
+        }
+        // A search shows what it found: everything open, then back as it was.
+        match (self.filter.is_empty(), self.flipped_before_search.take()) {
+            (false, None) => {
+                self.flipped_before_search = Some(std::mem::take(&mut self.flipped));
+                self.auto_open = None;
+            }
+            (false, kept) => self.flipped_before_search = kept,
+            (true, Some(kept)) => {
+                self.flipped = kept;
+                self.auto_open = None;
+            }
+            (true, None) => {}
         }
         let selected = self.visible.get(self.cursor).copied();
         let query = crate::search::Query::parse(&self.filter);
@@ -375,6 +415,17 @@ impl Select {
             }
         }
         self.open_cursor_section();
+    }
+
+    /// Where the list is now, and the furthest it goes.
+    #[cfg(test)]
+    pub fn list_scroll(&self) -> f32 {
+        self.anim.scroll
+    }
+
+    #[cfg(test)]
+    pub fn list_end(&self) -> f32 {
+        self.scroll_max
     }
 
     /// The listed songs in order, each as its difficulties' library indices.
@@ -538,8 +589,10 @@ impl Select {
         self.section_of.clear();
         if self.open_for != self.sort {
             self.open_for = self.sort;
-            self.open.clear();
+            self.flipped.clear();
+            self.flipped_before_search = self.flipped_before_search.take().map(|_| Default::default());
             self.cursor_label = None;
+            self.auto_open = None;
         }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         for g in 0..self.groups.len() {
@@ -550,8 +603,6 @@ impl Select {
             }
             self.section_of.push(self.sections.len() - 1);
         }
-        let labels: std::collections::HashSet<&str> = self.sections.iter().map(|s| s.label.as_str()).collect();
-        self.open.retain(|l| labels.contains(l.as_str()));
     }
 
     /// The heading the song at row `row` is listed under for the sort: what it's grouped by.
@@ -609,41 +660,96 @@ impl Select {
         self.group_of.get(self.cursor).map(|&g| self.section_of[g])
     }
 
-    /// Whether section `s` lists its songs.
-    fn section_open(&self, s: usize) -> bool {
-        self.open.contains(&self.sections[s].label)
+    /// Whether headings start open: a letter is only a divider in a long list, and a search
+    /// lists what it found. The other sorts start closed, like osu!'s groups.
+    fn starts_open(&self) -> bool {
+        !self.filter.is_empty() || matches!(self.sort, SortMode::Artist | SortMode::Title)
     }
 
-    /// The heading the selection is under stays open, unless the player closed it with the
-    /// selection there; when the selection moves to another heading, the one it left closes.
+    fn label_open(&self, label: &str) -> bool {
+        self.starts_open() != self.flipped.contains(label)
+    }
+
+    fn set_open(&mut self, label: &str, open: bool) {
+        if open == self.starts_open() {
+            self.flipped.remove(label);
+        } else {
+            self.flipped.insert(label.to_string());
+        }
+    }
+
+    /// Whether section `s` lists its songs.
+    fn section_open(&self, s: usize) -> bool {
+        self.label_open(&self.sections[s].label)
+    }
+
+    /// The heading the selection is under is open, unless the player closed it with the selection
+    /// there. If it had to open for the selection, it closes again when the selection moves out.
     fn open_cursor_section(&mut self) {
         let Some(s) = self.cursor_section() else { return };
         let label = self.sections[s].label.clone();
-        if self.cursor_label.as_ref() != Some(&label)
-            && let Some(left) = self.cursor_label.replace(label.clone()) {
-            self.open.remove(&left);
+        if self.cursor_label.as_ref() != Some(&label) {
+            self.cursor_label = Some(label.clone());
+            if let Some(left) = self.auto_open.take().filter(|left| *left != label) {
+                self.set_open(&left, false);
+            }
         }
-        if self.closed_at != Some(self.cursor) {
-            self.open.insert(label);
+        if self.closed_at != Some(self.cursor) && !self.label_open(&label) {
+            self.set_open(&label, true);
+            self.auto_open = Some(label);
         }
     }
 
-    /// A click on heading `s`: opens it or closes it (the selection stays where it is).
-    pub fn click_section(&mut self, s: usize) {
-        let Some(sec) = self.sections.get(s) else { return };
-        if !self.open.remove(&sec.label) {
-            self.open.insert(sec.label.clone());
-            if self.cursor_section() == Some(s) {
-                self.closed_at = None;
-            }
-        } else if self.cursor_section() == Some(s) {
-            self.closed_at = Some(self.cursor);
+    /// A click on heading `s`: opens it or closes it, the selection staying where it is and the
+    /// list staying where it's looking.
+    pub fn click_section(&mut self, s: usize, library: &[Entry]) {
+        let Some(label) = self.sections.get(s).map(|sec| sec.label.clone()) else { return };
+        self.free(library, WHEEL_TAU);
+        let open = !self.label_open(&label);
+        self.set_open(&label, open);
+        if self.auto_open.as_ref() == Some(&label) {
+            self.auto_open = None;
+        }
+        if self.cursor_section() == Some(s) {
+            self.closed_at = (!open).then_some(self.cursor);
+        }
+    }
+
+    /// The selected song's folder.
+    fn selected_folder<'a>(&self, library: &'a [Entry]) -> Option<&'a std::path::Path> {
+        self.selected().and_then(|i| library[i].path.parent())
+    }
+
+    /// The list as moved by hand, from where it is now if it was following the selection.
+    fn free(&mut self, library: &[Entry], tau: f32) -> &mut Glide {
+        let song = self.selected_folder(library).map(|p| p.to_path_buf());
+        let now = self.anim.scroll;
+        let free = self.free.get_or_insert_with(|| FreeScroll { glide: Glide::at(now), tau, song });
+        free.tau = tau;
+        &mut free.glide
+    }
+
+    /// The wheel: moves the list `notches` on, the selection staying where it is.
+    pub fn scroll_by(&mut self, notches: i32, library: &[Entry]) {
+        let max = self.scroll_max;
+        let glide = self.free(library, WHEEL_TAU);
+        glide.goal = (glide.goal + notches as f32 * WHEEL_STEP).clamp(0.0, max);
+    }
+
+    /// Back to following the selection, gliding there from wherever the list is.
+    pub fn follow_selection(&mut self) {
+        if self.free.take().is_some() {
+            let a = &mut self.anim;
+            (a.scroll_from, a.outline_from, a.open_from, a.closing_from) = (a.scroll, a.outline, a.open_now, a.closing_now);
+            a.start = Some(std::time::Instant::now());
+            a.ms = 0.0;
         }
     }
 
     /// The songs (`groups` indices) whose headings are open, in order: what scrolling goes through.
     fn listed_groups(&self) -> Vec<usize> {
-        (0..self.groups.len()).filter(|&g| self.section_open(self.section_of[g])).collect()
+        let open: Vec<bool> = (0..self.sections.len()).map(|s| self.section_open(s)).collect();
+        (0..self.groups.len()).filter(|&g| open[self.section_of[g]]).collect()
     }
 
     /// The song (range of `visible`) containing the cursor.
@@ -684,9 +790,13 @@ impl Select {
 
     pub fn key(&mut self, key: KeyCode, library: &[Entry]) -> SelectAction {
         let n = self.visible.len();
+        // Keys act on the selection, so that's where the list goes.
+        if !matches!(key, KeyCode::Tab | KeyCode::F1) {
+            self.follow_selection();
+        }
         match key {
-            KeyCode::ArrowDown => self.step(1, library, true),
-            KeyCode::ArrowUp => self.step(-1, library, true),
+            KeyCode::ArrowDown => self.step(1, library),
+            KeyCode::ArrowUp => self.step(-1, library),
             KeyCode::PageDown => self.jump_songs(5, library),
             KeyCode::PageUp => self.jump_songs(-5, library),
             KeyCode::Home | KeyCode::End => {
@@ -743,18 +853,17 @@ impl Select {
         SelectAction::None
     }
 
-    /// Up/Down and the mouse wheel (`n` steps, negative = up): through the open song's
-    /// difficulties, and past its first or last one into the previous or next listed song. With
-    /// `open_next` (the keys), past the last listed song the next heading opens and goes on into
-    /// it; the wheel stops there.
-    pub fn step(&mut self, n: i32, library: &[Entry], open_next: bool) {
+    /// Up/Down (`n` steps, negative = up): through the open song's difficulties, and past its
+    /// first or last one into the previous or next listed song. Past the last listed song it goes
+    /// on into the next heading, which opens for it.
+    pub fn step(&mut self, n: i32, library: &[Entry]) {
         for _ in 0..n.unsigned_abs() {
             let Some(g) = self.cursor_group() else { return };
             let next = self.cursor as i64 + n.signum() as i64;
             if (g.start as i64..g.end as i64).contains(&next) {
                 self.cursor = next as usize;
             } else {
-                self.move_songs(n.signum(), library, open_next);
+                self.move_songs(n.signum(), library, true);
             }
         }
     }
@@ -784,8 +893,6 @@ impl Select {
             if !(0..self.groups.len() as i64).contains(&edge) {
                 return;
             }
-            let label = self.sections[self.section_of[edge as usize]].label.clone();
-            self.open.insert(label);
             edge as usize
         } else {
             match listed.get(idx.clamp(0, listed.len() as i64 - 1) as usize) {
@@ -802,6 +909,7 @@ impl Select {
         if !self.searching {
             return;
         }
+        self.follow_selection();
         let mut changed = false;
         for ch in text.chars().filter(|c| !c.is_control()) {
             self.filter.push(ch);
@@ -910,7 +1018,7 @@ impl Select {
     /// pressed. The selection stays put until it's let go.
     pub fn drag_to(&mut self, dy: f32) {
         let a = &self.anim;
-        let d = self.drag.get_or_insert_with(|| ListDrag { scroll: a.scroll, outline: a.outline, now: a.scroll, samples: Default::default() });
+        let d = self.drag.get_or_insert_with(|| ListDrag { scroll: a.scroll, now: a.scroll, samples: Default::default() });
         d.now = d.scroll - dy;
         let now = std::time::Instant::now();
         d.samples.push_back((now, d.now));
@@ -924,8 +1032,8 @@ impl Select {
         self.drag = None;
     }
 
-    /// Lets go of the list: it carries on at the speed it was thrown, and the song that ends up
-    /// on the selection line gets selected, gliding there.
+    /// Lets go of the list: it carries on at the speed it was thrown and stays there. What's
+    /// selected doesn't change: a song is picked by clicking it.
     pub fn drag_end(&mut self, library: &[Entry]) {
         let Some(d) = self.drag.take() else { return };
         let velocity = match (d.samples.front(), d.samples.back()) {
@@ -935,32 +1043,10 @@ impl Select {
         // Released while still: no throw.
         let still = d.samples.back().is_none_or(|(t, _)| t.elapsed().as_millis() > 60);
         let throw = if still { 0.0 } else { (velocity * 250.0).clamp(-3000.0, 3000.0) };
+        let shown = self.anim.scroll;
+        let glide = self.free(library, THROW_TAU);
         // From where the list is shown (held a little past an end, it springs back).
-        let line = self.anim.scroll + throw + (LIST_BOTTOM - LIST_TOP) * 0.4;
-        // The song whose row is nearest the line (in the list as drawn).
-        let target = self
-            .song_y
-            .iter()
-            .enumerate()
-            .filter(|(_, y)| y.is_finite())
-            .min_by(|a, b| (a.1 - line).abs().total_cmp(&(b.1 - line).abs()))
-            .map(|(g, _)| g);
-        // Glide from where the list was dropped; further takes a little longer.
-        let ms = (LIST_ANIM_MS + throw.abs() * 0.15).clamp(LIST_ANIM_MS, 600.0);
-        match target {
-            Some(g) if self.group_of.get(self.cursor) != Some(&g) => {
-                self.enter_song(self.groups[g].start, library);
-                self.anim.ms = ms;
-                // Begins the transition from here (not from where the selection was).
-                self.anim.cursor = Some(usize::MAX);
-            }
-            _ => {
-                let a = &mut self.anim;
-                (a.scroll_from, a.outline_from, a.open_from, a.closing_from) = (a.scroll, a.outline, a.open_now, a.closing_now);
-                a.start = Some(std::time::Instant::now());
-                a.ms = ms;
-            }
-        }
+        *glide = Glide { now: shown, goal: d.now + throw };
     }
 
     /// Index of the song (group) holding the selection.
@@ -1053,18 +1139,13 @@ impl Select {
         self.refilter(library);
     }
 
-    /// osu!'s right-click scrolling: the pointer's height over the list (`y`, virtual units)
-    /// picks the song that far through the listed songs (the open headings'), top to bottom.
+    /// The scrollbar and osu!'s right-click scrolling: the pointer's height (`y`, virtual units)
+    /// is where the list is, all of it, closed headings too. The thumb stays under the pointer.
     pub fn scroll_to(&mut self, y: f32, library: &[Entry]) {
-        let listed = self.listed_groups();
-        if listed.is_empty() {
-            return;
-        }
-        let frac = ((y - LIST_TOP) / (LIST_BOTTOM - LIST_TOP)).clamp(0.0, 1.0);
-        let g = listed[(frac * (listed.len() - 1) as f32).round() as usize];
-        if self.group_of.get(self.cursor) != Some(&g) {
-            self.enter_song(self.groups[g].start, library);
-        }
+        let (track, thumb) = (LIST_BOTTOM - LIST_TOP, self.thumb);
+        let frac = ((y - LIST_TOP - thumb / 2.0) / (track - thumb).max(1.0)).clamp(0.0, 1.0);
+        let max = self.scroll_max;
+        self.free(library, SCRUB_TAU).goal = frac * max;
     }
 
     /// Shift+F2: back to the song before the last random jump.
@@ -1244,14 +1325,20 @@ impl Select {
             }
         }
 
-        let final_scroll = (final_cursor - view * 0.4).clamp(0.0, (final_y - view).max(0.0));
+        let max_scroll = (final_y - view).max(0.0);
+        self.scroll_max = max_scroll;
+        let final_scroll = (final_cursor - view * 0.4).clamp(0.0, max_scroll);
         let final_outline = top + final_cursor - final_scroll;
+        // Another song selected: the list goes to it.
+        if self.free.as_ref().is_some_and(|f| f.song.as_deref() != self.selected_folder(library)) {
+            self.free = None;
+        }
 
         // A new selection starts a transition from the current state.
         let a = &mut self.anim;
         if a.cursor != Some(self.cursor) || a.open != open_start {
-            if a.cursor.is_none() || self.instant {
-                // First frame (or right-click scrolling): no motion.
+            if a.cursor.is_none() {
+                // First frame: no motion.
                 *a = ListAnim { open: open_start, open_from: 1.0, scroll_from: final_scroll, outline_from: final_outline, ..Default::default() };
             } else {
                 if open_start != a.open {
@@ -1281,12 +1368,16 @@ impl Select {
         let closing_f = a.closing_from * (1.0 - p);
         let mut scroll = a.scroll_from + (final_scroll - a.scroll_from) * p;
         let mut outline = a.outline_from + (final_outline - a.outline_from) * p;
+        if let Some(f) = &mut self.free {
+            f.glide.settle(max_scroll, c.dt_ms, f.tau);
+            scroll = f.glide.now;
+            outline = top + final_cursor - scroll;
+        }
         if let Some(d) = &self.drag {
             // Held: exactly where the pointer has it (a little past the ends at most).
-            let max = (final_y - view).max(0.0);
-            let now = if d.now < 0.0 { d.now * 0.3 } else if d.now > max { max + (d.now - max) * 0.3 } else { d.now };
-            outline = d.outline + (d.scroll - now);
-            scroll = now;
+            let max = max_scroll;
+            scroll = if d.now < 0.0 { d.now * 0.3 } else if d.now > max { max + (d.now - max) * 0.3 } else { d.now };
+            outline = top + final_cursor - scroll;
         }
         (a.scroll, a.outline, a.open_now, a.closing_now) = (scroll, outline, open_f, closing_f);
         let (open_g, closing_g) = (a.open, a.closing);
@@ -1295,17 +1386,13 @@ impl Select {
         // (row, y, height, alpha): rows of opening / closing songs are squeezed and faded.
         let mut rows: Vec<(Row, f32, f32, f32)> = Vec::new();
         let mut y = 0.0;
-        self.song_y.clear();
         for (si, sec) in self.sections.iter().enumerate() {
             rows.push((Row::Section(si), y, SECTION_H, 1.0));
             y += SECTION_H;
             for g in &groups[sec.groups.clone()] {
                 if !section_open[si] {
-                    // Not listed: nowhere to land when the list is let go.
-                    self.song_y.push(f32::INFINITY);
                     continue;
                 }
-                self.song_y.push(y);
                 rows.push((Row::Song(g.clone()), y, SONG_H, 1.0));
                 y += SONG_H;
                 let f = if Some(g.start) == open_g { open_f } else if Some(g.start) == closing_g { closing_f } else { 0.0 };
@@ -1420,8 +1507,8 @@ impl Select {
             let (y0, y1) = (y.max(top - 2.0), (*y + *hh).min(bottom + 2.0));
             (*y, *hh) = (y0, (y1 - y0).max(0.0));
         }
-        // The scroll bar (after the list's clip, outside it), in the margin left of the list: where the list is, clicked or dragged
-        // to go somewhere (`scroll_to`, like right-dragging).
+        // The scroll bar (after the list's clip, outside it), in the margin left of the list: where
+        // the list is, clicked or dragged to go somewhere (`scroll_to`, like right-dragging).
         if groups.len() > 1 {
             let (track_x, track_w) = (8.0, 8.0);
             let track = bottom - top;
@@ -1429,12 +1516,40 @@ impl Select {
             c.round_rect([track_x, top], [track_w, track], 4.0, rgba(0x15151d, if hover { 0.9 } else { 0.6 }), rgba(0x2a2a38, 1.0), 1.0);
             let total = final_y.max(view);
             let thumb = (track * view / total).clamp(18.0, track);
+            self.thumb = thumb;
             let pos = (scroll / (total - view).max(1.0)).clamp(0.0, 1.0);
             c.round_rect([track_x + 1.0, top + pos * (track - thumb)], [track_w - 2.0, thumb], 3.0, rgba(if hover { accent() } else { 0x8a8aa8 }, 0.95), rgba(0, 0.0), 0.0);
             c.hit(track_x - 4.0, top, track_w + 12.0, track, Hit::SongScrollbar);
         }
 
-        let hints = "Enter play  Up/Down difficulty  Left/Right song  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit";
+        // Flying through the list: which heading it's passing.
+        if let Some(py) = self.scrubbing {
+            let line = scroll + view / 2.0;
+            let mut heading = rows.iter().filter_map(|(row, ry, ..)| match row {
+                Row::Section(si) if *ry <= line => Some(*si),
+                _ => None,
+            });
+            if let Some(si) = heading.next_back() {
+                let label = Canvas::fit(10.0, lw - 40.0, &self.sections[si].label);
+                let bw = Canvas::text_width(10.0, &label) + 24.0;
+                let by = (py - 13.0).clamp(top, bottom - 26.0);
+                c.round_rect([30.0, by], [bw, 26.0], 6.0, rgba(0x15151d, 0.96), rgba(accent(), 1.0), 1.5);
+                c.text(42.0, by + 8.0, 10.0, rgba(0xffffff, 1.0), &label);
+            }
+        }
+        // Scrolled away from the selection: the way back.
+        let cursor_y = top + final_cursor - scroll;
+        if self.free.is_some() && self.scrubbing.is_none() && !self.visible.is_empty() && (cursor_y < top - DIFF_H || cursor_y > bottom) {
+            let label = tr!("back to the selected song", "選択中の曲へ戻る", "к выбранной песне");
+            let bw = Canvas::text_width(7.0, label) + 20.0;
+            c.button(24.0 + (lw - bw) / 2.0, bottom - 24.0, bw, 20.0, label, 7.0, Hit::ListBack, true);
+        }
+
+        let hints = tr!(
+            "Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit",
+            "Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替え  Ctrl+L コレクション  Tab 設定  Esc 終了",
+            "Enter играть  Вверх/вниз сложность  Влево/вправо песня  Колесо или правый драг: прокрутка  F1 моды  F2 случайная  [ ] рейт  Ctrl+S сортировка  Ctrl+L коллекция  Tab настройки  Esc выход"
+        );
         c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hints));
         // The status line gives way (smaller) when the hints above come out taller.
         let status_size = Canvas::fit_height(7.0, 2.0 * (469.5 - (455.5 + Canvas::text_height(7.0) / 2.0) - 3.0));

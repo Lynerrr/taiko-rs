@@ -383,6 +383,13 @@ fn assert_every_screen_fits() {
             check(&mut s, &format!("settings {section}"), &mut out);
         }
     }
+    for query in ["e", "volume", "нет такой настройки", "a very long search for something that goes on past the end of the box"] {
+        s.search_settings(query.into());
+        check(&mut s, &format!("settings search {query}"), &mut out);
+    }
+    s.settings_ui.clear_search();
+    s.volume.touch(Instant::now());
+    check(&mut s, "volume lane", &mut out);
     let skins = vec!["built-in".into(), s.cfg.skin.clone(), "- Rafis 2017 Remake (Taiko HD) by somebody".into()];
     s.settings_ui.choices = Some(settings::Choices::new(Item::Skin, skins, Some(1), "2 installed".into()));
     check(&mut s, "skin picker", &mut out);
@@ -903,8 +910,8 @@ fn the_sort_button_lists_the_sorts() {
     assert_eq!(s.cfg.sort, "date added");
 }
 
-#[test]
-fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
+/// Song select sorted by status, its songs under three headings.
+fn select_under_headings() -> State {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = Scene::Select;
@@ -915,47 +922,136 @@ fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
     s.select.sort = ui::SortMode::Status;
     s.select.refilter(&s.library);
     assert!(s.select.sections().len() >= 3);
+    s
+}
+
+fn draw_select(s: &mut State) {
+    check_draw("song select", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None, &|_| Some("SS")));
+}
+
+#[test]
+fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
+    let mut s = select_under_headings();
     // The heading holding the selection is open, the rest closed.
     assert_eq!(s.select.open_sections(), vec![0]);
     // A click opens another without selecting anything, and closes it again.
     let at = s.select.cursor();
-    s.select.click_section(1);
+    s.select.click_section(1, &s.library);
     assert_eq!(s.select.open_sections(), vec![0, 1]);
     assert_eq!(s.select.cursor(), at);
-    s.select.click_section(1);
+    s.select.click_section(1, &s.library);
     assert_eq!(s.select.open_sections(), vec![0]);
     // The open one closes too, with the selection in it, and opens again.
-    s.select.click_section(0);
+    s.select.click_section(0, &s.library);
     assert!(s.select.open_sections().is_empty());
-    check_draw("sections closed", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None, &|_| Some("SS")));
-    s.select.click_section(0);
+    draw_select(&mut s);
+    s.select.click_section(0, &s.library);
     assert_eq!(s.select.open_sections(), vec![0]);
-    // The wheel and right-click scrolling stay in the open heading, however far they go.
-    s.select.step(-50, &s.library, false);
-    s.select.step(500, &s.library, false);
-    assert_eq!(s.select.open_sections(), vec![0], "the wheel opened nothing");
+    // The wheel and right-click scrolling go all the way, and change neither.
+    draw_select(&mut s);
+    s.select.scroll_by(500, &s.library);
     s.select.scroll_to(1000.0, &s.library);
-    assert_eq!(s.select.open_sections(), vec![0], "right-click scrolling opened nothing");
-    let in_first = |s: &State| s.select.current_song().is_some_and(|g| g < s.select.sections_end(0));
-    assert!(in_first(&s), "and the selection never left it");
     s.select.scroll_to(-1000.0, &s.library);
-    assert!(in_first(&s));
-    // The arrow keys, past the last song listed, open the next heading and go on into it.
-    s.select.step(500, &s.library, false);
-    let _ = s.select.key(KeyCode::ArrowDown, &s.library);
-    for _ in 0..20 {
+    assert_eq!(s.select.open_sections(), vec![0]);
+    assert_eq!(s.select.cursor(), at, "and the selection stays");
+    // The arrow keys, past the last song listed, open the next heading and go on into it. It
+    // opened for the selection, so it closes behind it.
+    for _ in 0..40 {
         let _ = s.select.key(KeyCode::ArrowDown, &s.library);
     }
     let open = s.select.open_sections();
-    assert!(open.len() == 1 && open[0] > 0, "the keys went on into the next heading, and the one they left closed: {open:?}");
-    // Moving the selection to another heading that is open closes the one it leaves.
-    s.select.click_section(0);
-    assert_eq!(s.select.open_sections().len(), 2);
-    s.select.scroll_to(-1000.0, &s.library);
-    let open = s.select.open_sections();
-    assert!(open.len() == 1 && open[0] == 0, "scrolling back up left the other heading and closed it: {open:?}");
+    assert!(open.contains(&0), "the player's own heading stays open: {open:?}");
+    assert!(open.len() == 2 && open[1] > 1, "only the last heading the keys went into is open too: {open:?}");
     // It all draws.
-    check_draw("sections", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None, &|_| Some("SS")));
+    draw_select(&mut s);
+}
+
+#[test]
+fn a_heading_the_player_opened_stays_open_when_the_selection_leaves() {
+    let mut s = select_under_headings();
+    s.select.click_section(1, &s.library);
+    let first_of_next = s.select.sections_end(0) as i64;
+    s.select.go_to_song(first_of_next, &s.library);
+    assert_eq!(s.select.open_sections(), vec![1], "the first only opened for the selection");
+    s.select.go_to_song(first_of_next + s.select.sections()[1].1 as i64, &s.library);
+    assert_eq!(s.select.open_sections(), vec![1, 2], "the player's stays when the selection leaves");
+}
+
+#[test]
+fn letters_are_dividers_and_new_ones_start_open() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let n = s.select.sections().len();
+    assert_eq!(s.select.open_sections(), (0..n).collect::<Vec<_>>(), "sorted by artist");
+    s.select.click_section(0, &s.library);
+    assert!(s.select.open_sections().len() < n, "closing one is up to the player");
+}
+
+#[test]
+fn a_search_opens_every_heading_and_clearing_it_puts_them_back() {
+    let mut s = select_under_headings();
+    assert_eq!(s.select.open_sections(), vec![0]);
+    s.select.filter = "song".into();
+    s.select.refilter(&s.library);
+    let n = s.select.sections().len();
+    assert_eq!(s.select.open_sections(), (0..n).collect::<Vec<_>>());
+    s.select.filter.clear();
+    s.select.refilter(&s.library);
+    assert_eq!(s.select.open_sections(), vec![0]);
+}
+
+#[test]
+fn the_list_scrolls_on_its_own_and_comes_back_for_the_selection() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    draw_select(&mut s);
+    let (at, top) = (s.select.cursor(), s.select.list_scroll());
+    // The wheel moves the list only, and walks past no difficulty.
+    s.select.scroll_by(2, &s.library);
+    draw_select(&mut s);
+    assert_eq!(s.select.cursor(), at);
+    assert!(s.select.list_scroll() > top, "{} vs {top}", s.select.list_scroll());
+    // Right-dragging to the bottom reaches the end of the whole list.
+    s.select.scroll_to(1000.0, &s.library);
+    draw_select(&mut s);
+    assert_eq!(s.select.cursor(), at);
+    assert_eq!(s.select.list_scroll(), s.select.list_end());
+    // The heading passing by shows beside the pointer.
+    s.select.scrubbing = Some(300.0);
+    draw_select(&mut s);
+    s.select.scrubbing = None;
+    // An arrow key goes back to the selection.
+    let _ = s.select.key(KeyCode::ArrowDown, &s.library);
+    draw_select(&mut s);
+    assert_ne!(s.select.list_scroll(), s.select.list_end());
+}
+
+#[test]
+fn letting_go_of_the_list_leaves_it_there_and_selects_nothing() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    draw_select(&mut s);
+    let at = s.select.cursor();
+    s.select.drag_to(-120.0);
+    draw_select(&mut s);
+    let held = s.select.list_scroll();
+    s.select.drag_end(&s.library);
+    draw_select(&mut s);
+    assert_eq!(s.select.cursor(), at);
+    assert_eq!(s.select.list_scroll(), held, "stayed where it was let go");
+}
+
+#[test]
+fn a_right_click_off_the_rows_does_nothing() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.right_press = Some((700.0, 400.0, None));
+    let at = s.select.cursor();
+    s.right_button(false);
+    assert_eq!(s.select.cursor(), at);
 }
 
 #[test]

@@ -3,7 +3,7 @@
 
 use std::cell::Cell;
 
-use crate::render::{accent, approach, rgba, Canvas, Hit};
+use crate::render::{accent, approach, rgba, Canvas, Glide, Hit};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
@@ -97,40 +97,39 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 112] = [
-    ("GENERAL", Item::Language),
-    ("GENERAL", Item::SongsFolder),
-    ("GENERAL", Item::ShowConverts),
-    ("GENERAL", Item::HiddenMaps),
-    ("GENERAL", Item::DataFolder),
-    ("GENERAL", Item::Screenshots),
+pub const ITEMS: [(&str, Item); 114] = [
+    ("LIBRARY", Item::SongsFolder),
+    ("LIBRARY", Item::ShowConverts),
+    ("LIBRARY", Item::HiddenMaps),
+    ("LIBRARY", Item::SongSelectLayout),
+    ("LIBRARY", Item::DataFolder),
+    ("LIBRARY", Item::Screenshots),
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::ResumeDelay),
+    ("GAMEPLAY", Item::HideGreat),
     ("GAMEPLAY", Item::Interface),
     ("GAMEPLAY", Item::InterfaceHides),
     ("GAMEPLAY", Item::InterfaceKey),
-    ("GAMEPLAY", Item::SongSelectLayout),
     ("GAMEPLAY", Item::AutoplayStyle),
     ("GAMEPLAY", Item::AutoplayBinding),
     ("GAMEPLAY", Item::AutoplayLeftHanded),
-    ("PLAYFIELD", Item::PlayfieldArea),
-    ("PLAYFIELD", Item::PlayfieldPreset),
-    ("PLAYFIELD", Item::PlayfieldReset),
-    ("PLAYFIELD", Item::ShowPlayfieldSize),
-    ("PLAYFIELD", Item::WheelResize),
-    ("PLAYFIELD", Item::BackgroundDim),
-    ("PLAYFIELD", Item::BackgroundDimBlack),
-    ("PLAYFIELD", Item::KiaiEffects),
-    ("PLAYFIELD", Item::HideGreat),
+    ("VIEW", Item::PlayfieldArea),
+    ("VIEW", Item::PlayfieldPreset),
+    ("VIEW", Item::PlayfieldReset),
+    ("VIEW", Item::ShowPlayfieldSize),
+    ("VIEW", Item::WheelResize),
+    ("VIEW", Item::BackgroundDim),
+    ("VIEW", Item::BackgroundDimBlack),
+    ("VIEW", Item::KiaiEffects),
     ("INPUT", Item::Key(0)),
     ("INPUT", Item::Key(1)),
     ("INPUT", Item::Key(2)),
     ("INPUT", Item::Key(3)),
+    ("INPUT", Item::TouchLayout),
     ("INPUT", Item::PresetKey(0)),
     ("INPUT", Item::PresetKey(1)),
-    ("INPUT", Item::TouchLayout),
     ("INPUT", Item::Hotkey(0)),
     ("INPUT", Item::Hotkey(1)),
     ("INPUT", Item::Hotkey(2)),
@@ -163,6 +162,8 @@ pub const ITEMS: [(&str, Item); 112] = [
     ("INPUT", Item::Hotkey(29)),
     ("INPUT", Item::Hotkey(30)),
     ("INPUT", Item::Hotkey(31)),
+    ("INPUT", Item::Hotkey(32)),
+    ("INPUT", Item::Hotkey(33)),
     ("OFFSET", Item::Offset),
     ("OFFSET", Item::VisualOffset),
     ("OFFSET", Item::Calibrate),
@@ -185,10 +186,6 @@ pub const ITEMS: [(&str, Item); 112] = [
     ("VIDEO", Item::Fullscreen),
     ("VIDEO", Item::WindowSize),
     ("VIDEO", Item::Animations),
-    ("VIDEO", Item::DiscordPresence),
-    ("VIDEO", Item::Splash),
-    ("VIDEO", Item::MainMenu),
-    ("VIDEO", Item::Guide),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinParts),
     ("SKIN", Item::SkinFolder),
@@ -205,25 +202,30 @@ pub const ITEMS: [(&str, Item); 112] = [
     ("ONLINE", Item::NotifyRequests),
     ("ONLINE", Item::NotifyOnline),
     ("ONLINE", Item::NotifyPlaying),
+    ("ONLINE", Item::DiscordPresence),
     ("ONLINE", Item::KrokodilKoban),
-    ("UPDATES", Item::UpdateChannel),
-    ("UPDATES", Item::Update),
-    ("UPDATES", Item::Changelog),
-    ("UPDATES", Item::CheckUpdates),
+    ("SYSTEM", Item::Language),
+    ("SYSTEM", Item::Splash),
+    ("SYSTEM", Item::MainMenu),
+    ("SYSTEM", Item::Guide),
+    ("SYSTEM", Item::UpdateChannel),
+    ("SYSTEM", Item::Update),
+    ("SYSTEM", Item::Changelog),
+    ("SYSTEM", Item::CheckUpdates),
 ];
 
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 10] = [
-    ("GENERAL", "language, Songs folder, data"),
+    ("LIBRARY", "Songs folder, hidden maps, data"),
     ("GAMEPLAY", "speed, rate, interface, autoplay"),
-    ("PLAYFIELD", "size, position"),
+    ("VIEW", "playfield, background"),
     ("INPUT", "drum keys, hotkeys, touch"),
     ("OFFSET", "audio offset, calibration"),
     ("AUDIO", "volume, latency"),
-    ("VIDEO", "frame pacing, display, Discord"),
-    ("SKIN", "notes, hitsounds, colour"),
-    ("ONLINE", "chat filter, notifications"),
-    ("UPDATES", "new versions"),
+    ("VIDEO", "frame pacing, display"),
+    ("SKIN", "notes, hit flash, colour"),
+    ("ONLINE", "chat, notifications, Discord"),
+    ("SYSTEM", "language, startup, updates"),
 ];
 
 /// First item of section `s`.
@@ -234,16 +236,16 @@ pub fn section_start(s: usize) -> usize {
 /// Section `s`'s name, as shown (`SECTIONS` has the English, which `ITEMS` refers to it by).
 pub fn section_name(s: usize) -> &'static str {
     match SECTIONS.get(s).map_or("", |s| s.0) {
-        "GENERAL" => tr!("GENERAL", "一般", "ОБЩИЕ"),
+        "LIBRARY" => tr!("LIBRARY", "ライブラリ", "БИБЛИОТЕКА"),
         "GAMEPLAY" => tr!("GAMEPLAY", "ゲームプレイ", "ИГРА"),
-        "PLAYFIELD" => tr!("PLAYFIELD", "プレイフィールド", "ИГРОВОЕ ПОЛЕ"),
+        "VIEW" => tr!("VIEW", "表示", "ВИД"),
         "INPUT" => tr!("INPUT", "入力", "УПРАВЛЕНИЕ"),
         "OFFSET" => tr!("OFFSET", "オフセット", "СМЕЩЕНИЕ"),
         "AUDIO" => tr!("AUDIO", "オーディオ", "ЗВУК"),
         "VIDEO" => tr!("VIDEO", "グラフィック", "ГРАФИКА"),
         "SKIN" => tr!("SKIN", "スキン", "СКИН"),
         "ONLINE" => tr!("ONLINE", "オンライン", "ОНЛАЙН"),
-        "UPDATES" => tr!("UPDATES", "アップデート", "ОБНОВЛЕНИЯ"),
+        "SYSTEM" => tr!("SYSTEM", "システム", "СИСТЕМА"),
         other => other,
     }
 }
@@ -251,18 +253,51 @@ pub fn section_name(s: usize) -> &'static str {
 /// Section `s`'s one-line summary for the sidebar.
 pub fn section_summary(s: usize) -> &'static str {
     match SECTIONS.get(s).map_or("", |s| s.0) {
-        "GENERAL" => tr!("language, Songs folder, data", "言語、Songsフォルダ、データ", "язык, папка Songs, данные"),
+        "LIBRARY" => tr!("Songs folder, hidden maps, data", "Songsフォルダ、非表示の譜面、データ", "папка Songs, скрытые карты, данные"),
         "GAMEPLAY" => tr!("speed, rate, interface", "速度、レート、インターフェース", "скорость, рейт, интерфейс"),
-        "PLAYFIELD" => tr!("size, position", "サイズ、位置", "размер, положение"),
+        "VIEW" => tr!("playfield, background", "プレイフィールド、背景", "игровое поле, фон"),
         "INPUT" => tr!("drum keys, hotkeys, touch", "太鼓のキー、ショートカット、タッチ", "клавиши, горячие клавиши"),
         "OFFSET" => tr!("audio offset, calibration", "音声オフセット、調整", "смещение звука, калибровка"),
         "AUDIO" => tr!("volume, latency", "音量、遅延", "громкость, задержка"),
-        "VIDEO" => tr!("frame pacing, display, Discord", "フレーム、画面、Discord", "кадры, экран, Discord"),
-        "SKIN" => tr!("notes, hitsounds, colour", "ノーツ、ヒット音、色", "ноты, хитсаунды, цвет"),
-        "ONLINE" => tr!("chat filter, notifications", "チャットフィルター、通知", "фильтр чата, уведомления"),
-        "UPDATES" => tr!("new versions", "新しいバージョン", "новые версии"),
+        "VIDEO" => tr!("frame pacing, display", "フレーム、画面", "кадры, экран"),
+        "SKIN" => tr!("notes, hit flash, colour", "ノーツ、ヒット時の光、色", "ноты, вспышка, цвет"),
+        "ONLINE" => tr!("chat, notifications, Discord", "チャット、通知、Discord", "чат, уведомления, Discord"),
+        "SYSTEM" => tr!("language, startup, updates", "言語、起動、アップデート", "язык, запуск, обновления"),
         _ => "",
     }
+}
+
+/// The small heading above a row that starts a group of its section.
+pub fn group_heading(item: Item) -> Option<&'static str> {
+    Some(match item {
+        Item::Interface => tr!("Interface", "インターフェース", "Интерфейс"),
+        Item::AutoplayStyle => tr!("Autoplay", "オートプレイ", "Автоигра"),
+        Item::PlayfieldArea => tr!("Playfield", "プレイフィールド", "Игровое поле"),
+        Item::BackgroundDim => tr!("Background", "背景", "Фон"),
+        Item::Key(0) => tr!("Drum", "太鼓", "Барабан"),
+        Item::PresetKey(0) => tr!("Playfield presets", "プレイフィールドのプリセット", "Пресеты поля"),
+        Item::Hotkey(0) => tr!("In a song", "プレイ中", "В песне"),
+        Item::Hotkey(6) => tr!("Song select", "選曲画面", "Выбор песни"),
+        Item::Hotkey(16) => tr!("Results", "リザルト", "Результаты"),
+        Item::Hotkey(19) => tr!("Anywhere", "どこでも", "Везде"),
+        Item::VsyncCompensation => tr!("Vsync", "垂直同期", "Vsync"),
+        Item::NoteColours => tr!("Colours", "色", "Цвета"),
+        Item::NotifyMessages => tr!("Notifications", "通知", "Уведомления"),
+        Item::UpdateChannel => tr!("Updates", "アップデート", "Обновления"),
+        _ => return None,
+    })
+}
+
+/// How a row shows its value, besides as text.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Control {
+    Text,
+    /// A switch, on or off.
+    Switch(bool),
+    /// A bar from 0 to 1, set by dragging it.
+    Level(f32),
+    /// A colour shown beside its value.
+    Swatch(u32),
 }
 
 /// What Enter does to a setting.
@@ -321,7 +356,7 @@ impl Item {
             Item::PresetKey(_) => tr!("Next preset key", "次のプリセットのキー", "Клавиша: след. пресет"),
             Item::Hotkey(i) => crate::keys::Hotkey::ALL[i].label(),
             Item::TouchLayout => tr!("Touch layout", "タッチの配置", "Сенсорная раскладка"),
-            Item::Screenshots => tr!("Screenshots (F12)", "スクリーンショット (F12)", "Скриншоты (F12)"),
+            Item::Screenshots => tr!("Screenshots", "スクリーンショット", "Скриншоты"),
             // Also in English, so anyone who picked a language by mistake finds their way back.
             Item::Language => tr!("Language", "言語 (Language)", "Язык (Language)"),
             Item::ShowPlayfieldSize => tr!("Show playfield size", "プレイフィールドのサイズを表示", "Показывать размер поля"),
@@ -558,9 +593,9 @@ impl Item {
                 "Язык меню, настроек и сообщений. Названия песен остаются как в картах."
             ),
             Item::Screenshots => tr!(
-                "Where F12 puts a screenshot: on the clipboard to paste, as a picture in the Screenshots folder, or both.",
-                "F12のスクリーンショットの行き先: 貼り付け用のクリップボード、Screenshotsフォルダの画像、またはその両方。",
-                "Куда F12 кладёт скриншот: в буфер обмена, картинкой в папку Screenshots или туда и туда."
+                "Where a screenshot goes: on the clipboard to paste, as a picture in the Screenshots folder, or both.",
+                "スクリーンショットの行き先: 貼り付け用のクリップボード、Screenshotsフォルダの画像、またはその両方。",
+                "Куда идёт скриншот: в буфер обмена, картинкой в папку Screenshots или туда и туда."
             ),
             Item::TouchLayout => tr!(
                 "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",
@@ -828,11 +863,34 @@ pub struct SettingsUi {
     pub choices: Option<Choices>,
     /// Typing a value for a setting.
     pub editing: Option<Edit>,
-    /// The section last drawn and the animated highlight position in it.
-    scroll: Cell<f32>,
+    /// What's typed into the search box, and the rows it finds (`ITEMS` indices, best first).
+    pub search: String,
+    results: Vec<usize>,
+    /// What's listed as last drawn (a section, or the search's results: `RESULTS`) and the
+    /// animated highlight position in it.
+    shown: Cell<Option<usize>>,
     highlight: Cell<f32>,
-    /// The first row shown of a section longer than the screen.
-    first_row: Cell<usize>,
+    /// How far the list is scrolled, and how far it goes.
+    scroll: Cell<f32>,
+    scroll_max: Cell<f32>,
+    /// The list moved by the wheel. Left out, it keeps the cursor in view.
+    free: Cell<Option<Glide>>,
+    /// Where the bars of `Control::Level` were drawn (x, width).
+    track: Cell<(f32, f32)>,
+}
+
+/// Top of the settings screen, a row's height, a group heading's height, a wheel notch.
+const TOP: f32 = 62.0;
+const ROW: f32 = 30.0;
+const GROUP_H: f32 = 18.0;
+const WHEEL_STEP: f32 = ROW * 2.0;
+/// `SettingsUi::shown` for the search's results.
+const RESULTS: usize = usize::MAX;
+
+/// A line of the list: a group's heading or a row (`ITEMS` index), and how far down it is.
+enum Line {
+    Group(&'static str, f32),
+    Row(usize, f32),
 }
 
 /// The playfield preset dropdown: a cursor over the flattened list, plus where each row was
@@ -1225,6 +1283,15 @@ impl SettingsUi {
     }
 
     pub fn move_cursor(&mut self, delta: i32) {
+        self.free.set(None);
+        self.editing = None;
+        if !self.search.is_empty() {
+            let at = self.results.iter().position(|&i| i == self.cursor).unwrap_or(0) as i32;
+            if let Some(&i) = self.results.get((at + delta).clamp(0, self.results.len() as i32 - 1) as usize) {
+                self.cursor = i;
+            }
+            return;
+        }
         let start = self.cursor;
         self.cursor = (self.cursor as i32 + delta).clamp(0, ITEMS.len() as i32 - 1) as usize;
         // Past a row that isn't shown, or back where it was at the end of the list.
@@ -1235,7 +1302,42 @@ impl SettingsUi {
                 break;
             }
         }
+    }
+
+    /// The wheel: moves the list `notches` on, within what's listed. The cursor stays.
+    pub fn scroll_by(&self, notches: i32) {
+        let mut glide = self.free.get().unwrap_or(Glide::at(self.scroll.get()));
+        glide.goal = (glide.goal + notches as f32 * WHEEL_STEP).clamp(0.0, self.scroll_max.get());
+        self.free.set(Some(glide));
+    }
+
+    /// `text` in the search box: lists what it finds and puts the cursor on the best of it.
+    /// `key` gives a key setting's key as shown.
+    pub fn set_search(&mut self, text: String, key: &dyn Fn(Item) -> String) {
+        self.search = text;
+        self.free.set(None);
         self.editing = None;
+        self.results = if self.search.trim().is_empty() {
+            Vec::new()
+        } else {
+            crate::settings_search::find(&self.search, key, &|item| self.shows(item))
+        };
+        if let Some(&first) = self.results.first() {
+            self.cursor = first;
+        }
+    }
+
+    /// Back to the sections.
+    pub fn clear_search(&mut self) {
+        self.search.clear();
+        self.results.clear();
+        self.free.set(None);
+    }
+
+    /// The bar's value under the pointer at `x`.
+    pub fn level_at(&self, x: f32) -> f32 {
+        let (left, w) = self.track.get();
+        ((x - left) / w.max(1.0)).clamp(0.0, 1.0)
     }
 
     /// Whether `item` is in the list (krokodil_koban mode is only for them).
@@ -1248,122 +1350,267 @@ impl SettingsUi {
         SECTIONS.iter().position(|(name, _)| *name == ITEMS[self.cursor].0).unwrap_or(0)
     }
 
-    /// A sidebar of sections and the selected section's settings. `value` gives the current
-    /// display value of each item.
-    pub fn draw(&self, c: &mut Canvas, value: &dyn Fn(Item) -> String, footer: &str) {
-        const TOP: f32 = 62.0;
-        const ROW: f32 = 30.0;
+    /// What's listed, in order: the section's rows under their groups' headings, or the
+    /// search's results.
+    fn lines(&self, section: usize) -> (Vec<Line>, f32) {
+        let mut y = 0.0;
+        if !self.search.is_empty() {
+            let lines = self.results.iter().enumerate().map(|(k, &i)| Line::Row(i, k as f32 * ROW)).collect::<Vec<_>>();
+            return (lines, self.results.len() as f32 * ROW);
+        }
+        let mut lines = Vec::new();
+        for (i, (sec, item)) in ITEMS.iter().enumerate() {
+            if *sec != SECTIONS[section].0 || !self.shows(*item) {
+                continue;
+            }
+            if let Some(heading) = group_heading(*item) {
+                lines.push(Line::Group(heading, y));
+                y += GROUP_H;
+            }
+            lines.push(Line::Row(i, y));
+            y += ROW;
+        }
+        (lines, y)
+    }
+
+    /// A sidebar of sections and the selected section's settings, or what the search found.
+    /// `value` gives the current display value of each item, `control` how it's shown.
+    pub fn draw(&self, c: &mut Canvas, value: &dyn Fn(Item) -> String, control: &dyn Fn(Item) -> Control, footer: &str) {
         let w = c.width;
         let total = (w - 48.0).min(780.0);
         let x0 = (w - total) / 2.0;
         let side_w = 170.0;
         let (cx, col) = (x0 + side_w + 16.0, total - side_w - 16.0);
         let section = self.section();
+        let searching = !self.search.is_empty();
 
-        // Sidebar.
-        for i in 0..SECTIONS.len() {
-            let (name, about) = (section_name(i), section_summary(i));
+        // Sidebar: while searching, how much was found in each section.
+        for (i, (id, _)) in SECTIONS.iter().enumerate() {
+            let name = section_name(i);
+            let found = self.results.iter().filter(|&&r| ITEMS[r].0 == *id).count();
+            let about = if searching { tr!("found: {found}", "{found}件", "найдено: {found}";) } else { section_summary(i).to_string() };
             let y = TOP + i as f32 * 40.0;
-            let on = i == section;
+            let on = i == section && !searching;
             let hover = !on && c.hovered(x0, y, side_w, 34.0);
             let bg = if on { 0x2b1a17 } else if hover { 0x262634 } else { 0x1d1d27 };
+            let dim = searching && found == 0;
             c.round_rect([x0, y], [side_w, 34.0], 7.0, rgba(bg, 0.95), rgba(if on { accent() } else { 0x2a2a38 }, 1.0), if on { 1.5 } else { 1.0 });
             c.hit(x0, y, side_w, 34.0, Hit::SettingsSection(i));
-            c.text(x0 + 12.0, y + 7.0, 9.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), name);
-            c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 20.0, about));
+            c.text(x0 + 12.0, y + 7.0, 9.0, rgba(if on { 0xffffff } else if dim { 0x6f6f86 } else { 0xc8c8d8 }, 1.0), name);
+            c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 20.0, &about));
         }
 
-        // The section's settings.
-        let rows: Vec<(usize, Item)> = ITEMS.iter().enumerate().filter(|(_, (sec, it))| *sec == SECTIONS[section].0 && self.shows(*it)).map(|(i, (_, it))| (i, *it)).collect();
-        c.text(cx, TOP - 2.0, 11.0, rgba(accent(), 1.0), section_name(section));
-        let first = rows.first().map(|r| r.0).unwrap_or(0);
-        // A long section (the hotkeys) scrolls to keep the cursor in sight, leaving room for the
-        // help underneath.
-        let fits = ((crate::render::VIRTUAL_HEIGHT - (TOP + 18.0) - 60.0) / ROW).floor().max(1.0) as usize;
-        let at = self.cursor - first;
-        let mut top_row = if self.scroll.get() != section as f32 { 0 } else { self.first_row.get() };
-        if at < top_row {
-            top_row = at;
-        } else if at >= top_row + fits {
-            top_row = at + 1 - fits;
-        }
-        top_row = top_row.min(rows.len().saturating_sub(fits));
-        self.first_row.set(top_row);
-        let target = (at - top_row) as f32 * ROW;
-        // The highlight glides within a section and jumps when the section changes.
-        let mut hl = self.highlight.get();
-        if self.scroll.get() != section as f32 || !hl.is_finite() {
-            hl = target;
-            self.scroll.set(section as f32);
-        }
-        approach(&mut hl, target, c.dt_ms, 35.0);
-        self.highlight.set(hl);
+        // The title and the search box beside it: typing anywhere goes into it.
+        let box_w = (col * 0.5).min(240.0);
+        let box_x = cx + col - box_w;
+        let n = self.results.len();
+        let title = if searching { tr!("Found: {n}", "{n}件", "Найдено: {n}";) } else { section_name(section).to_string() };
+        c.text(cx, TOP - 2.0, 11.0, rgba(accent(), 1.0), &Canvas::fit(11.0, col - box_w - 8.0, &title));
+        c.round_rect([box_x, TOP - 7.0], [box_w, 19.0], 5.0, rgba(0x23232f, 0.9), rgba(if searching { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+        let (text, col_text) = if searching {
+            (Canvas::fit_end(8.0, box_w - 18.0, &format!("{}_", self.search)), 0xffffff)
+        } else {
+            (Canvas::fit(8.0, box_w - 18.0, tr!("type to search...", "入力して検索...", "начни печатать для поиска...")), 0x6f6f86)
+        };
+        c.text(box_x + 9.0, TOP - 1.5, 8.0, rgba(col_text, 1.0), &text);
+        c.hit(box_x, TOP - 7.0, box_w, 19.0, Hit::SettingsSearch);
+
+        // The list: it scrolls by itself to keep the cursor in sight, and by the wheel.
         let list_top = TOP + 18.0;
-        if rows.len() > fits {
+        let (lines, height) = self.lines(section);
+        let view = ((crate::render::VIRTUAL_HEIGHT - list_top - 60.0) / ROW).floor().max(1.0) * ROW;
+        let max = (height - view).max(0.0);
+        self.scroll_max.set(max);
+        let listing = if searching { RESULTS } else { section };
+        let fresh = self.shown.get() != Some(listing);
+        if fresh {
+            self.shown.set(Some(listing));
+            self.free.set(None);
+            self.scroll.set(0.0);
+        }
+        let cursor_y = lines.iter().find_map(|l| match l {
+            Line::Row(i, y) if *i == self.cursor => Some(*y),
+            _ => None,
+        });
+        let mut scroll = self.scroll.get();
+        if let Some(mut glide) = self.free.get() {
+            glide.settle(max, c.dt_ms, 45.0);
+            scroll = glide.now;
+            self.free.set(Some(glide));
+        } else if let Some(y) = cursor_y {
+            let target = if y - GROUP_H < scroll {
+                y - GROUP_H
+            } else if y + ROW > scroll + view {
+                y + ROW - view
+            } else {
+                scroll
+            };
+            if fresh {
+                scroll = target.clamp(0.0, max);
+            } else {
+                approach(&mut scroll, target.clamp(0.0, max), c.dt_ms, 35.0);
+            }
+        }
+        scroll = scroll.clamp(0.0, max);
+        self.scroll.set(scroll);
+
+        // The highlight glides within a list and jumps when the list changes.
+        let mut hl = self.highlight.get();
+        if let Some(y) = cursor_y {
+            if fresh || !hl.is_finite() {
+                hl = y;
+            }
+            approach(&mut hl, y, c.dt_ms, 35.0);
+            self.highlight.set(hl);
+        }
+        if max > 0.0 {
             // Where the rows shown are in the whole list.
-            let (bar_h, all_h) = (fits as f32 * ROW - 4.0, rows.len() as f32 * ROW);
-            let (from, len) = (top_row as f32 * ROW / all_h * bar_h, (fits as f32 * ROW / all_h * bar_h).max(12.0));
+            let bar_h = view - 4.0;
+            let (from, len) = (scroll / height * bar_h, (view / height * bar_h).max(12.0));
             c.round_rect([cx + col + 4.0, list_top], [3.0, bar_h], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
             c.round_rect([cx + col + 4.0, list_top + from], [3.0, len], 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
         }
-        let rows_shown = rows.len().min(fits);
-        for (k, (i, item)) in rows.iter().skip(top_row).take(fits).enumerate() {
-            let y = list_top + k as f32 * ROW;
-            let selected = *i == self.cursor;
-            let hover = !selected && c.hovered(cx, y, col, ROW - 4.0);
-            let bg = if selected { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
-            c.round_rect([cx, y], [col, ROW - 4.0], 6.0, rgba(bg, 0.95), rgba(0x2a2a38, 1.0), 1.0);
-            c.hit(cx, y - 2.0, col, ROW, Hit::SettingRow(*i));
-            c.text(cx + 12.0, y + 9.5, 8.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
-            // The value gets what the label leaves, and is cut short past that.
-            let room = col - 36.0 - Canvas::text_width(8.0, item.label());
-            if let Some(edit) = self.editing.as_ref().filter(|e| selected && e.item == *item) {
-                // A text box in place of the value; the old value shows selected until typed over.
-                let text = Canvas::fit_end(8.0, room - 24.0, &edit.text);
-                let tw = Canvas::text_width(8.0, &text);
-                let bw = (tw + 24.0).max(90.0).min(room);
-                let right = cx + col - 12.0;
-                c.round_rect([right + 6.0 - bw, y + 4.0], [bw, ROW - 12.0], 4.0, rgba(0x15151d, 1.0), rgba(0xFFD34D, 1.0), 1.0);
-                if edit.fresh && !text.is_empty() {
-                    c.rect(right - 7.0 - tw, y + 7.0, tw + 2.0, ROW - 18.0, rgba(accent(), 0.45));
-                }
-                c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
-                // At the caret in the text (at the end when the start was cut off to fit).
-                let at = if text == edit.text { caret_x(8.0, &text, edit.caret) } else { tw };
-                c.rect(right - 6.0 - tw + at, y + 7.0, 1.0, ROW - 18.0, rgba(0xFFD34D, 1.0));
+        let list_h = height.min(view);
+        if searching && lines.is_empty() {
+            c.text(cx + 12.0, list_top + 10.0, 8.0, rgba(0x8a8aa0, 1.0), tr!("Nothing found.", "見つかりませんでした。", "Ничего не найдено."));
+        }
+        let track_w = (col * 0.2).clamp(50.0, 110.0);
+        self.track.set((cx + col - 12.0 - Canvas::text_width(8.0, "100%") - 12.0 - track_w, track_w));
+        let in_list = c.hovered(cx, list_top - 2.0, col, list_h + 2.0);
+        let mut hovered = None;
+        let (start, hits) = (c.shapes.len(), c.hits.len());
+        for line in &lines {
+            let y = list_top - scroll + match line {
+                Line::Group(_, y) | Line::Row(_, y) => *y,
+            };
+            if y + ROW < list_top - 2.0 || y > list_top + view {
                 continue;
             }
-            let v = if selected && self.binding.is_some() {
-                tr!("press a key...", "キーを押してください...", "нажмите клавишу...").to_string()
-            } else if selected && item.kind() != Kind::Key {
-                format!("<  {}  >", Canvas::fit(8.0, room - Canvas::text_width(8.0, "<    >"), &value(*item)))
-            } else {
-                Canvas::fit(8.0, room, &value(*item))
-            };
-            let v_col = if selected && self.binding.is_some() { 0xFFD34D } else { 0xffffff };
-            c.text_right(cx + col - 12.0, y + 9.5, 8.0, rgba(v_col, 1.0), &v);
-            if selected && self.binding.is_none() && item.kind() != Kind::Key {
-                // The "<" and ">" around the value step it.
-                let tw = Canvas::text_width(8.0, &v);
-                c.hit(cx + col - 12.0 - tw - 6.0, y, 20.0, ROW - 4.0, Hit::SettingStep(*i, -1));
-                c.hit(cx + col - 26.0, y, 24.0, ROW - 4.0, Hit::SettingStep(*i, 1));
+            match line {
+                Line::Group(heading, _) => {
+                    c.text(cx + 2.0, y + 6.0, 7.0, rgba(0x8a8aa0, 1.0), heading);
+                }
+                Line::Row(i, _) => {
+                    let row_hover = in_list && c.hovered(cx, y, col, ROW - 4.0);
+                    if row_hover {
+                        hovered = Some(ITEMS[*i].1);
+                    }
+                    self.draw_row(c, *i, [cx, y, col], row_hover, value, control);
+                }
             }
         }
-        c.round_rect([cx, list_top + hl], [col, ROW - 4.0], 6.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
+        if cursor_y.is_some() {
+            c.round_rect([cx, list_top + hl - scroll], [col, ROW - 4.0], 6.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
+        }
+        c.clip_since(start, cx - 2.0, list_top - 2.0, col + 4.0, view + 2.0);
+        for h in &mut c.hits[hits..] {
+            let [_, y, _, hh] = &mut h.rect;
+            let (y0, y1) = (y.max(list_top - 2.0), (*y + *hh).min(list_top + view));
+            (*y, *hh) = (y0, (y1 - y0).max(0.0));
+        }
 
-        // What the selected setting does.
-        let help_y = list_top + rows_shown as f32 * ROW + 10.0;
+        // What the setting under the pointer does, or else the selected one.
+        let help_y = list_top + list_h.max(ROW) + 10.0;
         // Two lines, spaced for however tall the text comes out (taller on a text grid).
         let glyph_h = Canvas::text_height(7.0);
         let line_h = glyph_h + 4.0;
         c.round_rect([cx, help_y], [col, line_h * 2.0 + 8.0], 6.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
-        let help = self.item().help();
+        let help = hovered.or(cursor_y.map(|_| self.item())).map_or("", Item::help);
         let (line1, line2) = split_help(help, 7.0, col - 20.0);
         // `text` centres taller glyphs on the line; this puts their top 6 below the box's.
         let first = help_y + 6.0 + (glyph_h - 7.0) / 2.0;
         c.text(cx + 10.0, first, 7.0, rgba(0x9a9ab0, 1.0), &line1);
         c.text(cx + 10.0, first + line_h, 7.0, rgba(0x9a9ab0, 1.0), &line2);
         c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), &Canvas::fit_hints(8.0, w - 48.0, footer));
+    }
+
+    /// Row `i` of `ITEMS` at `[x, y, width]`: its name, and its value in the way that suits it.
+    fn draw_row(&self, c: &mut Canvas, i: usize, [cx, y, col]: [f32; 3], hover: bool, value: &dyn Fn(Item) -> String, control: &dyn Fn(Item) -> Control) {
+        let item = ITEMS[i].1;
+        let selected = i == self.cursor;
+        let bg = if selected { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
+        c.round_rect([cx, y], [col, ROW - 4.0], 6.0, rgba(bg, 0.95), rgba(0x2a2a38, 1.0), 1.0);
+        c.hit(cx, y - 2.0, col, ROW, Hit::SettingRow(i));
+        // Found by a search, the row says which section it's in.
+        let mut x = cx + 12.0;
+        if !self.search.is_empty() {
+            let s = SECTIONS.iter().position(|(name, _)| *name == ITEMS[i].0).unwrap_or(0);
+            x += c.text(x, y + 10.5, 6.0, rgba(0x8a8aa0, 1.0), &format!("{}  ", section_name(s)));
+        }
+        c.text(x, y + 9.5, 8.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
+        let right = cx + col - 12.0;
+        // The value gets what the label leaves, and is cut short past that.
+        let room = right - x - 12.0 - Canvas::text_width(8.0, item.label());
+        if let Some(edit) = self.editing.as_ref().filter(|e| selected && e.item == item) {
+            // A text box in place of the value; the old value shows selected until typed over.
+            let text = Canvas::fit_end(8.0, room - 24.0, &edit.text);
+            let tw = Canvas::text_width(8.0, &text);
+            let bw = (tw + 24.0).max(90.0).min(room);
+            c.round_rect([right + 6.0 - bw, y + 4.0], [bw, ROW - 12.0], 4.0, rgba(0x15151d, 1.0), rgba(0xFFD34D, 1.0), 1.0);
+            if edit.fresh && !text.is_empty() {
+                c.rect(right - 7.0 - tw, y + 7.0, tw + 2.0, ROW - 18.0, rgba(accent(), 0.45));
+            }
+            c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
+            // At the caret in the text (at the end when the start was cut off to fit).
+            let at = if text == edit.text { caret_x(8.0, &text, edit.caret) } else { tw };
+            c.rect(right - 6.0 - tw + at, y + 7.0, 1.0, ROW - 18.0, rgba(0xFFD34D, 1.0));
+            return;
+        }
+        if selected && self.binding.is_some() {
+            c.text_right(right, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), tr!("press a key...", "キーを押してください...", "нажмите клавишу..."));
+            return;
+        }
+        let shown = value(item);
+        match (item.kind(), control(item)) {
+            (_, Control::Switch(on)) => {
+                let (sw, sh) = (22.0, 11.0);
+                let (sx, sy) = (right - sw, y + (ROW - 4.0 - sh) / 2.0);
+                let fill = if on { accent() } else { 0x3a3a4e };
+                c.round_rect([sx, sy], [sw, sh], sh / 2.0, rgba(fill, 1.0), rgba(fill, 1.0), 0.0);
+                let knob = if on { sx + sw - sh + 1.5 } else { sx + 1.5 };
+                c.round_rect([knob, sy + 1.5], [sh - 3.0, sh - 3.0], (sh - 3.0) / 2.0, rgba(0xffffff, 1.0), rgba(0xffffff, 1.0), 0.0);
+                // The rare switch with more to say than on or off.
+                if shown.chars().count() > 4 {
+                    c.text_right(sx - 8.0, y + 9.5, 8.0, rgba(0xc8c8d8, 1.0), &Canvas::fit(8.0, room - sw - 8.0, &shown));
+                }
+            }
+            (_, Control::Level(level)) => {
+                let (tx, tw) = self.track.get();
+                let ty = y + (ROW - 4.0) / 2.0 - 2.0;
+                c.round_rect([tx, ty], [tw, 4.0], 2.0, rgba(0x3a3a4e, 1.0), rgba(0, 0.0), 0.0);
+                c.round_rect([tx, ty], [(tw * level).max(4.0), 4.0], 2.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
+                c.round_rect([tx + tw * level - 4.0, ty - 3.0], [8.0, 10.0], 3.0, rgba(0xffffff, 1.0), rgba(0, 0.0), 0.0);
+                c.hit(tx - 5.0, y, tw + 10.0, ROW - 4.0, Hit::SettingLevel(i));
+                c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &shown);
+            }
+            (Kind::Key, _) => {
+                let text = Canvas::fit(8.0, room - 12.0, &shown);
+                let bw = Canvas::text_width(8.0, &text) + 12.0;
+                c.round_rect([right + 6.0 - bw, y + 5.0], [bw, ROW - 14.0], 3.0, rgba(0x2a2a3a, 1.0), rgba(0x5a5a74, 1.0), 1.0);
+                c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &text);
+            }
+            (Kind::Action, _) => {
+                let text = Canvas::fit(8.0, room, &shown);
+                c.text_right(right, y + 9.5, 8.0, rgba(if hover || selected { 0xffffff } else { 0x9a9ab0 }, 1.0), &text);
+            }
+            (_, control) => {
+                let stepped = selected || hover;
+                let swatch = if matches!(control, Control::Swatch(_)) { 14.0 } else { 0.0 };
+                let arrows = Canvas::text_width(8.0, "<    >");
+                let text = Canvas::fit(8.0, room - arrows - swatch, &shown);
+                let v = if stepped { format!("<  {text}  >") } else { text.clone() };
+                c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &v);
+                let tw = Canvas::text_width(8.0, &v);
+                if let Control::Swatch(colour) = control {
+                    c.round_rect([right - tw - 15.0, y + 8.0], [10.0, 10.0], 2.0, rgba(colour, 1.0), rgba(0xffffff, 0.6), 1.0);
+                }
+                if stepped {
+                    // The "<" and ">" around the value step it.
+                    c.hit(right - tw - 6.0, y, 20.0, ROW - 4.0, Hit::SettingStep(i, -1));
+                    c.hit(right - 14.0, y, 24.0, ROW - 4.0, Hit::SettingStep(i, 1));
+                }
+            }
+        }
     }
 }
 

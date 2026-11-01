@@ -138,10 +138,6 @@ pub struct Preview {
     /// Passed on to the autoplay preview (the kiai effects setting, how autoplay hits).
     pub kiai_effects: bool,
     pub autoplay: crate::autoplay::Settings,
-    /// The list is being dragged through (scrollbar, right-click scrolling): the selection
-    /// races past songs, so nothing loads until it is let go. Loading each song paused on
-    /// (decoding its music, parsing it) is what made dragging stutter.
-    pub hold: bool,
     /// The selected map's own offset, shown with its details.
     pub map_offset: f64,
     /// The pp a full combo of the selected map gives with the mods picked, at `pp::POTENTIAL`'s
@@ -262,7 +258,7 @@ impl Preview {
             self.changed_at = Some(if quiet { now.checked_sub(DEBOUNCE).unwrap_or(now) } else { now });
         }
         // Start loads once the selection has settled.
-        if self.seen != self.requested && !self.hold && self.changed_at.is_some_and(|t| now - t >= DEBOUNCE) {
+        if self.seen != self.requested && self.changed_at.is_some_and(|t| now - t >= DEBOUNCE) {
             self.requested = self.seen;
             self.requested_rate = rate;
             self.requested_pitch = self.pitch;

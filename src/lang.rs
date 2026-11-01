@@ -1,4 +1,4 @@
-//! The interface's language: English, Japanese or Russian (Settings > General > Language).
+//! The interface's language: English, Japanese or Russian (Settings > System > Language).
 //! Text is translated where it's written: `tr!("Play", "プレイ", "Играть")` picks one for the
 //! current language, and with format arguments after a `;` (`tr!("{} maps", "{}譜面",
 //! "{} карт"; n)`, or `tr!("{n} maps", "{n}譜面", "{n} карт";)` for captured variables) it formats
@@ -53,7 +53,24 @@ thread_local! {
     static CURRENT: AtomicU8 = const { AtomicU8::new(0) };
 }
 
+thread_local! {
+    /// The language `with` is running in.
+    static BORROWED: std::cell::Cell<Option<Lang>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with the text it asks for in `lang`, on this thread only, whatever the interface is
+/// showing meanwhile.
+pub fn with<T>(lang: Lang, f: impl Fn() -> T) -> T {
+    BORROWED.with(|b| b.set(Some(lang)));
+    let out = f();
+    BORROWED.with(|b| b.set(None));
+    out
+}
+
 pub fn current() -> Lang {
+    if let Some(lang) = BORROWED.with(std::cell::Cell::get) {
+        return lang;
+    }
     #[cfg(not(test))]
     let i = CURRENT.load(Ordering::Relaxed);
     #[cfg(test)]

@@ -422,6 +422,12 @@ pub fn types_text(key: KeyCode) -> bool {
     name.starts_with("Key") || name.starts_with("Digit") || matches!(key, Space | Minus | Equal | Backslash | Semicolon | Quote | Comma | Period | Slash | Backquote)
 }
 
+/// Whether `key` starts a word: punctuation keeps its other jobs until something's been typed.
+pub fn starts_text(key: KeyCode) -> bool {
+    let name = format!("{key:?}");
+    name.starts_with("Key") || name.starts_with("Digit")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

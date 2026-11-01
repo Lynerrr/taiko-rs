@@ -59,6 +59,7 @@ mod scores;
 mod search;
 mod setstatus;
 mod settings;
+mod settings_search;
 mod shapeshift;
 mod skin;
 mod social;
@@ -67,6 +68,7 @@ mod stars;
 mod ui;
 mod update;
 mod video;
+mod volume;
 #[cfg(target_os = "linux")]
 mod wayland_dnd;
 
@@ -271,7 +273,7 @@ struct State {
     modifiers_ctrl: bool,
     modifiers_alt: bool,
     /// When the volume overlay was last poked (Alt + wheel).
-    volume_shown: Option<Instant>,
+    volume: volume::Overlay,
     /// The startup splash while it plays.
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
@@ -297,8 +299,6 @@ struct State {
     /// The window's handle, for the media controls on Windows.
     window_handle: Option<usize>,
     updater: update::Updater,
-    /// When the overlay appeared (it slides in once, not on every notch).
-    volume_since: Option<Instant>,
     /// Clickable areas of the last frame drawn.
     hits: Vec<render::HitBox>,
     browse: browse::Browse,
@@ -389,6 +389,8 @@ struct State {
     focused: bool,
     /// The right button is held on song select (scrolling through the list).
     right_scroll: bool,
+    /// The settings' bar being dragged (index into `settings::ITEMS`).
+    settings_level: Option<usize>,
     /// The song list's scroll bar is held.
     scrollbar_drag: bool,
     /// Right button pressed on song select and not moved yet (virtual units, what's under it):
@@ -1015,22 +1017,6 @@ fn file_uri(path: &std::path::Path) -> String {
         }
     }
     uri
-}
-
-/// Volume overlay (bottom right) shown while Alt + wheel changes the master volume.
-fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32, slide: f32) {
-    let (w, h) = (190.0, 58.0);
-    let (x, y) = (c.width - w - 16.0 + slide, 480.0 - h - 30.0);
-    c.round_rect([x, y], [w, h], 8.0, rgba(0x101018, 0.88 * a), rgba(0x3a3a4e, a), 1.0);
-    c.text(x + 12.0, y + 10.0, 9.0, rgba(0xffffff, a), tr!("Volume", "音量", "Громкость"));
-    c.text_right(x + w - 12.0, y + 10.0, 9.0, rgba(0xffffff, a), &format!("{:.0}%", cfg.master_volume * 100.0));
-    let (bx, by, bw) = (x + 12.0, y + 26.0, w - 24.0);
-    c.round_rect([bx, by], [bw, 6.0], 3.0, rgba(0x2a2a38, a), rgba(0, 0.0), 0.0);
-    if cfg.master_volume > 0.0 {
-        c.round_rect([bx, by], [(bw * cfg.master_volume).max(6.0), 6.0], 3.0, rgba(accent(), a), rgba(0, 0.0), 0.0);
-    }
-    let detail = format!("music {:.0}%   hitsounds {:.0}%", cfg.music_volume * 100.0, cfg.fx_volume * 100.0);
-    c.text(x + 12.0, y + 40.0, 7.0, rgba(0x9a9ab0, a), &detail);
 }
 
 /// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
@@ -2023,6 +2009,7 @@ impl State {
         self.settings_ui.binding = None;
         self.settings_ui.choices = None;
         self.settings_ui.editing = None;
+        self.settings_ui.clear_search();
         self.settings_ui.krokodil = self.is_krokodil();
     }
 
@@ -2326,15 +2313,11 @@ impl State {
         }
     }
 
-    /// A note clicked: the one in the circle is hit, any other rides up to it.
+    /// A note or its name clicked: it rides up to the circle and is hit, all in one click.
     fn menu_click(&mut self, i: usize) {
         let Some(m) = self.main_menu.as_mut().filter(|m| !m.is_leaving()) else { return };
-        if m.is_selected(i) {
-            self.menu_hit();
-        } else {
-            m.pick(i);
-            self.sfx(audio::Sfx::Kat);
-        }
+        m.pick(i);
+        self.menu_hit();
     }
 
     fn menu_hit(&mut self) {
@@ -2393,6 +2376,69 @@ impl State {
                 *text = net::censor(text);
             }
         }
+    }
+
+    /// How a setting's row shows its value.
+    fn setting_control(&self, item: Item) -> settings::Control {
+        use settings::Control;
+        let c = &self.cfg;
+        match item {
+            Item::MasterVolume => Control::Level(c.master_volume),
+            Item::MusicVolume => Control::Level(c.music_volume),
+            Item::FxVolume => Control::Level(c.fx_volume),
+            Item::BackgroundDim => Control::Level(c.bg_dim),
+            Item::DonColour => Control::Swatch(c.note_colours.don()),
+            Item::KatColour => Control::Swatch(c.note_colours.kat()),
+            Item::Accent | Item::AccentHue => Control::Swatch(c.accent),
+            Item::Interface => Control::Switch(!c.interface_hidden),
+            _ if item.kind() == Kind::Toggle => Control::Switch(self.setting_value(item) != off_text()),
+            _ => Control::Text,
+        }
+    }
+
+    /// A setting's bar set from the pointer, to the nearest percent. Saved on letting go.
+    fn set_level(&mut self, i: usize) {
+        let level = (self.settings_ui.level_at(self.mouse_virtual().0) * 100.0).round() / 100.0;
+        match settings::ITEMS[i].1 {
+            Item::MasterVolume => self.cfg.master_volume = level,
+            Item::MusicVolume => self.cfg.music_volume = level,
+            Item::FxVolume => self.cfg.fx_volume = level,
+            Item::BackgroundDim => self.cfg.bg_dim = level,
+            _ => {}
+        }
+        self.apply_volume();
+    }
+
+    /// Text typed on the settings screen goes into its search; true if it took the key.
+    fn settings_type(&mut self, code: KeyCode, text: Option<&str>) -> bool {
+        let ui = &self.settings_ui;
+        if ui.choices.is_some() || ui.binding.is_some() || ui.dropdown.is_some() || self.modifiers_ctrl || self.modifiers_alt {
+            return false;
+        }
+        let searching = !ui.search.is_empty();
+        let mut search = ui.search.clone();
+        match code {
+            KeyCode::Backspace if searching => {
+                search.pop();
+            }
+            KeyCode::Escape if searching => search.clear(),
+            // Space still works the row until there's something to search for.
+            KeyCode::Space if !searching => return false,
+            _ if keys::starts_text(code) || (searching && keys::types_text(code)) => search.extend(text.into_iter().flat_map(str::chars).filter(|c| !c.is_control())),
+            _ => return false,
+        }
+        self.search_settings(search);
+        true
+    }
+
+    fn search_settings(&mut self, text: String) {
+        let hotkeys = self.settings_key_names();
+        self.settings_ui.set_search(text, &|item| hotkeys.iter().find(|(i, _)| *i == item).map_or(String::new(), |(_, name)| name.clone()));
+    }
+
+    /// Every key setting with the key it's on.
+    fn settings_key_names(&self) -> Vec<(Item, String)> {
+        settings::ITEMS.iter().filter(|(_, item)| item.kind() == Kind::Key).map(|&(_, item)| (item, self.setting_value(item))).collect()
     }
 
     fn setting_value(&self, item: Item) -> String {
@@ -3735,6 +3781,9 @@ impl State {
         match code {
             KeyCode::ArrowUp => self.settings_ui.move_cursor(-1),
             KeyCode::ArrowDown => self.settings_ui.move_cursor(1),
+            KeyCode::PageUp | KeyCode::PageDown if !self.settings_ui.search.is_empty() => {
+                self.settings_ui.move_cursor(if code == KeyCode::PageDown { 8 } else { -8 });
+            }
             KeyCode::PageUp | KeyCode::PageDown => {
                 let n = settings::SECTIONS.len() as i32;
                 let dir = if code == KeyCode::PageDown { 1 } else { -1 };
@@ -4416,6 +4465,20 @@ impl State {
         if notches == 0 {
             return;
         }
+        // Alt anywhere; once the volume's lane is up, also without Alt over its notes.
+        let now = Instant::now();
+        let (vx, vy) = self.mouse_virtual();
+        let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
+        if self.volume.point(vx, vy, width, now) || self.modifiers_alt {
+            let changed = self.volume.turn(&mut self.cfg, notches, now);
+            self.apply_volume();
+            self.cfg.save();
+            // Hitsounds have nothing playing to judge them by: one rings at the new volume.
+            if changed && self.volume.selected == volume::HITSOUNDS && !self.in_song() {
+                self.sfx(audio::Sfx::Kat);
+            }
+            return;
+        }
         if let Some(view) = &mut self.changelog {
             view.scroll_by(-notches * 3);
             return;
@@ -4431,18 +4494,6 @@ impl State {
         }
         if let Some(cur) = self.mod_select.filter(|_| !self.modifiers_alt) {
             self.mod_select = Some(mods::step(cur, 0, -notches));
-            return;
-        }
-        if self.modifiers_alt {
-            let v = ((self.cfg.master_volume + 0.05 * notches as f32) * 20.0).round() / 20.0;
-            self.cfg.master_volume = v.clamp(0.0, 1.0);
-            self.apply_volume();
-            self.cfg.save();
-            let now = Instant::now();
-            if self.volume_shown.is_none() {
-                self.volume_since = Some(now);
-            }
-            self.volume_shown = Some(now);
             return;
         }
         let n = self.preset_list().len();
@@ -4495,7 +4546,7 @@ impl State {
                 let n = self.select.picker_len() as i32;
                 self.select.picker = self.select.picker.map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
-            Scene::Select => self.select.step(-notches, &self.library, false),
+            Scene::Select => self.select.scroll_by(-notches, &self.library),
             Scene::Download if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Download => self.browse.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
@@ -4508,7 +4559,7 @@ impl State {
                     p.move_cursor(-notches);
                 }
             }
-            Scene::Settings { .. } => self.settings_ui.move_cursor(-notches),
+            Scene::Settings { .. } => self.settings_ui.scroll_by(-notches),
             _ => {}
         }
     }
@@ -4578,6 +4629,9 @@ impl State {
             self.mouse_moved_at = Instant::now();
         }
         self.mouse = (x, y);
+        let (vx, vy) = self.mouse_virtual();
+        let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
+        self.volume.point(vx, vy, width, Instant::now());
         if let Some(last) = self.replay_scrub {
             // Each seek re-judges the replay up to there; ~30 a second is plenty.
             if last.elapsed() >= Duration::from_millis(33) && self.replay_seek_to_pointer(true) {
@@ -4606,6 +4660,10 @@ impl State {
                 self.select.drag_to(dy);
                 return CursorIcon::NsResize;
             }
+        }
+        if let Some(i) = self.settings_level {
+            self.set_level(i);
+            return CursorIcon::EwResize;
         }
         if self.scrollbar_drag {
             if matches!(self.scene, Scene::Select) {
@@ -4748,8 +4806,8 @@ impl State {
     }
 
     /// Right button on song select: hold it and move up and down to fly through the list, like
-    /// osu!'s right-click scrolling.
-    /// Released without moving, it opens the row's menu (or, off the rows, jumps there).
+    /// osu!'s right-click scrolling. The selection stays.
+    /// Released without moving, it opens the row's menu; on the scrollbar, it goes there.
     fn right_button(&mut self, pressed: bool) {
         if self.mod_select.is_some() {
             // Right-clicking a mod makes it a favourite (or not any more).
@@ -4780,8 +4838,8 @@ impl State {
         match press {
             Some((x, y, Some(render::Hit::SongRow(row)))) => self.select.menu = Some(ui::SongMenu { row, header: false, x, y }),
             Some((x, y, Some(render::Hit::SongHeader(row)))) => self.select.menu = Some(ui::SongMenu { row, header: true, x, y }),
-            Some((_, y, _)) => self.select.scroll_to(y, &self.library),
-            None => {}
+            Some((_, y, Some(render::Hit::SongScrollbar))) => self.select.scroll_to(y, &self.library),
+            _ => {}
         }
     }
 
@@ -4954,6 +5012,10 @@ impl State {
         }
         if !pressed {
             self.scrollbar_drag = false;
+            if self.settings_level.take().is_some() {
+                self.cfg.save();
+                return;
+            }
             if self.split_drag.take().is_some() {
                 self.cfg.save();
                 return;
@@ -5961,6 +6023,7 @@ impl State {
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.universe_setup.as_ref().is_some_and(|u| u.typing.is_some())
             || (self.mod_select.is_none() && !self.on_menu() && matches!(self.scene, Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby))
+            || (matches!(self.scene, Scene::Settings { .. }) && self.settings_ui.binding.is_none() && self.settings_ui.choices.is_none() && self.settings_ui.dropdown.is_none())
     }
 
     /// Android: something is being typed that took the keys by itself (not a field that was
@@ -5977,7 +6040,7 @@ impl State {
     fn is_text_field(&self, hit: render::Hit) -> bool {
         use render::Hit;
         match hit {
-            Hit::TextField => true,
+            Hit::TextField | Hit::SettingsSearch => true,
             Hit::MpRow(i) => matches!(self.scene, Scene::MpMenu) && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action()),
             Hit::SocialRow(i) => matches!(self.social.rows(self.mp.is_some()).get(i), Some(social::Row::AddFriend | social::Row::Search)),
             _ => false,
@@ -6328,11 +6391,6 @@ impl State {
         std::thread::spawn(move || {
             let _ = tx.send((set, download::set_status(set).ok()));
         });
-    }
-
-    /// Song select: the list is being dragged through by its scrollbar or right-click scrolling.
-    fn dragging_list(&self) -> bool {
-        matches!(self.scene, Scene::Select) && (self.scrollbar_drag || self.right_scroll)
     }
 
     /// Showing a song, its background dimmed by the background dim setting.
@@ -7273,7 +7331,8 @@ impl State {
             || self.mod_select.is_some()
             || self.customization_tab().is_some();
         let plain = !self.modifiers_ctrl && !self.modifiers_alt;
-        if busy || (plain && self.in_song() && self.cfg.keys.contains(&code)) || (plain && self.takes_text() && keys::types_text(code)) {
+        let settings_idle = matches!(self.scene, Scene::Settings { .. }) && self.settings_ui.search.is_empty() && !keys::starts_text(code);
+        if busy || (plain && self.in_song() && self.cfg.keys.contains(&code)) || (plain && self.takes_text() && keys::types_text(code) && !settings_idle) {
             return None;
         }
         Some(match &self.scene {
@@ -7337,6 +7396,10 @@ impl State {
         }
         // Being typed or bound, Ctrl+O is just a key.
         let free = self.settings_ui.binding.is_none() && self.settings_ui.editing.is_none();
+        if free && self.modifiers_alt && !self.modifiers_ctrl && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+            self.volume.pick_next(if code == KeyCode::ArrowLeft { -1 } else { 1 }, Instant::now());
+            return;
+        }
         if free && code == KeyCode::KeyO && self.modifiers_ctrl && !self.modifiers_shift && !self.modifiers_alt {
             if !repeat {
                 self.settings_anywhere();
@@ -7440,7 +7503,7 @@ impl State {
             }
             return;
         }
-        if !repeat && !matches!(self.scene, Scene::MpMenu) && self.settings_ui.dropdown.is_none()
+        if !repeat && !matches!(self.scene, Scene::MpMenu | Scene::Settings { .. }) && self.settings_ui.dropdown.is_none()
             && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code) {
             self.cycle_preset(if i == 0 { -1 } else { 1 });
             return;
@@ -7642,7 +7705,11 @@ impl State {
                     self.show_select();
                 }
             }
-            Scene::Settings { .. } => self.settings_key(code, window),
+            Scene::Settings { .. } => {
+                if !self.settings_type(code, text) {
+                    self.settings_key(code, window);
+                }
+            }
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. } | Scene::Download => {}
             Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) | Scene::Watch(_) | Scene::VideoEdit(_) => {}
             Scene::Play { game, entry, from } => match code {
@@ -7765,7 +7832,6 @@ impl State {
             self.preview.menu = self.on_menu();
             self.preview.from_top &= self.preview.menu;
             self.preview.pitch = self.player.as_ref().map_or(1.0, |p| p.pitch());
-            self.preview.hold = self.dragging_list();
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.play_offset, rate);
@@ -7777,8 +7843,7 @@ impl State {
             }
             if matches!(self.scene, Scene::Select) {
                 self.poll_set_status(now);
-                let sets = if self.dragging_list() { Vec::new() } else { self.select.selected_set() };
-                for i in sets {
+                for i in self.select.selected_set() {
                     self.stars.request(i, &self.library[i].path, play_rate);
                 }
                 let (stars, rate) = (&self.stars, play_rate);
@@ -7977,7 +8042,15 @@ impl State {
                 let song = shown.and_then(|i| self.library.get(i)).map(Entry::label);
                 let k = |i: usize| config::key_name(self.cfg.keys[i]);
                 let (a, b, d, e) = (k(0), k(3), k(1), k(2));
-                let hint = tr!("{a} {b} move   {d} {e} choose", "{a} {b} 移動   {d} {e} 決定", "{a} {b} листать   {d} {e} выбрать";);
+                let hint = if cfg!(target_os = "android") {
+                    tr!("tap to open", "タップで開く", "нажми, чтобы открыть").to_string()
+                } else {
+                    tr!(
+                        "wheel or arrows: move   click or Enter: open   drum: {a} {b} move, {d} {e} open",
+                        "ホイールか矢印: 移動   クリックかEnter: 開く   太鼓: {a} {b} 移動、{d} {e} 開く",
+                        "колесо или стрелки: листать   клик или Enter: открыть   барабан: {a} {b} листать, {d} {e} открыть";
+                    )
+                };
                 let paused = self.music_paused;
                 if let Some(p) = &mut self.player {
                     let now = Instant::now();
@@ -8009,7 +8082,7 @@ impl State {
                     String::new()
                 };
                 let (stars, rate, plays) = (&self.stars, self.play_speed().0, &self.scores);
-                self.select.instant = self.right_scroll || self.scrollbar_drag;
+                self.select.scrubbing = (self.right_scroll || self.scrollbar_drag).then(|| self.mouse_virtual().1);
                 self.select.list_share = self.cfg.song_list_share;
                 self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate), &|e| scores::best_grade(plays, e.hash()));
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
@@ -8613,6 +8686,7 @@ impl State {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 self.settings_ui.krokodil = self.is_krokodil();
                 settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
+                let searching = !self.settings_ui.search.is_empty();
                 let footer = if self.settings_ui.editing.as_ref().is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder)) {
                     "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
                 } else if self.settings_ui.editing.is_some() {
@@ -8625,11 +8699,17 @@ impl State {
                         Kind::Key => "Enter rebind",
                         Kind::Action => "Enter go",
                     };
-                    let back = if from_game { "Esc back to pause menu" } else { "Esc or Tab back" };
-                    format!("Up/Down select   PgUp/PgDn section   Left/Right change   {enter}   {back}")
+                    let back = if searching {
+                        "Esc clear the search"
+                    } else if from_game {
+                        "Esc back to pause menu"
+                    } else {
+                        "Esc or Tab back"
+                    };
+                    format!("Type to search   Up/Down select   Left/Right change   {enter}   {back}")
                 };
                 let this = &*self;
-                this.settings_ui.draw(canvas, &|item| this.setting_value(item), &footer);
+                this.settings_ui.draw(canvas, &|item| this.setting_value(item), &|item| this.setting_control(item), &footer);
                 if let Some(p) = &self.settings_ui.choices {
                     p.draw(canvas);
                 }
@@ -8721,16 +8801,8 @@ impl State {
             canvas.round_rect([6.0, 6.0], [tw + 12.0, 16.0], 4.0, rgba(0x000000, 0.55), rgba(0, 0.0), 0.0);
             canvas.text(12.0, 10.0, 8.0, rgba(0x9fe09f, 1.0), &text);
         }
-        if let Some(shown) = self.volume_shown {
-            let age = now.saturating_duration_since(shown).as_secs_f32();
-            if age < 1.6 {
-                let a = ((1.6 - age) / 0.3).min(1.0);
-                let slide = (1.0 - render::progress(self.volume_since.unwrap_or(shown), 160.0)) * 40.0;
-                draw_volume(canvas, &self.cfg, a, slide);
-            } else {
-                self.volume_shown = None;
-                self.volume_since = None;
-            }
+        if self.volume.visible(now) {
+            self.volume.draw(canvas, &self.cfg, now);
         }
         if self.overlay_allowed() && self.splash.is_none() {
             let logged_in = self.mp_menu.account.is_some();
@@ -9067,7 +9139,7 @@ impl State {
     /// The online leaderboard of map `hash` (fetched in the background; again after a minute).
     fn online_board(&mut self, hash: u64) -> Option<&Result<Vec<online::OnlineScore>, String>> {
         let stale = self.online_boards.get(&hash).is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(60));
-        if stale && self.board_fetch.is_none() && !self.dragging_list() {
+        if stale && self.board_fetch.is_none() {
             self.board_fetch = Some((hash, fetch_board(self.cfg.online_server.clone(), hash)));
         }
         self.online_boards.get(&hash).map(|(_, rows)| rows)
@@ -9435,6 +9507,11 @@ impl State {
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),
+            Hit::MenuStep(by) => {
+                if !self.main_menu.as_ref().is_some_and(menu::Menu::is_leaving) {
+                    self.menu_step(by);
+                }
+            }
             Hit::Guide(action) => self.guide_action(action),
             Hit::DiscordServer => {
                 if !open_url(menu::DISCORD_INVITE) {
@@ -9579,6 +9656,7 @@ impl State {
             Hit::DlSort(i) => self.browse.set_sort(download::SortKey::ALL[i]),
             Hit::SettingsSection(i) => {
                 self.settings_ui.binding = None;
+                self.settings_ui.clear_search();
                 self.settings_ui.cursor = settings::section_start(i);
             }
             Hit::SortList => self.open_sorts(),
@@ -9595,7 +9673,8 @@ impl State {
                 self.download_key(KeyCode::Enter, None, window);
             }
             Hit::SongHeader(row) => self.click(Hit::SongRow(row), window),
-            Hit::SectionHeader(s) => self.select.click_section(s),
+            Hit::SectionHeader(s) => self.select.click_section(s, &self.library),
+            Hit::ListBack => self.select.follow_selection(),
             Hit::ModsButton => self.open_mod_select(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
@@ -9652,8 +9731,17 @@ impl State {
             // A song's own row picks its remembered (or hardest) difficulty.
             Hit::SongRow(row) if self.select.is_song_start(row) && !self.select.in_open_song(row) => self.select.enter_song(row, &self.library),
             Hit::SongRow(row) => self.select.set_cursor(row),
-            Hit::SettingRow(i) if i == self.settings_ui.cursor => self.settings_key(KeyCode::Enter, window),
-            Hit::SettingRow(i) => self.settings_ui.cursor = i,
+            // One click does what the row does: flips a switch, opens a list, waits for a key.
+            Hit::SettingRow(i) => {
+                self.settings_ui.cursor = i;
+                self.settings_key(KeyCode::Enter, window);
+            }
+            Hit::SettingLevel(i) => {
+                self.settings_ui.cursor = i;
+                self.settings_level = Some(i);
+                self.set_level(i);
+            }
+            Hit::SettingsSearch => {}
             Hit::SettingStep(i, dir) => {
                 self.settings_ui.cursor = i;
                 self.adjust_setting(settings::ITEMS[i].1, dir, window);
@@ -10432,7 +10520,7 @@ impl State {
             modifiers_shift: false,
             modifiers_ctrl: false,
             modifiers_alt: false,
-            volume_shown: None,
+            volume: volume::Overlay::new(),
             splash,
             main_menu: None,
             guide: None,
@@ -10446,7 +10534,6 @@ impl State {
             media_told: None,
             window_handle: None,
             updater,
-            volume_since: None,
             hits: Vec::new(),
             browse: browse::Browse::default(),
             downloads: Vec::new(),
@@ -10498,6 +10585,7 @@ impl State {
             skin_map_seen: None,
             focused: true,
             right_scroll: false,
+            settings_level: None,
             scrollbar_drag: false,
             right_press: None,
             list_drag: None,

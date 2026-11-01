@@ -796,7 +796,7 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     assert!(s.preview.panel_bottom < edge - 4.0, "{} vs {edge}", s.preview.panel_bottom);
     assert!(s.leaderboard.len() > rows_before, "{} rows, {rows_before} before", s.leaderboard.len());
 
-    // Settings > Gameplay puts the whole layout back.
+    // Settings > Library puts the whole layout back.
     s.cfg.song_list_share = ui::LIST_SHARE.1;
     s.open_settings();
     s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::SongSelectLayout).unwrap();
@@ -862,4 +862,135 @@ fn the_results_scroll_down_to_the_pp_and_back() {
     assert_eq!(scroll(&s), ui::RESULTS_SCROLL);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(s.hits.iter().any(|h| h.hit == render::Hit::Key(KeyCode::PageUp)), "and back up");
+}
+
+#[test]
+fn one_click_on_a_main_menu_note_opens_it() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    s.click(render::Hit::MenuItem(3), None);
+    let m = s.main_menu.as_ref().unwrap();
+    assert_eq!(m.current(), menu::Item::Settings);
+    assert!(m.is_leaving(), "no second click at the circle needed");
+}
+
+fn settings_screen() -> State {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = None;
+    s.open_settings();
+    s
+}
+
+fn type_key(s: &mut State, code: KeyCode, text: &str) {
+    s.key(code, false, Some(text), Instant::now(), None);
+}
+
+#[test]
+fn typing_in_the_settings_searches_and_escape_clears_before_it_leaves() {
+    let mut s = settings_screen();
+    for (code, text) in [(KeyCode::KeyM, "m"), (KeyCode::KeyU, "u"), (KeyCode::KeyS, "s"), (KeyCode::KeyI, "i"), (KeyCode::KeyC, "c")] {
+        type_key(&mut s, code, text);
+    }
+    assert_eq!(s.settings_ui.search, "music");
+    assert_eq!(s.settings_ui.item(), Item::MusicVolume);
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // The rows work as usual, and it's the results the arrows go through.
+    s.key(KeyCode::ArrowRight, false, None, Instant::now(), None);
+    s.key(KeyCode::Backspace, false, None, Instant::now(), None);
+    assert_eq!(s.settings_ui.search, "musi", "not the row's reset");
+    s.key(KeyCode::Escape, false, None, Instant::now(), None);
+    assert!(s.settings_ui.search.is_empty());
+    assert!(matches!(s.scene, Scene::Settings { .. }), "still here");
+    s.key(KeyCode::Escape, false, None, Instant::now(), None);
+    assert!(!matches!(s.scene, Scene::Settings { .. }));
+}
+
+#[test]
+fn space_and_punctuation_keep_their_jobs_until_something_is_typed() {
+    let mut s = settings_screen();
+    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::HalfResolution).unwrap();
+    let was = s.cfg.half_resolution;
+    type_key(&mut s, KeyCode::Space, " ");
+    assert_ne!(s.cfg.half_resolution, was, "space works the row");
+    assert!(s.settings_ui.search.is_empty());
+    type_key(&mut s, KeyCode::Minus, "-");
+    assert!(s.settings_ui.search.is_empty());
+    assert_eq!(s.hotkey_place(KeyCode::Minus), Some(keys::Place::Other), "the offset's hotkey still works");
+    type_key(&mut s, KeyCode::KeyF, "f");
+    type_key(&mut s, KeyCode::Space, " ");
+    assert_eq!(s.settings_ui.search, "f ");
+    assert_eq!(s.hotkey_place(KeyCode::Minus), None, "now it types");
+}
+
+#[test]
+fn the_wheel_scrolls_the_settings_and_stays_in_the_section() {
+    let mut s = settings_screen();
+    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::Key(0)).unwrap();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let (cursor, section) = (s.settings_ui.cursor, s.settings_ui.section());
+    s.wheel(-1000);
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert_eq!(s.settings_ui.cursor, cursor);
+    assert_eq!(s.settings_ui.section(), section);
+    // Down to the last rows, which are now there to click.
+    let last = settings::ITEMS.iter().rposition(|(sec, _)| *sec == settings::ITEMS[cursor].0).unwrap();
+    assert!(s.hits.iter().any(|h| h.hit == render::Hit::SettingRow(last)));
+}
+
+#[test]
+fn one_click_works_a_row_and_every_hotkey_has_one() {
+    let mut s = settings_screen();
+    let row = settings::ITEMS.iter().position(|(_, it)| *it == Item::MainMenu).unwrap();
+    let was = s.cfg.main_menu;
+    s.click(render::Hit::SettingRow(row), None);
+    assert_ne!(s.cfg.main_menu, was);
+    for i in 0..keys::Hotkey::ALL.len() {
+        assert!(settings::ITEMS.iter().any(|(_, it)| *it == Item::Hotkey(i)), "{:?}", keys::Hotkey::ALL[i]);
+    }
+    for (section, _) in settings::ITEMS {
+        assert!(settings::SECTIONS.iter().any(|(name, _)| *name == section), "{section}");
+    }
+}
+
+#[test]
+fn a_volume_is_dragged_along_its_bar_and_saved_on_letting_go() {
+    let mut s = settings_screen();
+    let row = settings::ITEMS.iter().position(|(_, it)| *it == Item::MusicVolume).unwrap();
+    s.settings_ui.cursor = row;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let bar = s.hits.iter().find(|h| h.hit == render::Hit::SettingLevel(row)).expect("a bar").rect;
+    let y = bar[1] + bar[3] / 2.0;
+    point(&mut s, bar[0] + 5.0, y);
+    s.click(render::Hit::SettingLevel(row), None);
+    assert_eq!(s.cfg.music_volume, 0.0);
+    point(&mut s, bar[0] + bar[2] / 2.0, y);
+    s.mouse_moved(s.mouse.0, s.mouse.1);
+    assert!((s.cfg.music_volume - 0.5).abs() < 0.02, "{}", s.cfg.music_volume);
+    s.mouse_button(false, None);
+    assert_eq!(s.settings_level, None);
+}
+
+#[test]
+fn alt_wheel_turns_the_note_under_the_pointer_and_the_lane_then_needs_no_alt() {
+    let mut s = settings_screen();
+    s.cfg.master_volume = 0.5;
+    s.cfg.fx_volume = 0.5;
+    s.mouse = (-1000.0, -1000.0);
+    s.modifiers_alt = true;
+    s.wheel(1);
+    assert_eq!(s.cfg.master_volume, 0.55, "the master first");
+    s.modifiers_alt = false;
+    // Hovering the hitsounds note picks it, before the wheel moves at all.
+    let (w, h) = (s.window_w, s.window_h);
+    let width = render::VIRTUAL_HEIGHT * w / h;
+    point(&mut s, width - 40.0, 400.0);
+    s.mouse_moved(s.mouse.0, s.mouse.1);
+    assert_eq!(s.volume.selected, volume::HITSOUNDS);
+    s.wheel(-2);
+    assert_eq!(s.cfg.fx_volume, 0.4, "no Alt needed over the lane");
+    assert_eq!(s.cfg.master_volume, 0.55);
 }

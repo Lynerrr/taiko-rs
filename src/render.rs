@@ -1709,6 +1709,28 @@ pub fn animations() -> bool {
 
 /// Moves `value` toward `target`, covering ~63% of the way every `tau_ms` (jumps there with
 /// animations off).
+/// A list's own position, apart from what's selected in it: where it's going and where it's got to.
+#[derive(Clone, Copy, Debug)]
+pub struct Glide {
+    pub now: f32,
+    pub goal: f32,
+}
+
+impl Glide {
+    pub fn at(now: f32) -> Glide {
+        Glide { now, goal: now }
+    }
+
+    /// A frame's motion towards the goal, kept within `0..=max` (from past an end it springs back).
+    pub fn settle(&mut self, max: f32, dt_ms: f32, tau_ms: f32) {
+        self.goal = self.goal.clamp(0.0, max);
+        approach(&mut self.now, self.goal, dt_ms, tau_ms);
+        if (self.now - self.goal).abs() < 0.05 {
+            self.now = self.goal;
+        }
+    }
+}
+
 pub fn approach(value: &mut f32, target: f32, dt_ms: f32, tau_ms: f32) {
     if !animations() || !value.is_finite() {
         *value = target;
@@ -1748,6 +1770,10 @@ pub enum Hit {
     Tab(usize),
     /// A note of the main menu (index into `menu::ITEMS`).
     MenuItem(usize),
+    /// An arrow beside the main menu's sections: moves the lane this far.
+    MenuStep(i32),
+    /// Takes the song list back to the selection it was scrolled away from.
+    ListBack,
     /// A button of the first steps guide.
     Guide(crate::guide::Action),
     /// The main menu's button to our Discord server.
@@ -1784,6 +1810,10 @@ pub enum Hit {
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
     SettingStep(usize, i32),
+    /// The bar of a setting (index into `settings::ITEMS`): set by clicking or dragging it.
+    SettingLevel(usize),
+    /// The settings' search box.
+    SettingsSearch,
     PauseItem(usize),
     MpRow(usize),
     /// Opens the playfield preset list.
