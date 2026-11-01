@@ -75,6 +75,8 @@ cargo build --release
 You'll need `clang` and the PipeWire headers (or build with `--no-default-features` for ALSA
 only). The APK is built with `android/build-apk.sh`, and the online server lives in `server/`.
 
+Pull requests run lint, tests, and release builds before merging; see [CI checks](docs/ci.md).
+
 ## License
 
 MIT, see [LICENSE](LICENSE); libraries and assets in [THIRD-PARTY.md](THIRD-PARTY.md). taiko.rs is
