@@ -27,6 +27,8 @@ mod card;
 mod covers;
 mod osustatus;
 mod discord;
+#[path = "../../src/changelog_entry.rs"]
+mod changelog_entry;
 #[allow(dead_code)]
 #[path = "../../src/font.rs"]
 mod font;
