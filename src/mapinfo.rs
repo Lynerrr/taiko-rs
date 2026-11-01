@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rosu_pp::taiko::Taiko;
 use rosu_pp::{Beatmap, Difficulty};
@@ -28,7 +28,13 @@ pub struct MapInfo {
     pub total: Arc<AtomicUsize>,
     /// The work waits while this is on: a song is being played.
     held: Arc<AtomicBool>,
+    /// When it began.
+    pub started: Instant,
 }
+
+/// How long the work has to take before it's worth showing: a library already in the cache is
+/// through it in a moment.
+const SHOW_AFTER: Duration = Duration::from_secs(2);
 
 /// How often the cache is written while working (maps): a big library can take longer than a
 /// session, and what's done shouldn't have to be done again.
@@ -98,7 +104,7 @@ impl MapInfo {
         let done = Arc::new(AtomicUsize::new(0));
         let total = Arc::new(AtomicUsize::new(maps.len()));
         let held = Arc::new(AtomicBool::new(held));
-        let info = MapInfo { results: results.clone(), done: done.clone(), total, held: held.clone() };
+        let info = MapInfo { results: results.clone(), done: done.clone(), total, held: held.clone(), started: Instant::now() };
         std::thread::Builder::new()
             .name("mapinfo".into())
             .spawn(move || run(maps, results, done, held))
@@ -122,6 +128,12 @@ impl MapInfo {
     /// Stops the work for now, or lets it go on.
     pub fn hold(&self, on: bool) {
         self.held.store(on, Ordering::Relaxed);
+    }
+
+    /// How far it's got (done, total), while it's worth showing.
+    pub fn progress(&self, now: Instant) -> Option<(usize, usize)> {
+        let shown = !self.finished() && now.saturating_duration_since(self.started) >= SHOW_AFTER;
+        shown.then(|| (self.done.load(Ordering::Relaxed), self.total.load(Ordering::Relaxed)))
     }
 
     pub fn finished(&self) -> bool {
@@ -202,6 +214,16 @@ mod tests {
         assert_eq!(info.done.load(Ordering::Relaxed), 0, "nothing while a song plays");
         info.hold(false);
         assert!(wait_for(&info), "{} done", info.done.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn progress_shows_only_when_it_takes_a_while_and_until_it_ends() {
+        let info = MapInfo::spawn(maps(3), 3, true);
+        assert_eq!(info.progress(info.started), None, "a moment in: maybe it's all cached");
+        assert_eq!(info.progress(info.started + SHOW_AFTER), Some((0, 3)));
+        info.hold(false);
+        assert!(wait_for(&info));
+        assert_eq!(info.progress(info.started + SHOW_AFTER), None, "done");
     }
 
     #[test]

@@ -1026,6 +1026,24 @@ fn file_uri(path: &std::path::Path) -> String {
     uri
 }
 
+/// The maps being analysed, top right: how far it's got. In a song it waits, and this isn't shown.
+fn draw_analysis(c: &mut Canvas, done: usize, total: usize) {
+    const BAR: f32 = 54.0;
+    let text = tr!("analysing maps {done} / {total}", "譜面を分析中 {done} / {total}", "анализ карт {done} / {total}";);
+    let text = Canvas::fit(6.0, (c.width - BAR - 64.0).max(40.0), &text);
+    let tw = Canvas::text_width(6.0, &text);
+    let w = tw + BAR + 20.0;
+    let (x, y) = (c.width - w - 8.0, 4.0);
+    c.round_rect([x, y], [w, 13.0], 4.0, rgba(0x101018, 0.82), rgba(0x3a3a4e, 1.0), 1.0);
+    c.text(x + 7.0, y + 3.5, 6.0, rgba(0xc8c8d8, 1.0), &text);
+    let (bx, by) = (x + tw + 13.0, y + 5.0);
+    c.round_rect([bx, by], [BAR, 3.0], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+    let part = done as f32 / total.max(1) as f32;
+    if part > 0.0 {
+        c.round_rect([bx, by], [(BAR * part).max(3.0), 3.0], 1.5, rgba(render::accent(), 1.0), rgba(0, 0.0), 0.0);
+    }
+}
+
 /// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
 fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
     let mut out = std::collections::HashMap::new();
@@ -5905,11 +5923,9 @@ impl State {
             self.start_status_sweep();
         }
         let Some(info) = &self.mapinfo else { return };
-        let (done, total) = (info.done.load(Ordering::Relaxed), info.total.load(Ordering::Relaxed));
         let finished = info.finished();
         // Sorting or searching by stars, length or BPM waits on the analysis.
         let needs_info = self.select.sort.needs_info() || search::Query::parse(&self.select.filter).needs_info();
-        self.select.info_progress = if !finished && needs_info { format!("  |  analysing {done}/{total}") } else { String::new() };
         if finished && !self.mapinfo_sorted {
             self.mapinfo_sorted = true;
             if needs_info {
@@ -8923,6 +8939,9 @@ impl State {
             let tw = Canvas::text_width(8.0, &text);
             canvas.round_rect([6.0, 6.0], [tw + 12.0, 16.0], 4.0, rgba(0x000000, 0.55), rgba(0, 0.0), 0.0);
             canvas.text(12.0, 10.0, 8.0, rgba(0x9fe09f, 1.0), &text);
+        }
+        if let Some((done, total)) = self.mapinfo.as_ref().and_then(|i| i.progress(now)).filter(|_| !self.in_song() && self.splash.is_none()) {
+            draw_analysis(canvas, done, total);
         }
         // Not during a song, where a pointer left there would hold it over the notes for good.
         if !self.in_song() {
