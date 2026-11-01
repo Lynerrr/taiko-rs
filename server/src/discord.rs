@@ -1018,25 +1018,16 @@ struct Posted {
     posted: Vec<String>,
 }
 
-/// Whether a commit goes in the changelog: not merges, not what's marked `Changelog: skip`, not
-/// a player's own secret.
+/// Only commits with explicit player-facing notes go in the changelog.
 pub(crate) fn worth_posting(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    let title = message.lines().next().unwrap_or("").trim();
-    !title.is_empty() && !title.starts_with("Merge ") && !lower.lines().any(|l| l.trim() == "changelog: skip") && !lower.contains("krokodil")
+    crate::changelog_entry::parse(message).is_some()
 }
 
-/// A commit's message as a changelog post: its first line, then its points, without trailers.
+/// Explicit player notes as a post, within Discord's embed limits.
 pub(crate) fn post_text(message: &str) -> (String, String) {
-    let mut lines = message.lines();
-    let title = lines.next().unwrap_or("").trim().chars().take(256).collect();
-    let body: Vec<&str> = lines
-        .filter(|l| {
-            let l = l.to_ascii_lowercase();
-            !["co-authored-by:", "claude-session:", "signed-off-by:", "changelog:"].iter().any(|t| l.starts_with(t))
-        })
-        .collect();
-    let body = body.join("\n").trim().chars().take(3500).collect();
+    let Some(entry) = crate::changelog_entry::parse(message) else { return (String::new(), String::new()) };
+    let title = entry.title.chars().take(256).collect();
+    let body = entry.points.into_iter().map(|point| format!("- {point}")).collect::<Vec<_>>().join("\n").chars().take(3500).collect();
     (title, body)
 }
 
@@ -1143,14 +1134,33 @@ mod tests {
     }
 
     #[test]
-    fn the_changelog_leaves_out_merges_skips_and_secrets() {
-        assert!(worth_posting("New mod, Crossfire\n\n- In the RAILS column\n\nCo-Authored-By: x"));
-        assert!(!worth_posting("Merge pull request #53 from x/y"));
-        assert!(!worth_posting("Server: no cap\n\nChangelog: skip\nCo-Authored-By: x"));
-        assert!(!worth_posting("krokodil_koban mode says nothing about itself"));
-        let (title, body) = post_text("Title here\n\n- one\n- two\n\nCo-Authored-By: C <c@x>\nClaude-Session: https://x\n");
-        assert_eq!(title, "Title here");
-        assert_eq!(body, "- one\n- two");
+    fn the_changelog_posts_only_explicit_player_notes() {
+        let message = "feat(mods): add Crossfire\n\nChangelog: Try Crossfire in the RAILS column.\nChangelog: Customize the lanes in mod settings.\n\n* Fixed lint errors\n  Technical continuation\nCo-Authored-By: C <c@x>\nClaude-Session: https://x\n";
+        assert!(worth_posting(message));
+        let (title, body) = post_text(message);
+        assert_eq!(title, "Try Crossfire in the RAILS column.");
+        assert_eq!(body, "- Customize the lanes in mod settings.");
+        for hidden in [
+            "fix(lint): fix warnings\n\n* Fixed lint errors",
+            "feat(mods): add Crossfire\n\nChangelog:",
+            "Merge pull request #53 from x/y\n\nChangelog: Try Crossfire",
+            "chore(server): change internals\n\nChangelog: A change\nChangelog: skip",
+            "feat(mods): add krokodil_koban mode\n\nChangelog: A private mode",
+        ] {
+            assert!(!worth_posting(hidden), "{hidden:?}");
+            assert_eq!(post_text(hidden), (String::new(), String::new()));
+        }
+        assert_eq!(post_text("fix(audio): align hitsounds\n\nChangelog: Hitsounds play on time."), ("Hitsounds play on time.".into(), String::new()));
+    }
+
+    #[test]
+    fn changelog_posts_keep_unicode_within_embed_limits() {
+        let message = format!("feat(player): improve navigation\n\nChangelog: {}\nChangelog: {}", "界".repeat(300), "曲".repeat(4000));
+        let (title, body) = post_text(&message);
+        assert_eq!(title.chars().count(), 256);
+        assert_eq!(body.chars().count(), 3500);
+        assert!(title.chars().all(|c| c == '界'));
+        assert!(body.starts_with("- 曲"));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use winit::keyboard::KeyCode;
 
 use crate::render::{accent, rgba, Canvas, Hit};
 
-/// One change: when, what, and its points (the commit's "- ..." lines).
+/// One change: when and the explicitly marked player-facing notes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Change {
     pub date: String,
@@ -219,34 +219,14 @@ fn commits(path: &str) -> Result<Vec<Change>, String> {
     Ok(items.drain(..).filter_map(|i| parse(&i.commit.message, &i.commit.author.date)).collect())
 }
 
-/// A commit as a change: its first line, and its "- " lines (continued by indented lines)
-/// without the trailers. None for merges, and for what isn't for everyone: a `Changelog: skip`
-/// line, or a player's own secret.
+/// A commit as a change, using only its explicit `Changelog: ...` lines.
 pub fn parse(message: &str, date: &str) -> Option<Change> {
-    let lower = message.to_ascii_lowercase();
-    if lower.lines().any(|l| l.trim() == "changelog: skip") || lower.contains("krokodil") {
-        return None;
-    }
-    let mut lines = message.lines();
-    let title = lines.next()?.trim().to_string();
-    if title.is_empty() || title.starts_with("Merge ") {
-        return None;
-    }
-    let mut points: Vec<String> = Vec::new();
-    for line in lines {
-        let trailer = ["Co-Authored-By:", "Claude-Session:", "Signed-off-by:"].iter().any(|t| line.to_ascii_lowercase().starts_with(&t.to_ascii_lowercase()));
-        if trailer {
-            continue;
-        }
-        if let Some(point) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-            points.push(point.trim().to_string());
-        } else if line.starts_with("  ") && !line.trim().is_empty()
-            && let Some(last) = points.last_mut() {
-            last.push(' ');
-            last.push_str(line.trim());
-        }
-    }
-    Some(Change { date: date.get(..10).unwrap_or(date).to_string(), title, points })
+    let entry = crate::changelog_entry::parse(message)?;
+    Some(Change {
+        date: date.get(..10).unwrap_or(date).to_string(),
+        title: entry.title.to_string(),
+        points: entry.points.into_iter().map(str::to_string).collect(),
+    })
 }
 
 #[cfg(test)]
@@ -254,15 +234,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn commits_become_changes_without_trailers_or_merges() {
-        let msg = "pp counter and more\n\n- Live pp counter in the HUD\n- Results: the song plays on, back\n  to the preview point\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nClaude-Session: https://x\n";
+    fn commits_become_changes_from_explicit_player_notes() {
+        let msg = "feat(hud): add pp counter\n\nChangelog: See your live pp while playing.\nChangelog: The song keeps playing on the results screen.\n\n* Fixed lint errors\nCo-Authored-By: Claude <noreply@anthropic.com>\nClaude-Session: https://x\n";
         let c = parse(msg, "2026-10-26T01:02:03Z").unwrap();
-        assert_eq!(c.title, "pp counter and more");
+        assert_eq!(c.title, "See your live pp while playing.");
         assert_eq!(c.date, "2026-10-26");
-        assert_eq!(c.points, vec!["Live pp counter in the HUD".to_string(), "Results: the song plays on, back to the preview point".into()]);
-        assert!(parse("Merge remote-tracking branch 'origin/x'", "2026-10-26").is_none());
-        assert!(parse("A quiet one\n\nChangelog: skip\n", "2026-10-26").is_none());
-        assert!(parse("Krokodil_Koban mode: something\n", "2026-10-26").is_none());
+        assert_eq!(c.points, ["The song keeps playing on the results screen."]);
+        assert!(parse("fix(lint): fix warnings\n\n* Fixed lint errors", "2026-10-26").is_none());
+        assert!(parse("Merge remote-tracking branch 'origin/x'\n\nChangelog: An update", "2026-10-26").is_none());
+        assert!(parse("chore(server): update internals\n\nChangelog: skip\n", "2026-10-26").is_none());
+        assert!(parse("feat(mods): add Krokodil_Koban mode\n\nChangelog: A private mode", "2026-10-26").is_none());
     }
 
     #[test]

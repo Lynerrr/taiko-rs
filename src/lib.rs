@@ -12,6 +12,7 @@ mod beatmap;
 mod browse;
 mod calibrate;
 mod changelog;
+mod changelog_entry;
 mod clock;
 mod clipboard;
 mod config;
