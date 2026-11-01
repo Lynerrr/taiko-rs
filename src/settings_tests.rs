@@ -863,3 +863,15 @@ fn the_results_scroll_down_to_the_pp_and_back() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(s.hits.iter().any(|h| h.hit == render::Hit::Key(KeyCode::PageUp)), "and back up");
 }
+
+#[test]
+fn one_click_on_a_main_menu_note_opens_it() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    s.click(render::Hit::MenuItem(3), None);
+    let m = s.main_menu.as_ref().unwrap();
+    assert_eq!(m.current(), menu::Item::Settings);
+    assert!(m.is_leaving(), "no second click at the circle needed");
+}

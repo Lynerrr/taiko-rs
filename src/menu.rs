@@ -16,7 +16,7 @@ pub enum Item {
     Exit,
 }
 
-pub const ITEMS: [Item; 6] = [Item::Play, Item::Multiplayer, Item::Download, Item::Editor, Item::Settings, Item::Exit];
+pub const ITEMS: [Item; 6] = [Item::Play, Item::Multiplayer, Item::Download, Item::Settings, Item::Editor, Item::Exit];
 
 /// How long a hit note shows before its screen opens (ms).
 const LEAVE_MS: f32 = 170.0;
@@ -30,6 +30,12 @@ const LANE_MID: f32 = LANE_TOP + LANE_H / 2.0;
 const DRUM_W: f32 = 112.0;
 const CIRCLE_X: f32 = 188.0;
 const NOTE_GAP: f32 = 132.0;
+/// The row naming every section, and the hint under it.
+const STRIP_Y: f32 = 348.0;
+const HINT_Y: f32 = 376.0;
+/// How long the lane sits still before the next note starts nudging at the circle (ms).
+const NUDGE_AFTER: f32 = 6000.0;
+const NUDGE_EVERY: f32 = 2400.0;
 
 const COMING_SOON: &str = "Coming soon";
 
@@ -307,12 +313,14 @@ pub struct Menu {
     burst: Option<(f32, Item)>,
     shake: f32,
     leaving: Option<(Item, f32)>,
+    /// When the lane last moved, for the nudge at a player who hasn't found out it does.
+    moved: f32,
     arts: Box<[Art; ITEMS.len()]>,
 }
 
 impl Menu {
     pub fn new() -> Menu {
-        Menu { selected: 0, shown: 0.0, clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, arts: Box::new(ITEMS.map(Item::art)) }
+        Menu { selected: 0, shown: 0.0, clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, moved: 0.0, arts: Box::new(ITEMS.map(Item::art)) }
     }
 
     fn index(&self) -> usize {
@@ -330,6 +338,7 @@ impl Menu {
     pub fn step(&mut self, by: i32) {
         self.selected += by;
         self.rim = (self.clock, by);
+        self.moved = self.clock;
     }
 
     /// Brings note `i` to the circle the short way round.
@@ -392,6 +401,7 @@ impl Menu {
         self.draw_drum(c);
         self.draw_burst(c);
         self.draw_title(c, f.maps);
+        self.draw_strip(c, f.hint);
         draw_footer(c, f);
     }
 
@@ -421,7 +431,7 @@ impl Menu {
         for k in (0..=n).rev() {
             let i = (first + k).rem_euclid(n) as usize;
             let item = ITEMS[i];
-            let x = CIRCLE_X + (first + k) as f32 * NOTE_GAP - self.shown * NOTE_GAP;
+            let x = CIRCLE_X + (first + k) as f32 * NOTE_GAP - self.shown * NOTE_GAP - if k == 1 { self.nudge() } else { 0.0 };
             if x > c.width + 60.0 {
                 continue;
             }
@@ -487,6 +497,55 @@ impl Menu {
             tooltip(c, 40.0 + width + 62.0, 281.0);
         }
     }
+
+    /// How far the next note leans towards the circle: a small hop now and then while nothing
+    /// has moved, showing the lane is there to be moved.
+    fn nudge(&self) -> f32 {
+        if render::animations() { nudge_after(self.clock - self.moved) } else { 0.0 }
+    }
+
+    /// Every section by name with arrows at the ends: nothing has to be found by scrolling, and
+    /// the arrows say that the lane moves. What moves it is spelled out underneath.
+    fn draw_strip(&self, c: &mut Canvas, hint: &str) {
+        const LEFT: f32 = 40.0;
+        const ARROW: f32 = 22.0;
+        const GAP: f32 = 18.0;
+        let room = c.width - 2.0 * LEFT - 2.0 * (ARROW + 8.0);
+        let names = ITEMS.map(Item::name);
+        let size = Canvas::fit_size(9.0, 6.0, room - GAP * 5.0, &names.concat());
+        let total: f32 = names.iter().map(|n| Canvas::text_width(size, n)).sum();
+        let gap = ((room - total) / 5.0).clamp(4.0, GAP);
+        c.button(LEFT, STRIP_Y - 5.0, ARROW, 20.0, "<", 8.0, Hit::MenuStep(-1), false);
+        let mut x = LEFT + ARROW + 8.0;
+        let y = STRIP_Y + (9.0 - size) / 2.0;
+        for (i, name) in names.iter().enumerate() {
+            let w = Canvas::text_width(size, name);
+            let (on, hover) = (self.is_selected(i), c.hovered(x - gap / 2.0, STRIP_Y - 6.0, w + gap, 22.0));
+            let col = match (on, hover) {
+                (true, _) | (_, true) => 0xffffff,
+                _ if ITEMS[i] == Item::Editor => 0x6f6f86,
+                _ => 0xa8a8bc,
+            };
+            c.text(x, y, size, rgba(col, 1.0), name);
+            if on {
+                c.rect(x, STRIP_Y + 13.0, w, 2.0, rgba(render::accent(), 1.0));
+            }
+            c.hit(x - gap / 2.0, STRIP_Y - 6.0, w + gap, 22.0, Hit::MenuItem(i));
+            x += w + gap;
+        }
+        c.button(x - gap + 8.0, STRIP_Y - 5.0, ARROW, 20.0, ">", 8.0, Hit::MenuStep(1), false);
+        c.text(LEFT + 2.0, HINT_Y, 7.0, rgba(0x9a9ab0, 1.0), &Canvas::fit_hints(7.0, c.width - 2.0 * LEFT, hint));
+    }
+}
+
+/// The next note's lean after `still` ms without the lane moving.
+fn nudge_after(still: f32) -> f32 {
+    let idle = still - NUDGE_AFTER;
+    if idle < 0.0 {
+        return 0.0;
+    }
+    let t = (idle % NUDGE_EVERY) / 420.0;
+    if t < 1.0 { (t * std::f32::consts::PI).sin() * 16.0 } else { 0.0 }
 }
 
 /// A note `r` units in radius, its pixels a whole number of screen pixels: it grows in steps,
@@ -569,16 +628,13 @@ fn draw_discord(c: &mut Canvas, right: f32, bottom: f32) {
 
 fn draw_footer(c: &mut Canvas, f: &Frame) {
     const Y: f32 = 436.0;
-    draw_discord(c, c.width - 14.0, Y + 6.0);
-    let hint_w = Canvas::text_width(7.0, f.hint) + 16.0;
-    c.round_rect([c.width - 14.0 - hint_w, Y + 12.0], [hint_w, 20.0], 6.0, rgba(0x15151d, 0.88), rgba(0x3a3a4e, 1.0), 1.0);
-    c.text(c.width - 6.0 - hint_w, Y + 18.5, 7.0, rgba(0xc8c8d8, 1.0), f.hint);
+    draw_discord(c, c.width - 14.0, Y + 32.0);
     let Some(song) = f.song else { return };
     const BUTTON_W: f32 = 26.0;
     const BUTTON_GAP: f32 = 4.0;
     const SONG_W: f32 = 240.0;
     // The same size whatever plays: a long name is cut, and the buttons stay put.
-    let w = SONG_W.min((c.width - hint_w - 50.0 - (BUTTON_W + BUTTON_GAP) * 4.0).max(120.0));
+    let w = SONG_W.min((c.width - 100.0 - (BUTTON_W + BUTTON_GAP) * 4.0).max(120.0));
     let song = Canvas::fit(8.0, w - 22.0, song);
     c.round_rect([14.0, Y - 6.0], [w, 38.0], 6.0, rgba(0x15151d, 0.88), rgba(0x3a3a4e, 1.0), 1.0);
     c.text(25.0, Y + 1.0, 7.0, rgba(0x9a9ab0, 1.0), tr!("NOW PLAYING", "再生中", "СЕЙЧАС ИГРАЕТ"));
@@ -609,7 +665,7 @@ mod tests {
     #[test]
     fn the_editor_is_only_shaken_the_rest_open_after_the_hit() {
         let mut m = Menu::new();
-        m.pick(3);
+        m.pick(4);
         assert_eq!(m.hit(), Item::Editor);
         assert!(!m.is_leaving());
         m.pick(0);
@@ -618,6 +674,18 @@ mod tests {
         m.clock += LEAVE_MS;
         assert_eq!(m.ready(), Some(Item::Play));
         assert_eq!(m.ready(), None);
+    }
+
+    #[test]
+    fn the_next_note_only_nudges_once_the_lane_has_sat_still() {
+        assert_eq!(nudge_after(0.0), 0.0);
+        assert_eq!(nudge_after(NUDGE_AFTER - 1.0), 0.0);
+        assert!(nudge_after(NUDGE_AFTER + 210.0) > 15.0);
+        assert_eq!(nudge_after(NUDGE_AFTER + 1000.0), 0.0, "a hop, then still until the next");
+        let mut m = Menu::new();
+        m.clock = NUDGE_AFTER * 2.0;
+        m.step(1);
+        assert_eq!(m.clock - m.moved, 0.0, "moving it starts the wait over");
     }
 
     #[test]

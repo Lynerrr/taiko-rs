@@ -2326,15 +2326,11 @@ impl State {
         }
     }
 
-    /// A note clicked: the one in the circle is hit, any other rides up to it.
+    /// A note or its name clicked: it rides up to the circle and is hit, all in one click.
     fn menu_click(&mut self, i: usize) {
         let Some(m) = self.main_menu.as_mut().filter(|m| !m.is_leaving()) else { return };
-        if m.is_selected(i) {
-            self.menu_hit();
-        } else {
-            m.pick(i);
-            self.sfx(audio::Sfx::Kat);
-        }
+        m.pick(i);
+        self.menu_hit();
     }
 
     fn menu_hit(&mut self) {
@@ -7977,7 +7973,15 @@ impl State {
                 let song = shown.and_then(|i| self.library.get(i)).map(Entry::label);
                 let k = |i: usize| config::key_name(self.cfg.keys[i]);
                 let (a, b, d, e) = (k(0), k(3), k(1), k(2));
-                let hint = tr!("{a} {b} move   {d} {e} choose", "{a} {b} 移動   {d} {e} 決定", "{a} {b} листать   {d} {e} выбрать";);
+                let hint = if cfg!(target_os = "android") {
+                    tr!("tap to open", "タップで開く", "нажми, чтобы открыть").to_string()
+                } else {
+                    tr!(
+                        "wheel or arrows: move   click or Enter: open   drum: {a} {b} move, {d} {e} open",
+                        "ホイールか矢印: 移動   クリックかEnter: 開く   太鼓: {a} {b} 移動、{d} {e} 開く",
+                        "колесо или стрелки: листать   клик или Enter: открыть   барабан: {a} {b} листать, {d} {e} открыть";
+                    )
+                };
                 let paused = self.music_paused;
                 if let Some(p) = &mut self.player {
                     let now = Instant::now();
@@ -9435,6 +9439,11 @@ impl State {
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),
+            Hit::MenuStep(by) => {
+                if !self.main_menu.as_ref().is_some_and(menu::Menu::is_leaving) {
+                    self.menu_step(by);
+                }
+            }
             Hit::Guide(action) => self.guide_action(action),
             Hit::DiscordServer => {
                 if !open_url(menu::DISCORD_INVITE) {

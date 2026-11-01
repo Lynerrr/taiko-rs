@@ -1748,6 +1748,8 @@ pub enum Hit {
     Tab(usize),
     /// A note of the main menu (index into `menu::ITEMS`).
     MenuItem(usize),
+    /// An arrow beside the main menu's sections: moves the lane this far.
+    MenuStep(i32),
     /// A button of the first steps guide.
     Guide(crate::guide::Action),
     /// The main menu's button to our Discord server.
