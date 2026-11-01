@@ -1810,6 +1810,10 @@ pub enum Hit {
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
     SettingStep(usize, i32),
+    /// The bar of a setting (index into `settings::ITEMS`): set by clicking or dragging it.
+    SettingLevel(usize),
+    /// The settings' search box.
+    SettingsSearch,
     PauseItem(usize),
     MpRow(usize),
     /// Opens the playfield preset list.

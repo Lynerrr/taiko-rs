@@ -168,7 +168,7 @@ fn page(i: usize, cfg: &Config) -> Page {
                 (key(cfg, Quit), tr!("quit", "終了", "выйти")),
                 (both_presets(cfg), tr!("previous and next playfield preset", "プレイフィールドのプリセット", "пресеты игрового поля")),
                 (cap(tr!("Keys", "キー", "Клавиши")), tr!("every key in this guide can be moved: Settings > Input", "このガイドのキーはすべて変更できます (入力)", "любую клавишу отсюда можно поменять: настройки > Управление")),
-                (cap(tr!("This guide", "このガイド", "Этот гид")), tr!("is always in Settings > Video", "いつでも 設定 > グラフィック から", "всегда есть в настройках > Графика")),
+                (cap(tr!("This guide", "このガイド", "Этот гид")), tr!("is always in Settings > System", "いつでも 設定 > システム から", "всегда есть в настройках > Система")),
             ],
         },
     }

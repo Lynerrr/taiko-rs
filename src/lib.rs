@@ -59,6 +59,7 @@ mod scores;
 mod search;
 mod setstatus;
 mod settings;
+mod settings_search;
 mod shapeshift;
 mod skin;
 mod social;
@@ -389,6 +390,8 @@ struct State {
     focused: bool,
     /// The right button is held on song select (scrolling through the list).
     right_scroll: bool,
+    /// The settings' bar being dragged (index into `settings::ITEMS`).
+    settings_level: Option<usize>,
     /// The song list's scroll bar is held.
     scrollbar_drag: bool,
     /// Right button pressed on song select and not moved yet (virtual units, what's under it):
@@ -2023,6 +2026,7 @@ impl State {
         self.settings_ui.binding = None;
         self.settings_ui.choices = None;
         self.settings_ui.editing = None;
+        self.settings_ui.clear_search();
         self.settings_ui.krokodil = self.is_krokodil();
     }
 
@@ -2389,6 +2393,69 @@ impl State {
                 *text = net::censor(text);
             }
         }
+    }
+
+    /// How a setting's row shows its value.
+    fn setting_control(&self, item: Item) -> settings::Control {
+        use settings::Control;
+        let c = &self.cfg;
+        match item {
+            Item::MasterVolume => Control::Level(c.master_volume),
+            Item::MusicVolume => Control::Level(c.music_volume),
+            Item::FxVolume => Control::Level(c.fx_volume),
+            Item::BackgroundDim => Control::Level(c.bg_dim),
+            Item::DonColour => Control::Swatch(c.note_colours.don()),
+            Item::KatColour => Control::Swatch(c.note_colours.kat()),
+            Item::Accent | Item::AccentHue => Control::Swatch(c.accent),
+            Item::Interface => Control::Switch(!c.interface_hidden),
+            _ if item.kind() == Kind::Toggle => Control::Switch(self.setting_value(item) != off_text()),
+            _ => Control::Text,
+        }
+    }
+
+    /// A setting's bar set from the pointer, to the nearest percent. Saved on letting go.
+    fn set_level(&mut self, i: usize) {
+        let level = (self.settings_ui.level_at(self.mouse_virtual().0) * 100.0).round() / 100.0;
+        match settings::ITEMS[i].1 {
+            Item::MasterVolume => self.cfg.master_volume = level,
+            Item::MusicVolume => self.cfg.music_volume = level,
+            Item::FxVolume => self.cfg.fx_volume = level,
+            Item::BackgroundDim => self.cfg.bg_dim = level,
+            _ => {}
+        }
+        self.apply_volume();
+    }
+
+    /// Text typed on the settings screen goes into its search; true if it took the key.
+    fn settings_type(&mut self, code: KeyCode, text: Option<&str>) -> bool {
+        let ui = &self.settings_ui;
+        if ui.choices.is_some() || ui.binding.is_some() || ui.dropdown.is_some() || self.modifiers_ctrl || self.modifiers_alt {
+            return false;
+        }
+        let searching = !ui.search.is_empty();
+        let mut search = ui.search.clone();
+        match code {
+            KeyCode::Backspace if searching => {
+                search.pop();
+            }
+            KeyCode::Escape if searching => search.clear(),
+            // Space still works the row until there's something to search for.
+            KeyCode::Space if !searching => return false,
+            _ if keys::starts_text(code) || (searching && keys::types_text(code)) => search.extend(text.into_iter().flat_map(str::chars).filter(|c| !c.is_control())),
+            _ => return false,
+        }
+        self.search_settings(search);
+        true
+    }
+
+    fn search_settings(&mut self, text: String) {
+        let hotkeys = self.settings_key_names();
+        self.settings_ui.set_search(text, &|item| hotkeys.iter().find(|(i, _)| *i == item).map_or(String::new(), |(_, name)| name.clone()));
+    }
+
+    /// Every key setting with the key it's on.
+    fn settings_key_names(&self) -> Vec<(Item, String)> {
+        settings::ITEMS.iter().filter(|(_, item)| item.kind() == Kind::Key).map(|&(_, item)| (item, self.setting_value(item))).collect()
     }
 
     fn setting_value(&self, item: Item) -> String {
@@ -3731,6 +3798,9 @@ impl State {
         match code {
             KeyCode::ArrowUp => self.settings_ui.move_cursor(-1),
             KeyCode::ArrowDown => self.settings_ui.move_cursor(1),
+            KeyCode::PageUp | KeyCode::PageDown if !self.settings_ui.search.is_empty() => {
+                self.settings_ui.move_cursor(if code == KeyCode::PageDown { 8 } else { -8 });
+            }
             KeyCode::PageUp | KeyCode::PageDown => {
                 let n = settings::SECTIONS.len() as i32;
                 let dir = if code == KeyCode::PageDown { 1 } else { -1 };
@@ -4504,7 +4574,7 @@ impl State {
                     p.move_cursor(-notches);
                 }
             }
-            Scene::Settings { .. } => self.settings_ui.move_cursor(-notches),
+            Scene::Settings { .. } => self.settings_ui.scroll_by(-notches),
             _ => {}
         }
     }
@@ -4602,6 +4672,10 @@ impl State {
                 self.select.drag_to(dy);
                 return CursorIcon::NsResize;
             }
+        }
+        if let Some(i) = self.settings_level {
+            self.set_level(i);
+            return CursorIcon::EwResize;
         }
         if self.scrollbar_drag {
             if matches!(self.scene, Scene::Select) {
@@ -4950,6 +5024,10 @@ impl State {
         }
         if !pressed {
             self.scrollbar_drag = false;
+            if self.settings_level.take().is_some() {
+                self.cfg.save();
+                return;
+            }
             if self.split_drag.take().is_some() {
                 self.cfg.save();
                 return;
@@ -5957,6 +6035,7 @@ impl State {
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.universe_setup.as_ref().is_some_and(|u| u.typing.is_some())
             || (self.mod_select.is_none() && !self.on_menu() && matches!(self.scene, Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby))
+            || (matches!(self.scene, Scene::Settings { .. }) && self.settings_ui.binding.is_none() && self.settings_ui.choices.is_none() && self.settings_ui.dropdown.is_none())
     }
 
     /// Android: something is being typed that took the keys by itself (not a field that was
@@ -5973,7 +6052,7 @@ impl State {
     fn is_text_field(&self, hit: render::Hit) -> bool {
         use render::Hit;
         match hit {
-            Hit::TextField => true,
+            Hit::TextField | Hit::SettingsSearch => true,
             Hit::MpRow(i) => matches!(self.scene, Scene::MpMenu) && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action()),
             Hit::SocialRow(i) => matches!(self.social.rows(self.mp.is_some()).get(i), Some(social::Row::AddFriend | social::Row::Search)),
             _ => false,
@@ -7264,7 +7343,8 @@ impl State {
             || self.mod_select.is_some()
             || self.customization_tab().is_some();
         let plain = !self.modifiers_ctrl && !self.modifiers_alt;
-        if busy || (plain && self.in_song() && self.cfg.keys.contains(&code)) || (plain && self.takes_text() && keys::types_text(code)) {
+        let settings_idle = matches!(self.scene, Scene::Settings { .. }) && self.settings_ui.search.is_empty() && !keys::starts_text(code);
+        if busy || (plain && self.in_song() && self.cfg.keys.contains(&code)) || (plain && self.takes_text() && keys::types_text(code) && !settings_idle) {
             return None;
         }
         Some(match &self.scene {
@@ -7431,7 +7511,7 @@ impl State {
             }
             return;
         }
-        if !repeat && !matches!(self.scene, Scene::MpMenu) && self.settings_ui.dropdown.is_none()
+        if !repeat && !matches!(self.scene, Scene::MpMenu | Scene::Settings { .. }) && self.settings_ui.dropdown.is_none()
             && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code) {
             self.cycle_preset(if i == 0 { -1 } else { 1 });
             return;
@@ -7633,7 +7713,11 @@ impl State {
                     self.show_select();
                 }
             }
-            Scene::Settings { .. } => self.settings_key(code, window),
+            Scene::Settings { .. } => {
+                if !self.settings_type(code, text) {
+                    self.settings_key(code, window);
+                }
+            }
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. } | Scene::Download => {}
             Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) | Scene::Watch(_) | Scene::VideoEdit(_) => {}
             Scene::Play { game, entry, from } => match code {
@@ -8610,6 +8694,7 @@ impl State {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 self.settings_ui.krokodil = self.is_krokodil();
                 settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
+                let searching = !self.settings_ui.search.is_empty();
                 let footer = if self.settings_ui.editing.as_ref().is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder)) {
                     "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
                 } else if self.settings_ui.editing.is_some() {
@@ -8622,11 +8707,17 @@ impl State {
                         Kind::Key => "Enter rebind",
                         Kind::Action => "Enter go",
                     };
-                    let back = if from_game { "Esc back to pause menu" } else { "Esc or Tab back" };
-                    format!("Up/Down select   PgUp/PgDn section   Left/Right change   {enter}   {back}")
+                    let back = if searching {
+                        "Esc clear the search"
+                    } else if from_game {
+                        "Esc back to pause menu"
+                    } else {
+                        "Esc or Tab back"
+                    };
+                    format!("Type to search   Up/Down select   Left/Right change   {enter}   {back}")
                 };
                 let this = &*self;
-                this.settings_ui.draw(canvas, &|item| this.setting_value(item), &footer);
+                this.settings_ui.draw(canvas, &|item| this.setting_value(item), &|item| this.setting_control(item), &footer);
                 if let Some(p) = &self.settings_ui.choices {
                     p.draw(canvas);
                 }
@@ -9581,6 +9672,7 @@ impl State {
             Hit::DlSort(i) => self.browse.set_sort(download::SortKey::ALL[i]),
             Hit::SettingsSection(i) => {
                 self.settings_ui.binding = None;
+                self.settings_ui.clear_search();
                 self.settings_ui.cursor = settings::section_start(i);
             }
             Hit::SortList => self.open_sorts(),
@@ -9655,8 +9747,17 @@ impl State {
             // A song's own row picks its remembered (or hardest) difficulty.
             Hit::SongRow(row) if self.select.is_song_start(row) && !self.select.in_open_song(row) => self.select.enter_song(row, &self.library),
             Hit::SongRow(row) => self.select.set_cursor(row),
-            Hit::SettingRow(i) if i == self.settings_ui.cursor => self.settings_key(KeyCode::Enter, window),
-            Hit::SettingRow(i) => self.settings_ui.cursor = i,
+            // One click does what the row does: flips a switch, opens a list, waits for a key.
+            Hit::SettingRow(i) => {
+                self.settings_ui.cursor = i;
+                self.settings_key(KeyCode::Enter, window);
+            }
+            Hit::SettingLevel(i) => {
+                self.settings_ui.cursor = i;
+                self.settings_level = Some(i);
+                self.set_level(i);
+            }
+            Hit::SettingsSearch => {}
             Hit::SettingStep(i, dir) => {
                 self.settings_ui.cursor = i;
                 self.adjust_setting(settings::ITEMS[i].1, dir, window);
@@ -10501,6 +10602,7 @@ impl State {
             skin_map_seen: None,
             focused: true,
             right_scroll: false,
+            settings_level: None,
             scrollbar_drag: false,
             right_press: None,
             list_drag: None,

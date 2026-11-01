@@ -1525,11 +1525,11 @@ impl Select {
         // Flying through the list: which heading it's passing.
         if let Some(py) = self.scrubbing {
             let line = scroll + view / 2.0;
-            let heading = rows.iter().filter_map(|(row, ry, ..)| match row {
+            let mut heading = rows.iter().filter_map(|(row, ry, ..)| match row {
                 Row::Section(si) if *ry <= line => Some(*si),
                 _ => None,
             });
-            if let Some(si) = heading.last() {
+            if let Some(si) = heading.next_back() {
                 let label = Canvas::fit(10.0, lw - 40.0, &self.sections[si].label);
                 let bw = Canvas::text_width(10.0, &label) + 24.0;
                 let by = (py - 13.0).clamp(top, bottom - 26.0);
