@@ -499,6 +499,7 @@ fn stars(s: Option<f64>) -> String {
 #[derive(Clone, Copy, PartialEq)]
 pub enum Os {
     Windows,
+    Mac,
     Linux,
     Android,
     Other,
@@ -511,6 +512,8 @@ impl Os {
             Os::Android
         } else if ua.contains("windows") {
             Os::Windows
+        } else if ua.contains("macintosh") {
+            Os::Mac
         } else if ua.contains("linux") || ua.contains("x11") {
             Os::Linux
         } else {
@@ -529,7 +532,7 @@ struct Build {
     alt: Option<(&'static str, &'static str)>,
 }
 
-const BUILDS: [Build; 3] = [
+const BUILDS: [Build; 4] = [
     Build {
         os: Os::Windows,
         name: "Windows",
@@ -537,6 +540,14 @@ const BUILDS: [Build; 3] = [
         file: "taiko-rs-windows-x64-setup.exe",
         kind: "installer",
         alt: Some(("taiko-rs-windows-x64.zip", "portable .zip")),
+    },
+    Build {
+        os: Os::Mac,
+        name: "macOS",
+        note: "macOS 11 or newer, Apple silicon or Intel. The command installs it to Applications and it then updates itself from the game. Apple hasn't signed this build: if you download the archive in a browser, allow it in System Settings, Privacy &amp; Security.",
+        file: "taiko-rs-macos.tar.gz",
+        kind: ".tar.gz",
+        alt: None,
     },
     Build {
         os: Os::Linux,
@@ -549,8 +560,8 @@ const BUILDS: [Build; 3] = [
     Build { os: Os::Android, name: "Android", note: "Android 8.0+, 64-bit ARM.", file: "taiko-rs-android.apk", kind: "APK", alt: None },
 ];
 
-/// The install commands.
-fn linux_command() -> String {
+/// The install commands: install.sh does Linux and macOS.
+fn unix_command() -> String {
     format!("curl -fsSL {RAW}/install.sh | sh")
 }
 
@@ -573,9 +584,10 @@ fn download_url(file: &str) -> String {
 fn download_cta(os: Os, on_download_page: bool) -> String {
     let others = if on_download_page { String::new() } else { " &middot; <a href=\"/download\">other systems</a>".into() };
     match BUILDS.iter().find(|b| b.os == os) {
-        Some(b) if b.os == Os::Linux => format!(
-            "<div class=cta-label>Install on Linux: paste this in a terminal</div>{}<div class=hint>installs, adds it to your apps and keeps it updated &middot; <a href=\"{}\">or the .tar.gz</a>{others}</div>",
-            cmd(&linux_command()),
+        Some(b) if matches!(b.os, Os::Linux | Os::Mac) => format!(
+            "<div class=cta-label>Install on {}: paste this in a terminal</div>{}<div class=hint>installs, adds it to your apps and keeps it updated &middot; <a href=\"{}\">or the .tar.gz</a>{others}</div>",
+            b.name,
+            cmd(&unix_command()),
             download_url(b.file)
         ),
         Some(b) => format!(
@@ -585,7 +597,7 @@ fn download_cta(os: Os, on_download_page: bool) -> String {
             b.note
         ),
         None if on_download_page => "<p class=dim>Pick your system below.</p>".into(),
-        None => "<a class=\"btn hot\" href=\"/download\">Download taiko.rs</a><div class=hint>Windows, Linux and Android</div>".into(),
+        None => "<a class=\"btn hot\" href=\"/download\">Download taiko.rs</a><div class=hint>Windows, macOS, Linux and Android</div>".into(),
     }
 }
 
@@ -1190,8 +1202,8 @@ pub fn download(os: Os) -> String {
             let button = format!("<a class=\"btn{hot}\" href=\"{}\">Download {}</a>", download_url(b.file), b.kind);
             let alt = |(file, label): (&str, &str)| format!("<a class=alt href=\"{}\">or the {label}</a>", download_url(file));
             let how = match b.os {
-                // Linux: the command, the archive for those who'd rather.
-                Os::Linux => format!("<h3>In a terminal</h3>{}{}", cmd(&linux_command()), alt((b.file, b.kind))),
+                // The command, the archive for those who'd rather.
+                Os::Linux | Os::Mac => format!("<h3>In a terminal</h3>{}{}", cmd(&unix_command()), alt((b.file, b.kind))),
                 Os::Windows => format!("{button}{}<h3>Or from PowerShell</h3>{}", b.alt.map(alt).unwrap_or_default(), cmd(&powershell_command())),
                 _ => button,
             };
@@ -1207,7 +1219,7 @@ pub fn download(os: Os) -> String {
     format!(
         "<div class=band><div class=inner><h1 class=glitch data-text=\"DOWNLOAD\">DOWNLOAD</h1><div class=band-cta>{}</div></div></div>\
          <div class=page><div class=builds>{builds}</div>\
-         <p class=dim>No macOS build yet. Source and every build: <a href=\"{REPO}/releases\">GitHub releases</a>.</p></div>",
+         <p class=dim>Source and every build: <a href=\"{REPO}/releases\">GitHub releases</a>.</p></div>",
         download_cta(os, true)
     )
 }
@@ -1594,7 +1606,7 @@ img.avatar{object-fit:cover;background:var(--panel2)}.tag.loved{color:#ff66aa;bo
 .copy{flex:none;font:inherit;border:0;border-left:2px solid var(--line2);background:var(--panel2);color:var(--white);padding:0 16px;cursor:pointer}.copy:hover{background:var(--acc)}
 .cta-label{color:var(--white);margin-bottom:2px}.stage-cta .cmd{max-width:820px;background:rgba(12,12,18,.92)}.alt{display:inline-block;margin-top:10px;color:var(--dim)}.alt:hover{color:var(--acc)}
 /* Download. */
-.builds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.build{display:flex;flex-direction:column;align-items:flex-start;min-width:0}.build h2{font-size:32px}.build p{margin-bottom:18px}.build .cmd{align-self:stretch}
+.builds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.build{display:flex;flex-direction:column;align-items:flex-start;min-width:0}.build h2{font-size:32px}.build p{margin-bottom:18px}.build .cmd{align-self:stretch}
 .build.mine{border-color:var(--acc)}.build .btn.hot{font-size:16px;min-height:44px;box-shadow:3px 3px 0 #6b1d12}.band-cta{margin-top:18px;max-width:820px}.yours{font-size:16px;color:var(--acc)}
 pre{background:var(--bg2);border:2px solid var(--line);padding:12px 14px;overflow-x:auto;font:16px/24px taiko5x7,monospace;color:var(--green)}h3{font-size:16px;margin-top:16px;color:var(--dim)}
 .lost{text-align:center;padding:56px 24px}.lost h1{font-size:96px;line-height:96px;color:var(--acc)}
@@ -1664,14 +1676,23 @@ mod tests {
         assert!(Os::of("Mozilla/5.0 (Windows NT 10.0; Win64; x64)") == Os::Windows);
         assert!(Os::of("Mozilla/5.0 (Linux; Android 14)") == Os::Android);
         assert!(Os::of("Mozilla/5.0 (X11; Linux x86_64)") == Os::Linux);
-        assert!(Os::of("Mozilla/5.0 (Macintosh)") == Os::Other);
+        assert!(Os::of("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)") == Os::Mac);
+        assert!(Os::of("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)") == Os::Other);
     }
 
     #[test]
     fn install_commands_ask_for_https() {
-        for command in [linux_command(), powershell_command()] {
+        for command in [unix_command(), powershell_command()] {
             assert!(command.contains("https://"));
         }
+    }
+
+    #[test]
+    fn mac_visitors_get_the_install_command() {
+        let page = download(Os::Mac);
+        assert!(page.contains("Install on macOS") && page.contains(&esc(&unix_command())));
+        assert!(page.contains("taiko-rs-macos.tar.gz") && page.contains("YOUR SYSTEM"));
+        assert!(!page.contains("No macOS build"));
     }
 
     #[test]

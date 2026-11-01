@@ -6,7 +6,7 @@
 
 **A small, fast taiko client for osu! beatmaps, written in Rust.**
 
-Linux (Wayland) · Windows · Android
+Linux (Wayland) · Windows · macOS · Android
 
 [![Download](https://img.shields.io/badge/download-latest-EB452C?style=flat-square)](https://github.com/Lynerrr/taiko-rs/releases/tag/latest)
 [![Build](https://img.shields.io/github/actions/workflow/status/Lynerrr/taiko-rs/release.yml?branch=worktree-taiko-client&style=flat-square&label=build)](https://github.com/Lynerrr/taiko-rs/actions/workflows/release.yml)
@@ -23,6 +23,7 @@ Linux (Wayland) · Windows · Android
 | --- | --- |
 | 🐧 **Linux** | `curl -fsSL https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.sh \| sh` |
 | 🪟 **Windows** | run [`taiko-rs-windows-x64-setup.exe`](https://github.com/Lynerrr/taiko-rs/releases/download/latest/taiko-rs-windows-x64-setup.exe), or in PowerShell: `irm https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.ps1 \| iex` |
+| 🍎 **macOS** | `curl -fsSL https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client/install.sh \| sh` (11+, Apple silicon or Intel) |
 | 🤖 **Android** | grab `taiko-rs-android.apk` from the [latest release](https://github.com/Lynerrr/taiko-rs/releases/tag/latest) (8.0+, arm64) |
 
 No root or admin needed. It finds your osu! Songs folder (osu-winello and Wine too); if yours is
