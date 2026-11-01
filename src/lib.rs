@@ -5854,7 +5854,7 @@ impl State {
         self.select.sort = sort;
         self.select.mods_label = self.cfg.mods.label();
         let maps = self.library.iter().enumerate().map(|(i, e)| (i, e.path.clone(), e.modified, e.size)).collect();
-        let info = mapinfo::MapInfo::spawn(maps, self.library.len());
+        let info = mapinfo::MapInfo::spawn(maps, self.library.len(), self.in_song());
         self.select.info = Some(info.results.clone());
         self.mapinfo = Some(info);
         self.mapinfo_sorted = false;
@@ -7881,6 +7881,10 @@ impl State {
         self.select.legacy = !self.cfg.main_menu;
         self.select.to_menu = self.mp.is_none() && !self.picking_lobby_map;
         self.select.covered = self.customization_tab().is_some();
+        // A big library's first analysis waits while a song is being played.
+        if let Some(info) = &self.mapinfo {
+            info.hold(self.in_song());
+        }
         self.refresh_play_offset();
         self.follow_map_skin();
         if self.window_resized_at.is_some_and(|t| now.saturating_duration_since(t) > Duration::from_secs(1)) {

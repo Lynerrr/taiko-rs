@@ -4,8 +4,9 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rosu_pp::taiko::Taiko;
 use rosu_pp::{Beatmap, Difficulty};
@@ -25,6 +26,18 @@ pub struct MapInfo {
     /// Maps handled so far (cached or computed) out of `total`.
     pub done: Arc<AtomicUsize>,
     pub total: Arc<AtomicUsize>,
+    /// The work waits while this is on: a song is being played.
+    held: Arc<AtomicBool>,
+}
+
+/// How often the cache is written while working (maps): a big library can take longer than a
+/// session, and what's done shouldn't have to be done again.
+const SAVE_EVERY: usize = 2000;
+
+/// How many threads to work on: half the machine at most, so a first start with a big library
+/// leaves it usable, however many maps there are.
+fn thread_count(cores: usize) -> usize {
+    (cores / 2).clamp(1, 4)
 }
 
 fn cache_path() -> Option<PathBuf> {
@@ -78,15 +91,17 @@ fn analyze(path: &Path) -> Option<Info> {
 }
 
 impl MapInfo {
-    /// Starts working through `maps` (library index, path, mtime, size) on background threads.
-    pub fn spawn(maps: Vec<(usize, PathBuf, u64, u64)>, len: usize) -> MapInfo {
+    /// Starts working through `maps` (library index, path, mtime, size) on background threads,
+    /// waiting first if `held`.
+    pub fn spawn(maps: Vec<(usize, PathBuf, u64, u64)>, len: usize, held: bool) -> MapInfo {
         let results: Shared = Arc::new(Mutex::new(vec![None; len]));
         let done = Arc::new(AtomicUsize::new(0));
         let total = Arc::new(AtomicUsize::new(maps.len()));
-        let info = MapInfo { results: results.clone(), done: done.clone(), total };
+        let held = Arc::new(AtomicBool::new(held));
+        let info = MapInfo { results: results.clone(), done: done.clone(), total, held: held.clone() };
         std::thread::Builder::new()
             .name("mapinfo".into())
-            .spawn(move || run(maps, results, done))
+            .spawn(move || run(maps, results, done, held))
             .expect("spawn map info");
         info
     }
@@ -100,8 +115,13 @@ impl MapInfo {
             }
         }
         self.total.fetch_add(maps.len(), Ordering::Relaxed);
-        let (results, done) = (self.results.clone(), self.done.clone());
-        std::thread::spawn(move || run(maps, results, done));
+        let (results, done, held) = (self.results.clone(), self.done.clone(), self.held.clone());
+        std::thread::spawn(move || run(maps, results, done, held));
+    }
+
+    /// Stops the work for now, or lets it go on.
+    pub fn hold(&self, on: bool) {
+        self.held.store(on, Ordering::Relaxed);
     }
 
     pub fn finished(&self) -> bool {
@@ -109,8 +129,8 @@ impl MapInfo {
     }
 }
 
-fn run(maps: Vec<(usize, PathBuf, u64, u64)>, results: Shared, done: Arc<AtomicUsize>) {
-    let mut cache = load_cache();
+fn run(maps: Vec<(usize, PathBuf, u64, u64)>, results: Shared, done: Arc<AtomicUsize>, held: Arc<AtomicBool>) {
+    let cache = load_cache();
     let mut todo = Vec::new();
     {
         let mut r = results.lock().unwrap();
@@ -129,13 +149,16 @@ fn run(maps: Vec<(usize, PathBuf, u64, u64)>, results: Shared, done: Arc<AtomicU
     if todo.is_empty() {
         return;
     }
-    // Leave a core for the game.
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).saturating_sub(1).clamp(1, 8);
+    let threads = thread_count(std::thread::available_parallelism().map_or(2, |n| n.get()));
     let next = AtomicUsize::new(0);
-    let fresh: Mutex<Vec<(PathBuf, u64, u64, Info)>> = Mutex::new(Vec::new());
+    let unsaved = AtomicUsize::new(0);
+    let cache = Mutex::new(cache);
     std::thread::scope(|s| {
         for _ in 0..threads {
             s.spawn(|| loop {
+                while held.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
                 let k = next.fetch_add(1, Ordering::Relaxed);
                 let Some((i, path, mtime, size)) = todo.get(k) else { break };
                 let info = std::panic::catch_unwind(|| analyze(path)).ok().flatten();
@@ -143,14 +166,50 @@ fn run(maps: Vec<(usize, PathBuf, u64, u64)>, results: Shared, done: Arc<AtomicU
                     if let Some(slot) = results.lock().unwrap().get_mut(*i) {
                         *slot = Some(info);
                     }
-                    fresh.lock().unwrap().push((path.clone(), *mtime, *size, info));
+                    let mut cache = cache.lock().unwrap();
+                    cache.insert(path.clone(), (*mtime, *size, info));
+                    if unsaved.fetch_add(1, Ordering::Relaxed) + 1 >= SAVE_EVERY {
+                        unsaved.store(0, Ordering::Relaxed);
+                        save_cache(&cache);
+                    }
                 }
                 done.fetch_add(1, Ordering::Relaxed);
             });
         }
     });
-    for (path, mtime, size, info) in fresh.into_inner().unwrap() {
-        cache.insert(path, (mtime, size, info));
+    save_cache(&cache.lock().unwrap());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn maps(n: usize) -> Vec<(usize, PathBuf, u64, u64)> {
+        (0..n).map(|i| (i, PathBuf::from(format!("/nonexistent/{i}.osu")), 0, 0)).collect()
     }
-    save_cache(&cache);
+
+    fn wait_for(info: &MapInfo) -> bool {
+        (0..300).any(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            info.finished()
+        })
+    }
+
+    #[test]
+    fn it_waits_while_held_and_goes_on_after() {
+        let info = MapInfo::spawn(maps(5), 5, true);
+        std::thread::sleep(Duration::from_millis(250));
+        assert_eq!(info.done.load(Ordering::Relaxed), 0, "nothing while a song plays");
+        info.hold(false);
+        assert!(wait_for(&info), "{} done", info.done.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn it_leaves_half_the_machine_alone() {
+        assert_eq!(thread_count(1), 1);
+        assert_eq!(thread_count(2), 1);
+        assert_eq!(thread_count(4), 2);
+        assert_eq!(thread_count(8), 4);
+        assert_eq!(thread_count(32), 4);
+    }
 }
