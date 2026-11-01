@@ -146,10 +146,9 @@ impl Guessr {
             }
             self.paths = Some(list.into_iter().map(|(h, _, path)| (h, path)).collect());
             // A round that started while we were still listing.
-            if let Some(r) = &mut self.round {
-                if r.load.is_none() && r.map.is_none() {
-                    r.load = self.paths.as_ref().and_then(|p| p.get(&r.hash)).map(|p| load(p.clone()));
-                }
+            if let Some(r) = &mut self.round
+                && r.load.is_none() && r.map.is_none() {
+                r.load = self.paths.as_ref().and_then(|p| p.get(&r.hash)).map(|p| load(p.clone()));
             }
         }
         let Some(r) = &mut self.round else { return };
@@ -273,7 +272,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, g: &mut Guessr, scroll_speed: f64
     let (_, band_h) = crate::game::lane_band();
     let bh = (band_h * col / 640.0).min(130.0);
     let rect = [x0, 94.0, col, bh];
-    c.round_rect(x0, 94.0, col, bh, 8.0, rgba(0x0c0c12, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+    c.round_rect([x0, 94.0], [col, bh], 8.0, rgba(0x0c0c12, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
     match g.round.as_mut().map(|r| (r.game.as_mut(), r.load.is_some())) {
         Some((Some(game), _)) if g.reveal.is_none() => draw_pattern(c, game, rect, scroll_speed),
         Some((None, true)) => c.text_centered(w / 2.0, 94.0 + bh / 2.0 - 5.0, 9.0, rgba(0x8a8aa0, 1.0), "loading..."),
@@ -297,7 +296,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, g: &mut Guessr, scroll_speed: f64
     for (i, p) in players.iter().enumerate().take(rows) {
         let y = top + 14.0 + i as f32 * 24.0;
         let me = Some(p.id) == s.client.id;
-        c.round_rect(x0, y, col, 20.0, 6.0, rgba(if me { 0x2b2b3d } else { 0x1d1d27 }, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect([x0, y], [col, 20.0], 6.0, rgba(if me { 0x2b2b3d } else { 0x1d1d27 }, 1.0), rgba(0x2a2a38, 1.0), 1.0);
         let mut name = p.name.clone();
         if p.host {
             name.push_str("  (host)");
@@ -373,10 +372,10 @@ pub fn draw_picking(c: &mut Canvas, g: &mut Guessr, scroll_speed: f64, now: Inst
     let w = c.width;
     let (x, y, h) = (24.0, 380.0, 92.0);
     let bw = w - 48.0;
-    c.round_rect(x, y, bw, h, 8.0, rgba(0x15151d, 1.0), rgba(accent(), 1.0), 1.5);
+    c.round_rect([x, y], [bw, h], 8.0, rgba(0x15151d, 1.0), rgba(accent(), 1.0), 1.5);
     let pattern_w = (bw * 0.62).min(560.0);
     let rect = [x + 8.0, y + 8.0, pattern_w, h - 16.0];
-    c.round_rect(rect[0], rect[1], rect[2], rect[3], 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+    c.round_rect([rect[0], rect[1]], [rect[2], rect[3]], 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
     let Some(r) = &mut g.round else { return };
     if let Some(game) = &mut r.game {
         draw_pattern(c, game, rect, scroll_speed);

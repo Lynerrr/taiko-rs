@@ -470,7 +470,7 @@ impl BgImage {
     pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> BgImage {
         let (w, h) = (width as usize, height as usize);
         let mut luma = Vec::with_capacity(w * h);
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             let (r, g, b) = (px[0] as f32, px[1] as f32, px[2] as f32);
             luma.push((0.299 * r + 0.587 * g + 0.114 * b + 0.5) as u8);
         }
@@ -1447,7 +1447,7 @@ impl Renderer {
         let data = buf.slice(..).get_mapped_range().ok()?;
         let mut rgb = Vec::with_capacity((w * h * 3) as usize);
         for row in data.chunks_exact(bpr as usize) {
-            for px in row[..(w * 4) as usize].chunks_exact(4) {
+            for px in row[..(w * 4) as usize].as_chunks::<4>().0 {
                 rgb.extend_from_slice(&px[..3]);
             }
         }
@@ -1897,10 +1897,9 @@ pub struct Canvas {
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
     let acc = accent();
-    if acc != DEFAULT_ACCENT {
-        if let Some([r, g, b]) = tint_grey(hex, acc) {
-            return [r, g, b, a];
-        }
+    if acc != DEFAULT_ACCENT
+        && let Some([r, g, b]) = tint_grey(hex, acc) {
+        return [r, g, b, a];
     }
     [((hex >> 16) & 0xff) as f32 / 255.0, ((hex >> 8) & 0xff) as f32 / 255.0, (hex & 0xff) as f32 / 255.0, a]
 }
@@ -2075,7 +2074,7 @@ impl Canvas {
             (false, false) => (0x23232f, 0x3a3a4e),
             (false, true) => (0x34344a, 0x6a6a88),
         };
-        self.round_rect(x, y, w, h, 6.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
+        self.round_rect([x, y], [w, h], 6.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
         // A label too long for the button shrinks a little, then gets cut short.
         let room = w - 8.0;
         let size = Self::fit_size(size, size * 0.8, room, label);
@@ -2113,7 +2112,7 @@ impl Canvas {
         self.shapes.push(Shape { center: [x + w / 2.0, y + h / 2.0], half: [w / 2.0, h / 2.0], fill, border: fill, params: [0.0; 4], angle: 0.0 });
     }
 
-    pub fn round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
+    pub fn round_rect(&mut self, [x, y]: [f32; 2], [w, h]: [f32; 2], radius: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
         if self.audit {
             self.boxes.push(self.shapes.len());
         }
@@ -2136,7 +2135,7 @@ impl Canvas {
     }
 
     /// Horizontal capsule from x0 to x1 (centres of the end caps).
-    pub fn capsule(&mut self, x0: f32, x1: f32, y: f32, r: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
+    pub fn capsule(&mut self, [x0, x1]: [f32; 2], y: f32, r: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
         let (a, b) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
         self.shapes.push(Shape {
             center: [(a + b) / 2.0, y],
@@ -2149,7 +2148,7 @@ impl Canvas {
     }
 
     /// Left (`side` 1) or right (`side` 2) half of a circle.
-    pub fn half_circle(&mut self, x: f32, y: f32, r: f32, side: u8, fill: [f32; 4], border: [f32; 4], border_w: f32) {
+    pub fn half_circle(&mut self, [x, y]: [f32; 2], r: f32, side: u8, fill: [f32; 4], border: [f32; 4], border_w: f32) {
         self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, side as f32], angle: 0.0 });
     }
 

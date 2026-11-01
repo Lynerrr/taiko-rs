@@ -196,10 +196,7 @@ fn from_network(mut raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connect
 fn to_network(raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connection>, turn: &Mutex<()>) {
     let mut buf = [0u8; 16 * 1024];
     loop {
-        let n = match inner.read(&mut buf) {
-            Ok(n) => n,
-            Err(_) => 0,
-        };
+        let n = inner.read(&mut buf).unwrap_or_default();
         let my_turn = turn.lock().unwrap();
         let mut locked = conn.lock().unwrap();
         if n == 0 {

@@ -593,10 +593,9 @@ fn spawn_connection<K: Send + 'static>(mut reader: BufReader<TcpStream>, id: u32
         }
         let mut line = String::new();
         while let Ok(Some(())) = read_message(&mut reader, &mut line) {
-            if let Ok(msg) = serde_json::from_str::<ClientMsg>(&line) {
-                if events.send(Event::Msg(id, msg)).is_err() {
-                    break;
-                }
+            if let Ok(msg) = serde_json::from_str::<ClientMsg>(&line)
+                && events.send(Event::Msg(id, msg)).is_err() {
+                break;
             }
         }
         let _ = events.send(Event::Left(id));
@@ -736,18 +735,16 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                 // Map transfers are relayed between the host and one player, lobby only.
                 let msg = match msg {
                     ClientMsg::RequestMap => {
-                        if let (Some(h), true, true) = (host_id, phase == Phase::Lobby, map.is_some()) {
-                            if let Some(host) = players.iter().find(|p| p.info.id == h) {
-                                let _ = host.tx.send(ServerMsg::MapRequested { from: id });
-                            }
+                        if let (Some(h), true, true) = (host_id, phase == Phase::Lobby, map.is_some())
+                            && let Some(host) = players.iter().find(|p| p.info.id == h) {
+                            let _ = host.tx.send(ServerMsg::MapRequested { from: id });
                         }
                         continue;
                     }
                     ClientMsg::MapFile { to, part } => {
-                        if is_host {
-                            if let Some(dest) = players.iter().find(|p| p.info.id == to) {
-                                let _ = dest.tx.send(ServerMsg::MapFile(part));
-                            }
+                        if is_host
+                            && let Some(dest) = players.iter().find(|p| p.info.id == to) {
+                            let _ = dest.tx.send(ServerMsg::MapFile(part));
                         }
                         continue;
                     }
@@ -967,13 +964,12 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                             dirty = true;
                         }
                     }
-                    ClientMsg::Finished(f) => {
-                        if p.in_match {
+                    ClientMsg::Finished(f)
+                        if p.in_match => {
                             p.info.result = Some(f);
                             p.info.status = Status::Finished;
                             dirty = true;
                         }
-                    }
                     _ => {}
                 }
             }
@@ -1188,10 +1184,9 @@ impl Client {
             let mut reader = reader;
             let mut line = String::new();
             while let Ok(Some(())) = read_message(&mut reader, &mut line) {
-                if let Ok(msg) = serde_json::from_str::<ServerMsg>(&line) {
-                    if inbox.send((Instant::now(), msg)).is_err() {
-                        return;
-                    }
+                if let Ok(msg) = serde_json::from_str::<ServerMsg>(&line)
+                    && inbox.send((Instant::now(), msg)).is_err() {
+                    return;
                 }
             }
             let _ = inbox.send((Instant::now(), ServerMsg::Disconnected(tr!("connection closed", "接続が切れました", "соединение закрыто").into())));

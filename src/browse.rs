@@ -17,6 +17,8 @@ const PREVIEW_DELAY: Duration = Duration::from_millis(250);
 /// (set id, beatmap id) of a previewed difficulty.
 type DiffKey = (u32, u32);
 
+type SearchPage = Result<(Vec<SetInfo>, bool), String>;
+
 pub struct Browse {
     pub query: String,
     pub category: Category,
@@ -28,7 +30,7 @@ pub struct Browse {
     pub status: String,
     /// The search on its way and the page (from 0) it fetches: 0 replaces the results, later
     /// pages add to them.
-    search: Option<(usize, Receiver<Result<(Vec<SetInfo>, bool), String>>)>,
+    search: Option<(usize, Receiver<SearchPage>)>,
     /// The last page shown, and whether the mirrors may have more.
     page: usize,
     more: bool,
@@ -103,10 +105,9 @@ impl Browse {
 
     /// Fetches the next page of results once the selection gets near the end of the list.
     fn load_more_near_end(&mut self) {
-        if self.more && self.search.is_none() && self.edited.is_none() && self.cursor + 10 >= self.results.len() {
-            if let Some(query) = self.searched.clone() {
-                self.fetch(query, self.page + 1);
-            }
+        if self.more && self.search.is_none() && self.edited.is_none() && self.cursor + 10 >= self.results.len()
+            && let Some(query) = self.searched.clone() {
+            self.fetch(query, self.page + 1);
         }
     }
 
@@ -170,19 +171,18 @@ impl Browse {
 
     /// Fetches the preview for the selection once it rests (one fetch at a time).
     fn poll_preview(&mut self, now: Instant) {
-        if let Some((key, rx)) = &self.fetching {
-            if let Ok(result) = rx.try_recv() {
-                let key = *key;
-                self.fetching = None;
-                match result.map_err(|e| e.to_string()).and_then(|osu| make_entry(&osu).ok_or_else(|| "unreadable difficulty".into())) {
-                    Ok(entry) => {
-                        self.remote.push(entry);
-                        self.remote_keys.push(key);
-                    }
-                    Err(e) => {
-                        self.failed.insert(key);
-                        self.status = format!("no preview: {e}");
-                    }
+        if let Some((key, rx)) = &self.fetching
+            && let Ok(result) = rx.try_recv() {
+            let key = *key;
+            self.fetching = None;
+            match result.map_err(|e| e.to_string()).and_then(|osu| make_entry(&osu).ok_or_else(|| "unreadable difficulty".into())) {
+                Ok(entry) => {
+                    self.remote.push(entry);
+                    self.remote_keys.push(key);
+                }
+                Err(e) => {
+                    self.failed.insert(key);
+                    self.status = format!("no preview: {e}");
                 }
             }
         }
@@ -276,7 +276,7 @@ impl Browse {
         let x0 = 24.0;
         crate::settings::tab_bar(c, 3, "maps from catboy.best / osu.direct");
         let busy = self.search.as_ref().is_some_and(|s| s.0 == 0) || self.edited.is_some();
-        c.round_rect(x0, 54.0, col, 24.0, 6.0, rgba(0x23232f, 0.95), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect([x0, 54.0], [col, 24.0], 6.0, rgba(0x23232f, 0.95), rgba(0x3a3a4e, 1.0), 1.0);
         // The query keeps clear of "searching..." on the right.
         let room = col - 20.0 - if busy { Canvas::text_width(8.0, "searching...") + 10.0 } else { 0.0 };
         let text = if self.query.is_empty() { Canvas::fit(10.0, room, "type to search (artist, title, mapper)...") } else { Canvas::fit_end(10.0, room, &format!("{}_", self.query)) };
@@ -290,7 +290,7 @@ impl Browse {
             let w = Canvas::text_width(6.0, label) + 8.0;
             let hover = !on && c.hovered(x, y, w, 15.0);
             let bg = if on { accent() } else if hover { 0x34344a } else { 0x23232f };
-            c.round_rect(x, y, w, 15.0, 5.0, rgba(bg, 1.0), rgba(if on { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+            c.round_rect([x, y], [w, 15.0], 5.0, rgba(bg, 1.0), rgba(if on { accent() } else { 0x3a3a4e }, 1.0), 1.0);
             c.text(x + 4.0, y + 4.5, 6.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
             c.hit(x, y, w, 15.0, hit);
             w + 3.0
@@ -340,7 +340,7 @@ impl Browse {
             let selected = i == self.cursor;
             let hover = !selected && c.hovered(x0, y, col, ROW - 4.0);
             let (bg, border) = if selected { (0x2b2b3d, accent()) } else if hover { (0x262634, 0x2a2a38) } else { (0x1d1d27, 0x2a2a38) };
-            c.round_rect(x0, y, col, ROW - 4.0, 7.0, rgba(bg, 0.95), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+            c.round_rect([x0, y], [col, ROW - 4.0], 7.0, rgba(bg, 0.95), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
             c.hit(x0, y, col, ROW, Hit::DlRow(i));
             let state = if installed.contains(&set.id) {
                 RowState::Installed
@@ -356,9 +356,9 @@ impl Browse {
                 RowState::Installed => c.text_right(right, y + 13.0, 8.0, rgba(0x86E05A, 1.0), "installed"),
                 RowState::Downloading(f) => {
                     let (bx, by, bw) = (right - action_w, y + 11.0, action_w);
-                    c.round_rect(bx, by, bw, 12.0, 4.0, rgba(0x15151d, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+                    c.round_rect([bx, by], [bw, 12.0], 4.0, rgba(0x15151d, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
                     if let Some(f) = f {
-                        c.round_rect(bx + 1.0, by + 1.0, (bw - 2.0) * f.clamp(0.0, 1.0), 10.0, 3.0, rgba(0x438EAD, 1.0), rgba(0, 0.0), 0.0);
+                        c.round_rect([bx + 1.0, by + 1.0], [(bw - 2.0) * f.clamp(0.0, 1.0), 10.0], 3.0, rgba(0x438EAD, 1.0), rgba(0, 0.0), 0.0);
                     }
                     let label = f.map(|f| format!("{:.0}%", f * 100.0)).unwrap_or_else(|| "starting...".into());
                     c.text_centered(bx + bw / 2.0, by + 3.0, 6.0, rgba(0xffffff, 1.0), &label);

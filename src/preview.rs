@@ -81,13 +81,17 @@ impl Details {
     }
 }
 
+type LoadedMap = (usize, Result<Beatmap, String>, Option<(Vec<f64>, f64, f64)>);
+type StatCell = (&'static str, String, f32);
+type StatRow<'a> = Vec<&'a StatCell>;
+
 #[derive(Default)]
 pub struct Preview {
     seen: Option<usize>,
     changed_at: Option<Instant>,
     last_change: Option<Instant>,
     requested: Option<usize>,
-    map_rx: Option<Receiver<(usize, Result<Beatmap, String>, Option<(Vec<f64>, f64, f64)>)>>,
+    map_rx: Option<Receiver<LoadedMap>>,
     /// Speed (and keep-pitch) the loaded preview was prepared for.
     requested_rate: (f64, bool),
     requested_pitch: f64,
@@ -279,73 +283,69 @@ impl Preview {
                 self.show_background_for(e);
                 let song = audio_path(e);
                 let loaded = self.audio.as_ref().is_some_and(|s| s.path == song && (s.rate, s.keep_pitch) == rate && s.pitch == shift);
-                if !loaded {
-                    if let Some(sr) = engine.map(|a| a.rate) {
-                        let (tx, rx) = mpsc::channel();
-                        // Quick part first: from where the music was (speed change) or the preview point.
-                        let part_from = self.resume_at.or((self.player || self.from_top).then_some(0.0)).unwrap_or(e.meta.preview_time);
-                        let clip_at = e.meta.preview_time.max(0.0);
-                        let is_clip = song.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::download::CLIP_PREFIX));
-                        std::thread::spawn(move || {
-                            if is_clip {
-                                // A download preview: ~10 s of music from the preview point, placed there.
-                                let clip = audio::decode(&song, sr).ok().map(|t| {
-                                    let base = (clip_at / 1000.0 * sr as f64 / speed).round() as i64;
-                                    (Arc::new(audio::shifted(t, sr, speed, keep_pitch, shift)), base, false)
-                                });
-                                let failed = clip.is_none();
-                                let _ = tx.send((song.clone(), clip));
-                                if !failed {
-                                    let _ = tx.send((song, None));
-                                }
-                                return;
-                            }
-                            if part_from >= 0.0 {
-                                // SNIPPET_MS of playback covers that much more map time when sped up.
-                                if let Ok((part, base)) = audio::decode_part(&song, sr, Some((part_from, SNIPPET_MS * speed))) {
-                                    let part = audio::shifted(part, sr, speed, keep_pitch, shift);
-                                    let base = (base as f64 / speed).round() as i64;
-                                    if tx.send((song.clone(), Some((Arc::new(part), base, false)))).is_err() {
-                                        return; // the selection moved on
-                                    }
-                                }
-                            }
-                            let track = audio::decode_shared(&song, sr).ok().map(|t| {
-                                let track = if shift == 1.0 { audio::with_rate(t, sr, speed, keep_pitch) } else { Arc::new(audio::shifted(Track { samples: t.samples.clone(), rate: t.rate }, sr, speed, keep_pitch, shift)) };
-                                (track, 0, true)
+                if !loaded
+                    && let Some(sr) = engine.map(|a| a.rate) {
+                    let (tx, rx) = mpsc::channel();
+                    // Quick part first: from where the music was (speed change) or the preview point.
+                    let part_from = self.resume_at.or((self.player || self.from_top).then_some(0.0)).unwrap_or(e.meta.preview_time);
+                    let clip_at = e.meta.preview_time.max(0.0);
+                    let is_clip = song.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::download::CLIP_PREFIX));
+                    std::thread::spawn(move || {
+                        if is_clip {
+                            // A download preview: ~10 s of music from the preview point, placed there.
+                            let clip = audio::decode(&song, sr).ok().map(|t| {
+                                let base = (clip_at / 1000.0 * sr as f64 / speed).round() as i64;
+                                (Arc::new(audio::shifted(t, sr, speed, keep_pitch, shift)), base, false)
                             });
-                            let _ = tx.send((song, track));
+                            let failed = clip.is_none();
+                            let _ = tx.send((song.clone(), clip));
+                            if !failed {
+                                let _ = tx.send((song, None));
+                            }
+                            return;
+                        }
+                        if part_from >= 0.0 {
+                            // SNIPPET_MS of playback covers that much more map time when sped up.
+                            if let Ok((part, base)) = audio::decode_part(&song, sr, Some((part_from, SNIPPET_MS * speed))) {
+                                let part = audio::shifted(part, sr, speed, keep_pitch, shift);
+                                let base = (base as f64 / speed).round() as i64;
+                                if tx.send((song.clone(), Some((Arc::new(part), base, false)))).is_err() {
+                                    return; // the selection moved on
+                                }
+                            }
+                        }
+                        let track = audio::decode_shared(&song, sr).ok().map(|t| {
+                            let track = if shift == 1.0 { audio::with_rate(t, sr, speed, keep_pitch) } else { Arc::new(audio::shifted(Track { samples: t.samples.clone(), rate: t.rate }, sr, speed, keep_pitch, shift)) };
+                            (track, 0, true)
                         });
-                        self.audio_rx = Some(rx);
-                    }
+                        let _ = tx.send((song, track));
+                    });
+                    self.audio_rx = Some(rx);
                 }
             }
         }
 
-        if let Some(rx) = &self.map_rx {
-            if let Ok((i, result, curve)) = rx.try_recv() {
-                self.map_rx = None;
-                if Some(i) == self.requested {
-                    if let Ok(map) = result {
-                        let details = Details::of(&map);
-                        let mut graph = difficulty::analyze(&map);
-                        if let Some(curve) = curve {
-                            graph.use_curve(curve);
-                        }
-                        self.game = Some(new_preview_game(&map, self.requested_rate.0));
-                        self.last_time = f64::NEG_INFINITY;
-                        self.map = Some((i, map, details, graph));
-                    }
+        if let Some(rx) = &self.map_rx
+            && let Ok((i, result, curve)) = rx.try_recv() {
+            self.map_rx = None;
+            if Some(i) == self.requested
+                && let Ok(map) = result {
+                let details = Details::of(&map);
+                let mut graph = difficulty::analyze(&map);
+                if let Some(curve) = curve {
+                    graph.use_curve(curve);
                 }
+                self.game = Some(new_preview_game(&map, self.requested_rate.0));
+                self.last_time = f64::NEG_INFINITY;
+                self.map = Some((i, map, details, graph));
             }
         }
-        if let Some(rx) = &self.bg_rx {
-            if let Ok((path, img)) = rx.try_recv() {
-                self.bg_rx = None;
-                if Some(&path) == self.bg_path.as_ref() {
-                    self.has_background = img.is_some();
-                    self.bg_upload = Some(img);
-                }
+        if let Some(rx) = &self.bg_rx
+            && let Ok((path, img)) = rx.try_recv() {
+            self.bg_rx = None;
+            if Some(&path) == self.bg_path.as_ref() {
+                self.has_background = img.is_some();
+                self.bg_upload = Some(img);
             }
         }
         let decoded: Vec<Decoded> = self.audio_rx.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
@@ -599,7 +599,7 @@ impl Preview {
             (self.size_cap, self.size_shown) = (fitted(110.0), wanted.min(fitted(110.0)));
             let below = unit * self.size_shown + 12.0 + after_box;
             self.panel_bottom = y + h.min(110.0 + below);
-            c.round_rect(x, y, w, h.min(110.0 + below), 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
+            c.round_rect([x, y], [w, h.min(110.0 + below)], 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
             return None;
         };
         let e = &library[i];
@@ -621,7 +621,7 @@ impl Preview {
         let pill_w = Canvas::text_width(9.0, "0.00") + 9.0 * 1.6 + 6.0;
         let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
         // Stats as label + value, flowed left to right; the first group is the map's, the second its notes.
-        let mut stats: [Vec<(&str, String, f32)>; 3] = [vec![("OD", format!("{:.1}", e.meta.od), 1.0)], Vec::new(), Vec::new()];
+        let mut stats: [Vec<StatCell>; 3] = [vec![("OD", format!("{:.1}", e.meta.od), 1.0)], Vec::new(), Vec::new()];
         // What a full combo would give: SS, 99%, 98%.
         if let Some(pp) = self.potential {
             for (label, pp) in ["SS", "99%", "98%"].into_iter().zip(pp) {
@@ -647,11 +647,11 @@ impl Preview {
                 stats[1].push(("Swells", d.swells.to_string(), fade));
             }
         }
-        let cell_w = |(label, value, _): &(&str, String, f32)| Canvas::text_width(8.0, &format!("{label} {value}"));
-        let rows: Vec<Vec<Vec<&(&str, String, f32)>>> = stats
+        let cell_w = |(label, value, _): &StatCell| Canvas::text_width(8.0, &format!("{label} {value}"));
+        let rows: Vec<Vec<StatRow<'_>>> = stats
             .iter()
             .map(|group| {
-                let mut rows: Vec<Vec<&(&str, String, f32)>> = vec![Vec::new()];
+                let mut rows: Vec<StatRow<'_>> = vec![Vec::new()];
                 let mut used = 0.0;
                 for cell in group {
                     let cw = cell_w(cell);
@@ -675,7 +675,7 @@ impl Preview {
         let preview_h = band_h * k + 12.0;
         let h = h.min(head + preview_h + after_box);
         self.panel_bottom = y + h;
-        c.round_rect(x, y, w, h, 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect([x, y], [w, h], 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
 
         let mut cy = y + 12.0;
         for line in &title {
@@ -693,7 +693,7 @@ impl Preview {
             Some((label, col)) => {
                 let lw = Canvas::text_width(7.0, label) + 12.0;
                 let sx = x + w - 14.0 - lw;
-                c.round_rect(sx, cy, lw, 13.0, 6.5, rgba(col, 0.15), rgba(col, 0.9), 1.0);
+                c.round_rect([sx, cy], [lw, 13.0], 6.5, rgba(col, 0.15), rgba(col, 0.9), 1.0);
                 c.text_centered(sx + lw / 2.0, cy + 3.0, 7.0, rgba(col, 1.0), label);
                 lw + 8.0
             }
@@ -723,7 +723,7 @@ impl Preview {
 
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
         let (bx, by, bw, bh) = (x + 10.0, cy, w - 20.0, preview_h);
-        c.round_rect(bx, by, bw, bh, 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect([bx, by], [bw, bh], 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
         self.box_rect = Some([bx, by, bw, bh]);
         let loaded = loaded.is_some();
         if loaded {
@@ -749,7 +749,7 @@ impl Preview {
             c.text_right(bx + bw - 6.0, by + bh - 10.0, 6.0, rgba(0x6f6f86, 1.0), "click: fullscreen (Ctrl+Enter)");
         }
         if fade < 1.0 {
-            c.round_rect(bx, by, bw, bh, 6.0, rgba(0x0c0c12, 1.0 - fade), rgba(0, 0.0), 0.0);
+            c.round_rect([bx, by], [bw, bh], 6.0, rgba(0x0c0c12, 1.0 - fade), rgba(0, 0.0), 0.0);
         }
         let clip = crate::layout::Area { x: bx / full_w, y: by / VIRTUAL_HEIGHT, w: bw / full_w, h: bh / VIRTUAL_HEIGHT };
         Some((start..c.shapes.len(), clip))
@@ -782,10 +782,9 @@ fn wrap(size: f32, max_w: f32, s: &str, lines: usize) -> Vec<String> {
         out.push(rest[..at].trim_end().to_string());
         rest = rest[at..].trim_start_matches(' ');
     }
-    if !rest.is_empty() {
-        if let Some(last) = out.last_mut() {
-            *last = Canvas::fit(size, max_w, &format!("{last} {rest}"));
-        }
+    if !rest.is_empty()
+        && let Some(last) = out.last_mut() {
+        *last = Canvas::fit(size, max_w, &format!("{last} {rest}"));
     }
     out
 }
@@ -801,7 +800,7 @@ pub fn draw_graph(c: &mut Canvas, g: &Graph, [x, y, w, h]: [f32; 4], now: f64, p
     let (t0, t1) = (g.start.min(0.0).max(g.start - 2000.0), g.end);
     let span = (t1 - t0).max(1.0);
     let x_of = |t: f64| x + (((t - t0) / span).clamp(0.0, 1.0) as f32) * w;
-    c.round_rect(x, y, w, h, 5.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+    c.round_rect([x, y], [w, h], 5.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
     for &(s, e) in &g.kiai {
         c.rect(x_of(s), y + 1.0, (x_of(e) - x_of(s)).max(1.0), h - 2.0, rgba(0xff8a3d, 0.12));
     }
@@ -853,7 +852,7 @@ fn draw_play_button(c: &mut Canvas, cx: f32, y: f32, marker: Option<f64>, button
     let (lw, hw) = (Canvas::text_width(8.0, &label), Canvas::text_width(6.0, hint));
     let bw = 14.0 + 10.0 + lw + 10.0 + hw + 10.0;
     let (bx, bh) = (cx - bw / 2.0, 17.0);
-    c.round_rect(bx, y, bw, bh, 5.0, rgba(0x173049, 1.0), rgba(MARKER, 1.0), 1.0);
+    c.round_rect([bx, y], [bw, bh], 5.0, rgba(0x173049, 1.0), rgba(MARKER, 1.0), 1.0);
     // A play triangle out of thin slices (the font is plain ASCII).
     for i in 0..7 {
         let f = i as f32;

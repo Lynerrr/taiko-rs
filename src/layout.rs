@@ -43,7 +43,7 @@ impl Area {
         Some(Area { x, y, w, h }.clamped())
     }
 
-    pub fn to_config(&self) -> String {
+    pub fn to_config(self) -> String {
         format!("{:.3},{:.3},{:.3},{:.3}", self.x, self.y, self.w, self.h)
     }
 
@@ -178,31 +178,27 @@ pub fn snap(a: Area, grip: Grip, tol_x: f32, tol_y: f32) -> (Area, Vec<Guide>) {
         }
         Grip::Resize { left, right, top, bottom } => {
             let (r, b) = (a.x + a.w, a.y + a.h);
-            if left {
-                if let Some((d, line)) = best(&[(a.x, 0.0), (a.x, 0.5)], tol_x) {
-                    a.x += d;
-                    a.w = r - a.x;
-                    guides.push(Guide::Vertical(line));
-                }
+            if left
+                && let Some((d, line)) = best(&[(a.x, 0.0), (a.x, 0.5)], tol_x) {
+                a.x += d;
+                a.w = r - a.x;
+                guides.push(Guide::Vertical(line));
             }
-            if right {
-                if let Some((d, line)) = best(&[(r, 0.5), (r, 1.0)], tol_x) {
-                    a.w += d;
-                    guides.push(Guide::Vertical(line));
-                }
+            if right
+                && let Some((d, line)) = best(&[(r, 0.5), (r, 1.0)], tol_x) {
+                a.w += d;
+                guides.push(Guide::Vertical(line));
             }
-            if top {
-                if let Some((d, line)) = best(&[(a.y, 0.0), (a.y, 0.5)], tol_y) {
-                    a.y += d;
-                    a.h = b - a.y;
-                    guides.push(Guide::Horizontal(line));
-                }
+            if top
+                && let Some((d, line)) = best(&[(a.y, 0.0), (a.y, 0.5)], tol_y) {
+                a.y += d;
+                a.h = b - a.y;
+                guides.push(Guide::Horizontal(line));
             }
-            if bottom {
-                if let Some((d, line)) = best(&[(b, 0.5), (b, 1.0)], tol_y) {
-                    a.h += d;
-                    guides.push(Guide::Horizontal(line));
-                }
+            if bottom
+                && let Some((d, line)) = best(&[(b, 0.5), (b, 1.0)], tol_y) {
+                a.h += d;
+                guides.push(Guide::Horizontal(line));
             }
         }
     }
@@ -304,9 +300,9 @@ pub fn draw_frame(c: &mut Canvas, area: Area, strong: bool) {
     let (x, y) = (area.x * c.width, area.y * VIRTUAL_HEIGHT);
     let (w, h) = (area.w * c.width, area.h * VIRTUAL_HEIGHT);
     let a = if strong { 0.9 } else { 0.45 };
-    c.round_rect(x, y, w, h, 3.0, rgba(0, 0.0), rgba(accent(), a), 1.5);
+    c.round_rect([x, y], [w, h], 3.0, rgba(0, 0.0), rgba(accent(), a), 1.5);
     for (hx, hy) in [(x, y), (x + w, y), (x, y + h), (x + w, y + h)] {
-        c.round_rect(hx - 4.0, hy - 4.0, 8.0, 8.0, 2.0, rgba(accent(), a), rgba(0xffffff, a), 1.0);
+        c.round_rect([hx - 4.0, hy - 4.0], [8.0, 8.0], 2.0, rgba(accent(), a), rgba(0xffffff, a), 1.0);
     }
 }
 

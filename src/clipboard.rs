@@ -42,7 +42,7 @@ pub fn set(text: &str) -> bool {
 pub fn set_image(w: u32, h: u32, rgb: &[u8]) -> bool {
     #[cfg(not(target_os = "android"))]
     {
-        let rgba: Vec<u8> = rgb.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        let rgba: Vec<u8> = rgb.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
         let image = arboard::ImageData { width: w as usize, height: h as usize, bytes: rgba.into() };
         if with_board(|b| b.set_image(image).ok()).is_some() {
             return true;

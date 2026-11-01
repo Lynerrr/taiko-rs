@@ -158,15 +158,14 @@ fn session(bot: &Arc<Bot>) -> Result<Stop, String> {
     let mut beat: Option<(Duration, Instant)> = None;
     let mut acked = true;
     loop {
-        if let Some((every, next)) = &mut beat {
-            if Instant::now() >= *next {
-                if !acked {
-                    return Err("no heartbeat ack, connecting again".into());
-                }
-                send(&mut ws, &json!({ "op": 1, "d": seq }))?;
-                acked = false;
-                *next += *every;
+        if let Some((every, next)) = &mut beat
+            && Instant::now() >= *next {
+            if !acked {
+                return Err("no heartbeat ack, connecting again".into());
             }
+            send(&mut ws, &json!({ "op": 1, "d": seq }))?;
+            acked = false;
+            *next += *every;
         }
         let text = match ws.read() {
             Ok(Message::Text(t)) => t.to_string(),
@@ -419,7 +418,7 @@ impl Bot {
                     let label = self.state.scores.lock().unwrap().map(map).map(|m| m.name).unwrap_or_else(|| "that map".into());
                     return text(format!("`{name}` hasn't played {label}."));
                 }
-                plays.sort_by(|a, b| b.score.cmp(&a.score));
+                plays.sort_by_key(|play| std::cmp::Reverse(play.score));
                 let shown: Vec<OnlineScore> = plays.into_iter().take(PAGE).collect();
                 Some((Answer::Embed(self.plays_embed(&format!("{name} on {}", shown[0].map), &shown, 0, &key), watch_buttons(&shown, 0)), Some(map)))
             }
@@ -623,10 +622,9 @@ impl Bot {
             lines.push(format!("**Best:** [{}]({WEBSITE}/m/{:x}) · **{}**", clean(&best.map), best.map_hash, pp_text(best.pp)));
         }
         lines.push(format!("Joined <t:{}:D>", p.joined));
-        if p.online {
-            if let Some(a) = self.state.activity(&p.name) {
-                lines.push(format!("🟢 Online, {}", a.describe()));
-            }
+        if p.online
+            && let Some(a) = self.state.activity(&p.name) {
+            lines.push(format!("🟢 Online, {}", a.describe()));
         }
         json!({
             "title": format!("taiko.rs profile for {}", p.name),
@@ -746,10 +744,9 @@ impl Bot {
         let mut messages: Vec<Value> = self.get(&format!("{API}/channels/{channel}/messages?limit={PING_CONTEXT}")).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
         messages.reverse();
         // A forum post's first message (the report) has the thread's id: kept even in a long thread.
-        if place["parent_id"].is_string() && !messages.iter().any(|m| m["id"].as_str() == Some(channel.as_str())) {
-            if let Ok(first) = self.get(&format!("{API}/channels/{channel}/messages/{channel}")) {
-                messages.insert(0, first);
-            }
+        if place["parent_id"].is_string() && !messages.iter().any(|m| m["id"].as_str() == Some(channel.as_str()))
+            && let Ok(first) = self.get(&format!("{API}/channels/{channel}/messages/{channel}")) {
+            messages.insert(0, first);
         }
         let said = |m: &Value| {
             json!({
@@ -975,7 +972,7 @@ fn thousands(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);

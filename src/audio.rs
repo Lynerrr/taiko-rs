@@ -128,12 +128,12 @@ impl Engine {
             }?;
             Ok((stream, tx, garbage))
         };
-        let (stream, tx, garbage) = match open(config.clone()) {
+        let (stream, tx, garbage) = match open(config) {
             Ok(v) => v,
             Err(e) if config.buffer_size != cpal::BufferSize::Default => {
                 eprintln!("fixed audio buffer rejected ({e}), using device default");
                 config.buffer_size = cpal::BufferSize::Default;
-                open(config.clone())?
+                open(config)?
             }
             Err(e) => return Err(e),
         };
@@ -781,7 +781,7 @@ fn built_in(index: usize, rate: u32) -> Vec<f32> {
 
 /// Stereo samples folded down to mono.
 pub fn mono(track: &Track) -> Vec<f32> {
-    track.samples.chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect()
+    track.samples.as_chunks::<2>().0.iter().map(|f| (f[0] + f[1]) * 0.5).collect()
 }
 
 /// The sounds (indexed by `Sfx`) at `rate`: a skin's where given, else built-in. Like osu!, a
@@ -1006,10 +1006,9 @@ fn decode_source(
             stereo.push(l);
             stereo.push(r);
         }
-        if let Some((_, len_ms)) = part {
-            if stereo.len() as f64 / 2.0 >= len_ms / 1000.0 * src_rate as f64 {
-                break;
-            }
+        if let Some((_, len_ms)) = part
+            && stereo.len() as f64 / 2.0 >= len_ms / 1000.0 * src_rate as f64 {
+            break;
         }
     }
     stereo.truncate(stereo.len().saturating_sub(tail * 2));

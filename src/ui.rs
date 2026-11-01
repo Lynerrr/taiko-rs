@@ -461,7 +461,7 @@ impl Select {
         for &i in &self.visible {
             let f = folder_ids[&folder(i)];
             let v = value(i);
-            if v.is_finite() && !(set_value[f] >= v) {
+            if v.is_finite() && (set_value[f].is_nan() || set_value[f] < v) {
                 set_value[f] = v;
             }
         }
@@ -619,10 +619,9 @@ impl Select {
     fn open_cursor_section(&mut self) {
         let Some(s) = self.cursor_section() else { return };
         let label = self.sections[s].label.clone();
-        if self.cursor_label.as_ref() != Some(&label) {
-            if let Some(left) = self.cursor_label.replace(label.clone()) {
-                self.open.remove(&left);
-            }
+        if self.cursor_label.as_ref() != Some(&label)
+            && let Some(left) = self.cursor_label.replace(label.clone()) {
+            self.open.remove(&left);
         }
         if self.closed_at != Some(self.cursor) {
             self.open.insert(label);
@@ -1111,13 +1110,11 @@ impl Select {
 
     /// Remembers the selected difficulty for its song (call once a frame).
     pub fn remember_selection(&mut self, library: &[Entry]) {
-        if let Some(&i) = self.visible.get(self.cursor) {
-            if let Some(folder) = library[i].path.parent() {
-                if self.remembered.get(folder) != Some(&i) {
+        if let Some(&i) = self.visible.get(self.cursor)
+            && let Some(folder) = library[i].path.parent()
+                && self.remembered.get(folder) != Some(&i) {
                     self.remembered.insert(folder.to_path_buf(), i);
                 }
-            }
-        }
     }
 
     /// `stars` looks up a difficulty's star rating (library index) if it has been calculated.
@@ -1169,7 +1166,7 @@ impl Select {
         }
         let search_w = bx - 24.0;
         let edge = if self.searching { rgba(crate::render::accent(), 1.0) } else { rgba(0x3a3a4e, 1.0) };
-        c.round_rect(24.0, 54.0, search_w, 24.0, 6.0, rgba(0x23232f, 0.9), edge, 1.0);
+        c.round_rect([24.0, 54.0], [search_w, 24.0], 6.0, rgba(0x23232f, 0.9), edge, 1.0);
         let room = search_w - 20.0;
         let caret = if self.searching { "_" } else { "" };
         let (search, search_col) = if self.filter.is_empty() {
@@ -1336,7 +1333,7 @@ impl Select {
                     let hover = c.hovered(24.0, y, lw, rh - 2.0);
                     let holds_cursor = cursor_section == Some(*si) && !open;
                     let border = if holds_cursor { rgba(accent(), 1.0) } else { rgba(col, if open { 0.7 } else { 0.35 }) };
-                    c.round_rect(24.0, y, lw, rh - 3.0, 5.0, rgba(if hover { 0x24242f } else { 0x16161e }, 0.9), border, if holds_cursor { 1.5 } else { 1.0 });
+                    c.round_rect([24.0, y], [lw, rh - 3.0], 5.0, rgba(if hover { 0x24242f } else { 0x16161e }, 0.9), border, if holds_cursor { 1.5 } else { 1.0 });
                     c.hit(24.0, y, lw, *rh, Hit::SectionHeader(*si));
                     let n = sec.groups.len();
                     c.text(34.0, y + 6.0, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
@@ -1349,11 +1346,11 @@ impl Select {
                     let (bg, border) = if open { (0x2b2b3d, 0x5a5a78) } else { (0x1d1d27, 0x2a2a38) };
                     let hover = !open && c.hovered(24.0, y, lw, rh - 4.0);
                     let bg = if hover { 0x262634 } else { bg };
-                    c.round_rect(24.0, y, lw, rh - 4.0, 7.0, rgba(bg, 0.88), rgba(border, 1.0), 1.0);
+                    c.round_rect([24.0, y], [lw, rh - 4.0], 7.0, rgba(bg, 0.88), rgba(border, 1.0), 1.0);
                     c.hit(24.0, y, lw, *rh, Hit::SongHeader(g.start));
                     let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
                     let tag = if any_taiko { 0xEB452C } else { 0x438EAD };
-                    c.round_rect(32.0, y + 8.0, 5.0, rh - 20.0, 2.5, rgba(tag, 1.0), rgba(tag, 1.0), 0.0);
+                    c.round_rect([32.0, y + 8.0], [5.0, rh - 20.0], 2.5, rgba(tag, 1.0), rgba(tag, 1.0), 0.0);
                     c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &fit(e.meta.title.clone(), 10.0, lw - 110.0));
                     let sub = format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator);
                     // Centred at y + 23.5, in what's left between the title (taller on a text
@@ -1377,7 +1374,7 @@ impl Select {
                             let bw = Canvas::text_width(6.0, label) + 10.0;
                             let bx = 24.0 + lw - 12.0 - bw;
                             let hover = c.hovered(bx, by, bw, bh);
-                            c.round_rect(bx, by, bw, bh, 3.0, rgba(if hover { 0x5a4a1a } else { 0x3a3218 }, 1.0), rgba(0xFFD34D, 1.0), 1.0);
+                            c.round_rect([bx, by], [bw, bh], 3.0, rgba(if hover { 0x5a4a1a } else { 0x3a3218 }, 1.0), rgba(0xFFD34D, 1.0), 1.0);
                             c.text_centered(bx + bw / 2.0, ty, 6.0, rgba(0xFFD34D, 1.0), label);
                             c.hit(bx, by, bw, bh, Hit::UpdateSet(self.visible[g.start]));
                         }
@@ -1391,7 +1388,7 @@ impl Select {
                     let selected = *i == self.cursor;
                     let bg = if selected { 0x34344a } else { 0x191921 };
                     let bg = if !selected && c.hovered(44.0, y, lw - 20.0, rh - 3.0) { 0x24242f } else { bg };
-                    c.round_rect(44.0, y, lw - 20.0, rh - 3.0, 5.0, rgba(bg, 0.92 * a), rgba(0x2a2a38, a), 1.0);
+                    c.round_rect([44.0, y], [lw - 20.0, rh - 3.0], 5.0, rgba(bg, 0.92 * a), rgba(0x2a2a38, a), 1.0);
                     c.hit(44.0, y, lw - 20.0, *rh, Hit::SongRow(*i));
                     let col = if selected { 0xffffff } else { 0xc8c8d8 };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
@@ -1414,7 +1411,7 @@ impl Select {
         // Not with its heading closed: the heading shows where the selection is instead.
         let oy = outline;
         if !self.visible.is_empty() && !cursor_hidden && oy > top - DIFF_H && oy < bottom {
-            c.round_rect(44.0, oy, lw - 20.0, DIFF_H - 3.0, 5.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
+            c.round_rect([44.0, oy], [lw - 20.0, DIFF_H - 3.0], 5.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
         }
         // Rows scrolling past the edges slide under them instead of over the search row.
         c.clip_since(list_start, 20.0, top - 2.0, lw + 8.0, bottom - top + 4.0);
@@ -1429,11 +1426,11 @@ impl Select {
             let (track_x, track_w) = (8.0, 8.0);
             let track = bottom - top;
             let hover = c.hovered(track_x - 4.0, top, track_w + 12.0, track);
-            c.round_rect(track_x, top, track_w, track, 4.0, rgba(0x15151d, if hover { 0.9 } else { 0.6 }), rgba(0x2a2a38, 1.0), 1.0);
+            c.round_rect([track_x, top], [track_w, track], 4.0, rgba(0x15151d, if hover { 0.9 } else { 0.6 }), rgba(0x2a2a38, 1.0), 1.0);
             let total = final_y.max(view);
             let thumb = (track * view / total).clamp(18.0, track);
             let pos = (scroll / (total - view).max(1.0)).clamp(0.0, 1.0);
-            c.round_rect(track_x + 1.0, top + pos * (track - thumb), track_w - 2.0, thumb, 3.0, rgba(if hover { accent() } else { 0x8a8aa8 }, 0.95), rgba(0, 0.0), 0.0);
+            c.round_rect([track_x + 1.0, top + pos * (track - thumb)], [track_w - 2.0, thumb], 3.0, rgba(if hover { accent() } else { 0x8a8aa8 }, 0.95), rgba(0, 0.0), 0.0);
             c.hit(track_x - 4.0, top, track_w + 12.0, track, Hit::SongScrollbar);
         }
 
@@ -1480,7 +1477,7 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, favourites: crat
     let w = c.width;
     c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.72));
     let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
-    c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+    c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
     c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "MODS");
     let mult = mods.multiplier();
     let rank = if mods.unranked() { "  (not saved)" } else { "" };
@@ -1509,10 +1506,10 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, favourites: crat
             }
             let bg = if i == cursor { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
             let border = if i == cursor { crate::render::accent() } else if on { *accent } else { 0x2a2a38 };
-            c.round_rect(x, y, col_w - 6.0, h, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if i == cursor { 1.5 } else { 1.0 });
+            c.round_rect([x, y], [col_w - 6.0, h], 5.0, rgba(bg, 1.0), rgba(border, 1.0), if i == cursor { 1.5 } else { 1.0 });
             // The acronym's badge keeps room for its letters when there are many rows.
             let inset = ((h - 13.0) / 2.0).clamp(3.0, 4.0);
-            c.round_rect(x + 4.0, y + inset, 22.0, h - 2.0 * inset, 3.0,rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
+            c.round_rect([x + 4.0, y + inset], [22.0, h - 2.0 * inset], 3.0,rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
             c.text_centered(x + 15.0, y + h / 2.0 - 3.5, 7.0, rgba(if on { 0x15151d } else { *accent }, 1.0), m.acronym());
             let fav = favourites.has(m);
             if fav {
@@ -1545,7 +1542,7 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, favourites: crat
             hovered = Some(m);
         }
         let border = if i == cursor { crate::render::accent() } else { col };
-        c.round_rect(fx, fav_y, cw, 16.0, 4.0, rgba(if on { col } else { 0x1d1d27 }, if on { 0.9 } else { 1.0 }), rgba(border, 1.0), 1.0);
+        c.round_rect([fx, fav_y], [cw, 16.0], 4.0, rgba(if on { col } else { 0x1d1d27 }, if on { 0.9 } else { 1.0 }), rgba(border, 1.0), 1.0);
         c.text(fx + 7.0, fav_y + 5.0, 6.0, rgba(if on { 0x15151d } else { 0xc8c8d8 }, 1.0), &text);
         c.hit(fx, fav_y, cw, 16.0, Hit::ModToggle(i));
         fx += cw + 5.0;
@@ -1576,7 +1573,7 @@ pub fn draw_customization_tabs(c: &mut Canvas, tabs: &[crate::mods::Mod], open: 
         let name = m.name().to_uppercase();
         let tw = Canvas::text_width(7.0, &name) + 20.0;
         let on = m == open;
-        c.round_rect(x, y, tw, h, 5.0, rgba(if on { 0x34344a } else { 0x1d1d27 }, 1.0), rgba(if on { accent() } else { 0x3a3a4e }, 1.0), if on { 1.5 } else { 1.0 });
+        c.round_rect([x, y], [tw, h], 5.0, rgba(if on { 0x34344a } else { 0x1d1d27 }, 1.0), rgba(if on { accent() } else { 0x3a3a4e }, 1.0), if on { 1.5 } else { 1.0 });
         c.text_centered(x + tw / 2.0, y + 5.5, 7.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), &name);
         c.hit(x, y, tw, h, Hit::CustomTab(i));
         x += tw + 6.0;
@@ -1687,11 +1684,11 @@ impl Select {
         let bh = items.len() as f32 * ROW + 26.0;
         let x = m.x.min(c.width - bw - 8.0).max(8.0);
         let y = m.y.min(480.0 - bh - 8.0).max(8.0);
-        c.round_rect(x, y, bw, bh, 6.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect([x, y], [bw, bh], 6.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         for (k, (label, _)) in items.iter().enumerate() {
             let ry = y + 6.0 + k as f32 * ROW;
             if c.hovered(x + 4.0, ry, bw - 8.0, ROW - 2.0) {
-                c.round_rect(x + 4.0, ry, bw - 8.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(accent(), 1.0), 1.0);
+                c.round_rect([x + 4.0, ry], [bw - 8.0, ROW - 2.0], 4.0, rgba(0x34344a, 1.0), rgba(accent(), 1.0), 1.0);
             }
             c.hit(x + 4.0, ry, bw - 8.0, ROW - 2.0, Hit::SongMenu(k));
             c.text(x + 12.0, ry + 5.0, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, bw - 20.0, label));
@@ -1713,7 +1710,7 @@ impl Select {
         let (bw, max_h) = (320.0, 380.0);
         let bh = (rows.len() as f32 * ROW + 56.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
-        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect([bx, by], [bw, bh], 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), title);
         let (top, view) = (by + 32.0, bh - 50.0);
         let scroll = (cursor as f32 * ROW - view / 2.0).clamp(0.0, (rows.len() as f32 * ROW - view).max(0.0));
@@ -1726,7 +1723,7 @@ impl Select {
             let current = now == Some(i);
             let hover = c.hovered(bx + 8.0, y, bw - 16.0, ROW - 2.0);
             if selected || hover {
-                c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+                c.round_rect([bx + 8.0, y], [bw - 16.0, ROW - 2.0], 4.0, rgba(0x34344a, 1.0), rgba(if selected { accent() } else { 0x3a3a4e }, 1.0), 1.0);
             }
             c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::PickRow(i));
             let shown_w = if current { Canvas::text_width(7.0, mark) + 10.0 } else { 0.0 };
@@ -1992,7 +1989,7 @@ impl Results {
         let x0 = cx - cw / 2.0;
         let hover = c.hovered(x0, cy, cw, ch);
         let pink = 0xff8ad8;
-        c.round_rect(x0, cy, cw, ch, ch / 2.0, rgba(if hover { 0x2b1f2a } else { 0x1d1d27 }, 0.95 * a), rgba(pink, if hover { a } else { 0.75 * a }), 1.5);
+        c.round_rect([x0, cy], [cw, ch], ch / 2.0, rgba(if hover { 0x2b1f2a } else { 0x1d1d27 }, 0.95 * a), rgba(pink, if hover { a } else { 0.75 * a }), 1.5);
         c.text_centered(cx, cy + (ch - 8.0) / 2.0, 8.0, rgba(if hover { 0xffffff } else { pink }, a), &cue);
         let t = self.shown.elapsed().as_secs_f32();
         let bob = 1.5 * (t * 4.0).sin() * if down { 1.0 } else { -1.0 };
@@ -2052,7 +2049,7 @@ impl Results {
             let (mut x, ry) = (cx - total / 2.0, y + r as f32 * (H + 3.0));
             for (label, col) in row {
                 let w = width(label);
-                c.round_rect(x, ry, w, H, 4.0, rgba(*col, 0.2), rgba(*col, 0.9), 1.0);
+                c.round_rect([x, ry], [w, H], 4.0, rgba(*col, 0.2), rgba(*col, 0.9), 1.0);
                 c.text_centered(x + w / 2.0, ry + (H - SIZE) / 2.0, SIZE, rgba(*col, 1.0), label);
                 x += w + GAP;
             }
@@ -2070,13 +2067,13 @@ impl Results {
         let (x, y) = ((w - pw) / 2.0, RESULTS_SCROLL + 64.0 + ((RESULTS_VIEW - 64.0 - h) / 2.0).max(0.0));
         let (label, value) = (rgba(0x8a8aa0, 1.0), rgba(0xffffff, 1.0));
         let Some(b) = self.breakdown else {
-            c.round_rect(x, y, pw, h, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+            c.round_rect([x, y], [pw, h], 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
             c.text(x + 16.0, y + 12.0, 8.0, label, "PERFORMANCE");
             let note = if self.job.is_some() { "working it out..." } else { self.no_pp.unwrap_or("no pp for this play") };
             c.text_centered(x + pw / 2.0, y + 44.0, 9.0, label, &Canvas::fit(9.0, pw - 32.0, note));
             return;
         };
-        c.round_rect(x, y, pw, h, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect([x, y], [pw, h], 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
         c.text(x + 16.0, y + 12.0, 8.0, label, "PERFORMANCE");
         crate::stars::draw_pill(c, x + pw - 14.0, y + 9.0, 8.0, Some(b.stars as f32));
         // Two columns: the pp and its parts, then what could have been and the total.
@@ -2090,10 +2087,10 @@ impl Results {
             let by = y + 100.0 + i as f32 * 40.0;
             c.text(lx, by, 8.0, rgba(0xc8c8d8, 1.0), name);
             c.text_right(lx + col_w, by, 8.0, value, &format!("{:.0}", v * count));
-            c.round_rect(lx, by + 15.0, col_w, 6.0, 3.0, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+            c.round_rect([lx, by + 15.0], [col_w, 6.0], 3.0, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
             let f = if max > 0.0 { ((v / max).clamp(0.0, 1.0) * count) as f32 } else { 0.0 };
             if f > 0.0 {
-                c.round_rect(lx, by + 15.0, (col_w * f).max(6.0), 6.0, 3.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
+                c.round_rect([lx, by + 15.0], [(col_w * f).max(6.0), 6.0], 3.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
             }
         }
         let mut rows = vec![

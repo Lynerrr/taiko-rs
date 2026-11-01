@@ -115,10 +115,9 @@ impl Config {
                             Some(n) => (false, n),
                             None => (true, name),
                         };
-                        if let Some(k) = KEYS.iter().position(|&n| n == name) {
-                            if !shapes.iter().any(|s| s.0 == k as u8) {
-                                shapes.push((k as u8, on));
-                            }
+                        if let Some(k) = KEYS.iter().position(|&n| n == name)
+                            && !shapes.iter().any(|s| s.0 == k as u8) {
+                            shapes.push((k as u8, on));
                         }
                     }
                     // Any left out go at the end, on.
@@ -233,7 +232,7 @@ impl Setup {
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.6));
         let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
-        c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.99), rgba(0x5ee6c8, 0.9), 1.5);
+        c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.99), rgba(0x5ee6c8, 0.9), 1.5);
         let title_w = c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "SHAPESHIFT");
         let hint = tr!(
             "arrows choose   Space pick   Shift + Left/Right move a shape   D defaults   Tab next tab   Esc back",
@@ -275,7 +274,7 @@ impl Setup {
                 }
                 let fill = if on { 0x1f4a44 } else if selected { 0x34344a } else { 0x1d1d27 };
                 let border = if selected { accent() } else if on { 0x5ee6c8 } else { 0x2a2a38 };
-                c.round_rect(cx, y, cw, h, 4.0, rgba(fill, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+                c.round_rect([cx, y], [cw, h], 4.0, rgba(fill, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
                 let text = match row {
                     0 => {
                         let n = EVERY[col];
@@ -401,16 +400,16 @@ mod tests {
     fn keys_pick_toggle_and_move_shapes() {
         let mut c = Config::default();
         let mut s = Setup::default();
-        assert_eq!(s.key(KeyCode::ArrowRight, false, &mut c), false);
-        assert_eq!(s.key(KeyCode::Space, false, &mut c), true);
+        assert!(!s.key(KeyCode::ArrowRight, false, &mut c));
+        assert!(s.key(KeyCode::Space, false, &mut c));
         assert_eq!(c.bars(), 8);
         s = Setup { row: SHAPES_ROW, col: 0 };
-        assert_eq!(s.key(KeyCode::ArrowRight, true, &mut c), true);
+        assert!(s.key(KeyCode::ArrowRight, true, &mut c));
         assert_eq!((c.shapes[1].0, s.col), (0, 1));
-        assert_eq!(s.key(KeyCode::Space, false, &mut c), true);
+        assert!(s.key(KeyCode::Space, false, &mut c));
         assert!(!c.shapes[1].1);
         // Not past the ends.
         s.col = 0;
-        assert_eq!(s.key(KeyCode::ArrowLeft, true, &mut c), false);
+        assert!(!s.key(KeyCode::ArrowLeft, true, &mut c));
     }
 }

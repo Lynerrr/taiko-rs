@@ -372,12 +372,12 @@ pub fn note(c: &mut Canvas, shape: Shape, x: f32, y: f32, r: f32, col: u32, a: f
         }
         Shape::Square => {
             let h = r * 0.9;
-            c.round_rect(x - h, y - h, 2.0 * h, 2.0 * h, r * 0.28, fill, white, r * 0.1);
+            c.round_rect([x - h, y - h], [2.0 * h, 2.0 * h], r * 0.28, fill, white, r * 0.1);
         }
         Shape::Diamond => {
             let first = c.shapes.len();
             let h = r * 0.82;
-            c.round_rect(x - h, y - h, 2.0 * h, 2.0 * h, r * 0.18, fill, white, r * 0.1);
+            c.round_rect([x - h, y - h], [2.0 * h, 2.0 * h], r * 0.18, fill, white, r * 0.1);
             c.rotate_since(first, [x, y], std::f32::consts::FRAC_PI_4, 1.0, [x, y]);
         }
         Shape::Ring => {
@@ -385,7 +385,7 @@ pub fn note(c: &mut Canvas, shape: Shape, x: f32, y: f32, r: f32, col: u32, a: f
             c.ring(x, y, r * 0.62, rgba(0xffffff, 0.8 * a), r * 0.07);
         }
         Shape::Pill => {
-            c.capsule(x - r * 0.45, x + r * 0.45, y, r * 0.78, fill, white, r * 0.1);
+            c.capsule([x - r * 0.45, x + r * 0.45], y, r * 0.78, fill, white, r * 0.1);
         }
     }
 }
@@ -569,7 +569,7 @@ impl Setup {
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.6));
         let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
-        c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.99), rgba(0xff5fa2, 0.9), 1.5);
+        c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.99), rgba(0xff5fa2, 0.9), 1.5);
         let title_w = c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "MULTIVERSE");
         let hint = tr!(
             "arrows choose   Space change (Shift back)   E own colours   S save preset   [ ] presets   R shuffle   Esc back",
@@ -598,7 +598,7 @@ impl Setup {
         for (i, u) in all.iter().enumerate() {
             let y = head_y + 12.0 + i as f32 * ROW;
             let (h, mid) = (ROW - 5.0, y + (ROW - 5.0) / 2.0);
-            c.round_rect(x0, y, px + pw - 12.0 - x0, h, 6.0, rgba(if i == self.row { 0x23232f } else { 0x1b1b24 }, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+            c.round_rect([x0, y], [px + pw - 12.0 - x0, h], 6.0, rgba(if i == self.row { 0x23232f } else { 0x1b1b24 }, 1.0), rgba(0x2a2a38, 1.0), 1.0);
             let label = if i == first_focus { format!("{}*", i + 1) } else { (i + 1).to_string() };
             c.text(x0 + 8.0, mid - 4.0, 8.0, rgba(0xc8c8d8, 1.0), &label);
             note(c, u.shape, x0 + 36.0, mid, 9.5, u.don(), 1.0);
@@ -613,7 +613,7 @@ impl Setup {
                 let on = col >= 3 && u.mods.has(MODS[col - 3]);
                 let fill = if on { 0x6b2a4c } else if selected { 0x34344a } else { 0x1d1d27 };
                 let border = if selected { accent() } else if on { 0xff5fa2 } else { 0x2a2a38 };
-                c.round_rect(cx, y + 3.0, cw, h - 6.0, 4.0, rgba(fill, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+                c.round_rect([cx, y + 3.0], [cw, h - 6.0], 4.0, rgba(fill, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
                 let text = match col {
                     0 => u.colours.label().to_string(),
                     1 => u.shape.label().to_string(),
@@ -688,7 +688,7 @@ impl Setup {
                 break;
             }
             let on = current == Some(i);
-            c.round_rect(x, by, cw, bh, 4.0, rgba(if on { 0x6b2a4c } else { 0x1d1d27 }, 1.0), rgba(if on { 0xff5fa2 } else { 0x3a3a4e }, 1.0), 1.0);
+            c.round_rect([x, by], [cw, bh], 4.0, rgba(if on { 0x6b2a4c } else { 0x1d1d27 }, 1.0), rgba(if on { 0xff5fa2 } else { 0x3a3a4e }, 1.0), 1.0);
             c.text(x + 7.0, by + 4.5, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, name_w, name));
             c.hit(x, by, cw - if mine { 12.0 } else { 0.0 }, bh, Hit::UniversePreset(i));
             if mine {

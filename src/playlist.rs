@@ -191,10 +191,9 @@ impl Playlist {
         }
         self.history.push(self.now);
         self.now = i;
-        if let Some((order, at)) = &mut self.shuffled {
-            if let Some(pos) = order.iter().position(|&t| t == i) {
-                *at = pos;
-            }
+        if let Some((order, at)) = &mut self.shuffled
+            && let Some(pos) = order.iter().position(|&t| t == i) {
+            *at = pos;
         }
     }
 

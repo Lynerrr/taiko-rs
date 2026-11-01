@@ -735,7 +735,7 @@ impl Scores {
         maps.dedup();
         let mut firsts: Vec<OnlineScore> =
             maps.into_iter().filter_map(|m| self.leader(m).filter(|s| s.player == player).map(|s| s.score.clone())).collect();
-        firsts.sort_by(|a, b| b.date.cmp(&a.date));
+        firsts.sort_by_key(|score| std::cmp::Reverse(score.date));
         firsts.truncate(PROFILE_PLAYS);
         let tally = self.tally(player);
         Profile { name: name.to_string(), joined, plays: mine.len() as u32 + tally.other_plays, pp, rank, top, recent, stats, firsts, online: false, play_ms: tally.ms }
