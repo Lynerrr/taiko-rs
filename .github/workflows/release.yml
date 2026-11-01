@@ -3,11 +3,10 @@ name: Release build
 # Builds taiko.rs for Windows and Linux on every push to the main branch and publishes both as
 # the rolling "latest" release, which install.ps1 / install.sh download. Pushes to `dev` publish
 # the "dev" pre-release instead (test builds; the game's Build channel setting switches to them).
-# Pull requests get the same builds, tests and a Linux install test, without publishing anything.
+# Pull requests are checked by pre-merge.yml; packaging and release builds run after merging.
 on:
   push:
     branches: [worktree-taiko-client, dev]
-  pull_request:
   workflow_dispatch:
 
 permissions:

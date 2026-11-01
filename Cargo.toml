@@ -57,13 +57,15 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 
-# CI's tests: release's settings but for what only makes the binary faster, which costs most of
-# a build. (The tests take a second; compiling them took minutes.)
+# One profile for CI builds, Clippy, and tests. Keep unwind enabled so normal and test
+# targets can share dependencies; omit debug symbols and incremental data on CI runners.
 [profile.ci-test]
-inherits = "release"
+inherits = "dev"
 opt-level = 0
 lto = "off"
 codegen-units = 256
+debug = 0
+incremental = false
 
 [profile.ci-test.package."*"]
 opt-level = 3

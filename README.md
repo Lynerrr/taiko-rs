@@ -75,7 +75,7 @@ cargo build --release
 You'll need `clang` and the PipeWire headers (or build with `--no-default-features` for ALSA
 only). The APK is built with `android/build-apk.sh`, and the online server lives in `server/`.
 
-Pull requests run lint, tests, and release builds before merging; see [CI checks](docs/ci.md).
+Pull requests build the app, run lint and tests before merging; see [CI checks](docs/ci.md).
 
 ## License
 

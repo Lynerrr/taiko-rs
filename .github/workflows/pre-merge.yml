@@ -39,14 +39,14 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y clang pkg-config libasound2-dev libpipewire-0.3-dev
 
+      - name: Build application and test binaries
+        run: cargo build --profile ci-test --locked --all-targets
+
       - name: Lint
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --profile ci-test --locked --all-targets -- -D warnings
 
-      - name: Test
+      - name: Run prebuilt tests
         run: cargo test --profile ci-test --locked --all-targets
-
-      - name: Build
-        run: cargo build --release --locked
 
   server:
     name: Server
@@ -62,19 +62,47 @@ jobs:
           workspaces: server -> target
           shared-key: pre-merge-server
 
+      - name: Build application and test binaries
+        run: cargo build --profile ci-test --locked --manifest-path server/Cargo.toml --all-targets
+
       - name: Lint
-        run: cargo clippy --locked --manifest-path server/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --profile ci-test --locked --manifest-path server/Cargo.toml --all-targets -- -D warnings
 
-      - name: Test
-        run: cargo test --locked --manifest-path server/Cargo.toml --all-targets
+      - name: Run prebuilt tests
+        run: cargo test --profile ci-test --locked --manifest-path server/Cargo.toml --all-targets
 
-      - name: Build
-        run: cargo build --release --locked --manifest-path server/Cargo.toml
+  android:
+    name: Android build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The APK's versionCode comes from the commit count.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pre-merge-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      # PRs use the script's debug signing key; release signing secrets are not needed.
+      - name: Build APK
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" android/build-apk.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: target/android/taiko-rs.apk
 
   checks:
     name: Pre-merge checks
     if: ${{ always() }}
-    needs: [desktop, server]
+    needs: [desktop, server, android]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -82,8 +110,9 @@ jobs:
         env:
           DESKTOP_RESULT: ${{ needs.desktop.result }}
           SERVER_RESULT: ${{ needs.server.result }}
+          ANDROID_RESULT: ${{ needs.android.result }}
         run: |
-          if [ "$DESKTOP_RESULT" != success ] || [ "$SERVER_RESULT" != success ]; then
-            echo "Pre-merge checks failed: desktop=$DESKTOP_RESULT, server=$SERVER_RESULT"
+          if [ "$DESKTOP_RESULT" != success ] || [ "$SERVER_RESULT" != success ] || [ "$ANDROID_RESULT" != success ]; then
+            echo "Pre-merge checks failed: desktop=$DESKTOP_RESULT, server=$SERVER_RESULT, android=$ANDROID_RESULT"
             exit 1
           fi
