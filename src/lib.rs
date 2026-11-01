@@ -8070,7 +8070,8 @@ impl State {
                     };
                     p.draw(canvas, &frame);
                 } else if let Some(m) = &mut self.main_menu {
-                    let frame = menu::Frame { beat: self.preview.beat(), song: song.as_deref(), hint: &hint, maps: self.library.len(), paused };
+                    let kiai = self.cfg.kiai_effects && !paused && self.preview.kiai();
+                    let frame = menu::Frame { beat: self.preview.beat(), kiai, song: song.as_deref(), hint: &hint, maps: self.library.len(), paused };
                     m.draw(canvas, &frame);
                 }
             }

@@ -505,6 +505,12 @@ impl Preview {
         beat_at(&map.control_points, self.last_time)
     }
 
+    /// Whether the music is in a kiai now.
+    pub fn kiai(&self) -> bool {
+        let Some((_, map, _, _)) = self.map.as_ref().filter(|_| self.audio_active) else { return false };
+        map.control_points.iter().rev().find(|p| p.time <= self.last_time).is_some_and(|p| p.kiai)
+    }
+
     pub fn seek_by(&mut self, delta_ms: f64, engine: Option<&Engine>) {
         let now = self.pending_seek.or_else(|| self.game.as_ref().map(|g| g.time));
         if let Some(t) = now {
