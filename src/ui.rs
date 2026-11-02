@@ -150,6 +150,12 @@ pub struct Select {
     flipped_before_search: Option<std::collections::HashSet<String>>,
     /// The sort `flipped` is for (another starts over).
     open_for: SortMode,
+    /// Songs are listed under headings (`sections`). Off: one list in the sort's order, each
+    /// difficulty on its own row when sorting by difficulty.
+    pub headings: bool,
+    /// Songs (folders) listed: `groups` counts difficulties instead in a list without headings
+    /// by difficulty.
+    song_count: usize,
     /// The heading the selection was last under.
     cursor_label: Option<String>,
     /// The heading the selection opened by moving in: it closes when the selection moves out.
@@ -341,6 +347,8 @@ impl Select {
             flipped: Default::default(),
             flipped_before_search: None,
             open_for: SortMode::Artist,
+            headings: true,
+            song_count: 0,
             cursor_label: None,
             auto_open: None,
             closed_at: None,
@@ -508,7 +516,12 @@ impl Select {
             }
         };
         let mut folder_ids: std::collections::HashMap<(&std::path::Path, i64), usize> = std::collections::HashMap::new();
+        let split = self.split_difficulties();
         let folder = |i: usize| {
+            if split {
+                // Each difficulty on its own: ordered by its own value.
+                return (library[i].path.as_path(), 0);
+            }
             let stars = if self.sort == SortMode::Difficulty { star_heading(value(i)) } else { 0 };
             (library[i].path.parent().unwrap_or(std::path::Path::new("")), stars)
         };
@@ -582,8 +595,10 @@ impl Select {
         self.groups.clear();
         self.group_of.clear();
         let mut start = 0;
+        let each = self.split_difficulties();
         for i in 1..=self.visible.len() {
             let split = i == self.visible.len()
+                || each
                 || library[self.visible[i]].path.parent() != library[self.visible[i - 1]].path.parent()
                 // The last of one star heading and the first of the next can be the same song's.
                 || (self.sort == SortMode::Difficulty && star_heading(self.row_value[i]) != star_heading(self.row_value[i - 1]));
@@ -601,6 +616,19 @@ impl Select {
             self.flipped_before_search = self.flipped_before_search.take().map(|_| Default::default());
             self.cursor_label = None;
             self.auto_open = None;
+        }
+        self.song_count = if each {
+            self.visible.iter().filter_map(|&i| library[i].path.parent()).collect::<std::collections::HashSet<_>>().len()
+        } else {
+            self.groups.len()
+        };
+        if !self.headings {
+            // One section, never drawn, holding every song.
+            if !self.groups.is_empty() {
+                self.sections.push(Section { label: String::new(), colour: None, groups: 0..self.groups.len() });
+            }
+            self.section_of = vec![0; self.groups.len()];
+            return;
         }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         for g in 0..self.groups.len() {
@@ -675,7 +703,20 @@ impl Select {
     }
 
     fn label_open(&self, label: &str) -> bool {
-        self.starts_open() != self.flipped.contains(label)
+        !self.headings || self.starts_open() != self.flipped.contains(label)
+    }
+
+    /// Each difficulty is a row of its own: sorting by difficulty without headings, like osu!.
+    fn split_difficulties(&self) -> bool {
+        !self.headings && self.sort == SortMode::Difficulty
+    }
+
+    /// Lists songs under headings or not.
+    pub fn set_headings(&mut self, on: bool, library: &[Entry]) {
+        if self.headings != on {
+            self.headings = on;
+            self.refilter(library);
+        }
     }
 
     fn set_open(&mut self, label: &str, open: bool) {
@@ -816,6 +857,10 @@ impl Select {
                 if let Some(&g) = if key == KeyCode::Home { listed.first() } else { listed.last() } {
                     self.enter_song(self.groups[g].start, library);
                 }
+            }
+            // Each difficulty on its own row: to the next or previous row, whatever its set.
+            KeyCode::ArrowRight | KeyCode::ArrowLeft if self.split_difficulties() => {
+                self.move_songs(if key == KeyCode::ArrowRight { 1 } else { -1 }, library, true);
             }
             // Jump between beatmap sets.
             KeyCode::ArrowRight | KeyCode::ArrowLeft => {
@@ -1219,7 +1264,7 @@ impl Select {
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
         let groups = &self.groups;
-        let summary = format!("{} songs, {} maps  |  {mode}{}", groups.len(), self.visible.len(), self.rate_label);
+        let summary = format!("{} songs, {} maps  |  {mode}{}", self.song_count, self.visible.len(), self.rate_label);
         let lw = Self::list_width(w, self.list_share);
         let legacy = self.legacy;
         // The row with the search: under the tabs, or at the top beside the way back.
@@ -1347,7 +1392,9 @@ impl Select {
             if !section_open[si] && cursor_section == Some(si) {
                 final_cursor = final_y;
             }
-            final_y += SECTION_H;
+            if self.headings {
+                final_y += SECTION_H;
+            }
             if !section_open[si] {
                 continue;
             }
@@ -1422,8 +1469,10 @@ impl Select {
         let mut rows: Vec<(Row, f32, f32, f32)> = Vec::new();
         let mut y = 0.0;
         for (si, sec) in self.sections.iter().enumerate() {
-            rows.push((Row::Section(si), y, SECTION_H, 1.0));
-            y += SECTION_H;
+            if self.headings {
+                rows.push((Row::Section(si), y, SECTION_H, 1.0));
+                y += SECTION_H;
+            }
             for g in &groups[sec.groups.clone()] {
                 if !section_open[si] {
                     continue;
@@ -1474,7 +1523,9 @@ impl Select {
                     let tag = if any_taiko { 0xEB452C } else { 0x438EAD };
                     c.round_rect([32.0, y + 8.0], [5.0, rh - 20.0], 2.5, rgba(tag, 1.0), rgba(tag, 1.0), 0.0);
                     c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &fit(e.meta.title.clone(), 10.0, lw - 110.0));
-                    let sub = format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator);
+                    // A row per difficulty: which one it is, rather than who mapped the set.
+                    let one = self.split_difficulties();
+                    let sub = if one { format!("{}  |  {}", e.meta.artist, e.meta.version) } else { format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator) };
                     // Centred at y + 23.5, in what's left between the title (taller on a text
                     // grid) and the bottom of the box, so the two never touch.
                     let title_bottom = 11.0 + Canvas::text_height(10.0) / 2.0;
@@ -1487,7 +1538,13 @@ impl Select {
                     let update = e.set_id().and_then(|id| self.updates.get(&id)).filter(|u| matches!(u, SetUpdate::Available | SetUpdate::Updating) && y + rh - 4.0 <= bottom);
                     let n = g.len();
                     let diffs_y = if update.is_some() { y + 6.0 } else { y + 11.0 };
-                    c.text_right(24.0 + lw - 12.0, diffs_y, 8.0, rgba(0x8a8aa0, 1.0), &format!("{n} diff{}", if n == 1 { "" } else { "s" }));
+                    if one {
+                        // What the list is ordered by (no mods, 1.0x); the open row has the mods'.
+                        let sorted_by = self.row_value.get(g.start).copied().filter(|v| v.is_finite()).map(|v| v as f32);
+                        crate::stars::draw_pill(c, 24.0 + lw - 12.0, diffs_y - 1.0, 8.0, sorted_by);
+                    } else {
+                        c.text_right(24.0 + lw - 12.0, diffs_y, 8.0, rgba(0x8a8aa0, 1.0), &format!("{n} diff{}", if n == 1 { "" } else { "s" }));
+                    }
                     let (by, bh) = (y + 19.0, 9.0);
                     let ty = by + (bh - Canvas::text_height(6.0)) / 2.0;
                     match update {

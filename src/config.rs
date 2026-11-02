@@ -147,6 +147,8 @@ pub struct Config {
     pub wheel_resizes_playfield: bool,
     /// Song select lists converts too.
     pub show_converts: bool,
+    /// Song select lists songs under headings (`ui::Select::headings`).
+    pub song_headings: bool,
     /// During songs, the background dims to black (and is black without one), rather than to
     /// the interface's grey.
     pub bg_dim_black: bool,
@@ -312,6 +314,7 @@ impl Default for Config {
             menu_vsync: true,
             wheel_resizes_playfield: false,
             show_converts: false,
+            song_headings: true,
             bg_dim_black: true,
             interface_hidden: false,
             interface_hides: crate::hud::Parts::DEFAULT_HIDES,
@@ -745,6 +748,7 @@ impl Config {
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
                 "show_converts" => cfg.show_converts = v == "true",
+                "song_headings" => cfg.song_headings = v != "false",
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
                 "interface_hidden" => cfg.interface_hidden = v == "true",
                 "interface_hides" => cfg.interface_hides = crate::hud::Parts::parse_saved(v),
@@ -954,6 +958,7 @@ impl Config {
         ));
         out.push_str(&format!("# the mouse wheel resizes the playfield during play\nwheel_resizes_playfield = {}\n", self.wheel_resizes_playfield));
         out.push_str(&format!("# song select lists converts too\nshow_converts = {}\n", self.show_converts));
+        out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
         out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));
         out.push_str(&format!(
             "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators; ! before one that came later: not hidden) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
