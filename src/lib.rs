@@ -8556,7 +8556,7 @@ impl State {
                                     version: m.version.clone(),
                                     rate: replay.rate,
                                     from: None,
-                                    set_id: m.set_id,
+                                    set_id: e.set_id(),
                                     mods: replay.mods.clone(),
                                     multiverse: None,
                                     shapeshift: None,
