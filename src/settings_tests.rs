@@ -641,6 +641,24 @@ fn star_ratings_arriving_dont_change_the_song_thats_playing() {
 }
 
 #[test]
+fn an_old_map_without_ids_in_its_file_goes_by_its_folders_set() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // Ranked, with no IDs in the .osu: nothing in old formats, -1 and 0 in guest difficulties.
+    s.library[0].meta.set_id = None;
+    s.library[0].meta.beatmap_id = None;
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("NOT SUBMITTED"));
+    s.library[0].path = "/songs/210 Taiko no Tatsujin - Saitama2000/map [Oni].osu".into();
+    assert_eq!(s.map_status(0), None, "nothing known yet");
+
+    s.set_status_tx.send((210, Some("ranked".into()))).unwrap();
+    s.poll_set_status(Instant::now());
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("RANKED"));
+    assert_eq!(s.select.status.get(&s.library[0].path), Some(&search::RANKED));
+    assert_eq!(map_gives_pp(&s.library[0], &s.set_status, &s.db_status, &s.select.server_loved), Some(true));
+}
+
+#[test]
 fn a_maps_status_comes_from_the_mirror_else_osu_db() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);

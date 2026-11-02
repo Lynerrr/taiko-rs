@@ -837,7 +837,7 @@ fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
 /// osu!), from the mirrors' status else osu!.db's; None when it isn't known. The server has the
 /// last word.
 fn map_gives_pp(e: &Entry, set_status: &std::collections::HashMap<u32, Option<String>>, db_status: &std::collections::HashMap<PathBuf, u8>, server_loved: &std::collections::HashSet<u32>) -> Option<bool> {
-    let Some(set) = e.meta.set_id else { return Some(false) };
+    let Some(set) = e.set_id() else { return Some(false) };
     // Loved on the online server: it gives pp there.
     if server_loved.contains(&set) {
         return Some(true);
@@ -1182,7 +1182,7 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         version: e.meta.version.clone(),
         rate,
         from: None,
-        set_id: e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)),
+        set_id: e.set_id(),
     }
 }
 
@@ -1234,7 +1234,7 @@ const SCORE_LINK_WAIT: Duration = Duration::from_secs(300);
 /// (hashing reads the file).
 fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Option<usize> {
     library.iter().position(|e| {
-        let candidate = match (s.set_id, e.meta.set_id) {
+        let candidate = match (s.set_id, e.set_id()) {
             (Some(a), Some(b)) => a == b,
             _ => online::clean_text(&e.label(), 160) == s.map,
         };
@@ -6351,7 +6351,7 @@ impl State {
     fn now_playing(&self) -> Option<String> {
         let e = self.library.get(self.offset_entry()?)?;
         let name = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
-        let set = e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder));
+        let set = e.set_id();
         Some(match set {
             Some(set) => format!("is playing {name} https://osu.ppy.sh/beatmapsets/{set}"),
             None => format!("is playing {name}"),
@@ -6361,7 +6361,7 @@ impl State {
     /// A map set named in the chat, clicked: picked in song select when we have it, else downloaded.
     fn open_chat_map(&mut self, set: u32) {
         self.main_menu = None;
-        let have = self.library.iter().position(|e| e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)) == Some(set));
+        let have = self.library.iter().position(|e| e.set_id() == Some(set));
         match have {
             Some(i) if matches!(self.scene, Scene::Select) => {
                 let path = self.library[i].path.clone();
@@ -6407,7 +6407,7 @@ impl State {
     /// else osu!.db's (which can't tell graveyard from pending).
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
-        let Some(set) = e.meta.set_id.filter(|_| !self.select.edited.contains(&e.path)) else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
+        let Some(set) = e.set_id().filter(|_| !self.select.edited.contains(&e.path)) else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
         if self.select.server_loved.contains(&set) {
             return Some(("LOVED HERE", 0xff66aa));
         }
@@ -6445,7 +6445,7 @@ impl State {
     /// The sets' statuses the cache has, for the maps in the library (before osu!.db's).
     fn apply_cached_statuses(&mut self) {
         for e in &self.library {
-            let code = e.meta.set_id.and_then(|set| self.status_cache.status(set)).and_then(search::status_code);
+            let code = e.set_id().and_then(|set| self.status_cache.status(set)).and_then(search::status_code);
             if let Some(code) = code {
                 self.select.status.insert(e.path.clone(), code);
             }
@@ -6530,7 +6530,7 @@ impl State {
                 let by_set = by_set.get_or_insert_with(|| {
                     let mut m: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
                     for (i, e) in self.library.iter().enumerate() {
-                        if let Some(set) = e.meta.set_id {
+                        if let Some(set) = e.set_id() {
                             m.entry(set).or_default().push(i);
                         }
                     }
@@ -6561,7 +6561,7 @@ impl State {
             self.status_resorted = now;
             self.select.refilter(&self.library);
         }
-        let set = self.select.selected().and_then(|i| self.library.get(i)).and_then(|e| e.meta.set_id);
+        let set = self.select.selected().and_then(|i| self.library.get(i)).and_then(Entry::set_id);
         let Some(set) = set.filter(|s| !self.set_status.contains_key(s)) else {
             self.status_wait = None;
             return;
@@ -9151,7 +9151,7 @@ impl State {
     fn installed_sets(&mut self) -> &mut std::collections::HashSet<u32> {
         let library = &self.library;
         self.installed_sets.get_or_insert_with(|| {
-            library.iter().filter_map(|e| e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder))).collect()
+            library.iter().filter_map(Entry::set_id).collect()
         })
     }
 
@@ -9617,6 +9617,7 @@ impl State {
                 Some(new) => {
                     *e = new;
                     self.select.gone.remove(&e.path);
+                    self.select.edited.remove(&e.path);
                     changed.push((i, e.path.clone(), e.modified, e.size));
                 }
                 None => {

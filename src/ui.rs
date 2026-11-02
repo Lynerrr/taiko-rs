@@ -473,7 +473,7 @@ impl Select {
         if self.edited.contains(&e.path) {
             return crate::search::NOT_SUBMITTED;
         }
-        match e.meta.set_id {
+        match e.set_id() {
             Some(set) if self.server_loved.contains(&set) => crate::search::LOVED,
             set => self.status.get(&e.path).copied().unwrap_or(if set.is_some() { crate::search::UNKNOWN } else { crate::search::NOT_SUBMITTED }),
         }
@@ -1093,7 +1093,7 @@ impl Select {
             items.push((fit(format!("Hide [{}]", library[i].meta.version)), MenuAction::HideDifficulty));
         }
         items.push((fit(format!("Hide {}", library[i].meta.title)), MenuAction::HideSong));
-        if let Some(set) = library[i].meta.set_id.filter(|_| self.nominator) {
+        if let Some(set) = library[i].set_id().filter(|_| self.nominator) {
             let loved = self.server_loved.contains(&set);
             items.push((if loved { "Unlove on taiko.rs" } else { "Love on taiko.rs (gives pp)" }.to_string(), MenuAction::Love(set, !loved)));
         }
