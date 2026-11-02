@@ -297,7 +297,9 @@ fn html(code: &str, what: &str) -> String {
 <tr><td align="center" style="padding:4px 16px 10px">
 {digits}
 </td></tr>
-<tr><td align="center" style="padding:6px 24px 0;{mono};font-size:22px;line-height:30px;font-weight:bold;letter-spacing:6px;color:#ffffff">{code}</td></tr>
+<tr><td align="center" style="padding:10px 24px 0">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate"><tr><td bgcolor="#1b1b26" style="background:#1b1b26;border:2px solid #3a3a4e;border-bottom:4px solid #EB452C;border-radius:6px;padding:10px 14px 8px 20px;{mono};font-size:24px;line-height:30px;font-weight:bold;letter-spacing:6px;color:#ffffff;-webkit-user-select:all;user-select:all;cursor:pointer" title="Select the code to copy it">{code}</td></tr></table>
+</td></tr>
 <tr><td align="center" style="padding:14px 24px 30px;{mono};font-size:13px;line-height:20px;color:#8a8aa0">Type it where you asked for it.<br>It works for <span style="color:#EB452C">15 minutes</span>.</td></tr>
 <tr><td style="border-top:2px solid #3a3a4e;padding:16px 24px 20px;{mono};font-size:12px;line-height:18px;color:#6a6a80">If you didn't ask for it, ignore this letter: nothing changes without the code.<br><br>
 <a href="https://rstaiko.auneu.space" style="color:#4fb4ff;text-decoration:none">rstaiko.auneu.space</a></td></tr>
