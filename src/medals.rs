@@ -9,6 +9,7 @@ use winit::keyboard::KeyCode;
 
 use crate::online::{self, medal_badge, medal_colour, said, MedalNote, MedalRow, MedalsView, BADGE};
 use crate::render::{rgba, Canvas, Hit, VIRTUAL_HEIGHT};
+use crate::splash::hash;
 
 /// Rows of medals on a page, and how tall each is.
 const ROW_H: f32 = 44.0;
@@ -21,10 +22,14 @@ const NEXT_UP: usize = 6;
 /// The medals shown one by one when several come at once; the rest get a line.
 pub const SHOWN_AT_ONCE: usize = 3;
 
-/// How long the medal takes to land, how long it stays, and how long it takes to leave (ms).
-const LAND_MS: f32 = 720.0;
-const STAY_MS: f32 = 4200.0;
-const LEAVE_MS: f32 = 260.0;
+/// How long the medal takes to land (its sound hits then) and how long it takes to switch off (ms).
+const LAND_MS: f32 = crate::medal_sound::LAND * 1000.0;
+const LEAVE_MS: f32 = 320.0;
+/// The logo's glitch colours, for tears, and the brighter ones the splash splits the picture into.
+const TEAR_RED: u32 = 0x9f2137;
+const TEAR_CYAN: u32 = 0x2a9fb5;
+const SPLIT_RED: u32 = 0xff2a4a;
+const SPLIT_CYAN: u32 = 0x2ad4ff;
 /// Before this it can't be skipped: a key still held from the play shouldn't throw it away.
 const SKIP_AFTER_MS: f32 = 450.0;
 
@@ -362,24 +367,30 @@ impl Unlock {
         self.current.is_some()
     }
 
-    /// Moves on as time passes: `allowed` is false while a song is playing. True when a new
-    /// medal has just started, for its sound.
-    pub fn tick(&mut self, allowed: bool) -> bool {
+    /// All of `medals`, in this order: for looking at them with `TAIKO_UNLOCK`.
+    pub fn preview(&mut self, medals: Vec<MedalNote>) {
+        self.queue.extend(medals);
+    }
+
+    /// Moves on as time passes: `allowed` is false while a song is playing. The tier and whether
+    /// it's secret of a medal that has just started, for its sound.
+    pub fn tick(&mut self, allowed: bool) -> Option<(u8, bool)> {
         if let Some(s) = &self.current {
             let ms = s.since.elapsed().as_secs_f32() * 1000.0;
             let gone = s.leaving.is_some_and(|l| l.elapsed().as_secs_f32() * 1000.0 >= LEAVE_MS);
             if gone {
                 self.current = None;
-            } else if ms >= STAY_MS && s.leaving.is_none() {
+            } else if ms >= Force::of(&s.medal).stay() && s.leaving.is_none() {
                 self.skip();
             }
         }
         if self.current.is_none() && allowed
             && let Some(medal) = self.queue.pop_front() {
+            let sound = (medal.tier, medal.secret);
             self.current = Some(Showing { medal, since: Instant::now(), leaving: None });
-            return true;
+            return Some(sound);
         }
-        false
+        None
     }
 
     /// A key or a click: on to the next one, once it's had its moment.
@@ -395,81 +406,337 @@ impl Unlock {
         let Some(s) = &self.current else { return };
         let ms = s.since.elapsed().as_secs_f32() * 1000.0;
         let leave = s.leaving.map_or(0.0, |l| (l.elapsed().as_secs_f32() * 1000.0 / LEAVE_MS).min(1.0));
-        draw_unlock(c, &s.medal, ms, 1.0 - leave);
+        draw_unlock(c, &s.medal, ms, leave);
     }
 }
 
-/// `t` eased out with a little overshoot.
-fn ease_back(t: f32) -> f32 {
-    let t = t - 1.0;
-    1.0 + 2.7 * t * t * t + 1.7 * t * t
+/// How hard a medal's scene goes off: the rarer, the more of it falls apart.
+#[derive(Clone, Copy)]
+struct Force {
+    /// How much glitch, 0 to 1.
+    glitch: f32,
+    /// A secret: it doesn't arrive, it comes through.
+    ura: bool,
 }
 
-/// The moment itself: the screen dims and light gathers; the medal drops in spinning, hits with a
-/// flash and a burst of sparks, and its name comes up. `ms`: since it began; `alpha`: 1, until it
-/// leaves. It's a pure function of the time, so it can be tested and looked at frame by frame.
-pub fn draw_unlock(c: &mut Canvas, m: &MedalNote, ms: f32, alpha: f32) {
-    let colour = medal_colour(m.tier, m.secret);
-    let (cx, cy) = (c.width / 2.0, 196.0);
-    let dim = (ms / 300.0).min(1.0) * 0.86 * alpha;
-    c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(0x000000, dim));
-    let landed = ((ms - LAND_MS) / 400.0).clamp(0.0, 1.0);
-    // Rays turning behind it, opening up as it lands.
-    let rays = (ms / 500.0).min(1.0) * (0.35 + 0.65 * landed) * alpha;
-    let spin = ms / 2600.0;
-    for i in 0..12 {
-        let start = c.shapes.len();
-        let len = 150.0 + 40.0 * landed;
-        c.rect(0.0, -3.0, len, 6.0, rgba(colour, 0.16 * rays));
-        c.rect(0.0, -1.0, len * 0.8, 2.0, rgba(0xffffff, 0.10 * rays));
-        c.rotate_since(start, [0.0, 0.0], spin + i as f32 * std::f32::consts::TAU / 12.0, 1.0, [cx, cy]);
+impl Force {
+    fn of(m: &MedalNote) -> Force {
+        let glitch = [0.12, 0.32, 0.6, 1.0][usize::from(m.tier.clamp(1, 4)) - 1];
+        Force { glitch: if m.secret { f32::max(glitch, 0.75) } else { glitch }, ura: m.secret }
     }
-    c.glow(cx, cy, 130.0 + 70.0 * landed, 170.0, rgba(colour, 0.40 * alpha * (ms / 400.0).min(1.0)));
-    // The medal drops in spinning and slows to face you.
-    let fall = (ms / LAND_MS).min(1.0);
-    let eased = ease_back(fall);
-    let size = 4.0 * (0.25 + 0.75 * eased);
-    let turn = (1.0 - fall).powi(2) * std::f32::consts::TAU * 3.0;
-    let dy = (1.0 - eased) * -70.0;
-    let lift = (-(ms - LAND_MS).max(0.0) / 130.0).exp();
-    let sway = ((ms - LAND_MS).max(0.0) / 800.0).sin() * 2.0 * landed;
-    // The flash and the ring going out on impact, and sparks flying.
-    if ms >= LAND_MS {
-        let since = ms - LAND_MS;
-        let ring = (since / 520.0).min(1.0);
-        if ring < 1.0 {
-            c.ring(cx, cy, 44.0 + 150.0 * ring, rgba(colour, (1.0 - ring) * 0.9 * alpha), 3.0 * (1.0 - ring) + 0.5);
-            c.ring(cx, cy, 30.0 + 90.0 * ring, rgba(0xffffff, (1.0 - ring) * 0.5 * alpha), 1.5);
+
+    /// How long the medal stays up, in ms.
+    fn stay(self) -> f32 {
+        if self.ura { 5000.0 } else { 2600.0 + self.glitch * 2200.0 }
+    }
+
+    /// A short burst of the glitch coming back while the medal sits there: 1 during one. Never
+    /// for the commonest medals.
+    fn aftershock(self, ms: f32) -> f32 {
+        const EVERY: f32 = 640.0;
+        if ms < LAND_MS + 500.0 || self.glitch < 0.3 {
+            return 0.0;
         }
-        for i in 0..40 {
-            let angle = i as f32 * 2.399_963;
-            let speed = 60.0 + (i * 37 % 100) as f32 * 1.7;
-            let life = (since / (620.0 + (i * 53 % 500) as f32)).min(1.0);
-            if life < 1.0 {
-                let d = speed * (1.0 - (1.0 - life).powi(3));
-                let (sx, sy) = (cx + angle.cos() * (40.0 + d), cy + angle.sin() * (40.0 + d) + 40.0 * life * life);
-                let px = if i % 3 == 0 { 3.0 } else { 2.0 };
-                c.rect(sx, sy, px, px, rgba(if i % 4 == 0 { 0xffffff } else { colour }, (1.0 - life) * alpha));
+        let n = (ms / EVERY) as u32;
+        let start = n as f32 * EVERY + hash(n, 0, 22) * EVERY * 0.6;
+        let long = 50.0 + 130.0 * self.glitch;
+        if hash(n, 0, 21) < self.glitch * 0.85 && (start..start + long).contains(&ms) { 1.0 } else { 0.0 }
+    }
+}
+
+/// `t` eased out.
+fn ease(t: f32) -> f32 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+}
+
+/// A badge torn apart: `row` says how far each row is thrown (`None`: not there at all),
+/// `split` throws red and cyan copies out from under it, and `ink` draws it all in one colour.
+struct Torn<'a> {
+    at: [f32; 2],
+    scale: f32,
+    look: Look<'a>,
+    row: &'a dyn Fn(usize) -> Option<f32>,
+    split: f32,
+    ink: Option<u32>,
+    alpha: f32,
+}
+
+fn torn_badge(c: &mut Canvas, t: Torn) {
+    let half = BADGE as f32 / 2.0;
+    let [cx, cy] = t.at;
+    let rows = medal_badge(t.look.art, t.look.tier, t.look.secret, t.look.lit);
+    let run = |row: &[Option<u32>; BADGE], from: usize, same: &dyn Fn(Option<u32>) -> bool| {
+        let mut x = from;
+        while x < BADGE && same(row[x]) {
+            x += 1;
+        }
+        x
+    };
+    // The split copies go underneath, so they only show around the edges.
+    if t.split > 0.5 {
+        for (ink, by) in [(SPLIT_RED, -t.split), (SPLIT_CYAN, t.split)] {
+            for (y, row) in rows.iter().enumerate() {
+                let Some(shift) = (t.row)(y) else { continue };
+                let mut x = 0;
+                while x < BADGE {
+                    if row[x].is_none() {
+                        x += 1;
+                        continue;
+                    }
+                    let end = run(row, x, &|p| p.is_some());
+                    let left = cx + (x as f32 - half) * t.scale + shift + by;
+                    c.rect(left, cy + (y as f32 - half) * t.scale, (end - x) as f32 * t.scale, t.scale, rgba(ink, 0.75 * t.alpha));
+                    x = end;
+                }
             }
         }
     }
-    badge(c, [cx, cy + dy + sway], [size * turn.cos().abs().max(0.08), size], Look { art: &m.art, tier: m.tier, secret: m.secret, lit: true }, alpha);
-    if ms >= LAND_MS {
-        c.glow(cx, cy, 60.0 + 60.0 * (1.0 - lift), 60.0, rgba(0xffffff, lift * 0.75 * alpha));
+    for (y, row) in rows.iter().enumerate() {
+        let Some(shift) = (t.row)(y) else { continue };
+        let mut x = 0;
+        while x < BADGE {
+            let Some(colour) = row[x] else {
+                x += 1;
+                continue;
+            };
+            let end = run(row, x, &|p| p == Some(colour));
+            let left = cx + (x as f32 - half) * t.scale + shift;
+            c.rect(left, cy + (y as f32 - half) * t.scale, (end - x) as f32 * t.scale, t.scale, rgba(t.ink.unwrap_or(colour), t.alpha));
+            x = end;
+        }
     }
-    // Its name.
-    let line = ((ms - LAND_MS - 120.0) / 320.0).clamp(0.0, 1.0);
-    if line > 0.0 {
-        let a = line * alpha;
-        let rise = (1.0 - line) * 10.0;
+}
+
+/// `text` still coming through: past the part that's arrived, junk that changes every 40 ms.
+fn decoding(text: &str, arrived: f32, bucket: u32) -> String {
+    const JUNK: &[u8] = b"#%&*@$!?/<>[]{}01";
+    let chars: Vec<char> = text.chars().collect();
+    let shown = (arrived.clamp(0.0, 1.0) * chars.len() as f32).ceil() as usize;
+    chars
+        .iter()
+        .enumerate()
+        .map(|(i, &ch)| {
+            if i < shown || ch == ' ' {
+                ch
+            } else {
+                JUNK[(hash(i as u32, bucket, 41) * JUNK.len() as f32) as usize % JUNK.len()] as char
+            }
+        })
+        .collect()
+}
+
+/// How a line stamps in: how far along it is, and how far its colours slip and it shakes.
+struct Stamp {
+    slam: f32,
+    slip: f32,
+    jitter: [f32; 2],
+}
+
+/// A line stamping in, the way the splash's title does: slammed down from huge, then shaking,
+/// with its colours slipping apart while the glitch is on.
+fn stamp(c: &mut Canvas, [cx, y]: [f32; 2], size: f32, colour: u32, text: &str, how: Stamp) {
+    let Stamp { slam, slip, jitter } = how;
+    let k = 1.0 + (1.0 - ease(slam)) * 2.2;
+    let size = size * k;
+    let a = (slam * 3.0).min(1.0);
+    let top = y - (size - size / k) / 2.0;
+    let (x, y) = (cx + jitter[0], top + jitter[1]);
+    c.text_centered(x + 2.0, y + 2.0, size, rgba(0x000000, 0.7 * a), text);
+    if slip > 0.3 {
+        c.text_centered(x - slip, y, size, rgba(SPLIT_RED, 0.8 * a), text);
+        c.text_centered(x + slip, y, size, rgba(SPLIT_CYAN, 0.8 * a), text);
+    }
+    c.text_centered(x, y, size, rgba(colour, a), text);
+}
+
+/// The moment itself, in the game's own language: time moves in 40 ms steps, a lane opens like a
+/// CRT and the medal rides it in like a note; it hits with an impact frame, tears run across the
+/// screen in the logo's colours, the name stamps in, and it all switches off to a line. How much
+/// of that happens goes with the medal's rarity. A secret doesn't ride in: the screen loses the
+/// signal and the medal comes through the static. `ms`: since it began; `leave`: 0, then to 1
+/// as it switches off. A pure function of the time, so it can be tested and looked at frame by
+/// frame.
+pub fn draw_unlock(c: &mut Canvas, m: &MedalNote, ms: f32, leave: f32) {
+    const LANE_H: f32 = 124.0;
+    const CY: f32 = 170.0;
+    const SIZE: f32 = 4.0;
+    let force = Force::of(m);
+    let g = force.glitch;
+    let colour = medal_colour(m.tier, m.secret);
+    let start = c.shapes.len();
+    let (w, cx) = (c.width, c.width / 2.0);
+    let bucket = (ms / 40.0) as u32;
+    let since = ms - LAND_MS;
+    let landed = since >= 0.0;
+    // What drives everything after the hit: it dies away, and comes back in bursts.
+    let shock = if landed { (-since / (150.0 + 320.0 * g)).exp() } else { 0.0 };
+    let heat = shock.max(force.aftershock(ms) * 0.7);
+    let look = || Look { art: &m.art, tier: m.tier, secret: m.secret, lit: true };
+
+    let dark = if force.ura { 1.0 } else { 0.8 + 0.16 * g };
+    c.rect(-24.0, -24.0, w + 48.0, VIRTUAL_HEIGHT + 48.0, rgba(0x000000, ((bucket + 1) as f32 * 0.25).min(1.0) * dark));
+
+    // No signal: a secret's way in.
+    if force.ura {
+        let thin = if landed { 0.1 + 0.4 * heat } else { 1.0 };
+        for i in 0..(420.0 * thin) as u32 {
+            let (nx, ny) = (hash(i, bucket, 7), hash(i, bucket, 8));
+            let v = 0.2 + hash(i, bucket, 9) * 0.5;
+            c.rect(nx * w, ny * VIRTUAL_HEIGHT, 3.0, 3.0, [v, v * 0.9, v * 1.1, 0.55]);
+        }
+    }
+
+    // The lane opens like a CRT coming on, and the hit circle is waiting on it.
+    let opened = ease(ms / 150.0);
+    let lane_h = 2.0 + (LANE_H - 2.0) * opened;
+    let lane_y = CY - lane_h / 2.0;
+    c.rect(-24.0, lane_y, w + 48.0, lane_h, rgba(0x0b0b10, 0.92));
+    c.rect(-24.0, lane_y - 2.0, w + 48.0, 2.0, rgba(colour, 0.9));
+    c.rect(-24.0, lane_y + lane_h, w + 48.0, 2.0, rgba(colour, 0.9));
+    if opened >= 1.0 && !landed {
+        c.ring(cx, CY, 54.0, rgba(0xffffff, 0.55), 2.0);
+        // Speed lines: more and faster the rarer it is.
+        for i in 0..(6.0 + 26.0 * g) as u32 {
+            let speed = 1.1 + hash(i, 0, 33) * 1.6;
+            let x = w - (ms * speed + hash(i, 0, 34) * w) % (w + 80.0);
+            let y = lane_y + 6.0 + hash(i, 0, 35) * (lane_h - 12.0);
+            c.rect(x, y, 20.0 + 50.0 * hash(i, 0, 36), 1.5, rgba(if i % 3 == 0 { colour } else { 0xffffff }, 0.3));
+        }
+    }
+
+    // Where the medal is.
+    let flight = (ms / LAND_MS).min(1.0);
+    let throw = |y: usize| -> Option<f32> {
+        // Rows thrown sideways in bands, a new pattern every step, the way the logo slips.
+        let band = y as u32 / 2;
+        let thrown = hash(band, bucket, 5) > 0.72 - 0.34 * g;
+        Some(if heat > 0.04 && thrown { (hash(band, bucket, 6) - 0.5) * (14.0 + 110.0 * g) * heat } else { 0.0 })
+    };
+    let coming_through = |y: usize| -> Option<f32> {
+        // A secret arrives a row at a time, flickering.
+        let there = hash(y as u32, 0, 3) < flight * 1.15 && hash(y as u32, bucket, 4) < 0.35 + 0.65 * flight;
+        there.then(|| (hash(y as u32, bucket, 6) - 0.5) * 60.0 * (1.0 - flight))
+    };
+    let row: &dyn Fn(usize) -> Option<f32> = if force.ura && !landed { &coming_through } else { &throw };
+    let x = if force.ura || landed { cx } else { cx + (w / 2.0 + 90.0) * (1.0 - flight).powf(1.6) };
+
+    // The trail behind it, in the logo's colours.
+    if !landed && !force.ura {
+        let split = |ink: u32, back: f32, alpha: f32, c: &mut Canvas| {
+            torn_badge(c, Torn { at: [x + back, CY], scale: SIZE, look: look(), row: &|_| Some(0.0), split: 0.0, ink: Some(ink), alpha });
+        };
+        let speed = 26.0 * (flight * 2.0).min(1.0);
+        split(TEAR_RED, speed * 2.0, 0.3, c);
+        split(TEAR_CYAN, speed, 0.5, c);
+    }
+
+    // The hit: frames of white with the medal cut out of it, one more of them the rarer it is.
+    let frames = 1 + (g * 2.5) as u32;
+    let impact = landed && (0..frames).any(|k| (k as f32 * 110.0..k as f32 * 110.0 + 30.0 + 40.0 * g).contains(&since));
+    if impact {
+        let flash = if force.ura { colour } else { 0xffffff };
+        c.rect(-24.0, -24.0, w + 48.0, VIRTUAL_HEIGHT + 48.0, rgba(flash, 0.4 + 0.55 * g));
+    }
+
+    // Rings going out in steps.
+    if landed {
+        let step = (since / 40.0).floor() * 40.0;
+        let ring = (step / (340.0 + 260.0 * g)).min(1.0);
+        if ring < 1.0 {
+            c.ring(cx, CY, 54.0 + (90.0 + 170.0 * g) * ring, rgba(colour, (1.0 - ring) * 0.95), 4.0 * (1.0 - ring) + 1.0);
+            c.ring(cx, CY, 40.0 + (50.0 + 120.0 * g) * ring, rgba(0xffffff, (1.0 - ring) * 0.6), 2.0);
+        }
+        // Pixels flying off the hit.
+        for i in 0..(12.0 + 60.0 * g) as u32 {
+            let angle = i as f32 * 2.399_963;
+            let life = (step / (420.0 + 400.0 * hash(i, 0, 51))).min(1.0);
+            if life < 1.0 {
+                let d = 56.0 + (70.0 + 200.0 * hash(i, 0, 52)) * ease(life);
+                let size = if i % 3 == 0 { 4.0 } else { 3.0 };
+                let ink = [colour, SPLIT_RED, SPLIT_CYAN, 0xffffff][i as usize % 4];
+                c.rect(((cx + angle.cos() * d) / 3.0).round() * 3.0, ((CY + angle.sin() * d * 0.7) / 3.0).round() * 3.0, size, size, rgba(ink, 1.0 - life));
+            }
+        }
+    }
+
+    // The medal, and on the hit a shove towards you.
+    let scale = SIZE * (1.0 + 0.3 * shock);
+    let ink = impact.then_some(0x000000);
+    let split = heat * (1.5 + 11.0 * g);
+    torn_badge(c, Torn { at: [x, CY], scale, look: look(), row, split, ink, alpha: 1.0 });
+
+    // Noise over it.
+    if landed && g > 0.25 {
+        for i in 0..(260.0 * g * heat) as u32 {
+            let (nx, ny) = (hash(i, bucket, 7), hash(i, bucket, 8));
+            let v = 0.5 + hash(i, bucket, 9) * 0.5;
+            c.rect(cx - 120.0 + nx * 240.0, CY - 90.0 + ny * 180.0, 3.0, 3.0, [v, v, v, 0.75]);
+        }
+    }
+
+    // Text.
+    if since > 40.0 {
+        let split = 1.0 + heat * (1.0 + 7.0 * g);
+        let shake = |salt: u32| (hash(salt, bucket, 13) - 0.5) * 2.0 * heat * (1.0 + 7.0 * g);
+        let jitter = [shake(1), shake(2)];
         let title = if m.secret { tr!("SECRET FOUND", "秘密を発見", "СЕКРЕТ НАЙДЕН") } else { tr!("MEDAL UNLOCKED", "メダル獲得", "МЕДАЛЬ ПОЛУЧЕНА") };
-        c.text_centered(cx, 74.0 - rise, 12.0, rgba(colour, a), title);
+        stamp(c, [cx, 72.0], 12.0, colour, title, Stamp { slam: (since - 40.0) / 150.0, slip: split, jitter });
+        let decode_ms = 80.0 + 620.0 * g;
         let name = said(&m.name);
-        let size = Canvas::fit_size(18.0, 10.0, c.width - 64.0, name);
-        c.text_centered(cx, 268.0 + rise, size, rgba(0xffffff, a), name);
-        let about = said(&m.about);
-        c.text_centered(cx, 300.0 + rise, 8.0, rgba(0xc8c8d8, a), &Canvas::fit(8.0, c.width - 64.0, about));
-        c.text_centered(cx, 318.0 + rise, 7.0, rgba(colour, a), tier_name(m.tier, m.secret));
+        let name_at = 150.0;
+        if since > name_at {
+            let size = Canvas::fit_size(20.0, 10.0, w - 64.0, name);
+            let text = if g >= 0.3 { decoding(name, (since - name_at) / decode_ms, bucket) } else { name.to_string() };
+            stamp(c, [cx, 252.0], size, 0xffffff, &text, Stamp { slam: (since - name_at) / 170.0, slip: split, jitter });
+        }
+        let about_at = 330.0;
+        if since > about_at {
+            let about = said(&m.about);
+            let text = if g >= 0.6 { decoding(about, (since - about_at) / (decode_ms * 1.3), bucket) } else { about.to_string() };
+            let a = ((since - about_at) / 120.0).min(1.0);
+            c.text_centered(cx, 288.0, 8.0, rgba(0xc8c8d8, a), &Canvas::fit(8.0, w - 64.0, &text));
+            c.text_centered(cx, 306.0, 7.0, rgba(colour, a), tier_name(m.tier, m.secret));
+        }
+    }
+
+    // Tears across the whole screen, a new set every step.
+    let tears = (heat * (3.0 + 44.0 * g)) as u32;
+    for i in 0..tears {
+        let (y, from) = (hash(i, bucket, 61) * VIRTUAL_HEIGHT, hash(i, bucket, 62) * w * 0.7);
+        let long = (0.3 + 0.7 * hash(i, bucket, 63)) * w;
+        let thick = 2.0 + (hash(i, bucket, 64) * hash(i, bucket, 64) * 14.0 * g).floor();
+        c.rect(from, y, long, thick, rgba(if i % 2 == 0 { TEAR_RED } else { TEAR_CYAN }, 0.9));
+    }
+    // Blocks of the picture gone wrong, for the rarest.
+    if g >= 0.6 {
+        for i in 0..(heat * 26.0 * g) as u32 {
+            let (bx, by) = (hash(i, bucket, 71) * w, hash(i, bucket, 72) * VIRTUAL_HEIGHT);
+            let (bw, bh) = (30.0 + hash(i, bucket, 73) * 170.0, 6.0 + hash(i, bucket, 74) * 30.0);
+            let ink = [colour, 0x000000, 0xffffff, TEAR_RED][i as usize % 4];
+            c.rect(bx, by, bw, bh, rgba(ink, 0.5 + 0.4 * hash(i, bucket, 75)));
+        }
+    }
+    // The whole screen flickers.
+    if heat > 0.2 && g >= 0.3 && hash(bucket, 0, 12) > 0.55 {
+        c.rect(-24.0, -24.0, w + 48.0, VIRTUAL_HEIGHT + 48.0, rgba(colour, 0.16 * g * heat));
+    }
+
+    // And shakes, in steps too.
+    let shake = heat * (0.5 + 16.0 * g);
+    if shake > 0.1 {
+        c.transform_since(start, [0.0, 0.0], 1.0, (hash(bucket, 0, 31) - 0.5) * 2.0 * shake, (hash(bucket, 0, 32) - 0.5) * 2.0 * shake);
+    }
+
+    // Switching off, like the splash: squashed to a line, the line to a dot.
+    if leave > 0.0 {
+        let ky = (1.0 - ease(leave / 0.55)).max(0.004);
+        let kx = 1.0 - ease((leave - 0.55) / 0.35);
+        let mid = VIRTUAL_HEIGHT / 2.0;
+        for sh in &mut c.shapes[start..] {
+            sh.center = [cx + (sh.center[0] - cx) * kx, mid + (sh.center[1] - mid) * ky];
+            sh.half = [sh.half[0] * kx, sh.half[1] * ky];
+        }
+        c.rect(cx - w * kx / 2.0, mid - 1.5, w * kx, 3.0, rgba(0xffffff, 0.9));
     }
 }
 
@@ -498,11 +765,11 @@ mod tests {
     fn nothing_starts_while_a_song_plays_and_it_can_wait() {
         let mut u = Unlock::default();
         u.add(vec![note("a", 1, false)]);
-        assert!(!u.tick(false));
+        assert_eq!(u.tick(false), None);
         assert!(!u.showing());
-        assert!(u.tick(true), "starts as soon as it may, and says so for the sound");
+        assert_eq!(u.tick(true), Some((1, false)), "starts as soon as it may, and says so for the sound");
         assert!(u.showing());
-        assert!(!u.tick(true), "only once");
+        assert_eq!(u.tick(true), None, "only once");
     }
 
     #[test]
@@ -530,11 +797,54 @@ mod tests {
         assert!(rows[0].at.is_some());
     }
 
+    fn shapes_at(m: &MedalNote, ms: f32) -> usize {
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        draw_unlock(&mut c, m, ms, 0.0);
+        c.shapes.len()
+    }
+
+    fn medal(tier: u8, secret: bool) -> MedalNote {
+        MedalNote { tier, secret, name: ["A name".into(), "A name".into(), "A name".into()], about: ["About".into(), "About".into(), "About".into()], art: vec!["#".repeat(16); 16], ..MedalNote::default() }
+    }
+
     #[test]
-    fn the_landing_overshoots_and_settles() {
-        assert!(ease_back(0.0).abs() < 1e-6);
-        assert!((ease_back(1.0) - 1.0).abs() < 1e-6);
-        assert!(ease_back(0.8) > 1.0);
+    fn the_rarer_the_medal_the_more_of_it_falls_apart() {
+        let on_the_hit = LAND_MS + 60.0;
+        let counts: Vec<usize> = (1..=4).map(|tier| shapes_at(&medal(tier, false), on_the_hit)).collect();
+        assert!(counts.windows(2).all(|p| p[1] > p[0]), "{counts:?}");
+    }
+
+    #[test]
+    fn the_scene_runs_from_start_to_finish_for_every_tier() {
+        for m in [medal(1, false), medal(2, false), medal(3, false), medal(4, false), medal(1, true), medal(4, true)] {
+            for ms in (0..7000).step_by(17) {
+                shapes_at(&m, ms as f32);
+            }
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            draw_unlock(&mut c, &m, 3000.0, 1.0);
+            assert!(c.shapes.iter().all(|s| s.center[0].is_finite() && s.center[1].is_finite()));
+        }
+    }
+
+    #[test]
+    fn rarer_medals_stay_longer_and_only_they_flare_up_again() {
+        let force = |tier| Force::of(&medal(tier, false));
+        assert!(force(4).stay() > force(1).stay());
+        assert!((0..60_000).all(|ms| force(1).aftershock(ms as f32) == 0.0), "the commonest medals stay calm");
+        assert!((0..60_000).any(|ms| force(4).aftershock(ms as f32) > 0.0));
+        assert!(Force::of(&medal(1, true)).glitch >= 0.75, "a secret is never a quiet one");
+    }
+
+    #[test]
+    fn names_come_through_a_letter_at_a_time_and_keep_their_length() {
+        assert_eq!(decoding("Name here", 1.0, 3), "Name here");
+        let half = decoding("Name here", 0.45, 3);
+        assert!(half.starts_with("Name"));
+        assert_ne!(half, "Name here");
+        assert_eq!(half.chars().count(), 9);
+        assert_eq!(half.chars().nth(4), Some(' '), "words keep their shape");
     }
 
     #[test]

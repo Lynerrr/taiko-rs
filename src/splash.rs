@@ -89,7 +89,7 @@ pub struct Splash {
 }
 
 /// Cheap deterministic randomness in 0..1.
-fn hash(a: u32, b: u32, salt: u32) -> f32 {
+pub fn hash(a: u32, b: u32, salt: u32) -> f32 {
     let mut h = a.wrapping_mul(0x9E37_79B1) ^ b.wrapping_mul(0x85EB_CA77) ^ salt.wrapping_mul(0xC2B2_AE3D);
     h ^= h >> 15;
     h = h.wrapping_mul(0x2C1B_3C6D);

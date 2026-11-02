@@ -11,6 +11,7 @@ mod autoplay;
 mod beatmap;
 mod browse;
 mod calibrate;
+mod medal_sound;
 mod medals;
 mod changelog;
 mod changelog_entry;
@@ -9413,8 +9414,8 @@ impl State {
             view.poll();
         }
         // The splash is drawn over everything, so it waits for that as well as for a song.
-        if self.unlock.tick(!self.in_song() && self.splash.is_none()) {
-            self.sfx(audio::Sfx::Medal);
+        if let Some((tier, secret)) = self.unlock.tick(!self.in_song() && self.splash.is_none()) {
+            self.sfx(audio::Sfx::medal(tier, secret));
         }
         self.poll_changelog();
         #[cfg(target_os = "android")]
@@ -10746,7 +10747,7 @@ impl State {
             medals: debug::medals_from_env().map(|view| medals::View { name: Some("TAIKO_MEDALS".into()), state: medals::State::Loaded(Box::new(view)), tab: 0, scroll: 0 }),
             unlock: {
                 let mut unlock = medals::Unlock::default();
-                unlock.add(debug::unlock_from_env());
+                unlock.preview(debug::unlock_from_env());
                 unlock
             },
             ime_preedit: String::new(),
