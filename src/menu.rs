@@ -4,7 +4,7 @@
 
 use crate::game::{DON, KAT};
 use crate::player::Control;
-use crate::render::{self, approach, pixel_size, rgba, snap_to_grid, Canvas, Hit};
+use crate::render::{self, approach, pixel_size, rgba, snap_to_grid, Canvas, Hit, Sprite};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
@@ -43,12 +43,13 @@ const NOTE_Y: f32 = LANE_MID - 10.0;
 const NOTE_MAX_R: f32 = 29.0;
 /// How much bigger the selected note is (it grows as the selector arrives).
 const GROW: f32 = 0.3;
-/// The song's own notes on the panel, behind the menu's: where they're hit (just past the drum),
-/// how long one takes to cross, their size and how faint they are.
-const HIT_X: f32 = PANEL_X + DRUM_W + 16.0;
+/// The song's own notes cross the panel like a play's: a big one as big as the drum, a small one
+/// in proportion (as in a song), hit in a target just past the drum, a crossing taking this long.
+const SONG_BIG_R: f32 = 44.0;
+const SONG_NOTE_R: f32 = SONG_BIG_R * crate::game::NOTE_R / crate::game::BIG_R;
 const CROSS_MS: f64 = 1700.0;
-const SONG_NOTE_R: f32 = 9.0;
-const SONG_NOTE_ALPHA: f32 = 0.5;
+/// How long a hit lights the target (ms).
+const SONG_HIT_MS: f32 = 140.0;
 const TITLE_Y: f32 = LANE_TOP + LANE_H + TITLE_GAP;
 /// Kiai: how long a beat's kick and the opening's flash last, and a spark's life (ms).
 const BEAT_MS: f32 = 300.0;
@@ -360,6 +361,8 @@ pub struct Menu {
     song_at: Option<f64>,
     /// Which rim the next kat of the song lands on.
     song_rim: i32,
+    /// The song's last hit: when, and whether a kat.
+    song_hit: (f32, bool),
     /// ms since the menu opened: every animation below is timed on it.
     clock: f32,
     /// When the rim last flashed, and which side.
@@ -394,7 +397,7 @@ struct Spark {
 
 impl Menu {
     pub fn new() -> Menu {
-        Menu { selected: 0, shown: 0.0, appear: 0.0, spot: [0.0, NOTE_Y], song_at: None, song_rim: 1, clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
+        Menu { selected: 0, shown: 0.0, appear: 0.0, spot: [0.0, NOTE_Y], song_at: None, song_rim: 1, song_hit: (f32::MIN, false), clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
     }
 
     fn index(&self) -> usize {
@@ -617,9 +620,18 @@ impl Menu {
         }
     }
 
-    /// Where the notes' slots start and how wide each is, on a screen `width` wide.
+    /// The song's lane on a screen `width` wide: where its notes are hit, and how big a big one
+    /// is (as big as the drum, less on narrow screens).
+    fn song_lane(width: f32) -> (f32, f32) {
+        let big = SONG_BIG_R.min(width * 0.055);
+        (PANEL_X + DRUM_W + 4.0 + big, big)
+    }
+
+    /// Where the notes' slots start (past the song's hit target) and how wide each is, on a
+    /// screen `width` wide.
     fn slots(width: f32) -> (f32, f32) {
-        let left = PANEL_X + DRUM_W + 4.0;
+        let (hit_x, big) = Self::song_lane(width);
+        let left = hit_x + big + 4.0;
         (left, (width - PANEL_X - 4.0 - left) / ITEMS.len() as f32)
     }
 
@@ -647,23 +659,39 @@ impl Menu {
                 } else {
                     self.face = self.clock;
                 }
+                self.song_hit = (self.clock, note.kat);
             }
         }
         self.song_at = Some(now);
-        let px = pixel_size(LANE_PIXEL);
+        let (hit_x, big_r) = Self::song_lane(c.width);
+        let small_r = big_r * SONG_NOTE_R / SONG_BIG_R;
         let start = c.shapes.len();
-        let fade = song.fade() * (1.0 + self.kiai * 0.5);
-        // Where they're hit.
-        pixel_ring(c, [HIT_X, NOTE_Y], SONG_NOTE_R + 4.0, px, 0, px, rgba(0xffffff, 0.22 * fade.min(1.0)));
-        let speed = (c.width - PANEL_X - HIT_X) as f64 / CROSS_MS;
-        // Furthest first, so the nearer ones lie on top.
+        let fade = song.fade();
+        let colours = crate::multiverse::note_colours();
+        let (don, kat) = (colours.don(), colours.kat());
+        // The target, as in a song: the skin's, or rings.
+        let big = c.sprite(Sprite::HitTargetBig, hit_x, LANE_MID, big_r, rgba(0xffffff, 0.22 * fade));
+        let ring = c.sprite(Sprite::HitTarget, hit_x, LANE_MID, small_r, rgba(0xffffff, 0.47 * fade));
+        if !big && !ring {
+            c.circle(hit_x, LANE_MID, big_r, rgba(0xffffff, 0.03 * fade), rgba(0xffffff, 0.12 * fade), 2.0);
+            c.circle(hit_x, LANE_MID, small_r + 1.0, rgba(0xffffff, 0.06 * fade), rgba(0xffffff, 0.4 * fade), 2.5);
+        }
+        // A hit lights it in the note's colour.
+        let lit = 1.0 - (self.clock - self.song_hit.0) / SONG_HIT_MS;
+        if lit > 0.0 {
+            let col = if self.song_hit.1 { kat } else { don };
+            c.circle(hit_x, LANE_MID, small_r + 6.0 * (1.0 - lit), rgba(col, 0.35 * lit * fade), rgba(0xffffff, 0.6 * lit * fade), 2.0);
+        }
+        let speed = (c.width - PANEL_X - hit_x + big_r) as f64 / CROSS_MS;
+        // Furthest first, so the nearer ones lie on top; each drawn as in a song (the skin's, or
+        // the built-in ones), in the player's colours.
         for note in song.between(now, now + CROSS_MS).iter().rev() {
-            let x = HIT_X + ((note.time - now) * speed) as f32;
-            let r = SONG_NOTE_R * if note.big { 1.4 } else { 1.0 };
-            let col = if note.kat { KAT } else { DON };
-            let a = (SONG_NOTE_ALPHA * fade).min(0.8);
-            pixel_ring(c, [x, NOTE_Y], r + px, r + px, 0, px, rgba(0xffffff, a));
-            pixel_ring(c, [x, NOTE_Y], r - px, r - px, 0, px, rgba(col, a));
+            let x = hit_x + ((note.time - now) * speed) as f32;
+            let r = if note.big { big_r } else { small_r };
+            let col = if note.kat { kat } else { don };
+            if !crate::game::skin_note(c, x, LANE_MID, r, note.big, col, fade) {
+                crate::multiverse::note(c, crate::multiverse::Shape::Round, x, LANE_MID, r, col, fade);
+            }
         }
         // Inside the panel, past the drum.
         c.clip_since(start, PANEL_X + DRUM_W + 2.0, LANE_TOP, c.width - 2.0 * PANEL_X - DRUM_W - 2.0, LANE_H);
