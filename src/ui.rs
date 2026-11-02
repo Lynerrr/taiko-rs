@@ -1489,6 +1489,8 @@ impl Select {
                 }
             }
         }
+        // The main menu's look: one dark panel the list runs down, rows as lines on it.
+        crate::style::panel(c, 20.0, top - 4.0, lw + 8.0, bottom - top + 8.0);
         let list_start = c.shapes.len();
         let hits_start = c.hits.len();
         let fit = |s: String, size: f32, room: f32| Canvas::fit(size, room.max(Canvas::char_width(size) * 4.0), &s);
@@ -1504,25 +1506,45 @@ impl Select {
                     let open = section_open[*si];
                     let hover = c.hovered(24.0, y, lw, rh - 2.0);
                     let holds_cursor = cursor_section == Some(*si) && !open;
-                    let border = if holds_cursor { rgba(accent(), 1.0) } else { rgba(col, if open { 0.7 } else { 0.35 }) };
-                    c.round_rect([24.0, y], [lw, rh - 3.0], 5.0, rgba(if hover { 0x24242f } else { 0x16161e }, 0.9), border, if holds_cursor { 1.5 } else { 1.0 });
+                    // A heading on the panel: its name on a pill of its colour, a line of it on.
+                    if hover {
+                        c.round_rect([24.0, y], [lw, rh - 3.0], 6.0, rgba(0x24242f, 0.6), rgba(0, 0.0), 0.0);
+                    }
+                    if holds_cursor {
+                        crate::style::brackets(c, [21.0, y - 3.0, lw + 6.0, rh + 3.0], 1.0);
+                    }
                     c.hit(24.0, y, lw, *rh, Hit::SectionHeader(*si));
                     let n = sec.groups.len();
-                    c.text(34.0, y + 6.0, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
-                    let label = format!("{}  |  {n} song{}", sec.label, if n == 1 { "" } else { "s" });
-                    c.text(48.0, y + 6.0, 7.0, rgba(col, 1.0), &fit(label, 7.0, lw - 60.0));
+                    c.text(32.0, y + 6.0, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
+                    let label = fit(sec.label.clone(), 7.0, lw - 140.0);
+                    let pw = Canvas::text_width(7.0, &label) + 14.0;
+                    crate::style::pill(c, 44.0, y + 1.5, pw, rh - 6.0, col);
+                    c.text(51.0, y + 6.0, 7.0, rgba(0xffffff, 1.0), &label);
+                    let count = format!("{n} song{}", if n == 1 { "" } else { "s" });
+                    let after = c.text(44.0 + pw + 8.0, y + 6.0, 7.0, rgba(0x8a8aa0, 1.0), &fit(count, 7.0, lw - pw - 40.0));
+                    let line_x = 44.0 + pw + 8.0 + after + 8.0;
+                    if line_x < 16.0 + lw {
+                        c.rect(line_x, y + rh / 2.0 - 1.5, 16.0 + lw - line_x, 1.0, rgba(col, 0.3));
+                    }
                 }
                 Row::Song(g) => {
                     let e = &library[self.visible[g.start]];
                     let open = g.contains(&self.cursor);
-                    let (bg, border) = if open { (0x2b2b3d, 0x5a5a78) } else { (0x1d1d27, 0x2a2a38) };
                     let hover = !open && c.hovered(24.0, y, lw, rh - 4.0);
-                    let bg = if hover { 0x262634 } else { bg };
-                    c.round_rect([24.0, y], [lw, rh - 4.0], 7.0, rgba(bg, 0.88), rgba(border, 1.0), 1.0);
+                    if open {
+                        c.round_rect([24.0, y], [lw, rh - 4.0], 7.0, rgba(crate::style::selector_colour(), 0.08), rgba(0, 0.0), 0.0);
+                    } else if hover {
+                        c.round_rect([24.0, y], [lw, rh - 4.0], 7.0, rgba(0x262634, 0.6), rgba(0, 0.0), 0.0);
+                    }
+                    c.rect(32.0, y + rh - 3.0, lw - 16.0, 1.0, rgba(0x23232f, 1.0));
                     c.hit(24.0, y, lw, *rh, Hit::SongHeader(g.start));
+                    // A note for the song, as on the main menu: a don for taiko maps, a kat for
+                    // converts; the open song's bigger and lit.
                     let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
-                    let tag = if any_taiko { 0xEB452C } else { 0x438EAD };
-                    c.round_rect([32.0, y + 8.0], [5.0, rh - 20.0], 2.5, rgba(tag, 1.0), rgba(tag, 1.0), 0.0);
+                    let colours = crate::multiverse::note_colours();
+                    let tag = if any_taiko { colours.don() } else { colours.kat() };
+                    let (nr, ny) = (if open { 6.5 } else { 5.0 }, y + (rh - 4.0) / 2.0);
+                    crate::style::note(c, 33.0, ny, nr, tag, open, 0.7);
                     c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &fit(e.meta.title.clone(), 10.0, lw - 110.0));
                     // A row per difficulty: which one it is, rather than who mapped the set.
                     let one = self.split_difficulties();
@@ -1566,9 +1588,12 @@ impl Select {
                     let a = *alpha;
                     let e = &library[self.visible[*i]];
                     let selected = *i == self.cursor;
-                    let bg = if selected { 0x34344a } else { 0x191921 };
-                    let bg = if !selected && c.hovered(44.0, y, lw - 20.0, rh - 3.0) { 0x24242f } else { bg };
-                    c.round_rect([44.0, y], [lw - 20.0, rh - 3.0], 5.0, rgba(bg, 0.92 * a), rgba(0x2a2a38, a), 1.0);
+                    if selected {
+                        c.round_rect([44.0, y], [lw - 20.0, rh - 3.0], 5.0, rgba(crate::style::selector_colour(), (0.12 + 0.05 * crate::style::pulse()) * a), rgba(0, 0.0), 0.0);
+                    } else if c.hovered(44.0, y, lw - 20.0, rh - 3.0) {
+                        c.round_rect([44.0, y], [lw - 20.0, rh - 3.0], 5.0, rgba(0x24242f, 0.6 * a), rgba(0, 0.0), 0.0);
+                    }
+                    c.rect(52.0, y + rh - 2.0, lw - 36.0, 1.0, rgba(0x1d1d27, a));
                     c.hit(44.0, y, lw - 20.0, *rh, Hit::SongRow(*i));
                     let col = if selected { 0xffffff } else { 0xc8c8d8 };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
@@ -1591,7 +1616,7 @@ impl Select {
         // Not with its heading closed: the heading shows where the selection is instead.
         let oy = outline;
         if !self.visible.is_empty() && !cursor_hidden && oy > top - DIFF_H && oy < bottom {
-            c.round_rect([44.0, oy], [lw - 20.0, DIFF_H - 3.0], 5.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
+            crate::style::brackets(c, [41.0, oy - 3.0, lw - 14.0, DIFF_H + 3.0], 1.0);
         }
         // Rows scrolling past the edges slide under them instead of over the search row.
         c.clip_since(list_start, 20.0, top - 2.0, lw + 8.0, bottom - top + 4.0);

@@ -339,8 +339,11 @@ impl Browse {
             }
             let selected = i == self.cursor;
             let hover = !selected && c.hovered(x0, y, col, ROW - 4.0);
-            let (bg, border) = if selected { (0x2b2b3d, accent()) } else if hover { (0x262634, 0x2a2a38) } else { (0x1d1d27, 0x2a2a38) };
-            c.round_rect([x0, y], [col, ROW - 4.0], 7.0, rgba(bg, 0.95), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+            let bg = if selected { 0x2b2b3d } else if hover { 0x262634 } else { 0x1d1d27 };
+            c.round_rect([x0, y], [col, ROW - 4.0], 7.0, rgba(bg, 0.95), rgba(0x2a2a38, 1.0), 1.0);
+            if selected {
+                crate::style::selector(c, "download", [x0 - 3.0, y - 3.0, col + 6.0, ROW + 2.0]);
+            }
             c.hit(x0, y, col, ROW, Hit::DlRow(i));
             let state = if installed.contains(&set.id) {
                 RowState::Installed

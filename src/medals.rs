@@ -203,7 +203,7 @@ impl View {
         let (by, bw) = (py + ph - 24.0, 56.0);
         c.button(px + pw - bw - 12.0, by, bw, 16.0, tr!("Back", "戻る", "Назад"), 7.0, Hit::Key(KeyCode::Escape), true);
         let title = tr!("MEDALS", "メダル", "МЕДАЛИ");
-        c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), title);
+        crate::style::title(c, px + 16.0, py + 12.0, 14.0, 0xffffff, title);
         let v = match &self.state {
             State::Loading(_) => {
                 c.text_centered(px + pw / 2.0, py + ph / 2.0, 9.0, rgba(0xc8c8d8, 1.0), tr!("loading the medals...", "メダルを読み込み中...", "загрузка медалей..."));
@@ -229,8 +229,13 @@ impl View {
             let on = tab == self.tab;
             let name = tab_name(tab);
             let hover = c.hovered(x, py + 32.0, tab_w, 14.0);
-            let fill = if on { 0x2a2a38 } else if hover { 0x20202b } else { 0x1a1a24 };
-            c.round_rect([x + 1.0, py + 32.0], [tab_w - 2.0, 14.0], 3.0, rgba(fill, 1.0), rgba(if on { 0xFFD34D } else { 0x2a2a38 }, 1.0), 1.0);
+            let fill = if hover { 0x20202b } else { 0x1a1a24 };
+            c.round_rect([x + 1.0, py + 32.0], [tab_w - 2.0, 14.0], 3.0, rgba(fill, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+            if on {
+                // The tab open: a gold pill, the selector sliding to it.
+                crate::style::pill(c, x + 1.0, py + 32.0, tab_w - 2.0, 14.0, 0xC89A2A);
+                crate::style::selector(c, "medals", [x - 2.0, py + 29.0, tab_w + 4.0, 20.0]);
+            }
             c.text_centered(x + tab_w / 2.0, py + 36.0, 6.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), &Canvas::fit(6.0, tab_w - 6.0, name));
             c.hit(x, py + 32.0, tab_w, 14.0, Hit::MedalTab(tab));
         }

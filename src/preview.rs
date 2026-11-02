@@ -19,6 +19,9 @@ const DEBOUNCE: Duration = Duration::from_millis(60);
 const QUIET: Duration = Duration::from_millis(300);
 /// The preview music starts from a quick decode of this much audio at the preview point; the
 /// full song replaces it a moment later without a gap.
+/// The width (virtual units, 480 tall) the preview lays the playfield out at: a 4:3 screen's.
+const FOUR_THREE: f32 = 640.0;
+
 const SNIPPET_MS: f64 = 15_000.0;
 
 pub type Image = crate::render::BgImage;
@@ -591,14 +594,16 @@ impl Preview {
     pub fn draw_panel(&mut self, c: &mut Canvas, library: &[Entry], x: f32, y: f32, w: f32, h: f32, scroll_speed: f64, stars: Option<f32>, button: Option<(&str, &str)>, status: Option<(&str, u32)>) -> Option<(std::ops::Range<usize>, crate::layout::Area)> {
         // The preview shows ~640 units of lane (several notes ahead), so its height follows the
         // panel width; the panel shrinks to fit instead of leaving empty space.
-        let (band_top, band_h) = game::lane_band();
+        // The lane alone fills the box, laid out as on a 4:3 screen (640 units wide): bigger notes,
+        // fewer of them, whatever the panel's shape.
+        let (band_top, band_h) = game::lane_only();
         const GRAPH_H: f32 = 40.0;
         // Under the preview box: the timeline and its button.
         let after_box = 8.0 + GRAPH_H + 44.0;
         // The preview's height per unit of its size. Smaller, it shows more of the lane ahead in
         // a shorter box: as small as dragged, and smaller still where the panel would otherwise
         // be taller than `h` (the details above it being `head` tall).
-        let unit = band_h * (w - 20.0) / 640.0;
+        let unit = band_h * (w - 20.0) / FOUR_THREE;
         self.size_unit = unit;
         let wanted = if self.size > 0.0 { self.size.clamp(PREVIEW_SIZE.0, PREVIEW_SIZE.1) } else { PREVIEW_SIZE.1 };
         let fitted = |head: f32| ((h - head - after_box - 12.0) / unit).clamp(PREVIEW_SIZE.0, PREVIEW_SIZE.1);
@@ -686,9 +691,11 @@ impl Preview {
         let (title_step, body_step, row_h) = (th_title + 4.0, th_body + 3.0, th_small + 4.0);
         let head = 12.0 + title.len() as f32 * title_step + 3.0 + artist.len() as f32 * body_step + 4.0 + 13.0 + 6.0 + (version.len() as f32 * body_step).max(15.0) + 6.0 + stat_rows as f32 * row_h + 6.0;
         (self.size_cap, self.size_shown) = (fitted(head), wanted.min(fitted(head)));
-        let k = (w - 20.0) / 640.0 * self.size_shown;
-        let preview_h = band_h * k + 12.0;
-        let h = h.min(head + preview_h + after_box);
+        // The lane fills the panel's width (at the size chosen), however little room the details
+        // leave: the panel grows down, into the leaderboard's room, rather than the lane shrink.
+        let k = (w - 20.0) / FOUR_THREE * wanted;
+        let preview_h = band_h * k;
+        let h = head + preview_h + after_box;
         self.panel_bottom = y + h;
         c.round_rect([x, y], [w, h], 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
 
@@ -737,7 +744,9 @@ impl Preview {
         cy = cy.max(y + 12.0) + (stat_rows.saturating_sub(rows.iter().map(Vec::len).sum()) as f32) * row_h + 6.0;
 
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
-        let (bx, by, bw, bh) = (x + 10.0, cy, w - 20.0, preview_h);
+        // As wide as 640 units at that scale (all of the panel at full size), centred.
+        let bw = FOUR_THREE * k;
+        let (bx, by, bh) = (x + 10.0 + (w - 20.0 - bw) / 2.0, cy, preview_h);
         c.round_rect([bx, by], [bw, bh], 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
         self.box_rect = Some([bx, by, bw, bh]);
         let loaded = loaded.is_some();
@@ -758,10 +767,10 @@ impl Preview {
         let game = self.game.as_mut().filter(|_| loaded && playing)?;
         let full_w = c.width;
         let start = c.shapes.len();
-        c.width = bw / k;
+        c.width = FOUR_THREE;
         game.kiai_effects = self.kiai_effects;
         game.draw_playfield(c, scroll_speed);
-        let oy = by + (bh - band_h * k) / 2.0 - band_top * k;
+        let oy = by - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
         if button.is_some() {

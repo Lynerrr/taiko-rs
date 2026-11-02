@@ -70,6 +70,7 @@ mod skin;
 mod social;
 mod splash;
 mod stars;
+mod style;
 mod ui;
 mod update;
 mod video;
@@ -286,8 +287,10 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
-    /// A screen opened from the main menu fades in: how long it has been showing (ms).
+    /// A screen just opened fades in: how long it has been showing (ms).
     screen_fade: Option<f32>,
+    /// The screen last drawn, to fade in the next one.
+    shown_scene: Option<std::mem::Discriminant<Scene>>,
     /// What drifts behind it.
     menu_notes: menu_notes::Notes,
     /// When dragging the player's timeline last moved the music.
@@ -7550,16 +7553,39 @@ impl State {
         if !self.quit_asked {
             return;
         }
+        // The main menu's look: one panel, the two answers as notes on it (Exit a don, Stay a kat),
+        // the selector on the one Enter picks, or on the one under the pointer.
         let w = c.width;
         c.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
-        let (bw, bh) = (300.0f32.min(w - 32.0), 100.0);
+        let (bw, bh) = (340.0f32.min(w - 32.0), 124.0);
         let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
-        c.round_rect([x, y], [bw, bh], 10.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
-        c.text_centered(w / 2.0, y + 18.0, 12.0, rgba(0xffffff, 1.0), "Exit taiko.rs?");
-        let gap = 10.0;
+        style::panel(c, x, y, bw, bh);
+        let title = tr!("Exit taiko.rs?", "taiko.rsを終了しますか?", "Выйти из taiko.rs?");
+        let size = Canvas::fit_size(16.0, 10.0, bw - 28.0, title);
+        style::title(c, w / 2.0 - Canvas::text_width(size, title) / 2.0, y + 18.0, size, 0xffffff, title);
+        let gap = 12.0;
         let button = (bw - 36.0 - gap) / 2.0;
-        c.button(x + 18.0, y + 56.0, button, 26.0, "1. Exit  (Enter)", 9.0, render::Hit::Key(KeyCode::KeyY), true);
-        c.button(x + 18.0 + button + gap, y + 56.0, button, 26.0, "2. Stay  (Esc)", 9.0, render::Hit::Key(KeyCode::KeyN), false);
+        let colours = multiverse::note_colours();
+        let options = [
+            (x + 18.0, tr!("Exit", "終了", "Выйти"), "1 / Enter", colours.don(), render::Hit::Key(KeyCode::KeyY)),
+            (x + 18.0 + button + gap, tr!("Stay", "戻る", "Остаться"), "2 / Esc", colours.kat(), render::Hit::Key(KeyCode::KeyN)),
+        ];
+        let oy = y + 62.0;
+        let hovered = options.iter().position(|o| c.hovered(o.0, oy, button, 40.0));
+        let on = hovered.unwrap_or(0);
+        for (k, (ox, label, keys, col, hit)) in options.into_iter().enumerate() {
+            let selected = k == on;
+            if selected {
+                c.round_rect([ox, oy], [button, 40.0], 8.0, rgba(style::selector_colour(), 0.12 + 0.05 * style::pulse()), rgba(0, 0.0), 0.0);
+                style::selector(c, "quit", [ox - 3.0, oy - 3.0, button + 6.0, 46.0]);
+            }
+            c.hit(ox, oy, button, 40.0, hit);
+            let (nx, ny, r) = (ox + 20.0, oy + 20.0, if selected { 10.0 } else { 8.0 });
+            style::note(c, nx, ny, r, col, selected, 0.6);
+            let room = button - 44.0;
+            c.text(ox + 38.0, oy + 9.0, 11.0, rgba(if selected { 0xffffff } else { 0xa8a8bc }, 1.0), &Canvas::fit(11.0, room, label));
+            c.text(ox + 38.0, oy + 24.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, room, keys));
+        }
     }
 
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
@@ -8348,7 +8374,17 @@ impl State {
         // Drawn again below if still watching a replay (after scripted input, which must see the
         // last frame's bar like real input does).
         self.replay_bar = None;
-        let scene_start = canvas.shapes.len();
+        // Another screen (not a song: nothing may stand between the player and the notes)
+        // fades in.
+        let scene = std::mem::discriminant(&self.scene);
+        if self.shown_scene.is_some_and(|s| s != scene) && !self.in_song() && !matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } | Scene::Loading { .. } | Scene::MpWait { .. }) {
+            self.screen_fade = Some(0.0);
+        }
+        self.shown_scene = Some(scene);
+        // Every screen's selector and titles move with the music, as the main menu does.
+        let playing = !self.music_paused && !self.in_song();
+        let phase = self.preview.beat().filter(|b| b.1 > 1.0 && playing).map(|(into, len)| (into / len).rem_euclid(1.0) as f32);
+        style::set_beat(phase, playing && self.cfg.kiai_effects && self.preview.kiai());
         match &mut self.scene {
             Scene::Select if on_menu => {
                 self.board_rect = None;
@@ -9039,14 +9075,15 @@ impl State {
                 canvas.text_centered(w / 2.0, 460.0 + (7.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, room, help));
             }
         }
-        // Just opened from the main menu: the screen fades in over the background.
+        // A screen just opened comes up out of black, its background too.
         if let Some(ms) = &mut self.screen_fade {
             *ms += canvas.dt_ms;
             let k = (*ms / menu::FADE_MS).min(1.0);
             if k >= 1.0 || !self.cfg.animations {
                 self.screen_fade = None;
             } else {
-                canvas.fade_since(scene_start, k * k * (3.0 - 2.0 * k), 1.0);
+                let w = canvas.width;
+                canvas.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 1.0 - k * k * (3.0 - 2.0 * k)));
             }
         }
         if self.grip.is_some() {
@@ -10883,6 +10920,7 @@ impl State {
             splash,
             main_menu: None,
             screen_fade: None,
+            shown_scene: None,
             menu_notes: Default::default(),
             guide: None,
             guide_binding: None,
