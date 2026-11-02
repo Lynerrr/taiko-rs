@@ -99,6 +99,8 @@ pub enum Item {
     Fullscreen,
     WindowSize,
     DiscordPresence,
+    /// After a crash, the next start sends its report in (`Config::send_crash_reports`).
+    CrashReports,
     Skin,
     SkinFolder,
     NoteColours,
@@ -108,7 +110,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 121] = [
+pub const ITEMS: [(&str, Item); 122] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -220,6 +222,7 @@ pub const ITEMS: [(&str, Item); 121] = [
     ("ONLINE", Item::NotifyOnline),
     ("ONLINE", Item::NotifyPlaying),
     ("ONLINE", Item::DiscordPresence),
+    ("ONLINE", Item::CrashReports),
     ("ONLINE", Item::KrokodilKoban),
     ("SYSTEM", Item::Language),
     ("SYSTEM", Item::Splash),
@@ -425,6 +428,7 @@ impl Item {
             Item::Fullscreen => tr!("Fullscreen", "フルスクリーン", "Полный экран"),
             Item::WindowSize => tr!("Window size", "ウィンドウのサイズ", "Размер окна"),
             Item::DiscordPresence => tr!("Discord status", "Discordのステータス", "Статус в Discord"),
+            Item::CrashReports => tr!("Send crash reports", "クラッシュレポートを送る", "Отправлять отчёты о вылетах"),
             Item::Skin => tr!("Skin", "スキン", "Скин"),
             Item::SkinParts => tr!("Skin parts", "スキンのパーツ", "Части скина"),
             Item::SkinPart(i) => crate::skin::Part::ALL.get(i).map_or(tr!("Skin part", "スキンのパーツ", "Часть скина"), |p| p.label()),
@@ -507,7 +511,8 @@ impl Item {
             | Item::MenuNotes
             | Item::CheckUpdates
             | Item::Fullscreen
-            | Item::DiscordPresence => Kind::Toggle,
+            | Item::DiscordPresence
+            | Item::CrashReports => Kind::Toggle,
             Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => Kind::Key,
             Item::PlayfieldArea | Item::PlayfieldReset | Item::ResetMapOffsets | Item::Guide | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout | Item::SkinFolder => Kind::Action,
         }
@@ -873,6 +878,11 @@ impl Item {
                 "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
                 "Enter: サイズを選ぶ (入力も可)。左/右: 次のサイズ。ウィンドウの端のドラッグでも変えられます。",
                 "Enter: выбрать размер (или ввести); влево/вправо: следующий. Можно тянуть края окна."
+            ),
+            Item::CrashReports => tr!(
+                "After a crash, the next start sends its report to the developers: the build, the system, the graphics card and where it crashed. No account or folder names.",
+                "クラッシュしたら、次の起動時にレポートを開発者に送ります: ビルド、システム、グラフィックカード、落ちた場所。アカウント名やフォルダ名は含みません。",
+                "После вылета следующий запуск отправит отчёт разработчикам: сборку, систему, видеокарту и место вылета. Без имени аккаунта и папок."
             ),
             Item::DiscordPresence => tr!(
                 "Show the map you're playing, your lobby or who you spectate in your Discord status.",

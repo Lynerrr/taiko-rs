@@ -25,6 +25,7 @@ mod tls;
 mod avatars;
 mod card;
 mod covers;
+mod crashes;
 mod osustatus;
 mod discord;
 #[path = "../../src/changelog_entry.rs"]
@@ -799,6 +800,10 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
         Request::Score { id } => match state.scores.lock().unwrap().score(id) {
             Some(s) => Reply::Score(Box::new(s)),
             None => Reply::Error("that score isn't on the server".into()),
+        },
+        Request::CrashReport(r) => match crashes::report(ip, *r) {
+            Ok(()) => Reply::Counted,
+            Err(e) => Reply::Error(e),
         },
         Request::Played { token, ms } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
@@ -1800,6 +1805,7 @@ fn main() {
     loved::init(data.clone());
     avatars::init(data.clone());
     mail::init(data.clone());
+    crashes::init(data.clone());
     let (state, wake) = State::load(data.join("accounts.json"));
     let state = Arc::new(state);
     state.sync_medal_counts();

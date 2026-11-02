@@ -1033,6 +1033,122 @@ pub(crate) fn post_text(message: &str) -> (String, String) {
     (title, body)
 }
 
+/// The channel crash reports go to, by name in the server the changelog goes to.
+const CRASH_CHANNEL: &str = "crash-reports";
+
+/// Crashes posted, each (signature, build) once with how many came in.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct CrashPosts {
+    posts: Vec<CrashPost>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct CrashPost {
+    signature: String,
+    build: String,
+    message: String,
+    count: u32,
+    /// The systems it came from (a few).
+    os: Vec<String>,
+}
+
+/// One at a time: two reports of the same crash must not both post it.
+static CRASHES: Mutex<()> = Mutex::new(());
+
+/// A crash report from a game (`crashes::report`) in the crash channel: a new crash as a post
+/// with its report, the same one again (same signature and build) as a count on that post.
+pub fn crash(signature: &str, r: &crate::online::CrashReport) {
+    let Some(bot) = BOT.get() else { return };
+    let _one = CRASHES.lock().unwrap_or_else(|e| e.into_inner());
+    let channel = match crash_channel(bot) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("discord: crash channel: {e}");
+            return;
+        }
+    };
+    let file = bot.dir.join("discord-crashes.json");
+    let mut posts: CrashPosts = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let build: String = r.build.chars().take(7).collect();
+    let known = posts.posts.iter().position(|p| p.signature == signature && p.build == build);
+    let embed = |count: u32, os: &[String]| {
+        // The end of the report says most (the log's last lines); an embed takes 4096.
+        let report = r.report.trim();
+        let cut = report.char_indices().rev().nth(3800).map(|(i, _)| i).unwrap_or(0);
+        let shown = if cut > 0 { format!("…{}", &report[cut..]) } else { report.to_string() };
+        json!({
+            "title": signature.chars().take(250).collect::<String>(),
+            "description": format!("```\n{}\n```", shown.replace("```", "'''")),
+            "color": 0xFF4B4B,
+            "fields": [
+                { "name": "build", "value": build, "inline": true },
+                { "name": "times", "value": count.to_string(), "inline": true },
+                { "name": "systems", "value": os.join(", "), "inline": true },
+            ],
+        })
+    };
+    let result = match known {
+        Some(i) => {
+            let post = &mut posts.posts[i];
+            post.count += 1;
+            if !post.os.contains(&r.os) && post.os.len() < 5 {
+                post.os.push(r.os.clone());
+            }
+            let body = json!({ "embeds": [embed(post.count, &post.os)] });
+            bot.send_json("PATCH", &format!("{API}/channels/{channel}/messages/{}", post.message), &body)
+        }
+        None => {
+            let os = vec![r.os.clone()];
+            bot.post(&format!("{API}/channels/{channel}/messages"), &json!({ "embeds": [embed(1, &os)], "allowed_mentions": { "parse": [] } })).map(|message| {
+                posts.posts.push(CrashPost { signature: signature.to_string(), build: build.clone(), message, count: 1, os });
+                // The newest few hundred: an old build's crashes stop coming.
+                if posts.posts.len() > 300 {
+                    posts.posts.drain(..posts.posts.len() - 300);
+                }
+            })
+        }
+    };
+    match result {
+        Ok(()) => {
+            let tmp = file.with_extension("json.tmp");
+            if let Err(e) = std::fs::write(&tmp, serde_json::to_string(&posts).unwrap_or_default()).and_then(|_| std::fs::rename(&tmp, &file)) {
+                eprintln!("discord: saving the crash posts: {e}");
+            }
+        }
+        Err(e) => eprintln!("discord: crash report: {e}"),
+    }
+}
+
+/// The crash channel's id: DIR/discord-crashes, else the channel named `CRASH_CHANNEL` in the
+/// changelog's server, made there if it isn't (the bot needs Manage Channels for that), and
+/// remembered.
+fn crash_channel(bot: &Bot) -> Result<String, String> {
+    let saved = bot.dir.join("discord-crashes");
+    if let Some(id) = std::fs::read_to_string(&saved).ok().map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+        return Ok(id);
+    }
+    let changelog = std::fs::read_to_string(bot.dir.join("discord-changelog")).map_err(|_| "no discord-changelog to find the server by")?;
+    let place = bot.get(&format!("{API}/channels/{}", changelog.trim()))?;
+    let guild = place["guild_id"].as_str().ok_or("the changelog channel isn't in a server")?.to_string();
+    let channels = bot.get(&format!("{API}/guilds/{guild}/channels"))?;
+    let found = channels
+        .as_array()
+        .and_then(|all| all.iter().find(|c| c["name"].as_str() == Some(CRASH_CHANNEL) && c["type"].as_u64() == Some(0)))
+        .and_then(|c| c["id"].as_str())
+        .map(str::to_string);
+    let id = match found {
+        Some(id) => id,
+        None => {
+            let body = json!({ "name": CRASH_CHANNEL, "type": 0, "topic": "Crashes the game sent in by itself on the start after one (Settings > Online > Send crash reports). The same crash on the same build is one post with a count." });
+            let made = bot.post(&format!("{API}/guilds/{guild}/channels"), &body)?;
+            println!("discord: made #{CRASH_CHANNEL} ({made})");
+            made
+        }
+    };
+    let _ = std::fs::write(&saved, &id);
+    Ok(id)
+}
+
 fn changelog(bot: Arc<Bot>) {
     let Some(channel) = std::fs::read_to_string(bot.dir.join("discord-changelog")).ok().map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) else {
         println!("discord: no changelog channel (discord-changelog)");

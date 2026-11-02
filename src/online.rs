@@ -97,6 +97,47 @@ pub enum Request {
     Played { token: String, ms: u64 },
     /// Every medal, and how `name` stands with them (`Reply::Medals`); no name: just the list.
     Medals { name: String },
+    /// The game crashed last time: its report, sent on the next start (`Reply::Counted`),
+    /// unless the player turned that off (Settings > Online > Send crash reports).
+    CrashReport(Box<CrashReport>),
+}
+
+/// A crash, as the game sends it in: the build and system, and the report (the panic or the
+/// exception, where it happened, and the end of the log), with the player's own folder names
+/// taken out (`scrub_paths`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct CrashReport {
+    pub build: String,
+    pub os: String,
+    pub report: String,
+}
+
+/// Longest crash report the server takes (and the game sends).
+pub const MAX_CRASH_REPORT: usize = 24_000;
+
+/// `text` without the player's user folder in its paths: `C:\Users\Name\...` and
+/// `/home/name/...` become `~\...`, so a crash report says nothing about who sent it.
+pub fn scrub_paths(text: &str) -> String {
+    let mut out = text.to_string();
+    for marker in ["\\Users\\", "/Users/", "/home/"] {
+        let mut cleaned = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(i) = rest.find(marker) {
+            let after = &rest[i + marker.len()..];
+            let end = after.find(['\\', '/', '\n', '"', '\'']).unwrap_or(after.len());
+            // The drive before it goes too ("C:" of "C:\Users\...").
+            let mut head = &rest[..i];
+            if head.len() >= 2 && head.ends_with(':') {
+                head = &head[..head.len() - 2];
+            }
+            cleaned.push_str(head);
+            cleaned.push('~');
+            rest = &after[end..];
+        }
+        cleaned.push_str(rest);
+        out = cleaned;
+    }
+    out
 }
 
 /// What a replay's presses can't say about a play's timing: with it, how far off a play was can
@@ -955,6 +996,8 @@ mod tests {
         assert!(!valid_login("ab") && !valid_login("no.at.sign") && !valid_name("me@mail.ru"));
         assert!(valid_password("hunter2") && !valid_password("short"));
         assert!(weighted_pp(Vec::new()).is_sign_positive(), "a new player has 0 pp, not -0");
+        let scrubbed = scrub_paths("at C:\\Users\\Kowalski\\AppData\\taiko-rs\\x.osu and /home/anna/Songs/a b.osu\nthread main");
+        assert_eq!(scrubbed, "at ~\\AppData\\taiko-rs\\x.osu and ~/Songs/a b.osu\nthread main");
         assert_eq!(clean_title("  ", "Lynerrr", false), "Lynerrr's lobby");
         assert_eq!(clean_title("", "Lynerrr", true), "Lynerrr's mapguessr");
         assert_eq!(clean_title("taiko\u{7}  night", "x", true), "taiko  night");

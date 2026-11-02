@@ -48,6 +48,7 @@ fn words(item: Item) -> &'static str {
         Item::ChatFilter => "swear profanity мат цензура",
         Item::NotifyMessages | Item::NotifyMentions | Item::NotifyRequests | Item::NotifyOnline | Item::NotifyPlaying => "notification ping friends оповещения пинг друзья",
         Item::DiscordPresence => "rich presence статус",
+        Item::CrashReports => "crash report bug telemetry вылет краш отчет баг",
         Item::Update | Item::UpdateChannel | Item::CheckUpdates | Item::Changelog => "version release dev latest версия релиз новое",
         Item::Splash | Item::Guide => "intro startup tutorial заставка запуск обучение",
         Item::LegacyMenu => "old classic tabs main menu старый классика вкладки главное меню",
