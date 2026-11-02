@@ -1200,3 +1200,55 @@ fn letterbox_settings_survive_a_restart() {
     assert!(back.letterbox);
     assert_eq!((back.letterbox_size, back.letterbox_pos), ((1337, 777), (-25.0, 40.0)));
 }
+
+fn dd(s: &State) -> &settings::Dropdown {
+    s.settings_ui.dropdown.as_ref().unwrap()
+}
+
+#[test]
+fn the_preset_list_scrolls_by_wheel_and_scroll_bar_never_by_pointing() {
+    let mut s = layout_tests::state();
+    let frame = |s: &mut State| s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.modifiers_ctrl = true;
+    s.key_inner(KeyCode::KeyO, false, None, Instant::now(), None);
+    s.modifiers_ctrl = false;
+    // Plenty of saved sizes, so the list is longer than its box.
+    s.cfg.saved_presets = (0..40).map(|k| (640 + k * 10, 360 + k * 5)).collect();
+    s.open_dropdown();
+    frame(&mut s);
+    let max = dd(&s).max_scroll();
+    assert!(max > 0.0 && dd(&s).bar().is_some(), "more sizes than fit, so it scrolls: {max}");
+    // Pointing at the rows nearest the bottom edge picks them and the list stays put.
+    let at = dd(&s).scroll();
+    for _ in 0..5 {
+        let &(i, [x, y, w, h]) = dd(&s).rows.last().unwrap();
+        point(&mut s, x + w / 2.0, y + h / 2.0);
+        assert_eq!(dd(&s).cursor, i);
+        frame(&mut s);
+        assert_eq!(dd(&s).scroll(), at, "pointing never scrolls");
+    }
+    let picked = dd(&s).cursor;
+    // The wheel moves the list, not the pick.
+    s.wheel(-1);
+    frame(&mut s);
+    assert_eq!(dd(&s).scroll(), (at + 45.0).min(max));
+    assert_eq!(dd(&s).cursor, picked);
+    s.wheel(100);
+    frame(&mut s);
+    assert_eq!(dd(&s).scroll(), 0.0, "stops at the top");
+    // The scroll bar: pressed at its bottom the list goes to its end, dragged up to its start.
+    let [bx, by, bw, bh] = dd(&s).bar().unwrap();
+    point(&mut s, bx + bw / 2.0, by + bh - 1.0);
+    s.mouse_button(true, None);
+    assert!(s.settings_ui.dropdown.is_some(), "a press on the bar doesn't close the list");
+    assert_eq!(dd(&s).scroll(), max);
+    point(&mut s, bx + bw / 2.0, by - 50.0);
+    assert_eq!(dd(&s).scroll(), 0.0);
+    s.mouse_button(false, None);
+    point(&mut s, bx + bw / 2.0, by + bh - 1.0);
+    assert_eq!(dd(&s).scroll(), 0.0, "let go, it no longer follows");
+    // Keys still bring the pick into sight.
+    s.dropdown_key(KeyCode::End);
+    frame(&mut s);
+    assert_eq!(dd(&s).scroll(), max);
+}

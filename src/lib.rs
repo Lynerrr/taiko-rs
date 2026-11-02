@@ -4506,6 +4506,9 @@ impl State {
     }
 
     fn dropdown_key(&mut self, code: KeyCode) {
+        if let Some(dd) = &mut self.settings_ui.dropdown {
+            dd.show_cursor();
+        }
         let list = self.preset_list();
         let n = list.len();
         let saved = self.cfg.saved_presets.len();
@@ -4562,6 +4565,7 @@ impl State {
         let saved = self.cfg.saved_presets.len();
         let size = self.playfield_size();
         let Some(dd) = &mut self.settings_ui.dropdown else { return };
+        dd.show_cursor();
         let i = dd.cursor;
         match action {
             PresetAction::SaveCurrent => {
@@ -4685,9 +4689,8 @@ impl State {
             self.mod_select = Some(mods::step(cur, 0, -notches));
             return;
         }
-        let n = self.preset_list().len();
         if let Some(dd) = &mut self.settings_ui.dropdown {
-            dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
+            dd.wheel(notches);
             return;
         }
         if matches!(self.scene, Scene::Preview { .. }) {
@@ -4704,9 +4707,8 @@ impl State {
             self.toast(text);
             return;
         }
-        let n = self.preset_list().len();
         if let Some(dd) = &mut self.settings_ui.dropdown {
-            dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
+            dd.wheel(notches);
             return;
         }
         let (vx, vy) = self.mouse_virtual();
@@ -4740,7 +4742,7 @@ impl State {
             Scene::Download => self.browse.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
-                    dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
+                    dd.wheel(notches);
                 }
             }
             Scene::Settings { .. } if self.settings_ui.choices.is_some() => {
@@ -4914,6 +4916,9 @@ impl State {
             }
         }
         if let Some(dd) = &mut self.settings_ui.dropdown {
+            if dd.drag_bar(vy) {
+                return CursorIcon::Default;
+            }
             if dd.button_at(vx, vy).is_some() {
                 return CursorIcon::Pointer;
             }
@@ -4983,10 +4988,14 @@ impl State {
         if !self.area_editable() {
             self.hover = None;
             let (vx, vy) = self.mouse_virtual();
-            if let Some(dd) = &mut self.settings_ui.dropdown
-                && let Some(i) = dd.row_at(vx, vy) {
-                dd.cursor = i;
-                return CursorIcon::Pointer;
+            if let Some(dd) = &mut self.settings_ui.dropdown {
+                if dd.drag_bar(vy) {
+                    return CursorIcon::Default;
+                }
+                if let Some(i) = dd.row_at(vx, vy) {
+                    dd.cursor = i;
+                    return CursorIcon::Pointer;
+                }
             }
             return CursorIcon::Default;
         }
@@ -5033,6 +5042,10 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
+        // Letting go of the preset list's scroll bar is all a release does then.
+        if !pressed && self.settings_ui.dropdown.as_mut().is_some_and(Dropdown::release_bar) {
+            return;
+        }
         if pressed && self.splash.is_none() {
             let (vx, vy) = self.mouse_virtual();
             let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
@@ -5188,6 +5201,10 @@ impl State {
         }
         if pressed && self.settings_ui.dropdown.is_some() {
             let (vx, vy) = self.mouse_virtual();
+            if let Some(dd) = self.settings_ui.dropdown.as_mut().filter(|d| d.editing.is_none() && d.on_bar(vx, vy)) {
+                dd.grab_bar(vy);
+                return;
+            }
             let dd = self.settings_ui.dropdown.as_ref().unwrap();
             if let Some(action) = dd.button_at(vx, vy) {
                 self.preset_action(action);
