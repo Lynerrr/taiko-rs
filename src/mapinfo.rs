@@ -89,7 +89,9 @@ fn save_cache(cache: &Cache) {
 /// Star rating (taiko, converts included), drain length and BPM of one map.
 fn analyze(path: &Path) -> Option<Info> {
     let map = Beatmap::from_path(path).ok()?;
-    map.check_suspicion().ok()?;
+    if !crate::stars::calculable(&map) {
+        return None;
+    }
     let stars = Difficulty::new().calculate_for_mode::<Taiko>(&map).ok()?.stars as f32;
     let first = map.hit_objects.first().map(|h| h.start_time).unwrap_or(0.0);
     let last = map.hit_objects.last().map(|h| h.start_time).unwrap_or(0.0);
