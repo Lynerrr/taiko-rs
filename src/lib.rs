@@ -10304,7 +10304,11 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     loop {
         let (wanted, cap, refresh_hz, surface, size, atlas, letterbox, pixel_scale) = {
             let mut s = lock(&state);
-            if s.quit { break; }
+            if s.quit {
+                // In game.log: the game was closed on purpose, not lost.
+                eprintln!("closing: quit from the game ({})", if s.quit_asked { "answered the exit question" } else { "no question asked" });
+                break;
+            }
             s.poll_skin();
             let surface = s.surface_swap.take();
             let size = s.want_size.take();
@@ -10787,6 +10791,9 @@ impl ApplicationHandler<UserEvent> for App {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("failed to initialise GPU: {e}");
+                // Without a console the window just closed: say why.
+                #[cfg(windows)]
+                crash_box(&format!("taiko.rs couldn't start the graphics card, so it closed.\n\n{e}\n\nUpdating the graphics driver usually fixes this. If it doesn't, send this message in #bugs on the taiko.rs Discord."));
                 event_loop.exit();
                 return;
             }
