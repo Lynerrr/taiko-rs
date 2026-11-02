@@ -1233,26 +1233,32 @@ impl Client {
     pub fn poll(&mut self) -> Vec<ServerMsg> {
         let mut out = Vec::new();
         while let Ok((arrived, msg)) = self.rx.try_recv() {
-            match msg {
-                ServerMsg::Pong { t, server } => {
-                    let now = arrived.duration_since(self.epoch).as_secs_f64() * 1000.0;
-                    let rtt = now - t;
-                    self.rtt_ms = rtt;
-                    // Trust the fastest round trip; let the bar rise slowly so clock drift is tracked.
-                    self.best_rtt += 0.05;
-                    if rtt <= self.best_rtt {
-                        self.best_rtt = rtt;
-                        self.offset = server + rtt / 2.0 - now;
-                    }
-                }
-                ServerMsg::Welcome { id } => {
-                    self.id = Some(id);
-                    out.push(ServerMsg::Welcome { id });
-                }
-                other => out.push(other),
-            }
+            out.extend(self.take_in(arrived, msg));
         }
         out
+    }
+
+    /// One incoming message: what the clock sync keeps for itself never comes out.
+    fn take_in(&mut self, arrived: Instant, msg: ServerMsg) -> Option<ServerMsg> {
+        match msg {
+            ServerMsg::Pong { t, server } => {
+                let now = arrived.duration_since(self.epoch).as_secs_f64() * 1000.0;
+                let rtt = now - t;
+                self.rtt_ms = rtt;
+                // Trust the fastest round trip; let the bar rise slowly so clock drift is tracked.
+                self.best_rtt += 0.05;
+                if rtt <= self.best_rtt {
+                    self.best_rtt = rtt;
+                    self.offset = server + rtt / 2.0 - now;
+                }
+                None
+            }
+            ServerMsg::Welcome { id } => {
+                self.id = Some(id);
+                Some(ServerMsg::Welcome { id })
+            }
+            other => Some(other),
+        }
     }
 
     /// Local instant corresponding to a server timestamp.
@@ -1299,11 +1305,15 @@ mod tests {
         assert_eq!(resolve("[::1]:9001").unwrap().port(), 9001);
     }
 
+    /// The next message like `pred`, skipping the ones before it. What came after it stays
+    /// queued: two messages can arrive together, and the next wait may want the second.
     fn wait_for<F: Fn(&ServerMsg) -> bool>(c: &mut Client, pred: F) -> ServerMsg {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(m) = c.poll().into_iter().find(|m| pred(m)) {
-                return m;
+            while let Ok((arrived, msg)) = c.rx.try_recv() {
+                if let Some(m) = c.take_in(arrived, msg).filter(|m| pred(m)) {
+                    return m;
+                }
             }
             assert!(Instant::now() < until, "timed out waiting for message");
             thread::sleep(Duration::from_millis(10));
