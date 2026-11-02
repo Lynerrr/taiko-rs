@@ -14,6 +14,8 @@ const REPO: &str = "https://github.com/Lynerrr/taiko-rs";
 /// Where the site lives, for the absolute links link previews need.
 const SITE: &str = "https://rstaiko.auneu.space";
 const TAGLINE: &str = "A taiko client for osu! beatmaps, with 73 mods that bend, break and multiply the lane. Rankings, profiles, chat and downloads.";
+/// The community's Discord server.
+const DISCORD: &str = "https://discord.gg/jCPv8k6HT";
 const RAW: &str = "https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client";
 
 /// A clip of taiko.rs's own mods: what it shows, the mods on, its file under /clips/, and the
@@ -821,6 +823,8 @@ pub fn home(rankings: &[Ranked], maps: &[MapRow], players: usize, plays: usize, 
     let clips: String = CLIPS[..3].iter().map(clip_card).collect();
     format!(
         "{}<div class=page>\
+         <section class=\"panel discord-band\"><div><h2>JOIN THE DISCORD</h2><p class=dim>Find people to play with, share maps and scores, report bugs and see what's coming next.</p></div>\
+           <a class=\"btn discord\" href=\"{DISCORD}\" target=_blank rel=noopener>Join the Discord</a></section>\
          <div class=hub>\
            <section class=panel><div class=panel-head><h2>ONLINE <span class=count>{}</span></h2></div>{}</section>\
            <section class=panel><div class=panel-head><h2>ROOMS <span class=count>{}</span></h2></div>{}</section>\
@@ -1486,6 +1490,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
             let on = if *name == nav { " class=on aria-current=page" } else { "" };
             format!("<a href=\"{href}\"{on}>{name}</a>")
         })
+        .chain(std::iter::once(format!("<a href=\"{DISCORD}\" target=_blank rel=noopener>discord</a>")))
         .collect();
     format!(
         r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{} · taiko.rs</title>
@@ -1493,7 +1498,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
 <link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style><script src="/site/copy.js" defer></script></head>
 <body><nav><div class=inner><a class=logo href="/" aria-label="taiko.rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO.RS</a><div class=links>{links}</div>
 <form action="/u" role=search><input name=name placeholder="find a player" maxlength=16 aria-label="Find a player"></form><div class=account>{account}</div></div></nav>
-<main>{}</main><footer><div class=inner><span class=brand>TAIKO.RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
+<main>{}</main><footer><div class=inner><span class=brand>TAIKO.RS</span><a href="{REPO}">github</a><a href="{DISCORD}" target=_blank rel=noopener>discord</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
         esc(title),
         body
     )
@@ -1544,6 +1549,8 @@ background:linear-gradient(0deg,var(--bg),transparent 30%),linear-gradient(rgba(
 .modname{height:24px;overflow:hidden;margin-top:10px;color:var(--gold);text-transform:uppercase}.ticker{animation:ticker 28s linear infinite}.ticker span{display:block;height:24px;white-space:nowrap}
 @keyframes ticker{0%,13.6%{transform:translateY(0)}14.3%,27.9%{transform:translateY(-24px)}28.6%,42.1%{transform:translateY(-48px)}42.9%,56.4%{transform:translateY(-72px)}57.1%,70.7%{transform:translateY(-96px)}71.4%,85%{transform:translateY(-120px)}85.7%,99.3%{transform:translateY(-144px)}100%{transform:translateY(-168px)}}
 .intro{position:absolute;left:24px;top:84px;max-width:640px;z-index:3}
+.discord-band{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-bottom:24px;border-color:#5865F2}.discord-band p{margin-top:6px}
+.btn.discord{flex:none;font-size:20px;background:#5865F2;border-color:#5865F2;box-shadow:4px 4px 0 #2c3280}.btn.discord:hover{background:#6d78f5;border-color:#6d78f5}
 .intro h1{font-size:96px;line-height:96px;letter-spacing:4px}.intro p{font-size:24px;line-height:32px;color:var(--text);margin-top:16px}
 .field{position:absolute;left:0;right:0;top:330px;height:140px;animation:mods 28s linear infinite;transform-origin:30% 50%}
 .lane{position:absolute;left:0;right:0;top:0;height:140px;transform-origin:30% 50%}
