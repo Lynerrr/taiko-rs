@@ -51,7 +51,7 @@ const SONG_NOTE_R: f32 = SONG_BIG_R * crate::game::NOTE_R / crate::game::BIG_R;
 const SONG_ALPHA: f32 = 0.3;
 /// How far apart 1/4 notes are, in small notes' widths: the scroll speed follows the song's
 /// BPM so a stream reads as one (a crossing takes `CROSS_MS` without a beat to go by).
-const QUARTER_GAP: f32 = 2.4;
+const QUARTER_GAP: f32 = 1.8;
 const CROSS_MS: f64 = 1700.0;
 /// How long a hit lights the target (ms).
 const SONG_HIT_MS: f32 = 140.0;
@@ -419,7 +419,16 @@ impl Menu {
 
     pub fn step(&mut self, by: i32) {
         self.selected += by;
-        self.rim = (self.clock, by);
+    }
+
+    /// The player hit the drum: a rim (left -1, right 1) for kat, the face for don. The drum
+    /// lights only for that and for the song's own notes.
+    pub fn drum(&mut self, kat: bool, side: i32) {
+        if kat {
+            self.rim = (self.clock, side);
+        } else {
+            self.face = self.clock;
+        }
     }
 
     /// Brings note `i` to the circle the short way round.
@@ -437,7 +446,6 @@ impl Menu {
     /// A don on the selected note. The editor isn't there yet: it just shakes it off.
     pub fn hit(&mut self) -> Item {
         let item = self.current();
-        self.face = self.clock;
         self.burst = Some((self.clock, item));
         if item == Item::Editor {
             self.shake = self.clock;
@@ -537,11 +545,6 @@ impl Menu {
             // Every two bars the universes change places, like Multiverse's focus.
             if no.rem_euclid(8) == 0 {
                 self.universe += 1;
-            }
-            if no % 2 == 0 {
-                self.rim = (self.clock, if no % 4 == 0 { -1 } else { 1 });
-            } else {
-                self.face = self.clock;
             }
             self.throw_sparks(SPARKS_A_BEAT);
         }
@@ -729,7 +732,16 @@ impl Menu {
             let hop = self.kick() * if i as i64 % 2 == self.beat_no.rem_euclid(2) { 12.0 } else { 5.0 };
             // The selected one grows as the selector gets to it, and shrinks back as it goes.
             let near = (1.0 - (self.shown - i as f32).abs()).clamp(0.0, 1.0);
-            draw_note(c, &self.arts[i], x + dx, NOTE_Y - hop, r * (1.0 + GROW * near), 1.0);
+            let grown = r * (1.0 + GROW * near);
+            // It stands out: a glow of its colour behind it, the others dimmed.
+            if near > 0.01 {
+                c.glow(x + dx, NOTE_Y - hop, grown * 1.45, grown * 0.6, rgba(tint(item.colour(), 0xffffff, 0.2), 0.45 * near));
+            }
+            let start = c.shapes.len();
+            draw_note(c, &self.arts[i], x + dx, NOTE_Y - hop, grown, 1.0);
+            if near < 0.99 {
+                c.fade_since(start, 1.0, 0.55 + 0.45 * near);
+            }
             let hovered = c.hovered(left + i as f32 * slot, LANE_TOP, slot, LANE_H);
             let on = self.is_selected(i);
             let w = Canvas::text_width(size, names[i]);
@@ -958,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn a_kiai_opens_with_sparks_and_each_beat_plays_the_drum() {
+    fn a_kiai_opens_with_sparks_and_each_beat_throws_more_but_leaves_the_drum_alone() {
         let mut m = Menu::new();
         m.clock = 1000.0;
         m.feel_kiai(false, Some((0.0, 500.0)), 16.0);
@@ -966,14 +978,20 @@ mod tests {
         m.feel_kiai(true, Some((1010.0, 500.0)), 16.0);
         assert_eq!(m.kiai_at, 1000.0);
         assert_eq!(m.sparks.len(), SPARKS_OPENING + SPARKS_A_BEAT);
-        assert_eq!(m.rim, (1000.0, 1), "beat 2: the right rim");
         m.clock = 1100.0;
         m.feel_kiai(true, Some((1100.0, 500.0)), 16.0);
         assert_eq!(m.beat_at, 1000.0, "the same beat");
         m.clock = 1500.0;
         m.feel_kiai(true, Some((1500.0, 500.0)), 16.0);
         assert_eq!(m.beat_at, 1500.0);
-        assert_eq!(m.face, 1500.0, "beat 3: the face");
+        // The drum plays only the song's notes and the player's hits.
+        assert_eq!((m.rim.0, m.face), (f32::MIN, f32::MIN));
+        m.step(1);
+        assert_eq!(m.rim.0, f32::MIN, "choosing isn't a hit");
+        m.drum(true, -1);
+        assert_eq!(m.rim, (1500.0, -1));
+        m.drum(false, 0);
+        assert_eq!(m.face, 1500.0);
     }
 
     #[test]

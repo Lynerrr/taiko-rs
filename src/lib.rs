@@ -2176,7 +2176,12 @@ impl State {
             return;
         }
         // Rim keys on the outside, like on the drum.
-        match (code, self.cfg.keys.iter().position(|&k| k == code)) {
+        let drum = self.cfg.keys.iter().position(|&k| k == code);
+        // The player's own drum keys play the drum: the rims outside, the face inside.
+        if let (Some(k), Some(m)) = (drum, self.main_menu.as_mut()) {
+            m.drum(k == 0 || k == 3, if k < 2 { -1 } else { 1 });
+        }
+        match (code, drum) {
             (KeyCode::Escape, _) => self.ask_quit(),
             (KeyCode::ArrowLeft, _) | (_, Some(0)) => self.menu_step(-1),
             (KeyCode::ArrowRight, _) | (_, Some(3)) => self.menu_step(1),
