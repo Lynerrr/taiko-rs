@@ -41,6 +41,14 @@ const DRUM_W: f32 = 112.0;
 /// Where the notes' middles are, and their biggest radius (narrow screens take less).
 const NOTE_Y: f32 = LANE_MID - 10.0;
 const NOTE_MAX_R: f32 = 29.0;
+/// How much bigger the selected note is (it grows as the selector arrives).
+const GROW: f32 = 0.3;
+/// The song's own notes on the panel, behind the menu's: where they're hit (just past the drum),
+/// how long one takes to cross, their size and how faint they are.
+const HIT_X: f32 = PANEL_X + DRUM_W + 16.0;
+const CROSS_MS: f64 = 1700.0;
+const SONG_NOTE_R: f32 = 9.0;
+const SONG_NOTE_ALPHA: f32 = 0.5;
 const TITLE_Y: f32 = LANE_TOP + LANE_H + TITLE_GAP;
 /// Kiai: how long a beat's kick and the opening's flash last, and a spark's life (ms).
 const BEAT_MS: f32 = 300.0;
@@ -348,6 +356,10 @@ pub struct Menu {
     appear: f32,
     /// The selected note's middle as last drawn: sparks and bursts come from there.
     spot: [f32; 2],
+    /// The song's position (map ms) last frame: the notes it passed since are hit on the drum.
+    song_at: Option<f64>,
+    /// Which rim the next kat of the song lands on.
+    song_rim: i32,
     /// ms since the menu opened: every animation below is timed on it.
     clock: f32,
     /// When the rim last flashed, and which side.
@@ -382,7 +394,7 @@ struct Spark {
 
 impl Menu {
     pub fn new() -> Menu {
-        Menu { selected: 0, shown: 0.0, appear: 0.0, spot: [0.0, NOTE_Y], clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
+        Menu { selected: 0, shown: 0.0, appear: 0.0, spot: [0.0, NOTE_Y], song_at: None, song_rim: 1, clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
     }
 
     fn index(&self) -> usize {
@@ -479,6 +491,8 @@ impl Menu {
         crate::settings::brand(c);
         self.draw_flashes(c);
         let _ = bar;
+        self.draw_panel(c);
+        self.play_song(c, f.ghosts.as_ref());
         self.draw_lane(c, pulse);
         self.draw_drum(c);
         self.draw_burst(c);
@@ -612,11 +626,54 @@ impl Menu {
     /// The notes in their places on a dark panel, each with its name under it, and the selector:
     /// corner brackets that slide to the selected one. Choosing moves only the selector; in a
     /// kiai the notes hop on the beat.
-    fn draw_lane(&mut self, c: &mut Canvas, pulse: f32) {
+    fn draw_panel(&self, c: &mut Canvas) {
         c.round_rect([PANEL_X, LANE_TOP], [c.width - 2.0 * PANEL_X, LANE_H], 10.0, rgba(0x15151d, 0.95), rgba(0x3a3a4e, 1.0), 1.5);
+    }
+
+    /// The song playing, as autoplay would play it: its notes cross the panel behind the menu's
+    /// to the drum, which hits each as it gets there (face for don, a rim for kat).
+    fn play_song(&mut self, c: &mut Canvas, song: Option<&crate::menu_notes::View>) {
+        let Some(song) = song else {
+            self.song_at = None;
+            return;
+        };
+        let now = song.time();
+        // Hit what got here since last frame (not after a jump: a seek or another song).
+        if let Some(before) = self.song_at.filter(|&t| t <= now && now - t < 250.0) {
+            for note in song.between(before, now) {
+                if note.kat {
+                    self.rim = (self.clock, self.song_rim);
+                    self.song_rim = -self.song_rim;
+                } else {
+                    self.face = self.clock;
+                }
+            }
+        }
+        self.song_at = Some(now);
+        let px = pixel_size(LANE_PIXEL);
+        let start = c.shapes.len();
+        let fade = song.fade() * (1.0 + self.kiai * 0.5);
+        // Where they're hit.
+        pixel_ring(c, [HIT_X, NOTE_Y], SONG_NOTE_R + 4.0, px, 0, px, rgba(0xffffff, 0.22 * fade.min(1.0)));
+        let speed = (c.width - PANEL_X - HIT_X) as f64 / CROSS_MS;
+        // Furthest first, so the nearer ones lie on top.
+        for note in song.between(now, now + CROSS_MS).iter().rev() {
+            let x = HIT_X + ((note.time - now) * speed) as f32;
+            let r = SONG_NOTE_R * if note.big { 1.4 } else { 1.0 };
+            let col = if note.kat { KAT } else { DON };
+            let a = (SONG_NOTE_ALPHA * fade).min(0.8);
+            pixel_ring(c, [x, NOTE_Y], r + px, r + px, 0, px, rgba(0xffffff, a));
+            pixel_ring(c, [x, NOTE_Y], r - px, r - px, 0, px, rgba(col, a));
+        }
+        // Inside the panel, past the drum.
+        c.clip_since(start, PANEL_X + DRUM_W + 2.0, LANE_TOP, c.width - 2.0 * PANEL_X - DRUM_W - 2.0, LANE_H);
+    }
+
+    fn draw_lane(&mut self, c: &mut Canvas, pulse: f32) {
         let (left, slot) = Self::slots(c.width);
         let r = NOTE_MAX_R.min(slot * 0.36);
-        let label_y = NOTE_Y + r + 10.0;
+        // Names stay where they are whichever note is grown.
+        let label_y = NOTE_Y + r * (1.0 + GROW) + 6.0;
         let names = ITEMS.map(Item::name);
         // One size for every name, the largest the narrowest slot takes.
         let size = names.iter().map(|n| Canvas::fit_size(7.0, 5.0, slot - 10.0, n)).fold(7.0f32, f32::min);
@@ -633,7 +690,9 @@ impl Menu {
             let dx = if shaking { (self.clock / 18.0).sin() * 5.0 * (1.0 - (self.clock - self.shake) / SHAKE_MS) } else { 0.0 };
             // In a kiai they hop on the beat, every other one higher.
             let hop = self.kick() * if i as i64 % 2 == self.beat_no.rem_euclid(2) { 12.0 } else { 5.0 };
-            draw_note(c, &self.arts[i], x + dx, NOTE_Y - hop, r, 1.0);
+            // The selected one grows as the selector gets to it, and shrinks back as it goes.
+            let near = (1.0 - (self.shown - i as f32).abs()).clamp(0.0, 1.0);
+            draw_note(c, &self.arts[i], x + dx, NOTE_Y - hop, r * (1.0 + GROW * near), 1.0);
             let hovered = c.hovered(left + i as f32 * slot, LANE_TOP, slot, LANE_H);
             let on = self.is_selected(i);
             let w = Canvas::text_width(size, names[i]);
@@ -648,7 +707,7 @@ impl Menu {
             };
             c.text_centered(x, label_y, size, rgba(col, 1.0), names[i]);
             if hovered && !on {
-                self.brackets(c, x, r, label_y + size, w, 0.35);
+                self.brackets(c, x, r * (1.0 + GROW), label_y + size, w, 0.35);
             }
             c.hit(left + i as f32 * slot, LANE_TOP, slot, LANE_H, Hit::MenuItem(i));
             if *item == Item::Editor && hovered {
@@ -659,7 +718,7 @@ impl Menu {
         let x = left + (self.shown + 0.5) * slot;
         self.spot = [left + (self.index() as f32 + 0.5) * slot, NOTE_Y];
         let w = Canvas::text_width(size, names[self.index()]);
-        self.brackets(c, x, r, label_y + size, w, 0.75 + 0.25 * pulse);
+        self.brackets(c, x, r * (1.0 + GROW), label_y + size, w, 0.75 + 0.25 * pulse);
         if let Some(x) = hint {
             tooltip(c, x, LANE_TOP - 26.0);
         }
@@ -942,6 +1001,40 @@ mod tests {
         m.step(4);
         assert_eq!(m.index(), 0);
         assert_eq!(note_spots(&frame(&mut m, 16.0)), first);
+    }
+
+    #[test]
+    fn the_drum_plays_the_songs_notes_as_they_reach_it() {
+        use crate::menu_notes::{Ghost, View};
+        let notes = [Ghost { time: 1000.0, kat: false, big: false }, Ghost { time: 1100.0, kat: true, big: false }, Ghost { time: 1200.0, kat: true, big: false }];
+        let mut m = Menu::new();
+        let at = |m: &mut Menu, time: f64| {
+            m.clock += 50.0;
+            let mut c = Canvas { width: 853.3, ..Default::default() };
+            m.play_song(&mut c, Some(&View::of(&notes, time)));
+            c
+        };
+        let c = at(&mut m, 900.0);
+        assert!(c.shapes.len() > 3, "the notes coming are drawn");
+        assert_eq!((m.face, m.rim.0), (f32::MIN, f32::MIN), "nothing has got there yet");
+        at(&mut m, 1050.0);
+        assert_eq!(m.face, m.clock, "the don: the face");
+        assert_eq!(m.rim.0, f32::MIN);
+        at(&mut m, 1150.0);
+        let first = m.rim;
+        assert_eq!(first.0, m.clock, "the kat: a rim");
+        at(&mut m, 1250.0);
+        assert_eq!(m.rim.0, m.clock);
+        assert_eq!(m.rim.1, -first.1, "the next kat, the other rim");
+        // A jump back (a seek, or the next song) hits nothing on the way.
+        let rim = m.rim;
+        at(&mut m, 0.0);
+        at(&mut m, 1150.0);
+        assert_eq!(m.rim, rim);
+        // Without the notes (turned off), it rests.
+        let mut c = Canvas { width: 853.3, ..Default::default() };
+        m.play_song(&mut c, None);
+        assert!(c.shapes.is_empty() && m.song_at.is_none());
     }
 
     #[test]
