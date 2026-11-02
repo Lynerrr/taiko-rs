@@ -42,11 +42,16 @@ const DRUM_W: f32 = 112.0;
 const NOTE_Y: f32 = LANE_MID - 10.0;
 const NOTE_MAX_R: f32 = 29.0;
 /// How much bigger the selected note is (it grows as the selector arrives).
-const GROW: f32 = 0.3;
-/// The song's own notes cross the panel like a play's: a big one as big as the drum, a small one
-/// in proportion (as in a song), hit in a target just past the drum, a crossing taking this long.
+const GROW: f32 = 0.4;
+/// The song's own notes cross the panel like a play's, behind the menu's: a big one as big as the
+/// drum, a small one in proportion (as in a song), hit in a target just past the drum. They stay in
+/// the background: this faint.
 const SONG_BIG_R: f32 = 44.0;
 const SONG_NOTE_R: f32 = SONG_BIG_R * crate::game::NOTE_R / crate::game::BIG_R;
+const SONG_ALPHA: f32 = 0.3;
+/// How far apart 1/4 notes are, in small notes' widths: the scroll speed follows the song's
+/// BPM so a stream reads as one (a crossing takes `CROSS_MS` without a beat to go by).
+const QUARTER_GAP: f32 = 2.4;
 const CROSS_MS: f64 = 1700.0;
 /// How long a hit lights the target (ms).
 const SONG_HIT_MS: f32 = 140.0;
@@ -495,7 +500,7 @@ impl Menu {
         self.draw_flashes(c);
         let _ = bar;
         self.draw_panel(c);
-        self.play_song(c, f.ghosts.as_ref());
+        self.play_song(c, f.ghosts.as_ref(), f.beat.map(|b| b.1));
         self.draw_lane(c, pulse);
         self.draw_drum(c);
         self.draw_burst(c);
@@ -627,11 +632,9 @@ impl Menu {
         (PANEL_X + DRUM_W + 4.0 + big, big)
     }
 
-    /// Where the notes' slots start (past the song's hit target) and how wide each is, on a
-    /// screen `width` wide.
+    /// Where the notes' slots start and how wide each is, on a screen `width` wide.
     fn slots(width: f32) -> (f32, f32) {
-        let (hit_x, big) = Self::song_lane(width);
-        let left = hit_x + big + 4.0;
+        let left = PANEL_X + DRUM_W + 4.0;
         (left, (width - PANEL_X - 4.0 - left) / ITEMS.len() as f32)
     }
 
@@ -644,7 +647,8 @@ impl Menu {
 
     /// The song playing, as autoplay would play it: its notes cross the panel behind the menu's
     /// to the drum, which hits each as it gets there (face for don, a rim for kat).
-    fn play_song(&mut self, c: &mut Canvas, song: Option<&crate::menu_notes::View>) {
+    /// `beat`: the song's beat length (ms), for its scroll speed.
+    fn play_song(&mut self, c: &mut Canvas, song: Option<&crate::menu_notes::View>, beat: Option<f64>) {
         let Some(song) = song else {
             self.song_at = None;
             return;
@@ -666,7 +670,7 @@ impl Menu {
         let (hit_x, big_r) = Self::song_lane(c.width);
         let small_r = big_r * SONG_NOTE_R / SONG_BIG_R;
         let start = c.shapes.len();
-        let fade = song.fade();
+        let fade = song.fade() * SONG_ALPHA;
         let colours = crate::multiverse::note_colours();
         let (don, kat) = (colours.don(), colours.kat());
         // The target, as in a song: the skin's, or rings.
@@ -682,10 +686,15 @@ impl Menu {
             let col = if self.song_hit.1 { kat } else { don };
             c.circle(hit_x, LANE_MID, small_r + 6.0 * (1.0 - lit), rgba(col, 0.35 * lit * fade), rgba(0xffffff, 0.6 * lit * fade), 2.0);
         }
-        let speed = (c.width - PANEL_X - hit_x + big_r) as f64 / CROSS_MS;
+        let room = (c.width - PANEL_X - hit_x + big_r) as f64;
+        let speed = match beat.filter(|&b| b > 1.0) {
+            Some(b) => (2.0 * small_r * QUARTER_GAP) as f64 / (b / 4.0),
+            None => room / CROSS_MS,
+        }
+        .clamp(0.2, 3.0);
         // Furthest first, so the nearer ones lie on top; each drawn as in a song (the skin's, or
         // the built-in ones), in the player's colours.
-        for note in song.between(now, now + CROSS_MS).iter().rev() {
+        for note in song.between(now, now + room / speed).iter().rev() {
             let x = hit_x + ((note.time - now) * speed) as f32;
             let r = if note.big { big_r } else { small_r };
             let col = if note.kat { kat } else { don };
@@ -1039,7 +1048,7 @@ mod tests {
         let at = |m: &mut Menu, time: f64| {
             m.clock += 50.0;
             let mut c = Canvas { width: 853.3, ..Default::default() };
-            m.play_song(&mut c, Some(&View::of(&notes, time)));
+            m.play_song(&mut c, Some(&View::of(&notes, time)), None);
             c
         };
         let c = at(&mut m, 900.0);
@@ -1061,7 +1070,7 @@ mod tests {
         assert_eq!(m.rim, rim);
         // Without the notes (turned off), it rests.
         let mut c = Canvas { width: 853.3, ..Default::default() };
-        m.play_song(&mut c, None);
+        m.play_song(&mut c, None, None);
         assert!(c.shapes.is_empty() && m.song_at.is_none());
     }
 

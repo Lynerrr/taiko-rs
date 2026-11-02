@@ -4851,13 +4851,21 @@ impl State {
     /// Pointer moved: drags the area if a drag is active, otherwise updates the hover state.
     /// Returns the cursor to show.
     fn mouse_moved(&mut self, x: f64, y: f64) -> CursorIcon {
-        if (x, y) != self.mouse {
+        let moved = (x, y) != self.mouse;
+        if moved {
             self.mouse_moved_at = Instant::now();
         }
         self.mouse = (x, y);
         let (vx, vy) = self.mouse_virtual();
         let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
         self.volume.point(vx, vy, width, Instant::now());
+        // On the main menu, pointing at a note selects it (moving: a pointer left resting doesn't
+        // take the selection back from the keys).
+        if moved && self.on_menu() && self.player.is_none()
+            && let Some(render::Hit::MenuItem(i)) = self.hit_at(vx, vy)
+            && let Some(m) = self.main_menu.as_mut().filter(|m| !m.is_leaving() && !m.is_selected(i)) {
+            m.pick(i);
+        }
         if let Some(last) = self.replay_scrub {
             // Each seek re-judges the replay up to there; ~30 a second is plenty.
             if last.elapsed() >= Duration::from_millis(33) && self.replay_seek_to_pointer(true) {
