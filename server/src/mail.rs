@@ -43,8 +43,10 @@ static MAIL: OnceLock<Mail> = OnceLock::new();
 pub fn init(dir: PathBuf) {
     let from = std::fs::read_to_string(dir.join("mail-from")).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "noreply@auneu.space".into());
     let mail = Mail { dir, from, outbox: Mutex::default(), codes: Mutex::default(), sent: Mutex::default() };
-    println!("mail {}", if key().is_some() { format!("on, from {}", mail.from) } else { "off (no mail-key)".into() });
+    let from = mail.from.clone();
     let _ = MAIL.set(mail);
+    // After the set: key() reads the folder from MAIL.
+    println!("mail {}", if key().is_some() { format!("on, from {from}") } else { "off (no mail-key)".into() });
 }
 
 fn key() -> Option<String> {
