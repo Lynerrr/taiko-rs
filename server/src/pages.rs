@@ -1356,7 +1356,7 @@ fn medal_panel(p: &Profile) -> String {
     let rarest: String = m
         .rarest
         .iter()
-        .map(|n| format!("<span class=rare title=\"{}\">{}</span>", esc(&n.name[0]), badge(&n.art, n.tier, n.secret, true, 56)))
+        .map(|n| format!("<span class=rare title=\"{}\">{}</span>", esc(&n.name[0]), badge(&n.art, n.tier, n.secret, true, 48)))
         .collect();
     let rarest = if rarest.is_empty() { "<p class=dim>No medals yet.</p>".to_string() } else { format!("<div class=medalrow>{rarest}</div>") };
     format!(

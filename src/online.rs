@@ -454,7 +454,7 @@ pub struct MedalRow {
 /// `Reply::Medals`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct MedalsView {
-    /// Players with a play on the server.
+    /// Players with a medal, what rarity is out of: some have one without having played.
     pub players: u32,
     /// The player's medals; 0 without a player.
     pub earned: u32,
