@@ -308,9 +308,11 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
     // One row: a text field (label left, value right) or an action (centred).
     let row = |c: &mut Canvas, i: usize, x: f32, y: f32, h: f32, label: &str, value: Option<(&str, bool)>| {
         let sel = i == cursor;
-        let (bg, border) = if sel { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
-        let bg = if !sel && c.hovered(x, y, col, h) { 0x262634 } else { bg };
-        c.round_rect([x, y], [col, h], 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
+        let bg = if sel { 0x34344a } else if c.hovered(x, y, col, h) { 0x262634 } else { 0x1d1d27 };
+        c.round_rect([x, y], [col, h], 7.0, rgba(bg, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+        if sel {
+            crate::style::selector(c, "multiplayer", [x - 3.0, y - 3.0, col + 6.0, h + 6.0]);
+        }
         c.hit(x, y, col, h, Hit::MpRow(i));
         match value {
             Some((v, placeholder)) => {
@@ -425,9 +427,11 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                 }
                 let Some(r) = menu.rooms.get(k) else { continue };
                 let sel = i == cursor;
-                let (bg, border) = if sel { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
-                let bg = if !sel && c.hovered(left, y, col, 32.0) { 0x262634 } else { bg };
-                c.round_rect([left, y], [col, 32.0], 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
+                let bg = if sel { 0x34344a } else if c.hovered(left, y, col, 32.0) { 0x262634 } else { 0x1d1d27 };
+                c.round_rect([left, y], [col, 32.0], 7.0, rgba(bg, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+                if sel {
+                    crate::style::selector(c, "multiplayer", [left - 3.0, y - 3.0, col + 6.0, 38.0]);
+                }
                 c.hit(left, y, col, 32.0, Hit::MpRow(i));
                 let state = if r.in_match { "in a match" } else { "in the lobby" };
                 c.text(left + 12.0, y + 6.0, 9.0, rgba(0xffffff, 1.0), &Canvas::fit(9.0, col - 32.0 - Canvas::text_width(8.0, state), &r.title));
@@ -499,9 +503,11 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
 
 /// An action row narrower than a column (two side by side), 24 tall.
 fn half_row(c: &mut Canvas, sel: bool, i: usize, x: f32, y: f32, w: f32, label: &str) {
-    let (bg, border) = if sel { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
-    let bg = if !sel && c.hovered(x, y, w, 24.0) { 0x262634 } else { bg };
-    c.round_rect([x, y], [w, 24.0], 7.0, rgba(bg, 1.0), rgba(border, 1.0), if sel { 2.0 } else { 1.0 });
+    let bg = if sel { 0x34344a } else if c.hovered(x, y, w, 24.0) { 0x262634 } else { 0x1d1d27 };
+    c.round_rect([x, y], [w, 24.0], 7.0, rgba(bg, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+    if sel {
+        crate::style::selector(c, "multiplayer", [x - 3.0, y - 3.0, w + 6.0, 30.0]);
+    }
     c.hit(x, y, w, 24.0, Hit::MpRow(i));
     let size = Canvas::fit_size(11.0, 7.0, w - 12.0, label);
     c.text_centered(x + w / 2.0, y + 12.0 - size / 2.0, size, rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0), label);

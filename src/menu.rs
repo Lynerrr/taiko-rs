@@ -504,8 +504,6 @@ impl Menu {
         let phase = (into / beat).rem_euclid(1.0) as f32;
         let playing = f.beat.is_some_and(|b| b.1 > 1.0) && !f.paused && render::animations();
         self.pulse = if playing { (1.0 - phase).powi(3) } else { 0.0 };
-        let bar = (into / (beat * 4.0)).rem_euclid(1.0) as f32;
-        let pulse = if render::animations() { (1.0 - phase).powi(3) } else { 0.0 };
         self.feel_kiai(f.kiai && render::animations(), f.beat.filter(|b| b.1 > 1.0), c.dt_ms);
 
         if let Some(ghosts) = &f.ghosts {
@@ -513,10 +511,9 @@ impl Menu {
         }
         crate::settings::brand(c);
         self.draw_flashes(c);
-        let _ = bar;
         self.draw_panel(c);
         self.play_song(c, f.ghosts.as_ref(), f.beat.map(|b| b.1));
-        self.draw_lane(c, pulse);
+        self.draw_lane(c);
         self.draw_drum(c);
         self.draw_burst(c);
         self.draw_kiai(c);
@@ -652,7 +649,7 @@ impl Menu {
     /// corner brackets that slide to the selected one. Choosing moves only the selector; in a
     /// kiai the notes hop on the beat.
     fn draw_panel(&self, c: &mut Canvas) {
-        c.round_rect([PANEL_X, LANE_TOP], [c.width - 2.0 * PANEL_X, LANE_H], 10.0, rgba(0x15151d, 0.95), rgba(0x3a3a4e, 1.0), 1.5);
+        crate::style::panel(c, PANEL_X, LANE_TOP, c.width - 2.0 * PANEL_X, LANE_H);
     }
 
     /// The song playing, as autoplay would play it: its notes cross the panel behind the menu's
@@ -711,7 +708,7 @@ impl Menu {
         c.clip_since(start, PANEL_X + DRUM_W + 2.0, LANE_TOP, c.width - 2.0 * PANEL_X - DRUM_W - 2.0, LANE_H);
     }
 
-    fn draw_lane(&mut self, c: &mut Canvas, pulse: f32) {
+    fn draw_lane(&mut self, c: &mut Canvas) {
         let (left, slot) = Self::slots(c.width);
         let r = NOTE_MAX_R.min(slot * 0.36);
         // Names stay where they are whichever note is grown.
@@ -771,7 +768,7 @@ impl Menu {
         let x = left + (self.shown + 0.5) * slot;
         self.spot = [left + (self.index() as f32 + 0.5) * slot, NOTE_Y];
         let w = Canvas::text_width(size, names[self.index()]);
-        self.brackets(c, x, r * (1.0 + GROW), label_y + size, w, 0.75 + 0.25 * pulse);
+        self.brackets(c, x, r * (1.0 + GROW), label_y + size, w, 1.0);
         if let Some(x) = hint {
             tooltip(c, x, LANE_TOP - 26.0);
         }
@@ -779,20 +776,9 @@ impl Menu {
 
     /// Corner brackets around a note (`r`) and its name (`w` wide, ending at `bottom`).
     fn brackets(&self, c: &mut Canvas, x: f32, r: f32, bottom: f32, w: f32, alpha: f32) {
-        let px = pixel_size(LANE_PIXEL);
         let half = (r + 10.0).max(w / 2.0 + 10.0);
-        let (l, rt) = (snap_to_grid(x - half), snap_to_grid(x + half));
-        let (top, bot) = (snap_to_grid(NOTE_Y - r - 8.0), snap_to_grid(bottom + 8.0));
-        let (arm, t) = (10.0, px);
-        let col = rgba(if self.kiai > 0.5 { GOLD } else { render::accent() }, alpha);
-        for (cx, sx) in [(l, 1.0), (rt, -1.0)] {
-            for (cy, sy) in [(top, 1.0), (bot, -1.0)] {
-                let hx = if sx > 0.0 { cx } else { cx - arm };
-                let vy = if sy > 0.0 { cy } else { cy - arm };
-                c.rect(hx, if sy > 0.0 { cy } else { cy - t }, arm, t, col);
-                c.rect(if sx > 0.0 { cx } else { cx - t }, vy, t, arm, col);
-            }
-        }
+        let top = NOTE_Y - r - 8.0;
+        crate::style::brackets(c, [x - half, top, 2.0 * half, bottom + 8.0 - top], alpha);
     }
 
     /// The head of the panel: the rim lights up on kat, the face on don.

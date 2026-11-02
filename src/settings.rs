@@ -1551,9 +1551,14 @@ impl SettingsUi {
             let y = TOP + i as f32 * 40.0;
             let on = i == section && !searching;
             let hover = !on && c.hovered(x0, y, side_w, 34.0);
-            let bg = if on { 0x2b1a17 } else if hover { 0x262634 } else { 0x1d1d27 };
+            let bg = if hover { 0x262634 } else { crate::style::PANEL };
             let dim = searching && found == 0;
-            c.round_rect([x0, y], [side_w, 34.0], 7.0, rgba(bg, 0.95), rgba(if on { accent() } else { 0x2a2a38 }, 1.0), if on { 1.5 } else { 1.0 });
+            c.round_rect([x0, y], [side_w, 34.0], 7.0, rgba(bg, 0.95), rgba(crate::style::PANEL_EDGE, 1.0), 1.0);
+            if on {
+                // The section open: a pill of the accent, the selector round it.
+                crate::style::pill(c, x0 + 4.0, y + 4.0, side_w - 8.0, 26.0, accent());
+                crate::style::selector(c, "settings-section", [x0 - 3.0, y - 3.0, side_w + 6.0, 40.0]);
+            }
             c.hit(x0, y, side_w, 34.0, Hit::SettingsSection(i));
             c.text(x0 + 12.0, y + 7.0, 9.0, rgba(if on { 0xffffff } else if dim { 0x6f6f86 } else { 0xc8c8d8 }, 1.0), name);
             c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 20.0, &about));
@@ -1564,7 +1569,7 @@ impl SettingsUi {
         let box_x = cx + col - box_w;
         let n = self.results.len();
         let title = if searching { tr!("Found: {n}", "{n}件", "Найдено: {n}";) } else { section_name(section).to_string() };
-        c.text(cx, TOP - 2.0, 11.0, rgba(accent(), 1.0), &Canvas::fit(11.0, col - box_w - 8.0, &title));
+        crate::style::title(c, cx, TOP - 2.0, 11.0, accent(), &Canvas::fit(11.0, col - box_w - 8.0, &title));
         c.round_rect([box_x, TOP - 7.0], [box_w, 19.0], 5.0, rgba(0x23232f, 0.9), rgba(if searching { accent() } else { 0x3a3a4e }, 1.0), 1.0);
         let (text, col_text) = if searching {
             (Canvas::fit_end(8.0, box_w - 18.0, &format!("{}_", self.search)), 0xffffff)
@@ -1659,7 +1664,7 @@ impl SettingsUi {
             }
         }
         if cursor_y.is_some() {
-            c.round_rect([cx, list_top + hl - scroll], [col, ROW - 4.0], 6.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
+            crate::style::brackets(c, [cx - 3.0, list_top + hl - scroll - 3.0, col + 6.0, ROW + 2.0], 1.0);
         }
         c.clip_since(start, cx - 2.0, list_top - 2.0, col + 4.0, view + 2.0);
         for h in &mut c.hits[hits..] {
@@ -1830,7 +1835,7 @@ fn header(c: &mut Canvas, active: usize, right_text: &str) {
         tr!("DOWNLOAD", "ダウンロード", "ЗАГРУЗКА"),
     ][active.min(3)];
     let x = 24.0 + w + 12.0;
-    let used = c.text(x, 26.0, 11.0, rgba(accent(), 1.0), title);
+    let used = crate::style::title(c, x, 24.0, 13.0, accent(), title);
     let right = c.width - 24.0;
     let room = right - (x + used + 16.0);
     if Canvas::text_width(8.0, right_text) <= room {

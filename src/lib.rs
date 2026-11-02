@@ -70,6 +70,7 @@ mod skin;
 mod social;
 mod splash;
 mod stars;
+mod style;
 mod ui;
 mod update;
 mod video;
@@ -286,8 +287,10 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
-    /// A screen opened from the main menu fades in: how long it has been showing (ms).
+    /// A screen just opened fades in: how long it has been showing (ms).
     screen_fade: Option<f32>,
+    /// The screen last drawn, to fade in the next one.
+    shown_scene: Option<std::mem::Discriminant<Scene>>,
     /// What drifts behind it.
     menu_notes: menu_notes::Notes,
     /// When dragging the player's timeline last moved the music.
@@ -8349,6 +8352,17 @@ impl State {
         // last frame's bar like real input does).
         self.replay_bar = None;
         let scene_start = canvas.shapes.len();
+        // Another screen (not a song: nothing may stand between the player and the notes)
+        // fades in.
+        let scene = std::mem::discriminant(&self.scene);
+        if self.shown_scene.is_some_and(|s| s != scene) && !self.in_song() && !matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } | Scene::Loading { .. } | Scene::MpWait { .. }) {
+            self.screen_fade = Some(0.0);
+        }
+        self.shown_scene = Some(scene);
+        // Every screen's selector and titles move with the music, as the main menu does.
+        let playing = !self.music_paused && !self.in_song();
+        let phase = self.preview.beat().filter(|b| b.1 > 1.0 && playing).map(|(into, len)| (into / len).rem_euclid(1.0) as f32);
+        style::set_beat(phase, playing && self.cfg.kiai_effects && self.preview.kiai());
         match &mut self.scene {
             Scene::Select if on_menu => {
                 self.board_rect = None;
@@ -10883,6 +10897,7 @@ impl State {
             splash,
             main_menu: None,
             screen_fade: None,
+            shown_scene: None,
             menu_notes: Default::default(),
             guide: None,
             guide_binding: None,

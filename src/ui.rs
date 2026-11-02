@@ -1504,13 +1504,20 @@ impl Select {
                     let open = section_open[*si];
                     let hover = c.hovered(24.0, y, lw, rh - 2.0);
                     let holds_cursor = cursor_section == Some(*si) && !open;
-                    let border = if holds_cursor { rgba(accent(), 1.0) } else { rgba(col, if open { 0.7 } else { 0.35 }) };
-                    c.round_rect([24.0, y], [lw, rh - 3.0], 5.0, rgba(if hover { 0x24242f } else { 0x16161e }, 0.9), border, if holds_cursor { 1.5 } else { 1.0 });
+                    // The main menu's look: a dark panel, the heading on a pill of its colour.
+                    c.round_rect([24.0, y], [lw, rh - 3.0], 6.0, rgba(if hover { 0x24242f } else { crate::style::PANEL }, 0.95), rgba(crate::style::PANEL_EDGE, 1.0), 1.0);
+                    if holds_cursor {
+                        crate::style::brackets(c, [21.0, y - 3.0, lw + 6.0, rh + 3.0], 1.0);
+                    }
                     c.hit(24.0, y, lw, *rh, Hit::SectionHeader(*si));
                     let n = sec.groups.len();
-                    c.text(34.0, y + 6.0, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
-                    let label = format!("{}  |  {n} song{}", sec.label, if n == 1 { "" } else { "s" });
-                    c.text(48.0, y + 6.0, 7.0, rgba(col, 1.0), &fit(label, 7.0, lw - 60.0));
+                    c.text(32.0, y + 6.0, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
+                    let label = fit(sec.label.clone(), 7.0, lw - 140.0);
+                    let pw = Canvas::text_width(7.0, &label) + 14.0;
+                    crate::style::pill(c, 44.0, y + 1.5, pw, rh - 6.0, col);
+                    c.text(51.0, y + 6.0, 7.0, rgba(0xffffff, 1.0), &label);
+                    let count = format!("{n} song{}", if n == 1 { "" } else { "s" });
+                    c.text(44.0 + pw + 8.0, y + 6.0, 7.0, rgba(0x8a8aa0, 1.0), &fit(count, 7.0, lw - pw - 40.0));
                 }
                 Row::Song(g) => {
                     let e = &library[self.visible[g.start]];
@@ -1591,7 +1598,7 @@ impl Select {
         // Not with its heading closed: the heading shows where the selection is instead.
         let oy = outline;
         if !self.visible.is_empty() && !cursor_hidden && oy > top - DIFF_H && oy < bottom {
-            c.round_rect([44.0, oy], [lw - 20.0, DIFF_H - 3.0], 5.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
+            crate::style::brackets(c, [41.0, oy - 3.0, lw - 14.0, DIFF_H + 3.0], 1.0);
         }
         // Rows scrolling past the edges slide under them instead of over the search row.
         c.clip_since(list_start, 20.0, top - 2.0, lw + 8.0, bottom - top + 4.0);
