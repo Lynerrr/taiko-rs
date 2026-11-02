@@ -624,6 +624,23 @@ fn ticking_interface_parts_keeps_the_list_open() {
 }
 
 #[test]
+fn star_ratings_arriving_dont_change_the_song_thats_playing() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    for (other_audio, stays) in [(false, false), (true, true)] {
+        s.select.jump_songs(1, &s.library);
+        let entered = s.select.selected().unwrap();
+        let hardest = s.select.selected_set()[0];
+        assert_ne!(hardest, entered);
+        let audio = s.library[entered].meta.audio_file.clone();
+        s.library[hardest].meta.audio_file = if other_audio { format!("other {audio}") } else { audio };
+        let stars = |i: usize| Some(if i == hardest { 5.0 } else { i as f32 / 100.0 });
+        s.select.sort_selected_set(&s.library, &stars);
+        assert_eq!(s.select.selected(), Some(if stays { entered } else { hardest }));
+    }
+}
+
+#[test]
 fn a_maps_status_comes_from_the_mirror_else_osu_db() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
