@@ -80,8 +80,8 @@ mod wayland_dnd;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -476,6 +476,8 @@ struct State {
     quit_asked: bool,
     /// The game crashed last time: its report, offered to copy (`draw_crash`).
     crash: Option<String>,
+    /// That report is on its way to the server (`send_crash_report`).
+    crash_sent: bool,
     /// F12 was pressed: the next frame is saved as a picture.
     screenshot_due: bool,
     smooth: Option<debug::Smoothness>,
@@ -2608,6 +2610,7 @@ impl State {
             Item::HideGreat => on(c.hide_great),
             Item::HitFlash => on(c.hit_flash),
             Item::DiscordPresence => on(c.discord_presence),
+            Item::CrashReports => on(c.send_crash_reports),
             Item::ChatFilter => on(c.chat_filter),
             Item::MessageSound => on(c.message_sound),
             Item::NotifyPlaying => on(c.notify_playing),
@@ -2839,6 +2842,10 @@ impl State {
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::HitFlash => self.cfg.hit_flash = !self.cfg.hit_flash,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
+            Item::CrashReports => {
+                self.cfg.send_crash_reports = !self.cfg.send_crash_reports;
+                SEND_CRASH_REPORTS.store(self.cfg.send_crash_reports, Ordering::Relaxed);
+            }
             Item::ChatFilter => {
                 self.cfg.chat_filter = !self.cfg.chat_filter;
                 // Switched on: what's already in the chats gets cleaned up too.
@@ -7600,10 +7607,18 @@ impl State {
         c.round_rect([x, y], [bw, bh], 10.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
         c.text_centered(w / 2.0, y + 18.0, 12.0, rgba(0xffffff, 1.0), tr!("taiko.rs crashed last time", "前回taiko.rsがクラッシュしました", "taiko.rs вылетел в прошлый раз"));
         let room = bw - 32.0;
-        for (k, line) in [
-            tr!("Copy the crash log and paste it in #bugs", "クラッシュログをコピーして", "Скопируйте лог краша и вставьте его"),
-            tr!("on the taiko.rs Discord, so it gets fixed.", "Discordの#bugsに貼ってください。", "в #bugs в Discord taiko.rs, чтобы мы починили."),
-        ]
+        let lines = if self.crash_sent {
+            [
+                tr!("Its report went to the developers by itself.", "レポートは自動で開発者に送られました。", "Отчёт уже ушёл разработчикам сам."),
+                tr!("To say what you were doing, paste the log in #bugs.", "何をしていたか伝えるには、ログを#bugsに貼ってください。", "Чтобы рассказать, что вы делали, вставьте лог в #bugs."),
+            ]
+        } else {
+            [
+                tr!("Copy the crash log and paste it in #bugs", "クラッシュログをコピーして", "Скопируйте лог краша и вставьте его"),
+                tr!("on the taiko.rs Discord, so it gets fixed.", "Discordの#bugsに貼ってください。", "в #bugs в Discord taiko.rs, чтобы мы починили."),
+            ]
+        };
+        for (k, line) in lines
         .iter()
         .enumerate()
         {
@@ -10941,6 +10956,7 @@ impl ApplicationHandler<UserEvent> for App {
             s.refresh_hz = refresh_hz;
             s.refresh_status();
             eprintln!("renderer: {}, present: {}, refresh {refresh_hz:.2} Hz", renderer.adapter_name, renderer.present.name());
+            let _ = CRASH_CONTEXT.set(format!("renderer: {}, present: {}, setting graphics_api = {}", renderer.adapter_name, renderer.present.name(), s.cfg.graphics_api));
             s.present = renderer.present;
             s.cfg.present = renderer.present;
             s.refresh_hz = refresh_hz;
@@ -11057,7 +11073,12 @@ impl State {
         let pending_changelog = whats_new(&mut cfg);
         let present = cfg.present;
         let fullscreen = cfg.fullscreen;
+        SEND_CRASH_REPORTS.store(cfg.send_crash_reports, Ordering::Relaxed);
+        let crash = crash_report();
+        let crash_sent = cfg.send_crash_reports && crash.as_ref().is_some_and(|r| send_crash_report(&cfg.online_server, r));
         State {
+            crash,
+            crash_sent,
             cfg,
             library,
             select,
@@ -11188,7 +11209,6 @@ impl State {
             exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
             quit: false,
             quit_asked: false,
-            crash: crash_report(),
             screenshot_due: false,
             smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
             frame_acquired: None,
@@ -11332,11 +11352,12 @@ fn log_crashes() {
         let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let thread = std::thread::current().name().unwrap_or("?").to_string();
         let text = format!(
-            "--- taiko.rs crash at unix {at}, build {} ({}, {})\nthread {thread}: {info}\n{}\n",
+            "--- taiko.rs crash at unix {at}, build {} ({}, {})\nthread {thread}: {info}\n{}\n{}",
             update::BUILD.unwrap_or("local"),
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS,
-            std::backtrace::Backtrace::force_capture()
+            std::backtrace::Backtrace::force_capture(),
+            crash_context(),
         );
         if let Some(dir) = config::data_dir() {
             let _ = std::fs::create_dir_all(&dir);
@@ -11354,7 +11375,8 @@ fn log_crashes() {
             // A clipboard of its own: the game's may be what was held when it crashed.
             let copied = arboard::Clipboard::new().and_then(|mut b| b.set_text(text.clone())).is_ok();
             let what = if copied { "The crash log is copied: paste it (Ctrl+V)" } else { "Send the crash log (crash.log in the game's data folder)" };
-            crash_box(&format!("taiko.rs crashed.\n\n{what} in #bugs on the taiko.rs Discord, so it can be fixed.\n\n{}", info));
+            let what = format!("{what} in #bugs on the taiko.rs Discord, so it can be fixed.");
+            crash_box(&format!("taiko.rs crashed.\n\n{}\n\n{}", crash_box_words(&what), info));
         }
     }));
 }
@@ -11481,6 +11503,7 @@ mod native_crashes {
             };
             text.push_str(&format!("{op} 0x{:x}\n", record.information[1]));
         }
+        text.push_str(&super::crash_context());
         // What the game printed last: the screen, the audio device, the map...
         if let Ok(log) = std::fs::read_to_string(dir.join("game.log")) {
             let lines: Vec<&str> = log.lines().collect();
@@ -11494,7 +11517,8 @@ mod native_crashes {
             let _ = std::io::Write::write_all(&mut f, text.as_bytes());
         }
         let _ = std::fs::write(dir.join(super::CRASH_REPORT), &text);
-        super::crash_box(&format!("taiko.rs crashed.\n\nThe next start offers to copy the crash log: paste it in #bugs on the taiko.rs Discord, so it can be fixed.\n\n{} 0x{:08X}", what(record.code), record.code));
+        let words = super::crash_box_words("The next start offers to copy the crash log: paste it in #bugs on the taiko.rs Discord, so it can be fixed.");
+        super::crash_box(&format!("taiko.rs crashed.\n\n{words}\n\n{} 0x{:08X}", what(record.code), record.code));
         // Windows' own handling goes on (its error report, and the end of the process).
         CONTINUE_SEARCH
     }
@@ -11515,6 +11539,52 @@ fn crash_box(text: &str) {
     unsafe {
         MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_ICONERROR | MB_TOPMOST);
     }
+}
+
+/// Whether a crash's report goes to the server on the next start (`Config::send_crash_reports`),
+/// for the crash handlers, which can't reach the config.
+static SEND_CRASH_REPORTS: AtomicBool = AtomicBool::new(true);
+
+/// What the game is running on (the graphics card and API), for crash reports: set once the
+/// graphics have started.
+static CRASH_CONTEXT: OnceLock<String> = OnceLock::new();
+
+fn crash_context() -> String {
+    CRASH_CONTEXT.get().map(|c| format!("{c}\n")).unwrap_or_default()
+}
+
+/// The crash window's words on what happens to the report: `otherwise` is how to send it in
+/// by hand, when the game doesn't.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn crash_box_words(otherwise: &str) -> String {
+    if SEND_CRASH_REPORTS.load(Ordering::Relaxed) {
+        "The next start sends the crash report to the developers by itself, so it can be fixed (Settings > Online > Send crash reports turns that off).".into()
+    } else {
+        otherwise.into()
+    }
+}
+
+/// Sends last time's crash report to the server in the background: true when it's on its way.
+/// The player's folder names are taken out first (`online::scrub_paths`).
+fn send_crash_report(server: &str, report: &str) -> bool {
+    if update::BUILD.is_none() {
+        // A local build's crashes are the developer's own, seen already.
+        return false;
+    }
+    let mut text = online::scrub_paths(report);
+    if text.len() > online::MAX_CRASH_REPORT {
+        // The start (what crashed) and the end (the log's last lines) say most.
+        let head: String = text.chars().take(online::MAX_CRASH_REPORT / 2).collect();
+        let tail: String = text.chars().rev().take(online::MAX_CRASH_REPORT / 2 - 100).collect::<Vec<_>>().into_iter().rev().collect();
+        text = format!("{head}\n[...]\n{tail}");
+    }
+    let r = online::CrashReport { build: update::BUILD.unwrap_or("local").to_string(), os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH), report: text };
+    let server = server.to_string();
+    std::thread::spawn(move || match online::call(&server, online::Request::CrashReport(Box::new(r))) {
+        Ok(_) => eprintln!("crash report sent"),
+        Err(e) => eprintln!("crash report not sent: {e}"),
+    });
+    true
 }
 
 /// The report of a crash last time that hasn't been offered yet (and forgets it).

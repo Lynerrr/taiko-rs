@@ -500,6 +500,8 @@ fn assert_every_screen_fits() {
     check(&mut s, "multiplayer menu", &mut out);
     s.crash = Some("--- taiko.rs crash".into());
     check(&mut s, "crash report", &mut out);
+    s.crash_sent = true;
+    check(&mut s, "crash report sent", &mut out);
     s.key(KeyCode::Escape, false, None, Instant::now(), None);
     assert!(s.crash.is_none(), "Esc closes it");
     // Signing up with a code, a forgotten password, changing it logged in, and the errors.

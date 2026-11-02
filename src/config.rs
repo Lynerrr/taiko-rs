@@ -205,6 +205,8 @@ pub struct Config {
     pub accent: u32,
     /// Show what you're doing in your Discord status.
     pub discord_presence: bool,
+    /// A crash's report goes to the server on the next start (`online::Request::CrashReport`).
+    pub send_crash_reports: bool,
     /// Star out swear words in chats.
     pub chat_filter: bool,
     /// A chime when a friend messages you.
@@ -366,6 +368,7 @@ impl Default for Config {
             hit_flash: true,
             accent: crate::render::DEFAULT_ACCENT,
             discord_presence: true,
+            send_crash_reports: true,
             discord_app_id: String::new(),
             chat_filter: true,
             message_sound: true,
@@ -735,6 +738,7 @@ impl Config {
                 "hit_flash" => cfg.hit_flash = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
                 "discord_presence" => cfg.discord_presence = v != "false",
+                "send_crash_reports" => cfg.send_crash_reports = v != "false",
                 "chat_filter" => cfg.chat_filter = v != "false",
                 "message_sound" => cfg.message_sound = v != "false",
                 "notify_playing" => cfg.notify_playing = v == "true",
@@ -956,6 +960,7 @@ impl Config {
             "# Discord status (\"Playing taiko.rs\"); app id empty = the built-in one\ndiscord_presence = {}\ndiscord_app_id = {}\n",
             self.discord_presence, self.discord_app_id
         ));
+        out.push_str(&format!("# after a crash, the next start sends its report to the developers\nsend_crash_reports = {}\n", self.send_crash_reports));
         out.push_str(&format!(
             "# chats: star out swear words; a chime when a friend messages you\nchat_filter = {}\nmessage_sound = {}\n",
             self.chat_filter, self.message_sound
