@@ -233,16 +233,18 @@ pub fn all() -> Vec<Medal> {
 
     // Dan: from real taiko ranks.
     let dans = [
-        (2, 1, "Gokyu 五級", "五級", "Гокю 五級"),
-        (3, 1, "Sankyu 三級", "三級", "Санкю 三級"),
-        (4, 1, "Ikkyu 一級", "一級", "Иккю 一級"),
-        (5, 1, "Shodan 初段", "初段", "Сёдан 初段"),
-        (6, 1, "Nidan 二段", "二段", "Нидан 二段"),
-        (7, 2, "Sandan 三段", "三段", "Сандан 三段"),
-        (8, 2, "Yondan 四段", "四段", "Ёндан 四段"),
-        (9, 4, "Godan 五段", "五段", "Годан 五段"),
-        (10, 4, "Kuroto 玄人", "玄人", "Куродо 玄人"),
-        (11, 4, "Meijin 名人", "名人", "Мэйдзин 名人"),
+        (1, 1, "Gokyu 五級", "五級", "Гокю 五級"),
+        (2, 1, "Sankyu 三級", "三級", "Санкю 三級"),
+        (3, 1, "Ikkyu 一級", "一級", "Иккю 一級"),
+        (4, 1, "Shodan 初段", "初段", "Сёдан 初段"),
+        (5, 2, "Nidan 二段", "二段", "Нидан 二段"),
+        (6, 2, "Sandan 三段", "三段", "Сандан 三段"),
+        (7, 3, "Yondan 四段", "四段", "Ёндан 四段"),
+        (8, 3, "Godan 五段", "五段", "Годан 五段"),
+        (9, 4, "Kuroto 玄人", "玄人", "Куродо 玄人"),
+        (10, 4, "Meijin 名人", "名人", "Мэйдзин 名人"),
+        (11, 4, "Choujin 超人", "超人", "Тёдзин 超人"),
+        (12, 4, "Tatsujin 達人", "達人", "Тацудзин 達人"),
     ];
     for (stars, tier, en, ja, ru) in dans {
         let about = say(&format!("{stars}★ or harder at 90%+"), &format!("★{stars}以上を精度90%以上で"), &format!("{stars}★+, точность 90%+"));
@@ -382,7 +384,7 @@ mod tests {
         let list = all();
         let ids: HashSet<&str> = list.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids.len(), list.len(), "two medals with one id");
-        assert_eq!(list.len(), 118);
+        assert_eq!(list.len(), 120);
         for m in &list {
             assert_eq!(m.art.len(), ART, "{}", m.id);
             assert!(m.art.iter().all(|r| r.chars().count() == ART && r.chars().all(|c| ".#xo".contains(c))), "{}: {:?}", m.id, m.art);
@@ -410,6 +412,15 @@ mod tests {
                 assert!(f.mods.iter().all(|a| mods.contains(a.as_str())), "{}: {:?}", m.id, f.mods);
             }
         }
+    }
+
+    #[test]
+    fn the_dan_ladder_climbs_every_tier_and_ends_on_tatsujin() {
+        let dans: Vec<Medal> = all().into_iter().filter(|m| m.section == DAN).collect();
+        assert!(dans.windows(2).all(|p| p[0].tier <= p[1].tier));
+        assert_eq!(dans.iter().map(|m| m.tier).collect::<HashSet<u8>>().len(), 4, "a step in every tier");
+        assert!(dans.last().unwrap().name[0].starts_with("Tatsujin"));
+        assert_eq!(dans.last().unwrap().id, "dan_12");
     }
 
     #[test]
