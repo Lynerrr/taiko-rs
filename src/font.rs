@@ -202,6 +202,7 @@ pub fn index(c: char) -> usize {
         '‘' | '’' => index('\''),
         '–' | '—' | '−' => index('-'),
         '…' => index('.'),
+        '·' | '•' => index('・'),
         '№' => index('#'),
         '\u{a0}' => index(' '),
         _ => {
@@ -271,6 +272,12 @@ pub fn drawable(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_dot_between_words_has_a_glyph() {
+        assert_ne!(index('·'), index('?'));
+        assert_eq!(index('·'), index('・'));
+    }
 
     #[test]
     fn cyrillic_letters_have_glyphs() {

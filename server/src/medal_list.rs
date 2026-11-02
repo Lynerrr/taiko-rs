@@ -415,6 +415,16 @@ mod tests {
     }
 
     #[test]
+    fn every_letter_of_every_medal_is_in_the_games_font() {
+        let unknown = crate::font::index('?');
+        for m in all() {
+            for c in m.name.iter().chain(&m.about).flat_map(|t| t.chars()) {
+                assert!(c == '?' || crate::font::index(c) != unknown, "{}: {c}", m.id);
+            }
+        }
+    }
+
+    #[test]
     fn the_dan_ladder_climbs_every_tier_and_ends_on_tatsujin() {
         let dans: Vec<Medal> = all().into_iter().filter(|m| m.section == DAN).collect();
         assert!(dans.windows(2).all(|p| p[0].tier <= p[1].tier));
