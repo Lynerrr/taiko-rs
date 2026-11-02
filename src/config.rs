@@ -287,6 +287,11 @@ pub struct Config {
     pub songs: Vec<PathBuf>,
 }
 
+/// The offset of a first launch. 0 is exact against what the speakers play, but players press
+/// ahead of what they hear: online plays settle at about -25 on Linux and -35 on Windows. osu!
+/// hides this, subtracting no output latency and with maps timed about 23 ms before their drums.
+pub const NEW_PLAYER_OFFSET_MS: f64 = -25.0;
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -294,7 +299,7 @@ impl Default for Config {
             // Android has no clipboard to put pictures on here.
             screenshot_to: if cfg!(target_os = "android") { ScreenshotTo::Folder } else { ScreenshotTo::Clipboard },
             language: crate::lang::Lang::En,
-            offset_ms: 0.0,
+            offset_ms: NEW_PLAYER_OFFSET_MS,
             visual_offset_ms: 0.0,
             vsync_compensation: true,
             vsync_tune_ms: 0.0,
@@ -649,7 +654,8 @@ impl Config {
 
     /// The settings in the config file's `text`.
     pub(crate) fn parse_text(text: &str) -> Config {
-        let mut cfg = Config { existed: true, ..Config::default() };
+        // A config from before the default moved keeps what it played on.
+        let mut cfg = Config { existed: true, offset_ms: 0.0, ..Config::default() };
         let mut osu_scroll_speed = false;
         for line in text.lines() {
             let line = line.trim();
@@ -1047,6 +1053,14 @@ mod tests {
         let mut out = "keys = A, S, K, L\n".to_string();
         keep_unknown(&mut out, "hotkey.apply_offset = none\nsongs = /a\nmultiverse_preset = x: y\nskin_part = a = b\n");
         assert_eq!(out, "keys = A, S, K, L\n");
+    }
+
+    #[test]
+    fn only_a_first_launch_gets_the_new_offset() {
+        assert_eq!(Config::default().offset_ms, NEW_PLAYER_OFFSET_MS);
+        assert_eq!(Config::parse_text("").offset_ms, 0.0, "a config with no offset line stays where it was");
+        assert_eq!(Config::parse_text("offset_ms = 0\n").offset_ms, 0.0);
+        assert_eq!(Config::parse_text("offset_ms = -12\n").offset_ms, -12.0);
     }
 
     #[test]
