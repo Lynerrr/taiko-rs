@@ -177,6 +177,7 @@ fn map_offsets_reset_only_on_the_second_press() {
 fn the_guide_turns_its_pages_and_takes_the_keys() {
     let key = |s: &mut State, code| s.key_inner(code, false, None, Instant::now(), None);
     let mut s = layout_tests::state();
+    s.cfg.guide_seen = true;
     s.guide = Some(0);
     key(&mut s, KeyCode::F2);
     assert_eq!(s.guide, Some(0), "other keys wait");
@@ -201,11 +202,75 @@ fn the_guide_turns_its_pages_and_takes_the_keys() {
 fn the_guide_counts_as_seen_once_closed_and_old_configs_havent_seen_it() {
     assert!(!Config::default().guide_seen, "a config without the line: not seen");
     let mut s = layout_tests::state();
+    s.guide_read[guide::OFFSET_PAGE] = true;
     s.guide = Some(2);
     s.guide_action(guide::Action::Next);
     assert!(!s.cfg.guide_seen, "still reading");
     s.guide_action(guide::Action::Close);
     assert!(s.cfg.guide_seen);
+}
+
+/// As if the page has been up for `ms`.
+fn guide_up_for(s: &mut State, ms: u64) {
+    s.guide_shown = s.guide.map(|p| (p, Instant::now() - Duration::from_millis(ms)));
+    s.tick_guide();
+}
+
+#[test]
+fn a_new_player_cant_leave_the_guide_without_reading_it() {
+    let key = |s: &mut State, code| s.key_inner(code, false, None, Instant::now(), None);
+    let mut s = layout_tests::state();
+    s.guide = Some(0);
+    s.tick_guide();
+    for code in [KeyCode::Escape, KeyCode::Enter] {
+        key(&mut s, code);
+        assert_eq!(s.guide, Some(0), "{code:?} waits");
+    }
+    s.guide_action(guide::Action::Page(3));
+    assert_eq!(s.guide, Some(0), "so do the dots");
+    assert!(!s.cfg.guide_seen);
+
+    guide_up_for(&mut s, 5000);
+    key(&mut s, KeyCode::Escape);
+    assert_eq!(s.guide, Some(guide::OFFSET_PAGE), "skipping still shows the offset");
+    s.tick_guide();
+    key(&mut s, KeyCode::Escape);
+    assert_eq!(s.guide, Some(guide::OFFSET_PAGE), "and it waits too");
+    key(&mut s, KeyCode::ArrowLeft);
+    assert_eq!(s.guide, Some(0), "going back is free");
+    key(&mut s, KeyCode::Enter);
+    assert_eq!(s.guide, Some(guide::OFFSET_PAGE), "a page already read doesn't wait again");
+
+    guide_up_for(&mut s, 5000);
+    key(&mut s, KeyCode::Escape);
+    assert_eq!(s.guide, None);
+    assert!(s.cfg.guide_seen);
+}
+
+#[test]
+fn the_guide_can_calibrate_straight_away_and_doesnt_wait_when_seen_before() {
+    let mut s = layout_tests::state();
+    s.guide = Some(guide::OFFSET_PAGE);
+    s.tick_guide();
+    s.guide_action(guide::Action::Calibrate);
+    assert_eq!(s.guide, None, "the hold is on leaving, not on calibrating");
+
+    let mut s = layout_tests::state();
+    s.cfg.guide_seen = true;
+    s.guide = Some(0);
+    s.tick_guide();
+    s.guide_action(guide::Action::Close);
+    assert_eq!(s.guide, None);
+}
+
+#[test]
+fn the_clock_of_the_guide_waits_for_the_splash() {
+    let mut s = layout_tests::state();
+    s.guide = Some(0);
+    s.splash = splash::Splash::new(Some(48000));
+    assert!(s.splash.is_some());
+    s.tick_guide();
+    assert_eq!(s.guide_shown, None);
 }
 
 #[test]

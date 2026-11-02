@@ -1246,6 +1246,27 @@ fn empty_update_notes_stay_closed_but_manual_view_stays_open() {
 }
 
 #[test]
+fn update_notes_wait_for_the_guide_instead_of_covering_it() {
+    let mut s = state();
+    let change = changelog::parse("fix(audio): align hitsounds\n\nChangelog: Hitsounds stay in sync.", "2026-10-26").unwrap();
+    s.pending_changelog = Some(changelog::View::loaded(vec![change]));
+    s.guide = Some(guide::OFFSET_PAGE);
+    s.guide_read = [true; guide::PAGES];
+    s.poll_changelog();
+    assert!(s.changelog.is_none(), "nothing may cover the guide: its keys would close it unseen");
+    assert!(s.pending_changelog.is_some(), "the notes aren't lost");
+
+    s.guide = None;
+    s.guide_after = Some(guide::OFFSET_PAGE + 1);
+    s.poll_changelog();
+    assert!(s.changelog.is_none(), "calibrating from the guide isn't the end of it");
+
+    s.guide_after = None;
+    s.poll_changelog();
+    assert!(s.changelog.is_some());
+}
+
+#[test]
 fn update_notes_open_when_ready_without_replacing_a_manual_view() {
     let mut s = state();
     let change = changelog::parse("fix(audio): align hitsounds\n\nChangelog: Hitsounds stay in sync.", "2026-10-26").unwrap();

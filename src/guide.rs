@@ -287,8 +287,8 @@ fn draw_picture(c: &mut Canvas, i: usize, cx: f32, y: f32, w: f32, binding: Opti
 
 const PICTURE_H: f32 = 108.0;
 
-/// Page `i` of the guide, over everything.
-pub fn draw(c: &mut Canvas, i: usize, binding: Option<usize>, cfg: &Config) {
+/// Page `i` of the guide, over everything. With `hold`, seconds to wait before moving on.
+pub fn draw(c: &mut Canvas, i: usize, binding: Option<usize>, hold: Option<u32>, cfg: &Config) {
     let p = page(i, cfg);
     c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(0x000000, 0.7));
     c.hit(0.0, 0.0, c.width, VIRTUAL_HEIGHT, Hit::Overlay);
@@ -330,13 +330,21 @@ pub fn draw(c: &mut Canvas, i: usize, binding: Option<usize>, cfg: &Config) {
     if i > 0 {
         c.button(x + 16.0, bottom, bw, 22.0, tr!("< Back", "< 戻る", "< Назад"), 8.0, Hit::Guide(Action::Back), false);
     } else {
-        c.button(x + 16.0, bottom, bw, 22.0, tr!("Skip (Esc)", "閉じる (Esc)", "Пропустить (Esc)"), 8.0, Hit::Guide(Action::Close), false);
+        let skip = tr!("Skip (Esc)", "閉じる (Esc)", "Пропустить (Esc)");
+        let (label, hit) = match hold {
+            Some(s) => (format!("{skip} {s}"), Hit::Overlay),
+            None => (skip.to_string(), Hit::Guide(Action::Close)),
+        };
+        c.button(x + 16.0, bottom, bw, 22.0, &label, 8.0, hit, false);
     }
     if i == OFFSET_PAGE {
         c.button(cx - bw / 2.0, bottom, bw, 22.0, tr!("Calibrate (C)", "調整 (C)", "Калибровать (C)"), 8.0, Hit::Guide(Action::Calibrate), true);
     }
     let next = if last { tr!("Done", "完了", "Готово") } else { tr!("Next >", "次へ >", "Далее >") };
-    c.button(x + w - 16.0 - bw, bottom, bw, 22.0, next, 8.0, Hit::Guide(if last { Action::Close } else { Action::Next }), true);
+    match hold {
+        Some(s) => c.button(x + w - 16.0 - bw, bottom, bw, 22.0, &format!("{next} {s}"), 8.0, Hit::Overlay, false),
+        None => c.button(x + w - 16.0 - bw, bottom, bw, 22.0, next, 8.0, Hit::Guide(if last { Action::Close } else { Action::Next }), true),
+    }
 }
 
 #[cfg(test)]
