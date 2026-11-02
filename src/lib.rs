@@ -11527,7 +11527,6 @@ mod native_crashes {
         }
     }
 
-    /// The DLL or exe `address` is in, and how far into it.
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut *mut c_void, hash: *mut u32) -> u16;
@@ -11548,6 +11547,7 @@ mod native_crashes {
         out
     }
 
+    /// The DLL or exe `address` is in, and how far into it.
     fn module_of(address: *const c_void) -> String {
         let mut module = std::ptr::null_mut();
         // SAFETY: plain lookups with a valid out pointer and buffer.
