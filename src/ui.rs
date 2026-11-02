@@ -1544,14 +1544,7 @@ impl Select {
                     let colours = crate::multiverse::note_colours();
                     let tag = if any_taiko { colours.don() } else { colours.kat() };
                     let (nr, ny) = (if open { 6.5 } else { 5.0 }, y + (rh - 4.0) / 2.0);
-                    if open {
-                        c.glow(33.0, ny, nr * 2.4, nr, rgba(tag, 0.5));
-                    }
-                    let note = c.shapes.len();
-                    crate::multiverse::note(c, crate::multiverse::Shape::Round, 33.0, ny, nr, tag, 1.0);
-                    if !open {
-                        c.fade_since(note, 1.0, 0.7);
-                    }
+                    crate::style::note(c, 33.0, ny, nr, tag, open, 0.7);
                     c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &fit(e.meta.title.clone(), 10.0, lw - 110.0));
                     // A row per difficulty: which one it is, rather than who mapped the set.
                     let one = self.split_difficulties();

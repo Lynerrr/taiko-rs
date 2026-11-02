@@ -7581,14 +7581,7 @@ impl State {
             }
             c.hit(ox, oy, button, 40.0, hit);
             let (nx, ny, r) = (ox + 20.0, oy + 20.0, if selected { 10.0 } else { 8.0 });
-            if selected {
-                c.glow(nx, ny, r * 2.4, r, rgba(col, 0.5));
-            }
-            let note = c.shapes.len();
-            multiverse::note(c, multiverse::Shape::Round, nx, ny, r, col, 1.0);
-            if !selected {
-                c.fade_since(note, 1.0, 0.6);
-            }
+            style::note(c, nx, ny, r, col, selected, 0.6);
             let room = button - 44.0;
             c.text(ox + 38.0, oy + 9.0, 11.0, rgba(if selected { 0xffffff } else { 0xa8a8bc }, 1.0), &Canvas::fit(11.0, room, label));
             c.text(ox + 38.0, oy + 24.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, room, keys));

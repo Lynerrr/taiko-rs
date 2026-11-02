@@ -103,6 +103,81 @@ fn slide(mut at: [f32; 4], target: [f32; 4], dt_ms: f32, animate: bool) -> [f32;
     at
 }
 
+/// A small note as pixel art, like the main menu's: a dark outline, a white rim lit top left and
+/// shaded bottom right, the logo's red and cyan glitch down its sides. `SMALL` pixels square.
+const SMALL: usize = 16;
+type SmallArt = [[u32; SMALL]; SMALL];
+
+fn small_art(fill: u32) -> SmallArt {
+    use crate::menu::tint;
+    const MID: f32 = 7.5;
+    const OUTLINE: u32 = 0x0f0f16;
+    let mut art = [[0; SMALL]; SMALL];
+    for (y, row) in art.iter_mut().enumerate() {
+        for (x, px) in row.iter_mut().enumerate() {
+            let (dx, dy) = (x as f32 - MID, y as f32 - MID);
+            let d = dx.hypot(dy);
+            let slant = dx + dy;
+            *px = if d > 7.0 {
+                0
+            } else if d > 6.1 {
+                OUTLINE
+            } else if d > 4.8 {
+                if slant > 4.5 { 0xc8c8d8 } else { 0xffffff }
+            } else if d > 3.9 && slant < -2.5 {
+                tint(fill, 0xffffff, 0.3)
+            } else if d > 3.9 && slant > 2.5 {
+                tint(fill, 0x000000, 0.28)
+            } else {
+                fill
+            };
+        }
+    }
+    // The glitch: a few rows pushed out, red on the left and cyan on the right.
+    for (y, by) in [(4, 1), (7, 2), (11, 1)] {
+        let row = &mut art[y];
+        let rim = |p: &u32| *p != 0 && *p != OUTLINE;
+        let (Some(left), Some(right)) = (row.iter().position(rim), row.iter().rposition(rim)) else { continue };
+        row[left.saturating_sub(by + 1)..left].fill(GLITCH_RED);
+        row[right + 1..(right + 2 + by).min(SMALL)].fill(GLITCH_CYAN);
+    }
+    art
+}
+
+thread_local! {
+    static ARTS: RefCell<HashMap<u32, Box<SmallArt>>> = RefCell::new(HashMap::new());
+}
+
+/// A pixel note `r` in radius in `col` at (`x`, `y`), its pixels whole screen pixels. `lit`: the
+/// chosen one, with a soft glow of its colour close round it; otherwise it's dimmed to
+/// `brightness`.
+pub fn note(c: &mut Canvas, x: f32, y: f32, r: f32, col: u32, lit: bool, brightness: f32) {
+    if lit {
+        c.glow(x, y, r * 1.7, r * 0.6, rgba(col, 0.35));
+    }
+    let start = c.shapes.len();
+    let px = pixel_size(r / 7.0);
+    let half = SMALL as f32 * px / 2.0;
+    let (left, top) = (snap_to_grid(x - half), snap_to_grid(y - half));
+    ARTS.with(|arts| {
+        let mut arts = arts.borrow_mut();
+        let art = arts.entry(col).or_insert_with(|| Box::new(small_art(col)));
+        for (row, line) in art.iter().enumerate() {
+            let mut col_i = 0;
+            while col_i < SMALL {
+                let end = line[col_i..].iter().position(|&p| p != line[col_i]).map_or(SMALL, |n| col_i + n);
+                if line[col_i] != 0 {
+                    c.rect(left + col_i as f32 * px, top + row as f32 * px, (end - col_i) as f32 * px, px, rgba(line[col_i], 1.0));
+                }
+                col_i = end;
+            }
+        }
+    });
+    if !lit && brightness < 1.0 {
+        c.fade_since(start, 1.0, brightness);
+    }
+}
+
 /// A pill behind a label that's on: `col`'s fill, a faint white edge.
 pub fn pill(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32, col: u32) {
     c.round_rect([x, y], [w, h], h / 2.0, rgba(crate::menu::tint(col, 0x000000, 0.25), 0.95), rgba(0xffffff, 0.35), 1.0);

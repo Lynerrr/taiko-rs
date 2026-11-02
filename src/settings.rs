@@ -1564,14 +1564,9 @@ impl SettingsUi {
             let col = if i % 2 == 0 { colours.don() } else { colours.kat() };
             let r = if on { 11.0 } else { 8.0 };
             if on {
-                c.glow(nx, ny, r * 2.4, r, rgba(col, 0.5));
                 crate::style::selector(c, "settings-section", [x0 - 2.0, y - 1.0, side_w + 4.0, 36.0]);
             }
-            let note = c.shapes.len();
-            crate::multiverse::note(c, crate::multiverse::Shape::Round, nx, ny, r, col, 1.0);
-            if !on {
-                c.fade_since(note, 1.0, if dim { 0.35 } else { 0.6 });
-            }
+            crate::style::note(c, nx, ny, r, col, on, if dim { 0.35 } else { 0.6 });
             c.hit(x0, y, side_w, 34.0, Hit::SettingsSection(i));
             let text = if on || hover { 0xffffff } else if dim { 0x6f6f86 } else { 0xa8a8bc };
             c.text(x0 + 36.0, y + 7.0, 9.0, rgba(text, 1.0), name);

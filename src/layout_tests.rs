@@ -44,6 +44,8 @@ pub(crate) fn state() -> State {
         animations: false,
         // Nothing to connect to: the menus show the server as offline instead of asking it.
         online_server: "127.0.0.1:9".into(),
+        // Song select's headings, which most of these tests are about (one list is the default).
+        song_headings: true,
         ..Config::default()
     };
     if let Some(a) = std::env::var("TAIKO_LAYOUT_ACCENT").ok().and_then(|a| render::parse_accent(&a)) {
@@ -990,10 +992,10 @@ fn without_headings_the_songs_are_one_list_and_by_difficulty_each_stands_alone()
 #[test]
 fn the_song_headings_setting_is_kept() {
     let mut cfg = crate::config::Config::default();
-    assert!(cfg.song_headings, "headings by default");
-    cfg.song_headings = false;
-    assert!(!crate::config::Config::parse_text(&cfg.to_text()).song_headings);
-    assert!(crate::config::Config::parse_text("").song_headings);
+    assert!(!cfg.song_headings, "one list by default");
+    cfg.song_headings = true;
+    assert!(crate::config::Config::parse_text(&cfg.to_text()).song_headings);
+    assert!(!crate::config::Config::parse_text("").song_headings);
 }
 
 #[test]

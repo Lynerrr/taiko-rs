@@ -3733,14 +3733,7 @@ impl Game {
                 let (nx, ny) = (rx + 18.0, y + (ROW_H - 6.0) / 2.0);
                 let col = if i % 2 == 0 { colours.don() } else { colours.kat() };
                 let r = if selected { 9.0 } else { 7.0 };
-                if selected {
-                    c.glow(nx, ny, r * 2.4, r, rgba(col, 0.5));
-                }
-                let note = c.shapes.len();
-                crate::multiverse::note(c, crate::multiverse::Shape::Round, nx, ny, r, col, 1.0);
-                if !selected {
-                    c.fade_since(note, 1.0, 0.6);
-                }
+                crate::style::note(c, nx, ny, r, col, selected, 0.6);
                 c.text(rx + 36.0, y + (ROW_H - 6.0 - 11.0) / 2.0, 11.0, rgba(if selected { WHITE } else { 0xa8a8bc }, 1.0), &Canvas::fit(11.0, rw - 48.0, item));
                 c.fade_since(row, ti, 1.0);
             }

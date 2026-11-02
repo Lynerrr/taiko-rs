@@ -741,7 +741,7 @@ impl Menu {
             let grown = r * (1.0 + GROW * near);
             // It stands out: a glow of its colour behind it, the others dimmed.
             if near > 0.01 {
-                c.glow(x + dx, NOTE_Y - hop, grown * 1.45, grown * 0.6, rgba(tint(item.colour(), 0xffffff, 0.2), 0.45 * near));
+                c.glow(x + dx, NOTE_Y - hop, grown * 1.18, grown * 0.35, rgba(tint(item.colour(), 0xffffff, 0.2), 0.35 * near));
             }
             let start = c.shapes.len();
             draw_note(c, &self.arts[i], x + dx, NOTE_Y - hop, grown, 1.0);
