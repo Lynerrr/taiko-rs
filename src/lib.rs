@@ -281,6 +281,7 @@ struct State {
     modifiers_alt: bool,
     /// When the volume overlay was last poked (Alt + wheel).
     volume: volume::Overlay,
+    volume_save_at: Option<Instant>,
     /// The startup splash while it plays.
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
@@ -396,7 +397,9 @@ struct State {
     /// When the background image last changed (it fades in).
     bg_changed: Option<Instant>,
     /// A newly loaded skin's note images, for the render thread to upload.
-    sprites_upload: Option<render::Atlas>,
+    sprites_upload: Option<Arc<render::Atlas>>,
+    skin_loader: Option<skin::Loader>,
+    skin_key: Option<(skin::Key, std::sync::Weak<render::Atlas>)>,
     /// The playing map's folder when it carries skin images (they're in the loaded skin), and
     /// the folder last checked for them.
     skin_map: Option<PathBuf>,
@@ -818,9 +821,11 @@ fn board_scrollbar(c: &mut Canvas, x: f32, y: f32, shown: usize, first: usize, t
 }
 
 /// Sends a play to the online leaderboards on a background thread.
-fn submit_score(server: String, token: String, play: online::ScoreSubmit) -> Receiver<Result<online::Reply, String>> {
+fn submit_score(server: String, token: String, mut play: online::ScoreSubmit, path: PathBuf, params: pp::Play) -> Receiver<Result<online::Reply, String>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
+        play.stars = stars::star_rating_played(&path, params.rate, params.mods, params.scroll_speed, params.seed, params.half);
+        play.md5 = std::fs::read(&path).ok().map(|bytes| download::md5_hex(&bytes));
         let _ = tx.send(online::call(&server, online::Request::SubmitScore { token, play: Box::new(play) }));
     });
     rx
@@ -3580,10 +3585,26 @@ impl State {
     }
 
     fn load_skin(&mut self) {
-        let skin = skin::load(&self.cfg.skin, &self.cfg.skin_parts, self.audio.as_ref().map(|a| a.rate), self.skin_map.as_deref());
-        self.sprites_upload = Some(skin.images);
-        if let Some(a) = &self.audio {
-            a.set_hitsounds(skin.hitsounds);
+        self.request_skin(true);
+    }
+
+    fn request_skin(&mut self, reload: bool) {
+        self.skin_loader.get_or_insert_with(skin::Loader::new).request(skin::Key {
+            main: self.cfg.skin.clone(), parts: self.cfg.skin_parts.clone(),
+            rate: self.audio.as_ref().map(|a| a.rate), map_dir: self.skin_map.clone(),
+        }, reload);
+    }
+
+    fn poll_skin(&mut self) {
+        if let Some(ready) = self.skin_loader.as_ref().and_then(skin::Loader::poll)
+            && self.skin_key.as_ref().is_none_or(|(key, image)| *key != ready.key || !image.ptr_eq(&Arc::downgrade(&ready.assets.images)))
+        {
+            self.skin_key = Some((ready.key, Arc::downgrade(&ready.assets.images)));
+            self.sprites_upload = Some(ready.assets.images.clone());
+            skin::apply_map_spinner_warning(ready.assets.map_spinner);
+            if let (Some(audio), Some(sounds)) = (&self.audio, &ready.assets.sounds) {
+                audio.set_hitsounds(sounds.clone());
+            }
         }
     }
 
@@ -3607,11 +3628,8 @@ impl State {
             return;
         }
         self.skin_map_seen = dir.clone();
-        let want = dir.filter(|d| skin::map_has_images(d));
-        if want != self.skin_map {
-            self.skin_map = want;
-            self.load_skin();
-        }
+        self.skin_map = dir;
+        self.request_skin(false);
     }
 
     fn open_skins_folder(&mut self) {
@@ -4186,6 +4204,9 @@ impl State {
     }
 
     fn map_offset(&self, entry: Option<usize>) -> f64 {
+        if self.map_offsets.is_empty() {
+            return 0.0;
+        }
         entry.and_then(|i| self.library.get(i)).and_then(|e| self.map_offsets.get(&e.hash())).copied().unwrap_or(0.0)
     }
 
@@ -4202,8 +4223,9 @@ impl State {
     }
 
     fn refresh_play_offset(&mut self) {
-        self.play_offset = self.cfg.offset_ms + self.map_offset(self.offset_entry());
-        self.preview.map_offset = self.map_offset(self.offset_entry());
+        let offset = self.map_offset(self.offset_entry());
+        self.play_offset = self.cfg.offset_ms + offset;
+        self.preview.map_offset = offset;
     }
 
     /// Plays the current map again from where it was started (in game, paused or on results).
@@ -4657,8 +4679,10 @@ impl State {
     /// Turns the volume picked on the volume overlay (Alt+wheel, Alt+Up/Down) `notches` up.
     fn turn_volume(&mut self, notches: i32) {
         let changed = self.volume.turn(&mut self.cfg, notches, Instant::now());
-        self.apply_volume();
-        self.cfg.save();
+        if changed {
+            self.apply_volume();
+            self.volume_save_at = Some(Instant::now() + Duration::from_millis(250));
+        }
         // Hitsounds have nothing playing to judge them by: one rings at the new volume.
         if changed && self.volume.selected == volume::HITSOUNDS && !self.in_song() {
             self.sfx(audio::Sfx::Kat);
@@ -8035,6 +8059,10 @@ impl State {
         }
         self.refresh_play_offset();
         self.follow_map_skin();
+        if self.volume_save_at.is_some_and(|at| now >= at) {
+            self.volume_save_at = None;
+            self.cfg.save();
+        }
         if self.window_resized_at.is_some_and(|t| now.saturating_duration_since(t) > Duration::from_secs(1)) {
             self.window_resized_at = None;
             self.cfg.save();
@@ -8609,11 +8637,11 @@ impl State {
                                 replay_version: replay.version,
                                 inputs: replay.inputs.clone(),
                                 rolls: Some(game.stats.roll_ticks),
-                                stars: stars::star_rating_played(&e.path, replay.rate, game.mods, game.scroll_speed, game.seed, replay.half_rule()),
+                                stars: None,
                                 pp_version: online::PP_VERSION,
                                 scroll_speed: Some(replay.scroll_speed),
                                 play_ms: Some(game.played_ms as u64),
-                                md5: std::fs::read(&e.path).ok().map(|b| download::md5_hex(&b)),
+                                md5: None,
                                 timing: {
                                     let (latency_ms, reported_latency_ms) = self.audio.as_ref().map(|a| a.latencies_ms()).unwrap_or_default();
                                     Some(online::PlayTiming {
@@ -8626,7 +8654,7 @@ impl State {
                                     })
                                 },
                             };
-                            self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
+                            self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play, e.path.clone(), replay.pp_play()));
                             // Counted with the play itself.
                             self.playing = None;
                             results.total_due = true;
@@ -10183,34 +10211,39 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
     let mut layout_seen = std::collections::HashSet::new();
     loop {
-        let (present, cap, refresh_hz) = {
+        let (wanted, cap, refresh_hz, surface, size, atlas, letterbox, pixel_scale) = {
             let mut s = lock(&state);
-            if s.quit {
-                break;
-            }
-            if let Some((surface, w, h)) = s.surface_swap.take() {
-                renderer.set_surface(surface, w, h);
-            }
-            if let Some((w, h)) = s.want_size.take() {
-                renderer.resize(w, h);
-            }
-            renderer.letterbox = s.sync_letterbox();
-            // Switch present mode when entering/leaving songs (menus can stay on vsync). Compare
-            // with what was requested, not what was granted, so an unsupported mode that falls
-            // back isn't re-applied every frame.
-            let wanted = s.wanted_present();
-            if requested_present != Some(wanted) {
-                renderer.set_present(wanted);
-                requested_present = Some(wanted);
-                s.present = renderer.present;
-            }
+            if s.quit { break; }
+            s.poll_skin();
+            let surface = s.surface_swap.take();
+            let size = s.want_size.take();
+            let letterbox = s.sync_letterbox();
             if matches!(s.scene, Scene::Play { .. })
-                && let Some(sm) = &mut s.smooth {
+                && let Some(sm) = &mut s.smooth
+            {
                 sm.sample_waits(waits.0, waits.1, waits.2);
             }
-            renderer.pixel_scale = if s.cfg.half_resolution { 2 } else { 1 };
-            (s.present, s.frame_cap(), s.refresh_hz)
+            (s.wanted_present(), s.frame_cap(), s.refresh_hz, surface, size,
+             s.sprites_upload.take(), letterbox, if s.cfg.half_resolution { 2 } else { 1 })
         };
+        // GPU waits and uploads never hold the input/state mutex.
+        if let Some((surface, w, h)) = surface { renderer.set_surface(surface, w, h); }
+        if let Some((w, h)) = size { renderer.resize(w, h); }
+        renderer.letterbox = letterbox;
+        if requested_present != Some(wanted) {
+            renderer.set_present(wanted);
+            requested_present = Some(wanted);
+            lock(&state).present = renderer.present;
+        }
+        let present = renderer.present;
+        renderer.pixel_scale = pixel_scale;
+        if let Some(atlas) = atlas {
+            renderer.set_sprites(&atlas);
+            for c in [&mut canvas, &mut export_canvas] {
+                c.sprites = render::PerSprite(atlas.sprites.map(|s| s.map(|(_, size)| size)));
+                c.skin_layout = atlas.layout;
+            }
+        }
 
         let t0 = timing.then(Instant::now);
         let Some(frame) = renderer.acquire() else {
@@ -10258,16 +10291,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 break;
             }
         }
-        let (capture, clip, backdrop) = {
+        let (capture, clip, backdrop, background) = {
             let mut s = lock(&state);
-            if let Some(atlas) = s.sprites_upload.take() {
-                renderer.set_sprites(&atlas);
-                // The video export draws with the skin too.
-                for c in [&mut canvas, &mut export_canvas] {
-                    c.sprites = render::PerSprite(atlas.sprites.map(|s| s.map(|(_, size)| size)));
-                    c.skin_layout = atlas.layout;
-                }
-            }
             // Video export frames above are drawn without the grid; the screen's frame with it.
             render::set_text_grid(renderer.text_grid());
             render::set_frame_time(Some(now));
@@ -10293,16 +10318,15 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 cursor_hidden = hide;
                 let _ = proxy.send_event(UserEvent::HideCursor(hide));
             }
-            if let Some(image) = s.preview.bg_upload.take() {
-                renderer.set_background(image);
-                s.bg_changed = Some(Instant::now());
-            }
+            let background = s.preview.bg_upload.take();
+            if background.is_some() { s.bg_changed = Some(Instant::now()); }
             renderer.bg_brightness = s.bg_brightness;
             // A new background cross-fades from the previous one.
             let fade = if s.on_menu() { MENU_BACKGROUND_FADE_MS } else { 300.0 };
             renderer.bg_mix = s.bg_changed.map(|t| render::progress(t, fade)).unwrap_or(1.0);
-            (capture, s.frame_clip.take(), s.backdrop(s.dims_background()))
+            (capture, s.frame_clip.take(), s.backdrop(s.dims_background()), background)
         };
+        if let Some(image) = background { renderer.set_background(image); }
         // The playfield / preview clip (fractions) plus the lists' (virtual units).
         let vw = canvas.width.max(1.0);
         let to_fraction = |[x, y, w, h]: [f32; 4]| [x / vw, y / render::VIRTUAL_HEIGHT, w / vw, h / render::VIRTUAL_HEIGHT];
@@ -10783,6 +10807,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         lock(&self.state).cfg.save();
+        config::flush_saves();
     }
 }
 
@@ -10839,6 +10864,7 @@ impl State {
             modifiers_ctrl: false,
             modifiers_alt: false,
             volume: volume::Overlay::new(),
+            volume_save_at: None,
             splash,
             main_menu: None,
             menu_notes: Default::default(),
@@ -10902,6 +10928,8 @@ impl State {
             last_video: None,
             bg_changed: None,
             sprites_upload: None,
+            skin_loader: None,
+            skin_key: None,
             skin_map: None,
             skin_map_seen: None,
             focused: true,

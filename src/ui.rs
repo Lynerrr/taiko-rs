@@ -416,7 +416,7 @@ impl Select {
             .filter(|(_, e)| !self.hidden.contains(&e.path) && !self.gone.contains(&e.path))
             .filter(|&(i, e)| {
                 self.pinned.contains(&e.path)
-                    || ((self.show_converts || e.meta.mode == 1) && only.is_none_or(|set| set.contains(&i)) && (query.is_empty() || query.matches(&e.meta, &e.label(), &facts(i, e))))
+                    || ((self.show_converts || e.meta.mode == 1) && only.is_none_or(|set| set.contains(&i)) && (query.is_empty() || query.matches_text(&e.meta, e.text(), &facts(i, e))))
             })
             .map(|(i, _)| i)
             .collect();
@@ -525,25 +525,26 @@ impl Select {
             let stars = if self.sort == SortMode::Difficulty { star_heading(value(i)) } else { 0 };
             (library[i].path.parent().unwrap_or(std::path::Path::new("")), stars)
         };
+        let mut set_value: Vec<f64> = Vec::new();
+        let mut keyed = Vec::with_capacity(self.visible.len());
         for &i in &self.visible {
             let n = folder_ids.len();
-            folder_ids.entry(folder(i)).or_insert(n);
-        }
-        let mut set_value = vec![f64::NAN; folder_ids.len()];
-        for &i in &self.visible {
-            let f = folder_ids[&folder(i)];
-            let v = value(i);
-            if v.is_finite() && (set_value[f].is_nan() || set_value[f] < v) {
-                set_value[f] = v;
+            let f = *folder_ids.entry(folder(i)).or_insert(n);
+            if f == set_value.len() { set_value.push(f64::NAN); }
+            keyed.push((f, i));
+            if self.sort != SortMode::Title {
+                let v = value(i);
+                if v.is_finite() && (set_value[f].is_nan() || set_value[f] < v) {
+                    set_value[f] = v;
+                }
             }
         }
         // Highest first: the newest, and the best status.
         let newest_first = matches!(self.sort, SortMode::Played | SortMode::Added | SortMode::Status);
-        let title = |i: usize| (library[i].meta.title.to_lowercase(), library[i].meta.artist.to_lowercase());
-        let mut keyed: Vec<(usize, usize)> = self.visible.iter().map(|&i| (folder_ids[&folder(i)], i)).collect();
+        let title = |i: usize| (library[i].text().title.as_str(), library[i].text().artist.as_str());
         if self.sort == SortMode::Title {
-            let titles: Vec<(String, String)> = {
-                let mut t = vec![(String::new(), String::new()); folder_ids.len()];
+            let titles: Vec<(&str, &str)> = {
+                let mut t = vec![("", ""); folder_ids.len()];
                 for &(f, i) in &keyed {
                     if t[f].0.is_empty() {
                         t[f] = title(i);

@@ -128,6 +128,41 @@ fn skin_and_builtin_sounds() {
 
 #[test]
 #[ignore = "opt-in performance audit; run with the perf-audit profile"]
+fn async_skin_handoff() {
+    let dir = std::env::temp_dir().join(format!("taiko-perf-async-skin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    image::RgbaImage::from_fn(2048, 2048, |x, y| image::Rgba([(x % 251) as u8, (y % 251) as u8, ((x ^ y) % 251) as u8, 255]))
+        .save(dir.join("taikohitcircle.png")).unwrap();
+    let loader = skin::Loader::new();
+    let key = skin::Key { main: String::new(), parts: skin::Sources::default(), rate: Some(48_000), map_dir: Some(dir.clone()) };
+    let mut requests = Vec::new();
+    let mut completions = Vec::new();
+    let mut handoffs = Vec::new();
+    for _ in 0..21 {
+        let at = Instant::now();
+        loader.request(key.clone(), true);
+        requests.push(at.elapsed().as_secs_f64() * 1e6);
+        let deadline = at + Duration::from_secs(10);
+        let ready = loop {
+            if let Some(ready) = loader.poll() { break ready; }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        completions.push(at.elapsed().as_secs_f64() * 1e6);
+        let at = Instant::now();
+        black_box(ready.assets.images.clone());
+        black_box(ready.assets.sounds.clone());
+        handoffs.push(at.elapsed().as_secs_f64() * 1e6);
+        assert!(ready.assets.images.sprites[render::Sprite::HitCircle as usize].is_some());
+    }
+    report("skin/async/request/2048px", requests);
+    report("skin/async/worker-completion/2048px", completions);
+    report("skin/async/arc-handoff/2048px", handoffs);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "opt-in performance audit; run with the perf-audit profile"]
 fn input_mutex_contention() {
     // A contention probe, not an end-to-end input measurement: run the exact sounds rebuild
     // while holding the same State mutex used by rendering and window event handling.

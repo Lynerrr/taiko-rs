@@ -2,6 +2,7 @@
 //! Linux, `%APPDATA%\taiko-rs\config.txt` on Windows.
 
 use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, mpsc};
 
 use winit::keyboard::KeyCode;
 
@@ -1004,12 +1005,50 @@ impl Config {
 
     pub fn save(&self) {
         let Some(path) = config_path() else { return };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+        let _ = SAVES.get_or_init(save_worker).send(Save::Write(path, self.to_text()));
+    }
+}
+
+enum Save {
+    Write(PathBuf, String),
+    Flush(mpsc::Sender<()>),
+}
+
+static SAVES: OnceLock<mpsc::Sender<Save>> = OnceLock::new();
+
+fn write_pending(pending: &mut std::collections::HashMap<PathBuf, String>) {
+    for (path, mut text) in pending.drain() {
+        if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+        keep_unknown(&mut text, &std::fs::read_to_string(&path).unwrap_or_default());
+        let _ = std::fs::write(path, text);
+    }
+}
+
+fn save_worker() -> mpsc::Sender<Save> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new().name("settings writer".into()).spawn(move || {
+        let mut pending = std::collections::HashMap::new();
+        while let Ok(first) = rx.recv() {
+            for job in std::iter::once(first).chain(rx.try_iter()) {
+                match job {
+                    Save::Write(path, text) => { pending.insert(path, text); }
+                    Save::Flush(done) => {
+                        write_pending(&mut pending);
+                        let _ = done.send(());
+                    }
+                }
+            }
+            write_pending(&mut pending);
         }
-        let mut out = self.to_text();
-        keep_unknown(&mut out, &std::fs::read_to_string(&path).unwrap_or_default());
-        let _ = std::fs::write(path, out);
+    }).expect("settings writer");
+    tx
+}
+
+/// Called outside State's lock on shutdown, after queuing the final settings snapshot.
+pub fn flush_saves() {
+    if let Some(tx) = SAVES.get() {
+        let (done, wait) = mpsc::channel();
+        if tx.send(Save::Flush(done)).is_ok() { let _ = wait.recv(); }
     }
 }
 
@@ -1036,6 +1075,26 @@ fn keep_unknown(out: &mut String, old: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_saves_flush_the_latest_snapshot_and_preserve_unknown_settings() {
+        let dir = std::env::temp_dir().join(format!("taiko-config-worker-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings");
+        std::fs::write(&path, "volume = 0\nfuture_option = keep\n").unwrap();
+        let tx = save_worker();
+        for i in 0..100 {
+            tx.send(Save::Write(path.clone(), format!("volume = {i}\n"))).unwrap();
+        }
+        let (done, wait) = mpsc::channel();
+        tx.send(Save::Flush(done)).unwrap();
+        wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("volume = 99\n"));
+        assert_eq!(text.matches("future_option = keep").count(), 1);
+        drop(tx);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn saving_keeps_the_settings_of_a_newer_build() {

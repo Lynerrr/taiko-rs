@@ -224,6 +224,24 @@ struct StrongPending {
     at: f64,
 }
 
+struct NoteBlock {
+    range: std::ops::Range<usize>,
+    min_velocity: f64,
+    last_end: f64,
+    regular: bool,
+}
+
+impl NoteBlock {
+    fn index(notes: &[beatmap::Note]) -> Vec<Self> {
+        notes.chunks(128).enumerate().map(|(i, notes)| Self {
+            range: i * 128..i * 128 + notes.len(),
+            min_velocity: notes.iter().map(|n| n.velocity).fold(f64::INFINITY, f64::min).max(1e-6),
+            last_end: notes.iter().map(|n| n.end_time).fold(f64::NEG_INFINITY, f64::max),
+            regular: notes.iter().all(|n| matches!(n.kind, Kind::Don | Kind::Kat) && n.fake_len == 0.0 && n.velocity.is_finite() && n.velocity > 0.0 && n.end_time.is_finite()),
+        }).collect()
+    }
+}
+
 pub struct Game {
     /// Random's colouring of the notes: a new one each play, kept with the replay so it plays
     /// back the same; 0 is the one per map from before seeds.
@@ -251,6 +269,7 @@ pub struct Game {
     recent_errors: VecDeque<(f64, f64, Judge)>,
     strong: Option<StrongPending>,
     min_velocity: f64,
+    note_blocks: Vec<NoteBlock>,
     /// The beat length covering the most map time: what pop-up fake sliders fade in by.
     main_beat: f64,
     visible: Vec<usize>,
@@ -1389,6 +1408,7 @@ impl Game {
         let focus_switches = if mods.has(Mod::Multiverse) { focus_switches(&map) } else { Vec::new() };
         let shapeshift = shapeshift::get();
         let shape_order = shape_order(&map, mods, shapeshift);
+        let note_blocks = NoteBlock::index(&map.notes);
         Game {
             seed,
             half,
@@ -1409,6 +1429,7 @@ impl Game {
             recent_errors: VecDeque::new(),
             strong: None,
             min_velocity,
+            note_blocks,
             main_beat,
             visible: Vec::new(),
             last_audio_ms: None,
@@ -1748,12 +1769,13 @@ impl Game {
         const PRIOR_MS: f64 = 10.0;
 
         let s = &self.stats;
-        let n = s.errors.len();
-        if n < MIN_HITS {
+        if s.errors.len() < MIN_HITS {
             return None;
         }
         // An error measured under offset `o` would have been `e - (current - o)` under the current one.
-        let corrected: Vec<f64> = s.errors.iter().zip(&s.error_offsets).map(|(e, o)| e - (current_offset - o)).collect();
+        let from = s.errors.len().saturating_sub(MAX_HITS);
+        let corrected: Vec<f64> = s.errors[from..].iter().zip(&s.error_offsets[from..]).map(|(e, o)| e - (current_offset - o)).collect();
+        let n = corrected.len();
         if !self.ur_scaled_hint {
             // Simple mode: average of the last 40 hits, applied in full.
             let estimate = calibrate::estimate(&corrected[n.saturating_sub(40)..], current_offset)?;
@@ -2702,22 +2724,30 @@ impl Game {
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
         // Uncapped: extremely slow notes are common, so the whole map may be on screen at once,
         // its last object included (owner, 2026-10-28).
-        // ponytail: one map-wide lookahead, so a slow section anywhere widens every frame's scan
-        // to the whole map; per-section reach (like barline_times) if that gets slow.
+        // Keep the global bound for special objects and barlines; ordinary-note blocks also
+        // have conservative local bounds so one distant slow note does not widen every scan.
         let lookahead = (lane_len + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs();
 
         // Notes on screen, nearest first.
         let start = self.map.notes.partition_point(|n| n.time < vt.min(t) - lookahead.max(20_000.0));
         self.visible.clear();
-        for i in start..self.map.notes.len() {
-            let n = &self.map.notes[i];
-            if n.time - vt > lookahead {
-                break;
+        let first_block = self.note_blocks.partition_point(|b| b.range.end <= start);
+        for block in &self.note_blocks[first_block..] {
+            if self.map.notes[block.range.start].time - vt > lookahead { break; }
+            if block.regular && !mods.has(Mod::Liar) {
+                let reach = (lane_len + BIG_R) as f64 / (block.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs();
+                if self.map.notes[block.range.start].time - vt.max(t) > reach || block.last_end < vt.min(t) - 3000.0 {
+                    continue;
+                }
             }
-            if n.end_time + n.fake_len < vt.min(t) - 3000.0 && n.kind != Kind::Swell {
-                continue;
+            for i in start.max(block.range.start)..block.range.end {
+                let n = &self.map.notes[i];
+                if n.time - vt > lookahead { break; }
+                if n.end_time + n.fake_len < vt.min(t) - 3000.0 && n.kind != Kind::Swell {
+                    continue;
+                }
+                self.visible.push(i);
             }
-            self.visible.push(i);
         }
         // Distance along the lane of note `i`. Liar: far off, a triplet sits where a 1/4 would,
         // sliding to its real place on the way in.
@@ -3924,6 +3954,43 @@ pub fn draw_preview_hud(c: &mut Canvas) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_culling_preserves_the_original_draw_for_every_mod() {
+        crate::render::set_animations(false);
+        crate::render::set_frame_time(Some(Instant::now()));
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let template = map.notes[0].clone();
+        map.notes = (0..2048).map(|i| {
+            let time = 2000.0 + i as f64 * 100.0;
+            let special = i % 511 == 0;
+            beatmap::Note {
+                time, end_time: time + if special { 9000.0 } else { 0.0 },
+                kind: if special { if i % 2 == 0 { Kind::Roll } else { Kind::Swell } } else { Kind::Don },
+                velocity: if i == 2047 { 1e-5 } else { 0.4 },
+                fake_len: if i == 511 { 200.0 } else { 0.0 },
+                ..template.clone()
+            }
+        }).collect();
+        for mods in std::iter::once(Mods::NONE).chain(crate::mods::ALL.into_iter().map(|m| Mods::parse(m.acronym()))) {
+            let track = Arc::new(Track { samples: Vec::new(), rate: 1.0 });
+            let mut optimized = Game::with_seed(map.clone(), track.clone(), None, mods, 42);
+            let mut reference = Game::with_seed(map.clone(), track, None, mods, 42);
+            // One special block disables the new bounds, reproducing the original scan.
+            reference.note_blocks = vec![NoteBlock { range: 0..reference.map.notes.len(), min_velocity: 1e-6, last_end: f64::INFINITY, regular: false }];
+            for time in [0.0, 3000.0, 55_555.0, 190_000.0, 210_000.0] {
+                optimized.time = time;
+                reference.time = time;
+                let mut a = Canvas::default();
+                let mut b = Canvas::default();
+                a.clear(853.3);
+                b.clear(853.3);
+                optimized.draw_playfield(&mut a, 1.0);
+                reference.draw_playfield(&mut b, 1.0);
+                assert!(bytemuck::cast_slice::<_, u8>(&a.shapes) == bytemuck::cast_slice::<_, u8>(&b.shapes), "mods={mods:?}, time={time}, shapes={} vs {}", a.shapes.len(), b.shapes.len());
+            }
+        }
+    }
 
     fn game() -> Game {
         let map = beatmap::calibration_map(500.0, 0, 64);

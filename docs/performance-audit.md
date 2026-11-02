@@ -1,7 +1,8 @@
 # Client performance audit
 
-Audited base: `393e1d4` (`worktree-taiko-client`). This branch adds measurements and this
-report, not runtime optimizations. The scope is the desktop client's render/input handoff,
+Audited base: `393e1d4` (`worktree-taiko-client`). This report records the original measurements;
+subsequent fixes and their results are in [performance-fixes.md](performance-fixes.md).
+The scope is the desktop client's render/input handoff,
 CPU gameplay drawing, library UI, asset preparation, and audio control paths.
 
 The largest demonstrated problem is **long work inside the same `State` mutex that keyboard
