@@ -41,3 +41,18 @@ If branch protection previously required checks from `Release build` on pull req
 replace those required checks with **Pre-merge checks**; release checks no longer run on PRs.
 Before merging, rebase onto the latest target branch and use squash merge, as specified in
 `AGENTS.md`.
+
+## Reading a Windows crash report
+
+A release build's backtrace on Windows has no names (`<unknown>`), so a crash report also ends
+in `frames: taiko-rs.exe+0x1a2b3c ...`: each return address as its module and offset. The
+release run builds the exe with line tables in `taiko_rs.pdb` (not shipped) and keeps both as
+the `windows-pdb` artifact for 90 days. To turn the frames into files and lines:
+
+```sh
+run=$(gh run list --workflow release.yml --commit <build> --json databaseId --jq '.[0].databaseId')
+gh run download "$run" -n windows-pdb -D pdb
+# The offsets of the taiko-rs.exe frames, as 0x... each; the exe's image base is 0x140000000.
+for off in 0x1a2b3c 0x0f00d; do printf '0x%x\n' $((0x140000000 + off)); done |
+  llvm-symbolizer --obj=pdb/taiko-rs.exe --pretty-print
+```
