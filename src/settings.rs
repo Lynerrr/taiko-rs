@@ -67,6 +67,8 @@ pub enum Item {
     BackgroundDim,
     BackgroundDimBlack,
     PresentMode,
+    /// The graphics API (`config::RENDERERS`), from the next start.
+    Renderer,
     MenuVsync,
     HalfResolution,
     FpsCap,
@@ -106,7 +108,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 120] = [
+pub const ITEMS: [(&str, Item); 121] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -189,6 +191,7 @@ pub const ITEMS: [(&str, Item); 120] = [
     ("AUDIO", Item::FxVolume),
     ("AUDIO", Item::AudioBuffer),
     ("VIDEO", Item::PresentMode),
+    ("VIDEO", Item::Renderer),
     ("VIDEO", Item::MenuVsync),
     ("VIDEO", Item::HalfResolution),
     ("VIDEO", Item::FpsCap),
@@ -399,6 +402,7 @@ impl Item {
             Item::BackgroundDim => tr!("Background dim", "背景の暗さ", "Затемнение фона"),
             Item::BackgroundDimBlack => tr!("Dim to black", "黒まで暗くする", "Затемнять до чёрного"),
             Item::PresentMode => tr!("Present mode (gameplay)", "表示モード (プレイ中)", "Режим вывода (в игре)"),
+            Item::Renderer => tr!("Renderer", "レンダラー", "Рендер"),
             Item::MenuVsync => tr!("Menus use vsync", "メニューは垂直同期", "Vsync в меню"),
             Item::HalfResolution => tr!("Half resolution", "半分の解像度", "Половинное разрешение"),
             Item::FpsCap => tr!("FPS cap", "FPSの上限", "Ограничение FPS"),
@@ -458,6 +462,7 @@ impl Item {
             | Item::Language
             | Item::AudioBuffer
             | Item::PresentMode
+            | Item::Renderer
             | Item::UpdateChannel
             | Item::Skin
             | Item::SkinParts
@@ -740,6 +745,11 @@ impl Item {
                 "Used during songs. vsync is smoothest on Wayland; mailbox/immediate add judder.",
                 "曲中に使います。Waylandではvsyncが一番なめらか。mailbox/immediateはカクつきます。",
                 "Для песен. На Wayland плавнее всего vsync; mailbox/immediate дёргаются."
+            ),
+            Item::Renderer => tr!(
+                "What draws the game, from the next start. If it closes right after starting or crashes, try another: DirectX 12 on Windows (Auto picks it on Intel graphics).",
+                "ゲームを描くグラフィックスAPI。次の起動から。起動直後に閉じたりクラッシュしたら別のものを: WindowsならDirectX 12 (Intelグラフィックスでは自動で選ばれます)。",
+                "Чем рисуется игра, со следующего запуска. Если она закрывается сразу после запуска или вылетает, попробуй другой: на Windows DirectX 12 (Авто выбирает его на графике Intel)."
             ),
             Item::MenuVsync => tr!(
                 "Everything but playing a song uses vsync: song select (and its autoplay preview), settings, results, replays and autoplay.",

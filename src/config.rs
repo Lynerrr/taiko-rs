@@ -142,7 +142,7 @@ pub struct Config {
     /// Draw at half resolution and scale up exactly 2x (default on Android: high-DPI screens,
     /// mobile GPUs).
     pub half_resolution: bool,
-    /// The graphics API: "auto", "vulkan", "dx12" (Windows) or "gl" (`crate::graphics_backends`).
+    /// The graphics API: one of `RENDERERS` (`crate::graphics_backends`).
     pub graphics_api: String,
     /// Everything but the player playing a song (menus, results, replays, autoplay) uses vsync.
     pub menu_vsync: bool,
@@ -442,6 +442,26 @@ pub fn data_folder() -> Option<PathBuf> {
 
 /// Where replays, scores, videos, play history and the like are kept: the data folder, else
 /// next to config.txt.
+/// The graphics APIs this system offers (`Config::graphics_api`, what the setting stores).
+pub const RENDERERS: &[&str] = if cfg!(windows) {
+    &["auto", "dx12", "vulkan", "gl"]
+} else if cfg!(target_os = "macos") {
+    &["auto", "metal"]
+} else {
+    &["auto", "vulkan", "gl"]
+};
+
+/// A renderer's name in the settings.
+pub fn renderer_name(api: &str) -> &'static str {
+    match api {
+        "dx12" => "DirectX 12",
+        "vulkan" => "Vulkan",
+        "gl" => "OpenGL",
+        "metal" => "Metal",
+        _ => tr!("Auto", "自動", "Авто"),
+    }
+}
+
 pub fn data_dir() -> Option<PathBuf> {
     data_folder().or_else(|| user_dir(false))
 }
