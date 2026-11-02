@@ -14,6 +14,8 @@ const REPO: &str = "https://github.com/Lynerrr/taiko-rs";
 /// Where the site lives, for the absolute links link previews need.
 const SITE: &str = "https://rstaiko.auneu.space";
 const TAGLINE: &str = "A taiko client for osu! beatmaps, with 73 mods that bend, break and multiply the lane. Rankings, profiles, chat and downloads.";
+/// The community's Discord server.
+const DISCORD: &str = "https://discord.gg/jCPv8k6HT";
 const RAW: &str = "https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client";
 
 /// A clip of taiko.rs's own mods: what it shows, the mods on, its file under /clips/, and the
@@ -1486,6 +1488,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
             let on = if *name == nav { " class=on aria-current=page" } else { "" };
             format!("<a href=\"{href}\"{on}>{name}</a>")
         })
+        .chain(std::iter::once(format!("<a href=\"{DISCORD}\" target=_blank rel=noopener>discord</a>")))
         .collect();
     format!(
         r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{} · taiko.rs</title>
@@ -1493,7 +1496,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
 <link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style><script src="/site/copy.js" defer></script></head>
 <body><nav><div class=inner><a class=logo href="/" aria-label="taiko.rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO.RS</a><div class=links>{links}</div>
 <form action="/u" role=search><input name=name placeholder="find a player" maxlength=16 aria-label="Find a player"></form><div class=account>{account}</div></div></nav>
-<main>{}</main><footer><div class=inner><span class=brand>TAIKO.RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
+<main>{}</main><footer><div class=inner><span class=brand>TAIKO.RS</span><a href="{REPO}">github</a><a href="{DISCORD}" target=_blank rel=noopener>discord</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
         esc(title),
         body
     )
