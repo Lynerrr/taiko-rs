@@ -1543,33 +1543,63 @@ impl SettingsUi {
         let section = self.section();
         let searching = !self.search.is_empty();
 
-        // Sidebar: while searching, how much was found in each section.
+        // Sidebar: one panel, each section a note on it (don and kat in turn, like a lane): the
+        // open one bigger and lit, the others dimmed, the selector sliding between them. While
+        // searching, how much was found in each section.
+        const PITCH: f32 = 40.0;
+        crate::style::panel(c, x0 - 6.0, TOP - 8.0, side_w + 12.0, SECTIONS.len() as f32 * PITCH + 4.0);
+        let colours = crate::multiverse::note_colours();
         for (i, (id, _)) in SECTIONS.iter().enumerate() {
             let name = section_name(i);
             let found = self.results.iter().filter(|&&r| ITEMS[r].0 == *id).count();
             let about = if searching { tr!("found: {found}", "{found}件", "найдено: {found}";) } else { section_summary(i).to_string() };
-            let y = TOP + i as f32 * 40.0;
+            let y = TOP + i as f32 * PITCH;
             let on = i == section && !searching;
             let hover = !on && c.hovered(x0, y, side_w, 34.0);
-            let bg = if hover { 0x262634 } else { crate::style::PANEL };
             let dim = searching && found == 0;
-            c.round_rect([x0, y], [side_w, 34.0], 7.0, rgba(bg, 0.95), rgba(crate::style::PANEL_EDGE, 1.0), 1.0);
+            if hover {
+                c.round_rect([x0, y], [side_w, 34.0], 7.0, rgba(0x262634, 0.6), rgba(0, 0.0), 0.0);
+            }
+            let (nx, ny) = (x0 + 17.0, y + 17.0);
+            let col = if i % 2 == 0 { colours.don() } else { colours.kat() };
+            let r = if on { 11.0 } else { 8.0 };
             if on {
-                // The section open: a pill of the accent, the selector round it.
-                crate::style::pill(c, x0 + 4.0, y + 4.0, side_w - 8.0, 26.0, accent());
-                crate::style::selector(c, "settings-section", [x0 - 3.0, y - 3.0, side_w + 6.0, 40.0]);
+                c.glow(nx, ny, r * 2.4, r, rgba(col, 0.5));
+                crate::style::selector(c, "settings-section", [x0 - 2.0, y - 1.0, side_w + 4.0, 36.0]);
+            }
+            let note = c.shapes.len();
+            crate::multiverse::note(c, crate::multiverse::Shape::Round, nx, ny, r, col, 1.0);
+            if !on {
+                c.fade_since(note, 1.0, if dim { 0.35 } else { 0.6 });
             }
             c.hit(x0, y, side_w, 34.0, Hit::SettingsSection(i));
-            c.text(x0 + 12.0, y + 7.0, 9.0, rgba(if on { 0xffffff } else if dim { 0x6f6f86 } else { 0xc8c8d8 }, 1.0), name);
-            c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 20.0, &about));
+            let text = if on || hover { 0xffffff } else if dim { 0x6f6f86 } else { 0xa8a8bc };
+            c.text(x0 + 36.0, y + 7.0, 9.0, rgba(text, 1.0), name);
+            c.text(x0 + 36.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 44.0, &about));
         }
+
+        // The list: it scrolls by itself to keep the cursor in sight, and by the wheel.
+        let list_top = TOP + 18.0;
+        let (lines, height) = self.lines(section);
+        // Room for the rows: the panel (help lines under them, however tall the text comes out)
+        // ends above the keys' hint at the bottom.
+        let help_room = 10.0 + 2.0 * (Canvas::text_height(7.0) + 4.0) + 14.0;
+        let view = ((crate::render::VIRTUAL_HEIGHT - 26.0 - help_room - list_top) / ROW).floor().max(1.0) * ROW;
+        let max = (height - view).max(0.0);
+        self.scroll_max.set(max);
+        // One panel for the section: its title, its rows and what the selected one does.
+        let list_h = height.min(view);
+        let glyph_h = Canvas::text_height(7.0);
+        let line_h = glyph_h + 4.0;
+        let help_y = list_top + list_h.max(ROW) + 10.0;
+        crate::style::panel(c, cx - 10.0, TOP - 14.0, col + 20.0, help_y + line_h * 2.0 + 14.0 - (TOP - 14.0));
 
         // The title and the search box beside it: typing anywhere goes into it.
         let box_w = (col * 0.5).min(240.0);
         let box_x = cx + col - box_w;
         let n = self.results.len();
         let title = if searching { tr!("Found: {n}", "{n}件", "Найдено: {n}";) } else { section_name(section).to_string() };
-        crate::style::title(c, cx, TOP - 2.0, 11.0, accent(), &Canvas::fit(11.0, col - box_w - 8.0, &title));
+        crate::style::title(c, cx, TOP - 4.0, 13.0, accent(), &Canvas::fit(13.0, col - box_w - 8.0, &title));
         c.round_rect([box_x, TOP - 7.0], [box_w, 19.0], 5.0, rgba(0x23232f, 0.9), rgba(if searching { accent() } else { 0x3a3a4e }, 1.0), 1.0);
         let (text, col_text) = if searching {
             (Canvas::fit_end(8.0, box_w - 18.0, &format!("{}_", self.search)), 0xffffff)
@@ -1579,12 +1609,7 @@ impl SettingsUi {
         c.text(box_x + 9.0, TOP - 1.5, 8.0, rgba(col_text, 1.0), &text);
         c.hit(box_x, TOP - 7.0, box_w, 19.0, Hit::SettingsSearch);
 
-        // The list: it scrolls by itself to keep the cursor in sight, and by the wheel.
-        let list_top = TOP + 18.0;
-        let (lines, height) = self.lines(section);
-        let view = ((crate::render::VIRTUAL_HEIGHT - list_top - 60.0) / ROW).floor().max(1.0) * ROW;
-        let max = (height - view).max(0.0);
-        self.scroll_max.set(max);
+
         let listing = if searching { RESULTS } else { section };
         let fresh = self.shown.get() != Some(listing);
         if fresh {
@@ -1634,7 +1659,6 @@ impl SettingsUi {
             c.round_rect([cx + col + 4.0, list_top], [3.0, bar_h], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
             c.round_rect([cx + col + 4.0, list_top + from], [3.0, len], 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
         }
-        let list_h = height.min(view);
         if searching && lines.is_empty() {
             c.text(cx + 12.0, list_top + 10.0, 8.0, rgba(0x8a8aa0, 1.0), tr!("Nothing found.", "見つかりませんでした。", "Ничего не найдено."));
         }
@@ -1652,7 +1676,7 @@ impl SettingsUi {
             }
             match line {
                 Line::Group(heading, _) => {
-                    c.text(cx + 2.0, y + 6.0, 7.0, rgba(0x8a8aa0, 1.0), heading);
+                    c.text(cx + 2.0, y + 6.0, 7.0, rgba(crate::style::selector_colour(), 0.85), heading);
                 }
                 Line::Row(i, _) => {
                     let row_hover = in_list && c.hovered(cx, y, col, ROW - 4.0);
@@ -1673,12 +1697,9 @@ impl SettingsUi {
             (*y, *hh) = (y0, (y1 - y0).max(0.0));
         }
 
-        // What the setting under the pointer does, or else the selected one.
-        let help_y = list_top + list_h.max(ROW) + 10.0;
-        // Two lines, spaced for however tall the text comes out (taller on a text grid).
-        let glyph_h = Canvas::text_height(7.0);
-        let line_h = glyph_h + 4.0;
-        c.round_rect([cx, help_y], [col, line_h * 2.0 + 8.0], 6.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        // What the setting under the pointer does, or else the selected one: two lines, spaced
+        // for however tall the text comes out (taller on a text grid), under a divider.
+        c.rect(cx, help_y - 3.0, col, 1.0, rgba(0x2a2a38, 1.0));
         let help = hovered.or(cursor_y.map(|_| self.item())).map_or("", Item::help);
         let (line1, line2) = split_help(help, 7.0, col - 20.0);
         // `text` centres taller glyphs on the line; this puts their top 6 below the box's.
@@ -1692,8 +1713,13 @@ impl SettingsUi {
     fn draw_row(&self, c: &mut Canvas, i: usize, [cx, y, col]: [f32; 3], hover: bool, value: &dyn Fn(Item) -> String, control: &dyn Fn(Item) -> Control) {
         let item = ITEMS[i].1;
         let selected = i == self.cursor;
-        let bg = if selected { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
-        c.round_rect([cx, y], [col, ROW - 4.0], 6.0, rgba(bg, 0.95), rgba(0x2a2a38, 1.0), 1.0);
+        // Rows are lines on the panel: the selected one lit in the selector's colour, a divider under each.
+        if selected {
+            c.round_rect([cx, y], [col, ROW - 4.0], 6.0, rgba(crate::style::selector_colour(), 0.10 + 0.05 * crate::style::pulse()), rgba(0, 0.0), 0.0);
+        } else if hover {
+            c.round_rect([cx, y], [col, ROW - 4.0], 6.0, rgba(0x262634, 0.6), rgba(0, 0.0), 0.0);
+        }
+        c.rect(cx + 8.0, y + ROW - 3.0, col - 16.0, 1.0, rgba(0x23232f, 1.0));
         c.hit(cx, y - 2.0, col, ROW, Hit::SettingRow(i));
         // Found by a search, the row says which section it's in.
         let mut x = cx + 12.0;
