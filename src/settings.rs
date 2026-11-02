@@ -752,9 +752,9 @@ impl Item {
                 "Для песен. На Wayland плавнее всего vsync; mailbox/immediate дёргаются."
             ),
             Item::Renderer => tr!(
-                "What draws the game, from the next start. If it closes right after starting or crashes, try another: DirectX 12 on Windows (Auto picks it on Intel graphics).",
-                "ゲームを描くグラフィックスAPI。次の起動から。起動直後に閉じたりクラッシュしたら別のものを: WindowsならDirectX 12 (Intelグラフィックスでは自動で選ばれます)。",
-                "Чем рисуется игра, со следующего запуска. Если она закрывается сразу после запуска или вылетает, попробуй другой: на Windows DirectX 12 (Авто выбирает его на графике Intel)."
+                "What draws the game: picking one restarts it. If it closes right after starting or crashes, try another: DirectX 12 on Windows (Auto picks it on Intel graphics). OpenGL always uses vsync on Linux.",
+                "ゲームを描くグラフィックスAPI: 選ぶと再起動します。起動直後に閉じたりクラッシュしたら別のものを: WindowsならDirectX 12 (Intelグラフィックスでは自動で選ばれます)。LinuxのOpenGLは常に垂直同期です。",
+                "Чем рисуется игра: при выборе она перезапустится. Если она закрывается сразу после запуска или вылетает, попробуй другой: на Windows DirectX 12 (Авто выбирает его на графике Intel). OpenGL на Linux всегда с vsync."
             ),
             Item::MenuVsync => tr!(
                 "Everything but playing a song uses vsync: song select (and its autoplay preview), settings, results, replays and autoplay.",

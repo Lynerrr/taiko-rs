@@ -2884,11 +2884,8 @@ impl State {
             Item::PresentMode => {
                 self.cfg.present = if dir > 0 { self.cfg.present.next() } else { self.cfg.present.next().next() };
             }
-            Item::Renderer => {
-                let all = config::RENDERERS;
-                let i = all.iter().position(|&r| r == self.cfg.graphics_api).unwrap_or(0) as i32;
-                self.cfg.graphics_api = all[(i + dir).rem_euclid(all.len() as i32) as usize].to_string();
-            }
+            // Each pick restarts the game, so Left/Right open the list rather than step through it.
+            Item::Renderer => self.open_choices(item),
             Item::MenuVsync => self.cfg.menu_vsync = !self.cfg.menu_vsync,
             Item::HalfResolution => self.cfg.half_resolution = !self.cfg.half_resolution,
             Item::FpsCap => {
@@ -3046,7 +3043,7 @@ impl State {
             Item::AutoplayBinding => (strings(&mut autoplay::BINDINGS.iter().copied()), Some(c.autoplay.binding), String::new()),
             Item::Renderer => {
                 let all = config::RENDERERS;
-                (strings(&mut all.iter().map(|&r| config::renderer_name(r))), all.iter().position(|&r| r == c.graphics_api), tr!("from the next start", "次の起動から", "со следующего запуска").into())
+                (strings(&mut all.iter().map(|&r| config::renderer_name(r))), all.iter().position(|&r| r == c.graphics_api), tr!("picking one restarts the game", "選ぶとゲームが再起動します", "выбор перезапустит игру").into())
             }
             Item::PresentMode => {
                 let all = PresentChoice::ALL;
@@ -3159,10 +3156,11 @@ impl State {
             Item::AutoplayBinding => self.cfg.autoplay.binding = i,
             Item::Language => self.cfg.language = lang::Lang::ALL[i],
             Item::PresentMode => self.cfg.present = PresentChoice::ALL[i],
-            Item::Renderer => {
+            Item::Renderer if config::RENDERERS[i] != self.cfg.graphics_api => {
                 self.cfg.graphics_api = config::RENDERERS[i].to_string();
-                self.toast(tr!("restart taiko.rs to switch the renderer", "レンダラーの切り替えはtaiko.rsの再起動後", "рендер сменится после перезапуска taiko.rs").into());
+                self.restart_for_renderer();
             }
+            Item::Renderer => {}
             Item::AudioBuffer if Some(i) != list.current => self.set_audio_buffer(AUDIO_BUFFERS[i]),
             Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
             Item::Accent => self.cfg.accent = render::ACCENTS[i].1,
@@ -5858,6 +5856,23 @@ impl State {
                 self.cfg.save();
             }
         }
+    }
+
+    /// The renderer is picked when the graphics start: the game starts again with the new one.
+    fn restart_for_renderer(&mut self) {
+        // On disk before the new game reads it (saves are written in the background).
+        self.cfg.save();
+        config::flush_saves();
+        #[cfg(not(target_os = "android"))]
+        match update::restart() {
+            Ok(()) => {
+                eprintln!("closing: restarting for the renderer ({})", self.cfg.graphics_api);
+                self.quit = true;
+            }
+            Err(e) => self.toast(tr!("restart taiko.rs to switch the renderer ({e})", "レンダラーの切り替えはtaiko.rsの再起動後 ({e})", "рендер сменится после перезапуска taiko.rs ({e})";)),
+        }
+        #[cfg(target_os = "android")]
+        self.toast(tr!("restart taiko.rs to switch the renderer", "レンダラーの切り替えはtaiko.rsの再起動後", "рендер сменится после перезапуска taiko.rs").into());
     }
 
     /// Forgets the saved online login.
@@ -10957,8 +10972,9 @@ impl ApplicationHandler<UserEvent> for App {
             s.refresh_status();
             eprintln!("renderer: {}, present: {}, refresh {refresh_hz:.2} Hz", renderer.adapter_name, renderer.present.name());
             let _ = CRASH_CONTEXT.set(format!("renderer: {}, present: {}, setting graphics_api = {}", renderer.adapter_name, renderer.present.name(), s.cfg.graphics_api));
+            // What it could do, not what was asked: OpenGL on Linux has only vsync, and that
+            // mustn't become the setting (it stayed vsync after going back to Vulkan).
             s.present = renderer.present;
-            s.cfg.present = renderer.present;
             s.refresh_hz = refresh_hz;
         }
         let state = self.state.clone();
