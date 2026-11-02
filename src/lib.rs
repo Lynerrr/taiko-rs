@@ -5619,6 +5619,10 @@ impl State {
             KeyCode::ArrowLeft => self.mp_menu.cursor = 0,
             KeyCode::ArrowRight => self.mp_menu.select(Row::Name),
             KeyCode::F5 => self.mp_menu.refresh(&server),
+            KeyCode::Escape if self.mp_menu.form != multiplayer::Form::Main => {
+                self.mp_menu.open(multiplayer::Form::Main);
+                self.mp_status.clear();
+            }
             KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
             KeyCode::Backspace => {
                 match row {
@@ -5652,82 +5656,112 @@ impl State {
                 let name = self.cfg.mp_name.clone();
                 let token = self.cfg.online_token.clone();
                 let account = self.mp_menu.account.clone().unwrap_or_default();
-                use multiplayer::CodeFor;
+                use multiplayer::{CodeFor, Form};
                 let menu = &mut self.mp_menu;
                 let code = (!menu.code.trim().is_empty()).then(|| menu.code.trim().to_string());
                 let email = menu.email.trim().to_string();
+                let busy = menu.account_request.is_some();
                 match row {
-                    Row::User => self.mp_menu.select(Row::Password),
-                    Row::Email | Row::Code => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
-                    Row::LogIn | Row::Register | Row::Password | Row::Forgot | Row::LinkEmail if menu.account_request.is_some() => {}
-                    // A new password typed for a reset goes with the code.
-                    Row::Password if menu.code_for == Some(CodeFor::Reset) => self.mp_menu.select(Row::Forgot),
+                    Row::User | Row::Email | Row::Code => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
+                    // Only on the login form does the password send.
+                    Row::Password if menu.form != Form::Main => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
+                    // The ways to the other forms.
+                    Row::Register if menu.form == Form::Main => {
+                        menu.open(Form::Register);
+                        self.mp_status.clear();
+                    }
+                    Row::Forgot if menu.form == Form::Main => {
+                        menu.open(Form::Reset);
+                        self.mp_status.clear();
+                    }
+                    Row::ChangePassword if menu.has_email == Some(false) => {
+                        menu.open(Form::Link);
+                        self.mp_status = tr!("link an email first: the code for a new password goes there", "先にメールを登録してください: 新しいパスワードのコードはそこに届きます", "сначала привяжи почту: код для нового пароля придёт туда").into();
+                    }
+                    Row::ChangePassword => {
+                        menu.open(Form::Reset);
+                        self.mp_status.clear();
+                    }
+                    Row::LinkEmail if menu.form != Form::Link => {
+                        menu.open(Form::Link);
+                        self.mp_status.clear();
+                    }
+                    Row::Back => {
+                        menu.open(Form::Main);
+                        self.mp_status.clear();
+                    }
+                    Row::LogIn | Row::Register | Row::Password | Row::Forgot | Row::LinkEmail if busy => {}
                     Row::Forgot => {
-                        let who = if menu.user.trim().is_empty() { email.clone() } else { menu.user.trim().to_string() };
+                        // Logged in, it's this account's password.
+                        let who = match &menu.account {
+                            Some(a) => a.clone(),
+                            None => menu.user.trim().to_string(),
+                        };
                         if who.is_empty() {
-                            self.mp_status = "type your username (or email) first".into();
+                            self.mp_status = tr!("type your name or email first", "先に名前かメールを入力してください", "сначала впиши ник или почту").into();
                             self.mp_menu.select(Row::User);
-                        } else if menu.code_for == Some(CodeFor::Reset) && code.is_some() {
-                            if !online::valid_password(&menu.password) {
-                                self.mp_status = "type a new password of at least 6 characters".into();
+                        } else if menu.code_for == Some(CodeFor::Reset) {
+                            if code.is_none() {
+                                self.mp_status = tr!("type the code from the email first", "先にメールのコードを入力してください", "сначала введи код из письма").into();
+                                self.mp_menu.select(Row::Code);
+                            } else if !online::valid_password(&menu.password) {
+                                self.mp_status = tr!("type a new password of at least 6 characters", "6文字以上の新しいパスワードを入力してください", "впиши новый пароль от 6 символов").into();
                                 self.mp_menu.select(Row::Password);
                             } else {
                                 let password = Some(menu.password.clone());
-                                self.mp_status = "setting the new password...".into();
+                                self.mp_status = tr!("setting the new password...", "新しいパスワードを設定中...", "сохраняю новый пароль...").into();
                                 menu.account_call(&server, online::Request::ResetPassword { who, code, password });
                             }
                         } else {
                             menu.asking = Some(CodeFor::Reset);
-                            self.mp_status = "sending a code to the account's email...".into();
+                            self.mp_status = tr!("sending a code to the account's email...", "アカウントのメールにコードを送信中...", "отправляю код на почту аккаунта...").into();
                             menu.account_call(&server, online::Request::ResetPassword { who, code: None, password: None });
                         }
                     }
-                    Row::LinkEmail if !menu.linking => {
-                        menu.linking = true;
-                        menu.code_for = None;
-                        menu.cursor = 0;
-                        self.mp_status = "type your email, then SEND CODE".into();
-                    }
                     Row::LinkEmail => {
                         if !email.contains('@') {
-                            self.mp_status = "type your email first".into();
+                            self.mp_status = tr!("type your email first", "先にメールを入力してください", "сначала впиши почту").into();
                             self.mp_menu.select(Row::Email);
                         } else if menu.code_for == Some(CodeFor::Link) && code.is_some() {
-                            self.mp_status = "linking the email...".into();
+                            self.mp_status = tr!("linking the email...", "メールを登録中...", "привязываю почту...").into();
                             menu.account_call(&server, online::Request::LinkEmail { token, email, code });
                         } else {
                             menu.asking = Some(CodeFor::Link);
-                            self.mp_status = format!("sending a code to {email}...");
+                            self.mp_status = tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}...";);
                             menu.account_call(&server, online::Request::LinkEmail { token, email, code: None });
                         }
                     }
-                    Row::LinkBack => {
-                        menu.linking = false;
-                        menu.code_for = None;
-                        menu.cursor = 0;
-                        self.mp_status.clear();
-                    }
-                    Row::LogIn | Row::Register | Row::Password => {
+                    Row::Register => {
                         let user = menu.user.trim().to_string();
-                        // Logging in forgets the typed password; a new account's waits for its code.
-                        let password = if row == Row::Register { menu.password.clone() } else { std::mem::take(&mut menu.password) };
-                        let valid = if row == Row::Register { online::valid_name(&user) } else { online::valid_login(&user) };
-                        if !valid {
-                            self.mp_status = format!("usernames are {}", online::NAME_RULES);
+                        if !online::valid_name(&user) {
+                            self.mp_status = tr!("names are {}", "名前は {}", "ник: {}"; online::NAME_RULES);
                             self.mp_menu.select(Row::User);
-                        } else if row == Row::Register && !online::valid_password(&password) {
-                            self.mp_status = "pick a password of at least 6 characters".into();
+                        } else if !online::valid_password(&menu.password) {
+                            self.mp_status = tr!("pick a password of at least 6 characters", "6文字以上のパスワードを決めてください", "придумай пароль от 6 символов").into();
                             self.mp_menu.select(Row::Password);
-                        } else if row == Row::Register && !email.contains('@') {
-                            self.mp_status = "type your email: a code to create the account goes there".into();
+                        } else if !email.contains('@') {
+                            self.mp_status = tr!("type your email: the code goes there", "メールを入力してください: コードはそこに届きます", "впиши почту: туда придёт код").into();
                             self.mp_menu.select(Row::Email);
-                        } else if row == Row::Register {
-                            let code = code.filter(|_| menu.code_for == Some(CodeFor::Register));
-                            self.mp_status = if code.is_some() { format!("creating {user}...") } else { format!("sending a code to {email}...") };
-                            menu.asking = Some(CodeFor::Register);
-                            menu.account_call(&server, online::Request::Register { name: user, password, email: Some(email), code });
                         } else {
-                            self.mp_status = format!("logging in as {user}...");
+                            let code = code.filter(|_| menu.code_for == Some(CodeFor::Register));
+                            self.mp_status = if code.is_some() { tr!("creating {user}...", "{user} を作成中...", "создаю {user}...";) } else { tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}...";) };
+                            menu.asking = Some(CodeFor::Register);
+                            let password = menu.password.clone();
+                            menu.account_call(&server, online::Request::Register { name: user, password, email: Some(email), code });
+                        }
+                    }
+                    Row::LogIn | Row::Password => {
+                        let user = menu.user.trim().to_string();
+                        if !online::valid_login(&user) {
+                            self.mp_status = tr!("type your name (or the account's email)", "名前(またはアカウントのメール)を入力してください", "впиши ник (или почту аккаунта)").into();
+                            self.mp_menu.select(Row::User);
+                        } else if menu.password.is_empty() {
+                            self.mp_status = tr!("type your password", "パスワードを入力してください", "впиши пароль").into();
+                            self.mp_menu.select(Row::Password);
+                        } else {
+                            // Logging in forgets the typed password.
+                            let password = std::mem::take(&mut menu.password);
+                            self.mp_status = tr!("logging in as {user}...", "{user} でログイン中...", "вхожу как {user}...";);
                             menu.account_call(&server, online::Request::Login { name: user, password });
                         }
                     }
@@ -5792,7 +5826,7 @@ impl State {
         self.select.nominator = false;
         self.mp_menu.account = None;
         self.mp_menu.has_email = None;
-        self.mp_menu.linking = false;
+        self.mp_menu.form = multiplayer::Form::Main;
         self.mp_menu.code_for = None;
         self.mp_menu.rooms.clear();
         self.cfg.online_token.clear();
@@ -5903,18 +5937,22 @@ impl State {
                             menu.online = Some(Ok(()));
                             menu.has_email = email;
                             menu.asking = None;
-                            if menu.code_for.take().is_some() {
-                                menu.code.clear();
-                                menu.password.clear();
+                            let reset = menu.form == multiplayer::Form::Reset && menu.code_for.is_some();
+                            if menu.form != multiplayer::Form::Main || menu.code_for.is_some() {
+                                menu.open(multiplayer::Form::Main);
+                            }
+                            if reset {
+                                self.mp_status = tr!("password changed: you're logged in as {name}", "パスワードを変更しました: {name} でログイン中", "пароль изменён, ты вошёл как {name}";);
+                            } else if fresh {
+                                self.mp_status = tr!("logged in as {name}", "{name} でログインしました", "ты вошёл как {name}";);
                             }
                             if fresh {
-                                self.mp_status = format!("logged in as {name}");
                                 menu.cursor = 0;
                                 // A new login: reconnect the social side with its token.
                                 self.social = social::Social::default();
                                 // Accounts from before emails: a word about linking one.
                                 if email == Some(false) {
-                                    self.toast = Some(Toast { text: "no email on your account: link one in the Online menu to reset a forgotten password".into(), until: Instant::now() + Duration::from_secs(8) });
+                                    self.toast = Some(Toast { text: tr!("no email on your account: link one in the Online menu to reset a forgotten password", "アカウントにメールがありません: オンラインメニューで登録するとパスワードを再設定できます", "к аккаунту не привязана почта: привяжи её в меню онлайна, чтобы можно было сбросить пароль").into(), until: Instant::now() + Duration::from_secs(8) });
                                 }
                             }
                             self.cfg.online_user = name;
@@ -5926,28 +5964,27 @@ impl State {
                             menu.code_for = menu.asking.take();
                             menu.code.clear();
                             // The server's mail is new to the big mail services: it may land in spam.
-                            self.mp_status = match menu.code_for {
-                                Some(multiplayer::CodeFor::Reset) => format!("code sent to {to} (check spam too): type it and a new password, then SET NEW PASSWORD"),
-                                Some(multiplayer::CodeFor::Link) => format!("code sent to {to} (check spam too): type it, then LINK EMAIL"),
-                                _ => format!("code sent to {to} (check spam too): type it, then CREATE ACCOUNT"),
-                            };
+                            self.mp_status = tr!("code sent to {to}: look in spam too if it isn't there", "{to} にコードを送信しました: 見つからなければ迷惑メールも確認", "код отправлен на {to}: если его нет, загляни в спам";);
                             menu.select(multiplayer::Row::Code);
                         }
                         Ok(online::Reply::EmailLinked(to)) => {
                             menu.has_email = Some(true);
-                            menu.linking = false;
-                            menu.code_for = None;
-                            menu.code.clear();
-                            menu.cursor = 0;
-                            self.mp_status = format!("email linked: {to}");
+                            menu.open(multiplayer::Form::Main);
+                            self.mp_status = tr!("email linked: {to}", "メールを登録しました: {to}", "почта привязана: {to}";);
                         }
                         Ok(_) => {}
                         Err(e) if e.contains("session") => self.sign_out(&e),
                         Err(e) => {
-                            if e.contains("offline") {
+                            if online::is_unreachable(&e) {
                                 menu.online = Some(Err(e.clone()));
                             }
-                            self.mp_status = e;
+                            // A wrong password: where to go from there.
+                            self.mp_status = if e.starts_with("wrong name or password") && menu.account.is_none() {
+                                menu.select(multiplayer::Row::Password);
+                                tr!("wrong name or password (forgot it? FORGOT PASSWORD below)", "名前かパスワードが違います(忘れたら下の「パスワードを忘れた?」)", "неверный ник или пароль (забыл? жми ЗАБЫЛ ПАРОЛЬ ниже)").into()
+                            } else {
+                                e
+                            };
                         }
                     }
                 }
@@ -6398,10 +6435,10 @@ impl State {
         if matches!(self.scene, Scene::MpMenu) {
             use multiplayer::Row;
             return match self.mp_menu.row() {
-                Row::User => Some(("Name or email".into(), self.mp_menu.user.clone())),
-                Row::Password => Some(("Password".into(), "*".repeat(self.mp_menu.password.chars().count()))),
-                Row::Email => Some(("Email".into(), self.mp_menu.email.clone())),
-                Row::Code => Some(("Code".into(), self.mp_menu.code.clone())),
+                r @ Row::User => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), self.mp_menu.user.clone())),
+                r @ Row::Password => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), "*".repeat(self.mp_menu.password.chars().count()))),
+                r @ Row::Email => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), self.mp_menu.email.clone())),
+                r @ Row::Code => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), self.mp_menu.code.clone())),
                 Row::Name => Some(("Your name".into(), self.cfg.mp_name.clone())),
                 Row::Port => Some(("Host on port".into(), self.cfg.mp_port.to_string())),
                 Row::Address => Some(("Join address".into(), self.cfg.mp_address.clone())),
@@ -9482,6 +9519,8 @@ impl State {
                 Ok(online::Reply::Submitted { map_rank, pp, rank, medals }) => {
                     self.medals_earned(medals);
                     let before = self.me.map(|(b, _)| b);
+                    // + 0.0: servers before the fix sent a new player's pp as -0.0 ("-0 pp").
+                    let pp = pp + 0.0;
                     self.me = Some((pp, rank));
                     if let Scene::Results { results, .. } = &mut self.scene
                         && results.opened.is_none() && results.replay.is_some() {
@@ -9537,7 +9576,7 @@ impl State {
         if let Some(Ok(result)) = self.me_fetch.as_ref().map(|rx| rx.try_recv()) {
             self.me_fetch = None;
             if let Ok(p) = result {
-                self.me = Some((p.pp, p.rank));
+                self.me = Some((p.pp + 0.0, p.rank));
             }
         }
     }

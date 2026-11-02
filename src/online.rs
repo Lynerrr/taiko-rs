@@ -324,7 +324,8 @@ pub const MAP_SCORES: usize = 50;
 #[allow(dead_code)] // used by the online server (server/)
 pub fn weighted_pp(mut best: Vec<f64>) -> f64 {
     best.sort_by(|a, b| b.total_cmp(a));
-    best.iter().enumerate().map(|(i, pp)| pp * 0.95f64.powi(i as i32)).sum()
+    // A fold from 0: `sum` of no floats is -0.0, which a new player's profile showed as "-0pp".
+    best.iter().enumerate().fold(0.0, |total, (i, pp)| total + pp * 0.95f64.powi(i as i32))
 }
 
 /// What a player is doing, for their friends.
@@ -709,9 +710,9 @@ pub fn clean_title(title: &str, owner: &str, mapguessr: bool) -> String {
 /// One line of JSON (without the newline), at most `MAX_LINE` bytes.
 pub fn read_line(reader: &mut impl BufRead) -> Result<String, String> {
     let mut line = String::new();
-    let n = reader.take(MAX_LINE).read_line(&mut line).map_err(|e| e.to_string())?;
+    let n = reader.take(MAX_LINE).read_line(&mut line).map_err(|e| network_error(&e))?;
     if n == 0 {
-        return Err("connection closed".into());
+        return Err(unreachable(tr!("the connection dropped. Try again", "接続が切れました。もう一度試してください", "соединение оборвалось. Попробуй ещё раз")));
     }
     if !line.ends_with('\n') {
         return Err("message too large".into());
@@ -722,7 +723,42 @@ pub fn read_line(reader: &mut impl BufRead) -> Result<String, String> {
 pub fn write_line<T: Serialize>(w: &mut impl Write, msg: &T) -> Result<(), String> {
     let mut line = serde_json::to_string(msg).map_err(|e| e.to_string())?;
     line.push('\n');
-    w.write_all(line.as_bytes()).map_err(|e| e.to_string())
+    w.write_all(line.as_bytes()).map_err(|e| network_error(&e))
+}
+
+/// Why the server couldn't be reached, as one line: every such reason starts the same
+/// (`is_unreachable`).
+fn unreachable(why: &str) -> String {
+    format!("{}{why}", unreachable_lead())
+}
+
+fn unreachable_lead() -> &'static str {
+    tr!("can't reach the server: ", "サーバーに接続できません: ", "нет связи с сервером: ")
+}
+
+/// The request never got an answer (the network or the server is down), rather than the
+/// server saying no.
+pub fn is_unreachable(e: &str) -> bool {
+    e.starts_with(unreachable_lead())
+}
+
+/// A failed connection in words a player gets. The system's own text says little, and comes in
+/// the system's language, which the game's font may not draw (a Polish Windows' timeout came
+/// out as "Pr?ba po??czenia...").
+pub fn network_error(e: &std::io::Error) -> String {
+    use std::io::ErrorKind as K;
+    unreachable(&match e.kind() {
+        K::TimedOut | K::WouldBlock => tr!("it didn't answer in time. Check your internet and try again", "応答がありません。インターネット接続を確認してもう一度試してください", "он не ответил вовремя. Проверь интернет и попробуй ещё раз").to_string(),
+        K::ConnectionRefused => tr!("it's restarting or down. Try again in a minute", "再起動中か停止中です。少し待ってからもう一度", "он перезапускается или лежит. Попробуй через минуту").to_string(),
+        K::ConnectionReset | K::ConnectionAborted | K::UnexpectedEof | K::BrokenPipe | K::NotConnected => tr!("the connection dropped. Try again", "接続が切れました。もう一度試してください", "соединение оборвалось. Попробуй ещё раз").to_string(),
+        K::HostUnreachable | K::NetworkUnreachable | K::NetworkDown | K::AddrNotAvailable => tr!("no internet connection", "インターネットに接続されていません", "нет подключения к интернету").to_string(),
+        // A TLS handshake that went wrong (something between rewrote it, or an old game).
+        K::InvalidData => tr!("the secure connection failed. Check your internet, or update taiko.rs", "安全な接続に失敗しました。インターネット接続を確認するか、taiko.rsを更新してください", "не удалось защищённое соединение. Проверь интернет или обнови taiko.rs").to_string(),
+        _ => match e.raw_os_error() {
+            Some(code) => tr!("network error {code}. Try again", "ネットワークエラー {code}。もう一度試してください", "сетевая ошибка {code}. Попробуй ещё раз";),
+            None => tr!("network error. Try again", "ネットワークエラー。もう一度試してください", "сетевая ошибка. Попробуй ещё раз").to_string(),
+        },
+    })
 }
 
 fn connect(server: &str) -> Result<TcpStream, String> {
@@ -738,20 +774,21 @@ fn connect(server: &str) -> Result<TcpStream, String> {
     } else {
         format!("{server}:{DEFAULT_PORT}")
     };
-    let addrs: Vec<_> = with_port.to_socket_addrs().map_err(|e| tr!("can't find the server: {e}", "サーバーが見つかりません: {e}", "сервер не найден: {e}";))?.collect();
-    let mut last = String::from(tr!("no address", "アドレスなし", "нет адреса"));
+    let no_address = || unreachable(tr!("its address wasn't found. Check your internet", "アドレスが見つかりません。インターネット接続を確認してください", "не найден его адрес. Проверь интернет"));
+    let addrs: Vec<_> = with_port.to_socket_addrs().map_err(|_| no_address())?.collect();
+    let mut last = no_address();
     for a in addrs {
-        match TcpStream::connect_timeout(&a, Duration::from_secs(4)) {
+        match TcpStream::connect_timeout(&a, Duration::from_secs(6)) {
             Ok(s) => {
-                let s = if secure { crate::tls::connect(s).map_err(|e| tr!("couldn't connect securely ({e})", "安全に接続できません ({e})", "не удалось безопасно подключиться ({e})";))? } else { s };
+                let s = if secure { crate::tls::connect(s)? } else { s };
                 let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
                 let _ = s.set_write_timeout(Some(Duration::from_secs(10)));
                 return Ok(s);
             }
-            Err(e) => last = e.to_string(),
+            Err(e) => last = network_error(&e),
         }
     }
-    Err(tr!("the server is offline ({last})", "サーバーはオフラインです ({last})", "сервер недоступен ({last})";))
+    Err(last)
 }
 
 /// Sends one request; returns the reply and the connection (still open).
@@ -760,7 +797,7 @@ pub fn exchange(server: &str, request: Request) -> Result<(Reply, BufReader<TcpS
     write_line(&mut stream, &Envelope { protocol: PROTOCOL, request })?;
     let mut reader = BufReader::new(stream);
     let line = read_line(&mut reader)?;
-    let reply: Reply = serde_json::from_str(&line).map_err(|e| tr!("odd reply from the server: {e}", "サーバーからの応答がおかしい: {e}", "странный ответ сервера: {e}";))?;
+    let reply: Reply = serde_json::from_str(&line).map_err(|_| tr!("the server answered something this version doesn't know: update taiko.rs", "サーバーの応答が読めません: taiko.rsを更新してください", "ответ сервера не понятен этой версии: обнови taiko.rs").to_string())?;
     Ok((reply, reader))
 }
 
@@ -917,6 +954,7 @@ mod tests {
         assert!(valid_login("Lynerrr") && valid_login("a.long.name+taiko@mail.ru"));
         assert!(!valid_login("ab") && !valid_login("no.at.sign") && !valid_name("me@mail.ru"));
         assert!(valid_password("hunter2") && !valid_password("short"));
+        assert!(weighted_pp(Vec::new()).is_sign_positive(), "a new player has 0 pp, not -0");
         assert_eq!(clean_title("  ", "Lynerrr", false), "Lynerrr's lobby");
         assert_eq!(clean_title("", "Lynerrr", true), "Lynerrr's mapguessr");
         assert_eq!(clean_title("taiko\u{7}  night", "x", true), "taiko  night");

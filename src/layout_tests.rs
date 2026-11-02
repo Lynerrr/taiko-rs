@@ -502,24 +502,55 @@ fn assert_every_screen_fits() {
     check(&mut s, "crash report", &mut out);
     s.key(KeyCode::Escape, false, None, Instant::now(), None);
     assert!(s.crash.is_none(), "Esc closes it");
-    // Signing up with a code, and resetting a password.
+    // Signing up with a code, a forgotten password, changing it logged in, and the errors.
+    s.mp_menu.open(multiplayer::Form::Register);
+    s.mp_menu.user = "MyOwnAccountName".into();
     s.mp_menu.email = "a.rather.long.email.address@example-mail.com".into();
+    check(&mut s, "multiplayer menu register", &mut out);
     s.mp_menu.code_for = Some(multiplayer::CodeFor::Register);
     s.mp_menu.code = "123456".into();
+    s.mp_status = "code sent to g******@gmail.com: look in spam too if it isn't there".into();
     check(&mut s, "multiplayer menu code", &mut out);
+    s.mp_menu.open(multiplayer::Form::Reset);
+    check(&mut s, "multiplayer menu forgot", &mut out);
     s.mp_menu.code_for = Some(multiplayer::CodeFor::Reset);
-    s.mp_status = "code sent to g******@gmail.com (check spam too): type it and a new password, then SET NEW PASSWORD".into();
     check(&mut s, "multiplayer menu reset", &mut out);
+    s.mp_menu.open(multiplayer::Form::Main);
+    s.mp_status = online::network_error(&std::io::Error::from(std::io::ErrorKind::TimedOut));
+    s.mp_menu.online = Some(Err(s.mp_status.clone()));
+    check(&mut s, "multiplayer menu timed out", &mut out);
     s.mp_status.clear();
     // An old account without an email, with a full lobby list, and linking one.
-    s.mp_menu.code_for = None;
     s.mp_menu.account = Some("MyOwnAccountName".into());
     s.mp_menu.has_email = Some(false);
     s.mp_menu.rooms = (0..8).map(|i| online::RoomInfo { id: i, title: format!("{LONG_NAME}'s lobby {i}"), host: LONG_NAME.into(), players: 3, map: Some(entry(0, 0, true).label()), in_match: i % 2 == 0, mapguessr: false }).collect();
     check(&mut s, "multiplayer menu no email", &mut out);
-    s.mp_menu.linking = true;
+    s.mp_menu.open(multiplayer::Form::Link);
     s.mp_menu.code_for = Some(multiplayer::CodeFor::Link);
     check(&mut s, "multiplayer menu linking", &mut out);
+    s.mp_menu.has_email = Some(true);
+    s.mp_menu.open(multiplayer::Form::Reset);
+    s.mp_menu.code_for = Some(multiplayer::CodeFor::Reset);
+    check(&mut s, "multiplayer menu change password", &mut out);
+    // The account forms are translated: they fit in every language.
+    for lang in [crate::lang::Lang::Ru, crate::lang::Lang::Ja] {
+        s.cfg.language = lang;
+        let code = lang.code();
+        s.mp_menu.account = None;
+        for form in [multiplayer::Form::Main, multiplayer::Form::Register, multiplayer::Form::Reset] {
+            s.mp_menu.open(form);
+            check(&mut s, &format!("multiplayer menu {form:?} {code}"), &mut out);
+            s.mp_menu.code_for = Some(if form == multiplayer::Form::Register { multiplayer::CodeFor::Register } else { multiplayer::CodeFor::Reset });
+            check(&mut s, &format!("multiplayer menu {form:?} code {code}"), &mut out);
+        }
+        s.mp_menu.open(multiplayer::Form::Main);
+        s.mp_menu.account = Some("MyOwnAccountName".into());
+        s.mp_menu.has_email = Some(false);
+        check(&mut s, &format!("multiplayer menu lobbies {code}"), &mut out);
+        s.mp_menu.open(multiplayer::Form::Link);
+        check(&mut s, &format!("multiplayer menu linking {code}"), &mut out);
+    }
+    s.cfg.language = crate::lang::Lang::En;
     s.mp_menu = Default::default();
     s.scene = Scene::Select;
 
