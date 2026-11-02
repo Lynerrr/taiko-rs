@@ -70,6 +70,12 @@ incremental = false
 [profile.ci-test.package."*"]
 opt-level = 3
 
+# Reproducible CPU audits: optimized application code without release LTO's build cost.
+[profile.perf-audit]
+inherits = "release"
+lto = "off"
+codegen-units = 16
+
 # Audio decoding is unbearably slow unoptimised; keep dependencies fast in debug builds too.
 [profile.dev.package."*"]
 opt-level = 3

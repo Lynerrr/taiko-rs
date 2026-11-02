@@ -228,6 +228,22 @@ fn compare(op: Op, have: f64, value: f64, tolerance: f64) -> bool {
     }
 }
 
+/// Normalized once when an entry is read; metadata reloads replace the entry and its keys.
+#[derive(Clone, Debug)]
+pub struct Text {
+    label: String,
+    creator: String,
+    pub artist: String,
+    pub title: String,
+    version: String,
+}
+
+impl Text {
+    pub fn new(meta: &crate::beatmap::Meta, label: &str) -> Self {
+        Self { label: label.to_lowercase(), creator: meta.creator.to_lowercase(), artist: meta.artist.to_lowercase(), title: meta.title.to_lowercase(), version: meta.version.to_lowercase() }
+    }
+}
+
 impl Query {
     pub fn parse(s: &str) -> Query {
         let mut q = Query::default();
@@ -253,10 +269,13 @@ impl Query {
         self.conds.iter().any(|c| matches!(c, Cond::Num { key: Num::Stars | Num::Length | Num::Bpm, .. }))
     }
 
+    #[cfg(test)]
     pub fn matches(&self, meta: &crate::beatmap::Meta, label: &str, facts: &Facts) -> bool {
-        let label = label.to_lowercase();
-        let creator = meta.creator.to_lowercase();
-        let words = self.words.iter().all(|w| label.contains(w.as_str()) || creator.contains(w.as_str()));
+        self.matches_text(meta, &Text::new(meta, label), facts)
+    }
+
+    pub fn matches_text(&self, meta: &crate::beatmap::Meta, text: &Text, facts: &Facts) -> bool {
+        let words = self.words.iter().all(|w| text.label.contains(w.as_str()) || text.creator.contains(w.as_str()));
         words
             && self.conds.iter().all(|c| match c {
                 Cond::Num { key, op, value, tolerance } => {
@@ -272,12 +291,12 @@ impl Query {
                 }
                 Cond::Text { field, negated, value } => {
                     let have = match field {
-                        Field::Creator => &meta.creator,
-                        Field::Artist => &meta.artist,
-                        Field::Title => &meta.title,
-                        Field::Version => &meta.version,
+                        Field::Creator => &text.creator,
+                        Field::Artist => &text.artist,
+                        Field::Title => &text.title,
+                        Field::Version => &text.version,
                     };
-                    have.to_lowercase().contains(value.as_str()) != *negated
+                    have.contains(value.as_str()) != *negated
                 }
                 Cond::Status { op, codes } => match op {
                     Op::Eq => codes.contains(&facts.status),

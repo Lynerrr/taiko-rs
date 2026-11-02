@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}, mpsc};
 
 use crate::audio;
 use crate::render::{Atlas, SkinLayout, Sprite, SPRITES};
@@ -485,6 +486,92 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
 pub struct Skin {
     pub hitsounds: audio::Custom,
     pub images: Atlas,
+    pub map_spinner: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Key {
+    pub main: String,
+    pub parts: Sources,
+    pub rate: Option<u32>,
+    pub map_dir: Option<PathBuf>,
+}
+
+pub struct Prepared {
+    pub images: Arc<Atlas>,
+    pub sounds: Option<Arc<audio::Sounds>>,
+    pub map_spinner: bool,
+}
+
+pub struct Ready {
+    pub key: Key,
+    pub assets: Arc<Prepared>,
+    revision: u64,
+}
+
+enum Work {
+    Load(u64, Box<Key>, bool),
+    Recycle(Arc<Prepared>),
+}
+
+/// One worker coalesces rapid selection changes; stale assets are discarded off the UI thread.
+pub struct Loader {
+    tx: mpsc::Sender<Work>,
+    rx: mpsc::Receiver<Ready>,
+    revision: Arc<AtomicU64>,
+}
+
+impl Loader {
+    pub fn new() -> Self {
+        let (tx, jobs) = mpsc::channel();
+        let (done, rx) = mpsc::channel();
+        let revision = Arc::new(AtomicU64::new(0));
+        let wanted = revision.clone();
+        std::thread::Builder::new().name("skin assets".into()).spawn(move || {
+            let mut cached: Option<(Key, Arc<Prepared>)> = None;
+            while let Ok(work) = jobs.recv() {
+                let mut next = None;
+                let mut reload = false;
+                for work in std::iter::once(work).chain(jobs.try_iter()) {
+                    match work {
+                        Work::Load(id, key, fresh) => { next = Some((id, *key)); reload |= fresh; }
+                        Work::Recycle(assets) => drop(assets),
+                    }
+                }
+                let Some((id, mut key)) = next else { continue };
+                key.map_dir = key.map_dir.filter(|dir| map_has_images(dir));
+                let assets = match &cached {
+                    Some((old, assets)) if !reload && *old == key => assets.clone(),
+                    _ => {
+                        let skin = load(&key.main, &key.parts, key.rate, key.map_dir.as_deref());
+                        let sounds = key.rate.map(|rate| Arc::new(audio::hitsound_set(rate, skin.hitsounds)));
+                        let assets = Arc::new(Prepared { images: Arc::new(skin.images), sounds, map_spinner: skin.map_spinner });
+                        cached = Some((key.clone(), assets.clone()));
+                        assets
+                    }
+                };
+                if wanted.load(Ordering::Relaxed) == id && done.send(Ready { key, assets, revision: id }).is_err() {
+                    break;
+                }
+            }
+        }).expect("skin asset worker");
+        Self { tx, rx, revision }
+    }
+
+    pub fn request(&self, key: Key, reload: bool) {
+        let id = self.revision.fetch_add(1, Ordering::Relaxed) + 1;
+        let _ = self.tx.send(Work::Load(id, Box::new(key), reload));
+    }
+
+    pub fn poll(&self) -> Option<Ready> {
+        for ready in self.rx.try_iter() {
+            if ready.revision == self.revision.load(Ordering::Relaxed) {
+                return Some(ready);
+            }
+            let _ = self.tx.send(Work::Recycle(ready.assets));
+        }
+        None
+    }
 }
 
 /// The skins `main` and `parts` use, read: by the part they're for (None = built-in).
@@ -517,6 +604,10 @@ pub fn map_has_spinner_warning() -> bool {
     MAP_SPINNER.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+pub fn apply_map_spinner_warning(present: bool) {
+    MAP_SPINNER.store(present, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Whether the map folder `dir` carries any skin images of its own (a beatmap skin).
 pub fn map_has_images(dir: &Path) -> bool {
     let map = Loaded::read(dir);
@@ -545,12 +636,11 @@ pub fn load(main: &str, parts: &Sources, rate: Option<u32>, map_dir: Option<&Pat
         }
     }
     let map_spinner = map.as_ref().is_some_and(|m| m.files.image(&image_names(Sprite::SpinnerWarning, &m.ini)).is_some());
-    MAP_SPINNER.store(map_spinner, std::sync::atomic::Ordering::Relaxed);
     let hitsounds = match (rate, skin_of(Part::Hitsounds)) {
         (Some(rate), Some(skin)) => hitsounds_of(&skin.files, rate),
         _ => audio::Custom::default(),
     };
-    Skin { hitsounds, images: atlas(&from) }
+    Skin { hitsounds, images: atlas(&from), map_spinner }
 }
 
 /// Just the hitsounds of `load` (for the video export's audio).
@@ -592,6 +682,44 @@ mod tests {
 
     use super::{Loaded, Part, Source, Sources};
     use crate::render::{Atlas, Sprite, SPRITES};
+
+    fn wait_for_skin(loader: &super::Loader) -> super::Ready {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(ready) = loader.poll() { return ready; }
+            assert!(std::time::Instant::now() < deadline, "skin worker did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn skin_worker_discards_stale_requests_reuses_plain_maps_and_reloads_images() {
+        let dir = std::env::temp_dir().join(format!("taiko-loader-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = super::Key { main: String::new(), parts: Sources::default(), rate: Some(48_000), map_dir: None };
+        let loader = super::Loader::new();
+        loader.request(key.clone(), false);
+        let initial = wait_for_skin(&loader);
+        for i in 0..100 {
+            loader.request(super::Key { map_dir: Some(dir.join(i.to_string())), ..key.clone() }, false);
+        }
+        let plain = wait_for_skin(&loader);
+        assert_eq!(plain.revision, 101);
+        assert!(plain.key.map_dir.is_none());
+        assert!(std::sync::Arc::ptr_eq(&initial.assets, &plain.assets));
+        let image = dir.join("taikohitcircle.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255])).save(&image).unwrap();
+        let custom = super::Key { map_dir: Some(dir.clone()), ..key };
+        loader.request(custom.clone(), false);
+        let first = wait_for_skin(&loader);
+        assert!(first.assets.images.sprites[Sprite::HitCircle as usize].is_some());
+        assert!(first.assets.sounds.is_some());
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 255, 0, 255])).save(image).unwrap();
+        loader.request(custom, true);
+        let reloaded = wait_for_skin(&loader);
+        assert!(!std::sync::Arc::ptr_eq(&first.assets, &reloaded.assets));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// Every sprite from the one skin in `dir`.
     fn atlas_of(dir: &std::path::Path) -> Atlas {

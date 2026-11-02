@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -67,7 +67,7 @@ impl Sfx {
 }
 
 /// One sound per `Sfx`.
-pub type Sounds = [Vec<f32>; 12];
+pub type Sounds = [Arc<[f32]>; 12];
 
 enum Cmd {
     /// `base`: the song frame the track's first sample belongs at (a partial decode).
@@ -209,10 +209,9 @@ impl Engine {
         let _ = self.tx.send(Cmd::Sfx(s, volume));
     }
 
-    /// Replaces the hitsounds with mono samples at the device rate; `None` keeps the built-in one.
-    pub fn set_hitsounds(&self, custom: Custom) {
-        let sounds = hitsound_set(self.rate, custom);
-        let _ = self.tx.send(Cmd::Sounds(Arc::new(sounds)));
+    /// Hands over prepared mono samples at the device rate without rebuilding them here.
+    pub fn set_hitsounds(&self, sounds: Arc<Sounds>) {
+        let _ = self.tx.send(Cmd::Sounds(sounds));
     }
 
     pub fn set_volume(&self, music: f32, effects: f32) {
@@ -470,6 +469,22 @@ impl Limiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_sounds_share_samples_but_custom_hits_keep_their_mix() {
+        let a = hitsound_set(48_000, Custom::default());
+        let b = hitsound_set(48_000, Custom::default());
+        assert!(a.iter().zip(&b).all(|(a, b)| Arc::ptr_eq(a, b)));
+        let other = hitsound_set(44_100, Custom::default());
+        assert_ne!(a[Sfx::Don as usize].len(), other[Sfx::Don as usize].len());
+        let custom = hitsound_set(48_000, Custom { don: Some(vec![0.2, 0.3]), finish: Some(vec![0.1]), ..Default::default() });
+        assert_eq!(&*custom[Sfx::Don as usize], &[0.2, 0.3]);
+        assert_eq!(&*custom[Sfx::BigDon as usize], mix(&[0.2, 0.3], &[0.1]));
+        assert_eq!(&*custom[Sfx::BigKat as usize], mix(&a[Sfx::Kat as usize], &[0.1]));
+        assert!(Arc::ptr_eq(&custom[Sfx::Kat as usize], &a[Sfx::Kat as usize]));
+        assert!(Arc::ptr_eq(&custom[Sfx::ComboBreak as usize], &a[Sfx::ComboBreak as usize]));
+        assert!(Arc::ptr_eq(&hitsound_set(48_000, Custom::default())[0], &a[0]));
+    }
 
     #[test]
     fn a_loud_mix_is_turned_down_whole_not_bent() {
@@ -806,12 +821,38 @@ pub fn mono(track: &Track) -> Vec<f32> {
 /// The sounds (indexed by `Sfx`) at `rate`: a skin's where given, else built-in. Like osu!, a
 /// big note is the normal hit with `finish` on top.
 pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
-    let don = custom.don.unwrap_or_else(|| built_in(0, rate));
-    let kat = custom.kat.unwrap_or_else(|| built_in(1, rate));
-    let finish = custom.finish.unwrap_or_else(|| built_in(2, rate));
-    let combobreak = custom.combobreak.unwrap_or_else(|| built_in(3, rate));
-    let [kantan, futsuu, muzukashii, oni, ura] = crate::medal_sound::sounds(rate);
-    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak, screech(rate), chime(rate), kantan, futsuu, muzukashii, oni, ura]
+    struct Builtin {
+        sounds: Sounds,
+        finish: Arc<[f32]>,
+    }
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<u32, Arc<Builtin>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let cached = cache.lock().unwrap().get(&rate).cloned();
+    let base = cached.unwrap_or_else(|| {
+        // Build outside the cache lock: different-rate preparation need not block a lookup.
+        let don = built_in(0, rate);
+        let kat = built_in(1, rate);
+        let finish = built_in(2, rate);
+        let [kantan, futsuu, muzukashii, oni, ura] = crate::medal_sound::sounds(rate);
+        let sounds = [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), built_in(3, rate), screech(rate), chime(rate), kantan, futsuu, muzukashii, oni, ura].map(Arc::from);
+        let value = Arc::new(Builtin { sounds, finish: finish.into() });
+        cache.lock().unwrap().entry(rate).or_insert(value).clone()
+    });
+    let mut sounds = base.sounds.clone();
+    let custom_don = custom.don.is_some();
+    let custom_kat = custom.kat.is_some();
+    let custom_finish = custom.finish.is_some();
+    if let Some(don) = custom.don { sounds[Sfx::Don as usize] = don.into(); }
+    if let Some(kat) = custom.kat { sounds[Sfx::Kat as usize] = kat.into(); }
+    let finish = custom.finish.map(Arc::from).unwrap_or_else(|| base.finish.clone());
+    if custom_don || custom_finish {
+        sounds[Sfx::BigDon as usize] = mix(&sounds[Sfx::Don as usize], &finish).into();
+    }
+    if custom_kat || custom_finish {
+        sounds[Sfx::BigKat as usize] = mix(&sounds[Sfx::Kat as usize], &finish).into();
+    }
+    if let Some(combo) = custom.combobreak { sounds[Sfx::ComboBreak as usize] = combo.into(); }
+    sounds
 }
 
 /// Overtime's scream, made up rather than sampled: detuned saws sweeping up with a fast

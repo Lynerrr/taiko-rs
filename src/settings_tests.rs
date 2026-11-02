@@ -7,6 +7,23 @@ use super::*;
 static FOLDERS: Mutex<()> = Mutex::new(());
 
 #[test]
+fn volume_changes_debounce_persistence_and_clamped_turns_do_not_schedule_writes() {
+    let mut s = layout_tests::state();
+    s.cfg.master_volume = 1.0;
+    s.turn_volume(1);
+    assert!(s.volume_save_at.is_none());
+    s.turn_volume(-1);
+    assert!(s.cfg.master_volume < 1.0);
+    let first = s.volume_save_at.unwrap();
+    s.turn_volume(-1);
+    assert!(s.volume_save_at.unwrap() >= first);
+    s.cfg.master_volume = 0.0;
+    s.volume_save_at = None;
+    s.turn_volume(-1);
+    assert!(s.volume_save_at.is_none());
+}
+
+#[test]
 fn ctrl_o_opens_settings_from_anywhere_and_closes_them() {
     let press = |s: &mut State| {
         s.modifiers_ctrl = true;
