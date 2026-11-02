@@ -1827,6 +1827,8 @@ pub enum Hit {
     MenuItem(usize),
     /// An arrow beside the main menu's sections: moves the lane this far.
     MenuStep(i32),
+    /// A tab of the medals screen.
+    MedalTab(usize),
     /// Takes the song list back to the selection it was scrolled away from.
     ListBack,
     /// Song select's way out: the main menu, or back where it came from.

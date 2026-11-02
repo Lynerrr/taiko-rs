@@ -743,7 +743,7 @@ mod tests {
         let sr = 1000;
         // 2 s of a constant 0.25 at 1.5x speed: map times 0..3000 ms.
         let track = Track { samples: vec![0.25; 2 * 2000], rate: 1.5 };
-        let sounds = [vec![0.5; 10], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1]];
+        let sounds = [vec![0.5; 10], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1]];
         // Cut 1500..3000 map ms = 1000..2000 track ms; a don at map 2250 ms = track frame 1500,
         // at its timing point's 50% volume (on top of the 0.25 music: 0.25 + 0.5 * 0.5).
         let out = mix_audio(&track, sr, &Speed::constant(1.5), 1500.0, 3000.0, 1.0, &[(2250.0, Sfx::Don, 0.5)], &sounds, 1.0);

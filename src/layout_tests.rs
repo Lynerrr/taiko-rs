@@ -371,6 +371,37 @@ fn assert_every_screen_fits() {
     check(&mut s, "profile failed", &mut out);
     s.profile = None;
 
+    let row = |i: usize, name: &str, section: u8| online::MedalRow {
+        id: format!("m{i}"),
+        section,
+        tier: (i % 4) as u8 + 1,
+        name: Some([name.to_string(), name.to_string(), name.to_string()]),
+        how: Some(["A very long way of saying how a medal is earned, longer than any there is".to_string(), "x".to_string(), "x".to_string()]),
+        art: vec!["#".repeat(16); 16],
+        at: i.is_multiple_of(2).then_some(1_700_000_000),
+        holders: 12,
+        have: 3,
+        need: 10,
+        ..Default::default()
+    };
+    let view = online::MedalsView {
+        players: 21,
+        earned: 123,
+        medals: (0..135).map(|i| row(i, LONG_NAME, (i % 9) as u8)).collect(),
+        collection: vec!["HD".into(), "MV".into()],
+        collection_size: 74,
+    };
+    let (_, rx) = std::sync::mpsc::channel();
+    s.medals = Some(medals::View { name: Some(LONG_NAME.into()), state: medals::State::Loading(rx), tab: 0, scroll: 0 });
+    check(&mut s, "medals loading", &mut out);
+    for tab in 0..medals::TABS {
+        s.medals = Some(medals::View { name: Some(LONG_NAME.into()), state: medals::State::Loaded(Box::new(view.clone())), tab, scroll: 0 });
+        check(&mut s, &format!("medals, tab {tab}"), &mut out);
+    }
+    s.medals = Some(medals::View { name: None, state: medals::State::Failed("this server doesn't have medals yet".into()), tab: 0, scroll: 0 });
+    check(&mut s, "medals failed", &mut out);
+    s.medals = None;
+
     s.open_collections();
     check(&mut s, "collections", &mut out);
     s.select.picker = None;
@@ -501,7 +532,7 @@ fn assert_every_screen_fits() {
     check(&mut s, "friends", &mut out);
     s.social.requests = vec!["SomebodyNewWhoWantsIn".into()];
     s.social.sent = vec!["AnotherPersonWithLongName".into(), "and_another_one".into()];
-    let line = |from: &str, to: &str| online::ChatLine { from: from.into(), to: to.into(), text: "a pretty long chat message that should wrap or get cut somewhere sensible, with more words".into(), at: 1_700_000_000 };
+    let line = |from: &str, to: &str| online::ChatLine { from: from.into(), to: to.into(), text: "a pretty long chat message that should wrap or get cut somewhere sensible, with more words".into(), at: 1_700_000_000, medal: None };
     s.social.chats.insert(social::key(LONG_NAME), (0..20).map(|i| if i % 2 == 0 { line(LONG_NAME, "MyOwnAccountName") } else { line("MyOwnAccountName", LONG_NAME) }).collect());
     s.social.cursor = 0;
     s.social.input = "a message being typed that is longer than the input box can show".into();

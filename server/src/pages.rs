@@ -928,6 +928,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
         grade("A"),
         st.a
     );
+    let medals = medal_panel(p);
     let fav_mods = if extras.mods.is_empty() {
         "<p class=dim>Plays without mods so far.</p>".into()
     } else {
@@ -982,6 +983,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
              <section class=panel><div class=panel-head><h2>FIRST PLACE RANKS <span class=count>{}</span></h2></div>{firsts}</section>\
              <section class=panel><div class=panel-head><h2>RECENT PLAYS</h2></div>{recent}</section>\
            </div><aside class=side>\
+             {medals}\
              <section class=panel><div class=panel-head><h2>GRADES</h2></div>{grades}</section>\
              <section class=panel><div class=panel-head><h2>FAVOURITE MODS</h2></div><div class=modcounts>{fav_mods}</div></section>\
              <section class=panel><div class=panel-head><h2>MOST PLAYED</h2></div>{most_played}</section>\
@@ -1309,7 +1311,102 @@ const NEW_PASSWORD: &str = "<label>new password<input name=password type=passwor
 
 fn chat_line(l: &ChatLine) -> String {
     let t = l.at % 86_400;
-    format!("<li><span class=time>{:02}:{:02}</span>{}<span class=text>{}</span></li>", t / 3600, t / 60 % 60, player_link(&l.from), esc(&l.text))
+    let (class, who) = if l.medal.is_some() { (" class=medal", format!("<span class=player>{}</span>", esc(&l.from))) } else { ("", player_link(&l.from)) };
+    format!("<li{class}><span class=time>{:02}:{:02}</span>{who}<span class=text>{}</span></li>", t / 3600, t / 60 % 60, esc(&l.text))
+}
+
+/// A medal's badge as a picture: a path per colour, one short run at a time. A page shows well
+/// over a hundred of these, so every byte counts.
+fn badge(art: &[String], tier: u8, secret: bool, lit: bool, size: u32) -> String {
+    let rows = crate::online::medal_badge(art, tier, secret, lit);
+    let mut paths: Vec<(u32, String)> = Vec::new();
+    for (y, row) in rows.iter().enumerate() {
+        let mut x = 0;
+        while x < row.len() {
+            let Some(colour) = row[x] else {
+                x += 1;
+                continue;
+            };
+            let start = x;
+            while x < row.len() && row[x] == Some(colour) {
+                x += 1;
+            }
+            let i = paths.iter().position(|(c, _)| *c == colour).unwrap_or_else(|| {
+                paths.push((colour, String::new()));
+                paths.len() - 1
+            });
+            paths[i].1 += &format!("M{start} {y}h{}v1H{start}z", x - start);
+        }
+    }
+    let inner: String = paths.iter().map(|(colour, d)| format!("<path fill=\"#{colour:06x}\" d=\"{d}\"/>")).collect();
+    let n = crate::online::BADGE;
+    format!("<svg class=badge width={size} height={size} viewBox=\"0 0 {n} {n}\" shape-rendering=\"crispEdges\" aria-hidden=\"true\">{inner}</svg>")
+}
+
+const TIER_NAMES: [&str; 4] = ["Kantan", "Futsuu", "Muzukashii", "Oni"];
+
+fn tier_label(tier: u8, secret: bool) -> &'static str {
+    if secret { "Ura" } else { TIER_NAMES[usize::from(tier.clamp(1, 4)) - 1] }
+}
+
+/// The medals on a profile: their highest dan and their rarest ones.
+fn medal_panel(p: &Profile) -> String {
+    let m = &p.medals;
+    let dan = m.dan.as_ref().map(|d| format!("<p><span class=dim>Dan</span> <b>{}</b></p>", esc(&d[0]))).unwrap_or_default();
+    let rarest: String = m
+        .rarest
+        .iter()
+        .map(|n| format!("<span class=rare title=\"{}\">{}</span>", esc(&n.name[0]), badge(&n.art, n.tier, n.secret, true, 56)))
+        .collect();
+    let rarest = if rarest.is_empty() { "<p class=dim>No medals yet.</p>".to_string() } else { format!("<div class=medalrow>{rarest}</div>") };
+    format!(
+        "<section class=panel><div class=panel-head><h2>MEDALS <span class=count>{} / {}</span></h2><a class=more href=\"/u/{}/medals\">all</a></div>{dan}{rarest}</section>",
+        m.earned,
+        m.total,
+        esc(&p.name)
+    )
+}
+
+/// One medal on the medals page; `owned`: on a player's page, where what they lack is greyed out.
+fn medal_card(m: &crate::online::MedalRow, players: u32, owned: bool) -> String {
+    let lit = m.at.is_some() || !owned;
+    let picture = if m.art.is_empty() {
+        "<span class=unknown>?</span>".to_string()
+    } else {
+        badge(&m.art, m.tier, m.secret, lit, 64)
+    };
+    let name = m.name.as_ref().map_or("???", |n| n[0].as_str());
+    let about = m.how.as_ref().or(m.hint.as_ref()).map_or("Nobody has found this one.".to_string(), |t| esc(&t[0]));
+    let share = if players > 0 { f64::from(m.holders) * 100.0 / f64::from(players) } else { 0.0 };
+    let earned = m.at.map(|t| format!(" · earned {}", month_year(t))).unwrap_or_default();
+    let progress = if m.need > 0 && owned && m.at.is_none() { format!(" · {} / {}", thousands(m.have), thousands(m.need)) } else { String::new() };
+    format!(
+        "<li class=\"medal{}\">{picture}<div><b>{}</b><p>{about}</p><span class=dim><span class=\"tier t{}{}\">{}</span> · {share:.0}% of players{earned}{progress}</span></div></li>",
+        if lit { " got" } else { "" },
+        esc(name),
+        m.tier.clamp(1, 4),
+        if m.secret { " ura" } else { "" },
+        tier_label(m.tier, m.secret),
+    )
+}
+
+/// Every medal; with a player's name, how they stand. `table`: who has the most.
+pub fn medals_page(view: &crate::online::MedalsView, player: Option<&str>, table: &[(String, u32)]) -> String {
+    let mut sections = String::new();
+    for (i, title) in crate::medal_list::SECTIONS.iter().enumerate() {
+        let cards: String = view.medals.iter().filter(|m| usize::from(m.section) == i).map(|m| medal_card(m, view.players, player.is_some())).collect();
+        if !cards.is_empty() {
+            sections += &format!("<section class=panel><div class=panel-head><h2>{}</h2></div><ul class=medals>{cards}</ul></section>", esc(&title.to_uppercase()));
+        }
+    }
+    let top: String = table.iter().take(10).map(|(name, n)| format!("<li>{}<span class=times>{n}</span></li>", player_link(name))).collect();
+    let lead = match player {
+        Some(name) => format!("<h1>{}'s medals</h1><p class=dim>{} of {}. Earn them in the game; a medal stays yours as long as the play that earned it does.</p>", esc(name), view.earned, view.medals.len()),
+        None => "<h1>Medals</h1><p class=dim>Earned by playing. Secret ones show a hint once somebody has found them; how to earn them is never said.</p>".to_string(),
+    };
+    format!(
+        "<div class=page><div class=section-head>{lead}</div><div class=medalpage><div class=medalcol>{sections}</div><aside><section class=panel><div class=panel-head><h2>MOST MEDALS</h2></div><ol class=board-list>{top}</ol></section></aside></div></div>"
+    )
 }
 
 /// The chat, like osu!'s: channels on the left (the global one and every friend), the open one
@@ -1372,7 +1469,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
         }
         None => "<a class=\"navbtn join\" href=\"/register\">sign up</a><a class=\"navbtn hot\" href=\"/login\">log in</a>".into(),
     };
-    let links: String = [("rankings", "/rankings"), ("beatmaps", "/beatmaps"), ("loved", "/loved"), ("mods", "/mods"), ("download", "/download")]
+    let links: String = [("rankings", "/rankings"), ("medals", "/medals"), ("beatmaps", "/beatmaps"), ("loved", "/loved"), ("mods", "/mods"), ("download", "/download")]
         .iter()
         .map(|(name, href)| {
             let on = if *name == nav { " class=on aria-current=page" } else { "" };
@@ -1555,6 +1652,14 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 .chart .area{fill:rgba(235,69,44,.15)}.chart .line{fill:none;stroke:var(--acc);stroke-width:3}.chart-axis{display:flex;justify-content:space-between;margin-top:6px}
 .grades{display:flex;justify-content:space-around}.grades div{display:flex;flex-direction:column;align-items:center;gap:4px}.grades .grade{font-size:48px;line-height:48px;width:auto}.grades b{color:var(--white)}
 .modcounts{display:flex;flex-wrap:wrap;gap:6px 10px}.modcount{display:inline-flex;align-items:center;gap:2px}
+.medalrow{display:flex;flex-wrap:wrap;gap:6px}.rare{display:inline-flex}
+.medalpage{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:16px;align-items:start}.medalcol{display:grid;gap:16px;min-width:0}
+.medals{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+.medals .medal{display:flex;gap:12px;align-items:flex-start;opacity:.72}.medals .medal.got{opacity:1}.medals .medal b{color:var(--white)}.medals .medal p{margin:2px 0;font-size:13px}
+.medals .medal .dim{font-size:12px}.unknown{width:64px;height:64px;flex:none;display:grid;place-items:center;background:var(--panel2);color:var(--dim);font-size:28px}
+.badge{flex:none;image-rendering:pixelated}.board-list li{min-width:0}.board-list .player{overflow:hidden;text-overflow:ellipsis}.tier.t1{color:var(--green)}.tier.t2{color:var(--katl)}.tier.t3{color:var(--gold)}.tier.t4{color:var(--don)}.tier.ura{color:var(--purple)}
+li.medal .text{color:var(--gold)}
+@media (max-width:860px){.medalpage{grid-template-columns:minmax(0,1fr)}}
 .mini{position:relative;display:flex;align-items:center;gap:12px;min-height:56px;padding:4px 10px 4px 4px;margin-bottom:6px;background:var(--panel2);border:2px solid transparent}.mini:hover{border-color:var(--acc);color:var(--text)}
 .mini .art{width:64px;height:44px;flex:none;background:var(--cover,linear-gradient(135deg,hsl(var(--h) 45% 34%),hsl(calc(var(--h) + 60) 40% 18%))) center/cover}
 .mini-info{display:flex;flex-direction:column;min-width:0}.mini-info b,.mini-info span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mini-info b{color:var(--white)}.times{margin-left:auto;color:var(--gold)}

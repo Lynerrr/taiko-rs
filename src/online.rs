@@ -95,6 +95,8 @@ pub enum Request {
     /// a lobby): it counts in the profile's play count, and `ms` of playing in its play time
     /// (`Reply::Counted`).
     Played { token: String, ms: u64 },
+    /// Every medal, and how `name` stands with them (`Reply::Medals`); no name: just the list.
+    Medals { name: String },
 }
 
 /// What a replay's presses can't say about a play's timing: with it, how far off a play was can
@@ -148,6 +150,9 @@ pub struct ScoreSubmit {
     /// How the game's timing was set up (none from older games).
     #[serde(default)]
     pub timing: Option<PlayTiming>,
+    /// Drumroll hits (none from older games).
+    #[serde(default)]
+    pub rolls: Option<u32>,
 }
 
 /// 1: on the notes `NOTE_MODS` leave, not the whole map. 2: Half keeps to the beat.
@@ -190,6 +195,13 @@ pub struct OnlineScore {
     /// `ScoreSubmit::pp_version`.
     #[serde(default)]
     pub pp_version: u32,
+    /// `ScoreSubmit::rolls`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rolls: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// An online score's replay: its presses, the map they were played on and how they are judged
@@ -246,6 +258,8 @@ pub struct Profile {
     /// Time spent playing (real milliseconds, pauses left out), counted since this was added.
     #[serde(default)]
     pub play_ms: u64,
+    #[serde(default)]
+    pub medals: MedalSummary,
 }
 
 /// A player's totals, like osu!'s profile.
@@ -332,6 +346,188 @@ pub struct ChatLine {
     pub text: String,
     /// Unix seconds.
     pub at: u64,
+    /// A medal the server is announcing (`SERVER_NAME` says it): `text` is the same in English,
+    /// for games from before medals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub medal: Option<ChatMedal>,
+}
+
+/// Who the server's own lines in the chat are from: a dot can't be in an account's name.
+pub const SERVER_NAME: &str = "taiko.rs";
+
+/// Text in each of the game's languages: English, Japanese, Russian.
+pub type Said = [String; 3];
+
+/// The side of `text` for the language the game is in.
+#[allow(dead_code)] // used by the game
+pub fn said(text: &Said) -> &str {
+    match crate::lang::current() {
+        crate::lang::Lang::En => &text[0],
+        crate::lang::Lang::Ja => &text[1],
+        crate::lang::Lang::Ru => &text[2],
+    }
+}
+
+/// Medal tiers, named after taiko's difficulties (the colours are the website's).
+pub const TIER_COLOURS: [u32; 4] = [0x86E05A, 0x4fb4ff, 0xFFD34D, 0xEB452C];
+/// A secret medal's colour, whatever its tier: Ura, taiko's hidden difficulty.
+pub const SECRET_COLOUR: u32 = 0xc77dff;
+
+/// A medal's colour: `tier` is 1 to 4.
+pub fn medal_colour(tier: u8, secret: bool) -> u32 {
+    if secret {
+        SECRET_COLOUR
+    } else {
+        TIER_COLOURS[usize::from(tier.clamp(1, 4)) - 1]
+    }
+}
+
+/// A medal someone has just earned, as the game shows it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MedalNote {
+    pub id: String,
+    pub name: Said,
+    /// How it was earned; a secret's stays a hint.
+    pub about: Said,
+    pub tier: u8,
+    pub secret: bool,
+    /// Its picture, for `medal_badge`.
+    pub art: Vec<String>,
+}
+
+/// The server's line about a medal, for games to say it in their own language.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct ChatMedal {
+    pub player: String,
+    pub name: Said,
+    pub tier: u8,
+    pub secret: bool,
+    /// Nobody had it before them.
+    pub first: bool,
+    /// How many players have it now, of how many.
+    pub holders: u32,
+    pub players: u32,
+}
+
+impl ChatLine {
+    /// What the line says, in the game's language.
+    #[allow(dead_code)] // used by the game
+    pub fn shown(&self) -> String {
+        let Some(m) = &self.medal else { return self.text.clone() };
+        let (player, name, holders, players) = (&m.player, said(&m.name), m.holders, m.players);
+        let line = match m.secret {
+            true => tr!("{player} found the secret {name}", "{player}が秘密のメダル「{name}」を見つけた", "{player} находит секрет «{name}»";),
+            false => tr!("{player} earned {name}", "{player}がメダル「{name}」を獲得", "{player} получает «{name}»";),
+        };
+        let rarity = match m.first {
+            true => tr!("first on the server", "サーバー初", "первым на сервере").to_string(),
+            false => tr!("{holders} of {players} have it", "{players}人中{holders}人", "есть у {holders} из {players}";),
+        };
+        format!("{line} · {rarity}")
+    }
+}
+
+/// How one medal stands.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MedalRow {
+    pub id: String,
+    /// The section it's in, the same order as the game's and the website's lists.
+    pub section: u8,
+    pub tier: u8,
+    pub secret: bool,
+    /// None: a secret nobody has found yet.
+    pub name: Option<Said>,
+    /// How to earn it; None for secrets.
+    pub how: Option<Said>,
+    /// A secret's hint, once somebody has found it.
+    pub hint: Option<Said>,
+    pub art: Vec<String>,
+    /// When the player earned it (Unix seconds).
+    pub at: Option<u64>,
+    /// How many players have it.
+    pub holders: u32,
+    /// How far along the player is, where that can be counted (`need` 0: it can't).
+    pub have: u64,
+    pub need: u64,
+}
+
+/// `Reply::Medals`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MedalsView {
+    /// Players with a play on the server.
+    pub players: u32,
+    /// The player's medals; 0 without a player.
+    pub earned: u32,
+    pub medals: Vec<MedalRow>,
+    /// The mods in their collection, by acronym.
+    pub collection: Vec<String>,
+    /// The mods a collection can have.
+    pub collection_size: u32,
+}
+
+/// What a profile says of a player's medals.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MedalSummary {
+    pub earned: u32,
+    pub total: u32,
+    /// Their highest dan.
+    pub dan: Option<Said>,
+    /// Their rarest medals.
+    pub rarest: Vec<MedalNote>,
+}
+
+/// A medal picture is this many pixels square, and a badge this many.
+pub const ART: usize = 16;
+pub const BADGE: usize = 28;
+
+/// A medal's badge as colours (`None`: nothing there), the same in the game and on the website:
+/// a ring in its tier's colour, more ornate the higher the tier, around its picture, whose
+/// pixels are `.` nothing, `#` white, `x` the medal's colour and `o` a dark shade of it. `lit`:
+/// earned; otherwise it's greyed out.
+pub fn medal_badge(art: &[String], tier: u8, secret: bool, lit: bool) -> [[Option<u32>; BADGE]; BADGE] {
+    let colour = medal_colour(tier, secret);
+    let mix = |a: u32, b: u32, t: f32| {
+        let part = |shift: u32| {
+            let (x, y) = (((a >> shift) & 255) as f32, ((b >> shift) & 255) as f32);
+            ((x + (y - x) * t) as u32) << shift
+        };
+        part(16) | part(8) | part(0)
+    };
+    let shade = |c: u32| if lit { c } else { mix(mix(c, 0x8a8aa0, 0.85), 0x000000, 0.45) };
+    let points = [0.0, 4.0, 8.0, 12.0][usize::from(tier.clamp(1, 4)) - 1];
+    let mut out = [[None; BADGE]; BADGE];
+    let mid = (BADGE as f32 - 1.0) / 2.0;
+    for (y, row) in out.iter_mut().enumerate() {
+        for (x, px) in row.iter_mut().enumerate() {
+            let (dx, dy) = (x as f32 - mid, y as f32 - mid);
+            let d = dx.hypot(dy);
+            // Each tier up adds points around the ring.
+            let turn = (dy.atan2(dx) + std::f32::consts::FRAC_PI_4) / std::f32::consts::TAU;
+            let spike = points > 0.0 && d <= 13.9 && ((turn * points).rem_euclid(1.0) - 0.5).abs() < 0.11;
+            *px = if d <= 10.6 {
+                Some(0x15151d)
+            } else if d <= 12.4 {
+                Some(shade(if dx + dy < 0.0 { mix(colour, 0xffffff, 0.35) } else { colour }))
+            } else if d <= 13.4 || spike {
+                Some(shade(mix(colour, 0x000000, 0.45)))
+            } else {
+                None
+            };
+        }
+    }
+    let inset = (BADGE - ART) / 2;
+    for (y, row) in art.iter().take(ART).enumerate() {
+        for (x, ink) in row.chars().take(ART).enumerate() {
+            let c = match ink {
+                '#' => 0xffffff,
+                'x' => colour,
+                'o' => mix(colour, 0x000000, 0.55),
+                _ => continue,
+            };
+            out[y + inset][x + inset] = Some(shade(c));
+        }
+    }
+    out
 }
 
 /// Someone connected to the server right now.
@@ -392,6 +588,8 @@ pub enum Down {
     /// with thousands online).
     Players { count: u32, players: Vec<OnlinePlayer> },
     /// A global chat line (the recent ones again on connecting).
+    /// Medals earned away from a play.
+    Medals(Vec<MedalNote>),
     GlobalChat(ChatLine),
 }
 
@@ -427,7 +625,15 @@ pub enum Reply {
     Error(String),
     /// The play is on the leaderboards: its place on the map (if it's the player's best there),
     /// and the player's pp total and rank now.
-    Submitted { map_rank: Option<u32>, pp: f64, rank: Option<u32> },
+    Submitted {
+        map_rank: Option<u32>,
+        pp: f64,
+        rank: Option<u32>,
+        /// The medals this play earned.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        medals: Vec<MedalNote>,
+    },
+    Medals(Box<MedalsView>),
     Scores(Vec<OnlineScore>),
     Profile(Box<Profile>),
     Replay(Box<OnlineReplay>),

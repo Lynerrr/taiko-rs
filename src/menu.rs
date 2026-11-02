@@ -11,12 +11,13 @@ pub enum Item {
     Play,
     Multiplayer,
     Download,
+    Medals,
     Editor,
     Settings,
     Exit,
 }
 
-pub const ITEMS: [Item; 6] = [Item::Play, Item::Multiplayer, Item::Download, Item::Settings, Item::Editor, Item::Exit];
+pub const ITEMS: [Item; 7] = [Item::Play, Item::Multiplayer, Item::Download, Item::Medals, Item::Settings, Item::Editor, Item::Exit];
 
 /// How long a hit note shows before its screen opens (ms).
 const LEAVE_MS: f32 = 170.0;
@@ -171,6 +172,24 @@ const GEAR: Icon = [
     "......####......",
     "................",
 ];
+const MEDAL: Icon = [
+    "..###......###..",
+    "...###....###...",
+    "....###..###....",
+    ".....######.....",
+    "......####......",
+    ".....######.....",
+    "...##########...",
+    "..####....####..",
+    "..###......###..",
+    ".###...##...###.",
+    ".###...##...###.",
+    "..###......###..",
+    "..####....####..",
+    "...##########...",
+    ".....######.....",
+    "................",
+];
 const CROSS: Icon = [
     "................",
     ".##..........##.",
@@ -196,6 +215,7 @@ impl Item {
             Item::Play => tr!("PLAY", "プレイ", "ИГРАТЬ"),
             Item::Multiplayer => tr!("MULTIPLAYER", "マルチ", "МУЛЬТИПЛЕЕР"),
             Item::Download => tr!("DOWNLOAD", "ダウンロード", "ЗАГРУЗКА"),
+            Item::Medals => tr!("MEDALS", "メダル", "МЕДАЛИ"),
             Item::Editor => tr!("EDITOR", "エディタ", "РЕДАКТОР"),
             Item::Settings => tr!("SETTINGS", "設定", "НАСТРОЙКИ"),
             Item::Exit => tr!("EXIT", "終了", "ВЫХОД"),
@@ -207,6 +227,7 @@ impl Item {
             Item::Play => tr!("{maps} maps in your library", "ライブラリに{maps}譜面", "{maps} карт в библиотеке";),
             Item::Multiplayer => tr!("Play with friends and everyone else", "フレンドやみんなと遊ぶ", "Играть с друзьями и не только").into(),
             Item::Download => tr!("Find and get new maps", "新しい譜面を探す", "Найти и скачать новые карты").into(),
+            Item::Medals => tr!("What you've earned, and what's next", "獲得したメダルと次の目標", "Что уже получено и что дальше").into(),
             Item::Editor => tr!("Your own maps, right in the game", "自分の譜面をゲーム内で", "Свои карты прямо в игре").into(),
             Item::Settings => tr!("Sound, keys, skin, offset", "音、キー、スキン、オフセット", "Звук, клавиши, скин, оффсет").into(),
             Item::Exit => tr!("Close taiko.rs", "taiko.rsを閉じる", "Закрыть taiko.rs").into(),
@@ -217,6 +238,7 @@ impl Item {
         match self {
             Item::Play | Item::Download => DON,
             Item::Multiplayer | Item::Settings => KAT,
+            Item::Medals => 0xE8B020,
             Item::Editor => 0x23232f,
             Item::Exit => 0x6f6f86,
         }
@@ -227,6 +249,7 @@ impl Item {
             Item::Play => &PLAY,
             Item::Multiplayer => &PEOPLE,
             Item::Download => &ARROW,
+            Item::Medals => &MEDAL,
             Item::Editor => &PENCIL,
             Item::Settings => &GEAR,
             Item::Exit => &CROSS,
@@ -792,7 +815,7 @@ mod tests {
     #[test]
     fn the_short_way_round_and_back_to_the_same_note() {
         let mut m = Menu::new();
-        m.pick(5);
+        m.pick(6);
         assert_eq!(m.selected, -1, "Exit is one step back from Play");
         assert_eq!(m.current(), Item::Exit);
         m.step(2);
@@ -804,7 +827,7 @@ mod tests {
     #[test]
     fn the_editor_is_only_shaken_the_rest_open_after_the_hit() {
         let mut m = Menu::new();
-        m.pick(4);
+        m.pick(5);
         assert_eq!(m.hit(), Item::Editor);
         assert!(!m.is_leaving());
         m.pick(0);
