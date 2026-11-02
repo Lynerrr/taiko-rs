@@ -870,7 +870,7 @@ fn one_click_on_a_main_menu_note_opens_it() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = Scene::Select;
     s.main_menu = Some(menu::Menu::new());
-    s.click(render::Hit::MenuItem(3), None);
+    s.click(render::Hit::MenuItem(4), None);
     let m = s.main_menu.as_ref().unwrap();
     assert_eq!(m.current(), menu::Item::Settings);
     assert!(m.is_leaving(), "no second click at the circle needed");

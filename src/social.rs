@@ -499,7 +499,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
             c.text_centered(x + PANEL_W / 2.0, y + h - 14.0, 6.0, rgba(0x55556a, a), &Canvas::fit_hints(6.0, iw, "Tab  type to search  Up/Down  Enter add friend  Esc"));
         }
         Tab::Chat => {
-            let lines: Vec<(String, String, bool)> = s.global.iter().map(|l| (l.from.clone(), l.text.clone(), Some(key(&l.from)) == me)).collect();
+            let lines: Vec<(String, String, bool)> = s.global.iter().map(|l| (l.from.clone(), l.shown(), Some(key(&l.from)) == me)).collect();
             if lines.is_empty() && s.connected {
                 let note = if s.players.is_some() { "nobody has said anything yet: say hi" } else { "this server has no global chat yet" };
                 c.text(inner + 4.0, list_top + 2.0, 7.0, rgba(0x6f6f86, a), note);
@@ -602,7 +602,15 @@ fn chat_lines(c: &mut Canvas, s: &Social, lines: &[(String, String, bool)], inne
     let mut wrapped: Vec<(String, u32, Option<u32>)> = Vec::new();
     for (from, text, mine) in lines {
         let set = map_set_in(text);
-        let colour = if set.is_some() { 0x66ccff } else if *mine { 0xFFD34D } else { 0xffffff };
+        let colour = if from == crate::online::SERVER_NAME {
+            0xFFB84D
+        } else if set.is_some() {
+            0x66ccff
+        } else if *mine {
+            0xFFD34D
+        } else {
+            0xffffff
+        };
         for (n, l) in wrap(&format!("{from}: {text}"), width).into_iter().enumerate() {
             wrapped.push((if n == 0 { l } else { format!("  {l}") }, colour, set));
         }

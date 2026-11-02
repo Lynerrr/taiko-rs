@@ -44,10 +44,30 @@ pub enum Sfx {
     Scream,
     /// A friend's message.
     Message,
+    /// A medal landing, by tier.
+    MedalKantan,
+    MedalFutsuu,
+    MedalMuzukashii,
+    MedalOni,
+    /// A secret medal.
+    MedalUra,
+}
+
+impl Sfx {
+    /// The sound of a medal: `tier` is 1 to 4.
+    pub fn medal(tier: u8, secret: bool) -> Sfx {
+        match (secret, tier) {
+            (true, _) => Sfx::MedalUra,
+            (_, 1) => Sfx::MedalKantan,
+            (_, 2) => Sfx::MedalFutsuu,
+            (_, 3) => Sfx::MedalMuzukashii,
+            _ => Sfx::MedalOni,
+        }
+    }
 }
 
 /// One sound per `Sfx`.
-pub type Sounds = [Vec<f32>; 7];
+pub type Sounds = [Vec<f32>; 12];
 
 enum Cmd {
     /// `base`: the song frame the track's first sample belongs at (a partial decode).
@@ -790,7 +810,8 @@ pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
     let kat = custom.kat.unwrap_or_else(|| built_in(1, rate));
     let finish = custom.finish.unwrap_or_else(|| built_in(2, rate));
     let combobreak = custom.combobreak.unwrap_or_else(|| built_in(3, rate));
-    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak, screech(rate), chime(rate)]
+    let [kantan, futsuu, muzukashii, oni, ura] = crate::medal_sound::sounds(rate);
+    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak, screech(rate), chime(rate), kantan, futsuu, muzukashii, oni, ura]
 }
 
 /// Overtime's scream, made up rather than sampled: detuned saws sweeping up with a fast

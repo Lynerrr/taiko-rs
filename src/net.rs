@@ -545,6 +545,17 @@ impl Drop for Room {
     }
 }
 
+/// What's told the results of a match.
+pub type MatchHook = Box<dyn Fn(&[PlayerInfo]) + Send + Sync>;
+
+/// Told the results of every match a room here finishes (the online server keeps count).
+static MATCH_OVER: std::sync::OnceLock<MatchHook> = std::sync::OnceLock::new();
+
+#[allow(dead_code)] // used by the online server (server/)
+pub fn on_match(hook: MatchHook) {
+    let _ = MATCH_OVER.set(hook);
+}
+
 #[allow(dead_code)] // used by the online server (server/)
 pub fn open_room(mapguessr: bool) -> Room {
     let stop = Arc::new(AtomicBool::new(false));
@@ -1012,6 +1023,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
         // Everyone still in the match has finished (or left): publish results, back to the lobby.
         if phase == Phase::Playing && players.iter().filter(|p| p.in_match).all(|p| p.info.status == Status::Finished) {
             let results: Vec<PlayerInfo> = players.iter().filter(|p| p.in_match).map(|p| p.info.clone()).collect();
+            if let Some(hook) = MATCH_OVER.get() {
+                hook(&results);
+            }
             for p in &mut players {
                 let _ = p.tx.send(ServerMsg::Results(results.clone()));
                 p.in_match = false;
@@ -1219,26 +1233,32 @@ impl Client {
     pub fn poll(&mut self) -> Vec<ServerMsg> {
         let mut out = Vec::new();
         while let Ok((arrived, msg)) = self.rx.try_recv() {
-            match msg {
-                ServerMsg::Pong { t, server } => {
-                    let now = arrived.duration_since(self.epoch).as_secs_f64() * 1000.0;
-                    let rtt = now - t;
-                    self.rtt_ms = rtt;
-                    // Trust the fastest round trip; let the bar rise slowly so clock drift is tracked.
-                    self.best_rtt += 0.05;
-                    if rtt <= self.best_rtt {
-                        self.best_rtt = rtt;
-                        self.offset = server + rtt / 2.0 - now;
-                    }
-                }
-                ServerMsg::Welcome { id } => {
-                    self.id = Some(id);
-                    out.push(ServerMsg::Welcome { id });
-                }
-                other => out.push(other),
-            }
+            out.extend(self.take_in(arrived, msg));
         }
         out
+    }
+
+    /// One incoming message: what the clock sync keeps for itself never comes out.
+    fn take_in(&mut self, arrived: Instant, msg: ServerMsg) -> Option<ServerMsg> {
+        match msg {
+            ServerMsg::Pong { t, server } => {
+                let now = arrived.duration_since(self.epoch).as_secs_f64() * 1000.0;
+                let rtt = now - t;
+                self.rtt_ms = rtt;
+                // Trust the fastest round trip; let the bar rise slowly so clock drift is tracked.
+                self.best_rtt += 0.05;
+                if rtt <= self.best_rtt {
+                    self.best_rtt = rtt;
+                    self.offset = server + rtt / 2.0 - now;
+                }
+                None
+            }
+            ServerMsg::Welcome { id } => {
+                self.id = Some(id);
+                Some(ServerMsg::Welcome { id })
+            }
+            other => Some(other),
+        }
     }
 
     /// Local instant corresponding to a server timestamp.
@@ -1285,11 +1305,15 @@ mod tests {
         assert_eq!(resolve("[::1]:9001").unwrap().port(), 9001);
     }
 
+    /// The next message like `pred`, skipping the ones before it. What came after it stays
+    /// queued: two messages can arrive together, and the next wait may want the second.
     fn wait_for<F: Fn(&ServerMsg) -> bool>(c: &mut Client, pred: F) -> ServerMsg {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(m) = c.poll().into_iter().find(|m| pred(m)) {
-                return m;
+            while let Ok((arrived, msg)) = c.rx.try_recv() {
+                if let Some(m) = c.take_in(arrived, msg).filter(|m| pred(m)) {
+                    return m;
+                }
             }
             assert!(Instant::now() < until, "timed out waiting for message");
             thread::sleep(Duration::from_millis(10));

@@ -24,6 +24,9 @@ if [ -f "$osu" ]; then scp -q "$osu" "$vps:/tmp/osu-api"; else ssh "$vps" rm -f 
 # Plays worked out again (`taiko-rs --recalc-pp`), when this machine has them.
 recalc=${RECALC_FILE:-$HOME/.config/taiko-server/recalculated.json}
 if [ -f "$recalc" ]; then scp -q "$recalc" "$vps:/tmp/recalculated.json"; else ssh "$vps" rm -f /tmp/recalculated.json; fi
+# The secret medals: the source is public, so they're nowhere but here and on the server.
+secrets=${MEDAL_SECRETS_FILE:-$HOME/.config/taiko-server/medal-secrets.json}
+if [ -f "$secrets" ]; then scp -q "$secrets" "$vps:/tmp/medal-secrets.json"; else ssh "$vps" rm -f /tmp/medal-secrets.json; fi
 # The certificate for the encrypted game port and its key, when this machine has them.
 tls=${TLS_DIR:-$HOME/.config/taiko-server}
 if [ -f "$tls/tls-key.der" ]; then scp -q "$tls/tls-cert.der" "$tls/tls-key.der" "$vps:/tmp/"; else ssh "$vps" rm -f /tmp/tls-key.der /tmp/tls-cert.der; fi
@@ -42,6 +45,11 @@ if [ -f /tmp/osu-api ]; then
     scp -q -F /dev/null -P 1337 -i ~/.ssh/xui_node -o IdentitiesOnly=yes /tmp/osu-api "$target:taiko-server/data/osu-api"
     rm -f /tmp/osu-api
     $hop "$target" chmod 600 taiko-server/data/osu-api
+fi
+if [ -f /tmp/medal-secrets.json ]; then
+    scp -q -F /dev/null -P 1337 -i ~/.ssh/xui_node -o IdentitiesOnly=yes /tmp/medal-secrets.json "$target:taiko-server/data/medal-secrets.json"
+    rm -f /tmp/medal-secrets.json
+    $hop "$target" chmod 600 taiko-server/data/medal-secrets.json
 fi
 if [ -f /tmp/recalculated.json ]; then
     scp -q -F /dev/null -P 1337 -i ~/.ssh/xui_node -o IdentitiesOnly=yes /tmp/recalculated.json "$target:taiko-server/data/recalculated.json"

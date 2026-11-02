@@ -120,6 +120,11 @@ pub fn save(key: &str, bytes: &[u8], now: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Everyone with a picture.
+pub fn keys() -> Vec<String> {
+    STORE.get().map(|s| s.has.lock().unwrap().keys().cloned().collect()).unwrap_or_default()
+}
+
 pub fn remove(key: &str) {
     let Some(s) = STORE.get() else { return };
     if s.has.lock().unwrap().remove(key).is_some() {
