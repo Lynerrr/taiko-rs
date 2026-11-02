@@ -502,6 +502,9 @@ struct State {
     /// in the background; the input thread waits until the render thread has let go of it).
     surface_swap: Option<(Option<wgpu::Surface<'static>>, u32, u32)>,
     present: PresentChoice,
+    /// The present modes the renderer can do (`Renderer::present_choices`): the only ones the
+    /// settings offer.
+    present_modes: Vec<PresentChoice>,
     refresh_hz: f64,
     settings_ui: SettingsUi,
     fullscreen: bool,
@@ -2646,7 +2649,7 @@ impl State {
                 let frames = c.audio_buffer;
                 tr!("{frames} frames ({ms:.1} ms)", "{frames}フレーム ({ms:.1} ms)", "{frames} кадров ({ms:.1} мс)";)
             }
-            Item::PresentMode => c.present.name().to_string(),
+            Item::PresentMode => c.present.within(&self.present_modes).name().to_string(),
             Item::Renderer => {
                 // What's drawing now (the adapter's name ends in its API), and a word when the
                 // pick waits for a restart.
@@ -2881,9 +2884,7 @@ impl State {
                 let i = AUDIO_BUFFERS.iter().position(|&b| b >= self.cfg.audio_buffer).unwrap_or(2);
                 self.set_audio_buffer(AUDIO_BUFFERS[(i as i32 + dir).clamp(0, AUDIO_BUFFERS.len() as i32 - 1) as usize]);
             }
-            Item::PresentMode => {
-                self.cfg.present = if dir > 0 { self.cfg.present.next() } else { self.cfg.present.next().next() };
-            }
+            Item::PresentMode => self.cfg.present = self.step_present(dir),
             // Each pick restarts the game, so Left/Right open the list rather than step through it.
             Item::Renderer => self.open_choices(item),
             Item::MenuVsync => self.cfg.menu_vsync = !self.cfg.menu_vsync,
@@ -3046,8 +3047,9 @@ impl State {
                 (strings(&mut all.iter().map(|&r| config::renderer_name(r))), all.iter().position(|&r| r == c.graphics_api), tr!("picking one restarts the game", "選ぶとゲームが再起動します", "выбор перезапустит игру").into())
             }
             Item::PresentMode => {
-                let all = PresentChoice::ALL;
-                (strings(&mut all.iter().map(|p| p.name())), all.iter().position(|&p| p == c.present), tr!("during songs", "曲の間", "во время песен").into())
+                let all = &self.present_modes;
+                let note = if all.len() == 1 { tr!("the only one this renderer has", "このレンダラーはこれだけ", "у этого рендера только он") } else { tr!("during songs", "曲の間", "во время песен") };
+                (strings(&mut all.iter().map(|p| p.name())), all.iter().position(|&p| p == c.present.within(all)), note.into())
             }
             Item::AudioBuffer => {
                 let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
@@ -3155,7 +3157,7 @@ impl State {
             Item::AutoplayStyle => self.cfg.autoplay.style = autoplay::Style::ALL[i],
             Item::AutoplayBinding => self.cfg.autoplay.binding = i,
             Item::Language => self.cfg.language = lang::Lang::ALL[i],
-            Item::PresentMode => self.cfg.present = PresentChoice::ALL[i],
+            Item::PresentMode => self.cfg.present = self.present_modes.get(i).copied().unwrap_or(PresentChoice::Fifo),
             Item::Renderer if config::RENDERERS[i] != self.cfg.graphics_api => {
                 self.cfg.graphics_api = config::RENDERERS[i].to_string();
                 self.restart_for_renderer();
@@ -4367,7 +4369,7 @@ impl State {
             KeyCode::F3 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, -1.0),
             KeyCode::F4 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, 1.0),
             KeyCode::F7 => {
-                self.cfg.present = self.cfg.present.next();
+                self.cfg.present = self.step_present(1);
                 self.cfg.save();
                 let note = if self.cfg.menu_vsync && !self.player_plays() { tr!(" (menus stay on vsync)", " (メニューは垂直同期のまま)", " (меню остаются с vsync)") } else { "" };
                 let text = tr!("gameplay present mode: {}{note}", "プレイ中の表示モード: {}{note}", "режим вывода в игре: {}{note}"; self.cfg.present.name());
@@ -5856,6 +5858,13 @@ impl State {
                 self.cfg.save();
             }
         }
+    }
+
+    /// The present mode `dir` steps from the one in effect, among those the renderer can do.
+    fn step_present(&self, dir: i32) -> PresentChoice {
+        let modes = &self.present_modes;
+        let at = modes.iter().position(|&p| p == self.cfg.present.within(modes)).unwrap_or(0) as i32;
+        modes.get((at + dir).rem_euclid(modes.len().max(1) as i32) as usize).copied().unwrap_or(PresentChoice::Fifo)
     }
 
     /// The renderer is picked when the graphics start: the game starts again with the new one.
@@ -10975,6 +10984,7 @@ impl ApplicationHandler<UserEvent> for App {
             // What it could do, not what was asked: OpenGL on Linux has only vsync, and that
             // mustn't become the setting (it stayed vsync after going back to Vulkan).
             s.present = renderer.present;
+            s.present_modes = renderer.present_choices();
             s.refresh_hz = refresh_hz;
         }
         let state = self.state.clone();
@@ -11237,6 +11247,7 @@ impl State {
             touch_flash: [None; 4],
             surface_swap: None,
             present,
+            present_modes: PresentChoice::ALL.to_vec(),
             refresh_hz: 60.0,
             settings_ui: SettingsUi::default(),
             fullscreen,

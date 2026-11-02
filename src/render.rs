@@ -252,13 +252,17 @@ impl PresentChoice {
     /// In the order the settings list shows them.
     pub const ALL: [PresentChoice; 3] = [PresentChoice::Fifo, PresentChoice::Mailbox, PresentChoice::Immediate];
 
-    pub fn next(self) -> Self {
-        match self {
-            PresentChoice::Mailbox => PresentChoice::Immediate,
-            PresentChoice::Immediate => PresentChoice::Fifo,
-            PresentChoice::Fifo => PresentChoice::Mailbox,
-        }
+    /// The one drawn with when `self` isn't among `modes` (what the renderer can do), as
+    /// `Renderer::set_present` falls back.
+    pub fn within(self, modes: &[PresentChoice]) -> PresentChoice {
+        let order: &[PresentChoice] = match self {
+            PresentChoice::Mailbox => &[PresentChoice::Mailbox, PresentChoice::Immediate, PresentChoice::Fifo],
+            PresentChoice::Immediate => &[PresentChoice::Immediate, PresentChoice::Mailbox, PresentChoice::Fifo],
+            PresentChoice::Fifo => &[PresentChoice::Fifo],
+        };
+        order.iter().copied().find(|p| modes.contains(p)).unwrap_or(PresentChoice::Fifo)
     }
+
     pub fn name(self) -> &'static str {
         match self {
             PresentChoice::Mailbox => "mailbox",
@@ -1242,6 +1246,16 @@ impl Renderer {
     }
 
     /// Applies a present mode, falling back toward vsync if the compositor lacks it.
+    /// The present modes this renderer can do, in the settings' order (vsync always).
+    pub fn present_choices(&self) -> Vec<PresentChoice> {
+        let to_wgpu = |p: PresentChoice| match p {
+            PresentChoice::Mailbox => wgpu::PresentMode::Mailbox,
+            PresentChoice::Immediate => wgpu::PresentMode::Immediate,
+            PresentChoice::Fifo => wgpu::PresentMode::Fifo,
+        };
+        PresentChoice::ALL.into_iter().filter(|&p| p == PresentChoice::Fifo || self.supported_modes.contains(&to_wgpu(p))).collect()
+    }
+
     pub fn set_present(&mut self, want: PresentChoice) {
         let order: &[PresentChoice] = match want {
             PresentChoice::Mailbox => &[PresentChoice::Mailbox, PresentChoice::Immediate, PresentChoice::Fifo],
@@ -2555,6 +2569,17 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_present_mode_the_renderer_lacks_falls_back_like_the_renderer_does() {
+        use super::PresentChoice::*;
+        // OpenGL on Linux: vsync only.
+        assert_eq!(Mailbox.within(&[Fifo]), Fifo);
+        assert_eq!(Immediate.within(&[Fifo]), Fifo);
+        // Windows' OpenGL: no mailbox.
+        assert_eq!(Mailbox.within(&[Fifo, Immediate]), Immediate);
+        assert_eq!(Immediate.within(&[Fifo, Mailbox, Immediate]), Immediate);
+    }
+
     use wgpu::naga;
 
     #[test]
