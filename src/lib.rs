@@ -8344,15 +8344,6 @@ impl State {
                 let song = shown.and_then(|i| self.library.get(i)).map(Entry::label);
                 let k = |i: usize| config::key_name(self.cfg.keys[i]);
                 let (a, b, d, e) = (k(0), k(3), k(1), k(2));
-                let hint = if cfg!(target_os = "android") {
-                    tr!("tap to open", "タップで開く", "нажми, чтобы открыть").to_string()
-                } else {
-                    tr!(
-                        "wheel or arrows: move   click or Enter: open   drum: {a} {b} move, {d} {e} open",
-                        "ホイールか矢印: 移動   クリックかEnter: 開く   太鼓: {a} {b} 移動、{d} {e} 開く",
-                        "колесо или стрелки: листать   клик или Enter: открыть   барабан: {a} {b} листать, {d} {e} открыть";
-                    )
-                };
                 let paused = self.music_paused;
                 if let Some(p) = &mut self.player {
                     let now = Instant::now();
@@ -8375,7 +8366,7 @@ impl State {
                     let kiai = self.cfg.kiai_effects && !paused && self.preview.kiai();
                     let shows = self.cfg.menu_notes && render::animations();
                     let ghosts = self.preview.map_time(self.menu_notes.entry()).filter(|_| shows).and_then(|t| self.menu_notes.view(t));
-                    let frame = menu::Frame { beat: self.preview.beat(), kiai, ghosts, song: song.as_deref(), hint: &hint, maps: self.library.len(), paused };
+                    let frame = menu::Frame { beat: self.preview.beat(), kiai, ghosts, song: song.as_deref(), maps: self.library.len(), paused };
                     m.draw(canvas, &frame);
                 }
             }
@@ -9851,11 +9842,6 @@ impl State {
             Hit::MedalTab(tab) => {
                 if let Some(view) = &mut self.medals {
                     view.set_tab(tab);
-                }
-            }
-            Hit::MenuStep(by) => {
-                if !self.main_menu.as_ref().is_some_and(menu::Menu::is_leaving) {
-                    self.menu_step(by);
                 }
             }
             Hit::Guide(action) => self.guide_action(action),

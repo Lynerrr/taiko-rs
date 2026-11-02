@@ -27,8 +27,13 @@ const SHAKE_MS: f32 = 300.0;
 const FLASH_MS: f32 = 200.0;
 const BURST_MS: f32 = 520.0;
 
-const LANE_TOP: f32 = 118.0;
+/// The panel of notes, with the selected section's name and what it is under it: the two
+/// together in the middle of the screen's height.
 const LANE_H: f32 = 124.0;
+const TITLE_GAP: f32 = 22.0;
+/// The name's height, the gap to the line about it and that line's.
+const TITLE_H: f32 = 44.0 + 10.0;
+const LANE_TOP: f32 = (render::VIRTUAL_HEIGHT - (LANE_H + TITLE_GAP + TITLE_H)) / 2.0;
 const LANE_MID: f32 = LANE_TOP + LANE_H / 2.0;
 /// The panel the notes sit on, in from the screen's sides.
 const PANEL_X: f32 = 12.0;
@@ -36,9 +41,7 @@ const DRUM_W: f32 = 112.0;
 /// Where the notes' middles are, and their biggest radius (narrow screens take less).
 const NOTE_Y: f32 = LANE_MID - 10.0;
 const NOTE_MAX_R: f32 = 29.0;
-/// The row naming every section, and the hint under it.
-const STRIP_Y: f32 = 348.0;
-const HINT_Y: f32 = 376.0;
+const TITLE_Y: f32 = LANE_TOP + LANE_H + TITLE_GAP;
 /// Kiai: how long a beat's kick and the opening's flash last, and a spark's life (ms).
 const BEAT_MS: f32 = 300.0;
 const OPENING_MS: f32 = 420.0;
@@ -332,7 +335,6 @@ pub struct Frame<'a> {
     /// The song's notes for the background.
     pub ghosts: Option<crate::menu_notes::View<'a>>,
     pub song: Option<&'a str>,
-    pub hint: &'a str,
     pub maps: usize,
     pub paused: bool,
 }
@@ -482,7 +484,6 @@ impl Menu {
         self.draw_burst(c);
         self.draw_kiai(c);
         self.draw_title(c, f.maps);
-        self.draw_strip(c, f.hint);
         draw_footer(c, f);
         let shown = if render::animations() { self.opacity() } else { 1.0 };
         if shown < 1.0 {
@@ -609,7 +610,8 @@ impl Menu {
     }
 
     /// The notes in their places on a dark panel, each with its name under it, and the selector:
-    /// corner brackets that slide to the selected one. Nothing grows or moves but the selector.
+    /// corner brackets that slide to the selected one. Choosing moves only the selector; in a
+    /// kiai the notes hop on the beat.
     fn draw_lane(&mut self, c: &mut Canvas, pulse: f32) {
         c.round_rect([PANEL_X, LANE_TOP], [c.width - 2.0 * PANEL_X, LANE_H], 10.0, rgba(0x15151d, 0.95), rgba(0x3a3a4e, 1.0), 1.5);
         let (left, slot) = Self::slots(c.width);
@@ -629,7 +631,9 @@ impl Menu {
             let x = left + (i as f32 + 0.5) * slot;
             let shaking = *item == Item::Editor && self.is_selected(i) && self.clock - self.shake < SHAKE_MS;
             let dx = if shaking { (self.clock / 18.0).sin() * 5.0 * (1.0 - (self.clock - self.shake) / SHAKE_MS) } else { 0.0 };
-            draw_note(c, &self.arts[i], x + dx, NOTE_Y, r, 1.0);
+            // In a kiai they hop on the beat, every other one higher.
+            let hop = self.kick() * if i as i64 % 2 == self.beat_no.rem_euclid(2) { 12.0 } else { 5.0 };
+            draw_note(c, &self.arts[i], x + dx, NOTE_Y - hop, r, 1.0);
             let hovered = c.hovered(left + i as f32 * slot, LANE_TOP, slot, LANE_H);
             let on = self.is_selected(i);
             let w = Canvas::text_width(size, names[i]);
@@ -714,55 +718,18 @@ impl Menu {
 
     fn draw_title(&self, c: &mut Canvas, maps: usize) {
         let item = self.current();
+        let mid = c.width / 2.0;
         // A kiai's beat shakes the title apart into red and cyan for a moment.
         let split = self.kick() * 3.0;
         if split > 0.2 {
-            c.text(40.0 - split, 274.0, 34.0, rgba(GLITCH_RED, 0.9), item.name());
-            c.text(40.0 + split, 274.0, 34.0, rgba(GLITCH_CYAN, 0.9), item.name());
+            c.text_centered(mid - split, TITLE_Y, 34.0, rgba(GLITCH_RED, 0.9), item.name());
+            c.text_centered(mid + split, TITLE_Y, 34.0, rgba(GLITCH_CYAN, 0.9), item.name());
         }
-        let width = c.text(40.0, 274.0, 34.0, rgba(0xffffff, 1.0), item.name());
-        c.text(42.0, 318.0, 10.0, rgba(0xc8c8d8, 1.0), &item.about(maps));
+        c.text_centered(mid, TITLE_Y, 34.0, rgba(0xffffff, 1.0), item.name());
+        c.text_centered(mid, TITLE_Y + 44.0, 10.0, rgba(0xc8c8d8, 1.0), &item.about(maps));
         if item == Item::Editor {
-            tooltip(c, 40.0 + width + 62.0, 281.0);
+            tooltip(c, mid + Canvas::text_width(34.0, item.name()) / 2.0 + 62.0, TITLE_Y + 7.0);
         }
-    }
-
-    /// Every section by name with arrows at the ends: nothing has to be found by scrolling, and
-    /// the arrows say that the lane moves. What moves it is spelled out underneath.
-    fn draw_strip(&self, c: &mut Canvas, hint: &str) {
-        const LEFT: f32 = 40.0;
-        const ARROW: f32 = 22.0;
-        const GAP: f32 = 18.0;
-        let room = c.width - 2.0 * LEFT - 2.0 * (ARROW + 8.0);
-        let names = ITEMS.map(Item::name);
-        let size = Canvas::fit_size(9.0, 6.0, room - GAP * 5.0, &names.concat());
-        let total: f32 = names.iter().map(|n| Canvas::text_width(size, n)).sum();
-        let gap = ((room - total) / 5.0).clamp(4.0, GAP);
-        let hint = Canvas::fit_hints(7.0, c.width - 2.0 * LEFT, hint);
-        // A dark panel behind the names and the hint, as wide as the longer of them.
-        let strip_end = LEFT + 2.0 * (ARROW + 8.0) + total + gap * (names.len() - 1) as f32;
-        let right = strip_end.max(LEFT + 2.0 + Canvas::text_width(7.0, &hint)) + 12.0;
-        c.round_rect([LEFT - 12.0, STRIP_Y - 14.0], [right - (LEFT - 12.0), HINT_Y + 19.0 - (STRIP_Y - 14.0)], 10.0, rgba(0x15151d, 0.92), rgba(0x3a3a4e, 1.0), 1.5);
-        c.button(LEFT, STRIP_Y - 5.0, ARROW, 20.0, "<", 8.0, Hit::MenuStep(-1), false);
-        let mut x = LEFT + ARROW + 8.0;
-        let y = STRIP_Y + (9.0 - size) / 2.0;
-        for (i, name) in names.iter().enumerate() {
-            let w = Canvas::text_width(size, name);
-            let (on, hover) = (self.is_selected(i), c.hovered(x - gap / 2.0, STRIP_Y - 6.0, w + gap, 22.0));
-            let col = match (on, hover) {
-                (true, _) | (_, true) => 0xffffff,
-                _ if ITEMS[i] == Item::Editor => 0x6f6f86,
-                _ => 0xa8a8bc,
-            };
-            c.text(x, y, size, rgba(col, 1.0), name);
-            if on {
-                c.rect(x, STRIP_Y + 13.0, w, 2.0, rgba(render::accent(), 1.0));
-            }
-            c.hit(x - gap / 2.0, STRIP_Y - 6.0, w + gap, 22.0, Hit::MenuItem(i));
-            x += w + gap;
-        }
-        c.button(x - gap + 8.0, STRIP_Y - 5.0, ARROW, 20.0, ">", 8.0, Hit::MenuStep(1), false);
-        c.text(LEFT + 2.0, HINT_Y, 7.0, rgba(0x9a9ab0, 1.0), &hint);
     }
 }
 
@@ -943,7 +910,7 @@ mod tests {
     /// A frame of the menu on a 16:9 screen, `ms` after the last.
     fn frame(m: &mut Menu, ms: f32) -> Canvas {
         let mut c = Canvas { width: 853.3, dt_ms: ms, ..Default::default() };
-        let f = Frame { beat: None, kiai: false, ghosts: None, song: None, hint: "", maps: 0, paused: false };
+        let f = Frame { beat: None, kiai: false, ghosts: None, song: None, maps: 0, paused: false };
         m.draw(&mut c, &f);
         c
     }
