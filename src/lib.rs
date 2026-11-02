@@ -33,6 +33,8 @@ mod layout;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
+mod perf_audit;
+#[cfg(test)]
 mod results_tests;
 #[cfg(test)]
 mod settings_tests;
