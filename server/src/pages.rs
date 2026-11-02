@@ -455,6 +455,17 @@ fn mod_chips<S: AsRef<str>>(m: &[S], rate: f64) -> String {
     out
 }
 
+/// How many mods a row in a list shows; the play's own page has them all.
+const MODS_IN_A_ROW: usize = 6;
+
+/// `mod_chips` for a row in a list: a stack of mods mustn't push it off the page, so past the
+/// first few they're a count, named when hovered.
+fn short_mod_chips(m: &[String], rate: f64) -> String {
+    let Some(rest) = m.get(MODS_IN_A_ROW..).filter(|r| !r.is_empty()) else { return mod_chips(m, rate) };
+    let more = format!("<span class=mod title=\"{}\">+{}</span>", esc(&rest.join(" ")), rest.len());
+    format!("{}{more}{}", mod_chips(&m[..MODS_IN_A_ROW], 1.0), mod_chips::<&str>(&[], rate))
+}
+
 /// osu!'s colour for a star rating: blue for easy through red and purple to black.
 pub(crate) fn star_colour(s: f64) -> [u8; 3] {
     const STOPS: [(f64, [u8; 3]); 11] = [
@@ -779,7 +790,7 @@ fn feed_row(s: &OnlineScore) -> String {
         s.map_hash,
         esc(song),
         esc(version),
-        mod_chips(&s.mods, s.rate),
+        short_mod_chips(&s.mods, s.rate),
         ago(s.date),
         s.pp.map(|p| format!("{p:.0}pp")).unwrap_or_default(),
         s.accuracy * 100.0
@@ -1028,7 +1039,7 @@ fn play_row(s: &OnlineScore, weighted: Option<usize>, show_score: bool) -> Strin
         stars(s.stars),
         esc(version),
         ago(s.date),
-        mod_chips(&s.mods, s.rate),
+        short_mod_chips(&s.mods, s.rate),
         s.accuracy * 100.0
     )
 }
@@ -1154,7 +1165,7 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
                 r.ok,
                 r.miss,
                 r.pp.map(|p| format!("{p:.0}")).unwrap_or_else(|| "-".into()),
-                mod_chips(&r.mods, r.rate),
+                short_mod_chips(&r.mods, r.rate),
                 ago(r.date)
             )
         })
@@ -1832,6 +1843,15 @@ mod tests {
                 assert!(mod_info(m).is_some(), "{m}");
             }
         }
+    }
+
+    #[test]
+    fn a_row_shows_a_stack_of_mods_as_a_count() {
+        let mods = |n: usize| (0..n).map(|i| format!("M{i}")).collect::<Vec<_>>();
+        assert_eq!(short_mod_chips(&mods(6), 1.0), mod_chips(&mods(6), 1.0));
+        let row = short_mod_chips(&mods(34), 1.35);
+        assert_eq!(row.matches("class=mod").count(), 7);
+        assert!(row.contains(">+28<") && row.contains("title=\"M6 M7") && row.contains("1.35x"), "{row}");
     }
 
     #[test]
