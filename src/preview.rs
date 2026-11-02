@@ -15,7 +15,7 @@ use crate::render::{accent, rgba, Canvas, VIRTUAL_HEIGHT};
 
 /// While scrolling, wait this long after the selection settles before loading, so scrolling
 /// stays cheap. A single change after a quiet moment loads at once.
-const DEBOUNCE: Duration = Duration::from_millis(150);
+const DEBOUNCE: Duration = Duration::from_millis(60);
 const QUIET: Duration = Duration::from_millis(300);
 /// The preview music starts from a quick decode of this much audio at the preview point; the
 /// full song replaces it a moment later without a gap.
@@ -112,8 +112,10 @@ pub struct Preview {
     play_rect: Option<[f32; 4]>,
     /// Where the autoplay box was drawn (clicking it opens the fullscreen preview).
     box_rect: Option<[f32; 4]>,
-    /// When the shown map's preview became ready (it fades in), and for which entry.
+    /// When the shown map's details could first be shown (they fade in), and for which entry.
     ready_at: Option<Instant>,
+    shown_for: Option<usize>,
+    /// The entry whose autoplay has been ready: its music played.
     ready_for: Option<usize>,
     game: Option<Game>,
     last_time: f64,
@@ -611,10 +613,15 @@ impl Preview {
             return None;
         };
         let e = &library[i];
-        // Map details, the autoplay and the timeline appear together, once the map's music plays.
-        let ready = self.ready(library, i) || (self.ready_for == Some(i) && self.map.as_ref().is_some_and(|(mi, ..)| *mi == i));
-        if ready && self.ready_for != Some(i) {
+        // Map details and the timeline appear with the map; the autoplay runs on the map's music,
+        // so it joins them when that plays.
+        let ready = self.map.as_ref().is_some_and(|(mi, ..)| *mi == i);
+        let playing = self.ready(library, i) || (self.ready_for == Some(i) && ready);
+        if playing {
             self.ready_for = Some(i);
+        }
+        if ready && self.shown_for != Some(i) {
+            self.shown_for = Some(i);
             self.ready_at = Some(Instant::now());
         }
         let fade = self.ready_at.filter(|_| ready).map(|t| crate::render::progress(t, 180.0)).unwrap_or(0.0);
@@ -736,6 +743,11 @@ impl Preview {
         let loaded = loaded.is_some();
         if loaded {
             self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], button);
+            // Seeking goes by the music: until this map's plays, a click would move the last one.
+            if !playing {
+                self.graph_rect = None;
+                self.play_rect = None;
+            }
             if fade < 1.0 {
                 c.rect(bx - 1.0, by + bh + 4.0, bw + 2.0, GRAPH_H + 40.0, rgba(0x15151d, 1.0 - fade));
             }
@@ -743,7 +755,7 @@ impl Preview {
             self.graph_rect = None;
             self.play_rect = None;
         }
-        let game = self.game.as_mut().filter(|_| loaded)?;
+        let game = self.game.as_mut().filter(|_| loaded && playing)?;
         let full_w = c.width;
         let start = c.shapes.len();
         c.width = bw / k;
@@ -882,6 +894,30 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Game {
 mod beat_tests {
     use super::*;
     use crate::beatmap::ControlPoint;
+
+    #[test]
+    fn details_show_with_the_map_and_the_autoplay_waits_for_its_music() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        let library = [Entry::new(PathBuf::from("/nonexistent/a.osu"), map.meta.clone())];
+        let mut p = Preview { seen: Some(0), ..Default::default() };
+        let draw = |p: &mut Preview| {
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            let autoplay = p.draw_panel(&mut c, &library, 500.0, 40.0, 340.0, 400.0, 1.0, None, Some(("Play from", "Shift+Enter")), None).is_some();
+            (autoplay, c.shapes.len())
+        };
+        let (_, empty) = draw(&mut p);
+        p.game = Some(new_preview_game(&map, 1.0));
+        p.map = Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map)));
+        let (autoplay, with_map) = draw(&mut p);
+        assert!(!autoplay);
+        assert!(with_map > empty, "the details are there before the music");
+        assert!(p.graph_rect.is_none() && p.play_rect.is_none(), "nothing to seek in yet");
+
+        p.ready_for = Some(0);
+        assert!(draw(&mut p).0);
+        assert!(p.graph_rect.is_some());
+    }
 
     #[test]
     fn a_new_speed_doesnt_change_how_long_the_song_is() {
