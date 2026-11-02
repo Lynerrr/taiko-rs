@@ -138,14 +138,19 @@ pub enum Row {
     /// The code mailed (`Menu::code_for`).
     Code,
     LogIn,
+    /// On the login form it opens `Form::Register`; there it sends the code, then makes the
+    /// account.
     Register,
-    /// Forgot the password: a code to the account's email, then a new one.
+    /// Forgot the password: on the login form it opens `Form::Reset`; there it sends a code to
+    /// the account's email, then sets the new password.
     Forgot,
-    /// Logged in without an email: link one (opens `Menu::linking`, then sends the code and
+    /// Logged in: a new password, by a code to the account's email (`Form::Reset`).
+    ChangePassword,
+    /// Logged in without an email: link one (opens `Form::Link`, then sends the code and
     /// checks it).
     LinkEmail,
-    /// Out of linking an email, back to the lobbies.
-    LinkBack,
+    /// Out of a form, back to logging in (or the lobbies).
+    Back,
     HostOnline,
     HostGuessr,
     Lobby(usize),
@@ -162,6 +167,18 @@ impl Row {
     pub fn is_action(self) -> bool {
         !matches!(self, Row::User | Row::Password | Row::Email | Row::Code | Row::Name | Row::Port | Row::Address)
     }
+}
+
+/// What the account side of the menu shows: the login form (or the lobbies, logged in), or one
+/// of the steps around it, each on its own so no field means two things.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Form {
+    #[default]
+    Main,
+    Register,
+    /// A forgotten password, or (logged in) a changed one: both by a code to the email.
+    Reset,
+    Link,
 }
 
 /// What a mailed code is for.
@@ -187,8 +204,8 @@ pub struct Menu {
     pub account: Option<String>,
     /// Whether the account has an email (None: the server doesn't say).
     pub has_email: Option<bool>,
-    /// Linking an email: its rows in place of the lobbies.
-    pub linking: bool,
+    /// The form shown in place of the login (or the lobbies).
+    pub form: Form,
     pub rooms: Vec<online::RoomInfo>,
     /// Whether the server answered the last request (None: not asked yet).
     pub online: Option<Result<(), String>>,
@@ -205,29 +222,113 @@ const LOBBY_ROWS: usize = 5;
 impl Menu {
     pub fn rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
-        if self.account.is_some() && self.linking {
-            rows.push(Row::Email);
-            if self.code_for == Some(CodeFor::Link) {
-                rows.push(Row::Code);
+        let sent = |f| self.code_for == Some(f);
+        match (self.account.is_some(), self.form) {
+            (true, Form::Link) => {
+                rows.push(Row::Email);
+                if sent(CodeFor::Link) {
+                    rows.push(Row::Code);
+                }
+                rows.extend([Row::LinkEmail, Row::Back]);
             }
-            rows.extend([Row::LinkEmail, Row::LinkBack]);
-        } else if self.account.is_some() {
-            rows.push(Row::HostOnline);
-            rows.push(Row::HostGuessr);
-            rows.extend((0..self.rooms.len()).map(Row::Lobby));
-            rows.push(Row::LogOut);
-            if self.has_email == Some(false) {
-                rows.push(Row::LinkEmail);
+            (logged_in, Form::Reset) => {
+                if !logged_in {
+                    rows.push(Row::User);
+                }
+                if sent(CodeFor::Reset) {
+                    rows.extend([Row::Code, Row::Password]);
+                }
+                rows.extend([Row::Forgot, Row::Back]);
             }
-        } else {
-            rows.extend([Row::User, Row::Password, Row::Email]);
-            if matches!(self.code_for, Some(CodeFor::Register | CodeFor::Reset)) {
-                rows.push(Row::Code);
+            (false, Form::Register) => {
+                rows.extend([Row::User, Row::Password, Row::Email]);
+                if sent(CodeFor::Register) {
+                    rows.push(Row::Code);
+                }
+                rows.extend([Row::Register, Row::Back]);
             }
-            rows.extend([Row::LogIn, Row::Register, Row::Forgot]);
+            (true, _) => {
+                rows.push(Row::HostOnline);
+                rows.push(Row::HostGuessr);
+                rows.extend((0..self.rooms.len()).map(Row::Lobby));
+                rows.extend([Row::LogOut, Row::ChangePassword]);
+                if self.has_email == Some(false) {
+                    rows.push(Row::LinkEmail);
+                }
+            }
+            (false, _) => rows.extend([Row::User, Row::Password, Row::LogIn, Row::Register, Row::Forgot]),
         }
         rows.extend([Row::Name, Row::Port, Row::HostDirect, Row::Address, Row::JoinDirect]);
         rows
+    }
+
+    /// Shows `form`, from its start (what was typed for another one stays, but codes don't).
+    pub fn open(&mut self, form: Form) {
+        self.form = form;
+        self.code_for = None;
+        self.asking = None;
+        self.code.clear();
+        self.password.clear();
+        self.cursor = 0;
+    }
+
+    /// A text field's label, as this form means it.
+    pub fn field_label(&self, row: Row) -> Option<&'static str> {
+        Some(match row {
+            Row::User if self.form == Form::Register => tr!("Name", "名前", "Ник"),
+            Row::User => tr!("Name or email", "名前かメール", "Ник или почта"),
+            Row::Password if self.form == Form::Reset => tr!("New password", "新しいパスワード", "Новый пароль"),
+            Row::Password => tr!("Password", "パスワード", "Пароль"),
+            Row::Email => tr!("Email", "メール", "Почта"),
+            Row::Code => tr!("Code from the email", "メールのコード", "Код из письма"),
+            _ => return None,
+        })
+    }
+
+    /// Above the form: what it's for.
+    fn title(&self) -> Option<&'static str> {
+        Some(match self.form {
+            Form::Register => tr!("NEW ACCOUNT", "新規アカウント", "НОВЫЙ АККАУНТ"),
+            Form::Reset if self.account.is_some() => tr!("CHANGE PASSWORD", "パスワード変更", "СМЕНА ПАРОЛЯ"),
+            Form::Reset => tr!("FORGOT PASSWORD", "パスワードを忘れた", "ВОССТАНОВЛЕНИЕ ПАРОЛЯ"),
+            Form::Link => tr!("LINK AN EMAIL", "メールを登録", "ПРИВЯЗКА ПОЧТЫ"),
+            Form::Main => return None,
+        })
+    }
+
+    /// Under the form: what to do, step by step.
+    fn steps(&self) -> [&'static str; 2] {
+        let sent = self.code_for.is_some();
+        match self.form {
+            Form::Register if sent => [
+                tr!("The code is in your email (look in spam too).", "コードはメールにあります(迷惑メールも確認)。", "Код пришёл на почту (загляни и в спам)."),
+                tr!("Type it above, then CREATE ACCOUNT.", "上に入力して「アカウント作成」。", "Введи его выше и нажми СОЗДАТЬ АККАУНТ."),
+            ],
+            Form::Register => [
+                tr!("Pick a name and a password, type your email,", "名前とパスワードを決め、メールを入力して", "Придумай ник и пароль, впиши почту"),
+                tr!("then SEND CODE: it comes to that email.", "「コードを送信」。そのメールに届きます。", "и нажми ОТПРАВИТЬ КОД: он придёт туда."),
+            ],
+            Form::Reset if sent => [
+                tr!("The code is in your email (look in spam too).", "コードはメールにあります(迷惑メールも確認)。", "Код пришёл на почту (загляни и в спам)."),
+                tr!("Type it and a new password, then SET PASSWORD.", "コードと新しいパスワードを入力して「設定」。", "Введи его и новый пароль, затем СОХРАНИТЬ."),
+            ],
+            Form::Reset if self.account.is_some() => [
+                tr!("SEND CODE: it goes to your account's email.", "「コードを送信」: アカウントのメールに届きます。", "ОТПРАВИТЬ КОД: он придёт на почту аккаунта."),
+                tr!("Then you type it with the new password.", "そのコードと新しいパスワードを入力します。", "Потом вводишь его и новый пароль."),
+            ],
+            Form::Reset => [
+                tr!("Type your name or email, then SEND CODE:", "名前かメールを入力して「コードを送信」:", "Впиши ник или почту и нажми ОТПРАВИТЬ КОД:"),
+                tr!("it goes to the account's email.", "アカウントのメールに届きます。", "он придёт на почту аккаунта."),
+            ],
+            Form::Link => [
+                tr!("A code goes to the email: type it, then LINK.", "メールにコードが届きます: 入力して「登録」。", "На почту придёт код: введи его и нажми ПРИВЯЗАТЬ."),
+                tr!("With it, a lost password can be reset.", "これでパスワードを忘れても再設定できます。", "С ней можно восстановить забытый пароль."),
+            ],
+            Form::Main => [
+                tr!("An account is only needed for online lobbies.", "アカウントはオンラインロビーにだけ必要です。", "Аккаунт нужен только для онлайн-лобби."),
+                tr!("Direct play on the right works without one.", "右のダイレクト対戦はなしで遊べます。", "Прямая игра справа работает и без него."),
+            ],
+        }
     }
 
     pub fn row(&self) -> Row {
@@ -324,81 +425,100 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                 let colour = if placeholder && !sel { 0x55556a } else { 0xffffff };
                 c.text_right(x + col - 14.0, y + h / 2.0 - 4.5, 9.0, rgba(colour, 1.0), &shown);
             }
-            None => c.text_centered(x + col / 2.0, y + h / 2.0 - 5.5, 11.0, rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0), label),
+            None => {
+                let size = Canvas::fit_size(11.0, 7.0, col - 16.0, label);
+                c.text_centered(x + col / 2.0, y + h / 2.0 - size / 2.0, size, rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
+            }
         }
     };
 
     // Online.
     c.text(left, 62.0, 9.0, rgba(accent(), 1.0), "ONLINE");
     let (state, colour) = match &menu.online {
-        Some(Ok(())) => ("online", 0x86E05A),
-        Some(Err(_)) => ("offline", 0xFF4B4B),
-        None => ("connecting...", 0x8a8aa0),
+        Some(Ok(())) => (tr!("online", "オンライン", "онлайн"), 0x86E05A),
+        Some(Err(_)) => (tr!("no connection", "接続なし", "нет связи"), 0xFF4B4B),
+        None => (tr!("connecting...", "接続中...", "подключение..."), 0x8a8aa0),
     };
     let room = col - Canvas::text_width(9.0, "ONLINE") - 12.0;
     c.text_right(left + col, 62.0, 8.0, rgba(colour, 1.0), &Canvas::fit(8.0, room, &format!("{}  {state}", server_label(server))));
     let mut y = 80.0;
+    if let Some(title) = menu.title() {
+        c.text(left, y, 8.0, rgba(0xc8c8d8, 1.0), title);
+        y += 14.0;
+    }
+    // A form's steps under it, in two lines.
+    let steps = |c: &mut Canvas, y: f32| {
+        for (k, line) in menu.steps().iter().enumerate() {
+            let size = Canvas::fit_size(7.0, 6.0, col, line);
+            c.text_centered(left + col / 2.0, y + 4.0 + 14.0 * k as f32, size, rgba(0x8a8aa0, 1.0), &Canvas::fit(size, col, line));
+        }
+    };
     let lobby_rows: Vec<(usize, usize)> = rows.iter().enumerate().filter_map(|(i, r)| if let Row::Lobby(k) = r { Some((i, *k)) } else { None }).collect();
     // The visible window of lobbies follows the cursor.
     let first = lobby_rows.iter().position(|(i, _)| *i == cursor).map(|p| p.saturating_sub(LOBBY_ROWS - 1)).unwrap_or(0);
     for (i, r) in rows.iter().enumerate() {
+        let label = menu.field_label(*r).unwrap_or("");
         match *r {
             Row::User => {
-                row(c, i, left, y, 30.0, "Name or email", Some(if menu.user.is_empty() { (online::NAME_RULES, true) } else { (&menu.user, false) }));
+                let hint = if menu.form == Form::Register { online::NAME_RULES } else { "" };
+                row(c, i, left, y, 30.0, label, Some(if menu.user.is_empty() { (hint, true) } else { (&menu.user, false) }));
                 y += 38.0;
             }
             Row::Password => {
                 let stars = "*".repeat(menu.password.chars().count());
-                let label = if menu.code_for == Some(CodeFor::Reset) { "New password" } else { "Password" };
-                row(c, i, left, y, 30.0, label, Some((&stars, false)));
+                let hint = if menu.form == Form::Main { "" } else { tr!("6 characters or more", "6文字以上", "от 6 символов") };
+                row(c, i, left, y, 30.0, label, Some(if stars.is_empty() { (hint, true) } else { (&stars, false) }));
                 y += 38.0;
             }
             Row::Email => {
-                let hint = if menu.account.is_some() { "your email" } else { "for a new account" };
-                row(c, i, left, y, 30.0, "Email", Some(if menu.email.is_empty() { (hint, true) } else { (&menu.email, false) }));
+                let hint = if menu.form == Form::Register { tr!("the code comes here", "コードの送り先", "сюда придёт код") } else { tr!("your email", "あなたのメール", "твоя почта") };
+                row(c, i, left, y, 30.0, label, Some(if menu.email.is_empty() { (hint, true) } else { (&menu.email, false) }));
                 y += 38.0;
             }
             Row::Code => {
-                row(c, i, left, y, 30.0, "Code from the email", Some(if menu.code.is_empty() { ("6 digits", true) } else { (&menu.code, false) }));
+                row(c, i, left, y, 30.0, label, Some(if menu.code.is_empty() { (tr!("6 digits", "6桁", "6 цифр"), true) } else { (&menu.code, false) }));
                 y += 38.0;
             }
-            Row::Forgot => {
-                let label = if menu.code_for == Some(CodeFor::Reset) { "SET NEW PASSWORD" } else { "FORGOT PASSWORD" };
-                y += 6.0;
-                row(c, i, left, y, 24.0, label, None);
+            Row::LogIn => {
+                row(c, i, left, y, 30.0, tr!("LOG IN", "ログイン", "ВОЙТИ"), None);
+                y += 38.0;
             }
-            Row::LinkEmail if menu.linking => {
-                let label = if menu.code_for == Some(CodeFor::Link) { "LINK EMAIL" } else { "SEND CODE" };
+            // On the login form, the ways to its other forms, side by side.
+            Row::Register if menu.form == Form::Main => {
+                let half = (col - 8.0) / 2.0;
+                half_row(c, i == cursor, i, left, y, half, tr!("CREATE ACCOUNT", "アカウント作成", "РЕГИСТРАЦИЯ"));
+                half_row(c, i + 1 == cursor, i + 1, left + half + 8.0, y, half, tr!("FORGOT PASSWORD?", "パスワードを忘れた?", "ЗАБЫЛ ПАРОЛЬ?"));
+                y += 30.0;
+                steps(c, y);
+                y += 30.0;
+            }
+            Row::Forgot if menu.form == Form::Main => {}
+            Row::Register => {
+                let label = if menu.code_for == Some(CodeFor::Register) { tr!("CREATE ACCOUNT", "アカウント作成", "СОЗДАТЬ АККАУНТ") } else { tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД") };
                 row(c, i, left, y, 30.0, label, None);
                 y += 38.0;
             }
-            Row::LinkBack => {
-                row(c, i, left, y, 24.0, "BACK", None);
+            Row::Forgot => {
+                let label = if menu.code_for == Some(CodeFor::Reset) { tr!("SET PASSWORD", "設定", "СОХРАНИТЬ") } else { tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД") };
+                row(c, i, left, y, 30.0, label, None);
+                y += 38.0;
+            }
+            Row::LinkEmail if menu.form == Form::Link => {
+                let label = if menu.code_for == Some(CodeFor::Link) { tr!("LINK", "登録", "ПРИВЯЗАТЬ") } else { tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД") };
+                row(c, i, left, y, 30.0, label, None);
+                y += 38.0;
+            }
+            Row::Back => {
+                row(c, i, left, y, 24.0, tr!("BACK", "戻る", "НАЗАД"), None);
                 y += 32.0;
-                for (k, line) in ["A code goes to the email: type it above and LINK EMAIL.", "Then a forgotten password can be reset with it."].iter().enumerate() {
-                    let size = Canvas::fit_size(7.0, 6.0, col, line);
-                    c.text_centered(left + col / 2.0, y + 4.0 + 14.0 * k as f32, size, rgba(0x6f6f86, 1.0), &Canvas::fit(size, col, line));
-                }
-            }
-            Row::LogIn => {
-                row(c, i, left, y, 30.0, "LOG IN", None);
-                y += 38.0;
-            }
-            Row::Register => {
-                row(c, i, left, y, 30.0, "CREATE ACCOUNT", None);
-                y += 38.0;
-                for (k, line) in ["An account is only needed for online lobbies.", "Direct play on the right works without one."].iter().enumerate() {
-                    let size = Canvas::fit_size(7.0, 6.0, col, line);
-                    c.text_centered(left + col / 2.0, y + 4.0 + 14.0 * k as f32, size, rgba(0x6f6f86, 1.0), &Canvas::fit(size, col, line));
-                }
-                y += 30.0;
+                steps(c, y);
             }
             Row::HostOnline => {
                 let who = menu.account.as_deref().unwrap_or("");
-                c.text(left, y - 2.0, 8.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(8.0, col, &format!("logged in as {who}")));
+                c.text(left, y - 2.0, 8.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(8.0, col, &tr!("logged in as {who}", "{who} でログイン中", "ты вошёл как {who}";)));
                 y += 12.0;
                 if menu.has_email == Some(false) {
-                    let line = "no email yet: link one to reset a lost password";
+                    let line = tr!("no email yet: link one to reset a lost password", "メール未登録: 登録するとパスワードを再設定できます", "почта не привязана: без неё забытый пароль не вернуть");
                     let size = Canvas::fit_size(7.0, 6.0, col, line);
                     c.text(left, y - 2.0, size, rgba(0xFFD34D, 1.0), &Canvas::fit(size, col, line));
                     y += 11.0;
@@ -413,7 +533,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                 y += 14.0;
                 if menu.rooms.is_empty() {
                     let msg = match &menu.online {
-                        Some(Err(e)) => format!("server unreachable ({e}): use direct play"),
+                        Some(Err(e)) => format!("{e}. {}", tr!("Direct play on the right still works", "右のダイレクト対戦は使えます", "прямая игра справа работает")),
                         _ => "nobody is hosting right now".into(),
                     };
                     c.text(left + 4.0, y + 4.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, col - 8.0, &msg));
@@ -454,13 +574,13 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, name: &str, port: u16, address: &s
                     y += 12.0;
                 }
                 y += 4.0;
-                // Beside it, linking an email.
-                let half = if menu.has_email == Some(false) { (col - 8.0) / 2.0 } else { col };
-                half_row(c, i == cursor, i, left, y, half, "LOG OUT");
-                if half < col {
-                    half_row(c, i + 1 == cursor, i + 1, left + half + 8.0, y, half, "LINK AN EMAIL");
-                }
+                // Beside it, changing the password; under them, linking an email.
+                let half = (col - 8.0) / 2.0;
+                half_row(c, i == cursor, i, left, y, half, tr!("LOG OUT", "ログアウト", "ВЫЙТИ"));
+                half_row(c, i + 1 == cursor, i + 1, left + half + 8.0, y, half, tr!("CHANGE PASSWORD", "パスワード変更", "СМЕНИТЬ ПАРОЛЬ"));
+                y += 30.0;
             }
+            Row::LinkEmail => row(c, i, left, y, 24.0, tr!("LINK AN EMAIL", "メールを登録", "ПРИВЯЗАТЬ ПОЧТУ"), None),
             _ => {}
         }
     }

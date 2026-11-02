@@ -80,7 +80,7 @@ impl View {
         } else {
             String::new()
         };
-        let (pp, plays, joined) = (p.pp, p.plays, crate::scores::age(p.joined));
+        let (pp, plays, joined) = (p.pp + 0.0, p.plays, crate::scores::age(p.joined));
         let plays_ru = crate::lang::ru_plural(plays, ["игра", "игры", "игр"]);
         let stats = tr!(
             "{rank}   {pp:.0} pp   {plays} plays   {time}joined {joined} ago",
