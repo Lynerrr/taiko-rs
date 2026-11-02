@@ -50,9 +50,10 @@ const SONG_BIG_R: f32 = 44.0;
 const SONG_NOTE_R: f32 = SONG_BIG_R * crate::game::NOTE_R / crate::game::BIG_R;
 const SONG_ALPHA: f32 = 0.3;
 /// How far apart 1/4 notes are, in small notes' widths: the scroll speed follows the song's
-/// BPM so a stream reads as one (a crossing takes `CROSS_MS` without a beat to go by).
-const QUARTER_GAP: f32 = 1.8;
-const CROSS_MS: f64 = 1700.0;
+/// As in a song at osu!'s default slider multiplier: 1.4 x 1.4 x 100 osu!px a beat (the game's
+/// units are osu!px), here in proportion to the panel's notes.
+const SLIDER_MULTIPLIER: f64 = 1.4;
+const TAIKO_VELOCITY: f64 = 1.4 * 100.0;
 /// How long a hit lights the target (ms).
 const SONG_HIT_MS: f32 = 140.0;
 const TITLE_Y: f32 = LANE_TOP + LANE_H + TITLE_GAP;
@@ -365,14 +366,18 @@ pub struct Menu {
     /// The song's position (map ms) last frame: the notes it passed since are hit on the drum.
     song_at: Option<f64>,
     /// Which rim the next kat of the song lands on.
-    song_rim: i32,
+    song_hand: i32,
     /// The song's last hit: when, and whether a kat.
     song_hit: (f32, bool),
     /// ms since the menu opened: every animation below is timed on it.
     clock: f32,
     /// When the rim last flashed, and which side.
     rim: (f32, i32),
-    face: f32,
+    /// When the face last lit, and which half (left -1, right 1): a hand hits one side.
+    face: (f32, i32),
+    /// What's left of the music's beat (1 on it, falling to 0), when it plays: the menu's notes
+    /// bounce on every beat, higher in a kiai.
+    pulse: f32,
     /// A hit: when, and on what.
     burst: Option<(f32, Item)>,
     shake: f32,
@@ -402,7 +407,7 @@ struct Spark {
 
 impl Menu {
     pub fn new() -> Menu {
-        Menu { selected: 0, shown: 0.0, appear: 0.0, spot: [0.0, NOTE_Y], song_at: None, song_rim: 1, song_hit: (f32::MIN, false), clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
+        Menu { selected: 0, shown: 0.0, appear: 0.0, spot: [0.0, NOTE_Y], song_at: None, song_hand: 1, song_hit: (f32::MIN, false), clock: 0.0, rim: (f32::MIN, 1), face: (f32::MIN, 1), pulse: 0.0, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
     }
 
     fn index(&self) -> usize {
@@ -421,13 +426,13 @@ impl Menu {
         self.selected += by;
     }
 
-    /// The player hit the drum: a rim (left -1, right 1) for kat, the face for don. The drum
-    /// lights only for that and for the song's own notes.
+    /// The player hit the drum on `side` (left -1, right 1): its rim for kat, that half of the
+    /// face for don. The drum lights only for that and for the song's own notes.
     pub fn drum(&mut self, kat: bool, side: i32) {
         if kat {
             self.rim = (self.clock, side);
         } else {
-            self.face = self.clock;
+            self.face = (self.clock, side);
         }
     }
 
@@ -497,6 +502,8 @@ impl Menu {
         }
         let (into, beat) = f.beat.filter(|b| b.1 > 1.0).unwrap_or((self.clock as f64, 500.0));
         let phase = (into / beat).rem_euclid(1.0) as f32;
+        let playing = f.beat.is_some_and(|b| b.1 > 1.0) && !f.paused && render::animations();
+        self.pulse = if playing { (1.0 - phase).powi(3) } else { 0.0 };
         let bar = (into / (beat * 4.0)).rem_euclid(1.0) as f32;
         let pulse = if render::animations() { (1.0 - phase).powi(3) } else { 0.0 };
         self.feel_kiai(f.kiai && render::animations(), f.beat.filter(|b| b.1 > 1.0), c.dt_ms);
@@ -660,12 +667,9 @@ impl Menu {
         // Hit what got here since last frame (not after a jump: a seek or another song).
         if let Some(before) = self.song_at.filter(|&t| t <= now && now - t < 250.0) {
             for note in song.between(before, now) {
-                if note.kat {
-                    self.rim = (self.clock, self.song_rim);
-                    self.song_rim = -self.song_rim;
-                } else {
-                    self.face = self.clock;
-                }
+                // Hands in turn, as autoplay plays: each note on the other side.
+                self.drum(note.kat, self.song_hand);
+                self.song_hand = -self.song_hand;
                 self.song_hit = (self.clock, note.kat);
             }
         }
@@ -690,11 +694,9 @@ impl Menu {
             c.circle(hit_x, LANE_MID, small_r + 6.0 * (1.0 - lit), rgba(col, 0.35 * lit * fade), rgba(0xffffff, 0.6 * lit * fade), 2.0);
         }
         let room = (c.width - PANEL_X - hit_x + big_r) as f64;
-        let speed = match beat.filter(|&b| b > 1.0) {
-            Some(b) => (2.0 * small_r * QUARTER_GAP) as f64 / (b / 4.0),
-            None => room / CROSS_MS,
-        }
-        .clamp(0.2, 3.0);
+        // osu!px a ms at the song's BPM (120 without one), scaled with the notes.
+        let beat_ms = beat.filter(|&b| b > 1.0).unwrap_or(500.0);
+        let speed = (SLIDER_MULTIPLIER * TAIKO_VELOCITY / beat_ms * (small_r / crate::game::NOTE_R) as f64).clamp(0.05, 3.0);
         // Furthest first, so the nearer ones lie on top; each drawn as in a song (the skin's, or
         // the built-in ones), in the player's colours.
         for note in song.between(now, now + room / speed).iter().rev() {
@@ -729,7 +731,9 @@ impl Menu {
             let shaking = *item == Item::Editor && self.is_selected(i) && self.clock - self.shake < SHAKE_MS;
             let dx = if shaking { (self.clock / 18.0).sin() * 5.0 * (1.0 - (self.clock - self.shake) / SHAKE_MS) } else { 0.0 };
             // In a kiai they hop on the beat, every other one higher.
-            let hop = self.kick() * if i as i64 % 2 == self.beat_no.rem_euclid(2) { 12.0 } else { 5.0 };
+            // On every beat they bounce, every other one higher; in a kiai, higher still.
+            let high = i as i64 % 2 == self.beat_no.rem_euclid(2);
+            let hop = self.kick() * if high { 12.0 } else { 5.0 } + self.pulse * (1.0 - self.kiai) * if high { 5.0 } else { 2.5 };
             // The selected one grows as the selector gets to it, and shrinks back as it goes.
             let near = (1.0 - (self.shown - i as f32).abs()).clamp(0.0, 1.0);
             let grown = r * (1.0 + GROW * near);
@@ -803,9 +807,9 @@ impl Menu {
             pixel_ring(c, [x, LANE_MID], 42.0, 14.0, self.rim.1.signum(), px, rgba(KAT, rim));
         }
         pixel_ring(c, [x, LANE_MID], 28.0, 28.0, 0, px, rgba(0x2d2d3c, 1.0));
-        let face = (1.0 - (self.clock - self.face) / FLASH_MS).max(0.0);
+        let face = (1.0 - (self.clock - self.face.0) / FLASH_MS).max(0.0);
         if face > 0.0 {
-            pixel_ring(c, [x, LANE_MID], 28.0, 28.0, 0, px, rgba(DON, 0.35 + 0.65 * face));
+            pixel_ring(c, [x, LANE_MID], 28.0, 28.0, self.face.1.signum(), px, rgba(DON, 0.35 + 0.65 * face));
         }
         c.rect(x - 0.5, LANE_MID - 28.0, 1.0, 56.0, rgba(0xffffff, 0.2));
     }
@@ -985,13 +989,13 @@ mod tests {
         m.feel_kiai(true, Some((1500.0, 500.0)), 16.0);
         assert_eq!(m.beat_at, 1500.0);
         // The drum plays only the song's notes and the player's hits.
-        assert_eq!((m.rim.0, m.face), (f32::MIN, f32::MIN));
+        assert_eq!((m.rim.0, m.face.0), (f32::MIN, f32::MIN));
         m.step(1);
         assert_eq!(m.rim.0, f32::MIN, "choosing isn't a hit");
         m.drum(true, -1);
         assert_eq!(m.rim, (1500.0, -1));
-        m.drum(false, 0);
-        assert_eq!(m.face, 1500.0);
+        m.drum(false, 1);
+        assert_eq!(m.face, (1500.0, 1), "a don: the right half of the face");
     }
 
     #[test]
@@ -1071,13 +1075,15 @@ mod tests {
         };
         let c = at(&mut m, 900.0);
         assert!(c.shapes.len() > 3, "the notes coming are drawn");
-        assert_eq!((m.face, m.rim.0), (f32::MIN, f32::MIN), "nothing has got there yet");
+        assert_eq!((m.face.0, m.rim.0), (f32::MIN, f32::MIN), "nothing has got there yet");
         at(&mut m, 1050.0);
-        assert_eq!(m.face, m.clock, "the don: the face");
+        assert_eq!(m.face.0, m.clock, "the don: the face");
         assert_eq!(m.rim.0, f32::MIN);
+        assert!(m.face.1.abs() == 1, "one half of the face, not all of it");
         at(&mut m, 1150.0);
         let first = m.rim;
         assert_eq!(first.0, m.clock, "the kat: a rim");
+        assert_eq!(first.1, -m.face.1, "hands in turn: the other side from the don");
         at(&mut m, 1250.0);
         assert_eq!(m.rim.0, m.clock);
         assert_eq!(m.rim.1, -first.1, "the next kat, the other rim");
