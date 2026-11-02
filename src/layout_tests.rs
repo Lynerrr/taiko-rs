@@ -941,6 +941,62 @@ fn by_difficulty_each_is_listed_under_its_own_stars() {
 }
 
 #[test]
+fn without_headings_the_songs_are_one_list_and_by_difficulty_each_stands_alone() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let by_artist = s.select.songs();
+    let maps = by_artist.iter().map(Vec::len).sum::<usize>();
+    // Stars counting down through the library, so by difficulty its order turns round.
+    let mut info = vec![None; s.library.len()];
+    for (k, &i) in by_artist.iter().flatten().enumerate() {
+        info[i] = Some(crate::mapinfo::Info { stars: 10.0 - k as f32 * 0.25, length_ms: 60_000.0, bpm: 120.0 });
+    }
+    s.select.info = Some(std::sync::Arc::new(std::sync::Mutex::new(info.clone())));
+    s.cfg.song_headings = true;
+    let on = s.setting_value(Item::SongHeadings);
+    s.adjust_setting(Item::SongHeadings, 1, None);
+    assert_ne!(s.setting_value(Item::SongHeadings), on);
+    assert!(!s.select.headings && !s.cfg.song_headings, "the setting turns them off and is saved");
+    // Songs stay whole, in the same order, without headings: all of them listed.
+    assert_eq!(s.select.songs(), by_artist);
+    assert_eq!(s.select.sections(), vec![(String::new(), by_artist.len())]);
+    assert_eq!(s.select.open_sections(), vec![0]);
+    // By difficulty: one row per difficulty, easiest first, whatever its song.
+    s.select.set_sort(ui::SortMode::Difficulty, &s.library);
+    let rows = s.select.songs();
+    assert_eq!(rows.len(), maps);
+    assert!(rows.iter().all(|r| r.len() == 1));
+    let stars: Vec<f32> = rows.iter().map(|r| info[r[0]].unwrap().stars).collect();
+    assert!(stars.is_sorted(), "{stars:?}");
+    assert_eq!(s.select.sections().len(), 1);
+    let mut problems = Vec::new();
+    check_draw("flat list", &mut problems, |c| s.select.draw(c, &s.library, 16.0, "", &|_| None, &|_| None));
+    assert!(problems.is_empty(), "{problems:?}");
+    // Right and Left go row by row, even between difficulties of one song.
+    s.select.enter_song(0, &s.library);
+    s.select.key(KeyCode::ArrowRight, &s.library);
+    assert_eq!(s.select.selected(), Some(rows[1][0]));
+    s.select.key(KeyCode::ArrowLeft, &s.library);
+    assert_eq!(s.select.selected(), Some(rows[0][0]));
+    // Headings back on: under their star headings again, songs together within them.
+    s.adjust_setting(Item::SongHeadings, 1, None);
+    assert_eq!(s.setting_value(Item::SongHeadings), on);
+    assert!(s.select.headings && s.cfg.song_headings);
+    assert!(s.select.sections().len() > 1 && s.select.sections().iter().all(|x| !x.0.is_empty()));
+    assert!(s.select.songs().len() < maps);
+}
+
+#[test]
+fn the_song_headings_setting_is_kept() {
+    let mut cfg = crate::config::Config::default();
+    assert!(cfg.song_headings, "headings by default");
+    cfg.song_headings = false;
+    assert!(!crate::config::Config::parse_text(&cfg.to_text()).song_headings);
+    assert!(crate::config::Config::parse_text("").song_headings);
+}
+
+#[test]
 fn the_sort_button_lists_the_sorts() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);

@@ -2596,6 +2596,7 @@ impl State {
             Item::NotifyMentions => on(c.notify_mentions),
             Item::NotifyRequests => on(c.notify_requests),
             Item::ShowConverts => on(self.select.show_converts),
+            Item::SongHeadings => on(self.select.headings),
             Item::HiddenMaps => self.select.hidden.describe(),
             Item::SongsFolder if self.folder_pick.is_some() && self.folder_pick_for == Item::SongsFolder => picking_text().into(),
             Item::DataFolder if self.folder_pick.is_some() && self.folder_pick_for == Item::DataFolder => picking_text().into(),
@@ -2815,6 +2816,12 @@ impl State {
                 self.select.show_converts = !self.select.show_converts;
                 self.select.refilter(&self.library);
                 self.cfg.show_converts = self.select.show_converts;
+                self.cfg.save();
+                return;
+            }
+            Item::SongHeadings => {
+                self.select.set_headings(!self.select.headings, &self.library);
+                self.cfg.song_headings = self.select.headings;
                 self.cfg.save();
                 return;
             }
@@ -5942,6 +5949,7 @@ impl State {
         self.select.server_loved = server_loved;
         self.select.nominator = nominator;
         self.select.sort = sort;
+        self.select.headings = self.cfg.song_headings;
         self.select.mods_label = self.cfg.mods.label();
         let maps = self.library.iter().enumerate().map(|(i, e)| (i, e.path.clone(), e.modified, e.size)).collect();
         let info = mapinfo::MapInfo::spawn(maps, self.library.len(), self.in_song());
@@ -10768,6 +10776,7 @@ impl State {
         let (set_status_tx, set_status_rx) = mpsc::channel();
         let status_cache = setstatus::Cache::load();
         select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
+        select.headings = cfg.song_headings;
         select.mods_label = cfg.mods.label();
         select.played = load_plays();
         let updater = update::Updater::new(cfg.check_updates);

@@ -41,6 +41,7 @@ fn words(item: Item) -> &'static str {
         Item::NoteColours | Item::DonColour | Item::KatColour => "color palette red blue цвет палитра красный синий",
         Item::Language => "english japanese russian locale английский японский русский",
         Item::SongsFolder | Item::ShowConverts | Item::HiddenMaps => "library beatmaps maps osu stable библиотека карты песни",
+        Item::SongHeadings => "song select list groups sort tabs flat difficulty список группы сортировка вкладки сложность",
         Item::DataFolder => "save scores replays path сохранения рекорды реплеи путь",
         Item::Screenshots => "picture clipboard screen картинка буфер экран",
         Item::ChatFilter => "swear profanity мат цензура",

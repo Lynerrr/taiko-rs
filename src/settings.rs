@@ -56,6 +56,7 @@ pub enum Item {
     NotifyMentions,
     NotifyRequests,
     ShowConverts,
+    SongHeadings,
     HiddenMaps,
     SongsFolder,
     DataFolder,
@@ -105,9 +106,10 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 119] = [
+pub const ITEMS: [(&str, Item); 120] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
+    ("LIBRARY", Item::SongHeadings),
     ("LIBRARY", Item::HiddenMaps),
     ("LIBRARY", Item::SongSelectLayout),
     ("LIBRARY", Item::DataFolder),
@@ -386,6 +388,7 @@ impl Item {
             Item::NotifyOnline => tr!("Notify: friend online", "通知: フレンドのログイン", "Уведомлять: друг в сети"),
             Item::NotifyPlaying => tr!("Notify: friend playing", "通知: フレンドのプレイ", "Уведомлять: друг играет"),
             Item::ShowConverts => tr!("Show osu!standard converts", "osu!standardの変換譜面を表示", "Карты osu!standard (конверты)"),
+            Item::SongHeadings => tr!("Song list headings", "曲リストの見出し", "Заголовки в списке песен"),
             Item::HiddenMaps => tr!("Hidden maps", "非表示の譜面", "Скрытые карты"),
             Item::SongsFolder => tr!("Songs folder", "Songsフォルダ", "Папка Songs"),
             Item::DataFolder => tr!("Game data folder", "ゲームデータのフォルダ", "Папка данных игры"),
@@ -488,6 +491,7 @@ impl Item {
             | Item::NotifyMentions
             | Item::NotifyRequests
             | Item::ShowConverts
+            | Item::SongHeadings
             | Item::MenuVsync
             | Item::HalfResolution
             | Item::ShowFps
@@ -640,6 +644,11 @@ impl Item {
                 "Also list standard maps, converted to taiko like osu! does.",
                 "standardの譜面も、osu!と同じく太鼓に変換して並べます。",
                 "Показывать и карты standard, переделанные в taiko, как в osu!."
+            ),
+            Item::SongHeadings => tr!(
+                "Group songs under headings you open and close (stars, letters, BPM...). Off: one list in the sort's order; by difficulty, each difficulty on its own.",
+                "曲を開閉できる見出し (星、頭文字、BPMなど) ごとにまとめます。オフ: 並び順のまま一つのリストに。難易度順では難易度ごとに並べます。",
+                "Группировать песни под заголовками, которые открываются и закрываются (звёзды, буквы, BPM...). Выкл.: один список по сортировке; по сложности — каждая сложность отдельно."
             ),
             Item::HiddenMaps => tr!(
                 "Right-click a song to hide it here (files stay). Enter lists them all again.",
