@@ -59,10 +59,14 @@ const FORMULA: [(Mod, u32); 4] = [(Mod::Easy, 2), (Mod::Hidden, 8), (Mod::HardRo
 /// Mods whose only effect on pp is the speed or the notes (`stars::load_played`), or none.
 const NEUTRAL: [Mod; 8] = [Mod::NoFail, Mod::SuddenDeath, Mod::Perfect, Mod::DoubleTime, Mod::Nightcore, Mod::HalfTime, Mod::Daycore, Mod::Half];
 
+/// The most a play's other mods can add to its pp: stacked up, a map learned by heart came to
+/// five times what it's worth.
+const MAX_CUSTOM_FACTOR: f64 = 1.5;
+
 /// What the play's other mods (taiko.rs's own, and osu!'s that pp doesn't know) do to its pp:
-/// their score multipliers.
+/// their score multipliers, up to `MAX_CUSTOM_FACTOR`.
 pub fn custom_factor(mods: Mods) -> f64 {
-    mods.iter().filter(|m| !FORMULA.iter().any(|f| f.0 == *m) && !NEUTRAL.contains(m)).map(|m| m.multiplier()).product()
+    mods.iter().filter(|m| !FORMULA.iter().any(|f| f.0 == *m) && !NEUTRAL.contains(m)).map(|m| m.multiplier()).product::<f64>().min(MAX_CUSTOM_FACTOR)
 }
 
 /// The pp of a play on the map at `path`. None for Autoplay / Relax, or a map that can't be read.
@@ -294,6 +298,22 @@ mod tests {
         assert_eq!(custom_factor(Mods::parse("HD,HR,DT,NF")), 1.0);
         assert!((custom_factor(Mods::parse("HD,CH")) - Mod::SvChaos.multiplier()).abs() < 1e-12);
         assert_eq!(custom_factor(Mods::parse("HA")), 1.0, "Half's pp go by the notes it leaves");
+    }
+
+    #[test]
+    fn stacked_mods_stop_adding_pp() {
+        let every = Mods::parse("BL,BO,CL,CH,DY,LI,LG,MW,PT,RL,SK,SN,SP");
+        assert_eq!(custom_factor(every), MAX_CUSTOM_FACTOR);
+        assert_eq!(custom_factor(Mods::parse("NB")), Mod::NoFinishers.multiplier(), "only adding has a ceiling");
+    }
+
+    #[test]
+    fn the_servers_list_of_mods_without_a_factor_is_right() {
+        for code in crate::online::NO_FACTOR_MODS {
+            assert_eq!(custom_factor(Mods::parse(code)), 1.0, "{code}");
+        }
+        let most = crate::mods::ALL.iter().filter(|m| !crate::online::NO_FACTOR_MODS.contains(&m.acronym())).map(|m| m.multiplier()).fold(0.0, f64::max);
+        assert!(most.powi(crate::online::MODS_BELOW_CAP as i32) < MAX_CUSTOM_FACTOR);
     }
 
     #[test]

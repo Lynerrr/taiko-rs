@@ -155,8 +155,26 @@ pub struct ScoreSubmit {
     pub rolls: Option<u32>,
 }
 
-/// 1: on the notes `NOTE_MODS` leave, not the whole map. 2: Half keeps to the beat.
-pub const PP_VERSION: u32 = 2;
+/// 1: on the notes `NOTE_MODS` leave, not the whole map. 2: Half keeps to the beat. 3: what
+/// stacked mods add has a ceiling.
+pub const PP_VERSION: u32 = 3;
+/// From this one on, `NOTE_MODS` were worked out right.
+#[allow(dead_code)] // used by the server
+pub const NOTE_MODS_VERSION: u32 = 2;
+/// Mods that add nothing to pp by their multiplier: osu!'s the formula knows, and those that only
+/// change the speed or the notes.
+#[allow(dead_code)] // used by the server
+pub const NO_FACTOR_MODS: [&str; 12] = ["EZ", "HD", "HR", "FL", "NF", "SD", "PF", "DT", "NC", "HT", "DC", "HA"];
+/// How many other mods can't reach the ceiling whatever they are.
+#[allow(dead_code)] // used by the server
+pub const MODS_BELOW_CAP: usize = 3;
+
+/// Whether a play from a game before the ceiling could have gone past it.
+#[allow(dead_code)] // used by the server
+pub fn past_the_cap(mods: &[String]) -> bool {
+    mods.iter().filter(|m| !NO_FACTOR_MODS.contains(&m.as_str())).count() > MODS_BELOW_CAP
+}
+
 /// The mods that change the notes: older games' pp of plays with them are wrong.
 #[allow(dead_code)] // used by the online server (server/)
 pub const NOTE_MODS: [&str; 3] = ["HA", "SW", "RD"];

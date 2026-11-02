@@ -506,8 +506,12 @@ impl Scores {
     pub fn submit(&mut self, player: &str, name: &str, mut play: ScoreSubmit, now: u64) -> Result<(Option<u32>, f64, Option<u32>), String> {
         check(&play)?;
         // Older games work these out on the whole map.
-        if play.pp_version < online::PP_VERSION && play.map.mods.iter().any(|m| online::NOTE_MODS.contains(&m.as_str())) {
+        if play.pp_version < online::NOTE_MODS_VERSION && play.map.mods.iter().any(|m| online::NOTE_MODS.contains(&m.as_str())) {
             (play.pp, play.stars) = (None, None);
+        }
+        // Older games add up as many mods as they like.
+        if play.pp_version < online::PP_VERSION && online::past_the_cap(&play.map.mods) {
+            play.pp = None;
         }
         let times = self.submits.entry(player.to_string()).or_default();
         times.retain(|t| t.elapsed() < Duration::from_secs(60));
@@ -1203,6 +1207,23 @@ mod tests {
         s.set_banned("a", false);
         assert_eq!(names(&s), ["A", "B"]);
         assert_eq!(s.map_scores(7)[0].player, "A");
+    }
+
+    #[test]
+    fn older_games_get_no_pp_from_mods_stacked_past_the_ceiling() {
+        let mut s = Scores::load(None);
+        let with = |mods: &[&str], version: u32| {
+            let mut p = play(7, 500, 100.0);
+            p.map.mods = mods.iter().map(|m| m.to_string()).collect();
+            p.pp_version = version;
+            p
+        };
+        let stacked = ["BL", "BO", "CL", "CH"];
+        s.submit("a", "A", with(&stacked, online::PP_VERSION - 1), 1).unwrap();
+        s.submit("b", "B", with(&stacked, online::PP_VERSION), 2).unwrap();
+        s.submit("c", "C", with(&["HD", "HR", "DT", "FL"], online::PP_VERSION - 1), 3).unwrap();
+        assert_eq!(s.profile("a", "A", 0).pp, 0.0);
+        assert!(s.profile("b", "B", 0).pp > 0.0 && s.profile("c", "C", 0).pp > 0.0);
     }
 
     #[test]
