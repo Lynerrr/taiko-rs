@@ -548,6 +548,10 @@ fn assert_every_screen_fits() {
     check(&mut s, "friends players", &mut out);
     s.social.tab = social::Tab::Chat;
     s.social.global = (0..40).map(|i| line(&format!("{LONG_NAME}{i}"), "")).collect();
+    for (i, tier, secret) in [(33, 1, false), (35, 2, false), (36, 3, false), (37, 4, false), (39, 4, true)] {
+        let medal = online::ChatMedal { player: LONG_NAME.into(), name: [LONG_NAME.to_string(), LONG_NAME.to_string(), LONG_NAME.to_string()], tier, secret, first: true, holders: 1, players: 28 };
+        s.social.global[i] = online::ChatLine { from: online::SERVER_NAME.into(), medal: Some(medal), ..line("", "") };
+    }
     s.social.global_unread = 12;
     s.social.input = "a message being typed that is longer than the input box can show".into();
     check(&mut s, "global chat", &mut out);

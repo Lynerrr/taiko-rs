@@ -389,6 +389,10 @@ const PANEL_W: f32 = 290.0;
 /// Where the friends tab's conversation starts, below the panel's top.
 const CHAT_TOP: f32 = 236.0;
 const GREEN: u32 = 0x86E05A;
+/// The banner of a line from the server that isn't about a medal.
+const SERVER_COLOUR: u32 = 0xFFB84D;
+/// Characters of a chat line a banner's bar and padding take up.
+const BANNER_INSET: usize = 1;
 /// Characters per chat line (drawn at 6.5 between 4 px margins in the panel's 8 px padding).
 pub fn chat_width() -> usize {
     ((PANEL_W - 24.0) / Canvas::char_width(6.5)) as usize
@@ -469,14 +473,14 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
             // The conversation.
             let chat_top = y + CHAT_TOP;
             c.rect(inner, chat_top - 2.0, iw, 1.0, rgba(0x2a2a38, a));
-            let lines: Vec<(String, String, bool)> = match s.conversation(in_lobby) {
+            let lines: Vec<ChatEntry> = match s.conversation(in_lobby) {
                 Some(Ok(f)) => {
                     c.text(inner + 2.0, chat_top + 4.0, 7.0, rgba(0x9a9ab0, a), &format!("chat with {}", f.name));
-                    s.chats.get(&key(&f.name)).map(|v| v.iter().map(|l| (l.from.clone(), l.text.clone(), Some(key(&l.from)) == me)).collect()).unwrap_or_default()
+                    s.chats.get(&key(&f.name)).map(|v| v.iter().map(|l| ChatEntry::new(&l.from, l.text.clone(), Some(key(&l.from)) == me, None)).collect()).unwrap_or_default()
                 }
                 Some(Err(())) => {
                     c.text(inner + 2.0, chat_top + 4.0, 7.0, rgba(0x4fb4ff, a), "# lobby chat");
-                    lobby.unwrap_or(&[]).iter().map(|(from, text)| (from.clone(), text.clone(), false)).collect()
+                    lobby.unwrap_or(&[]).iter().map(|(from, text)| ChatEntry::new(from, text.clone(), false, None)).collect()
                 }
                 None => {
                     c.text(inner + 2.0, chat_top + 4.0, 7.0, rgba(0x6f6f86, a), "pick a friend to chat with");
@@ -499,7 +503,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
             c.text_centered(x + PANEL_W / 2.0, y + h - 14.0, 6.0, rgba(0x55556a, a), &Canvas::fit_hints(6.0, iw, "Tab  type to search  Up/Down  Enter add friend  Esc"));
         }
         Tab::Chat => {
-            let lines: Vec<(String, String, bool)> = s.global.iter().map(|l| (l.from.clone(), l.shown(), Some(key(&l.from)) == me)).collect();
+            let lines: Vec<ChatEntry> = s.global.iter().map(|l| ChatEntry::new(&l.from, l.shown(), Some(key(&l.from)) == me, l.medal.as_ref())).collect();
             if lines.is_empty() && s.connected {
                 let note = if s.players.is_some() { "nobody has said anything yet: say hi" } else { "this server has no global chat yet" };
                 c.text(inner + 4.0, list_top + 2.0, 7.0, rgba(0x6f6f86, a), note);
@@ -594,44 +598,90 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
     ry
 }
 
-/// Chat lines (from, text, ours) between `top` and the message box at `input_y`: newest at the
-/// bottom, wrapped, as many as fit, scrolled back by `s.chat_scroll` lines.
-#[allow(clippy::too_many_arguments)]
-fn chat_lines(c: &mut Canvas, s: &Social, lines: &[(String, String, bool)], inner: f32, top: f32, input_y: f32, width: usize, a: f32) {
-    // Lines naming a map set (`/np`) are links, in blue.
-    let mut wrapped: Vec<(String, u32, Option<u32>)> = Vec::new();
-    for (from, text, mine) in lines {
-        let set = map_set_in(text);
-        let colour = if from == crate::online::SERVER_NAME {
-            0xFFB84D
-        } else if set.is_some() {
-            0x66ccff
-        } else if *mine {
-            0xFFD34D
+/// A line of a chat, before wrapping.
+struct ChatEntry {
+    from: String,
+    text: String,
+    mine: bool,
+    /// The colour of the banner it sits on, when the server is saying it.
+    banner: Option<u32>,
+}
+
+impl ChatEntry {
+    fn new(from: &str, text: String, mine: bool, medal: Option<&online::ChatMedal>) -> Self {
+        let banner = (from == online::SERVER_NAME).then(|| medal.map_or(SERVER_COLOUR, |m| online::medal_colour(m.tier, m.secret)));
+        Self { from: from.to_string(), text, mine, banner }
+    }
+}
+
+/// A chat line as it's drawn, one row of a wrapped `ChatEntry`.
+#[derive(Debug, PartialEq)]
+struct ChatRow {
+    text: String,
+    colour: u32,
+    /// The map set it links to.
+    set: Option<u32>,
+    banner: bool,
+    /// The last row of its line: banners keep apart here.
+    ends: bool,
+}
+
+/// `lines` wrapped to `width`: people's lines after their names, the server's alone on a banner.
+fn chat_rows(lines: &[ChatEntry], width: usize) -> Vec<ChatRow> {
+    let mut rows = Vec::new();
+    for line in lines {
+        if let Some(colour) = line.banner {
+            let text = wrap(&line.text, width.saturating_sub(BANNER_INSET));
+            rows.extend(text.into_iter().map(|text| ChatRow { text, colour, set: None, banner: true, ends: false }));
         } else {
-            0xffffff
-        };
-        for (n, l) in wrap(&format!("{from}: {text}"), width).into_iter().enumerate() {
-            wrapped.push((if n == 0 { l } else { format!("  {l}") }, colour, set));
+            // Lines naming a map set (`/np`) are links, in blue.
+            let set = map_set_in(&line.text);
+            let colour = match (set, line.mine) {
+                (Some(_), _) => 0x66ccff,
+                (None, true) => 0xFFD34D,
+                (None, false) => 0xffffff,
+            };
+            for (n, l) in wrap(&format!("{}: {}", line.from, line.text), width).into_iter().enumerate() {
+                rows.push(ChatRow { text: if n == 0 { l } else { format!("  {l}") }, colour, set, banner: false, ends: false });
+            }
+        }
+        if let Some(last) = rows.last_mut() {
+            last.ends = true;
         }
     }
+    rows
+}
+
+/// Chat lines between `top` and the message box at `input_y`: newest at the bottom, wrapped, as
+/// many as fit, scrolled back by `s.chat_scroll` lines.
+#[allow(clippy::too_many_arguments)]
+fn chat_lines(c: &mut Canvas, s: &Social, lines: &[ChatEntry], inner: f32, top: f32, input_y: f32, width: usize, a: f32) {
+    let rows = chat_rows(lines, width);
     let line_h = 10.0;
     let fit = ((input_y - top - 6.0) / line_h).max(0.0) as usize;
-    let max = wrapped.len().saturating_sub(fit);
+    let max = rows.len().saturating_sub(fit);
     s.chat_scroll_max.set(max);
     let back = s.chat_scroll.min(max);
-    let end = wrapped.len() - back;
-    let shown = &wrapped[end.saturating_sub(fit)..end];
+    let end = rows.len() - back;
+    let shown = &rows[end.saturating_sub(fit)..end];
     let mut ly = input_y - 6.0 - line_h * shown.len() as f32;
-    for (l, colour, set) in shown {
-        c.text(inner + 4.0, ly, 6.5, rgba(*colour, a), l);
-        if let Some(set) = set {
-            c.hit(inner, ly - 2.0, PANEL_W - 16.0, line_h, Hit::ChatMap(*set));
+    let iw = PANEL_W - 16.0;
+    for row in shown {
+        let mut tx = inner + 4.0;
+        if row.banner {
+            let h = if row.ends { line_h - 1.0 } else { line_h };
+            c.rect(inner, ly - 1.5, iw, h, rgba(row.colour, 0.16 * a));
+            c.rect(inner, ly - 1.5, 2.0, h, rgba(row.colour, a));
+            tx = inner + 7.0;
+        }
+        c.text(tx, ly, 6.5, rgba(row.colour, a), &row.text);
+        if let Some(set) = row.set {
+            c.hit(inner, ly - 2.0, iw, line_h, Hit::ChatMap(set));
         }
         ly += line_h;
     }
     if back > 0 {
-        c.text_right(inner + PANEL_W - 20.0, input_y - 4.0, 6.0, rgba(0x6f6f86, a), &format!("{back} newer lines below"));
+        c.text_right(inner + iw - 4.0, input_y - 4.0, 6.0, rgba(0x6f6f86, a), &format!("{back} newer lines below"));
     }
 }
 
@@ -734,6 +784,25 @@ pub fn draw_chip(c: &mut Canvas, s: &Social, lobby_unread: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_server_speaks_on_a_banner_in_the_medals_colour() {
+        let medal = online::ChatMedal { tier: 4, ..Default::default() };
+        let secret = online::ChatMedal { tier: 4, secret: true, ..Default::default() };
+        let said = |from: &str, medal: Option<&online::ChatMedal>| ChatEntry::new(from, "a b c d e f".into(), false, medal);
+
+        let rows = chat_rows(&[said(online::SERVER_NAME, Some(&medal))], 7);
+        assert_eq!(rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["a b c", "d e f"], "no name in front, no indent");
+        assert!(rows.iter().all(|r| r.banner && r.colour == online::medal_colour(4, false)));
+        assert_eq!(rows.iter().map(|r| r.ends).collect::<Vec<_>>(), [false, true]);
+
+        assert_eq!(chat_rows(&[said(online::SERVER_NAME, Some(&secret))], 40)[0].colour, online::SECRET_COLOUR);
+        assert_eq!(chat_rows(&[said(online::SERVER_NAME, None)], 40)[0].colour, SERVER_COLOUR);
+
+        let person = &chat_rows(&[said("auneu", Some(&medal))], 40)[0];
+        assert_eq!(person.text, "auneu: a b c d e f");
+        assert!(!person.banner);
+    }
 
     #[test]
     fn wraps_at_spaces_and_cuts_long_words() {
