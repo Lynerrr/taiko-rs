@@ -10188,6 +10188,74 @@ impl State {
     }
 }
 
+/// The graphics APIs to draw with, from the `graphics_api` setting. "auto" is wgpu's choice
+/// (Vulkan first) except on Windows where Vulkan is known to fall over: Intel's Vulkan driver
+/// (igvk64.dll) crashed on a UHD 630 right after the window came up, a white flash and gone, where
+/// DX12 works. So DX12 there when every graphics card is Intel's; and after a start that never
+/// got going (`gpu_start`) the setting itself becomes "dx12".
+pub fn graphics_backends(api: &str) -> wgpu::Backends {
+    match api {
+        "vulkan" => wgpu::Backends::VULKAN,
+        "dx12" => wgpu::Backends::DX12,
+        "gl" => wgpu::Backends::GL,
+        _ => auto_backends(),
+    }
+}
+
+#[cfg(windows)]
+fn auto_backends() -> wgpu::Backends {
+    // DXGI lists the cards without touching their Vulkan drivers.
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::DX12, ..wgpu::InstanceDescriptor::new_without_display_handle() });
+    let cards: Vec<wgpu::AdapterInfo> = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12))
+        .iter()
+        .map(|a| a.get_info())
+        .filter(|i| i.device_type != wgpu::DeviceType::Cpu)
+        .collect();
+    const INTEL: u32 = 0x8086;
+    if !cards.is_empty() && cards.iter().all(|i| i.vendor == INTEL) {
+        eprintln!("graphics: only Intel graphics ({}): DX12", cards[0].name);
+        return wgpu::Backends::DX12;
+    }
+    wgpu::Backends::all()
+}
+
+#[cfg(not(windows))]
+fn auto_backends() -> wgpu::Backends {
+    wgpu::Backends::all()
+}
+
+/// A start of the graphics that crashes (in the driver, where nothing of ours runs) leaves its
+/// mark behind: `gpu-start` in the data folder, written before the graphics start and removed
+/// once frames have been going for a few seconds. The next start finds it and takes the other
+/// way (`auto_backends`).
+mod gpu_start {
+    const FILE: &str = "gpu-start";
+    /// Frames drawn before the start counts as having worked.
+    pub const FRAMES: u32 = 180;
+
+    fn path() -> Option<std::path::PathBuf> {
+        crate::config::data_dir().map(|d| d.join(FILE))
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn failed_last_time() -> bool {
+        path().is_some_and(|p| p.exists())
+    }
+
+    pub fn starting() {
+        if let Some(p) = path() {
+            let _ = std::fs::create_dir_all(p.parent().unwrap_or(&p));
+            let _ = std::fs::write(p, "the graphics are starting; this goes once they're going\n");
+        }
+    }
+
+    pub fn going() {
+        if let Some(p) = path() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
 /// Rounds of asking the server about statuses it didn't have yet, and the wait between them.
 const STATUS_ROUNDS: usize = 60;
 const STATUS_ROUND_SECS: u64 = 45;
@@ -10301,7 +10369,12 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     // TAIKO_LAYOUT=1: print each text that doesn't fit (once), see `debug::layout_problems`.
     canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
     let mut layout_seen = std::collections::HashSet::new();
+    let mut frames = 0u32;
     loop {
+        frames = frames.saturating_add(1);
+        if frames == gpu_start::FRAMES {
+            gpu_start::going();
+        }
         let (wanted, cap, refresh_hz, surface, size, atlas, letterbox, pixel_scale) = {
             let mut s = lock(&state);
             if s.quit { break; }
@@ -10493,6 +10566,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             sleep_until(next_frame);
         }
     }
+    // Closed before the frames counted it: the start went fine all the same.
+    gpu_start::going();
     let _ = proxy.send_event(UserEvent::Stopped);
 }
 
@@ -10779,9 +10854,23 @@ impl ApplicationHandler<UserEvent> for App {
                 });
             }
         }
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
-            event_loop.owned_display_handle(),
-        )));
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut api = lock(&self.state).cfg.graphics_api.clone();
+        // The last start crashed in the graphics driver: DX12 from now on (kept, or every other
+        // start would crash again).
+        #[cfg(windows)]
+        if api == "auto" && gpu_start::failed_last_time() {
+            eprintln!("graphics: the last start never got going: DX12 from now on (graphics_api in config.txt)");
+            api = "dx12".into();
+            let mut s = lock(&self.state);
+            s.cfg.graphics_api = api.clone();
+            s.cfg.save();
+        }
+        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(event_loop.owned_display_handle()));
+        desc.backends = graphics_backends(&api);
+        // WGPU_BACKEND still has the last word.
+        let instance = wgpu::Instance::new(desc.with_env());
+        gpu_start::starting();
         let present = lock(&self.state).cfg.present;
         let renderer = match Renderer::new(&instance, window.clone(), present) {
             Ok(r) => r,

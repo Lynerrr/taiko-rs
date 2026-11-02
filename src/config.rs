@@ -142,6 +142,8 @@ pub struct Config {
     /// Draw at half resolution and scale up exactly 2x (default on Android: high-DPI screens,
     /// mobile GPUs).
     pub half_resolution: bool,
+    /// The graphics API: "auto", "vulkan", "dx12" (Windows) or "gl" (`crate::graphics_backends`).
+    pub graphics_api: String,
     /// Everything but the player playing a song (menus, results, replays, autoplay) uses vsync.
     pub menu_vsync: bool,
     /// The mouse wheel resizes the playfield during play (it always does in its editor).
@@ -312,6 +314,7 @@ impl Default for Config {
             fx_volume: 1.0,
             present: PresentChoice::Immediate,
             half_resolution: cfg!(target_os = "android"),
+            graphics_api: "auto".into(),
             menu_vsync: true,
             wheel_resizes_playfield: false,
             show_converts: false,
@@ -681,6 +684,7 @@ impl Config {
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "menu_vsync" => cfg.menu_vsync = v != "false",
                 "half_resolution" => cfg.half_resolution = v == "true",
+                "graphics_api" => cfg.graphics_api = v.trim().to_ascii_lowercase(),
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
                 "playfield_area" => cfg.playfield_area = Area::parse(v).unwrap_or(Area::FULL),
                 "bg_dim" => cfg.bg_dim = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
@@ -832,6 +836,8 @@ impl Config {
              menu_vsync = {}\n\
              # draw at half resolution, scaled up exactly 2x (crisp pixels, faster)\n\
              half_resolution = {}\n\
+             # auto | vulkan | dx12 (Windows) | gl; auto picks DX12 on Windows where Vulkan is known to crash\n\
+             graphics_api = {}\n\
              # mailbox/immediate only; 0 = uncapped\n\
              fps_cap = {}\n\
              calibration_bpm = {}\n\
@@ -884,6 +890,7 @@ impl Config {
             self.present.name(),
             self.menu_vsync,
             self.half_resolution,
+            self.graphics_api,
             self.fps_cap,
             self.calibration_bpm,
             self.playfield_area.to_config(),
