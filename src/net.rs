@@ -545,6 +545,17 @@ impl Drop for Room {
     }
 }
 
+/// What's told the results of a match.
+pub type MatchHook = Box<dyn Fn(&[PlayerInfo]) + Send + Sync>;
+
+/// Told the results of every match a room here finishes (the online server keeps count).
+static MATCH_OVER: std::sync::OnceLock<MatchHook> = std::sync::OnceLock::new();
+
+#[allow(dead_code)] // used by the online server (server/)
+pub fn on_match(hook: MatchHook) {
+    let _ = MATCH_OVER.set(hook);
+}
+
 #[allow(dead_code)] // used by the online server (server/)
 pub fn open_room(mapguessr: bool) -> Room {
     let stop = Arc::new(AtomicBool::new(false));
@@ -1012,6 +1023,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
         // Everyone still in the match has finished (or left): publish results, back to the lobby.
         if phase == Phase::Playing && players.iter().filter(|p| p.in_match).all(|p| p.info.status == Status::Finished) {
             let results: Vec<PlayerInfo> = players.iter().filter(|p| p.in_match).map(|p| p.info.clone()).collect();
+            if let Some(hook) = MATCH_OVER.get() {
+                hook(&results);
+            }
             for p in &mut players {
                 let _ = p.tx.send(ServerMsg::Results(results.clone()));
                 p.in_match = false;

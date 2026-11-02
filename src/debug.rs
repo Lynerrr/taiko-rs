@@ -3,7 +3,8 @@
 //! `TAIKO_STATS=1` prints a report when leaving gameplay (with vsync, its "note step vs refresh
 //! grid" line shows how evenly notes move; `TAIKO_NO_PACE=1` turns the vsync pacing off to
 //! compare); `TAIKO_SHOTS=dir:ms,ms,...` saves PNGs at the given gameplay times (used for headless
-//! testing).
+//! testing); `TAIKO_MEDALS=file` opens the medals screen on a saved reply at launch, and
+//! `TAIKO_UNLOCK=file` plays the earning of the medals in the file (JSON, a list) at launch.
 
 use std::path::{Path, PathBuf};
 
@@ -320,6 +321,16 @@ pub fn wall_shots_from_env() -> Vec<f64> {
         .unwrap_or_default();
     v.sort_by(|a, b| b.total_cmp(a));
     v
+}
+
+/// The medals screen's reply, from `TAIKO_MEDALS`.
+pub fn medals_from_env() -> Option<crate::online::MedalsView> {
+    serde_json::from_str(&std::fs::read_to_string(std::env::var_os("TAIKO_MEDALS")?).ok()?).ok()
+}
+
+/// Medals to play the earning of, from `TAIKO_UNLOCK`.
+pub fn unlock_from_env() -> Vec<crate::online::MedalNote> {
+    std::env::var_os("TAIKO_UNLOCK").and_then(|f| serde_json::from_str(&std::fs::read_to_string(f).ok()?).ok()).unwrap_or_default()
 }
 
 /// Text that doesn't fit, as readable lines: off screen, sticking out of the rounded box it sits

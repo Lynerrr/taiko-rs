@@ -464,6 +464,17 @@ fn route(state: &State, req: &Req) -> Reply {
             req.page(200, "a taiko client for osu! beatmaps", "", pages::home(&ranked, &maps, ranked.len(), plays, req.os, live)).per_visitor()
         }
         ["rankings"] => req.page(200, "Performance Ranking", "rankings", pages::rankings(&state.scores.lock().unwrap().rankings(RANKINGS))),
+        ["medals"] => {
+            let (view, table) = state.medals_page(None);
+            req.page(200, "Medals", "medals", pages::medals_page(&view, None, &table))
+        }
+        ["u", name, "medals"] => match state.profile(name) {
+            Some(p) => {
+                let (view, table) = state.medals_page(Some(&p.name));
+                req.page(200, &format!("{}'s medals", p.name), "medals", pages::medals_page(&view, Some(&p.name), &table))
+            }
+            None => req.not_found("There is no player by that name"),
+        },
         ["api", "rankings"] => Reply::json(&state.scores.lock().unwrap().rankings(RANKINGS)),
         ["download"] => req.page(200, "Download", "download", pages::download(req.os)).per_visitor(),
         // The search box: /u?name=...
@@ -644,7 +655,12 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
         ["avatar"] => {
             let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
             let msg = match &req.upload {
-                Some(file) => crate::avatars::save(&key, file, crate::now_secs()).map(|_| "Your picture is set".to_string()).unwrap_or_else(|e| e),
+                Some(file) => crate::avatars::save(&key, file, crate::now_secs())
+                    .map(|_| {
+                        state.medal_count(&key, "avatar", 1, true);
+                        "Your picture is set".to_string()
+                    })
+                    .unwrap_or_else(|e| e),
                 None => "pick a picture first".into(),
             };
             Reply::see_other(format!("/u/{}?msg={}", state.display_name(&key), encode(&msg)))

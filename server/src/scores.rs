@@ -9,8 +9,11 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::online::{self, OnlineScore, Profile, ScoreSubmit, Stats};
+use crate::medals::{Medals, Play, Rivals};
+use crate::online::{self, MedalNote, MedalsView, OnlineScore, Profile, ScoreSubmit, Stats};
 
+/// The most drumroll hits a play can say it has: no map comes close.
+const MAX_ROLLS: u32 = 1_000_000;
 /// Plays one account may send per minute.
 const SUBMITS_PER_MINUTE: usize = 20;
 /// The most key presses a play can have: on a submitted one, and kept of a live one.
@@ -119,6 +122,7 @@ pub struct Scores {
     next_id: u64,
     submits: HashMap<String, Vec<Instant>>,
     /// Whether plays on a set give pp (None: not known yet).
+    pub medals: Medals,
     gives_pp: fn(Option<u32>) -> Option<bool>,
     /// Whether a `.osu` (by MD5) is one of the set's own on osu! (not an edited copy).
     official: fn(Option<u32>, &str) -> bool,
@@ -214,6 +218,7 @@ impl Scores {
         for r in &renames {
             r.apply(&mut all);
         }
+        let medals = Medals::load(dir.as_deref());
         let mut scores = Scores {
             file,
             overrides_file,
@@ -234,6 +239,7 @@ impl Scores {
             submits: HashMap::new(),
             gives_pp: crate::loved::gives_pp,
             official: crate::covers::official,
+            medals,
             by_player: HashMap::new(),
             by_map: HashMap::new(),
             standings: HashMap::new(),
@@ -241,7 +247,52 @@ impl Scores {
         };
         scores.reindex();
         scores.count_pp();
+        scores.settle_medals();
         scores
+    }
+
+    /// Whether a play counts for medals that want a real map: unknown doesn't do, unlike for pp.
+    fn gives(&self, s: &Stored) -> bool {
+        (self.gives_pp)(s.score.set_id) == Some(true) && s.md5.as_deref().is_none_or(|m| (self.official)(s.score.set_id, m))
+    }
+
+    /// `player`'s plays as medals see them, oldest first.
+    fn medal_plays(&self, player: &str) -> Vec<Play> {
+        let mut plays: Vec<&Stored> = self.stored_of(player).into_iter().filter(|s| !s.hidden).collect();
+        plays.sort_by_key(|s| (s.score.date, s.id));
+        plays.into_iter().map(|s| Play::of(&s.score, self.gives(s))).collect()
+    }
+
+    fn rivals(&self) -> Rivals {
+        Rivals::of(self.all.iter().filter(|s| !s.hidden).map(|s| (s.player.as_str(), Play::of(&s.score, self.gives(s)))))
+    }
+
+    /// Everyone's medals, without telling anyone: at start, and for what can't be told as it
+    /// happens.
+    pub fn settle_medals(&mut self) {
+        let rivals = self.rivals();
+        let players: HashSet<String> = self.by_player.keys().cloned().chain(self.medals.counted_players()).collect();
+        let everyone: Vec<(String, Vec<Play>, u64)> = players
+            .into_iter()
+            .map(|p| {
+                let (plays, ms) = (self.medal_plays(&p), self.tally(&p).ms);
+                (p, plays, ms)
+            })
+            .collect();
+        self.medals.settle_all(&everyone, &rivals, crate::now_secs());
+    }
+
+    /// `player`'s medals after a change: the ones it earned.
+    pub fn medals_after(&mut self, player: &str, now: u64) -> Vec<MedalNote> {
+        let (plays, rivals, ms) = (self.medal_plays(player), self.rivals(), self.tally(player).ms);
+        self.medals.settle(player, &plays, &rivals, ms, now)
+    }
+
+    /// Every medal, and how `player` stands with them.
+    pub fn medals_view(&self, player: Option<&str>) -> MedalsView {
+        let plays = player.map(|p| self.medal_plays(p)).unwrap_or_default();
+        let ms = player.map_or(0, |p| self.tally(p).ms);
+        self.medals.view(player, &plays, &self.rivals(), ms)
     }
 
     /// Redoes the indexes, the maps' rows and the rankings from the plays.
@@ -410,6 +461,8 @@ impl Scores {
         }
         let gone = self.all.remove(at);
         self.reindex();
+        let (plays, rivals, ms) = (self.medal_plays(&gone.player), self.rivals(), self.tally(&gone.player).ms);
+        self.medals.revoke(&gone.player, &plays, &rivals, ms, crate::now_secs());
         Ok(gone.score.player)
     }
 
@@ -424,6 +477,7 @@ impl Scores {
             r.apply(&mut self.all);
         }
         if from != to {
+            self.medals.rename(from, to);
             if let Some(t) = self.tallies.remove(from) {
                 self.tallies.insert(to.to_string(), t);
                 self.save_tallies();
@@ -487,6 +541,7 @@ impl Scores {
                 id,
                 scroll_speed: play.scroll_speed.filter(|s| s.is_finite() && (0.1..=10.0).contains(s)),
                 pp_version: play.pp_version,
+                rolls: play.rolls.unwrap_or(0).min(MAX_ROLLS),
             },
             sent_pp: play.pp,
             md5: play.md5.as_deref().map(|m| online::clean_text(m, 32).to_ascii_lowercase()),
@@ -567,6 +622,7 @@ impl Scores {
                 id,
                 scroll_speed: None,
                 pp_version: online::PP_VERSION,
+                rolls: 0,
             },
             sent_pp: Some(pp),
             md5: None,
@@ -738,7 +794,7 @@ impl Scores {
         firsts.sort_by_key(|score| std::cmp::Reverse(score.date));
         firsts.truncate(PROFILE_PLAYS);
         let tally = self.tally(player);
-        Profile { name: name.to_string(), joined, plays: mine.len() as u32 + tally.other_plays, pp, rank, top, recent, stats, firsts, online: false, play_ms: tally.ms }
+        Profile { name: name.to_string(), joined, plays: mine.len() as u32 + tally.other_plays, pp, rank, top, recent, stats, firsts, online: false, play_ms: tally.ms, medals: self.medals.summary(player) }
     }
 }
 
@@ -850,6 +906,7 @@ mod tests {
             md5: None,
             pp_version: 0,
             timing: None,
+            rolls: None,
         }
     }
 
@@ -1021,6 +1078,7 @@ mod tests {
             s.submits.clear();
             s.submit(&player, &player.to_uppercase(), p, i).unwrap();
         }
+        s.settle_medals();
         let again = Scores::load(Some(dir.clone()));
         assert_eq!(s.rankings(usize::MAX), again.rankings(usize::MAX));
         assert_eq!(s.maps(usize::MAX), again.maps(usize::MAX));

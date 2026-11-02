@@ -34,6 +34,8 @@ mod changelog_entry;
 mod font;
 mod loved;
 mod mail;
+mod medal_list;
+mod medals;
 mod scores;
 mod pages;
 mod web;
@@ -769,15 +771,27 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             let map = format!("{} - {} [{}]", play.map.artist, play.map.title, play.map.version);
             // Whether the map gives pp, so the total sent back is right.
             covers::learn(play.map.set_id);
-            match state.scores.lock().unwrap().submit(&key, &name, *play, now_secs()) {
+            let mut scores = state.scores.lock().unwrap();
+            match scores.submit(&key, &name, *play, now_secs()) {
                 Ok((map_rank, pp, rank)) => {
-                    println!("score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total");
-                    Reply::Submitted { map_rank, pp, rank }
+                    let medals = scores.medals_after(&key, now_secs());
+                    let announcement = scores.medals.announcement(&medals);
+                    drop(scores);
+                    if let Some(a) = announcement {
+                        state.announce_medal(&name, &a);
+                    }
+                    println!("score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total, {} medals", medals.len());
+                    Reply::Submitted { map_rank, pp, rank, medals }
                 }
                 Err(e) => Reply::Error(e),
             }
         }
         Request::MapScores { map } => Reply::Scores(state.scores.lock().unwrap().map_scores(map)),
+        Request::Medals { name } => {
+            let key = name.trim().to_ascii_lowercase();
+            let player = (!key.is_empty()).then_some(key.as_str());
+            Reply::Medals(Box::new(state.scores.lock().unwrap().medals_view(player)))
+        }
         Request::Replay { id } => match state.scores.lock().unwrap().replay(id) {
             Some(r) => Reply::Replay(Box::new(r)),
             None => Reply::Error("that replay isn't on the server".into()),
@@ -1309,6 +1323,85 @@ impl State {
         }
     }
 
+    /// Every medal (and how `name` stands with them), and who has the most, for the website.
+    pub fn medals_page(&self, name: Option<&str>) -> (online::MedalsView, Vec<(String, u32)>) {
+        let key = name.map(str::to_ascii_lowercase);
+        let (view, table) = {
+            let scores = self.scores.lock().unwrap();
+            (scores.medals_view(key.as_deref()), scores.medals.table())
+        };
+        (view, table.into_iter().map(|(key, n)| (self.display_name(&key), n)).collect())
+    }
+
+    /// Says a rare medal in the global chat.
+    fn announce_medal(&self, player: &str, a: &medals::Announcement) {
+        let m = &a.medal;
+        let medal = online::ChatMedal { player: player.to_string(), name: m.name.clone(), tier: m.tier, secret: m.secret, first: a.first, holders: a.holders, players: a.players };
+        let line = ChatLine { from: online::SERVER_NAME.to_string(), to: String::new(), text: medals::chat_text(player, a), at: now_secs(), medal: Some(medal) };
+        let mut hub = self.hub.lock().unwrap();
+        hub.global.push_back(line.clone());
+        if hub.global.len() > CHAT_HISTORY {
+            hub.global.pop_front();
+        }
+        hub.chat_changed = true;
+        hub.send_to_all(&Down::GlobalChat(line));
+        drop(hub);
+        self.save();
+    }
+
+    /// Counts something that doesn't show in plays (`absolute`: sets it), and tells the player
+    /// of what it earned them.
+    pub fn medal_count(&self, name: &str, event: &str, by: u64, absolute: bool) {
+        let key = name.to_ascii_lowercase();
+        let (new, announcement) = {
+            let mut scores = self.scores.lock().unwrap();
+            if !scores.medals.count(&key, event, by, absolute) {
+                return;
+            }
+            let new = scores.medals_after(&key, now_secs());
+            let announcement = scores.medals.announcement(&new);
+            (new, announcement)
+        };
+        if let Some(a) = announcement {
+            self.announce_medal(&self.display_name(&key), &a);
+        }
+        if !new.is_empty() {
+            self.hub.lock().unwrap().send_to(&key, &Down::Medals(new));
+        }
+    }
+
+    /// What earned medals before they were counted: nobody is told of these, they just have them.
+    fn sync_medal_counts(&self) {
+        let friends: Vec<(String, u64)> = self.accounts.lock().unwrap().users.iter().map(|(k, u)| (k.clone(), u.friends.len() as u64)).collect();
+        let chatted: Vec<String> = self.hub.lock().unwrap().global.iter().filter(|l| l.medal.is_none()).map(|l| l.from.to_ascii_lowercase()).collect();
+        let links: HashMap<String, String> = load_saved(&self.path.with_file_name("discord-links.json"));
+        let mut scores = self.scores.lock().unwrap();
+        for (key, n) in friends {
+            scores.medals.count(&key, "friends", n, true);
+        }
+        for (event, keys) in [("chat", chatted), ("avatar", avatars::keys()), ("discord", links.into_values().collect())] {
+            for key in keys {
+                scores.medals.count(&key, event, 1, true);
+            }
+        }
+        scores.settle_medals();
+    }
+
+    /// A lobby match is over: who played and who won it.
+    fn match_over(&self, players: &[net::PlayerInfo]) {
+        let finished: Vec<(&str, u64)> = players.iter().filter_map(|p| p.result.as_ref().filter(|r| !r.quit).map(|r| (p.name.as_str(), r.score))).collect();
+        if finished.len() < 2 {
+            return;
+        }
+        let known = |name: &str| self.accounts.lock().unwrap().users.contains_key(&name.to_ascii_lowercase());
+        for (name, _) in finished.iter().filter(|(name, _)| known(name)) {
+            self.medal_count(name, "matches", 1, false);
+        }
+        if let Some((name, _)) = finished.iter().max_by_key(|(_, score)| *score).filter(|(name, _)| known(name)) {
+            self.medal_count(name, "wins", 1, false);
+        }
+    }
+
     /// `key` (`name` as written) asks `other` to be friends, or accepts their request. Tells
     /// both what happened; the message for `key` either way.
     fn add_friend(&self, key: &str, name: &str, other: &str) -> Result<String, String> {
@@ -1340,6 +1433,13 @@ impl State {
         self.push_friends(&other);
         match outcome? {
             (true, other_name) => {
+                let counts: Vec<(&str, u64)> = {
+                    let a = self.accounts.lock().unwrap();
+                    vec![(key, a.users[key].friends.len() as u64), (other.as_str(), a.users[&other].friends.len() as u64)]
+                };
+                for (who, n) in counts {
+                    self.medal_count(who, "friends", n, true);
+                }
                 self.notice(&other, format!("{name} accepted your friend request"));
                 Ok(format!("you and {other_name} are friends now"))
             }
@@ -1366,7 +1466,7 @@ impl State {
         if !allowed(&mut hub) {
             return Err("slow down a little".into());
         }
-        let line = ChatLine { from: name.to_string(), to: to_name, text, at: now_secs() };
+        let line = ChatLine { from: name.to_string(), to: to_name, text, at: now_secs(), medal: None };
         let log = hub.history.entry(pair(key, &to)).or_default();
         log.push_back(line.clone());
         if log.len() > CHAT_HISTORY {
@@ -1392,7 +1492,7 @@ impl State {
         if !allowed(&mut hub) {
             return Err("slow down a little".into());
         }
-        let line = ChatLine { from: name.to_string(), to: String::new(), text, at: now_secs() };
+        let line = ChatLine { from: name.to_string(), to: String::new(), text, at: now_secs(), medal: None };
         hub.global.push_back(line.clone());
         if hub.global.len() > CHAT_HISTORY {
             hub.global.pop_front();
@@ -1401,6 +1501,7 @@ impl State {
         hub.send_to_all(&Down::GlobalChat(line.clone()));
         drop(hub);
         self.save();
+        self.medal_count(name, "chat", 1, false);
         Ok(line)
     }
 }
@@ -1535,13 +1636,19 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &Tx, up: Up) {
             let other_name = state.display_name(&other);
             let mut hub = state.hub.lock().unwrap();
             hub.set_watching(key, id, Some(other.clone()));
-            match hub.plays.get(&other) {
+            let live = match hub.plays.get(&other) {
                 Some(p) => {
                     let _ = tx.send(Down::WatchStart { player: other_name, play: p.play.clone(), t: p.t, paused: p.paused, inputs: p.inputs.clone() });
+                    true
                 }
                 None => {
                     let _ = tx.send(Down::WatchEnd { player: other_name });
+                    false
                 }
+            };
+            drop(hub);
+            if live {
+                state.medal_count(key, "watched", 1, false);
             }
         }
         Up::StopWatching => {
@@ -1695,6 +1802,14 @@ fn main() {
     mail::init(data.clone());
     let (state, wake) = State::load(data.join("accounts.json"));
     let state = Arc::new(state);
+    state.sync_medal_counts();
+    {
+        let state = state.clone();
+        net::on_match(Box::new(move |players| {
+            let (state, players) = (state.clone(), players.to_vec());
+            std::thread::spawn(move || state.match_over(&players));
+        }));
+    }
     {
         let state = state.clone();
         std::thread::spawn(move || saver(state, wake));

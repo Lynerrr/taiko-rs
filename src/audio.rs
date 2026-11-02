@@ -44,10 +44,12 @@ pub enum Sfx {
     Scream,
     /// A friend's message.
     Message,
+    /// A medal landing.
+    Medal,
 }
 
 /// One sound per `Sfx`.
-pub type Sounds = [Vec<f32>; 7];
+pub type Sounds = [Vec<f32>; 8];
 
 enum Cmd {
     /// `base`: the song frame the track's first sample belongs at (a partial decode).
@@ -790,7 +792,41 @@ pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
     let kat = custom.kat.unwrap_or_else(|| built_in(1, rate));
     let finish = custom.finish.unwrap_or_else(|| built_in(2, rate));
     let combobreak = custom.combobreak.unwrap_or_else(|| built_in(3, rate));
-    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak, screech(rate), chime(rate)]
+    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak, screech(rate), chime(rate), fanfare(rate)]
+}
+
+/// A medal: bells climbing a major arpeggio up to when it lands, then a big drum under a held
+/// chord, made up rather than sampled.
+fn fanfare(rate: u32) -> Vec<f32> {
+    use std::f32::consts::TAU;
+    const LAND: f32 = 0.72;
+    let sr = rate as f32;
+    let mut out = vec![0.0f32; (sr * 2.4) as usize];
+    let mut noise = Noise(0x7a1c_0de5);
+    let bell = |out: &mut [f32], start: f32, freq: f32, level: f32, decay: f32| {
+        for (i, o) in out[(start * sr) as usize..].iter_mut().enumerate() {
+            let t = i as f32 / sr;
+            let env = (t / 0.005).min(1.0) * (-t * decay).exp();
+            *o += env * level * ((t * freq * TAU).sin() + 0.3 * (t * freq * 2.0 * TAU).sin() + 0.12 * (t * freq * 3.01 * TAU).sin());
+        }
+    };
+    // Climbing as it falls: C5 E5 G5 C6 E6.
+    for (k, freq) in [523.25, 659.25, 783.99, 1046.5, 1318.5].into_iter().enumerate() {
+        bell(&mut out, 0.08 + k as f32 * 0.13, freq, 0.13, 7.0);
+    }
+    // The landing: a C major chord ringing on.
+    for (freq, level) in [(523.25, 0.14), (659.25, 0.12), (783.99, 0.12), (1046.5, 0.13), (1568.0, 0.07), (2093.0, 0.05)] {
+        bell(&mut out, LAND, freq, level, 2.1);
+    }
+    // And the drum under it: a pitch falling fast, with a slap of noise on top.
+    let mut phase = 0.0f32;
+    for (i, o) in out[(LAND * sr) as usize..].iter_mut().enumerate() {
+        let t = i as f32 / sr;
+        phase += (72.0 + 150.0 * (-t * 22.0).exp()) / sr;
+        *o += 0.62 * (-t * 5.5).exp() * (phase * TAU).sin() + 0.26 * (-t * 60.0).exp() * noise.next();
+    }
+    out.iter_mut().for_each(|o| *o = (*o * 1.1).tanh() * 0.8);
+    out
 }
 
 /// Overtime's scream, made up rather than sampled: detuned saws sweeping up with a fast

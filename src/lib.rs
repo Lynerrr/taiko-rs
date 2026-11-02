@@ -11,6 +11,7 @@ mod autoplay;
 mod beatmap;
 mod browse;
 mod calibrate;
+mod medals;
 mod changelog;
 mod changelog_entry;
 mod clock;
@@ -344,6 +345,10 @@ struct State {
     board_online: bool,
     /// A player's profile, over everything else.
     profile: Option<profile::View>,
+    /// The medals screen, over everything but a medal being earned.
+    medals: Option<medals::View>,
+    /// Medals earned, shown as soon as nothing is playing.
+    unlock: medals::Unlock,
     /// What's new, over everything else.
     changelog: Option<changelog::View>,
     /// Update notes being fetched without opening an overlay or intercepting input.
@@ -2114,6 +2119,7 @@ impl State {
         }
         self.changelog = None;
         self.profile = None;
+        self.medals = None;
         self.social.close();
         self.mod_select = None;
         self.open_settings();
@@ -2361,6 +2367,19 @@ impl State {
         }
     }
 
+    /// The medals screen; `name`: whose, or None for just the list.
+    fn open_medals(&mut self, name: Option<String>) {
+        self.medals = Some(medals::View::open(self.cfg.online_server.clone(), name));
+    }
+
+    /// Medals to celebrate; past the few that get the full show, a line says how many more.
+    fn medals_earned(&mut self, new: Vec<online::MedalNote>) {
+        let more = self.unlock.add(new);
+        if more > 0 {
+            self.toast(tr!("and {more} more medals", "ほか{more}個のメダル", "и ещё медалей: {more}";));
+        }
+    }
+
     /// Opens the screen of the note that was hit. Coming back from those lands here again,
     /// except from the songs, which is what the menu is for leaving to.
     fn menu_open(&mut self, item: menu::Item) {
@@ -2368,6 +2387,7 @@ impl State {
             menu::Item::Play => self.main_menu = None,
             menu::Item::Multiplayer => self.open_multiplayer(),
             menu::Item::Download => self.open_download(),
+            menu::Item::Medals => self.open_medals(self.mp_menu.account.clone()),
             menu::Item::Editor => {}
             menu::Item::Settings => self.open_settings(),
             menu::Item::Exit => self.ask_quit(),
@@ -4609,6 +4629,10 @@ impl State {
             view.scroll_by(-notches * 3);
             return;
         }
+        if let Some(view) = &mut self.medals {
+            view.wheel(notches);
+            return;
+        }
         if self.social.open && !self.modifiers_alt {
             let (vx, vy) = self.mouse_virtual();
             let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
@@ -4993,8 +5017,24 @@ impl State {
             }
             return;
         }
+        if self.unlock.showing() {
+            if pressed {
+                self.unlock.skip();
+            }
+            return;
+        }
+        if self.medals.is_some() {
+            // Its tabs and its Back button.
+            if pressed {
+                let (vx, vy) = self.mouse_virtual();
+                if let Some(hit @ (render::Hit::Key(_) | render::Hit::MedalTab(_))) = self.hit_at(vx, vy) {
+                    self.click(hit, window);
+                }
+            }
+            return;
+        }
         if self.profile.is_some() {
-            // Only its Back button.
+            // Only its buttons.
             if pressed {
                 let (vx, vy) = self.mouse_virtual();
                 if let Some(hit @ render::Hit::Key(_)) = self.hit_at(vx, vy) {
@@ -6934,6 +6974,7 @@ impl State {
                 let rows = self.social.rows(self.mp.is_some()).len();
                 self.social.cursor = self.social.cursor.min(rows - 1);
             }
+            Down::Medals(new) => self.medals_earned(new),
             Down::GlobalChat(mut line) => {
                 if self.cfg.chat_filter {
                     line.text = net::censor(&line.text);
@@ -6945,7 +6986,7 @@ impl State {
                     self.social.global_unread += 1;
                     // Only lines that call us by name pop up: the rest just count.
                     if self.cfg.notify_mentions && self.social.mentions_me(&line.text) {
-                        self.social.notify(format!("{} in chat", line.from), line.text.clone(), 0x4fb4ff, NoteAction::Global);
+                        self.social.notify(format!("{} in chat", line.from), line.shown(), 0x4fb4ff, NoteAction::Global);
                     }
                 }
                 // Scrolled back, the view stays on the same lines.
@@ -7448,6 +7489,8 @@ impl State {
     fn hotkey_place(&self, code: KeyCode) -> Option<keys::Place> {
         let busy = self.splash.is_some()
             || self.profile.is_some()
+            || self.medals.is_some()
+            || self.unlock.showing()
             || self.settings_ui.binding.is_some()
             || self.settings_ui.editing.is_some()
             || self.settings_ui.dropdown.is_some()
@@ -7537,10 +7580,31 @@ impl State {
             }
             return;
         }
+        // A medal being earned is over everything: anything moves it on.
+        if self.unlock.showing() {
+            self.unlock.skip();
+            return;
+        }
+        if let Some(view) = &mut self.medals {
+            match code {
+                KeyCode::Escape | KeyCode::Backspace => self.medals = None,
+                KeyCode::ArrowLeft => view.step_tab(-1),
+                KeyCode::ArrowRight | KeyCode::Tab => view.step_tab(1),
+                KeyCode::ArrowUp => view.wheel(1),
+                KeyCode::ArrowDown => view.wheel(-1),
+                KeyCode::PageUp => view.wheel(5),
+                KeyCode::PageDown => view.wheel(-5),
+                _ => {}
+            }
+            return;
+        }
         // A profile is over everything: any of these closes it, the rest do nothing.
         if self.profile.is_some() {
             if matches!(code, KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter) {
                 self.profile = None;
+            } else if code == KeyCode::KeyM {
+                let name = self.profile.take().map(|p| p.name);
+                self.open_medals(name);
             }
             return;
         }
@@ -8476,6 +8540,7 @@ impl State {
                                 date: replay.date,
                                 replay_version: replay.version,
                                 inputs: replay.inputs.clone(),
+                                rolls: Some(game.stats.roll_ticks),
                                 stars: stars::star_rating_played(&e.path, replay.rate, game.mods, game.scroll_speed, game.seed, replay.half_rule()),
                                 pp_version: online::PP_VERSION,
                                 scroll_speed: Some(replay.scroll_speed),
@@ -8978,6 +9043,10 @@ impl State {
         if let Some(p) = &self.profile {
             p.draw(canvas);
         }
+        if let Some(view) = &self.medals {
+            view.draw(canvas);
+        }
+        self.unlock.draw(canvas);
         if let Some(view) = &self.changelog {
             view.draw(canvas);
         }
@@ -9256,7 +9325,8 @@ impl State {
         });
         for r in done {
             let text = match r {
-                Ok(online::Reply::Submitted { map_rank, pp, rank }) => {
+                Ok(online::Reply::Submitted { map_rank, pp, rank, medals }) => {
+                    self.medals_earned(medals);
                     let before = self.me.map(|(b, _)| b);
                     self.me = Some((pp, rank));
                     if let Scene::Results { results, .. } = &mut self.scene
@@ -9338,6 +9408,12 @@ impl State {
         self.poll_online_scores();
         if let Some(p) = &mut self.profile {
             p.poll();
+        }
+        if let Some(view) = &mut self.medals {
+            view.poll();
+        }
+        if self.unlock.tick(!self.in_song()) {
+            self.sfx(audio::Sfx::Medal);
         }
         self.poll_changelog();
         #[cfg(target_os = "android")]
@@ -9653,6 +9729,11 @@ impl State {
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),
+            Hit::MedalTab(tab) => {
+                if let Some(view) = &mut self.medals {
+                    view.set_tab(tab);
+                }
+            }
             Hit::MenuStep(by) => {
                 if !self.main_menu.as_ref().is_some_and(menu::Menu::is_leaving) {
                     self.menu_step(by);
@@ -10661,6 +10742,12 @@ impl State {
             scene: Scene::Select,
             audio,
             toast: None,
+            medals: debug::medals_from_env().map(|view| medals::View { name: Some("TAIKO_MEDALS".into()), state: medals::State::Loaded(Box::new(view)), tab: 0, scroll: 0 }),
+            unlock: {
+                let mut unlock = medals::Unlock::default();
+                unlock.add(debug::unlock_from_env());
+                unlock
+            },
             ime_preedit: String::new(),
             drag_hover: None,
             stats: FrameStats {

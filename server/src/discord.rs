@@ -347,6 +347,7 @@ impl Bot {
                 let Some(display) = self.player(name) else { return text(format!("There's no player called `{}`.", clean(name))) };
                 self.links.lock().unwrap().insert(author.to_string(), name.to_ascii_lowercase());
                 self.save_links();
+                self.state.medal_count(name, "discord", 1, true);
                 text(format!("Linked to **{display}**. Now `>rs`, `>top` and `>osu` show your plays."))
             }
             "verify" => {
@@ -356,6 +357,7 @@ impl Bot {
                 self.verified.lock().unwrap().insert(author.to_string(), key.clone());
                 self.links.lock().unwrap().insert(author.to_string(), key.clone());
                 self.save_links();
+                self.state.medal_count(&key, "discord", 1, true);
                 let name = self.state.display_name(&key);
                 text(format!("Verified as **{}**: `>love` and `>unlove` work for you now.", clean(&name)))
             }
@@ -1232,6 +1234,7 @@ mod tests {
             md5: None,
             pp_version: 0,
             timing: None,
+            rolls: None,
         };
         state.scores.lock().unwrap().submit("ryuji", "Ryuji", play, 1_792_990_923).unwrap();
         let http: ureq::Agent = ureq::Agent::config_builder().build().into();

@@ -17,9 +17,10 @@
     const time = document.createElement("span");
     time.className = "time";
     time.textContent = `${pad(Math.floor(t / 3600))}:${pad(Math.floor(t / 60) % 60)}`;
-    const who = document.createElement("a");
+    if (l.medal) li.className = "medal";
+    const who = document.createElement(l.medal ? "span" : "a");
     who.className = "player";
-    who.href = `/u/${encodeURIComponent(l.from)}`;
+    if (!l.medal) who.href = `/u/${encodeURIComponent(l.from)}`;
     who.textContent = l.from;
     const text = document.createElement("span");
     text.className = "text";
