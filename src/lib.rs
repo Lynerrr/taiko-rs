@@ -9412,7 +9412,8 @@ impl State {
         if let Some(view) = &mut self.medals {
             view.poll();
         }
-        if self.unlock.tick(!self.in_song()) {
+        // The splash is drawn over everything, so it waits for that as well as for a song.
+        if self.unlock.tick(!self.in_song() && self.splash.is_none()) {
             self.sfx(audio::Sfx::Medal);
         }
         self.poll_changelog();
