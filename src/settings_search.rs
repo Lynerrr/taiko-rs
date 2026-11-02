@@ -33,6 +33,7 @@ fn words(item: Item) -> &'static str {
         Item::FpsCap => "fps framerate limit lag фпс кадры лимит",
         Item::ShowFps => "fps framerate counter фпс кадры счетчик",
         Item::HalfResolution => "performance weak gpu lag производительность слабый лаги",
+        Item::Renderer => "renderer graphics api vulkan directx dx12 opengl metal crash gpu рендер графика вулкан директ вылет краш видеокарта",
         Item::Fullscreen | Item::WindowSize => "resolution borderless windowed разрешение окно",
         Item::Letterbox | Item::LetterboxSize | Item::LetterboxX | Item::LetterboxY => "resolution custom black bars driver window разрешение кастомное черные полосы окно драйвер",
         Item::PlayfieldArea | Item::PlayfieldPreset | Item::PlayfieldReset | Item::ShowPlayfieldSize | Item::WheelResize => "size position resolution tablet размер позиция разрешение",

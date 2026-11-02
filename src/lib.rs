@@ -2644,6 +2644,26 @@ impl State {
                 tr!("{frames} frames ({ms:.1} ms)", "{frames}フレーム ({ms:.1} ms)", "{frames} кадров ({ms:.1} мс)";)
             }
             Item::PresentMode => c.present.name().to_string(),
+            Item::Renderer => {
+                // What's drawing now (the adapter's name ends in its API), and a word when the
+                // pick waits for a restart.
+                let api = self.adapter.rsplit_once('(').map(|(_, a)| a.trim_end_matches(')').to_ascii_lowercase()).unwrap_or_default();
+                let running = match api.as_str() {
+                    "vulkan" => "vulkan",
+                    "dx12" => "dx12",
+                    "gl" => "gl",
+                    "metal" => "metal",
+                    _ => "",
+                };
+                let name = config::renderer_name(&c.graphics_api);
+                if c.graphics_api == "auto" && !running.is_empty() {
+                    format!("{name} ({})", config::renderer_name(running))
+                } else if c.graphics_api != "auto" && !running.is_empty() && c.graphics_api != running {
+                    tr!("{name} (after a restart)", "{name} (再起動後)", "{name} (после перезапуска)";)
+                } else {
+                    name.to_string()
+                }
+            }
             Item::MenuVsync => on(c.menu_vsync),
             Item::HalfResolution => on(c.half_resolution),
             Item::FpsCap => {
@@ -2857,6 +2877,11 @@ impl State {
             Item::PresentMode => {
                 self.cfg.present = if dir > 0 { self.cfg.present.next() } else { self.cfg.present.next().next() };
             }
+            Item::Renderer => {
+                let all = config::RENDERERS;
+                let i = all.iter().position(|&r| r == self.cfg.graphics_api).unwrap_or(0) as i32;
+                self.cfg.graphics_api = all[(i + dir).rem_euclid(all.len() as i32) as usize].to_string();
+            }
             Item::MenuVsync => self.cfg.menu_vsync = !self.cfg.menu_vsync,
             Item::HalfResolution => self.cfg.half_resolution = !self.cfg.half_resolution,
             Item::FpsCap => {
@@ -3012,6 +3037,10 @@ impl State {
                 (strings(&mut all.iter().map(|s| s.name())), all.iter().position(|&s| s == c.autoplay.style), String::new())
             }
             Item::AutoplayBinding => (strings(&mut autoplay::BINDINGS.iter().copied()), Some(c.autoplay.binding), String::new()),
+            Item::Renderer => {
+                let all = config::RENDERERS;
+                (strings(&mut all.iter().map(|&r| config::renderer_name(r))), all.iter().position(|&r| r == c.graphics_api), tr!("from the next start", "次の起動から", "со следующего запуска").into())
+            }
             Item::PresentMode => {
                 let all = PresentChoice::ALL;
                 (strings(&mut all.iter().map(|p| p.name())), all.iter().position(|&p| p == c.present), tr!("during songs", "曲の間", "во время песен").into())
@@ -3123,6 +3152,10 @@ impl State {
             Item::AutoplayBinding => self.cfg.autoplay.binding = i,
             Item::Language => self.cfg.language = lang::Lang::ALL[i],
             Item::PresentMode => self.cfg.present = PresentChoice::ALL[i],
+            Item::Renderer => {
+                self.cfg.graphics_api = config::RENDERERS[i].to_string();
+                self.toast(tr!("restart taiko.rs to switch the renderer", "レンダラーの切り替えはtaiko.rsの再起動後", "рендер сменится после перезапуска taiko.rs").into());
+            }
             Item::AudioBuffer if Some(i) != list.current => self.set_audio_buffer(AUDIO_BUFFERS[i]),
             Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
             Item::Accent => self.cfg.accent = render::ACCENTS[i].1,
@@ -10198,6 +10231,7 @@ pub fn graphics_backends(api: &str) -> wgpu::Backends {
         "vulkan" => wgpu::Backends::VULKAN,
         "dx12" => wgpu::Backends::DX12,
         "gl" => wgpu::Backends::GL,
+        "metal" => wgpu::Backends::METAL,
         _ => auto_backends(),
     }
 }
