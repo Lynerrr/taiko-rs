@@ -156,6 +156,31 @@ pub struct View<'a> {
     fade: f32,
 }
 
+impl<'a> View<'a> {
+    /// `notes` at map time `time`, all the way in.
+    #[cfg(test)]
+    pub fn of(notes: &'a [Ghost], time: f64) -> View<'a> {
+        View { notes, time, fade: 1.0 }
+    }
+
+    /// The song's position (map ms).
+    pub fn time(&self) -> f64 {
+        self.time
+    }
+
+    /// How far the notes have come in with this song (0 to 1).
+    pub fn fade(&self) -> f32 {
+        self.fade
+    }
+
+    /// The notes from map time `from` to `until` (both ms), in order.
+    pub fn between(&self, from: f64, until: f64) -> &[Ghost] {
+        let start = self.notes.partition_point(|n| n.time <= from);
+        let end = start + self.notes[start..].partition_point(|n| n.time <= until);
+        &self.notes[start..end]
+    }
+}
+
 /// The routes and what's on them, under the menu. `clock` is the menu's (ms), `kiai` and `kick`
 /// how far into a kiai and what's left of its beat, and `shift` moves the universes along the
 /// routes, as a kiai does every few bars.

@@ -1825,8 +1825,6 @@ pub enum Hit {
     Tab(usize),
     /// A note of the main menu (index into `menu::ITEMS`).
     MenuItem(usize),
-    /// An arrow beside the main menu's sections: moves the lane this far.
-    MenuStep(i32),
     /// A tab of the medals screen.
     MedalTab(usize),
     /// Takes the song list back to the selection it was scrolled away from.

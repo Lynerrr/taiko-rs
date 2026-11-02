@@ -41,8 +41,8 @@ pub const PANEL_W: f32 = 112.5;
 pub const HIT_X: f32 = 160.0;
 pub const LANE_Y: f32 = 160.0;
 pub const LANE_H: f32 = 118.0;
-const NOTE_R: f32 = 31.0;
-const BIG_R: f32 = 46.0;
+pub const NOTE_R: f32 = 31.0;
+pub const BIG_R: f32 = 46.0;
 /// A spinner being hit: its circle over the drum (a skin's 128 px spinner image at this radius).
 const SPIN_R: f32 = 50.0;
 /// Second key of a big note must land within this window of the first.
@@ -3815,7 +3815,7 @@ pub fn lane_band() -> (f32, f32) {
 
 /// A don or kat drawn with the skin's images: the circle tinted `col`, then its overlay. False
 /// (nothing drawn) when the skin has no circle for it.
-fn skin_note(c: &mut Canvas, x: f32, y: f32, r: f32, big: bool, col: u32, alpha: f32) -> bool {
+pub fn skin_note(c: &mut Canvas, x: f32, y: f32, r: f32, big: bool, col: u32, alpha: f32) -> bool {
     let (circle, overlay) = if big { (Sprite::BigCircle, Sprite::BigCircleOverlay) } else { (Sprite::HitCircle, Sprite::HitCircleOverlay) };
     if !c.sprite(circle, x, y, r, rgba(col, alpha)) {
         return false;

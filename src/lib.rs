@@ -286,6 +286,8 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
+    /// A screen opened from the main menu fades in: how long it has been showing (ms).
+    screen_fade: Option<f32>,
     /// What drifts behind it.
     menu_notes: menu_notes::Notes,
     /// When dragging the player's timeline last moved the music.
@@ -2174,7 +2176,12 @@ impl State {
             return;
         }
         // Rim keys on the outside, like on the drum.
-        match (code, self.cfg.keys.iter().position(|&k| k == code)) {
+        let drum = self.cfg.keys.iter().position(|&k| k == code);
+        // The player's own drum keys play the drum: the rims outside, the face inside.
+        if let (Some(k), Some(m)) = (drum, self.main_menu.as_mut()) {
+            m.drum(k == 0 || k == 3, if k < 2 { -1 } else { 1 });
+        }
+        match (code, drum) {
             (KeyCode::Escape, _) => self.ask_quit(),
             (KeyCode::ArrowLeft, _) | (_, Some(0)) => self.menu_step(-1),
             (KeyCode::ArrowRight, _) | (_, Some(3)) => self.menu_step(1),
@@ -2422,6 +2429,9 @@ impl State {
     /// Opens the screen of the note that was hit. Coming back from those lands here again,
     /// except from the songs, which is what the menu is for leaving to.
     fn menu_open(&mut self, item: menu::Item) {
+        if !matches!(item, menu::Item::Editor | menu::Item::Exit) {
+            self.screen_fade = Some(0.0);
+        }
         match item {
             menu::Item::Play => self.main_menu = None,
             menu::Item::Multiplayer => self.open_multiplayer(),
@@ -4846,13 +4856,21 @@ impl State {
     /// Pointer moved: drags the area if a drag is active, otherwise updates the hover state.
     /// Returns the cursor to show.
     fn mouse_moved(&mut self, x: f64, y: f64) -> CursorIcon {
-        if (x, y) != self.mouse {
+        let moved = (x, y) != self.mouse;
+        if moved {
             self.mouse_moved_at = Instant::now();
         }
         self.mouse = (x, y);
         let (vx, vy) = self.mouse_virtual();
         let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
         self.volume.point(vx, vy, width, Instant::now());
+        // On the main menu, pointing at a note selects it (moving: a pointer left resting doesn't
+        // take the selection back from the keys).
+        if moved && self.on_menu() && self.player.is_none()
+            && let Some(render::Hit::MenuItem(i)) = self.hit_at(vx, vy)
+            && let Some(m) = self.main_menu.as_mut().filter(|m| !m.is_leaving() && !m.is_selected(i)) {
+            m.pick(i);
+        }
         if let Some(last) = self.replay_scrub {
             // Each seek re-judges the replay up to there; ~30 a second is plenty.
             if last.elapsed() >= Duration::from_millis(33) && self.replay_seek_to_pointer(true) {
@@ -8330,6 +8348,7 @@ impl State {
         // Drawn again below if still watching a replay (after scripted input, which must see the
         // last frame's bar like real input does).
         self.replay_bar = None;
+        let scene_start = canvas.shapes.len();
         match &mut self.scene {
             Scene::Select if on_menu => {
                 self.board_rect = None;
@@ -8338,15 +8357,6 @@ impl State {
                 let song = shown.and_then(|i| self.library.get(i)).map(Entry::label);
                 let k = |i: usize| config::key_name(self.cfg.keys[i]);
                 let (a, b, d, e) = (k(0), k(3), k(1), k(2));
-                let hint = if cfg!(target_os = "android") {
-                    tr!("tap to open", "タップで開く", "нажми, чтобы открыть").to_string()
-                } else {
-                    tr!(
-                        "wheel or arrows: move   click or Enter: open   drum: {a} {b} move, {d} {e} open",
-                        "ホイールか矢印: 移動   クリックかEnter: 開く   太鼓: {a} {b} 移動、{d} {e} 開く",
-                        "колесо или стрелки: листать   клик или Enter: открыть   барабан: {a} {b} листать, {d} {e} открыть";
-                    )
-                };
                 let paused = self.music_paused;
                 if let Some(p) = &mut self.player {
                     let now = Instant::now();
@@ -8369,7 +8379,7 @@ impl State {
                     let kiai = self.cfg.kiai_effects && !paused && self.preview.kiai();
                     let shows = self.cfg.menu_notes && render::animations();
                     let ghosts = self.preview.map_time(self.menu_notes.entry()).filter(|_| shows).and_then(|t| self.menu_notes.view(t));
-                    let frame = menu::Frame { beat: self.preview.beat(), kiai, ghosts, song: song.as_deref(), hint: &hint, maps: self.library.len(), paused };
+                    let frame = menu::Frame { beat: self.preview.beat(), kiai, ghosts, song: song.as_deref(), maps: self.library.len(), paused };
                     m.draw(canvas, &frame);
                 }
             }
@@ -9027,6 +9037,16 @@ impl State {
                 let help = "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done";
                 let size = Canvas::fit_size(7.0, 5.5, room, help);
                 canvas.text_centered(w / 2.0, 460.0 + (7.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, room, help));
+            }
+        }
+        // Just opened from the main menu: the screen fades in over the background.
+        if let Some(ms) = &mut self.screen_fade {
+            *ms += canvas.dt_ms;
+            let k = (*ms / menu::FADE_MS).min(1.0);
+            if k >= 1.0 || !self.cfg.animations {
+                self.screen_fade = None;
+            } else {
+                canvas.fade_since(scene_start, k * k * (3.0 - 2.0 * k), 1.0);
             }
         }
         if self.grip.is_some() {
@@ -9835,11 +9855,6 @@ impl State {
             Hit::MedalTab(tab) => {
                 if let Some(view) = &mut self.medals {
                     view.set_tab(tab);
-                }
-            }
-            Hit::MenuStep(by) => {
-                if !self.main_menu.as_ref().is_some_and(menu::Menu::is_leaving) {
-                    self.menu_step(by);
                 }
             }
             Hit::Guide(action) => self.guide_action(action),
@@ -10867,6 +10882,7 @@ impl State {
             volume_save_at: None,
             splash,
             main_menu: None,
+            screen_fade: None,
             menu_notes: Default::default(),
             guide: None,
             guide_binding: None,

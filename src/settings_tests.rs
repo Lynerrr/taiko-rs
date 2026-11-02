@@ -1298,3 +1298,63 @@ fn the_preset_list_scrolls_by_wheel_and_scroll_bar_never_by_pointing() {
     frame(&mut s);
     assert_eq!(dd(&s).scroll(), max);
 }
+
+fn frame_off(s: &mut State) -> Option<f32> {
+    s.build_frame(&mut Canvas::default(), Instant::now() + Duration::from_secs(60), 853.3);
+    s.screen_fade
+}
+
+#[test]
+fn a_screen_opened_from_the_main_menu_fades_in() {
+    let mut s = layout_tests::state();
+    s.cfg.animations = true;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    s.menu_open(menu::Item::Settings);
+    assert!(matches!(s.scene, Scene::Settings { .. }));
+    assert_eq!(s.screen_fade, Some(0.0));
+    // Frames 50 ms apart.
+    let mut at = Instant::now();
+    let mut frame = || {
+        at += Duration::from_millis(50);
+        s.build_frame(&mut Canvas::default(), at, 853.3);
+        s.screen_fade
+    };
+    assert!(frame().is_some_and(|ms| ms > 0.0), "fading in");
+    for _ in 0..10 {
+        frame();
+    }
+    assert_eq!(s.screen_fade, None, "then it's done");
+    // With animations off it shows at once.
+    s.close_settings();
+    s.cfg.animations = false;
+    s.menu_open(menu::Item::Settings);
+    assert_eq!(frame_off(&mut s), None);
+    // Exit only asks, over the menu: nothing fades.
+    s.close_settings();
+    s.menu_open(menu::Item::Exit);
+    assert_eq!(s.screen_fade, None);
+}
+
+#[test]
+fn pointing_at_a_main_menu_note_selects_it() {
+    let mut s = layout_tests::state();
+    // A first frame starts the map this state plays loading, which leaves the menu: open it after.
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(s.on_menu());
+    // Along the panel's middle, the first spot on Medals.
+    let medals = menu::ITEMS.iter().position(|&i| i == menu::Item::Medals).unwrap();
+    let y = 240.0 - 30.0;
+    let x = (0..853).map(|x| x as f32).find(|&x| s.hit_at(x, y) == Some(render::Hit::MenuItem(medals))).expect("a note there");
+    point(&mut s, x + 20.0, y);
+    assert_eq!(s.main_menu.as_ref().unwrap().current(), menu::Item::Medals);
+    // The keys move on from it, and a pointer left where it is doesn't take it back.
+    s.menu_step(1);
+    let (mx, my) = s.mouse;
+    s.mouse_moved(mx, my);
+    assert_eq!(s.main_menu.as_ref().unwrap().current(), menu::ITEMS[medals + 1]);
+}
