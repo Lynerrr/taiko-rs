@@ -11149,6 +11149,11 @@ pub fn recalc_pp(args: &[String]) -> Result<(), String> {
 pub fn desktop_main() {
     let cfg = Config::load();
     config::set_data_folder(cfg.data_folder.clone());
+    // Only where a crash ends the game (release builds), as with panics.
+    #[cfg(windows)]
+    if cfg!(panic = "abort") {
+        native_crashes::install();
+    }
     log_crashes();
     let mut args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let auto = args.iter().any(|a| a == "--auto");
@@ -11224,8 +11229,149 @@ fn log_crashes() {
     }));
 }
 
+/// Windows crashes that aren't panics: an access violation (often in a graphics or audio driver),
+/// a stack overflow, an abort. The panic hook never sees those, and a release build has no
+/// console, so the game just vanished with nothing left behind. Now what it printed goes to
+/// `game.log` (the last run's is kept as `game-prev.log`), and an unhandled exception leaves the
+/// same `crash.log` entry and next-start report a panic does, with the exception's code, where
+/// it happened (which module) and the end of the log.
+#[cfg(windows)]
+mod native_crashes {
+    use std::ffi::c_void;
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+
+    #[repr(C)]
+    struct ExceptionRecord {
+        code: u32,
+        flags: u32,
+        record: *mut ExceptionRecord,
+        address: *mut c_void,
+        parameters: u32,
+        information: [usize; 15],
+    }
+
+    #[repr(C)]
+    struct ExceptionPointers {
+        record: *mut ExceptionRecord,
+        context: *mut c_void,
+    }
+
+    type Filter = unsafe extern "system" fn(*mut ExceptionPointers) -> i32;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetUnhandledExceptionFilter(filter: Option<Filter>) -> Option<Filter>;
+        fn SetStdHandle(which: u32, handle: *mut c_void) -> i32;
+        fn GetModuleHandleExW(flags: u32, address: *const c_void, module: *mut *mut c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut c_void, name: *mut u16, size: u32) -> u32;
+    }
+
+    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+    const FROM_ADDRESS: u32 = 0x4;
+    const UNCHANGED_REFCOUNT: u32 = 0x2;
+    const CONTINUE_SEARCH: i32 = 0;
+
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+
+    pub fn install() {
+        let Some(dir) = crate::config::data_dir() else { return };
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("game.log");
+        let _ = std::fs::rename(&log, dir.join("game-prev.log"));
+        if let Ok(file) = std::fs::File::create(&log) {
+            use std::os::windows::io::IntoRawHandle;
+            // std looks the handle up on every write, so eprintln! lands in the file from here
+            // on, and so does std's own last word on a stack overflow or an abort.
+            // SAFETY: the handle is a file we own and never close (it lives as long as the game).
+            unsafe {
+                SetStdHandle(STD_ERROR_HANDLE, file.into_raw_handle());
+            }
+        }
+        let _ = DIR.set(dir);
+        // SAFETY: `filter` matches the signature Windows calls it with.
+        unsafe {
+            SetUnhandledExceptionFilter(Some(filter));
+        }
+        // To see this work: a crash of the kind a driver has.
+        if std::env::var_os("TAIKO_TEST_NATIVE_CRASH").is_some() {
+            eprintln!("crashing on purpose (TAIKO_TEST_NATIVE_CRASH)");
+            // SAFETY: not safe at all, on purpose: it's the access violation being tested.
+            unsafe { std::ptr::null_mut::<u8>().write_volatile(1) };
+        }
+    }
+
+    fn what(code: u32) -> &'static str {
+        match code {
+            0xC000_0005 => "access violation",
+            0xC000_00FD => "stack overflow",
+            0xC000_001D => "illegal instruction",
+            0xC000_0094 => "integer divide by zero",
+            0xC000_0409 => "fail fast (abort)",
+            0xC000_0374 => "heap corruption",
+            0x8000_0003 => "breakpoint",
+            _ => "exception",
+        }
+    }
+
+    /// The DLL or exe `address` is in, and how far into it.
+    fn module_of(address: *const c_void) -> String {
+        let mut module = std::ptr::null_mut();
+        // SAFETY: plain lookups with a valid out pointer and buffer.
+        unsafe {
+            if GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, address, &mut module) == 0 {
+                return format!("{address:p} (in no module)");
+            }
+            let mut name = [0u16; 260];
+            let n = GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) as usize;
+            let path = String::from_utf16_lossy(&name[..n.min(name.len())]);
+            let file = path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string();
+            format!("{file}+0x{:x}", address as usize - module as usize)
+        }
+    }
+
+    unsafe extern "system" fn filter(info: *mut ExceptionPointers) -> i32 {
+        // SAFETY: Windows passes valid exception pointers to an unhandled exception filter.
+        let Some(record) = (unsafe { info.as_ref().and_then(|i| i.record.as_ref()) }) else { return CONTINUE_SEARCH };
+        let Some(dir) = DIR.get() else { return CONTINUE_SEARCH };
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let mut text = format!(
+            "--- taiko.rs crash at unix {at}, build {} ({}, windows)\n{} 0x{:08X} at {}\n",
+            crate::update::BUILD.unwrap_or("local"),
+            env!("CARGO_PKG_VERSION"),
+            what(record.code),
+            record.code,
+            module_of(record.address),
+        );
+        if record.code == 0xC000_0005 && record.parameters >= 2 {
+            let op = match record.information[0] {
+                0 => "reading",
+                1 => "writing",
+                _ => "running",
+            };
+            text.push_str(&format!("{op} 0x{:x}\n", record.information[1]));
+        }
+        // What the game printed last: the screen, the audio device, the map...
+        if let Ok(log) = std::fs::read_to_string(dir.join("game.log")) {
+            let lines: Vec<&str> = log.lines().collect();
+            text.push_str("last lines of game.log:\n");
+            for line in &lines[lines.len().saturating_sub(25)..] {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+            let _ = std::io::Write::write_all(&mut f, text.as_bytes());
+        }
+        let _ = std::fs::write(dir.join(super::CRASH_REPORT), &text);
+        super::crash_box(&format!("taiko.rs crashed.\n\nThe next start offers to copy the crash log: paste it in #bugs on the taiko.rs Discord, so it can be fixed.\n\n{} 0x{:08X}", what(record.code), record.code));
+        // Windows' own handling goes on (its error report, and the end of the process).
+        CONTINUE_SEARCH
+    }
+}
+
 /// A message box (Windows), there even without a window of the game's.
-#[cfg(all(windows, panic = "abort"))]
+#[cfg(windows)]
 fn crash_box(text: &str) {
     #[link(name = "user32")]
     unsafe extern "system" {
