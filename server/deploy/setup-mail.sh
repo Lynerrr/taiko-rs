@@ -31,13 +31,32 @@ sudo postconf -e \
     inet_interfaces=loopback-only \
     inet_protocols=ipv4 \
     mydestination= \
-    relayhost= \
-    smtp_tls_security_level=may \
     smtp_tls_loglevel=1 \
     milter_default_action=accept \
-    milter_protocol=6 \
-    smtpd_milters=inet:127.0.0.1:8891 \
-    non_smtpd_milters=inet:127.0.0.1:8891
+    milter_protocol=6
+# The host's network (NuxtCloud, AS216127) is on Spamhaus ASN-DROP, so Hotmail refuses mail sent
+# straight from here. With /etc/postfix/sasl_passwd in place (see setup-mail-relay.sh) letters go
+# through Resend, which signs them itself (selector "resend"); otherwise Postfix sends directly.
+if sudo test -s /etc/postfix/sasl_passwd; then
+    sudo postmap /etc/postfix/sasl_passwd
+    sudo chmod 600 /etc/postfix/sasl_passwd /etc/postfix/sasl_passwd.db
+    sudo postconf -e \
+        'relayhost=[smtp.resend.com]:587' \
+        smtp_sasl_auth_enable=yes \
+        smtp_sasl_password_maps=hash:/etc/postfix/sasl_passwd \
+        smtp_sasl_security_options=noanonymous \
+        smtp_sasl_tls_security_options=noanonymous \
+        smtp_tls_security_level=encrypt \
+        smtpd_milters= \
+        non_smtpd_milters=
+else
+    sudo postconf -e \
+        relayhost= \
+        smtp_sasl_auth_enable=no \
+        smtp_tls_security_level=may \
+        smtpd_milters=inet:127.0.0.1:8891 \
+        non_smtpd_milters=inet:127.0.0.1:8891
+fi
 
 sudo mkdir -p /etc/opendkim/keys/auneu.space
 if [ ! -f /etc/opendkim/keys/auneu.space/mail.private ]; then
@@ -117,7 +136,7 @@ echo "== DNS records for auneu.space (Cloudflare, all grey / DNS only) =="
 echo "A     mail                 $ip"
 echo "TXT   auneu.space          v=spf1 ip4:$ip -all"
 echo "TXT   mail._domainkey      $dkim"
-echo "TXT   _dmarc               v=DMARC1; p=none; adkim=s; aspf=s"
+echo "TXT   _dmarc               v=DMARC1; p=none; adkim=s; aspf=r"
 echo "PTR   $ip -> mail.auneu.space  (at NuxtCloud: IP-адреса -> Домен)"
 echo
 echo "PTR now: $(getent hosts "$ip" | awk '{print $2}')"
