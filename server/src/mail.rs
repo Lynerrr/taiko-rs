@@ -135,7 +135,7 @@ pub fn send_code(for_: &str, email: &str, what: &str) -> Result<(), String> {
     let body = format!(
         "Your taiko.rs code {what}:\n\n    {code}\n\nType it where you asked for it. It works for 15 minutes.\n\nIf you didn't ask for it, ignore this letter: nothing changes without the code.\n\n-- \ntaiko.rs  https://rstaiko.auneu.space\n"
     );
-    let letter = letter(&m.from, email, &format!("taiko.rs code: {code}"), &body);
+    let letter = letter(&m.from, email, &format!("taiko.rs code: {code}"), &body, &html(&code, what));
     let mut outbox = m.outbox.lock().unwrap();
     if outbox.len() >= MAX_OUTBOX {
         return Err("the server is sending a lot of mail right now, try again in a few minutes".into());
@@ -173,12 +173,139 @@ pub fn pending_email(for_: &str) -> Option<String> {
     MAIL.get()?.codes.lock().unwrap().get(for_).filter(|p| p.made.elapsed() < CODE_LIFE).map(|p| p.email.clone())
 }
 
-/// A plain text letter, as Postfix's `sendmail -t` takes it (lines end in \n there).
-fn letter(from: &str, to: &str, subject: &str, body: &str) -> String {
+/// A letter with a plain text and an HTML version (mail apps show the last one they can), as
+/// Postfix's `sendmail -t` takes it (lines end in \n there).
+fn letter(from: &str, to: &str, subject: &str, text: &str, html: &str) -> String {
     let now = chrono_date();
-    let id = format!("{}.{}@{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0), six_digits(), from.split('@').nth(1).unwrap_or("localhost"));
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let id = format!("{nanos}.{}@{}", six_digits(), from.split('@').nth(1).unwrap_or("localhost"));
+    let b = format!("=_taiko_{nanos}_{}", six_digits());
     format!(
-        "From: taiko.rs <{from}>\nTo: <{to}>\nSubject: {subject}\nDate: {now}\nMessage-ID: <{id}>\nMIME-Version: 1.0\nContent-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: 8bit\nAuto-Submitted: auto-generated\n\n{body}"
+        "From: taiko.rs <{from}>\nTo: <{to}>\nSubject: {subject}\nDate: {now}\nMessage-ID: <{id}>\nMIME-Version: 1.0\nContent-Type: multipart/alternative; boundary=\"{b}\"\nAuto-Submitted: auto-generated\n\n--{b}\nContent-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: 8bit\n\n{text}\n--{b}\nContent-Type: text/html; charset=utf-8\nContent-Transfer-Encoding: 8bit\n\n{html}\n--{b}--\n"
+    )
+}
+
+/// The game's 5x7 font (`src/font.rs`) for the characters the HTML letter draws: five columns,
+/// the lowest bit the top row.
+fn glyph(c: char) -> [u8; 5] {
+    match c {
+        '0' => [0x3E, 0x51, 0x49, 0x45, 0x3E],
+        '1' => [0x00, 0x42, 0x7F, 0x40, 0x00],
+        '2' => [0x42, 0x61, 0x51, 0x49, 0x46],
+        '3' => [0x21, 0x41, 0x45, 0x4B, 0x31],
+        '4' => [0x18, 0x14, 0x12, 0x7F, 0x10],
+        '5' => [0x27, 0x45, 0x45, 0x45, 0x39],
+        '6' => [0x3C, 0x4A, 0x49, 0x49, 0x30],
+        '7' => [0x01, 0x71, 0x09, 0x05, 0x03],
+        '8' => [0x36, 0x49, 0x49, 0x49, 0x36],
+        '9' => [0x06, 0x49, 0x49, 0x29, 0x1E],
+        '-' => [0x08, 0x08, 0x08, 0x08, 0x08],
+        'A' => [0x7E, 0x11, 0x11, 0x11, 0x7E],
+        'I' => [0x00, 0x41, 0x7F, 0x41, 0x00],
+        'K' => [0x7F, 0x08, 0x14, 0x22, 0x41],
+        'O' => [0x3E, 0x41, 0x41, 0x41, 0x3E],
+        'R' => [0x7F, 0x09, 0x19, 0x29, 0x46],
+        'S' => [0x46, 0x49, 0x49, 0x49, 0x31],
+        'T' => [0x01, 0x01, 0x7F, 0x01, 0x01],
+        _ => [0; 5],
+    }
+}
+
+/// `text` in the game's pixel font, drawn with table cells (mail apps take tables, not web fonts):
+/// white, with the site's red and blue fringes left and right half a pixel wide, so each font
+/// pixel is 2x2 cells of `half` px. `tight` drops a glyph's empty side columns (the logo's I),
+/// else every glyph is as wide (the code's digits). Each row is its own table of runs of one
+/// colour, which keeps the letter small, and each cell goes on its own line: mail lines can't be
+/// longer than 998 characters.
+fn pixels(text: &str, half: u32, tight: bool) -> String {
+    let mut cols = vec![0u8];
+    for (i, c) in text.chars().enumerate() {
+        if i > 0 {
+            cols.push(0);
+        }
+        cols.extend(glyph(c).into_iter().filter(|&col| !tight || col != 0));
+    }
+    cols.push(0);
+    let width = cols.len() * 2;
+    let mut out = String::new();
+    for sub_row in 0..14 {
+        let row = sub_row / 2;
+        let on = |x: usize| x < width && cols[x / 2] >> row & 1 == 1;
+        let colour = |x: usize| {
+            if on(x) {
+                "#ffffff"
+            } else if on(x + 1) {
+                "#EB452C"
+            } else if x > 0 && on(x - 1) {
+                "#4fb4ff"
+            } else {
+                ""
+            }
+        };
+        out.push_str(&format!("<table role=\"presentation\" width=\"{}\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"border-collapse:collapse;margin:0 auto;font-size:0;line-height:0\"><tr>\n", width as u32 * half));
+        let mut x = 0;
+        while x < width {
+            let c = colour(x);
+            let mut n = 1;
+            while x + n < width && colour(x + n) == c {
+                n += 1;
+            }
+            let bg = if c.is_empty() { String::new() } else { format!(" bgcolor=\"{c}\"") };
+            out.push_str(&format!("<td width=\"{w}\" height=\"{half}\"{bg}></td>\n", w = n as u32 * half));
+            x += n;
+        }
+        out.push_str("</tr></table>\n");
+    }
+    out
+}
+
+/// `s` safe inside HTML text.
+fn escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// The letter's HTML version, dressed like the game and its site: the pixel logo, a lane of
+/// notes, the code big in pixels and again as text to copy.
+fn html(code: &str, what: &str) -> String {
+    let what = escape(what);
+    let code = escape(code);
+    let logo = pixels("TAIKO-RS", 3, true);
+    let digits = pixels(&code, 4, false);
+    let mono = "font-family:'Courier New',Courier,monospace";
+    let note = |color: &str, size: u32| {
+        format!("<td valign=\"middle\" style=\"padding:0 3px\"><div style=\"width:{size}px;height:{size}px;border-radius:50%;background:{color};border:2px solid #ffffff\"></div></td>\n")
+    };
+    let (d, k) = ("#EB452C", "#438EAD");
+    let judge = "<td valign=\"middle\" style=\"padding:0 8px 0 0\"><div style=\"width:22px;height:22px;border-radius:50%;border:2px solid #4a4a60\"></div></td>\n";
+    let lane: String = [judge.to_string(), note(d, 14), note(k, 14), note(d, 14), note(d, 22), note(k, 14), note(k, 14), note(k, 22)].concat();
+    format!(
+        r##"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>taiko.rs code</title></head>
+<body style="margin:0;padding:0;background:#0b0b10">
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all">{code} is your taiko.rs code {what}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#0b0b10" style="background:#0b0b10"><tr><td align="center" style="padding:32px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#12121a" style="max-width:480px;border-collapse:collapse;background:#12121a;border:2px solid #3a3a4e">
+<tr><td align="center" style="padding:36px 16px 28px">
+{logo}
+</td></tr>
+<tr><td bgcolor="#1b1b26" style="background:#1b1b26;border-top:3px solid #3a3a4e;border-bottom:3px solid #3a3a4e;padding:10px 16px">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+{lane}</tr></table>
+</td></tr>
+<tr><td align="center" style="padding:30px 24px 16px;{mono};font-size:15px;line-height:22px;color:#c8c8d8">Your code {what}</td></tr>
+<tr><td align="center" style="padding:4px 16px 10px">
+{digits}
+</td></tr>
+<tr><td align="center" style="padding:10px 24px 0">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate"><tr><td bgcolor="#1b1b26" style="background:#1b1b26;border:2px solid #3a3a4e;border-bottom:4px solid #EB452C;border-radius:6px;padding:10px 14px 8px 20px;{mono};font-size:24px;line-height:30px;font-weight:bold;letter-spacing:6px;color:#ffffff;-webkit-user-select:all;user-select:all;cursor:pointer" title="Select the code to copy it">{code}</td></tr></table>
+</td></tr>
+<tr><td align="center" style="padding:14px 24px 30px;{mono};font-size:13px;line-height:20px;color:#8a8aa0">Type it where you asked for it.<br>It works for <span style="color:#EB452C">15 minutes</span>.</td></tr>
+<tr><td style="border-top:2px solid #3a3a4e;padding:16px 24px 20px;{mono};font-size:12px;line-height:18px;color:#6a6a80">If you didn't ask for it, ignore this letter: nothing changes without the code.<br><br>
+<a href="https://rstaiko.auneu.space" style="color:#4fb4ff;text-decoration:none">rstaiko.auneu.space</a></td></tr>
+</table>
+</td></tr></table>
+</body></html>"##
     )
 }
 
@@ -225,6 +352,20 @@ mod tests {
         assert_eq!(masked("galileo@gmail.com"), "g******@gmail.com");
         assert_eq!(masked("ab@x.io"), "a*@x.io");
         assert_eq!(normal("  Me@Mail.RU "), "me@mail.ru");
+    }
+
+    #[test]
+    fn a_letter_has_text_and_html_and_short_lines() {
+        let l = letter("noreply@a.co", "me@b.co", "taiko.rs code: 012345", "text 012345\n", &html("012345", "for creating the account <b>"));
+        let b = l.split("boundary=\"").nth(1).unwrap().split('"').next().unwrap();
+        assert_eq!(l.matches(&format!("--{b}\n")).count(), 2, "{l}");
+        assert!(l.ends_with(&format!("--{b}--\n")));
+        assert!(l.contains("text/plain") && l.contains("text/html") && l.contains("text 012345"));
+        assert!(l.contains("account &lt;b&gt;") && !l.contains("account <b>"));
+        assert!(l.lines().all(|line| line.len() < 998), "a line is too long for mail");
+        if let Ok(path) = std::env::var("TAIKO_MAIL_PREVIEW") {
+            std::fs::write(path, html("042137", "for creating the account Dekovner")).unwrap();
+        }
     }
 
     #[test]
