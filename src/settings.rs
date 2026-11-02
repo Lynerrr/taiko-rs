@@ -958,6 +958,16 @@ enum Line {
 pub struct Dropdown {
     pub cursor: usize,
     scroll: f32,
+    /// Where the list goes when it next draws: centred on the cursor (just opened), or just far
+    /// enough to show it (moved by key). Otherwise it stays where the wheel or the scroll bar left
+    /// it: the pointer picking rows never moves it.
+    follow: Follow,
+    /// How far it scrolls, and the scroll bar's track and thumb height, as last drawn.
+    max_scroll: f32,
+    bar: Option<[f32; 4]>,
+    thumb: f32,
+    /// The scroll bar is held: where in the thumb it was grabbed.
+    dragging: Option<f32>,
     pub rows: Vec<(usize, [f32; 4])>,
     pub bounds: [f32; 4],
     /// Typing a size: for a new saved one (None) or saved one `i`, and the text so far.
@@ -984,9 +994,75 @@ pub enum PresetAction {
 /// Name of the saved sizes' group.
 pub const SAVED: &str = "Saved";
 
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+enum Follow {
+    #[default]
+    Centre,
+    Show,
+    Stay,
+}
+
+/// How far a notch of the wheel moves the dropdown's list (virtual units: three rows).
+const DROPDOWN_WHEEL: f32 = 45.0;
+
 impl Dropdown {
     pub fn new(cursor: usize) -> Dropdown {
         Dropdown { cursor, ..Default::default() }
+    }
+
+    /// The cursor moved by key: the list scrolls to keep it in sight.
+    pub fn show_cursor(&mut self) {
+        self.follow = Follow::Show;
+    }
+
+    /// The wheel: moves the list `notches` (up positive), the cursor staying where it is.
+    pub fn wheel(&mut self, notches: i32) {
+        self.scroll = (self.scroll - notches as f32 * DROPDOWN_WHEEL).clamp(0.0, self.max_scroll);
+        self.follow = Follow::Stay;
+    }
+
+    /// Whether (`x`, `y`) is on the scroll bar.
+    pub fn on_bar(&self, x: f32, y: f32) -> bool {
+        self.bar.is_some_and(|[bx, by, bw, bh]| inside(&[bx - 4.0, by, bw + 8.0, bh], x, y))
+    }
+
+    /// A press on the scroll bar: held by the thumb where it was grabbed, or (off the thumb)
+    /// with the thumb's middle jumping to the pointer.
+    pub fn grab_bar(&mut self, y: f32) {
+        let Some([_, top, _, track]) = self.bar else { return };
+        let thumb_y = top + self.scroll / self.max_scroll.max(1.0) * (track - self.thumb);
+        let grip = if (thumb_y..thumb_y + self.thumb).contains(&y) { y - thumb_y } else { self.thumb / 2.0 };
+        self.dragging = Some(grip);
+        self.drag_bar(y);
+    }
+
+    /// The held scroll bar follows the pointer; false when it isn't held.
+    pub fn drag_bar(&mut self, y: f32) -> bool {
+        let (Some(grip), Some([_, top, _, track])) = (self.dragging, self.bar) else { return false };
+        let frac = ((y - grip - top) / (track - self.thumb).max(1.0)).clamp(0.0, 1.0);
+        self.scroll = frac * self.max_scroll;
+        self.follow = Follow::Stay;
+        true
+    }
+
+    /// Lets go of the scroll bar; whether it was held.
+    pub fn release_bar(&mut self) -> bool {
+        self.dragging.take().is_some()
+    }
+
+    #[cfg(test)]
+    pub fn scroll(&self) -> f32 {
+        self.scroll
+    }
+
+    #[cfg(test)]
+    pub fn bar(&self) -> Option<[f32; 4]> {
+        self.bar
+    }
+
+    #[cfg(test)]
+    pub fn max_scroll(&self) -> f32 {
+        self.max_scroll
     }
 
     /// Index of the row under (`x`, `y`) in virtual units.
@@ -1082,7 +1158,18 @@ impl Dropdown {
             _ => false,
         });
         let focus_y = focus.map(|l| l.1).unwrap_or(0.0);
-        self.scroll = (focus_y - view / 2.0).clamp(0.0, (y - view).max(0.0));
+        self.max_scroll = (y - view).max(0.0);
+        // A size being typed stays in sight; otherwise the list only moves when asked to.
+        let follow = if self.editing.is_some() && self.follow == Follow::Stay { Follow::Show } else { self.follow };
+        self.scroll = match follow {
+            Follow::Centre => focus_y - view / 2.0,
+            Follow::Show => self.scroll.min(focus_y).max(focus_y + ROW - view),
+            Follow::Stay => self.scroll,
+        }
+        .clamp(0.0, self.max_scroll);
+        if self.editing.is_none() {
+            self.follow = Follow::Stay;
+        }
         self.rows.clear();
         let caret = self.caret;
         let text_input = |c: &mut Canvas, ry: f32, text: &str| {
@@ -1157,6 +1244,18 @@ impl Dropdown {
                     c.text_right(right, ry + 3.5, 7.0, rgba(col, 1.0), tag);
                 }
             }
+        }
+        // The scroll bar, when there's more than fits: wheel, click or drag it.
+        self.bar = None;
+        if self.max_scroll > 0.0 {
+            let (bar_x, bar_w) = (bx + bw - 7.0, 4.0);
+            let bar = [bar_x, top, bar_w, view];
+            self.bar = Some(bar);
+            self.thumb = (view * view / (view + self.max_scroll)).clamp(18.0, view);
+            let thumb_y = top + self.scroll / self.max_scroll * (view - self.thumb);
+            let lit = self.dragging.is_some() || c.hovered(bar_x - 4.0, top, bar_w + 8.0, view);
+            c.round_rect([bar_x, top], [bar_w, view], 2.0, rgba(0x0e0e14, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+            c.round_rect([bar_x, thumb_y], [bar_w, self.thumb], 2.0, rgba(if lit { accent() } else { 0x8a8aa8 }, 0.95), rgba(0, 0.0), 0.0);
         }
         let (line1, line2) = if self.editing.is_some() {
             (tr!("type a size like 1280x720   Enter save   Esc cancel", "1280x720のように入力   Enter 保存   Esc 取消", "введите размер вроде 1280x720   Enter сохранить   Esc отмена"), "")
