@@ -104,29 +104,32 @@ fn slide(mut at: [f32; 4], target: [f32; 4], dt_ms: f32, animate: bool) -> [f32;
 }
 
 /// A small note as pixel art, like the main menu's: a dark outline, a white rim lit top left and
-/// shaded bottom right, the logo's red and cyan glitch down its sides. `SMALL` pixels square.
-const SMALL: usize = 16;
+/// shaded bottom right, the logo's red and cyan glitch down its sides. `SMALL` pixels square:
+/// enough for a round outline that still shows its pixels.
+const SMALL: usize = 22;
+/// Its radius in pixels, and where its middle is.
+const SMALL_R: f32 = 10.0;
+const SMALL_MID: f32 = 10.5;
 type SmallArt = [[u32; SMALL]; SMALL];
 
 fn small_art(fill: u32) -> SmallArt {
     use crate::menu::tint;
-    const MID: f32 = 7.5;
     const OUTLINE: u32 = 0x0f0f16;
     let mut art = [[0; SMALL]; SMALL];
     for (y, row) in art.iter_mut().enumerate() {
         for (x, px) in row.iter_mut().enumerate() {
-            let (dx, dy) = (x as f32 - MID, y as f32 - MID);
+            let (dx, dy) = (x as f32 - SMALL_MID, y as f32 - SMALL_MID);
             let d = dx.hypot(dy);
             let slant = dx + dy;
-            *px = if d > 7.0 {
+            *px = if d > SMALL_R {
                 0
-            } else if d > 6.1 {
+            } else if d > 8.9 {
                 OUTLINE
-            } else if d > 4.8 {
-                if slant > 4.5 { 0xc8c8d8 } else { 0xffffff }
-            } else if d > 3.9 && slant < -2.5 {
+            } else if d > 7.0 {
+                if slant > 6.5 { 0xc8c8d8 } else { 0xffffff }
+            } else if d > 5.8 && slant < -3.5 {
                 tint(fill, 0xffffff, 0.3)
-            } else if d > 3.9 && slant > 2.5 {
+            } else if d > 5.8 && slant > 3.5 {
                 tint(fill, 0x000000, 0.28)
             } else {
                 fill
@@ -134,7 +137,7 @@ fn small_art(fill: u32) -> SmallArt {
         }
     }
     // The glitch: a few rows pushed out, red on the left and cyan on the right.
-    for (y, by) in [(4, 1), (7, 2), (11, 1)] {
+    for (y, by) in [(6, 1), (10, 2), (15, 1)] {
         let row = &mut art[y];
         let rim = |p: &u32| *p != 0 && *p != OUTLINE;
         let (Some(left), Some(right)) = (row.iter().position(rim), row.iter().rposition(rim)) else { continue };
@@ -144,8 +147,42 @@ fn small_art(fill: u32) -> SmallArt {
     art
 }
 
+/// `art` as as few rectangles as it takes (x, y, w, h in pixels, colour): runs of a colour, grown
+/// down while the rows below repeat them. Drawn row by row, the seams between the rows showed.
+/// Rectangles of a note's pixels: x, y, width and height in pixels, and colour.
+type Rects = Vec<(usize, usize, usize, usize, u32)>;
+
+fn merged(art: &SmallArt) -> Rects {
+    let mut done = [[false; SMALL]; SMALL];
+    let mut out = Vec::new();
+    for y in 0..SMALL {
+        let mut x = 0;
+        while x < SMALL {
+            let col = art[y][x];
+            if col == 0 || done[y][x] {
+                x += 1;
+                continue;
+            }
+            let mut end = x + 1;
+            while end < SMALL && art[y][end] == col && !done[y][end] {
+                end += 1;
+            }
+            let mut h = 1;
+            while y + h < SMALL && (x..end).all(|k| art[y + h][k] == col && !done[y + h][k]) {
+                h += 1;
+            }
+            for row in &mut done[y..y + h] {
+                row[x..end].fill(true);
+            }
+            out.push((x, y, end - x, h, col));
+            x = end;
+        }
+    }
+    out
+}
+
 thread_local! {
-    static ARTS: RefCell<HashMap<u32, Box<SmallArt>>> = RefCell::new(HashMap::new());
+    static ARTS: RefCell<HashMap<u32, Rects>> = RefCell::new(HashMap::new());
 }
 
 /// A pixel note `r` in radius in `col` at (`x`, `y`), its pixels whole screen pixels. `lit`: the
@@ -156,21 +193,18 @@ pub fn note(c: &mut Canvas, x: f32, y: f32, r: f32, col: u32, lit: bool, brightn
         c.glow(x, y, r * 1.7, r * 0.6, rgba(col, 0.35));
     }
     let start = c.shapes.len();
-    let px = pixel_size(r / 7.0);
+    let px = pixel_size(r / SMALL_R);
     let half = SMALL as f32 * px / 2.0;
     let (left, top) = (snap_to_grid(x - half), snap_to_grid(y - half));
+    // A disc of the note's own colour under the pixels: where two rectangles meet, any seam shows
+    // the same colour.
+    let mid = [left + SMALL_MID * px, top + SMALL_MID * px];
+    c.circle(mid[0], mid[1], 7.0 * px, rgba(col, 1.0), rgba(col, 1.0), 0.0);
     ARTS.with(|arts| {
         let mut arts = arts.borrow_mut();
-        let art = arts.entry(col).or_insert_with(|| Box::new(small_art(col)));
-        for (row, line) in art.iter().enumerate() {
-            let mut col_i = 0;
-            while col_i < SMALL {
-                let end = line[col_i..].iter().position(|&p| p != line[col_i]).map_or(SMALL, |n| col_i + n);
-                if line[col_i] != 0 {
-                    c.rect(left + col_i as f32 * px, top + row as f32 * px, (end - col_i) as f32 * px, px, rgba(line[col_i], 1.0));
-                }
-                col_i = end;
-            }
+        let rects = arts.entry(col).or_insert_with(|| merged(&small_art(col)));
+        for &(rx, ry, rw, rh, colour) in rects.iter() {
+            c.rect(left + rx as f32 * px, top + ry as f32 * px, rw as f32 * px, rh as f32 * px, rgba(colour, 1.0));
         }
     });
     if !lit && brightness < 1.0 {
@@ -209,6 +243,30 @@ mod tests {
         assert!((at[1] - 40.0).abs() < 0.01);
         assert_eq!(slide(from, to, 16.0, false), to, "without animations: there");
         assert_eq!(slide(from, [10.0, 900.0, 100.0, 20.0], 16.0, true)[1], 900.0, "from far: at once");
+    }
+
+    #[test]
+    fn a_small_note_is_round_and_its_rectangles_cover_it_exactly() {
+        let art = small_art(0xEB452C);
+        // Round: as wide across the middle as from top to bottom, and its corners empty.
+        let row = |y: usize| art[y].iter().filter(|&&p| p != 0 && p != GLITCH_RED && p != GLITCH_CYAN).count();
+        let column = |x: usize| (0..SMALL).filter(|&y| art[y][x] != 0).count();
+        assert_eq!(row(11), column(11), "as wide as it is tall (a row without the glitch)");
+        assert!(art[0][0] == 0 && art[0][SMALL - 1] == 0 && art[SMALL - 1][0] == 0 && art[SMALL - 1][SMALL - 1] == 0);
+        // The rectangles paint every pixel once, in its colour, and there are far fewer of them.
+        let rects = merged(&art);
+        let mut painted = [[0u32; SMALL]; SMALL];
+        for (x, y, w, h, col) in &rects {
+            for row in &mut painted[*y..y + h] {
+                for p in &mut row[*x..x + w] {
+                    assert_eq!(*p, 0, "painted twice");
+                    *p = *col;
+                }
+            }
+        }
+        assert_eq!(painted, art);
+        let runs: usize = art.iter().map(|r| r.windows(2).filter(|w| w[0] != w[1]).count() + 1).sum();
+        assert!(rects.len() < runs, "{} rectangles for {runs} row runs", rects.len());
     }
 
     #[test]
