@@ -1298,3 +1298,41 @@ fn the_preset_list_scrolls_by_wheel_and_scroll_bar_never_by_pointing() {
     frame(&mut s);
     assert_eq!(dd(&s).scroll(), max);
 }
+
+fn frame_off(s: &mut State) -> Option<f32> {
+    s.build_frame(&mut Canvas::default(), Instant::now() + Duration::from_secs(60), 853.3);
+    s.screen_fade
+}
+
+#[test]
+fn a_screen_opened_from_the_main_menu_fades_in() {
+    let mut s = layout_tests::state();
+    s.cfg.animations = true;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    s.menu_open(menu::Item::Settings);
+    assert!(matches!(s.scene, Scene::Settings { .. }));
+    assert_eq!(s.screen_fade, Some(0.0));
+    // Frames 50 ms apart.
+    let mut at = Instant::now();
+    let mut frame = || {
+        at += Duration::from_millis(50);
+        s.build_frame(&mut Canvas::default(), at, 853.3);
+        s.screen_fade
+    };
+    assert!(frame().is_some_and(|ms| ms > 0.0), "fading in");
+    for _ in 0..10 {
+        frame();
+    }
+    assert_eq!(s.screen_fade, None, "then it's done");
+    // With animations off it shows at once.
+    s.close_settings();
+    s.cfg.animations = false;
+    s.menu_open(menu::Item::Settings);
+    assert_eq!(frame_off(&mut s), None);
+    // Exit only asks, over the menu: nothing fades.
+    s.close_settings();
+    s.menu_open(menu::Item::Exit);
+    assert_eq!(s.screen_fade, None);
+}

@@ -19,8 +19,10 @@ pub enum Item {
 
 pub const ITEMS: [Item; 7] = [Item::Play, Item::Multiplayer, Item::Download, Item::Medals, Item::Settings, Item::Editor, Item::Exit];
 
-/// How long a hit note shows before its screen opens (ms).
-const LEAVE_MS: f32 = 170.0;
+/// How long a hit note shows before its screen opens (ms): the menu fades out meanwhile.
+const LEAVE_MS: f32 = 220.0;
+/// How long the menu takes to fade in, opened or come back to (ms).
+pub const FADE_MS: f32 = 220.0;
 const SHAKE_MS: f32 = 300.0;
 const FLASH_MS: f32 = 200.0;
 const BURST_MS: f32 = 520.0;
@@ -28,9 +30,12 @@ const BURST_MS: f32 = 520.0;
 const LANE_TOP: f32 = 118.0;
 const LANE_H: f32 = 124.0;
 const LANE_MID: f32 = LANE_TOP + LANE_H / 2.0;
+/// The panel the notes sit on, in from the screen's sides.
+const PANEL_X: f32 = 12.0;
 const DRUM_W: f32 = 112.0;
-const CIRCLE_X: f32 = 188.0;
-const NOTE_GAP: f32 = 132.0;
+/// Where the notes' middles are, and their biggest radius (narrow screens take less).
+const NOTE_Y: f32 = LANE_MID - 10.0;
+const NOTE_MAX_R: f32 = 29.0;
 /// The row naming every section, and the hint under it.
 const STRIP_Y: f32 = 348.0;
 const HINT_Y: f32 = 376.0;
@@ -333,10 +338,14 @@ pub struct Frame<'a> {
 }
 
 pub struct Menu {
-    /// The selected note, counted on forever so it always rides the same way round.
+    /// The selected note, counted on forever (`index` wraps it).
     selected: i32,
-    /// Where the lane has got to on the way there.
+    /// Where the selector has got to on its way to the selected note's slot.
     shown: f32,
+    /// When the menu started fading in (opened, or come back to from a screen it opened).
+    appear: f32,
+    /// The selected note's middle as last drawn: sparks and bursts come from there.
+    spot: [f32; 2],
     /// ms since the menu opened: every animation below is timed on it.
     clock: f32,
     /// When the rim last flashed, and which side.
@@ -371,7 +380,7 @@ struct Spark {
 
 impl Menu {
     pub fn new() -> Menu {
-        Menu { selected: 0, shown: 0.0, clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
+        Menu { selected: 0, shown: 0.0, appear: 0.0, spot: [0.0, NOTE_Y], clock: 0.0, rim: (f32::MIN, 1), face: f32::MIN, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
     }
 
     fn index(&self) -> usize {
@@ -425,20 +434,35 @@ impl Menu {
         self.leaving = None;
     }
 
-    /// The screen to open now, once the hit has had its moment.
+    /// The screen to open now, once the hit has had its moment. Shown again later (back from
+    /// that screen), the menu fades in.
     pub fn ready(&mut self) -> Option<Item> {
         let (item, at) = self.leaving?;
         (self.clock >= at).then(|| {
             self.leaving = None;
+            self.appear = self.clock;
             item
         })
     }
 
+    /// How much of the menu shows: fading in after it appears, out while leaving (but not for
+    /// Exit, which only asks).
+    fn opacity(&self) -> f32 {
+        let fade_in = ((self.clock - self.appear) / FADE_MS).clamp(0.0, 1.0);
+        let fade_out = match self.leaving {
+            Some((item, at)) if item != Item::Exit => ((at - self.clock) / LEAVE_MS).clamp(0.0, 1.0),
+            _ => 1.0,
+        };
+        let k = fade_in.min(fade_out);
+        k * k * (3.0 - 2.0 * k)
+    }
+
     pub fn draw(&mut self, c: &mut Canvas, f: &Frame) {
+        let start = c.shapes.len();
         self.clock += c.dt_ms;
-        let target = self.selected as f32;
+        let target = self.index() as f32;
         approach(&mut self.shown, target, c.dt_ms, 45.0);
-        if (self.shown - target).abs() < 0.002 {
+        if (self.shown - target).abs() < 0.002 || !render::animations() {
             self.shown = target;
         }
         let (into, beat) = f.beat.filter(|b| b.1 > 1.0).unwrap_or((self.clock as f64, 500.0));
@@ -452,13 +476,18 @@ impl Menu {
         }
         crate::settings::brand(c);
         self.draw_flashes(c);
-        self.draw_lane(c, bar, pulse);
+        let _ = bar;
+        self.draw_lane(c, pulse);
         self.draw_drum(c);
         self.draw_burst(c);
         self.draw_kiai(c);
         self.draw_title(c, f.maps);
         self.draw_strip(c, f.hint);
         draw_footer(c, f);
+        let shown = if render::animations() { self.opacity() } else { 1.0 };
+        if shown < 1.0 {
+            c.fade_since(start, shown, 1.0);
+        }
     }
 
     /// What's left of this beat's kick, 1 to 0.
@@ -519,7 +548,7 @@ impl Menu {
             let angle = -std::f32::consts::FRAC_PI_2 + (self.roll() - 0.5) * 2.6;
             let speed = 0.12 + self.roll() * 0.22;
             let col = [DON, KAT, GOLD, 0xffffff][(self.roll() * 4.0) as usize % 4];
-            self.sparks.push(Spark { at: [CIRCLE_X, LANE_MID], speed: [angle.cos() * speed, angle.sin() * speed], born: self.clock, col });
+            self.sparks.push(Spark { at: self.spot, speed: [angle.cos() * speed, angle.sin() * speed], born: self.clock, col });
         }
     }
 
@@ -539,34 +568,32 @@ impl Menu {
         }
     }
 
-    /// Over the lane: the gold it takes on, the opening's flash and tears, the rings and sparks.
+    /// Over the panel: the gold it takes on, the opening's flash and tears, the rings and sparks.
     fn draw_kiai(&self, c: &mut Canvas) {
         if self.kiai <= 0.0 && self.sparks.is_empty() {
             return;
         }
         let kick = self.kick();
         let px = pixel_size(LANE_PIXEL);
-        c.rect(DRUM_W + 2.0, LANE_TOP, c.width, LANE_H, rgba(GOLD, self.kiai * 0.05 + kick * 0.11));
-        for y in [LANE_TOP - 2.0, LANE_TOP + LANE_H] {
-            c.rect(0.0, y, c.width, 2.0, rgba(GOLD, self.kiai * (0.55 + kick * 0.45)));
-        }
+        let (left, w) = (PANEL_X, c.width - 2.0 * PANEL_X);
+        c.round_rect([left, LANE_TOP], [w, LANE_H], 10.0, rgba(GOLD, self.kiai * 0.05 + kick * 0.11), rgba(GOLD, self.kiai * (0.55 + kick * 0.45)), 2.0);
         if kick > 0.0 {
             let k = 1.0 - kick / self.kiai.max(0.01);
             let col = if self.beat_no.rem_euclid(2) == 0 { KAT } else { DON };
-            pixel_ring(c, [CIRCLE_X, LANE_MID], 46.0 + k * 34.0, px * 2.0, 0, px, rgba(col, kick * 0.9));
+            pixel_ring(c, self.spot, 34.0 + k * 30.0, px * 2.0, 0, px, rgba(col, kick * 0.9));
         }
         let opening = 1.0 - (self.clock - self.kiai_at) / OPENING_MS;
         if opening > 0.0 {
-            c.rect(0.0, LANE_TOP, c.width, LANE_H, rgba(0xffffff, opening * opening * 0.55));
-            // The lane torn, in the logo's colours, a new tear every 40 ms.
+            c.round_rect([left, LANE_TOP], [w, LANE_H], 10.0, rgba(0xffffff, opening * opening * 0.55), rgba(0, 0.0), 0.0);
+            // The panel torn, in the logo's colours, a new tear every 40 ms.
             let seed = (self.clock / 40.0) as u32;
             for tear in 0..6u32 {
                 let mix = (tear + 1).wrapping_mul(2_654_435_761) ^ seed.wrapping_mul(40_503);
-                let (y, x) = (LANE_TOP + ((mix >> 8) % LANE_H as u32) as f32, ((mix >> 16) % 240) as f32);
-                c.rect(x, y, c.width - x, 3.0, rgba(if tear % 2 == 0 { GLITCH_RED } else { GLITCH_CYAN }, opening));
+                let (y, x) = (LANE_TOP + 4.0 + ((mix >> 8) % (LANE_H as u32 - 8)) as f32, left + ((mix >> 16) % 240) as f32);
+                c.rect(x, y, left + w - x, 3.0, rgba(if tear % 2 == 0 { GLITCH_RED } else { GLITCH_CYAN }, opening));
             }
             let up = (1.0 - opening) * 16.0;
-            c.text_centered(CIRCLE_X, LANE_TOP - 26.0 - up, 16.0, rgba(GOLD, opening.min(0.5) * 2.0), "KIAI!");
+            c.text_centered(self.spot[0], LANE_TOP - 26.0 - up, 16.0, rgba(GOLD, opening.min(0.5) * 2.0), "KIAI!");
         }
         for s in &self.sparks {
             let a = 1.0 - (self.clock - s.born) / SPARK_MS;
@@ -575,63 +602,87 @@ impl Menu {
         }
     }
 
-    fn draw_lane(&self, c: &mut Canvas, bar: f32, pulse: f32) {
-        c.rect(0.0, LANE_TOP, c.width, LANE_H, rgba(0x15151d, 0.93));
-        c.rect(0.0, LANE_TOP - 2.0, c.width, 2.0, rgba(0x3a3a4e, 1.0));
-        c.rect(0.0, LANE_TOP + LANE_H, c.width, 2.0, rgba(0x3a3a4e, 1.0));
-        // Bar lines run with the song; a tick on every beat.
-        let bars = NOTE_GAP * 2.0;
-        let mut x = CIRCLE_X - bar * bars;
-        while x < c.width {
-            c.rect(x, LANE_TOP, 2.0, LANE_H, rgba(0xffffff, 0.14));
-            for tick in 1..4 {
-                c.rect(x + tick as f32 * bars / 4.0, LANE_MID - 4.0, 2.0, 8.0, rgba(0xffffff, 0.13));
-            }
-            x += bars;
-        }
-        let grow = 1.0 + pulse * 0.05;
-        let px = pixel_size(LANE_PIXEL);
-        pixel_ring(c, [CIRCLE_X, LANE_MID], 46.0 * grow, 46.0, 0, px, rgba(0xffffff, 0.04));
-        pixel_ring(c, [CIRCLE_X, LANE_MID], 46.0 * grow, px * 2.0, 0, px, rgba(0xffffff, 0.5));
-        pixel_ring(c, [CIRCLE_X, LANE_MID], 33.0, px, 0, px, rgba(0xffffff, 0.24));
+    /// Where the notes' slots start and how wide each is, on a screen `width` wide.
+    fn slots(width: f32) -> (f32, f32) {
+        let left = PANEL_X + DRUM_W + 4.0;
+        (left, (width - PANEL_X - 4.0 - left) / ITEMS.len() as f32)
+    }
 
-        let first = self.shown.floor() as i32;
-        let n = ITEMS.len() as i32;
+    /// The notes in their places on a dark panel, each with its name under it, and the selector:
+    /// corner brackets that slide to the selected one. Nothing grows or moves but the selector.
+    fn draw_lane(&mut self, c: &mut Canvas, pulse: f32) {
+        c.round_rect([PANEL_X, LANE_TOP], [c.width - 2.0 * PANEL_X, LANE_H], 10.0, rgba(0x15151d, 0.95), rgba(0x3a3a4e, 1.0), 1.5);
+        let (left, slot) = Self::slots(c.width);
+        let r = NOTE_MAX_R.min(slot * 0.36);
+        let label_y = NOTE_Y + r + 10.0;
+        let names = ITEMS.map(Item::name);
+        // One size for every name, the largest the narrowest slot takes.
+        let size = names.iter().map(|n| Canvas::fit_size(7.0, 5.0, slot - 10.0, n)).fold(7.0f32, f32::min);
+        let px = pixel_size(LANE_PIXEL);
+        // Small marks between the notes.
+        for k in 1..ITEMS.len() {
+            let x = snap_to_grid(left + k as f32 * slot - px);
+            c.rect(x, NOTE_Y - px, px * 2.0, px * 2.0, rgba(0x6a6a88, 0.8));
+        }
         let mut hint = None;
-        for k in (0..=n).rev() {
-            let i = (first + k).rem_euclid(n) as usize;
-            let item = ITEMS[i];
-            let x = CIRCLE_X + (first + k) as f32 * NOTE_GAP - self.shown * NOTE_GAP;
-            if x > c.width + 60.0 {
-                continue;
-            }
-            let close = (1.0 - (x - CIRCLE_X).abs() / NOTE_GAP).clamp(0.0, 1.0);
-            let r = 29.0 + close * 11.0 + if close > 0.5 { pulse * 2.0 } else { 0.0 };
-            let fade = ((x - 130.0) / 50.0).clamp(0.2, 1.0);
-            let shaking = item == Item::Editor && self.is_selected(i) && self.clock - self.shake < SHAKE_MS;
+        for (i, item) in ITEMS.iter().enumerate() {
+            let x = left + (i as f32 + 0.5) * slot;
+            let shaking = *item == Item::Editor && self.is_selected(i) && self.clock - self.shake < SHAKE_MS;
             let dx = if shaking { (self.clock / 18.0).sin() * 5.0 * (1.0 - (self.clock - self.shake) / SHAKE_MS) } else { 0.0 };
-            // In a kiai they hop on the beat, every other one higher.
-            let hop = self.kick() * if (first + k).rem_euclid(2) as i64 == self.beat_no.rem_euclid(2) { 12.0 } else { 5.0 };
-            draw_note(c, &self.arts[i], x + dx, LANE_MID - hop, r, fade);
-            // A note just coming on screen shows its name once all of it fits.
-            if close < 0.5 && x + Canvas::text_width(7.0, item.name()) / 2.0 < c.width - 4.0 {
-                c.text_centered(x, LANE_MID + r + 9.0, 7.0, rgba(0xc8c8d8, fade), item.name());
+            draw_note(c, &self.arts[i], x + dx, NOTE_Y, r, 1.0);
+            let hovered = c.hovered(left + i as f32 * slot, LANE_TOP, slot, LANE_H);
+            let on = self.is_selected(i);
+            let w = Canvas::text_width(size, names[i]);
+            if on {
+                let (pw, ph) = (w + 14.0, size + 8.0);
+                c.round_rect([x - pw / 2.0, label_y - 4.0], [pw, ph], ph / 2.0, rgba(tint(item.colour(), 0x000000, 0.25), 0.95), rgba(0xffffff, 0.35), 1.0);
             }
-            c.hit(x - 42.0, LANE_TOP, 84.0, LANE_H, Hit::MenuItem(i));
-            if item == Item::Editor && c.hovered(x - 42.0, LANE_TOP, 84.0, LANE_H) {
+            let col = match (on || hovered, *item == Item::Editor) {
+                (true, _) => 0xffffff,
+                (false, true) => 0x6f6f86,
+                (false, false) => 0xc8c8d8,
+            };
+            c.text_centered(x, label_y, size, rgba(col, 1.0), names[i]);
+            if hovered && !on {
+                self.brackets(c, x, r, label_y + size, w, 0.35);
+            }
+            c.hit(left + i as f32 * slot, LANE_TOP, slot, LANE_H, Hit::MenuItem(i));
+            if *item == Item::Editor && hovered {
                 hint = Some(x);
             }
         }
+        // The selector, on its way to the selected note: brighter on the beat, gold in a kiai.
+        let x = left + (self.shown + 0.5) * slot;
+        self.spot = [left + (self.index() as f32 + 0.5) * slot, NOTE_Y];
+        let w = Canvas::text_width(size, names[self.index()]);
+        self.brackets(c, x, r, label_y + size, w, 0.75 + 0.25 * pulse);
         if let Some(x) = hint {
             tooltip(c, x, LANE_TOP - 26.0);
         }
     }
 
-    /// The head of the lane: the rim lights up on kat, the face on don.
+    /// Corner brackets around a note (`r`) and its name (`w` wide, ending at `bottom`).
+    fn brackets(&self, c: &mut Canvas, x: f32, r: f32, bottom: f32, w: f32, alpha: f32) {
+        let px = pixel_size(LANE_PIXEL);
+        let half = (r + 10.0).max(w / 2.0 + 10.0);
+        let (l, rt) = (snap_to_grid(x - half), snap_to_grid(x + half));
+        let (top, bot) = (snap_to_grid(NOTE_Y - r - 8.0), snap_to_grid(bottom + 8.0));
+        let (arm, t) = (10.0, px);
+        let col = rgba(if self.kiai > 0.5 { GOLD } else { render::accent() }, alpha);
+        for (cx, sx) in [(l, 1.0), (rt, -1.0)] {
+            for (cy, sy) in [(top, 1.0), (bot, -1.0)] {
+                let hx = if sx > 0.0 { cx } else { cx - arm };
+                let vy = if sy > 0.0 { cy } else { cy - arm };
+                c.rect(hx, if sy > 0.0 { cy } else { cy - t }, arm, t, col);
+                c.rect(if sx > 0.0 { cx } else { cx - t }, vy, t, arm, col);
+            }
+        }
+    }
+
+    /// The head of the panel: the rim lights up on kat, the face on don.
     fn draw_drum(&self, c: &mut Canvas) {
-        let x = DRUM_W / 2.0;
-        c.rect(0.0, LANE_TOP, DRUM_W, LANE_H, rgba(0x1d1d27, 1.0));
-        c.rect(DRUM_W, LANE_TOP, 2.0, LANE_H, rgba(0x3a3a4e, 1.0));
+        let x = PANEL_X + DRUM_W / 2.0;
+        c.rect(PANEL_X + DRUM_W, LANE_TOP + 10.0, 2.0, LANE_H - 20.0, rgba(0x3a3a4e, 1.0));
         let px = pixel_size(LANE_PIXEL);
         pixel_ring(c, [x, LANE_MID], 44.0, 44.0, 0, px, rgba(0x23232f, 1.0));
         pixel_ring(c, [x, LANE_MID], 44.0, px * 2.0, 0, px, rgba(0x6a6a88, 1.0));
@@ -656,9 +707,9 @@ impl Menu {
         let a = 1.0 - k;
         let miss = item == Item::Editor;
         let px = pixel_size(LANE_PIXEL);
-        pixel_ring(c, [CIRCLE_X, LANE_MID], 40.0 + k * 70.0, px * 2.0, 0, px, rgba(if miss { 0x8a8aa0 } else { item.colour() }, a * 0.9));
+        pixel_ring(c, self.spot, 34.0 + k * 50.0, px * 2.0, 0, px, rgba(if miss { 0x8a8aa0 } else { item.colour() }, a * 0.9));
         let word = if miss { tr!("SOON", "もうすぐ", "СКОРО") } else { "GREAT" };
-        c.text_centered(CIRCLE_X, LANE_TOP - 22.0 - k * 18.0, 12.0, rgba(0xFFD34D, a), word);
+        c.text_centered(self.spot[0], LANE_TOP - 22.0 - k * 18.0, 12.0, rgba(0xFFD34D, a), word);
     }
 
     fn draw_title(&self, c: &mut Canvas, maps: usize) {
@@ -687,6 +738,11 @@ impl Menu {
         let size = Canvas::fit_size(9.0, 6.0, room - GAP * 5.0, &names.concat());
         let total: f32 = names.iter().map(|n| Canvas::text_width(size, n)).sum();
         let gap = ((room - total) / 5.0).clamp(4.0, GAP);
+        let hint = Canvas::fit_hints(7.0, c.width - 2.0 * LEFT, hint);
+        // A dark panel behind the names and the hint, as wide as the longer of them.
+        let strip_end = LEFT + 2.0 * (ARROW + 8.0) + total + gap * (names.len() - 1) as f32;
+        let right = strip_end.max(LEFT + 2.0 + Canvas::text_width(7.0, &hint)) + 12.0;
+        c.round_rect([LEFT - 12.0, STRIP_Y - 14.0], [right - (LEFT - 12.0), HINT_Y + 19.0 - (STRIP_Y - 14.0)], 10.0, rgba(0x15151d, 0.92), rgba(0x3a3a4e, 1.0), 1.5);
         c.button(LEFT, STRIP_Y - 5.0, ARROW, 20.0, "<", 8.0, Hit::MenuStep(-1), false);
         let mut x = LEFT + ARROW + 8.0;
         let y = STRIP_Y + (9.0 - size) / 2.0;
@@ -706,7 +762,7 @@ impl Menu {
             x += w + gap;
         }
         c.button(x - gap + 8.0, STRIP_Y - 5.0, ARROW, 20.0, ">", 8.0, Hit::MenuStep(1), false);
-        c.text(LEFT + 2.0, HINT_Y, 7.0, rgba(0x9a9ab0, 1.0), &Canvas::fit_hints(7.0, c.width - 2.0 * LEFT, hint));
+        c.text(LEFT + 2.0, HINT_Y, 7.0, rgba(0x9a9ab0, 1.0), &hint);
     }
 }
 
@@ -882,6 +938,71 @@ mod tests {
         }
         assert_eq!(tint(0x204060, 0xffffff, 0.0), 0x204060);
         assert_eq!(tint(0x204060, 0x000000, 1.0), 0x000000);
+    }
+
+    /// A frame of the menu on a 16:9 screen, `ms` after the last.
+    fn frame(m: &mut Menu, ms: f32) -> Canvas {
+        let mut c = Canvas { width: 853.3, dt_ms: ms, ..Default::default() };
+        let f = Frame { beat: None, kiai: false, ghosts: None, song: None, hint: "", maps: 0, paused: false };
+        m.draw(&mut c, &f);
+        c
+    }
+
+    /// Where each note's hit area is.
+    fn note_spots(c: &Canvas) -> Vec<[f32; 4]> {
+        (0..ITEMS.len()).map(|i| c.hits.iter().find(|h| h.hit == Hit::MenuItem(i)).unwrap().rect).collect()
+    }
+
+    #[test]
+    fn the_notes_stay_put_and_the_selector_moves_to_them() {
+        let mut m = Menu::new();
+        let first = note_spots(&frame(&mut m, 16.0));
+        // Side by side and inside the screen, in order.
+        assert!(first.windows(2).all(|w| w[0][0] + w[0][2] <= w[1][0] + 0.01));
+        assert!(first[0][0] > DRUM_W && first[6][0] + first[6][2] <= 853.3 - PANEL_X);
+        m.step(3);
+        let c = frame(&mut m, 16.0);
+        assert_eq!(note_spots(&c), first, "choosing doesn't move the notes");
+        // On its way (or there already, with animations off: other tests switch them).
+        assert!(m.shown > 0.0 && m.shown <= 3.0, "the selector goes toward it: {}", m.shown);
+        for _ in 0..60 {
+            frame(&mut m, 16.0);
+        }
+        assert_eq!(m.shown, 3.0);
+        let [x, _, w, _] = first[3];
+        assert!((m.spot[0] - (x + w / 2.0)).abs() < 0.01, "sparks and bursts come from it");
+        // Round past the end: it goes back along, the notes still where they were.
+        m.step(4);
+        assert_eq!(m.index(), 0);
+        assert_eq!(note_spots(&frame(&mut m, 16.0)), first);
+    }
+
+    #[test]
+    fn the_menu_fades_in_and_out_but_not_for_exit() {
+        let mut m = Menu::new();
+        assert_eq!(m.opacity(), 0.0, "it fades in");
+        m.clock = FADE_MS / 2.0;
+        assert!(m.opacity() > 0.0 && m.opacity() < 1.0);
+        m.clock = FADE_MS;
+        assert_eq!(m.opacity(), 1.0);
+        // Opening something fades it out until it goes.
+        m.pick(2);
+        m.hit();
+        assert_eq!(m.opacity(), 1.0);
+        m.clock += LEAVE_MS / 2.0;
+        assert!(m.opacity() < 1.0 && m.opacity() > 0.0);
+        m.clock += LEAVE_MS / 2.0;
+        assert_eq!(m.opacity(), 0.0);
+        assert_eq!(m.ready(), Some(Item::Download));
+        // Back from there, it fades in again.
+        assert_eq!(m.opacity(), 0.0);
+        m.clock += FADE_MS;
+        assert_eq!(m.opacity(), 1.0);
+        // Exit only asks: the menu stays.
+        m.pick(6);
+        m.hit();
+        m.clock += LEAVE_MS * 0.9;
+        assert_eq!(m.opacity(), 1.0);
     }
 
     #[test]

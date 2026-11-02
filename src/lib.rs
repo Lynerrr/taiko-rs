@@ -286,6 +286,8 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
+    /// A screen opened from the main menu fades in: how long it has been showing (ms).
+    screen_fade: Option<f32>,
     /// What drifts behind it.
     menu_notes: menu_notes::Notes,
     /// When dragging the player's timeline last moved the music.
@@ -2422,6 +2424,9 @@ impl State {
     /// Opens the screen of the note that was hit. Coming back from those lands here again,
     /// except from the songs, which is what the menu is for leaving to.
     fn menu_open(&mut self, item: menu::Item) {
+        if !matches!(item, menu::Item::Editor | menu::Item::Exit) {
+            self.screen_fade = Some(0.0);
+        }
         match item {
             menu::Item::Play => self.main_menu = None,
             menu::Item::Multiplayer => self.open_multiplayer(),
@@ -8330,6 +8335,7 @@ impl State {
         // Drawn again below if still watching a replay (after scripted input, which must see the
         // last frame's bar like real input does).
         self.replay_bar = None;
+        let scene_start = canvas.shapes.len();
         match &mut self.scene {
             Scene::Select if on_menu => {
                 self.board_rect = None;
@@ -9027,6 +9033,16 @@ impl State {
                 let help = "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done";
                 let size = Canvas::fit_size(7.0, 5.5, room, help);
                 canvas.text_centered(w / 2.0, 460.0 + (7.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, room, help));
+            }
+        }
+        // Just opened from the main menu: the screen fades in over the background.
+        if let Some(ms) = &mut self.screen_fade {
+            *ms += canvas.dt_ms;
+            let k = (*ms / menu::FADE_MS).min(1.0);
+            if k >= 1.0 || !self.cfg.animations {
+                self.screen_fade = None;
+            } else {
+                canvas.fade_since(scene_start, k * k * (3.0 - 2.0 * k), 1.0);
             }
         }
         if self.grip.is_some() {
@@ -10867,6 +10883,7 @@ impl State {
             volume_save_at: None,
             splash,
             main_menu: None,
+            screen_fade: None,
             menu_notes: Default::default(),
             guide: None,
             guide_binding: None,
