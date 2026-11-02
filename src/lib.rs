@@ -141,6 +141,8 @@ const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
 
 /// How long "Reset map offsets" waits for its second press.
 const RESET_CONFIRM: Duration = Duration::from_secs(4);
+/// How long a new player stays on the guide's welcome and offset pages before moving on.
+const GUIDE_HOLD: Duration = Duration::from_secs(4);
 
 /// How far the player's arrow keys and wheel move the music.
 const MUSIC_SEEK_MS: f64 = 5000.0;
@@ -291,6 +293,9 @@ struct State {
     guide_binding: Option<usize>,
     /// The page to go back to once calibrating from the guide is done.
     guide_after: Option<usize>,
+    /// The page on screen and since when, and the pages that were up for all of `GUIDE_HOLD`.
+    guide_shown: Option<(usize, Instant)>,
+    guide_read: [bool; guide::PAGES],
     /// When "Reset map offsets" was pressed once, waiting for the second.
     reset_armed: Option<Instant>,
     /// The music player, instead of the main menu.
@@ -2060,8 +2065,14 @@ impl State {
 
     fn guide_action(&mut self, action: guide::Action) {
         let Some(page) = self.guide else { return };
+        if self.guide_hold_left().is_some() && matches!(action, guide::Action::Next | guide::Action::Close | guide::Action::Page(_)) {
+            return;
+        }
         self.guide_binding = None;
+        let closing = action == guide::Action::Close || (action == guide::Action::Next && page + 1 == guide::PAGES);
         match action {
+            // A new player doesn't leave without the page that says to calibrate.
+            _ if closing && !self.cfg.guide_seen && !self.guide_read[guide::OFFSET_PAGE] => self.guide = Some(guide::OFFSET_PAGE),
             guide::Action::Bind(slot) => self.guide_binding = Some(slot),
             guide::Action::Back => self.guide = Some(page.saturating_sub(1)),
             guide::Action::Next if page + 1 < guide::PAGES => self.guide = Some(page + 1),
@@ -2077,6 +2088,26 @@ impl State {
         if self.guide.is_none() && !self.cfg.guide_seen {
             self.cfg.guide_seen = true;
             self.cfg.save();
+        }
+    }
+
+    /// What's left of the time a new player stays on this page of the guide.
+    fn guide_hold_left(&self) -> Option<Duration> {
+        let page = self.guide.filter(|&p| !self.cfg.guide_seen && (p == 0 || p == guide::OFFSET_PAGE) && !self.guide_read[p])?;
+        let shown = self.guide_shown.filter(|s| s.0 == page).map_or(Duration::ZERO, |s| s.1.elapsed());
+        Some(GUIDE_HOLD.saturating_sub(shown)).filter(|left| !left.is_zero())
+    }
+
+    /// Times the page on screen: the clock starts once the splash is out of the way.
+    fn tick_guide(&mut self) {
+        let page = self.guide.filter(|_| self.splash.is_none());
+        if page != self.guide_shown.map(|s| s.0) {
+            self.guide_shown = page.map(|p| (p, Instant::now()));
+        }
+        if let Some((p, since)) = self.guide_shown
+            && since.elapsed() >= GUIDE_HOLD
+        {
+            self.guide_read[p] = true;
         }
     }
 
@@ -9039,7 +9070,8 @@ impl State {
             social::draw_notes(canvas, &self.social);
         }
         if let Some(page) = self.guide.filter(|_| self.splash.is_none()) {
-            guide::draw(canvas, page, self.guide_binding, &self.cfg);
+            let hold = self.guide_hold_left().map(|left| left.as_secs_f32().ceil() as u32);
+            guide::draw(canvas, page, self.guide_binding, hold, &self.cfg);
         }
         if let Some(p) = &self.profile {
             p.draw(canvas);
@@ -9394,8 +9426,11 @@ impl State {
             view.poll();
         }
         // A delayed response must not open an overlay in the middle of a song or replace
-        // a changelog the player has already opened manually.
+        // a changelog the player has already opened manually, and the guide comes first: what's
+        // new would cover it while its keys still went to the guide, closing it unseen.
         if !self.in_song()
+            && self.guide.is_none()
+            && self.guide_after.is_none()
             && let Some(view) = changelog::poll_automatic(&mut self.pending_changelog)
             && self.changelog.is_none()
         {
@@ -9417,6 +9452,7 @@ impl State {
         if let Some((tier, secret)) = self.unlock.tick(!self.in_song() && self.splash.is_none()) {
             self.sfx(audio::Sfx::medal(tier, secret));
         }
+        self.tick_guide();
         self.poll_changelog();
         #[cfg(target_os = "android")]
         if self.imports_checked.elapsed() >= Duration::from_secs(1) {
@@ -10771,6 +10807,8 @@ impl State {
             guide: None,
             guide_binding: None,
             guide_after: None,
+            guide_shown: None,
+            guide_read: [false; guide::PAGES],
             reset_armed: None,
             music_seeked: None,
             player: None,
