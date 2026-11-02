@@ -3694,30 +3694,60 @@ impl Game {
             c.text_centered(cx, cy - 7.0, 14.0, rgba(WHITE, 1.0), &format!("{:.1}", left));
             c.text_centered(cx, cy + 36.0, 8.0, rgba(0x9a9ab0, 1.0), tr!("get ready   (Esc: back to menu)", "準備して   (Esc: メニューに戻る)", "приготовьтесь   (Esc: назад в меню)"));
         } else if let Some(cursor) = self.paused.filter(|_| !self.watched) {
+            // The main menu's look: one panel, the options as notes on it (don and kat in turn),
+            // the chosen one bigger and lit, the selector sliding between them.
             let t = progress(self.paused_at, 180.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78 * t));
             let rise = (1.0 - t) * 12.0;
-            c.text_centered(w / 2.0, 98.0 - rise, 32.0, rgba(WHITE, t), tr!("PAUSED", "ポーズ", "ПАУЗА"));
+            const ROW_H: f32 = 36.0;
+            let pw = (w - 40.0).min(340.0);
+            let ph = 92.0 + PAUSE_ITEMS as f32 * ROW_H + 26.0;
+            let (px, py) = (w / 2.0 - pw / 2.0, (480.0 - ph) / 2.0 - 6.0 - rise);
+            let start = c.shapes.len();
+            crate::style::panel(c, px, py, pw, ph);
+            let title = tr!("PAUSED", "ポーズ", "ПАУЗА");
+            crate::style::title(c, w / 2.0 - Canvas::text_width(26.0, title) / 2.0, py + 14.0, 26.0, WHITE, title);
             // The map's name lives here rather than under the lane, where moved lanes ran into it.
             let m = &self.map.meta;
             let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("   {:.2}x", self.rate) } else { String::new() };
-            let fit = (w - 80.0).min(520.0);
-            c.text_centered(w / 2.0, 140.0 - rise, 9.0, rgba(0x9a9ab0, t), &Canvas::fit(9.0, fit, &format!("{} - {}", m.artist, m.title)));
-            c.text_centered(w / 2.0, 153.0 - rise, 9.0, rgba(0x6f6f86, t), &Canvas::fit(9.0, fit, &format!("[{}]  OD {:.1}{rate}", m.version, m.od)));
+            let fit = pw - 28.0;
+            c.text_centered(w / 2.0, py + 50.0, 8.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(8.0, fit, &format!("{} - {}", m.artist, m.title)));
+            c.text_centered(w / 2.0, py + 62.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit(8.0, fit, &format!("[{}]  OD {:.1}{rate}", m.version, m.od)));
+            c.rect(px + 14.0, py + 78.0, pw - 28.0, 1.0, rgba(0x2a2a38, 1.0));
+            c.fade_since(start, t, 1.0);
+            let colours = crate::multiverse::note_colours();
+            let (rx, rw) = (px + 12.0, pw - 24.0);
             for (i, item) in (0..PAUSE_ITEMS).map(pause_item).enumerate() {
-                // Items slide up one after another.
+                // Options slide up one after another.
                 let ti = progress(self.paused_at + std::time::Duration::from_millis(25 * i as u64), 180.0);
-                let y = 170.0 + i as f32 * 38.0 + (1.0 - ti) * 18.0;
+                let y = py + 88.0 + i as f32 * ROW_H + (1.0 - ti) * 18.0;
                 let selected = i == cursor;
-                let (bg, border) = if selected { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
-                c.round_rect([w / 2.0 - 140.0, y], [280.0, 32.0], 8.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 2.0 } else { 1.0 });
-                c.hit(w / 2.0 - 140.0, y, 280.0, 32.0, Hit::PauseItem(i));
-                c.text_centered(w / 2.0, y + 10.0, 12.0, rgba(if selected { WHITE } else { 0xc8c8d8 }, 1.0), item);
+                let row = c.shapes.len();
+                if selected {
+                    c.round_rect([rx, y], [rw, ROW_H - 6.0], 7.0, rgba(crate::style::selector_colour(), 0.12 + 0.05 * crate::style::pulse()), rgba(0, 0.0), 0.0);
+                    crate::style::selector(c, "pause", [rx - 3.0, y - 3.0, rw + 6.0, ROW_H]);
+                } else if c.hovered(rx, y, rw, ROW_H - 6.0) {
+                    c.round_rect([rx, y], [rw, ROW_H - 6.0], 7.0, rgba(0x262634, 0.6), rgba(0, 0.0), 0.0);
+                }
+                c.hit(rx, y, rw, ROW_H - 6.0, Hit::PauseItem(i));
+                let (nx, ny) = (rx + 18.0, y + (ROW_H - 6.0) / 2.0);
+                let col = if i % 2 == 0 { colours.don() } else { colours.kat() };
+                let r = if selected { 9.0 } else { 7.0 };
+                if selected {
+                    c.glow(nx, ny, r * 2.4, r, rgba(col, 0.5));
+                }
+                let note = c.shapes.len();
+                crate::multiverse::note(c, crate::multiverse::Shape::Round, nx, ny, r, col, 1.0);
+                if !selected {
+                    c.fade_since(note, 1.0, 0.6);
+                }
+                c.text(rx + 36.0, y + (ROW_H - 6.0 - 11.0) / 2.0, 11.0, rgba(if selected { WHITE } else { 0xa8a8bc }, 1.0), &Canvas::fit(11.0, rw - 48.0, item));
+                c.fade_since(row, ti, 1.0);
             }
-            let hint_y = 170.0 + PAUSE_ITEMS as f32 * 38.0 + 8.0;
-            // Fades in once the items have slid past it.
+            // Fades in once the options have slid past it.
             let th = progress(self.paused_at + std::time::Duration::from_millis(220), 150.0);
-            c.text_centered(w / 2.0, hint_y, 9.0, rgba(0x8a8aa0, th), tr!("Up/Down + Enter    Esc: continue", "上下 + Enter    Esc: 続ける", "Вверх/вниз + Enter    Esc: продолжить"));
+            let hint = tr!("Up/Down + Enter    Esc: continue", "上下 + Enter    Esc: 続ける", "Вверх/вниз + Enter    Esc: продолжить");
+            c.text_centered(w / 2.0, py + ph - 18.0, 7.0, rgba(0x8a8aa0, th), &Canvas::fit_hints(7.0, pw - 28.0, hint));
         }
         if let Some((_, at)) = self.failed {
             let p = progress(at, 400.0);
@@ -3805,6 +3835,11 @@ fn turned_box(rect: [f32; 4], pivot: [f32; 2], angle: f32, scale: f32, dest: [f3
     let (x0, x1) = corners.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
     let (y0, y1) = corners.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
     [x0, y0, x1 - x0, y1 - y0]
+}
+
+/// The lane alone (top, height), for a preview it fills.
+pub fn lane_only() -> (f32, f32) {
+    (LANE_Y - LANE_H / 2.0, LANE_H)
 }
 
 /// Vertical band (top, height) of the lane with a little room for judgements, for previews that

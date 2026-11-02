@@ -375,9 +375,9 @@ pub struct Menu {
     rim: (f32, i32),
     /// When the face last lit, and which half (left -1, right 1): a hand hits one side.
     face: (f32, i32),
-    /// What's left of the music's beat (1 on it, falling to 0), when it plays: the menu's notes
-    /// bounce on every beat, higher in a kiai.
-    pulse: f32,
+    /// How many beats into the song the music is, when it plays: the menu's notes float with
+    /// it, and hop in a kiai.
+    beats: Option<f64>,
     /// A hit: when, and on what.
     burst: Option<(f32, Item)>,
     shake: f32,
@@ -407,7 +407,7 @@ struct Spark {
 
 impl Menu {
     pub fn new() -> Menu {
-        Menu { selected: 0, shown: 0.0, appear: 0.0, spot: [0.0, NOTE_Y], song_at: None, song_hand: 1, song_hit: (f32::MIN, false), clock: 0.0, rim: (f32::MIN, 1), face: (f32::MIN, 1), pulse: 0.0, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
+        Menu { selected: 0, shown: 0.0, appear: 0.0, spot: [0.0, NOTE_Y], song_at: None, song_hand: 1, song_hit: (f32::MIN, false), clock: 0.0, rim: (f32::MIN, 1), face: (f32::MIN, 1), beats: None, burst: None, shake: f32::MIN, leaving: None, kiai: 0.0, in_kiai: false, kiai_at: f32::MIN, beat_no: i64::MIN, beat_at: f32::MIN, sparks: Vec::new(), rng: 0x9E37_79B9, universe: 0, arts: Box::new(ITEMS.map(Item::art)) }
     }
 
     fn index(&self) -> usize {
@@ -493,7 +493,6 @@ impl Menu {
     }
 
     pub fn draw(&mut self, c: &mut Canvas, f: &Frame) {
-        let start = c.shapes.len();
         self.clock += c.dt_ms;
         let target = self.index() as f32;
         approach(&mut self.shown, target, c.dt_ms, 45.0);
@@ -501,9 +500,8 @@ impl Menu {
             self.shown = target;
         }
         let (into, beat) = f.beat.filter(|b| b.1 > 1.0).unwrap_or((self.clock as f64, 500.0));
-        let phase = (into / beat).rem_euclid(1.0) as f32;
         let playing = f.beat.is_some_and(|b| b.1 > 1.0) && !f.paused && render::animations();
-        self.pulse = if playing { (1.0 - phase).powi(3) } else { 0.0 };
+        self.beats = playing.then_some(into / beat);
         self.feel_kiai(f.kiai && render::animations(), f.beat.filter(|b| b.1 > 1.0), c.dt_ms);
 
         if let Some(ghosts) = &f.ghosts {
@@ -519,9 +517,11 @@ impl Menu {
         self.draw_kiai(c);
         self.draw_title(c, f.maps);
         draw_footer(c, f);
+        // Coming in out of black, and going to black when it leaves: the next screen comes up
+        // out of it.
         let shown = if render::animations() { self.opacity() } else { 1.0 };
         if shown < 1.0 {
-            c.fade_since(start, shown, 1.0);
+            c.rect(0.0, 0.0, c.width, render::VIRTUAL_HEIGHT, rgba(0x000000, 1.0 - shown));
         }
     }
 
@@ -730,7 +730,12 @@ impl Menu {
             // In a kiai they hop on the beat, every other one higher.
             // On every beat they bounce, every other one higher; in a kiai, higher still.
             let high = i as i64 % 2 == self.beat_no.rem_euclid(2);
-            let hop = self.kick() * if high { 12.0 } else { 5.0 } + self.pulse * (1.0 - self.kiai) * if high { 5.0 } else { 2.5 };
+            // Outside a kiai they float: a slow wave with the music (one rise and fall every two
+            // beats, each note a little behind the one before), or with the clock when none
+            // plays. In a kiai they hop on the beat.
+            let wave = self.beats.unwrap_or(self.clock as f64 / 1000.0) / 2.0 - i as f64 * 0.12;
+            let float = (std::f64::consts::TAU * wave).sin() as f32 * 3.5 * (1.0 - self.kiai);
+            let hop = self.kick() * if high { 12.0 } else { 5.0 } + float;
             // The selected one grows as the selector gets to it, and shrinks back as it goes.
             let near = (1.0 - (self.shown - i as f32).abs()).clamp(0.0, 1.0);
             let grown = r * (1.0 + GROW * near);
