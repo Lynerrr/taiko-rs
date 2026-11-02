@@ -4652,20 +4652,24 @@ impl State {
     }
 
     /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
+    /// Turns the volume picked on the volume overlay (Alt+wheel, Alt+Up/Down) `notches` up.
+    fn turn_volume(&mut self, notches: i32) {
+        let changed = self.volume.turn(&mut self.cfg, notches, Instant::now());
+        self.apply_volume();
+        self.cfg.save();
+        // Hitsounds have nothing playing to judge them by: one rings at the new volume.
+        if changed && self.volume.selected == volume::HITSOUNDS && !self.in_song() {
+            self.sfx(audio::Sfx::Kat);
+        }
+    }
+
     fn wheel(&mut self, notches: i32) {
         if notches == 0 {
             return;
         }
         // Alt anywhere; with the pointer moved onto one of the volume's notes, also without Alt.
-        let now = Instant::now();
-        if self.volume.hovering(now) || self.modifiers_alt {
-            let changed = self.volume.turn(&mut self.cfg, notches, now);
-            self.apply_volume();
-            self.cfg.save();
-            // Hitsounds have nothing playing to judge them by: one rings at the new volume.
-            if changed && self.volume.selected == volume::HITSOUNDS && !self.in_song() {
-                self.sfx(audio::Sfx::Kat);
-            }
+        if self.volume.hovering(Instant::now()) || self.modifiers_alt {
+            self.turn_volume(notches);
             return;
         }
         if let Some(view) = &mut self.changelog {
@@ -7622,6 +7626,11 @@ impl State {
         let free = self.settings_ui.binding.is_none() && self.settings_ui.editing.is_none();
         if free && self.modifiers_alt && !self.modifiers_ctrl && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
             self.volume.pick_next(if code == KeyCode::ArrowLeft { -1 } else { 1 }, Instant::now());
+            return;
+        }
+        // Alt+Up/Down turn it like Alt+wheel (held, it keeps turning).
+        if free && self.modifiers_alt && !self.modifiers_ctrl && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown) {
+            self.turn_volume(if code == KeyCode::ArrowUp { 1 } else { -1 });
             return;
         }
         if free && code == KeyCode::KeyO && self.modifiers_ctrl && !self.modifiers_shift && !self.modifiers_alt {

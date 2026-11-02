@@ -138,6 +138,7 @@ Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
 | Shift+Enter | play the selected map from the start point picked on its timeline |
 | Ctrl+Enter / click the autoplay box | fullscreen preview (song select); P in the multiplayer lobby |
 | Alt + wheel | overall volume (anywhere); move the pointer onto the music or hitsounds note to turn that one instead, without Alt, or pick it with Alt + Left/Right |
+| Alt + Up/Down | turns the volume picked like Alt + wheel (held, it keeps turning) |
 | no key by default: Settings > Input | apply the live offset suggestion to this map (with Shift: to the global offset) |
 | `` ` `` or Ctrl+R | restart map (Ctrl+R also works paused and on the results screen) |
 | Esc (song select) | clear search / quit |

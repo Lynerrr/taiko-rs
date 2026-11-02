@@ -1102,6 +1102,35 @@ fn alt_wheel_turns_the_note_under_the_pointer_and_the_lane_then_needs_no_alt() {
 }
 
 #[test]
+fn alt_up_and_down_turn_the_volume_picked_with_alt_left_and_right() {
+    let press = |s: &mut State, code: KeyCode, repeat: bool| s.key_inner(code, repeat, None, Instant::now(), None);
+    for scene in [Scene::Select, Scene::Download] {
+        let mut s = settings_screen();
+        s.scene = scene;
+        s.cfg.master_volume = 0.5;
+        s.cfg.music_volume = 0.5;
+        s.mouse = (-1000.0, -1000.0);
+        s.modifiers_alt = true;
+        press(&mut s, KeyCode::ArrowUp, false);
+        assert_eq!(s.cfg.master_volume, 0.55, "the overall volume first");
+        // Held down, it keeps turning.
+        press(&mut s, KeyCode::ArrowDown, false);
+        press(&mut s, KeyCode::ArrowDown, true);
+        press(&mut s, KeyCode::ArrowDown, true);
+        assert_eq!(s.cfg.master_volume, 0.4);
+        // Alt+Left picks the music, which Up then turns.
+        press(&mut s, KeyCode::ArrowLeft, false);
+        assert_eq!(s.volume.selected, volume::MUSIC);
+        press(&mut s, KeyCode::ArrowUp, false);
+        assert_eq!((s.cfg.music_volume, s.cfg.master_volume), (0.55, 0.4));
+        // Without Alt the arrows are the screen's again.
+        s.modifiers_alt = false;
+        press(&mut s, KeyCode::ArrowUp, false);
+        assert_eq!((s.cfg.music_volume, s.cfg.master_volume), (0.55, 0.4));
+    }
+}
+
+#[test]
 fn a_lane_coming_up_under_a_parked_pointer_turns_the_overall_volume() {
     let mut s = settings_screen();
     s.cfg.master_volume = 0.5;
