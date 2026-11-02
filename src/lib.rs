@@ -8079,7 +8079,7 @@ impl State {
                     self.stars.request(i, &self.library[i].path, play_rate);
                 }
                 let (stars, rate) = (&self.stars, play_rate);
-                self.select.sort_selected_set(&|i| stars.get(i, rate));
+                self.select.sort_selected_set(&self.library, &|i| stars.get(i, rate));
                 self.select.remember_selection(&self.library);
             }
             let has_bg = self.preview.has_background;

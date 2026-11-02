@@ -1175,7 +1175,7 @@ impl Select {
     /// Orders the selected song's difficulties by star rating once all of them are known, like
     /// osu!, keeping the same difficulty selected. (Other songs are collapsed, so their order
     /// doesn't show until they are opened.)
-    pub fn sort_selected_set(&mut self, stars: &dyn Fn(usize) -> Option<f32>) {
+    pub fn sort_selected_set(&mut self, library: &[Entry], stars: &dyn Fn(usize) -> Option<f32>) {
         let Some(g) = self.cursor_group() else { return };
         let Some(keys) = self.visible[g.clone()].iter().map(|&i| stars(i)).collect::<Option<Vec<f32>>>() else { return };
         if keys.windows(2).all(|w| w[0] <= w[1]) {
@@ -1189,8 +1189,9 @@ impl Select {
         for (slot, (_, i)) in g.clone().zip(set) {
             self.visible[slot] = i;
         }
-        // Sorting only reorders within the song, so the groups stay valid.
-        if to_last {
+        // Sorting only reorders within the song, so the groups stay valid. A hardest difficulty
+        // with audio of its own stays unselected: the music has already started on this one.
+        if to_last && library[self.visible[g.end - 1]].meta.audio_file == library[current].meta.audio_file {
             self.cursor = g.end - 1;
         } else if let Some(pos) = self.visible[g.clone()].iter().position(|&v| v == current) {
             self.cursor = g.start + pos;
