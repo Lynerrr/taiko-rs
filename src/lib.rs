@@ -9525,11 +9525,23 @@ impl State {
                     self.mp_menu.field_label(r).unwrap_or_default().into(),
                     self.mp_menu.code.clone(),
                 )),
-                Row::Name => Some(("Your name".into(), self.cfg.mp_name.clone())),
-                Row::Port => Some(("Host on port".into(), self.cfg.mp_port.to_string())),
-                Row::Address => Some(("Join address".into(), self.cfg.mp_address.clone())),
+                Row::NewPassword => Some((
+                    "Lobby password".into(),
+                    "*".repeat(self.mp_menu.new_password.chars().count()),
+                )),
+                Row::JoinPassword => Some((
+                    "Lobby password".into(),
+                    "*".repeat(self.mp_menu.join_password.chars().count()),
+                )),
                 _ => None,
             };
+        }
+        // The host typing a new lobby password (K).
+        if let (Scene::Lobby, Some(typed)) = (
+            &self.scene,
+            self.mp.as_ref().and_then(|s| s.edit_password.as_ref()),
+        ) {
+            return Some(("New lobby password".into(), typed.clone()));
         }
         None
     }
