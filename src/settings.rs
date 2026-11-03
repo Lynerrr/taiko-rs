@@ -47,6 +47,7 @@ pub enum Item {
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
+    BlackLane,
     HideGreat,
     ChatFilter,
     MessageSound,
@@ -112,7 +113,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 124] = [
+pub const ITEMS: [(&str, Item); 125] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -139,6 +140,7 @@ pub const ITEMS: [(&str, Item); 124] = [
     ("VIEW", Item::BackgroundDim),
     ("VIEW", Item::BackgroundDimBlack),
     ("VIEW", Item::KiaiEffects),
+    ("VIEW", Item::BlackLane),
     ("INPUT", Item::Key(0)),
     ("INPUT", Item::Key(1)),
     ("INPUT", Item::Key(2)),
@@ -501,6 +503,7 @@ impl Item {
                 "Колесо меняет размер поля"
             ),
             Item::KiaiEffects => tr!("Kiai effects", "キアイの演出", "Эффекты киай"),
+            Item::BlackLane => tr!("Black lane", "黒いレーン", "Чёрная дорожка"),
             Item::HideGreat => tr!(
                 "Hide GREAT splash",
                 "GREATの表示を隠す",
@@ -693,6 +696,7 @@ impl Item {
             | Item::BackgroundDimBlack
             | Item::Interface
             | Item::KiaiEffects
+            | Item::BlackLane
             | Item::AutoplayLeftHanded
             | Item::HideGreat
             | Item::HitFlash
@@ -889,6 +893,11 @@ impl Item {
                 "Replays, scores, videos, downloaded maps, skins and caches. Enter: move them to another folder or drive.",
                 "リプレイ、スコア、動画、ダウンロードした譜面、スキン、キャッシュ。Enter: 別のフォルダやドライブへ移動。",
                 "Повторы, рекорды, видео, скачанные карты, скины и кэш. Enter: перенести в другую папку или на диск."
+            ),
+            Item::BlackLane => tr!(
+                "The lane the notes scroll on, and the drum's panel, are pure black: no kiai tint, no skin's lane picture.",
+                "ノーツが流れるレーンと太鼓のパネルを真っ黒に。キアイの色もスキンのレーン画像もなし。",
+                "Дорожка, по которой едут ноты, и панель барабана полностью чёрные: без подсветки киай и картинки дорожки из скина."
             ),
             Item::KiaiEffects => tr!(
                 "During kiai time, tint the lane and pulse the hit target with the beat. The main menu joins in too.",
