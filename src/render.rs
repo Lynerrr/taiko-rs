@@ -20,7 +20,8 @@ pub struct Shape {
     pub border: [f32; 4],
     /// x: corner radius, y: border width, z: glow/softness width, w: half clip (0 none, 1 left, 2 right)
     /// or a skin image (`SPRITE_BASE` + `Sprite`, tinted by `fill`) or a character of the font
-    /// (`GLYPH_BASE` + `font::index`, in `fill`, filling the quad's 5x7 font pixels).
+    /// (`GLYPH_BASE` + `font::index`, in `fill`, filling the quad's 5x7 font pixels) or a profile
+    /// picture (-1 - its `avatars` slot, rounded by x, faded by fill's alpha).
     pub params: [f32; 4],
     /// Rotation (radians, clockwise on screen) about the centre; 0 for nearly everything.
     pub angle: f32,
@@ -252,13 +253,17 @@ impl PresentChoice {
     /// In the order the settings list shows them.
     pub const ALL: [PresentChoice; 3] = [PresentChoice::Fifo, PresentChoice::Mailbox, PresentChoice::Immediate];
 
-    pub fn next(self) -> Self {
-        match self {
-            PresentChoice::Mailbox => PresentChoice::Immediate,
-            PresentChoice::Immediate => PresentChoice::Fifo,
-            PresentChoice::Fifo => PresentChoice::Mailbox,
-        }
+    /// The one drawn with when `self` isn't among `modes` (what the renderer can do), as
+    /// `Renderer::set_present` falls back.
+    pub fn within(self, modes: &[PresentChoice]) -> PresentChoice {
+        let order: &[PresentChoice] = match self {
+            PresentChoice::Mailbox => &[PresentChoice::Mailbox, PresentChoice::Immediate, PresentChoice::Fifo],
+            PresentChoice::Immediate => &[PresentChoice::Immediate, PresentChoice::Mailbox, PresentChoice::Fifo],
+            PresentChoice::Fifo => &[PresentChoice::Fifo],
+        };
+        order.iter().copied().find(|p| modes.contains(p)).unwrap_or(PresentChoice::Fifo)
     }
+
     pub fn name(self) -> &'static str {
         match self {
             PresentChoice::Mailbox => "mailbox",
@@ -299,6 +304,9 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     /// The font's glyphs (`font::atlas`), for text quads.
     font_view: wgpu::TextureView,
+    /// Profile pictures, a grid of `avatars::CELL` squares (`Renderer::set_avatar`).
+    avatar_texture: wgpu::Texture,
+    avatar_view: wgpu::TextureView,
     instances: wgpu::Buffer,
     capacity: usize,
     supported_modes: Vec<wgpu::PresentMode>,
@@ -321,11 +329,17 @@ pub struct Renderer {
     pub bg_mix: f32,
     /// 0 hides the background, 1 shows it at full brightness.
     pub bg_brightness: f32,
+    /// How far the background has faded into its blurred copy, 0 (sharp) to 1 (the idle screen's).
+    pub bg_blur: f32,
     pub present: PresentChoice,
     pub adapter_name: String,
+    /// The graphics API it draws with.
+    pub backend: wgpu::Backend,
     /// 2: draw at half the screen's resolution, then scale up exactly 2x (crisp pixels, a
     /// quarter of the work); 1: full resolution.
     pub pixel_scale: u32,
+    /// The game's `[x, y, w, h]` on the screen, in pixels, black all round; None: all of it.
+    pub letterbox: Option<[u32; 4]>,
     /// The last image came Suboptimal: configure the surface again before the next.
     reconfigure: bool,
     /// The half-resolution image and its bind group for the upscale, sized for the screen.
@@ -430,14 +444,23 @@ impl GpuTimer {
 struct LowRes {
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
+    /// Where it goes on the screen (`UPSCALE_SHADER`'s `place`).
+    place: wgpu::Buffer,
     width: u32,
     height: u32,
 }
 
-/// Integer upscale: each screen pixel copies texel (pixel / 2), so every texel becomes a sharp
-/// 2x2 block (no filtering).
+/// Integer upscale: each screen pixel copies the texel under it, so every texel becomes a sharp
+/// block `scale` pixels across (no filtering). Puts the image at `origin` on the screen.
 const UPSCALE_SHADER: &str = r#"
+struct Place {
+    origin: vec2<f32>,
+    scale: f32,
+    pad: f32,
+}
+
 @group(0) @binding(0) var image: texture_2d<f32>;
+@group(0) @binding(1) var<uniform> place: Place;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -448,7 +471,7 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
 
 @fragment
 fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let texel = min(vec2<u32>(pos.xy) / 2u, textureDimensions(image) - 1u);
+    let texel = min(vec2<u32>((pos.xy - place.origin) / place.scale), textureDimensions(image) - 1u);
     return textureLoad(image, texel, 0);
 }
 "#;
@@ -470,7 +493,7 @@ impl BgImage {
     pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> BgImage {
         let (w, h) = (width as usize, height as usize);
         let mut luma = Vec::with_capacity(w * h);
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             let (r, g, b) = (px[0] as f32, px[1] as f32, px[2] as f32);
             luma.push((0.299 * r + 0.587 * g + 0.114 * b + 0.5) as u8);
         }
@@ -525,6 +548,55 @@ struct BgLayer {
     disc_uniform: wgpu::Buffer,
 }
 
+/// The blurred copy's height (pixels): each is about 1/48 of the picture, then box-blurred.
+const BLUR_ROWS: u32 = 48;
+
+/// The size of a background's blurred copy: `BLUR_ROWS` high, its aspect kept.
+fn blurred_size(w: u32, h: u32) -> (u32, u32) {
+    let sh = BLUR_ROWS.min(h).max(1);
+    ((w as u64 * sh as u64 / h.max(1) as u64).max(1) as u32, sh)
+}
+
+/// `src` (`w` x `h`, `comps` bytes a pixel) averaged down to `sw` x `sh`, then three passes of
+/// a 3-wide box blur each way (close to a Gaussian); the GPU's filtering smooths it back up.
+fn shrink_blur(src: &[u8], w: u32, h: u32, comps: usize, sw: u32, sh: u32) -> Vec<u8> {
+    let (w, h, sw, sh) = (w as usize, h as usize, sw as usize, sh as usize);
+    let mut out = vec![0f32; sw * sh * comps];
+    for sy in 0..sh {
+        let (y0, y1) = (sy * h / sh, ((sy + 1) * h / sh).max(sy * h / sh + 1).min(h));
+        for sx in 0..sw {
+            let (x0, x1) = (sx * w / sw, ((sx + 1) * w / sw).max(sx * w / sw + 1).min(w));
+            let n = ((y1 - y0) * (x1 - x0)).max(1) as f32;
+            for c in 0..comps {
+                let mut sum = 0u32;
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        sum += src.get((y * w + x) * comps + c).copied().unwrap_or(0) as u32;
+                    }
+                }
+                out[(sy * sw + sx) * comps + c] = sum as f32 / n;
+            }
+        }
+    }
+    for _ in 0..3 {
+        for (dx, dy) in [(1isize, 0isize), (0, 1)] {
+            let prev = out.clone();
+            for y in 0..sh as isize {
+                for x in 0..sw as isize {
+                    for c in 0..comps {
+                        let at = |x: isize, y: isize| {
+                            let (x, y) = (x.clamp(0, sw as isize - 1) as usize, y.clamp(0, sh as isize - 1) as usize);
+                            prev[(y * sw + x) * comps + c]
+                        };
+                        out[(y as usize * sw + x as usize) * comps + c] = (at(x - dx, y - dy) + at(x, y) + at(x + dx, y + dy)) / 3.0;
+                    }
+                }
+            }
+        }
+    }
+    out.into_iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect()
+}
+
 const BG_SHADER: &str = r#"
 struct Bg { uv: vec4<f32>, params: vec4<f32> };
 @group(0) @binding(0) var<uniform> bg: Bg;
@@ -543,13 +615,22 @@ fn vs(@builtin(vertex_index) vi: u32) -> V {
     return o;
 }
 
+@group(0) @binding(4) var luma_blur: texture_2d<f32>;
+@group(0) @binding(5) var chroma_blur: texture_2d<f32>;
+
+// YCbCr (JPEG's full-range BT.601) back to RGB.
+fn to_rgb(y: f32, cbcr: vec2<f32>) -> vec3<f32> {
+    let c = cbcr - vec2<f32>(0.5);
+    return vec3<f32>(y + 1.402 * c.y, y - 0.344136 * c.x - 0.714136 * c.y, y + 1.772 * c.x);
+}
+
 @fragment
 fn fs(i: V) -> @location(0) vec4<f32> {
-    // YCbCr (JPEG's full-range BT.601) back to RGB.
-    let y = textureSample(luma, samp, i.uv).r;
-    let c = textureSample(chroma, samp, i.uv).rg - vec2<f32>(0.5);
-    let rgb = vec3<f32>(y + 1.402 * c.y, y - 0.344136 * c.x - 0.714136 * c.y, y + 1.772 * c.x);
-    // params: brightness, opacity (for cross-fading into a new background).
+    // params: brightness, opacity (for cross-fading into a new background), how far into its
+    // blurred copy (the idle screen).
+    let sharp = to_rgb(textureSample(luma, samp, i.uv).r, textureSample(chroma, samp, i.uv).rg);
+    let soft = to_rgb(textureSample(luma_blur, samp, i.uv).r, textureSample(chroma_blur, samp, i.uv).rg);
+    let rgb = mix(sharp, soft, bg.params.z);
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * bg.params.x, bg.params.y);
 }
 "#;
@@ -610,6 +691,8 @@ fn shape_shader() -> String {
         .replace("SPRITE_LAST", &(SPRITES - 1).to_string())
         .replace("FONT_COLS", &crate::font::ATLAS_COLS.to_string())
         .replace("FONT_CELL_W", &crate::font::CELL_W.to_string())
+        .replace("AVATAR_GRID", &crate::avatars::GRID.to_string())
+        .replace("AVATAR_CELL", &crate::avatars::CELL.to_string())
 }
 
 const SHADER: &str = r#"
@@ -619,6 +702,7 @@ struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32 };
 @group(0) @binding(2) var atlas: texture_2d<f32>;
 @group(0) @binding(3) var samp: sampler;
 @group(0) @binding(4) var font: texture_2d<f32>;
+@group(0) @binding(5) var avatars: texture_2d<f32>;
 
 struct Inst {
     @location(0) center: vec2<f32>,
@@ -680,6 +764,17 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 
 fn shade(in: VOut) -> vec4<f32> {
+    if (in.params.w < -0.5) {
+        // A profile picture (premultiplied) from its cell of the avatar texture, rounded.
+        let slot = u32(-in.params.w - 0.5);
+        let cell = vec2<f32>(f32(slot % AVATAR_GRIDu), f32(slot / AVATAR_GRIDu));
+        let edge = 0.5 / f32(AVATAR_CELL);
+        let uv = clamp(in.local / (2.0 * in.half) + 0.5, vec2<f32>(edge), vec2<f32>(1.0 - edge));
+        let t = textureSampleLevel(avatars, samp, (cell + uv) / f32(AVATAR_GRID), 0.0);
+        let r = min(in.params.x, min(in.half.x, in.half.y));
+        let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
+        return t * in.fill.a * cover;
+    }
     if (in.params.w > 99.5) {
         // A character: how much of this pixel the font pixels under it cover (a box filter, so
         // edges look like single rects did, with no seams between neighbouring font pixels).
@@ -820,6 +915,16 @@ impl Renderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let font_view = {
@@ -854,7 +959,19 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let bind_group = Self::shape_bind_group(&device, &queue, &bgl, &globals, &sprite_rects, &sampler, &font_view, &Atlas::default());
+        let avatar_side = crate::avatars::GRID * crate::avatars::CELL;
+        let avatar_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("avatars"),
+            size: wgpu::Extent3d { width: avatar_side, height: avatar_side, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let avatar_view = avatar_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = Self::shape_bind_group(&device, &queue, &bgl, &globals, &sprite_rects, &sampler, &font_view, &avatar_view, &Atlas::default());
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[Some(&bgl)],
@@ -931,6 +1048,27 @@ impl Renderer {
                     },
                     count: None,
                 },
+                // The small blurred copies (the idle screen's).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let bg_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -994,16 +1132,24 @@ impl Renderer {
         let instances = Self::make_instance_buffer(&device, capacity);
         let upscale_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("upscale"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
         });
         let upscale_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("upscale"),
@@ -1043,6 +1189,8 @@ impl Renderer {
             sprite_rects,
             sampler,
             font_view,
+            avatar_texture,
+            avatar_view,
             instances,
             capacity,
             supported_modes: caps.present_modes,
@@ -1056,9 +1204,12 @@ impl Renderer {
             bg_prev: None,
             bg_mix: 1.0,
             bg_brightness: 0.0,
+            bg_blur: 0.0,
             present,
             adapter_name,
+            backend: adapter.get_info().backend,
             pixel_scale: 1,
+            letterbox: None,
             reconfigure: false,
             low: None,
             upscale_layout,
@@ -1088,7 +1239,22 @@ impl Renderer {
 
     /// Uploads a skin's images; an empty atlas removes them.
     pub fn set_sprites(&mut self, atlas: &Atlas) {
-        self.bind_group = Self::shape_bind_group(&self.device, &self.queue, &self.shape_layout, &self.globals, &self.sprite_rects, &self.sampler, &self.font_view, atlas);
+        self.bind_group = Self::shape_bind_group(&self.device, &self.queue, &self.shape_layout, &self.globals, &self.sprite_rects, &self.sampler, &self.font_view, &self.avatar_view, atlas);
+    }
+
+    /// Puts a profile picture (`avatars::CELL` square, premultiplied RGBA) in `slot`.
+    pub fn set_avatar(&mut self, slot: u32, rgba: &[u8]) {
+        let cell = crate::avatars::CELL;
+        if slot >= crate::avatars::GRID * crate::avatars::GRID || rgba.len() != (cell * cell * 4) as usize {
+            return;
+        }
+        let (gx, gy) = (slot % crate::avatars::GRID, slot / crate::avatars::GRID);
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &self.avatar_texture, mip_level: 0, origin: wgpu::Origin3d { x: gx * cell, y: gy * cell, z: 0 }, aspect: wgpu::TextureAspect::All },
+            rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * cell), rows_per_image: Some(cell) },
+            wgpu::Extent3d { width: cell, height: cell, depth_or_array_layers: 1 },
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1100,6 +1266,7 @@ impl Renderer {
         rects: &wgpu::Buffer,
         sampler: &wgpu::Sampler,
         font: &wgpu::TextureView,
+        avatars: &wgpu::TextureView,
         atlas: &Atlas,
     ) -> wgpu::BindGroup {
         // The texture can't be empty: no images is one transparent pixel.
@@ -1137,6 +1304,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(font) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(avatars) },
             ],
         })
     }
@@ -1185,6 +1353,10 @@ impl Renderer {
         let (cw, ch) = BgImage::chroma_size(w, h);
         let luma = plane("background luma", w, h, wgpu::TextureFormat::R8Unorm, 1, &img.luma);
         let chroma = plane("background chroma", cw, ch, wgpu::TextureFormat::Rg8Unorm, 2, &img.chroma);
+        // Small blurred copies to fade into on the idle screen: a few reads a pixel at any blur.
+        let (sw, sh) = blurred_size(w, h);
+        let luma_blur = plane("background luma blurred", sw, sh, wgpu::TextureFormat::R8Unorm, 1, &shrink_blur(&img.luma, w, h, 1, sw, sh));
+        let chroma_blur = plane("background chroma blurred", sw, sh, wgpu::TextureFormat::Rg8Unorm, 2, &shrink_blur(&img.chroma, cw, ch, 2, sw, sh));
         // Each layer has its own uniform: its crop depends on its own aspect.
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("background"),
@@ -1200,6 +1372,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&luma) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.bg_sampler) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&chroma) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&luma_blur) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&chroma_blur) },
             ],
         });
         let disc_uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1216,12 +1390,24 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&luma) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.bg_sampler) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&chroma) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&luma_blur) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&chroma_blur) },
             ],
         });
         self.bg = Some(BgLayer { bind_group, aspect: w as f32 / h as f32, uniform, alpha: 1.0, disc_bind_group, disc_uniform });
     }
 
     /// Applies a present mode, falling back toward vsync if the compositor lacks it.
+    /// The present modes this renderer can do, in the settings' order (vsync always).
+    pub fn present_choices(&self) -> Vec<PresentChoice> {
+        let to_wgpu = |p: PresentChoice| match p {
+            PresentChoice::Mailbox => wgpu::PresentMode::Mailbox,
+            PresentChoice::Immediate => wgpu::PresentMode::Immediate,
+            PresentChoice::Fifo => wgpu::PresentMode::Fifo,
+        };
+        PresentChoice::ALL.into_iter().filter(|&p| p == PresentChoice::Fifo || self.supported_modes.contains(&to_wgpu(p))).collect()
+    }
+
     pub fn set_present(&mut self, want: PresentChoice) {
         let order: &[PresentChoice] = match want {
             PresentChoice::Mailbox => &[PresentChoice::Mailbox, PresentChoice::Immediate, PresentChoice::Fifo],
@@ -1270,17 +1456,24 @@ impl Renderer {
     /// Render pixels per virtual unit for crisp text (`set_text_grid`) when drawing at half
     /// resolution.
     pub fn text_grid(&self) -> Option<f32> {
-        (self.pixel_scale > 1).then(|| (self.config.height / self.pixel_scale).max(1) as f32 / VIRTUAL_HEIGHT)
+        (self.pixel_scale > 1).then(|| (self.size().1 / self.pixel_scale).max(1) as f32 / VIRTUAL_HEIGHT)
     }
 
-    /// The screen in pixels.
+    /// Where the game goes, if not on all of the screen. Only a place on the screen as it is now:
+    /// one left over from another size would draw outside it.
+    fn placed(&self) -> Option<[u32; 4]> {
+        self.letterbox.filter(|&[x, y, w, h]| w > 0 && h > 0 && x + w <= self.config.width && y + h <= self.config.height)
+    }
+
+    /// The game in pixels: the screen, or its part of it.
     pub fn size(&self) -> (u32, u32) {
-        (self.config.width, self.config.height)
+        self.placed().map_or((self.config.width, self.config.height), |[_, _, w, h]| (w, h))
     }
 
     /// Canvas width in virtual units.
     pub fn virtual_width(&self) -> f32 {
-        VIRTUAL_HEIGHT * self.config.width as f32 / self.config.height.max(1) as f32
+        let (w, h) = self.size();
+        VIRTUAL_HEIGHT * w as f32 / h.max(1) as f32
     }
 
     /// Waits for a swapchain image. Under vsync this is where the frame may block, so callers
@@ -1318,13 +1511,12 @@ impl Renderer {
         clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
         opaque: Option<[f32; 4]>,
     ) -> Option<(u32, u32, Vec<u8>)> {
-        // What the shapes are drawn at: the screen, or half of it to be scaled up after.
-        let scaled = self.pixel_scale > 1;
-        let (w, h) = if scaled {
-            ((self.config.width / self.pixel_scale).max(1), (self.config.height / self.pixel_scale).max(1))
-        } else {
-            (self.config.width, self.config.height)
-        };
+        // What the shapes are drawn at: the game's size, or half of it to be scaled up after. Either
+        // goes through an image of its own to get to its place on a black screen.
+        let place = self.placed();
+        let scaled = self.pixel_scale > 1 || place.is_some();
+        let (gw, gh) = self.size();
+        let (w, h) = ((gw / self.pixel_scale).max(1), (gh / self.pixel_scale).max(1));
         if scaled {
             self.ensure_low(w, h);
         }
@@ -1371,7 +1563,7 @@ impl Renderer {
             if let Some(l) = layer {
                 // "Cover" fit: crop the image's long side so it fills the screen without stretching.
                 let (u, v) = if l.aspect > screen { (screen / l.aspect, 1.0) } else { (1.0, l.aspect / screen) };
-                let uniform = [(1.0 - u) / 2.0, (1.0 - v) / 2.0, (1.0 + u) / 2.0, (1.0 + v) / 2.0, self.bg_brightness, alpha, 0.0, 0.0];
+                let uniform = [(1.0 - u) / 2.0, (1.0 - v) / 2.0, (1.0 + u) / 2.0, (1.0 + v) / 2.0, self.bg_brightness, alpha, self.bg_blur.clamp(0.0, 1.0), 0.0];
                 self.queue.write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
                 l.alpha = alpha;
             }
@@ -1396,7 +1588,11 @@ impl Renderer {
         match self.low.as_ref().filter(|_| scaled) {
             Some(low) => {
                 self.encode_pass(&mut encoder, &low.view, false, shapes.len(), clear, &into, timer.and_then(|t| t.writes(true, false)));
-                self.encode_upscale(&mut encoder, &view, low, clear, timer.and_then(|t| t.writes(false, true)));
+                let origin = place.map_or([0, 0], |[x, y, ..]| [x, y]);
+                let round = if place.is_some() { [0.0; 3] } else { clear };
+                let uniform = [origin[0] as f32, origin[1] as f32, self.pixel_scale as f32, 0.0];
+                self.queue.write_buffer(&low.place, 0, bytemuck::cast_slice(&uniform));
+                self.encode_upscale(&mut encoder, &view, low, origin, self.pixel_scale, round, timer.and_then(|t| t.writes(false, true)));
             }
             None => self.encode_pass(&mut encoder, &view, false, shapes.len(), clear, &into, timer.and_then(|t| t.writes(true, true))),
         }
@@ -1447,7 +1643,7 @@ impl Renderer {
         let data = buf.slice(..).get_mapped_range().ok()?;
         let mut rgb = Vec::with_capacity((w * h * 3) as usize);
         for row in data.chunks_exact(bpr as usize) {
-            for px in row[..(w * 4) as usize].chunks_exact(4) {
+            for px in row[..(w * 4) as usize].as_chunks::<4>().0 {
                 rgb.extend_from_slice(&px[..3]);
             }
         }
@@ -1542,21 +1738,33 @@ impl Renderer {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let place = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("upscale place"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("half resolution"),
             layout: &self.upscale_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }],
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: place.as_entire_binding() },
+            ],
         });
-        self.low = Some(LowRes { view, bind_group, width, height });
+        self.low = Some(LowRes { view, bind_group, place, width, height });
     }
 
-    /// Scales the half-resolution image up to the screen, exactly 2x. An odd last row or column
-    /// of the screen keeps the clear colour.
+    /// Puts the image on the screen at `origin`, `scale` times its size exactly. What it doesn't
+    /// cover (an odd last row or column of the screen, a letterbox's bars) keeps `clear`.
+    #[allow(clippy::too_many_arguments)]
     fn encode_upscale(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         low: &LowRes,
+        origin: [u32; 2],
+        scale: u32,
         clear: [f64; 3],
         timestamp_writes: Option<wgpu::RenderPassTimestampWrites>,
     ) {
@@ -1574,7 +1782,7 @@ impl Renderer {
             timestamp_writes,
             ..Default::default()
         });
-        pass.set_viewport(0.0, 0.0, (low.width * 2) as f32, (low.height * 2) as f32, 0.0, 1.0);
+        pass.set_viewport(origin[0] as f32, origin[1] as f32, (low.width * scale) as f32, (low.height * scale) as f32, 0.0, 1.0);
         pass.set_pipeline(&self.upscale_pipeline);
         pass.set_bind_group(0, &low.bind_group, &[]);
         pass.draw(0..3, 0..1);
@@ -1683,6 +1891,19 @@ fn font_px(size: f32) -> f32 {
     }
 }
 
+thread_local! {
+    /// The Legacy menu setting, for the frame being built.
+    static LEGACY_MENU: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub fn set_legacy_menu(on: bool) {
+    LEGACY_MENU.with(|l| l.set(on));
+}
+
+pub fn legacy_menu() -> bool {
+    LEGACY_MENU.with(std::cell::Cell::get)
+}
+
 /// `v` moved onto the text grid (unchanged without one).
 pub fn snap_to_grid(v: f32) -> f32 {
     let grid = TEXT_GRID.with(std::cell::Cell::get);
@@ -1709,6 +1930,28 @@ pub fn animations() -> bool {
 
 /// Moves `value` toward `target`, covering ~63% of the way every `tau_ms` (jumps there with
 /// animations off).
+/// A list's own position, apart from what's selected in it: where it's going and where it's got to.
+#[derive(Clone, Copy, Debug)]
+pub struct Glide {
+    pub now: f32,
+    pub goal: f32,
+}
+
+impl Glide {
+    pub fn at(now: f32) -> Glide {
+        Glide { now, goal: now }
+    }
+
+    /// A frame's motion towards the goal, kept within `0..=max` (from past an end it springs back).
+    pub fn settle(&mut self, max: f32, dt_ms: f32, tau_ms: f32) {
+        self.goal = self.goal.clamp(0.0, max);
+        approach(&mut self.now, self.goal, dt_ms, tau_ms);
+        if (self.now - self.goal).abs() < 0.05 {
+            self.now = self.goal;
+        }
+    }
+}
+
 pub fn approach(value: &mut f32, target: f32, dt_ms: f32, tau_ms: f32) {
     if !animations() || !value.is_finite() {
         *value = target;
@@ -1748,6 +1991,12 @@ pub enum Hit {
     Tab(usize),
     /// A note of the main menu (index into `menu::ITEMS`).
     MenuItem(usize),
+    /// A tab of the medals screen.
+    MedalTab(usize),
+    /// Takes the song list back to the selection it was scrolled away from.
+    ListBack,
+    /// Song select's way out: the main menu, or back where it came from.
+    ToMenu,
     /// A button of the first steps guide.
     Guide(crate::guide::Action),
     /// The main menu's button to our Discord server.
@@ -1784,6 +2033,10 @@ pub enum Hit {
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
     SettingStep(usize, i32),
+    /// The bar of a setting (index into `settings::ITEMS`): set by clicking or dragging it.
+    SettingLevel(usize),
+    /// The settings' search box.
+    SettingsSearch,
     PauseItem(usize),
     MpRow(usize),
     /// Opens the playfield preset list.
@@ -1840,10 +2093,14 @@ pub enum Hit {
     /// notification card.
     SocialToggle,
     SocialPanel,
+    /// Back from a conversation to the friend list.
+    SocialBack,
     SocialTab(crate::social::Tab),
     SocialRow(usize),
     SocialAction(usize, crate::social::Action),
     SocialNote(usize),
+    /// An admin takes this global chat line (its index) down.
+    SocialDeleteChat(usize),
     /// A chat line naming a map set (`/np`): downloads it, or picks it in song select.
     ChatMap(u32),
     /// A text field (a search box, the message box): on Android, tapping it brings up the
@@ -1893,14 +2150,17 @@ pub struct Canvas {
     /// A plain opaque rect (shape index) that hides the background under it, so the renderer
     /// needn't draw the background there (`opaque_rect`).
     pub opaque: Option<usize>,
+    /// Which profile pictures the renderer has, by lowercased name: their slots.
+    pub avatar_slots: std::sync::Arc<std::collections::HashMap<String, u32>>,
+    /// Pictures asked for this frame (lowercased names), so they get fetched.
+    pub avatars_wanted: Vec<String>,
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
     let acc = accent();
-    if acc != DEFAULT_ACCENT {
-        if let Some([r, g, b]) = tint_grey(hex, acc) {
-            return [r, g, b, a];
-        }
+    if acc != DEFAULT_ACCENT
+        && let Some([r, g, b]) = tint_grey(hex, acc) {
+        return [r, g, b, a];
     }
     [((hex >> 16) & 0xff) as f32 / 255.0, ((hex >> 8) & 0xff) as f32 / 255.0, (hex & 0xff) as f32 / 255.0, a]
 }
@@ -1926,7 +2186,24 @@ pub fn set_accent(hex: u32) {
 
 /// The interface's accent: borders of what's selected, headings, sliders.
 pub fn accent() -> u32 {
+    #[cfg(test)]
+    if let Some(pinned) = PINNED_ACCENT.with(std::cell::Cell::get) {
+        return pinned;
+    }
     ACCENT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PINNED_ACCENT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Tests: this thread sees `hex` as the accent whatever `set_accent` does meanwhile. The accent
+/// is process-wide (the window thread reads it too), and tests building frames in parallel set
+/// it from their own configs, so a test comparing draws pins it first.
+#[cfg(test)]
+pub fn pin_accent_for_this_thread(hex: Option<u32>) {
+    PINNED_ACCENT.with(|p| p.set(hex));
 }
 
 /// `default` with the default accent; with another, that accent mixed `t` of the way to `toward`
@@ -2014,6 +2291,7 @@ const CLEAR: [f32; 4] = [0.0; 4];
 impl Canvas {
     pub fn clear(&mut self, width: f32) {
         self.shapes.clear();
+        self.avatars_wanted.clear();
         self.disc = None;
         self.hits.clear();
         self.clips.clear();
@@ -2075,7 +2353,7 @@ impl Canvas {
             (false, false) => (0x23232f, 0x3a3a4e),
             (false, true) => (0x34344a, 0x6a6a88),
         };
-        self.round_rect(x, y, w, h, 6.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
+        self.round_rect([x, y], [w, h], 6.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
         // A label too long for the button shrinks a little, then gets cut short.
         let room = w - 8.0;
         let size = Self::fit_size(size, size * 0.8, room, label);
@@ -2113,7 +2391,7 @@ impl Canvas {
         self.shapes.push(Shape { center: [x + w / 2.0, y + h / 2.0], half: [w / 2.0, h / 2.0], fill, border: fill, params: [0.0; 4], angle: 0.0 });
     }
 
-    pub fn round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
+    pub fn round_rect(&mut self, [x, y]: [f32; 2], [w, h]: [f32; 2], radius: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
         if self.audit {
             self.boxes.push(self.shapes.len());
         }
@@ -2136,7 +2414,7 @@ impl Canvas {
     }
 
     /// Horizontal capsule from x0 to x1 (centres of the end caps).
-    pub fn capsule(&mut self, x0: f32, x1: f32, y: f32, r: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
+    pub fn capsule(&mut self, [x0, x1]: [f32; 2], y: f32, r: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
         let (a, b) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
         self.shapes.push(Shape {
             center: [(a + b) / 2.0, y],
@@ -2149,7 +2427,7 @@ impl Canvas {
     }
 
     /// Left (`side` 1) or right (`side` 2) half of a circle.
-    pub fn half_circle(&mut self, x: f32, y: f32, r: f32, side: u8, fill: [f32; 4], border: [f32; 4], border_w: f32) {
+    pub fn half_circle(&mut self, [x, y]: [f32; 2], r: f32, side: u8, fill: [f32; 4], border: [f32; 4], border_w: f32) {
         self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, side as f32], angle: 0.0 });
     }
 
@@ -2209,6 +2487,25 @@ impl Canvas {
         }
         // Negative where a glow's softness goes; big, so scaling the playfield keeps it below -0.5.
         self.shapes[start].params[2] = -1.0e6;
+    }
+
+    /// `name`'s profile picture, round, centred on (`x`, `y`) with radius `r`; until it's here
+    /// (and without one) their initial on a disc of `colour`.
+    pub fn avatar(&mut self, name: &str, x: f32, y: f32, r: f32, colour: u32, a: f32) {
+        let key = name.to_ascii_lowercase();
+        let slot = self.avatar_slots.get(&key).copied();
+        if !self.avatars_wanted.contains(&key) {
+            self.avatars_wanted.push(key);
+        }
+        match slot {
+            Some(slot) => self.shapes.push(Shape { center: [x, y], half: [r, r], fill: [1.0, 1.0, 1.0, a], border: CLEAR, params: [r, 0.0, 0.0, -1.0 - slot as f32], angle: 0.0 }),
+            None => {
+                self.circle(x, y, r, rgba(colour, 0.9 * a), CLEAR, 0.0);
+                let initial: String = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into());
+                let size = (r * 1.15).max(4.0);
+                self.text_centered(x + size / 14.0, y - size / 2.0, size, rgba(0x0d0d15, a), &initial);
+            }
+        }
     }
 
     /// A skin image stretched over the box centred on (`x`, `y`), `hw` by `hh` either side.
@@ -2469,6 +2766,45 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pinned_accent_holds_while_another_thread_sets_it() {
+        super::pin_accent_for_this_thread(Some(0x123456));
+        let other = std::thread::spawn(|| {
+            for i in 0..1000 {
+                super::set_accent(i);
+            }
+            super::accent()
+        });
+        let seen = other.join().unwrap();
+        assert_eq!(super::accent(), 0x123456, "the pin holds on this thread");
+        assert_ne!(seen, 0x123456, "other threads see what's set");
+        super::pin_accent_for_this_thread(None);
+        super::set_accent(super::DEFAULT_ACCENT);
+    }
+
+    #[test]
+    fn a_background_s_blurred_copy_is_small_and_keeps_its_colours() {
+        assert_eq!(super::blurred_size(1920, 1080), (85, 48));
+        assert_eq!(super::blurred_size(10, 4), (10, 4), "never bigger than the picture");
+        // A flat picture stays flat; a bright half bleeds into the dark one.
+        let flat = super::shrink_blur(&[90; 64 * 32 * 2], 64, 32, 2, 16, 8);
+        assert!(flat.iter().all(|&v| v == 90));
+        let half: Vec<u8> = (0..64 * 32).map(|i| if i % 64 < 32 { 0 } else { 255 }).collect();
+        let soft = super::shrink_blur(&half, 64, 32, 1, 16, 8);
+        assert!(soft[7] > 0 && soft[7] < soft[8] && soft[8] < 255, "{:?}", &soft[..16]);
+    }
+
+    #[test]
+    fn a_present_mode_the_renderer_lacks_falls_back_like_the_renderer_does() {
+        use super::PresentChoice::*;
+        // OpenGL on Linux: vsync only.
+        assert_eq!(Mailbox.within(&[Fifo]), Fifo);
+        assert_eq!(Immediate.within(&[Fifo]), Fifo);
+        // Windows' OpenGL: no mailbox.
+        assert_eq!(Mailbox.within(&[Fifo, Immediate]), Immediate);
+        assert_eq!(Immediate.within(&[Fifo, Mailbox, Immediate]), Immediate);
+    }
+
     use wgpu::naga;
 
     #[test]

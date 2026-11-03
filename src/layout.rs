@@ -43,7 +43,7 @@ impl Area {
         Some(Area { x, y, w, h }.clamped())
     }
 
-    pub fn to_config(&self) -> String {
+    pub fn to_config(self) -> String {
         format!("{:.3},{:.3},{:.3},{:.3}", self.x, self.y, self.w, self.h)
     }
 
@@ -178,31 +178,27 @@ pub fn snap(a: Area, grip: Grip, tol_x: f32, tol_y: f32) -> (Area, Vec<Guide>) {
         }
         Grip::Resize { left, right, top, bottom } => {
             let (r, b) = (a.x + a.w, a.y + a.h);
-            if left {
-                if let Some((d, line)) = best(&[(a.x, 0.0), (a.x, 0.5)], tol_x) {
-                    a.x += d;
-                    a.w = r - a.x;
-                    guides.push(Guide::Vertical(line));
-                }
+            if left
+                && let Some((d, line)) = best(&[(a.x, 0.0), (a.x, 0.5)], tol_x) {
+                a.x += d;
+                a.w = r - a.x;
+                guides.push(Guide::Vertical(line));
             }
-            if right {
-                if let Some((d, line)) = best(&[(r, 0.5), (r, 1.0)], tol_x) {
-                    a.w += d;
-                    guides.push(Guide::Vertical(line));
-                }
+            if right
+                && let Some((d, line)) = best(&[(r, 0.5), (r, 1.0)], tol_x) {
+                a.w += d;
+                guides.push(Guide::Vertical(line));
             }
-            if top {
-                if let Some((d, line)) = best(&[(a.y, 0.0), (a.y, 0.5)], tol_y) {
-                    a.y += d;
-                    a.h = b - a.y;
-                    guides.push(Guide::Horizontal(line));
-                }
+            if top
+                && let Some((d, line)) = best(&[(a.y, 0.0), (a.y, 0.5)], tol_y) {
+                a.y += d;
+                a.h = b - a.y;
+                guides.push(Guide::Horizontal(line));
             }
-            if bottom {
-                if let Some((d, line)) = best(&[(b, 0.5), (b, 1.0)], tol_y) {
-                    a.h += d;
-                    guides.push(Guide::Horizontal(line));
-                }
+            if bottom
+                && let Some((d, line)) = best(&[(b, 0.5), (b, 1.0)], tol_y) {
+                a.h += d;
+                guides.push(Guide::Horizontal(line));
             }
         }
     }
@@ -268,6 +264,21 @@ pub fn parse_size(s: &str) -> Option<(u32, u32)> {
     (parts.next().is_none() && (320..=7680).contains(&w) && (240..=4320).contains(&h)).then_some((w, h))
 }
 
+/// Where a game of `size` pixels goes on a black `screen`: `[x, y, w, h]` in pixels. `pos` moves it
+/// from the centre towards the edges, -100 to 100 percent of the room there is each way. None if
+/// it fills the screen. Never bigger than the screen, nor uselessly small whatever the config says.
+pub fn letterbox(screen: (u32, u32), size: (u32, u32), pos: (f32, f32)) -> Option<[u32; 4]> {
+    if screen.0 == 0 || screen.1 == 0 {
+        return None;
+    }
+    let (w, h) = (size.0.clamp(320.min(screen.0), screen.0), size.1.clamp(240.min(screen.1), screen.1));
+    if (w, h) == screen {
+        return None;
+    }
+    let at = |room: u32, pos: f32| (room as f32 * (0.5 + pos.clamp(-100.0, 100.0) / 200.0)).round() as u32;
+    Some([at(screen.0 - w, pos.0), at(screen.1 - h, pos.1), w, h])
+}
+
 /// A centred area the size of a `w` x `h` window on a `screen_w` x `screen_h` screen.
 pub fn preset_area(w: u32, h: u32, screen_w: f32, screen_h: f32) -> Area {
     let (fw, fh) = (w as f32 / screen_w.max(1.0), h as f32 / screen_h.max(1.0));
@@ -304,15 +315,28 @@ pub fn draw_frame(c: &mut Canvas, area: Area, strong: bool) {
     let (x, y) = (area.x * c.width, area.y * VIRTUAL_HEIGHT);
     let (w, h) = (area.w * c.width, area.h * VIRTUAL_HEIGHT);
     let a = if strong { 0.9 } else { 0.45 };
-    c.round_rect(x, y, w, h, 3.0, rgba(0, 0.0), rgba(accent(), a), 1.5);
+    c.round_rect([x, y], [w, h], 3.0, rgba(0, 0.0), rgba(accent(), a), 1.5);
     for (hx, hy) in [(x, y), (x + w, y), (x, y + h), (x + w, y + h)] {
-        c.round_rect(hx - 4.0, hy - 4.0, 8.0, 8.0, 2.0, rgba(accent(), a), rgba(0xffffff, a), 1.0);
+        c.round_rect([hx - 4.0, hy - 4.0], [8.0, 8.0], 2.0, rgba(accent(), a), rgba(0xffffff, a), 1.0);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn letterbox_centres_the_game_moves_it_and_stays_on_the_screen() {
+        let screen = (1920, 1080);
+        assert_eq!(letterbox(screen, (1280, 720), (0.0, 0.0)), Some([320, 180, 1280, 720]));
+        assert_eq!(letterbox(screen, (1280, 720), (-100.0, 100.0)), Some([0, 360, 1280, 720]));
+        assert_eq!(letterbox(screen, (1280, 720), (500.0, -500.0)), Some([640, 0, 1280, 720]), "held to the screen");
+        assert_eq!(letterbox(screen, (1920, 1080), (0.0, 0.0)), None, "nothing to put around it");
+        assert_eq!(letterbox(screen, (3840, 2160), (0.0, 0.0)), None, "too big: all of the screen");
+        assert_eq!(letterbox(screen, (3840, 720), (0.0, 0.0)), Some([0, 180, 1920, 720]), "bars one way only");
+        assert_eq!(letterbox(screen, (1, 1), (0.0, 0.0)), Some([800, 420, 320, 240]));
+        assert_eq!(letterbox((0, 0), (1280, 720), (0.0, 0.0)), None, "a window with no size yet");
+    }
 
     const W: f64 = 1920.0;
     const H: f64 = 1080.0;

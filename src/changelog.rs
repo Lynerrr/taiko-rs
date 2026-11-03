@@ -8,7 +8,7 @@ use winit::keyboard::KeyCode;
 
 use crate::render::{accent, rgba, Canvas, Hit};
 
-/// One change: when, what, and its points (the commit's "- ..." lines).
+/// One change: when and its player-facing notes (including legacy history).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Change {
     pub date: String,
@@ -30,6 +30,21 @@ pub struct View {
     scroll: usize,
     /// Lines that fit, and how many there are (as last drawn).
     shown: std::cell::Cell<(usize, usize)>,
+}
+
+/// Update notes stay in the background until there is something to show.
+/// Empty results and fetch failures must not interrupt startup with an automatic popup.
+pub fn poll_automatic(pending: &mut Option<View>) -> Option<View> {
+    let view = pending.as_mut()?;
+    view.poll();
+    match &view.state {
+        State::Loading(_) => None,
+        State::Loaded(changes) if !changes.is_empty() => pending.take(),
+        State::Loaded(_) | State::Failed(_) => {
+            *pending = None;
+            None
+        }
+    }
 }
 
 impl View {
@@ -100,7 +115,7 @@ impl View {
         c.hit(0.0, 0.0, w, 480.0, Hit::Overlay);
         let pw = (w - 32.0).min(640.0);
         let (px, py, ph) = ((w - pw) / 2.0, 36.0, 420.0);
-        c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), tr!("What's new", "更新内容", "Что нового"));
         let about = match (self.after_update, crate::update::BUILD) {
             (true, Some(b)) => tr!("updated to {}", "{}に更新しました", "обновлено до {}"; crate::update::short(b)),
@@ -153,9 +168,9 @@ impl View {
         if lines.len() > fits {
             let (bar_h, all) = (fits as f32 * line_h, lines.len() as f32);
             let x = px + pw - 10.0;
-            c.round_rect(x, top, 3.0, bar_h, 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+            c.round_rect([x, top], [3.0, bar_h], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
             let len = (fits as f32 / all * bar_h).max(12.0);
-            c.round_rect(x, top + scroll as f32 / all * bar_h, 3.0, len, 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
+            c.round_rect([x, top + scroll as f32 / all * bar_h], [3.0, len], 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
         }
     }
 }
@@ -219,35 +234,14 @@ fn commits(path: &str) -> Result<Vec<Change>, String> {
     Ok(items.drain(..).filter_map(|i| parse(&i.commit.message, &i.commit.author.date)).collect())
 }
 
-/// A commit as a change: its first line, and its "- " lines (continued by indented lines)
-/// without the trailers. None for merges, and for what isn't for everyone: a `Changelog: skip`
-/// line, or a player's own secret.
+/// A commit as a change, with explicit notes for Conventional Commits and legacy fallback.
 pub fn parse(message: &str, date: &str) -> Option<Change> {
-    let lower = message.to_ascii_lowercase();
-    if lower.lines().any(|l| l.trim() == "changelog: skip") || lower.contains("krokodil") {
-        return None;
-    }
-    let mut lines = message.lines();
-    let title = lines.next()?.trim().to_string();
-    if title.is_empty() || title.starts_with("Merge ") {
-        return None;
-    }
-    let mut points: Vec<String> = Vec::new();
-    for line in lines {
-        let trailer = ["Co-Authored-By:", "Claude-Session:", "Signed-off-by:"].iter().any(|t| line.to_ascii_lowercase().starts_with(&t.to_ascii_lowercase()));
-        if trailer {
-            continue;
-        }
-        if let Some(point) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-            points.push(point.trim().to_string());
-        } else if line.starts_with("  ") && !line.trim().is_empty() {
-            if let Some(last) = points.last_mut() {
-                last.push(' ');
-                last.push_str(line.trim());
-            }
-        }
-    }
-    Some(Change { date: date.get(..10).unwrap_or(date).to_string(), title, points })
+    let entry = crate::changelog_entry::parse(message)?;
+    Some(Change {
+        date: date.get(..10).unwrap_or(date).to_string(),
+        title: entry.title,
+        points: entry.points,
+    })
 }
 
 #[cfg(test)]
@@ -255,15 +249,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn commits_become_changes_without_trailers_or_merges() {
-        let msg = "pp counter and more\n\n- Live pp counter in the HUD\n- Results: the song plays on, back\n  to the preview point\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nClaude-Session: https://x\n";
+    fn commits_become_changes_from_explicit_player_notes() {
+        let msg = "feat(hud): add pp counter\n\nChangelog: See your live pp while playing.\nChangelog: The song keeps playing on the results screen.\n\n* Fixed lint errors\nCo-Authored-By: Claude <noreply@anthropic.com>\nClaude-Session: https://x\n";
         let c = parse(msg, "2026-10-26T01:02:03Z").unwrap();
-        assert_eq!(c.title, "pp counter and more");
+        assert_eq!(c.title, "See your live pp while playing.");
         assert_eq!(c.date, "2026-10-26");
-        assert_eq!(c.points, vec!["Live pp counter in the HUD".to_string(), "Results: the song plays on, back to the preview point".into()]);
-        assert!(parse("Merge remote-tracking branch 'origin/x'", "2026-10-26").is_none());
-        assert!(parse("A quiet one\n\nChangelog: skip\n", "2026-10-26").is_none());
-        assert!(parse("Krokodil_Koban mode: something\n", "2026-10-26").is_none());
+        assert_eq!(c.points, ["The song keeps playing on the results screen."]);
+        assert!(parse("fix(lint): fix warnings\n\n* Fixed lint errors", "2026-10-26").is_none());
+        assert!(parse("Merge remote-tracking branch 'origin/x'\n\nChangelog: An update", "2026-10-26").is_none());
+        assert!(parse("chore(server): update internals\n\nChangelog: skip\n", "2026-10-26").is_none());
+        assert!(parse("feat(mods): add Krokodil_Koban mode\n\nChangelog: A private mode", "2026-10-26").is_none());
+    }
+
+    #[test]
+    fn old_windows_notes_keep_their_title_points_and_date() {
+        let title = "Windows: the offset no longer drifts the longer the game stays open.";
+        let change = parse(&format!("{title}\n\n- Hits stay aligned\n  throughout long sessions\n\nCo-Authored-By: Someone <x@y>"), "2026-10-26T01:02:03Z").unwrap();
+        assert_eq!(change.title, title);
+        assert_eq!(change.points, ["Hits stay aligned throughout long sessions"]);
+        assert_eq!(change.date, "2026-10-26");
+        assert!(parse("chore(x): y\n\n* Fixed lint errors", "2026-10-26").is_none());
+    }
+
+    #[test]
+    fn automatic_notes_wait_for_nonempty_results() {
+        let (tx, rx) = mpsc::channel();
+        let mut view = View::loaded(Vec::new());
+        view.state = State::Loading(rx);
+        let mut pending = Some(view);
+        assert!(poll_automatic(&mut pending).is_none());
+        assert!(pending.is_some());
+        let change = parse("fix(audio): align hitsounds\n\nChangelog: Hitsounds stay in sync.", "2026-10-26").unwrap();
+        tx.send(Ok(vec![change.clone()])).unwrap();
+        let shown = poll_automatic(&mut pending).unwrap();
+        assert!(pending.is_none());
+        let State::Loaded(changes) = shown.state else { panic!("notes should be loaded") };
+        assert_eq!(changes, [change]);
+    }
+
+    #[test]
+    fn automatic_empty_or_failed_results_are_discarded() {
+        for result in [Ok(Vec::new()), Err("offline".to_string())] {
+            let (tx, rx) = mpsc::channel();
+            let mut view = View::loaded(Vec::new());
+            view.state = State::Loading(rx);
+            let mut pending = Some(view);
+            tx.send(result).unwrap();
+            assert!(poll_automatic(&mut pending).is_none());
+            assert!(pending.is_none());
+        }
+        let (tx, rx) = mpsc::channel();
+        drop(tx);
+        let mut view = View::loaded(Vec::new());
+        view.state = State::Loading(rx);
+        let mut pending = Some(view);
+        assert!(poll_automatic(&mut pending).is_none());
+        assert!(pending.is_none());
     }
 
     #[test]

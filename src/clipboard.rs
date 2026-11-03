@@ -42,7 +42,7 @@ pub fn set(text: &str) -> bool {
 pub fn set_image(w: u32, h: u32, rgb: &[u8]) -> bool {
     #[cfg(not(target_os = "android"))]
     {
-        let rgba: Vec<u8> = rgb.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        let rgba: Vec<u8> = rgb.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
         let image = arboard::ImageData { width: w as usize, height: h as usize, bytes: rgba.into() };
         if with_board(|b| b.set_image(image).ok()).is_some() {
             return true;
@@ -75,10 +75,10 @@ fn tool(tries: &[(&str, &[&str])], input: Option<&[u8]>) -> Option<String> {
                 // wl-copy stays behind to serve it; don't wait for it.
                 return Some(String::new());
             }
-            if let Ok(out) = c.stdin(Stdio::null()).output() {
-                if out.status.success() {
-                    return Some(String::from_utf8_lossy(&out.stdout).into_owned());
-                }
+            if let Ok(out) = c.stdin(Stdio::null()).output()
+                && out.status.success()
+            {
+                return Some(String::from_utf8_lossy(&out.stdout).into_owned());
             }
         }
     }

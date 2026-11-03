@@ -1,0 +1,74 @@
+Client CPU audit after fixes
+Baseline: 393e1d4; original results preserved in performance-audit-results.txt
+Darwin arm64, Rust 1.99.1, optimized perf-audit profile
+Command: cargo test --profile perf-audit --locked --offline --lib perf_audit:: -- --ignored --nocapture --test-threads=1
+Times in microseconds. 21 samples; see performance-audit.md and performance-fixes.md for batching and limitations.
+
+AUDIT skin/async/request/2048px: p50_us=7.042 p95_us=19.583
+AUDIT skin/async/worker-completion/2048px: p50_us=69149.958 p95_us=73827.625
+AUDIT skin/async/arc-handoff/2048px: p50_us=0.125 p95_us=0.334
+AUDIT game/prepare/2000: p50_us=127.708 p95_us=133.333
+AUDIT game/expiry/2000/long-roll=false: p50_us=0.006 p95_us=0.006
+AUDIT game/expiry/2000/long-roll=true: p50_us=0.711 p95_us=0.769
+AUDIT game/prepare/10000: p50_us=601.208 p95_us=650.542
+AUDIT game/expiry/10000/long-roll=false: p50_us=0.006 p95_us=0.006
+AUDIT game/expiry/10000/long-roll=true: p50_us=3.792 p95_us=4.173
+AUDIT mutex/sounds-rebuild/wait: p50_us=0.083 p95_us=0.125
+AUDIT hash/first/65536: p50_us=66.958 p95_us=72.750
+AUDIT offset-lookup/empty-cache/first/65536: p50_us=0.000 p95_us=0.042
+AUDIT hash/cached/65536: p50_us=0.001 p95_us=0.001
+AUDIT hash/first/1048576: p50_us=944.791 p95_us=972.000
+AUDIT offset-lookup/empty-cache/first/1048576: p50_us=0.000 p95_us=0.042
+AUDIT hash/cached/1048576: p50_us=0.001 p95_us=0.001
+AUDIT hash/first/8388608: p50_us=7576.541 p95_us=7629.167
+AUDIT offset-lookup/empty-cache/first/8388608: p50_us=0.000 p95_us=0.042
+AUDIT hash/cached/8388608: p50_us=0.001 p95_us=0.001
+AUDIT select/draw/100: p50_us=5.667 p95_us=5.758
+AUDIT select/shapes/100: 433
+AUDIT select/refilter/100: p50_us=6.750 p95_us=6.833
+AUDIT select/search/100: p50_us=11.083 p95_us=11.167
+AUDIT select/title-sort/100: p50_us=14.208 p95_us=15.416
+AUDIT select/draw/10000: p50_us=35.267 p95_us=36.675
+AUDIT select/shapes/10000: 439
+AUDIT select/refilter/10000: p50_us=760.209 p95_us=776.084
+AUDIT select/search/10000: p50_us=1214.792 p95_us=1255.083
+AUDIT select/title-sort/10000: p50_us=1549.750 p95_us=1582.667
+AUDIT select/draw/50000: p50_us=154.600 p95_us=161.833
+AUDIT select/shapes/50000: 439
+AUDIT select/refilter/50000: p50_us=4231.333 p95_us=5137.583
+AUDIT select/search/50000: p50_us=6252.250 p95_us=6552.250
+AUDIT select/title-sort/50000: p50_us=8271.417 p95_us=8444.000
+AUDIT offset/full/200/scaled=false: p50_us=0.364 p95_us=0.367
+AUDIT offset/tail200/200/scaled=false: p50_us=0.364 p95_us=0.366
+AUDIT offset/full/200/scaled=true: p50_us=0.915 p95_us=0.924
+AUDIT offset/tail200/200/scaled=true: p50_us=0.932 p95_us=0.973
+AUDIT offset/full/10000/scaled=false: p50_us=0.380 p95_us=0.386
+AUDIT offset/tail200/10000/scaled=false: p50_us=0.378 p95_us=0.380
+AUDIT offset/full/10000/scaled=true: p50_us=0.931 p95_us=1.006
+AUDIT offset/tail200/10000/scaled=true: p50_us=0.895 p95_us=0.950
+AUDIT offset/full/100000/scaled=false: p50_us=0.425 p95_us=0.428
+AUDIT offset/tail200/100000/scaled=false: p50_us=0.425 p95_us=0.428
+AUDIT offset/full/100000/scaled=true: p50_us=0.967 p95_us=0.973
+AUDIT offset/tail200/100000/scaled=true: p50_us=0.973 p95_us=0.979
+AUDIT draw/2000/slow=false/mods=: p50_us=2.058 p95_us=2.062
+AUDIT shapes/2000/slow=false/mods=: 59
+AUDIT draw/2000/slow=true/mods=: p50_us=6.175 p95_us=6.200
+AUDIT shapes/2000/slow=true/mods=: 61
+AUDIT draw/2000/slow=false/mods=MV: p50_us=16.438 p95_us=16.904
+AUDIT shapes/2000/slow=false/mods=MV: 436
+AUDIT draw/2000/slow=true/mods=MV: p50_us=48.950 p95_us=51.146
+AUDIT shapes/2000/slow=true/mods=MV: 452
+AUDIT draw/10000/slow=false/mods=: p50_us=2.013 p95_us=2.021
+AUDIT shapes/10000/slow=false/mods=: 59
+AUDIT draw/10000/slow=true/mods=: p50_us=5.054 p95_us=5.067
+AUDIT shapes/10000/slow=true/mods=: 61
+AUDIT draw/10000/slow=false/mods=MV: p50_us=16.721 p95_us=18.046
+AUDIT shapes/10000/slow=false/mods=MV: 436
+AUDIT draw/10000/slow=true/mods=MV: p50_us=41.708 p95_us=42.617
+AUDIT shapes/10000/slow=true/mods=MV: 452
+AUDIT results/star-rating/2000: p50_us=720.375 p95_us=746.209
+AUDIT results/star-rating/10000: p50_us=3484.250 p95_us=3608.083
+AUDIT sounds/rebuild/48000: p50_us=0.250 p95_us=0.333
+AUDIT sounds/medals-only/48000: p50_us=13504.125 p95_us=13617.000
+AUDIT skin/load/512px: p50_us=5374.375 p95_us=5640.333
+AUDIT skin/load/2048px: p50_us=67676.458 p95_us=69626.083

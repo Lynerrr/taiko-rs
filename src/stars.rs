@@ -16,9 +16,40 @@ const SECTION_MS: f64 = 400.0;
 
 pub(crate) fn load(path: &Path) -> Option<Beatmap> {
     let map = Beatmap::from_path(path).ok()?;
-    // Maps built to break calculators (absurd density/length) are skipped, as osu! would time out.
-    map.check_suspicion().ok()?;
-    Some(map)
+    calculable(&map).then_some(map)
+}
+
+/// Taiko maps up to this many objects are rated. rosu-pp turns away those over 30,000 as too
+/// slow to work out, but marathons are far from it: Nanahira - Nana Party's 63,841 take ~50 ms.
+const MAX_TAIKO_OBJECTS: usize = 200_000;
+
+/// Whether a map can be rated: maps built to break calculators (absurd density, length or
+/// object count) are skipped, as osu! would time out.
+pub(crate) fn calculable(map: &Beatmap) -> bool {
+    use rosu_pp::model::beatmap::TooSuspicious;
+    match map.check_suspicion() {
+        Ok(()) => true,
+        // rosu-pp stops at the count, before the length and density checks: those still apply.
+        Err(TooSuspicious::ObjectCount) if map.mode == GameMode::Taiko && map.hit_objects.len() <= MAX_TAIKO_OBJECTS => {
+            let times: Vec<f64> = map.hit_objects.iter().map(|h| h.start_time).collect();
+            reasonable_taiko(&times)
+        }
+        Err(_) => false,
+    }
+}
+
+/// rosu-pp's length and density checks for taiko (`TooSuspicious::new`): no more than a day long,
+/// and no more than 400 objects within a second or 1,000 within ten.
+fn reasonable_taiko(times: &[f64]) -> bool {
+    const DAY_MS: f64 = 24.0 * 60.0 * 60.0 * 1000.0;
+    const PER_1S: usize = 400;
+    const PER_10S: usize = 1000;
+    if let [first, .., last] = times
+        && last - first > DAY_MS {
+        return false;
+    }
+    let dense = |i: usize, n: usize, ms: f64| times.get(i + n).is_some_and(|t| t - times[i] < ms);
+    !(0..times.len()).any(|i| dense(i, PER_1S, 1000.0) || dense(i, PER_10S, 10_000.0))
 }
 
 /// The map at `path` as a play with `mods` has it: Half takes notes off (by `half`), Swap and
@@ -229,11 +260,11 @@ pub fn draw_pill(c: &mut Canvas, right: f32, y: f32, size: f32, stars: Option<f3
         }
         None => (0x2a2a38, 0x8a8aa0),
     };
-    c.round_rect(x, y - 3.0, w, h, h / 2.0, rgba(bg, 1.0), rgba(bg, 1.0), 0.0);
+    c.round_rect([x, y - 3.0], [w, h], h / 2.0, rgba(bg, 1.0), rgba(bg, 1.0), 0.0);
     // A small diamond stands in for the star glyph the pixel font doesn't have.
     let d = size * 0.32;
     let (dx, dy) = (x + size * 0.6 + 2.0, y - 3.0 + h / 2.0);
-    c.round_rect(dx - d, dy - d, d * 2.0, d * 2.0, d * 0.4, rgba(fg, 1.0), rgba(fg, 1.0), 0.0);
+    c.round_rect([dx - d, dy - d], [d * 2.0, d * 2.0], d * 0.4, rgba(fg, 1.0), rgba(fg, 1.0), 0.0);
     c.text(x + size * 1.3 + 4.0, y, size, rgba(fg, 1.0), &text);
     w
 }
@@ -267,6 +298,49 @@ mod tests {
         // Mods the rating doesn't count don't change it.
         assert_eq!(mod_bits(crate::mods::Mods::parse("HD,FL,PF")), 0);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A taiko map of `n` dons, `gap_ms` apart.
+    fn stream(n: usize, gap_ms: f64) -> Beatmap {
+        map_of((0..n).map(|k| 1000.0 + k as f64 * gap_ms))
+    }
+
+    /// A taiko map of dons at `times`.
+    fn map_of(times: impl Iterator<Item = f64>) -> Beatmap {
+        let mut osu = String::from(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nHPDrainRate:5\nCircleSize:5\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n0,333.333,4,1,0,100,1,0\n\n[HitObjects]\n",
+        );
+        for t in times {
+            osu.push_str(&format!("256,192,{t},1,0,0:0:0:0:\n"));
+        }
+        osu.parse().unwrap()
+    }
+
+    #[test]
+    fn marathons_over_rosu_pps_object_count_are_rated() {
+        // Nana Party's size: 63,841 notes in three hours.
+        let map = stream(63_841, 170.0);
+        assert!(matches!(map.check_suspicion(), Err(rosu_pp::model::beatmap::TooSuspicious::ObjectCount)));
+        assert!(calculable(&map));
+        assert!(Difficulty::new().calculate_for_mode::<Taiko>(&map).unwrap().stars > 0.0);
+        // Under rosu-pp's count, its own checks decide as before.
+        assert!(calculable(&stream(1000, 100.0)));
+    }
+
+    #[test]
+    fn maps_built_to_break_calculators_still_are_not() {
+        // Past the count it's not tried at all.
+        assert!(!calculable(&stream(MAX_TAIKO_OBJECTS + 1, 100.0)));
+        // Over the count, the checks rosu-pp skips for it still apply: 401 notes within a second
+        // (a burst in a 20 ms stream)...
+        let burst = |n: usize| map_of((0..40_000).map(move |k| if k < n { k as f64 * 2.0 } else { 1e6 + k as f64 * 20.0 }));
+        assert!(!calculable(&burst(401)));
+        assert!(calculable(&burst(400)));
+        // ...1,001 within ten seconds...
+        assert!(!calculable(&stream(40_000, 9.99)));
+        assert!(calculable(&stream(40_000, 10.01)));
+        // ...and over a day long.
+        assert!(!calculable(&stream(40_000, 2200.0)));
     }
 
     #[test]

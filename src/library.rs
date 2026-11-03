@@ -16,17 +16,25 @@ pub struct Entry {
     /// Content hash of the `.osu` for matching maps between multiplayer clients. Computed on first
     /// use: hashing every file up front would make startup with a big library crawl.
     hash: OnceLock<u64>,
+    text: crate::search::Text,
 }
 
 impl Entry {
     pub fn new(path: PathBuf, meta: Meta) -> Entry {
         let (size, modified) = file_stats(&path);
-        Entry { path, meta, size, modified, hash: OnceLock::new() }
+        Self::from_parts(path, meta, size, modified)
+    }
+
+    fn from_parts(path: PathBuf, meta: Meta, size: u64, modified: u64) -> Entry {
+        let text = crate::search::Text::new(&meta, &format!("{} - {} [{}]", meta.artist, meta.title, meta.version));
+        Entry { path, meta, size, modified, hash: OnceLock::new(), text }
     }
 
     pub fn label(&self) -> String {
         format!("{} - {} [{}]", self.meta.artist, self.meta.title, self.meta.version)
     }
+
+    pub fn text(&self) -> &crate::search::Text { &self.text }
 
     /// The osu! beatmap set it belongs to: from the `.osu`, else its "123456 Artist - Title" folder.
     pub fn set_id(&self) -> Option<u32> {
@@ -413,7 +421,7 @@ fn scan_cached(inputs: &[PathBuf], found: &AtomicUsize, cache_path: &Path) -> Ve
     let mut entries: Vec<Entry> = maps
         .into_iter()
         .filter(|m| m.meta.is_playable())
-        .map(|m| Entry { path: m.path, meta: m.meta, size: m.size, modified: m.modified, hash: OnceLock::new() })
+        .map(|m| Entry::from_parts(m.path, m.meta, m.size, m.modified))
         .collect();
     entries.sort_by(|a, b| {
         // Same-named songs from different folders stay separate sets.

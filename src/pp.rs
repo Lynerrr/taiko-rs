@@ -59,10 +59,14 @@ const FORMULA: [(Mod, u32); 4] = [(Mod::Easy, 2), (Mod::Hidden, 8), (Mod::HardRo
 /// Mods whose only effect on pp is the speed or the notes (`stars::load_played`), or none.
 const NEUTRAL: [Mod; 8] = [Mod::NoFail, Mod::SuddenDeath, Mod::Perfect, Mod::DoubleTime, Mod::Nightcore, Mod::HalfTime, Mod::Daycore, Mod::Half];
 
+/// The most a play's other mods can add to its pp: stacked up, a map learned by heart came to
+/// five times what it's worth.
+const MAX_CUSTOM_FACTOR: f64 = 1.5;
+
 /// What the play's other mods (taiko.rs's own, and osu!'s that pp doesn't know) do to its pp:
-/// their score multipliers.
+/// their score multipliers, up to `MAX_CUSTOM_FACTOR`.
 pub fn custom_factor(mods: Mods) -> f64 {
-    mods.iter().filter(|m| !FORMULA.iter().any(|f| f.0 == *m) && !NEUTRAL.contains(m)).map(|m| m.multiplier()).product()
+    mods.iter().filter(|m| !FORMULA.iter().any(|f| f.0 == *m) && !NEUTRAL.contains(m)).map(|m| m.multiplier()).product::<f64>().min(MAX_CUSTOM_FACTOR)
 }
 
 /// The pp of a play on the map at `path`. None for Autoplay / Relax, or a map that can't be read.
@@ -297,6 +301,22 @@ mod tests {
     }
 
     #[test]
+    fn stacked_mods_stop_adding_pp() {
+        let every = Mods::parse("BL,BO,CL,CH,DY,LI,LG,MW,PT,RL,SK,SN,SP");
+        assert_eq!(custom_factor(every), MAX_CUSTOM_FACTOR);
+        assert_eq!(custom_factor(Mods::parse("NB")), Mod::NoFinishers.multiplier(), "only adding has a ceiling");
+    }
+
+    #[test]
+    fn the_servers_list_of_mods_without_a_factor_is_right() {
+        for code in crate::online::NO_FACTOR_MODS {
+            assert_eq!(custom_factor(Mods::parse(code)), 1.0, "{code}");
+        }
+        let most = crate::mods::ALL.iter().filter(|m| !crate::online::NO_FACTOR_MODS.contains(&m.acronym())).map(|m| m.multiplier()).fold(0.0, f64::max);
+        assert!(most.powi(crate::online::MODS_BELOW_CAP as i32) < MAX_CUSTOM_FACTOR);
+    }
+
+    #[test]
     fn half_counts_the_notes_it_leaves() {
         let dir = std::env::temp_dir().join(format!("taiko-rs-pp-half-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -389,10 +409,10 @@ mod tests {
         let hr_slow = play_pp(&path, &Play { scroll_speed: 0.5, ..hr }).unwrap();
         assert!(hr_slow < hr_pp, "{hr_slow} vs {hr_pp}");
         assert!(play_pp(&path, &Play { scroll_speed: 1.5, ..play }).unwrap() > ss);
-        let bits = TaikoPerformance::new(&crate::stars::load(&path).unwrap()).mods(16u32).n300(400).calculate().unwrap().pp;
+        let bits = TaikoPerformance::new(crate::stars::load(&path).unwrap()).mods(16u32).n300(400).calculate().unwrap().pp;
         assert!((hr_pp - bits).abs() < 1e-9, "the usual speed changes nothing");
         // The lazer form of HR at a scroll speed of exactly 1 is HR.
-        let lazer_one = TaikoPerformance::new(&crate::stars::load(&path).unwrap()).mods(formula_mods(Mods::parse("HR"), 1.0 + 1e-3)).n300(400).calculate().unwrap().pp;
+        let lazer_one = TaikoPerformance::new(crate::stars::load(&path).unwrap()).mods(formula_mods(Mods::parse("HR"), 1.0 + 1e-3)).n300(400).calculate().unwrap().pp;
         assert!((lazer_one - bits).abs() / bits < 0.01, "{lazer_one} vs {bits}");
         let _ = std::fs::remove_dir_all(&dir);
     }

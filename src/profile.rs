@@ -50,9 +50,12 @@ impl View {
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.72));
         let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
-        c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         let (by, bw) = (py + ph - 26.0, 56.0);
         c.button(px + pw - bw - 12.0, by, bw, 16.0, tr!("Back", "戻る", "Назад"), 7.0, Hit::Key(KeyCode::Escape), true);
+        if matches!(self.state, State::Loaded(_)) {
+            c.button(px + pw - bw * 2.0 - 18.0, by, bw, 16.0, tr!("Medals", "メダル", "Медали"), 7.0, Hit::Key(KeyCode::KeyM), false);
+        }
         let p = match &self.state {
             State::Loading(_) => {
                 c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), &Canvas::fit(14.0, pw - 32.0, &self.name));
@@ -77,7 +80,7 @@ impl View {
         } else {
             String::new()
         };
-        let (pp, plays, joined) = (p.pp, p.plays, crate::scores::age(p.joined));
+        let (pp, plays, joined) = (p.pp + 0.0, p.plays, crate::scores::age(p.joined));
         let plays_ru = crate::lang::ru_plural(plays, ["игра", "игры", "игр"]);
         let stats = tr!(
             "{rank}   {pp:.0} pp   {plays} plays   {time}joined {joined} ago",
@@ -85,11 +88,25 @@ impl View {
             "{rank}   {pp:.0} pp   {plays} {plays_ru}   {time}с нами {joined}";
         );
         let stats_w = Canvas::text_width(8.0, &stats).min(pw * 0.6);
-        c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), &Canvas::fit(14.0, pw - stats_w - 48.0, &p.name));
+        // Their picture, left of the name and the medals line.
+        c.avatar(&p.name, px + 30.0, py + 25.0, 14.0, accent(), 1.0);
+        let hx = px + 30.0;
+        c.text(hx + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), &Canvas::fit(14.0, pw - 30.0 - stats_w - 48.0, &p.name));
         c.text_right(px + pw - 16.0, py + 16.0, 8.0, rgba(0xff8ad8, 1.0), &Canvas::fit(8.0, stats_w, &stats));
+        // Their medals: how many, their dan and their rarest.
+        let (earned, total) = (p.medals.earned, p.medals.total);
+        let mut line = tr!("MEDALS  {earned} of {total}", "メダル  {total}個中{earned}個", "МЕДАЛИ  {earned} из {total}";);
+        if let Some(dan) = &p.medals.dan {
+            line += "   ";
+            line += online::said(dan);
+        }
+        c.text(hx + 16.0, py + 31.0, 7.0, rgba(0xFFD34D, 1.0), &Canvas::fit(7.0, pw * 0.5 - 30.0, &line));
+        for (i, m) in p.medals.rarest.iter().enumerate() {
+            crate::medals::small_badge(c, px + pw - 22.0 - i as f32 * 24.0, py + 35.0, m);
+        }
         // Two lists side by side.
         let col_w = (pw - 48.0) / 2.0;
-        let top = py + 44.0;
+        let top = py + 54.0;
         let bottom = by - 6.0;
         let lists = [
             (tr!("BEST PERFORMANCE", "ベストパフォーマンス", "ЛУЧШИЕ РЕЗУЛЬТАТЫ"), &p.top, tr!("no pp plays yet", "ppのプレイはまだありません", "пока нет игр с pp")),
@@ -114,7 +131,7 @@ fn score_rows(c: &mut Canvas, rows: &[OnlineScore], x: f32, top: f32, w: f32, bo
         if y + ROW - 3.0 > bottom {
             break;
         }
-        c.round_rect(x, y, w, ROW - 3.0, 5.0, rgba(0x1d1d27, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect([x, y], [w, ROW - 3.0], 5.0, rgba(0x1d1d27, 1.0), rgba(0x2a2a38, 1.0), 1.0);
         let pp = r.pp.map(|p| format!("{p:.0}pp")).unwrap_or_else(|| "-".into());
         let pp_w = Canvas::text_width(8.0, &pp);
         c.text_right(x + w - 8.0, y + 7.0, 8.0, rgba(0xff8ad8, 1.0), &pp);

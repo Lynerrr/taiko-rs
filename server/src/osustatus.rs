@@ -146,10 +146,9 @@ fn token(s: &Status, agent: &ureq::Agent) -> Option<String> {
         #[serde(default)]
         expires_in: u64,
     }
-    if let Some((t, until)) = &s.inner.lock().unwrap().token {
-        if Instant::now() < *until {
-            return Some(t.clone());
-        }
+    if let Some((t, until)) = &s.inner.lock().unwrap().token
+        && Instant::now() < *until {
+        return Some(t.clone());
     }
     let (id, secret) = s.credentials.as_ref()?;
     let body = serde_json::json!({ "client_id": id.parse::<u64>().ok().map(serde_json::Value::from).unwrap_or_else(|| id.clone().into()), "client_secret": secret, "grant_type": "client_credentials", "scope": "public" }).to_string();
@@ -244,7 +243,7 @@ fn worker() {
                 }
                 inner.dirty = true;
                 batches += 1;
-                if batches % 20 == 0 {
+                if batches.is_multiple_of(20) {
                     println!("osu statuses: {} sets known, {} waiting", inner.known.len(), inner.queue.len());
                 }
                 if last_save.elapsed() >= Duration::from_secs(30) {

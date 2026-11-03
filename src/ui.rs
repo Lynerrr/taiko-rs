@@ -4,7 +4,7 @@ use winit::keyboard::KeyCode;
 
 use crate::game::{Stats, Windows};
 use crate::library::Entry;
-use crate::render::{accent, progress, rgba, Canvas, Hit};
+use crate::render::{accent, progress, rgba, Canvas, Glide, Hit};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SortMode {
@@ -105,8 +105,6 @@ pub struct Select {
     pub picker: Option<usize>,
     /// The open list is the sort modes, not the collections.
     pub sorting: bool,
-    /// Shown in the header while the analysis for the current sort is running.
-    pub info_progress: String,
     /// Files read so far while the library is still being scanned.
     pub scanning: Option<usize>,
     /// The folder dialog is open (from the button shown when there are no maps at all).
@@ -133,8 +131,6 @@ pub struct Select {
     pinned_view: View,
     /// The list being dragged with the left button.
     drag: Option<ListDrag>,
-    /// Where each song's own row is in the list as last drawn (list units, top = 0).
-    song_y: Vec<f32>,
     visible: Vec<usize>,
     /// Songs (beatmap sets) as ranges of `visible`: consecutive difficulties sharing a folder.
     /// Rebuilt when `visible` changes, not per frame (big libraries have tens of thousands of maps).
@@ -146,13 +142,25 @@ pub struct Select {
     sections: Vec<Section>,
     /// The section of each song (`groups`).
     section_of: Vec<usize>,
-    /// The headings (by name) whose songs are listed: the ones opened by clicking them, and the
-    /// one the selection moved into. Scrolling never opens or closes any.
-    open: std::collections::HashSet<String>,
-    /// The sort `open` is for (another starts over with the selection's section).
+    /// The headings (by name) the other way round from how this list starts (`starts_open`):
+    /// only the player's clicks and the selection change them. Scrolling never does.
+    flipped: std::collections::HashSet<String>,
+    /// What `flipped` was before a search, which opens everything: it comes back with the search
+    /// cleared.
+    flipped_before_search: Option<std::collections::HashSet<String>>,
+    /// The sort `flipped` is for (another starts over).
     open_for: SortMode,
-    /// The heading the selection was last under: when it moves to another, this one closes.
+    /// Songs are listed under headings (`sections`). Off: one list in the sort's order, each
+    /// difficulty on its own row when sorting by difficulty.
+    pub headings: bool,
+    /// Songs (folders) listed: `groups` counts difficulties instead in a list without headings
+    /// by difficulty.
+    song_count: usize,
+    /// The heading the selection was last under.
     cursor_label: Option<String>,
+    /// The heading the selection opened by moving in: it closes when the selection moves out.
+    /// One the player opened stays until they close it.
+    auto_open: Option<String>,
     /// The cursor when the player closed the heading it was under: it stays closed until the
     /// selection moves.
     closed_at: Option<usize>,
@@ -167,14 +175,25 @@ pub struct Select {
     /// Entered this song (first visible row) on its hardest difficulty: keep it there when the
     /// difficulties get sorted by stars.
     hardest_pending: Option<usize>,
-    /// Selection changes jump instead of gliding (while right-click scrolling, where they come
-    /// faster than the motion could follow).
-    pub instant: bool,
+    /// The list moved by hand, away from the selection. Left out, it follows the selection.
+    free: Option<FreeScroll>,
+    /// How far the list scrolls and the scrollbar's thumb, as last drawn.
+    scroll_max: f32,
+    thumb: f32,
+    /// Where the pointer is while flying through the list (right drag, scrollbar): the heading
+    /// passing by shows beside it.
+    pub scrubbing: Option<f32>,
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
     random_history: Vec<usize>,
     rng: u64,
     /// The song list's share of the width (`Config::song_list_share`).
     pub list_share: f32,
+    /// The Legacy menu setting: tabs on top, keys spelled out at the bottom.
+    pub legacy: bool,
+    /// The way back leads to the main menu, not to a lobby.
+    pub to_menu: bool,
+    /// A mod's customization is open over the top of the screen: no way back to show.
+    pub covered: bool,
 }
 
 /// A play's letter in its colour, the same as on the website.
@@ -218,18 +237,34 @@ struct ListAnim {
 
 /// The list held by the pointer: it scrolls with it, then flies on and settles on a song.
 struct ListDrag {
-    /// Scroll and outline when the drag began.
+    /// Scroll when the drag began.
     scroll: f32,
-    outline: f32,
     /// Scroll now, and recent (time, scroll) samples for the release speed.
     now: f32,
     samples: std::collections::VecDeque<(std::time::Instant, f32)>,
 }
 
+/// The list somewhere of the player's choosing. Selecting another song ends it.
+struct FreeScroll {
+    glide: Glide,
+    /// How quickly it gets there (ms).
+    tau: f32,
+    /// The song that was selected (its folder).
+    song: Option<std::path::PathBuf>,
+}
+
+/// How far a notch of the wheel moves the list, and how quickly.
+const WHEEL_STEP: f32 = SONG_ROW_H * 3.0;
+const WHEEL_TAU: f32 = 45.0;
+const SCRUB_TAU: f32 = 20.0;
+const THROW_TAU: f32 = 130.0;
+
 /// Length of a song list transition.
 const LIST_ANIM_MS: f32 = 200.0;
-/// Top and bottom of the song list (virtual units).
-const LIST_TOP: f32 = 86.0;
+/// Top and bottom of the song list (virtual units): with the tabs of the Legacy menu above it,
+/// and without.
+const LIST_TOP_LEGACY: f32 = 86.0;
+const LIST_TOP: f32 = 52.0;
 /// The song list's share of the width: least, most and usual (dragging its edge).
 pub const LIST_SHARE: (f32, f32, f32) = (0.3, 0.7, 0.52);
 /// The narrowest the song list and the panel beside it get (virtual units).
@@ -260,7 +295,13 @@ fn status_heading(code: u8) -> (&'static str, u32) {
         _ => ("Status not known yet", 0x8a8aa0),
     }
 }
-const LIST_BOTTOM: f32 = 440.0;
+/// The legacy layout's list runs down to its hint line.
+const LIST_BOTTOM_LEGACY: f32 = 440.0;
+/// Its frame (4 below) ends where the map panel's column does (436), leaving the button
+/// row a band of its own between the panels and the status line.
+const LIST_BOTTOM: f32 = 432.0;
+/// The button row under the panels: 6 below them, 4 above the status line.
+const BUTTONS_Y: f32 = 442.0;
 
 pub enum SelectAction {
     None,
@@ -276,6 +317,9 @@ impl Select {
         let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9e37_79b9_7f4a_7c15);
         let mut s = Select {
             list_share: LIST_SHARE.2,
+            legacy: false,
+            to_menu: true,
+            covered: false,
             filter: String::new(),
             searching: false,
             sort: SortMode::Artist,
@@ -288,7 +332,6 @@ impl Select {
             collection: None,
             picker: None,
             sorting: false,
-            info_progress: String::new(),
             scanning: None,
             picking_folder: false,
             rate_label: String::new(),
@@ -302,15 +345,18 @@ impl Select {
             pinned: std::collections::HashSet::new(),
             pinned_view: Default::default(),
             drag: None,
-            song_y: Vec::new(),
             visible: Vec::new(),
             groups: Vec::new(),
             group_of: Vec::new(),
             sections: Vec::new(),
             section_of: Vec::new(),
-            open: Default::default(),
+            flipped: Default::default(),
+            flipped_before_search: None,
             open_for: SortMode::Artist,
+            headings: true,
+            song_count: 0,
             cursor_label: None,
+            auto_open: None,
             closed_at: None,
             row_value: Vec::new(),
             cursor: 0,
@@ -318,7 +364,10 @@ impl Select {
             anim: ListAnim::default(),
             remembered: std::collections::HashMap::new(),
             hardest_pending: None,
-            instant: false,
+            free: None,
+            scroll_max: 0.0,
+            thumb: 0.0,
+            scrubbing: None,
             random_history: Vec::new(),
             rng: seed | 1,
         };
@@ -338,6 +387,19 @@ impl Select {
     pub fn refilter(&mut self, library: &[Entry]) {
         if self.pinned_view != self.view() {
             self.pinned.clear();
+        }
+        // A search shows what it found: everything open, then back as it was.
+        match (self.filter.is_empty(), self.flipped_before_search.take()) {
+            (false, None) => {
+                self.flipped_before_search = Some(std::mem::take(&mut self.flipped));
+                self.auto_open = None;
+            }
+            (false, kept) => self.flipped_before_search = kept,
+            (true, Some(kept)) => {
+                self.flipped = kept;
+                self.auto_open = None;
+            }
+            (true, None) => {}
         }
         let selected = self.visible.get(self.cursor).copied();
         let query = crate::search::Query::parse(&self.filter);
@@ -360,7 +422,7 @@ impl Select {
             .filter(|(_, e)| !self.hidden.contains(&e.path) && !self.gone.contains(&e.path))
             .filter(|&(i, e)| {
                 self.pinned.contains(&e.path)
-                    || ((self.show_converts || e.meta.mode == 1) && only.is_none_or(|set| set.contains(&i)) && (query.is_empty() || query.matches(&e.meta, &e.label(), &facts(i, e))))
+                    || ((self.show_converts || e.meta.mode == 1) && only.is_none_or(|set| set.contains(&i)) && (query.is_empty() || query.matches_text(&e.meta, e.text(), &facts(i, e))))
             })
             .map(|(i, _)| i)
             .collect();
@@ -375,6 +437,17 @@ impl Select {
             }
         }
         self.open_cursor_section();
+    }
+
+    /// Where the list is now, and the furthest it goes.
+    #[cfg(test)]
+    pub fn list_scroll(&self) -> f32 {
+        self.anim.scroll
+    }
+
+    #[cfg(test)]
+    pub fn list_end(&self) -> f32 {
+        self.scroll_max
     }
 
     /// The listed songs in order, each as its difficulties' library indices.
@@ -414,7 +487,7 @@ impl Select {
         if self.edited.contains(&e.path) {
             return crate::search::NOT_SUBMITTED;
         }
-        match e.meta.set_id {
+        match e.set_id() {
             Some(set) if self.server_loved.contains(&set) => crate::search::LOVED,
             set => self.status.get(&e.path).copied().unwrap_or(if set.is_some() { crate::search::UNKNOWN } else { crate::search::NOT_SUBMITTED }),
         }
@@ -449,29 +522,35 @@ impl Select {
             }
         };
         let mut folder_ids: std::collections::HashMap<(&std::path::Path, i64), usize> = std::collections::HashMap::new();
+        let split = self.split_difficulties();
         let folder = |i: usize| {
+            if split {
+                // Each difficulty on its own: ordered by its own value.
+                return (library[i].path.as_path(), 0);
+            }
             let stars = if self.sort == SortMode::Difficulty { star_heading(value(i)) } else { 0 };
             (library[i].path.parent().unwrap_or(std::path::Path::new("")), stars)
         };
+        let mut set_value: Vec<f64> = Vec::new();
+        let mut keyed = Vec::with_capacity(self.visible.len());
         for &i in &self.visible {
             let n = folder_ids.len();
-            folder_ids.entry(folder(i)).or_insert(n);
-        }
-        let mut set_value = vec![f64::NAN; folder_ids.len()];
-        for &i in &self.visible {
-            let f = folder_ids[&folder(i)];
-            let v = value(i);
-            if v.is_finite() && !(set_value[f] >= v) {
-                set_value[f] = v;
+            let f = *folder_ids.entry(folder(i)).or_insert(n);
+            if f == set_value.len() { set_value.push(f64::NAN); }
+            keyed.push((f, i));
+            if self.sort != SortMode::Title {
+                let v = value(i);
+                if v.is_finite() && (set_value[f].is_nan() || set_value[f] < v) {
+                    set_value[f] = v;
+                }
             }
         }
         // Highest first: the newest, and the best status.
         let newest_first = matches!(self.sort, SortMode::Played | SortMode::Added | SortMode::Status);
-        let title = |i: usize| (library[i].meta.title.to_lowercase(), library[i].meta.artist.to_lowercase());
-        let mut keyed: Vec<(usize, usize)> = self.visible.iter().map(|&i| (folder_ids[&folder(i)], i)).collect();
+        let title = |i: usize| (library[i].text().title.as_str(), library[i].text().artist.as_str());
         if self.sort == SortMode::Title {
-            let titles: Vec<(String, String)> = {
-                let mut t = vec![(String::new(), String::new()); folder_ids.len()];
+            let titles: Vec<(&str, &str)> = {
+                let mut t = vec![("", ""); folder_ids.len()];
                 for &(f, i) in &keyed {
                     if t[f].0.is_empty() {
                         t[f] = title(i);
@@ -523,8 +602,10 @@ impl Select {
         self.groups.clear();
         self.group_of.clear();
         let mut start = 0;
+        let each = self.split_difficulties();
         for i in 1..=self.visible.len() {
             let split = i == self.visible.len()
+                || each
                 || library[self.visible[i]].path.parent() != library[self.visible[i - 1]].path.parent()
                 // The last of one star heading and the first of the next can be the same song's.
                 || (self.sort == SortMode::Difficulty && star_heading(self.row_value[i]) != star_heading(self.row_value[i - 1]));
@@ -538,8 +619,23 @@ impl Select {
         self.section_of.clear();
         if self.open_for != self.sort {
             self.open_for = self.sort;
-            self.open.clear();
+            self.flipped.clear();
+            self.flipped_before_search = self.flipped_before_search.take().map(|_| Default::default());
             self.cursor_label = None;
+            self.auto_open = None;
+        }
+        self.song_count = if each {
+            self.visible.iter().filter_map(|&i| library[i].path.parent()).collect::<std::collections::HashSet<_>>().len()
+        } else {
+            self.groups.len()
+        };
+        if !self.headings {
+            // One section, never drawn, holding every song.
+            if !self.groups.is_empty() {
+                self.sections.push(Section { label: String::new(), colour: None, groups: 0..self.groups.len() });
+            }
+            self.section_of = vec![0; self.groups.len()];
+            return;
         }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         for g in 0..self.groups.len() {
@@ -550,8 +646,6 @@ impl Select {
             }
             self.section_of.push(self.sections.len() - 1);
         }
-        let labels: std::collections::HashSet<&str> = self.sections.iter().map(|s| s.label.as_str()).collect();
-        self.open.retain(|l| labels.contains(l.as_str()));
     }
 
     /// The heading the song at row `row` is listed under for the sort: what it's grouped by.
@@ -609,42 +703,117 @@ impl Select {
         self.group_of.get(self.cursor).map(|&g| self.section_of[g])
     }
 
-    /// Whether section `s` lists its songs.
-    fn section_open(&self, s: usize) -> bool {
-        self.open.contains(&self.sections[s].label)
+    /// Whether headings start open: a letter is only a divider in a long list, and a search
+    /// lists what it found. The other sorts start closed, like osu!'s groups.
+    fn starts_open(&self) -> bool {
+        !self.filter.is_empty() || matches!(self.sort, SortMode::Artist | SortMode::Title)
     }
 
-    /// The heading the selection is under stays open, unless the player closed it with the
-    /// selection there; when the selection moves to another heading, the one it left closes.
+    fn label_open(&self, label: &str) -> bool {
+        !self.headings || self.starts_open() != self.flipped.contains(label)
+    }
+
+    /// Each difficulty is a row of its own: sorting by difficulty without headings, like osu!.
+    fn split_difficulties(&self) -> bool {
+        !self.headings && self.sort == SortMode::Difficulty
+    }
+
+    /// Lists songs under headings or not.
+    pub fn set_headings(&mut self, on: bool, library: &[Entry]) {
+        if self.headings != on {
+            self.headings = on;
+            self.refilter(library);
+        }
+    }
+
+    fn set_open(&mut self, label: &str, open: bool) {
+        if open == self.starts_open() {
+            self.flipped.remove(label);
+        } else {
+            self.flipped.insert(label.to_string());
+        }
+    }
+
+    /// Whether section `s` lists its songs.
+    fn section_open(&self, s: usize) -> bool {
+        self.label_open(&self.sections[s].label)
+    }
+
+    /// The heading the selection is under is open, unless the player closed it with the selection
+    /// there. If it had to open for the selection, it closes again when the selection moves out.
     fn open_cursor_section(&mut self) {
         let Some(s) = self.cursor_section() else { return };
         let label = self.sections[s].label.clone();
         if self.cursor_label.as_ref() != Some(&label) {
-            if let Some(left) = self.cursor_label.replace(label.clone()) {
-                self.open.remove(&left);
+            self.cursor_label = Some(label.clone());
+            if let Some(left) = self.auto_open.take().filter(|left| *left != label) {
+                self.set_open(&left, false);
             }
         }
-        if self.closed_at != Some(self.cursor) {
-            self.open.insert(label);
+        if self.closed_at != Some(self.cursor) && !self.label_open(&label) {
+            self.set_open(&label, true);
+            self.auto_open = Some(label);
         }
     }
 
-    /// A click on heading `s`: opens it or closes it (the selection stays where it is).
-    pub fn click_section(&mut self, s: usize) {
-        let Some(sec) = self.sections.get(s) else { return };
-        if !self.open.remove(&sec.label) {
-            self.open.insert(sec.label.clone());
-            if self.cursor_section() == Some(s) {
-                self.closed_at = None;
-            }
-        } else if self.cursor_section() == Some(s) {
-            self.closed_at = Some(self.cursor);
+    /// A click on heading `s`: opens it or closes it, the selection staying where it is and the
+    /// list staying where it's looking.
+    pub fn click_section(&mut self, s: usize, library: &[Entry]) {
+        let Some(label) = self.sections.get(s).map(|sec| sec.label.clone()) else { return };
+        self.free(library, WHEEL_TAU);
+        let open = !self.label_open(&label);
+        self.set_open(&label, open);
+        if self.auto_open.as_ref() == Some(&label) {
+            self.auto_open = None;
+        }
+        if self.cursor_section() == Some(s) {
+            self.closed_at = (!open).then_some(self.cursor);
+        }
+    }
+
+    /// The selected song's folder.
+    fn selected_folder<'a>(&self, library: &'a [Entry]) -> Option<&'a std::path::Path> {
+        self.selected().and_then(|i| library[i].path.parent())
+    }
+
+    /// The list as moved by hand, from where it is now if it was following the selection.
+    fn free(&mut self, library: &[Entry], tau: f32) -> &mut Glide {
+        let song = self.selected_folder(library).map(|p| p.to_path_buf());
+        let now = self.anim.scroll;
+        let free = self.free.get_or_insert_with(|| FreeScroll { glide: Glide::at(now), tau, song });
+        free.tau = tau;
+        &mut free.glide
+    }
+
+    fn list_top(&self) -> f32 {
+        if self.legacy { LIST_TOP_LEGACY } else { LIST_TOP }
+    }
+
+    fn list_bottom(&self) -> f32 {
+        if self.legacy { LIST_BOTTOM_LEGACY } else { LIST_BOTTOM }
+    }
+
+    /// The wheel: moves the list `notches` on, the selection staying where it is.
+    pub fn scroll_by(&mut self, notches: i32, library: &[Entry]) {
+        let max = self.scroll_max;
+        let glide = self.free(library, WHEEL_TAU);
+        glide.goal = (glide.goal + notches as f32 * WHEEL_STEP).clamp(0.0, max);
+    }
+
+    /// Back to following the selection, gliding there from wherever the list is.
+    pub fn follow_selection(&mut self) {
+        if self.free.take().is_some() {
+            let a = &mut self.anim;
+            (a.scroll_from, a.outline_from, a.open_from, a.closing_from) = (a.scroll, a.outline, a.open_now, a.closing_now);
+            a.start = Some(std::time::Instant::now());
+            a.ms = 0.0;
         }
     }
 
     /// The songs (`groups` indices) whose headings are open, in order: what scrolling goes through.
     fn listed_groups(&self) -> Vec<usize> {
-        (0..self.groups.len()).filter(|&g| self.section_open(self.section_of[g])).collect()
+        let open: Vec<bool> = (0..self.sections.len()).map(|s| self.section_open(s)).collect();
+        (0..self.groups.len()).filter(|&g| open[self.section_of[g]]).collect()
     }
 
     /// The song (range of `visible`) containing the cursor.
@@ -685,9 +854,13 @@ impl Select {
 
     pub fn key(&mut self, key: KeyCode, library: &[Entry]) -> SelectAction {
         let n = self.visible.len();
+        // Keys act on the selection, so that's where the list goes.
+        if !matches!(key, KeyCode::Tab | KeyCode::F1) {
+            self.follow_selection();
+        }
         match key {
-            KeyCode::ArrowDown => self.step(1, library, true),
-            KeyCode::ArrowUp => self.step(-1, library, true),
+            KeyCode::ArrowDown => self.step(1, library),
+            KeyCode::ArrowUp => self.step(-1, library),
             KeyCode::PageDown => self.jump_songs(5, library),
             KeyCode::PageUp => self.jump_songs(-5, library),
             KeyCode::Home | KeyCode::End => {
@@ -695,6 +868,10 @@ impl Select {
                 if let Some(&g) = if key == KeyCode::Home { listed.first() } else { listed.last() } {
                     self.enter_song(self.groups[g].start, library);
                 }
+            }
+            // Each difficulty on its own row: to the next or previous row, whatever its set.
+            KeyCode::ArrowRight | KeyCode::ArrowLeft if self.split_difficulties() => {
+                self.move_songs(if key == KeyCode::ArrowRight { 1 } else { -1 }, library, true);
             }
             // Jump between beatmap sets.
             KeyCode::ArrowRight | KeyCode::ArrowLeft => {
@@ -744,18 +921,17 @@ impl Select {
         SelectAction::None
     }
 
-    /// Up/Down and the mouse wheel (`n` steps, negative = up): through the open song's
-    /// difficulties, and past its first or last one into the previous or next listed song. With
-    /// `open_next` (the keys), past the last listed song the next heading opens and goes on into
-    /// it; the wheel stops there.
-    pub fn step(&mut self, n: i32, library: &[Entry], open_next: bool) {
+    /// Up/Down (`n` steps, negative = up): through the open song's difficulties, and past its
+    /// first or last one into the previous or next listed song. Past the last listed song it goes
+    /// on into the next heading, which opens for it.
+    pub fn step(&mut self, n: i32, library: &[Entry]) {
         for _ in 0..n.unsigned_abs() {
             let Some(g) = self.cursor_group() else { return };
             let next = self.cursor as i64 + n.signum() as i64;
             if (g.start as i64..g.end as i64).contains(&next) {
                 self.cursor = next as usize;
             } else {
-                self.move_songs(n.signum(), library, open_next);
+                self.move_songs(n.signum(), library, true);
             }
         }
     }
@@ -785,8 +961,6 @@ impl Select {
             if !(0..self.groups.len() as i64).contains(&edge) {
                 return;
             }
-            let label = self.sections[self.section_of[edge as usize]].label.clone();
-            self.open.insert(label);
             edge as usize
         } else {
             match listed.get(idx.clamp(0, listed.len() as i64 - 1) as usize) {
@@ -803,6 +977,7 @@ impl Select {
         if !self.searching {
             return;
         }
+        self.follow_selection();
         let mut changed = false;
         for ch in text.chars().filter(|c| !c.is_control()) {
             self.filter.push(ch);
@@ -848,6 +1023,11 @@ impl Select {
             Some((min, max)) => screen_w * share.clamp(min, max),
             None => (screen_w * LIST_SHARE.2).max(300.0).min(screen_w - 48.0),
         }
+    }
+
+    /// Width of the preview panel beside a song list of `share` (past the margins and the gap).
+    pub fn panel_width(screen_w: f32, share: f32) -> f32 {
+        screen_w - 24.0 - Self::list_width(screen_w, share) - 12.0 - 24.0
     }
 
     /// The shares of a `screen_w` wide screen the song list can take: within `LIST_SHARE`, and
@@ -911,7 +1091,7 @@ impl Select {
     /// pressed. The selection stays put until it's let go.
     pub fn drag_to(&mut self, dy: f32) {
         let a = &self.anim;
-        let d = self.drag.get_or_insert_with(|| ListDrag { scroll: a.scroll, outline: a.outline, now: a.scroll, samples: Default::default() });
+        let d = self.drag.get_or_insert_with(|| ListDrag { scroll: a.scroll, now: a.scroll, samples: Default::default() });
         d.now = d.scroll - dy;
         let now = std::time::Instant::now();
         d.samples.push_back((now, d.now));
@@ -925,8 +1105,8 @@ impl Select {
         self.drag = None;
     }
 
-    /// Lets go of the list: it carries on at the speed it was thrown, and the song that ends up
-    /// on the selection line gets selected, gliding there.
+    /// Lets go of the list: it carries on at the speed it was thrown and stays there. What's
+    /// selected doesn't change: a song is picked by clicking it.
     pub fn drag_end(&mut self, library: &[Entry]) {
         let Some(d) = self.drag.take() else { return };
         let velocity = match (d.samples.front(), d.samples.back()) {
@@ -936,32 +1116,10 @@ impl Select {
         // Released while still: no throw.
         let still = d.samples.back().is_none_or(|(t, _)| t.elapsed().as_millis() > 60);
         let throw = if still { 0.0 } else { (velocity * 250.0).clamp(-3000.0, 3000.0) };
+        let shown = self.anim.scroll;
+        let glide = self.free(library, THROW_TAU);
         // From where the list is shown (held a little past an end, it springs back).
-        let line = self.anim.scroll + throw + (LIST_BOTTOM - LIST_TOP) * 0.4;
-        // The song whose row is nearest the line (in the list as drawn).
-        let target = self
-            .song_y
-            .iter()
-            .enumerate()
-            .filter(|(_, y)| y.is_finite())
-            .min_by(|a, b| (a.1 - line).abs().total_cmp(&(b.1 - line).abs()))
-            .map(|(g, _)| g);
-        // Glide from where the list was dropped; further takes a little longer.
-        let ms = (LIST_ANIM_MS + throw.abs() * 0.15).clamp(LIST_ANIM_MS, 600.0);
-        match target {
-            Some(g) if self.group_of.get(self.cursor) != Some(&g) => {
-                self.enter_song(self.groups[g].start, library);
-                self.anim.ms = ms;
-                // Begins the transition from here (not from where the selection was).
-                self.anim.cursor = Some(usize::MAX);
-            }
-            _ => {
-                let a = &mut self.anim;
-                (a.scroll_from, a.outline_from, a.open_from, a.closing_from) = (a.scroll, a.outline, a.open_now, a.closing_now);
-                a.start = Some(std::time::Instant::now());
-                a.ms = ms;
-            }
-        }
+        *glide = Glide { now: shown, goal: d.now + throw };
     }
 
     /// Index of the song (group) holding the selection.
@@ -996,7 +1154,7 @@ impl Select {
             items.push((fit(format!("Hide [{}]", library[i].meta.version)), MenuAction::HideDifficulty));
         }
         items.push((fit(format!("Hide {}", library[i].meta.title)), MenuAction::HideSong));
-        if let Some(set) = library[i].meta.set_id.filter(|_| self.nominator) {
+        if let Some(set) = library[i].set_id().filter(|_| self.nominator) {
             let loved = self.server_loved.contains(&set);
             items.push((if loved { "Unlove on taiko.rs" } else { "Love on taiko.rs (gives pp)" }.to_string(), MenuAction::Love(set, !loved)));
         }
@@ -1054,18 +1212,14 @@ impl Select {
         self.refilter(library);
     }
 
-    /// osu!'s right-click scrolling: the pointer's height over the list (`y`, virtual units)
-    /// picks the song that far through the listed songs (the open headings'), top to bottom.
+    /// The scrollbar and osu!'s right-click scrolling: the pointer's height (`y`, virtual units)
+    /// is where the list is, all of it, closed headings too. The thumb stays under the pointer.
     pub fn scroll_to(&mut self, y: f32, library: &[Entry]) {
-        let listed = self.listed_groups();
-        if listed.is_empty() {
-            return;
-        }
-        let frac = ((y - LIST_TOP) / (LIST_BOTTOM - LIST_TOP)).clamp(0.0, 1.0);
-        let g = listed[(frac * (listed.len() - 1) as f32).round() as usize];
-        if self.group_of.get(self.cursor) != Some(&g) {
-            self.enter_song(self.groups[g].start, library);
-        }
+        let top = self.list_top();
+        let (track, thumb) = (self.list_bottom() - top, self.thumb);
+        let frac = ((y - top - thumb / 2.0) / (track - thumb).max(1.0)).clamp(0.0, 1.0);
+        let max = self.scroll_max;
+        self.free(library, SCRUB_TAU).goal = frac * max;
     }
 
     /// Shift+F2: back to the song before the last random jump.
@@ -1082,7 +1236,7 @@ impl Select {
     /// Orders the selected song's difficulties by star rating once all of them are known, like
     /// osu!, keeping the same difficulty selected. (Other songs are collapsed, so their order
     /// doesn't show until they are opened.)
-    pub fn sort_selected_set(&mut self, stars: &dyn Fn(usize) -> Option<f32>) {
+    pub fn sort_selected_set(&mut self, library: &[Entry], stars: &dyn Fn(usize) -> Option<f32>) {
         let Some(g) = self.cursor_group() else { return };
         let Some(keys) = self.visible[g.clone()].iter().map(|&i| stars(i)).collect::<Option<Vec<f32>>>() else { return };
         if keys.windows(2).all(|w| w[0] <= w[1]) {
@@ -1096,8 +1250,9 @@ impl Select {
         for (slot, (_, i)) in g.clone().zip(set) {
             self.visible[slot] = i;
         }
-        // Sorting only reorders within the song, so the groups stay valid.
-        if to_last {
+        // Sorting only reorders within the song, so the groups stay valid. A hardest difficulty
+        // with audio of its own stays unselected: the music has already started on this one.
+        if to_last && library[self.visible[g.end - 1]].meta.audio_file == library[current].meta.audio_file {
             self.cursor = g.end - 1;
         } else if let Some(pos) = self.visible[g.clone()].iter().position(|&v| v == current) {
             self.cursor = g.start + pos;
@@ -1111,13 +1266,11 @@ impl Select {
 
     /// Remembers the selected difficulty for its song (call once a frame).
     pub fn remember_selection(&mut self, library: &[Entry]) {
-        if let Some(&i) = self.visible.get(self.cursor) {
-            if let Some(folder) = library[i].path.parent() {
-                if self.remembered.get(folder) != Some(&i) {
+        if let Some(&i) = self.visible.get(self.cursor)
+            && let Some(folder) = library[i].path.parent()
+                && self.remembered.get(folder) != Some(&i) {
                     self.remembered.insert(folder.to_path_buf(), i);
                 }
-            }
-        }
     }
 
     /// `stars` looks up a difficulty's star rating (library index) if it has been calculated.
@@ -1127,9 +1280,27 @@ impl Select {
         let w = c.width;
         let mode = if self.show_converts { "taiko + converts" } else { "taiko only" };
         let groups = &self.groups;
-        crate::settings::tab_bar(c, 0, &format!("{} songs, {} maps  |  {mode}{}{}", groups.len(), self.visible.len(), self.rate_label, self.info_progress));
-
+        let summary = format!("{} songs, {} maps  |  {mode}{}", self.song_count, self.visible.len(), self.rate_label);
         let lw = Self::list_width(w, self.list_share);
+        let legacy = self.legacy;
+        // The row with the search: under the tabs, or at the top beside the way back.
+        let row = if legacy { 54.0 } else { 20.0 };
+        let mut left = 24.0;
+        if legacy {
+            crate::settings::tab_bar(c, 0, &summary);
+        } else {
+            let back = if self.to_menu { tr!("< MENU", "< メニュー", "< МЕНЮ") } else { tr!("< BACK", "< 戻る", "< НАЗАД") };
+            if self.covered {
+                left += Canvas::text_width(8.0, back) + 26.0;
+            } else {
+                left += crate::settings::back_button(c, row + 2.0, back, Hit::ToMenu) + 6.0;
+            }
+            // Over the panel beside the list, where there is one.
+            let (x, right) = (24.0 + lw + 12.0, w - 24.0);
+            if right - x > 60.0 {
+                c.text_right(right, row + 8.0, 7.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(7.0, right - x, &summary));
+            }
+        }
         // Mods, sort and collection buttons share the search row, right to left. On a narrow
         // screen the widest of them switches to a shorter label until the search box gets at
         // least SEARCH_MIN; past that the widest give up room (their labels get cut).
@@ -1140,13 +1311,16 @@ impl Select {
             vec![format!("Mods: {}", self.mods_label), format!("Mods ({})", self.mods_label.len() / 2)]
         };
         let sort = self.sort.name();
-        let mut buttons = vec![(mods, Hit::ModsButton, !self.mods_label.is_empty()), (vec![format!("Sort: {sort}"), sort.to_string()], Hit::SortList, false)];
+        let mut buttons = vec![(vec![format!("Sort: {sort}"), sort.to_string()], Hit::SortList, false)];
+        if legacy {
+            buttons.insert(0, (mods.clone(), Hit::ModsButton, !self.mods_label.is_empty()));
+        }
         if !self.collections.is_empty() {
             let name = self.collection.and_then(|c| self.collections.get(c)).map_or("all", |(name, _)| name.as_str());
             buttons.push((vec![format!("Collection: {name}"), name.to_string()], Hit::CollectionPick, self.collection.is_some()));
         }
         let width = |label: &str| Canvas::text_width(7.0, label) + 20.0;
-        let budget = lw - SEARCH_MIN - 6.0 * buttons.len() as f32;
+        let budget = lw - (left - 24.0) - SEARCH_MIN - 6.0 * buttons.len() as f32;
         let mut pick = vec![0; buttons.len()];
         loop {
             let widths: Vec<f32> = buttons.iter().zip(&pick).map(|((labels, ..), &k)| width(&labels[k])).collect();
@@ -1164,12 +1338,12 @@ impl Select {
         for ((label, (_, hit, accent)), nw) in labels.iter().zip(&buttons).zip(natural) {
             let bw = nw.min(cap);
             bx -= bw;
-            c.button(bx, 56.0, bw, 20.0, label, 7.0, *hit, *accent);
+            c.button(bx, row + 2.0, bw, 20.0, label, 7.0, *hit, *accent);
             bx -= 6.0;
         }
-        let search_w = bx - 24.0;
+        let search_w = bx - left;
         let edge = if self.searching { rgba(crate::render::accent(), 1.0) } else { rgba(0x3a3a4e, 1.0) };
-        c.round_rect(24.0, 54.0, search_w, 24.0, 6.0, rgba(0x23232f, 0.9), edge, 1.0);
+        c.round_rect([left, row], [search_w, 24.0], 6.0, rgba(0x23232f, 0.9), edge, 1.0);
         let room = search_w - 20.0;
         let caret = if self.searching { "_" } else { "" };
         let (search, search_col) = if self.filter.is_empty() {
@@ -1181,8 +1355,8 @@ impl Select {
             let text = if Canvas::text_width(10.0, &full) <= room { full } else { Canvas::fit_end(10.0, room, &format!("{}{caret}", self.filter)) };
             (text, 0xffffff)
         };
-        c.text(34.0, 61.0, 10.0, rgba(search_col, 1.0), &search);
-        c.hit(24.0, 54.0, search_w, 24.0, Hit::TextField);
+        c.text(left + 10.0, row + 7.0, 10.0, rgba(search_col, 1.0), &search);
+        c.hit(left, row, search_w, 24.0, Hit::TextField);
 
         if let Some(n) = self.scanning {
             c.text_centered(24.0 + lw / 2.0, 200.0, 12.0, rgba(0xc8c8d8, 1.0), "Scanning your Songs folder...");
@@ -1221,7 +1395,7 @@ impl Select {
             Diff(usize),
         }
         let _ = dt_ms;
-        let (top, bottom) = (LIST_TOP, LIST_BOTTOM);
+        let (top, bottom) = (self.list_top(), self.list_bottom());
         let view = bottom - top;
         // Where everything ends up: the selected song open, the others closed.
         let open_start = self.group_of.get(self.cursor).map(|&g| groups[g].start);
@@ -1234,7 +1408,9 @@ impl Select {
             if !section_open[si] && cursor_section == Some(si) {
                 final_cursor = final_y;
             }
-            final_y += SECTION_H;
+            if self.headings {
+                final_y += SECTION_H;
+            }
             if !section_open[si] {
                 continue;
             }
@@ -1247,14 +1423,20 @@ impl Select {
             }
         }
 
-        let final_scroll = (final_cursor - view * 0.4).clamp(0.0, (final_y - view).max(0.0));
+        let max_scroll = (final_y - view).max(0.0);
+        self.scroll_max = max_scroll;
+        let final_scroll = (final_cursor - view * 0.4).clamp(0.0, max_scroll);
         let final_outline = top + final_cursor - final_scroll;
+        // Another song selected: the list goes to it.
+        if self.free.as_ref().is_some_and(|f| f.song.as_deref() != self.selected_folder(library)) {
+            self.free = None;
+        }
 
         // A new selection starts a transition from the current state.
         let a = &mut self.anim;
         if a.cursor != Some(self.cursor) || a.open != open_start {
-            if a.cursor.is_none() || self.instant {
-                // First frame (or right-click scrolling): no motion.
+            if a.cursor.is_none() {
+                // First frame: no motion.
                 *a = ListAnim { open: open_start, open_from: 1.0, scroll_from: final_scroll, outline_from: final_outline, ..Default::default() };
             } else {
                 if open_start != a.open {
@@ -1284,12 +1466,16 @@ impl Select {
         let closing_f = a.closing_from * (1.0 - p);
         let mut scroll = a.scroll_from + (final_scroll - a.scroll_from) * p;
         let mut outline = a.outline_from + (final_outline - a.outline_from) * p;
+        if let Some(f) = &mut self.free {
+            f.glide.settle(max_scroll, c.dt_ms, f.tau);
+            scroll = f.glide.now;
+            outline = top + final_cursor - scroll;
+        }
         if let Some(d) = &self.drag {
             // Held: exactly where the pointer has it (a little past the ends at most).
-            let max = (final_y - view).max(0.0);
-            let now = if d.now < 0.0 { d.now * 0.3 } else if d.now > max { max + (d.now - max) * 0.3 } else { d.now };
-            outline = d.outline + (d.scroll - now);
-            scroll = now;
+            let max = max_scroll;
+            scroll = if d.now < 0.0 { d.now * 0.3 } else if d.now > max { max + (d.now - max) * 0.3 } else { d.now };
+            outline = top + final_cursor - scroll;
         }
         (a.scroll, a.outline, a.open_now, a.closing_now) = (scroll, outline, open_f, closing_f);
         let (open_g, closing_g) = (a.open, a.closing);
@@ -1298,17 +1484,15 @@ impl Select {
         // (row, y, height, alpha): rows of opening / closing songs are squeezed and faded.
         let mut rows: Vec<(Row, f32, f32, f32)> = Vec::new();
         let mut y = 0.0;
-        self.song_y.clear();
         for (si, sec) in self.sections.iter().enumerate() {
-            rows.push((Row::Section(si), y, SECTION_H, 1.0));
-            y += SECTION_H;
+            if self.headings {
+                rows.push((Row::Section(si), y, SECTION_H, 1.0));
+                y += SECTION_H;
+            }
             for g in &groups[sec.groups.clone()] {
                 if !section_open[si] {
-                    // Not listed: nowhere to land when the list is let go.
-                    self.song_y.push(f32::INFINITY);
                     continue;
                 }
-                self.song_y.push(y);
                 rows.push((Row::Song(g.clone()), y, SONG_H, 1.0));
                 y += SONG_H;
                 let f = if Some(g.start) == open_g { open_f } else if Some(g.start) == closing_g { closing_f } else { 0.0 };
@@ -1320,6 +1504,8 @@ impl Select {
                 }
             }
         }
+        // The main menu's look: one dark panel the list runs down, rows as lines on it.
+        crate::style::panel(c, 20.0, top - 4.0, lw + 8.0, bottom - top + 8.0);
         let list_start = c.shapes.len();
         let hits_start = c.hits.len();
         let fit = |s: String, size: f32, room: f32| Canvas::fit(size, room.max(Canvas::char_width(size) * 4.0), &s);
@@ -1335,27 +1521,49 @@ impl Select {
                     let open = section_open[*si];
                     let hover = c.hovered(24.0, y, lw, rh - 2.0);
                     let holds_cursor = cursor_section == Some(*si) && !open;
-                    let border = if holds_cursor { rgba(accent(), 1.0) } else { rgba(col, if open { 0.7 } else { 0.35 }) };
-                    c.round_rect(24.0, y, lw, rh - 3.0, 5.0, rgba(if hover { 0x24242f } else { 0x16161e }, 0.9), border, if holds_cursor { 1.5 } else { 1.0 });
+                    // A heading on the panel: its name on a pill of its colour, a line of it on.
+                    if hover {
+                        c.round_rect([24.0, y], [lw, rh - 3.0], 6.0, rgba(0x24242f, 0.6), rgba(0, 0.0), 0.0);
+                    }
+                    if holds_cursor {
+                        crate::style::brackets(c, [21.0, y - 3.0, lw + 6.0, rh + 3.0], 1.0);
+                    }
                     c.hit(24.0, y, lw, *rh, Hit::SectionHeader(*si));
                     let n = sec.groups.len();
-                    c.text(34.0, y + 6.0, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
-                    let label = format!("{}  |  {n} song{}", sec.label, if n == 1 { "" } else { "s" });
-                    c.text(48.0, y + 6.0, 7.0, rgba(col, 1.0), &fit(label, 7.0, lw - 60.0));
+                    c.text(32.0, y + 6.0, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
+                    let label = fit(sec.label.clone(), 7.0, lw - 140.0);
+                    let pw = Canvas::text_width(7.0, &label) + 14.0;
+                    crate::style::pill(c, 44.0, y + 1.5, pw, rh - 6.0, col);
+                    c.text(51.0, y + 6.0, 7.0, rgba(0xffffff, 1.0), &label);
+                    let count = format!("{n} song{}", if n == 1 { "" } else { "s" });
+                    let after = c.text(44.0 + pw + 8.0, y + 6.0, 7.0, rgba(0x8a8aa0, 1.0), &fit(count, 7.0, lw - pw - 40.0));
+                    let line_x = 44.0 + pw + 8.0 + after + 8.0;
+                    if line_x < 16.0 + lw {
+                        c.rect(line_x, y + rh / 2.0 - 1.5, 16.0 + lw - line_x, 1.0, rgba(col, 0.3));
+                    }
                 }
                 Row::Song(g) => {
                     let e = &library[self.visible[g.start]];
                     let open = g.contains(&self.cursor);
-                    let (bg, border) = if open { (0x2b2b3d, 0x5a5a78) } else { (0x1d1d27, 0x2a2a38) };
                     let hover = !open && c.hovered(24.0, y, lw, rh - 4.0);
-                    let bg = if hover { 0x262634 } else { bg };
-                    c.round_rect(24.0, y, lw, rh - 4.0, 7.0, rgba(bg, 0.88), rgba(border, 1.0), 1.0);
+                    if open {
+                        c.round_rect([24.0, y], [lw, rh - 4.0], 7.0, rgba(crate::style::selector_colour(), 0.08), rgba(0, 0.0), 0.0);
+                    } else if hover {
+                        c.round_rect([24.0, y], [lw, rh - 4.0], 7.0, rgba(0x262634, 0.6), rgba(0, 0.0), 0.0);
+                    }
+                    c.rect(32.0, y + rh - 3.0, lw - 16.0, 1.0, rgba(0x23232f, 1.0));
                     c.hit(24.0, y, lw, *rh, Hit::SongHeader(g.start));
+                    // A note for the song, as on the main menu: a don for taiko maps, a kat for
+                    // converts; the open song's bigger and lit.
                     let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
-                    let tag = if any_taiko { 0xEB452C } else { 0x438EAD };
-                    c.round_rect(32.0, y + 8.0, 5.0, rh - 20.0, 2.5, rgba(tag, 1.0), rgba(tag, 1.0), 0.0);
+                    let colours = crate::multiverse::note_colours();
+                    let tag = if any_taiko { colours.don() } else { colours.kat() };
+                    let (nr, ny) = (if open { 6.5 } else { 5.0 }, y + (rh - 4.0) / 2.0);
+                    crate::style::note(c, 33.0, ny, nr, tag, open, 0.7);
                     c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &fit(e.meta.title.clone(), 10.0, lw - 110.0));
-                    let sub = format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator);
+                    // A row per difficulty: which one it is, rather than who mapped the set.
+                    let one = self.split_difficulties();
+                    let sub = if one { format!("{}  |  {}", e.meta.artist, e.meta.version) } else { format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator) };
                     // Centred at y + 23.5, in what's left between the title (taller on a text
                     // grid) and the bottom of the box, so the two never touch.
                     let title_bottom = 11.0 + Canvas::text_height(10.0) / 2.0;
@@ -1368,7 +1576,13 @@ impl Select {
                     let update = e.set_id().and_then(|id| self.updates.get(&id)).filter(|u| matches!(u, SetUpdate::Available | SetUpdate::Updating) && y + rh - 4.0 <= bottom);
                     let n = g.len();
                     let diffs_y = if update.is_some() { y + 6.0 } else { y + 11.0 };
-                    c.text_right(24.0 + lw - 12.0, diffs_y, 8.0, rgba(0x8a8aa0, 1.0), &format!("{n} diff{}", if n == 1 { "" } else { "s" }));
+                    if one {
+                        // What the list is ordered by (no mods, 1.0x); the open row has the mods'.
+                        let sorted_by = self.row_value.get(g.start).copied().filter(|v| v.is_finite()).map(|v| v as f32);
+                        crate::stars::draw_pill(c, 24.0 + lw - 12.0, diffs_y - 1.0, 8.0, sorted_by);
+                    } else {
+                        c.text_right(24.0 + lw - 12.0, diffs_y, 8.0, rgba(0x8a8aa0, 1.0), &format!("{n} diff{}", if n == 1 { "" } else { "s" }));
+                    }
                     let (by, bh) = (y + 19.0, 9.0);
                     let ty = by + (bh - Canvas::text_height(6.0)) / 2.0;
                     match update {
@@ -1377,7 +1591,7 @@ impl Select {
                             let bw = Canvas::text_width(6.0, label) + 10.0;
                             let bx = 24.0 + lw - 12.0 - bw;
                             let hover = c.hovered(bx, by, bw, bh);
-                            c.round_rect(bx, by, bw, bh, 3.0, rgba(if hover { 0x5a4a1a } else { 0x3a3218 }, 1.0), rgba(0xFFD34D, 1.0), 1.0);
+                            c.round_rect([bx, by], [bw, bh], 3.0, rgba(if hover { 0x5a4a1a } else { 0x3a3218 }, 1.0), rgba(0xFFD34D, 1.0), 1.0);
                             c.text_centered(bx + bw / 2.0, ty, 6.0, rgba(0xFFD34D, 1.0), label);
                             c.hit(bx, by, bw, bh, Hit::UpdateSet(self.visible[g.start]));
                         }
@@ -1389,9 +1603,12 @@ impl Select {
                     let a = *alpha;
                     let e = &library[self.visible[*i]];
                     let selected = *i == self.cursor;
-                    let bg = if selected { 0x34344a } else { 0x191921 };
-                    let bg = if !selected && c.hovered(44.0, y, lw - 20.0, rh - 3.0) { 0x24242f } else { bg };
-                    c.round_rect(44.0, y, lw - 20.0, rh - 3.0, 5.0, rgba(bg, 0.92 * a), rgba(0x2a2a38, a), 1.0);
+                    if selected {
+                        c.round_rect([44.0, y], [lw - 20.0, rh - 3.0], 5.0, rgba(crate::style::selector_colour(), (0.12 + 0.05 * crate::style::pulse()) * a), rgba(0, 0.0), 0.0);
+                    } else if c.hovered(44.0, y, lw - 20.0, rh - 3.0) {
+                        c.round_rect([44.0, y], [lw - 20.0, rh - 3.0], 5.0, rgba(0x24242f, 0.6 * a), rgba(0, 0.0), 0.0);
+                    }
+                    c.rect(52.0, y + rh - 2.0, lw - 36.0, 1.0, rgba(0x1d1d27, a));
                     c.hit(44.0, y, lw - 20.0, *rh, Hit::SongRow(*i));
                     let col = if selected { 0xffffff } else { 0xc8c8d8 };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
@@ -1414,7 +1631,7 @@ impl Select {
         // Not with its heading closed: the heading shows where the selection is instead.
         let oy = outline;
         if !self.visible.is_empty() && !cursor_hidden && oy > top - DIFF_H && oy < bottom {
-            c.round_rect(44.0, oy, lw - 20.0, DIFF_H - 3.0, 5.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
+            crate::style::brackets(c, [41.0, oy - 3.0, lw - 14.0, DIFF_H + 3.0], 1.0);
         }
         // Rows scrolling past the edges slide under them instead of over the search row.
         c.clip_since(list_start, 20.0, top - 2.0, lw + 8.0, bottom - top + 4.0);
@@ -1423,22 +1640,67 @@ impl Select {
             let (y0, y1) = (y.max(top - 2.0), (*y + *hh).min(bottom + 2.0));
             (*y, *hh) = (y0, (y1 - y0).max(0.0));
         }
-        // The scroll bar (after the list's clip, outside it), in the margin left of the list: where the list is, clicked or dragged
-        // to go somewhere (`scroll_to`, like right-dragging).
+        // The scroll bar (after the list's clip, outside it), in the margin left of the list: where
+        // the list is, clicked or dragged to go somewhere (`scroll_to`, like right-dragging).
         if groups.len() > 1 {
             let (track_x, track_w) = (8.0, 8.0);
             let track = bottom - top;
             let hover = c.hovered(track_x - 4.0, top, track_w + 12.0, track);
-            c.round_rect(track_x, top, track_w, track, 4.0, rgba(0x15151d, if hover { 0.9 } else { 0.6 }), rgba(0x2a2a38, 1.0), 1.0);
+            c.round_rect([track_x, top], [track_w, track], 4.0, rgba(0x15151d, if hover { 0.9 } else { 0.6 }), rgba(0x2a2a38, 1.0), 1.0);
             let total = final_y.max(view);
             let thumb = (track * view / total).clamp(18.0, track);
+            self.thumb = thumb;
             let pos = (scroll / (total - view).max(1.0)).clamp(0.0, 1.0);
-            c.round_rect(track_x + 1.0, top + pos * (track - thumb), track_w - 2.0, thumb, 3.0, rgba(if hover { accent() } else { 0x8a8aa8 }, 0.95), rgba(0, 0.0), 0.0);
+            c.round_rect([track_x + 1.0, top + pos * (track - thumb)], [track_w - 2.0, thumb], 3.0, rgba(if hover { accent() } else { 0x8a8aa8 }, 0.95), rgba(0, 0.0), 0.0);
             c.hit(track_x - 4.0, top, track_w + 12.0, track, Hit::SongScrollbar);
         }
 
-        let hints = "Enter play  Up/Down difficulty  Left/Right song  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit";
-        c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hints));
+        // Flying through the list: which heading it's passing.
+        if let Some(py) = self.scrubbing {
+            let line = scroll + view / 2.0;
+            let mut heading = rows.iter().filter_map(|(row, ry, ..)| match row {
+                Row::Section(si) if *ry <= line => Some(*si),
+                _ => None,
+            });
+            if let Some(si) = heading.next_back() {
+                let label = Canvas::fit(10.0, lw - 40.0, &self.sections[si].label);
+                let bw = Canvas::text_width(10.0, &label) + 24.0;
+                let by = (py - 13.0).clamp(top, bottom - 26.0);
+                c.round_rect([30.0, by], [bw, 26.0], 6.0, rgba(0x15151d, 0.96), rgba(accent(), 1.0), 1.5);
+                c.text(42.0, by + 8.0, 10.0, rgba(0xffffff, 1.0), &label);
+            }
+        }
+        // Scrolled away from the selection: the way back.
+        let cursor_y = top + final_cursor - scroll;
+        if self.free.is_some() && self.scrubbing.is_none() && !self.visible.is_empty() && (cursor_y < top - DIFF_H || cursor_y > bottom) {
+            let label = tr!("back to the selected song", "選択中の曲へ戻る", "к выбранной песне");
+            let bw = Canvas::text_width(7.0, label) + 20.0;
+            c.button(24.0 + (lw - bw) / 2.0, bottom - 24.0, bw, 20.0, label, 7.0, Hit::ListBack, true);
+        }
+
+        if !legacy {
+            let random = tr!("Random", "ランダム", "Случайная");
+            let (download, settings, online) = (tr!("Download", "ダウンロード", "Загрузка"), tr!("Settings", "設定", "Настройки"), tr!("Multiplayer", "マルチ", "Мультиплеер"));
+            let accent_mods = !self.mods_label.is_empty();
+            c.button_row(
+                BUTTONS_Y,
+                &[
+                    (&mods[0], Hit::ModsButton, accent_mods),
+                    (random, Hit::Key(KeyCode::F2), false),
+                    (download, Hit::Tab(3), false),
+                    (settings, Hit::Tab(1), false),
+                    (online, Hit::Tab(2), false),
+                ],
+            );
+        }
+        let hints = tr!(
+            "Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit",
+            "Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替え  Ctrl+L コレクション  Tab 設定  Esc 終了",
+            "Enter играть  Вверх/вниз сложность  Влево/вправо песня  Колесо или правый драг: прокрутка  F1 моды  F2 случайная  [ ] рейт  Ctrl+S сортировка  Ctrl+L коллекция  Tab настройки  Esc выход"
+        );
+        if legacy {
+            c.text(24.0, 452.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hints));
+        }
         // The status line gives way (smaller) when the hints above come out taller.
         let status_size = Canvas::fit_height(7.0, 2.0 * (469.5 - (455.5 + Canvas::text_height(7.0) / 2.0) - 3.0));
         c.text(24.0, 466.0 + (7.0 - status_size) / 2.0, status_size, rgba(0x55556a, 1.0), &Canvas::fit(status_size, w - 48.0, status));
@@ -1480,7 +1742,7 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, favourites: crat
     let w = c.width;
     c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.72));
     let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
-    c.round_rect(px, py, pw, ph, 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+    c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
     c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "MODS");
     let mult = mods.multiplier();
     let rank = if mods.unranked() { "  (not saved)" } else { "" };
@@ -1509,10 +1771,10 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, favourites: crat
             }
             let bg = if i == cursor { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
             let border = if i == cursor { crate::render::accent() } else if on { *accent } else { 0x2a2a38 };
-            c.round_rect(x, y, col_w - 6.0, h, 5.0, rgba(bg, 1.0), rgba(border, 1.0), if i == cursor { 1.5 } else { 1.0 });
+            c.round_rect([x, y], [col_w - 6.0, h], 5.0, rgba(bg, 1.0), rgba(border, 1.0), if i == cursor { 1.5 } else { 1.0 });
             // The acronym's badge keeps room for its letters when there are many rows.
             let inset = ((h - 13.0) / 2.0).clamp(3.0, 4.0);
-            c.round_rect(x + 4.0, y + inset, 22.0, h - 2.0 * inset, 3.0,rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
+            c.round_rect([x + 4.0, y + inset], [22.0, h - 2.0 * inset], 3.0,rgba(*accent, if on { 1.0 } else { 0.0 }), rgba(*accent, 1.0), 1.0);
             c.text_centered(x + 15.0, y + h / 2.0 - 3.5, 7.0, rgba(if on { 0x15151d } else { *accent }, 1.0), m.acronym());
             let fav = favourites.has(m);
             if fav {
@@ -1545,7 +1807,7 @@ pub fn draw_mod_select(c: &mut Canvas, mods: crate::mods::Mods, favourites: crat
             hovered = Some(m);
         }
         let border = if i == cursor { crate::render::accent() } else { col };
-        c.round_rect(fx, fav_y, cw, 16.0, 4.0, rgba(if on { col } else { 0x1d1d27 }, if on { 0.9 } else { 1.0 }), rgba(border, 1.0), 1.0);
+        c.round_rect([fx, fav_y], [cw, 16.0], 4.0, rgba(if on { col } else { 0x1d1d27 }, if on { 0.9 } else { 1.0 }), rgba(border, 1.0), 1.0);
         c.text(fx + 7.0, fav_y + 5.0, 6.0, rgba(if on { 0x15151d } else { 0xc8c8d8 }, 1.0), &text);
         c.hit(fx, fav_y, cw, 16.0, Hit::ModToggle(i));
         fx += cw + 5.0;
@@ -1576,7 +1838,7 @@ pub fn draw_customization_tabs(c: &mut Canvas, tabs: &[crate::mods::Mod], open: 
         let name = m.name().to_uppercase();
         let tw = Canvas::text_width(7.0, &name) + 20.0;
         let on = m == open;
-        c.round_rect(x, y, tw, h, 5.0, rgba(if on { 0x34344a } else { 0x1d1d27 }, 1.0), rgba(if on { accent() } else { 0x3a3a4e }, 1.0), if on { 1.5 } else { 1.0 });
+        c.round_rect([x, y], [tw, h], 5.0, rgba(if on { 0x34344a } else { 0x1d1d27 }, 1.0), rgba(if on { accent() } else { 0x3a3a4e }, 1.0), if on { 1.5 } else { 1.0 });
         c.text_centered(x + tw / 2.0, y + 5.5, 7.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), &name);
         c.hit(x, y, tw, h, Hit::CustomTab(i));
         x += tw + 6.0;
@@ -1687,11 +1949,11 @@ impl Select {
         let bh = items.len() as f32 * ROW + 26.0;
         let x = m.x.min(c.width - bw - 8.0).max(8.0);
         let y = m.y.min(480.0 - bh - 8.0).max(8.0);
-        c.round_rect(x, y, bw, bh, 6.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect([x, y], [bw, bh], 6.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         for (k, (label, _)) in items.iter().enumerate() {
             let ry = y + 6.0 + k as f32 * ROW;
             if c.hovered(x + 4.0, ry, bw - 8.0, ROW - 2.0) {
-                c.round_rect(x + 4.0, ry, bw - 8.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(accent(), 1.0), 1.0);
+                c.round_rect([x + 4.0, ry], [bw - 8.0, ROW - 2.0], 4.0, rgba(0x34344a, 1.0), rgba(accent(), 1.0), 1.0);
             }
             c.hit(x + 4.0, ry, bw - 8.0, ROW - 2.0, Hit::SongMenu(k));
             c.text(x + 12.0, ry + 5.0, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, bw - 20.0, label));
@@ -1713,7 +1975,7 @@ impl Select {
         let (bw, max_h) = (320.0, 380.0);
         let bh = (rows.len() as f32 * ROW + 56.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
-        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect([bx, by], [bw, bh], 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), title);
         let (top, view) = (by + 32.0, bh - 50.0);
         let scroll = (cursor as f32 * ROW - view / 2.0).clamp(0.0, (rows.len() as f32 * ROW - view).max(0.0));
@@ -1726,7 +1988,7 @@ impl Select {
             let current = now == Some(i);
             let hover = c.hovered(bx + 8.0, y, bw - 16.0, ROW - 2.0);
             if selected || hover {
-                c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+                c.round_rect([bx + 8.0, y], [bw - 16.0, ROW - 2.0], 4.0, rgba(0x34344a, 1.0), rgba(if selected { accent() } else { 0x3a3a4e }, 1.0), 1.0);
             }
             c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::PickRow(i));
             let shown_w = if current { Canvas::text_width(7.0, mark) + 10.0 } else { 0.0 };
@@ -1992,7 +2254,7 @@ impl Results {
         let x0 = cx - cw / 2.0;
         let hover = c.hovered(x0, cy, cw, ch);
         let pink = 0xff8ad8;
-        c.round_rect(x0, cy, cw, ch, ch / 2.0, rgba(if hover { 0x2b1f2a } else { 0x1d1d27 }, 0.95 * a), rgba(pink, if hover { a } else { 0.75 * a }), 1.5);
+        c.round_rect([x0, cy], [cw, ch], ch / 2.0, rgba(if hover { 0x2b1f2a } else { 0x1d1d27 }, 0.95 * a), rgba(pink, if hover { a } else { 0.75 * a }), 1.5);
         c.text_centered(cx, cy + (ch - 8.0) / 2.0, 8.0, rgba(if hover { 0xffffff } else { pink }, a), &cue);
         let t = self.shown.elapsed().as_secs_f32();
         let bob = 1.5 * (t * 4.0).sin() * if down { 1.0 } else { -1.0 };
@@ -2052,7 +2314,7 @@ impl Results {
             let (mut x, ry) = (cx - total / 2.0, y + r as f32 * (H + 3.0));
             for (label, col) in row {
                 let w = width(label);
-                c.round_rect(x, ry, w, H, 4.0, rgba(*col, 0.2), rgba(*col, 0.9), 1.0);
+                c.round_rect([x, ry], [w, H], 4.0, rgba(*col, 0.2), rgba(*col, 0.9), 1.0);
                 c.text_centered(x + w / 2.0, ry + (H - SIZE) / 2.0, SIZE, rgba(*col, 1.0), label);
                 x += w + GAP;
             }
@@ -2070,13 +2332,13 @@ impl Results {
         let (x, y) = ((w - pw) / 2.0, RESULTS_SCROLL + 64.0 + ((RESULTS_VIEW - 64.0 - h) / 2.0).max(0.0));
         let (label, value) = (rgba(0x8a8aa0, 1.0), rgba(0xffffff, 1.0));
         let Some(b) = self.breakdown else {
-            c.round_rect(x, y, pw, h, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+            c.round_rect([x, y], [pw, h], 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
             c.text(x + 16.0, y + 12.0, 8.0, label, "PERFORMANCE");
             let note = if self.job.is_some() { "working it out..." } else { self.no_pp.unwrap_or("no pp for this play") };
             c.text_centered(x + pw / 2.0, y + 44.0, 9.0, label, &Canvas::fit(9.0, pw - 32.0, note));
             return;
         };
-        c.round_rect(x, y, pw, h, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect([x, y], [pw, h], 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
         c.text(x + 16.0, y + 12.0, 8.0, label, "PERFORMANCE");
         crate::stars::draw_pill(c, x + pw - 14.0, y + 9.0, 8.0, Some(b.stars as f32));
         // Two columns: the pp and its parts, then what could have been and the total.
@@ -2090,10 +2352,10 @@ impl Results {
             let by = y + 100.0 + i as f32 * 40.0;
             c.text(lx, by, 8.0, rgba(0xc8c8d8, 1.0), name);
             c.text_right(lx + col_w, by, 8.0, value, &format!("{:.0}", v * count));
-            c.round_rect(lx, by + 15.0, col_w, 6.0, 3.0, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+            c.round_rect([lx, by + 15.0], [col_w, 6.0], 3.0, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
             let f = if max > 0.0 { ((v / max).clamp(0.0, 1.0) * count) as f32 } else { 0.0 };
             if f > 0.0 {
-                c.round_rect(lx, by + 15.0, (col_w * f).max(6.0), 6.0, 3.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
+                c.round_rect([lx, by + 15.0], [(col_w * f).max(6.0), 6.0], 3.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
             }
         }
         let mut rows = vec![

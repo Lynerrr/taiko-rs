@@ -49,7 +49,9 @@ impl Graph {
 pub fn analyze(map: &Beatmap) -> Graph {
     let start = map.notes.first().map(|n| n.time).unwrap_or(0.0);
     let end = map.notes.iter().map(|n| n.end_time).fold(start, f64::max);
-    let sections = (((end - start) / SECTION_MS).ceil() as usize).max(1);
+    // At most a day's worth: a note's end that far off (rolls are capped in `beatmap`, but a
+    // map isn't only from there) mustn't ask for more sections than can be counted.
+    let sections = (((end - start) / SECTION_MS).ceil() as usize).clamp(1, (86_400_000.0 / SECTION_MS) as usize);
     let mut peaks = vec![0.0f64; sections];
     let section_of = |t: f64| (((t - start) / SECTION_MS) as usize).min(sections - 1);
     let decay = |strain: f64, ms: f64| strain * DECAY_PER_SECOND.powf(ms / 1000.0);

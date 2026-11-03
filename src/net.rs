@@ -443,6 +443,8 @@ enum Event {
     Joined(u32, Sender<ServerMsg>, Option<String>),
     Msg(u32, ClientMsg),
     Left(u32),
+    /// An admin takes the player called this out of the room.
+    Kick(String),
 }
 
 /// `mapguessr`: the room plays mapguessr instead of matches.
@@ -545,6 +547,17 @@ impl Drop for Room {
     }
 }
 
+/// What's told the results of a match.
+pub type MatchHook = Box<dyn Fn(&[PlayerInfo]) + Send + Sync>;
+
+/// Told the results of every match a room here finishes (the online server keeps count).
+static MATCH_OVER: std::sync::OnceLock<MatchHook> = std::sync::OnceLock::new();
+
+#[allow(dead_code)] // used by the online server (server/)
+pub fn on_match(hook: MatchHook) {
+    let _ = MATCH_OVER.set(hook);
+}
+
 #[allow(dead_code)] // used by the online server (server/)
 pub fn open_room(mapguessr: bool) -> Room {
     let stop = Arc::new(AtomicBool::new(false));
@@ -566,6 +579,11 @@ impl Room {
     pub fn attach<K: Send + 'static>(&self, reader: BufReader<TcpStream>, name: Option<String>, keep: K) {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         spawn_connection(reader, id, self.events.clone(), name, keep);
+    }
+
+    /// Takes the player called `name` (any case) out of the room, telling them why.
+    pub fn kick(&self, name: &str) {
+        let _ = self.events.send(Event::Kick(name.to_string()));
     }
 }
 
@@ -593,10 +611,9 @@ fn spawn_connection<K: Send + 'static>(mut reader: BufReader<TcpStream>, id: u32
         }
         let mut line = String::new();
         while let Ok(Some(())) = read_message(&mut reader, &mut line) {
-            if let Ok(msg) = serde_json::from_str::<ClientMsg>(&line) {
-                if events.send(Event::Msg(id, msg)).is_err() {
-                    break;
-                }
+            if let Ok(msg) = serde_json::from_str::<ClientMsg>(&line)
+                && events.send(Event::Msg(id, msg)).is_err() {
+                break;
             }
         }
         let _ = events.send(Event::Left(id));
@@ -690,7 +707,19 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
     let mut common_dirty = false;
 
     while !stop.load(Ordering::Relaxed) {
-        match rx.recv_timeout(Duration::from_millis(50)) {
+        let event = match rx.recv_timeout(Duration::from_millis(50)) {
+            // A kick is the player leaving, after a word to them (their link closes with it).
+            Ok(Event::Kick(name)) => match players.iter().find(|p| p.info.name.eq_ignore_ascii_case(&name) || p.forced_name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&name))) {
+                Some(p) => {
+                    let _ = p.tx.send(ServerMsg::Chat { from: "taiko.rs".into(), text: "an admin took you out of this lobby".into() });
+                    Ok(Event::Left(p.info.id))
+                }
+                None => Err(RecvTimeoutError::Timeout),
+            },
+            other => other,
+        };
+        match event {
+            Ok(Event::Kick(_)) => {}
             Ok(Event::Joined(id, tx, forced_name)) => {
                 players.push(Player {
                     forced_name,
@@ -736,18 +765,16 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                 // Map transfers are relayed between the host and one player, lobby only.
                 let msg = match msg {
                     ClientMsg::RequestMap => {
-                        if let (Some(h), true, true) = (host_id, phase == Phase::Lobby, map.is_some()) {
-                            if let Some(host) = players.iter().find(|p| p.info.id == h) {
-                                let _ = host.tx.send(ServerMsg::MapRequested { from: id });
-                            }
+                        if let (Some(h), true, true) = (host_id, phase == Phase::Lobby, map.is_some())
+                            && let Some(host) = players.iter().find(|p| p.info.id == h) {
+                            let _ = host.tx.send(ServerMsg::MapRequested { from: id });
                         }
                         continue;
                     }
                     ClientMsg::MapFile { to, part } => {
-                        if is_host {
-                            if let Some(dest) = players.iter().find(|p| p.info.id == to) {
-                                let _ = dest.tx.send(ServerMsg::MapFile(part));
-                            }
+                        if is_host
+                            && let Some(dest) = players.iter().find(|p| p.info.id == to) {
+                            let _ = dest.tx.send(ServerMsg::MapFile(part));
                         }
                         continue;
                     }
@@ -967,13 +994,12 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                             dirty = true;
                         }
                     }
-                    ClientMsg::Finished(f) => {
-                        if p.in_match {
+                    ClientMsg::Finished(f)
+                        if p.in_match => {
                             p.info.result = Some(f);
                             p.info.status = Status::Finished;
                             dirty = true;
                         }
-                    }
                     _ => {}
                 }
             }
@@ -1016,6 +1042,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
         // Everyone still in the match has finished (or left): publish results, back to the lobby.
         if phase == Phase::Playing && players.iter().filter(|p| p.in_match).all(|p| p.info.status == Status::Finished) {
             let results: Vec<PlayerInfo> = players.iter().filter(|p| p.in_match).map(|p| p.info.clone()).collect();
+            if let Some(hook) = MATCH_OVER.get() {
+                hook(&results);
+            }
             for p in &mut players {
                 let _ = p.tx.send(ServerMsg::Results(results.clone()));
                 p.in_match = false;
@@ -1188,10 +1217,9 @@ impl Client {
             let mut reader = reader;
             let mut line = String::new();
             while let Ok(Some(())) = read_message(&mut reader, &mut line) {
-                if let Ok(msg) = serde_json::from_str::<ServerMsg>(&line) {
-                    if inbox.send((Instant::now(), msg)).is_err() {
-                        return;
-                    }
+                if let Ok(msg) = serde_json::from_str::<ServerMsg>(&line)
+                    && inbox.send((Instant::now(), msg)).is_err() {
+                    return;
                 }
             }
             let _ = inbox.send((Instant::now(), ServerMsg::Disconnected(tr!("connection closed", "接続が切れました", "соединение закрыто").into())));
@@ -1224,26 +1252,32 @@ impl Client {
     pub fn poll(&mut self) -> Vec<ServerMsg> {
         let mut out = Vec::new();
         while let Ok((arrived, msg)) = self.rx.try_recv() {
-            match msg {
-                ServerMsg::Pong { t, server } => {
-                    let now = arrived.duration_since(self.epoch).as_secs_f64() * 1000.0;
-                    let rtt = now - t;
-                    self.rtt_ms = rtt;
-                    // Trust the fastest round trip; let the bar rise slowly so clock drift is tracked.
-                    self.best_rtt += 0.05;
-                    if rtt <= self.best_rtt {
-                        self.best_rtt = rtt;
-                        self.offset = server + rtt / 2.0 - now;
-                    }
-                }
-                ServerMsg::Welcome { id } => {
-                    self.id = Some(id);
-                    out.push(ServerMsg::Welcome { id });
-                }
-                other => out.push(other),
-            }
+            out.extend(self.take_in(arrived, msg));
         }
         out
+    }
+
+    /// One incoming message: what the clock sync keeps for itself never comes out.
+    fn take_in(&mut self, arrived: Instant, msg: ServerMsg) -> Option<ServerMsg> {
+        match msg {
+            ServerMsg::Pong { t, server } => {
+                let now = arrived.duration_since(self.epoch).as_secs_f64() * 1000.0;
+                let rtt = now - t;
+                self.rtt_ms = rtt;
+                // Trust the fastest round trip; let the bar rise slowly so clock drift is tracked.
+                self.best_rtt += 0.05;
+                if rtt <= self.best_rtt {
+                    self.best_rtt = rtt;
+                    self.offset = server + rtt / 2.0 - now;
+                }
+                None
+            }
+            ServerMsg::Welcome { id } => {
+                self.id = Some(id);
+                Some(ServerMsg::Welcome { id })
+            }
+            other => Some(other),
+        }
     }
 
     /// Local instant corresponding to a server timestamp.
@@ -1290,11 +1324,15 @@ mod tests {
         assert_eq!(resolve("[::1]:9001").unwrap().port(), 9001);
     }
 
+    /// The next message like `pred`, skipping the ones before it. What came after it stays
+    /// queued: two messages can arrive together, and the next wait may want the second.
     fn wait_for<F: Fn(&ServerMsg) -> bool>(c: &mut Client, pred: F) -> ServerMsg {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(m) = c.poll().into_iter().find(|m| pred(m)) {
-                return m;
+            while let Ok((arrived, msg)) = c.rx.try_recv() {
+                if let Some(m) = c.take_in(arrived, msg).filter(|m| pred(m)) {
+                    return m;
+                }
             }
             assert!(Instant::now() < until, "timed out waiting for message");
             thread::sleep(Duration::from_millis(10));

@@ -9,8 +9,11 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::online::{self, OnlineScore, Profile, ScoreSubmit, Stats};
+use crate::medals::{Medals, Play, Rivals};
+use crate::online::{self, MedalNote, MedalsView, OnlineScore, Profile, ScoreSubmit, Stats};
 
+/// The most drumroll hits a play can say it has: no map comes close.
+const MAX_ROLLS: u32 = 1_000_000;
 /// Plays one account may send per minute.
 const SUBMITS_PER_MINUTE: usize = 20;
 /// The most key presses a play can have: on a submitted one, and kept of a live one.
@@ -47,6 +50,9 @@ struct StoredReplay<'a> {
     version: u32,
     map: &'a crate::net::MapInfo,
     inputs: &'a [(f64, u8)],
+    /// For working out how far off plays are; `replay` doesn't hand it out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timing: Option<online::PlayTiming>,
 }
 
 /// A player's plays that aren't on the leaderboards (failed, quit, restarted...) and the time
@@ -116,6 +122,7 @@ pub struct Scores {
     next_id: u64,
     submits: HashMap<String, Vec<Instant>>,
     /// Whether plays on a set give pp (None: not known yet).
+    pub medals: Medals,
     gives_pp: fn(Option<u32>) -> Option<bool>,
     /// Whether a `.osu` (by MD5) is one of the set's own on osu! (not an edited copy).
     official: fn(Option<u32>, &str) -> bool,
@@ -211,6 +218,7 @@ impl Scores {
         for r in &renames {
             r.apply(&mut all);
         }
+        let medals = Medals::load(dir.as_deref());
         let mut scores = Scores {
             file,
             overrides_file,
@@ -231,6 +239,7 @@ impl Scores {
             submits: HashMap::new(),
             gives_pp: crate::loved::gives_pp,
             official: crate::covers::official,
+            medals,
             by_player: HashMap::new(),
             by_map: HashMap::new(),
             standings: HashMap::new(),
@@ -238,7 +247,52 @@ impl Scores {
         };
         scores.reindex();
         scores.count_pp();
+        scores.settle_medals();
         scores
+    }
+
+    /// Whether a play counts for medals that want a real map: unknown doesn't do, unlike for pp.
+    fn gives(&self, s: &Stored) -> bool {
+        (self.gives_pp)(s.score.set_id) == Some(true) && s.md5.as_deref().is_none_or(|m| (self.official)(s.score.set_id, m))
+    }
+
+    /// `player`'s plays as medals see them, oldest first.
+    fn medal_plays(&self, player: &str) -> Vec<Play> {
+        let mut plays: Vec<&Stored> = self.stored_of(player).into_iter().filter(|s| !s.hidden).collect();
+        plays.sort_by_key(|s| (s.score.date, s.id));
+        plays.into_iter().map(|s| Play::of(&s.score, self.gives(s))).collect()
+    }
+
+    fn rivals(&self) -> Rivals {
+        Rivals::of(self.all.iter().filter(|s| !s.hidden).map(|s| (s.player.as_str(), Play::of(&s.score, self.gives(s)))))
+    }
+
+    /// Everyone's medals, without telling anyone: at start, and for what can't be told as it
+    /// happens.
+    pub fn settle_medals(&mut self) {
+        let rivals = self.rivals();
+        let players: HashSet<String> = self.by_player.keys().cloned().chain(self.medals.counted_players()).collect();
+        let everyone: Vec<(String, Vec<Play>, u64)> = players
+            .into_iter()
+            .map(|p| {
+                let (plays, ms) = (self.medal_plays(&p), self.tally(&p).ms);
+                (p, plays, ms)
+            })
+            .collect();
+        self.medals.settle_all(&everyone, &rivals, crate::now_secs());
+    }
+
+    /// `player`'s medals after a change: the ones it earned.
+    pub fn medals_after(&mut self, player: &str, now: u64) -> Vec<MedalNote> {
+        let (plays, rivals, ms) = (self.medal_plays(player), self.rivals(), self.tally(player).ms);
+        self.medals.settle(player, &plays, &rivals, ms, now)
+    }
+
+    /// Every medal, and how `player` stands with them.
+    pub fn medals_view(&self, player: Option<&str>) -> MedalsView {
+        let plays = player.map(|p| self.medal_plays(p)).unwrap_or_default();
+        let ms = player.map_or(0, |p| self.tally(p).ms);
+        self.medals.view(player, &plays, &self.rivals(), ms)
     }
 
     /// Redoes the indexes, the maps' rows and the rankings from the plays.
@@ -407,6 +461,8 @@ impl Scores {
         }
         let gone = self.all.remove(at);
         self.reindex();
+        let (plays, rivals, ms) = (self.medal_plays(&gone.player), self.rivals(), self.tally(&gone.player).ms);
+        self.medals.revoke(&gone.player, &plays, &rivals, ms, crate::now_secs());
         Ok(gone.score.player)
     }
 
@@ -421,6 +477,7 @@ impl Scores {
             r.apply(&mut self.all);
         }
         if from != to {
+            self.medals.rename(from, to);
             if let Some(t) = self.tallies.remove(from) {
                 self.tallies.insert(to.to_string(), t);
                 self.save_tallies();
@@ -449,8 +506,12 @@ impl Scores {
     pub fn submit(&mut self, player: &str, name: &str, mut play: ScoreSubmit, now: u64) -> Result<(Option<u32>, f64, Option<u32>), String> {
         check(&play)?;
         // Older games work these out on the whole map.
-        if play.pp_version < online::PP_VERSION && play.map.mods.iter().any(|m| online::NOTE_MODS.contains(&m.as_str())) {
+        if play.pp_version < online::NOTE_MODS_VERSION && play.map.mods.iter().any(|m| online::NOTE_MODS.contains(&m.as_str())) {
             (play.pp, play.stars) = (None, None);
+        }
+        // Older games add up as many mods as they like.
+        if play.pp_version < online::PP_VERSION && online::past_the_cap(&play.map.mods) {
+            play.pp = None;
         }
         let times = self.submits.entry(player.to_string()).or_default();
         times.retain(|t| t.elapsed() < Duration::from_secs(60));
@@ -484,13 +545,15 @@ impl Scores {
                 id,
                 scroll_speed: play.scroll_speed.filter(|s| s.is_finite() && (0.1..=10.0).contains(s)),
                 pp_version: play.pp_version,
+                rolls: play.rolls.unwrap_or(0).min(MAX_ROLLS),
             },
             sent_pp: play.pp,
             md5: play.md5.as_deref().map(|m| online::clean_text(m, 32).to_ascii_lowercase()),
             hidden: false,
         };
         if let Some(dir) = &self.replays {
-            let replay = StoredReplay { version: play.replay_version, map: &play.map, inputs: &play.inputs };
+            let timing = play.timing.clone().map(|t| online::PlayTiming { os: online::clean_text(&t.os, 16), present: online::clean_text(&t.present, 16), ..t });
+            let replay = StoredReplay { version: play.replay_version, map: &play.map, inputs: &play.inputs, timing };
             let bytes = serde_json::to_vec(&replay).unwrap_or_default();
             if self.replay_bytes + bytes.len() as u64 > self.replay_limit {
                 eprintln!("replay {id} isn't kept: the replays have taken all their room");
@@ -563,6 +626,7 @@ impl Scores {
                 id,
                 scroll_speed: None,
                 pp_version: online::PP_VERSION,
+                rolls: 0,
             },
             sent_pp: Some(pp),
             md5: None,
@@ -731,10 +795,10 @@ impl Scores {
         maps.dedup();
         let mut firsts: Vec<OnlineScore> =
             maps.into_iter().filter_map(|m| self.leader(m).filter(|s| s.player == player).map(|s| s.score.clone())).collect();
-        firsts.sort_by(|a, b| b.date.cmp(&a.date));
+        firsts.sort_by_key(|score| std::cmp::Reverse(score.date));
         firsts.truncate(PROFILE_PLAYS);
         let tally = self.tally(player);
-        Profile { name: name.to_string(), joined, plays: mine.len() as u32 + tally.other_plays, pp, rank, top, recent, stats, firsts, online: false, play_ms: tally.ms }
+        Profile { name: name.to_string(), joined, plays: mine.len() as u32 + tally.other_plays, pp, rank, top, recent, stats, firsts, online: false, play_ms: tally.ms, medals: self.medals.summary(player) }
     }
 }
 
@@ -845,6 +909,8 @@ mod tests {
             play_ms: Some(60_000),
             md5: None,
             pp_version: 0,
+            timing: None,
+            rolls: None,
         }
     }
 
@@ -1016,6 +1082,7 @@ mod tests {
             s.submits.clear();
             s.submit(&player, &player.to_uppercase(), p, i).unwrap();
         }
+        s.settle_medals();
         let again = Scores::load(Some(dir.clone()));
         assert_eq!(s.rankings(usize::MAX), again.rankings(usize::MAX));
         assert_eq!(s.maps(usize::MAX), again.maps(usize::MAX));
@@ -1143,6 +1210,23 @@ mod tests {
     }
 
     #[test]
+    fn older_games_get_no_pp_from_mods_stacked_past_the_ceiling() {
+        let mut s = Scores::load(None);
+        let with = |mods: &[&str], version: u32| {
+            let mut p = play(7, 500, 100.0);
+            p.map.mods = mods.iter().map(|m| m.to_string()).collect();
+            p.pp_version = version;
+            p
+        };
+        let stacked = ["BL", "BO", "CL", "CH"];
+        s.submit("a", "A", with(&stacked, online::PP_VERSION - 1), 1).unwrap();
+        s.submit("b", "B", with(&stacked, online::PP_VERSION), 2).unwrap();
+        s.submit("c", "C", with(&["HD", "HR", "DT", "FL"], online::PP_VERSION - 1), 3).unwrap();
+        assert_eq!(s.profile("a", "A", 0).pp, 0.0);
+        assert!(s.profile("b", "B", 0).pp > 0.0 && s.profile("c", "C", 0).pp > 0.0);
+    }
+
+    #[test]
     fn older_games_get_no_pp_with_mods_that_change_the_notes() {
         let mut s = Scores::load(None);
         let with = |mods: &[&str], version: u32| {
@@ -1174,6 +1258,25 @@ mod tests {
         assert_eq!(s.pp_of(1), Some((Some(90.0), None)));
         // Every line stays as sent.
         assert!(std::fs::read_to_string(dir.join("scores.jsonl")).unwrap().contains("900"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_plays_timing_stays_with_its_replay_and_is_shown_to_no_one() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-timing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        let timing = online::PlayTiming { os: format!("windows{}", "x".repeat(100)), present: "immediate".into(), offset_ms: -20.0, visual_lead_ms: 0.0, latency_ms: 32.4, reported_latency_ms: 144.2 };
+        s.submit("a", "A", ScoreSubmit { timing: Some(timing), ..play(7, 500, 100.0) }, 1).unwrap();
+        s.submit("a", "A", play(8, 500, 100.0), 1).unwrap();
+        let stored = |id: u64| serde_json::from_slice::<serde_json::Value>(&std::fs::read(dir.join(format!("replays/{id}.json"))).unwrap()).unwrap();
+        let first = stored(1);
+        assert_eq!((first["timing"]["offset_ms"].as_f64(), first["timing"]["reported_latency_ms"].as_f64()), (Some(-20.0), Some(144.2)));
+        assert_eq!(first["timing"]["os"].as_str().unwrap().chars().count(), 16, "a client can't fill the disk with it");
+        assert!(stored(2).get("timing").is_none(), "games from before it send none");
+        let handed_out = serde_json::to_value(s.replay(1).unwrap()).unwrap();
+        assert!(handed_out.get("timing").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

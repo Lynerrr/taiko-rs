@@ -3,7 +3,7 @@
 
 use std::cell::Cell;
 
-use crate::render::{accent, approach, rgba, Canvas, Hit};
+use crate::render::{accent, approach, rgba, Canvas, Glide, Hit};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
@@ -56,6 +56,7 @@ pub enum Item {
     NotifyMentions,
     NotifyRequests,
     ShowConverts,
+    SongHeadings,
     HiddenMaps,
     SongsFolder,
     DataFolder,
@@ -66,13 +67,24 @@ pub enum Item {
     BackgroundDim,
     BackgroundDimBlack,
     PresentMode,
+    /// The graphics API (`config::RENDERERS`), from the next start.
+    Renderer,
     MenuVsync,
     HalfResolution,
     FpsCap,
     ShowFps,
     Animations,
     Splash,
-    MainMenu,
+    /// The old layout: tabs on top and no main menu (`Config::main_menu` off).
+    LegacyMenu,
+    /// The song's notes behind the main menu.
+    MenuNotes,
+    MenuNotesDim,
+    /// The game smaller than the screen, black around it: on or off, its size, and where it sits.
+    Letterbox,
+    LetterboxSize,
+    LetterboxX,
+    LetterboxY,
     /// Clears every map's own offset, on a second press.
     ResetMapOffsets,
     /// Shows the first launch's guide again.
@@ -88,6 +100,9 @@ pub enum Item {
     Fullscreen,
     WindowSize,
     DiscordPresence,
+    IdleScreen,
+    /// After a crash, the next start sends its report in (`Config::send_crash_reports`).
+    CrashReports,
     Skin,
     SkinFolder,
     NoteColours,
@@ -97,40 +112,40 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 112] = [
-    ("GENERAL", Item::Language),
-    ("GENERAL", Item::SongsFolder),
-    ("GENERAL", Item::ShowConverts),
-    ("GENERAL", Item::HiddenMaps),
-    ("GENERAL", Item::DataFolder),
-    ("GENERAL", Item::Screenshots),
+pub const ITEMS: [(&str, Item); 124] = [
+    ("LIBRARY", Item::SongsFolder),
+    ("LIBRARY", Item::ShowConverts),
+    ("LIBRARY", Item::SongHeadings),
+    ("LIBRARY", Item::HiddenMaps),
+    ("LIBRARY", Item::SongSelectLayout),
+    ("LIBRARY", Item::DataFolder),
+    ("LIBRARY", Item::Screenshots),
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::ResumeDelay),
+    ("GAMEPLAY", Item::HideGreat),
     ("GAMEPLAY", Item::Interface),
     ("GAMEPLAY", Item::InterfaceHides),
     ("GAMEPLAY", Item::InterfaceKey),
-    ("GAMEPLAY", Item::SongSelectLayout),
     ("GAMEPLAY", Item::AutoplayStyle),
     ("GAMEPLAY", Item::AutoplayBinding),
     ("GAMEPLAY", Item::AutoplayLeftHanded),
-    ("PLAYFIELD", Item::PlayfieldArea),
-    ("PLAYFIELD", Item::PlayfieldPreset),
-    ("PLAYFIELD", Item::PlayfieldReset),
-    ("PLAYFIELD", Item::ShowPlayfieldSize),
-    ("PLAYFIELD", Item::WheelResize),
-    ("PLAYFIELD", Item::BackgroundDim),
-    ("PLAYFIELD", Item::BackgroundDimBlack),
-    ("PLAYFIELD", Item::KiaiEffects),
-    ("PLAYFIELD", Item::HideGreat),
+    ("VIEW", Item::PlayfieldArea),
+    ("VIEW", Item::PlayfieldPreset),
+    ("VIEW", Item::PlayfieldReset),
+    ("VIEW", Item::ShowPlayfieldSize),
+    ("VIEW", Item::WheelResize),
+    ("VIEW", Item::BackgroundDim),
+    ("VIEW", Item::BackgroundDimBlack),
+    ("VIEW", Item::KiaiEffects),
     ("INPUT", Item::Key(0)),
     ("INPUT", Item::Key(1)),
     ("INPUT", Item::Key(2)),
     ("INPUT", Item::Key(3)),
+    ("INPUT", Item::TouchLayout),
     ("INPUT", Item::PresetKey(0)),
     ("INPUT", Item::PresetKey(1)),
-    ("INPUT", Item::TouchLayout),
     ("INPUT", Item::Hotkey(0)),
     ("INPUT", Item::Hotkey(1)),
     ("INPUT", Item::Hotkey(2)),
@@ -163,6 +178,8 @@ pub const ITEMS: [(&str, Item); 112] = [
     ("INPUT", Item::Hotkey(29)),
     ("INPUT", Item::Hotkey(30)),
     ("INPUT", Item::Hotkey(31)),
+    ("INPUT", Item::Hotkey(32)),
+    ("INPUT", Item::Hotkey(33)),
     ("OFFSET", Item::Offset),
     ("OFFSET", Item::VisualOffset),
     ("OFFSET", Item::Calibrate),
@@ -178,6 +195,7 @@ pub const ITEMS: [(&str, Item); 112] = [
     ("AUDIO", Item::FxVolume),
     ("AUDIO", Item::AudioBuffer),
     ("VIDEO", Item::PresentMode),
+    ("VIDEO", Item::Renderer),
     ("VIDEO", Item::MenuVsync),
     ("VIDEO", Item::HalfResolution),
     ("VIDEO", Item::FpsCap),
@@ -185,10 +203,10 @@ pub const ITEMS: [(&str, Item); 112] = [
     ("VIDEO", Item::Fullscreen),
     ("VIDEO", Item::WindowSize),
     ("VIDEO", Item::Animations),
-    ("VIDEO", Item::DiscordPresence),
-    ("VIDEO", Item::Splash),
-    ("VIDEO", Item::MainMenu),
-    ("VIDEO", Item::Guide),
+    ("VIDEO", Item::Letterbox),
+    ("VIDEO", Item::LetterboxSize),
+    ("VIDEO", Item::LetterboxX),
+    ("VIDEO", Item::LetterboxY),
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinParts),
     ("SKIN", Item::SkinFolder),
@@ -205,25 +223,34 @@ pub const ITEMS: [(&str, Item); 112] = [
     ("ONLINE", Item::NotifyRequests),
     ("ONLINE", Item::NotifyOnline),
     ("ONLINE", Item::NotifyPlaying),
+    ("ONLINE", Item::DiscordPresence),
+    ("ONLINE", Item::CrashReports),
     ("ONLINE", Item::KrokodilKoban),
-    ("UPDATES", Item::UpdateChannel),
-    ("UPDATES", Item::Update),
-    ("UPDATES", Item::Changelog),
-    ("UPDATES", Item::CheckUpdates),
+    ("SYSTEM", Item::Language),
+    ("SYSTEM", Item::Splash),
+    ("SYSTEM", Item::IdleScreen),
+    ("SYSTEM", Item::LegacyMenu),
+    ("SYSTEM", Item::MenuNotes),
+    ("SYSTEM", Item::MenuNotesDim),
+    ("SYSTEM", Item::Guide),
+    ("SYSTEM", Item::UpdateChannel),
+    ("SYSTEM", Item::Update),
+    ("SYSTEM", Item::Changelog),
+    ("SYSTEM", Item::CheckUpdates),
 ];
 
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 10] = [
-    ("GENERAL", "language, Songs folder, data"),
+    ("LIBRARY", "Songs folder, hidden maps, data"),
     ("GAMEPLAY", "speed, rate, interface, autoplay"),
-    ("PLAYFIELD", "size, position"),
+    ("VIEW", "playfield, background"),
     ("INPUT", "drum keys, hotkeys, touch"),
     ("OFFSET", "audio offset, calibration"),
     ("AUDIO", "volume, latency"),
-    ("VIDEO", "frame pacing, display, Discord"),
-    ("SKIN", "notes, hitsounds, colour"),
-    ("ONLINE", "chat filter, notifications"),
-    ("UPDATES", "new versions"),
+    ("VIDEO", "frame pacing, display"),
+    ("SKIN", "notes, hit flash, colour"),
+    ("ONLINE", "chat, notifications, Discord"),
+    ("SYSTEM", "language, startup, updates"),
 ];
 
 /// First item of section `s`.
@@ -234,16 +261,16 @@ pub fn section_start(s: usize) -> usize {
 /// Section `s`'s name, as shown (`SECTIONS` has the English, which `ITEMS` refers to it by).
 pub fn section_name(s: usize) -> &'static str {
     match SECTIONS.get(s).map_or("", |s| s.0) {
-        "GENERAL" => tr!("GENERAL", "一般", "ОБЩИЕ"),
+        "LIBRARY" => tr!("LIBRARY", "ライブラリ", "БИБЛИОТЕКА"),
         "GAMEPLAY" => tr!("GAMEPLAY", "ゲームプレイ", "ИГРА"),
-        "PLAYFIELD" => tr!("PLAYFIELD", "プレイフィールド", "ИГРОВОЕ ПОЛЕ"),
+        "VIEW" => tr!("VIEW", "表示", "ВИД"),
         "INPUT" => tr!("INPUT", "入力", "УПРАВЛЕНИЕ"),
         "OFFSET" => tr!("OFFSET", "オフセット", "СМЕЩЕНИЕ"),
         "AUDIO" => tr!("AUDIO", "オーディオ", "ЗВУК"),
         "VIDEO" => tr!("VIDEO", "グラフィック", "ГРАФИКА"),
         "SKIN" => tr!("SKIN", "スキン", "СКИН"),
         "ONLINE" => tr!("ONLINE", "オンライン", "ОНЛАЙН"),
-        "UPDATES" => tr!("UPDATES", "アップデート", "ОБНОВЛЕНИЯ"),
+        "SYSTEM" => tr!("SYSTEM", "システム", "СИСТЕМА"),
         other => other,
     }
 }
@@ -251,18 +278,52 @@ pub fn section_name(s: usize) -> &'static str {
 /// Section `s`'s one-line summary for the sidebar.
 pub fn section_summary(s: usize) -> &'static str {
     match SECTIONS.get(s).map_or("", |s| s.0) {
-        "GENERAL" => tr!("language, Songs folder, data", "言語、Songsフォルダ、データ", "язык, папка Songs, данные"),
+        "LIBRARY" => tr!("Songs folder, hidden maps, data", "Songsフォルダ、非表示の譜面、データ", "папка Songs, скрытые карты, данные"),
         "GAMEPLAY" => tr!("speed, rate, interface", "速度、レート、インターフェース", "скорость, рейт, интерфейс"),
-        "PLAYFIELD" => tr!("size, position", "サイズ、位置", "размер, положение"),
+        "VIEW" => tr!("playfield, background", "プレイフィールド、背景", "игровое поле, фон"),
         "INPUT" => tr!("drum keys, hotkeys, touch", "太鼓のキー、ショートカット、タッチ", "клавиши, горячие клавиши"),
         "OFFSET" => tr!("audio offset, calibration", "音声オフセット、調整", "смещение звука, калибровка"),
         "AUDIO" => tr!("volume, latency", "音量、遅延", "громкость, задержка"),
-        "VIDEO" => tr!("frame pacing, display, Discord", "フレーム、画面、Discord", "кадры, экран, Discord"),
-        "SKIN" => tr!("notes, hitsounds, colour", "ノーツ、ヒット音、色", "ноты, хитсаунды, цвет"),
-        "ONLINE" => tr!("chat filter, notifications", "チャットフィルター、通知", "фильтр чата, уведомления"),
-        "UPDATES" => tr!("new versions", "新しいバージョン", "новые версии"),
+        "VIDEO" => tr!("frame pacing, display", "フレーム、画面", "кадры, экран"),
+        "SKIN" => tr!("notes, hit flash, colour", "ノーツ、ヒット時の光、色", "ноты, вспышка, цвет"),
+        "ONLINE" => tr!("chat, notifications, Discord", "チャット、通知、Discord", "чат, уведомления, Discord"),
+        "SYSTEM" => tr!("language, startup, updates", "言語、起動、アップデート", "язык, запуск, обновления"),
         _ => "",
     }
+}
+
+/// The small heading above a row that starts a group of its section.
+pub fn group_heading(item: Item) -> Option<&'static str> {
+    Some(match item {
+        Item::Interface => tr!("Interface", "インターフェース", "Интерфейс"),
+        Item::AutoplayStyle => tr!("Autoplay", "オートプレイ", "Автоигра"),
+        Item::PlayfieldArea => tr!("Playfield", "プレイフィールド", "Игровое поле"),
+        Item::BackgroundDim => tr!("Background", "背景", "Фон"),
+        Item::Key(0) => tr!("Drum", "太鼓", "Барабан"),
+        Item::PresetKey(0) => tr!("Playfield presets", "プレイフィールドのプリセット", "Пресеты поля"),
+        Item::Hotkey(0) => tr!("In a song", "プレイ中", "В песне"),
+        Item::Hotkey(6) => tr!("Song select", "選曲画面", "Выбор песни"),
+        Item::Hotkey(16) => tr!("Results", "リザルト", "Результаты"),
+        Item::Hotkey(19) => tr!("Anywhere", "どこでも", "Везде"),
+        Item::VsyncCompensation => tr!("Vsync", "垂直同期", "Vsync"),
+        Item::NoteColours => tr!("Colours", "色", "Цвета"),
+        Item::Letterbox => tr!("Black bars", "黒帯", "Чёрные поля"),
+        Item::NotifyMessages => tr!("Notifications", "通知", "Уведомления"),
+        Item::UpdateChannel => tr!("Updates", "アップデート", "Обновления"),
+        _ => return None,
+    })
+}
+
+/// How a row shows its value, besides as text.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Control {
+    Text,
+    /// A switch, on or off.
+    Switch(bool),
+    /// A bar from 0 to 1, set by dragging it.
+    Level(f32),
+    /// A colour shown beside its value.
+    Swatch(u32),
 }
 
 /// What Enter does to a setting.
@@ -321,7 +382,7 @@ impl Item {
             Item::PresetKey(_) => tr!("Next preset key", "次のプリセットのキー", "Клавиша: след. пресет"),
             Item::Hotkey(i) => crate::keys::Hotkey::ALL[i].label(),
             Item::TouchLayout => tr!("Touch layout", "タッチの配置", "Сенсорная раскладка"),
-            Item::Screenshots => tr!("Screenshots (F12)", "スクリーンショット (F12)", "Скриншоты (F12)"),
+            Item::Screenshots => tr!("Screenshots", "スクリーンショット", "Скриншоты"),
             // Also in English, so anyone who picked a language by mistake finds their way back.
             Item::Language => tr!("Language", "言語 (Language)", "Язык (Language)"),
             Item::ShowPlayfieldSize => tr!("Show playfield size", "プレイフィールドのサイズを表示", "Показывать размер поля"),
@@ -337,6 +398,7 @@ impl Item {
             Item::NotifyOnline => tr!("Notify: friend online", "通知: フレンドのログイン", "Уведомлять: друг в сети"),
             Item::NotifyPlaying => tr!("Notify: friend playing", "通知: フレンドのプレイ", "Уведомлять: друг играет"),
             Item::ShowConverts => tr!("Show osu!standard converts", "osu!standardの変換譜面を表示", "Карты osu!standard (конверты)"),
+            Item::SongHeadings => tr!("Song list headings", "曲リストの見出し", "Заголовки в списке песен"),
             Item::HiddenMaps => tr!("Hidden maps", "非表示の譜面", "Скрытые карты"),
             Item::SongsFolder => tr!("Songs folder", "Songsフォルダ", "Папка Songs"),
             Item::DataFolder => tr!("Game data folder", "ゲームデータのフォルダ", "Папка данных игры"),
@@ -347,13 +409,20 @@ impl Item {
             Item::BackgroundDim => tr!("Background dim", "背景の暗さ", "Затемнение фона"),
             Item::BackgroundDimBlack => tr!("Dim to black", "黒まで暗くする", "Затемнять до чёрного"),
             Item::PresentMode => tr!("Present mode (gameplay)", "表示モード (プレイ中)", "Режим вывода (в игре)"),
+            Item::Renderer => tr!("Renderer", "レンダラー", "Рендер"),
             Item::MenuVsync => tr!("Menus use vsync", "メニューは垂直同期", "Vsync в меню"),
             Item::HalfResolution => tr!("Half resolution", "半分の解像度", "Половинное разрешение"),
             Item::FpsCap => tr!("FPS cap", "FPSの上限", "Ограничение FPS"),
             Item::ShowFps => tr!("FPS overlay", "FPSの表示", "Счётчик FPS"),
             Item::Animations => tr!("UI animations", "UIのアニメーション", "Анимации интерфейса"),
             Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
-            Item::MainMenu => tr!("Main menu", "メインメニュー", "Главное меню"),
+            Item::LegacyMenu => tr!("Legacy menu", "旧メニュー", "Старое меню"),
+            Item::Letterbox => tr!("Letterbox", "レターボックス", "Чёрные поля (letterbox)"),
+            Item::LetterboxSize => tr!("Letterbox resolution", "レターボックスの解像度", "Разрешение с полями"),
+            Item::LetterboxX => tr!("Letterbox position: sideways", "レターボックスの位置: 横", "Положение: по горизонтали"),
+            Item::LetterboxY => tr!("Letterbox position: up and down", "レターボックスの位置: 縦", "Положение: по вертикали"),
+            Item::MenuNotes => tr!("Notes behind the main menu", "メインメニューの背景のノーツ", "Ноты за главным меню"),
+            Item::MenuNotesDim => tr!("Menu lane notes dim", "メニューのレーンのノーツの暗さ", "Затемнение нот на дорожке меню"),
             Item::ResetMapOffsets => tr!("Reset map offsets", "譜面のオフセットをリセット", "Сбросить оффсеты карт"),
             Item::Guide => tr!("First steps guide", "はじめてのガイド", "Первые шаги"),
             Item::UpdateChannel => tr!("Build channel", "ビルドのチャンネル", "Канал сборок"),
@@ -364,6 +433,8 @@ impl Item {
             Item::Fullscreen => tr!("Fullscreen", "フルスクリーン", "Полный экран"),
             Item::WindowSize => tr!("Window size", "ウィンドウのサイズ", "Размер окна"),
             Item::DiscordPresence => tr!("Discord status", "Discordのステータス", "Статус в Discord"),
+            Item::IdleScreen => tr!("Idle screen", "待機画面", "Экран бездействия"),
+            Item::CrashReports => tr!("Send crash reports", "クラッシュレポートを送る", "Отправлять отчёты о вылетах"),
             Item::Skin => tr!("Skin", "スキン", "Скин"),
             Item::SkinParts => tr!("Skin parts", "スキンのパーツ", "Части скина"),
             Item::SkinPart(i) => crate::skin::Part::ALL.get(i).map_or(tr!("Skin part", "スキンのパーツ", "Часть скина"), |p| p.label()),
@@ -388,17 +459,22 @@ impl Item {
             | Item::MusicVolume
             | Item::FxVolume
             | Item::BackgroundDim
+            | Item::MenuNotesDim
             | Item::FpsCap
             | Item::AccentHue
             | Item::VsyncTune
             | Item::DonColour
-            | Item::KatColour => Kind::Value,
+            | Item::KatColour
+            | Item::LetterboxX
+            | Item::LetterboxY => Kind::Value,
             Item::PlayfieldPreset
             | Item::TouchLayout
             | Item::Screenshots
+            | Item::IdleScreen
             | Item::Language
             | Item::AudioBuffer
             | Item::PresentMode
+            | Item::Renderer
             | Item::UpdateChannel
             | Item::Skin
             | Item::SkinParts
@@ -408,6 +484,7 @@ impl Item {
             | Item::AutoplayStyle
             | Item::AutoplayBinding
             | Item::WindowSize
+            | Item::LetterboxSize
             | Item::Accent
             | Item::SongsFolder
             | Item::DataFolder => Kind::List,
@@ -431,15 +508,19 @@ impl Item {
             | Item::NotifyMentions
             | Item::NotifyRequests
             | Item::ShowConverts
+            | Item::SongHeadings
             | Item::MenuVsync
             | Item::HalfResolution
             | Item::ShowFps
             | Item::Animations
             | Item::Splash
-            | Item::MainMenu
+            | Item::LegacyMenu
+            | Item::Letterbox
+            | Item::MenuNotes
             | Item::CheckUpdates
             | Item::Fullscreen
-            | Item::DiscordPresence => Kind::Toggle,
+            | Item::DiscordPresence
+            | Item::CrashReports => Kind::Toggle,
             Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => Kind::Key,
             Item::PlayfieldArea | Item::PlayfieldReset | Item::ResetMapOffsets | Item::Guide | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout | Item::SkinFolder => Kind::Action,
         }
@@ -558,9 +639,9 @@ impl Item {
                 "Язык меню, настроек и сообщений. Названия песен остаются как в картах."
             ),
             Item::Screenshots => tr!(
-                "Where F12 puts a screenshot: on the clipboard to paste, as a picture in the Screenshots folder, or both.",
-                "F12のスクリーンショットの行き先: 貼り付け用のクリップボード、Screenshotsフォルダの画像、またはその両方。",
-                "Куда F12 кладёт скриншот: в буфер обмена, картинкой в папку Screenshots или туда и туда."
+                "Where a screenshot goes: on the clipboard to paste, as a picture in the Screenshots folder, or both.",
+                "スクリーンショットの行き先: 貼り付け用のクリップボード、Screenshotsフォルダの画像、またはその両方。",
+                "Куда идёт скриншот: в буфер обмена, картинкой в папку Screenshots или туда и туда."
             ),
             Item::TouchLayout => tr!(
                 "Touch screens: the screen is four columns, left to right (K = rim / kat, D = centre / don).",
@@ -582,6 +663,11 @@ impl Item {
                 "standardの譜面も、osu!と同じく太鼓に変換して並べます。",
                 "Показывать и карты standard, переделанные в taiko, как в osu!."
             ),
+            Item::SongHeadings => tr!(
+                "Group songs under headings you open and close (stars, letters, BPM...). Off: one list in the sort's order; by difficulty, each difficulty on its own.",
+                "曲を開閉できる見出し (星、頭文字、BPMなど) ごとにまとめます。オフ: 並び順のまま一つのリストに。難易度順では難易度ごとに並べます。",
+                "Группировать песни под заголовками, которые открываются и закрываются (звёзды, буквы, BPM...). Выкл.: один список по сортировке; по сложности — каждая сложность отдельно."
+            ),
             Item::HiddenMaps => tr!(
                 "Right-click a song to hide it here (files stay). Enter lists them all again.",
                 "曲を右クリックでここから隠せます (ファイルは残ります)。Enterで全て再表示。",
@@ -598,9 +684,9 @@ impl Item {
                 "Повторы, рекорды, видео, скачанные карты, скины и кэш. Enter: перенести в другую папку или на диск."
             ),
             Item::KiaiEffects => tr!(
-                "During kiai time, tint the lane and pulse the hit target with the beat.",
-                "キアイタイム中、レーンに色を付け、判定枠を拍に合わせて脈打たせます。",
-                "В киай подкрашивать дорожку и пульсировать мишень в такт."
+                "During kiai time, tint the lane and pulse the hit target with the beat. The main menu joins in too.",
+                "キアイタイム中、レーンに色を付け、判定枠を拍に合わせて脈打たせます。メインメニューも盛り上がります。",
+                "В киай подкрашивать дорожку и пульсировать мишень в такт. Главное меню тоже оживает."
             ),
             Item::HideGreat => tr!(
                 "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",
@@ -673,6 +759,11 @@ impl Item {
                 "曲中に使います。Waylandではvsyncが一番なめらか。mailbox/immediateはカクつきます。",
                 "Для песен. На Wayland плавнее всего vsync; mailbox/immediate дёргаются."
             ),
+            Item::Renderer => tr!(
+                "What draws the game: picking one restarts it. If it closes right after starting or crashes, try another: Vulkan or DirectX 12 on Windows (Auto picks DirectX 12). OpenGL always uses vsync on Linux.",
+                "ゲームを描くグラフィックスAPI: 選ぶと再起動します。起動直後に閉じたりクラッシュしたら別のものを: WindowsならVulkanかDirectX 12 (自動ではDirectX 12)。LinuxのOpenGLは常に垂直同期です。",
+                "Чем рисуется игра: при выборе она перезапустится. Если она закрывается сразу после запуска или вылетает, попробуй другой: на Windows Vulkan или DirectX 12 (Авто выбирает DirectX 12). OpenGL на Linux всегда с vsync."
+            ),
             Item::MenuVsync => tr!(
                 "Everything but playing a song uses vsync: song select (and its autoplay preview), settings, results, replays and autoplay.",
                 "曲のプレイ以外は垂直同期: 選曲 (とオートのプレビュー)、設定、リザルト、リプレイ、オート。",
@@ -713,10 +804,40 @@ impl Item {
                 "初回起動時の短いガイドをもう一度表示します。",
                 "Короткая подсказка с первого запуска."
             ),
-            Item::MainMenu => tr!(
-                "Starts on the main menu, and Esc in song select goes back to it. Off: straight to song select, and Esc there asks to quit.",
-                "メインメニューから始まり、選曲画面のEscでそこに戻ります。オフ: すぐに選曲画面になり、そこでEscを押すと終了を確認します。",
-                "Игра открывается с главного меню, Esc в выборе песни возвращает в него. Выкл.: сразу выбор песни, а Esc там спрашивает о выходе."
+            Item::Letterbox => tr!(
+                "In fullscreen, the whole game runs at a resolution of your own with black around it. Turning it on goes fullscreen.",
+                "フルスクリーンで、ゲーム全体を好きな解像度で動かし、周りを黒くします。オンにするとフルスクリーンになります。",
+                "В полном экране вся игра идёт в своём разрешении, а вокруг чёрное. Включение переводит в полный экран."
+            ),
+            Item::LetterboxSize => tr!(
+                "Every resolution the monitor reports, custom ones from the graphics driver too, or type your own.",
+                "モニターが報告するすべての解像度 (ドライバーで追加したものも含む)。自分で入力もできます。",
+                "Все разрешения, что отдаёт монитор, включая кастомные из драйвера. Или введите своё."
+            ),
+            Item::LetterboxX => tr!(
+                "Where the game sits between the sides of the screen: -100 left, 0 the middle, 100 right.",
+                "画面の左右のどこに置くか: -100 左、0 中央、100 右。",
+                "Где игра стоит по ширине экрана: -100 слева, 0 по центру, 100 справа."
+            ),
+            Item::LetterboxY => tr!(
+                "Where the game sits between the top and the bottom: -100 top, 0 the middle, 100 bottom.",
+                "画面の上下のどこに置くか: -100 上、0 中央、100 下。",
+                "Где игра стоит по высоте экрана: -100 сверху, 0 по центру, 100 снизу."
+            ),
+            Item::LegacyMenu => tr!(
+                "The old layout: straight to song select with tabs along the top, no main menu, and Esc asks to quit.",
+                "旧レイアウト: メインメニューなしですぐ選曲画面になり、上にタブが並び、Escは終了を確認します。",
+                "Старый вид: сразу выбор песни с вкладками сверху, без главного меню, Esc спрашивает о выходе."
+            ),
+            Item::MenuNotesDim => tr!(
+                "How faint the song's notes are on the main menu's lane. 100% hides them. The notes drifting behind the menu stay as they are.",
+                "メインメニューのレーンを流れる曲のノーツの薄さ。100%で見えなくなります。背景を流れるノーツは変わりません。",
+                "Насколько бледны ноты песни на дорожке главного меню. 100% прячет их. Ноты за меню не меняются."
+            ),
+            Item::MenuNotes => tr!(
+                "The playing song's notes drift along routes behind the main menu, one for each Multiverse universe.",
+                "再生中の曲のノーツが、Multiverseのユニバースごとの道筋を流れていきます。",
+                "Ноты играющей песни плывут по маршрутам за главным меню, по одному на вселенную Multiverse."
             ),
             Item::VisualOffset => tr!(
                 "Draws notes earlier to make up for display lag; raise it if notes reach the drum after the beat. Judging stays on the audio. In a song: Ctrl + - / +.",
@@ -770,6 +891,16 @@ impl Item {
                 "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
                 "Enter: サイズを選ぶ (入力も可)。左/右: 次のサイズ。ウィンドウの端のドラッグでも変えられます。",
                 "Enter: выбрать размер (или ввести); влево/вправо: следующий. Можно тянуть края окна."
+            ),
+            Item::CrashReports => tr!(
+                "After a crash, the next start sends its report to the developers: the build, the system, the graphics card and where it crashed. No account or folder names.",
+                "クラッシュしたら、次の起動時にレポートを開発者に送ります: ビルド、システム、グラフィックカード、落ちた場所。アカウント名やフォルダ名は含みません。",
+                "После вылета следующий запуск отправит отчёт разработчикам: сборку, систему, видеокарту и место вылета. Без имени аккаунта и папок."
+            ),
+            Item::IdleScreen => tr!(
+                "After this long without a key, click or move, menus fade away and the song's disc turns over the blurred background. Anything brings them back.",
+                "この時間キー・クリック・マウス操作がないと、メニューが消えてぼかした背景の上で曲のディスクが回ります。何か操作すれば戻ります。",
+                "Если столько времени не нажимать клавиши и не двигать мышь, меню исчезает и диск песни крутится над размытым фоном. Любое действие всё вернёт."
             ),
             Item::DiscordPresence => tr!(
                 "Show the map you're playing, your lobby or who you spectate in your Discord status.",
@@ -828,11 +959,34 @@ pub struct SettingsUi {
     pub choices: Option<Choices>,
     /// Typing a value for a setting.
     pub editing: Option<Edit>,
-    /// The section last drawn and the animated highlight position in it.
-    scroll: Cell<f32>,
+    /// What's typed into the search box, and the rows it finds (`ITEMS` indices, best first).
+    pub search: String,
+    results: Vec<usize>,
+    /// What's listed as last drawn (a section, or the search's results: `RESULTS`) and the
+    /// animated highlight position in it.
+    shown: Cell<Option<usize>>,
     highlight: Cell<f32>,
-    /// The first row shown of a section longer than the screen.
-    first_row: Cell<usize>,
+    /// How far the list is scrolled, and how far it goes.
+    scroll: Cell<f32>,
+    scroll_max: Cell<f32>,
+    /// The list moved by the wheel. Left out, it keeps the cursor in view.
+    free: Cell<Option<Glide>>,
+    /// Where the bars of `Control::Level` were drawn (x, width).
+    track: Cell<(f32, f32)>,
+}
+
+/// Top of the settings screen, a row's height, a group heading's height, a wheel notch.
+const TOP: f32 = 62.0;
+const ROW: f32 = 30.0;
+const GROUP_H: f32 = 18.0;
+const WHEEL_STEP: f32 = ROW * 2.0;
+/// `SettingsUi::shown` for the search's results.
+const RESULTS: usize = usize::MAX;
+
+/// A line of the list: a group's heading or a row (`ITEMS` index), and how far down it is.
+enum Line {
+    Group(&'static str, f32),
+    Row(usize, f32),
 }
 
 /// The playfield preset dropdown: a cursor over the flattened list, plus where each row was
@@ -842,6 +996,16 @@ pub struct SettingsUi {
 pub struct Dropdown {
     pub cursor: usize,
     scroll: f32,
+    /// Where the list goes when it next draws: centred on the cursor (just opened), or just far
+    /// enough to show it (moved by key). Otherwise it stays where the wheel or the scroll bar left
+    /// it: the pointer picking rows never moves it.
+    follow: Follow,
+    /// How far it scrolls, and the scroll bar's track and thumb height, as last drawn.
+    max_scroll: f32,
+    bar: Option<[f32; 4]>,
+    thumb: f32,
+    /// The scroll bar is held: where in the thumb it was grabbed.
+    dragging: Option<f32>,
     pub rows: Vec<(usize, [f32; 4])>,
     pub bounds: [f32; 4],
     /// Typing a size: for a new saved one (None) or saved one `i`, and the text so far.
@@ -868,9 +1032,75 @@ pub enum PresetAction {
 /// Name of the saved sizes' group.
 pub const SAVED: &str = "Saved";
 
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+enum Follow {
+    #[default]
+    Centre,
+    Show,
+    Stay,
+}
+
+/// How far a notch of the wheel moves the dropdown's list (virtual units: three rows).
+const DROPDOWN_WHEEL: f32 = 45.0;
+
 impl Dropdown {
     pub fn new(cursor: usize) -> Dropdown {
         Dropdown { cursor, ..Default::default() }
+    }
+
+    /// The cursor moved by key: the list scrolls to keep it in sight.
+    pub fn show_cursor(&mut self) {
+        self.follow = Follow::Show;
+    }
+
+    /// The wheel: moves the list `notches` (up positive), the cursor staying where it is.
+    pub fn wheel(&mut self, notches: i32) {
+        self.scroll = (self.scroll - notches as f32 * DROPDOWN_WHEEL).clamp(0.0, self.max_scroll);
+        self.follow = Follow::Stay;
+    }
+
+    /// Whether (`x`, `y`) is on the scroll bar.
+    pub fn on_bar(&self, x: f32, y: f32) -> bool {
+        self.bar.is_some_and(|[bx, by, bw, bh]| inside(&[bx - 4.0, by, bw + 8.0, bh], x, y))
+    }
+
+    /// A press on the scroll bar: held by the thumb where it was grabbed, or (off the thumb)
+    /// with the thumb's middle jumping to the pointer.
+    pub fn grab_bar(&mut self, y: f32) {
+        let Some([_, top, _, track]) = self.bar else { return };
+        let thumb_y = top + self.scroll / self.max_scroll.max(1.0) * (track - self.thumb);
+        let grip = if (thumb_y..thumb_y + self.thumb).contains(&y) { y - thumb_y } else { self.thumb / 2.0 };
+        self.dragging = Some(grip);
+        self.drag_bar(y);
+    }
+
+    /// The held scroll bar follows the pointer; false when it isn't held.
+    pub fn drag_bar(&mut self, y: f32) -> bool {
+        let (Some(grip), Some([_, top, _, track])) = (self.dragging, self.bar) else { return false };
+        let frac = ((y - grip - top) / (track - self.thumb).max(1.0)).clamp(0.0, 1.0);
+        self.scroll = frac * self.max_scroll;
+        self.follow = Follow::Stay;
+        true
+    }
+
+    /// Lets go of the scroll bar; whether it was held.
+    pub fn release_bar(&mut self) -> bool {
+        self.dragging.take().is_some()
+    }
+
+    #[cfg(test)]
+    pub fn scroll(&self) -> f32 {
+        self.scroll
+    }
+
+    #[cfg(test)]
+    pub fn bar(&self) -> Option<[f32; 4]> {
+        self.bar
+    }
+
+    #[cfg(test)]
+    pub fn max_scroll(&self) -> f32 {
+        self.max_scroll
     }
 
     /// Index of the row under (`x`, `y`) in virtual units.
@@ -889,7 +1119,7 @@ impl Dropdown {
     fn button(&mut self, c: &mut Canvas, x: f32, y: f32, label: &str, action: PresetAction) -> f32 {
         let w = Canvas::text_width(6.0, label) + 10.0;
         let hover = c.hovered(x, y, w, 12.0);
-        c.round_rect(x, y, w, 12.0, 3.0, rgba(if hover { 0x4a4a64 } else { 0x2a2a3a }, 1.0), rgba(0x5a5a74, 1.0), 1.0);
+        c.round_rect([x, y], [w, 12.0], 3.0, rgba(if hover { 0x4a4a64 } else { 0x2a2a3a }, 1.0), rgba(0x5a5a74, 1.0), 1.0);
         c.text(x + 5.0, y + 3.0, 6.0, rgba(0xffffff, 1.0), label);
         self.buttons.push((action, [x, y, w, 12.0]));
         w
@@ -950,7 +1180,7 @@ impl Dropdown {
         let bh = (y + 8.0 + 78.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         self.bounds = [bx, by, bw, bh];
-        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect([bx, by], [bw, bh], 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         let title_w = c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), Item::PlayfieldPreset.label());
         let screen = tr!("screen {}x{}", "画面 {}x{}", "экран {}x{}"; native.0, native.1);
         c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, bw - 28.0 - title_w - 10.0, &screen));
@@ -966,11 +1196,22 @@ impl Dropdown {
             _ => false,
         });
         let focus_y = focus.map(|l| l.1).unwrap_or(0.0);
-        self.scroll = (focus_y - view / 2.0).clamp(0.0, (y - view).max(0.0));
+        self.max_scroll = (y - view).max(0.0);
+        // A size being typed stays in sight; otherwise the list only moves when asked to.
+        let follow = if self.editing.is_some() && self.follow == Follow::Stay { Follow::Show } else { self.follow };
+        self.scroll = match follow {
+            Follow::Centre => focus_y - view / 2.0,
+            Follow::Show => self.scroll.min(focus_y).max(focus_y + ROW - view),
+            Follow::Stay => self.scroll,
+        }
+        .clamp(0.0, self.max_scroll);
+        if self.editing.is_none() {
+            self.follow = Follow::Stay;
+        }
         self.rows.clear();
         let caret = self.caret;
         let text_input = |c: &mut Canvas, ry: f32, text: &str| {
-            c.round_rect(bx + 8.0, ry, bw - 16.0, ROW - 2.0, 4.0, rgba(0x1d1d27, 1.0), rgba(0xFFD34D, 1.0), 1.0);
+            c.round_rect([bx + 8.0, ry], [bw - 16.0, ROW - 2.0], 4.0, rgba(0x1d1d27, 1.0), rgba(0xFFD34D, 1.0), 1.0);
             c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), text);
             c.rect(bx + 22.0 + caret_x(7.0, text, caret), ry + 2.5, 1.0, 9.0, rgba(0xFFD34D, 1.0));
             c.text_right(bx + bw - 22.0, ry + 3.5, 6.0, rgba(0x8a8aa0, 1.0), tr!("width x height", "幅 x 高さ", "ширина x высота"));
@@ -1003,15 +1244,14 @@ impl Dropdown {
                     }
                 }
                 Line::Row(i, rw, rh) => {
-                    if let Some((Some(e), text)) = &self.editing {
-                        if *e == i {
-                            text_input(c, ry, text);
-                            continue;
-                        }
+                    if let Some((Some(e), text)) = &self.editing
+                        && *e == i {
+                        text_input(c, ry, text);
+                        continue;
                     }
                     let selected = i == self.cursor && self.editing.is_none();
                     if selected {
-                        c.round_rect(bx + 8.0, ry, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(accent(), 1.0), 1.0);
+                        c.round_rect([bx + 8.0, ry], [bw - 16.0, ROW - 2.0], 4.0, rgba(0x34344a, 1.0), rgba(accent(), 1.0), 1.0);
                     }
                     self.rows.push((i, [bx + 8.0, ry, bw - 16.0, ROW - 2.0]));
                     c.text(bx + 22.0, ry + 3.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &format!("{rw} x {rh}"));
@@ -1042,6 +1282,18 @@ impl Dropdown {
                     c.text_right(right, ry + 3.5, 7.0, rgba(col, 1.0), tag);
                 }
             }
+        }
+        // The scroll bar, when there's more than fits: wheel, click or drag it.
+        self.bar = None;
+        if self.max_scroll > 0.0 {
+            let (bar_x, bar_w) = (bx + bw - 7.0, 4.0);
+            let bar = [bar_x, top, bar_w, view];
+            self.bar = Some(bar);
+            self.thumb = (view * view / (view + self.max_scroll)).clamp(18.0, view);
+            let thumb_y = top + self.scroll / self.max_scroll * (view - self.thumb);
+            let lit = self.dragging.is_some() || c.hovered(bar_x - 4.0, top, bar_w + 8.0, view);
+            c.round_rect([bar_x, top], [bar_w, view], 2.0, rgba(0x0e0e14, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+            c.round_rect([bar_x, thumb_y], [bar_w, self.thumb], 2.0, rgba(if lit { accent() } else { 0x8a8aa8 }, 0.95), rgba(0, 0.0), 0.0);
         }
         let (line1, line2) = if self.editing.is_some() {
             (tr!("type a size like 1280x720   Enter save   Esc cancel", "1280x720のように入力   Enter 保存   Esc 取消", "введите размер вроде 1280x720   Enter сохранить   Esc отмена"), "")
@@ -1183,7 +1435,7 @@ impl Choices {
         let (bw, max_h) = ((w - 48.0).min(420.0), 380.0);
         let bh = (n as f32 * ROW + 56.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
-        c.round_rect(bx, by, bw, bh, 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect([bx, by], [bw, bh], 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
         let title_w = c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), self.item.label());
         c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_end(7.0, bw - 38.0 - title_w, &self.note));
         let (top, view) = (by + 32.0, bh - 50.0);
@@ -1196,7 +1448,7 @@ impl Choices {
             let selected = i == self.cursor;
             let hover = c.hovered(bx + 8.0, y, bw - 16.0, ROW - 2.0);
             if selected || hover {
-                c.round_rect(bx + 8.0, y, bw - 16.0, ROW - 2.0, 4.0, rgba(0x34344a, 1.0), rgba(if selected { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+                c.round_rect([bx + 8.0, y], [bw - 16.0, ROW - 2.0], 4.0, rgba(0x34344a, 1.0), rgba(if selected { accent() } else { 0x3a3a4e }, 1.0), 1.0);
             }
             c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::ChoiceRow(i));
             let current = self.current == Some(i);
@@ -1226,6 +1478,15 @@ impl SettingsUi {
     }
 
     pub fn move_cursor(&mut self, delta: i32) {
+        self.free.set(None);
+        self.editing = None;
+        if !self.search.is_empty() {
+            let at = self.results.iter().position(|&i| i == self.cursor).unwrap_or(0) as i32;
+            if let Some(&i) = self.results.get((at + delta).clamp(0, self.results.len() as i32 - 1) as usize) {
+                self.cursor = i;
+            }
+            return;
+        }
         let start = self.cursor;
         self.cursor = (self.cursor as i32 + delta).clamp(0, ITEMS.len() as i32 - 1) as usize;
         // Past a row that isn't shown, or back where it was at the end of the list.
@@ -1236,12 +1497,49 @@ impl SettingsUi {
                 break;
             }
         }
-        self.editing = None;
     }
 
-    /// Whether `item` is in the list (krokodil_koban mode is only for them).
+    /// The wheel: moves the list `notches` on, within what's listed. The cursor stays.
+    pub fn scroll_by(&self, notches: i32) {
+        let mut glide = self.free.get().unwrap_or(Glide::at(self.scroll.get()));
+        glide.goal = (glide.goal + notches as f32 * WHEEL_STEP).clamp(0.0, self.scroll_max.get());
+        self.free.set(Some(glide));
+    }
+
+    /// `text` in the search box: lists what it finds and puts the cursor on the best of it.
+    /// `key` gives a key setting's key as shown.
+    pub fn set_search(&mut self, text: String, key: &dyn Fn(Item) -> String) {
+        self.search = text;
+        self.free.set(None);
+        self.editing = None;
+        self.results = if self.search.trim().is_empty() {
+            Vec::new()
+        } else {
+            crate::settings_search::find(&self.search, key, &|item| self.shows(item))
+        };
+        if let Some(&first) = self.results.first() {
+            self.cursor = first;
+        }
+    }
+
+    /// Back to the sections.
+    pub fn clear_search(&mut self) {
+        self.search.clear();
+        self.results.clear();
+        self.free.set(None);
+    }
+
+    /// The bar's value under the pointer at `x`.
+    pub fn level_at(&self, x: f32) -> f32 {
+        let (left, w) = self.track.get();
+        ((x - left) / w.max(1.0)).clamp(0.0, 1.0)
+    }
+
+    /// Whether `item` is in the list (krokodil_koban mode is only for them, and a phone's screen
+    /// has no use for black bars).
     pub fn shows(&self, item: Item) -> bool {
-        item != Item::KrokodilKoban || self.krokodil
+        let letterbox = matches!(item, Item::Letterbox | Item::LetterboxSize | Item::LetterboxX | Item::LetterboxY);
+        (item != Item::KrokodilKoban || self.krokodil) && !(letterbox && cfg!(target_os = "android"))
     }
 
     /// Section of the selected item.
@@ -1249,122 +1547,293 @@ impl SettingsUi {
         SECTIONS.iter().position(|(name, _)| *name == ITEMS[self.cursor].0).unwrap_or(0)
     }
 
-    /// A sidebar of sections and the selected section's settings. `value` gives the current
-    /// display value of each item.
-    pub fn draw(&self, c: &mut Canvas, value: &dyn Fn(Item) -> String, footer: &str) {
-        const TOP: f32 = 62.0;
-        const ROW: f32 = 30.0;
+    /// What's listed, in order: the section's rows under their groups' headings, or the
+    /// search's results.
+    fn lines(&self, section: usize) -> (Vec<Line>, f32) {
+        let mut y = 0.0;
+        if !self.search.is_empty() {
+            let lines = self.results.iter().enumerate().map(|(k, &i)| Line::Row(i, k as f32 * ROW)).collect::<Vec<_>>();
+            return (lines, self.results.len() as f32 * ROW);
+        }
+        let mut lines = Vec::new();
+        for (i, (sec, item)) in ITEMS.iter().enumerate() {
+            if *sec != SECTIONS[section].0 || !self.shows(*item) {
+                continue;
+            }
+            if let Some(heading) = group_heading(*item) {
+                lines.push(Line::Group(heading, y));
+                y += GROUP_H;
+            }
+            lines.push(Line::Row(i, y));
+            y += ROW;
+        }
+        (lines, y)
+    }
+
+    /// A sidebar of sections and the selected section's settings, or what the search found.
+    /// `value` gives the current display value of each item, `control` how it's shown.
+    pub fn draw(&self, c: &mut Canvas, value: &dyn Fn(Item) -> String, control: &dyn Fn(Item) -> Control, footer: &str) {
         let w = c.width;
         let total = (w - 48.0).min(780.0);
         let x0 = (w - total) / 2.0;
         let side_w = 170.0;
         let (cx, col) = (x0 + side_w + 16.0, total - side_w - 16.0);
         let section = self.section();
+        let searching = !self.search.is_empty();
 
-        // Sidebar.
-        for i in 0..SECTIONS.len() {
-            let (name, about) = (section_name(i), section_summary(i));
-            let y = TOP + i as f32 * 40.0;
-            let on = i == section;
+        // Sidebar: one panel, each section a note on it (don and kat in turn, like a lane): the
+        // open one bigger and lit, the others dimmed, the selector sliding between them. While
+        // searching, how much was found in each section.
+        const PITCH: f32 = 40.0;
+        crate::style::panel(c, x0 - 6.0, TOP - 8.0, side_w + 12.0, SECTIONS.len() as f32 * PITCH + 4.0);
+        let colours = crate::multiverse::note_colours();
+        for (i, (id, _)) in SECTIONS.iter().enumerate() {
+            let name = section_name(i);
+            let found = self.results.iter().filter(|&&r| ITEMS[r].0 == *id).count();
+            let about = if searching { tr!("found: {found}", "{found}件", "найдено: {found}";) } else { section_summary(i).to_string() };
+            let y = TOP + i as f32 * PITCH;
+            let on = i == section && !searching;
             let hover = !on && c.hovered(x0, y, side_w, 34.0);
-            let bg = if on { 0x2b1a17 } else if hover { 0x262634 } else { 0x1d1d27 };
-            c.round_rect(x0, y, side_w, 34.0, 7.0, rgba(bg, 0.95), rgba(if on { accent() } else { 0x2a2a38 }, 1.0), if on { 1.5 } else { 1.0 });
+            let dim = searching && found == 0;
+            if hover {
+                c.round_rect([x0, y], [side_w, 34.0], 7.0, rgba(0x262634, 0.6), rgba(0, 0.0), 0.0);
+            }
+            let (nx, ny) = (x0 + 17.0, y + 17.0);
+            let col = if i % 2 == 0 { colours.don() } else { colours.kat() };
+            let r = if on { 11.0 } else { 8.0 };
+            if on {
+                crate::style::selector(c, "settings-section", [x0 - 2.0, y - 1.0, side_w + 4.0, 36.0]);
+            }
+            crate::style::note(c, nx, ny, r, col, on, if dim { 0.35 } else { 0.6 });
             c.hit(x0, y, side_w, 34.0, Hit::SettingsSection(i));
-            c.text(x0 + 12.0, y + 7.0, 9.0, rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0), name);
-            c.text(x0 + 12.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 20.0, about));
+            let text = if on || hover { 0xffffff } else if dim { 0x6f6f86 } else { 0xa8a8bc };
+            c.text(x0 + 36.0, y + 7.0, 9.0, rgba(text, 1.0), name);
+            c.text(x0 + 36.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 44.0, &about));
         }
 
-        // The section's settings.
-        let rows: Vec<(usize, Item)> = ITEMS.iter().enumerate().filter(|(_, (sec, it))| *sec == SECTIONS[section].0 && self.shows(*it)).map(|(i, (_, it))| (i, *it)).collect();
-        c.text(cx, TOP - 2.0, 11.0, rgba(accent(), 1.0), section_name(section));
-        let first = rows.first().map(|r| r.0).unwrap_or(0);
-        // A long section (the hotkeys) scrolls to keep the cursor in sight, leaving room for the
-        // help underneath.
-        let fits = ((crate::render::VIRTUAL_HEIGHT - (TOP + 18.0) - 60.0) / ROW).floor().max(1.0) as usize;
-        let at = self.cursor - first;
-        let mut top_row = if self.scroll.get() != section as f32 { 0 } else { self.first_row.get() };
-        if at < top_row {
-            top_row = at;
-        } else if at >= top_row + fits {
-            top_row = at + 1 - fits;
-        }
-        top_row = top_row.min(rows.len().saturating_sub(fits));
-        self.first_row.set(top_row);
-        let target = (at - top_row) as f32 * ROW;
-        // The highlight glides within a section and jumps when the section changes.
-        let mut hl = self.highlight.get();
-        if self.scroll.get() != section as f32 || !hl.is_finite() {
-            hl = target;
-            self.scroll.set(section as f32);
-        }
-        approach(&mut hl, target, c.dt_ms, 35.0);
-        self.highlight.set(hl);
+        // The list: it scrolls by itself to keep the cursor in sight, and by the wheel.
         let list_top = TOP + 18.0;
-        if rows.len() > fits {
-            // Where the rows shown are in the whole list.
-            let (bar_h, all_h) = (fits as f32 * ROW - 4.0, rows.len() as f32 * ROW);
-            let (from, len) = (top_row as f32 * ROW / all_h * bar_h, (fits as f32 * ROW / all_h * bar_h).max(12.0));
-            c.round_rect(cx + col + 4.0, list_top, 3.0, bar_h, 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
-            c.round_rect(cx + col + 4.0, list_top + from, 3.0, len, 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
-        }
-        let rows_shown = rows.len().min(fits);
-        for (k, (i, item)) in rows.iter().skip(top_row).take(fits).enumerate() {
-            let y = list_top + k as f32 * ROW;
-            let selected = *i == self.cursor;
-            let hover = !selected && c.hovered(cx, y, col, ROW - 4.0);
-            let bg = if selected { 0x34344a } else if hover { 0x262634 } else { 0x1d1d27 };
-            c.round_rect(cx, y, col, ROW - 4.0, 6.0, rgba(bg, 0.95), rgba(0x2a2a38, 1.0), 1.0);
-            c.hit(cx, y - 2.0, col, ROW, Hit::SettingRow(*i));
-            c.text(cx + 12.0, y + 9.5, 8.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
-            // The value gets what the label leaves, and is cut short past that.
-            let room = col - 36.0 - Canvas::text_width(8.0, item.label());
-            if let Some(edit) = self.editing.as_ref().filter(|e| selected && e.item == *item) {
-                // A text box in place of the value; the old value shows selected until typed over.
-                let text = Canvas::fit_end(8.0, room - 24.0, &edit.text);
-                let tw = Canvas::text_width(8.0, &text);
-                let bw = (tw + 24.0).max(90.0).min(room);
-                let right = cx + col - 12.0;
-                c.round_rect(right + 6.0 - bw, y + 4.0, bw, ROW - 12.0, 4.0, rgba(0x15151d, 1.0), rgba(0xFFD34D, 1.0), 1.0);
-                if edit.fresh && !text.is_empty() {
-                    c.rect(right - 7.0 - tw, y + 7.0, tw + 2.0, ROW - 18.0, rgba(accent(), 0.45));
-                }
-                c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
-                // At the caret in the text (at the end when the start was cut off to fit).
-                let at = if text == edit.text { caret_x(8.0, &text, edit.caret) } else { tw };
-                c.rect(right - 6.0 - tw + at, y + 7.0, 1.0, ROW - 18.0, rgba(0xFFD34D, 1.0));
-                continue;
-            }
-            let v = if selected && self.binding.is_some() {
-                tr!("press a key...", "キーを押してください...", "нажмите клавишу...").to_string()
-            } else if selected && item.kind() != Kind::Key {
-                format!("<  {}  >", Canvas::fit(8.0, room - Canvas::text_width(8.0, "<    >"), &value(*item)))
-            } else {
-                Canvas::fit(8.0, room, &value(*item))
-            };
-            let v_col = if selected && self.binding.is_some() { 0xFFD34D } else { 0xffffff };
-            c.text_right(cx + col - 12.0, y + 9.5, 8.0, rgba(v_col, 1.0), &v);
-            if selected && self.binding.is_none() && item.kind() != Kind::Key {
-                // The "<" and ">" around the value step it.
-                let tw = Canvas::text_width(8.0, &v);
-                c.hit(cx + col - 12.0 - tw - 6.0, y, 20.0, ROW - 4.0, Hit::SettingStep(*i, -1));
-                c.hit(cx + col - 26.0, y, 24.0, ROW - 4.0, Hit::SettingStep(*i, 1));
-            }
-        }
-        c.round_rect(cx, list_top + hl, col, ROW - 4.0, 6.0, rgba(0, 0.0), rgba(accent(), 1.0), 1.5);
-
-        // What the selected setting does.
-        let help_y = list_top + rows_shown as f32 * ROW + 10.0;
-        // Two lines, spaced for however tall the text comes out (taller on a text grid).
+        let (lines, height) = self.lines(section);
+        // Room for the rows: the panel (help lines under them, however tall the text comes out)
+        // ends above the keys' hint at the bottom.
+        let help_room = 10.0 + 2.0 * (Canvas::text_height(7.0) + 4.0) + 14.0;
+        let view = ((crate::render::VIRTUAL_HEIGHT - 26.0 - help_room - list_top) / ROW).floor().max(1.0) * ROW;
+        let max = (height - view).max(0.0);
+        self.scroll_max.set(max);
+        // One panel for the section: its title, its rows and what the selected one does.
+        let list_h = height.min(view);
         let glyph_h = Canvas::text_height(7.0);
         let line_h = glyph_h + 4.0;
-        c.round_rect(cx, help_y, col, line_h * 2.0 + 8.0, 6.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
-        let help = self.item().help();
+        let help_y = list_top + list_h.max(ROW) + 10.0;
+        crate::style::panel(c, cx - 10.0, TOP - 14.0, col + 20.0, help_y + line_h * 2.0 + 14.0 - (TOP - 14.0));
+
+        // The title and the search box beside it: typing anywhere goes into it.
+        let box_w = (col * 0.5).min(240.0);
+        let box_x = cx + col - box_w;
+        let n = self.results.len();
+        let title = if searching { tr!("Found: {n}", "{n}件", "Найдено: {n}";) } else { section_name(section).to_string() };
+        crate::style::title(c, cx, TOP - 4.0, 13.0, accent(), &Canvas::fit(13.0, col - box_w - 8.0, &title));
+        c.round_rect([box_x, TOP - 7.0], [box_w, 19.0], 5.0, rgba(0x23232f, 0.9), rgba(if searching { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+        let (text, col_text) = if searching {
+            (Canvas::fit_end(8.0, box_w - 18.0, &format!("{}_", self.search)), 0xffffff)
+        } else {
+            (Canvas::fit(8.0, box_w - 18.0, tr!("type to search...", "入力して検索...", "начни печатать для поиска...")), 0x6f6f86)
+        };
+        c.text(box_x + 9.0, TOP - 1.5, 8.0, rgba(col_text, 1.0), &text);
+        c.hit(box_x, TOP - 7.0, box_w, 19.0, Hit::SettingsSearch);
+
+
+        let listing = if searching { RESULTS } else { section };
+        let fresh = self.shown.get() != Some(listing);
+        if fresh {
+            self.shown.set(Some(listing));
+            self.free.set(None);
+            self.scroll.set(0.0);
+        }
+        let cursor_y = lines.iter().find_map(|l| match l {
+            Line::Row(i, y) if *i == self.cursor => Some(*y),
+            _ => None,
+        });
+        let mut scroll = self.scroll.get();
+        if let Some(mut glide) = self.free.get() {
+            glide.settle(max, c.dt_ms, 45.0);
+            scroll = glide.now;
+            self.free.set(Some(glide));
+        } else if let Some(y) = cursor_y {
+            let target = if y - GROUP_H < scroll {
+                y - GROUP_H
+            } else if y + ROW > scroll + view {
+                y + ROW - view
+            } else {
+                scroll
+            };
+            if fresh {
+                scroll = target.clamp(0.0, max);
+            } else {
+                approach(&mut scroll, target.clamp(0.0, max), c.dt_ms, 35.0);
+            }
+        }
+        scroll = scroll.clamp(0.0, max);
+        self.scroll.set(scroll);
+
+        // The highlight glides within a list and jumps when the list changes.
+        let mut hl = self.highlight.get();
+        if let Some(y) = cursor_y {
+            if fresh || !hl.is_finite() {
+                hl = y;
+            }
+            approach(&mut hl, y, c.dt_ms, 35.0);
+            self.highlight.set(hl);
+        }
+        if max > 0.0 {
+            // Where the rows shown are in the whole list.
+            let bar_h = view - 4.0;
+            let (from, len) = (scroll / height * bar_h, (view / height * bar_h).max(12.0));
+            c.round_rect([cx + col + 4.0, list_top], [3.0, bar_h], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+            c.round_rect([cx + col + 4.0, list_top + from], [3.0, len], 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
+        }
+        if searching && lines.is_empty() {
+            c.text(cx + 12.0, list_top + 10.0, 8.0, rgba(0x8a8aa0, 1.0), tr!("Nothing found.", "見つかりませんでした。", "Ничего не найдено."));
+        }
+        let track_w = (col * 0.2).clamp(50.0, 110.0);
+        self.track.set((cx + col - 12.0 - Canvas::text_width(8.0, "100%") - 12.0 - track_w, track_w));
+        let in_list = c.hovered(cx, list_top - 2.0, col, list_h + 2.0);
+        let mut hovered = None;
+        let (start, hits) = (c.shapes.len(), c.hits.len());
+        for line in &lines {
+            let y = list_top - scroll + match line {
+                Line::Group(_, y) | Line::Row(_, y) => *y,
+            };
+            if y + ROW < list_top - 2.0 || y > list_top + view {
+                continue;
+            }
+            match line {
+                Line::Group(heading, _) => {
+                    c.text(cx + 2.0, y + 6.0, 7.0, rgba(crate::style::selector_colour(), 0.85), heading);
+                }
+                Line::Row(i, _) => {
+                    let row_hover = in_list && c.hovered(cx, y, col, ROW - 4.0);
+                    if row_hover {
+                        hovered = Some(ITEMS[*i].1);
+                    }
+                    self.draw_row(c, *i, [cx, y, col], row_hover, value, control);
+                }
+            }
+        }
+        if cursor_y.is_some() {
+            crate::style::brackets(c, [cx - 3.0, list_top + hl - scroll - 3.0, col + 6.0, ROW + 2.0], 1.0);
+        }
+        c.clip_since(start, cx - 2.0, list_top - 2.0, col + 4.0, view + 2.0);
+        for h in &mut c.hits[hits..] {
+            let [_, y, _, hh] = &mut h.rect;
+            let (y0, y1) = (y.max(list_top - 2.0), (*y + *hh).min(list_top + view));
+            (*y, *hh) = (y0, (y1 - y0).max(0.0));
+        }
+
+        // What the setting under the pointer does, or else the selected one: two lines, spaced
+        // for however tall the text comes out (taller on a text grid), under a divider.
+        c.rect(cx, help_y - 3.0, col, 1.0, rgba(0x2a2a38, 1.0));
+        let help = hovered.or(cursor_y.map(|_| self.item())).map_or("", Item::help);
         let (line1, line2) = split_help(help, 7.0, col - 20.0);
         // `text` centres taller glyphs on the line; this puts their top 6 below the box's.
         let first = help_y + 6.0 + (glyph_h - 7.0) / 2.0;
         c.text(cx + 10.0, first, 7.0, rgba(0x9a9ab0, 1.0), &line1);
         c.text(cx + 10.0, first + line_h, 7.0, rgba(0x9a9ab0, 1.0), &line2);
         c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), &Canvas::fit_hints(8.0, w - 48.0, footer));
+    }
+
+    /// Row `i` of `ITEMS` at `[x, y, width]`: its name, and its value in the way that suits it.
+    fn draw_row(&self, c: &mut Canvas, i: usize, [cx, y, col]: [f32; 3], hover: bool, value: &dyn Fn(Item) -> String, control: &dyn Fn(Item) -> Control) {
+        let item = ITEMS[i].1;
+        let selected = i == self.cursor;
+        // Rows are lines on the panel: the selected one lit in the selector's colour, a divider under each.
+        if selected {
+            c.round_rect([cx, y], [col, ROW - 4.0], 6.0, rgba(crate::style::selector_colour(), 0.10 + 0.05 * crate::style::pulse()), rgba(0, 0.0), 0.0);
+        } else if hover {
+            c.round_rect([cx, y], [col, ROW - 4.0], 6.0, rgba(0x262634, 0.6), rgba(0, 0.0), 0.0);
+        }
+        c.rect(cx + 8.0, y + ROW - 3.0, col - 16.0, 1.0, rgba(0x23232f, 1.0));
+        c.hit(cx, y - 2.0, col, ROW, Hit::SettingRow(i));
+        // Found by a search, the row says which section it's in.
+        let mut x = cx + 12.0;
+        if !self.search.is_empty() {
+            let s = SECTIONS.iter().position(|(name, _)| *name == ITEMS[i].0).unwrap_or(0);
+            x += c.text(x, y + 10.5, 6.0, rgba(0x8a8aa0, 1.0), &format!("{}  ", section_name(s)));
+        }
+        c.text(x, y + 9.5, 8.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
+        let right = cx + col - 12.0;
+        // The value gets what the label leaves, and is cut short past that.
+        let room = right - x - 12.0 - Canvas::text_width(8.0, item.label());
+        if let Some(edit) = self.editing.as_ref().filter(|e| selected && e.item == item) {
+            // A text box in place of the value; the old value shows selected until typed over.
+            let text = Canvas::fit_end(8.0, room - 24.0, &edit.text);
+            let tw = Canvas::text_width(8.0, &text);
+            let bw = (tw + 24.0).max(90.0).min(room);
+            c.round_rect([right + 6.0 - bw, y + 4.0], [bw, ROW - 12.0], 4.0, rgba(0x15151d, 1.0), rgba(0xFFD34D, 1.0), 1.0);
+            if edit.fresh && !text.is_empty() {
+                c.rect(right - 7.0 - tw, y + 7.0, tw + 2.0, ROW - 18.0, rgba(accent(), 0.45));
+            }
+            c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
+            // At the caret in the text (at the end when the start was cut off to fit).
+            let at = if text == edit.text { caret_x(8.0, &text, edit.caret) } else { tw };
+            c.rect(right - 6.0 - tw + at, y + 7.0, 1.0, ROW - 18.0, rgba(0xFFD34D, 1.0));
+            return;
+        }
+        if selected && self.binding.is_some() {
+            c.text_right(right, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), tr!("press a key...", "キーを押してください...", "нажмите клавишу..."));
+            return;
+        }
+        let shown = value(item);
+        match (item.kind(), control(item)) {
+            (_, Control::Switch(on)) => {
+                let (sw, sh) = (22.0, 11.0);
+                let (sx, sy) = (right - sw, y + (ROW - 4.0 - sh) / 2.0);
+                let fill = if on { accent() } else { 0x3a3a4e };
+                c.round_rect([sx, sy], [sw, sh], sh / 2.0, rgba(fill, 1.0), rgba(fill, 1.0), 0.0);
+                let knob = if on { sx + sw - sh + 1.5 } else { sx + 1.5 };
+                c.round_rect([knob, sy + 1.5], [sh - 3.0, sh - 3.0], (sh - 3.0) / 2.0, rgba(0xffffff, 1.0), rgba(0xffffff, 1.0), 0.0);
+                // The rare switch with more to say than on or off.
+                if shown.chars().count() > 4 {
+                    c.text_right(sx - 8.0, y + 9.5, 8.0, rgba(0xc8c8d8, 1.0), &Canvas::fit(8.0, room - sw - 8.0, &shown));
+                }
+            }
+            (_, Control::Level(level)) => {
+                let (tx, tw) = self.track.get();
+                let ty = y + (ROW - 4.0) / 2.0 - 2.0;
+                c.round_rect([tx, ty], [tw, 4.0], 2.0, rgba(0x3a3a4e, 1.0), rgba(0, 0.0), 0.0);
+                c.round_rect([tx, ty], [(tw * level).max(4.0), 4.0], 2.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
+                c.round_rect([tx + tw * level - 4.0, ty - 3.0], [8.0, 10.0], 3.0, rgba(0xffffff, 1.0), rgba(0, 0.0), 0.0);
+                c.hit(tx - 5.0, y, tw + 10.0, ROW - 4.0, Hit::SettingLevel(i));
+                c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &shown);
+            }
+            (Kind::Key, _) => {
+                let text = Canvas::fit(8.0, room - 12.0, &shown);
+                let bw = Canvas::text_width(8.0, &text) + 12.0;
+                c.round_rect([right + 6.0 - bw, y + 5.0], [bw, ROW - 14.0], 3.0, rgba(0x2a2a3a, 1.0), rgba(0x5a5a74, 1.0), 1.0);
+                c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &text);
+            }
+            (Kind::Action, _) => {
+                let text = Canvas::fit(8.0, room, &shown);
+                c.text_right(right, y + 9.5, 8.0, rgba(if hover || selected { 0xffffff } else { 0x9a9ab0 }, 1.0), &text);
+            }
+            (_, control) => {
+                let stepped = selected || hover;
+                let swatch = if matches!(control, Control::Swatch(_)) { 14.0 } else { 0.0 };
+                let arrows = Canvas::text_width(8.0, "<    >");
+                let text = Canvas::fit(8.0, room - arrows - swatch, &shown);
+                let v = if stepped { format!("<  {text}  >") } else { text.clone() };
+                c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &v);
+                let tw = Canvas::text_width(8.0, &v);
+                if let Control::Swatch(colour) = control {
+                    c.round_rect([right - tw - 15.0, y + 8.0], [10.0, 10.0], 2.0, rgba(colour, 1.0), rgba(0xffffff, 0.6), 1.0);
+                }
+                if stepped {
+                    // The "<" and ">" around the value step it.
+                    c.hit(right - tw - 6.0, y, 20.0, ROW - 4.0, Hit::SettingStep(i, -1));
+                    c.hit(right - 14.0, y, 24.0, ROW - 4.0, Hit::SettingStep(i, 1));
+                }
+            }
+        }
     }
 }
 
@@ -1384,7 +1853,7 @@ fn split_help(text: &str, size: f32, max_w: f32) -> (String, String) {
             '、' | '。' => Some(i + ch.len_utf8()).filter(|&end| end <= full),
             _ => None,
         })
-        .last()
+        .next_back()
         .filter(|&i| i > 0)
         .unwrap_or(full);
     (text[..cut].to_string(), Canvas::fit(size, max_w, text[cut..].trim_start()))
@@ -1408,8 +1877,38 @@ pub fn brand(c: &mut Canvas) -> f32 {
     tx
 }
 
+/// The way back, as a button: what Esc does here.
+pub fn back_button(c: &mut Canvas, y: f32, label: &str, hit: Hit) -> f32 {
+    let w = Canvas::text_width(8.0, label) + 20.0;
+    c.button(24.0, y, w, 20.0, label, 8.0, hit, false);
+    w
+}
+
+/// Top of a screen: the way back, what the screen is, and `right_text` to the side.
+fn header(c: &mut Canvas, active: usize, right_text: &str) {
+    let w = back_button(c, 21.0, tr!("< BACK", "< 戻る", "< НАЗАД"), Hit::Key(winit::keyboard::KeyCode::Escape));
+    let title = [
+        tr!("SONGS", "曲", "ПЕСНИ"),
+        tr!("SETTINGS", "設定", "НАСТРОЙКИ"),
+        tr!("MULTIPLAYER", "マルチ", "МУЛЬТИПЛЕЕР"),
+        tr!("DOWNLOAD", "ダウンロード", "ЗАГРУЗКА"),
+    ][active.min(3)];
+    let x = 24.0 + w + 12.0;
+    let used = crate::style::title(c, x, 24.0, 13.0, accent(), title);
+    let right = c.width - 24.0;
+    let room = right - (x + used + 16.0);
+    if Canvas::text_width(8.0, right_text) <= room {
+        c.text_right(right, 28.0, 8.0, rgba(0x9a9ab0, 1.0), right_text);
+    } else {
+        c.text(x, 45.0, 6.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(6.0, c.width - 110.0 - x, right_text));
+    }
+}
+
 /// Top bar shared by the song list, settings and multiplayer: logo plus the three tabs.
 pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
+    if !crate::render::legacy_menu() {
+        return header(c, active, right_text);
+    }
     thread_local! {
         /// Where the active tab's highlight is (x, width), so it slides between tabs.
         static PILL: Cell<(f32, f32)> = const { Cell::new((f32::NAN, 0.0)) };
@@ -1428,7 +1927,7 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
         let on = i == active;
         let hover = !on && c.hovered(x, 20.0, tw + 20.0, 22.0);
         let fill = if hover { 0x34344a } else { 0x23232f };
-        c.round_rect(x, 20.0, tw + 20.0, 22.0, 6.0, rgba(fill, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect([x, 20.0], [tw + 20.0, 22.0], 6.0, rgba(fill, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
         c.hit(x, 20.0, tw + 20.0, 22.0, Hit::Tab(i));
         if on {
             target = (x, tw + 20.0);
@@ -1442,7 +1941,7 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
     approach(&mut px, target.0, c.dt_ms, 40.0);
     approach(&mut pw, target.1, c.dt_ms, 40.0);
     PILL.with(|p| p.set((px, pw)));
-    c.round_rect(px, 20.0, pw, 22.0, 6.0, rgba(accent(), 1.0), rgba(accent(), 1.0), 1.0);
+    c.round_rect([px, 20.0], [pw, 22.0], 6.0, rgba(accent(), 1.0), rgba(accent(), 1.0), 1.0);
     let mut x = x0;
     for (i, name) in names.iter().enumerate() {
         let tw = Canvas::text_width(9.0, name);

@@ -5,7 +5,8 @@
 //! A build knows the commit it was built from (`GITHUB_SHA`, set by GitHub Actions) and the
 //! release says which commit it was built from, so different = newer. Local builds have no
 //! commit and never update themselves. Installing downloads this platform's archive, unpacks the
-//! binary next to the running one and swaps it in: Linux renames over the running file; Windows
+//! binary next to the running one and swaps it in: Linux and macOS (where the binary is the one
+//! inside the .app, and the rest of the app stays as it is) rename over the running file; Windows
 //! can't overwrite a running exe but can rename it, so the old one becomes `taiko-rs.exe.old`
 //! (deleted on the next start). Then the game restarts itself.
 
@@ -30,8 +31,15 @@ pub const BUILD_CHANNEL: Channel = match option_env!("TAIKO_CHANNEL") {
 const USER_AGENT: &str = concat!("taiko-rs/", env!("CARGO_PKG_VERSION"), " (updater)");
 #[cfg(windows)]
 const ASSET: &str = "taiko-rs-windows-x64.zip";
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+const ASSET: &str = "taiko-rs-macos.tar.gz";
+#[cfg(not(any(windows, target_os = "macos")))]
 const ASSET: &str = "taiko-rs-linux-x64.tar.gz";
+/// Where the binary is in that archive.
+#[cfg(target_os = "macos")]
+const ARCHIVED_BINARY: &str = "taiko-rs.app/Contents/MacOS/taiko-rs";
+#[cfg(not(any(windows, target_os = "macos")))]
+const ARCHIVED_BINARY: &str = "taiko-rs/taiko-rs";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Channel {
@@ -321,13 +329,13 @@ fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// The game binary out of the release archive (a gzipped tar with `taiko-rs/taiko-rs`).
+/// The game binary out of the release archive (a gzipped tar).
 #[cfg(not(windows))]
 fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut tar = Vec::new();
     flate2::read::GzDecoder::new(file).read_to_end(&mut tar).map_err(|e| format!("gzip: {e}"))?;
-    tar_file(&tar, "taiko-rs/taiko-rs").ok_or_else(|| "taiko-rs/taiko-rs not in the archive".into())
+    tar_file(&tar, ARCHIVED_BINARY).ok_or_else(|| format!("{ARCHIVED_BINARY} not in the archive"))
 }
 
 /// A regular file's contents out of an (uncompressed, ustar) tar.

@@ -47,15 +47,16 @@ pub fn connect(raw: TcpStream) -> Result<TcpStream, String> {
 fn connect_with(mut raw: TcpStream, config: Arc<ClientConfig>, host: &str) -> Result<TcpStream, String> {
     let name = ServerName::try_from(host.to_string()).map_err(|e| e.to_string())?;
     let mut conn = ClientConnection::new(config, name).map_err(|e| e.to_string())?;
-    handshake(&mut raw, &mut conn)?;
-    pump(raw, conn).map_err(|e| e.to_string())
+    // In words a player gets: this is where a bad network shows first.
+    handshake(&mut raw, &mut conn).map_err(|e| crate::online::network_error(&e))?;
+    pump(raw, conn).map_err(|e| crate::online::network_error(&e))
 }
 
-fn handshake<D: rustls::SideData>(raw: &mut TcpStream, conn: &mut rustls::ConnectionCommon<D>) -> Result<(), String> {
+fn handshake<D: rustls::SideData>(raw: &mut TcpStream, conn: &mut rustls::ConnectionCommon<D>) -> io::Result<()> {
     let _ = raw.set_read_timeout(Some(HANDSHAKE));
     let _ = raw.set_write_timeout(Some(HANDSHAKE));
     while conn.is_handshaking() {
-        conn.complete_io(raw).map_err(|e| e.to_string())?;
+        conn.complete_io(raw)?;
     }
     Ok(())
 }
@@ -79,7 +80,7 @@ fn server_config_of(cert: Vec<u8>, key: Vec<u8>) -> Result<Arc<ServerConfig>, St
 #[allow(dead_code)]
 pub fn accept(mut raw: TcpStream, config: Arc<ServerConfig>) -> Result<TcpStream, String> {
     let mut conn = ServerConnection::new(config).map_err(|e| e.to_string())?;
-    handshake(&mut raw, &mut conn)?;
+    handshake(&mut raw, &mut conn).map_err(|e| e.to_string())?;
     pump(raw, conn).map_err(|e| e.to_string())
 }
 
@@ -196,10 +197,7 @@ fn from_network(mut raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connect
 fn to_network(raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connection>, turn: &Mutex<()>) {
     let mut buf = [0u8; 16 * 1024];
     loop {
-        let n = match inner.read(&mut buf) {
-            Ok(n) => n,
-            Err(_) => 0,
-        };
+        let n = inner.read(&mut buf).unwrap_or_default();
         let my_turn = turn.lock().unwrap();
         let mut locked = conn.lock().unwrap();
         if n == 0 {

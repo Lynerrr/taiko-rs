@@ -8,7 +8,7 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 cpal = "0.18"
 # Unpacking the Linux release archive in the self-updater (already a dependency of zip).
 flate2 = "1"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 pollster = "1.0.1"
 rosu-pp = "4"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -57,16 +57,24 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 
-# CI's tests: release's settings but for what only makes the binary faster, which costs most of
-# a build. (The tests take a second; compiling them took minutes.)
+# One profile for CI builds, Clippy, and tests. Keep unwind enabled so normal and test
+# targets can share dependencies; omit debug symbols and incremental data on CI runners.
 [profile.ci-test]
-inherits = "release"
+inherits = "dev"
 opt-level = 0
 lto = "off"
 codegen-units = 256
+debug = 0
+incremental = false
 
 [profile.ci-test.package."*"]
 opt-level = 3
+
+# Reproducible CPU audits: optimized application code without release LTO's build cost.
+[profile.perf-audit]
+inherits = "release"
+lto = "off"
+codegen-units = 16
 
 # Audio decoding is unbearably slow unoptimised; keep dependencies fast in debug builds too.
 [profile.dev.package."*"]
@@ -86,3 +94,8 @@ symphonia-bundle-mp3 = { path = "vendor/symphonia-bundle-mp3" }
 # The Windows exe's icon (build.rs).
 [build-dependencies]
 embed-resource = "3.0.12"
+
+[dev-dependencies.cargo-husky]
+version = "1"
+default-features = false
+features = ["user-hooks"]

@@ -41,8 +41,8 @@ pub const PANEL_W: f32 = 112.5;
 pub const HIT_X: f32 = 160.0;
 pub const LANE_Y: f32 = 160.0;
 pub const LANE_H: f32 = 118.0;
-const NOTE_R: f32 = 31.0;
-const BIG_R: f32 = 46.0;
+pub const NOTE_R: f32 = 31.0;
+pub const BIG_R: f32 = 46.0;
 /// A spinner being hit: its circle over the drum (a skin's 128 px spinner image at this radius).
 const SPIN_R: f32 = 50.0;
 /// Second key of a big note must land within this window of the first.
@@ -256,6 +256,24 @@ struct StrongPending {
     at: f64,
 }
 
+struct NoteBlock {
+    range: std::ops::Range<usize>,
+    min_velocity: f64,
+    last_end: f64,
+    regular: bool,
+}
+
+impl NoteBlock {
+    fn index(notes: &[beatmap::Note]) -> Vec<Self> {
+        notes.chunks(128).enumerate().map(|(i, notes)| Self {
+            range: i * 128..i * 128 + notes.len(),
+            min_velocity: notes.iter().map(|n| n.velocity).fold(f64::INFINITY, f64::min).max(1e-6),
+            last_end: notes.iter().map(|n| n.end_time).fold(f64::NEG_INFINITY, f64::max),
+            regular: notes.iter().all(|n| matches!(n.kind, Kind::Don | Kind::Kat) && n.fake_len == 0.0 && n.velocity.is_finite() && n.velocity > 0.0 && n.end_time.is_finite()),
+        }).collect()
+    }
+}
+
 pub struct Game {
     /// Random's colouring of the notes: a new one each play, kept with the replay so it plays
     /// back the same; 0 is the one per map from before seeds.
@@ -283,6 +301,7 @@ pub struct Game {
     recent_errors: VecDeque<(f64, f64, Judge)>,
     strong: Option<StrongPending>,
     min_velocity: f64,
+    note_blocks: Vec<NoteBlock>,
     /// The beat length covering the most map time: what pop-up fake sliders fade in by.
     main_beat: f64,
     visible: Vec<usize>,
@@ -713,6 +732,9 @@ const LOOP_R: f32 = 110.0;
 const LOOP_EXIT: f32 = 0.6;
 const LOOP_TURN: f32 = std::f32::consts::TAU - LOOP_EXIT;
 
+/// Most ticks one roll keeps (`NoteState::ticks`).
+const MAX_ROLL_TICKS: usize = 360_000;
+
 /// Shapeshift's shapes, by the index `shapeshift::SHAPES` names them with.
 const SHAPESHIFT: [RailShape; 6] = [RailShape::Zigzag, RailShape::UTurn, RailShape::Spiral, RailShape::Loop, RailShape::Elbow, RailShape::Straight];
 
@@ -1109,10 +1131,9 @@ fn bake_speeds(map: &mut Beatmap, mods: Mods) {
         if mods.has(Mod::Drop) && cp.kiai {
             v *= 1.4;
         }
-        if mods.has(Mod::Gearbox) {
-            if let Some((_, start, _)) = bar_at(&bars, t, 1.0) {
-                v *= 1.0 + 0.15 * ((t - start) / cp.beat_length + 0.01).floor().clamp(0.0, 7.0);
-            }
+        if mods.has(Mod::Gearbox)
+            && let Some((_, start, _)) = bar_at(&bars, t, 1.0) {
+            v *= 1.0 + 0.15 * ((t - start) / cp.beat_length + 0.01).floor().clamp(0.0, 7.0);
         }
         if mods.has(Mod::Roulette) {
             let i = sections.partition_point(|s| s.0 <= t + 1.0);
@@ -1240,7 +1261,7 @@ fn lies(map: &Beatmap) -> Vec<f64> {
         .iter()
         .map(|n| {
             let d = snap_of(&map.control_points, n.time);
-            if !matches!(n.kind, Kind::Don | Kind::Kat) || d == 0 || d % 3 != 0 {
+            if !matches!(n.kind, Kind::Don | Kind::Kat) || d == 0 || !d.is_multiple_of(3) {
                 return n.time;
             }
             let cp = beatmap::control_point_at(&map.control_points, n.time);
@@ -1365,7 +1386,9 @@ impl Game {
             .map(|n| NoteState {
                 // A fake slider has none (taiko_arranger's `drumroll_tick_times`).
                 ticks: if n.kind == Kind::Roll && n.tick_spacing > 0.0 && !n.tiny {
-                    vec![false; ((n.end_time - n.time) / n.tick_spacing + 0.5).floor() as usize + 1]
+                    // At most a tick every 10 ms of the longest roll: a tick spacing of next to
+                    // nothing (a tiny beat length) mustn't ask for more than can be counted.
+                    vec![false; (((n.end_time - n.time) / n.tick_spacing + 0.5).floor() as usize).min(MAX_ROLL_TICKS) + 1]
                 } else {
                     Vec::new()
                 },
@@ -1425,6 +1448,7 @@ impl Game {
         let focus_switches = if mods.has(Mod::Multiverse) { focus_switches(&map) } else { Vec::new() };
         let shapeshift = shapeshift::get();
         let shape_order = shape_order(&map, mods, shapeshift);
+        let note_blocks = NoteBlock::index(&map.notes);
         Game {
             seed,
             half,
@@ -1445,6 +1469,7 @@ impl Game {
             recent_errors: VecDeque::new(),
             strong: None,
             min_velocity,
+            note_blocks,
             main_beat,
             visible: Vec::new(),
             last_audio_ms: None,
@@ -1753,10 +1778,9 @@ impl Game {
 
     pub fn resume(&mut self, audio: Option<&Engine>) {
         self.resuming = None;
-        if self.paused.take().is_some() {
-            if let Some(a) = audio {
-                a.set_paused(false);
-            }
+        if self.paused.take().is_some()
+            && let Some(a) = audio {
+            a.set_paused(false);
         }
     }
 
@@ -1790,12 +1814,13 @@ impl Game {
         const PRIOR_MS: f64 = 10.0;
 
         let s = &self.stats;
-        let n = s.errors.len();
-        if n < MIN_HITS {
+        if s.errors.len() < MIN_HITS {
             return None;
         }
         // An error measured under offset `o` would have been `e - (current - o)` under the current one.
-        let corrected: Vec<f64> = s.errors.iter().zip(&s.error_offsets).map(|(e, o)| e - (current_offset - o)).collect();
+        let from = s.errors.len().saturating_sub(MAX_HITS);
+        let corrected: Vec<f64> = s.errors[from..].iter().zip(&s.error_offsets[from..]).map(|(e, o)| e - (current_offset - o)).collect();
+        let n = corrected.len();
         if !self.ur_scaled_hint {
             // Simple mode: average of the last 40 hits, applied in full.
             let estimate = calibrate::estimate(&corrected[n.saturating_sub(40)..], current_offset)?;
@@ -2206,13 +2231,12 @@ impl Game {
         if let Some(i) = self.find_active(t, Kind::Roll) {
             let n = &self.map.notes[i];
             let k = ((t - n.time) / n.tick_spacing).round().max(0.0) as usize;
-            if let Some(tick) = self.state[i].ticks.get_mut(k) {
-                if !*tick {
-                    *tick = true;
-                    self.stats.roll_ticks += 1;
-                    let points = if n.big { 200.0 } else { 100.0 };
-                    self.add_score(points);
-                }
+            if let Some(tick) = self.state[i].ticks.get_mut(k)
+                && !*tick {
+                *tick = true;
+                self.stats.roll_ticks += 1;
+                let points = if n.big { 200.0 } else { 100.0 };
+                self.add_score(points);
             }
         }
         normal
@@ -2745,22 +2769,30 @@ impl Game {
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
         // Uncapped: extremely slow notes are common, so the whole map may be on screen at once,
         // its last object included (owner, 2026-10-28).
-        // ponytail: one map-wide lookahead, so a slow section anywhere widens every frame's scan
-        // to the whole map; per-section reach (like barline_times) if that gets slow.
+        // Keep the global bound for special objects and barlines; ordinary-note blocks also
+        // have conservative local bounds so one distant slow note does not widen every scan.
         let lookahead = (lane_len + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs();
 
         // Notes on screen, nearest first.
         let start = self.map.notes.partition_point(|n| n.time < vt.min(t) - lookahead.max(20_000.0));
         self.visible.clear();
-        for i in start..self.map.notes.len() {
-            let n = &self.map.notes[i];
-            if n.time - vt > lookahead {
-                break;
+        let first_block = self.note_blocks.partition_point(|b| b.range.end <= start);
+        for block in &self.note_blocks[first_block..] {
+            if self.map.notes[block.range.start].time - vt > lookahead { break; }
+            if block.regular && !mods.has(Mod::Liar) {
+                let reach = (lane_len + BIG_R) as f64 / (block.min_velocity * scroll.speed * scroll.min_factor()) + warp.abs();
+                if self.map.notes[block.range.start].time - vt.max(t) > reach || block.last_end < vt.min(t) - 3000.0 {
+                    continue;
+                }
             }
-            if n.end_time + n.fake_len < vt.min(t) - 3000.0 && n.kind != Kind::Swell {
-                continue;
+            for i in start.max(block.range.start)..block.range.end {
+                let n = &self.map.notes[i];
+                if n.time - vt > lookahead { break; }
+                if n.end_time + n.fake_len < vt.min(t) - 3000.0 && n.kind != Kind::Swell {
+                    continue;
+                }
+                self.visible.push(i);
             }
-            self.visible.push(i);
         }
         // Distance along the lane of note `i`. Liar: far off, a triplet sits where a 1/4 would,
         // sliding to its real place on the way in.
@@ -2851,7 +2883,7 @@ impl Game {
                 // Each note pulses on its own grid: a 1/4 four times a beat.
                 let own = (1.0 - (beats * flow.clamp(1, 8) as f32).rem_euclid(1.0)).powi(3);
                 size *= 1.0 + 0.22 * own;
-                squish = 1.0 + 0.3 * own * if k % 2 == 0 { 1.0 } else { -1.0 };
+                squish = 1.0 + 0.3 * own * if k.is_multiple_of(2) { 1.0 } else { -1.0 };
             }
             let r = if n.big { BIG_R } else { NOTE_R } * size;
             let first = c.shapes.len();
@@ -2874,7 +2906,7 @@ impl Game {
         if boxed && halo > 0.01 {
             for (k, a) in [0.3, 0.16, 0.08, 0.03].into_iter().enumerate() {
                 let d = 3.0 + 6.0 * k as f32;
-                c.round_rect(-d, lane_top - 3.0 - d, w + 2.0 * d, LANE_H + 6.0 + 2.0 * d, 4.0 + d, rgba(0, 0.0), rgba(FOCUS_COL, a * halo), 6.0);
+                c.round_rect([-d, lane_top - 3.0 - d], [w + 2.0 * d, LANE_H + 6.0 + 2.0 * d], 4.0 + d, rgba(0, 0.0), rgba(FOCUS_COL, a * halo), 6.0);
             }
         }
 
@@ -3158,7 +3190,7 @@ impl Game {
                             c.sprite_box(Sprite::RollEnd, xe + r * ex, LANE_Y, r * ex, r * ey, rgba(ROLL, a));
                         }
                     } else {
-                        c.capsule(HIT_X + s0, HIT_X + s1, LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
+                        c.capsule([HIT_X + s0, HIT_X + s1], LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
                         if fake {
                             c.circle(HIT_X + s_cap, LANE_Y, body_r, rgba(ROLL, a), rgba(WHITE, a), 2.5);
                         }
@@ -3339,7 +3371,7 @@ impl Game {
         // the focus: a flash and a ring off the drum.
         if boxed && !geo.bent() {
             let frame = tint(rgba(0x3a3a4e, 1.0), FOCUS_COL, look.focus.max(look.aim));
-            c.round_rect(0.0, lane_top - 3.0, w, LANE_H + 6.0, 4.0, rgba(0, 0.0), frame, 2.0);
+            c.round_rect([0.0, lane_top - 3.0], [w, LANE_H + 6.0], 4.0, rgba(0, 0.0), frame, 2.0);
         }
         // Called: a ping off the drum on each beat.
         if boxed && look.aim > 0.0 {
@@ -3391,10 +3423,9 @@ impl Game {
         }
         if mods.has(Mod::BarrelRoll) {
             let i = self.kiai_starts.partition_point(|&(k, _)| k <= vt);
-            if let Some(&(k, b)) = i.checked_sub(1).and_then(|i| self.kiai_starts.get(i)) {
-                if vt - k < 2.0 * b {
-                    angle += TAU * smooth(0.0, 2.0 * b, vt - k) as f32;
-                }
+            if let Some(&(k, b)) = i.checked_sub(1).and_then(|i| self.kiai_starts.get(i))
+                && vt - k < 2.0 * b {
+                angle += TAU * smooth(0.0, 2.0 * b, vt - k) as f32;
             }
         }
         let mut dest = pivot;
@@ -3561,8 +3592,8 @@ impl Game {
         let t = self.time;
         let w = c.width;
         if let Some(text) = &self.banner {
-            let tw = Canvas::text_width(9.0, &text);
-            c.round_rect(w / 2.0 - tw / 2.0 - 12.0, 14.0, tw + 24.0, 20.0, 10.0, rgba(0x173049, 0.9), rgba(0x4fb4ff, 1.0), 1.0);
+            let tw = Canvas::text_width(9.0, text);
+            c.round_rect([w / 2.0 - tw / 2.0 - 12.0, 14.0], [tw + 24.0, 20.0], 10.0, rgba(0x173049, 0.9), rgba(0x4fb4ff, 1.0), 1.0);
             c.text_centered(w / 2.0, 19.5, 9.0, rgba(WHITE, 1.0), text);
         }
 
@@ -3616,10 +3647,10 @@ impl Game {
                 c.clip_since(start, fx, fy, fill_w * hp, fill_h);
                 c.rect(fx + fill_w / 2.0 - 0.75, fy - 2.0, 1.5, fill_h + 4.0, rgba(WHITE, 0.8));
             } else {
-                c.round_rect(hx, hy, hw, 8.0, 3.0, rgba(0x15151d, 0.85), rgba(0x3a3a4e, 1.0), 1.0);
+                c.round_rect([hx, hy], [hw, 8.0], 3.0, rgba(0x15151d, 0.85), rgba(0x3a3a4e, 1.0), 1.0);
                 let fill = if hp >= 0.5 { 0xFFD34D } else { 0xEB452C };
                 if hp > 0.0 {
-                    c.round_rect(hx + 1.0, hy + 1.0, (hw - 2.0) * hp, 6.0, 2.5, rgba(fill, 0.95), rgba(0, 0.0), 0.0);
+                    c.round_rect([hx + 1.0, hy + 1.0], [(hw - 2.0) * hp, 6.0], 2.5, rgba(fill, 0.95), rgba(0, 0.0), 0.0);
                 }
                 c.rect(hx + hw / 2.0 - 0.75, hy - 2.0, 1.5, 12.0, rgba(WHITE, 0.8));
             }
@@ -3635,9 +3666,9 @@ impl Game {
         if shown(Part::HitError) {
         let scale = 150.0 / self.windows.miss as f32;
         let wnd = |ms: f64| ms as f32 * scale;
-        c.round_rect(cx - wnd(self.windows.miss), my - 3.0, wnd(self.windows.miss) * 2.0, 6.0, 3.0, rgba(Judge::Miss.color(), 0.25), rgba(0, 0.0), 0.0);
-        c.round_rect(cx - wnd(self.windows.ok), my - 3.0, wnd(self.windows.ok) * 2.0, 6.0, 3.0, rgba(Judge::Ok.color(), 0.4), rgba(0, 0.0), 0.0);
-        c.round_rect(cx - wnd(self.windows.great), my - 3.0, wnd(self.windows.great) * 2.0, 6.0, 3.0, rgba(Judge::Great.color(), 0.6), rgba(0, 0.0), 0.0);
+        c.round_rect([cx - wnd(self.windows.miss), my - 3.0], [wnd(self.windows.miss) * 2.0, 6.0], 3.0, rgba(Judge::Miss.color(), 0.25), rgba(0, 0.0), 0.0);
+        c.round_rect([cx - wnd(self.windows.ok), my - 3.0], [wnd(self.windows.ok) * 2.0, 6.0], 3.0, rgba(Judge::Ok.color(), 0.4), rgba(0, 0.0), 0.0);
+        c.round_rect([cx - wnd(self.windows.great), my - 3.0], [wnd(self.windows.great) * 2.0, 6.0], 3.0, rgba(Judge::Great.color(), 0.6), rgba(0, 0.0), 0.0);
         for &(err, at, j) in &self.recent_errors {
             let age = (t - at) as f32;
             if age < 4000.0 {
@@ -3708,30 +3739,53 @@ impl Game {
             c.text_centered(cx, cy - 7.0, 14.0, rgba(WHITE, 1.0), &format!("{:.1}", left));
             c.text_centered(cx, cy + 36.0, 8.0, rgba(0x9a9ab0, 1.0), tr!("get ready   (Esc: back to menu)", "準備して   (Esc: メニューに戻る)", "приготовьтесь   (Esc: назад в меню)"));
         } else if let Some(cursor) = self.paused.filter(|_| !self.watched) {
+            // The main menu's look: one panel, the options as notes on it (don and kat in turn),
+            // the chosen one bigger and lit, the selector sliding between them.
             let t = progress(self.paused_at, 180.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78 * t));
             let rise = (1.0 - t) * 12.0;
-            c.text_centered(w / 2.0, 98.0 - rise, 32.0, rgba(WHITE, t), tr!("PAUSED", "ポーズ", "ПАУЗА"));
+            const ROW_H: f32 = 36.0;
+            let pw = (w - 40.0).min(340.0);
+            let ph = 92.0 + PAUSE_ITEMS as f32 * ROW_H + 26.0;
+            let (px, py) = (w / 2.0 - pw / 2.0, (480.0 - ph) / 2.0 - 6.0 - rise);
+            let start = c.shapes.len();
+            crate::style::panel(c, px, py, pw, ph);
+            let title = tr!("PAUSED", "ポーズ", "ПАУЗА");
+            crate::style::title(c, w / 2.0 - Canvas::text_width(26.0, title) / 2.0, py + 14.0, 26.0, WHITE, title);
             // The map's name lives here rather than under the lane, where moved lanes ran into it.
             let m = &self.map.meta;
             let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("   {:.2}x", self.rate) } else { String::new() };
-            let fit = (w - 80.0).min(520.0);
-            c.text_centered(w / 2.0, 140.0 - rise, 9.0, rgba(0x9a9ab0, t), &Canvas::fit(9.0, fit, &format!("{} - {}", m.artist, m.title)));
-            c.text_centered(w / 2.0, 153.0 - rise, 9.0, rgba(0x6f6f86, t), &Canvas::fit(9.0, fit, &format!("[{}]  OD {:.1}{rate}", m.version, m.od)));
+            let fit = pw - 28.0;
+            c.text_centered(w / 2.0, py + 50.0, 8.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(8.0, fit, &format!("{} - {}", m.artist, m.title)));
+            c.text_centered(w / 2.0, py + 62.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit(8.0, fit, &format!("[{}]  OD {:.1}{rate}", m.version, m.od)));
+            c.rect(px + 14.0, py + 78.0, pw - 28.0, 1.0, rgba(0x2a2a38, 1.0));
+            c.fade_since(start, t, 1.0);
+            let colours = crate::multiverse::note_colours();
+            let (rx, rw) = (px + 12.0, pw - 24.0);
             for (i, item) in (0..PAUSE_ITEMS).map(pause_item).enumerate() {
-                // Items slide up one after another.
+                // Options slide up one after another.
                 let ti = progress(self.paused_at + std::time::Duration::from_millis(25 * i as u64), 180.0);
-                let y = 170.0 + i as f32 * 38.0 + (1.0 - ti) * 18.0;
+                let y = py + 88.0 + i as f32 * ROW_H + (1.0 - ti) * 18.0;
                 let selected = i == cursor;
-                let (bg, border) = if selected { (0x34344a, accent()) } else { (0x1d1d27, 0x2a2a38) };
-                c.round_rect(w / 2.0 - 140.0, y, 280.0, 32.0, 8.0, rgba(bg, 1.0), rgba(border, 1.0), if selected { 2.0 } else { 1.0 });
-                c.hit(w / 2.0 - 140.0, y, 280.0, 32.0, Hit::PauseItem(i));
-                c.text_centered(w / 2.0, y + 10.0, 12.0, rgba(if selected { WHITE } else { 0xc8c8d8 }, 1.0), item);
+                let row = c.shapes.len();
+                if selected {
+                    c.round_rect([rx, y], [rw, ROW_H - 6.0], 7.0, rgba(crate::style::selector_colour(), 0.12 + 0.05 * crate::style::pulse()), rgba(0, 0.0), 0.0);
+                    crate::style::selector(c, "pause", [rx - 3.0, y - 3.0, rw + 6.0, ROW_H]);
+                } else if c.hovered(rx, y, rw, ROW_H - 6.0) {
+                    c.round_rect([rx, y], [rw, ROW_H - 6.0], 7.0, rgba(0x262634, 0.6), rgba(0, 0.0), 0.0);
+                }
+                c.hit(rx, y, rw, ROW_H - 6.0, Hit::PauseItem(i));
+                let (nx, ny) = (rx + 18.0, y + (ROW_H - 6.0) / 2.0);
+                let col = if i % 2 == 0 { colours.don() } else { colours.kat() };
+                let r = if selected { 9.0 } else { 7.0 };
+                crate::style::note(c, nx, ny, r, col, selected, 0.6);
+                c.text(rx + 36.0, y + (ROW_H - 6.0 - 11.0) / 2.0, 11.0, rgba(if selected { WHITE } else { 0xa8a8bc }, 1.0), &Canvas::fit(11.0, rw - 48.0, item));
+                c.fade_since(row, ti, 1.0);
             }
-            let hint_y = 170.0 + PAUSE_ITEMS as f32 * 38.0 + 8.0;
-            // Fades in once the items have slid past it.
+            // Fades in once the options have slid past it.
             let th = progress(self.paused_at + std::time::Duration::from_millis(220), 150.0);
-            c.text_centered(w / 2.0, hint_y, 9.0, rgba(0x8a8aa0, th), tr!("Up/Down + Enter    Esc: continue", "上下 + Enter    Esc: 続ける", "Вверх/вниз + Enter    Esc: продолжить"));
+            let hint = tr!("Up/Down + Enter    Esc: continue", "上下 + Enter    Esc: 続ける", "Вверх/вниз + Enter    Esc: продолжить");
+            c.text_centered(w / 2.0, py + ph - 18.0, 7.0, rgba(0x8a8aa0, th), &Canvas::fit_hints(7.0, pw - 28.0, hint));
         }
         if let Some((_, at)) = self.failed {
             let p = progress(at, 400.0);
@@ -3774,9 +3828,9 @@ fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
         c.circle(side * 62.0, -50.0, 5.0, rgba(0xffffff, 1.0), rgba(0xffffff, 1.0), 0.0);
     }
     // Snout, nose, and the jaw hanging open, teeth top and bottom.
-    c.round_rect(-95.0, -5.0, 190.0, 95.0, 45.0, rgba(snout, 1.0), rgba(dark, 1.0), 4.0);
-    c.round_rect(-26.0, -8.0, 52.0, 30.0, 12.0, rgba(0x0b0b0b, 1.0), rgba(0x0b0b0b, 1.0), 0.0);
-    c.round_rect(-85.0, 55.0, 170.0, 110.0, 30.0, rgba(0x1a0404, 1.0), rgba(dark, 1.0), 5.0);
+    c.round_rect([-95.0, -5.0], [190.0, 95.0], 45.0, rgba(snout, 1.0), rgba(dark, 1.0), 4.0);
+    c.round_rect([-26.0, -8.0], [52.0, 30.0], 12.0, rgba(0x0b0b0b, 1.0), rgba(0x0b0b0b, 1.0), 0.0);
+    c.round_rect([-85.0, 55.0], [170.0, 110.0], 30.0, rgba(0x1a0404, 1.0), rgba(dark, 1.0), 5.0);
     for i in 0..7 {
         let x = -72.0 + i as f32 * 21.0;
         c.rect(x, 58.0, 15.0, 22.0, rgba(0xe8e0c8, 1.0));
@@ -3784,7 +3838,7 @@ fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
     }
     // Bow tie under the chin.
     for side in [-1.0, 1.0] {
-        c.round_rect(side * 34.0 - 30.0, 168.0, 60.0, 34.0, 8.0, rgba(0x0b0b0b, 1.0), rgba(0x0b0b0b, 1.0), 0.0);
+        c.round_rect([side * 34.0 - 30.0, 168.0], [60.0, 34.0], 8.0, rgba(0x0b0b0b, 1.0), rgba(0x0b0b0b, 1.0), 0.0);
     }
     c.circle(0.0, 185.0, 12.0, rgba(0x0b0b0b, 1.0), rgba(0x0b0b0b, 1.0), 0.0);
     // Everything but the backdrop was drawn about (0, 0): scale and shake it into place.
@@ -3821,6 +3875,11 @@ fn turned_box(rect: [f32; 4], pivot: [f32; 2], angle: f32, scale: f32, dest: [f3
     [x0, y0, x1 - x0, y1 - y0]
 }
 
+/// The lane alone (top, height), for a preview it fills.
+pub fn lane_only() -> (f32, f32) {
+    (LANE_Y - LANE_H / 2.0, LANE_H)
+}
+
 /// Vertical band (top, height) of the lane with a little room for judgements, for previews that
 /// show only the lane.
 pub fn lane_band() -> (f32, f32) {
@@ -3829,7 +3888,7 @@ pub fn lane_band() -> (f32, f32) {
 
 /// A don or kat drawn with the skin's images: the circle tinted `col`, then its overlay. False
 /// (nothing drawn) when the skin has no circle for it.
-fn skin_note(c: &mut Canvas, x: f32, y: f32, r: f32, big: bool, col: u32, alpha: f32) -> bool {
+pub fn skin_note(c: &mut Canvas, x: f32, y: f32, r: f32, big: bool, col: u32, alpha: f32) -> bool {
     let (circle, overlay) = if big { (Sprite::BigCircle, Sprite::BigCircleOverlay) } else { (Sprite::HitCircle, Sprite::HitCircleOverlay) };
     if !c.sprite(circle, x, y, r, rgba(col, alpha)) {
         return false;
@@ -3913,16 +3972,16 @@ fn draw_drum(c: &mut Canvas, flash: [f32; 4], don: u32, kat: u32) -> f32 {
     if skinned_panel {
         // The panel has its drum drawn on: light it the built-in way.
         for (side, r, col, a) in [(1, 46.0, kat, flash[0]), (2, 46.0, kat, flash[3]), (1, 32.0, don, flash[1]), (2, 32.0, don, flash[2])] {
-            c.half_circle(drum_x, LANE_Y, r, side, rgba(col, a * 0.7), rgba(col, 0.0), 0.0);
+            c.half_circle([drum_x, LANE_Y], r, side, rgba(col, a * 0.7), rgba(col, 0.0), 0.0);
         }
         return drum_x;
     }
     c.circle(drum_x, LANE_Y, 46.0, rgba(0x2f2f3e, 1.0), rgba(0x4a4a60, 1.0), 2.0);
-    c.half_circle(drum_x, LANE_Y, 46.0, 1, rgba(kat, flash[0]), rgba(kat, 0.0), 0.0);
-    c.half_circle(drum_x, LANE_Y, 46.0, 2, rgba(kat, flash[3]), rgba(kat, 0.0), 0.0);
+    c.half_circle([drum_x, LANE_Y], 46.0, 1, rgba(kat, flash[0]), rgba(kat, 0.0), 0.0);
+    c.half_circle([drum_x, LANE_Y], 46.0, 2, rgba(kat, flash[3]), rgba(kat, 0.0), 0.0);
     c.circle(drum_x, LANE_Y, 32.0, rgba(0xe9dcc3, 1.0), rgba(0x8a7b63, 1.0), 2.0);
-    c.half_circle(drum_x, LANE_Y, 32.0, 1, rgba(don, flash[1]), rgba(don, 0.0), 0.0);
-    c.half_circle(drum_x, LANE_Y, 32.0, 2, rgba(don, flash[2]), rgba(don, 0.0), 0.0);
+    c.half_circle([drum_x, LANE_Y], 32.0, 1, rgba(don, flash[1]), rgba(don, 0.0), 0.0);
+    c.half_circle([drum_x, LANE_Y], 32.0, 2, rgba(don, flash[2]), rgba(don, 0.0), 0.0);
     drum_x
 }
 
@@ -3945,7 +4004,7 @@ pub fn draw_preview(c: &mut Canvas) {
     }
     draw_hit_target(c);
     // Back to front, like gameplay.
-    c.capsule(HIT_X + 560.0, HIT_X + 760.0, LANE_Y, NOTE_R * 0.86, rgba(ROLL, 1.0), rgba(WHITE, 1.0), 2.5);
+    c.capsule([HIT_X + 560.0, HIT_X + 760.0], LANE_Y, NOTE_R * 0.86, rgba(ROLL, 1.0), rgba(WHITE, 1.0), 2.5);
     c.circle(HIT_X + 560.0, LANE_Y, NOTE_R, rgba(ROLL, 1.0), rgba(WHITE, 1.0), NOTE_R * 0.1);
     let colours = multiverse::note_colours();
     for (dx, col, big) in [(400.0, colours.don(), true), (260.0, colours.kat(), false), (150.0, colours.don(), false)] {
@@ -3968,6 +4027,47 @@ pub fn draw_preview_hud(c: &mut Canvas) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_culling_preserves_the_original_draw_for_every_mod() {
+        // The accent and the note colours are process-wide, and other tests (building frames from
+        // their own configs) set them while these draws are compared.
+        crate::render::pin_accent_for_this_thread(Some(crate::render::DEFAULT_ACCENT));
+        multiverse::pin_note_colours_for_this_thread(Some(multiverse::Colours::CLASSIC));
+        crate::render::set_animations(false);
+        crate::render::set_frame_time(Some(Instant::now()));
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let template = map.notes[0].clone();
+        map.notes = (0..2048).map(|i| {
+            let time = 2000.0 + i as f64 * 100.0;
+            let special = i % 511 == 0;
+            beatmap::Note {
+                time, end_time: time + if special { 9000.0 } else { 0.0 },
+                kind: if special { if i % 2 == 0 { Kind::Roll } else { Kind::Swell } } else { Kind::Don },
+                velocity: if i == 2047 { 1e-5 } else { 0.4 },
+                fake_len: if i == 511 { 200.0 } else { 0.0 },
+                ..template.clone()
+            }
+        }).collect();
+        for mods in std::iter::once(Mods::NONE).chain(crate::mods::ALL.into_iter().map(|m| Mods::parse(m.acronym()))) {
+            let track = Arc::new(Track { samples: Vec::new(), rate: 1.0 });
+            let mut optimized = Game::with_seed(map.clone(), track.clone(), None, mods, 42);
+            let mut reference = Game::with_seed(map.clone(), track, None, mods, 42);
+            // One special block disables the new bounds, reproducing the original scan.
+            reference.note_blocks = vec![NoteBlock { range: 0..reference.map.notes.len(), min_velocity: 1e-6, last_end: f64::INFINITY, regular: false }];
+            for time in [0.0, 3000.0, 55_555.0, 190_000.0, 210_000.0] {
+                optimized.time = time;
+                reference.time = time;
+                let mut a = Canvas::default();
+                let mut b = Canvas::default();
+                a.clear(853.3);
+                b.clear(853.3);
+                optimized.draw_playfield(&mut a, 1.0);
+                reference.draw_playfield(&mut b, 1.0);
+                assert!(bytemuck::cast_slice::<_, u8>(&a.shapes) == bytemuck::cast_slice::<_, u8>(&b.shapes), "mods={mods:?}, time={time}, shapes={} vs {}", a.shapes.len(), b.shapes.len());
+            }
+        }
+    }
 
     fn game() -> Game {
         let map = beatmap::calibration_map(500.0, 0, 64);
@@ -4270,7 +4370,7 @@ mod tests {
 
     fn hits(g: &mut Game, errors: &[f64], offset: f64) {
         g.stats.errors.extend_from_slice(errors);
-        g.stats.error_offsets.extend(std::iter::repeat(offset).take(errors.len()));
+        g.stats.error_offsets.extend(std::iter::repeat_n(offset, errors.len()));
     }
 
     /// Deterministic spread around `mean` with standard deviation close to `sd`.

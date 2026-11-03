@@ -20,7 +20,7 @@ const URI_LIST: &str = "text/uri-list";
 /// Listens for files dragged over the game's windows on the Wayland connection `display` (winit's
 /// `wl_display`, which lives as long as the game) and reports them to `send`.
 pub fn start(display: *mut std::ffi::c_void, send: impl Fn(FileDrag) + Send + 'static) {
-    // SAFETY: winit keeps the display connected until the process exits.
+    // SAFETY: winit's display, connected while the game runs (see below for its end).
     let backend = unsafe { Backend::from_foreign_display(display.cast()) };
     let conn = Connection::from_backend(backend);
     let _ = std::thread::Builder::new().name("drag and drop".into()).spawn(move || {
@@ -28,6 +28,10 @@ pub fn start(display: *mut std::ffi::c_void, send: impl Fn(FileDrag) + Send + 's
         conn.display().get_registry(&queue.handle(), ());
         let mut dnd = Dnd { conn: conn.clone(), manager: None, seat: None, offer: None, send: Box::new(send) };
         while queue.blocking_dispatch(&mut dnd).is_ok() {}
+        // The game is closing and winit has let go of the display: dropping our proxies and the
+        // queue now would destroy them on a display that's gone (a segfault in wl_proxy_destroy
+        // on every quit). The process is ending; leave them be.
+        std::mem::forget((queue, dnd, conn));
     });
 }
 
@@ -167,10 +171,10 @@ impl Dispatch<WlDataDevice, ()> for Dnd {
 
 impl Dispatch<WlDataOffer, Files> for Dnd {
     fn event(_: &mut Self, _: &WlDataOffer, event: wl_data_offer::Event, files: &Files, _: &Connection, _: &QueueHandle<Self>) {
-        if let wl_data_offer::Event::Offer { mime_type } = event {
-            if mime_type == URI_LIST {
-                files.0.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
+        if let wl_data_offer::Event::Offer { mime_type } = event
+            && mime_type == URI_LIST
+        {
+            files.0.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }

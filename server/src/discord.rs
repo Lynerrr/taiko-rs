@@ -158,15 +158,14 @@ fn session(bot: &Arc<Bot>) -> Result<Stop, String> {
     let mut beat: Option<(Duration, Instant)> = None;
     let mut acked = true;
     loop {
-        if let Some((every, next)) = &mut beat {
-            if Instant::now() >= *next {
-                if !acked {
-                    return Err("no heartbeat ack, connecting again".into());
-                }
-                send(&mut ws, &json!({ "op": 1, "d": seq }))?;
-                acked = false;
-                *next += *every;
+        if let Some((every, next)) = &mut beat
+            && Instant::now() >= *next {
+            if !acked {
+                return Err("no heartbeat ack, connecting again".into());
             }
+            send(&mut ws, &json!({ "op": 1, "d": seq }))?;
+            acked = false;
+            *next += *every;
         }
         let text = match ws.read() {
             Ok(Message::Text(t)) => t.to_string(),
@@ -348,6 +347,7 @@ impl Bot {
                 let Some(display) = self.player(name) else { return text(format!("There's no player called `{}`.", clean(name))) };
                 self.links.lock().unwrap().insert(author.to_string(), name.to_ascii_lowercase());
                 self.save_links();
+                self.state.medal_count(name, "discord", 1, true);
                 text(format!("Linked to **{display}**. Now `>rs`, `>top` and `>osu` show your plays."))
             }
             "verify" => {
@@ -357,6 +357,7 @@ impl Bot {
                 self.verified.lock().unwrap().insert(author.to_string(), key.clone());
                 self.links.lock().unwrap().insert(author.to_string(), key.clone());
                 self.save_links();
+                self.state.medal_count(&key, "discord", 1, true);
                 let name = self.state.display_name(&key);
                 text(format!("Verified as **{}**: `>love` and `>unlove` work for you now.", clean(&name)))
             }
@@ -419,7 +420,7 @@ impl Bot {
                     let label = self.state.scores.lock().unwrap().map(map).map(|m| m.name).unwrap_or_else(|| "that map".into());
                     return text(format!("`{name}` hasn't played {label}."));
                 }
-                plays.sort_by(|a, b| b.score.cmp(&a.score));
+                plays.sort_by_key(|play| std::cmp::Reverse(play.score));
                 let shown: Vec<OnlineScore> = plays.into_iter().take(PAGE).collect();
                 Some((Answer::Embed(self.plays_embed(&format!("{name} on {}", shown[0].map), &shown, 0, &key), watch_buttons(&shown, 0)), Some(map)))
             }
@@ -623,10 +624,9 @@ impl Bot {
             lines.push(format!("**Best:** [{}]({WEBSITE}/m/{:x}) · **{}**", clean(&best.map), best.map_hash, pp_text(best.pp)));
         }
         lines.push(format!("Joined <t:{}:D>", p.joined));
-        if p.online {
-            if let Some(a) = self.state.activity(&p.name) {
-                lines.push(format!("🟢 Online, {}", a.describe()));
-            }
+        if p.online
+            && let Some(a) = self.state.activity(&p.name) {
+            lines.push(format!("🟢 Online, {}", a.describe()));
         }
         json!({
             "title": format!("taiko.rs profile for {}", p.name),
@@ -746,10 +746,9 @@ impl Bot {
         let mut messages: Vec<Value> = self.get(&format!("{API}/channels/{channel}/messages?limit={PING_CONTEXT}")).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
         messages.reverse();
         // A forum post's first message (the report) has the thread's id: kept even in a long thread.
-        if place["parent_id"].is_string() && !messages.iter().any(|m| m["id"].as_str() == Some(channel.as_str())) {
-            if let Ok(first) = self.get(&format!("{API}/channels/{channel}/messages/{channel}")) {
-                messages.insert(0, first);
-            }
+        if place["parent_id"].is_string() && !messages.iter().any(|m| m["id"].as_str() == Some(channel.as_str()))
+            && let Ok(first) = self.get(&format!("{API}/channels/{channel}/messages/{channel}")) {
+            messages.insert(0, first);
         }
         let said = |m: &Value| {
             json!({
@@ -975,7 +974,7 @@ fn thousands(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -1021,26 +1020,133 @@ struct Posted {
     posted: Vec<String>,
 }
 
-/// Whether a commit goes in the changelog: not merges, not what's marked `Changelog: skip`, not
-/// a player's own secret.
+/// Explicit notes for Conventional Commits, with legacy history preserved.
 pub(crate) fn worth_posting(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    let title = message.lines().next().unwrap_or("").trim();
-    !title.is_empty() && !title.starts_with("Merge ") && !lower.lines().any(|l| l.trim() == "changelog: skip") && !lower.contains("krokodil")
+    crate::changelog_entry::parse(message).is_some()
 }
 
-/// A commit's message as a changelog post: its first line, then its points, without trailers.
+/// Player notes as a post, within Discord's embed limits.
 pub(crate) fn post_text(message: &str) -> (String, String) {
-    let mut lines = message.lines();
-    let title = lines.next().unwrap_or("").trim().chars().take(256).collect();
-    let body: Vec<&str> = lines
-        .filter(|l| {
-            let l = l.to_ascii_lowercase();
-            !["co-authored-by:", "claude-session:", "signed-off-by:", "changelog:"].iter().any(|t| l.starts_with(t))
-        })
-        .collect();
-    let body = body.join("\n").trim().chars().take(3500).collect();
+    let Some(entry) = crate::changelog_entry::parse(message) else { return (String::new(), String::new()) };
+    let title = entry.title.chars().take(256).collect();
+    let body = entry.points.into_iter().map(|point| format!("- {point}")).collect::<Vec<_>>().join("\n").chars().take(3500).collect();
     (title, body)
+}
+
+/// The channel crash reports go to, by name in the server the changelog goes to.
+const CRASH_CHANNEL: &str = "crash-reports";
+
+/// Crashes posted, each (signature, build) once with how many came in.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct CrashPosts {
+    posts: Vec<CrashPost>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct CrashPost {
+    signature: String,
+    build: String,
+    message: String,
+    count: u32,
+    /// The systems it came from (a few).
+    os: Vec<String>,
+}
+
+/// One at a time: two reports of the same crash must not both post it.
+static CRASHES: Mutex<()> = Mutex::new(());
+
+/// A crash report from a game (`crashes::report`) in the crash channel: a new crash as a post
+/// with its report, the same one again (same signature and build) as a count on that post.
+pub fn crash(signature: &str, r: &crate::online::CrashReport) {
+    let Some(bot) = BOT.get() else { return };
+    let _one = CRASHES.lock().unwrap_or_else(|e| e.into_inner());
+    let channel = match crash_channel(bot) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("discord: crash channel: {e}");
+            return;
+        }
+    };
+    let file = bot.dir.join("discord-crashes.json");
+    let mut posts: CrashPosts = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let build: String = r.build.chars().take(7).collect();
+    let known = posts.posts.iter().position(|p| p.signature == signature && p.build == build);
+    let embed = |count: u32, os: &[String]| {
+        // The end of the report says most (the log's last lines); an embed takes 4096.
+        let report = r.report.trim();
+        let cut = report.char_indices().rev().nth(3800).map(|(i, _)| i).unwrap_or(0);
+        let shown = if cut > 0 { format!("…{}", &report[cut..]) } else { report.to_string() };
+        json!({
+            "title": signature.chars().take(250).collect::<String>(),
+            "description": format!("```\n{}\n```", shown.replace("```", "'''")),
+            "color": 0xFF4B4B,
+            "fields": [
+                { "name": "build", "value": build, "inline": true },
+                { "name": "times", "value": count.to_string(), "inline": true },
+                { "name": "systems", "value": os.join(", "), "inline": true },
+            ],
+        })
+    };
+    let result = match known {
+        Some(i) => {
+            let post = &mut posts.posts[i];
+            post.count += 1;
+            if !post.os.contains(&r.os) && post.os.len() < 5 {
+                post.os.push(r.os.clone());
+            }
+            let body = json!({ "embeds": [embed(post.count, &post.os)] });
+            bot.send_json("PATCH", &format!("{API}/channels/{channel}/messages/{}", post.message), &body)
+        }
+        None => {
+            let os = vec![r.os.clone()];
+            bot.post(&format!("{API}/channels/{channel}/messages"), &json!({ "embeds": [embed(1, &os)], "allowed_mentions": { "parse": [] } })).map(|message| {
+                posts.posts.push(CrashPost { signature: signature.to_string(), build: build.clone(), message, count: 1, os });
+                // The newest few hundred: an old build's crashes stop coming.
+                if posts.posts.len() > 300 {
+                    posts.posts.drain(..posts.posts.len() - 300);
+                }
+            })
+        }
+    };
+    match result {
+        Ok(()) => {
+            let tmp = file.with_extension("json.tmp");
+            if let Err(e) = std::fs::write(&tmp, serde_json::to_string(&posts).unwrap_or_default()).and_then(|_| std::fs::rename(&tmp, &file)) {
+                eprintln!("discord: saving the crash posts: {e}");
+            }
+        }
+        Err(e) => eprintln!("discord: crash report: {e}"),
+    }
+}
+
+/// The crash channel's id: DIR/discord-crashes, else the channel named `CRASH_CHANNEL` in the
+/// changelog's server, made there if it isn't (the bot needs Manage Channels for that), and
+/// remembered.
+fn crash_channel(bot: &Bot) -> Result<String, String> {
+    let saved = bot.dir.join("discord-crashes");
+    if let Some(id) = std::fs::read_to_string(&saved).ok().map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+        return Ok(id);
+    }
+    let changelog = std::fs::read_to_string(bot.dir.join("discord-changelog")).map_err(|_| "no discord-changelog to find the server by")?;
+    let place = bot.get(&format!("{API}/channels/{}", changelog.trim()))?;
+    let guild = place["guild_id"].as_str().ok_or("the changelog channel isn't in a server")?.to_string();
+    let channels = bot.get(&format!("{API}/guilds/{guild}/channels"))?;
+    let found = channels
+        .as_array()
+        .and_then(|all| all.iter().find(|c| c["name"].as_str() == Some(CRASH_CHANNEL) && c["type"].as_u64() == Some(0)))
+        .and_then(|c| c["id"].as_str())
+        .map(str::to_string);
+    let id = match found {
+        Some(id) => id,
+        None => {
+            let body = json!({ "name": CRASH_CHANNEL, "type": 0, "topic": "Crashes the game sent in by itself on the start after one (Settings > Online > Send crash reports). The same crash on the same build is one post with a count." });
+            let made = bot.post(&format!("{API}/guilds/{guild}/channels"), &body)?;
+            println!("discord: made #{CRASH_CHANNEL} ({made})");
+            made
+        }
+    };
+    let _ = std::fs::write(&saved, &id);
+    Ok(id)
 }
 
 fn changelog(bot: Arc<Bot>) {
@@ -1146,14 +1252,42 @@ mod tests {
     }
 
     #[test]
-    fn the_changelog_leaves_out_merges_skips_and_secrets() {
-        assert!(worth_posting("New mod, Crossfire\n\n- In the RAILS column\n\nCo-Authored-By: x"));
-        assert!(!worth_posting("Merge pull request #53 from x/y"));
-        assert!(!worth_posting("Server: no cap\n\nChangelog: skip\nCo-Authored-By: x"));
-        assert!(!worth_posting("krokodil_koban mode says nothing about itself"));
-        let (title, body) = post_text("Title here\n\n- one\n- two\n\nCo-Authored-By: C <c@x>\nClaude-Session: https://x\n");
-        assert_eq!(title, "Title here");
-        assert_eq!(body, "- one\n- two");
+    fn the_changelog_posts_only_explicit_player_notes() {
+        let message = "feat(mods): add Crossfire\n\nChangelog: Try Crossfire in the RAILS column.\nChangelog: Customize the lanes in mod settings.\n\n* Fixed lint errors\n  Technical continuation\nCo-Authored-By: C <c@x>\nClaude-Session: https://x\n";
+        assert!(worth_posting(message));
+        let (title, body) = post_text(message);
+        assert_eq!(title, "Try Crossfire in the RAILS column.");
+        assert_eq!(body, "- Customize the lanes in mod settings.");
+        for hidden in [
+            "fix(lint): fix warnings\n\n* Fixed lint errors",
+            "feat(mods): add Crossfire\n\nChangelog:",
+            "Merge pull request #53 from x/y\n\nChangelog: Try Crossfire",
+            "chore(server): change internals\n\nChangelog: A change\nChangelog: skip",
+            "feat(mods): add krokodil_koban mode\n\nChangelog: A private mode",
+        ] {
+            assert!(!worth_posting(hidden), "{hidden:?}");
+            assert_eq!(post_text(hidden), (String::new(), String::new()));
+        }
+        assert_eq!(post_text("fix(audio): align hitsounds\n\nChangelog: Hitsounds play on time."), ("Hitsounds play on time.".into(), String::new()));
+    }
+
+    #[test]
+    fn changelog_posts_keep_unicode_within_embed_limits() {
+        let message = format!("feat(player): improve navigation\n\nChangelog: {}\nChangelog: {}", "界".repeat(300), "曲".repeat(4000));
+        let (title, body) = post_text(&message);
+        assert_eq!(title.chars().count(), 256);
+        assert_eq!(body.chars().count(), 3500);
+        assert!(title.chars().all(|c| c == '界'));
+        assert!(body.starts_with("- 曲"));
+    }
+
+    #[test]
+    fn legacy_changelog_posts_preserve_player_history() {
+        let title = "Windows: the offset no longer drifts the longer the game stays open.";
+        let message = format!("{title}\n\n- Hits stay in sync\n  during long sessions\n\nCo-Authored-By: Someone <x@y>");
+        assert!(worth_posting(&message));
+        assert_eq!(post_text(&message), (title.to_string(), "- Hits stay in sync during long sessions".into()));
+        assert!(!worth_posting("chore(x): y\n\n* Fixed lint errors"));
     }
 
     #[test]
@@ -1195,7 +1329,7 @@ mod tests {
         {
             let mut a = state.accounts.lock().unwrap();
             for name in ["Ryuji", "Lynerrr"] {
-                a.users.insert(name.to_ascii_lowercase(), crate::User { name: name.into(), hash: String::new(), created: 1_700_000_000, friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None });
+                a.users.insert(name.to_ascii_lowercase(), crate::User { name: name.into(), hash: String::new(), created: 1_700_000_000, friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None, muted_until: None });
             }
         }
         let play = online::ScoreSubmit {
@@ -1215,6 +1349,8 @@ mod tests {
             play_ms: None,
             md5: None,
             pp_version: 0,
+            timing: None,
+            rolls: None,
         };
         state.scores.lock().unwrap().submit("ryuji", "Ryuji", play, 1_792_990_923).unwrap();
         let http: ureq::Agent = ureq::Agent::config_builder().build().into();

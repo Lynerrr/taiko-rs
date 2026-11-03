@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -44,10 +44,30 @@ pub enum Sfx {
     Scream,
     /// A friend's message.
     Message,
+    /// A medal landing, by tier.
+    MedalKantan,
+    MedalFutsuu,
+    MedalMuzukashii,
+    MedalOni,
+    /// A secret medal.
+    MedalUra,
+}
+
+impl Sfx {
+    /// The sound of a medal: `tier` is 1 to 4.
+    pub fn medal(tier: u8, secret: bool) -> Sfx {
+        match (secret, tier) {
+            (true, _) => Sfx::MedalUra,
+            (_, 1) => Sfx::MedalKantan,
+            (_, 2) => Sfx::MedalFutsuu,
+            (_, 3) => Sfx::MedalMuzukashii,
+            _ => Sfx::MedalOni,
+        }
+    }
 }
 
 /// One sound per `Sfx`.
-pub type Sounds = [Vec<f32>; 7];
+pub type Sounds = [Arc<[f32]>; 12];
 
 enum Cmd {
     /// `base`: the song frame the track's first sample belongs at (a partial decode).
@@ -82,6 +102,8 @@ struct Stamp {
     at: Instant,
     /// Delay from callback to the samples reaching the speakers.
     latency: Duration,
+    /// That delay as the stream reported it (`SteadyLatency`).
+    reported: Duration,
     /// The last Play / Seek the callback had applied.
     epoch: u64,
 }
@@ -110,7 +132,7 @@ impl Engine {
             config.buffer_size = cpal::BufferSize::Fixed(buffer_frames.clamp(*min, *max));
         }
 
-        let stamp = Arc::new(Mutex::new(Stamp { playing: false, frame: 0, at: Instant::now(), latency: Duration::ZERO, epoch: 0 }));
+        let stamp = Arc::new(Mutex::new(Stamp { playing: false, frame: 0, at: Instant::now(), latency: Duration::ZERO, reported: Duration::ZERO, epoch: 0 }));
         let volume = Arc::new([AtomicU32::new(0.8f32.to_bits()), AtomicU32::new(1.0f32.to_bits())]);
         let fmt = supported.sample_format();
         let open = |config: StreamConfig| -> Result<(cpal::Stream, Sender<Cmd>, Receiver<Garbage>), String> {
@@ -126,12 +148,12 @@ impl Engine {
             }?;
             Ok((stream, tx, garbage))
         };
-        let (stream, tx, garbage) = match open(config.clone()) {
+        let (stream, tx, garbage) = match open(config) {
             Ok(v) => v,
             Err(e) if config.buffer_size != cpal::BufferSize::Default => {
                 eprintln!("fixed audio buffer rejected ({e}), using device default");
                 config.buffer_size = cpal::BufferSize::Default;
-                open(config.clone())?
+                open(config)?
             }
             Err(e) => return Err(e),
         };
@@ -196,15 +218,20 @@ impl Engine {
         let _ = self.tx.send(Cmd::Sfx(s, volume));
     }
 
-    /// Replaces the hitsounds with mono samples at the device rate; `None` keeps the built-in one.
-    pub fn set_hitsounds(&self, custom: Custom) {
-        let sounds = hitsound_set(self.rate, custom);
-        let _ = self.tx.send(Cmd::Sounds(Arc::new(sounds)));
+    /// Hands over prepared mono samples at the device rate without rebuilding them here.
+    pub fn set_hitsounds(&self, sounds: Arc<Sounds>) {
+        let _ = self.tx.send(Cmd::Sounds(sounds));
     }
 
     pub fn set_volume(&self, music: f32, effects: f32) {
         self.volume[0].store(music.to_bits(), Ordering::Relaxed);
         self.volume[1].store(effects.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The output latency (ms) the clock goes by, and what the stream reports.
+    pub fn latencies_ms(&self) -> (f64, f64) {
+        let s = *self.stamp.lock().unwrap();
+        (s.latency.as_secs_f64() * 1000.0, s.reported.as_secs_f64() * 1000.0)
     }
 
     /// Song position (ms) audible at `now`, or None when nothing is playing yet.
@@ -223,12 +250,11 @@ impl Engine {
 fn pick_host() -> cpal::Host {
     // cpal only has a PipeWire host on Linux; elsewhere (WASAPI on Windows) the default host is right.
     #[cfg(all(feature = "pipewire", target_os = "linux"))]
-    if std::env::var_os("TAIKO_ALSA").is_none() {
-        if let Ok(host) = cpal::host_from_id(cpal::HostId::PipeWire) {
-            if host.default_output_device().is_some() {
-                return host;
-            }
-        }
+    if std::env::var_os("TAIKO_ALSA").is_none()
+        && let Ok(host) = cpal::host_from_id(cpal::HostId::PipeWire)
+        && host.default_output_device().is_some()
+    {
+        return host;
     }
     cpal::default_host()
 }
@@ -374,10 +400,10 @@ impl Mixer {
         }
 
         let ts = info.timestamp();
-        let latency = ts.playback.duration_since(ts.callback);
-        let latency = if cfg!(windows) { self.steady.of(latency, out.len() / self.channels, self.rate) } else { latency };
+        let reported = ts.playback.duration_since(ts.callback);
+        let latency = if cfg!(windows) { self.steady.of(reported, out.len() / self.channels, self.rate) } else { reported };
         if let Ok(mut s) = self.stamp.try_lock() {
-            *s = Stamp { playing: self.track.is_some() && !self.paused, frame: self.frame, at: now, latency, epoch: self.epoch };
+            *s = Stamp { playing: self.track.is_some() && !self.paused, frame: self.frame, at: now, latency, reported, epoch: self.epoch };
         }
 
         let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed));
@@ -455,6 +481,22 @@ impl Limiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_sounds_share_samples_but_custom_hits_keep_their_mix() {
+        let a = hitsound_set(48_000, Custom::default());
+        let b = hitsound_set(48_000, Custom::default());
+        assert!(a.iter().zip(&b).all(|(a, b)| Arc::ptr_eq(a, b)));
+        let other = hitsound_set(44_100, Custom::default());
+        assert_ne!(a[Sfx::Don as usize].len(), other[Sfx::Don as usize].len());
+        let custom = hitsound_set(48_000, Custom { don: Some(vec![0.2, 0.3]), finish: Some(vec![0.1]), ..Default::default() });
+        assert_eq!(&*custom[Sfx::Don as usize], &[0.2, 0.3]);
+        assert_eq!(&*custom[Sfx::BigDon as usize], mix(&[0.2, 0.3], &[0.1]));
+        assert_eq!(&*custom[Sfx::BigKat as usize], mix(&a[Sfx::Kat as usize], &[0.1]));
+        assert!(Arc::ptr_eq(&custom[Sfx::Kat as usize], &a[Sfx::Kat as usize]));
+        assert!(Arc::ptr_eq(&custom[Sfx::ComboBreak as usize], &a[Sfx::ComboBreak as usize]));
+        assert!(Arc::ptr_eq(&hitsound_set(48_000, Custom::default())[0], &a[0]));
+    }
 
     #[test]
     fn a_loud_mix_is_turned_down_whole_not_bent() {
@@ -785,17 +827,44 @@ fn built_in(index: usize, rate: u32) -> Vec<f32> {
 
 /// Stereo samples folded down to mono.
 pub fn mono(track: &Track) -> Vec<f32> {
-    track.samples.chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect()
+    track.samples.as_chunks::<2>().0.iter().map(|f| (f[0] + f[1]) * 0.5).collect()
 }
 
 /// The sounds (indexed by `Sfx`) at `rate`: a skin's where given, else built-in. Like osu!, a
 /// big note is the normal hit with `finish` on top.
 pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
-    let don = custom.don.unwrap_or_else(|| built_in(0, rate));
-    let kat = custom.kat.unwrap_or_else(|| built_in(1, rate));
-    let finish = custom.finish.unwrap_or_else(|| built_in(2, rate));
-    let combobreak = custom.combobreak.unwrap_or_else(|| built_in(3, rate));
-    [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), combobreak, screech(rate), chime(rate)]
+    struct Builtin {
+        sounds: Sounds,
+        finish: Arc<[f32]>,
+    }
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<u32, Arc<Builtin>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let cached = cache.lock().unwrap().get(&rate).cloned();
+    let base = cached.unwrap_or_else(|| {
+        // Build outside the cache lock: different-rate preparation need not block a lookup.
+        let don = built_in(0, rate);
+        let kat = built_in(1, rate);
+        let finish = built_in(2, rate);
+        let [kantan, futsuu, muzukashii, oni, ura] = crate::medal_sound::sounds(rate);
+        let sounds = [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), built_in(3, rate), screech(rate), chime(rate), kantan, futsuu, muzukashii, oni, ura].map(Arc::from);
+        let value = Arc::new(Builtin { sounds, finish: finish.into() });
+        cache.lock().unwrap().entry(rate).or_insert(value).clone()
+    });
+    let mut sounds = base.sounds.clone();
+    let custom_don = custom.don.is_some();
+    let custom_kat = custom.kat.is_some();
+    let custom_finish = custom.finish.is_some();
+    if let Some(don) = custom.don { sounds[Sfx::Don as usize] = don.into(); }
+    if let Some(kat) = custom.kat { sounds[Sfx::Kat as usize] = kat.into(); }
+    let finish = custom.finish.map(Arc::from).unwrap_or_else(|| base.finish.clone());
+    if custom_don || custom_finish {
+        sounds[Sfx::BigDon as usize] = mix(&sounds[Sfx::Don as usize], &finish).into();
+    }
+    if custom_kat || custom_finish {
+        sounds[Sfx::BigKat as usize] = mix(&sounds[Sfx::Kat as usize], &finish).into();
+    }
+    if let Some(combo) = custom.combobreak { sounds[Sfx::ComboBreak as usize] = combo.into(); }
+    sounds
 }
 
 /// Overtime's scream, made up rather than sampled: detuned saws sweeping up with a fast
@@ -1010,10 +1079,9 @@ fn decode_source(
             stereo.push(l);
             stereo.push(r);
         }
-        if let Some((_, len_ms)) = part {
-            if stereo.len() as f64 / 2.0 >= len_ms / 1000.0 * src_rate as f64 {
-                break;
-            }
+        if let Some((_, len_ms)) = part
+            && stereo.len() as f64 / 2.0 >= len_ms / 1000.0 * src_rate as f64 {
+            break;
         }
     }
     stereo.truncate(stereo.len().saturating_sub(tail * 2));

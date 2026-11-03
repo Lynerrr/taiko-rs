@@ -37,13 +37,17 @@ fn entry(set: usize, diff: usize, long: bool) -> Entry {
 }
 
 pub(crate) fn state() -> State {
-    let mut cfg = Config::default();
-    cfg.check_updates = false;
-    cfg.mods = Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR");
-    cfg.master_volume = 0.0;
-    cfg.animations = false;
-    // Nothing to connect to: the menus show the server as offline instead of asking it.
-    cfg.online_server = "127.0.0.1:9".into();
+    let mut cfg = Config {
+        check_updates: false,
+        mods: Mods::parse("HD,HR,DT,FL,PR,AC,WV,PY,SU,MR"),
+        master_volume: 0.0,
+        animations: false,
+        // Nothing to connect to: the menus show the server as offline instead of asking it.
+        online_server: "127.0.0.1:9".into(),
+        // Song select's headings, which most of these tests are about (one list is the default).
+        song_headings: true,
+        ..Config::default()
+    };
     if let Some(a) = std::env::var("TAIKO_LAYOUT_ACCENT").ok().and_then(|a| render::parse_accent(&a)) {
         cfg.accent = a;
     }
@@ -170,6 +174,12 @@ fn assert_every_screen_fits() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.select.collections = vec![("My Favourite Tech Maps For Practice".into(), Default::default()), ("dans".into(), Default::default())];
     check(&mut s, "select", &mut out);
+    s.cfg.main_menu = false;
+    check(&mut s, "select, legacy menu", &mut out);
+    s.open_settings();
+    check(&mut s, "settings, legacy menu", &mut out);
+    s.close_settings();
+    s.cfg.main_menu = true;
     // Each from scratch: the map this state plays once scanned may start loading meanwhile, and
     // that leaves the menu.
     for (i, item) in menu::ITEMS.iter().enumerate() {
@@ -363,6 +373,37 @@ fn assert_every_screen_fits() {
     check(&mut s, "profile failed", &mut out);
     s.profile = None;
 
+    let row = |i: usize, name: &str, section: u8| online::MedalRow {
+        id: format!("m{i}"),
+        section,
+        tier: (i % 4) as u8 + 1,
+        name: Some([name.to_string(), name.to_string(), name.to_string()]),
+        how: Some(["A very long way of saying how a medal is earned, longer than any there is".to_string(), "x".to_string(), "x".to_string()]),
+        art: vec!["#".repeat(16); 16],
+        at: i.is_multiple_of(2).then_some(1_700_000_000),
+        holders: 12,
+        have: 3,
+        need: 10,
+        ..Default::default()
+    };
+    let view = online::MedalsView {
+        players: 21,
+        earned: 123,
+        medals: (0..135).map(|i| row(i, LONG_NAME, (i % 9) as u8)).collect(),
+        collection: vec!["HD".into(), "MV".into()],
+        collection_size: 74,
+    };
+    let (_, rx) = std::sync::mpsc::channel();
+    s.medals = Some(medals::View { name: Some(LONG_NAME.into()), state: medals::State::Loading(rx), tab: 0, scroll: 0 });
+    check(&mut s, "medals loading", &mut out);
+    for tab in 0..medals::TABS {
+        s.medals = Some(medals::View { name: Some(LONG_NAME.into()), state: medals::State::Loaded(Box::new(view.clone())), tab, scroll: 0 });
+        check(&mut s, &format!("medals, tab {tab}"), &mut out);
+    }
+    s.medals = Some(medals::View { name: None, state: medals::State::Failed("this server doesn't have medals yet".into()), tab: 0, scroll: 0 });
+    check(&mut s, "medals failed", &mut out);
+    s.medals = None;
+
     s.open_collections();
     check(&mut s, "collections", &mut out);
     s.select.picker = None;
@@ -381,11 +422,28 @@ fn assert_every_screen_fits() {
             check(&mut s, &format!("settings {section}"), &mut out);
         }
     }
+    for query in ["e", "volume", "нет такой настройки", "a very long search for something that goes on past the end of the box"] {
+        s.search_settings(query.into());
+        check(&mut s, &format!("settings search {query}"), &mut out);
+    }
+    s.settings_ui.clear_search();
+    s.volume.touch(Instant::now());
+    check(&mut s, "volume lane", &mut out);
+    // Gone again: on a slow runner (macOS CI) it was still up screens later, over their buttons.
+    s.volume = crate::volume::Overlay::new();
+    let was = s.mapinfo.take();
+    let mut info = mapinfo::MapInfo::spawn(vec![(0, PathBuf::from("/nonexistent/a.osu"), 0, 0)], 1, true);
+    info.started -= Duration::from_secs(60);
+    info.total.store(123_456, std::sync::atomic::Ordering::Relaxed);
+    s.mapinfo = Some(info);
+    check(&mut s, "analysing maps", &mut out);
+    s.mapinfo.take().unwrap().hold(false);
+    s.mapinfo = was;
     let skins = vec!["built-in".into(), s.cfg.skin.clone(), "- Rafis 2017 Remake (Taiko HD) by somebody".into()];
     s.settings_ui.choices = Some(settings::Choices::new(Item::Skin, skins, Some(1), "2 installed".into()));
     check(&mut s, "skin picker", &mut out);
     s.settings_ui.choices = None;
-    for item in [Item::PresentMode, Item::AudioBuffer, Item::Accent, Item::SongsFolder, Item::WindowSize, Item::DataFolder, Item::InterfaceHides] {
+    for item in [Item::PresentMode, Item::AudioBuffer, Item::Accent, Item::SongsFolder, Item::WindowSize, Item::LetterboxSize, Item::DataFolder, Item::InterfaceHides] {
         s.open_choices(item);
         check(&mut s, &format!("{item:?} list"), &mut out);
         s.settings_ui.choices = None;
@@ -444,26 +502,59 @@ fn assert_every_screen_fits() {
     check(&mut s, "multiplayer menu", &mut out);
     s.crash = Some("--- taiko.rs crash".into());
     check(&mut s, "crash report", &mut out);
+    s.crash_sent = true;
+    check(&mut s, "crash report sent", &mut out);
     s.key(KeyCode::Escape, false, None, Instant::now(), None);
     assert!(s.crash.is_none(), "Esc closes it");
-    // Signing up with a code, and resetting a password.
+    // Signing up with a code, a forgotten password, changing it logged in, and the errors.
+    s.mp_menu.open(multiplayer::Form::Register);
+    s.mp_menu.user = "MyOwnAccountName".into();
     s.mp_menu.email = "a.rather.long.email.address@example-mail.com".into();
+    check(&mut s, "multiplayer menu register", &mut out);
     s.mp_menu.code_for = Some(multiplayer::CodeFor::Register);
     s.mp_menu.code = "123456".into();
+    s.mp_status = "code sent to g******@gmail.com: look in spam too if it isn't there".into();
     check(&mut s, "multiplayer menu code", &mut out);
+    s.mp_menu.open(multiplayer::Form::Reset);
+    check(&mut s, "multiplayer menu forgot", &mut out);
     s.mp_menu.code_for = Some(multiplayer::CodeFor::Reset);
-    s.mp_status = "code sent to g******@gmail.com (check spam too): type it and a new password, then SET NEW PASSWORD".into();
     check(&mut s, "multiplayer menu reset", &mut out);
+    s.mp_menu.open(multiplayer::Form::Main);
+    s.mp_status = online::network_error(&std::io::Error::from(std::io::ErrorKind::TimedOut));
+    s.mp_menu.online = Some(Err(s.mp_status.clone()));
+    check(&mut s, "multiplayer menu timed out", &mut out);
     s.mp_status.clear();
     // An old account without an email, with a full lobby list, and linking one.
-    s.mp_menu.code_for = None;
     s.mp_menu.account = Some("MyOwnAccountName".into());
     s.mp_menu.has_email = Some(false);
     s.mp_menu.rooms = (0..8).map(|i| online::RoomInfo { id: i, title: format!("{LONG_NAME}'s lobby {i}"), host: LONG_NAME.into(), players: 3, map: Some(entry(0, 0, true).label()), in_match: i % 2 == 0, mapguessr: false }).collect();
     check(&mut s, "multiplayer menu no email", &mut out);
-    s.mp_menu.linking = true;
+    s.mp_menu.open(multiplayer::Form::Link);
     s.mp_menu.code_for = Some(multiplayer::CodeFor::Link);
     check(&mut s, "multiplayer menu linking", &mut out);
+    s.mp_menu.has_email = Some(true);
+    s.mp_menu.open(multiplayer::Form::Reset);
+    s.mp_menu.code_for = Some(multiplayer::CodeFor::Reset);
+    check(&mut s, "multiplayer menu change password", &mut out);
+    // The account forms are translated: they fit in every language.
+    for lang in [crate::lang::Lang::Ru, crate::lang::Lang::Ja] {
+        s.cfg.language = lang;
+        let code = lang.code();
+        s.mp_menu.account = None;
+        for form in [multiplayer::Form::Main, multiplayer::Form::Register, multiplayer::Form::Reset] {
+            s.mp_menu.open(form);
+            check(&mut s, &format!("multiplayer menu {form:?} {code}"), &mut out);
+            s.mp_menu.code_for = Some(if form == multiplayer::Form::Register { multiplayer::CodeFor::Register } else { multiplayer::CodeFor::Reset });
+            check(&mut s, &format!("multiplayer menu {form:?} code {code}"), &mut out);
+        }
+        s.mp_menu.open(multiplayer::Form::Main);
+        s.mp_menu.account = Some("MyOwnAccountName".into());
+        s.mp_menu.has_email = Some(false);
+        check(&mut s, &format!("multiplayer menu lobbies {code}"), &mut out);
+        s.mp_menu.open(multiplayer::Form::Link);
+        check(&mut s, &format!("multiplayer menu linking {code}"), &mut out);
+    }
+    s.cfg.language = crate::lang::Lang::En;
     s.mp_menu = Default::default();
     s.scene = Scene::Select;
 
@@ -478,12 +569,16 @@ fn assert_every_screen_fits() {
     check(&mut s, "friends", &mut out);
     s.social.requests = vec!["SomebodyNewWhoWantsIn".into()];
     s.social.sent = vec!["AnotherPersonWithLongName".into(), "and_another_one".into()];
-    let line = |from: &str, to: &str| online::ChatLine { from: from.into(), to: to.into(), text: "a pretty long chat message that should wrap or get cut somewhere sensible, with more words".into(), at: 1_700_000_000 };
+    let line = |from: &str, to: &str| online::ChatLine { from: from.into(), to: to.into(), text: "a pretty long chat message that should wrap or get cut somewhere sensible, with more words".into(), at: 1_700_000_000, medal: None };
     s.social.chats.insert(social::key(LONG_NAME), (0..20).map(|i| if i % 2 == 0 { line(LONG_NAME, "MyOwnAccountName") } else { line("MyOwnAccountName", LONG_NAME) }).collect());
     s.social.cursor = 0;
     s.social.input = "a message being typed that is longer than the input box can show".into();
     check(&mut s, "friends chat", &mut out);
-    s.social.input.clear();
+    s.social.unread.insert("bob".into(), 12);
+    s.social.cursor = 2;
+    s.social.open_conversation();
+    check(&mut s, "friends conversation", &mut out);
+    s.social.close_conversation();
     s.social.tab = social::Tab::Players;
     s.social.online_total = 1234;
     s.social.players = Some(
@@ -494,9 +589,52 @@ fn assert_every_screen_fits() {
     check(&mut s, "friends players", &mut out);
     s.social.tab = social::Tab::Chat;
     s.social.global = (0..40).map(|i| line(&format!("{LONG_NAME}{i}"), "")).collect();
+    for (i, tier, secret) in [(33, 1, false), (35, 2, false), (36, 3, false), (37, 4, false), (39, 4, true)] {
+        let medal = online::ChatMedal { player: LONG_NAME.into(), name: [LONG_NAME.to_string(), LONG_NAME.to_string(), LONG_NAME.to_string()], tier, secret, first: true, holders: 1, players: 28 };
+        s.social.global[i] = online::ChatLine { from: online::SERVER_NAME.into(), medal: Some(medal), ..line("", "") };
+    }
+    // A run from one sender, a line calling us by name, and one of ours.
+    s.social.global[30] = line(&format!("{LONG_NAME}29"), "");
+    s.social.global[34].text = "hey MyOwnAccountName, want to play?".into();
+    s.social.global[38] = line("MyOwnAccountName", "");
     s.social.global_unread = 12;
     s.social.input = "a message being typed that is longer than the input box can show".into();
     check(&mut s, "global chat", &mut out);
+    // An admin's tab: who's on, the lobbies and the log, then a lookup over them.
+    s.admin = true;
+    s.social.admin = true;
+    s.social.input.clear();
+    let playing = online::Activity::Playing { map: entry(0, 0, true).label() };
+    s.social.overview = Some(online::AdminOverview {
+        uptime_secs: 3 * 86400 + 5 * 3600,
+        accounts: 1543,
+        sessions: 2210,
+        players: (0..5)
+            .map(|i| online::AdminPlayer {
+                name: format!("{LONG_NAME}{i}"),
+                activity: Some(if i % 3 == 0 { playing.clone() } else { online::Activity::Menus }),
+                connections: if i == 1 { 2 } else { 1 },
+                watching: None,
+                muted_until: (i == 2).then(|| crate::discord::unix_now() + 20 * 60),
+            })
+            .collect(),
+        rooms: vec![online::RoomInfo { id: 12, title: "A lobby with a very long title, yes".into(), host: LONG_NAME.into(), players: 8, map: Some(entry(0, 0, true).label()), in_match: true, mapguessr: false }],
+        log: (0..10).map(|i| format!("12:{i:02} auneu muted {LONG_NAME}{i} for 30 minutes")).collect(),
+    });
+    s.social.set_tab(social::Tab::Admin);
+    s.social.cursor = 1;
+    check(&mut s, "admin", &mut out);
+    s.social.info = Some((LONG_NAME.into(), vec!["online  joined 120d 4h ago  345 plays  email linked".into(), "BANNED  loved nominator  muted for 20m".into(), format!("same places as: {LONG_NAME}1, {LONG_NAME}2, {LONG_NAME}3")]));
+    s.social.cursor = 0;
+    s.social.input = "/mute FriendWithAVeryLongName 2h and a command longer than the box".into();
+    check(&mut s, "admin info", &mut out);
+    s.social.info = None;
+    s.social.input.clear();
+    s.social.set_tab(social::Tab::Chat);
+    s.social.cursor = 0;
+    check(&mut s, "global chat admin", &mut out);
+    s.admin = false;
+    s.social.admin = false;
     s.social.tab = social::Tab::Friends;
     s.social.input.clear();
     s.social.open = false;
@@ -883,6 +1021,62 @@ fn by_difficulty_each_is_listed_under_its_own_stars() {
 }
 
 #[test]
+fn without_headings_the_songs_are_one_list_and_by_difficulty_each_stands_alone() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let by_artist = s.select.songs();
+    let maps = by_artist.iter().map(Vec::len).sum::<usize>();
+    // Stars counting down through the library, so by difficulty its order turns round.
+    let mut info = vec![None; s.library.len()];
+    for (k, &i) in by_artist.iter().flatten().enumerate() {
+        info[i] = Some(crate::mapinfo::Info { stars: 10.0 - k as f32 * 0.25, length_ms: 60_000.0, bpm: 120.0 });
+    }
+    s.select.info = Some(std::sync::Arc::new(std::sync::Mutex::new(info.clone())));
+    s.cfg.song_headings = true;
+    let on = s.setting_value(Item::SongHeadings);
+    s.adjust_setting(Item::SongHeadings, 1, None);
+    assert_ne!(s.setting_value(Item::SongHeadings), on);
+    assert!(!s.select.headings && !s.cfg.song_headings, "the setting turns them off and is saved");
+    // Songs stay whole, in the same order, without headings: all of them listed.
+    assert_eq!(s.select.songs(), by_artist);
+    assert_eq!(s.select.sections(), vec![(String::new(), by_artist.len())]);
+    assert_eq!(s.select.open_sections(), vec![0]);
+    // By difficulty: one row per difficulty, easiest first, whatever its song.
+    s.select.set_sort(ui::SortMode::Difficulty, &s.library);
+    let rows = s.select.songs();
+    assert_eq!(rows.len(), maps);
+    assert!(rows.iter().all(|r| r.len() == 1));
+    let stars: Vec<f32> = rows.iter().map(|r| info[r[0]].unwrap().stars).collect();
+    assert!(stars.is_sorted(), "{stars:?}");
+    assert_eq!(s.select.sections().len(), 1);
+    let mut problems = Vec::new();
+    check_draw("flat list", &mut problems, |c| s.select.draw(c, &s.library, 16.0, "", &|_| None, &|_| None));
+    assert!(problems.is_empty(), "{problems:?}");
+    // Right and Left go row by row, even between difficulties of one song.
+    s.select.enter_song(0, &s.library);
+    s.select.key(KeyCode::ArrowRight, &s.library);
+    assert_eq!(s.select.selected(), Some(rows[1][0]));
+    s.select.key(KeyCode::ArrowLeft, &s.library);
+    assert_eq!(s.select.selected(), Some(rows[0][0]));
+    // Headings back on: under their star headings again, songs together within them.
+    s.adjust_setting(Item::SongHeadings, 1, None);
+    assert_eq!(s.setting_value(Item::SongHeadings), on);
+    assert!(s.select.headings && s.cfg.song_headings);
+    assert!(s.select.sections().len() > 1 && s.select.sections().iter().all(|x| !x.0.is_empty()));
+    assert!(s.select.songs().len() < maps);
+}
+
+#[test]
+fn the_song_headings_setting_is_kept() {
+    let mut cfg = crate::config::Config::default();
+    assert!(!cfg.song_headings, "one list by default");
+    cfg.song_headings = true;
+    assert!(crate::config::Config::parse_text(&cfg.to_text()).song_headings);
+    assert!(!crate::config::Config::parse_text("").song_headings);
+}
+
+#[test]
 fn the_sort_button_lists_the_sorts() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
@@ -901,8 +1095,8 @@ fn the_sort_button_lists_the_sorts() {
     assert_eq!(s.cfg.sort, "date added");
 }
 
-#[test]
-fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
+/// Song select sorted by status, its songs under three headings.
+fn select_under_headings() -> State {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = Scene::Select;
@@ -913,47 +1107,136 @@ fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
     s.select.sort = ui::SortMode::Status;
     s.select.refilter(&s.library);
     assert!(s.select.sections().len() >= 3);
+    s
+}
+
+fn draw_select(s: &mut State) {
+    check_draw("song select", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None, &|_| Some("SS")));
+}
+
+#[test]
+fn headings_open_and_close_by_click_and_scrolling_never_changes_them() {
+    let mut s = select_under_headings();
     // The heading holding the selection is open, the rest closed.
     assert_eq!(s.select.open_sections(), vec![0]);
     // A click opens another without selecting anything, and closes it again.
     let at = s.select.cursor();
-    s.select.click_section(1);
+    s.select.click_section(1, &s.library);
     assert_eq!(s.select.open_sections(), vec![0, 1]);
     assert_eq!(s.select.cursor(), at);
-    s.select.click_section(1);
+    s.select.click_section(1, &s.library);
     assert_eq!(s.select.open_sections(), vec![0]);
     // The open one closes too, with the selection in it, and opens again.
-    s.select.click_section(0);
+    s.select.click_section(0, &s.library);
     assert!(s.select.open_sections().is_empty());
-    check_draw("sections closed", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None, &|_| Some("SS")));
-    s.select.click_section(0);
+    draw_select(&mut s);
+    s.select.click_section(0, &s.library);
     assert_eq!(s.select.open_sections(), vec![0]);
-    // The wheel and right-click scrolling stay in the open heading, however far they go.
-    s.select.step(-50, &s.library, false);
-    s.select.step(500, &s.library, false);
-    assert_eq!(s.select.open_sections(), vec![0], "the wheel opened nothing");
+    // The wheel and right-click scrolling go all the way, and change neither.
+    draw_select(&mut s);
+    s.select.scroll_by(500, &s.library);
     s.select.scroll_to(1000.0, &s.library);
-    assert_eq!(s.select.open_sections(), vec![0], "right-click scrolling opened nothing");
-    let in_first = |s: &State| s.select.current_song().is_some_and(|g| g < s.select.sections_end(0));
-    assert!(in_first(&s), "and the selection never left it");
     s.select.scroll_to(-1000.0, &s.library);
-    assert!(in_first(&s));
-    // The arrow keys, past the last song listed, open the next heading and go on into it.
-    s.select.step(500, &s.library, false);
-    let _ = s.select.key(KeyCode::ArrowDown, &s.library);
-    for _ in 0..20 {
+    assert_eq!(s.select.open_sections(), vec![0]);
+    assert_eq!(s.select.cursor(), at, "and the selection stays");
+    // The arrow keys, past the last song listed, open the next heading and go on into it. It
+    // opened for the selection, so it closes behind it.
+    for _ in 0..40 {
         let _ = s.select.key(KeyCode::ArrowDown, &s.library);
     }
     let open = s.select.open_sections();
-    assert!(open.len() == 1 && open[0] > 0, "the keys went on into the next heading, and the one they left closed: {open:?}");
-    // Moving the selection to another heading that is open closes the one it leaves.
-    s.select.click_section(0);
-    assert_eq!(s.select.open_sections().len(), 2);
-    s.select.scroll_to(-1000.0, &s.library);
-    let open = s.select.open_sections();
-    assert!(open.len() == 1 && open[0] == 0, "scrolling back up left the other heading and closed it: {open:?}");
+    assert!(open.contains(&0), "the player's own heading stays open: {open:?}");
+    assert!(open.len() == 2 && open[1] > 1, "only the last heading the keys went into is open too: {open:?}");
     // It all draws.
-    check_draw("sections", &mut Vec::new(), |c| s.select.draw(c, &s.library, 16.0, "", &|_| None, &|_| Some("SS")));
+    draw_select(&mut s);
+}
+
+#[test]
+fn a_heading_the_player_opened_stays_open_when_the_selection_leaves() {
+    let mut s = select_under_headings();
+    s.select.click_section(1, &s.library);
+    let first_of_next = s.select.sections_end(0) as i64;
+    s.select.go_to_song(first_of_next, &s.library);
+    assert_eq!(s.select.open_sections(), vec![1], "the first only opened for the selection");
+    s.select.go_to_song(first_of_next + s.select.sections()[1].1 as i64, &s.library);
+    assert_eq!(s.select.open_sections(), vec![1, 2], "the player's stays when the selection leaves");
+}
+
+#[test]
+fn letters_are_dividers_and_new_ones_start_open() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let n = s.select.sections().len();
+    assert_eq!(s.select.open_sections(), (0..n).collect::<Vec<_>>(), "sorted by artist");
+    s.select.click_section(0, &s.library);
+    assert!(s.select.open_sections().len() < n, "closing one is up to the player");
+}
+
+#[test]
+fn a_search_opens_every_heading_and_clearing_it_puts_them_back() {
+    let mut s = select_under_headings();
+    assert_eq!(s.select.open_sections(), vec![0]);
+    s.select.filter = "song".into();
+    s.select.refilter(&s.library);
+    let n = s.select.sections().len();
+    assert_eq!(s.select.open_sections(), (0..n).collect::<Vec<_>>());
+    s.select.filter.clear();
+    s.select.refilter(&s.library);
+    assert_eq!(s.select.open_sections(), vec![0]);
+}
+
+#[test]
+fn the_list_scrolls_on_its_own_and_comes_back_for_the_selection() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    draw_select(&mut s);
+    let (at, top) = (s.select.cursor(), s.select.list_scroll());
+    // The wheel moves the list only, and walks past no difficulty.
+    s.select.scroll_by(2, &s.library);
+    draw_select(&mut s);
+    assert_eq!(s.select.cursor(), at);
+    assert!(s.select.list_scroll() > top, "{} vs {top}", s.select.list_scroll());
+    // Right-dragging to the bottom reaches the end of the whole list.
+    s.select.scroll_to(1000.0, &s.library);
+    draw_select(&mut s);
+    assert_eq!(s.select.cursor(), at);
+    assert_eq!(s.select.list_scroll(), s.select.list_end());
+    // The heading passing by shows beside the pointer.
+    s.select.scrubbing = Some(300.0);
+    draw_select(&mut s);
+    s.select.scrubbing = None;
+    // An arrow key goes back to the selection.
+    let _ = s.select.key(KeyCode::ArrowDown, &s.library);
+    draw_select(&mut s);
+    assert_ne!(s.select.list_scroll(), s.select.list_end());
+}
+
+#[test]
+fn letting_go_of_the_list_leaves_it_there_and_selects_nothing() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    draw_select(&mut s);
+    let at = s.select.cursor();
+    s.select.drag_to(-120.0);
+    draw_select(&mut s);
+    let held = s.select.list_scroll();
+    s.select.drag_end(&s.library);
+    draw_select(&mut s);
+    assert_eq!(s.select.cursor(), at);
+    assert_eq!(s.select.list_scroll(), held, "stayed where it was let go");
+}
+
+#[test]
+fn a_right_click_off_the_rows_does_nothing() {
+    let mut s = state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.right_press = Some((700.0, 400.0, None));
+    let at = s.select.cursor();
+    s.right_button(false);
+    assert_eq!(s.select.cursor(), at);
 }
 
 #[test]
@@ -1083,4 +1366,60 @@ fn converts_stay_listed_when_the_settings_say_so() {
     s.select.keep_converts(&s.library, true);
     assert!(s.select.show_converts);
     assert_eq!(s.select.songs().len(), 2);
+}
+
+#[test]
+fn empty_update_notes_stay_closed_but_manual_view_stays_open() {
+    let mut s = state();
+    s.pending_changelog = Some(changelog::View::loaded(Vec::new()));
+    s.poll_changelog();
+    assert!(s.pending_changelog.is_none());
+    assert!(s.changelog.is_none());
+
+    let mut manual = changelog::View::loaded(Vec::new());
+    manual.after_update = false;
+    s.changelog = Some(manual);
+    s.poll_changelog();
+    let view = s.changelog.as_ref().expect("manual empty results remain visible");
+    assert!(!view.after_update);
+    assert!(matches!(&view.state, changelog::State::Loaded(changes) if changes.is_empty()));
+}
+
+#[test]
+fn update_notes_wait_for_the_guide_instead_of_covering_it() {
+    let mut s = state();
+    let change = changelog::parse("fix(audio): align hitsounds\n\nChangelog: Hitsounds stay in sync.", "2026-10-26").unwrap();
+    s.pending_changelog = Some(changelog::View::loaded(vec![change]));
+    s.guide = Some(guide::OFFSET_PAGE);
+    s.guide_read = [true; guide::PAGES];
+    s.poll_changelog();
+    assert!(s.changelog.is_none(), "nothing may cover the guide: its keys would close it unseen");
+    assert!(s.pending_changelog.is_some(), "the notes aren't lost");
+
+    s.guide = None;
+    s.guide_after = Some(guide::OFFSET_PAGE + 1);
+    s.poll_changelog();
+    assert!(s.changelog.is_none(), "calibrating from the guide isn't the end of it");
+
+    s.guide_after = None;
+    s.poll_changelog();
+    assert!(s.changelog.is_some());
+}
+
+#[test]
+fn update_notes_open_when_ready_without_replacing_a_manual_view() {
+    let mut s = state();
+    let change = changelog::parse("fix(audio): align hitsounds\n\nChangelog: Hitsounds stay in sync.", "2026-10-26").unwrap();
+    s.pending_changelog = Some(changelog::View::loaded(vec![change.clone()]));
+    s.poll_changelog();
+    assert!(s.pending_changelog.is_none());
+    assert!(s.changelog.as_ref().is_some_and(|view| view.after_update));
+
+    let mut manual = changelog::View::loaded(Vec::new());
+    manual.after_update = false;
+    s.changelog = Some(manual);
+    s.pending_changelog = Some(changelog::View::loaded(vec![change]));
+    s.poll_changelog();
+    assert!(s.pending_changelog.is_none());
+    assert!(!s.changelog.as_ref().unwrap().after_update);
 }

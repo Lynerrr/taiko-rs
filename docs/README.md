@@ -122,11 +122,11 @@ Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
 | D / F / J / K | left rim (kat) / left centre (don) / right centre / right rim |
 | Enter, ↑/↓, ←/→ | play, select difficulty, jump between sets |
 | type, Backspace | search |
-| Tab | switch between the SONGS and SETTINGS tabs |
+| Tab | switch between the songs and settings |
 | F1 / the Mods button | mod select (song select; the host in a multiplayer lobby) |
 | [ / ] (Shift: ×5) | speed (rate) −/+ 0.05× on song select; host sets the match rate in the lobby |
 | F5 / F6 (rebindable) | previous / next playfield resolution preset, anywhere |
-| right mouse (hold and move, song select) | fly through the song list like osu!: the pointer's height over the list picks the song that far through it |
+| right mouse (hold and move, song select) | fly through the song list like osu!: the pointer's height is that far through the whole list, and the selection stays |
 | right click on a song / difficulty | menu: hide that difficulty or the whole song from the list (only in taiko.rs, files stay; Settings → *Hidden maps* brings them all back) |
 | left mouse (hold and drag, song select) | drag the song list up and down; a click without dragging selects / plays as before |
 | mouse (in game) | drag inside the playfield to move it, drag its edges/corners to resize it, wheel to scale it |
@@ -137,8 +137,9 @@ Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
 | Ctrl+← / → | seek the song select preview ±5 s |
 | Shift+Enter | play the selected map from the start point picked on its timeline |
 | Ctrl+Enter / click the autoplay box | fullscreen preview (song select); P in the multiplayer lobby |
-| Alt + wheel | master volume (anywhere) |
-| no key by default: Settings > Hotkeys | apply the live offset suggestion to this map (with Shift: to the global offset) |
+| Alt + wheel | overall volume (anywhere); move the pointer onto the music or hitsounds note to turn that one instead, without Alt, or pick it with Alt + Left/Right |
+| Alt + Up/Down | turns the volume picked like Alt + wheel (held, it keeps turning) |
+| no key by default: Settings > Input | apply the live offset suggestion to this map (with Shift: to the global offset) |
 | `` ` `` or Ctrl+R | restart map (Ctrl+R also works paused and on the results screen) |
 | Esc (song select) | clear search / quit |
 | - / = (Shift: ×5) | offset −/+ 1 ms: this map's own during a song or on its results, else the global one |
@@ -148,7 +149,13 @@ Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
 | F10 / F11 | FPS overlay / fullscreen (the game starts fullscreen; F11 is remembered) |
 
-**Mouse:** everything can also be clicked. The top tabs switch screens; in the song list the
+**Letterbox:** Settings > Video > *Letterbox* runs the whole game at a resolution of your own in
+fullscreen, black all round, moved anywhere on the screen. It lists every mode the monitor reports,
+custom ones from the graphics driver included, and any size can be typed.
+
+**Mouse:** everything can also be clicked. The back button at the top leaves a screen and the
+buttons along the bottom of song select open the others (Settings > System > *Legacy menu* brings
+back the old tabs, without the main menu); in the song list the
 first click selects a song or difficulty and clicking the selected difficulty plays it; settings
 rows select on the first click and toggle/open on the second, and `<` / `>` step values; the pause
 menu follows the pointer; results, calibration and the multiplayer menu, lobby and results have
@@ -177,10 +184,12 @@ you which way to move the offset.
 Songs are grouped: each beatmap set is one row, and the selected set expands to its difficulties,
 ordered by star rating. Star ratings are osu!'s own (via [rosu-pp](https://github.com/MaxOhn/rosu-pp),
 a precise port of lazer's calculator, converts included) at the current speed rate, coloured like
-osu!'s spectrum and calculated in the background for the selected song. Up/Down (and the wheel) move through the
+osu!'s spectrum and calculated in the background for the selected song. Up/Down move through the
 selected song's difficulties and on into the next or previous song; Left/Right, PgUp/PgDn (5 songs)
 and Home/End jump between songs. A song opens on the difficulty you last picked in it, else its
-hardest. Hold the right mouse button to fly through the list like osu!. The selected map's background fills the screen behind the menu, its music plays from the
+hardest. The wheel, the scrollbar, dragging the list and holding the right mouse button all move
+the list without touching the selection, through every heading; a click picks a song, and any
+navigation key or the button at the bottom of the list goes back to the selected one. The selected map's background fills the screen behind the menu, its music plays from the
 map's preview point (looping), and the panel on the right shows its details (OD, BPM, length,
 note counts) above a live autoplay preview synced to that music, and a difficulty timeline like
 lazer's song progress graph: osu!'s strain over the whole map (kiai tinted, preview point and

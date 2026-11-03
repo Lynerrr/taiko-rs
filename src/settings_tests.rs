@@ -7,6 +7,23 @@ use super::*;
 static FOLDERS: Mutex<()> = Mutex::new(());
 
 #[test]
+fn volume_changes_debounce_persistence_and_clamped_turns_do_not_schedule_writes() {
+    let mut s = layout_tests::state();
+    s.cfg.master_volume = 1.0;
+    s.turn_volume(1);
+    assert!(s.volume_save_at.is_none());
+    s.turn_volume(-1);
+    assert!(s.cfg.master_volume < 1.0);
+    let first = s.volume_save_at.unwrap();
+    s.turn_volume(-1);
+    assert!(s.volume_save_at.unwrap() >= first);
+    s.cfg.master_volume = 0.0;
+    s.volume_save_at = None;
+    s.turn_volume(-1);
+    assert!(s.volume_save_at.is_none());
+}
+
+#[test]
 fn ctrl_o_opens_settings_from_anywhere_and_closes_them() {
     let press = |s: &mut State| {
         s.modifiers_ctrl = true;
@@ -177,6 +194,7 @@ fn map_offsets_reset_only_on_the_second_press() {
 fn the_guide_turns_its_pages_and_takes_the_keys() {
     let key = |s: &mut State, code| s.key_inner(code, false, None, Instant::now(), None);
     let mut s = layout_tests::state();
+    s.cfg.guide_seen = true;
     s.guide = Some(0);
     key(&mut s, KeyCode::F2);
     assert_eq!(s.guide, Some(0), "other keys wait");
@@ -201,11 +219,75 @@ fn the_guide_turns_its_pages_and_takes_the_keys() {
 fn the_guide_counts_as_seen_once_closed_and_old_configs_havent_seen_it() {
     assert!(!Config::default().guide_seen, "a config without the line: not seen");
     let mut s = layout_tests::state();
+    s.guide_read[guide::OFFSET_PAGE] = true;
     s.guide = Some(2);
     s.guide_action(guide::Action::Next);
     assert!(!s.cfg.guide_seen, "still reading");
     s.guide_action(guide::Action::Close);
     assert!(s.cfg.guide_seen);
+}
+
+/// As if the page has been up for `ms`.
+fn guide_up_for(s: &mut State, ms: u64) {
+    s.guide_shown = s.guide.map(|p| (p, Instant::now() - Duration::from_millis(ms)));
+    s.tick_guide();
+}
+
+#[test]
+fn a_new_player_cant_leave_the_guide_without_reading_it() {
+    let key = |s: &mut State, code| s.key_inner(code, false, None, Instant::now(), None);
+    let mut s = layout_tests::state();
+    s.guide = Some(0);
+    s.tick_guide();
+    for code in [KeyCode::Escape, KeyCode::Enter] {
+        key(&mut s, code);
+        assert_eq!(s.guide, Some(0), "{code:?} waits");
+    }
+    s.guide_action(guide::Action::Page(3));
+    assert_eq!(s.guide, Some(0), "so do the dots");
+    assert!(!s.cfg.guide_seen);
+
+    guide_up_for(&mut s, 5000);
+    key(&mut s, KeyCode::Escape);
+    assert_eq!(s.guide, Some(guide::OFFSET_PAGE), "skipping still shows the offset");
+    s.tick_guide();
+    key(&mut s, KeyCode::Escape);
+    assert_eq!(s.guide, Some(guide::OFFSET_PAGE), "and it waits too");
+    key(&mut s, KeyCode::ArrowLeft);
+    assert_eq!(s.guide, Some(0), "going back is free");
+    key(&mut s, KeyCode::Enter);
+    assert_eq!(s.guide, Some(guide::OFFSET_PAGE), "a page already read doesn't wait again");
+
+    guide_up_for(&mut s, 5000);
+    key(&mut s, KeyCode::Escape);
+    assert_eq!(s.guide, None);
+    assert!(s.cfg.guide_seen);
+}
+
+#[test]
+fn the_guide_can_calibrate_straight_away_and_doesnt_wait_when_seen_before() {
+    let mut s = layout_tests::state();
+    s.guide = Some(guide::OFFSET_PAGE);
+    s.tick_guide();
+    s.guide_action(guide::Action::Calibrate);
+    assert_eq!(s.guide, None, "the hold is on leaving, not on calibrating");
+
+    let mut s = layout_tests::state();
+    s.cfg.guide_seen = true;
+    s.guide = Some(0);
+    s.tick_guide();
+    s.guide_action(guide::Action::Close);
+    assert_eq!(s.guide, None);
+}
+
+#[test]
+fn the_clock_of_the_guide_waits_for_the_splash() {
+    let mut s = layout_tests::state();
+    s.guide = Some(0);
+    s.splash = splash::Splash::new(Some(48000));
+    assert!(s.splash.is_some());
+    s.tick_guide();
+    assert_eq!(s.guide_shown, None);
 }
 
 #[test]
@@ -417,8 +499,7 @@ fn calibrating_by_ear_shows_no_notes_and_nothing_about_the_hits() {
     // 20 hits, all 37 ms early, well into the song.
     game.stats.errors = vec![-37.0; 20];
     game.time = game.map.notes[10].time;
-    let mut c = Canvas::default();
-    c.audit = true;
+    let mut c = Canvas { audit: true, ..Canvas::default() };
     calibrate::draw_by_ear(&mut c, game);
     let texts: Vec<&str> = c.texts.iter().map(|(_, t)| t.as_str()).collect();
     assert!(!texts.is_empty());
@@ -557,6 +638,41 @@ fn ticking_interface_parts_keeps_the_list_open() {
     assert!(!s.cfg.interface_hides.has(hud::Part::HitAnimation));
     assert_eq!(s.settings_ui.choices.as_ref().map(|c| c.cursor), Some(k));
     assert!(s.settings_ui.choices.as_ref().unwrap().names[k].starts_with("[ ]"));
+}
+
+#[test]
+fn star_ratings_arriving_dont_change_the_song_thats_playing() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    for (other_audio, stays) in [(false, false), (true, true)] {
+        s.select.jump_songs(1, &s.library);
+        let entered = s.select.selected().unwrap();
+        let hardest = s.select.selected_set()[0];
+        assert_ne!(hardest, entered);
+        let audio = s.library[entered].meta.audio_file.clone();
+        s.library[hardest].meta.audio_file = if other_audio { format!("other {audio}") } else { audio };
+        let stars = |i: usize| Some(if i == hardest { 5.0 } else { i as f32 / 100.0 });
+        s.select.sort_selected_set(&s.library, &stars);
+        assert_eq!(s.select.selected(), Some(if stays { entered } else { hardest }));
+    }
+}
+
+#[test]
+fn an_old_map_without_ids_in_its_file_goes_by_its_folders_set() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // Ranked, with no IDs in the .osu: nothing in old formats, -1 and 0 in guest difficulties.
+    s.library[0].meta.set_id = None;
+    s.library[0].meta.beatmap_id = None;
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("NOT SUBMITTED"));
+    s.library[0].path = "/songs/210 Taiko no Tatsujin - Saitama2000/map [Oni].osu".into();
+    assert_eq!(s.map_status(0), None, "nothing known yet");
+
+    s.set_status_tx.send((210, Some("ranked".into()))).unwrap();
+    s.poll_set_status(Instant::now());
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("RANKED"));
+    assert_eq!(s.select.status.get(&s.library[0].path), Some(&search::RANKED));
+    assert_eq!(map_gives_pp(&s.library[0], &s.set_status, &s.db_status, &s.select.server_loved), Some(true));
 }
 
 #[test]
@@ -797,7 +913,7 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     assert!(s.preview.panel_bottom < edge - 4.0, "{} vs {edge}", s.preview.panel_bottom);
     assert!(s.leaderboard.len() > rows_before, "{} rows, {rows_before} before", s.leaderboard.len());
 
-    // Settings > Gameplay puts the whole layout back.
+    // Settings > Library puts the whole layout back.
     s.cfg.song_list_share = ui::LIST_SHARE.1;
     s.open_settings();
     s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::SongSelectLayout).unwrap();
@@ -863,4 +979,382 @@ fn the_results_scroll_down_to_the_pp_and_back() {
     assert_eq!(scroll(&s), ui::RESULTS_SCROLL);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(s.hits.iter().any(|h| h.hit == render::Hit::Key(KeyCode::PageUp)), "and back up");
+}
+
+#[test]
+fn one_click_on_a_main_menu_note_opens_it() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    s.click(render::Hit::MenuItem(4), None);
+    let m = s.main_menu.as_ref().unwrap();
+    assert_eq!(m.current(), menu::Item::Settings);
+    assert!(m.is_leaving(), "no second click at the circle needed");
+}
+
+fn settings_screen() -> State {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = None;
+    s.open_settings();
+    s
+}
+
+fn type_key(s: &mut State, code: KeyCode, text: &str) {
+    s.key(code, false, Some(text), Instant::now(), None);
+}
+
+#[test]
+fn typing_in_the_settings_searches_and_escape_clears_before_it_leaves() {
+    let mut s = settings_screen();
+    for (code, text) in [(KeyCode::KeyM, "m"), (KeyCode::KeyU, "u"), (KeyCode::KeyS, "s"), (KeyCode::KeyI, "i"), (KeyCode::KeyC, "c")] {
+        type_key(&mut s, code, text);
+    }
+    assert_eq!(s.settings_ui.search, "music");
+    assert_eq!(s.settings_ui.item(), Item::MusicVolume);
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // The rows work as usual, and it's the results the arrows go through.
+    s.key(KeyCode::ArrowRight, false, None, Instant::now(), None);
+    s.key(KeyCode::Backspace, false, None, Instant::now(), None);
+    assert_eq!(s.settings_ui.search, "musi", "not the row's reset");
+    s.key(KeyCode::Escape, false, None, Instant::now(), None);
+    assert!(s.settings_ui.search.is_empty());
+    assert!(matches!(s.scene, Scene::Settings { .. }), "still here");
+    s.key(KeyCode::Escape, false, None, Instant::now(), None);
+    assert!(!matches!(s.scene, Scene::Settings { .. }));
+}
+
+#[test]
+fn space_and_punctuation_keep_their_jobs_until_something_is_typed() {
+    let mut s = settings_screen();
+    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::HalfResolution).unwrap();
+    let was = s.cfg.half_resolution;
+    type_key(&mut s, KeyCode::Space, " ");
+    assert_ne!(s.cfg.half_resolution, was, "space works the row");
+    assert!(s.settings_ui.search.is_empty());
+    type_key(&mut s, KeyCode::Minus, "-");
+    assert!(s.settings_ui.search.is_empty());
+    assert_eq!(s.hotkey_place(KeyCode::Minus), Some(keys::Place::Other), "the offset's hotkey still works");
+    type_key(&mut s, KeyCode::KeyF, "f");
+    type_key(&mut s, KeyCode::Space, " ");
+    assert_eq!(s.settings_ui.search, "f ");
+    assert_eq!(s.hotkey_place(KeyCode::Minus), None, "now it types");
+}
+
+#[test]
+fn the_wheel_scrolls_the_settings_and_stays_in_the_section() {
+    let mut s = settings_screen();
+    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::Key(0)).unwrap();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let (cursor, section) = (s.settings_ui.cursor, s.settings_ui.section());
+    s.wheel(-1000);
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert_eq!(s.settings_ui.cursor, cursor);
+    assert_eq!(s.settings_ui.section(), section);
+    // Down to the last rows, which are now there to click.
+    let last = settings::ITEMS.iter().rposition(|(sec, _)| *sec == settings::ITEMS[cursor].0).unwrap();
+    assert!(s.hits.iter().any(|h| h.hit == render::Hit::SettingRow(last)));
+}
+
+#[test]
+fn one_click_works_a_row_and_every_hotkey_has_one() {
+    let mut s = settings_screen();
+    let row = settings::ITEMS.iter().position(|(_, it)| *it == Item::LegacyMenu).unwrap();
+    let was = s.cfg.main_menu;
+    s.click(render::Hit::SettingRow(row), None);
+    assert_ne!(s.cfg.main_menu, was);
+    for i in 0..keys::Hotkey::ALL.len() {
+        assert!(settings::ITEMS.iter().any(|(_, it)| *it == Item::Hotkey(i)), "{:?}", keys::Hotkey::ALL[i]);
+    }
+    for (section, _) in settings::ITEMS {
+        assert!(settings::SECTIONS.iter().any(|(name, _)| *name == section), "{section}");
+    }
+}
+
+#[test]
+fn a_volume_is_dragged_along_its_bar_and_saved_on_letting_go() {
+    let mut s = settings_screen();
+    let row = settings::ITEMS.iter().position(|(_, it)| *it == Item::MusicVolume).unwrap();
+    s.settings_ui.cursor = row;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let bar = s.hits.iter().find(|h| h.hit == render::Hit::SettingLevel(row)).expect("a bar").rect;
+    let y = bar[1] + bar[3] / 2.0;
+    point(&mut s, bar[0] + 5.0, y);
+    s.click(render::Hit::SettingLevel(row), None);
+    assert_eq!(s.cfg.music_volume, 0.0);
+    point(&mut s, bar[0] + bar[2] / 2.0, y);
+    s.mouse_moved(s.mouse.0, s.mouse.1);
+    assert!((s.cfg.music_volume - 0.5).abs() < 0.02, "{}", s.cfg.music_volume);
+    s.mouse_button(false, None);
+    assert_eq!(s.settings_level, None);
+}
+
+#[test]
+fn alt_wheel_turns_the_note_under_the_pointer_and_the_lane_then_needs_no_alt() {
+    let mut s = settings_screen();
+    s.cfg.master_volume = 0.5;
+    s.cfg.fx_volume = 0.5;
+    s.mouse = (-1000.0, -1000.0);
+    s.modifiers_alt = true;
+    s.wheel(1);
+    assert_eq!(s.cfg.master_volume, 0.55, "the master first");
+    s.modifiers_alt = false;
+    // Hovering the hitsounds note picks it, before the wheel moves at all.
+    let (w, h) = (s.window_w, s.window_h);
+    let width = render::VIRTUAL_HEIGHT * w / h;
+    point(&mut s, width - 40.0, 400.0);
+    s.mouse_moved(s.mouse.0, s.mouse.1);
+    assert_eq!(s.volume.selected, volume::HITSOUNDS);
+    s.wheel(-2);
+    assert_eq!(s.cfg.fx_volume, 0.4, "no Alt needed over the lane");
+    assert_eq!(s.cfg.master_volume, 0.55);
+    // Moved away, Alt + wheel is the overall volume again.
+    point(&mut s, 10.0, 10.0);
+    s.modifiers_alt = true;
+    s.wheel(1);
+    assert_eq!(s.cfg.master_volume, 0.6);
+    assert_eq!(s.cfg.fx_volume, 0.4);
+}
+
+#[test]
+fn alt_up_and_down_turn_the_volume_picked_with_alt_left_and_right() {
+    let press = |s: &mut State, code: KeyCode, repeat: bool| s.key_inner(code, repeat, None, Instant::now(), None);
+    for scene in [Scene::Select, Scene::Download] {
+        let mut s = settings_screen();
+        s.scene = scene;
+        s.cfg.master_volume = 0.5;
+        s.cfg.music_volume = 0.5;
+        s.mouse = (-1000.0, -1000.0);
+        s.modifiers_alt = true;
+        press(&mut s, KeyCode::ArrowUp, false);
+        assert_eq!(s.cfg.master_volume, 0.55, "the overall volume first");
+        // Held down, it keeps turning.
+        press(&mut s, KeyCode::ArrowDown, false);
+        press(&mut s, KeyCode::ArrowDown, true);
+        press(&mut s, KeyCode::ArrowDown, true);
+        assert_eq!(s.cfg.master_volume, 0.4);
+        // Alt+Left picks the music, which Up then turns.
+        press(&mut s, KeyCode::ArrowLeft, false);
+        assert_eq!(s.volume.selected, volume::MUSIC);
+        press(&mut s, KeyCode::ArrowUp, false);
+        assert_eq!((s.cfg.music_volume, s.cfg.master_volume), (0.55, 0.4));
+        // Without Alt the arrows are the screen's again.
+        s.modifiers_alt = false;
+        press(&mut s, KeyCode::ArrowUp, false);
+        assert_eq!((s.cfg.music_volume, s.cfg.master_volume), (0.55, 0.4));
+    }
+}
+
+#[test]
+fn a_lane_coming_up_under_a_parked_pointer_turns_the_overall_volume() {
+    let mut s = settings_screen();
+    s.cfg.master_volume = 0.5;
+    s.cfg.fx_volume = 0.5;
+    let width = render::VIRTUAL_HEIGHT * s.window_w / s.window_h;
+    point(&mut s, width - 40.0, 400.0);
+    s.modifiers_alt = true;
+    s.wheel(1);
+    s.wheel(1);
+    assert_eq!(s.cfg.master_volume, 0.6);
+    assert_eq!(s.cfg.fx_volume, 0.5);
+}
+
+#[test]
+fn the_tabs_only_come_back_with_the_legacy_menu() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = None;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let tab = |s: &State| s.hits.iter().any(|h| matches!(h.hit, render::Hit::Tab(i) if h.rect[1] < 50.0 && i < 4));
+    assert!(!tab(&s), "no tabs on top");
+    assert!(s.hits.iter().any(|h| h.hit == render::Hit::ToMenu));
+    assert!(s.hits.iter().any(|h| h.hit == render::Hit::Tab(3)), "download along the bottom");
+    s.click(render::Hit::ToMenu, None);
+    assert!(s.on_menu());
+
+    s.click(render::Hit::SettingRow(settings::ITEMS.iter().position(|(_, it)| *it == Item::LegacyMenu).unwrap()), None);
+    assert!(!s.cfg.main_menu);
+    assert!(s.main_menu.is_none(), "the menu goes at once");
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(tab(&s), "the old tabs");
+    assert!(!s.hits.iter().any(|h| h.hit == render::Hit::ToMenu));
+}
+
+#[test]
+fn the_back_button_of_a_screen_does_what_esc_does() {
+    let mut s = settings_screen();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(s.hits.iter().any(|h| h.hit == render::Hit::Key(KeyCode::Escape)));
+    s.click(render::Hit::Key(KeyCode::Escape), None);
+    assert!(matches!(s.scene, Scene::Select));
+}
+
+#[test]
+fn letterbox_lists_what_the_monitor_reports_custom_ones_too() {
+    let mut s = settings_screen();
+    s.monitor_size = (2560, 1440);
+    s.monitor_modes = vec![(2560, 1440), (1337, 777), (1920, 1080)];
+    assert!(s.letterbox_sizes().contains(&(1337, 777)), "a size only the driver knows");
+    s.open_choices(Item::LetterboxSize);
+    let list = s.settings_ui.choices.take().unwrap();
+    let at = list.names.iter().position(|n| n.starts_with("1337 x 777")).expect("listed");
+    s.open_choices(Item::LetterboxSize);
+    s.pick_choice(at);
+    assert_eq!(s.cfg.letterbox_size, (1337, 777));
+    // Or typed, as long as it fits.
+    s.apply_typed(Item::LetterboxSize, "1111x600").unwrap();
+    assert_eq!(s.cfg.letterbox_size, (1111, 600));
+    assert!(s.apply_typed(Item::LetterboxSize, "3840x2160").is_err());
+    assert!(s.apply_typed(Item::LetterboxSize, "100x100").is_err());
+    assert_eq!(s.cfg.letterbox_size, (1111, 600));
+}
+
+#[test]
+fn with_letterbox_the_game_is_its_own_size_and_the_pointer_lands_on_it() {
+    let mut s = settings_screen();
+    s.set_window(1920.0, 1080.0);
+    s.fullscreen = true;
+    s.cfg.letterbox = true;
+    s.cfg.letterbox_size = (1280, 720);
+    assert_eq!(s.sync_letterbox(), Some([320, 180, 1280, 720]));
+    assert_eq!((s.window_w, s.window_h), (1280.0, 720.0), "all of the game goes by this");
+    assert_eq!(s.to_game(320.0, 180.0), (0.0, 0.0), "the game's corner");
+    assert_eq!(s.to_game(100.0, 100.0), (-220.0, -80.0), "a bar: off the game, so nothing's there");
+    let (x, y) = s.to_game(320.0 + 640.0, 180.0 + 360.0);
+    s.mouse_moved(x, y);
+    let (vx, vy) = s.mouse_virtual();
+    assert!((vx - render::VIRTUAL_HEIGHT * 640.0 / 720.0).abs() < 0.01 && (vy - render::VIRTUAL_HEIGHT / 2.0).abs() < 0.01, "the middle of the game: {vx}, {vy}");
+    assert_eq!(s.setting_value(Item::WindowSize), "fullscreen (1920x1080)");
+    // Moved towards a corner.
+    s.cfg.letterbox_pos = (100.0, -100.0);
+    assert_eq!(s.sync_letterbox(), Some([640, 0, 1280, 720]));
+    // Out of fullscreen, or off: the game is the window again.
+    s.fullscreen = false;
+    assert_eq!(s.sync_letterbox(), None);
+    assert_eq!((s.window_w, s.window_h), (1920.0, 1080.0));
+    assert_eq!(s.to_game(5.0, 6.0), (5.0, 6.0));
+}
+
+#[test]
+fn letterbox_settings_survive_a_restart() {
+    let cfg = Config { letterbox: true, letterbox_size: (1337, 777), letterbox_pos: (-25.0, 40.0), ..Config::default() };
+    let text = cfg.to_text();
+    let back = Config::parse_text(&text);
+    assert!(back.letterbox);
+    assert_eq!((back.letterbox_size, back.letterbox_pos), ((1337, 777), (-25.0, 40.0)));
+}
+
+fn dd(s: &State) -> &settings::Dropdown {
+    s.settings_ui.dropdown.as_ref().unwrap()
+}
+
+#[test]
+fn the_preset_list_scrolls_by_wheel_and_scroll_bar_never_by_pointing() {
+    let mut s = layout_tests::state();
+    let frame = |s: &mut State| s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.modifiers_ctrl = true;
+    s.key_inner(KeyCode::KeyO, false, None, Instant::now(), None);
+    s.modifiers_ctrl = false;
+    // Plenty of saved sizes, so the list is longer than its box.
+    s.cfg.saved_presets = (0..40).map(|k| (640 + k * 10, 360 + k * 5)).collect();
+    s.open_dropdown();
+    frame(&mut s);
+    let max = dd(&s).max_scroll();
+    assert!(max > 0.0 && dd(&s).bar().is_some(), "more sizes than fit, so it scrolls: {max}");
+    // Pointing at the rows nearest the bottom edge picks them and the list stays put.
+    let at = dd(&s).scroll();
+    for _ in 0..5 {
+        let &(i, [x, y, w, h]) = dd(&s).rows.last().unwrap();
+        point(&mut s, x + w / 2.0, y + h / 2.0);
+        assert_eq!(dd(&s).cursor, i);
+        frame(&mut s);
+        assert_eq!(dd(&s).scroll(), at, "pointing never scrolls");
+    }
+    let picked = dd(&s).cursor;
+    // The wheel moves the list, not the pick.
+    s.wheel(-1);
+    frame(&mut s);
+    assert_eq!(dd(&s).scroll(), (at + 45.0).min(max));
+    assert_eq!(dd(&s).cursor, picked);
+    s.wheel(100);
+    frame(&mut s);
+    assert_eq!(dd(&s).scroll(), 0.0, "stops at the top");
+    // The scroll bar: pressed at its bottom the list goes to its end, dragged up to its start.
+    let [bx, by, bw, bh] = dd(&s).bar().unwrap();
+    point(&mut s, bx + bw / 2.0, by + bh - 1.0);
+    s.mouse_button(true, None);
+    assert!(s.settings_ui.dropdown.is_some(), "a press on the bar doesn't close the list");
+    assert_eq!(dd(&s).scroll(), max);
+    point(&mut s, bx + bw / 2.0, by - 50.0);
+    assert_eq!(dd(&s).scroll(), 0.0);
+    s.mouse_button(false, None);
+    point(&mut s, bx + bw / 2.0, by + bh - 1.0);
+    assert_eq!(dd(&s).scroll(), 0.0, "let go, it no longer follows");
+    // Keys still bring the pick into sight.
+    s.dropdown_key(KeyCode::End);
+    frame(&mut s);
+    assert_eq!(dd(&s).scroll(), max);
+}
+
+fn frame_off(s: &mut State) -> Option<f32> {
+    s.build_frame(&mut Canvas::default(), Instant::now() + Duration::from_secs(60), 853.3);
+    s.screen_fade
+}
+
+#[test]
+fn a_screen_opened_from_the_main_menu_fades_in() {
+    let mut s = layout_tests::state();
+    s.cfg.animations = true;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    s.menu_open(menu::Item::Settings);
+    assert!(matches!(s.scene, Scene::Settings { .. }));
+    assert_eq!(s.screen_fade, Some(0.0));
+    // Frames 50 ms apart.
+    let mut at = Instant::now();
+    let mut frame = || {
+        at += Duration::from_millis(50);
+        s.build_frame(&mut Canvas::default(), at, 853.3);
+        s.screen_fade
+    };
+    assert!(frame().is_some_and(|ms| ms > 0.0), "fading in");
+    for _ in 0..10 {
+        frame();
+    }
+    assert_eq!(s.screen_fade, None, "then it's done");
+    // With animations off it shows at once.
+    s.close_settings();
+    s.cfg.animations = false;
+    s.menu_open(menu::Item::Settings);
+    assert_eq!(frame_off(&mut s), None);
+    // Exit only asks, over the menu: nothing fades.
+    s.close_settings();
+    s.menu_open(menu::Item::Exit);
+    assert_eq!(s.screen_fade, None);
+}
+
+#[test]
+fn pointing_at_a_main_menu_note_selects_it() {
+    let mut s = layout_tests::state();
+    // A first frame starts the map this state plays loading, which leaves the menu: open it after.
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(s.on_menu());
+    // Along the panel's middle, the first spot on Medals.
+    let medals = menu::ITEMS.iter().position(|&i| i == menu::Item::Medals).unwrap();
+    let y = 240.0 - 30.0;
+    let x = (0..853).map(|x| x as f32).find(|&x| s.hit_at(x, y) == Some(render::Hit::MenuItem(medals))).expect("a note there");
+    point(&mut s, x + 20.0, y);
+    assert_eq!(s.main_menu.as_ref().unwrap().current(), menu::Item::Medals);
+    // The keys move on from it, and a pointer left where it is doesn't take it back.
+    s.menu_step(1);
+    let (mx, my) = s.mouse;
+    s.mouse_moved(mx, my);
+    assert_eq!(s.main_menu.as_ref().unwrap().current(), menu::ITEMS[medals + 1]);
 }

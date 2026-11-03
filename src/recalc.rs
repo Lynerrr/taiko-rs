@@ -133,7 +133,7 @@ mod tests {
         }
         let path = dir.join("set/map.osu");
         std::fs::write(&path, &text).unwrap();
-        let (by_hash, by_label) = index(osu_files(&[dir.clone()]));
+        let (by_hash, by_label) = index(osu_files(std::slice::from_ref(&dir)));
         assert_eq!(by_hash.get(&crate::net::map_hash(text.as_bytes())), Some(&path));
         assert_eq!(by_label.get("A - T [V]"), Some(&path));
 

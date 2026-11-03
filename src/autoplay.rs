@@ -200,7 +200,7 @@ pub fn note_keys(notes: &[(f64, bool, bool)], beat: f64, s: Settings) -> Vec<Vec
 /// A drumroll's `k`th tick: dons alternating from the dominant hand, as osu!'s autoplay plays one.
 pub fn roll_key(k: usize, left_handed: bool) -> usize {
     // Halves 3 then 2 (right-handed), 2 then 3 (left).
-    if (k % 2 == 0) != left_handed { RIGHT_DON } else { LEFT_DON }
+    if k.is_multiple_of(2) != left_handed { RIGHT_DON } else { LEFT_DON }
 }
 
 #[cfg(test)]

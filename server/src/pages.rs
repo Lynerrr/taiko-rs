@@ -14,6 +14,8 @@ const REPO: &str = "https://github.com/Lynerrr/taiko-rs";
 /// Where the site lives, for the absolute links link previews need.
 const SITE: &str = "https://rstaiko.auneu.space";
 const TAGLINE: &str = "A taiko client for osu! beatmaps, with 73 mods that bend, break and multiply the lane. Rankings, profiles, chat and downloads.";
+/// The community's Discord server.
+const DISCORD: &str = "https://discord.gg/jCPv8k6HT";
 const RAW: &str = "https://raw.githubusercontent.com/Lynerrr/taiko-rs/worktree-taiko-client";
 
 /// A clip of taiko.rs's own mods: what it shows, the mods on, its file under /clips/, and the
@@ -345,7 +347,7 @@ fn thousands(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -455,6 +457,17 @@ fn mod_chips<S: AsRef<str>>(m: &[S], rate: f64) -> String {
     out
 }
 
+/// How many mods a row in a list shows; the play's own page has them all.
+const MODS_IN_A_ROW: usize = 6;
+
+/// `mod_chips` for a row in a list: a stack of mods mustn't push it off the page, so past the
+/// first few they're a count, named when hovered.
+fn short_mod_chips(m: &[String], rate: f64) -> String {
+    let Some(rest) = m.get(MODS_IN_A_ROW..).filter(|r| !r.is_empty()) else { return mod_chips(m, rate) };
+    let more = format!("<span class=mod title=\"{}\">+{}</span>", esc(&rest.join(" ")), rest.len());
+    format!("{}{more}{}", mod_chips(&m[..MODS_IN_A_ROW], 1.0), mod_chips::<&str>(&[], rate))
+}
+
 /// osu!'s colour for a star rating: blue for easy through red and purple to black.
 pub(crate) fn star_colour(s: f64) -> [u8; 3] {
     const STOPS: [(f64, [u8; 3]); 11] = [
@@ -499,6 +512,7 @@ fn stars(s: Option<f64>) -> String {
 #[derive(Clone, Copy, PartialEq)]
 pub enum Os {
     Windows,
+    Mac,
     Linux,
     Android,
     Other,
@@ -511,6 +525,8 @@ impl Os {
             Os::Android
         } else if ua.contains("windows") {
             Os::Windows
+        } else if ua.contains("macintosh") {
+            Os::Mac
         } else if ua.contains("linux") || ua.contains("x11") {
             Os::Linux
         } else {
@@ -529,7 +545,7 @@ struct Build {
     alt: Option<(&'static str, &'static str)>,
 }
 
-const BUILDS: [Build; 3] = [
+const BUILDS: [Build; 4] = [
     Build {
         os: Os::Windows,
         name: "Windows",
@@ -537,6 +553,14 @@ const BUILDS: [Build; 3] = [
         file: "taiko-rs-windows-x64-setup.exe",
         kind: "installer",
         alt: Some(("taiko-rs-windows-x64.zip", "portable .zip")),
+    },
+    Build {
+        os: Os::Mac,
+        name: "macOS",
+        note: "macOS 11 or newer, Apple silicon or Intel. The command installs it to Applications and it then updates itself from the game. Apple hasn't signed this build: if you download the archive in a browser, allow it in System Settings, Privacy &amp; Security.",
+        file: "taiko-rs-macos.tar.gz",
+        kind: ".tar.gz",
+        alt: None,
     },
     Build {
         os: Os::Linux,
@@ -549,8 +573,8 @@ const BUILDS: [Build; 3] = [
     Build { os: Os::Android, name: "Android", note: "Android 8.0+, 64-bit ARM.", file: "taiko-rs-android.apk", kind: "APK", alt: None },
 ];
 
-/// The install commands.
-fn linux_command() -> String {
+/// The install commands: install.sh does Linux and macOS.
+fn unix_command() -> String {
     format!("curl -fsSL {RAW}/install.sh | sh")
 }
 
@@ -573,9 +597,10 @@ fn download_url(file: &str) -> String {
 fn download_cta(os: Os, on_download_page: bool) -> String {
     let others = if on_download_page { String::new() } else { " &middot; <a href=\"/download\">other systems</a>".into() };
     match BUILDS.iter().find(|b| b.os == os) {
-        Some(b) if b.os == Os::Linux => format!(
-            "<div class=cta-label>Install on Linux: paste this in a terminal</div>{}<div class=hint>installs, adds it to your apps and keeps it updated &middot; <a href=\"{}\">or the .tar.gz</a>{others}</div>",
-            cmd(&linux_command()),
+        Some(b) if matches!(b.os, Os::Linux | Os::Mac) => format!(
+            "<div class=cta-label>Install on {}: paste this in a terminal</div>{}<div class=hint>installs, adds it to your apps and keeps it updated &middot; <a href=\"{}\">or the .tar.gz</a>{others}</div>",
+            b.name,
+            cmd(&unix_command()),
             download_url(b.file)
         ),
         Some(b) => format!(
@@ -585,7 +610,7 @@ fn download_cta(os: Os, on_download_page: bool) -> String {
             b.note
         ),
         None if on_download_page => "<p class=dim>Pick your system below.</p>".into(),
-        None => "<a class=\"btn hot\" href=\"/download\">Download taiko.rs</a><div class=hint>Windows, Linux and Android</div>".into(),
+        None => "<a class=\"btn hot\" href=\"/download\">Download taiko.rs</a><div class=hint>Windows, macOS, Linux and Android</div>".into(),
     }
 }
 
@@ -767,7 +792,7 @@ fn feed_row(s: &OnlineScore) -> String {
         s.map_hash,
         esc(song),
         esc(version),
-        mod_chips(&s.mods, s.rate),
+        short_mod_chips(&s.mods, s.rate),
         ago(s.date),
         s.pp.map(|p| format!("{p:.0}pp")).unwrap_or_default(),
         s.accuracy * 100.0
@@ -798,6 +823,8 @@ pub fn home(rankings: &[Ranked], maps: &[MapRow], players: usize, plays: usize, 
     let clips: String = CLIPS[..3].iter().map(clip_card).collect();
     format!(
         "{}<div class=page>\
+         <section class=\"panel discord-band\"><div><h2>JOIN THE DISCORD</h2><p class=dim>Find people to play with, share maps and scores, report bugs and see what's coming next.</p></div>\
+           <a class=\"btn discord\" href=\"{DISCORD}\" target=_blank rel=noopener>Join the Discord</a></section>\
          <div class=hub>\
            <section class=panel><div class=panel-head><h2>ONLINE <span class=count>{}</span></h2></div>{}</section>\
            <section class=panel><div class=panel-head><h2>ROOMS <span class=count>{}</span></h2></div>{}</section>\
@@ -916,6 +943,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
         grade("A"),
         st.a
     );
+    let medals = medal_panel(p);
     let fav_mods = if extras.mods.is_empty() {
         "<p class=dim>Plays without mods so far.</p>".into()
     } else {
@@ -970,6 +998,7 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
              <section class=panel><div class=panel-head><h2>FIRST PLACE RANKS <span class=count>{}</span></h2></div>{firsts}</section>\
              <section class=panel><div class=panel-head><h2>RECENT PLAYS</h2></div>{recent}</section>\
            </div><aside class=side>\
+             {medals}\
              <section class=panel><div class=panel-head><h2>GRADES</h2></div>{grades}</section>\
              <section class=panel><div class=panel-head><h2>FAVOURITE MODS</h2></div><div class=modcounts>{fav_mods}</div></section>\
              <section class=panel><div class=panel-head><h2>MOST PLAYED</h2></div>{most_played}</section>\
@@ -1014,7 +1043,7 @@ fn play_row(s: &OnlineScore, weighted: Option<usize>, show_score: bool) -> Strin
         stars(s.stars),
         esc(version),
         ago(s.date),
-        mod_chips(&s.mods, s.rate),
+        short_mod_chips(&s.mods, s.rate),
         s.accuracy * 100.0
     )
 }
@@ -1140,7 +1169,7 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
                 r.ok,
                 r.miss,
                 r.pp.map(|p| format!("{p:.0}")).unwrap_or_else(|| "-".into()),
-                mod_chips(&r.mods, r.rate),
+                short_mod_chips(&r.mods, r.rate),
                 ago(r.date)
             )
         })
@@ -1190,8 +1219,8 @@ pub fn download(os: Os) -> String {
             let button = format!("<a class=\"btn{hot}\" href=\"{}\">Download {}</a>", download_url(b.file), b.kind);
             let alt = |(file, label): (&str, &str)| format!("<a class=alt href=\"{}\">or the {label}</a>", download_url(file));
             let how = match b.os {
-                // Linux: the command, the archive for those who'd rather.
-                Os::Linux => format!("<h3>In a terminal</h3>{}{}", cmd(&linux_command()), alt((b.file, b.kind))),
+                // The command, the archive for those who'd rather.
+                Os::Linux | Os::Mac => format!("<h3>In a terminal</h3>{}{}", cmd(&unix_command()), alt((b.file, b.kind))),
                 Os::Windows => format!("{button}{}<h3>Or from PowerShell</h3>{}", b.alt.map(alt).unwrap_or_default(), cmd(&powershell_command())),
                 _ => button,
             };
@@ -1207,7 +1236,7 @@ pub fn download(os: Os) -> String {
     format!(
         "<div class=band><div class=inner><h1 class=glitch data-text=\"DOWNLOAD\">DOWNLOAD</h1><div class=band-cta>{}</div></div></div>\
          <div class=page><div class=builds>{builds}</div>\
-         <p class=dim>No macOS build yet. Source and every build: <a href=\"{REPO}/releases\">GitHub releases</a>.</p></div>",
+         <p class=dim>Source and every build: <a href=\"{REPO}/releases\">GitHub releases</a>.</p></div>",
         download_cta(os, true)
     )
 }
@@ -1297,7 +1326,102 @@ const NEW_PASSWORD: &str = "<label>new password<input name=password type=passwor
 
 fn chat_line(l: &ChatLine) -> String {
     let t = l.at % 86_400;
-    format!("<li><span class=time>{:02}:{:02}</span>{}<span class=text>{}</span></li>", t / 3600, t / 60 % 60, player_link(&l.from), esc(&l.text))
+    let (class, who) = if l.medal.is_some() { (" class=medal", format!("<span class=player>{}</span>", esc(&l.from))) } else { ("", player_link(&l.from)) };
+    format!("<li{class}><span class=time>{:02}:{:02}</span>{who}<span class=text>{}</span></li>", t / 3600, t / 60 % 60, esc(&l.text))
+}
+
+/// A medal's badge as a picture: a path per colour, one short run at a time. A page shows well
+/// over a hundred of these, so every byte counts.
+fn badge(art: &[String], tier: u8, secret: bool, lit: bool, size: u32) -> String {
+    let rows = crate::online::medal_badge(art, tier, secret, lit);
+    let mut paths: Vec<(u32, String)> = Vec::new();
+    for (y, row) in rows.iter().enumerate() {
+        let mut x = 0;
+        while x < row.len() {
+            let Some(colour) = row[x] else {
+                x += 1;
+                continue;
+            };
+            let start = x;
+            while x < row.len() && row[x] == Some(colour) {
+                x += 1;
+            }
+            let i = paths.iter().position(|(c, _)| *c == colour).unwrap_or_else(|| {
+                paths.push((colour, String::new()));
+                paths.len() - 1
+            });
+            paths[i].1 += &format!("M{start} {y}h{}v1H{start}z", x - start);
+        }
+    }
+    let inner: String = paths.iter().map(|(colour, d)| format!("<path fill=\"#{colour:06x}\" d=\"{d}\"/>")).collect();
+    let n = crate::online::BADGE;
+    format!("<svg class=badge width={size} height={size} viewBox=\"0 0 {n} {n}\" shape-rendering=\"crispEdges\" aria-hidden=\"true\">{inner}</svg>")
+}
+
+const TIER_NAMES: [&str; 4] = ["Kantan", "Futsuu", "Muzukashii", "Oni"];
+
+fn tier_label(tier: u8, secret: bool) -> &'static str {
+    if secret { "Ura" } else { TIER_NAMES[usize::from(tier.clamp(1, 4)) - 1] }
+}
+
+/// The medals on a profile: their highest dan and their rarest ones.
+fn medal_panel(p: &Profile) -> String {
+    let m = &p.medals;
+    let dan = m.dan.as_ref().map(|d| format!("<p><span class=dim>Dan</span> <b>{}</b></p>", esc(&d[0]))).unwrap_or_default();
+    let rarest: String = m
+        .rarest
+        .iter()
+        .map(|n| format!("<span class=rare title=\"{}\">{}</span>", esc(&n.name[0]), badge(&n.art, n.tier, n.secret, true, 48)))
+        .collect();
+    let rarest = if rarest.is_empty() { "<p class=dim>No medals yet.</p>".to_string() } else { format!("<div class=medalrow>{rarest}</div>") };
+    format!(
+        "<section class=panel><div class=panel-head><h2>MEDALS <span class=count>{} / {}</span></h2><a class=more href=\"/u/{}/medals\">all</a></div>{dan}{rarest}</section>",
+        m.earned,
+        m.total,
+        esc(&p.name)
+    )
+}
+
+/// One medal on the medals page; `owned`: on a player's page, where what they lack is greyed out.
+fn medal_card(m: &crate::online::MedalRow, players: u32, owned: bool) -> String {
+    let lit = m.at.is_some() || !owned;
+    let picture = if m.art.is_empty() {
+        "<span class=unknown>?</span>".to_string()
+    } else {
+        badge(&m.art, m.tier, m.secret, lit, 64)
+    };
+    let name = m.name.as_ref().map_or("???", |n| n[0].as_str());
+    let about = m.how.as_ref().or(m.hint.as_ref()).map_or("Nobody has found this one.".to_string(), |t| esc(&t[0]));
+    let share = if players > 0 { f64::from(m.holders) * 100.0 / f64::from(players) } else { 0.0 };
+    let earned = m.at.map(|t| format!(" · earned {}", month_year(t))).unwrap_or_default();
+    let progress = if m.need > 0 && owned && m.at.is_none() { format!(" · {} / {}", thousands(m.have), thousands(m.need)) } else { String::new() };
+    format!(
+        "<li class=\"medal{}\">{picture}<div><b>{}</b><p>{about}</p><span class=dim><span class=\"tier t{}{}\">{}</span> · {share:.0}% of players{earned}{progress}</span></div></li>",
+        if lit { " got" } else { "" },
+        esc(name),
+        m.tier.clamp(1, 4),
+        if m.secret { " ura" } else { "" },
+        tier_label(m.tier, m.secret),
+    )
+}
+
+/// Every medal; with a player's name, how they stand. `table`: who has the most.
+pub fn medals_page(view: &crate::online::MedalsView, player: Option<&str>, table: &[(String, u32)]) -> String {
+    let mut sections = String::new();
+    for (i, title) in crate::medal_list::SECTIONS.iter().enumerate() {
+        let cards: String = view.medals.iter().filter(|m| usize::from(m.section) == i).map(|m| medal_card(m, view.players, player.is_some())).collect();
+        if !cards.is_empty() {
+            sections += &format!("<section class=panel><div class=panel-head><h2>{}</h2></div><ul class=medals>{cards}</ul></section>", esc(&title.to_uppercase()));
+        }
+    }
+    let top: String = table.iter().take(10).map(|(name, n)| format!("<li>{}<span class=times>{n}</span></li>", player_link(name))).collect();
+    let lead = match player {
+        Some(name) => format!("<h1>{}'s medals</h1><p class=dim>{} of {}. Earn them in the game; a medal stays yours as long as the play that earned it does.</p>", esc(name), view.earned, view.medals.len()),
+        None => "<h1>Medals</h1><p class=dim>Earned by playing. Secret ones show a hint once somebody has found them; how to earn them is never said.</p>".to_string(),
+    };
+    format!(
+        "<div class=page><div class=section-head>{lead}</div><div class=medalpage><div class=medalcol>{sections}</div><aside><section class=panel><div class=panel-head><h2>MOST MEDALS</h2></div><ol class=board-list>{top}</ol></section></aside></div></div>"
+    )
 }
 
 /// The chat, like osu!'s: channels on the left (the global one and every friend), the open one
@@ -1360,12 +1484,13 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
         }
         None => "<a class=\"navbtn join\" href=\"/register\">sign up</a><a class=\"navbtn hot\" href=\"/login\">log in</a>".into(),
     };
-    let links: String = [("rankings", "/rankings"), ("beatmaps", "/beatmaps"), ("loved", "/loved"), ("mods", "/mods"), ("download", "/download")]
+    let links: String = [("rankings", "/rankings"), ("medals", "/medals"), ("beatmaps", "/beatmaps"), ("loved", "/loved"), ("mods", "/mods"), ("download", "/download")]
         .iter()
         .map(|(name, href)| {
             let on = if *name == nav { " class=on aria-current=page" } else { "" };
             format!("<a href=\"{href}\"{on}>{name}</a>")
         })
+        .chain(std::iter::once(format!("<a href=\"{DISCORD}\" target=_blank rel=noopener>discord</a>")))
         .collect();
     format!(
         r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{} · taiko.rs</title>
@@ -1373,7 +1498,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
 <link rel=preload href="/site/taiko5x7.woff2" as=font type="font/woff2" crossorigin><style>{STYLE}</style><script src="/site/copy.js" defer></script></head>
 <body><nav><div class=inner><a class=logo href="/" aria-label="taiko.rs home"><img src="/site/logo.png" alt="" width=32 height=32>TA<span class=narrow>I</span>KO.RS</a><div class=links>{links}</div>
 <form action="/u" role=search><input name=name placeholder="find a player" maxlength=16 aria-label="Find a player"></form><div class=account>{account}</div></div></nav>
-<main>{}</main><footer><div class=inner><span class=brand>TAIKO.RS</span><a href="{REPO}">github</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
+<main>{}</main><footer><div class=inner><span class=brand>TAIKO.RS</span><a href="{REPO}">github</a><a href="{DISCORD}" target=_blank rel=noopener>discord</a><a href="/download">download</a><a href="/mods">mods</a><a href="{REPO}/blob/worktree-taiko-client/LICENSE">MIT license</a><span class=dim>Not affiliated with ppy or osu!. Beatmap covers load from osu!'s servers.</span></div></footer></body></html>"#,
         esc(title),
         body
     )
@@ -1424,6 +1549,8 @@ background:linear-gradient(0deg,var(--bg),transparent 30%),linear-gradient(rgba(
 .modname{height:24px;overflow:hidden;margin-top:10px;color:var(--gold);text-transform:uppercase}.ticker{animation:ticker 28s linear infinite}.ticker span{display:block;height:24px;white-space:nowrap}
 @keyframes ticker{0%,13.6%{transform:translateY(0)}14.3%,27.9%{transform:translateY(-24px)}28.6%,42.1%{transform:translateY(-48px)}42.9%,56.4%{transform:translateY(-72px)}57.1%,70.7%{transform:translateY(-96px)}71.4%,85%{transform:translateY(-120px)}85.7%,99.3%{transform:translateY(-144px)}100%{transform:translateY(-168px)}}
 .intro{position:absolute;left:24px;top:84px;max-width:640px;z-index:3}
+.discord-band{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin-bottom:24px;border-color:#5865F2}.discord-band p{margin-top:6px}
+.btn.discord{flex:none;font-size:20px;background:#5865F2;border-color:#5865F2;box-shadow:4px 4px 0 #2c3280}.btn.discord:hover{background:#6d78f5;border-color:#6d78f5}
 .intro h1{font-size:96px;line-height:96px;letter-spacing:4px}.intro p{font-size:24px;line-height:32px;color:var(--text);margin-top:16px}
 .field{position:absolute;left:0;right:0;top:330px;height:140px;animation:mods 28s linear infinite;transform-origin:30% 50%}
 .lane{position:absolute;left:0;right:0;top:0;height:140px;transform-origin:30% 50%}
@@ -1543,6 +1670,14 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 .chart .area{fill:rgba(235,69,44,.15)}.chart .line{fill:none;stroke:var(--acc);stroke-width:3}.chart-axis{display:flex;justify-content:space-between;margin-top:6px}
 .grades{display:flex;justify-content:space-around}.grades div{display:flex;flex-direction:column;align-items:center;gap:4px}.grades .grade{font-size:48px;line-height:48px;width:auto}.grades b{color:var(--white)}
 .modcounts{display:flex;flex-wrap:wrap;gap:6px 10px}.modcount{display:inline-flex;align-items:center;gap:2px}
+.medalrow{display:flex;flex-wrap:wrap;gap:6px}.rare{display:inline-flex}
+.medalpage{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:16px;align-items:start}.medalcol{display:grid;gap:16px;min-width:0}
+.medals{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+.medals .medal{display:flex;gap:12px;align-items:flex-start;opacity:.72}.medals .medal.got{opacity:1}.medals .medal b{color:var(--white)}.medals .medal p{margin:2px 0;font-size:13px}
+.medals .medal .dim{font-size:12px}.unknown{width:64px;height:64px;flex:none;display:grid;place-items:center;background:var(--panel2);color:var(--dim);font-size:28px}
+.badge{flex:none;image-rendering:pixelated}.board-list li{min-width:0}.board-list .player{overflow:hidden;text-overflow:ellipsis}.tier.t1{color:var(--green)}.tier.t2{color:var(--katl)}.tier.t3{color:var(--gold)}.tier.t4{color:var(--don)}.tier.ura{color:var(--purple)}
+li.medal .text{color:var(--gold)}
+@media (max-width:860px){.medalpage{grid-template-columns:minmax(0,1fr)}}
 .mini{position:relative;display:flex;align-items:center;gap:12px;min-height:56px;padding:4px 10px 4px 4px;margin-bottom:6px;background:var(--panel2);border:2px solid transparent}.mini:hover{border-color:var(--acc);color:var(--text)}
 .mini .art{width:64px;height:44px;flex:none;background:var(--cover,linear-gradient(135deg,hsl(var(--h) 45% 34%),hsl(calc(var(--h) + 60) 40% 18%))) center/cover}
 .mini-info{display:flex;flex-direction:column;min-width:0}.mini-info b,.mini-info span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mini-info b{color:var(--white)}.times{margin-left:auto;color:var(--gold)}
@@ -1594,7 +1729,7 @@ img.avatar{object-fit:cover;background:var(--panel2)}.tag.loved{color:#ff66aa;bo
 .copy{flex:none;font:inherit;border:0;border-left:2px solid var(--line2);background:var(--panel2);color:var(--white);padding:0 16px;cursor:pointer}.copy:hover{background:var(--acc)}
 .cta-label{color:var(--white);margin-bottom:2px}.stage-cta .cmd{max-width:820px;background:rgba(12,12,18,.92)}.alt{display:inline-block;margin-top:10px;color:var(--dim)}.alt:hover{color:var(--acc)}
 /* Download. */
-.builds{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.build{display:flex;flex-direction:column;align-items:flex-start;min-width:0}.build h2{font-size:32px}.build p{margin-bottom:18px}.build .cmd{align-self:stretch}
+.builds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.build{display:flex;flex-direction:column;align-items:flex-start;min-width:0}.build h2{font-size:32px}.build p{margin-bottom:18px}.build .cmd{align-self:stretch}
 .build.mine{border-color:var(--acc)}.build .btn.hot{font-size:16px;min-height:44px;box-shadow:3px 3px 0 #6b1d12}.band-cta{margin-top:18px;max-width:820px}.yours{font-size:16px;color:var(--acc)}
 pre{background:var(--bg2);border:2px solid var(--line);padding:12px 14px;overflow-x:auto;font:16px/24px taiko5x7,monospace;color:var(--green)}h3{font-size:16px;margin-top:16px;color:var(--dim)}
 .lost{text-align:center;padding:56px 24px}.lost h1{font-size:96px;line-height:96px;color:var(--acc)}
@@ -1664,14 +1799,23 @@ mod tests {
         assert!(Os::of("Mozilla/5.0 (Windows NT 10.0; Win64; x64)") == Os::Windows);
         assert!(Os::of("Mozilla/5.0 (Linux; Android 14)") == Os::Android);
         assert!(Os::of("Mozilla/5.0 (X11; Linux x86_64)") == Os::Linux);
-        assert!(Os::of("Mozilla/5.0 (Macintosh)") == Os::Other);
+        assert!(Os::of("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)") == Os::Mac);
+        assert!(Os::of("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)") == Os::Other);
     }
 
     #[test]
     fn install_commands_ask_for_https() {
-        for command in [linux_command(), powershell_command()] {
+        for command in [unix_command(), powershell_command()] {
             assert!(command.contains("https://"));
         }
+    }
+
+    #[test]
+    fn mac_visitors_get_the_install_command() {
+        let page = download(Os::Mac);
+        assert!(page.contains("Install on macOS") && page.contains(&esc(&unix_command())));
+        assert!(page.contains("taiko-rs-macos.tar.gz") && page.contains("YOUR SYSTEM"));
+        assert!(!page.contains("No macOS build"));
     }
 
     #[test]
@@ -1706,6 +1850,15 @@ mod tests {
                 assert!(mod_info(m).is_some(), "{m}");
             }
         }
+    }
+
+    #[test]
+    fn a_row_shows_a_stack_of_mods_as_a_count() {
+        let mods = |n: usize| (0..n).map(|i| format!("M{i}")).collect::<Vec<_>>();
+        assert_eq!(short_mod_chips(&mods(6), 1.0), mod_chips(&mods(6), 1.0));
+        let row = short_mod_chips(&mods(34), 1.35);
+        assert_eq!(row.matches("class=mod").count(), 7);
+        assert!(row.contains(">+28<") && row.contains("title=\"M6 M7") && row.contains("1.35x"), "{row}");
     }
 
     #[test]

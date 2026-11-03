@@ -42,7 +42,7 @@ fn arrow_rgba(scale: usize, hover: bool) -> (Vec<u8>, usize, usize) {
             };
             for dy in 0..scale {
                 let start = ((y * scale + dy) * w + x * scale) * 4;
-                for p in px[start..start + scale * 4].chunks_exact_mut(4) {
+                for p in px[start..start + scale * 4].as_chunks_mut::<4>().0 {
                     p.copy_from_slice(&color);
                 }
             }

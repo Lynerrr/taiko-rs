@@ -22,16 +22,22 @@ mod net;
 mod online;
 #[path = "../../src/tls.rs"]
 mod tls;
+mod admin;
 mod avatars;
 mod card;
 mod covers;
+mod crashes;
 mod osustatus;
 mod discord;
+#[path = "../../src/changelog_entry.rs"]
+mod changelog_entry;
 #[allow(dead_code)]
 #[path = "../../src/font.rs"]
 mod font;
 mod loved;
 mod mail;
+mod medal_list;
+mod medals;
 mod scores;
 mod pages;
 mod web;
@@ -83,6 +89,9 @@ struct User {
     /// none until linked).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     email: Option<String>,
+    /// Kept out of the global chat until then (unix seconds); admins give and take it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    muted_until: Option<u64>,
 }
 
 /// What a banned account is told.
@@ -228,8 +237,12 @@ impl Hub {
         }
     }
 
-    /// Stops `key` watching `whom` on all of `key`'s connections.
+    /// Stops `key` watching `whom` on all of `key`'s connections (admins watch anyone, friends
+    /// or not).
     fn stop_watching(&mut self, key: &str, whom: &str) {
+        if is_admin(key) {
+            return;
+        }
         let ids: Vec<u64> = self.conns.get(key).into_iter().flatten().filter(|c| c.watching.as_deref() == Some(whom)).map(|c| c.id).collect();
         for id in ids {
             self.set_watching(key, id, None);
@@ -421,6 +434,8 @@ struct State {
     scores: Mutex<scores::Scores>,
     /// Codes for `>verify` on Discord: code -> (lowercased name, when made).
     verify_codes: Mutex<HashMap<String, (String, Instant)>>,
+    /// Admin tools' own state: kicks, where accounts log in from, the log (see `admin`).
+    admin: admin::AdminState,
 }
 
 /// What's saved at `path`: the default when there's no such file yet, an error when there is
@@ -512,7 +527,7 @@ impl State {
         let mut save = !accounts.users.contains_key("claude");
         if save {
             let hash = hash_password(&new_token()).expect("argon2");
-            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None });
+            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None, muted_until: None });
         }
         // And its friends, both ways.
         for &friend in CLAUDE_FRIENDS {
@@ -538,6 +553,7 @@ impl State {
         let chat: SavedChat = load_saved(&path.with_file_name("chat.json"));
         let history = chat.friends.into_iter().map(|(a, b, log)| ((a, b), log)).collect();
         let (saves, wake) = mpsc::channel();
+        let path_dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
         let state = State {
             accounts: Mutex::new(accounts),
             path,
@@ -549,6 +565,7 @@ impl State {
             hub: Mutex::new(Hub { history, global: chat.global, ..Hub::default() }),
             scores: Mutex::new(scores),
             verify_codes: Mutex::new(HashMap::new()),
+            admin: admin::AdminState::load(&path_dir),
         };
         if save {
             state.save();
@@ -625,7 +642,7 @@ impl State {
     fn account(&self, name: String, token: String) -> Reply {
         let key = name.to_ascii_lowercase();
         let email = self.accounts.lock().unwrap().users.get(&key).map(|u| u.email.is_some());
-        Reply::Account { nominator: self.is_nominator(&key), name, token, email }
+        Reply::Account { nominator: self.is_nominator(&key), admin: is_admin(&key), name, token, email }
     }
 
     /// Mails a code (`mail::send_code`), a few an hour per address.
@@ -726,7 +743,13 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
     }
     let out = match env.request {
         Request::Register { name, password, email, code } => register(state, ip, &name, Some(&password), email.as_deref(), code.as_deref()),
-        Request::Login { name, password } => login(state, ip, &name, &password),
+        Request::Login { name, password } => {
+            let r = login(state, ip, &name, &password);
+            if let Reply::Account { name, .. } = &r {
+                state.admin.seen(&name.to_ascii_lowercase(), limit_key(ip));
+            }
+            r
+        }
         Request::ResetPassword { who, code, password } => reset_password(state, ip, &who, code.as_deref(), password.as_deref()),
         Request::LinkEmail { token, email, code } => link_email(state, ip, &token, &email, code.as_deref()),
         Request::WhoAmI { token } => match state.user(&token) {
@@ -757,6 +780,11 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
         }
         Request::Connect { token } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
+            let key = name.to_ascii_lowercase();
+            if let Some(left) = state.admin.kicked_for(&key) {
+                return reply(&mut reader, Reply::Error(format!("an admin disconnected you: try again in {} s", left.as_secs().max(1))));
+            }
+            state.admin.seen(&key, limit_key(ip));
             reply(&mut reader, state.account(name.clone(), token.clone()));
             social_session(state, reader, name, token);
             return;
@@ -767,15 +795,27 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             let map = format!("{} - {} [{}]", play.map.artist, play.map.title, play.map.version);
             // Whether the map gives pp, so the total sent back is right.
             covers::learn(play.map.set_id);
-            match state.scores.lock().unwrap().submit(&key, &name, *play, now_secs()) {
+            let mut scores = state.scores.lock().unwrap();
+            match scores.submit(&key, &name, *play, now_secs()) {
                 Ok((map_rank, pp, rank)) => {
-                    println!("score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total");
-                    Reply::Submitted { map_rank, pp, rank }
+                    let medals = scores.medals_after(&key, now_secs());
+                    let announcement = scores.medals.announcement(&medals);
+                    drop(scores);
+                    if let Some(a) = announcement {
+                        state.announce_medal(&name, &a);
+                    }
+                    println!("score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total, {} medals", medals.len());
+                    Reply::Submitted { map_rank, pp, rank, medals }
                 }
                 Err(e) => Reply::Error(e),
             }
         }
         Request::MapScores { map } => Reply::Scores(state.scores.lock().unwrap().map_scores(map)),
+        Request::Medals { name } => {
+            let key = name.trim().to_ascii_lowercase();
+            let player = (!key.is_empty()).then_some(key.as_str());
+            Reply::Medals(Box::new(state.scores.lock().unwrap().medals_view(player)))
+        }
         Request::Replay { id } => match state.scores.lock().unwrap().replay(id) {
             Some(r) => Reply::Replay(Box::new(r)),
             None => Reply::Error("that replay isn't on the server".into()),
@@ -783,6 +823,10 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
         Request::Score { id } => match state.scores.lock().unwrap().score(id) {
             Some(s) => Reply::Score(Box::new(s)),
             None => Reply::Error("that score isn't on the server".into()),
+        },
+        Request::CrashReport(r) => match crashes::report(ip, *r) {
+            Ok(()) => Reply::Counted,
+            Err(e) => Reply::Error(e),
         },
         Request::Played { token, ms } => {
             let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
@@ -891,12 +935,12 @@ fn create_account(state: &State, ip: IpAddr, name: &str, password: Option<&str>,
         return Reply::Error("that name is taken".into());
     }
     let has_email = verified.is_some();
-    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: verified });
+    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: verified, muted_until: None });
     let token = state.new_session(&mut a, &key);
     state.save();
     drop(a);
     println!("account {name} created ({ip})");
-    Reply::Account { name: name.to_string(), token, nominator: is_admin(&key), email: Some(has_email) }
+    Reply::Account { name: name.to_string(), token, nominator: is_admin(&key), admin: is_admin(&key), email: Some(has_email) }
 }
 
 /// A forgotten password (see `Request::ResetPassword`).
@@ -1016,7 +1060,7 @@ fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     let mut a = state.accounts.lock().unwrap();
     let token = state.new_session(&mut a, &key);
     state.save();
-    Reply::Account { name: user.name, token, nominator: is_admin(&key) || user.nominator, email: Some(user.email.is_some()) }
+    Reply::Account { name: user.name, token, nominator: is_admin(&key) || user.nominator, admin: is_admin(&key), email: Some(user.email.is_some()) }
 }
 
 impl State {
@@ -1058,6 +1102,12 @@ impl State {
     /// Admins, and those they've made loved nominators.
     fn is_nominator(&self, key: &str) -> bool {
         is_admin(key) || self.accounts.lock().unwrap().users.get(key).is_some_and(|u| u.nominator && !u.banned)
+    }
+
+    /// Seconds `key`'s global chat mute has left, if any.
+    fn muted_for(&self, key: &str) -> Option<u64> {
+        let until = self.accounts.lock().unwrap().users.get(key)?.muted_until?;
+        until.checked_sub(now_secs()).filter(|&left| left > 0)
     }
 
     fn is_banned(&self, key: &str) -> bool {
@@ -1307,6 +1357,85 @@ impl State {
         }
     }
 
+    /// Every medal (and how `name` stands with them), and who has the most, for the website.
+    pub fn medals_page(&self, name: Option<&str>) -> (online::MedalsView, Vec<(String, u32)>) {
+        let key = name.map(str::to_ascii_lowercase);
+        let (view, table) = {
+            let scores = self.scores.lock().unwrap();
+            (scores.medals_view(key.as_deref()), scores.medals.table())
+        };
+        (view, table.into_iter().map(|(key, n)| (self.display_name(&key), n)).collect())
+    }
+
+    /// Says a rare medal in the global chat.
+    fn announce_medal(&self, player: &str, a: &medals::Announcement) {
+        let m = &a.medal;
+        let medal = online::ChatMedal { player: player.to_string(), name: m.name.clone(), tier: m.tier, secret: m.secret, first: a.first, holders: a.holders, players: a.players };
+        let line = ChatLine { from: online::SERVER_NAME.to_string(), to: String::new(), text: medals::chat_text(player, a), at: now_secs(), medal: Some(medal) };
+        let mut hub = self.hub.lock().unwrap();
+        hub.global.push_back(line.clone());
+        if hub.global.len() > CHAT_HISTORY {
+            hub.global.pop_front();
+        }
+        hub.chat_changed = true;
+        hub.send_to_all(&Down::GlobalChat(line));
+        drop(hub);
+        self.save();
+    }
+
+    /// Counts something that doesn't show in plays (`absolute`: sets it), and tells the player
+    /// of what it earned them.
+    pub fn medal_count(&self, name: &str, event: &str, by: u64, absolute: bool) {
+        let key = name.to_ascii_lowercase();
+        let (new, announcement) = {
+            let mut scores = self.scores.lock().unwrap();
+            if !scores.medals.count(&key, event, by, absolute) {
+                return;
+            }
+            let new = scores.medals_after(&key, now_secs());
+            let announcement = scores.medals.announcement(&new);
+            (new, announcement)
+        };
+        if let Some(a) = announcement {
+            self.announce_medal(&self.display_name(&key), &a);
+        }
+        if !new.is_empty() {
+            self.hub.lock().unwrap().send_to(&key, &Down::Medals(new));
+        }
+    }
+
+    /// What earned medals before they were counted: nobody is told of these, they just have them.
+    fn sync_medal_counts(&self) {
+        let friends: Vec<(String, u64)> = self.accounts.lock().unwrap().users.iter().map(|(k, u)| (k.clone(), u.friends.len() as u64)).collect();
+        let chatted: Vec<String> = self.hub.lock().unwrap().global.iter().filter(|l| l.medal.is_none()).map(|l| l.from.to_ascii_lowercase()).collect();
+        let links: HashMap<String, String> = load_saved(&self.path.with_file_name("discord-links.json"));
+        let mut scores = self.scores.lock().unwrap();
+        for (key, n) in friends {
+            scores.medals.count(&key, "friends", n, true);
+        }
+        for (event, keys) in [("chat", chatted), ("avatar", avatars::keys()), ("discord", links.into_values().collect())] {
+            for key in keys {
+                scores.medals.count(&key, event, 1, true);
+            }
+        }
+        scores.settle_medals();
+    }
+
+    /// A lobby match is over: who played and who won it.
+    fn match_over(&self, players: &[net::PlayerInfo]) {
+        let finished: Vec<(&str, u64)> = players.iter().filter_map(|p| p.result.as_ref().filter(|r| !r.quit).map(|r| (p.name.as_str(), r.score))).collect();
+        if finished.len() < 2 {
+            return;
+        }
+        let known = |name: &str| self.accounts.lock().unwrap().users.contains_key(&name.to_ascii_lowercase());
+        for (name, _) in finished.iter().filter(|(name, _)| known(name)) {
+            self.medal_count(name, "matches", 1, false);
+        }
+        if let Some((name, _)) = finished.iter().max_by_key(|(_, score)| *score).filter(|(name, _)| known(name)) {
+            self.medal_count(name, "wins", 1, false);
+        }
+    }
+
     /// `key` (`name` as written) asks `other` to be friends, or accepts their request. Tells
     /// both what happened; the message for `key` either way.
     fn add_friend(&self, key: &str, name: &str, other: &str) -> Result<String, String> {
@@ -1338,6 +1467,13 @@ impl State {
         self.push_friends(&other);
         match outcome? {
             (true, other_name) => {
+                let counts: Vec<(&str, u64)> = {
+                    let a = self.accounts.lock().unwrap();
+                    vec![(key, a.users[key].friends.len() as u64), (other.as_str(), a.users[&other].friends.len() as u64)]
+                };
+                for (who, n) in counts {
+                    self.medal_count(who, "friends", n, true);
+                }
                 self.notice(&other, format!("{name} accepted your friend request"));
                 Ok(format!("you and {other_name} are friends now"))
             }
@@ -1364,7 +1500,7 @@ impl State {
         if !allowed(&mut hub) {
             return Err("slow down a little".into());
         }
-        let line = ChatLine { from: name.to_string(), to: to_name, text, at: now_secs() };
+        let line = ChatLine { from: name.to_string(), to: to_name, text, at: now_secs(), medal: None };
         let log = hub.history.entry(pair(key, &to)).or_default();
         log.push_back(line.clone());
         if log.len() > CHAT_HISTORY {
@@ -1386,11 +1522,14 @@ impl State {
         if text.is_empty() {
             return Err("nothing to send".into());
         }
+        if let Some(left) = self.muted_for(&name.to_ascii_lowercase()) {
+            return Err(format!("you're muted in the global chat for {} more minutes", left.div_ceil(60).max(1)));
+        }
         let mut hub = self.hub.lock().unwrap();
         if !allowed(&mut hub) {
             return Err("slow down a little".into());
         }
-        let line = ChatLine { from: name.to_string(), to: String::new(), text, at: now_secs() };
+        let line = ChatLine { from: name.to_string(), to: String::new(), text, at: now_secs(), medal: None };
         hub.global.push_back(line.clone());
         if hub.global.len() > CHAT_HISTORY {
             hub.global.pop_front();
@@ -1399,6 +1538,7 @@ impl State {
         hub.send_to_all(&Down::GlobalChat(line.clone()));
         drop(hub);
         self.save();
+        self.medal_count(name, "chat", 1, false);
         Ok(line)
     }
 }
@@ -1481,6 +1621,11 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &Tx, up: Up) {
             let _ = tx.send(Down::Pong);
         }
         Up::Status(activity) => {
+            // An admin watching someone shows as in the menus: the one watched isn't told.
+            let activity = match activity {
+                Activity::Watching { .. } if is_admin(key) => Activity::Menus,
+                a => a,
+            };
             {
                 let mut hub = state.hub.lock().unwrap();
                 if let Some(c) = hub.conn(key, id) {
@@ -1522,24 +1667,36 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &Tx, up: Up) {
             }
         }
         Up::GlobalChat(text) => {
-            let _ = state.post_global(name, &text, |hub| hub.chat_allowed(key, id));
+            // Going too fast already said so (`chat_allowed`); a mute says how long.
+            if let Err(e) = state.post_global(name, &text, |hub| hub.chat_allowed(key, id))
+                && e.starts_with("you're muted") {
+                state.notice(key, e);
+            }
         }
+        Up::Admin(op) => admin::op(state, key, name, op),
         Up::Watch(other) => {
             let other = other.trim().to_ascii_lowercase();
-            if !state.are_friends(key, &other) {
+            // Admins watch anyone, and nobody is told (see `Up::Status`).
+            if !is_admin(key) && !state.are_friends(key, &other) {
                 let _ = tx.send(Down::WatchStopped("you can only watch friends".into()));
                 return;
             }
             let other_name = state.display_name(&other);
             let mut hub = state.hub.lock().unwrap();
             hub.set_watching(key, id, Some(other.clone()));
-            match hub.plays.get(&other) {
+            let live = match hub.plays.get(&other) {
                 Some(p) => {
                     let _ = tx.send(Down::WatchStart { player: other_name, play: p.play.clone(), t: p.t, paused: p.paused, inputs: p.inputs.clone() });
+                    true
                 }
                 None => {
                     let _ = tx.send(Down::WatchEnd { player: other_name });
+                    false
                 }
+            };
+            drop(hub);
+            if live {
+                state.medal_count(key, "watched", 1, false);
             }
         }
         Up::StopWatching => {
@@ -1581,6 +1738,7 @@ fn saver(state: Arc<State>, wake: mpsc::Receiver<()>) {
         let copy = state.accounts.lock().unwrap().clone();
         state.write(&copy);
         state.write_chat();
+        state.admin.write();
     }
 }
 
@@ -1691,8 +1849,17 @@ fn main() {
     loved::init(data.clone());
     avatars::init(data.clone());
     mail::init(data.clone());
+    crashes::init(data.clone());
     let (state, wake) = State::load(data.join("accounts.json"));
     let state = Arc::new(state);
+    state.sync_medal_counts();
+    {
+        let state = state.clone();
+        net::on_match(Box::new(move |players| {
+            let (state, players) = (state.clone(), players.to_vec());
+            std::thread::spawn(move || state.match_over(&players));
+        }));
+    }
     {
         let state = state.clone();
         std::thread::spawn(move || saver(state, wake));
@@ -1771,7 +1938,7 @@ mod tests {
     use super::*;
 
     fn user(name: &str) -> User {
-        User { name: name.into(), hash: String::new(), created: 0, friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None }
+        User { name: name.into(), hash: String::new(), created: 0, friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None, muted_until: None }
     }
 
     #[test]
@@ -2123,5 +2290,101 @@ mod tests {
             social_up(&state, "alice", "alice", id, &tx, Up::PlayFrame { t: 0.0, paused: false, inputs });
         }
         assert_eq!(state.hub.lock().unwrap().plays["alice"].inputs.len(), scores::MAX_INPUTS);
+    }
+
+    #[test]
+    fn admins_watch_anyone_and_nobody_is_told() {
+        let state = test_state("stealth");
+        {
+            let mut a = state.accounts.lock().unwrap();
+            for n in ["auneu", "bob", "carl"] {
+                a.users.insert(n.into(), user(n));
+            }
+            // carl is the admin's friend: he'd see a "watching" status.
+            a.users.get_mut("auneu").unwrap().friends.push("carl".into());
+            a.users.get_mut("carl").unwrap().friends.push("auneu".into());
+        }
+        let (admin, admin_tx, admin_rx) = connect(&state, "auneu", "a");
+        let (carl, carl_tx, carl_rx) = connect(&state, "carl", "c");
+        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Watch("bob".into()));
+        assert!(lines(&admin_rx).iter().all(|l| !l.contains("WatchStopped")), "not friends, still watching");
+        assert_eq!(state.hub.lock().unwrap().watchers.get("bob"), Some(&1));
+        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Status(Activity::Watching { name: "bob".into() }));
+        assert!(lines(&carl_rx).iter().all(|l| !l.contains("Watching")), "friends see the menus");
+        assert!(matches!(state.activity("auneu"), Some(Activity::Menus)));
+        // Anyone else still can't.
+        social_up(&state, "carl", "carl", carl, &carl_tx, Up::Watch("bob".into()));
+        assert!(lines(&carl_rx).iter().any(|l| l.contains("WatchStopped")));
+    }
+
+    #[test]
+    fn admin_tools_are_for_admins_only() {
+        let state = test_state("admin-only");
+        {
+            let mut a = state.accounts.lock().unwrap();
+            for n in ["troll", "auneu"] {
+                a.users.insert(n.into(), user(n));
+            }
+        }
+        let (troll, troll_tx, troll_rx) = connect(&state, "troll", "t");
+        social_up(&state, "troll", "troll", troll, &troll_tx, Up::Admin(online::AdminOp::Ban { name: "auneu".into(), on: true }));
+        assert!(lines(&troll_rx).iter().any(|l| l.contains("only admins")));
+        assert!(!state.is_banned("auneu"));
+    }
+
+    #[test]
+    fn a_muted_player_stays_out_of_the_global_chat_until_let_back() {
+        let state = test_state("mute");
+        {
+            let mut a = state.accounts.lock().unwrap();
+            for n in ["troll", "auneu"] {
+                a.users.insert(n.into(), user(n));
+            }
+        }
+        let (admin, admin_tx, _admin_rx) = connect(&state, "auneu", "a");
+        let (troll, troll_tx, troll_rx) = connect(&state, "troll", "t");
+        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Admin(online::AdminOp::Mute { name: "Troll".into(), minutes: 30 }));
+        lines(&troll_rx);
+        social_up(&state, "troll", "troll", troll, &troll_tx, Up::GlobalChat("spam".into()));
+        assert!(lines(&troll_rx).iter().any(|l| l.contains("muted")));
+        assert!(state.global_chat().is_empty());
+        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Admin(online::AdminOp::Mute { name: "troll".into(), minutes: 0 }));
+        social_up(&state, "troll", "troll", troll, &troll_tx, Up::GlobalChat("sorry".into()));
+        assert_eq!(state.global_chat().len(), 1);
+    }
+
+    #[test]
+    fn a_line_taken_down_goes_for_everyone() {
+        let state = test_state("takedown");
+        state.accounts.lock().unwrap().users.insert("auneu".into(), user("auneu"));
+        let (admin, admin_tx, _) = connect(&state, "auneu", "a");
+        let (_, _, viewer) = connect(&state, "viewer", "v");
+        let bad = state.post_global("troll", "bad words", |_| true).unwrap();
+        state.post_global("ann", "hi", |_| true).unwrap();
+        lines(&viewer);
+        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Admin(online::AdminOp::DeleteGlobal { from: bad.from.clone(), at: bad.at }));
+        assert_eq!(state.global_chat().iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["hi"]);
+        assert!(lines(&viewer).iter().any(|l| l.contains("GlobalChatDeleted")));
+    }
+
+    #[test]
+    fn a_kicked_player_is_disconnected_and_kept_out_a_while() {
+        let state = test_state("kick");
+        {
+            let mut a = state.accounts.lock().unwrap();
+            for n in ["troll", "auneu"] {
+                a.users.insert(n.into(), user(n));
+            }
+        }
+        let (admin, admin_tx, admin_rx) = connect(&state, "auneu", "a");
+        let (_, _, troll_rx) = connect(&state, "troll", "t");
+        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Admin(online::AdminOp::Kick { name: "troll".into() }));
+        let got = lines(&troll_rx);
+        assert!(got.iter().any(|l| l.contains("disconnected")) && got.iter().any(|l| l.is_empty()), "told, then closed");
+        assert!(state.admin.kicked_for("troll").is_some());
+        assert!(lines(&admin_rx).iter().any(|l| l.contains("kicked")));
+        // Admins can't kick admins.
+        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Admin(online::AdminOp::Kick { name: "lynerrr".into() }));
+        assert!(lines(&admin_rx).iter().any(|l| l.contains("admin")));
     }
 }

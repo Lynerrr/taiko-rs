@@ -5,6 +5,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 /// A media key.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(not(any(target_os = "linux", windows)), expect(dead_code, reason = "the media control backend is only implemented on Linux and Windows"))]
 pub enum Key {
     Toggle,
     Play,
@@ -13,6 +14,7 @@ pub enum Key {
     Prev,
 }
 
+#[cfg_attr(not(any(target_os = "linux", windows)), expect(dead_code, reason = "the stub backend drains messages without using their payloads"))]
 enum Message {
     Song { title: String, artist: String },
     Playing(bool),

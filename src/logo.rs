@@ -15,13 +15,15 @@ pub fn window_icon() -> Option<winit::window::Icon> {
     winit::window::Icon::from_rgba(img.into_raw(), w, h).ok()
 }
 
+type PixelRun = (u32, u32, u32, [f32; 4]);
+
 /// The 32 px logo as horizontal runs of one colour: (x, y, length, colour).
-fn runs() -> &'static [(u32, u32, u32, [f32; 4])] {
-    static RUNS: OnceLock<Vec<(u32, u32, u32, [f32; 4])>> = OnceLock::new();
+fn runs() -> &'static [PixelRun] {
+    static RUNS: OnceLock<Vec<PixelRun>> = OnceLock::new();
     RUNS.get_or_init(|| {
         let Ok(img) = image::load_from_memory(ICON_32) else { return Vec::new() };
         let img = img.to_rgba8();
-        let mut out: Vec<(u32, u32, u32, [f32; 4])> = Vec::new();
+        let mut out: Vec<PixelRun> = Vec::new();
         for (x, y, p) in img.enumerate_pixels() {
             if p[3] == 0 {
                 continue;

@@ -8,11 +8,16 @@ mod lang;
 mod android;
 mod audio;
 mod audiolog;
+mod admin;
 mod autoplay;
+mod avatars;
 mod beatmap;
 mod browse;
 mod calibrate;
+mod medal_sound;
+mod medals;
 mod changelog;
+mod changelog_entry;
 mod clock;
 mod clipboard;
 mod config;
@@ -31,6 +36,8 @@ mod layout;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
+mod perf_audit;
+#[cfg(test)]
 mod results_tests;
 #[cfg(test)]
 mod settings_tests;
@@ -41,7 +48,9 @@ mod mapguessr;
 mod mapinfo;
 mod media;
 mod menu;
+mod menu_notes;
 mod hud;
+mod idle;
 mod keys;
 mod mods;
 mod multiverse;
@@ -59,21 +68,24 @@ mod scores;
 mod search;
 mod setstatus;
 mod settings;
+mod settings_search;
 mod shapeshift;
 mod skin;
 mod social;
 mod splash;
 mod stars;
+mod style;
 mod ui;
 mod update;
 mod video;
+mod volume;
 #[cfg(target_os = "linux")]
 mod wayland_dnd;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -136,6 +148,8 @@ const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
 
 /// How long "Reset map offsets" waits for its second press.
 const RESET_CONFIRM: Duration = Duration::from_secs(4);
+/// How long a new player stays on the guide's welcome and offset pages before moving on.
+const GUIDE_HOLD: Duration = Duration::from_secs(4);
 
 /// How far the player's arrow keys and wheel move the music.
 const MUSIC_SEEK_MS: f64 = 5000.0;
@@ -246,6 +260,10 @@ struct FrameStats {
     worst_acc: f64,
 }
 
+type SetCheck = (u32, Receiver<Result<(bool, Vec<PathBuf>), String>>);
+type BoardFetch = (u64, Receiver<Result<Vec<online::OnlineScore>, String>>);
+type LovedCall = (Receiver<Result<online::Reply, String>>, Option<(u32, bool)>);
+
 /// Everything the input and render threads share. The render thread holds the lock only while
 /// building a frame (well under a millisecond) and never across a GPU wait, so key presses are
 /// handled — and timestamped — immediately no matter how the swapchain paces frames.
@@ -267,11 +285,18 @@ struct State {
     modifiers_ctrl: bool,
     modifiers_alt: bool,
     /// When the volume overlay was last poked (Alt + wheel).
-    volume_shown: Option<Instant>,
+    volume: volume::Overlay,
+    volume_save_at: Option<Instant>,
     /// The startup splash while it plays.
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
+    /// A screen just opened fades in: how long it has been showing (ms).
+    screen_fade: Option<f32>,
+    /// The screen last drawn, to fade in the next one.
+    shown_scene: Option<std::mem::Discriminant<Scene>>,
+    /// What drifts behind it.
+    menu_notes: menu_notes::Notes,
     /// When dragging the player's timeline last moved the music.
     music_seeked: Option<Instant>,
     /// The first steps guide is up, on this page.
@@ -280,6 +305,9 @@ struct State {
     guide_binding: Option<usize>,
     /// The page to go back to once calibrating from the guide is done.
     guide_after: Option<usize>,
+    /// The page on screen and since when, and the pages that were up for all of `GUIDE_HOLD`.
+    guide_shown: Option<(usize, Instant)>,
+    guide_read: [bool; guide::PAGES],
     /// When "Reset map offsets" was pressed once, waiting for the second.
     reset_armed: Option<Instant>,
     /// The music player, instead of the main menu.
@@ -293,8 +321,6 @@ struct State {
     /// The window's handle, for the media controls on Windows.
     window_handle: Option<usize>,
     updater: update::Updater,
-    /// When the overlay appeared (it slides in once, not on every notch).
-    volume_since: Option<Instant>,
     /// Clickable areas of the last frame drawn.
     hits: Vec<render::HitBox>,
     browse: browse::Browse,
@@ -303,7 +329,7 @@ struct State {
     /// and the one the selection rests on, since when.
     /// The set being checked against osu!: whether it's outdated, and its difficulties here
     /// that aren't osu!'s.
-    set_check: Option<(u32, Receiver<Result<(bool, Vec<PathBuf>), String>>)>,
+    set_check: Option<SetCheck>,
     set_check_due: Option<(u32, Instant)>,
     /// Android: when the folder of .osz files opened with the game was last looked at.
     #[cfg(target_os = "android")]
@@ -337,12 +363,18 @@ struct State {
     board_online: bool,
     /// A player's profile, over everything else.
     profile: Option<profile::View>,
+    /// The medals screen, over everything but a medal being earned.
+    medals: Option<medals::View>,
+    /// Medals earned, shown as soon as nothing is playing.
+    unlock: medals::Unlock,
     /// What's new, over everything else.
     changelog: Option<changelog::View>,
+    /// Update notes being fetched without opening an overlay or intercepting input.
+    pending_changelog: Option<changelog::View>,
     /// Online leaderboards fetched (by map hash: when, and the rows or why not), and the one
     /// being fetched.
     online_boards: std::collections::HashMap<u64, (Instant, Result<Vec<online::OnlineScore>, String>)>,
-    board_fetch: Option<(u64, Receiver<Result<Vec<online::OnlineScore>, String>>)>,
+    board_fetch: Option<BoardFetch>,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
     /// Mods of the play being loaded.
@@ -374,7 +406,13 @@ struct State {
     /// When the background image last changed (it fades in).
     bg_changed: Option<Instant>,
     /// A newly loaded skin's note images, for the render thread to upload.
-    sprites_upload: Option<render::Atlas>,
+    sprites_upload: Option<Arc<render::Atlas>>,
+    /// Profile pictures: fetched as they're drawn, uploaded by the render thread.
+    avatars: avatars::Avatars,
+    /// The account logged in is an admin (the server says so; it checks every admin action).
+    admin: bool,
+    skin_loader: Option<skin::Loader>,
+    skin_key: Option<(skin::Key, std::sync::Weak<render::Atlas>)>,
     /// The playing map's folder when it carries skin images (they're in the loaded skin), and
     /// the folder last checked for them.
     skin_map: Option<PathBuf>,
@@ -383,6 +421,8 @@ struct State {
     focused: bool,
     /// The right button is held on song select (scrolling through the list).
     right_scroll: bool,
+    /// The settings' bar being dragged (index into `settings::ITEMS`).
+    settings_level: Option<usize>,
     /// The song list's scroll bar is held.
     scrollbar_drag: bool,
     /// Right button pressed on song select and not moved yet (virtual units, what's under it):
@@ -417,7 +457,7 @@ struct State {
     status_sweep_due: Option<Instant>,
     /// Asking the online server which sets are loved there (or loving one: the set and which
     /// way, for the message), and whether it's been asked since starting.
-    loved_call: Option<(Receiver<Result<online::Reply, String>>, Option<(u32, bool)>)>,
+    loved_call: Option<LovedCall>,
     loved_asked: bool,
     /// The live play going on (its time played so far), until it's sent to the leaderboards or
     /// left some other way: then it's counted on the server as played (`Request::Played`).
@@ -444,6 +484,8 @@ struct State {
     quit_asked: bool,
     /// The game crashed last time: its report, offered to copy (`draw_crash`).
     crash: Option<String>,
+    /// That report is on its way to the server (`send_crash_report`).
+    crash_sent: bool,
     /// F12 was pressed: the next frame is saved as a picture.
     screenshot_due: bool,
     smooth: Option<debug::Smoothness>,
@@ -468,6 +510,9 @@ struct State {
     /// in the background; the input thread waits until the render thread has let go of it).
     surface_swap: Option<(Option<wgpu::Surface<'static>>, u32, u32)>,
     present: PresentChoice,
+    /// The present modes the renderer can do (`Renderer::present_choices`): the only ones the
+    /// settings offer.
+    present_modes: Vec<PresentChoice>,
     refresh_hz: f64,
     settings_ui: SettingsUi,
     fullscreen: bool,
@@ -515,8 +560,12 @@ struct State {
     mouse: (f64, f64),
     grip: Option<(Grip, (f64, f64), Area)>,
     hover: Option<Grip>,
+    /// The game's size in pixels: the window, or its part of it with Letterbox on.
     window_w: f32,
     window_h: f32,
+    /// The window's own size, and where the game is in it with Letterbox on.
+    real_window: (f32, f32),
+    letterbox: Option<[u32; 4]>,
     /// Shapes of this frame to clip to the playfield area.
     frame_clip: Option<(std::ops::Range<usize>, Area)>,
     /// Song select preview: background, preview music, autoplay preview.
@@ -527,6 +576,8 @@ struct State {
     potentials: pp::Potentials,
     /// Background brightness for this frame (0 hides it).
     bg_brightness: f32,
+    /// The idle screen, after a while with no input.
+    idle: idle::Idle,
     /// Where the playfield size readout was drawn (virtual units), so it can be clicked.
     readout_rect: Option<[f32; 4]>,
     /// Watching a replay: the timeline drawn this frame (virtual units), and when the pointer
@@ -602,7 +653,7 @@ fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool) -> [f32; 4] {
     c.rect(x, y - th / 2.0, bw, th, rgba(0x2a2a38, 1.0));
     c.rect(x, y - th / 2.0, bw * f, th, rgba(accent(), 1.0));
     let k = if hover { 5.0 } else { 3.5 };
-    c.round_rect(x + bw * f - k, y - k, k * 2.0, k * 2.0, 1.0, rgba(0xffffff, 1.0), rgba(accent(), 1.0), 1.5);
+    c.round_rect([x + bw * f - k, y - k], [k * 2.0, k * 2.0], 1.0, rgba(0xffffff, 1.0), rgba(accent(), 1.0), 1.5);
     rect
 }
 
@@ -651,7 +702,7 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
         let st = &g.stats;
         let line = format!("{name}   {:08}   {:.2}%   {}x", st.score, st.accuracy() * 100.0, st.combo);
         let tw = Canvas::text_width(8.0, &line);
-        c.round_rect(full_w - tw - 28.0, y + 4.0, tw + 16.0, 16.0, 6.0, rgba(0x000000, 0.6), rgba(0, 0.0), 0.0);
+        c.round_rect([full_w - tw - 28.0, y + 4.0], [tw + 16.0, 16.0], 6.0, rgba(0x000000, 0.6), rgba(0, 0.0), 0.0);
         c.text_right(full_w - 20.0, y + 8.0, 8.0, rgba(0xffffff, 1.0), &line);
     }
 }
@@ -663,7 +714,7 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
         let tw = Canvas::text_width(7.0, label) + 10.0;
         let lit = on == online;
         let h = Canvas::text_height(7.0) + 3.0;
-        c.round_rect(tx, y - 1.5, tw, h, 3.0, rgba(if lit { accent() } else { 0x1d1d27 }, if lit { 0.9 } else { 1.0 }), rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+        c.round_rect([tx, y - 1.5], [tw, h], 3.0, rgba(if lit { accent() } else { 0x1d1d27 }, if lit { 0.9 } else { 1.0 }), rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), 1.0);
         c.text(tx + 5.0, y + 1.5, 7.0, rgba(if lit { 0xffffff } else { 0x8a8aa0 }, 1.0), label);
         c.hit(tx, y - 1.5, tw, h, render::Hit::BoardTab(on));
         tx += tw + 4.0;
@@ -672,7 +723,7 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
 }
 
 /// The server's scores for the selected map: each player's best (`board` None while loading).
-fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option<&Result<Vec<online::OnlineScore>, String>>, me: &str, fits: usize, first: usize) {
+fn draw_online_leaderboard(c: &mut Canvas, [x, y]: [f32; 2], w: f32, board: Option<&Result<Vec<online::OnlineScore>, String>>, me: &str, fits: usize, first: usize) {
     let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true);
     let at = x + 4.0 + tabs_w + 10.0;
     let note = match board {
@@ -702,7 +753,7 @@ fn draw_online_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, board: Option
         let mine = r.player.eq_ignore_ascii_case(me);
         let hover = c.hovered(x, ry, w, 16.0);
         let bg = if hover { 0x262634 } else if mine { 0x23232f } else { 0x15151d };
-        c.round_rect(x, ry, w, 16.0, 5.0, rgba(bg, 0.9), rgba(if mine { accent() } else { 0x2a2a38 }, 1.0), 1.0);
+        c.round_rect([x, ry], [w, 16.0], 5.0, rgba(bg, 0.9), rgba(if mine { accent() } else { 0x2a2a38 }, 1.0), 1.0);
         c.hit(x, ry, w, 16.0, render::Hit::OnlineScoreRow(k));
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods.concat()) };
@@ -738,7 +789,7 @@ fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::Sco
     for (k, r) in rows.iter().enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
         let hover = c.hovered(x, ry, w, 16.0);
-        c.round_rect(x, ry, w, 16.0, 5.0, rgba(if hover { 0x262634 } else { 0x15151d }, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect([x, ry], [w, 16.0], 5.0, rgba(if hover { 0x262634 } else { 0x15151d }, 0.9), rgba(0x2a2a38, 1.0), 1.0);
         c.hit(x, ry, w, 16.0, render::Hit::ScoreRow(k));
         let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
         let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods) };
@@ -769,10 +820,10 @@ fn draw_divider(c: &mut Canvas, [x, y, w, h]: [f32; 4], upright: bool, dragging:
     let lit = dragging || c.hovered(gx, gy, gw, gh);
     if upright {
         let len = if lit { h } else { 28.0 };
-        c.round_rect(cx - 1.0, cy - len / 2.0, 2.0, len, 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
+        c.round_rect([cx - 1.0, cy - len / 2.0], [2.0, len], 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
     } else {
         let len = if lit { w } else { 28.0 };
-        c.round_rect(cx - len / 2.0, cy - 1.0, len, 2.0, 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
+        c.round_rect([cx - len / 2.0, cy - 1.0], [len, 2.0], 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
     }
     c.hit(gx, gy, gw, gh, hit);
 }
@@ -785,14 +836,16 @@ fn board_scrollbar(c: &mut Canvas, x: f32, y: f32, shown: usize, first: usize, t
     let h = shown as f32 * 18.0 - 2.0;
     let thumb = (h * shown as f32 / total as f32).max(10.0);
     let at = (h - thumb) * first as f32 / (total - shown) as f32;
-    c.round_rect(x, y, 3.0, h, 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
-    c.round_rect(x, y + at, 3.0, thumb, 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
+    c.round_rect([x, y], [3.0, h], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+    c.round_rect([x, y + at], [3.0, thumb], 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
 }
 
 /// Sends a play to the online leaderboards on a background thread.
-fn submit_score(server: String, token: String, play: online::ScoreSubmit) -> Receiver<Result<online::Reply, String>> {
+fn submit_score(server: String, token: String, mut play: online::ScoreSubmit, path: PathBuf, params: pp::Play) -> Receiver<Result<online::Reply, String>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
+        play.stars = stars::star_rating_played(&path, params.rate, params.mods, params.scroll_speed, params.seed, params.half);
+        play.md5 = std::fs::read(&path).ok().map(|bytes| download::md5_hex(&bytes));
         let _ = tx.send(online::call(&server, online::Request::SubmitScore { token, play: Box::new(play) }));
     });
     rx
@@ -811,7 +864,7 @@ fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
 /// osu!), from the mirrors' status else osu!.db's; None when it isn't known. The server has the
 /// last word.
 fn map_gives_pp(e: &Entry, set_status: &std::collections::HashMap<u32, Option<String>>, db_status: &std::collections::HashMap<PathBuf, u8>, server_loved: &std::collections::HashSet<u32>) -> Option<bool> {
-    let Some(set) = e.meta.set_id else { return Some(false) };
+    let Some(set) = e.set_id() else { return Some(false) };
     // Loved on the online server: it gives pp there.
     if server_loved.contains(&set) {
         return Some(true);
@@ -851,10 +904,9 @@ fn fetch_replay(server: &str, score: &online::OnlineScore, map_path: &std::path:
     if score.id == 0 {
         return Err(tr!("the server doesn't keep replays yet", "このサーバーはまだリプレイを保存していません", "сервер пока не хранит повторы").into());
     }
-    if let Some(file) = scores::online_replay_path(score.id).filter(|f| f.is_file()) {
-        if let Ok(r) = scores::load_replay(&file) {
-            return Ok((file, r));
-        }
+    if let Some(file) = scores::online_replay_path(score.id).filter(|f| f.is_file())
+        && let Ok(r) = scores::load_replay(&file) {
+        return Ok((file, r));
     }
     let got = match online::call(server, online::Request::Replay { id: score.id }) {
         Ok(online::Reply::Replay(r)) => *r,
@@ -992,7 +1044,7 @@ fn open_url(url: &str) -> bool {
         // SAFETY: both strings are nul-terminated and live through the call; the rest may be null.
         let result = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
         // Above 32 is success, the rest are error codes.
-        return result as usize > 32;
+        result as usize > 32
     }
     #[cfg(not(windows))]
     std::process::Command::new("xdg-open").arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().is_ok()
@@ -1012,20 +1064,22 @@ fn file_uri(path: &std::path::Path) -> String {
     uri
 }
 
-/// Volume overlay (bottom right) shown while Alt + wheel changes the master volume.
-fn draw_volume(c: &mut Canvas, cfg: &Config, a: f32, slide: f32) {
-    let (w, h) = (190.0, 58.0);
-    let (x, y) = (c.width - w - 16.0 + slide, 480.0 - h - 30.0);
-    c.round_rect(x, y, w, h, 8.0, rgba(0x101018, 0.88 * a), rgba(0x3a3a4e, a), 1.0);
-    c.text(x + 12.0, y + 10.0, 9.0, rgba(0xffffff, a), tr!("Volume", "音量", "Громкость"));
-    c.text_right(x + w - 12.0, y + 10.0, 9.0, rgba(0xffffff, a), &format!("{:.0}%", cfg.master_volume * 100.0));
-    let (bx, by, bw) = (x + 12.0, y + 26.0, w - 24.0);
-    c.round_rect(bx, by, bw, 6.0, 3.0, rgba(0x2a2a38, a), rgba(0, 0.0), 0.0);
-    if cfg.master_volume > 0.0 {
-        c.round_rect(bx, by, (bw * cfg.master_volume).max(6.0), 6.0, 3.0, rgba(accent(), a), rgba(0, 0.0), 0.0);
+/// The maps being analysed, top right: how far it's got. In a song it waits, and this isn't shown.
+fn draw_analysis(c: &mut Canvas, done: usize, total: usize) {
+    const BAR: f32 = 54.0;
+    let text = tr!("analysing maps {done} / {total}", "譜面を分析中 {done} / {total}", "анализ карт {done} / {total}";);
+    let text = Canvas::fit(6.0, (c.width - BAR - 64.0).max(40.0), &text);
+    let tw = Canvas::text_width(6.0, &text);
+    let w = tw + BAR + 20.0;
+    let (x, y) = (c.width - w - 8.0, 4.0);
+    c.round_rect([x, y], [w, 13.0], 4.0, rgba(0x101018, 0.82), rgba(0x3a3a4e, 1.0), 1.0);
+    c.text(x + 7.0, y + 3.5, 6.0, rgba(0xc8c8d8, 1.0), &text);
+    let (bx, by) = (x + tw + 13.0, y + 5.0);
+    c.round_rect([bx, by], [BAR, 3.0], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+    let part = done as f32 / total.max(1) as f32;
+    if part > 0.0 {
+        c.round_rect([bx, by], [(BAR * part).max(3.0), 3.0], 1.5, rgba(render::accent(), 1.0), rgba(0, 0.0), 0.0);
     }
-    let detail = format!("music {:.0}%   hitsounds {:.0}%", cfg.music_volume * 100.0, cfg.fx_volume * 100.0);
-    c.text(x + 12.0, y + 40.0, 7.0, rgba(0x9a9ab0, a), &detail);
 }
 
 /// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
@@ -1033,11 +1087,10 @@ fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
     let mut out = std::collections::HashMap::new();
     let Some(text) = config::data_dir().and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok()) else { return out };
     for line in text.lines() {
-        if let Some((t, path)) = line.split_once('\t') {
-            if let Ok(t) = t.parse::<u64>() {
-                let slot = out.entry(PathBuf::from(path)).or_insert(0);
-                *slot = (*slot).max(t);
-            }
+        if let Some((t, path)) = line.split_once('\t')
+            && let Ok(t) = t.parse::<u64>() {
+            let slot = out.entry(PathBuf::from(path)).or_insert(0);
+            *slot = (*slot).max(t);
         }
     }
     out
@@ -1090,18 +1143,18 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
     let blue = preview::MARKER;
     let a = cfg.playfield_area;
     let (ax, ay, aw, ah) = (a.x * c.width, a.y * render::VIRTUAL_HEIGHT, a.w * c.width, a.h * render::VIRTUAL_HEIGHT);
-    c.round_rect(ax + 1.0, ay + 1.0, aw - 2.0, ah - 2.0, 4.0, rgba(0, 0.0), rgba(blue, 0.55), 1.5);
+    c.round_rect([ax + 1.0, ay + 1.0], [aw - 2.0, ah - 2.0], 4.0, rgba(0, 0.0), rgba(blue, 0.55), 1.5);
     let badge = tr!("AUTOPLAY PREVIEW", "オートのプレビュー", "ПРЕВЬЮ АВТОПЛЕЯ");
     let bw = Canvas::text_width(7.0, badge) + 16.0;
     // Below the header when the area reaches the top of the screen.
     let by = (ay + 8.0).max(52.0);
-    c.round_rect(ax + 8.0, by, bw, 16.0, 8.0, rgba(blue, 0.85), rgba(0, 0.0), 0.0);
+    c.round_rect([ax + 8.0, by], [bw, 16.0], 8.0, rgba(blue, 0.85), rgba(0, 0.0), 0.0);
     c.text(ax + 16.0, by + 4.5, 7.0, rgba(0x0c1a28, 1.0), badge);
 
-    c.round_rect(24.0, 10.0, c.width - 48.0, 34.0, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+    c.round_rect([24.0, 10.0], [c.width - 48.0, 34.0], 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
     let tag = tr!("PREVIEW", "プレビュー", "ПРЕВЬЮ");
     let tag_w = Canvas::text_width(8.0, tag) + 18.0;
-    c.round_rect(32.0, 18.0, tag_w, 18.0, 9.0, rgba(0x173049, 1.0), rgba(blue, 1.0), 1.0);
+    c.round_rect([32.0, 18.0], [tag_w, 18.0], 9.0, rgba(0x173049, 1.0), rgba(blue, 1.0), 1.0);
     c.text(41.0, 23.0, 8.0, rgba(0xffffff, 1.0), tag);
     let pill = stars::draw_pill(c, c.width - 36.0, 22.0, 8.0, stars);
     let back = if lobby { tr!("Lobby  (Esc)", "ロビー  (Esc)", "Лобби  (Esc)") } else { tr!("Back  (Esc)", "戻る  (Esc)", "Назад  (Esc)") };
@@ -1156,7 +1209,7 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         version: e.meta.version.clone(),
         rate,
         from: None,
-        set_id: e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)),
+        set_id: e.set_id(),
     }
 }
 
@@ -1208,7 +1261,7 @@ const SCORE_LINK_WAIT: Duration = Duration::from_secs(300);
 /// (hashing reads the file).
 fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Option<usize> {
     library.iter().position(|e| {
-        let candidate = match (s.set_id, e.meta.set_id) {
+        let candidate = match (s.set_id, e.set_id()) {
             (Some(a), Some(b)) => a == b,
             _ => online::clean_text(&e.label(), 160) == s.map,
         };
@@ -1282,6 +1335,25 @@ impl State {
     /// In a song (or its pause menu's settings): what counts for pp stays as it started.
     fn mid_song(&self) -> bool {
         self.in_song() || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. } | Scene::MpPlay { .. }))
+    }
+
+    /// Screens that go idle after a while: menus and lists, never a song or an open dialog.
+    fn idle_allowed(&self) -> bool {
+        matches!(self.scene, Scene::Select | Scene::Settings { .. } | Scene::Download | Scene::MpMenu | Scene::Lobby | Scene::Results { .. } | Scene::MpResults)
+            && !self.quit_asked
+            && self.crash.is_none()
+            && self.splash.is_none()
+            && self.settings_ui.binding.is_none()
+    }
+
+    /// The idle screen's song: the player's, or the one on this screen (title, artist).
+    fn idle_song(&self) -> Option<(String, String)> {
+        let entry = match &self.player {
+            Some(p) => p.list.entry(),
+            None => self.offset_entry(),
+        }?;
+        let e = self.library.get(entry)?;
+        Some((e.meta.title.clone(), e.meta.artist.clone()))
     }
 
     fn in_song(&self) -> bool {
@@ -1528,7 +1600,7 @@ impl State {
                 }
             }
             KeyCode::Escape => {
-                self.to_select();
+                self.show_select();
             }
             _ => {
                 self.handle_global_key(code, window);
@@ -1994,7 +2066,7 @@ impl State {
         rx
     }
 
-    fn to_select(&mut self) {
+    fn show_select(&mut self) {
         self.stop_audio();
         self.report_smoothness();
         self.scene = Scene::Select;
@@ -2020,6 +2092,7 @@ impl State {
         self.settings_ui.binding = None;
         self.settings_ui.choices = None;
         self.settings_ui.editing = None;
+        self.settings_ui.clear_search();
         self.settings_ui.krokodil = self.is_krokodil();
     }
 
@@ -2039,8 +2112,14 @@ impl State {
 
     fn guide_action(&mut self, action: guide::Action) {
         let Some(page) = self.guide else { return };
+        if self.guide_hold_left().is_some() && matches!(action, guide::Action::Next | guide::Action::Close | guide::Action::Page(_)) {
+            return;
+        }
         self.guide_binding = None;
+        let closing = action == guide::Action::Close || (action == guide::Action::Next && page + 1 == guide::PAGES);
         match action {
+            // A new player doesn't leave without the page that says to calibrate.
+            _ if closing && !self.cfg.guide_seen && !self.guide_read[guide::OFFSET_PAGE] => self.guide = Some(guide::OFFSET_PAGE),
             guide::Action::Bind(slot) => self.guide_binding = Some(slot),
             guide::Action::Back => self.guide = Some(page.saturating_sub(1)),
             guide::Action::Next if page + 1 < guide::PAGES => self.guide = Some(page + 1),
@@ -2056,6 +2135,26 @@ impl State {
         if self.guide.is_none() && !self.cfg.guide_seen {
             self.cfg.guide_seen = true;
             self.cfg.save();
+        }
+    }
+
+    /// What's left of the time a new player stays on this page of the guide.
+    fn guide_hold_left(&self) -> Option<Duration> {
+        let page = self.guide.filter(|&p| !self.cfg.guide_seen && (p == 0 || p == guide::OFFSET_PAGE) && !self.guide_read[p])?;
+        let shown = self.guide_shown.filter(|s| s.0 == page).map_or(Duration::ZERO, |s| s.1.elapsed());
+        Some(GUIDE_HOLD.saturating_sub(shown)).filter(|left| !left.is_zero())
+    }
+
+    /// Times the page on screen: the clock starts once the splash is out of the way.
+    fn tick_guide(&mut self) {
+        let page = self.guide.filter(|_| self.splash.is_none());
+        if page != self.guide_shown.map(|s| s.0) {
+            self.guide_shown = page.map(|p| (p, Instant::now()));
+        }
+        if let Some((p, since)) = self.guide_shown
+            && since.elapsed() >= GUIDE_HOLD
+        {
+            self.guide_read[p] = true;
         }
     }
 
@@ -2099,6 +2198,7 @@ impl State {
         }
         self.changelog = None;
         self.profile = None;
+        self.medals = None;
         self.social.close();
         self.mod_select = None;
         self.open_settings();
@@ -2114,7 +2214,12 @@ impl State {
             return;
         }
         // Rim keys on the outside, like on the drum.
-        match (code, self.cfg.keys.iter().position(|&k| k == code)) {
+        let drum = self.cfg.keys.iter().position(|&k| k == code);
+        // The player's own drum keys play the drum: the rims outside, the face inside.
+        if let (Some(k), Some(m)) = (drum, self.main_menu.as_mut()) {
+            m.drum(k == 0 || k == 3, if k < 2 { -1 } else { 1 });
+        }
+        match (code, drum) {
             (KeyCode::Escape, _) => self.ask_quit(),
             (KeyCode::ArrowLeft, _) | (_, Some(0)) => self.menu_step(-1),
             (KeyCode::ArrowRight, _) | (_, Some(3)) => self.menu_step(1),
@@ -2266,10 +2371,9 @@ impl State {
         let Some((p, media)) = self.player.as_ref().zip(self.media.as_ref()) else { return };
         let state = (p.list.now(), !self.music_paused);
         if self.media_told != Some(state) {
-            if self.media_told.is_none_or(|t| t.0 != state.0) {
-                if let Some(e) = p.list.entry().and_then(|i| self.library.get(i)) {
-                    media.song(e.meta.title.clone(), e.meta.artist.clone());
-                }
+            if self.media_told.is_none_or(|t| t.0 != state.0)
+                && let Some(e) = p.list.entry().and_then(|i| self.library.get(i)) {
+                media.song(e.meta.title.clone(), e.meta.artist.clone());
             }
             media.playing(state.1);
             self.media_told = Some(state);
@@ -2324,15 +2428,11 @@ impl State {
         }
     }
 
-    /// A note clicked: the one in the circle is hit, any other rides up to it.
+    /// A note or its name clicked: it rides up to the circle and is hit, all in one click.
     fn menu_click(&mut self, i: usize) {
         let Some(m) = self.main_menu.as_mut().filter(|m| !m.is_leaving()) else { return };
-        if m.is_selected(i) {
-            self.menu_hit();
-        } else {
-            m.pick(i);
-            self.sfx(audio::Sfx::Kat);
-        }
+        m.pick(i);
+        self.menu_hit();
     }
 
     fn menu_hit(&mut self) {
@@ -2351,13 +2451,30 @@ impl State {
         }
     }
 
+    /// The medals screen; `name`: whose, or None for just the list.
+    fn open_medals(&mut self, name: Option<String>) {
+        self.medals = Some(medals::View::open(self.cfg.online_server.clone(), name));
+    }
+
+    /// Medals to celebrate; past the few that get the full show, a line says how many more.
+    fn medals_earned(&mut self, new: Vec<online::MedalNote>) {
+        let more = self.unlock.add(new);
+        if more > 0 {
+            self.toast(tr!("and {more} more medals", "ほか{more}個のメダル", "и ещё медалей: {more}";));
+        }
+    }
+
     /// Opens the screen of the note that was hit. Coming back from those lands here again,
     /// except from the songs, which is what the menu is for leaving to.
     fn menu_open(&mut self, item: menu::Item) {
+        if !matches!(item, menu::Item::Editor | menu::Item::Exit) {
+            self.screen_fade = Some(0.0);
+        }
         match item {
             menu::Item::Play => self.main_menu = None,
             menu::Item::Multiplayer => self.open_multiplayer(),
             menu::Item::Download => self.open_download(),
+            menu::Item::Medals => self.open_medals(self.mp_menu.account.clone()),
             menu::Item::Editor => {}
             menu::Item::Settings => self.open_settings(),
             menu::Item::Exit => self.ask_quit(),
@@ -2393,6 +2510,109 @@ impl State {
         }
     }
 
+    /// The window has a new size.
+    fn set_window(&mut self, w: f32, h: f32) {
+        self.real_window = (w, h);
+        self.window_w = w;
+        self.window_h = h;
+    }
+
+    /// Works out where the game goes in the window, for this frame.
+    fn sync_letterbox(&mut self) -> Option<[u32; 4]> {
+        let (w, h) = self.real_window;
+        let on = self.cfg.letterbox && self.fullscreen;
+        self.letterbox = layout::letterbox((w as u32, h as u32), self.cfg.letterbox_size, self.cfg.letterbox_pos).filter(|_| on);
+        let (gw, gh) = self.letterbox.map_or((w, h), |[_, _, gw, gh]| (gw as f32, gh as f32));
+        if (gw, gh) != (self.window_w, self.window_h) {
+            (self.window_w, self.window_h) = (gw, gh);
+            self.refresh_presets();
+        }
+        self.letterbox
+    }
+
+    /// A point of the window as the game sees it: from the game's own corner.
+    fn to_game(&self, x: f64, y: f64) -> (f64, f64) {
+        self.letterbox.map_or((x, y), |[gx, gy, ..]| (x - gx as f64, y - gy as f64))
+    }
+
+    /// The window's size in pixels.
+    fn window_px(&self) -> (f32, f32) {
+        if self.letterbox.is_some() { self.real_window } else { (self.window_w, self.window_h) }
+    }
+
+    /// The resolutions Letterbox can use: all the monitor reports, custom ones from the driver
+    /// too, and the usual ones, grouped by aspect ratio.
+    fn letterbox_sizes(&self) -> Vec<(u32, u32)> {
+        let (mw, mh) = self.monitor_size;
+        let sizes = layout::presets(&self.monitor_modes, mw, mh);
+        layout::group_presets(&sizes, self.monitor_size).into_iter().flat_map(|(_, l)| l).collect()
+    }
+
+    /// How a setting's row shows its value.
+    fn setting_control(&self, item: Item) -> settings::Control {
+        use settings::Control;
+        let c = &self.cfg;
+        match item {
+            Item::MasterVolume => Control::Level(c.master_volume),
+            Item::MusicVolume => Control::Level(c.music_volume),
+            Item::FxVolume => Control::Level(c.fx_volume),
+            Item::BackgroundDim => Control::Level(c.bg_dim),
+            Item::MenuNotesDim => Control::Level(c.menu_notes_dim),
+            Item::DonColour => Control::Swatch(c.note_colours.don()),
+            Item::KatColour => Control::Swatch(c.note_colours.kat()),
+            Item::Accent | Item::AccentHue => Control::Swatch(c.accent),
+            Item::Interface => Control::Switch(!c.interface_hidden),
+            _ if item.kind() == Kind::Toggle => Control::Switch(self.setting_value(item) != off_text()),
+            _ => Control::Text,
+        }
+    }
+
+    /// A setting's bar set from the pointer, to the nearest percent. Saved on letting go.
+    fn set_level(&mut self, i: usize) {
+        let level = (self.settings_ui.level_at(self.mouse_virtual().0) * 100.0).round() / 100.0;
+        match settings::ITEMS[i].1 {
+            Item::MasterVolume => self.cfg.master_volume = level,
+            Item::MusicVolume => self.cfg.music_volume = level,
+            Item::FxVolume => self.cfg.fx_volume = level,
+            Item::BackgroundDim => self.cfg.bg_dim = level,
+            Item::MenuNotesDim => self.cfg.menu_notes_dim = level,
+            _ => {}
+        }
+        self.apply_volume();
+    }
+
+    /// Text typed on the settings screen goes into its search; true if it took the key.
+    fn settings_type(&mut self, code: KeyCode, text: Option<&str>) -> bool {
+        let ui = &self.settings_ui;
+        if ui.choices.is_some() || ui.binding.is_some() || ui.dropdown.is_some() || self.modifiers_ctrl || self.modifiers_alt {
+            return false;
+        }
+        let searching = !ui.search.is_empty();
+        let mut search = ui.search.clone();
+        match code {
+            KeyCode::Backspace if searching => {
+                search.pop();
+            }
+            KeyCode::Escape if searching => search.clear(),
+            // Space still works the row until there's something to search for.
+            KeyCode::Space if !searching => return false,
+            _ if keys::starts_text(code) || (searching && keys::types_text(code)) => search.extend(text.into_iter().flat_map(str::chars).filter(|c| !c.is_control())),
+            _ => return false,
+        }
+        self.search_settings(search);
+        true
+    }
+
+    fn search_settings(&mut self, text: String) {
+        let hotkeys = self.settings_key_names();
+        self.settings_ui.set_search(text, &|item| hotkeys.iter().find(|(i, _)| *i == item).map_or(String::new(), |(_, name)| name.clone()));
+    }
+
+    /// Every key setting with the key it's on.
+    fn settings_key_names(&self) -> Vec<(Item, String)> {
+        settings::ITEMS.iter().filter(|(_, item)| item.kind() == Kind::Key).map(|&(_, item)| (item, self.setting_value(item))).collect()
+    }
+
     fn setting_value(&self, item: Item) -> String {
         let c = &self.cfg;
         let on = |b: bool| if b { on_text() } else { off_text() }.to_string();
@@ -2417,6 +2637,7 @@ impl State {
             Item::AutoplayBinding => autoplay::BINDINGS[c.autoplay.binding].into(),
             Item::AutoplayLeftHanded => on(c.autoplay.left_handed),
             Item::Screenshots => c.screenshot_to.name().into(),
+            Item::IdleScreen => idle::minutes_name(c.idle_minutes),
             Item::Language => c.language.name().into(),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::WheelResize => on(c.wheel_resizes_playfield),
@@ -2425,6 +2646,7 @@ impl State {
             Item::HideGreat => on(c.hide_great),
             Item::HitFlash => on(c.hit_flash),
             Item::DiscordPresence => on(c.discord_presence),
+            Item::CrashReports => on(c.send_crash_reports),
             Item::ChatFilter => on(c.chat_filter),
             Item::MessageSound => on(c.message_sound),
             Item::NotifyPlaying => on(c.notify_playing),
@@ -2433,6 +2655,7 @@ impl State {
             Item::NotifyMentions => on(c.notify_mentions),
             Item::NotifyRequests => on(c.notify_requests),
             Item::ShowConverts => on(self.select.show_converts),
+            Item::SongHeadings => on(self.select.headings),
             Item::HiddenMaps => self.select.hidden.describe(),
             Item::SongsFolder if self.folder_pick.is_some() && self.folder_pick_for == Item::SongsFolder => picking_text().into(),
             Item::DataFolder if self.folder_pick.is_some() && self.folder_pick_for == Item::DataFolder => picking_text().into(),
@@ -2459,7 +2682,27 @@ impl State {
                 let frames = c.audio_buffer;
                 tr!("{frames} frames ({ms:.1} ms)", "{frames}フレーム ({ms:.1} ms)", "{frames} кадров ({ms:.1} мс)";)
             }
-            Item::PresentMode => c.present.name().to_string(),
+            Item::PresentMode => c.present.within(&self.present_modes).name().to_string(),
+            Item::Renderer => {
+                // What's drawing now (the adapter's name ends in its API), and a word when the
+                // pick waits for a restart.
+                let api = self.adapter.rsplit_once('(').map(|(_, a)| a.trim_end_matches(')').to_ascii_lowercase()).unwrap_or_default();
+                let running = match api.as_str() {
+                    "vulkan" => "vulkan",
+                    "dx12" => "dx12",
+                    "gl" => "gl",
+                    "metal" => "metal",
+                    _ => "",
+                };
+                let name = config::renderer_name(&c.graphics_api);
+                if c.graphics_api == "auto" && !running.is_empty() {
+                    format!("{name} ({})", config::renderer_name(running))
+                } else if c.graphics_api != "auto" && !running.is_empty() && c.graphics_api != running {
+                    tr!("{name} (after a restart)", "{name} (再起動後)", "{name} (после перезапуска)";)
+                } else {
+                    name.to_string()
+                }
+            }
             Item::MenuVsync => on(c.menu_vsync),
             Item::HalfResolution => on(c.half_resolution),
             Item::FpsCap => {
@@ -2472,7 +2715,12 @@ impl State {
             Item::ShowFps => on(c.show_fps),
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
-            Item::MainMenu => on(c.main_menu),
+            Item::LegacyMenu => on(!c.main_menu),
+            Item::Letterbox => on(c.letterbox),
+            Item::LetterboxSize => format!("{}x{}", c.letterbox_size.0, c.letterbox_size.1),
+            Item::LetterboxX => format!("{:+.0}%", c.letterbox_pos.0),
+            Item::LetterboxY => format!("{:+.0}%", c.letterbox_pos.1),
+            Item::MenuNotes => on(c.menu_notes),
             Item::CheckUpdates => on(c.check_updates),
             Item::Update => {
                 let build = update::BUILD.map(update::short);
@@ -2499,10 +2747,13 @@ impl State {
             Item::KrokodilKoban => String::new(),
             Item::Fullscreen => on(self.fullscreen),
             Item::WindowSize if self.fullscreen => {
-                let (w, h) = (self.window_w, self.window_h);
+                let (w, h) = self.window_px();
                 tr!("fullscreen ({w:.0}x{h:.0})", "フルスクリーン ({w:.0}x{h:.0})", "полный экран ({w:.0}x{h:.0})";)
             }
-            Item::WindowSize => format!("{:.0}x{:.0}", self.window_w, self.window_h),
+            Item::WindowSize => {
+                let (w, h) = self.window_px();
+                format!("{w:.0}x{h:.0}")
+            }
             Item::Calibrate => enter_to_start().into(),
             Item::Guide => enter_to_start().into(),
             Item::ResetMapOffsets if self.map_offsets.is_empty() => tr!("none set", "なし", "их нет").into(),
@@ -2545,6 +2796,7 @@ impl State {
             Item::PlayfieldArea => c.playfield_area.describe(),
             Item::PlayfieldPreset => self.current_preset().map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| tr!("custom", "カスタム", "свой").into()),
             Item::BackgroundDim => format!("{:.0}%", c.bg_dim * 100.0),
+            Item::MenuNotesDim => format!("{:.0}%", c.menu_notes_dim * 100.0),
             Item::PlayfieldReset => tr!("Enter to reset", "Enterで元に戻す", "Enter — сбросить").into(),
             Item::Rate => format!("{:.2}x", c.rate),
             Item::RateKeepPitch => on(c.rate_keep_pitch),
@@ -2602,6 +2854,10 @@ impl State {
             }
             Item::AutoplayLeftHanded => self.cfg.autoplay.left_handed = !self.cfg.autoplay.left_handed,
             Item::Screenshots => self.cfg.screenshot_to = self.cfg.screenshot_to.step(dir),
+            Item::IdleScreen => {
+                let i = idle::MINUTES.iter().position(|&m| m == self.cfg.idle_minutes).unwrap_or(2) as i32;
+                self.cfg.idle_minutes = idle::MINUTES[(i + dir).rem_euclid(idle::MINUTES.len() as i32) as usize];
+            }
             Item::Language => self.cfg.language = self.cfg.language.step(dir),
             Item::Accent => {
                 let n = render::ACCENTS.len() as i32;
@@ -2627,6 +2883,10 @@ impl State {
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::HitFlash => self.cfg.hit_flash = !self.cfg.hit_flash,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
+            Item::CrashReports => {
+                self.cfg.send_crash_reports = !self.cfg.send_crash_reports;
+                SEND_CRASH_REPORTS.store(self.cfg.send_crash_reports, Ordering::Relaxed);
+            }
             Item::ChatFilter => {
                 self.cfg.chat_filter = !self.cfg.chat_filter;
                 // Switched on: what's already in the chats gets cleaned up too.
@@ -2647,6 +2907,12 @@ impl State {
                 self.cfg.save();
                 return;
             }
+            Item::SongHeadings => {
+                self.select.set_headings(!self.select.headings, &self.library);
+                self.cfg.song_headings = self.select.headings;
+                self.cfg.save();
+                return;
+            }
             // Act on Enter in `settings_key`.
             Item::HiddenMaps | Item::SongsFolder | Item::DataFolder => return,
             Item::MasterVolume => self.cfg.master_volume = (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
@@ -2656,9 +2922,9 @@ impl State {
                 let i = AUDIO_BUFFERS.iter().position(|&b| b >= self.cfg.audio_buffer).unwrap_or(2);
                 self.set_audio_buffer(AUDIO_BUFFERS[(i as i32 + dir).clamp(0, AUDIO_BUFFERS.len() as i32 - 1) as usize]);
             }
-            Item::PresentMode => {
-                self.cfg.present = if dir > 0 { self.cfg.present.next() } else { self.cfg.present.next().next() };
-            }
+            Item::PresentMode => self.cfg.present = self.step_present(dir),
+            // Each pick restarts the game, so Left/Right open the list rather than step through it.
+            Item::Renderer => self.open_choices(item),
             Item::MenuVsync => self.cfg.menu_vsync = !self.cfg.menu_vsync,
             Item::HalfResolution => self.cfg.half_resolution = !self.cfg.half_resolution,
             Item::FpsCap => {
@@ -2668,7 +2934,31 @@ impl State {
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Splash => self.cfg.splash = !self.cfg.splash,
-            Item::MainMenu => self.cfg.main_menu = !self.cfg.main_menu,
+            Item::LegacyMenu => {
+                self.cfg.main_menu = !self.cfg.main_menu;
+                // Gone at once, not just from the next start.
+                if !self.cfg.main_menu {
+                    self.main_menu = None;
+                }
+            }
+            Item::MenuNotes => self.cfg.menu_notes = !self.cfg.menu_notes,
+            Item::Letterbox => {
+                self.cfg.letterbox = !self.cfg.letterbox;
+                if self.cfg.letterbox && !self.fullscreen {
+                    self.toggle_fullscreen(window);
+                }
+            }
+            Item::LetterboxSize => {
+                let sizes = self.letterbox_sizes();
+                let area = |&(w, h): &(u32, u32)| w as u64 * h as u64;
+                let now = area(&self.cfg.letterbox_size);
+                let next = if dir > 0 { sizes.iter().filter(|s| area(s) > now).min_by_key(|s| area(s)) } else { sizes.iter().filter(|s| area(s) < now).max_by_key(|s| area(s)) };
+                if let Some(&size) = next {
+                    self.cfg.letterbox_size = size;
+                }
+            }
+            Item::LetterboxX => self.cfg.letterbox_pos.0 = (self.cfg.letterbox_pos.0 + 5.0 * dir as f32).clamp(-100.0, 100.0),
+            Item::LetterboxY => self.cfg.letterbox_pos.1 = (self.cfg.letterbox_pos.1 + 5.0 * dir as f32).clamp(-100.0, 100.0),
             Item::CheckUpdates => self.cfg.check_updates = !self.cfg.check_updates,
             // Acts on Enter in `settings_key`.
             Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout => return,
@@ -2715,6 +3005,7 @@ impl State {
                 return;
             }
             Item::BackgroundDim => self.cfg.bg_dim = (((self.cfg.bg_dim + 0.05 * dir as f32) * 20.0).round() / 20.0).clamp(0.0, 1.0),
+            Item::MenuNotesDim => self.cfg.menu_notes_dim = (((self.cfg.menu_notes_dim + 0.05 * dir as f32) * 20.0).round() / 20.0).clamp(0.0, 1.0),
             Item::Rate => {
                 let step = 0.05 * if self.modifiers_shift { 5.0 } else { 1.0 };
                 self.cfg.rate = (((self.cfg.rate + step * d) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
@@ -2781,6 +3072,9 @@ impl State {
                 let all = lang::Lang::ALL;
                 (strings(&mut all.iter().map(|l| l.name())), all.iter().position(|&l| l == c.language), String::new())
             }
+            Item::IdleScreen => {
+                (idle::MINUTES.iter().map(|&m| idle::minutes_name(m)).collect(), idle::MINUTES.iter().position(|&m| m == c.idle_minutes), String::new())
+            }
             Item::Screenshots => {
                 let all = config::ScreenshotTo::ALL;
                 (strings(&mut all.iter().map(|t| t.name())), all.iter().position(|&t| t == c.screenshot_to), String::new())
@@ -2790,9 +3084,14 @@ impl State {
                 (strings(&mut all.iter().map(|s| s.name())), all.iter().position(|&s| s == c.autoplay.style), String::new())
             }
             Item::AutoplayBinding => (strings(&mut autoplay::BINDINGS.iter().copied()), Some(c.autoplay.binding), String::new()),
+            Item::Renderer => {
+                let all = config::RENDERERS;
+                (strings(&mut all.iter().map(|&r| config::renderer_name(r))), all.iter().position(|&r| r == c.graphics_api), tr!("picking one restarts the game", "選ぶとゲームが再起動します", "выбор перезапустит игру").into())
+            }
             Item::PresentMode => {
-                let all = PresentChoice::ALL;
-                (strings(&mut all.iter().map(|p| p.name())), all.iter().position(|&p| p == c.present), tr!("during songs", "曲の間", "во время песен").into())
+                let all = &self.present_modes;
+                let note = if all.len() == 1 { tr!("the only one this renderer has", "このレンダラーはこれだけ", "у этого рендера только он") } else { tr!("during songs", "曲の間", "во время песен") };
+                (strings(&mut all.iter().map(|p| p.name())), all.iter().position(|&p| p == c.present.within(all)), note.into())
             }
             Item::AudioBuffer => {
                 let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
@@ -2817,6 +3116,14 @@ impl State {
                 let type_size = tr!("Type a size", "サイズを入力", "Ввести размер").to_string();
                 let names = std::iter::once(type_size).chain(sizes.iter().map(|&(w, h)| format!("{w} x {h}   {}", layout::aspect_name(w, h)))).collect();
                 let current = sizes.iter().position(|&s| s == now && !self.fullscreen).map(|i| i + 1);
+                let (mw, mh) = self.monitor_size;
+                (names, current, tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}";))
+            }
+            Item::LetterboxSize => {
+                let sizes = self.letterbox_sizes();
+                let type_size = tr!("Type a size", "サイズを入力", "Ввести размер").to_string();
+                let names = std::iter::once(type_size).chain(sizes.iter().map(|&(w, h)| format!("{w} x {h}   {}", layout::aspect_name(w, h)))).collect();
+                let current = sizes.iter().position(|&s| s == c.letterbox_size).map(|i| i + 1);
                 let (mw, mh) = self.monitor_size;
                 (names, current, tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}";))
             }
@@ -2889,10 +3196,16 @@ impl State {
         match list.item {
             Item::TouchLayout => self.cfg.touch_layout = config::TouchLayout::ALL[i],
             Item::Screenshots => self.cfg.screenshot_to = config::ScreenshotTo::ALL[i],
+            Item::IdleScreen => self.cfg.idle_minutes = idle::MINUTES[i],
             Item::AutoplayStyle => self.cfg.autoplay.style = autoplay::Style::ALL[i],
             Item::AutoplayBinding => self.cfg.autoplay.binding = i,
             Item::Language => self.cfg.language = lang::Lang::ALL[i],
-            Item::PresentMode => self.cfg.present = PresentChoice::ALL[i],
+            Item::PresentMode => self.cfg.present = self.present_modes.get(i).copied().unwrap_or(PresentChoice::Fifo),
+            Item::Renderer if config::RENDERERS[i] != self.cfg.graphics_api => {
+                self.cfg.graphics_api = config::RENDERERS[i].to_string();
+                self.restart_for_renderer();
+            }
+            Item::Renderer => {}
             Item::AudioBuffer if Some(i) != list.current => self.set_audio_buffer(AUDIO_BUFFERS[i]),
             Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
             Item::Accent => self.cfg.accent = render::ACCENTS[i].1,
@@ -2912,6 +3225,15 @@ impl State {
             Item::WindowSize if i == 0 => {
                 self.start_edit(Item::WindowSize);
                 return;
+            }
+            Item::LetterboxSize if i == 0 => {
+                self.start_edit(Item::LetterboxSize);
+                return;
+            }
+            Item::LetterboxSize => {
+                if let Some(&size) = self.letterbox_sizes().get(i - 1) {
+                    self.cfg.letterbox_size = size;
+                }
             }
             Item::WindowSize => {
                 self.window_request = self.window_sizes().get(i - 1).copied();
@@ -2984,6 +3306,9 @@ impl State {
     fn start_edit(&mut self, item: Item) {
         let c = &self.cfg;
         let text = match item {
+            Item::LetterboxSize => format!("{}x{}", c.letterbox_size.0, c.letterbox_size.1),
+            Item::LetterboxX => format!("{:.0}", c.letterbox_pos.0),
+            Item::LetterboxY => format!("{:.0}", c.letterbox_pos.1),
             Item::ScrollSpeed => format!("{:.2}", c.scroll_speed),
             Item::Rate => format!("{:.2}", c.rate),
             Item::Offset => format!("{:.0}", c.offset_ms),
@@ -2995,6 +3320,7 @@ impl State {
             Item::MusicVolume => format!("{:.0}", c.music_volume * 100.0),
             Item::FxVolume => format!("{:.0}", c.fx_volume * 100.0),
             Item::BackgroundDim => format!("{:.0}", c.bg_dim * 100.0),
+            Item::MenuNotesDim => format!("{:.0}", c.menu_notes_dim * 100.0),
             Item::FpsCap => c.fps_cap.to_string(),
             Item::AccentHue => format!("#{:06x}", c.accent),
             Item::DonColour => format!("#{:06x}", c.note_colours.don()),
@@ -3046,6 +3372,8 @@ impl State {
         let percent = || number().map(|n| (n / 100.0).clamp(0.0, 1.0) as f32);
         let c = &mut self.cfg;
         match item {
+            Item::LetterboxX => c.letterbox_pos.0 = number()?.round().clamp(-100.0, 100.0) as f32,
+            Item::LetterboxY => c.letterbox_pos.1 = number()?.round().clamp(-100.0, 100.0) as f32,
             Item::ScrollSpeed => c.scroll_speed = ((number()? * 100.0).round() / 100.0).clamp(0.3, 4.0),
             Item::Rate => c.rate = ((number()? * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
             Item::Offset => c.offset_ms = number()?.round().clamp(-1000.0, 1000.0),
@@ -3057,6 +3385,7 @@ impl State {
             Item::MusicVolume => c.music_volume = percent()?,
             Item::FxVolume => c.fx_volume = percent()?,
             Item::BackgroundDim => c.bg_dim = percent()?,
+            Item::MenuNotesDim => c.menu_notes_dim = percent()?,
             Item::FpsCap => {
                 let fps = number()?.round();
                 c.fps_cap = if fps <= 0.0 { 0 } else { fps.clamp(30.0, 10000.0) as u32 };
@@ -3065,6 +3394,17 @@ impl State {
                 let t = text.trim();
                 let hex = if t.starts_with('#') { t.to_string() } else { format!("#{t}") };
                 c.accent = render::parse_accent(t).or_else(|| render::parse_accent(&hex)).ok_or(tr!("type a colour like #ff8800", "#ff8800のように色を入力", "введите цвет вроде #ff8800"))?;
+            }
+            Item::LetterboxSize => {
+                let (w, h) = layout::parse_size(text).ok_or(tr!("type a size like 1280x720", "1280x720のようにサイズを入力", "введите размер вроде 1280x720"))?;
+                let (mw, mh) = self.monitor_size;
+                if w > mw || h > mh {
+                    return Err(tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})";));
+                }
+                if w < MIN_WINDOW.0 as u32 || h < MIN_WINDOW.1 as u32 {
+                    return Err(tr!("at least {}x{}", "{}x{}以上", "минимум {}x{}"; MIN_WINDOW.0, MIN_WINDOW.1));
+                }
+                c.letterbox_size = (w, h);
             }
             Item::WindowSize => {
                 let (w, h) = layout::parse_size(text).ok_or(tr!("type a size like 1280x720", "1280x720のようにサイズを入力", "введите размер вроде 1280x720"))?;
@@ -3273,7 +3613,7 @@ impl State {
             let w = Canvas::text_width(7.0, label) + 14.0;
             let x = c.width - 8.0 - badge - w;
             let hover = c.hovered(x, 3.0, w, 14.0);
-            c.round_rect(x, 3.0, w, 14.0, 4.0, rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95), rgba(0x3a3a4e, 1.0), 1.0);
+            c.round_rect([x, 3.0], [w, 14.0], 4.0, rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95), rgba(0x3a3a4e, 1.0), 1.0);
             c.text(x + 7.0, 6.5, 7.0, rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
             c.hit(x, 3.0, w, 14.0, render::Hit::Changelog);
             // Who's logged in and their pp, left of it: their profile on the website.
@@ -3282,12 +3622,17 @@ impl State {
                 (Some(name), None) => (name.clone(), String::new()),
                 (None, _) => (tr!("log in", "ログイン", "войти").to_string(), String::new()),
             };
-            let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0;
+            // Their picture first.
+            let pic = if self.mp_menu.account.is_some() { 12.0 } else { 0.0 };
+            let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0 + pic;
             let ax = x - 6.0 - aw;
             let hover = c.hovered(ax, 3.0, aw, 14.0);
-            c.round_rect(ax, 3.0, aw, 14.0, 4.0, rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95), rgba(if self.mp_menu.account.is_some() { accent() } else { 0x3a3a4e }, 1.0), 1.0);
-            let nw = c.text(ax + 7.0, 6.5, 7.0, rgba(0xffffff, 1.0), &name);
-            c.text(ax + 7.0 + nw, 6.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
+            c.round_rect([ax, 3.0], [aw, 14.0], 4.0, rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95), rgba(if self.mp_menu.account.is_some() { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+            if pic > 0.0 {
+                c.avatar(&name, ax + 9.0, 10.0, 4.5, accent(), 1.0);
+            }
+            let nw = c.text(ax + 7.0 + pic, 6.5, 7.0, rgba(0xffffff, 1.0), &name);
+            c.text(ax + 7.0 + pic + nw, 6.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
             c.hit(ax, 3.0, aw, 14.0, render::Hit::Account);
         }
         let text = match self.updater.status() {
@@ -3311,7 +3656,7 @@ impl State {
         let w = Canvas::text_width(7.0, &text) + 14.0;
         let x = c.width - 8.0 - w;
         let hover = c.hovered(x, 3.0, w, 14.0);
-        c.round_rect(x, 3.0, w, 14.0, 4.0, rgba(if hover { 0x2f8f4a } else { 0x1f6b36 }, 0.95), rgba(0x86E05A, 1.0), 1.0);
+        c.round_rect([x, 3.0], [w, 14.0], 4.0, rgba(if hover { 0x2f8f4a } else { 0x1f6b36 }, 0.95), rgba(0x86E05A, 1.0), 1.0);
         c.text(x + 7.0, 6.5, 7.0, rgba(0xffffff, 1.0), &text);
         c.hit(x, 3.0, w, 14.0, render::Hit::Update);
     }
@@ -3343,10 +3688,26 @@ impl State {
     }
 
     fn load_skin(&mut self) {
-        let skin = skin::load(&self.cfg.skin, &self.cfg.skin_parts, self.audio.as_ref().map(|a| a.rate), self.skin_map.as_deref());
-        self.sprites_upload = Some(skin.images);
-        if let Some(a) = &self.audio {
-            a.set_hitsounds(skin.hitsounds);
+        self.request_skin(true);
+    }
+
+    fn request_skin(&mut self, reload: bool) {
+        self.skin_loader.get_or_insert_with(skin::Loader::new).request(skin::Key {
+            main: self.cfg.skin.clone(), parts: self.cfg.skin_parts.clone(),
+            rate: self.audio.as_ref().map(|a| a.rate), map_dir: self.skin_map.clone(),
+        }, reload);
+    }
+
+    fn poll_skin(&mut self) {
+        if let Some(ready) = self.skin_loader.as_ref().and_then(skin::Loader::poll)
+            && self.skin_key.as_ref().is_none_or(|(key, image)| *key != ready.key || !image.ptr_eq(&Arc::downgrade(&ready.assets.images)))
+        {
+            self.skin_key = Some((ready.key, Arc::downgrade(&ready.assets.images)));
+            self.sprites_upload = Some(ready.assets.images.clone());
+            skin::apply_map_spinner_warning(ready.assets.map_spinner);
+            if let (Some(audio), Some(sounds)) = (&self.audio, &ready.assets.sounds) {
+                audio.set_hitsounds(sounds.clone());
+            }
         }
     }
 
@@ -3370,11 +3731,8 @@ impl State {
             return;
         }
         self.skin_map_seen = dir.clone();
-        let want = dir.filter(|d| skin::map_has_images(d));
-        if want != self.skin_map {
-            self.skin_map = want;
-            self.load_skin();
-        }
+        self.skin_map = dir;
+        self.request_skin(false);
     }
 
     fn open_skins_folder(&mut self) {
@@ -3465,7 +3823,7 @@ impl State {
         let a = (now.saturating_duration_since(since).as_secs_f32() / 0.12).min(1.0);
         let (w, h) = (canvas.width, render::VIRTUAL_HEIGHT);
         canvas.rect(0.0, 0.0, w, h, rgba(0x000000, 0.6 * a));
-        canvas.round_rect(24.0, 24.0, w - 48.0, h - 48.0, 16.0, rgba(0x000000, 0.0), rgba(accent(), 0.9 * a), 2.5);
+        canvas.round_rect([24.0, 24.0], [w - 48.0, h - 48.0], 16.0, rgba(0x000000, 0.0), rgba(accent(), 0.9 * a), 2.5);
         let drop = tr!("Drop .osz maps to add them", ".oszの譜面をドロップで追加", "Бросьте карты .osz, чтобы добавить");
         canvas.text_centered(w / 2.0, h / 2.0 - 22.0, 18.0, rgba(0xffffff, a), &Canvas::fit(18.0, w - 64.0, drop));
         let dir = self.songs_dir.display();
@@ -3521,6 +3879,11 @@ impl State {
             let state = s.map.as_ref().map(map_label).unwrap_or_else(|| tr!("picking a map", "譜面を選択中", "выбирает карту").into());
             (details, state)
         };
+        // Away: the idle screen is all the way in (the timer then counts the time away).
+        if self.idle.amount() >= 1.0 {
+            let song = self.idle_song().map(|(title, artist)| format!("{artist} - {title}")).unwrap_or_default();
+            return Some((tr!("AFK", "離席中", "Отошёл").into(), song));
+        }
         Some(match &self.scene {
             Scene::Loading { entry, .. } => (self.library.get(*entry)?.label(), tr!("Loading...", "読み込み中...", "Загрузка...").into()),
             Scene::Play { game, entry, .. } => {
@@ -3564,6 +3927,10 @@ impl State {
             Scene::Select if self.player.is_some() => {
                 let song = self.player.as_ref().and_then(|p| p.list.entry()).and_then(|i| self.library.get(i)).map(Entry::label);
                 (tr!("Listening to music", "音楽を聴いている", "Слушает музыку").into(), song.unwrap_or_default())
+            }
+            _ if self.on_menu() => {
+                let song = self.idle_song().map(|(title, artist)| format!("{artist} - {title}")).unwrap_or_default();
+                (tr!("In the main menu", "メインメニュー", "В главном меню").into(), song)
             }
             Scene::Download => (tr!("Looking for new maps", "新しい譜面を探しています", "Ищет новые карты").into(), String::new()),
             Scene::Settings { .. } | Scene::LayoutEdit { .. } => (tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(), String::new()),
@@ -3733,6 +4100,9 @@ impl State {
         match code {
             KeyCode::ArrowUp => self.settings_ui.move_cursor(-1),
             KeyCode::ArrowDown => self.settings_ui.move_cursor(1),
+            KeyCode::PageUp | KeyCode::PageDown if !self.settings_ui.search.is_empty() => {
+                self.settings_ui.move_cursor(if code == KeyCode::PageDown { 8 } else { -8 });
+            }
             KeyCode::PageUp | KeyCode::PageDown => {
                 let n = settings::SECTIONS.len() as i32;
                 let dir = if code == KeyCode::PageDown { 1 } else { -1 };
@@ -3950,6 +4320,9 @@ impl State {
     }
 
     fn map_offset(&self, entry: Option<usize>) -> f64 {
+        if self.map_offsets.is_empty() {
+            return 0.0;
+        }
         entry.and_then(|i| self.library.get(i)).and_then(|e| self.map_offsets.get(&e.hash())).copied().unwrap_or(0.0)
     }
 
@@ -3967,11 +4340,12 @@ impl State {
 
     fn refresh_play_offset(&mut self) {
         let was = self.play_offset;
-        self.play_offset = self.cfg.offset_ms + self.map_offset(self.offset_entry());
+        let offset = self.map_offset(self.offset_entry());
+        self.play_offset = self.cfg.offset_ms + offset;
         if self.play_offset != was {
             audiolog::line(&format!("offset total={} global={}", self.play_offset, self.cfg.offset_ms));
         }
-        self.preview.map_offset = self.map_offset(self.offset_entry());
+        self.preview.map_offset = offset;
     }
 
     /// Plays the current map again from where it was started (in game, paused or on results).
@@ -4013,7 +4387,7 @@ impl State {
                 }
                 2 => self.open_dropdown(),
                 3 => self.open_settings(),
-                _ => self.to_select(),
+                _ => self.show_select(),
             },
             _ => {}
         }
@@ -4062,7 +4436,7 @@ impl State {
             KeyCode::F3 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, -1.0),
             KeyCode::F4 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, 1.0),
             KeyCode::F7 => {
-                self.cfg.present = self.cfg.present.next();
+                self.cfg.present = self.step_present(1);
                 self.cfg.save();
                 let note = if self.cfg.menu_vsync && !self.player_plays() { tr!(" (menus stay on vsync)", " (メニューは垂直同期のまま)", " (меню остаются с vsync)") } else { "" };
                 let text = tr!("gameplay present mode: {}{note}", "プレイ中の表示モード: {}{note}", "режим вывода в игре: {}{note}"; self.cfg.present.name());
@@ -4107,9 +4481,7 @@ impl State {
             }
             _ => return false,
         }
-        match key {
-            _ => self.toast(tr!("scroll speed {:.2}x", "スクロール速度 {:.2}x", "скорость прокрутки {:.2}x"; self.cfg.scroll_speed)),
-        }
+        self.toast(tr!("scroll speed {:.2}x", "スクロール速度 {:.2}x", "скорость прокрутки {:.2}x"; self.cfg.scroll_speed));
         self.cfg.save();
         true
     }
@@ -4138,6 +4510,10 @@ impl State {
             Scene::Spectate(_) | Scene::Watch(_) => !self.social.open,
             _ => false,
         };
+        // The idle screen all the way in: nothing to point at.
+        if self.idle.amount() >= 1.0 {
+            return true;
+        }
         playing
             && self.grip.is_none()
             && self.replay_scrub.is_none()
@@ -4278,6 +4654,9 @@ impl State {
     }
 
     fn dropdown_key(&mut self, code: KeyCode) {
+        if let Some(dd) = &mut self.settings_ui.dropdown {
+            dd.show_cursor();
+        }
         let list = self.preset_list();
         let n = list.len();
         let saved = self.cfg.saved_presets.len();
@@ -4334,6 +4713,7 @@ impl State {
         let saved = self.cfg.saved_presets.len();
         let size = self.playfield_size();
         let Some(dd) = &mut self.settings_ui.dropdown else { return };
+        dd.show_cursor();
         let i = dd.cursor;
         match action {
             PresetAction::SaveCurrent => {
@@ -4420,12 +4800,37 @@ impl State {
     }
 
     /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
+    /// Turns the volume picked on the volume overlay (Alt+wheel, Alt+Up/Down) `notches` up.
+    fn turn_volume(&mut self, notches: i32) {
+        let changed = self.volume.turn(&mut self.cfg, notches, Instant::now());
+        if changed {
+            self.apply_volume();
+            self.volume_save_at = Some(Instant::now() + Duration::from_millis(250));
+        }
+        // Hitsounds have nothing playing to judge them by: one rings at the new volume.
+        if changed && self.volume.selected == volume::HITSOUNDS && !self.in_song() {
+            self.sfx(audio::Sfx::Kat);
+        }
+    }
+
     fn wheel(&mut self, notches: i32) {
+        if self.idle.input(Instant::now()) {
+            return;
+        }
         if notches == 0 {
+            return;
+        }
+        // Alt anywhere; with the pointer moved onto one of the volume's notes, also without Alt.
+        if self.volume.hovering(Instant::now()) || self.modifiers_alt {
+            self.turn_volume(notches);
             return;
         }
         if let Some(view) = &mut self.changelog {
             view.scroll_by(-notches * 3);
+            return;
+        }
+        if let Some(view) = &mut self.medals {
+            view.wheel(notches);
             return;
         }
         if self.social.open && !self.modifiers_alt {
@@ -4433,7 +4838,7 @@ impl State {
             let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
             let [px, py, pw, ph] = social::panel_rect(width);
             if vx >= px && vx <= px + pw && vy >= py && vy <= py + ph {
-                self.social.wheel(notches, vy, self.mp.is_some());
+                self.social.wheel(notches, self.mp.is_some());
                 return;
             }
         }
@@ -4441,21 +4846,8 @@ impl State {
             self.mod_select = Some(mods::step(cur, 0, -notches));
             return;
         }
-        if self.modifiers_alt {
-            let v = ((self.cfg.master_volume + 0.05 * notches as f32) * 20.0).round() / 20.0;
-            self.cfg.master_volume = v.clamp(0.0, 1.0);
-            self.apply_volume();
-            self.cfg.save();
-            let now = Instant::now();
-            if self.volume_shown.is_none() {
-                self.volume_since = Some(now);
-            }
-            self.volume_shown = Some(now);
-            return;
-        }
-        let n = self.preset_list().len();
         if let Some(dd) = &mut self.settings_ui.dropdown {
-            dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
+            dd.wheel(notches);
             return;
         }
         if matches!(self.scene, Scene::Preview { .. }) {
@@ -4472,9 +4864,8 @@ impl State {
             self.toast(text);
             return;
         }
-        let n = self.preset_list().len();
         if let Some(dd) = &mut self.settings_ui.dropdown {
-            dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
+            dd.wheel(notches);
             return;
         }
         let (vx, vy) = self.mouse_virtual();
@@ -4503,12 +4894,12 @@ impl State {
                 let n = self.select.picker_len() as i32;
                 self.select.picker = self.select.picker.map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
-            Scene::Select => self.select.step(-notches, &self.library, false),
+            Scene::Select => self.select.scroll_by(-notches, &self.library),
             Scene::Download if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Download => self.browse.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
-                    dd.cursor = (dd.cursor as i32 - notches).clamp(0, n as i32 - 1) as usize;
+                    dd.wheel(notches);
                 }
             }
             Scene::Settings { .. } if self.settings_ui.choices.is_some() => {
@@ -4516,7 +4907,7 @@ impl State {
                     p.move_cursor(-notches);
                 }
             }
-            Scene::Settings { .. } => self.settings_ui.move_cursor(-notches),
+            Scene::Settings { .. } => self.settings_ui.scroll_by(-notches),
             _ => {}
         }
     }
@@ -4535,6 +4926,7 @@ impl State {
     /// in its column (`cfg.touch_layout`), timed like a key press; elsewhere the first finger
     /// is the mouse (tap = click, drag = drag).
     fn touch(&mut self, id: u64, phase: TouchPhase, x: f64, y: f64, at: Instant, window: Option<&Window>) {
+        self.idle.input(at);
         self.touch_used = true;
         if phase == TouchPhase::Started && self.touch_drums() {
             let col = (x / self.window_w.max(1.0) as f64 * 4.0).floor().clamp(0.0, 3.0) as usize;
@@ -4582,10 +4974,22 @@ impl State {
     /// Pointer moved: drags the area if a drag is active, otherwise updates the hover state.
     /// Returns the cursor to show.
     fn mouse_moved(&mut self, x: f64, y: f64) -> CursorIcon {
-        if (x, y) != self.mouse {
+        let moved = (x, y) != self.mouse;
+        if moved {
             self.mouse_moved_at = Instant::now();
+            self.idle.input(self.mouse_moved_at);
         }
         self.mouse = (x, y);
+        let (vx, vy) = self.mouse_virtual();
+        let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
+        self.volume.point(vx, vy, width, Instant::now());
+        // On the main menu, pointing at a note selects it (moving: a pointer left resting doesn't
+        // take the selection back from the keys).
+        if moved && self.on_menu() && self.player.is_none()
+            && let Some(render::Hit::MenuItem(i)) = self.hit_at(vx, vy)
+            && let Some(m) = self.main_menu.as_mut().filter(|m| !m.is_leaving() && !m.is_selected(i)) {
+            m.pick(i);
+        }
         if let Some(last) = self.replay_scrub {
             // Each seek re-judges the replay up to there; ~30 a second is plenty.
             if last.elapsed() >= Duration::from_millis(33) && self.replay_seek_to_pointer(true) {
@@ -4614,6 +5018,10 @@ impl State {
                 self.select.drag_to(dy);
                 return CursorIcon::NsResize;
             }
+        }
+        if let Some(i) = self.settings_level {
+            self.set_level(i);
+            return CursorIcon::EwResize;
         }
         if self.scrollbar_drag {
             if matches!(self.scene, Scene::Select) {
@@ -4675,6 +5083,9 @@ impl State {
             }
         }
         if let Some(dd) = &mut self.settings_ui.dropdown {
+            if dd.drag_bar(vy) {
+                return CursorIcon::Default;
+            }
             if dd.button_at(vx, vy).is_some() {
                 return CursorIcon::Pointer;
             }
@@ -4700,18 +5111,17 @@ impl State {
             self.guides = guides;
             return grip.cursor();
         }
-        if self.scrubbing.is_none() {
-            if let Some(hit) = self.hit_at(vx, vy) {
-                if let (render::Hit::PauseItem(i), Scene::Play { game, .. }) = (hit, &mut self.scene) {
-                    game.paused = Some(i);
-                }
-                self.hover = None;
-                return match hit {
-                    render::Hit::SplitList => CursorIcon::EwResize,
-                    render::Hit::SplitPreview => CursorIcon::NsResize,
-                    _ => CursorIcon::Pointer,
-                };
+        if self.scrubbing.is_none()
+            && let Some(hit) = self.hit_at(vx, vy) {
+            if let (render::Hit::PauseItem(i), Scene::Play { game, .. }) = (hit, &mut self.scene) {
+                game.paused = Some(i);
             }
+            self.hover = None;
+            return match hit {
+                render::Hit::SplitList => CursorIcon::EwResize,
+                render::Hit::SplitPreview => CursorIcon::NsResize,
+                _ => CursorIcon::Pointer,
+            };
         }
         if let Some(drag) = self.player.as_ref().and_then(|p| p.drag) {
             match drag {
@@ -4746,6 +5156,9 @@ impl State {
             self.hover = None;
             let (vx, vy) = self.mouse_virtual();
             if let Some(dd) = &mut self.settings_ui.dropdown {
+                if dd.drag_bar(vy) {
+                    return CursorIcon::Default;
+                }
                 if let Some(i) = dd.row_at(vx, vy) {
                     dd.cursor = i;
                     return CursorIcon::Pointer;
@@ -4758,9 +5171,18 @@ impl State {
     }
 
     /// Right button on song select: hold it and move up and down to fly through the list, like
-    /// osu!'s right-click scrolling.
-    /// Released without moving, it opens the row's menu (or, off the rows, jumps there).
+    /// osu!'s right-click scrolling. The selection stays.
+    /// Released without moving, it opens the row's menu; on the scrollbar, it goes there.
     fn right_button(&mut self, pressed: bool) {
+        // A click that wakes the idle screen does nothing else, its release neither.
+        if pressed {
+            if self.idle.input(Instant::now()) {
+                self.idle.swallow_right = true;
+                return;
+            }
+        } else if std::mem::take(&mut self.idle.swallow_right) {
+            return;
+        }
         if self.mod_select.is_some() {
             // Right-clicking a mod makes it a favourite (or not any more).
             if pressed && self.customization_tab().is_none() {
@@ -4790,12 +5212,24 @@ impl State {
         match press {
             Some((x, y, Some(render::Hit::SongRow(row)))) => self.select.menu = Some(ui::SongMenu { row, header: false, x, y }),
             Some((x, y, Some(render::Hit::SongHeader(row)))) => self.select.menu = Some(ui::SongMenu { row, header: true, x, y }),
-            Some((_, y, _)) => self.select.scroll_to(y, &self.library),
-            None => {}
+            Some((_, y, Some(render::Hit::SongScrollbar))) => self.select.scroll_to(y, &self.library),
+            _ => {}
         }
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
+        if pressed {
+            if self.idle.input(Instant::now()) {
+                self.idle.swallow_left = true;
+                return;
+            }
+        } else if std::mem::take(&mut self.idle.swallow_left) {
+            return;
+        }
+        // Letting go of the preset list's scroll bar is all a release does then.
+        if !pressed && self.settings_ui.dropdown.as_mut().is_some_and(Dropdown::release_bar) {
+            return;
+        }
         if pressed && self.splash.is_none() {
             let (vx, vy) = self.mouse_virtual();
             let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
@@ -4819,8 +5253,24 @@ impl State {
             }
             return;
         }
+        if self.unlock.showing() {
+            if pressed {
+                self.unlock.skip();
+            }
+            return;
+        }
+        if self.medals.is_some() {
+            // Its tabs and its Back button.
+            if pressed {
+                let (vx, vy) = self.mouse_virtual();
+                if let Some(hit @ (render::Hit::Key(_) | render::Hit::MedalTab(_))) = self.hit_at(vx, vy) {
+                    self.click(hit, window);
+                }
+            }
+            return;
+        }
         if self.profile.is_some() {
-            // Only its Back button.
+            // Only its buttons.
             if pressed {
                 let (vx, vy) = self.mouse_virtual();
                 if let Some(hit @ render::Hit::Key(_)) = self.hit_at(vx, vy) {
@@ -4886,10 +5336,9 @@ impl State {
             if let Some(hit) = self.hit_at(vx, vy).filter(|_| pressed) {
                 self.click(hit, window);
             }
-            if let Some(p) = self.player.as_mut().filter(|_| !pressed) {
-                if p.drag.take() == Some(player::Drag::Volume) {
-                    self.cfg.save();
-                }
+            if let Some(p) = self.player.as_mut().filter(|_| !pressed)
+                && p.drag.take() == Some(player::Drag::Volume) {
+                self.cfg.save();
             }
             return;
         }
@@ -4936,6 +5385,10 @@ impl State {
         }
         if pressed && self.settings_ui.dropdown.is_some() {
             let (vx, vy) = self.mouse_virtual();
+            if let Some(dd) = self.settings_ui.dropdown.as_mut().filter(|d| d.editing.is_none() && d.on_bar(vx, vy)) {
+                dd.grab_bar(vy);
+                return;
+            }
             let dd = self.settings_ui.dropdown.as_ref().unwrap();
             if let Some(action) = dd.button_at(vx, vy) {
                 self.preset_action(action);
@@ -4965,6 +5418,10 @@ impl State {
         }
         if !pressed {
             self.scrollbar_drag = false;
+            if self.settings_level.take().is_some() {
+                self.cfg.save();
+                return;
+            }
             if self.split_drag.take().is_some() {
                 self.cfg.save();
                 return;
@@ -5089,13 +5546,12 @@ impl State {
 
     fn multiplayer_key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
         // Drum keys during a match go straight to the game.
-        if let Scene::MpPlay { game, .. } = &mut self.scene {
-            if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
-                if !repeat && game.replay.is_none() {
-                    game.press(k, at, self.audio.as_ref(), self.play_offset);
-                }
-                return;
+        if let Scene::MpPlay { game, .. } = &mut self.scene
+            && let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
+            if !repeat && game.replay.is_none() {
+                game.press(k, at, self.audio.as_ref(), self.play_offset);
             }
+            return;
         }
         if matches!(self.scene, Scene::MpMenu) {
             // The form takes typed text, so only function keys act as shortcuts here.
@@ -5214,10 +5670,9 @@ impl State {
                     self.toast(if self.cfg.mp_scoreboard { "scoreboard shown (Tab)" } else { "scoreboard hidden (Tab)" }.into());
                 }
                 KeyCode::Space => {
-                    if game.skip(self.audio.as_ref(), self.play_offset) {
-                        if let Some(s) = &self.mp {
-                            s.client.send(net::ClientMsg::Skipped);
-                        }
+                    if game.skip(self.audio.as_ref(), self.play_offset)
+                        && let Some(s) = &self.mp {
+                        s.client.send(net::ClientMsg::Skipped);
                     }
                 }
                 KeyCode::Escape => {
@@ -5297,6 +5752,10 @@ impl State {
             KeyCode::ArrowLeft => self.mp_menu.cursor = 0,
             KeyCode::ArrowRight => self.mp_menu.select(Row::Name),
             KeyCode::F5 => self.mp_menu.refresh(&server),
+            KeyCode::Escape if self.mp_menu.form != multiplayer::Form::Main => {
+                self.mp_menu.open(multiplayer::Form::Main);
+                self.mp_status.clear();
+            }
             KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
             KeyCode::Backspace => {
                 match row {
@@ -5330,82 +5789,112 @@ impl State {
                 let name = self.cfg.mp_name.clone();
                 let token = self.cfg.online_token.clone();
                 let account = self.mp_menu.account.clone().unwrap_or_default();
-                use multiplayer::CodeFor;
+                use multiplayer::{CodeFor, Form};
                 let menu = &mut self.mp_menu;
                 let code = (!menu.code.trim().is_empty()).then(|| menu.code.trim().to_string());
                 let email = menu.email.trim().to_string();
+                let busy = menu.account_request.is_some();
                 match row {
-                    Row::User => self.mp_menu.select(Row::Password),
-                    Row::Email | Row::Code => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
-                    Row::LogIn | Row::Register | Row::Password | Row::Forgot | Row::LinkEmail if menu.account_request.is_some() => {}
-                    // A new password typed for a reset goes with the code.
-                    Row::Password if menu.code_for == Some(CodeFor::Reset) => self.mp_menu.select(Row::Forgot),
+                    Row::User | Row::Email | Row::Code => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
+                    // Only on the login form does the password send.
+                    Row::Password if menu.form != Form::Main => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
+                    // The ways to the other forms.
+                    Row::Register if menu.form == Form::Main => {
+                        menu.open(Form::Register);
+                        self.mp_status.clear();
+                    }
+                    Row::Forgot if menu.form == Form::Main => {
+                        menu.open(Form::Reset);
+                        self.mp_status.clear();
+                    }
+                    Row::ChangePassword if menu.has_email == Some(false) => {
+                        menu.open(Form::Link);
+                        self.mp_status = tr!("link an email first: the code for a new password goes there", "先にメールを登録してください: 新しいパスワードのコードはそこに届きます", "сначала привяжи почту: код для нового пароля придёт туда").into();
+                    }
+                    Row::ChangePassword => {
+                        menu.open(Form::Reset);
+                        self.mp_status.clear();
+                    }
+                    Row::LinkEmail if menu.form != Form::Link => {
+                        menu.open(Form::Link);
+                        self.mp_status.clear();
+                    }
+                    Row::Back => {
+                        menu.open(Form::Main);
+                        self.mp_status.clear();
+                    }
+                    Row::LogIn | Row::Register | Row::Password | Row::Forgot | Row::LinkEmail if busy => {}
                     Row::Forgot => {
-                        let who = if menu.user.trim().is_empty() { email.clone() } else { menu.user.trim().to_string() };
+                        // Logged in, it's this account's password.
+                        let who = match &menu.account {
+                            Some(a) => a.clone(),
+                            None => menu.user.trim().to_string(),
+                        };
                         if who.is_empty() {
-                            self.mp_status = "type your username (or email) first".into();
+                            self.mp_status = tr!("type your name or email first", "先に名前かメールを入力してください", "сначала впиши ник или почту").into();
                             self.mp_menu.select(Row::User);
-                        } else if menu.code_for == Some(CodeFor::Reset) && code.is_some() {
-                            if !online::valid_password(&menu.password) {
-                                self.mp_status = "type a new password of at least 6 characters".into();
+                        } else if menu.code_for == Some(CodeFor::Reset) {
+                            if code.is_none() {
+                                self.mp_status = tr!("type the code from the email first", "先にメールのコードを入力してください", "сначала введи код из письма").into();
+                                self.mp_menu.select(Row::Code);
+                            } else if !online::valid_password(&menu.password) {
+                                self.mp_status = tr!("type a new password of at least 6 characters", "6文字以上の新しいパスワードを入力してください", "впиши новый пароль от 6 символов").into();
                                 self.mp_menu.select(Row::Password);
                             } else {
                                 let password = Some(menu.password.clone());
-                                self.mp_status = "setting the new password...".into();
+                                self.mp_status = tr!("setting the new password...", "新しいパスワードを設定中...", "сохраняю новый пароль...").into();
                                 menu.account_call(&server, online::Request::ResetPassword { who, code, password });
                             }
                         } else {
                             menu.asking = Some(CodeFor::Reset);
-                            self.mp_status = "sending a code to the account's email...".into();
+                            self.mp_status = tr!("sending a code to the account's email...", "アカウントのメールにコードを送信中...", "отправляю код на почту аккаунта...").into();
                             menu.account_call(&server, online::Request::ResetPassword { who, code: None, password: None });
                         }
                     }
-                    Row::LinkEmail if !menu.linking => {
-                        menu.linking = true;
-                        menu.code_for = None;
-                        menu.cursor = 0;
-                        self.mp_status = "type your email, then SEND CODE".into();
-                    }
                     Row::LinkEmail => {
                         if !email.contains('@') {
-                            self.mp_status = "type your email first".into();
+                            self.mp_status = tr!("type your email first", "先にメールを入力してください", "сначала впиши почту").into();
                             self.mp_menu.select(Row::Email);
                         } else if menu.code_for == Some(CodeFor::Link) && code.is_some() {
-                            self.mp_status = "linking the email...".into();
+                            self.mp_status = tr!("linking the email...", "メールを登録中...", "привязываю почту...").into();
                             menu.account_call(&server, online::Request::LinkEmail { token, email, code });
                         } else {
                             menu.asking = Some(CodeFor::Link);
-                            self.mp_status = format!("sending a code to {email}...");
+                            self.mp_status = tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}...";);
                             menu.account_call(&server, online::Request::LinkEmail { token, email, code: None });
                         }
                     }
-                    Row::LinkBack => {
-                        menu.linking = false;
-                        menu.code_for = None;
-                        menu.cursor = 0;
-                        self.mp_status.clear();
-                    }
-                    Row::LogIn | Row::Register | Row::Password => {
+                    Row::Register => {
                         let user = menu.user.trim().to_string();
-                        // Logging in forgets the typed password; a new account's waits for its code.
-                        let password = if row == Row::Register { menu.password.clone() } else { std::mem::take(&mut menu.password) };
-                        let valid = if row == Row::Register { online::valid_name(&user) } else { online::valid_login(&user) };
-                        if !valid {
-                            self.mp_status = format!("usernames are {}", online::NAME_RULES);
+                        if !online::valid_name(&user) {
+                            self.mp_status = tr!("names are {}", "名前は {}", "ник: {}"; online::NAME_RULES);
                             self.mp_menu.select(Row::User);
-                        } else if row == Row::Register && !online::valid_password(&password) {
-                            self.mp_status = "pick a password of at least 6 characters".into();
+                        } else if !online::valid_password(&menu.password) {
+                            self.mp_status = tr!("pick a password of at least 6 characters", "6文字以上のパスワードを決めてください", "придумай пароль от 6 символов").into();
                             self.mp_menu.select(Row::Password);
-                        } else if row == Row::Register && !email.contains('@') {
-                            self.mp_status = "type your email: a code to create the account goes there".into();
+                        } else if !email.contains('@') {
+                            self.mp_status = tr!("type your email: the code goes there", "メールを入力してください: コードはそこに届きます", "впиши почту: туда придёт код").into();
                             self.mp_menu.select(Row::Email);
-                        } else if row == Row::Register {
-                            let code = code.filter(|_| menu.code_for == Some(CodeFor::Register));
-                            self.mp_status = if code.is_some() { format!("creating {user}...") } else { format!("sending a code to {email}...") };
-                            menu.asking = Some(CodeFor::Register);
-                            menu.account_call(&server, online::Request::Register { name: user, password, email: Some(email), code });
                         } else {
-                            self.mp_status = format!("logging in as {user}...");
+                            let code = code.filter(|_| menu.code_for == Some(CodeFor::Register));
+                            self.mp_status = if code.is_some() { tr!("creating {user}...", "{user} を作成中...", "создаю {user}...";) } else { tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}...";) };
+                            menu.asking = Some(CodeFor::Register);
+                            let password = menu.password.clone();
+                            menu.account_call(&server, online::Request::Register { name: user, password, email: Some(email), code });
+                        }
+                    }
+                    Row::LogIn | Row::Password => {
+                        let user = menu.user.trim().to_string();
+                        if !online::valid_login(&user) {
+                            self.mp_status = tr!("type your name (or the account's email)", "名前(またはアカウントのメール)を入力してください", "впиши ник (или почту аккаунта)").into();
+                            self.mp_menu.select(Row::User);
+                        } else if menu.password.is_empty() {
+                            self.mp_status = tr!("type your password", "パスワードを入力してください", "впиши пароль").into();
+                            self.mp_menu.select(Row::Password);
+                        } else {
+                            // Logging in forgets the typed password.
+                            let password = std::mem::take(&mut menu.password);
+                            self.mp_status = tr!("logging in as {user}...", "{user} でログイン中...", "вхожу как {user}...";);
                             menu.account_call(&server, online::Request::Login { name: user, password });
                         }
                     }
@@ -5464,13 +5953,67 @@ impl State {
         }
     }
 
+    /// The present mode `dir` steps from the one in effect, among those the renderer can do.
+    fn step_present(&self, dir: i32) -> PresentChoice {
+        let modes = &self.present_modes;
+        let at = modes.iter().position(|&p| p == self.cfg.present.within(modes)).unwrap_or(0) as i32;
+        modes.get((at + dir).rem_euclid(modes.len().max(1) as i32) as usize).copied().unwrap_or(PresentChoice::Fifo)
+    }
+
+    /// The renderer is picked when the graphics start: the game starts again with the new one.
+    fn restart_for_renderer(&mut self) {
+        // On disk before the new game reads it (saves are written in the background).
+        self.cfg.save();
+        config::flush_saves();
+        #[cfg(not(target_os = "android"))]
+        match update::restart() {
+            Ok(()) => {
+                eprintln!("closing: restarting for the renderer ({})", self.cfg.graphics_api);
+                self.quit = true;
+            }
+            Err(e) => self.toast(tr!("restart taiko.rs to switch the renderer ({e})", "レンダラーの切り替えはtaiko.rsの再起動後 ({e})", "рендер сменится после перезапуска taiko.rs ({e})";)),
+        }
+        #[cfg(target_os = "android")]
+        self.toast(tr!("restart taiko.rs to switch the renderer", "レンダラーの切り替えはtaiko.rsの再起動後", "рендер сменится после перезапуска taiko.rs").into());
+    }
+
+    /// What's on screen, and the map, for a crash report (`CRASH_SCENE`).
+    fn note_scene_for_crashes(&self) {
+        let screen = match &self.scene {
+            Scene::Select if self.on_menu() => "main menu",
+            Scene::Select => "song select",
+            Scene::Loading { .. } => "loading a map",
+            Scene::Play { game, .. } => if game.replay.is_some() { "watching a replay" } else { "playing" },
+            Scene::Results { .. } => "results",
+            Scene::Settings { .. } => "settings",
+            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => "calibration",
+            Scene::LayoutEdit { .. } => "layout editor",
+            Scene::Preview { .. } => "map preview",
+            Scene::Download => "downloads",
+            Scene::MpMenu => "multiplayer menu",
+            Scene::Lobby => "lobby",
+            Scene::MpWait { .. } | Scene::MpPlay { .. } => "multiplayer match",
+            Scene::MpResults => "multiplayer results",
+            Scene::Spectate(_) => "spectating",
+            Scene::Watch(_) => "watching a friend",
+            Scene::VideoEdit(_) => "video editor",
+        };
+        let map = self.offset_entry().and_then(|i| self.library.get(i)).map(|e| format!(", map {} [{}] by {}", e.meta.title, e.meta.version, e.meta.creator)).unwrap_or_default();
+        let mods = self.cfg.mods.label();
+        let mods = if mods.is_empty() { String::new() } else { format!(", mods {mods}") };
+        if let Ok(mut s) = CRASH_SCENE.lock() {
+            *s = format!("screen: {screen}{map}{mods}");
+        }
+    }
+
     /// Forgets the saved online login.
     fn sign_out(&mut self, why: &str) {
         self.social = social::Social::default();
         self.select.nominator = false;
+        self.admin = false;
         self.mp_menu.account = None;
         self.mp_menu.has_email = None;
-        self.mp_menu.linking = false;
+        self.mp_menu.form = multiplayer::Form::Main;
         self.mp_menu.code_for = None;
         self.mp_menu.rooms.clear();
         self.cfg.online_token.clear();
@@ -5573,26 +6116,31 @@ impl State {
                 Ok(result) => {
                     menu.account_request = None;
                     match result {
-                        Ok(online::Reply::Account { name, token, nominator, email }) => {
+                        Ok(online::Reply::Account { name, token, nominator, admin, email }) => {
                             self.select.nominator = nominator;
+                            self.admin = admin;
                             self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name) || self.cfg.online_token != token;
                             menu.account = Some(name.clone());
                             menu.online = Some(Ok(()));
                             menu.has_email = email;
                             menu.asking = None;
-                            if menu.code_for.take().is_some() {
-                                menu.code.clear();
-                                menu.password.clear();
+                            let reset = menu.form == multiplayer::Form::Reset && menu.code_for.is_some();
+                            if menu.form != multiplayer::Form::Main || menu.code_for.is_some() {
+                                menu.open(multiplayer::Form::Main);
+                            }
+                            if reset {
+                                self.mp_status = tr!("password changed: you're logged in as {name}", "パスワードを変更しました: {name} でログイン中", "пароль изменён, ты вошёл как {name}";);
+                            } else if fresh {
+                                self.mp_status = tr!("logged in as {name}", "{name} でログインしました", "ты вошёл как {name}";);
                             }
                             if fresh {
-                                self.mp_status = format!("logged in as {name}");
                                 menu.cursor = 0;
                                 // A new login: reconnect the social side with its token.
                                 self.social = social::Social::default();
                                 // Accounts from before emails: a word about linking one.
                                 if email == Some(false) {
-                                    self.toast = Some(Toast { text: "no email on your account: link one in the Online menu to reset a forgotten password".into(), until: Instant::now() + Duration::from_secs(8) });
+                                    self.toast = Some(Toast { text: tr!("no email on your account: link one in the Online menu to reset a forgotten password", "アカウントにメールがありません: オンラインメニューで登録するとパスワードを再設定できます", "к аккаунту не привязана почта: привяжи её в меню онлайна, чтобы можно было сбросить пароль").into(), until: Instant::now() + Duration::from_secs(8) });
                                 }
                             }
                             self.cfg.online_user = name;
@@ -5604,28 +6152,27 @@ impl State {
                             menu.code_for = menu.asking.take();
                             menu.code.clear();
                             // The server's mail is new to the big mail services: it may land in spam.
-                            self.mp_status = match menu.code_for {
-                                Some(multiplayer::CodeFor::Reset) => format!("code sent to {to} (check spam too): type it and a new password, then SET NEW PASSWORD"),
-                                Some(multiplayer::CodeFor::Link) => format!("code sent to {to} (check spam too): type it, then LINK EMAIL"),
-                                _ => format!("code sent to {to} (check spam too): type it, then CREATE ACCOUNT"),
-                            };
+                            self.mp_status = tr!("code sent to {to}: look in spam too if it isn't there", "{to} にコードを送信しました: 見つからなければ迷惑メールも確認", "код отправлен на {to}: если его нет, загляни в спам";);
                             menu.select(multiplayer::Row::Code);
                         }
                         Ok(online::Reply::EmailLinked(to)) => {
                             menu.has_email = Some(true);
-                            menu.linking = false;
-                            menu.code_for = None;
-                            menu.code.clear();
-                            menu.cursor = 0;
-                            self.mp_status = format!("email linked: {to}");
+                            menu.open(multiplayer::Form::Main);
+                            self.mp_status = tr!("email linked: {to}", "メールを登録しました: {to}", "почта привязана: {to}";);
                         }
                         Ok(_) => {}
                         Err(e) if e.contains("session") => self.sign_out(&e),
                         Err(e) => {
-                            if e.contains("offline") {
+                            if online::is_unreachable(&e) {
                                 menu.online = Some(Err(e.clone()));
                             }
-                            self.mp_status = e;
+                            // A wrong password: where to go from there.
+                            self.mp_status = if e.starts_with("wrong name or password") && menu.account.is_none() {
+                                menu.select(multiplayer::Row::Password);
+                                tr!("wrong name or password (forgot it? FORGOT PASSWORD below)", "名前かパスワードが違います(忘れたら下の「パスワードを忘れた?」)", "неверный ник или пароль (забыл? жми ЗАБЫЛ ПАРОЛЬ ниже)").into()
+                            } else {
+                                e
+                            };
                         }
                     }
                 }
@@ -5695,9 +6242,10 @@ impl State {
         self.select.server_loved = server_loved;
         self.select.nominator = nominator;
         self.select.sort = sort;
+        self.select.headings = self.cfg.song_headings;
         self.select.mods_label = self.cfg.mods.label();
         let maps = self.library.iter().enumerate().map(|(i, e)| (i, e.path.clone(), e.modified, e.size)).collect();
-        let info = mapinfo::MapInfo::spawn(maps, self.library.len());
+        let info = mapinfo::MapInfo::spawn(maps, self.library.len(), self.in_song());
         self.select.info = Some(info.results.clone());
         self.mapinfo = Some(info);
         self.mapinfo_sorted = false;
@@ -5727,34 +6275,30 @@ impl State {
             self.start_loading(0);
         }
         // A lobby map may have been announced before our library was ready.
-        if let Some(s) = &mut self.mp {
-            if let Some(m) = &s.map {
-                s.map_entry = find_map(&self.library, m);
-                s.have_map = s.map_entry.is_some();
-                s.client.send(net::ClientMsg::HasMap(s.have_map));
-            }
+        if let Some(s) = &mut self.mp
+            && let Some(m) = &s.map {
+            s.map_entry = find_map(&self.library, m);
+            s.have_map = s.map_entry.is_some();
+            s.client.send(net::ClientMsg::HasMap(s.have_map));
         }
     }
 
     /// Folds osu!'s collections and play history in once read, and re-sorts when the
     /// difficulty analysis finishes.
     fn poll_sorting(&mut self) {
-        if let Some(rx) = &self.osudb_rx {
-            if let Ok(db) = rx.try_recv() {
-                self.osudb_rx = None;
-                if let Some(db) = db {
-                    self.apply_osu_db(db);
-                }
-                // With osu!.db's statuses known, the mirrors are asked about the rest.
-                self.start_status_sweep();
+        if let Some(rx) = &self.osudb_rx
+            && let Ok(db) = rx.try_recv() {
+            self.osudb_rx = None;
+            if let Some(db) = db {
+                self.apply_osu_db(db);
             }
+            // With osu!.db's statuses known, the mirrors are asked about the rest.
+            self.start_status_sweep();
         }
         let Some(info) = &self.mapinfo else { return };
-        let (done, total) = (info.done.load(Ordering::Relaxed), info.total.load(Ordering::Relaxed));
         let finished = info.finished();
         // Sorting or searching by stars, length or BPM waits on the analysis.
         let needs_info = self.select.sort.needs_info() || search::Query::parse(&self.select.filter).needs_info();
-        self.select.info_progress = if !finished && needs_info { format!("  |  analysing {done}/{total}") } else { String::new() };
         if finished && !self.mapinfo_sorted {
             self.mapinfo_sorted = true;
             if needs_info {
@@ -5860,9 +6404,9 @@ impl State {
     /// As the lobby host: tells the room the match's rate, mods and mod settings as they are now.
     fn update_lobby_map(&self) {
         let (rate, mods) = (self.play_speed().0, self.cfg.mods);
-        if let Some(s) = &self.mp {
-            if s.is_host() && !s.in_match {
-                if let Some(mut m) = s.map.clone() {
+        if let Some(s) = &self.mp
+            && s.is_host() && !s.in_match
+                && let Some(mut m) = s.map.clone() {
                     m.rate = rate;
                     // Only the speed's: everyone picks their other mods themselves.
                     m.mods = mods.shared().list();
@@ -5872,8 +6416,6 @@ impl State {
                         s.client.send(net::ClientMsg::SelectMap(m));
                     }
                 }
-            }
-        }
     }
 
     /// Keys while the mod select is open.
@@ -5978,6 +6520,7 @@ impl State {
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.universe_setup.as_ref().is_some_and(|u| u.typing.is_some())
             || (self.mod_select.is_none() && !self.on_menu() && matches!(self.scene, Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby))
+            || (matches!(self.scene, Scene::Settings { .. }) && self.settings_ui.binding.is_none() && self.settings_ui.choices.is_none() && self.settings_ui.dropdown.is_none())
     }
 
     /// Android: something is being typed that took the keys by itself (not a field that was
@@ -5994,7 +6537,7 @@ impl State {
     fn is_text_field(&self, hit: render::Hit) -> bool {
         use render::Hit;
         match hit {
-            Hit::TextField => true,
+            Hit::TextField | Hit::SettingsSearch => true,
             Hit::MpRow(i) => matches!(self.scene, Scene::MpMenu) && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action()),
             Hit::SocialRow(i) => matches!(self.social.rows(self.mp.is_some()).get(i), Some(social::Row::AddFriend | social::Row::Search)),
             _ => false,
@@ -6080,10 +6623,10 @@ impl State {
         if matches!(self.scene, Scene::MpMenu) {
             use multiplayer::Row;
             return match self.mp_menu.row() {
-                Row::User => Some(("Name or email".into(), self.mp_menu.user.clone())),
-                Row::Password => Some(("Password".into(), "*".repeat(self.mp_menu.password.chars().count()))),
-                Row::Email => Some(("Email".into(), self.mp_menu.email.clone())),
-                Row::Code => Some(("Code".into(), self.mp_menu.code.clone())),
+                r @ Row::User => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), self.mp_menu.user.clone())),
+                r @ Row::Password => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), "*".repeat(self.mp_menu.password.chars().count()))),
+                r @ Row::Email => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), self.mp_menu.email.clone())),
+                r @ Row::Code => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), self.mp_menu.code.clone())),
                 Row::Name => Some(("Your name".into(), self.cfg.mp_name.clone())),
                 Row::Port => Some(("Host on port".into(), self.cfg.mp_port.to_string())),
                 Row::Address => Some(("Join address".into(), self.cfg.mp_address.clone())),
@@ -6109,7 +6652,7 @@ impl State {
     fn now_playing(&self) -> Option<String> {
         let e = self.library.get(self.offset_entry()?)?;
         let name = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
-        let set = e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder));
+        let set = e.set_id();
         Some(match set {
             Some(set) => format!("is playing {name} https://osu.ppy.sh/beatmapsets/{set}"),
             None => format!("is playing {name}"),
@@ -6119,7 +6662,7 @@ impl State {
     /// A map set named in the chat, clicked: picked in song select when we have it, else downloaded.
     fn open_chat_map(&mut self, set: u32) {
         self.main_menu = None;
-        let have = self.library.iter().position(|e| e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder)) == Some(set));
+        let have = self.library.iter().position(|e| e.set_id() == Some(set));
         match have {
             Some(i) if matches!(self.scene, Scene::Select) => {
                 let path = self.library[i].path.clone();
@@ -6165,7 +6708,7 @@ impl State {
     /// else osu!.db's (which can't tell graveyard from pending).
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
-        let Some(set) = e.meta.set_id.filter(|_| !self.select.edited.contains(&e.path)) else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
+        let Some(set) = e.set_id().filter(|_| !self.select.edited.contains(&e.path)) else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
         if self.select.server_loved.contains(&set) {
             return Some(("LOVED HERE", 0xff66aa));
         }
@@ -6203,7 +6746,7 @@ impl State {
     /// The sets' statuses the cache has, for the maps in the library (before osu!.db's).
     fn apply_cached_statuses(&mut self) {
         for e in &self.library {
-            let code = e.meta.set_id.and_then(|set| self.status_cache.status(set)).and_then(search::status_code);
+            let code = e.set_id().and_then(|set| self.status_cache.status(set)).and_then(search::status_code);
             if let Some(code) = code {
                 self.select.status.insert(e.path.clone(), code);
             }
@@ -6288,7 +6831,7 @@ impl State {
                 let by_set = by_set.get_or_insert_with(|| {
                     let mut m: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
                     for (i, e) in self.library.iter().enumerate() {
-                        if let Some(set) = e.meta.set_id {
+                        if let Some(set) = e.set_id() {
                             m.entry(set).or_default().push(i);
                         }
                     }
@@ -6319,7 +6862,7 @@ impl State {
             self.status_resorted = now;
             self.select.refilter(&self.library);
         }
-        let set = self.select.selected().and_then(|i| self.library.get(i)).and_then(|e| e.meta.set_id);
+        let set = self.select.selected().and_then(|i| self.library.get(i)).and_then(Entry::set_id);
         let Some(set) = set.filter(|s| !self.set_status.contains_key(s)) else {
             self.status_wait = None;
             return;
@@ -6345,11 +6888,6 @@ impl State {
         std::thread::spawn(move || {
             let _ = tx.send((set, download::set_status(set).ok()));
         });
-    }
-
-    /// Song select: the list is being dragged through by its scrollbar or right-click scrolling.
-    fn dragging_list(&self) -> bool {
-        matches!(self.scene, Scene::Select) && (self.scrollbar_drag || self.right_scroll)
     }
 
     /// Showing a song, its background dimmed by the background dim setting.
@@ -6434,18 +6972,24 @@ impl State {
         let in_lobby = self.mp.is_some();
         let rows = self.social.rows(in_lobby).len();
         let row = self.social.row(in_lobby);
+        let talking = self.social.in_conversation(in_lobby);
         match code {
+            KeyCode::Escape if talking => self.social.close_conversation(),
+            KeyCode::Escape if self.social.tab == social::Tab::Admin && self.social.info.is_some() => self.social.info = None,
             KeyCode::Escape => self.social.close(),
             KeyCode::Tab => self.social.cycle_tab(self.modifiers_shift),
-            KeyCode::PageUp => self.social.wheel(5, f32::MAX, in_lobby),
-            KeyCode::PageDown => self.social.wheel(-5, f32::MAX, in_lobby),
+            KeyCode::PageUp => self.social.wheel(5, in_lobby),
+            KeyCode::PageDown => self.social.wheel(-5, in_lobby),
+            KeyCode::ArrowUp if talking => self.social.wheel(1, in_lobby),
+            KeyCode::ArrowDown if talking => self.social.wheel(-1, in_lobby),
             KeyCode::ArrowUp => self.social.cursor = self.social.cursor.min(rows - 1).saturating_sub(1),
             KeyCode::ArrowDown => self.social.cursor = (self.social.cursor + 1).min(rows - 1),
             KeyCode::Backspace => {
                 self.social.input.pop();
             }
-            KeyCode::Delete if self.social.input.is_empty() => match row {
+            KeyCode::Delete if self.social.input.is_empty() && !talking => match row {
                 Row::Request(_) => self.social_action(social::Action::Decline),
+                Row::AdminRoom(_) => self.social_action(social::Action::CloseRoom),
                 Row::Friend(k) => {
                     if let (Some(f), Some(c)) = (self.social.friends.get(k), &self.social.conn) {
                         c.send(online::Up::RemoveFriend(f.name.clone()));
@@ -6457,6 +7001,19 @@ impl State {
             KeyCode::KeyW if self.modifiers_ctrl => self.social_action(social::Action::Watch),
             KeyCode::KeyP if self.modifiers_ctrl => self.social_action(social::Action::Profile),
             KeyCode::KeyJ if self.modifiers_ctrl => self.social_action(social::Action::Join),
+            KeyCode::KeyK if self.modifiers_ctrl && self.admin => self.social_action(social::Action::Kick),
+            KeyCode::KeyM if self.modifiers_ctrl && self.admin => self.social_action(social::Action::Mute),
+            KeyCode::KeyL if self.modifiers_ctrl && self.admin => self.social_action(social::Action::Lookup),
+            // An admin's /command, from any chat box (or the admin tab's).
+            KeyCode::Enter | KeyCode::NumpadEnter if self.admin && admin::is_command(&self.social.input) && matches!(row, Row::AdminInput | Row::Friend(_) | Row::Lobby | Row::Global) => {
+                let text = std::mem::take(&mut self.social.input);
+                self.admin_command(text.trim());
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter if row == Row::AdminInput => {
+                if !self.social.input.trim().is_empty() {
+                    self.toast("admin commands start with / (/help lists them)".into());
+                }
+            }
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 let mut text = self.social.input.trim().to_string();
                 // `/np` in a chat: the map on screen, with its osu! link (a link others can click).
@@ -6470,6 +7027,7 @@ impl State {
                     }
                 }
                 match row {
+                    Row::Friend(_) | Row::Lobby if !talking => self.social.open_conversation(),
                     Row::AddFriend if !text.is_empty() => {
                         if let Some(c) = &self.social.conn {
                             c.send(online::Up::AddFriend(text));
@@ -6513,6 +7071,10 @@ impl State {
             _ => {
                 let Some(text) = text else { return };
                 let searching = self.social.tab == social::Tab::Players;
+                // Typing on a friend starts talking to them.
+                if matches!(row, Row::Friend(_) | Row::Lobby) && !talking && text.chars().any(|c| net::drawable_char(c) && c != ' ') {
+                    self.social.open_conversation();
+                }
                 for ch in text.chars().filter(|c| net::drawable_char(*c)) {
                     let len = self.social.input.chars().count();
                     let ok = match row {
@@ -6527,10 +7089,9 @@ impl State {
             }
         }
         self.social.mark_read(in_lobby);
-        if self.social.row(in_lobby) == Row::Lobby {
-            if let Some(s) = &mut self.mp {
-                s.chat_unread = 0;
-            }
+        if self.social.row(in_lobby) == Row::Lobby && self.social.in_conversation(in_lobby)
+            && let Some(s) = &mut self.mp {
+            s.chat_unread = 0;
         }
     }
 
@@ -6577,24 +7138,80 @@ impl State {
                     self.watch(f.name);
                 }
             }
+            (Row::AdminPlayer(k), action) => {
+                let Some(p) = self.social.overview.as_ref().and_then(|o| o.players.get(k)).cloned() else { return };
+                let muted = p.muted_until.is_some_and(|t| t > discord::unix_now());
+                match action {
+                    Action::Watch => self.watch(p.name),
+                    Action::Profile => self.open_profile(p.name),
+                    Action::Kick => self.admin_op(online::AdminOp::Kick { name: p.name }),
+                    Action::Mute => self.admin_op(online::AdminOp::Mute { name: p.name, minutes: if muted { 0 } else { 30 } }),
+                    Action::Lookup => self.admin_op(online::AdminOp::Lookup { name: p.name }),
+                    _ => {}
+                }
+            }
+            (Row::AdminRoom(k), action) => {
+                let Some(r) = self.social.overview.as_ref().and_then(|o| o.rooms.get(k)).cloned() else { return };
+                match action {
+                    Action::Join => self.join_room(r.id, r.title),
+                    Action::CloseRoom => self.admin_op(online::AdminOp::CloseRoom { room: r.id }),
+                    _ => {}
+                }
+            }
+            // Admins watch any solo play from the players tab too.
+            (Row::Player(k), Action::Watch) if self.admin => {
+                if let Some(p) = self.social.players.as_ref().and_then(|v| v.get(k)).cloned() {
+                    self.watch(p.name);
+                }
+            }
             (Row::Friend(k), Action::Join) => {
                 let Some(f) = self.social.friends.get(k).cloned() else { return };
                 let Some(online::Activity::Lobby { room: Some(room), title }) = f.activity else {
                     self.toast(format!("{} isn't in an online lobby", f.name));
                     return;
                 };
-                if self.mp.is_some() || self.mp_connecting.is_some() {
-                    self.toast("leave your lobby first".into());
-                    return;
-                }
-                self.social.close();
-                self.mp_status = format!("joining {title}...");
-                self.scene = Scene::MpMenu;
-                let request = online::Request::JoinRoom { token: self.cfg.online_token.clone(), room };
-                let account = self.mp_menu.account.clone().unwrap_or_default();
-                self.mp_connecting = Some(multiplayer::start_online(self.cfg.online_server.clone(), request, account));
+                self.join_room(room, title);
             }
             _ => {}
+        }
+    }
+
+    /// Joins online lobby `room` (from a friend's row, or an admin's list).
+    fn join_room(&mut self, room: u32, title: String) {
+        if self.mp.is_some() || self.mp_connecting.is_some() {
+            self.toast("leave your lobby first".into());
+            return;
+        }
+        self.social.close();
+        self.mp_status = format!("joining {title}...");
+        self.scene = Scene::MpMenu;
+        let request = online::Request::JoinRoom { token: self.cfg.online_token.clone(), room };
+        let account = self.mp_menu.account.clone().unwrap_or_default();
+        self.mp_connecting = Some(multiplayer::start_online(self.cfg.online_server.clone(), request, account));
+    }
+
+    /// Sends an admin action (the server answers with a notice).
+    fn admin_op(&mut self, op: online::AdminOp) {
+        match self.social.conn.as_ref().filter(|_| self.social.connected) {
+            Some(c) => {
+                c.send(online::Up::Admin(op));
+                // What it changed shows in the next overview, soon.
+                self.social.overview_asked = None;
+            }
+            None => self.toast("not connected to the server".into()),
+        }
+    }
+
+    /// An admin's typed /command.
+    fn admin_command(&mut self, text: &str) {
+        match admin::parse(text) {
+            Ok(admin::Command::Op(op)) => self.admin_op(op),
+            Ok(admin::Command::Watch(name)) => self.watch(name),
+            Ok(admin::Command::Help) => {
+                self.social.set_tab(social::Tab::Admin);
+                self.social.info = Some(("admin commands".into(), admin::HELP.split(" /").map(|c| if c.starts_with('/') { c.to_string() } else { format!("/{c}") }).collect()));
+            }
+            Err(e) => self.toast(e),
         }
     }
 
@@ -6623,7 +7240,7 @@ impl State {
             c.send(online::Up::StopWatching);
         }
         self.stop_audio();
-        self.to_select();
+        self.show_select();
     }
 
     /// What we're doing, for friends.
@@ -6681,7 +7298,7 @@ impl State {
                     self.sign_out("your session expired: log in again");
                     return;
                 }
-                online::SocialEvent::Down(d) => self.social_down(d),
+                online::SocialEvent::Down(d) => self.social_down(*d),
             }
         }
         if self.social.connected {
@@ -6693,12 +7310,22 @@ impl State {
                 self.social.sent_activity = Some(a);
             }
         }
+        self.social.admin = self.admin;
+        if !self.admin && self.social.tab == social::Tab::Admin {
+            self.social.set_tab(social::Tab::Friends);
+        }
+        // The admin tab keeps its overview fresh while it's open.
+        if self.admin && self.social.open && self.social.tab == social::Tab::Admin && self.social.connected
+            && self.social.overview_asked.is_none_or(|t| t.elapsed() > Duration::from_secs(3))
+            && let Some(c) = &self.social.conn {
+            c.send(online::Up::Admin(online::AdminOp::Overview));
+            self.social.overview_asked = Some(Instant::now());
+        }
         let hold = !self.overlay_allowed();
         self.social.expire_notes(hold);
-        if self.social.open && self.social.row(self.mp.is_some()) == social::Row::Lobby {
-            if let Some(s) = &mut self.mp {
-                s.chat_unread = 0;
-            }
+        if self.social.open && self.social.row(self.mp.is_some()) == social::Row::Lobby && self.social.in_conversation(self.mp.is_some())
+            && let Some(s) = &mut self.mp {
+            s.chat_unread = 0;
         }
     }
 
@@ -6730,11 +7357,7 @@ impl State {
                     }
                 }
                 self.social.have_list = true;
-                self.social.friends = friends;
-                self.social.requests = requests;
-                self.social.sent = sent;
-                let rows = self.social.rows(self.mp.is_some()).len();
-                self.social.cursor = self.social.cursor.min(rows - 1);
+                self.social.set_friends(friends, requests, sent, self.mp.is_some());
             }
             Down::Chat(mut line) => {
                 if self.cfg.chat_filter {
@@ -6750,13 +7373,12 @@ impl State {
                 if log.len() > 200 {
                     log.remove(0);
                 }
-                let viewing = self.social.open && matches!(self.social.row(self.mp.is_some()), social::Row::Friend(k) if self.social.friends.get(k).is_some_and(|f| key(&f.name) == key(&other)));
+                let viewing = self.social.open && self.social.in_conversation(self.mp.is_some()) && matches!(self.social.row(self.mp.is_some()), social::Row::Friend(k) if self.social.friends.get(k).is_some_and(|f| key(&f.name) == key(&other)));
                 // A chime for every fresh message from a friend, unless it would land in the middle
                 // of a play.
-                if !mine && fresh && self.cfg.message_sound && !self.playing() {
-                    if let Some(a) = &self.audio {
-                        a.sfx_at(audio::Sfx::Message, 1.0);
-                    }
+                if !mine && fresh && self.cfg.message_sound && !self.playing()
+                    && let Some(a) = &self.audio {
+                    a.sfx_at(audio::Sfx::Message, 1.0);
                 }
                 if !mine && fresh && !viewing {
                     *self.social.unread.entry(key(&other)).or_default() += 1;
@@ -6766,12 +7388,37 @@ impl State {
                 }
             }
             Down::Notice(text) => self.social.notify("taiko.rs", text, 0x9a9ab0, NoteAction::None),
-            Down::Players { count, players } => {
-                self.social.online_total = count as usize;
-                self.social.players = Some(players);
-                let rows = self.social.rows(self.mp.is_some()).len();
-                self.social.cursor = self.social.cursor.min(rows - 1);
+            Down::GlobalChatDeleted { from, at } => self.social.delete_global(&from, at),
+            Down::AdminOverview(o) => self.social.set_overview(*o, self.mp.is_some()),
+            Down::AdminLookup(l) => {
+                let now = discord::unix_now();
+                let mut lines = vec![format!(
+                    "{}  joined {} ago  {} plays  {}",
+                    if l.online { "online" } else { "offline" },
+                    admin::span(now.saturating_sub(l.created)),
+                    l.plays,
+                    if l.has_email { "email linked" } else { "no email" }
+                )];
+                let mut marks = Vec::new();
+                if l.banned {
+                    marks.push("BANNED".to_string());
+                }
+                if l.nominator {
+                    marks.push("loved nominator".to_string());
+                }
+                if let Some(t) = l.muted_until.filter(|&t| t > now) {
+                    marks.push(format!("muted for {}", admin::span(t - now)));
+                }
+                if !marks.is_empty() {
+                    lines.push(marks.join("  "));
+                }
+                lines.push(if l.alts.is_empty() { "no other accounts from the same places".into() } else { format!("same places as: {}", l.alts.join(", ")) });
+                self.social.info = Some((l.name.clone(), lines));
             }
+            Down::Players { count, players } => {
+                self.social.set_players(count as usize, players, self.mp.is_some());
+            }
+            Down::Medals(new) => self.medals_earned(new),
             Down::GlobalChat(mut line) => {
                 if self.cfg.chat_filter {
                     line.text = net::censor(&line.text);
@@ -6783,12 +7430,12 @@ impl State {
                     self.social.global_unread += 1;
                     // Only lines that call us by name pop up: the rest just count.
                     if self.cfg.notify_mentions && self.social.mentions_me(&line.text) {
-                        self.social.notify(format!("{} in chat", line.from), line.text.clone(), 0x4fb4ff, NoteAction::Global);
+                        self.social.notify(format!("{} in chat", line.from), line.shown(), 0x4fb4ff, NoteAction::Global);
                     }
                 }
                 // Scrolled back, the view stays on the same lines.
                 if self.social.chat_scroll > 0 && viewing {
-                    self.social.chat_scroll += social::wrap(&format!("{}: {}", line.from, line.text), social::chat_width()).len();
+                    self.social.chat_scroll += self.social.global_rows_added(&line);
                 }
                 self.social.global.push(line);
                 if self.social.global.len() > 200 {
@@ -6796,20 +7443,19 @@ impl State {
                 }
             }
             Down::WatchStart { player, play, t, paused, inputs } => {
-                if let Scene::Watch(v) = &mut self.scene {
-                    if key(&v.player) == key(&player) {
-                        v.play = Some(play);
-                        v.inputs = inputs;
-                        v.clock = (t, Instant::now(), paused);
-                        v.game = None;
-                        v.rx = None;
-                        v.entry = None;
-                        v.held = false;
-                        v.fetching = false;
-                        v.looked = None;
-                        if let Some(a) = &self.audio {
-                            a.stop();
-                        }
+                if let Scene::Watch(v) = &mut self.scene
+                    && key(&v.player) == key(&player) {
+                    v.play = Some(play);
+                    v.inputs = inputs;
+                    v.clock = (t, Instant::now(), paused);
+                    v.game = None;
+                    v.rx = None;
+                    v.entry = None;
+                    v.held = false;
+                    v.fetching = false;
+                    v.looked = None;
+                    if let Some(a) = &self.audio {
+                        a.stop();
                     }
                 }
             }
@@ -6823,13 +7469,12 @@ impl State {
                 }
             }
             Down::WatchEnd { player } => {
-                if let Scene::Watch(v) = &mut self.scene {
-                    if key(&v.player) == key(&player) {
-                        let name = v.player.clone();
-                        **v = WatchView::new(name);
-                        if let Some(a) = &self.audio {
-                            a.stop();
-                        }
+                if let Scene::Watch(v) = &mut self.scene
+                    && key(&v.player) == key(&player) {
+                    let name = v.player.clone();
+                    **v = WatchView::new(name);
+                    if let Some(a) = &self.audio {
+                        a.stop();
                     }
                 }
             }
@@ -6837,7 +7482,7 @@ impl State {
                 self.toast(why);
                 if matches!(self.scene, Scene::Watch(_)) {
                     self.stop_audio();
-                    self.to_select();
+                    self.show_select();
                 }
             }
             Down::Pong => {}
@@ -6849,10 +7494,9 @@ impl State {
     fn stream_play(&mut self) {
         let connected = self.social.connected;
         let Scene::Play { game, entry, .. } = &mut self.scene else {
-            if self.stream.take().is_some() && connected {
-                if let Some(c) = &self.social.conn {
-                    c.send(online::Up::PlayEnd);
-                }
+            if self.stream.take().is_some() && connected
+                && let Some(c) = &self.social.conn {
+                c.send(online::Up::PlayEnd);
             }
             return;
         };
@@ -6886,21 +7530,20 @@ impl State {
             return;
         }
         let Scene::Watch(mut v) = std::mem::replace(&mut self.scene, Scene::Select) else { return };
-        if let (Some(play), None, None) = (v.play.clone(), v.entry, &v.game) {
-            if v.looked.is_none_or(|t| t.elapsed() > Duration::from_secs(1)) {
-                v.looked = Some(Instant::now());
-                match find_map(&self.library, &play.map) {
-                    Some(i) => {
-                        v.entry = Some(i);
-                        self.preview.show_background_for(&self.library[i]);
-                        v.rx = Some(self.load_with(i, play.map.rate, Mods::from_list(&play.map.mods)));
-                    }
-                    None if !v.fetching => {
-                        v.fetching = true;
-                        self.fetch_map(play.map.clone());
-                    }
-                    None => {}
+        if let (Some(play), None, None) = (v.play.clone(), v.entry, &v.game)
+            && v.looked.is_none_or(|t| t.elapsed() > Duration::from_secs(1)) {
+            v.looked = Some(Instant::now());
+            match find_map(&self.library, &play.map) {
+                Some(i) => {
+                    v.entry = Some(i);
+                    self.preview.show_background_for(&self.library[i]);
+                    v.rx = Some(self.load_with(i, play.map.rate, Mods::from_list(&play.map.mods)));
                 }
+                None if !v.fetching => {
+                    v.fetching = true;
+                    self.fetch_map(play.map.clone());
+                }
+                None => {}
             }
         }
         if let Some(rx) = &v.rx {
@@ -7220,13 +7863,21 @@ impl State {
         c.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
         let (bw, bh) = (380.0f32.min(w - 32.0), 132.0);
         let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
-        c.round_rect(x, y, bw, bh, 10.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
+        c.round_rect([x, y], [bw, bh], 10.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
         c.text_centered(w / 2.0, y + 18.0, 12.0, rgba(0xffffff, 1.0), tr!("taiko.rs crashed last time", "前回taiko.rsがクラッシュしました", "taiko.rs вылетел в прошлый раз"));
         let room = bw - 32.0;
-        for (k, line) in [
-            tr!("Copy the crash log and paste it in #bugs", "クラッシュログをコピーして", "Скопируйте лог краша и вставьте его"),
-            tr!("on the taiko.rs Discord, so it gets fixed.", "Discordの#bugsに貼ってください。", "в #bugs в Discord taiko.rs, чтобы мы починили."),
-        ]
+        let lines = if self.crash_sent {
+            [
+                tr!("Its report went to the developers by itself.", "レポートは自動で開発者に送られました。", "Отчёт уже ушёл разработчикам сам."),
+                tr!("To say what you were doing, paste the log in #bugs.", "何をしていたか伝えるには、ログを#bugsに貼ってください。", "Чтобы рассказать, что вы делали, вставьте лог в #bugs."),
+            ]
+        } else {
+            [
+                tr!("Copy the crash log and paste it in #bugs", "クラッシュログをコピーして", "Скопируйте лог краша и вставьте его"),
+                tr!("on the taiko.rs Discord, so it gets fixed.", "Discordの#bugsに貼ってください。", "в #bugs в Discord taiko.rs, чтобы мы починили."),
+            ]
+        };
+        for (k, line) in lines
         .iter()
         .enumerate()
         {
@@ -7246,19 +7897,46 @@ impl State {
         if !self.quit_asked {
             return;
         }
+        // The main menu's look: one panel, the two answers as notes on it (Exit a don, Stay a kat),
+        // the selector on the one Enter picks, or on the one under the pointer.
         let w = c.width;
         c.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
-        let (bw, bh) = (300.0f32.min(w - 32.0), 100.0);
+        let (bw, bh) = (340.0f32.min(w - 32.0), 124.0);
         let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
-        c.round_rect(x, y, bw, bh, 10.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
-        c.text_centered(w / 2.0, y + 18.0, 12.0, rgba(0xffffff, 1.0), "Exit taiko.rs?");
-        let gap = 10.0;
+        style::panel(c, x, y, bw, bh);
+        let title = tr!("Exit taiko.rs?", "taiko.rsを終了しますか?", "Выйти из taiko.rs?");
+        let size = Canvas::fit_size(16.0, 10.0, bw - 28.0, title);
+        style::title(c, w / 2.0 - Canvas::text_width(size, title) / 2.0, y + 18.0, size, 0xffffff, title);
+        let gap = 12.0;
         let button = (bw - 36.0 - gap) / 2.0;
-        c.button(x + 18.0, y + 56.0, button, 26.0, "1. Exit  (Enter)", 9.0, render::Hit::Key(KeyCode::KeyY), true);
-        c.button(x + 18.0 + button + gap, y + 56.0, button, 26.0, "2. Stay  (Esc)", 9.0, render::Hit::Key(KeyCode::KeyN), false);
+        let colours = multiverse::note_colours();
+        let options = [
+            (x + 18.0, tr!("Exit", "終了", "Выйти"), "1 / Enter", colours.don(), render::Hit::Key(KeyCode::KeyY)),
+            (x + 18.0 + button + gap, tr!("Stay", "戻る", "Остаться"), "2 / Esc", colours.kat(), render::Hit::Key(KeyCode::KeyN)),
+        ];
+        let oy = y + 62.0;
+        let hovered = options.iter().position(|o| c.hovered(o.0, oy, button, 40.0));
+        let on = hovered.unwrap_or(0);
+        for (k, (ox, label, keys, col, hit)) in options.into_iter().enumerate() {
+            let selected = k == on;
+            if selected {
+                c.round_rect([ox, oy], [button, 40.0], 8.0, rgba(style::selector_colour(), 0.12 + 0.05 * style::pulse()), rgba(0, 0.0), 0.0);
+                style::selector(c, "quit", [ox - 3.0, oy - 3.0, button + 6.0, 46.0]);
+            }
+            c.hit(ox, oy, button, 40.0, hit);
+            let (nx, ny, r) = (ox + 20.0, oy + 20.0, if selected { 10.0 } else { 8.0 });
+            style::note(c, nx, ny, r, col, selected, 0.6);
+            let room = button - 44.0;
+            c.text(ox + 38.0, oy + 9.0, 11.0, rgba(if selected { 0xffffff } else { 0xa8a8bc }, 1.0), &Canvas::fit(11.0, room, label));
+            c.text(ox + 38.0, oy + 24.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, room, keys));
+        }
     }
 
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        // A key that wakes the idle screen does nothing else.
+        if self.idle.input(at) {
+            return;
+        }
         if self.quit_asked {
             if !repeat {
                 self.quit_key(code);
@@ -7290,6 +7968,8 @@ impl State {
     fn hotkey_place(&self, code: KeyCode) -> Option<keys::Place> {
         let busy = self.splash.is_some()
             || self.profile.is_some()
+            || self.medals.is_some()
+            || self.unlock.showing()
             || self.settings_ui.binding.is_some()
             || self.settings_ui.editing.is_some()
             || self.settings_ui.dropdown.is_some()
@@ -7297,7 +7977,8 @@ impl State {
             || self.mod_select.is_some()
             || self.customization_tab().is_some();
         let plain = !self.modifiers_ctrl && !self.modifiers_alt;
-        if busy || (plain && self.in_song() && self.cfg.keys.contains(&code)) || (plain && self.takes_text() && keys::types_text(code)) {
+        let settings_idle = matches!(self.scene, Scene::Settings { .. }) && self.settings_ui.search.is_empty() && !keys::starts_text(code);
+        if busy || (plain && self.in_song() && self.cfg.keys.contains(&code)) || (plain && self.takes_text() && keys::types_text(code) && !settings_idle) {
             return None;
         }
         Some(match &self.scene {
@@ -7361,6 +8042,15 @@ impl State {
         }
         // Being typed or bound, Ctrl+O is just a key.
         let free = self.settings_ui.binding.is_none() && self.settings_ui.editing.is_none();
+        if free && self.modifiers_alt && !self.modifiers_ctrl && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+            self.volume.pick_next(if code == KeyCode::ArrowLeft { -1 } else { 1 }, Instant::now());
+            return;
+        }
+        // Alt+Up/Down turn it like Alt+wheel (held, it keeps turning).
+        if free && self.modifiers_alt && !self.modifiers_ctrl && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown) {
+            self.turn_volume(if code == KeyCode::ArrowUp { 1 } else { -1 });
+            return;
+        }
         if free && code == KeyCode::KeyO && self.modifiers_ctrl && !self.modifiers_shift && !self.modifiers_alt {
             if !repeat {
                 self.settings_anywhere();
@@ -7368,10 +8058,27 @@ impl State {
             return;
         }
         if let Some(view) = &mut self.changelog {
-            if !repeat || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown) {
-                if view.key(code) {
-                    self.changelog = None;
-                }
+            if (!repeat || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown))
+                && view.key(code) {
+                self.changelog = None;
+            }
+            return;
+        }
+        // A medal being earned is over everything: anything moves it on.
+        if self.unlock.showing() {
+            self.unlock.skip();
+            return;
+        }
+        if let Some(view) = &mut self.medals {
+            match code {
+                KeyCode::Escape | KeyCode::Backspace => self.medals = None,
+                KeyCode::ArrowLeft => view.step_tab(-1),
+                KeyCode::ArrowRight | KeyCode::Tab => view.step_tab(1),
+                KeyCode::ArrowUp => view.wheel(1),
+                KeyCode::ArrowDown => view.wheel(-1),
+                KeyCode::PageUp => view.wheel(5),
+                KeyCode::PageDown => view.wheel(-5),
+                _ => {}
             }
             return;
         }
@@ -7379,6 +8086,9 @@ impl State {
         if self.profile.is_some() {
             if matches!(code, KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter) {
                 self.profile = None;
+            } else if code == KeyCode::KeyM {
+                let name = self.profile.take().map(|p| p.name);
+                self.open_medals(name);
             }
             return;
         }
@@ -7465,11 +8175,10 @@ impl State {
             }
             return;
         }
-        if !repeat && !matches!(self.scene, Scene::MpMenu) && self.settings_ui.dropdown.is_none() {
-            if let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code) {
-                self.cycle_preset(if i == 0 { -1 } else { 1 });
-                return;
-            }
+        if !repeat && !matches!(self.scene, Scene::MpMenu | Scene::Settings { .. }) && self.settings_ui.dropdown.is_none()
+            && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code) {
+            self.cycle_preset(if i == 0 { -1 } else { 1 });
+            return;
         }
         if matches!(self.scene, Scene::Calibrate { .. } | Scene::CalibrateDone { .. }) {
             self.calibration_key(code, repeat, at, window);
@@ -7665,10 +8374,14 @@ impl State {
             },
             Scene::Loading { .. } => {
                 if code == KeyCode::Escape {
-                    self.to_select();
+                    self.show_select();
                 }
             }
-            Scene::Settings { .. } => self.settings_key(code, window),
+            Scene::Settings { .. } => {
+                if !self.settings_type(code, text) {
+                    self.settings_key(code, window);
+                }
+            }
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. } | Scene::Download => {}
             Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) | Scene::Watch(_) | Scene::VideoEdit(_) => {}
             Scene::Play { game, entry, from } => match code {
@@ -7715,7 +8428,7 @@ impl State {
                 }
                 KeyCode::Escape => {
                     let path = self.library[*entry].path.clone();
-                    self.to_select();
+                    self.show_select();
                     self.select.select_path(&self.library, &path);
                 }
                 _ => {}
@@ -7728,8 +8441,20 @@ impl State {
     fn build_frame(&mut self, canvas: &mut Canvas, now: Instant, width: f32) -> Option<String> {
         // Here too, so a new choice (or a test's) shows from the next frame on.
         lang::set(self.cfg.language);
+        render::set_legacy_menu(!self.cfg.main_menu);
+        self.select.legacy = !self.cfg.main_menu;
+        self.select.to_menu = self.mp.is_none() && !self.picking_lobby_map;
+        self.select.covered = self.customization_tab().is_some();
+        // A big library's first analysis waits while a song is being played.
+        if let Some(info) = &self.mapinfo {
+            info.hold(self.in_song());
+        }
         self.refresh_play_offset();
         self.follow_map_skin();
+        if self.volume_save_at.is_some_and(|at| now >= at) {
+            self.volume_save_at = None;
+            self.cfg.save();
+        }
         if self.window_resized_at.is_some_and(|t| now.saturating_duration_since(t) > Duration::from_secs(1)) {
             self.window_resized_at = None;
             self.cfg.save();
@@ -7752,9 +8477,14 @@ impl State {
             self.stats.window_start = now;
         }
 
+        // The pictures the last frame drew, then the ones the renderer has for this one.
+        self.avatars.update(&canvas.avatars_wanted);
         canvas.clear(width);
+        canvas.avatar_slots = self.avatars.slots();
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
+        let idle_allowed = self.idle_allowed();
+        self.idle.update(now, canvas.dt_ms, idle_allowed, self.cfg.idle_minutes);
         render::set_animations(self.cfg.animations);
         render::set_accent(self.cfg.accent);
         game::set_hide_great(self.cfg.hide_great);
@@ -7764,6 +8494,7 @@ impl State {
         if self.scene_kind != Some(kind) {
             self.scene_kind = Some(kind);
             self.scene_since = now;
+            self.note_scene_for_crashes();
         }
         self.frame_clip = None;
         #[cfg(target_os = "android")]
@@ -7791,24 +8522,26 @@ impl State {
             self.preview.menu = self.on_menu();
             self.preview.from_top &= self.preview.menu;
             self.preview.pitch = self.player.as_ref().map_or(1.0, |p| p.pitch());
-            self.preview.hold = self.dragging_list();
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
             self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.play_offset, rate);
             self.stars.poll();
             self.stars.set_mods(self.cfg.mods, self.cfg.scroll_speed);
             let play_rate = self.play_speed().0;
+            if self.cfg.menu_notes && self.on_menu() {
+                let playing = self.preview_target();
+                self.menu_notes.update(playing, &self.library, &mut self.stars, play_rate);
+            }
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
                 self.stars.request(i, &self.library[i].path, play_rate);
             }
             if matches!(self.scene, Scene::Select) {
                 self.poll_set_status(now);
-                let sets = if self.dragging_list() { Vec::new() } else { self.select.selected_set() };
-                for i in sets {
+                for i in self.select.selected_set() {
                     self.stars.request(i, &self.library[i].path, play_rate);
                 }
                 let (stars, rate) = (&self.stars, play_rate);
-                self.select.sort_selected_set(&|i| stars.get(i, rate));
+                self.select.sort_selected_set(&self.library, &|i| stars.get(i, rate));
                 self.select.remember_selection(&self.library);
             }
             let has_bg = self.preview.has_background;
@@ -7819,6 +8552,7 @@ impl State {
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
+            self.bg_brightness *= 1.0 - idle::DARKEN * self.idle.amount();
 
         }
         self.poll_multiplayer();
@@ -7935,13 +8669,12 @@ impl State {
                 Scene::Results { .. } => Some("results"),
                 _ => None,
             };
-            if let Some(name) = screen {
-                if let Some(pos) = self.pending_screen_shots.iter().position(|&s| s == name) {
-                    self.pending_screen_shots.remove(pos);
-                    capture = Some(format!("{name}.png"));
-                    if name == "results" && self.exit_when_done {
-                        self.quit = true;
-                    }
+            if let Some(name) = screen
+                && let Some(pos) = self.pending_screen_shots.iter().position(|&s| s == name) {
+                self.pending_screen_shots.remove(pos);
+                capture = Some(format!("{name}.png"));
+                if name == "results" && self.exit_when_done {
+                    self.quit = true;
                 }
             }
         }
@@ -7996,6 +8729,17 @@ impl State {
         // Drawn again below if still watching a replay (after scripted input, which must see the
         // last frame's bar like real input does).
         self.replay_bar = None;
+        // Another screen (not a song: nothing may stand between the player and the notes)
+        // fades in.
+        let scene = std::mem::discriminant(&self.scene);
+        if self.shown_scene.is_some_and(|s| s != scene) && !self.in_song() && !matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } | Scene::Loading { .. } | Scene::MpWait { .. }) {
+            self.screen_fade = Some(0.0);
+        }
+        self.shown_scene = Some(scene);
+        // Every screen's selector and titles move with the music, as the main menu does.
+        let playing = !self.music_paused && !self.in_song();
+        let phase = self.preview.beat().filter(|b| b.1 > 1.0 && playing).map(|(into, len)| (into / len).rem_euclid(1.0) as f32);
+        style::set_beat(phase, playing && self.cfg.kiai_effects && self.preview.kiai());
         match &mut self.scene {
             Scene::Select if on_menu => {
                 self.board_rect = None;
@@ -8004,12 +8748,11 @@ impl State {
                 let song = shown.and_then(|i| self.library.get(i)).map(Entry::label);
                 let k = |i: usize| config::key_name(self.cfg.keys[i]);
                 let (a, b, d, e) = (k(0), k(3), k(1), k(2));
-                let hint = tr!("{a} {b} move   {d} {e} choose", "{a} {b} 移動   {d} {e} 決定", "{a} {b} листать   {d} {e} выбрать";);
                 let paused = self.music_paused;
                 if let Some(p) = &mut self.player {
                     let now = Instant::now();
                     let engine = self.audio.as_ref();
-                    let sounding = !paused && self.preview.sounding(engine, now, &mut p.samples);
+                    let sounding = !paused && self.preview.sounding(engine, now, &mut p.spectrum.samples);
                     let hint = tr!("{a} {b} song   {d} {e} pause   L love   Tab folders", "{a} {b} 曲   {d} {e} ポーズ   L お気に入り   Tab フォルダ", "{a} {b} трек   {d} {e} пауза   L любимое   Tab папки";);
                     let volume = self.cfg.music_volume;
                     let frame = player::Frame {
@@ -8024,7 +8767,10 @@ impl State {
                     };
                     p.draw(canvas, &frame);
                 } else if let Some(m) = &mut self.main_menu {
-                    let frame = menu::Frame { beat: self.preview.beat(), song: song.as_deref(), hint: &hint, maps: self.library.len(), paused };
+                    let kiai = self.cfg.kiai_effects && !paused && self.preview.kiai();
+                    let shows = self.cfg.menu_notes && render::animations();
+                    let ghosts = self.preview.map_time(self.menu_notes.entry()).filter(|_| shows).and_then(|t| self.menu_notes.view(t));
+                    let frame = menu::Frame { beat: self.preview.beat(), kiai, ghosts, lane_dim: self.cfg.menu_notes_dim, song: song.as_deref(), maps: self.library.len(), paused };
                     m.draw(canvas, &frame);
                 }
             }
@@ -8036,7 +8782,7 @@ impl State {
                     String::new()
                 };
                 let (stars, rate, plays) = (&self.stars, self.play_speed().0, &self.scores);
-                self.select.instant = self.right_scroll || self.scrollbar_drag;
+                self.select.scrubbing = (self.right_scroll || self.scrollbar_drag).then(|| self.mouse_virtual().1);
                 self.select.list_share = self.cfg.song_list_share;
                 self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate), &|e| scores::best_grade(plays, e.hash()));
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
@@ -8072,7 +8818,7 @@ impl State {
                                 let total = board.as_ref().and_then(|b| b.as_ref().ok()).map_or(0, Vec::len);
                                 self.board_max = total.saturating_sub(fits);
                                 self.board_scroll = self.board_scroll.min(self.board_max);
-                                draw_online_leaderboard(canvas, x, top, pw, board.as_ref(), &self.cfg.online_user, fits, self.board_scroll);
+                                draw_online_leaderboard(canvas, [x, top], pw, board.as_ref(), &self.cfg.online_user, fits, self.board_scroll);
                                 self.online_leaderboard = match board {
                                     Some(Ok(rows)) => rows.into_iter().skip(self.board_scroll).take(fits).collect(),
                                     _ => Vec::new(),
@@ -8100,7 +8846,7 @@ impl State {
                     mapguessr::draw_picking(canvas, g, self.cfg.scroll_speed, Instant::now());
                 } else if self.picking_lobby_map {
                     let w = canvas.width;
-                    canvas.round_rect(24.0, 438.0, w - 48.0, 34.0, 8.0, rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0), rgba(accent(), 1.0), 1.5);
+                    canvas.round_rect([24.0, 438.0], [w - 48.0, 34.0], 8.0, rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0), rgba(accent(), 1.0), 1.5);
                     canvas.text_centered(w / 2.0, 450.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, w - 64.0, "Picking the lobby map: Enter to choose, Esc to cancel"));
                 }
                 self.select.draw_popups(canvas, &self.library);
@@ -8184,11 +8930,10 @@ impl State {
                 if game.replay.is_some() && game.paused.is_none() {
                     self.replay_bar = Some(draw_replay_bar(canvas, game, self.replay_scrub.is_some()));
                 }
-                if let Some(plan) = &mut self.shots {
-                    if plan.times.last().is_some_and(|&t| game.time >= t) {
-                        let t = plan.times.pop().unwrap();
-                        capture = Some(format!("play-{t:.0}.png"));
-                    }
+                if let Some(plan) = &mut self.shots
+                    && plan.times.last().is_some_and(|&t| game.time >= t) {
+                    let t = plan.times.pop().unwrap();
+                    capture = Some(format!("play-{t:.0}.png"));
                 }
                 if done {
                     let title = results_title(&game.map.meta, *from);
@@ -8276,7 +9021,7 @@ impl State {
                                     version: m.version.clone(),
                                     rate: replay.rate,
                                     from: None,
-                                    set_id: m.set_id,
+                                    set_id: e.set_id(),
                                     mods: replay.mods.clone(),
                                     multiverse: None,
                                     shapeshift: None,
@@ -8292,13 +9037,25 @@ impl State {
                                 date: replay.date,
                                 replay_version: replay.version,
                                 inputs: replay.inputs.clone(),
-                                stars: stars::star_rating_played(&e.path, replay.rate, game.mods, game.scroll_speed, game.seed, replay.half_rule()),
+                                rolls: Some(game.stats.roll_ticks),
+                                stars: None,
                                 pp_version: online::PP_VERSION,
                                 scroll_speed: Some(replay.scroll_speed),
                                 play_ms: Some(game.played_ms as u64),
-                                md5: std::fs::read(&e.path).ok().map(|b| download::md5_hex(&b)),
+                                md5: None,
+                                timing: {
+                                    let (latency_ms, reported_latency_ms) = self.audio.as_ref().map(|a| a.latencies_ms()).unwrap_or_default();
+                                    Some(online::PlayTiming {
+                                        os: std::env::consts::OS.into(),
+                                        present: self.present.name().into(),
+                                        offset_ms: self.play_offset,
+                                        visual_lead_ms: visual_offset - self.pace_shift_ms,
+                                        latency_ms,
+                                        reported_latency_ms,
+                                    })
+                                },
                             };
-                            self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play));
+                            self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play, e.path.clone(), replay.pp_play()));
                             // Counted with the play itself.
                             self.playing = None;
                             results.total_due = true;
@@ -8366,7 +9123,7 @@ impl State {
                         let stars = self.stars.get(i, self.play_speed().0);
                         draw_preview_chrome(canvas, &self.cfg, e, stars, lobby, &size_label);
                         let (x, y, w) = (24.0, 394.0, canvas.width - 48.0);
-                        canvas.round_rect(x, y, w, 78.0, 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+                        canvas.round_rect([x, y], [w, 78.0], 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
                         let button = match (lobby, lobby_host) {
                             (false, _) => Some(("Play from", "Enter")),
                             (true, true) => Some(("Start the match from", "Enter")),
@@ -8412,26 +9169,25 @@ impl State {
                         Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Lobby),
                     }
                 }
-                if start.is_some_and(|at| now >= at) {
-                    if let Some((map, track)) = loaded.take() {
-                        let seed = self.mp.as_ref().and_then(|s| s.map.as_ref()).and_then(|m| m.seed).unwrap_or(0);
-                        let mut game = Game::with_seed(map, track, self.audio.as_ref(), self.pending_mods, seed);
-                        game.scroll_speed = self.cfg.scroll_speed;
-                        if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
-                            game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, game.scroll_speed, game.seed, Default::default());
-                        }
-                        if let Some(m) = self.mp.as_ref().and_then(|s| s.map.as_ref()) {
-                            use_mod_settings(&mut game, m);
-                        }
-                        if let Some(t) = *from {
-                            game.start_from(t, self.audio.as_ref(), self.play_offset);
-                        }
-                        game.record = true;
-                        if let Some(s) = &mut self.mp {
-                            s.inputs_sent = 0;
-                        }
-                        next = Some(Scene::MpPlay { game: Box::new(game), quit_armed: None });
+                if start.is_some_and(|at| now >= at)
+                    && let Some((map, track)) = loaded.take() {
+                    let seed = self.mp.as_ref().and_then(|s| s.map.as_ref()).and_then(|m| m.seed).unwrap_or(0);
+                    let mut game = Game::with_seed(map, track, self.audio.as_ref(), self.pending_mods, seed);
+                    game.scroll_speed = self.cfg.scroll_speed;
+                    if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
+                        game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, game.scroll_speed, game.seed, Default::default());
                     }
+                    if let Some(m) = self.mp.as_ref().and_then(|s| s.map.as_ref()) {
+                        use_mod_settings(&mut game, m);
+                    }
+                    if let Some(t) = *from {
+                        game.start_from(t, self.audio.as_ref(), self.play_offset);
+                    }
+                    game.record = true;
+                    if let Some(s) = &mut self.mp {
+                        s.inputs_sent = 0;
+                    }
+                    next = Some(Scene::MpPlay { game: Box::new(game), quit_armed: None });
                 }
                 if let Some(s) = &self.mp {
                     multiplayer::draw_waiting(canvas, s, *start, loaded.is_some(), now);
@@ -8472,10 +9228,9 @@ impl State {
                         // Failing (SD / PF) ends the match for you like forfeiting does.
                         let failed = game.failed_early();
                         s.client.send(net::ClientMsg::Finished(multiplayer::final_from(&game.stats, failed)));
-                        if failed {
-                            if let Some(a) = &self.audio {
-                                a.stop();
-                            }
+                        if failed
+                            && let Some(a) = &self.audio {
+                            a.stop();
                         }
                         next = Some(Scene::MpResults);
                     }
@@ -8498,32 +9253,31 @@ impl State {
                 }
                 // Start once the map is ready and the delay has passed: the music where the
                 // players were SPECTATE_DELAY ago, every player's game snapping to it.
-                if v.games.is_empty() && now >= v.start + SPECTATE_DELAY {
-                    if let (Some((map, track)), Some(audio)) = (v.loaded.take(), self.audio.as_ref()) {
-                        let probe = Game::with_mods(map.clone(), track.clone(), None, v.mods);
-                        let first_ms = match v.from {
-                            Some(t) => (probe.track_at(t) - 2000.0).max(probe.track_at(probe.time)) + self.play_offset,
-                            None => probe.track_at(probe.time),
-                        };
-                        let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
-                        audio.play(track.clone(), first_ms + behind);
-                        for (k, (id, name)) in v.players.iter().enumerate() {
-                            // The lobby's speed mods, and the player's own others.
-                            let own = self.mp.as_ref().and_then(|s| s.players.iter().find(|p| p.id == *id)).map(|p| Mods::from_list(&p.mods).free()).unwrap_or(Mods::NONE);
-                            let mut g = Game::with_seed(map.clone(), track.clone(), None, v.mods.shared().plus(own), v.map.seed.unwrap_or(0));
-                            use_mod_settings(&mut g, &v.map);
-                            if let Some(t) = v.from {
-                                g.skip_to(t);
-                            }
-                            let inputs = v.pending.remove(id).unwrap_or_default();
-                            g.replay = Some((inputs, 0));
-                            g.banner = Some(format!("SPECTATING  -  {name}  ({}/{})", k + 1, v.players.len()));
-                            g.watched = true;
-                            v.games.push((*id, Box::new(g)));
+                if v.games.is_empty() && now >= v.start + SPECTATE_DELAY
+                    && let (Some((map, track)), Some(audio)) = (v.loaded.take(), self.audio.as_ref()) {
+                    let probe = Game::with_mods(map.clone(), track.clone(), None, v.mods);
+                    let first_ms = match v.from {
+                        Some(t) => (probe.track_at(t) - 2000.0).max(probe.track_at(probe.time)) + self.play_offset,
+                        None => probe.track_at(probe.time),
+                    };
+                    let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
+                    audio.play(track.clone(), first_ms + behind);
+                    for (k, (id, name)) in v.players.iter().enumerate() {
+                        // The lobby's speed mods, and the player's own others.
+                        let own = self.mp.as_ref().and_then(|s| s.players.iter().find(|p| p.id == *id)).map(|p| Mods::from_list(&p.mods).free()).unwrap_or(Mods::NONE);
+                        let mut g = Game::with_seed(map.clone(), track.clone(), None, v.mods.shared().plus(own), v.map.seed.unwrap_or(0));
+                        use_mod_settings(&mut g, &v.map);
+                        if let Some(t) = v.from {
+                            g.skip_to(t);
                         }
-                        // Players may have skipped the intro before the view was ready.
-                        v.follow_skip(self.audio.as_ref(), self.play_offset);
+                        let inputs = v.pending.remove(id).unwrap_or_default();
+                        g.replay = Some((inputs, 0));
+                        g.banner = Some(format!("SPECTATING  -  {name}  ({}/{})", k + 1, v.players.len()));
+                        g.watched = true;
+                        v.games.push((*id, Box::new(g)));
                     }
+                    // Players may have skipped the intro before the view was ready.
+                    v.follow_skip(self.audio.as_ref(), self.play_offset);
                 }
                 if v.games.is_empty() {
                     canvas.text_centered(canvas.width / 2.0, 220.0, 12.0, rgba(0xffffff, 1.0), "joining the match...");
@@ -8633,6 +9387,7 @@ impl State {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 self.settings_ui.krokodil = self.is_krokodil();
                 settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
+                let searching = !self.settings_ui.search.is_empty();
                 let footer = if self.settings_ui.editing.as_ref().is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder)) {
                     "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
                 } else if self.settings_ui.editing.is_some() {
@@ -8645,11 +9400,17 @@ impl State {
                         Kind::Key => "Enter rebind",
                         Kind::Action => "Enter go",
                     };
-                    let back = if from_game { "Esc back to pause menu" } else { "Esc or Tab back" };
-                    format!("Up/Down select   PgUp/PgDn section   Left/Right change   {enter}   {back}")
+                    let back = if searching {
+                        "Esc clear the search"
+                    } else if from_game {
+                        "Esc back to pause menu"
+                    } else {
+                        "Esc or Tab back"
+                    };
+                    format!("Type to search   Up/Down select   Left/Right change   {enter}   {back}")
                 };
                 let this = &*self;
-                this.settings_ui.draw(canvas, &|item| this.setting_value(item), &footer);
+                this.settings_ui.draw(canvas, &|item| this.setting_value(item), &|item| this.setting_control(item), &footer);
                 if let Some(p) = &self.settings_ui.choices {
                     p.draw(canvas);
                 }
@@ -8661,12 +9422,23 @@ impl State {
                 layout::draw_frame(canvas, area, true);
                 let w = canvas.width;
                 let bw = (w - 32.0).min(660.0);
-                canvas.round_rect(w / 2.0 - bw / 2.0, 440.0, bw, 34.0, 8.0, rgba(0x000000, 0.75), rgba(accent(), 0.6), 1.0);
+                canvas.round_rect([w / 2.0 - bw / 2.0, 440.0], [bw, 34.0], 8.0, rgba(0x000000, 0.75), rgba(accent(), 0.6), 1.0);
                 let room = bw - 16.0;
                 canvas.text_centered(w / 2.0, 446.0, 8.0, rgba(0xffffff, 1.0), &Canvas::fit(8.0, room, &format!("Playfield area: {}", area.describe())));
                 let help = "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done";
                 let size = Canvas::fit_size(7.0, 5.5, room, help);
                 canvas.text_centered(w / 2.0, 460.0 + (7.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, room, help));
+            }
+        }
+        // A screen just opened comes up out of black, its background too.
+        if let Some(ms) = &mut self.screen_fade {
+            *ms += canvas.dt_ms;
+            let k = (*ms / menu::FADE_MS).min(1.0);
+            if k >= 1.0 || !self.cfg.animations {
+                self.screen_fade = None;
+            } else {
+                let w = canvas.width;
+                canvas.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 1.0 - k * k * (3.0 - 2.0 * k)));
             }
         }
         if self.grip.is_some() {
@@ -8738,19 +9510,18 @@ impl State {
             };
             let text = format!("{:.0} fps  {:.2} ms  worst {:.1} ms  {mode}", self.stats.fps, 1000.0 / self.stats.fps.max(1.0), self.stats.worst_ms);
             let tw = Canvas::text_width(8.0, &text);
-            canvas.round_rect(6.0, 6.0, tw + 12.0, 16.0, 4.0, rgba(0x000000, 0.55), rgba(0, 0.0), 0.0);
+            canvas.round_rect([6.0, 6.0], [tw + 12.0, 16.0], 4.0, rgba(0x000000, 0.55), rgba(0, 0.0), 0.0);
             canvas.text(12.0, 10.0, 8.0, rgba(0x9fe09f, 1.0), &text);
         }
-        if let Some(shown) = self.volume_shown {
-            let age = now.saturating_duration_since(shown).as_secs_f32();
-            if age < 1.6 {
-                let a = ((1.6 - age) / 0.3).min(1.0);
-                let slide = (1.0 - render::progress(self.volume_since.unwrap_or(shown), 160.0)) * 40.0;
-                draw_volume(canvas, &self.cfg, a, slide);
-            } else {
-                self.volume_shown = None;
-                self.volume_since = None;
-            }
+        if let Some((done, total)) = self.mapinfo.as_ref().and_then(|i| i.progress(now)).filter(|_| !self.in_song() && self.splash.is_none()) {
+            draw_analysis(canvas, done, total);
+        }
+        // Not during a song, where a pointer left there would hold it over the notes for good.
+        if !self.in_song() {
+            self.volume.hold(now);
+        }
+        if self.volume.visible(now) {
+            self.volume.draw(canvas, &self.cfg, now);
         }
         if self.overlay_allowed() && self.splash.is_none() {
             let logged_in = self.mp_menu.account.is_some();
@@ -8758,11 +9529,13 @@ impl State {
                 Some(s) => (Some(&s.chat[..]), s.chat_unread),
                 None => (None, 0),
             };
+            // The screen behind darkens, but not a play being watched.
+            let dim = !self.in_song();
             if self.social.open {
-                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread);
+                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread, dim);
             } else if let Some(p) = self.social.closing() {
                 let (start, hits) = (canvas.shapes.len(), canvas.hits.len());
-                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread);
+                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread, dim);
                 canvas.hits.truncate(hits);
                 canvas.transform_since(start, [0.0, 0.0], 1.0, p * 30.0, 0.0);
                 for sh in &mut canvas.shapes[start..] {
@@ -8775,11 +9548,16 @@ impl State {
             social::draw_notes(canvas, &self.social);
         }
         if let Some(page) = self.guide.filter(|_| self.splash.is_none()) {
-            guide::draw(canvas, page, self.guide_binding, &self.cfg);
+            let hold = self.guide_hold_left().map(|left| left.as_secs_f32().ceil() as u32);
+            guide::draw(canvas, page, self.guide_binding, hold, &self.cfg);
         }
         if let Some(p) = &self.profile {
             p.draw(canvas);
         }
+        if let Some(view) = &self.medals {
+            view.draw(canvas);
+        }
+        self.unlock.draw(canvas);
         if let Some(view) = &self.changelog {
             view.draw(canvas);
         }
@@ -8793,7 +9571,7 @@ impl State {
             let text = Canvas::fit_end(10.0, room, &self.ime_preedit);
             let tw = Canvas::text_width(10.0, &text);
             let x = canvas.width / 2.0 - tw / 2.0;
-            canvas.round_rect(x - 10.0, 344.0, tw + 20.0, 24.0, 6.0, rgba(0x15151d, 0.95), rgba(0xFFD34D, 1.0), 1.0);
+            canvas.round_rect([x - 10.0, 344.0], [tw + 20.0, 24.0], 6.0, rgba(0x15151d, 0.95), rgba(0xFFD34D, 1.0), 1.0);
             canvas.text(x, 351.0, 10.0, rgba(0xFFD34D, 1.0), &text);
             canvas.rect(x, 363.0, tw, 1.0, rgba(0xFFD34D, 0.8));
         }
@@ -8807,13 +9585,22 @@ impl State {
                 let text = Canvas::fit(size, room, &t.text);
                 let tw = Canvas::text_width(size, &text);
                 let x = canvas.width / 2.0 - tw / 2.0;
-                canvas.round_rect(x - 12.0, 380.0 + rise, tw + 24.0, 28.0, 8.0, rgba(0x000000, 0.7 * a), rgba(0xffffff, 0.2 * a), 1.0);
+                canvas.round_rect([x - 12.0, 380.0 + rise], [tw + 24.0, 28.0], 8.0, rgba(0x000000, 0.7 * a), rgba(0xffffff, 0.2 * a), 1.0);
                 canvas.text(x, 394.0 - size / 2.0 + rise, size, rgba(0xffffff, a), &text);
             } else {
                 self.toast = None;
             }
         }
         self.draw_update(canvas);
+        // Over everything so far (the top bar's buttons too); a dialog or a drop goes on top.
+        // The idle screen's rays hear what the menu or player plays.
+        if self.idle.amount() > 0.0 {
+            let engine = self.audio.as_ref();
+            let sounding = !self.music_paused && self.preview.sounding(engine, now, &mut self.idle.spectrum.samples);
+            self.idle.spectrum.update(canvas.dt_ms, sounding, engine.map_or(48_000, |a| a.rate));
+        }
+        let song = self.idle_song();
+        self.idle.draw(canvas, self.preview.has_background, song.as_ref().map(|(t, a)| (t.as_str(), a.as_str())));
         self.draw_drag_hover(canvas, now);
         self.draw_crash(canvas);
         self.draw_quit(canvas);
@@ -8821,10 +9608,9 @@ impl State {
             let boot = self.boot_log();
             // Some window managers never report focus: don't wait forever.
             let ready = self.focus_seen || self.started.elapsed() > Duration::from_secs(5);
-            if let Some(s) = &mut self.splash {
-                if !s.draw(canvas, now, self.audio.as_ref(), &boot, ready) {
-                    self.splash = None;
-                }
+            if let Some(s) = &mut self.splash
+                && !s.draw(canvas, now, self.audio.as_ref(), &boot, ready) {
+                self.splash = None;
             }
         }
         std::mem::swap(&mut self.hits, &mut canvas.hits);
@@ -8852,7 +9638,7 @@ impl State {
     fn installed_sets(&mut self) -> &mut std::collections::HashSet<u32> {
         let library = &self.library;
         self.installed_sets.get_or_insert_with(|| {
-            library.iter().filter_map(|e| e.meta.set_id.or_else(|| e.path.parent().and_then(download::set_id_of_folder))).collect()
+            library.iter().filter_map(Entry::set_id).collect()
         })
     }
 
@@ -9059,13 +9845,15 @@ impl State {
         });
         for r in done {
             let text = match r {
-                Ok(online::Reply::Submitted { map_rank, pp, rank }) => {
+                Ok(online::Reply::Submitted { map_rank, pp, rank, medals }) => {
+                    self.medals_earned(medals);
                     let before = self.me.map(|(b, _)| b);
+                    // + 0.0: servers before the fix sent a new player's pp as -0.0 ("-0 pp").
+                    let pp = pp + 0.0;
                     self.me = Some((pp, rank));
-                    if let Scene::Results { results, .. } = &mut self.scene {
-                        if results.opened.is_none() && results.replay.is_some() {
-                            results.total = Some(ui::Total { before, after: pp, rank });
-                        }
+                    if let Scene::Results { results, .. } = &mut self.scene
+                        && results.opened.is_none() && results.replay.is_some() {
+                        results.total = Some(ui::Total { before, after: pp, rank });
                     }
                     let place = map_rank.map(|r| format!("#{r} on this map")).unwrap_or_else(|| "sent (not your best here)".into());
                     let total = rank.map(|r| format!("  |  {pp:.0} pp, #{r} overall")).unwrap_or_default();
@@ -9078,19 +9866,18 @@ impl State {
             };
             self.toast(text);
         }
-        if let Some((map, rx)) = &self.board_fetch {
-            if let Ok(rows) = rx.try_recv() {
-                let rows = rows.map_err(|e| if e == "bad request" { "the server doesn't keep scores yet".into() } else { e });
-                self.online_boards.insert(*map, (Instant::now(), rows));
-                self.board_fetch = None;
-            }
+        if let Some((map, rx)) = &self.board_fetch
+            && let Ok(rows) = rx.try_recv() {
+            let rows = rows.map_err(|e| if e == "bad request" { "the server doesn't keep scores yet".into() } else { e });
+            self.online_boards.insert(*map, (Instant::now(), rows));
+            self.board_fetch = None;
         }
     }
 
     /// The online leaderboard of map `hash` (fetched in the background; again after a minute).
     fn online_board(&mut self, hash: u64) -> Option<&Result<Vec<online::OnlineScore>, String>> {
         let stale = self.online_boards.get(&hash).is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(60));
-        if stale && self.board_fetch.is_none() && !self.dragging_list() {
+        if stale && self.board_fetch.is_none() {
             self.board_fetch = Some((hash, fetch_board(self.cfg.online_server.clone(), hash)));
         }
         self.online_boards.get(&hash).map(|(_, rows)| rows)
@@ -9118,8 +9905,25 @@ impl State {
         if let Some(Ok(result)) = self.me_fetch.as_ref().map(|rx| rx.try_recv()) {
             self.me_fetch = None;
             if let Ok(p) = result {
-                self.me = Some((p.pp, p.rank));
+                self.me = Some((p.pp + 0.0, p.rank));
             }
+        }
+    }
+
+    fn poll_changelog(&mut self) {
+        if let Some(view) = &mut self.changelog {
+            view.poll();
+        }
+        // A delayed response must not open an overlay in the middle of a song or replace
+        // a changelog the player has already opened manually, and the guide comes first: what's
+        // new would cover it while its keys still went to the guide, closing it unseen.
+        if !self.in_song()
+            && self.guide.is_none()
+            && self.guide_after.is_none()
+            && let Some(view) = changelog::poll_automatic(&mut self.pending_changelog)
+            && self.changelog.is_none()
+        {
+            self.changelog = Some(view);
         }
     }
 
@@ -9130,9 +9934,15 @@ impl State {
         if let Some(p) = &mut self.profile {
             p.poll();
         }
-        if let Some(view) = &mut self.changelog {
+        if let Some(view) = &mut self.medals {
             view.poll();
         }
+        // The splash is drawn over everything, so it waits for that as well as for a song.
+        if let Some((tier, secret)) = self.unlock.tick(!self.in_song() && self.splash.is_none()) {
+            self.sfx(audio::Sfx::medal(tier, secret));
+        }
+        self.tick_guide();
+        self.poll_changelog();
         #[cfg(target_os = "android")]
         if self.imports_checked.elapsed() >= Duration::from_secs(1) {
             self.imports_checked = Instant::now();
@@ -9296,6 +10106,7 @@ impl State {
                 Some(new) => {
                     *e = new;
                     self.select.gone.remove(&e.path);
+                    self.select.edited.remove(&e.path);
                     changed.push((i, e.path.clone(), e.modified, e.size));
                 }
                 None => {
@@ -9337,14 +10148,13 @@ impl State {
         // Lobby: the map we were missing may be here now.
         let library = &self.library;
         let mut lobby_note = None;
-        if let Some(s) = &mut self.mp {
-            if let (Some(m), false) = (&s.map, s.have_map) {
-                s.map_entry = find_map(library, m);
-                s.have_map = s.map_entry.is_some();
-                s.client.send(net::ClientMsg::HasMap(s.have_map));
-                if !s.have_map && m.set_id == Some(set.id) {
-                    lobby_note = Some("downloaded, but the host has a different version of this map".to_string());
-                }
+        if let Some(s) = &mut self.mp
+            && let (Some(m), false) = (&s.map, s.have_map) {
+            s.map_entry = find_map(library, m);
+            s.have_map = s.map_entry.is_some();
+            s.client.send(net::ClientMsg::HasMap(s.have_map));
+            if !s.have_map && m.set_id == Some(set.id) {
+                lobby_note = Some("downloaded, but the host has a different version of this map".to_string());
             }
         }
         self.reveal_maps(maps);
@@ -9397,7 +10207,7 @@ impl State {
     }
 
     /// The SONGS tab: the songs themselves, not the menu over them.
-    fn to_songs(&mut self) {
+    fn show_songs(&mut self) {
         self.main_menu = None;
         self.scene = Scene::Select;
     }
@@ -9414,20 +10224,20 @@ impl State {
             }
             (Scene::Settings { .. }, 0) if settings_from_menu => {
                 self.close_settings();
-                self.to_songs();
+                self.show_songs();
             }
             (Scene::Settings { .. }, 2) if settings_from_menu => {
                 self.close_settings();
                 self.open_multiplayer();
             }
-            (Scene::MpMenu | Scene::Lobby, 0) => self.to_songs(),
+            (Scene::MpMenu | Scene::Lobby, 0) => self.show_songs(),
             (Scene::MpMenu | Scene::Lobby, 1) => self.open_settings(),
             (Scene::Select | Scene::MpMenu | Scene::Lobby, 3) => self.open_download(),
             (Scene::Settings { .. }, 3) if settings_from_menu => {
                 self.close_settings();
                 self.open_download();
             }
-            (Scene::Download, 0) => self.to_songs(),
+            (Scene::Download, 0) => self.show_songs(),
             (Scene::Download, 1) => self.open_settings(),
             (Scene::Download, 2) => self.open_multiplayer(),
             _ => {}
@@ -9447,6 +10257,11 @@ impl State {
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),
+            Hit::MedalTab(tab) => {
+                if let Some(view) = &mut self.medals {
+                    view.set_tab(tab);
+                }
+            }
             Hit::Guide(action) => self.guide_action(action),
             Hit::DiscordServer => {
                 if !open_url(menu::DISCORD_INVITE) {
@@ -9526,8 +10341,22 @@ impl State {
                 self.social.mark_read(self.mp.is_some());
             }
             Hit::SocialRow(i) => {
+                let in_lobby = self.mp.is_some();
                 self.social.cursor = i;
-                self.social.mark_read(self.mp.is_some());
+                if matches!(self.social.row(in_lobby), social::Row::Friend(_) | social::Row::Lobby) {
+                    self.social.open_conversation();
+                }
+                self.social.mark_read(in_lobby);
+                if self.social.row(in_lobby) == social::Row::Lobby
+                    && let Some(s) = &mut self.mp {
+                    s.chat_unread = 0;
+                }
+            }
+            Hit::SocialBack => self.social.close_conversation(),
+            Hit::SocialDeleteChat(i) => {
+                if let Some(l) = self.social.global.get(i).cloned() {
+                    self.admin_op(online::AdminOp::DeleteGlobal { from: l.from, at: l.at });
+                }
             }
             Hit::SocialAction(i, action) => {
                 self.social.cursor = i;
@@ -9545,6 +10374,7 @@ impl State {
                         social::NoteAction::Requests => {
                             self.open_social();
                             self.social.set_tab(social::Tab::Friends);
+                            self.social.close_conversation();
                             let in_lobby = self.mp.is_some();
                             if let Some(r) = self.social.rows(in_lobby).iter().position(|r| matches!(r, social::Row::Request(_))) {
                                 self.social.cursor = r;
@@ -9591,6 +10421,7 @@ impl State {
             Hit::DlSort(i) => self.browse.set_sort(download::SortKey::ALL[i]),
             Hit::SettingsSection(i) => {
                 self.settings_ui.binding = None;
+                self.settings_ui.clear_search();
                 self.settings_ui.cursor = settings::section_start(i);
             }
             Hit::SortList => self.open_sorts(),
@@ -9607,7 +10438,13 @@ impl State {
                 self.download_key(KeyCode::Enter, None, window);
             }
             Hit::SongHeader(row) => self.click(Hit::SongRow(row), window),
-            Hit::SectionHeader(s) => self.select.click_section(s),
+            Hit::SectionHeader(s) => self.select.click_section(s, &self.library),
+            Hit::ListBack => self.select.follow_selection(),
+            Hit::ToMenu if self.select.to_menu => {
+                self.select.searching = false;
+                self.main_menu = Some(menu::Menu::new());
+            }
+            Hit::ToMenu => self.key_inner(KeyCode::Escape, false, None, Instant::now(), window),
             Hit::ModsButton => self.open_mod_select(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
@@ -9625,10 +10462,9 @@ impl State {
                 self.shapeshift_changed();
             }
             Hit::ShapeshiftMove(dir) => {
-                if let Some(setup) = &mut self.shapeshift_setup {
-                    if setup.move_shape(&mut self.cfg.shapeshift, dir) {
-                        self.shapeshift_changed();
-                    }
+                if let Some(setup) = &mut self.shapeshift_setup
+                    && setup.move_shape(&mut self.cfg.shapeshift, dir) {
+                    self.shapeshift_changed();
                 }
             }
             Hit::CustomTab(i) => {
@@ -9665,8 +10501,17 @@ impl State {
             // A song's own row picks its remembered (or hardest) difficulty.
             Hit::SongRow(row) if self.select.is_song_start(row) && !self.select.in_open_song(row) => self.select.enter_song(row, &self.library),
             Hit::SongRow(row) => self.select.set_cursor(row),
-            Hit::SettingRow(i) if i == self.settings_ui.cursor => self.settings_key(KeyCode::Enter, window),
-            Hit::SettingRow(i) => self.settings_ui.cursor = i,
+            // One click does what the row does: flips a switch, opens a list, waits for a key.
+            Hit::SettingRow(i) => {
+                self.settings_ui.cursor = i;
+                self.settings_key(KeyCode::Enter, window);
+            }
+            Hit::SettingLevel(i) => {
+                self.settings_ui.cursor = i;
+                self.settings_level = Some(i);
+                self.set_level(i);
+            }
+            Hit::SettingsSearch => {}
             Hit::SettingStep(i, dir) => {
                 self.settings_ui.cursor = i;
                 self.adjust_setting(settings::ITEMS[i].1, dir, window);
@@ -9686,6 +10531,129 @@ impl State {
         }
     }
 }
+
+/// The graphics APIs to draw with, from the `graphics_api` setting. "auto" is DX12 on Windows
+/// (whatever the card: Vulkan drivers there have crashed on start, Intel's igvk64.dll on a UHD
+/// 630 among them) unless no card has it, and wgpu's choice (Vulkan first) elsewhere. After a
+/// Windows start that never got going (`gpu_start`) the setting itself becomes "vulkan".
+pub fn graphics_backends(api: &str) -> wgpu::Backends {
+    match api {
+        "vulkan" => wgpu::Backends::VULKAN,
+        "dx12" => wgpu::Backends::DX12,
+        "gl" => wgpu::Backends::GL,
+        "metal" => wgpu::Backends::METAL,
+        _ => auto_backends(),
+    }
+}
+
+#[cfg(windows)]
+fn auto_backends() -> wgpu::Backends {
+    // DXGI lists the cards without touching their Vulkan drivers.
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::DX12, ..wgpu::InstanceDescriptor::new_without_display_handle() });
+    let cards = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12)).iter().filter(|a| a.get_info().device_type != wgpu::DeviceType::Cpu).count();
+    if cards > 0 {
+        return wgpu::Backends::DX12;
+    }
+    eprintln!("graphics: no DX12 graphics card: wgpu's choice");
+    wgpu::Backends::all()
+}
+
+#[cfg(not(windows))]
+fn auto_backends() -> wgpu::Backends {
+    wgpu::Backends::all()
+}
+
+/// A start of the graphics that crashes (in the driver, where nothing of ours runs) leaves its
+/// mark behind: `gpu-start` in the data folder, written before the graphics start and removed
+/// once frames have been going for a few seconds. The next start finds it and takes the other
+/// way (`auto_backends`).
+mod gpu_start {
+    const FILE: &str = "gpu-start";
+    /// Frames drawn before the start counts as having worked.
+    pub const FRAMES: u32 = 180;
+
+    fn path() -> Option<std::path::PathBuf> {
+        crate::config::data_dir().map(|d| d.join(FILE))
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn failed_last_time() -> bool {
+        path().is_some_and(|p| p.exists())
+    }
+
+    pub fn starting() {
+        if let Some(p) = path() {
+            let _ = std::fs::create_dir_all(p.parent().unwrap_or(&p));
+            let _ = std::fs::write(p, "the graphics are starting; this goes once they're going\n");
+        }
+    }
+
+    pub fn going() {
+        if let Some(p) = path() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// The mark of a crash in an overlay or capture hook while drawing with Vulkan on "auto"
+    /// (`native_crashes`): the next start takes DX12.
+    const HOOK_FILE: &str = "vulkan-hook-crash";
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn hook_crashed() {
+        if let Some(d) = crate::config::data_dir() {
+            let _ = std::fs::write(d.join(HOOK_FILE), "a hook crashed the game drawing with Vulkan; the next start takes DX12\n");
+        }
+    }
+
+    /// Whether the last run ended that way (and forgets it).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn hook_crashed_last_time() -> bool {
+        crate::config::data_dir().is_some_and(|d| std::fs::remove_file(d.join(HOOK_FILE)).is_ok())
+    }
+}
+
+/// Programs that put their own code into the game's drawing (game capture, overlays) and
+/// sometimes crash there, as (module, what it is). OBS's game capture crashed a game drawing
+/// with Vulkan: graphics-hook64.dll, hooked into the present, made a D3D11 device for its shared
+/// texture and dxcore.dll read 0xffffffffffffffff.
+const DRAWING_HOOKS: [(&str, &str); 4] = [
+    ("graphics-hook64.dll", "OBS's game capture"),
+    ("gameoverlayrenderer64.dll", "the Steam overlay"),
+    ("discordhook64.dll", "the Discord overlay"),
+    ("rtsshooks64.dll", "RivaTuner (RTSS)"),
+];
+
+/// The first of `DRAWING_HOOKS` in a crash's `frames:` line.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drawing_hook(frames: &str) -> Option<(&'static str, &'static str)> {
+    let frames = frames.to_ascii_lowercase();
+    frames.split_whitespace().find_map(|f| DRAWING_HOOKS.iter().find(|(dll, _)| f.split('+').next() == Some(dll)).copied())
+}
+
+/// What the crash window says to do about a crash in `who`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drawing_hook_advice(who: &str, dll: &str, to_dx12: bool, vulkan: bool) -> String {
+    let mut out = format!("It crashed inside {who} ({dll}), which hooks into the game's drawing, not in the game's own code.");
+    if to_dx12 {
+        out.push_str(" The next start draws with DX12 instead of Vulkan, which usually gets along with it.");
+    } else if vulkan {
+        out.push_str(" Picking DX12 in Settings > Video > Renderer may avoid it.");
+    }
+    if dll == "graphics-hook64.dll" {
+        out.push_str(" If it happens again, capture the game in OBS with Window Capture instead of Game Capture.");
+    } else {
+        out.push_str(" If it happens again, turning that overlay off avoids it.");
+    }
+    out
+}
+
+/// Drawing with Vulkan because `graphics_api` is "auto": a crash in a hook then moves the next
+/// start to DX12.
+#[cfg_attr(not(windows), allow(dead_code))]
+static VULKAN_ON_AUTO: AtomicBool = AtomicBool::new(false);
+/// Drawing with Vulkan at all (for the crash window's advice).
+#[cfg_attr(not(windows), allow(dead_code))]
+static VULKAN: AtomicBool = AtomicBool::new(false);
 
 /// Rounds of asking the server about statuses it didn't have yet, and the wait between them.
 const STATUS_ROUNDS: usize = 60;
@@ -9796,38 +10764,56 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     // can cost microseconds a time (HPET).
     let timing = profile || std::env::var_os("TAIKO_STATS").is_some();
     let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) = (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
+    let (mut prof_acquire, mut prof_acquire_max) = (0.0f64, 0.0f64);
     // TAIKO_LAYOUT=1: print each text that doesn't fit (once), see `debug::layout_problems`.
     canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
     let mut layout_seen = std::collections::HashSet::new();
+    let mut frames = 0u32;
     loop {
-        let (present, cap, refresh_hz) = {
+        frames = frames.saturating_add(1);
+        if frames == gpu_start::FRAMES {
+            gpu_start::going();
+        }
+        let (wanted, cap, refresh_hz, surface, size, atlas, letterbox, pixel_scale, avatar_uploads) = {
             let mut s = lock(&state);
             if s.quit {
+                // In game.log: the game was closed on purpose, not lost.
+                eprintln!("closing: quit from the game ({})", if s.quit_asked { "answered the exit question" } else { "no question asked" });
                 break;
             }
-            if let Some((surface, w, h)) = s.surface_swap.take() {
-                renderer.set_surface(surface, w, h);
+            s.poll_skin();
+            let surface = s.surface_swap.take();
+            let size = s.want_size.take();
+            let letterbox = s.sync_letterbox();
+            if matches!(s.scene, Scene::Play { .. })
+                && let Some(sm) = &mut s.smooth
+            {
+                sm.sample_waits(waits.0, waits.1, waits.2);
             }
-            if let Some((w, h)) = s.want_size.take() {
-                renderer.resize(w, h);
-            }
-            // Switch present mode when entering/leaving songs (menus can stay on vsync). Compare
-            // with what was requested, not what was granted, so an unsupported mode that falls
-            // back isn't re-applied every frame.
-            let wanted = s.wanted_present();
-            if requested_present != Some(wanted) {
-                renderer.set_present(wanted);
-                requested_present = Some(wanted);
-                s.present = renderer.present;
-            }
-            if matches!(s.scene, Scene::Play { .. }) {
-                if let Some(sm) = &mut s.smooth {
-                    sm.sample_waits(waits.0, waits.1, waits.2);
-                }
-            }
-            renderer.pixel_scale = if s.cfg.half_resolution { 2 } else { 1 };
-            (s.present, s.frame_cap(), s.refresh_hz)
+            (s.wanted_present(), s.frame_cap(), s.refresh_hz, surface, size,
+             s.sprites_upload.take(), letterbox, if s.cfg.half_resolution { 2 } else { 1 }, s.avatars.take_uploads())
         };
+        // GPU waits and uploads never hold the input/state mutex.
+        if let Some((surface, w, h)) = surface { renderer.set_surface(surface, w, h); }
+        if let Some((w, h)) = size { renderer.resize(w, h); }
+        renderer.letterbox = letterbox;
+        if requested_present != Some(wanted) {
+            renderer.set_present(wanted);
+            requested_present = Some(wanted);
+            lock(&state).present = renderer.present;
+        }
+        let present = renderer.present;
+        renderer.pixel_scale = pixel_scale;
+        for (slot, rgba) in avatar_uploads {
+            renderer.set_avatar(slot, &rgba);
+        }
+        if let Some(atlas) = atlas {
+            renderer.set_sprites(&atlas);
+            for c in [&mut canvas, &mut export_canvas] {
+                c.sprites = render::PerSprite(atlas.sprites.map(|s| s.map(|(_, size)| size)));
+                c.skin_layout = atlas.layout;
+            }
+        }
 
         let t0 = timing.then(Instant::now);
         let Some(frame) = renderer.acquire() else {
@@ -9875,16 +10861,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 break;
             }
         }
-        let (capture, clip, backdrop) = {
+        let (capture, clip, backdrop, background) = {
             let mut s = lock(&state);
-            if let Some(atlas) = s.sprites_upload.take() {
-                renderer.set_sprites(&atlas);
-                // The video export draws with the skin too.
-                for c in [&mut canvas, &mut export_canvas] {
-                    c.sprites = render::PerSprite(atlas.sprites.map(|s| s.map(|(_, size)| size)));
-                    c.skin_layout = atlas.layout;
-                }
-            }
             // Video export frames above are drawn without the grid; the screen's frame with it.
             render::set_text_grid(renderer.text_grid());
             render::set_frame_time(Some(now));
@@ -9910,16 +10888,16 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 cursor_hidden = hide;
                 let _ = proxy.send_event(UserEvent::HideCursor(hide));
             }
-            if let Some(image) = s.preview.bg_upload.take() {
-                renderer.set_background(image);
-                s.bg_changed = Some(Instant::now());
-            }
+            let background = s.preview.bg_upload.take();
+            if background.is_some() { s.bg_changed = Some(Instant::now()); }
             renderer.bg_brightness = s.bg_brightness;
+            renderer.bg_blur = s.idle.amount();
             // A new background cross-fades from the previous one.
             let fade = if s.on_menu() { MENU_BACKGROUND_FADE_MS } else { 300.0 };
             renderer.bg_mix = s.bg_changed.map(|t| render::progress(t, fade)).unwrap_or(1.0);
-            (capture, s.frame_clip.take(), s.backdrop(s.dims_background()))
+            (capture, s.frame_clip.take(), s.backdrop(s.dims_background()), background)
         };
+        if let Some(image) = background { renderer.set_background(image); }
         // The playfield / preview clip (fractions) plus the lists' (virtual units).
         let vw = canvas.width.max(1.0);
         let to_fraction = |[x, y, w, h]: [f32; 4]| [x / vw, y / render::VIRTUAL_HEIGHT, w / vw, h / render::VIRTUAL_HEIGHT];
@@ -9939,6 +10917,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             waits = ((acquired - t0).as_secs_f64() * 1000.0, (presented - t1).as_secs_f64() * 1000.0, sample_age);
             if profile {
                 prof_n += 1;
+                prof_acquire += waits.0;
+                prof_acquire_max = prof_acquire_max.max(waits.0);
                 prof_build += (t1 - now).as_secs_f64() * 1000.0;
                 prof_submit += (presented - t1).as_secs_f64() * 1000.0;
                 prof_shapes = prof_shapes.max(canvas.shapes.len());
@@ -9955,8 +10935,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                     let screen = (renderer.size().0 * renderer.size().1).max(1) as f32;
                     let cover: f32 = canvas.shapes.iter().map(area).sum::<f32>() / screen;
                     eprintln!(
-                        "profile: {:.0} fps  build {:.2} ms  submit {:.2} ms  shapes {}{gpu}  cover {cover:.2}",
-                        n / prof_start.elapsed().as_secs_f64(), prof_build / n, prof_submit / n, prof_shapes
+                        "profile: {:.0} fps  acquire {:.2} ms (max {:.2})  build {:.2} ms  submit {:.2} ms  shapes {}{gpu}  cover {cover:.2}",
+                        n / prof_start.elapsed().as_secs_f64(), prof_acquire / n, prof_acquire_max, prof_build / n, prof_submit / n, prof_shapes
                     );
                     if std::env::var("TAIKO_PROFILE").is_ok_and(|v| v == "shapes") {
                         let mut big: Vec<&render::Shape> = canvas.shapes.iter().collect();
@@ -9966,6 +10946,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                         }
                     }
                     (prof_start, prof_n, prof_build, prof_submit, prof_shapes) = (Instant::now(), 0, 0.0, 0.0, 0);
+                    (prof_acquire, prof_acquire_max) = (0.0, 0.0);
                 }
             }
         }
@@ -9992,6 +10973,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             sleep_until(next_frame);
         }
     }
+    // Closed before the frames counted it: the start went fine all the same.
+    gpu_start::going();
     let _ = proxy.send_event(UserEvent::Stopped);
 }
 
@@ -10027,12 +11010,11 @@ impl App {
 impl App {
     fn handle_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         // A new UI colour: the pointer is drawn in it too.
-        if self.cursors.is_some() && self.cursor_accent != render::accent() {
-            if let Some(window) = &self.window {
-                self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
-                self.cursor_accent = render::accent();
-                self.set_cursor(self.cursor);
-            }
+        if self.cursors.is_some() && self.cursor_accent != render::accent()
+            && let Some(window) = &self.window {
+            self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
+            self.cursor_accent = render::accent();
+            self.set_cursor(self.cursor);
         }
         match event {
             WindowEvent::CloseRequested => lock(&self.state).ask_quit(),
@@ -10111,10 +11093,16 @@ impl App {
             }
             WindowEvent::Touch(t) => {
                 let at = Instant::now();
-                lock(&self.state).touch(t.id, t.phase, t.location.x, t.location.y, at, self.window.as_deref());
+                let mut s = lock(&self.state);
+                let (x, y) = s.to_game(t.location.x, t.location.y);
+                s.touch(t.id, t.phase, x, y, at, self.window.as_deref());
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let icon = lock(&self.state).mouse_moved(position.x, position.y);
+                let icon = {
+                    let mut s = lock(&self.state);
+                    let (x, y) = s.to_game(position.x, position.y);
+                    s.mouse_moved(x, y)
+                };
                 if icon != self.cursor {
                     self.cursor = icon;
                     self.set_cursor(icon);
@@ -10172,8 +11160,7 @@ impl App {
         self.read_monitor();
         let mut s = lock(&self.state);
         s.want_size = Some((size.width, size.height));
-        s.window_w = size.width as f32;
-        s.window_h = size.height as f32;
+        s.set_window(size.width as f32, size.height as f32);
         s.refresh_presets();
         // Out of fullscreen, the size is remembered for the next start (saved once it stops
         // changing: dragging an edge resizes many times a second).
@@ -10234,8 +11221,7 @@ impl ApplicationHandler<UserEvent> for App {
                 Ok(surface) => {
                     let mut s = lock(&self.state);
                     s.surface_swap = Some((Some(surface), size.width, size.height));
-                    s.window_w = size.width as f32;
-                    s.window_h = size.height as f32;
+                    s.set_window(size.width as f32, size.height as f32);
                     s.set_background(false);
                 }
                 Err(e) => eprintln!("can't draw to the new window: {e}"),
@@ -10275,14 +11261,41 @@ impl ApplicationHandler<UserEvent> for App {
                 });
             }
         }
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
-            event_loop.owned_display_handle(),
-        )));
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut api = lock(&self.state).cfg.graphics_api.clone();
+        // The last start crashed in the graphics driver: Vulkan from now on (kept, or every other
+        // start would crash again).
+        #[cfg(windows)]
+        if api == "auto" && gpu_start::failed_last_time() {
+            eprintln!("graphics: the last start never got going: Vulkan from now on (graphics_api in config.txt)");
+            api = "vulkan".into();
+            let mut s = lock(&self.state);
+            s.cfg.graphics_api = api.clone();
+            s.cfg.save();
+        }
+        // The last run crashed in an overlay or capture hook while drawing with Vulkan: the
+        // same, they get along with DX12 (and it would crash again).
+        #[cfg(windows)]
+        if gpu_start::hook_crashed_last_time() && api == "auto" {
+            eprintln!("graphics: the last run crashed in a hook into Vulkan's drawing: DX12 from now on (graphics_api in config.txt)");
+            api = "dx12".into();
+            let mut s = lock(&self.state);
+            s.cfg.graphics_api = api.clone();
+            s.cfg.save();
+        }
+        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(event_loop.owned_display_handle()));
+        desc.backends = graphics_backends(&api);
+        // WGPU_BACKEND still has the last word.
+        let instance = wgpu::Instance::new(desc.with_env());
+        gpu_start::starting();
         let present = lock(&self.state).cfg.present;
         let renderer = match Renderer::new(&instance, window.clone(), present) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("failed to initialise GPU: {e}");
+                // Without a console the window just closed: say why.
+                #[cfg(windows)]
+                crash_box(&format!("taiko.rs couldn't start the graphics card, so it closed.\n\n{e}\n\nUpdating the graphics driver usually fixes this. If it doesn't, send this message in #bugs on the taiko.rs Discord."));
                 event_loop.exit();
                 return;
             }
@@ -10295,8 +11308,7 @@ impl ApplicationHandler<UserEvent> for App {
         {
             let mut s = lock(&self.state);
             s.adapter = renderer.adapter_name.clone();
-            s.window_w = window.inner_size().width as f32;
-            s.window_h = window.inner_size().height as f32;
+            s.set_window(window.inner_size().width as f32, window.inner_size().height as f32);
             s.monitor_modes = window
                 .current_monitor()
                 .map(|m| m.video_modes().map(|v| (v.size().width, v.size().height)).collect())
@@ -10308,8 +11320,13 @@ impl ApplicationHandler<UserEvent> for App {
             s.refresh_hz = refresh_hz;
             s.refresh_status();
             eprintln!("renderer: {}, present: {}, refresh {refresh_hz:.2} Hz", renderer.adapter_name, renderer.present.name());
+            let _ = CRASH_CONTEXT.set(format!("renderer: {}, present: {}, setting graphics_api = {}", renderer.adapter_name, renderer.present.name(), s.cfg.graphics_api));
+            VULKAN.store(renderer.backend == wgpu::Backend::Vulkan, Ordering::Relaxed);
+            VULKAN_ON_AUTO.store(renderer.backend == wgpu::Backend::Vulkan && s.cfg.graphics_api == "auto", Ordering::Relaxed);
+            // What it could do, not what was asked: OpenGL on Linux has only vsync, and that
+            // mustn't become the setting (it stayed vsync after going back to Vulkan).
             s.present = renderer.present;
-            s.cfg.present = renderer.present;
+            s.present_modes = renderer.present_choices();
             s.refresh_hz = refresh_hz;
         }
         let state = self.state.clone();
@@ -10395,6 +11412,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         lock(&self.state).cfg.save();
+        config::flush_saves();
     }
 }
 
@@ -10416,19 +11434,35 @@ impl State {
         let (set_status_tx, set_status_rx) = mpsc::channel();
         let status_cache = setstatus::Cache::load();
         select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
+        select.headings = cfg.song_headings;
         select.mods_label = cfg.mods.label();
         select.played = load_plays();
         let updater = update::Updater::new(cfg.check_updates);
-        let changelog = whats_new(&mut cfg);
+        let pending_changelog = whats_new(&mut cfg);
         let present = cfg.present;
         let fullscreen = cfg.fullscreen;
+        SEND_CRASH_REPORTS.store(cfg.send_crash_reports, Ordering::Relaxed);
+        let crash = crash_report();
+        let crash_sent = cfg.send_crash_reports && crash.as_ref().is_some_and(|r| send_crash_report(&cfg.online_server, r));
+        // Pictures are on the website of our own server only.
+        let avatars = avatars::Avatars::new((cfg.online_server == online::DEFAULT_SERVER).then(|| online::WEBSITE.to_string()));
         State {
+            avatars,
+            admin: false,
+            crash,
+            crash_sent,
             cfg,
             library,
             select,
             scene: Scene::Select,
             audio,
             toast: None,
+            medals: debug::medals_from_env().map(|view| medals::View { name: Some("TAIKO_MEDALS".into()), state: medals::State::Loaded(Box::new(view)), tab: 0, scroll: 0 }),
+            unlock: {
+                let mut unlock = medals::Unlock::default();
+                unlock.preview(debug::unlock_from_env());
+                unlock
+            },
             ime_preedit: String::new(),
             drag_hover: None,
             stats: FrameStats {
@@ -10443,12 +11477,18 @@ impl State {
             modifiers_shift: false,
             modifiers_ctrl: false,
             modifiers_alt: false,
-            volume_shown: None,
+            volume: volume::Overlay::new(),
+            volume_save_at: None,
             splash,
             main_menu: None,
+            screen_fade: None,
+            shown_scene: None,
+            menu_notes: Default::default(),
             guide: None,
             guide_binding: None,
             guide_after: None,
+            guide_shown: None,
+            guide_read: [false; guide::PAGES],
             reset_armed: None,
             music_seeked: None,
             player: None,
@@ -10457,7 +11497,6 @@ impl State {
             media_told: None,
             window_handle: None,
             updater,
-            volume_since: None,
             hits: Vec::new(),
             browse: browse::Browse::default(),
             downloads: Vec::new(),
@@ -10486,7 +11525,8 @@ impl State {
             online_boards: std::collections::HashMap::new(),
             board_fetch: None,
             pending_replay: None,
-            changelog,
+            changelog: None,
+            pending_changelog,
             pending_mods: Mods::NONE,
             mod_select: None,
             universe_setup: None,
@@ -10504,10 +11544,13 @@ impl State {
             last_video: None,
             bg_changed: None,
             sprites_upload: None,
+            skin_loader: None,
+            skin_key: None,
             skin_map: None,
             skin_map_seen: None,
             focused: true,
             right_scroll: false,
+            settings_level: None,
             scrollbar_drag: false,
             right_press: None,
             list_drag: None,
@@ -10538,7 +11581,6 @@ impl State {
             exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
             quit: false,
             quit_asked: false,
-            crash: crash_report(),
             screenshot_due: false,
             smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
             frame_acquired: None,
@@ -10551,6 +11593,7 @@ impl State {
             touch_flash: [None; 4],
             surface_swap: None,
             present,
+            present_modes: PresentChoice::ALL.to_vec(),
             refresh_hz: 60.0,
             settings_ui: SettingsUi::default(),
             fullscreen,
@@ -10581,6 +11624,8 @@ impl State {
             hover: None,
             window_w: 1280.0,
             window_h: 720.0,
+            real_window: (1280.0, 720.0),
+            letterbox: None,
             frame_clip: None,
             guides: Vec::new(),
             readout_rect: None,
@@ -10591,6 +11636,7 @@ impl State {
             stars: stars::Stars::default(),
             potentials: pp::Potentials::default(),
             bg_brightness: 0.0,
+            idle: idle::Idle::new(Instant::now()),
             resolutions: Vec::new(),
             monitor_modes: Vec::new(),
             monitor_size: (1920, 1080),
@@ -10600,8 +11646,8 @@ impl State {
     }
 }
 
-/// What's new after an update: the changes since the build last started (the latest ones when
-/// the build before didn't note itself). Notes this build as started.
+/// Starts loading update notes in the background, and notes this build as started.
+/// The caller keeps the view pending until a nonempty list of changes is available.
 fn whats_new(cfg: &mut Config) -> Option<changelog::View> {
     let build = update::BUILD?;
     if cfg.last_build == build {
@@ -10627,6 +11673,11 @@ pub fn recalc_pp(args: &[String]) -> Result<(), String> {
 pub fn desktop_main() {
     let cfg = Config::load();
     config::set_data_folder(cfg.data_folder.clone());
+    // Only where a crash ends the game (release builds), as with panics.
+    #[cfg(windows)]
+    if cfg!(panic = "abort") {
+        native_crashes::install();
+    }
     log_crashes();
     let mut args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let auto = args.iter().any(|a| a == "--auto");
@@ -10675,12 +11726,17 @@ fn log_crashes() {
         let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let thread = std::thread::current().name().unwrap_or("?").to_string();
         let text = format!(
-            "--- taiko.rs crash at unix {at}, build {} ({}, {})\nthread {thread}: {info}\n{}\n",
+            "--- taiko.rs crash at unix {at}, build {} ({}, {})\nthread {thread}: {info}\n{}\n{}",
             update::BUILD.unwrap_or("local"),
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS,
-            std::backtrace::Backtrace::force_capture()
+            std::backtrace::Backtrace::force_capture(),
+            crash_context(),
         );
+        // A release build's backtrace has no names on Windows: where each frame is, for
+        // finding them with that build's .pdb (docs/ci.md).
+        #[cfg(windows)]
+        let text = format!("{text}{}", native_crashes::frames());
         if let Some(dir) = config::data_dir() {
             let _ = std::fs::create_dir_all(&dir);
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
@@ -10697,13 +11753,190 @@ fn log_crashes() {
             // A clipboard of its own: the game's may be what was held when it crashed.
             let copied = arboard::Clipboard::new().and_then(|mut b| b.set_text(text.clone())).is_ok();
             let what = if copied { "The crash log is copied: paste it (Ctrl+V)" } else { "Send the crash log (crash.log in the game's data folder)" };
-            crash_box(&format!("taiko.rs crashed.\n\n{what} in #bugs on the taiko.rs Discord, so it can be fixed.\n\n{}", info));
+            let what = format!("{what} in #bugs on the taiko.rs Discord, so it can be fixed.");
+            crash_box(&format!("taiko.rs crashed.\n\n{}\n\n{}", crash_box_words(&what), info));
         }
     }));
 }
 
+/// Windows crashes that aren't panics: an access violation (often in a graphics or audio driver),
+/// a stack overflow, an abort. The panic hook never sees those, and a release build has no
+/// console, so the game just vanished with nothing left behind. Now what it printed goes to
+/// `game.log` (the last run's is kept as `game-prev.log`), and an unhandled exception leaves the
+/// same `crash.log` entry and next-start report a panic does, with the exception's code, where
+/// it happened (which module) and the end of the log.
+#[cfg(windows)]
+mod native_crashes {
+    use std::ffi::c_void;
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+
+    #[repr(C)]
+    struct ExceptionRecord {
+        code: u32,
+        flags: u32,
+        record: *mut ExceptionRecord,
+        address: *mut c_void,
+        parameters: u32,
+        information: [usize; 15],
+    }
+
+    #[repr(C)]
+    struct ExceptionPointers {
+        record: *mut ExceptionRecord,
+        context: *mut c_void,
+    }
+
+    type Filter = unsafe extern "system" fn(*mut ExceptionPointers) -> i32;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetUnhandledExceptionFilter(filter: Option<Filter>) -> Option<Filter>;
+        fn SetStdHandle(which: u32, handle: *mut c_void) -> i32;
+        fn GetModuleHandleExW(flags: u32, address: *const c_void, module: *mut *mut c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut c_void, name: *mut u16, size: u32) -> u32;
+    }
+
+    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+    const FROM_ADDRESS: u32 = 0x4;
+    const UNCHANGED_REFCOUNT: u32 = 0x2;
+    const CONTINUE_SEARCH: i32 = 0;
+
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+
+    pub fn install() {
+        let Some(dir) = crate::config::data_dir() else { return };
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("game.log");
+        let _ = std::fs::rename(&log, dir.join("game-prev.log"));
+        if let Ok(file) = std::fs::File::create(&log) {
+            use std::os::windows::io::IntoRawHandle;
+            // std looks the handle up on every write, so eprintln! lands in the file from here
+            // on, and so does std's own last word on a stack overflow or an abort.
+            // SAFETY: the handle is a file we own and never close (it lives as long as the game).
+            unsafe {
+                SetStdHandle(STD_ERROR_HANDLE, file.into_raw_handle());
+            }
+        }
+        let _ = DIR.set(dir);
+        // SAFETY: `filter` matches the signature Windows calls it with.
+        unsafe {
+            SetUnhandledExceptionFilter(Some(filter));
+        }
+        // To see this work: a crash of the kind a driver has.
+        if std::env::var_os("TAIKO_TEST_NATIVE_CRASH").is_some() {
+            eprintln!("crashing on purpose (TAIKO_TEST_NATIVE_CRASH)");
+            // SAFETY: not safe at all, on purpose: it's the access violation being tested.
+            unsafe { std::ptr::null_mut::<u8>().write_volatile(1) };
+        }
+    }
+
+    fn what(code: u32) -> &'static str {
+        match code {
+            0xC000_0005 => "access violation",
+            0xC000_00FD => "stack overflow",
+            0xC000_001D => "illegal instruction",
+            0xC000_0094 => "integer divide by zero",
+            0xC000_0409 => "fail fast (abort)",
+            0xC000_0374 => "heap corruption",
+            0x8000_0003 => "breakpoint",
+            _ => "exception",
+        }
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut *mut c_void, hash: *mut u32) -> u16;
+    }
+
+    /// This thread's stack as `frames: taiko-rs.exe+0x1a2b3c ...` (the module and offset of
+    /// each return address): files and lines with the build's .pdb (docs/ci.md).
+    pub fn frames() -> String {
+        let mut frames = [std::ptr::null_mut::<c_void>(); 62];
+        // SAFETY: the buffer holds the 62 frames asked for.
+        let n = unsafe { RtlCaptureStackBackTrace(1, frames.len() as u32, frames.as_mut_ptr(), std::ptr::null_mut()) } as usize;
+        let mut out = String::from("frames:");
+        for f in &frames[..n.min(frames.len())] {
+            out.push(' ');
+            out.push_str(&module_of(*f));
+        }
+        out.push('\n');
+        out
+    }
+
+    /// The DLL or exe `address` is in, and how far into it.
+    fn module_of(address: *const c_void) -> String {
+        let mut module = std::ptr::null_mut();
+        // SAFETY: plain lookups with a valid out pointer and buffer.
+        unsafe {
+            if GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, address, &mut module) == 0 {
+                return format!("{address:p} (in no module)");
+            }
+            let mut name = [0u16; 260];
+            let n = GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) as usize;
+            let path = String::from_utf16_lossy(&name[..n.min(name.len())]);
+            let file = path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string();
+            format!("{file}+0x{:x}", address as usize - module as usize)
+        }
+    }
+
+    unsafe extern "system" fn filter(info: *mut ExceptionPointers) -> i32 {
+        // SAFETY: Windows passes valid exception pointers to an unhandled exception filter.
+        let Some(record) = (unsafe { info.as_ref().and_then(|i| i.record.as_ref()) }) else { return CONTINUE_SEARCH };
+        let Some(dir) = DIR.get() else { return CONTINUE_SEARCH };
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let mut text = format!(
+            "--- taiko.rs crash at unix {at}, build {} ({}, windows)\n{} 0x{:08X} at {}\n",
+            crate::update::BUILD.unwrap_or("local"),
+            env!("CARGO_PKG_VERSION"),
+            what(record.code),
+            record.code,
+            module_of(record.address),
+        );
+        if record.code == 0xC000_0005 && record.parameters >= 2 {
+            let op = match record.information[0] {
+                0 => "reading",
+                1 => "writing",
+                _ => "running",
+            };
+            text.push_str(&format!("{op} 0x{:x}\n", record.information[1]));
+        }
+        text.push_str(&super::crash_context());
+        let frames = frames();
+        text.push_str(&frames);
+        let hook = super::drawing_hook(&frames);
+        if let Some((dll, who)) = hook {
+            text.push_str(&format!("in a hook: {who} ({dll})\n"));
+        }
+        let to_dx12 = hook.is_some() && super::VULKAN_ON_AUTO.load(std::sync::atomic::Ordering::Relaxed);
+        if to_dx12 {
+            super::gpu_start::hook_crashed();
+        }
+        // What the game printed last: the screen, the audio device, the map...
+        if let Ok(log) = std::fs::read_to_string(dir.join("game.log")) {
+            let lines: Vec<&str> = log.lines().collect();
+            text.push_str("last lines of game.log:\n");
+            for line in &lines[lines.len().saturating_sub(25)..] {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+            let _ = std::io::Write::write_all(&mut f, text.as_bytes());
+        }
+        let _ = std::fs::write(dir.join(super::CRASH_REPORT), &text);
+        let words = super::crash_box_words("The next start offers to copy the crash log: paste it in #bugs on the taiko.rs Discord, so it can be fixed.");
+        let advice = hook
+            .map(|(dll, who)| format!("{}\n\n", super::drawing_hook_advice(who, dll, to_dx12, super::VULKAN.load(std::sync::atomic::Ordering::Relaxed))))
+            .unwrap_or_default();
+        super::crash_box(&format!("taiko.rs crashed.\n\n{advice}{words}\n\n{} 0x{:08X}", what(record.code), record.code));
+        // Windows' own handling goes on (its error report, and the end of the process).
+        CONTINUE_SEARCH
+    }
+}
+
 /// A message box (Windows), there even without a window of the game's.
-#[cfg(all(windows, panic = "abort"))]
+#[cfg(windows)]
 fn crash_box(text: &str) {
     #[link(name = "user32")]
     unsafe extern "system" {
@@ -10717,6 +11950,63 @@ fn crash_box(text: &str) {
     unsafe {
         MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_ICONERROR | MB_TOPMOST);
     }
+}
+
+/// Whether a crash's report goes to the server on the next start (`Config::send_crash_reports`),
+/// for the crash handlers, which can't reach the config.
+static SEND_CRASH_REPORTS: AtomicBool = AtomicBool::new(true);
+
+/// What the game is running on (the graphics card and API), for crash reports: set once the
+/// graphics have started.
+static CRASH_CONTEXT: OnceLock<String> = OnceLock::new();
+
+/// The screen (and map and mods) when it crashed: set as screens change, never under the
+/// state's lock (the crashing thread may hold that one).
+static CRASH_SCENE: Mutex<String> = Mutex::new(String::new());
+
+fn crash_context() -> String {
+    let mut out = CRASH_CONTEXT.get().map(|c| format!("{c}\n")).unwrap_or_default();
+    if let Ok(scene) = CRASH_SCENE.try_lock()
+        && !scene.is_empty()
+    {
+        out.push_str(&scene);
+        out.push('\n');
+    }
+    out
+}
+
+/// The crash window's words on what happens to the report: `otherwise` is how to send it in
+/// by hand, when the game doesn't.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn crash_box_words(otherwise: &str) -> String {
+    if SEND_CRASH_REPORTS.load(Ordering::Relaxed) {
+        "The next start sends the crash report to the developers by itself, so it can be fixed (Settings > Online > Send crash reports turns that off).".into()
+    } else {
+        otherwise.into()
+    }
+}
+
+/// Sends last time's crash report to the server in the background: true when it's on its way.
+/// The player's folder names are taken out first (`online::scrub_paths`).
+fn send_crash_report(server: &str, report: &str) -> bool {
+    if update::BUILD.is_none() {
+        // A local build's crashes are the developer's own, seen already.
+        return false;
+    }
+    let mut text = online::scrub_paths(report);
+    if text.len() > online::MAX_CRASH_REPORT {
+        // The start (what crashed) and the end (the log's last lines) say most.
+        let head: String = text.chars().take(online::MAX_CRASH_REPORT / 2).collect();
+        let tail: String = text.chars().rev().take(online::MAX_CRASH_REPORT / 2 - 100).collect::<Vec<_>>().into_iter().rev().collect();
+        text = format!("{head}\n[...]\n{tail}");
+    }
+    let r = online::CrashReport { build: update::BUILD.unwrap_or("local").to_string(), os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH), report: text };
+    let server = server.to_string();
+    std::thread::spawn(move || match online::call(&server, online::Request::CrashReport(Box::new(r))) {
+        Ok(_) => eprintln!("crash report sent"),
+        Err(e) => eprintln!("crash report not sent: {e}"),
+    });
+    true
 }
 
 /// The report of a crash last time that hasn't been offered yet (and forgets it).
@@ -10827,5 +12117,28 @@ fn info(path: &std::path::Path) {
     match audio::decode(&audio_path, 48000) {
         Ok(track) => println!("  audio {:.1} s decoded in {:.0} ms", track.frames() as f64 / 48000.0, t.elapsed().as_secs_f64() * 1000.0),
         Err(e) => println!("  audio error: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod drawing_hook_tests {
+    use super::*;
+
+    #[test]
+    fn finds_obs_game_capture_in_the_frames() {
+        let frames = "frames: taiko-rs.exe+0x7b154f KERNELBASE.dll+0x10f4e3 dxcore.dll+0x26d72 d3d11.dll+0xd2f7 graphics-hook64.dll+0x9b45 taiko-rs.exe+0xa1ee83";
+        assert_eq!(drawing_hook(frames), Some(("graphics-hook64.dll", "OBS's game capture")));
+        assert_eq!(drawing_hook("frames: GameOverlayRenderer64.dll+0x10 taiko-rs.exe+0x1").map(|h| h.1), Some("the Steam overlay"));
+        assert_eq!(drawing_hook("frames: taiko-rs.exe+0x1 nvoglv64.dll+0x2"), None);
+        assert_eq!(drawing_hook("frames: not-graphics-hook64.dll+0x2"), None);
+    }
+
+    #[test]
+    fn advice_says_what_happens_next() {
+        let a = drawing_hook_advice("OBS's game capture", "graphics-hook64.dll", true, true);
+        assert!(a.contains("DX12 instead of Vulkan") && a.contains("Window Capture"));
+        let b = drawing_hook_advice("the Steam overlay", "gameoverlayrenderer64.dll", false, true);
+        assert!(b.contains("Settings > Video > Renderer") && b.contains("overlay off"));
+        assert!(!drawing_hook_advice("the Steam overlay", "gameoverlayrenderer64.dll", false, false).contains("DX12"));
     }
 }

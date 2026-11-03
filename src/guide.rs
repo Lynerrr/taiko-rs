@@ -72,7 +72,7 @@ fn page(i: usize, cfg: &Config) -> Page {
                 ("Ctrl+O".into(), tr!("Settings from anywhere: keys are in Input", "どこからでも設定へ。キーは入力の項目に", "настройки откуда угодно, клавиши в разделе Управление")),
                 (key(cfg, Settings), tr!("songs and settings", "曲と設定を切り替え", "песни и настройки")),
                 ("Esc".into(), tr!("back; from the main menu, it asks to quit", "戻る (メインメニューでは終了の確認)", "назад, а в главном меню спросит о выходе")),
-                ("Alt+wheel".into(), tr!("volume, anywhere", "音量 (どこでも)", "громкость, где угодно")),
+                ("Alt+wheel/arrows".into(), tr!("volume, anywhere; point at music or hitsounds", "音量 (どこでも)、音楽やヒット音にポインタを合わせて", "громкость, где угодно; наведи на музыку или хитсаунды")),
                 (cap(tr!("mouse", "マウス", "мышь")), tr!("everything can be clicked too, the wheel scrolls", "すべてクリックでも操作できます", "всё можно нажимать мышью, колесо листает")),
             ],
         },
@@ -168,7 +168,7 @@ fn page(i: usize, cfg: &Config) -> Page {
                 (key(cfg, Quit), tr!("quit", "終了", "выйти")),
                 (both_presets(cfg), tr!("previous and next playfield preset", "プレイフィールドのプリセット", "пресеты игрового поля")),
                 (cap(tr!("Keys", "キー", "Клавиши")), tr!("every key in this guide can be moved: Settings > Input", "このガイドのキーはすべて変更できます (入力)", "любую клавишу отсюда можно поменять: настройки > Управление")),
-                (cap(tr!("This guide", "このガイド", "Этот гид")), tr!("is always in Settings > Video", "いつでも 設定 > グラフィック から", "всегда есть в настройках > Графика")),
+                (cap(tr!("This guide", "このガイド", "Этот гид")), tr!("is always in Settings > System", "いつでも 設定 > システム から", "всегда есть в настройках > Система")),
             ],
         },
     }
@@ -177,7 +177,7 @@ fn page(i: usize, cfg: &Config) -> Page {
 /// A key on a little keycap; returns its width.
 fn keycap(c: &mut Canvas, x: f32, y: f32, label: &str, fill: u32) -> f32 {
     let w = Canvas::text_width(8.0, label) + 12.0;
-    c.round_rect(x, y, w, 17.0, 3.0, rgba(fill, 1.0), rgba(crate::menu::tint(fill, 0x000000, 0.4), 1.0), 1.0);
+    c.round_rect([x, y], [w, 17.0], 3.0, rgba(fill, 1.0), rgba(crate::menu::tint(fill, 0x000000, 0.4), 1.0), 1.0);
     c.rect(x + 2.0, y + 16.0, w - 4.0, 1.0, rgba(0x000000, 0.4));
     c.text(x + 6.0, y + 4.5, 8.0, rgba(0xffffff, 1.0), label);
     w
@@ -187,15 +187,15 @@ fn keycap(c: &mut Canvas, x: f32, y: f32, label: &str, fill: u32) -> f32 {
 fn draw_picture(c: &mut Canvas, i: usize, cx: f32, y: f32, w: f32, binding: Option<usize>, cfg: &Config) {
     let mid = y + PICTURE_H / 2.0;
     let px = pixel_size(1.0);
-    c.round_rect(cx - w / 2.0, y, w, PICTURE_H, 4.0, rgba(0x121219, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+    c.round_rect([cx - w / 2.0, y], [w, PICTURE_H], 4.0, rgba(0x121219, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
     match i {
         0 => {
             // The drum, split like the keys: rim, face, face, rim. The keys are live: a click
             // waits for a new one.
             let (cy, r) = (y + 42.0, 34.0);
-            menu::pixel_ring(c, cx, cy, r, r, 0, px, rgba(0x23232f, 1.0));
-            menu::pixel_ring(c, cx, cy, r, 11.0, 0, px, rgba(KAT, 1.0));
-            menu::pixel_ring(c, cx, cy, 22.0, 22.0, 0, px, rgba(DON, 1.0));
+            menu::pixel_ring(c, [cx, cy], r, r, 0, px, rgba(0x23232f, 1.0));
+            menu::pixel_ring(c, [cx, cy], r, 11.0, 0, px, rgba(KAT, 1.0));
+            menu::pixel_ring(c, [cx, cy], 22.0, 22.0, 0, px, rgba(DON, 1.0));
             c.rect(cx - 0.5, cy - r, 1.0, r * 2.0, rgba(0xffffff, 0.35));
             let names: [String; 4] = std::array::from_fn(|slot| if binding == Some(slot) { "?".to_string() } else { printed(key_name(cfg.keys[slot])) });
             let width = |slot: usize| Canvas::text_width(8.0, &names[slot]) + 12.0;
@@ -237,7 +237,7 @@ fn draw_picture(c: &mut Canvas, i: usize, cx: f32, y: f32, w: f32, binding: Opti
             for (n, label) in ["Artist - Song [Kantan]", "Artist - Song [Oni]", "Artist - Song [Inner Oni]"].into_iter().enumerate() {
                 let (row, on) = (y + 18.0 + n as f32 * 26.0, n == 1);
                 let bw = (w - 60.0).min(300.0);
-                c.round_rect(cx - bw / 2.0, row, bw, 22.0, 4.0, rgba(if on { 0x23232f } else { 0x1a1a24 }, 1.0), rgba(if on { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+                c.round_rect([cx - bw / 2.0, row], [bw, 22.0], 4.0, rgba(if on { 0x23232f } else { 0x1a1a24 }, 1.0), rgba(if on { accent() } else { 0x3a3a4e }, 1.0), 1.0);
                 c.text(cx - bw / 2.0 + 10.0, row + 7.5, 7.0, rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0), &Canvas::fit(7.0, bw - 76.0, label));
                 c.text_right(cx + bw / 2.0 - 10.0, row + 7.5, 7.0, rgba(0xffd34d, 1.0), ["1.82*", "4.96*", "6.31*"][n]);
             }
@@ -248,13 +248,13 @@ fn draw_picture(c: &mut Canvas, i: usize, cx: f32, y: f32, w: f32, binding: Opti
             c.rect(left, mid - 26.0, right - left, 52.0, rgba(0x15151d, 1.0));
             let circle = left + 44.0;
             let px = pixel_size(1.0);
-            menu::pixel_ring(c, circle, mid, 22.0, px * 2.0, 0, px, rgba(0xffffff, 0.6));
+            menu::pixel_ring(c, [circle, mid], 22.0, px * 2.0, 0, px, rgba(0xffffff, 0.6));
             let mut x = circle + 62.0;
             let mut n = 0;
             while x < right - 18.0 {
                 let kat = [false, false, true, false, true, true][n % 6];
-                menu::pixel_ring(c, x, mid, 17.0, 17.0, 0, px, rgba(0xffffff, 1.0));
-                menu::pixel_ring(c, x, mid, 14.0, 14.0, 0, px, rgba(if kat { KAT } else { DON }, 1.0));
+                menu::pixel_ring(c, [x, mid], 17.0, 17.0, 0, px, rgba(0xffffff, 1.0));
+                menu::pixel_ring(c, [x, mid], 14.0, 14.0, 0, px, rgba(if kat { KAT } else { DON }, 1.0));
                 x += 52.0;
                 n += 1;
             }
@@ -266,7 +266,7 @@ fn draw_picture(c: &mut Canvas, i: usize, cx: f32, y: f32, w: f32, binding: Opti
             let mut x = cx - total / 2.0;
             for (name, colour) in chips {
                 let bw = Canvas::text_width(8.0, name) + 18.0;
-                c.round_rect(x, mid - 12.0, bw, 24.0, 5.0, rgba(crate::menu::tint(colour, 0x000000, 0.65), 1.0), rgba(colour, 1.0), 1.5);
+                c.round_rect([x, mid - 12.0], [bw, 24.0], 5.0, rgba(crate::menu::tint(colour, 0x000000, 0.65), 1.0), rgba(colour, 1.0), 1.5);
                 c.text_centered(x + bw / 2.0, mid - 4.0, 8.0, rgba(0xffffff, 1.0), name);
                 x += bw + 6.0;
             }
@@ -287,15 +287,15 @@ fn draw_picture(c: &mut Canvas, i: usize, cx: f32, y: f32, w: f32, binding: Opti
 
 const PICTURE_H: f32 = 108.0;
 
-/// Page `i` of the guide, over everything.
-pub fn draw(c: &mut Canvas, i: usize, binding: Option<usize>, cfg: &Config) {
+/// Page `i` of the guide, over everything. With `hold`, seconds to wait before moving on.
+pub fn draw(c: &mut Canvas, i: usize, binding: Option<usize>, hold: Option<u32>, cfg: &Config) {
     let p = page(i, cfg);
     c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(0x000000, 0.7));
     c.hit(0.0, 0.0, c.width, VIRTUAL_HEIGHT, Hit::Overlay);
     let w = 600.0f32.min(c.width - 24.0);
     let (x, y, h) = ((c.width - w) / 2.0, 14.0, 452.0);
     let cx = c.width / 2.0;
-    c.round_rect(x, y, w, h, 8.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
+    c.round_rect([x, y], [w, h], 8.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
     c.text_centered(cx, y + 12.0, 13.0, rgba(0xffffff, 1.0), &Canvas::fit(13.0, w - 32.0, p.title));
     draw_picture(c, i, cx, y + 36.0, w - 32.0, binding, cfg);
     let mut row = y + 36.0 + PICTURE_H + 9.0;
@@ -330,13 +330,21 @@ pub fn draw(c: &mut Canvas, i: usize, binding: Option<usize>, cfg: &Config) {
     if i > 0 {
         c.button(x + 16.0, bottom, bw, 22.0, tr!("< Back", "< 戻る", "< Назад"), 8.0, Hit::Guide(Action::Back), false);
     } else {
-        c.button(x + 16.0, bottom, bw, 22.0, tr!("Skip (Esc)", "閉じる (Esc)", "Пропустить (Esc)"), 8.0, Hit::Guide(Action::Close), false);
+        let skip = tr!("Skip (Esc)", "閉じる (Esc)", "Пропустить (Esc)");
+        let (label, hit) = match hold {
+            Some(s) => (format!("{skip} {s}"), Hit::Overlay),
+            None => (skip.to_string(), Hit::Guide(Action::Close)),
+        };
+        c.button(x + 16.0, bottom, bw, 22.0, &label, 8.0, hit, false);
     }
     if i == OFFSET_PAGE {
         c.button(cx - bw / 2.0, bottom, bw, 22.0, tr!("Calibrate (C)", "調整 (C)", "Калибровать (C)"), 8.0, Hit::Guide(Action::Calibrate), true);
     }
     let next = if last { tr!("Done", "完了", "Готово") } else { tr!("Next >", "次へ >", "Далее >") };
-    c.button(x + w - 16.0 - bw, bottom, bw, 22.0, next, 8.0, Hit::Guide(if last { Action::Close } else { Action::Next }), true);
+    match hold {
+        Some(s) => c.button(x + w - 16.0 - bw, bottom, bw, 22.0, &format!("{next} {s}"), 8.0, Hit::Overlay, false),
+        None => c.button(x + w - 16.0 - bw, bottom, bw, 22.0, next, 8.0, Hit::Guide(if last { Action::Close } else { Action::Next }), true),
+    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 //! Linux, `%APPDATA%\taiko-rs\config.txt` on Windows.
 
 use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, mpsc};
 
 use winit::keyboard::KeyCode;
 
@@ -141,12 +142,16 @@ pub struct Config {
     /// Draw at half resolution and scale up exactly 2x (default on Android: high-DPI screens,
     /// mobile GPUs).
     pub half_resolution: bool,
+    /// The graphics API: one of `RENDERERS` (`crate::graphics_backends`).
+    pub graphics_api: String,
     /// Everything but the player playing a song (menus, results, replays, autoplay) uses vsync.
     pub menu_vsync: bool,
     /// The mouse wheel resizes the playfield during play (it always does in its editor).
     pub wheel_resizes_playfield: bool,
     /// Song select lists converts too.
     pub show_converts: bool,
+    /// Song select lists songs under headings (`ui::Select::headings`).
+    pub song_headings: bool,
     /// During songs, the background dims to black (and is black without one), rather than to
     /// the interface's grey.
     pub bg_dim_black: bool,
@@ -200,6 +205,10 @@ pub struct Config {
     pub accent: u32,
     /// Show what you're doing in your Discord status.
     pub discord_presence: bool,
+    /// Minutes without input before the idle screen shows (0: never; one of `idle::MINUTES`).
+    pub idle_minutes: u32,
+    /// A crash's report goes to the server on the next start (`online::Request::CrashReport`).
+    pub send_crash_reports: bool,
     /// Star out swear words in chats.
     pub chat_filter: bool,
     /// A chime when a friend messages you.
@@ -226,6 +235,10 @@ pub struct Config {
     pub splash: bool,
     /// Start on the main menu (off: straight to song select).
     pub main_menu: bool,
+    /// The song's notes drift behind the main menu.
+    pub menu_notes: bool,
+    /// How much the song's notes on the main menu's lane are dimmed, 0 (as they are) to 1 (gone).
+    pub menu_notes_dim: f32,
     /// The first steps guide has been seen through. A config from before it says nothing, so
     /// players already playing get it once too.
     pub guide_seen: bool,
@@ -235,6 +248,11 @@ pub struct Config {
     pub fullscreen: bool,
     /// The window's size out of fullscreen (pixels), as last left; None = the default.
     pub window_size: Option<(u32, u32)>,
+    /// In fullscreen, the game at `letterbox_size` with black around it, moved from the centre by
+    /// `letterbox_pos` (percent, -100 to 100).
+    pub letterbox: bool,
+    pub letterbox_size: (u32, u32),
+    pub letterbox_pos: (f32, f32),
     /// Where the game's data was moved to (see `data_folder()`); None = the usual places.
     pub data_folder: Option<PathBuf>,
     /// Left rim, left centre, right centre, right rim.
@@ -280,6 +298,11 @@ pub struct Config {
     pub songs: Vec<PathBuf>,
 }
 
+/// The offset of a first launch. 0 is exact against what the speakers play, but players press
+/// ahead of what they hear: online plays settle at about -25 on Linux and -35 on Windows. osu!
+/// hides this, subtracting no output latency and with maps timed about 23 ms before their drums.
+pub const NEW_PLAYER_OFFSET_MS: f64 = -25.0;
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -287,7 +310,7 @@ impl Default for Config {
             // Android has no clipboard to put pictures on here.
             screenshot_to: if cfg!(target_os = "android") { ScreenshotTo::Folder } else { ScreenshotTo::Clipboard },
             language: crate::lang::Lang::En,
-            offset_ms: 0.0,
+            offset_ms: NEW_PLAYER_OFFSET_MS,
             visual_offset_ms: 0.0,
             vsync_compensation: true,
             vsync_tune_ms: 0.0,
@@ -297,9 +320,11 @@ impl Default for Config {
             fx_volume: 1.0,
             present: PresentChoice::Immediate,
             half_resolution: cfg!(target_os = "android"),
+            graphics_api: "auto".into(),
             menu_vsync: true,
             wheel_resizes_playfield: false,
             show_converts: false,
+            song_headings: false,
             bg_dim_black: true,
             interface_hidden: false,
             interface_hides: crate::hud::Parts::DEFAULT_HIDES,
@@ -329,10 +354,15 @@ impl Default for Config {
             show_fps: true,
             fullscreen: true,
             window_size: None,
+            letterbox: false,
+            letterbox_size: (1280, 720),
+            letterbox_pos: (0.0, 0.0),
             data_folder: None,
             animations: true,
             splash: true,
             main_menu: true,
+            menu_notes: true,
+            menu_notes_dim: 0.0,
             guide_seen: false,
             check_updates: true,
             resume_delay_ms: 1000.0,
@@ -343,6 +373,8 @@ impl Default for Config {
             hit_flash: true,
             accent: crate::render::DEFAULT_ACCENT,
             discord_presence: true,
+            idle_minutes: 2,
+            send_crash_reports: true,
             discord_app_id: String::new(),
             chat_filter: true,
             message_sound: true,
@@ -419,6 +451,26 @@ pub fn data_folder() -> Option<PathBuf> {
 
 /// Where replays, scores, videos, play history and the like are kept: the data folder, else
 /// next to config.txt.
+/// The graphics APIs this system offers (`Config::graphics_api`, what the setting stores).
+pub const RENDERERS: &[&str] = if cfg!(windows) {
+    &["auto", "dx12", "vulkan", "gl"]
+} else if cfg!(target_os = "macos") {
+    &["auto", "metal"]
+} else {
+    &["auto", "vulkan", "gl"]
+};
+
+/// A renderer's name in the settings.
+pub fn renderer_name(api: &str) -> &'static str {
+    match api {
+        "dx12" => "DirectX 12",
+        "vulkan" => "Vulkan",
+        "gl" => "OpenGL",
+        "metal" => "Metal",
+        _ => tr!("Auto", "自動", "Авто"),
+    }
+}
+
 pub fn data_dir() -> Option<PathBuf> {
     data_folder().or_else(|| user_dir(false))
 }
@@ -631,10 +683,15 @@ impl Config {
     }
 
     pub fn load() -> Config {
-        let mut cfg = Config::default();
-        let Some(path) = config_path() else { return cfg };
-        let Ok(text) = std::fs::read_to_string(&path) else { return cfg };
-        cfg.existed = true;
+        let Some(path) = config_path() else { return Config::default() };
+        let Ok(text) = std::fs::read_to_string(&path) else { return Config::default() };
+        Config::parse_text(&text)
+    }
+
+    /// The settings in the config file's `text`.
+    pub(crate) fn parse_text(text: &str) -> Config {
+        // A config from before the default moved keeps what it played on.
+        let mut cfg = Config { existed: true, offset_ms: 0.0, ..Config::default() };
         let mut osu_scroll_speed = false;
         for line in text.lines() {
             let line = line.trim();
@@ -656,6 +713,7 @@ impl Config {
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "menu_vsync" => cfg.menu_vsync = v != "false",
                 "half_resolution" => cfg.half_resolution = v == "true",
+                "graphics_api" => cfg.graphics_api = v.trim().to_ascii_lowercase(),
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
                 "playfield_area" => cfg.playfield_area = Area::parse(v).unwrap_or(Area::FULL),
                 "bg_dim" => cfg.bg_dim = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
@@ -666,10 +724,16 @@ impl Config {
                 "show_fps" => cfg.show_fps = v == "true",
                 "fullscreen" => cfg.fullscreen = v != "false",
                 "window_size" => cfg.window_size = crate::layout::parse_size(v),
+                "letterbox" => cfg.letterbox = v == "true",
+                "letterbox_size" => cfg.letterbox_size = crate::layout::parse_size(v).unwrap_or(cfg.letterbox_size),
+                "letterbox_x" => cfg.letterbox_pos.0 = v.parse().unwrap_or(0.0),
+                "letterbox_y" => cfg.letterbox_pos.1 = v.parse().unwrap_or(0.0),
                 "data_folder" => cfg.data_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
                 "animations" => cfg.animations = v != "false",
                 "splash" => cfg.splash = v != "false",
                 "main_menu" => cfg.main_menu = v != "false",
+                "menu_notes" => cfg.menu_notes = v != "false",
+                "menu_notes_dim" => cfg.menu_notes_dim = v.parse::<f32>().unwrap_or(0.0).clamp(0.0, 1.0),
                 "guide_seen" => cfg.guide_seen = v == "true",
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
@@ -681,6 +745,8 @@ impl Config {
                 "hit_flash" => cfg.hit_flash = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
                 "discord_presence" => cfg.discord_presence = v != "false",
+                "idle_minutes" => cfg.idle_minutes = v.parse().unwrap_or(cfg.idle_minutes),
+                "send_crash_reports" => cfg.send_crash_reports = v != "false",
                 "chat_filter" => cfg.chat_filter = v != "false",
                 "message_sound" => cfg.message_sound = v != "false",
                 "notify_playing" => cfg.notify_playing = v == "true",
@@ -719,6 +785,7 @@ impl Config {
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
                 "show_converts" => cfg.show_converts = v == "true",
+                "song_headings" => cfg.song_headings = v == "true",
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
                 "interface_hidden" => cfg.interface_hidden = v == "true",
                 "interface_hides" => cfg.interface_hides = crate::hud::Parts::parse_saved(v),
@@ -766,11 +833,8 @@ impl Config {
         cfg
     }
 
-    pub fn save(&self) {
-        let Some(path) = config_path() else { return };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
+    /// The settings as the config file has them.
+    pub(crate) fn to_text(&self) -> String {
         let keys: Vec<String> = self.keys.iter().map(|k| key_name(*k)).collect();
         let mut out = format!(
             "# taiko.rs settings\n\
@@ -804,6 +868,8 @@ impl Config {
              menu_vsync = {}\n\
              # draw at half resolution, scaled up exactly 2x (crisp pixels, faster)\n\
              half_resolution = {}\n\
+             # auto | vulkan | dx12 (Windows) | gl; auto picks DX12 on Windows where Vulkan is known to crash\n\
+             graphics_api = {}\n\
              # mailbox/immediate only; 0 = uncapped\n\
              fps_cap = {}\n\
              calibration_bpm = {}\n\
@@ -821,6 +887,9 @@ impl Config {
              animations = {}\n\
              splash = {}\n\
              main_menu = {}\n\
+             menu_notes = {}\n\
+             # dims the song's notes on the main menu's lane, 0 (none) to 1 (hidden)\n\
+             menu_notes_dim = {:.2}\n\
              guide_seen = {}\n\
              check_updates = {}\n\
              # countdown before play continues after pausing (ms)\n\
@@ -855,6 +924,7 @@ impl Config {
             self.present.name(),
             self.menu_vsync,
             self.half_resolution,
+            self.graphics_api,
             self.fps_cap,
             self.calibration_bpm,
             self.playfield_area.to_config(),
@@ -867,6 +937,8 @@ impl Config {
             self.animations,
             self.splash,
             self.main_menu,
+            self.menu_notes,
+            self.menu_notes_dim,
             self.guide_seen,
             self.check_updates,
             self.resume_delay_ms,
@@ -896,9 +968,11 @@ impl Config {
             crate::render::accent_name(self.accent)
         ));
         out.push_str(&format!(
-            "# Discord status (\"Playing taiko.rs\"); app id empty = the built-in one\ndiscord_presence = {}\ndiscord_app_id = {}\n",
-            self.discord_presence, self.discord_app_id
+            "# Discord status (\"Playing taiko.rs\"); app id empty = the built-in one\ndiscord_presence = {}\ndiscord_app_id = {}\n\
+             # minutes without input before the idle screen (0 = never)\nidle_minutes = {}\n",
+            self.discord_presence, self.discord_app_id, self.idle_minutes
         ));
+        out.push_str(&format!("# after a crash, the next start sends its report to the developers\nsend_crash_reports = {}\n", self.send_crash_reports));
         out.push_str(&format!(
             "# chats: star out swear words; a chime when a friend messages you\nchat_filter = {}\nmessage_sound = {}\n",
             self.chat_filter, self.message_sound
@@ -916,6 +990,11 @@ impl Config {
             "# with vsync, draw notes where they'll be once the frame is on screen; ms added to that\nvsync_compensation = {}\nvsync_tune_ms = {:.0}\n",
             self.vsync_compensation, self.vsync_tune_ms
         ));
+        let (lw, lh) = self.letterbox_size;
+        out.push_str(&format!(
+            "# in fullscreen, the game at this size with black around it, moved from the centre (percent)\nletterbox = {}\nletterbox_size = {lw}x{lh}\nletterbox_x = {}\nletterbox_y = {}\n",
+            self.letterbox, self.letterbox_pos.0, self.letterbox_pos.1
+        ));
         let window = self.window_size.map(|(w, h)| format!("{w}x{h}")).unwrap_or_default();
         out.push_str(&format!("# the window's size out of fullscreen (empty = 1280x720)\nwindow_size = {window}\n"));
         let data = self.data_folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
@@ -924,6 +1003,7 @@ impl Config {
         ));
         out.push_str(&format!("# the mouse wheel resizes the playfield during play\nwheel_resizes_playfield = {}\n", self.wheel_resizes_playfield));
         out.push_str(&format!("# song select lists converts too\nshow_converts = {}\n", self.show_converts));
+        out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
         out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));
         out.push_str(&format!(
             "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators; ! before one that came later: not hidden) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
@@ -964,8 +1044,55 @@ impl Config {
         for s in &self.songs {
             out.push_str(&format!("songs = {}\n", s.display()));
         }
-        keep_unknown(&mut out, &std::fs::read_to_string(&path).unwrap_or_default());
-        let _ = std::fs::write(path, out);
+        out
+    }
+
+    pub fn save(&self) {
+        let Some(path) = config_path() else { return };
+        let _ = SAVES.get_or_init(save_worker).send(Save::Write(path, self.to_text()));
+    }
+}
+
+enum Save {
+    Write(PathBuf, String),
+    Flush(mpsc::Sender<()>),
+}
+
+static SAVES: OnceLock<mpsc::Sender<Save>> = OnceLock::new();
+
+fn write_pending(pending: &mut std::collections::HashMap<PathBuf, String>) {
+    for (path, mut text) in pending.drain() {
+        if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+        keep_unknown(&mut text, &std::fs::read_to_string(&path).unwrap_or_default());
+        let _ = std::fs::write(path, text);
+    }
+}
+
+fn save_worker() -> mpsc::Sender<Save> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new().name("settings writer".into()).spawn(move || {
+        let mut pending = std::collections::HashMap::new();
+        while let Ok(first) = rx.recv() {
+            for job in std::iter::once(first).chain(rx.try_iter()) {
+                match job {
+                    Save::Write(path, text) => { pending.insert(path, text); }
+                    Save::Flush(done) => {
+                        write_pending(&mut pending);
+                        let _ = done.send(());
+                    }
+                }
+            }
+            write_pending(&mut pending);
+        }
+    }).expect("settings writer");
+    tx
+}
+
+/// Called outside State's lock on shutdown, after queuing the final settings snapshot.
+pub fn flush_saves() {
+    if let Some(tx) = SAVES.get() {
+        let (done, wait) = mpsc::channel();
+        if tx.send(Save::Flush(done)).is_ok() { let _ = wait.recv(); }
     }
 }
 
@@ -994,6 +1121,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn background_saves_flush_the_latest_snapshot_and_preserve_unknown_settings() {
+        let dir = std::env::temp_dir().join(format!("taiko-config-worker-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings");
+        std::fs::write(&path, "volume = 0\nfuture_option = keep\n").unwrap();
+        let tx = save_worker();
+        for i in 0..100 {
+            tx.send(Save::Write(path.clone(), format!("volume = {i}\n"))).unwrap();
+        }
+        let (done, wait) = mpsc::channel();
+        tx.send(Save::Flush(done)).unwrap();
+        wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("volume = 99\n"));
+        assert_eq!(text.matches("future_option = keep").count(), 1);
+        drop(tx);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn saving_keeps_the_settings_of_a_newer_build() {
         let old = "# a comment\nkeys = D, F, J, K\nfuture_setting = 3\nhotkey.future_hotkey = none\n";
         let mut out = "keys = A, S, K, L\n".to_string();
@@ -1014,6 +1161,14 @@ mod tests {
         let mut out = "keys = A, S, K, L\n".to_string();
         keep_unknown(&mut out, "hotkey.apply_offset = none\nsongs = /a\nmultiverse_preset = x: y\nskin_part = a = b\n");
         assert_eq!(out, "keys = A, S, K, L\n");
+    }
+
+    #[test]
+    fn only_a_first_launch_gets_the_new_offset() {
+        assert_eq!(Config::default().offset_ms, NEW_PLAYER_OFFSET_MS);
+        assert_eq!(Config::parse_text("").offset_ms, 0.0, "a config with no offset line stays where it was");
+        assert_eq!(Config::parse_text("offset_ms = 0\n").offset_ms, 0.0);
+        assert_eq!(Config::parse_text("offset_ms = -12\n").offset_ms, -12.0);
     }
 
     #[test]

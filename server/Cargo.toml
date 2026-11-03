@@ -19,3 +19,15 @@ miniz_oxide = "0.8"
 
 [profile.release]
 lto = "thin"
+
+# Match the game's CI profile so build, lint, and test use the same settings.
+[profile.ci-test]
+inherits = "dev"
+opt-level = 0
+lto = "off"
+codegen-units = 256
+debug = 0
+incremental = false
+
+[profile.ci-test.package."*"]
+opt-level = 3

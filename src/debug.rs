@@ -3,7 +3,8 @@
 //! `TAIKO_STATS=1` prints a report when leaving gameplay (with vsync, its "note step vs refresh
 //! grid" line shows how evenly notes move; `TAIKO_NO_PACE=1` turns the vsync pacing off to
 //! compare); `TAIKO_SHOTS=dir:ms,ms,...` saves PNGs at the given gameplay times (used for headless
-//! testing).
+//! testing); `TAIKO_MEDALS=file` opens the medals screen on a saved reply at launch, and
+//! `TAIKO_UNLOCK=file` plays the earning of the medals in the file (JSON, a list) at launch.
 
 use std::path::{Path, PathBuf};
 
@@ -322,6 +323,16 @@ pub fn wall_shots_from_env() -> Vec<f64> {
     v
 }
 
+/// The medals screen's reply, from `TAIKO_MEDALS`.
+pub fn medals_from_env() -> Option<crate::online::MedalsView> {
+    serde_json::from_str(&std::fs::read_to_string(std::env::var_os("TAIKO_MEDALS")?).ok()?).ok()
+}
+
+/// Medals to play the earning of, from `TAIKO_UNLOCK`.
+pub fn unlock_from_env() -> Vec<crate::online::MedalNote> {
+    std::env::var_os("TAIKO_UNLOCK").and_then(|f| serde_json::from_str(&std::fs::read_to_string(f).ok()?).ok()).unwrap_or_default()
+}
+
 /// Text that doesn't fit, as readable lines: off screen, sticking out of the rounded box it sits
 /// in, cut off by a clip, or drawn over other text. The canvas must have been drawn with `audit`.
 pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
@@ -375,11 +386,10 @@ pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
                 let visible = sh.fill[3] > 0.1 || (sh.border[3] > 0.1 && sh.params[1] > 0.0);
                 visible && contains(bounds(b), x, mid_y)
             });
-            if let Some(&b) = holder {
-                if !inside(seen, bounds(b)) {
-                    out.push(format!("sticks out: \"{}\" {} past its box {}", short(s), fmt(seen), fmt(bounds(b))));
-                    break;
-                }
+            if let Some(&b) = holder
+                && !inside(seen, bounds(b)) {
+                out.push(format!("sticks out: \"{}\" {} past its box {}", short(s), fmt(seen), fmt(bounds(b))));
+                break;
             }
         }
         texts.push((range.start, range.end, ink, seen, s));
@@ -444,7 +454,9 @@ pub fn rasterize(c: &crate::render::Canvas, scale: f32) -> (u32, u32, Vec<u8>) {
                 if d > 0.0 {
                     continue;
                 }
-                let col = if border > 0.0 && d > -border { sh.border } else { sh.fill };
+                // A profile picture: a grey disc stands in.
+                let fill = if sh.params[3] < -0.5 { [0.45, 0.45, 0.55, sh.fill[3]] } else { sh.fill };
+                let col = if border > 0.0 && d > -border { sh.border } else { fill };
                 let p = &mut px[(y * w + x) as usize];
                 for k in 0..3 {
                     p[k] += (col[k] - p[k]) * col[3];
