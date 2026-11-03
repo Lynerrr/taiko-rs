@@ -123,7 +123,7 @@ enum Scene {
         from: Option<f64>,
     },
     Results {
-        results: Results,
+        results: Box<Results>,
         entry: usize,
         from: Option<f64>,
     },
@@ -160,7 +160,7 @@ enum Scene {
     /// `from`: map time the match starts at.
     MpWait {
         rx: Option<Receiver<Loaded>>,
-        loaded: Option<(Beatmap, Arc<Track>)>,
+        loaded: Option<Box<(Beatmap, Arc<Track>)>>,
         start: Option<Instant>,
         from: Option<f64>,
     },
@@ -2497,7 +2497,7 @@ impl State {
             None,
         ));
         self.scene = Scene::Results {
-            results,
+            results: Box::new(results),
             entry,
             from: None,
         };
@@ -2699,7 +2699,7 @@ impl State {
         let online = (self.cfg.online_server.clone(), score, e.label());
         results.job = Some(results_job(e.path.clone(), play, None, Some(online)));
         self.scene = Scene::Results {
-            results,
+            results: Box::new(results),
             entry,
             from: None,
         };
@@ -12749,7 +12749,7 @@ impl State {
                         }
                     }
                     next = Some(Scene::Results {
-                        results,
+                        results: Box::new(results),
                         entry: *entry,
                         from: *from,
                     });
@@ -12884,7 +12884,7 @@ impl State {
                 if let Some(r) = rx {
                     match r.try_recv() {
                         Ok(Ok(l)) => {
-                            *loaded = Some(l);
+                            *loaded = Some(Box::new(l));
                             *rx = None;
                             if let Some(s) = &self.mp {
                                 s.client.send(net::ClientMsg::Loaded(true));
@@ -12902,8 +12902,9 @@ impl State {
                     }
                 }
                 if start.is_some_and(|at| now >= at)
-                    && let Some((map, track)) = loaded.take()
+                    && let Some(loaded) = loaded.take()
                 {
+                    let (map, track) = *loaded;
                     let seed = self
                         .mp
                         .as_ref()

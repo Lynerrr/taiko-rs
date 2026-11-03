@@ -1240,7 +1240,7 @@ fn the_results_scroll_down_to_the_pp_and_back() {
     );
     r.no_pp = Some("no pp here");
     s.scene = Scene::Results {
-        results: r,
+        results: Box::new(r),
         entry: 0,
         from: None,
     };
