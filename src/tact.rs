@@ -237,9 +237,9 @@ impl Setup {
             c.hit(cx, y, cw, h, Hit::TactCell(col));
         }
         let about = tr!(
-            "Each step the notes crawl forward slowly, then rush the rest of the way at its end, landing where they'd be as the next step starts. A shorter step rushes more often. Hits are judged as usual.",
-            "各ステップでノーツはゆっくり進み、終わりに一気に残りを進んで、次のステップの始まりの位置に着きます。短いほど頻繁に加速します。判定はいつも通り。",
-            "На каждом шаге ноты медленно ползут, а в конце рывком проходят остаток и оказываются там, где должны быть в начале следующего шага. Чем короче шаг, тем чаще рывки. Попадания судятся как обычно."
+            "Far off, the notes crawl through each step, then rush the rest of the way at its end. Closer in they move as usual, so each one is in the hit circle on time. A shorter step rushes more often.",
+            "遠くのノーツは各ステップでゆっくり進み、終わりに一気に残りを進みます。近づくといつも通りに動くので、どのノーツも時間通りに判定円に来ます。短いほど頻繁に加速します。",
+            "Вдали ноты медленно ползут на каждом шаге, а в конце рывком проходят остаток. Ближе они движутся как обычно, так что каждая нота вовремя в круге удара. Чем короче шаг, тем чаще рывки."
         );
         let mut ty = y + h + 18.0;
         let chars = ((pw - 32.0) / Canvas::char_width(7.0)).max(10.0) as usize;
