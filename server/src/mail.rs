@@ -41,17 +41,37 @@ struct Pending {
 static MAIL: OnceLock<Mail> = OnceLock::new();
 
 pub fn init(dir: PathBuf) {
-    let from = std::fs::read_to_string(dir.join("mail-from")).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "noreply@auneu.space".into());
-    let mail = Mail { dir, from, outbox: Mutex::default(), codes: Mutex::default(), sent: Mutex::default() };
+    let from = std::fs::read_to_string(dir.join("mail-from"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "noreply@auneu.space".into());
+    let mail = Mail {
+        dir,
+        from,
+        outbox: Mutex::default(),
+        codes: Mutex::default(),
+        sent: Mutex::default(),
+    };
     let from = mail.from.clone();
     let _ = MAIL.set(mail);
     // After the set: key() reads the folder from MAIL.
-    println!("mail {}", if key().is_some() { format!("on, from {from}") } else { "off (no mail-key)".into() });
+    println!(
+        "mail {}",
+        if key().is_some() {
+            format!("on, from {from}")
+        } else {
+            "off (no mail-key)".into()
+        }
+    );
 }
 
 fn key() -> Option<String> {
     let m = MAIL.get()?;
-    std::fs::read_to_string(m.dir.join("mail-key")).ok().map(|k| k.trim().to_string()).filter(|k| k.len() >= 16)
+    std::fs::read_to_string(m.dir.join("mail-key"))
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| k.len() >= 16)
 }
 
 /// Whether letters can be sent (the mailer's key is set up): then new accounts need an email.
@@ -61,7 +81,14 @@ pub fn on() -> bool {
 
 /// Whether `bearer` is the mailer's key (compared in the same time whatever matches).
 pub fn mailer_key(bearer: &str) -> bool {
-    key().is_some_and(|want| want.len() == bearer.len() && want.bytes().zip(bearer.bytes()).fold(0, |d, (a, b)| d | (a ^ b)) == 0)
+    key().is_some_and(|want| {
+        want.len() == bearer.len()
+            && want
+                .bytes()
+                .zip(bearer.bytes())
+                .fold(0, |d, (a, b)| d | (a ^ b))
+                == 0
+    })
 }
 
 /// The oldest letter waiting (taken out: the mailer hands it to Postfix, which keeps it).
@@ -71,7 +98,9 @@ pub fn next() -> Option<String> {
 
 /// Whether `email` looks like one: name@domain.tld, nothing odd in it.
 pub fn valid_email(email: &str) -> bool {
-    let Some((local, domain)) = email.split_once('@') else { return false };
+    let Some((local, domain)) = email.split_once('@') else {
+        return false;
+    };
     (3..=254).contains(&email.len())
         && !local.is_empty()
         && local.len() <= 64
@@ -79,7 +108,13 @@ pub fn valid_email(email: &str) -> bool {
         && !domain.starts_with('.')
         && !domain.ends_with('.')
         && !domain.contains("..")
-        && email.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '<' | '>' | '(' | ')' | ',' | ';' | ':' | '\\' | '"' | '[' | ']'))
+        && email.chars().all(|c| {
+            c.is_ascii_graphic()
+                && !matches!(
+                    c,
+                    '<' | '>' | '(' | ')' | ',' | ';' | ':' | '\\' | '"' | '[' | ']'
+                )
+        })
         && !domain.contains('@')
 }
 
@@ -93,7 +128,10 @@ pub fn masked(email: &str) -> String {
     match email.split_once('@') {
         Some((local, domain)) => {
             let first: String = local.chars().take(1).collect();
-            format!("{first}{}@{domain}", "*".repeat(local.chars().count().saturating_sub(1).clamp(1, 6)))
+            format!(
+                "{first}{}@{domain}",
+                "*".repeat(local.chars().count().saturating_sub(1).clamp(1, 6))
+            )
         }
         None => "***".into(),
     }
@@ -102,7 +140,9 @@ pub fn masked(email: &str) -> String {
 fn six_digits() -> String {
     let mut b = [0u8; 8];
     use std::io::Read;
-    std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).expect("/dev/urandom");
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut b))
+        .expect("/dev/urandom");
     format!("{:06}", u64::from_le_bytes(b) % 1_000_000)
 }
 
@@ -112,7 +152,10 @@ pub const JUST_SENT: &str = "a code was just sent: wait a minute before asking a
 /// Mails a new code for `for_` (what it unlocks, e.g. "reg:name") to `email`; `what` says in the
 /// letter what it's for. Err: too many asked for lately, or mail is off.
 pub fn send_code(for_: &str, email: &str, what: &str) -> Result<(), String> {
-    let m = MAIL.get().filter(|_| on()).ok_or("the server can't send mail right now")?;
+    let m = MAIL
+        .get()
+        .filter(|_| on())
+        .ok_or("the server can't send mail right now")?;
     {
         let mut sent = m.sent.lock().unwrap();
         sent.retain(|_, v| {
@@ -122,7 +165,13 @@ pub fn send_code(for_: &str, email: &str, what: &str) -> Result<(), String> {
         for who in [normal(email), for_.to_string()] {
             let times = sent.get(&who).map(Vec::as_slice).unwrap_or_default();
             // A minute apart for the same thing; another (a sign-up, then a reset) may follow.
-            if who == for_ && times.iter().filter(|t| t.elapsed() < Duration::from_secs(60)).count() >= PER_MINUTE {
+            if who == for_
+                && times
+                    .iter()
+                    .filter(|t| t.elapsed() < Duration::from_secs(60))
+                    .count()
+                    >= PER_MINUTE
+            {
                 return Err(JUST_SENT.into());
             }
             if times.len() >= PER_HOUR {
@@ -137,16 +186,32 @@ pub fn send_code(for_: &str, email: &str, what: &str) -> Result<(), String> {
     let body = format!(
         "Your taiko.rs code {what}:\n\n    {code}\n\nType it where you asked for it. It works for 15 minutes.\n\nIf you didn't ask for it, ignore this letter: nothing changes without the code.\n\n-- \ntaiko.rs  https://rstaiko.auneu.space\n"
     );
-    let letter = letter(&m.from, email, &format!("taiko.rs code: {code}"), &body, &html(&code, what));
+    let letter = letter(
+        &m.from,
+        email,
+        &format!("taiko.rs code: {code}"),
+        &body,
+        &html(&code, what),
+    );
     let mut outbox = m.outbox.lock().unwrap();
     if outbox.len() >= MAX_OUTBOX {
-        return Err("the server is sending a lot of mail right now, try again in a few minutes".into());
+        return Err(
+            "the server is sending a lot of mail right now, try again in a few minutes".into(),
+        );
     }
     outbox.push_back(letter);
     drop(outbox);
     let mut codes = m.codes.lock().unwrap();
     codes.retain(|_, p| p.made.elapsed() < CODE_LIFE);
-    codes.insert(for_.to_string(), Pending { code, email: normal(email), made: Instant::now(), tries: 0 });
+    codes.insert(
+        for_.to_string(),
+        Pending {
+            code,
+            email: normal(email),
+            made: Instant::now(),
+            tries: 0,
+        },
+    );
     Ok(())
 }
 
@@ -172,15 +237,28 @@ pub fn check_code(for_: &str, code: &str) -> Result<String, String> {
 
 /// The email a code for `for_` is waiting at, if one is.
 pub fn pending_email(for_: &str) -> Option<String> {
-    MAIL.get()?.codes.lock().unwrap().get(for_).filter(|p| p.made.elapsed() < CODE_LIFE).map(|p| p.email.clone())
+    MAIL.get()?
+        .codes
+        .lock()
+        .unwrap()
+        .get(for_)
+        .filter(|p| p.made.elapsed() < CODE_LIFE)
+        .map(|p| p.email.clone())
 }
 
 /// A letter with a plain text and an HTML version (mail apps show the last one they can), as
 /// Postfix's `sendmail -t` takes it (lines end in \n there).
 fn letter(from: &str, to: &str, subject: &str, text: &str, html: &str) -> String {
     let now = chrono_date();
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let id = format!("{nanos}.{}@{}", six_digits(), from.split('@').nth(1).unwrap_or("localhost"));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let id = format!(
+        "{nanos}.{}@{}",
+        six_digits(),
+        from.split('@').nth(1).unwrap_or("localhost")
+    );
     let b = format!("=_taiko_{nanos}_{}", six_digits());
     format!(
         "From: taiko.rs <{from}>\nTo: <{to}>\nSubject: {subject}\nDate: {now}\nMessage-ID: <{id}>\nMIME-Version: 1.0\nContent-Type: multipart/alternative; boundary=\"{b}\"\nAuto-Submitted: auto-generated\n\n--{b}\nContent-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: 8bit\n\n{text}\n--{b}\nContent-Type: text/html; charset=utf-8\nContent-Transfer-Encoding: 8bit\n\n{html}\n--{b}--\n"
@@ -252,8 +330,15 @@ fn pixels(text: &str, half: u32, tight: bool) -> String {
             while x + n < width && colour(x + n) == c {
                 n += 1;
             }
-            let bg = if c.is_empty() { String::new() } else { format!(" bgcolor=\"{c}\"") };
-            out.push_str(&format!("<td width=\"{w}\" height=\"{half}\"{bg}></td>\n", w = n as u32 * half));
+            let bg = if c.is_empty() {
+                String::new()
+            } else {
+                format!(" bgcolor=\"{c}\"")
+            };
+            out.push_str(&format!(
+                "<td width=\"{w}\" height=\"{half}\"{bg}></td>\n",
+                w = n as u32 * half
+            ));
             x += n;
         }
         out.push_str("</tr></table>\n");
@@ -263,7 +348,10 @@ fn pixels(text: &str, half: u32, tight: bool) -> String {
 
 /// `s` safe inside HTML text.
 fn escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// The letter's HTML version, dressed like the game and its site: the pixel logo, a lane of
@@ -275,11 +363,23 @@ fn html(code: &str, what: &str) -> String {
     let digits = pixels(&code, 4, false);
     let mono = "font-family:'Courier New',Courier,monospace";
     let note = |color: &str, size: u32| {
-        format!("<td valign=\"middle\" style=\"padding:0 3px\"><div style=\"width:{size}px;height:{size}px;border-radius:50%;background:{color};border:2px solid #ffffff\"></div></td>\n")
+        format!(
+            "<td valign=\"middle\" style=\"padding:0 3px\"><div style=\"width:{size}px;height:{size}px;border-radius:50%;background:{color};border:2px solid #ffffff\"></div></td>\n"
+        )
     };
     let (d, k) = ("#EB452C", "#438EAD");
     let judge = "<td valign=\"middle\" style=\"padding:0 8px 0 0\"><div style=\"width:22px;height:22px;border-radius:50%;border:2px solid #4a4a60\"></div></td>\n";
-    let lane: String = [judge.to_string(), note(d, 14), note(k, 14), note(d, 14), note(d, 22), note(k, 14), note(k, 14), note(k, 22)].concat();
+    let lane: String = [
+        judge.to_string(),
+        note(d, 14),
+        note(k, 14),
+        note(d, 14),
+        note(d, 22),
+        note(k, 14),
+        note(k, 14),
+        note(k, 22),
+    ]
+    .concat();
     format!(
         r##"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -313,7 +413,10 @@ fn html(code: &str, what: &str) -> String {
 
 /// Now as an RFC 5322 date, in UTC.
 fn chrono_date() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let days = secs / 86_400;
     let (h, mi, s) = (secs % 86_400 / 3600, secs % 3600 / 60, secs % 60);
     // 1970-01-01 was a Thursday.
@@ -328,7 +431,9 @@ fn chrono_date() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    let month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][(m - 1) as usize];
+    let month = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ][(m - 1) as usize];
     format!("{weekday}, {d:02} {month} {y} {h:02}:{mi:02}:{s:02} +0000")
 }
 
@@ -345,10 +450,17 @@ mod tests {
 
     #[test]
     fn emails_are_checked_and_masked() {
-        for good in ["a@b.co", "galileo.985+taiko@gmail.com", "x_y@mail.yandex.ru"] {
+        for good in [
+            "a@b.co",
+            "galileo.985+taiko@gmail.com",
+            "x_y@mail.yandex.ru",
+        ] {
             assert!(valid_email(good), "{good}");
         }
-        for bad in ["", "a@b", "@b.co", "a b@c.de", "a@b..co", "a@.b.co", "a@b.co.", "<a@b.co>", "a@b@c.co", "a,b@c.de"] {
+        for bad in [
+            "", "a@b", "@b.co", "a b@c.de", "a@b..co", "a@.b.co", "a@b.co.", "<a@b.co>",
+            "a@b@c.co", "a,b@c.de",
+        ] {
             assert!(!valid_email(bad), "{bad}");
         }
         assert_eq!(masked("galileo@gmail.com"), "g******@gmail.com");
@@ -358,13 +470,28 @@ mod tests {
 
     #[test]
     fn a_letter_has_text_and_html_and_short_lines() {
-        let l = letter("noreply@a.co", "me@b.co", "taiko.rs code: 012345", "text 012345\n", &html("012345", "for creating the account <b>"));
-        let b = l.split("boundary=\"").nth(1).unwrap().split('"').next().unwrap();
+        let l = letter(
+            "noreply@a.co",
+            "me@b.co",
+            "taiko.rs code: 012345",
+            "text 012345\n",
+            &html("012345", "for creating the account <b>"),
+        );
+        let b = l
+            .split("boundary=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
         assert_eq!(l.matches(&format!("--{b}\n")).count(), 2, "{l}");
         assert!(l.ends_with(&format!("--{b}--\n")));
         assert!(l.contains("text/plain") && l.contains("text/html") && l.contains("text 012345"));
         assert!(l.contains("account &lt;b&gt;") && !l.contains("account <b>"));
-        assert!(l.lines().all(|line| line.len() < 998), "a line is too long for mail");
+        assert!(
+            l.lines().all(|line| line.len() < 998),
+            "a line is too long for mail"
+        );
         if let Ok(path) = std::env::var("TAIKO_MAIL_PREVIEW") {
             std::fs::write(path, html("042137", "for creating the account Dekovner")).unwrap();
         }
@@ -373,6 +500,9 @@ mod tests {
     #[test]
     fn a_date_reads_like_mail_wants() {
         let d = chrono_date();
-        assert!(d.ends_with(" +0000") && d.len() == "Thu, 01 Jan 1970 00:00:00 +0000".len(), "{d}");
+        assert!(
+            d.ends_with(" +0000") && d.len() == "Thu, 01 Jan 1970 00:00:00 +0000".len(),
+            "{d}"
+        );
     }
 }

@@ -22,7 +22,11 @@ const SCROLL_STEP: f64 = 0.05;
 /// step in that direction first, so 1.01 goes down to 1.00 and up to 1.05.
 pub fn step_scroll_speed(speed: f64, d: f64) -> f64 {
     let k = speed / SCROLL_STEP;
-    let k = if d > 0.0 { (k + 1e-6).floor() + 1.0 } else { (k - 1e-6).ceil() - 1.0 };
+    let k = if d > 0.0 {
+        (k + 1e-6).floor() + 1.0
+    } else {
+        (k - 1e-6).ceil() - 1.0
+    };
     (k * SCROLL_STEP).clamp(0.3, 4.0)
 }
 
@@ -37,7 +41,12 @@ pub enum TouchLayout {
 }
 
 impl TouchLayout {
-    pub const ALL: [TouchLayout; 4] = [TouchLayout::Kddk, TouchLayout::Kkdd, TouchLayout::Dkkd, TouchLayout::Ddkk];
+    pub const ALL: [TouchLayout; 4] = [
+        TouchLayout::Kddk,
+        TouchLayout::Kkdd,
+        TouchLayout::Dkkd,
+        TouchLayout::Ddkk,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -49,12 +58,17 @@ impl TouchLayout {
     }
 
     fn parse(s: &str) -> Option<TouchLayout> {
-        TouchLayout::ALL.into_iter().find(|l| l.name().eq_ignore_ascii_case(s))
+        TouchLayout::ALL
+            .into_iter()
+            .find(|l| l.name().eq_ignore_ascii_case(s))
     }
 
     /// The layout `dir` steps away (wrapping).
     pub fn step(self, dir: i32) -> TouchLayout {
-        let i = TouchLayout::ALL.iter().position(|&l| l == self).unwrap_or(0) as i32;
+        let i = TouchLayout::ALL
+            .iter()
+            .position(|&l| l == self)
+            .unwrap_or(0) as i32;
         TouchLayout::ALL[(i + dir).rem_euclid(4) as usize]
     }
 
@@ -79,7 +93,11 @@ pub enum ScreenshotTo {
 }
 
 impl ScreenshotTo {
-    pub const ALL: [ScreenshotTo; 3] = [ScreenshotTo::Clipboard, ScreenshotTo::Folder, ScreenshotTo::Both];
+    pub const ALL: [ScreenshotTo; 3] = [
+        ScreenshotTo::Clipboard,
+        ScreenshotTo::Folder,
+        ScreenshotTo::Both,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -99,12 +117,17 @@ impl ScreenshotTo {
     }
 
     fn parse(s: &str) -> Option<ScreenshotTo> {
-        ScreenshotTo::ALL.into_iter().find(|t| t.key().eq_ignore_ascii_case(s))
+        ScreenshotTo::ALL
+            .into_iter()
+            .find(|t| t.key().eq_ignore_ascii_case(s))
     }
 
     /// The choice `dir` steps away (wrapping).
     pub fn step(self, dir: i32) -> ScreenshotTo {
-        let i = ScreenshotTo::ALL.iter().position(|&t| t == self).unwrap_or(0) as i32;
+        let i = ScreenshotTo::ALL
+            .iter()
+            .position(|&t| t == self)
+            .unwrap_or(0) as i32;
         ScreenshotTo::ALL[(i + dir).rem_euclid(3) as usize]
     }
 
@@ -199,6 +222,8 @@ pub struct Config {
     pub autoplay: crate::autoplay::Settings,
     /// GREAT hits without their flash and label (only OKs and misses show).
     pub hide_great: bool,
+    /// The lane and the drum's panel drawn pure black.
+    pub black_lane: bool,
     /// The coloured flash on the hit target as notes are hit.
     pub hit_flash: bool,
     /// The interface's accent colour (`render::ACCENTS`, or any other).
@@ -289,6 +314,8 @@ pub struct Config {
     pub universe_presets: Vec<crate::multiverse::Preset>,
     /// Shapeshift: how often the lane changes shape, how long the morph takes, the order.
     pub shapeshift: crate::shapeshift::Config,
+    /// Random colouring, shared by retries and saved between sessions.
+    pub random_seed: u64,
     /// Mods marked as favourites in the mod select (shown in a row of their own).
     pub favourite_mods: crate::mods::Mods,
     /// Note colours without Multiverse.
@@ -308,7 +335,11 @@ impl Default for Config {
         Config {
             touch_layout: TouchLayout::Kddk,
             // Android has no clipboard to put pictures on here.
-            screenshot_to: if cfg!(target_os = "android") { ScreenshotTo::Folder } else { ScreenshotTo::Clipboard },
+            screenshot_to: if cfg!(target_os = "android") {
+                ScreenshotTo::Folder
+            } else {
+                ScreenshotTo::Clipboard
+            },
             language: crate::lang::Lang::En,
             offset_ms: NEW_PLAYER_OFFSET_MS,
             visual_offset_ms: 0.0,
@@ -370,6 +401,7 @@ impl Default for Config {
             kiai_effects: true,
             autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
+            black_lane: false,
             hit_flash: true,
             accent: crate::render::DEFAULT_ACCENT,
             discord_presence: true,
@@ -399,6 +431,7 @@ impl Default for Config {
             universes: crate::multiverse::defaults(),
             universe_presets: Vec::new(),
             shapeshift: Default::default(),
+            random_seed: crate::fresh_seed(),
             favourite_mods: crate::mods::Mods::NONE,
             note_colours: crate::multiverse::Colours::CLASSIC,
             video: Default::default(),
@@ -412,7 +445,8 @@ fn parse_spot(s: &str) -> Option<((u32, u32), (f32, f32))> {
     let (size, spot) = s.trim().split_once('@')?;
     let (x, y) = spot.split_once('/')?;
     let (x, y) = (x.parse::<f32>().ok()?, y.parse::<f32>().ok()?);
-    ((0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y)).then_some((crate::layout::parse_size(size)?, (x, y)))
+    ((0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y))
+        .then_some((crate::layout::parse_size(size)?, (x, y)))
 }
 
 /// Per-user taiko.rs directory: settings (`cache == false`) or disposable data like extracted
@@ -429,7 +463,11 @@ pub fn user_dir(cache: bool) -> Option<PathBuf> {
     }
     #[cfg(not(windows))]
     {
-        let (xdg, fallback) = if cache { ("XDG_CACHE_HOME", ".cache") } else { ("XDG_CONFIG_HOME", ".config") };
+        let (xdg, fallback) = if cache {
+            ("XDG_CACHE_HOME", ".cache")
+        } else {
+            ("XDG_CONFIG_HOME", ".config")
+        };
         std::env::var_os(xdg)
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback)))
@@ -446,7 +484,10 @@ pub fn set_data_folder(dir: Option<PathBuf>) {
 }
 
 pub fn data_folder() -> Option<PathBuf> {
-    DATA_FOLDER.read().unwrap_or_else(|e| e.into_inner()).clone()
+    DATA_FOLDER
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 /// Where replays, scores, videos, play history and the like are kept: the data folder, else
@@ -477,7 +518,9 @@ pub fn data_dir() -> Option<PathBuf> {
 
 /// Where disposable data goes (extracted `.osz` files, map analysis, previews).
 pub fn cache_dir() -> Option<PathBuf> {
-    data_folder().map(|d| d.join("cache")).or_else(|| user_dir(true))
+    data_folder()
+        .map(|d| d.join("cache"))
+        .or_else(|| user_dir(true))
 }
 
 /// taiko.rs's own folder `name` ("Songs", "Skins"): in the data folder, else next to config.txt
@@ -504,7 +547,16 @@ fn own_dir_in(folder: Option<&Path>, name: &str) -> Option<PathBuf> {
 /// the files next to config.txt, its own Songs and Skins, and the cache.
 fn data_paths(folder: Option<&Path>) -> Vec<Option<PathBuf>> {
     let base = folder.map(Path::to_path_buf).or_else(|| user_dir(false));
-    let mut out: Vec<Option<PathBuf>> = ["replays", "videos", "map_offsets.tsv", "plays.tsv", "hidden.tsv"].iter().map(|n| base.as_ref().map(|b| b.join(n))).collect();
+    let mut out: Vec<Option<PathBuf>> = [
+        "replays",
+        "videos",
+        "map_offsets.tsv",
+        "plays.tsv",
+        "hidden.tsv",
+    ]
+    .iter()
+    .map(|n| base.as_ref().map(|b| b.join(n)))
+    .collect();
     out.push(own_dir_in(folder, "Songs"));
     out.push(own_dir_in(folder, "Skins"));
     out.push(folder.map(|d| d.join("cache")).or_else(|| user_dir(true)));
@@ -515,7 +567,12 @@ fn data_paths(folder: Option<&Path>) -> Vec<Option<PathBuf>> {
 /// where they're on the same drive, else copied and the originals removed once everything has
 /// copied. Nothing is overwritten; on any failure what had moved goes back. `done` / `total`
 /// count bytes for a progress bar.
-pub fn move_data(from: Option<&Path>, to: Option<&Path>, done: &std::sync::atomic::AtomicU64, total: &std::sync::atomic::AtomicU64) -> Result<(), String> {
+pub fn move_data(
+    from: Option<&Path>,
+    to: Option<&Path>,
+    done: &std::sync::atomic::AtomicU64,
+    total: &std::sync::atomic::AtomicU64,
+) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     let pairs: Vec<(PathBuf, PathBuf)> = data_paths(from)
         .into_iter()
@@ -525,13 +582,19 @@ pub fn move_data(from: Option<&Path>, to: Option<&Path>, done: &std::sync::atomi
         .collect();
     for (a, b) in &pairs {
         if b.exists() {
-            return Err(format!("{} is already there: pick an empty folder", b.display()));
+            return Err(format!(
+                "{} is already there: pick an empty folder",
+                b.display()
+            ));
         }
         if b.starts_with(a) {
             return Err(format!("can't move {} into itself", a.display()));
         }
     }
-    total.store(pairs.iter().map(|(a, _)| size_of(a)).sum(), Ordering::Relaxed);
+    total.store(
+        pairs.iter().map(|(a, _)| size_of(a)).sum(),
+        Ordering::Relaxed,
+    );
     // Moved so far: (from, to, copied rather than renamed).
     let mut moved: Vec<(&Path, &Path, bool)> = Vec::new();
     let mut failed = None;
@@ -577,7 +640,12 @@ pub fn move_data(from: Option<&Path>, to: Option<&Path>, done: &std::sync::atomi
 
 fn size_of(p: &Path) -> u64 {
     match std::fs::symlink_metadata(p) {
-        Ok(m) if m.is_dir() => std::fs::read_dir(p).into_iter().flatten().flatten().map(|e| size_of(&e.path())).sum(),
+        Ok(m) if m.is_dir() => std::fs::read_dir(p)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| size_of(&e.path()))
+            .sum(),
         Ok(m) => m.len(),
         Err(_) => 0,
     }
@@ -599,17 +667,28 @@ fn copy_all(from: &Path, to: &Path, done: &std::sync::atomic::AtomicU64) -> std:
 }
 
 fn remove_all(p: &Path) -> std::io::Result<()> {
-    if std::fs::symlink_metadata(p)?.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) }
+    if std::fs::symlink_metadata(p)?.is_dir() {
+        std::fs::remove_dir_all(p)
+    } else {
+        std::fs::remove_file(p)
+    }
 }
 
 /// Each map's own offset (on top of the global one), by the .osu's content hash:
 /// `map_offsets.tsv` in the config folder, one `hash<TAB>ms` per line.
 pub fn load_map_offsets() -> std::collections::HashMap<u64, f64> {
-    let Some(text) = data_dir().and_then(|d| std::fs::read_to_string(d.join("map_offsets.tsv")).ok()) else { return Default::default() };
+    let Some(text) =
+        data_dir().and_then(|d| std::fs::read_to_string(d.join("map_offsets.tsv")).ok())
+    else {
+        return Default::default();
+    };
     text.lines()
         .filter_map(|l| {
             let (h, ms) = l.split_once('\t')?;
-            Some((u64::from_str_radix(h.trim(), 16).ok()?, ms.trim().parse::<f64>().ok()?))
+            Some((
+                u64::from_str_radix(h.trim(), 16).ok()?,
+                ms.trim().parse::<f64>().ok()?,
+            ))
         })
         .collect()
 }
@@ -617,7 +696,10 @@ pub fn load_map_offsets() -> std::collections::HashMap<u64, f64> {
 pub fn save_map_offsets(offsets: &std::collections::HashMap<u64, f64>) {
     let Some(dir) = data_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);
-    let mut lines: Vec<String> = offsets.iter().map(|(h, ms)| format!("{h:016x}\t{ms}")).collect();
+    let mut lines: Vec<String> = offsets
+        .iter()
+        .map(|(h, ms)| format!("{h:016x}\t{ms}"))
+        .collect();
     lines.sort();
     let _ = std::fs::write(dir.join("map_offsets.tsv"), lines.join("\n") + "\n");
 }
@@ -625,7 +707,10 @@ pub fn save_map_offsets(offsets: &std::collections::HashMap<u64, f64>) {
 /// Clears every map's own offset, keeping them in `map_offsets.backup.tsv` to go back to by hand.
 pub fn reset_map_offsets() {
     if let Some(dir) = data_dir() {
-        let _ = std::fs::rename(dir.join("map_offsets.tsv"), dir.join("map_offsets.backup.tsv"));
+        let _ = std::fs::rename(
+            dir.join("map_offsets.tsv"),
+            dir.join("map_offsets.backup.tsv"),
+        );
     }
 }
 
@@ -634,23 +719,108 @@ pub fn config_path() -> Option<PathBuf> {
 }
 
 const KEY_NAMES: &[KeyCode] = &[
-    KeyCode::KeyA, KeyCode::KeyB, KeyCode::KeyC, KeyCode::KeyD, KeyCode::KeyE, KeyCode::KeyF, KeyCode::KeyG,
-    KeyCode::KeyH, KeyCode::KeyI, KeyCode::KeyJ, KeyCode::KeyK, KeyCode::KeyL, KeyCode::KeyM, KeyCode::KeyN,
-    KeyCode::KeyO, KeyCode::KeyP, KeyCode::KeyQ, KeyCode::KeyR, KeyCode::KeyS, KeyCode::KeyT, KeyCode::KeyU,
-    KeyCode::KeyV, KeyCode::KeyW, KeyCode::KeyX, KeyCode::KeyY, KeyCode::KeyZ, KeyCode::Digit0, KeyCode::Digit1,
-    KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7,
-    KeyCode::Digit8, KeyCode::Digit9, KeyCode::Comma, KeyCode::Period, KeyCode::Slash, KeyCode::Semicolon,
-    KeyCode::Quote, KeyCode::BracketLeft, KeyCode::BracketRight, KeyCode::Backslash, KeyCode::Backquote,
-    KeyCode::Space, KeyCode::ShiftLeft, KeyCode::ShiftRight, KeyCode::ControlLeft, KeyCode::ControlRight,
-    KeyCode::AltLeft, KeyCode::AltRight, KeyCode::CapsLock, KeyCode::Tab, KeyCode::Enter, KeyCode::ArrowLeft,
-    KeyCode::ArrowRight, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::Numpad0, KeyCode::Numpad1,
-    KeyCode::Numpad2, KeyCode::Numpad3, KeyCode::Numpad4, KeyCode::Numpad5, KeyCode::Numpad6, KeyCode::Numpad7,
-    KeyCode::Numpad8, KeyCode::Numpad9, KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4, KeyCode::F5,
-    KeyCode::F6, KeyCode::F7, KeyCode::F8, KeyCode::F9, KeyCode::F10, KeyCode::F11, KeyCode::F12, KeyCode::Minus,
-    KeyCode::Equal, KeyCode::PageUp, KeyCode::PageDown, KeyCode::Home, KeyCode::End, KeyCode::Insert, KeyCode::Delete,
-    KeyCode::Escape, KeyCode::Backspace, KeyCode::NumpadAdd, KeyCode::NumpadSubtract, KeyCode::NumpadMultiply,
-    KeyCode::NumpadDivide, KeyCode::NumpadDecimal, KeyCode::NumpadEnter, KeyCode::Pause, KeyCode::ScrollLock,
-    KeyCode::ContextMenu, KeyCode::IntlBackslash, NO_KEY,
+    KeyCode::KeyA,
+    KeyCode::KeyB,
+    KeyCode::KeyC,
+    KeyCode::KeyD,
+    KeyCode::KeyE,
+    KeyCode::KeyF,
+    KeyCode::KeyG,
+    KeyCode::KeyH,
+    KeyCode::KeyI,
+    KeyCode::KeyJ,
+    KeyCode::KeyK,
+    KeyCode::KeyL,
+    KeyCode::KeyM,
+    KeyCode::KeyN,
+    KeyCode::KeyO,
+    KeyCode::KeyP,
+    KeyCode::KeyQ,
+    KeyCode::KeyR,
+    KeyCode::KeyS,
+    KeyCode::KeyT,
+    KeyCode::KeyU,
+    KeyCode::KeyV,
+    KeyCode::KeyW,
+    KeyCode::KeyX,
+    KeyCode::KeyY,
+    KeyCode::KeyZ,
+    KeyCode::Digit0,
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+    KeyCode::Comma,
+    KeyCode::Period,
+    KeyCode::Slash,
+    KeyCode::Semicolon,
+    KeyCode::Quote,
+    KeyCode::BracketLeft,
+    KeyCode::BracketRight,
+    KeyCode::Backslash,
+    KeyCode::Backquote,
+    KeyCode::Space,
+    KeyCode::ShiftLeft,
+    KeyCode::ShiftRight,
+    KeyCode::ControlLeft,
+    KeyCode::ControlRight,
+    KeyCode::AltLeft,
+    KeyCode::AltRight,
+    KeyCode::CapsLock,
+    KeyCode::Tab,
+    KeyCode::Enter,
+    KeyCode::ArrowLeft,
+    KeyCode::ArrowRight,
+    KeyCode::ArrowUp,
+    KeyCode::ArrowDown,
+    KeyCode::Numpad0,
+    KeyCode::Numpad1,
+    KeyCode::Numpad2,
+    KeyCode::Numpad3,
+    KeyCode::Numpad4,
+    KeyCode::Numpad5,
+    KeyCode::Numpad6,
+    KeyCode::Numpad7,
+    KeyCode::Numpad8,
+    KeyCode::Numpad9,
+    KeyCode::F1,
+    KeyCode::F2,
+    KeyCode::F3,
+    KeyCode::F4,
+    KeyCode::F5,
+    KeyCode::F6,
+    KeyCode::F7,
+    KeyCode::F8,
+    KeyCode::F9,
+    KeyCode::F10,
+    KeyCode::F11,
+    KeyCode::F12,
+    KeyCode::Minus,
+    KeyCode::Equal,
+    KeyCode::PageUp,
+    KeyCode::PageDown,
+    KeyCode::Home,
+    KeyCode::End,
+    KeyCode::Insert,
+    KeyCode::Delete,
+    KeyCode::Escape,
+    KeyCode::Backspace,
+    KeyCode::NumpadAdd,
+    KeyCode::NumpadSubtract,
+    KeyCode::NumpadMultiply,
+    KeyCode::NumpadDivide,
+    KeyCode::NumpadDecimal,
+    KeyCode::NumpadEnter,
+    KeyCode::Pause,
+    KeyCode::ScrollLock,
+    KeyCode::ContextMenu,
+    KeyCode::IntlBackslash,
+    NO_KEY,
 ];
 
 /// A key taken away: nothing presses it.
@@ -666,50 +836,84 @@ pub fn key_name(k: KeyCode) -> String {
         return "none".into();
     }
     let s = format!("{k:?}");
-    s.strip_prefix("Key").or_else(|| s.strip_prefix("Digit")).map(str::to_owned).unwrap_or(s)
+    s.strip_prefix("Key")
+        .or_else(|| s.strip_prefix("Digit"))
+        .map(str::to_owned)
+        .unwrap_or(s)
 }
 
 pub fn parse_key(s: &str) -> Option<KeyCode> {
     if s.eq_ignore_ascii_case("none") {
         return Some(NO_KEY);
     }
-    KEY_NAMES.iter().copied().find(|k| format!("{k:?}").eq_ignore_ascii_case(s) || key_name(*k).eq_ignore_ascii_case(s))
+    KEY_NAMES
+        .iter()
+        .copied()
+        .find(|k| format!("{k:?}").eq_ignore_ascii_case(s) || key_name(*k).eq_ignore_ascii_case(s))
 }
 
 impl Config {
     /// Music and hitsound volume after the master volume.
     pub fn volumes(&self) -> (f32, f32) {
-        (self.master_volume * self.music_volume, self.master_volume * self.fx_volume)
+        (
+            self.master_volume * self.music_volume,
+            self.master_volume * self.fx_volume,
+        )
     }
 
     pub fn load() -> Config {
-        let Some(path) = config_path() else { return Config::default() };
-        let Ok(text) = std::fs::read_to_string(&path) else { return Config::default() };
+        let Some(path) = config_path() else {
+            return Config::default();
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Config::default();
+        };
         Config::parse_text(&text)
     }
 
     /// The settings in the config file's `text`.
     pub(crate) fn parse_text(text: &str) -> Config {
         // A config from before the default moved keeps what it played on.
-        let mut cfg = Config { existed: true, offset_ms: 0.0, ..Config::default() };
+        let mut cfg = Config {
+            existed: true,
+            offset_ms: 0.0,
+            ..Config::default()
+        };
         let mut osu_scroll_speed = false;
         for line in text.lines() {
             let line = line.trim();
             if line.starts_with('#') {
                 continue;
             }
-            let Some((k, v)) = line.split_once('=') else { continue };
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
             let (k, v) = (k.trim(), v.trim());
             match k {
                 "offset_ms" => cfg.offset_ms = v.parse().unwrap_or(cfg.offset_ms),
-                "visual_offset_ms" => cfg.visual_offset_ms = v.parse().unwrap_or(cfg.visual_offset_ms),
+                "visual_offset_ms" => {
+                    cfg.visual_offset_ms = v.parse().unwrap_or(cfg.visual_offset_ms)
+                }
                 "vsync_compensation" => cfg.vsync_compensation = v != "false",
-                "vsync_tune_ms" => cfg.vsync_tune_ms = v.parse::<f64>().unwrap_or(cfg.vsync_tune_ms).clamp(-200.0, 200.0),
-                "scroll_speed" => cfg.scroll_speed = v.parse::<f64>().unwrap_or(cfg.scroll_speed).clamp(0.3, 4.0),
+                "vsync_tune_ms" => {
+                    cfg.vsync_tune_ms = v
+                        .parse::<f64>()
+                        .unwrap_or(cfg.vsync_tune_ms)
+                        .clamp(-200.0, 200.0)
+                }
+                "scroll_speed" => {
+                    cfg.scroll_speed = v.parse::<f64>().unwrap_or(cfg.scroll_speed).clamp(0.3, 4.0)
+                }
                 "scroll_speed_osu" => osu_scroll_speed = v == "true",
-                "master_volume" => cfg.master_volume = v.parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0),
-                "music_volume" => cfg.music_volume = v.parse::<f32>().unwrap_or(cfg.music_volume).clamp(0.0, 1.0),
-                "fx_volume" => cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0),
+                "master_volume" => {
+                    cfg.master_volume = v.parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0)
+                }
+                "music_volume" => {
+                    cfg.music_volume = v.parse::<f32>().unwrap_or(cfg.music_volume).clamp(0.0, 1.0)
+                }
+                "fx_volume" => {
+                    cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0)
+                }
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
                 "menu_vsync" => cfg.menu_vsync = v != "false",
                 "half_resolution" => cfg.half_resolution = v == "true",
@@ -717,15 +921,26 @@ impl Config {
                 "fps_cap" => cfg.fps_cap = v.parse().unwrap_or(cfg.fps_cap),
                 "playfield_area" => cfg.playfield_area = Area::parse(v).unwrap_or(Area::FULL),
                 "bg_dim" => cfg.bg_dim = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
-                "rate" => cfg.rate = v.parse::<f64>().unwrap_or(1.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
+                "rate" => {
+                    cfg.rate = v
+                        .parse::<f64>()
+                        .unwrap_or(1.0)
+                        .clamp(RATE_RANGE.0, RATE_RANGE.1)
+                }
                 "rate_keep_pitch" => cfg.rate_keep_pitch = v != "false",
-                "calibration_bpm" => cfg.calibration_bpm = v.parse::<f64>().unwrap_or(120.0).clamp(60.0, 240.0),
-                "audio_buffer" => cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096),
+                "calibration_bpm" => {
+                    cfg.calibration_bpm = v.parse::<f64>().unwrap_or(120.0).clamp(60.0, 240.0)
+                }
+                "audio_buffer" => {
+                    cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096)
+                }
                 "show_fps" => cfg.show_fps = v == "true",
                 "fullscreen" => cfg.fullscreen = v != "false",
                 "window_size" => cfg.window_size = crate::layout::parse_size(v),
                 "letterbox" => cfg.letterbox = v == "true",
-                "letterbox_size" => cfg.letterbox_size = crate::layout::parse_size(v).unwrap_or(cfg.letterbox_size),
+                "letterbox_size" => {
+                    cfg.letterbox_size = crate::layout::parse_size(v).unwrap_or(cfg.letterbox_size)
+                }
                 "letterbox_x" => cfg.letterbox_pos.0 = v.parse().unwrap_or(0.0),
                 "letterbox_y" => cfg.letterbox_pos.1 = v.parse().unwrap_or(0.0),
                 "data_folder" => cfg.data_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
@@ -733,15 +948,26 @@ impl Config {
                 "splash" => cfg.splash = v != "false",
                 "main_menu" => cfg.main_menu = v != "false",
                 "menu_notes" => cfg.menu_notes = v != "false",
-                "menu_notes_dim" => cfg.menu_notes_dim = v.parse::<f32>().unwrap_or(0.0).clamp(0.0, 1.0),
+                "menu_notes_dim" => {
+                    cfg.menu_notes_dim = v.parse::<f32>().unwrap_or(0.0).clamp(0.0, 1.0)
+                }
                 "guide_seen" => cfg.guide_seen = v == "true",
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
-                "autoplay_style" => cfg.autoplay.style = crate::autoplay::Style::parse(v).unwrap_or(cfg.autoplay.style),
-                "autoplay_binding" => cfg.autoplay.binding = crate::autoplay::BINDINGS.iter().position(|b| *b == v).unwrap_or(cfg.autoplay.binding),
+                "autoplay_style" => {
+                    cfg.autoplay.style =
+                        crate::autoplay::Style::parse(v).unwrap_or(cfg.autoplay.style)
+                }
+                "autoplay_binding" => {
+                    cfg.autoplay.binding = crate::autoplay::BINDINGS
+                        .iter()
+                        .position(|b| *b == v)
+                        .unwrap_or(cfg.autoplay.binding)
+                }
                 "autoplay_left_handed" => cfg.autoplay.left_handed = v == "true",
                 "hide_great" => cfg.hide_great = v != "false",
+                "black_lane" => cfg.black_lane = v == "true",
                 "hit_flash" => cfg.hit_flash = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
                 "discord_presence" => cfg.discord_presence = v != "false",
@@ -755,7 +981,9 @@ impl Config {
                 "notify_mentions" => cfg.notify_mentions = v != "false",
                 "notify_requests" => cfg.notify_requests = v != "false",
                 "discord_app_id" => cfg.discord_app_id = v.to_string(),
-                "resume_delay_ms" => cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0),
+                "resume_delay_ms" => {
+                    cfg.resume_delay_ms = v.parse::<f64>().unwrap_or(1000.0).clamp(0.0, 3000.0)
+                }
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "show_map_info" => cfg.show_map_info = v != "false",
                 "mp_scoreboard" => cfg.mp_scoreboard = v != "false",
@@ -768,19 +996,25 @@ impl Config {
                 "online_token" => cfg.online_token = v.to_string(),
                 "offset_hint_ur_scaled" => cfg.offset_hint_ur_scaled = v == "true",
                 "keys" => {
-                    let keys: Vec<KeyCode> = v.split(',').filter_map(|s| parse_key(s.trim())).collect();
+                    let keys: Vec<KeyCode> =
+                        v.split(',').filter_map(|s| parse_key(s.trim())).collect();
                     if let Ok(k) = keys.try_into() {
                         cfg.keys = k;
                     }
                 }
                 "preset_keys" => {
-                    let keys: Vec<KeyCode> = v.split(',').filter_map(|s| parse_key(s.trim())).collect();
+                    let keys: Vec<KeyCode> =
+                        v.split(',').filter_map(|s| parse_key(s.trim())).collect();
                     if let Ok(k) = keys.try_into() {
                         cfg.preset_keys = k;
                     }
                 }
-                "touch_layout" => cfg.touch_layout = TouchLayout::parse(v).unwrap_or(cfg.touch_layout),
-                "screenshot_to" => cfg.screenshot_to = ScreenshotTo::parse(v).unwrap_or(cfg.screenshot_to),
+                "touch_layout" => {
+                    cfg.touch_layout = TouchLayout::parse(v).unwrap_or(cfg.touch_layout)
+                }
+                "screenshot_to" => {
+                    cfg.screenshot_to = ScreenshotTo::parse(v).unwrap_or(cfg.screenshot_to)
+                }
                 "language" => cfg.language = crate::lang::Lang::parse(v).unwrap_or(cfg.language),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
@@ -801,21 +1035,34 @@ impl Config {
                 "last_build" => cfg.last_build = v.to_string(),
                 "song_list_share" => {
                     let (min, max, _) = crate::ui::LIST_SHARE;
-                    cfg.song_list_share = v.parse::<f32>().ok().filter(|f| f.is_finite()).map_or(cfg.song_list_share, |f| f.clamp(min, max));
+                    cfg.song_list_share = v
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|f| f.is_finite())
+                        .map_or(cfg.song_list_share, |f| f.clamp(min, max));
                 }
                 "song_preview_size" => {
                     let (min, max) = crate::preview::PREVIEW_SIZE;
-                    cfg.song_preview_size = v.parse::<f32>().ok().filter(|f| f.is_finite()).map_or(cfg.song_preview_size, |f| f.clamp(min, max));
+                    cfg.song_preview_size = v
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|f| f.is_finite())
+                        .map_or(cfg.song_preview_size, |f| f.clamp(min, max));
                 }
                 k if k.starts_with("hotkey.") => cfg.hotkeys.parse_line(&k["hotkey.".len()..], v),
-                "saved_presets" => cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect(),
+                "saved_presets" => {
+                    cfg.saved_presets = v.split(',').filter_map(crate::layout::parse_size).collect()
+                }
                 "preset_spots" => cfg.preset_spots = v.split(',').filter_map(parse_spot).collect(),
                 "skin" => cfg.skin = v.to_string(),
                 "skin_part" => cfg.skin_parts.parse(v),
                 "songs_folder" => cfg.songs_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
                 "multiverse" => cfg.universes = crate::multiverse::parse(v),
-                "multiverse_preset" => cfg.universe_presets.extend(crate::multiverse::Preset::parse(v)),
+                "multiverse_preset" => cfg
+                    .universe_presets
+                    .extend(crate::multiverse::Preset::parse(v)),
                 "note_colours" => cfg.note_colours = crate::multiverse::Colours::parse(v),
+                "random_seed" => cfg.random_seed = v.parse().unwrap_or(cfg.random_seed),
                 "shapeshift" => cfg.shapeshift = crate::shapeshift::Config::parse(v),
                 "favourite_mods" => cfg.favourite_mods = crate::mods::Mods::parse_set(v),
                 k if k.starts_with("video_") => {
@@ -828,7 +1075,9 @@ impl Config {
         // Scroll speed 1.0 used to be ~0.76x of osu!'s (at 16:9). Left at 1.0 it now simply
         // becomes osu!'s; a speed someone picked on purpose keeps looking (about) the same.
         if !osu_scroll_speed && (cfg.scroll_speed - 1.0).abs() > 1e-3 {
-            cfg.scroll_speed = ((cfg.scroll_speed * OLD_SCROLL_SPEED / SCROLL_STEP).round() * SCROLL_STEP).clamp(0.3, 4.0);
+            cfg.scroll_speed = ((cfg.scroll_speed * OLD_SCROLL_SPEED / SCROLL_STEP).round()
+                * SCROLL_STEP)
+                .clamp(0.3, 4.0);
         }
         cfg
     }
@@ -899,6 +1148,8 @@ impl Config {
              kiai_effects = {}\n\
              # GREAT hits without their flash and label (only OKs and misses show)\n\
              hide_great = {}\n\
+             # the lane and the drum's panel pure black\n\
+             black_lane = {}\n\
              # the coloured flash on the hit target as notes are hit\n\
              hit_flash = {}\n\
              show_offset_hint = {}\n\
@@ -908,13 +1159,25 @@ impl Config {
              # mods picked on song select (F1), e.g. HD,HR\n\
              mods = {}\n",
             keys.join(", "),
-            self.preset_keys.iter().map(|k| key_name(*k)).collect::<Vec<_>>().join(", "),
+            self.preset_keys
+                .iter()
+                .map(|k| key_name(*k))
+                .collect::<Vec<_>>()
+                .join(", "),
             self.touch_layout.name(),
             self.screenshot_to.key(),
             self.language.code(),
             self.show_playfield_size,
-            self.saved_presets.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(", "),
-            self.preset_spots.iter().map(|((w, h), (x, y))| format!("{w}x{h}@{x:.4}/{y:.4}")).collect::<Vec<_>>().join(", "),
+            self.saved_presets
+                .iter()
+                .map(|(w, h)| format!("{w}x{h}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.preset_spots
+                .iter()
+                .map(|((w, h), (x, y))| format!("{w}x{h}@{x:.4}/{y:.4}"))
+                .collect::<Vec<_>>()
+                .join(", "),
             self.offset_ms,
             self.visual_offset_ms,
             self.scroll_speed,
@@ -945,20 +1208,27 @@ impl Config {
             self.sort,
             self.kiai_effects,
             self.hide_great,
+            self.black_lane,
             self.hit_flash,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
             self.show_map_info,
             self.mods.to_config(),
         );
-        out.push_str(&format!("# the live scoreboard in lobby matches (Tab toggles)\nmp_scoreboard = {}\n", self.mp_scoreboard));
+        out.push_str(&format!(
+            "# the live scoreboard in lobby matches (Tab toggles)\nmp_scoreboard = {}\n",
+            self.mp_scoreboard
+        ));
         out.push_str(&format!(
             "# how autoplay hits: full, semi, single, roll or ddkk; binding 1234, 1324 or 4231; left-handed\nautoplay_style = {}\nautoplay_binding = {}\nautoplay_left_handed = {}\n",
             self.autoplay.style.key(),
             crate::autoplay::BINDINGS[self.autoplay.binding],
             self.autoplay.left_handed
         ));
-        out.push_str(&format!("# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n", self.skin));
+        out.push_str(&format!(
+            "# osu! skin (folder name in a Skins folder), empty = built-in\nskin = {}\n",
+            self.skin
+        ));
         out.push_str("# parts of the skin from elsewhere: skin_part = <part> = <skin folder name> (or <built-in>)\n");
         for line in self.skin_parts.to_config() {
             out.push_str(&format!("skin_part = {line}\n"));
@@ -981,7 +1251,10 @@ impl Config {
             "# pop-ups: a friend starts a map / comes online / messages you, a global chat line mentions you, friend requests\nnotify_playing = {}\nnotify_online = {}\nnotify_messages = {}\nnotify_mentions = {}\nnotify_requests = {}\n",
             self.notify_playing, self.notify_online, self.notify_messages, self.notify_mentions, self.notify_requests
         ));
-        out.push_str(&format!("# multiplayer\nmp_name = {}\nmp_port = {}\nmp_address = {}\n", self.mp_name, self.mp_port, self.mp_address));
+        out.push_str(&format!(
+            "# multiplayer\nmp_name = {}\nmp_port = {}\nmp_address = {}\n",
+            self.mp_name, self.mp_port, self.mp_address
+        ));
         out.push_str(&format!(
             "# online server (accounts, lobbies) and your saved login there\nonline_server = {}\nonline_user = {}\nonline_token = {}\n",
             self.online_server, self.online_user, self.online_token
@@ -995,14 +1268,29 @@ impl Config {
             "# in fullscreen, the game at this size with black around it, moved from the centre (percent)\nletterbox = {}\nletterbox_size = {lw}x{lh}\nletterbox_x = {}\nletterbox_y = {}\n",
             self.letterbox, self.letterbox_pos.0, self.letterbox_pos.1
         ));
-        let window = self.window_size.map(|(w, h)| format!("{w}x{h}")).unwrap_or_default();
-        out.push_str(&format!("# the window's size out of fullscreen (empty = 1280x720)\nwindow_size = {window}\n"));
-        let data = self.data_folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+        let window = self
+            .window_size
+            .map(|(w, h)| format!("{w}x{h}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "# the window's size out of fullscreen (empty = 1280x720)\nwindow_size = {window}\n"
+        ));
+        let data = self
+            .data_folder
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
         out.push_str(&format!(
             "# where replays, scores, videos, taiko.rs's Songs and Skins and caches are (empty = the usual places); move it from Settings\ndata_folder = {data}\n"
         ));
-        out.push_str(&format!("# the mouse wheel resizes the playfield during play\nwheel_resizes_playfield = {}\n", self.wheel_resizes_playfield));
-        out.push_str(&format!("# song select lists converts too\nshow_converts = {}\n", self.show_converts));
+        out.push_str(&format!(
+            "# the mouse wheel resizes the playfield during play\nwheel_resizes_playfield = {}\n",
+            self.wheel_resizes_playfield
+        ));
+        out.push_str(&format!(
+            "# song select lists converts too\nshow_converts = {}\n",
+            self.show_converts
+        ));
         out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
         out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));
         out.push_str(&format!(
@@ -1012,11 +1300,14 @@ impl Config {
             interface_key_name(self.interface_key)
         ));
         out.push_str(&format!(
-            "# song select: the song list's share of the width, and the autoplay preview's size (drag the edges between them)\nsong_list_share = {:.3}\nsong_preview_size = {:.3}\n",
+            "# song select: the song list's share of the width (drag the edge beside it); the preview's size is no longer used\nsong_list_share = {:.3}\nsong_preview_size = {:.3}\n",
             self.song_list_share, self.song_preview_size
         ));
         out.push_str(&self.hotkeys.config_lines());
-        out.push_str(&format!("# the build last started (what's new shows after an update)\nlast_build = {}\n", self.last_build));
+        out.push_str(&format!(
+            "# the build last started (what's new shows after an update)\nlast_build = {}\n",
+            self.last_build
+        ));
         out.push_str(&self.video.config_lines());
         out.push_str(&format!(
             "# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (C in the mod select)\nmultiverse = {}\n",
@@ -1026,6 +1317,10 @@ impl Config {
         for p in &self.universe_presets {
             out.push_str(&format!("multiverse_preset = {}\n", p.format()));
         }
+        out.push_str(&format!(
+            "# Random: repeatable note colours (C in the mod select)\nrandom_seed = {}\n",
+            self.random_seed
+        ));
         out.push_str(&format!(
             "# Shapeshift: bars per shape (4/8/16/32), bars to morph (0.5/1/2/4), order shuffle/fixed, shapes in order (- = left out)\nshapeshift = {}\n",
             self.shapeshift.format()
@@ -1038,7 +1333,11 @@ impl Config {
             "# note colours without Multiverse: a palette (classic, neon, sunset...) or custom #don/#kat\nnote_colours = {}\n",
             self.note_colours.format()
         ));
-        let folder = self.songs_folder.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+        let folder = self
+            .songs_folder
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
         out.push_str(&format!("# Songs folder to scan instead of finding osu!'s (empty = find it)\nsongs_folder = {folder}\n"));
         out.push_str("# extra song folders / .osz files, one per line\n");
         for s in &self.songs {
@@ -1049,7 +1348,9 @@ impl Config {
 
     pub fn save(&self) {
         let Some(path) = config_path() else { return };
-        let _ = SAVES.get_or_init(save_worker).send(Save::Write(path, self.to_text()));
+        let _ = SAVES
+            .get_or_init(save_worker)
+            .send(Save::Write(path, self.to_text()));
     }
 }
 
@@ -1062,29 +1363,39 @@ static SAVES: OnceLock<mpsc::Sender<Save>> = OnceLock::new();
 
 fn write_pending(pending: &mut std::collections::HashMap<PathBuf, String>) {
     for (path, mut text) in pending.drain() {
-        if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
-        keep_unknown(&mut text, &std::fs::read_to_string(&path).unwrap_or_default());
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        keep_unknown(
+            &mut text,
+            &std::fs::read_to_string(&path).unwrap_or_default(),
+        );
         let _ = std::fs::write(path, text);
     }
 }
 
 fn save_worker() -> mpsc::Sender<Save> {
     let (tx, rx) = mpsc::channel();
-    std::thread::Builder::new().name("settings writer".into()).spawn(move || {
-        let mut pending = std::collections::HashMap::new();
-        while let Ok(first) = rx.recv() {
-            for job in std::iter::once(first).chain(rx.try_iter()) {
-                match job {
-                    Save::Write(path, text) => { pending.insert(path, text); }
-                    Save::Flush(done) => {
-                        write_pending(&mut pending);
-                        let _ = done.send(());
+    std::thread::Builder::new()
+        .name("settings writer".into())
+        .spawn(move || {
+            let mut pending = std::collections::HashMap::new();
+            while let Ok(first) = rx.recv() {
+                for job in std::iter::once(first).chain(rx.try_iter()) {
+                    match job {
+                        Save::Write(path, text) => {
+                            pending.insert(path, text);
+                        }
+                        Save::Flush(done) => {
+                            write_pending(&mut pending);
+                            let _ = done.send(());
+                        }
                     }
                 }
+                write_pending(&mut pending);
             }
-            write_pending(&mut pending);
-        }
-    }).expect("settings writer");
+        })
+        .expect("settings writer");
     tx
 }
 
@@ -1092,14 +1403,18 @@ fn save_worker() -> mpsc::Sender<Save> {
 pub fn flush_saves() {
     if let Some(tx) = SAVES.get() {
         let (done, wait) = mpsc::channel();
-        if tx.send(Save::Flush(done)).is_ok() { let _ = wait.recv(); }
+        if tx.send(Save::Flush(done)).is_ok() {
+            let _ = wait.recv();
+        }
     }
 }
 
 /// The setting on a config line, if it has one.
 fn setting(line: &str) -> Option<&str> {
     let line = line.trim();
-    (!line.starts_with('#')).then(|| line.split_once('=').map(|(k, _)| k.trim())).flatten()
+    (!line.starts_with('#'))
+        .then(|| line.split_once('=').map(|(k, _)| k.trim()))
+        .flatten()
 }
 
 /// Adds to `out` (the config about to be written) what's in `old` (the file as it is) that this
@@ -1108,8 +1423,16 @@ fn setting(line: &str) -> Option<&str> {
 fn keep_unknown(out: &mut String, old: &str) {
     let known: std::collections::HashSet<&str> = out.lines().filter_map(setting).collect();
     // These have a line each only when there's something to say; none left means none left.
-    let ours = |k: &str| known.contains(k) || matches!(k, "songs" | "multiverse_preset" | "skin_part") || k.strip_prefix("hotkey.").is_some_and(crate::keys::Hotkey::known);
-    let kept: Vec<&str> = old.lines().filter(|l| setting(l).is_some_and(|k| !ours(k))).collect();
+    let ours = |k: &str| {
+        known.contains(k)
+            || matches!(k, "songs" | "multiverse_preset" | "skin_part")
+            || k.strip_prefix("hotkey.")
+                .is_some_and(crate::keys::Hotkey::known)
+    };
+    let kept: Vec<&str> = old
+        .lines()
+        .filter(|l| setting(l).is_some_and(|k| !ours(k)))
+        .collect();
     if !kept.is_empty() {
         out.push_str("# from another version of the game, kept for it\n");
         out.push_str(&(kept.join("\n") + "\n"));
@@ -1128,11 +1451,13 @@ mod tests {
         std::fs::write(&path, "volume = 0\nfuture_option = keep\n").unwrap();
         let tx = save_worker();
         for i in 0..100 {
-            tx.send(Save::Write(path.clone(), format!("volume = {i}\n"))).unwrap();
+            tx.send(Save::Write(path.clone(), format!("volume = {i}\n")))
+                .unwrap();
         }
         let (done, wait) = mpsc::channel();
         tx.send(Save::Flush(done)).unwrap();
-        wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        wait.recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.starts_with("volume = 99\n"));
         assert_eq!(text.matches("future_option = keep").count(), 1);
@@ -1142,31 +1467,57 @@ mod tests {
 
     #[test]
     fn saving_keeps_the_settings_of_a_newer_build() {
-        let old = "# a comment\nkeys = D, F, J, K\nfuture_setting = 3\nhotkey.future_hotkey = none\n";
+        let old =
+            "# a comment\nkeys = D, F, J, K\nfuture_setting = 3\nhotkey.future_hotkey = none\n";
         let mut out = "keys = A, S, K, L\n".to_string();
         keep_unknown(&mut out, old);
-        assert_eq!(out, "keys = A, S, K, L\n# from another version of the game, kept for it\nfuture_setting = 3\nhotkey.future_hotkey = none\n");
+        assert_eq!(
+            out,
+            "keys = A, S, K, L\n# from another version of the game, kept for it\nfuture_setting = 3\nhotkey.future_hotkey = none\n"
+        );
         // Written again, they stay once, and a build that knows them takes over.
         let mut again = "keys = A, S, K, L\n".to_string();
         keep_unknown(&mut again, &out);
         assert_eq!(again, out);
-        let mut newer = "keys = A, S, K, L\nfuture_setting = 4\nhotkey.future_hotkey = none\n".to_string();
+        let mut newer =
+            "keys = A, S, K, L\nfuture_setting = 4\nhotkey.future_hotkey = none\n".to_string();
         keep_unknown(&mut newer, &out);
-        assert_eq!(newer, "keys = A, S, K, L\nfuture_setting = 4\nhotkey.future_hotkey = none\n");
+        assert_eq!(
+            newer,
+            "keys = A, S, K, L\nfuture_setting = 4\nhotkey.future_hotkey = none\n"
+        );
     }
 
     #[test]
     fn saving_doesnt_bring_back_what_was_taken_out() {
         // A hotkey back on its default, the last extra song folder removed: no line for them now.
         let mut out = "keys = A, S, K, L\n".to_string();
-        keep_unknown(&mut out, "hotkey.apply_offset = none\nsongs = /a\nmultiverse_preset = x: y\nskin_part = a = b\n");
+        keep_unknown(
+            &mut out,
+            "hotkey.apply_offset = none\nsongs = /a\nmultiverse_preset = x: y\nskin_part = a = b\n",
+        );
         assert_eq!(out, "keys = A, S, K, L\n");
+    }
+
+    #[test]
+    fn random_seeds_round_trip_including_legacy_and_maximum() {
+        for seed in [0, 42, u64::MAX] {
+            let cfg = Config::parse_text(&format!("random_seed = {seed}\n"));
+            assert_eq!(cfg.random_seed, seed);
+            assert_eq!(Config::parse_text(&cfg.to_text()).random_seed, seed);
+        }
+        let cfg = Config::parse_text("random_seed = 42\nrandom_seed = invalid\n");
+        assert_eq!(cfg.random_seed, 42);
     }
 
     #[test]
     fn only_a_first_launch_gets_the_new_offset() {
         assert_eq!(Config::default().offset_ms, NEW_PLAYER_OFFSET_MS);
-        assert_eq!(Config::parse_text("").offset_ms, 0.0, "a config with no offset line stays where it was");
+        assert_eq!(
+            Config::parse_text("").offset_ms,
+            0.0,
+            "a config with no offset line stays where it was"
+        );
         assert_eq!(Config::parse_text("offset_ms = 0\n").offset_ms, 0.0);
         assert_eq!(Config::parse_text("offset_ms = -12\n").offset_ms, -12.0);
     }
@@ -1191,21 +1542,34 @@ mod tests {
             sorted.sort();
             assert_eq!(sorted, [0, 1, 2, 3], "{}", layout.name());
             // Columns read like the name (K = rims 0/3, D = centres 1/2).
-            let read: String = keys.iter().map(|&k| if k == 0 || k == 3 { 'K' } else { 'D' }).collect();
+            let read: String = keys
+                .iter()
+                .map(|&k| if k == 0 || k == 3 { 'K' } else { 'D' })
+                .collect();
             assert_eq!(read, layout.name());
             // Both columns of a colour are different hands, so together they make a big hit.
             for kat in [true, false] {
-                let hands: Vec<bool> = keys.iter().filter(|&&k| (k == 0 || k == 3) == kat).map(|&k| k < 2).collect();
+                let hands: Vec<bool> = keys
+                    .iter()
+                    .filter(|&&k| (k == 0 || k == 3) == kat)
+                    .map(|&k| k < 2)
+                    .collect();
                 assert_ne!(hands[0], hands[1], "{}", layout.name());
             }
-            assert_eq!(TouchLayout::parse(&layout.name().to_lowercase()), Some(layout));
+            assert_eq!(
+                TouchLayout::parse(&layout.name().to_lowercase()),
+                Some(layout)
+            );
         }
         assert_eq!(TouchLayout::Kddk.step(-1), TouchLayout::Ddkk);
     }
 
     #[test]
     fn preset_spots_read_back() {
-        assert_eq!(parse_spot(" 1280x720@0.1000/0.2500"), Some(((1280, 720), (0.1, 0.25))));
+        assert_eq!(
+            parse_spot(" 1280x720@0.1000/0.2500"),
+            Some(((1280, 720), (0.1, 0.25)))
+        );
         assert_eq!(parse_spot("1280x720@1.5/0"), None);
         assert_eq!(parse_spot("1280x720"), None);
     }
@@ -1240,11 +1604,24 @@ mod tests {
         file(from.join("cache/osz/x/y.osu"), "cache");
         let (done, total) = (AtomicU64::new(0), AtomicU64::new(0));
         move_data(Some(&from), Some(&to), &done, &total).unwrap();
-        for (path, text) in [("replays/1.json", "replay"), ("plays.tsv", "plays"), ("Songs/1 map/map.osu", "osu"), ("Skins/mine/skin.ini", "skin"), ("cache/osz/x/y.osu", "cache")] {
-            assert_eq!(std::fs::read_to_string(to.join(path)).unwrap(), text, "{path}");
+        for (path, text) in [
+            ("replays/1.json", "replay"),
+            ("plays.tsv", "plays"),
+            ("Songs/1 map/map.osu", "osu"),
+            ("Skins/mine/skin.ini", "skin"),
+            ("cache/osz/x/y.osu", "cache"),
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(to.join(path)).unwrap(),
+                text,
+                "{path}"
+            );
             assert!(!from.join(path).exists(), "{path} still in the old folder");
         }
-        assert_eq!(done.load(std::sync::atomic::Ordering::Relaxed), total.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(
+            done.load(std::sync::atomic::Ordering::Relaxed),
+            total.load(std::sync::atomic::Ordering::Relaxed)
+        );
         // Back, onto a folder that has replays of its own: refused, nothing touched.
         file(from.join("replays/other.json"), "other");
         assert!(move_data(Some(&to), Some(&from), &done, &total).is_err());
@@ -1262,7 +1639,10 @@ mod tests {
         std::fs::write(root.join("a/d.txt"), "hi").unwrap();
         let done = AtomicU64::new(0);
         copy_all(&root.join("a"), &root.join("z"), &done).unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("z/b/c.txt")).unwrap(), "hello");
+        assert_eq!(
+            std::fs::read_to_string(root.join("z/b/c.txt")).unwrap(),
+            "hello"
+        );
         assert_eq!(done.load(std::sync::atomic::Ordering::Relaxed), 7);
         assert_eq!(size_of(&root.join("z")), 7);
         remove_all(&root.join("a")).unwrap();

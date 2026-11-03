@@ -20,7 +20,8 @@ static LOG: Mutex<Option<(std::fs::File, Instant)>> = Mutex::new(None);
 pub static STALL: AtomicU32 = AtomicU32::new(0);
 
 pub fn enabled() -> bool {
-    std::env::var_os("TAIKO_AUDIO_LOG").is_some() || (cfg!(windows) && crate::update::BUILD_CHANNEL == crate::update::Channel::Dev)
+    std::env::var_os("TAIKO_AUDIO_LOG").is_some()
+        || (cfg!(windows) && crate::update::BUILD_CHANNEL == crate::update::Channel::Dev)
 }
 
 /// Opens the log if this build keeps one. True if it's open.
@@ -28,19 +29,37 @@ pub fn start() -> bool {
     if !enabled() {
         return false;
     }
-    let Ok(mut log) = LOG.lock() else { return false };
+    let Ok(mut log) = LOG.lock() else {
+        return false;
+    };
     if log.is_some() {
         return true;
     }
-    let Some(dir) = crate::config::data_dir() else { return false };
+    let Some(dir) = crate::config::data_dir() else {
+        return false;
+    };
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("audio-log.txt");
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_BYTES) {
         let _ = std::fs::rename(&path, dir.join("audio-log.old.txt"));
     }
-    let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) else { return false };
-    let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let _ = writeln!(file, "=== taiko.rs {} build {} channel {} started {unix}", env!("CARGO_PKG_VERSION"), crate::update::BUILD.unwrap_or("local"), crate::update::BUILD_CHANNEL.name());
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return false;
+    };
+    let unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let _ = writeln!(
+        file,
+        "=== taiko.rs {} build {} channel {} started {unix}",
+        env!("CARGO_PKG_VERSION"),
+        crate::update::BUILD.unwrap_or("local"),
+        crate::update::BUILD_CHANNEL.name()
+    );
     *log = Some((file, Instant::now()));
     true
 }
@@ -74,7 +93,10 @@ fn clock_fields(c: &cpal::taiko_clock::ClockLog, rate: u32) -> String {
 
 /// Every 2 s, logs what `report` says with cpal's clock, until `report` says None.
 pub fn every(rate: u32, mut report: impl FnMut() -> Option<String> + Send + 'static) {
-    let stall_every = std::env::var("TAIKO_AUDIO_STALL").ok().and_then(|s| s.parse::<u64>().ok()).filter(|&s| s > 0);
+    let stall_every = std::env::var("TAIKO_AUDIO_STALL")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&s| s > 0);
     std::thread::spawn(move || {
         let mut ticks = 0;
         let mut told = false;
@@ -84,13 +106,21 @@ pub fn every(rate: u32, mut report: impl FnMut() -> Option<String> + Send + 'sta
             if let Some(c) = cpal::taiko_clock::take() {
                 if !told {
                     told = true;
-                    line(&format!("stream max_frames={} period_frames={} clock_hz={} stream_latency_ms={:.3}", c.max_frames, c.period_frames, c.clock_frequency, c.stream_latency_us as f64 / 1000.0));
+                    line(&format!(
+                        "stream max_frames={} period_frames={} clock_hz={} stream_latency_ms={:.3}",
+                        c.max_frames,
+                        c.period_frames,
+                        c.clock_frequency,
+                        c.stream_latency_us as f64 / 1000.0
+                    ));
                 }
                 text.push_str(&clock_fields(&c, rate));
             }
             line(&text);
             ticks += 1;
-            if stall_every.is_some_and(|s| ticks * EVERY_SECS >= s && (ticks * EVERY_SECS) % s < EVERY_SECS) {
+            if stall_every
+                .is_some_and(|s| ticks * EVERY_SECS >= s && (ticks * EVERY_SECS) % s < EVERY_SECS)
+            {
                 STALL.store(STALL_MS, Ordering::Relaxed);
                 line(&format!("stall {STALL_MS}"));
             }

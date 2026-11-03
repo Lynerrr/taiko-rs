@@ -22,7 +22,10 @@ pub struct Cache {
 }
 
 pub fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn file() -> Option<PathBuf> {
@@ -35,7 +38,10 @@ impl Cache {
         if cfg!(test) {
             return Cache::default();
         }
-        file().and_then(|f| std::fs::read_to_string(f).ok()).map(|t| Cache::parse(&t)).unwrap_or_default()
+        file()
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .map(|t| Cache::parse(&t))
+            .unwrap_or_default()
     }
 
     fn parse(text: &str) -> Cache {
@@ -61,12 +67,18 @@ impl Cache {
         let Some(path) = file() else { return };
         let mut rows: Vec<_> = self.sets.iter().collect();
         rows.sort();
-        let text: String = rows.iter().map(|(set, (status, at))| format!("{set}\t{status}\t{at}\n")).collect();
+        let text: String = rows
+            .iter()
+            .map(|(set, (status, at))| format!("{set}\t{status}\t{at}\n"))
+            .collect();
         let tmp = path.with_extension("tsv.tmp");
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        if std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path)).is_err() {
+        if std::fs::write(&tmp, text)
+            .and_then(|_| std::fs::rename(&tmp, &path))
+            .is_err()
+        {
             let _ = std::fs::remove_file(&tmp);
         }
     }
@@ -78,11 +90,16 @@ impl Cache {
 
     /// The status the mirrors gave (not `MISSING`).
     pub fn status(&self, set: u32) -> Option<&str> {
-        self.sets.get(&set).map(|(s, _)| s.as_str()).filter(|s| *s != MISSING)
+        self.sets
+            .get(&set)
+            .map(|(s, _)| s.as_str())
+            .filter(|s| *s != MISSING)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (u32, &str)> {
-        self.sets.iter().map(|(&set, (status, _))| (set, status.as_str()))
+        self.sets
+            .iter()
+            .map(|(&set, (status, _))| (set, status.as_str()))
     }
 
     /// Whether `set` should be asked about (again) at `now`.
@@ -113,15 +130,22 @@ mod tests {
         c.put(2, "pending", 1000);
         c.put(3, MISSING, 1000);
         assert!(!c.due(1, 1000 + 86_400) && !c.due(2, 1000 + 3600) && !c.due(3, 1000 + 86_400));
-        assert!(c.due(2, 1000 + 3 * 86_400), "pending is asked again in days");
+        assert!(
+            c.due(2, 1000 + 3 * 86_400),
+            "pending is asked again in days"
+        );
         assert!(c.due(3, 1000 + 15 * 86_400));
         assert!(!c.due(1, 1000 + 59 * 86_400) && c.due(1, 1000 + 61 * 86_400));
-        assert_eq!((c.status(1), c.status(3), c.status(4)), (Some("ranked"), None, None));
+        assert_eq!(
+            (c.status(1), c.status(3), c.status(4)),
+            (Some("ranked"), None, None)
+        );
     }
 
     #[test]
     fn the_file_round_trips_and_skips_bad_lines() {
-        let c = Cache::parse("5\tloved\t10\nnot a line\n6\t\t10\n7\tgraveyard\tx\n8\tpending\t20\n");
+        let c =
+            Cache::parse("5\tloved\t10\nnot a line\n6\t\t10\n7\tgraveyard\tx\n8\tpending\t20\n");
         let mut got: Vec<_> = c.iter().collect();
         got.sort();
         assert_eq!(got, vec![(5, "loved"), (8, "pending")]);

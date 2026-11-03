@@ -5,7 +5,7 @@ use std::sync::RwLock;
 
 use winit::keyboard::KeyCode;
 
-use crate::render::{accent, rgba, Canvas, Hit};
+use crate::render::{Canvas, Hit, accent, rgba};
 
 /// Shape `i`'s name, by the index `game::SHAPESHIFT` uses.
 pub fn shape_name(i: usize) -> &'static str {
@@ -15,10 +15,13 @@ pub fn shape_name(i: usize) -> &'static str {
         2 => tr!("Spiral", "らせん", "Спираль"),
         3 => tr!("Loop", "ループ", "Петля"),
         4 => tr!("Elbow", "L字", "Колено"),
+        6 => tr!("Meadow", "草原", "Луг"),
         _ => tr!("Straight", "まっすぐ", "Прямая"),
     }
 }
-const KEYS: [&str; 6] = ["zigzag", "uturn", "spiral", "loop", "elbow", "straight"];
+const KEYS: [&str; 7] = [
+    "zigzag", "uturn", "spiral", "loop", "elbow", "straight", "meadow",
+];
 /// Bars each shape lasts.
 pub const EVERY: [usize; 4] = [4, 8, 16, 32];
 /// Bars the morph into the next shape takes (at most half the shape's bars).
@@ -41,12 +44,25 @@ pub struct Config {
     /// Each map its own order of the shapes, else the order of `shapes`.
     pub shuffle: bool,
     /// The shapes (index into `SHAPES`) in the order they come, each on or off.
-    pub shapes: [(u8, bool); 6],
+    pub shapes: [(u8, bool); 7],
 }
 
 impl Default for Config {
     fn default() -> Config {
-        Config { every: 2, morph: 2, shuffle: true, shapes: [(0, true), (1, true), (2, true), (3, true), (4, true), (5, true)] }
+        Config {
+            every: 2,
+            morph: 2,
+            shuffle: true,
+            shapes: [
+                (0, true),
+                (1, true),
+                (2, true),
+                (3, true),
+                (4, true),
+                (5, true),
+                (6, true),
+            ],
+        }
     }
 }
 
@@ -64,7 +80,11 @@ impl Config {
     /// The shapes switched on, in order (all of them if none are).
     fn used(&self) -> Vec<u8> {
         let on: Vec<u8> = self.shapes.iter().filter(|s| s.1).map(|s| s.0).collect();
-        if on.is_empty() { self.shapes.iter().map(|s| s.0).collect() } else { on }
+        if on.is_empty() {
+            self.shapes.iter().map(|s| s.0).collect()
+        } else {
+            on
+        }
     }
 
     /// The shape of each of `sections` (index into `SHAPES`). `seed` (from the map) picks the
@@ -96,8 +116,23 @@ impl Config {
     /// `every=16 morph=2 order=shuffle shapes=zigzag,uturn,-spiral,...` (- is off).
     pub fn format(&self) -> String {
         let morph = MORPH[self.morph.min(MORPH.len() - 1)];
-        let shapes: Vec<String> = self.shapes.iter().map(|&(s, on)| format!("{}{}", if on { "" } else { "-" }, KEYS[s as usize % KEYS.len()])).collect();
-        format!("every={} morph={morph} order={} shapes={}", self.bars(), if self.shuffle { "shuffle" } else { "fixed" }, shapes.join(","))
+        let shapes: Vec<String> = self
+            .shapes
+            .iter()
+            .map(|&(s, on)| {
+                format!(
+                    "{}{}",
+                    if on { "" } else { "-" },
+                    KEYS[s as usize % KEYS.len()]
+                )
+            })
+            .collect();
+        format!(
+            "every={} morph={morph} order={} shapes={}",
+            self.bars(),
+            if self.shuffle { "shuffle" } else { "fixed" },
+            shapes.join(",")
+        )
     }
 
     /// Reads `format`'s line; anything missing or unknown stays as the default.
@@ -105,8 +140,18 @@ impl Config {
         let mut c = Config::default();
         for word in s.split_whitespace() {
             match word.split_once('=') {
-                Some(("every", v)) => c.every = EVERY.iter().position(|&e| v.parse() == Ok(e)).unwrap_or(c.every),
-                Some(("morph", v)) => c.morph = MORPH.iter().position(|&m| v.parse() == Ok(m)).unwrap_or(c.morph),
+                Some(("every", v)) => {
+                    c.every = EVERY
+                        .iter()
+                        .position(|&e| v.parse() == Ok(e))
+                        .unwrap_or(c.every)
+                }
+                Some(("morph", v)) => {
+                    c.morph = MORPH
+                        .iter()
+                        .position(|&m| v.parse() == Ok(m))
+                        .unwrap_or(c.morph)
+                }
                 Some(("order", v)) => c.shuffle = v != "fixed",
                 Some(("shapes", v)) => {
                     let mut shapes: Vec<(u8, bool)> = Vec::new();
@@ -116,14 +161,16 @@ impl Config {
                             None => (true, name),
                         };
                         if let Some(k) = KEYS.iter().position(|&n| n == name)
-                            && !shapes.iter().any(|s| s.0 == k as u8) {
+                            && !shapes.iter().any(|s| s.0 == k as u8)
+                        {
                             shapes.push((k as u8, on));
                         }
                     }
-                    // Any left out go at the end, on.
+                    // Any left out go at the end, off: a setup saved (or a lobby host's sent) before
+                    // a shape was added plays as it did.
                     for k in 0..KEYS.len() as u8 {
                         if !shapes.iter().any(|s| s.0 == k) {
-                            shapes.push((k, true));
+                            shapes.push((k, false));
                         }
                     }
                     c.shapes.copy_from_slice(&shapes);
@@ -143,7 +190,20 @@ fn mix(mut x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
-static CURRENT: RwLock<Config> = RwLock::new(Config { every: 2, morph: 2, shuffle: true, shapes: [(0, true), (1, true), (2, true), (3, true), (4, true), (5, true)] });
+static CURRENT: RwLock<Config> = RwLock::new(Config {
+    every: 2,
+    morph: 2,
+    shuffle: true,
+    shapes: [
+        (0, true),
+        (1, true),
+        (2, true),
+        (3, true),
+        (4, true),
+        (5, true),
+        (6, true),
+    ],
+});
 
 /// The setup Shapeshift plays with (from the config).
 pub fn set(c: Config) {
@@ -228,38 +288,97 @@ impl Setup {
     }
 
     /// Draws the setup over the mod select, like the Multiverse one.
-    pub fn draw_panel(&self, c: &mut Canvas, cfg: &Config, outline: impl Fn(usize) -> Vec<(f32, f32)>) {
+    pub fn draw_panel(
+        &self,
+        c: &mut Canvas,
+        cfg: &Config,
+        outline: impl Fn(usize) -> Vec<(f32, f32)>,
+    ) {
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.6));
         let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
-        c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.99), rgba(0x5ee6c8, 0.9), 1.5);
-        let title_w = c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "SHAPESHIFT");
+        c.round_rect(
+            [px, py],
+            [pw, ph],
+            10.0,
+            rgba(0x15151d, 0.99),
+            rgba(0x5ee6c8, 0.9),
+            1.5,
+        );
+        let title_w = c.text(
+            px + 16.0,
+            py + 12.0,
+            12.0,
+            rgba(0xffffff, 1.0),
+            "SHAPESHIFT",
+        );
         let hint = tr!(
             "arrows choose   Space pick   Shift + Left/Right move a shape   D defaults   Tab next tab   Esc back",
             "矢印 選択   Space 決定   Shift + 左右 形を移動   D 初期設定   Tab 次のタブ   Esc 戻る",
             "стрелки выбор   Space отметить   Shift + влево/вправо двигать   D сброс   Tab вкладка   Esc назад"
         );
-        c.text(px + 26.0 + title_w, py + 16.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit(6.0, pw - title_w - 42.0, hint));
+        c.text(
+            px + 26.0 + title_w,
+            py + 16.0,
+            6.0,
+            rgba(0x6f6f86, 1.0),
+            &Canvas::fit(6.0, pw - title_w - 42.0, hint),
+        );
         self.draw(c, cfg, px, py + 40.0, pw, outline);
         let (by, bw) = (py + ph - 26.0, 56.0);
-        c.button(px + pw - bw - 12.0, by, bw, 16.0, tr!("Back", "戻る", "Назад"), 7.0, Hit::Key(KeyCode::Escape), true);
-        c.button(px + pw - 2.0 * bw - 18.0, by, bw, 16.0, tr!("Defaults", "初期設定", "Сброс"), 7.0, Hit::Key(KeyCode::KeyD), false);
+        c.button(
+            px + pw - bw - 12.0,
+            by,
+            bw,
+            16.0,
+            tr!("Back", "戻る", "Назад"),
+            7.0,
+            Hit::Key(KeyCode::Escape),
+            true,
+        );
+        c.button(
+            px + pw - 2.0 * bw - 18.0,
+            by,
+            bw,
+            16.0,
+            tr!("Defaults", "初期設定", "Сброс"),
+            7.0,
+            Hit::Key(KeyCode::KeyD),
+            false,
+        );
     }
 
     /// Draws the setup's rows in the panel `px, py, pw` wide (below its title).
     /// `outline(shape)` gives a shape's lane, as points to draw a thumbnail with.
-    pub fn draw(&self, c: &mut Canvas, cfg: &Config, px: f32, py: f32, pw: f32, outline: impl Fn(usize) -> Vec<(f32, f32)>) {
+    pub fn draw(
+        &self,
+        c: &mut Canvas,
+        cfg: &Config,
+        px: f32,
+        py: f32,
+        pw: f32,
+        outline: impl Fn(usize) -> Vec<(f32, f32)>,
+    ) {
         let x0 = px + 16.0;
         let label_w = 70.0;
         let mut hovered = None;
         let mut y = py;
         for row in 0..ROWS {
             let h = if row == SHAPES_ROW { 76.0 } else { 24.0 };
-            let name = [tr!("EVERY", "間隔", "КАЖДЫЕ"), tr!("MORPH", "変形", "ПЕРЕХОД"), tr!("ORDER", "順番", "ПОРЯДОК"), tr!("SHAPES", "形", "ФОРМЫ")][row];
+            let name = [
+                tr!("EVERY", "間隔", "КАЖДЫЕ"),
+                tr!("MORPH", "変形", "ПЕРЕХОД"),
+                tr!("ORDER", "順番", "ПОРЯДОК"),
+                tr!("SHAPES", "形", "ФОРМЫ"),
+            ][row];
             c.text(x0, y + h / 2.0 - 4.0, 7.0, rgba(0x8a8aa0, 1.0), name);
             let n = row_len(row);
             let room = px + pw - 16.0 - (x0 + label_w);
-            let cw = ((room - 6.0 * (n as f32 - 1.0)) / n as f32).min(if row == SHAPES_ROW { 110.0 } else { 90.0 });
+            let cw = ((room - 6.0 * (n as f32 - 1.0)) / n as f32).min(if row == SHAPES_ROW {
+                110.0
+            } else {
+                90.0
+            });
             for col in 0..n {
                 let cx = x0 + label_w + col as f32 * (cw + 6.0);
                 let selected = self.row == row && self.col == col;
@@ -272,9 +391,28 @@ impl Setup {
                 if c.hovered(cx, y, cw, h) {
                     hovered = Some((row, col));
                 }
-                let fill = if on { 0x1f4a44 } else if selected { 0x34344a } else { 0x1d1d27 };
-                let border = if selected { accent() } else if on { 0x5ee6c8 } else { 0x2a2a38 };
-                c.round_rect([cx, y], [cw, h], 4.0, rgba(fill, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+                let fill = if on {
+                    0x1f4a44
+                } else if selected {
+                    0x34344a
+                } else {
+                    0x1d1d27
+                };
+                let border = if selected {
+                    accent()
+                } else if on {
+                    0x5ee6c8
+                } else {
+                    0x2a2a38
+                };
+                c.round_rect(
+                    [cx, y],
+                    [cw, h],
+                    4.0,
+                    rgba(fill, 1.0),
+                    rgba(border, 1.0),
+                    if selected { 1.5 } else { 1.0 },
+                );
                 let text = match row {
                     0 => {
                         let n = EVERY[col];
@@ -282,15 +420,39 @@ impl Setup {
                         tr!("{n} bars", "{n}小節", "{n} {bars_ru}";)
                     }
                     1 => morph_name(col).to_string(),
-                    2 => [tr!("Shuffled", "シャッフル", "Перемешать"), tr!("In order", "順番どおり", "По порядку")][col].to_string(),
+                    2 => [
+                        tr!("Shuffled", "シャッフル", "Перемешать"),
+                        tr!("In order", "順番どおり", "По порядку"),
+                    ][col]
+                        .to_string(),
                     _ => format!("{}. {}", col + 1, shape_name(cfg.shapes[col].0 as usize)),
                 };
                 let text_col = if on { 0xffffff } else { 0x8a8aa0 };
                 if row == SHAPES_ROW {
-                    c.text_centered(cx + cw / 2.0, y + h - 13.0, 7.0, rgba(text_col, 1.0), &Canvas::fit(7.0, cw - 6.0, &text));
-                    thumbnail(c, &outline(cfg.shapes[col].0 as usize), cx + 4.0, y + 4.0, cw - 8.0, h - 22.0, if on { 0x5ee6c8 } else { 0x4a4a5e });
+                    c.text_centered(
+                        cx + cw / 2.0,
+                        y + h - 13.0,
+                        7.0,
+                        rgba(text_col, 1.0),
+                        &Canvas::fit(7.0, cw - 6.0, &text),
+                    );
+                    thumbnail(
+                        c,
+                        &outline(cfg.shapes[col].0 as usize),
+                        cx + 4.0,
+                        y + 4.0,
+                        cw - 8.0,
+                        h - 22.0,
+                        if on { 0x5ee6c8 } else { 0x4a4a5e },
+                    );
                 } else {
-                    c.text_centered(cx + cw / 2.0, y + h / 2.0 - 3.5, 7.0, rgba(text_col, 1.0), &Canvas::fit(7.0, cw - 6.0, &text));
+                    c.text_centered(
+                        cx + cw / 2.0,
+                        y + h / 2.0 - 3.5,
+                        7.0,
+                        rgba(text_col, 1.0),
+                        &Canvas::fit(7.0, cw - 6.0, &text),
+                    );
                 }
                 c.hit(cx, y, cw, h, Hit::ShapeshiftCell(row, col));
             }
@@ -299,8 +461,26 @@ impl Setup {
         // Moving the selected shape along the order, by mouse.
         if self.row == SHAPES_ROW {
             let bx = x0 + label_w;
-            c.button(bx, y, 70.0, 16.0, tr!("< earlier", "< 前へ", "< раньше"), 7.0, Hit::ShapeshiftMove(-1), false);
-            c.button(bx + 76.0, y, 70.0, 16.0, tr!("later >", "後へ >", "позже >"), 7.0, Hit::ShapeshiftMove(1), false);
+            c.button(
+                bx,
+                y,
+                70.0,
+                16.0,
+                tr!("< earlier", "< 前へ", "< раньше"),
+                7.0,
+                Hit::ShapeshiftMove(-1),
+                false,
+            );
+            c.button(
+                bx + 76.0,
+                y,
+                70.0,
+                16.0,
+                tr!("later >", "後へ >", "позже >"),
+                7.0,
+                Hit::ShapeshiftMove(1),
+                false,
+            );
         }
         let bars = cfg.bars();
         let morph_note = if cfg.morph_bars() < MORPH[cfg.morph] {
@@ -328,7 +508,13 @@ impl Setup {
             )
             .to_string(),
         };
-        c.text(x0, y + 26.0, 7.0, rgba(0x9a9ab0, 1.0), &Canvas::fit_end(7.0, pw - 32.0, &about));
+        c.text(
+            x0,
+            y + 26.0,
+            7.0,
+            rgba(0x9a9ab0, 1.0),
+            &Canvas::fit_end(7.0, pw - 32.0, &about),
+        );
     }
 }
 
@@ -344,7 +530,14 @@ fn thumbnail(c: &mut Canvas, pts: &[(f32, f32)], x: f32, y: f32, w: f32, h: f32,
     let k = (w / (x1 - x0).max(1.0)).min(h / (y1 - y0).max(1.0));
     let (ox, oy) = (x + (w - (x1 - x0) * k) / 2.0, y + (h - (y1 - y0) * k) / 2.0);
     for &(px, py) in pts {
-        c.circle(ox + (px - x0) * k, oy + (py - y0) * k, 1.2, rgba(col, 1.0), rgba(0, 0.0), 0.0);
+        c.circle(
+            ox + (px - x0) * k,
+            oy + (py - y0) * k,
+            1.2,
+            rgba(col, 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
     }
 }
 
@@ -354,15 +547,26 @@ mod tests {
 
     #[test]
     fn the_setup_round_trips_through_the_config() {
-        let mut c = Config { every: 1, morph: 0, shuffle: false, ..Config::default() };
+        let mut c = Config {
+            every: 1,
+            morph: 0,
+            shuffle: false,
+            ..Config::default()
+        };
         c.shapes.swap(0, 3);
         c.shapes[1].1 = false;
         assert_eq!(Config::parse(&c.format()), c);
         assert_eq!(Config::parse(""), Config::default());
-        // Unknown words and shapes are skipped; missing shapes come back at the end.
+        // Unknown words and shapes are skipped; missing shapes come back at the end, off.
         let p = Config::parse("every=7 shapes=loop,-blob,-zigzag");
         assert_eq!(p.every, Config::default().every);
-        assert_eq!(p.shapes[..3], [(3, true), (0, false), (1, true)]);
+        assert_eq!(p.shapes[..3], [(3, true), (0, false), (1, false)]);
+        let old = Config::parse("shapes=zigzag,uturn,spiral,loop,elbow,straight");
+        assert_eq!(
+            old.shapes[6],
+            (6, false),
+            "a setup from before Meadow plays without it"
+        );
     }
 
     #[test]
@@ -373,14 +577,17 @@ mod tests {
         assert_ne!(a, c.sequence(40, 2));
         assert!(a.windows(2).all(|p| p[0] != p[1]), "{a:?}");
         // Every shape comes once per round.
-        let mut round: Vec<u8> = a[..6].to_vec();
+        let mut round: Vec<u8> = a[..7].to_vec();
         round.sort();
-        assert_eq!(round, [0, 1, 2, 3, 4, 5]);
+        assert_eq!(round, [0, 1, 2, 3, 4, 5, 6]);
         // In order: the player's order, without the shapes left out.
-        let mut fixed = Config { shuffle: false, ..c };
+        let mut fixed = Config {
+            shuffle: false,
+            ..c
+        };
         fixed.shapes.swap(0, 5);
         fixed.shapes[2].1 = false;
-        assert_eq!(fixed.sequence(7, 9), [5, 1, 3, 4, 0, 5, 1]);
+        assert_eq!(fixed.sequence(7, 9), [5, 1, 3, 4, 0, 6, 5]);
         // Only one shape on: it stays.
         let mut one = c;
         for s in one.shapes.iter_mut().skip(1) {
@@ -391,7 +598,11 @@ mod tests {
 
     #[test]
     fn morphs_take_at_most_half_a_shape() {
-        let c = Config { every: 0, morph: 3, ..Config::default() };
+        let c = Config {
+            every: 0,
+            morph: 3,
+            ..Config::default()
+        };
         assert_eq!((c.bars(), c.morph_bars()), (4, 2.0));
         assert_eq!(Config::default().morph_bars(), 2.0);
     }
@@ -403,7 +614,10 @@ mod tests {
         assert!(!s.key(KeyCode::ArrowRight, false, &mut c));
         assert!(s.key(KeyCode::Space, false, &mut c));
         assert_eq!(c.bars(), 8);
-        s = Setup { row: SHAPES_ROW, col: 0 };
+        s = Setup {
+            row: SHAPES_ROW,
+            col: 0,
+        };
         assert!(s.key(KeyCode::ArrowRight, true, &mut c));
         assert_eq!((c.shapes[1].0, s.col), (0, 1));
         assert!(s.key(KeyCode::Space, false, &mut c));

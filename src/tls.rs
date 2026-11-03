@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
-use rustls::{ClientConfig, ClientConnection, Connection, RootCertStore, ServerConfig, ServerConnection};
+use rustls::{
+    ClientConfig, ClientConnection, Connection, RootCertStore, ServerConfig, ServerConnection,
+};
 
 /// The port the game's connections take, encrypted (`online::DEFAULT_PORT` is the old plain one).
 pub const PORT: u16 = 7801;
@@ -31,9 +33,15 @@ fn provider() -> Arc<rustls::crypto::CryptoProvider> {
 
 fn client_config(ca: &[u8]) -> Result<Arc<ClientConfig>, String> {
     let mut roots = RootCertStore::empty();
-    roots.add(CertificateDer::from(ca.to_vec())).map_err(|e| e.to_string())?;
-    let builder = ClientConfig::builder_with_provider(provider()).with_protocol_versions(&[&rustls::version::TLS13]).map_err(|e| e.to_string())?;
-    Ok(Arc::new(builder.with_root_certificates(roots).with_no_client_auth()))
+    roots
+        .add(CertificateDer::from(ca.to_vec()))
+        .map_err(|e| e.to_string())?;
+    let builder = ClientConfig::builder_with_provider(provider())
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|e| e.to_string())?;
+    Ok(Arc::new(
+        builder.with_root_certificates(roots).with_no_client_auth(),
+    ))
 }
 
 /// Encrypts a connection to the server, proving it's the server: the plain end, to use as the
@@ -44,7 +52,11 @@ pub fn connect(raw: TcpStream) -> Result<TcpStream, String> {
     connect_with(raw, config, SERVER_HOST)
 }
 
-fn connect_with(mut raw: TcpStream, config: Arc<ClientConfig>, host: &str) -> Result<TcpStream, String> {
+fn connect_with(
+    mut raw: TcpStream,
+    config: Arc<ClientConfig>,
+    host: &str,
+) -> Result<TcpStream, String> {
     let name = ServerName::try_from(host.to_string()).map_err(|e| e.to_string())?;
     let mut conn = ClientConnection::new(config, name).map_err(|e| e.to_string())?;
     // In words a player gets: this is where a bad network shows first.
@@ -52,7 +64,10 @@ fn connect_with(mut raw: TcpStream, config: Arc<ClientConfig>, host: &str) -> Re
     pump(raw, conn).map_err(|e| crate::online::network_error(&e))
 }
 
-fn handshake<D: rustls::SideData>(raw: &mut TcpStream, conn: &mut rustls::ConnectionCommon<D>) -> io::Result<()> {
+fn handshake<D: rustls::SideData>(
+    raw: &mut TcpStream,
+    conn: &mut rustls::ConnectionCommon<D>,
+) -> io::Result<()> {
     let _ = raw.set_read_timeout(Some(HANDSHAKE));
     let _ = raw.set_write_timeout(Some(HANDSHAKE));
     while conn.is_handshaking() {
@@ -71,8 +86,13 @@ pub fn server_config(cert: &Path, key: &Path) -> Result<Arc<ServerConfig>, Strin
 #[allow(dead_code)]
 fn server_config_of(cert: Vec<u8>, key: Vec<u8>) -> Result<Arc<ServerConfig>, String> {
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key));
-    let builder = ServerConfig::builder_with_provider(provider()).with_protocol_versions(&[&rustls::version::TLS13]).map_err(|e| e.to_string())?;
-    let config = builder.with_no_client_auth().with_single_cert(vec![CertificateDer::from(cert)], key).map_err(|e| e.to_string())?;
+    let builder = ServerConfig::builder_with_provider(provider())
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|e| e.to_string())?;
+    let config = builder
+        .with_no_client_auth()
+        .with_single_cert(vec![CertificateDer::from(cert)], key)
+        .map_err(|e| e.to_string())?;
     Ok(Arc::new(config))
 }
 
@@ -90,7 +110,10 @@ fn loopback() -> io::Result<(TcpStream, TcpStream)> {
     let near = TcpStream::connect(listener.local_addr()?)?;
     let (far, peer) = listener.accept()?;
     if peer != near.local_addr()? {
-        return Err(io::Error::new(ErrorKind::PermissionDenied, "someone else connected"));
+        return Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            "someone else connected",
+        ));
     }
     near.set_nodelay(true)?;
     far.set_nodelay(true)?;
@@ -105,7 +128,12 @@ fn pump(raw: TcpStream, conn: impl Into<Connection>) -> io::Result<TcpStream> {
     let _ = raw.set_nodelay(true);
     let conn = Arc::new(Mutex::new(conn.into()));
     let turn = Arc::new(Mutex::new(()));
-    let (raw_up, inner_up, conn_up, turn_up) = (raw.try_clone()?, inner.try_clone()?, conn.clone(), turn.clone());
+    let (raw_up, inner_up, conn_up, turn_up) = (
+        raw.try_clone()?,
+        inner.try_clone()?,
+        conn.clone(),
+        turn.clone(),
+    );
     std::thread::Builder::new().spawn(move || {
         from_network(&raw_up, &inner_up, &conn_up, &turn_up);
         let _ = raw_up.shutdown(Shutdown::Both);
@@ -122,7 +150,12 @@ fn pump(raw: TcpStream, conn: impl Into<Connection>) -> io::Result<TcpStream> {
 /// Sends what `conn` has for the network, with the turn to send (records can't change places).
 /// The socket is never written with `conn` locked: both ends stuck writing, each with a full
 /// buffer the other can't read because reading needs that lock, would wait for each other.
-fn send_pending<'a>(turn: MutexGuard<()>, mut locked: MutexGuard<'a, Connection>, conn: &'a Mutex<Connection>, mut raw: &TcpStream) -> io::Result<()> {
+fn send_pending<'a>(
+    turn: MutexGuard<()>,
+    mut locked: MutexGuard<'a, Connection>,
+    conn: &'a Mutex<Connection>,
+    mut raw: &TcpStream,
+) -> io::Result<()> {
     loop {
         let mut out = Vec::new();
         while locked.wants_write() {
@@ -141,7 +174,12 @@ fn send_pending<'a>(turn: MutexGuard<()>, mut locked: MutexGuard<'a, Connection>
 
 /// `send_pending` from the reading side, which mustn't wait to send or it stops reading: if
 /// someone has the turn, they send this too.
-fn answer<'a>(locked: MutexGuard<'a, Connection>, conn: &'a Mutex<Connection>, turn: &Mutex<()>, raw: &TcpStream) -> io::Result<()> {
+fn answer<'a>(
+    locked: MutexGuard<'a, Connection>,
+    conn: &'a Mutex<Connection>,
+    turn: &Mutex<()>,
+    raw: &TcpStream,
+) -> io::Result<()> {
     match turn.try_lock() {
         Ok(turn) => send_pending(turn, locked, conn, raw),
         Err(_) => Ok(()),
@@ -149,7 +187,12 @@ fn answer<'a>(locked: MutexGuard<'a, Connection>, conn: &'a Mutex<Connection>, t
 }
 
 /// Decrypts what comes in, until either side is done.
-fn from_network(mut raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connection>, turn: &Mutex<()>) {
+fn from_network(
+    mut raw: &TcpStream,
+    mut inner: &TcpStream,
+    conn: &Mutex<Connection>,
+    turn: &Mutex<()>,
+) {
     let mut buf = [0u8; 16 * 1024];
     let mut plain = [0u8; 16 * 1024];
     loop {
@@ -205,7 +248,9 @@ fn to_network(raw: &TcpStream, mut inner: &TcpStream, conn: &Mutex<Connection>, 
             let _ = send_pending(my_turn, locked, conn, raw);
             return;
         }
-        if locked.writer().write_all(&buf[..n]).is_err() || send_pending(my_turn, locked, conn, raw).is_err() {
+        if locked.writer().write_all(&buf[..n]).is_err()
+            || send_pending(my_turn, locked, conn, raw).is_err()
+        {
             return;
         }
     }
@@ -229,7 +274,9 @@ mod tests {
         let config = server_config_of(TEST_CERT.to_vec(), TEST_KEY.to_vec()).unwrap();
         std::thread::spawn(move || {
             let (raw, _) = listener.accept().unwrap();
-            let Ok(plain) = accept(raw, config) else { return };
+            let Ok(plain) = accept(raw, config) else {
+                return;
+            };
             let mut writer = plain.try_clone().unwrap();
             for line in BufReader::new(plain).lines() {
                 let line = line.unwrap();
@@ -242,7 +289,9 @@ mod tests {
     #[test]
     fn lines_go_both_ways_at_once_on_a_cloned_socket() {
         let plain = connect_with(echo_server(), client_config(TEST_CA).unwrap(), HOST).unwrap();
-        plain.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        plain
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
         let mut writer = plain.try_clone().unwrap();
         let line = "x".repeat(200_000);
         let sent = line.clone();
@@ -269,7 +318,14 @@ mod tests {
     #[test]
     fn a_server_without_our_certificate_is_refused() {
         // It has a certificate, but for another name, and then from another CA.
-        assert!(connect_with(echo_server(), client_config(TEST_CA).unwrap(), "other.invalid").is_err());
+        assert!(
+            connect_with(
+                echo_server(),
+                client_config(TEST_CA).unwrap(),
+                "other.invalid"
+            )
+            .is_err()
+        );
         assert!(connect_with(echo_server(), client_config(CA).unwrap(), HOST).is_err());
     }
 

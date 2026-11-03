@@ -2,8 +2,8 @@
 //! live autoplay of the selected difficulty with its details, all loaded in the background.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use crate::audio::{self, Engine, Track};
@@ -11,7 +11,7 @@ use crate::beatmap::{self, Beatmap, Kind};
 use crate::difficulty::{self, Graph};
 use crate::game::{self, Game};
 use crate::library::Entry;
-use crate::render::{accent, rgba, Canvas, VIRTUAL_HEIGHT};
+use crate::render::{Canvas, VIRTUAL_HEIGHT, accent, rgba};
 
 /// While scrolling, wait this long after the selection settles before loading, so scrolling
 /// stays cheap. A single change after a quiet moment loads at once.
@@ -87,7 +87,9 @@ impl Details {
             .filter(|p| p.time <= last)
             .map(|p| 60000.0 / p.beat_length)
             .collect();
-        let bpm = bpms.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &b| (lo.min(b), hi.max(b)));
+        let bpm = bpms.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &b| {
+            (lo.min(b), hi.max(b))
+        });
         Details {
             bpm: if bpms.is_empty() { (0.0, 0.0) } else { bpm },
             length_ms: last - first,
@@ -179,7 +181,11 @@ pub struct Preview {
 /// How far map time `t` is past the red line the beats count from, and the beat's length. Green
 /// lines are control points too, but they don't move the beat.
 fn beat_at(points: &[crate::beatmap::ControlPoint], t: f64) -> Option<(f64, f64)> {
-    let line = points.iter().rev().find(|p| p.time <= t).or(points.first())?;
+    let line = points
+        .iter()
+        .rev()
+        .find(|p| p.time <= t)
+        .or(points.first())?;
     Some((t - line.beat_origin, line.beat_length))
 }
 
@@ -188,22 +194,39 @@ const NEXT_SONG_WAIT: Duration = Duration::from_millis(1500);
 
 /// How long a song is, in map ms: as decoded whole (`whole`), else as last known, else about what
 /// its notes span.
-fn song_length(whole: Option<f64>, known: Option<&(PathBuf, f64)>, path: &Path, map_end: f64) -> f64 {
-    whole.or(known.filter(|k| k.0 == path).map(|k| k.1)).unwrap_or(map_end)
+fn song_length(
+    whole: Option<f64>,
+    known: Option<&(PathBuf, f64)>,
+    path: &Path,
+    map_end: f64,
+) -> f64 {
+    whole
+        .or(known.filter(|k| k.0 == path).map(|k| k.1))
+        .unwrap_or(map_end)
 }
 
 fn audio_path(e: &Entry) -> PathBuf {
-    e.path.parent().unwrap_or(Path::new(".")).join(&e.meta.audio_file)
+    e.path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(&e.meta.audio_file)
 }
 
 fn background_path(e: &Entry) -> Option<PathBuf> {
-    e.meta.background.as_ref().map(|b| e.path.parent().unwrap_or(Path::new(".")).join(b))
+    e.meta
+        .background
+        .as_ref()
+        .map(|b| e.path.parent().unwrap_or(Path::new(".")).join(b))
 }
 
 /// Decodes a background, shrunk to at most 1920x1200 (GPU texture limits, memory).
 fn load_image(path: &Path) -> Option<Image> {
     let img = image::open(path).ok()?;
-    let img = if img.width() > 1920 || img.height() > 1200 { img.resize(1920, 1200, image::imageops::FilterType::Triangle) } else { img };
+    let img = if img.width() > 1920 || img.height() > 1200 {
+        img.resize(1920, 1200, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
     let rgba = img.to_rgba8();
     Some(Image::from_rgba(rgba.width(), rgba.height(), &rgba))
 }
@@ -226,7 +249,13 @@ impl Preview {
 
     /// The decoded song, for reuse when that map is played at the same speed.
     pub fn cached_track(&self, e: &Entry, rate: f64, keep_pitch: bool) -> Option<Arc<Track>> {
-        let same = |s: &&Song| s.full && s.pitch == 1.0 && s.path == audio_path(e) && (s.rate - rate).abs() < 1e-6 && (s.keep_pitch == keep_pitch || (rate - 1.0).abs() < 1e-6);
+        let same = |s: &&Song| {
+            s.full
+                && s.pitch == 1.0
+                && s.path == audio_path(e)
+                && (s.rate - rate).abs() < 1e-6
+                && (s.keep_pitch == keep_pitch || (rate - 1.0).abs() < 1e-6)
+        };
         self.audio.as_ref().filter(same).map(|s| s.track.clone())
     }
 
@@ -257,14 +286,33 @@ impl Preview {
     /// autoplay preview is visible and runs.
     #[allow(clippy::too_many_arguments)]
     /// `rate`: speed the music and the autoplay play at (and whether it keeps the pitch).
-    pub fn update(&mut self, now: Instant, library: &[Entry], selected: Option<usize>, engine: Option<&Engine>, in_menu: bool, in_select: bool, offset: f64, rate: (f64, bool)) {
-        let rate = if (rate.0 - 1.0).abs() < 1e-6 { (1.0, false) } else { rate };
+    pub fn update(
+        &mut self,
+        now: Instant,
+        library: &[Entry],
+        selected: Option<usize>,
+        engine: Option<&Engine>,
+        in_menu: bool,
+        in_select: bool,
+        offset: f64,
+        rate: (f64, bool),
+    ) {
+        let rate = if (rate.0 - 1.0).abs() < 1e-6 {
+            (1.0, false)
+        } else {
+            rate
+        };
         // A new speed changes the music and the strain curve: reload as if the selection
         // changed, carrying on from where the music was.
-        if (rate != self.requested_rate || self.pitch != self.requested_pitch) && self.requested.is_some() {
+        if (rate != self.requested_rate || self.pitch != self.requested_pitch)
+            && self.requested.is_some()
+        {
             if self.audio_active && self.requested == selected {
                 // Where the music is now, in map time (the playing track's own speed).
-                let playing = engine.and_then(|e| e.position_ms(now)).zip(self.audio.as_ref()).map(|(p, s)| p * s.rate);
+                let playing = engine
+                    .and_then(|e| e.position_ms(now))
+                    .zip(self.audio.as_ref())
+                    .map(|(p, s)| p * s.rate);
                 self.resume_at = self.pending_seek.or(playing).or(self.resume_at);
             }
             self.requested = None;
@@ -275,7 +323,11 @@ impl Preview {
             self.resume_at = None;
             let quiet = self.last_change.is_none_or(|t| now - t >= QUIET);
             self.last_change = Some(now);
-            self.changed_at = Some(if quiet { now.checked_sub(DEBOUNCE).unwrap_or(now) } else { now });
+            self.changed_at = Some(if quiet {
+                now.checked_sub(DEBOUNCE).unwrap_or(now)
+            } else {
+                now
+            });
         }
         // Start loads once the selection has settled.
         if self.seen != self.requested && self.changed_at.is_some_and(|t| now - t >= DEBOUNCE) {
@@ -291,27 +343,47 @@ impl Preview {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
                     let map = beatmap::load(&path);
-                    let first = map.as_ref().ok().and_then(|m| m.notes.first()).map(|n| n.time).unwrap_or(0.0);
-                    let curve = std::panic::catch_unwind(|| crate::stars::strain_curve(&path, speed, first)).ok().flatten();
+                    let first = map
+                        .as_ref()
+                        .ok()
+                        .and_then(|m| m.notes.first())
+                        .map(|n| n.time)
+                        .unwrap_or(0.0);
+                    let curve = std::panic::catch_unwind(|| {
+                        crate::stars::strain_curve(&path, speed, first)
+                    })
+                    .ok()
+                    .flatten();
                     let _ = tx.send((i, map, curve));
                 });
                 self.map_rx = Some(rx);
                 self.show_background_for(e);
                 let song = audio_path(e);
-                let loaded = self.audio.as_ref().is_some_and(|s| s.path == song && (s.rate, s.keep_pitch) == rate && s.pitch == shift);
-                if !loaded
-                    && let Some(sr) = engine.map(|a| a.rate) {
+                let loaded = self.audio.as_ref().is_some_and(|s| {
+                    s.path == song && (s.rate, s.keep_pitch) == rate && s.pitch == shift
+                });
+                if !loaded && let Some(sr) = engine.map(|a| a.rate) {
                     let (tx, rx) = mpsc::channel();
                     // Quick part first: from where the music was (speed change) or the preview point.
-                    let part_from = self.resume_at.or((self.player || self.from_top).then_some(0.0)).unwrap_or(e.meta.preview_time);
+                    let part_from = self
+                        .resume_at
+                        .or((self.player || self.from_top).then_some(0.0))
+                        .unwrap_or(e.meta.preview_time);
                     let clip_at = e.meta.preview_time.max(0.0);
-                    let is_clip = song.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::download::CLIP_PREFIX));
+                    let is_clip = song.file_name().is_some_and(|n| {
+                        n.to_string_lossy()
+                            .starts_with(crate::download::CLIP_PREFIX)
+                    });
                     std::thread::spawn(move || {
                         if is_clip {
                             // A download preview: ~10 s of music from the preview point, placed there.
                             let clip = audio::decode(&song, sr).ok().map(|t| {
                                 let base = (clip_at / 1000.0 * sr as f64 / speed).round() as i64;
-                                (Arc::new(audio::shifted(t, sr, speed, keep_pitch, shift)), base, false)
+                                (
+                                    Arc::new(audio::shifted(t, sr, speed, keep_pitch, shift)),
+                                    base,
+                                    false,
+                                )
                             });
                             let failed = clip.is_none();
                             let _ = tx.send((song.clone(), clip));
@@ -322,16 +394,34 @@ impl Preview {
                         }
                         if part_from >= 0.0 {
                             // SNIPPET_MS of playback covers that much more map time when sped up.
-                            if let Ok((part, base)) = audio::decode_part(&song, sr, Some((part_from, SNIPPET_MS * speed))) {
+                            if let Ok((part, base)) =
+                                audio::decode_part(&song, sr, Some((part_from, SNIPPET_MS * speed)))
+                            {
                                 let part = audio::shifted(part, sr, speed, keep_pitch, shift);
                                 let base = (base as f64 / speed).round() as i64;
-                                if tx.send((song.clone(), Some((Arc::new(part), base, false)))).is_err() {
+                                if tx
+                                    .send((song.clone(), Some((Arc::new(part), base, false))))
+                                    .is_err()
+                                {
                                     return; // the selection moved on
                                 }
                             }
                         }
                         let track = audio::decode_shared(&song, sr).ok().map(|t| {
-                            let track = if shift == 1.0 { audio::with_rate(t, sr, speed, keep_pitch) } else { Arc::new(audio::shifted(Track { samples: t.samples.clone(), rate: t.rate }, sr, speed, keep_pitch, shift)) };
+                            let track = if shift == 1.0 {
+                                audio::with_rate(t, sr, speed, keep_pitch)
+                            } else {
+                                Arc::new(audio::shifted(
+                                    Track {
+                                        samples: t.samples.clone(),
+                                        rate: t.rate,
+                                    },
+                                    sr,
+                                    speed,
+                                    keep_pitch,
+                                    shift,
+                                ))
+                            };
                             (track, 0, true)
                         });
                         let _ = tx.send((song, track));
@@ -342,43 +432,68 @@ impl Preview {
         }
 
         if let Some(rx) = &self.map_rx
-            && let Ok((i, result, curve)) = rx.try_recv() {
+            && let Ok((i, result, curve)) = rx.try_recv()
+        {
             self.map_rx = None;
             if Some(i) == self.requested
-                && let Ok(map) = result {
+                && let Ok(map) = result
+            {
                 let details = Details::of(&map);
                 let mut graph = difficulty::analyze(&map);
                 if let Some(curve) = curve {
                     graph.use_curve(curve);
                 }
                 // The details and the music, but no playfield for a map gone wild.
-                self.game = (!map.too_wild_to_preview()).then(|| new_preview_game(&map, self.requested_rate.0));
+                self.game = (!map.too_wild_to_preview())
+                    .then(|| new_preview_game(&map, self.requested_rate.0));
                 self.last_time = f64::NEG_INFINITY;
                 self.map = Some((i, map, details, graph));
             }
         }
         if let Some(rx) = &self.bg_rx
-            && let Ok((path, img)) = rx.try_recv() {
+            && let Ok((path, img)) = rx.try_recv()
+        {
             self.bg_rx = None;
             if Some(&path) == self.bg_path.as_ref() {
                 self.has_background = img.is_some();
                 self.bg_upload = Some(img);
             }
         }
-        let decoded: Vec<Decoded> = self.audio_rx.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
+        let decoded: Vec<Decoded> = self
+            .audio_rx
+            .as_ref()
+            .map(|rx| rx.try_iter().collect())
+            .unwrap_or_default();
         for (path, result) in decoded {
             if !matches!(result, Some((_, _, false))) {
                 self.audio_rx = None; // the full song (or a failure) is the last message
             }
             let wanted = self.requested.and_then(|i| library.get(i));
-            let (Some((track, base, full)), Some(engine), Some(e)) = (result, engine, wanted.filter(|e| audio_path(e) == path)) else { continue };
+            let (Some((track, base, full)), Some(engine), Some(e)) =
+                (result, engine, wanted.filter(|e| audio_path(e) == path))
+            else {
+                continue;
+            };
             let (speed, keep_pitch) = self.requested_rate;
             // In map ms (the track plays `speed` map ms per ms).
             let len_ms = track.frames() as f64 / engine.rate as f64 * 1000.0 * speed;
             let preview_time = e.meta.preview_time;
-            let start = if self.player || self.from_top { 0.0 } else { (if preview_time >= 0.0 && (!full || preview_time < len_ms) { preview_time } else { len_ms * 0.4 }) / speed };
+            let start = if self.player || self.from_top {
+                0.0
+            } else {
+                (if preview_time >= 0.0 && (!full || preview_time < len_ms) {
+                    preview_time
+                } else {
+                    len_ms * 0.4
+                }) / speed
+            };
             // The full song takes over from the part that's already playing without a gap.
-            let playing_part = self.audio.as_ref().is_some_and(|s| s.path == path && !s.full && (s.rate, s.keep_pitch) == (speed, keep_pitch) && s.pitch == self.requested_pitch);
+            let playing_part = self.audio.as_ref().is_some_and(|s| {
+                s.path == path
+                    && !s.full
+                    && (s.rate, s.keep_pitch) == (speed, keep_pitch)
+                    && s.pitch == self.requested_pitch
+            });
             if full && playing_part && self.audio_active && in_menu {
                 engine.swap(track.clone(), base);
             } else {
@@ -390,15 +505,27 @@ impl Preview {
             self.ended_at = None;
             // The quick part comes first; the whole song is the last of it.
             self.from_top &= !full;
-            self.audio = Some(Song { path, track, base, full, start, rate: speed, keep_pitch, pitch: self.requested_pitch });
+            self.audio = Some(Song {
+                path,
+                track,
+                base,
+                full,
+                start,
+                rate: speed,
+                keep_pitch,
+                pitch: self.requested_pitch,
+            });
         }
 
         // Music: start at the preview point, loop back to it at the end.
-        let (Some(engine), true) = (engine, in_menu) else { return };
+        let (Some(engine), true) = (engine, in_menu) else {
+            return;
+        };
         if let Some(song) = &self.audio {
             let end_ms = song.end_ms(engine.rate);
             // A seek past the quick part waits, silent, for the full song; it's not the end.
-            let ended = self.audio_rx.is_none() && engine.position_ms(now).is_some_and(|p| p > end_ms - 30.0);
+            let ended = self.audio_rx.is_none()
+                && engine.position_ms(now).is_some_and(|p| p > end_ms - 30.0);
             // There the next song takes over; if none does, this one goes round again.
             let next_coming = ended && (self.player || self.menu) && {
                 let at = *self.ended_at.get_or_insert_with(|| {
@@ -409,7 +536,11 @@ impl Preview {
             };
             if (!self.audio_active || ended) && !next_coming {
                 let from_top = ended && (self.player || self.from_top);
-                let at = self.resume_at.take().map(|t| t / song.rate).unwrap_or(if from_top { 0.0 } else { song.start });
+                let at = self
+                    .resume_at
+                    .take()
+                    .map(|t| t / song.rate)
+                    .unwrap_or(if from_top { 0.0 } else { song.start });
                 engine.play_part(song.track.clone(), song.base, at);
                 self.audio_active = true;
                 self.ended_at = None;
@@ -420,7 +551,9 @@ impl Preview {
         // Autoplay preview, driven by the music's clock. It waits while the music is still the
         // previous song's or speed's (its clock would put the notes in the wrong place).
         let wanted = self.requested.and_then(|i| library.get(i)).map(audio_path);
-        let stale = self.audio.as_ref().is_none_or(|s| (s.rate, s.keep_pitch) != self.requested_rate || Some(&s.path) != wanted.as_ref());
+        let stale = self.audio.as_ref().is_none_or(|s| {
+            (s.rate, s.keep_pitch) != self.requested_rate || Some(&s.path) != wanted.as_ref()
+        });
         if !in_select || !self.audio_active || stale {
             return;
         }
@@ -428,7 +561,9 @@ impl Preview {
         if let Some(target) = self.pending_seek {
             // The engine applies seeks on its next callback; rebuild once the music is there so
             // the notes in between aren't lost.
-            let arrived = engine.position_ms(now).is_some_and(|p| (p * speed - target).abs() < 150.0 * speed);
+            let arrived = engine
+                .position_ms(now)
+                .is_some_and(|p| (p * speed - target).abs() < 150.0 * speed);
             if arrived {
                 if let Some((_, map, _, _)) = &self.map
                     && !map.too_wild_to_preview()
@@ -474,13 +609,19 @@ impl Preview {
 
     /// Jumps the preview music (and the autoplay) to map time `t`; returns where it landed.
     pub fn seek_music(&mut self, t: f64, engine: Option<&Engine>) -> Option<f64> {
-        let (Some(engine), Some(song)) = (engine, &self.audio) else { return None };
+        let (Some(engine), Some(song)) = (engine, &self.audio) else {
+            return None;
+        };
         if !self.audio_active {
             return None;
         }
         // Until the full decode replaces the quick part, the song's length isn't known; seeking
         // outside the part is silent for that moment instead of being refused.
-        let last = if song.full { ((song.end_ms(engine.rate) - 1000.0) * song.rate).max(0.0) } else { f64::INFINITY };
+        let last = if song.full {
+            ((song.end_ms(engine.rate) - 1000.0) * song.rate).max(0.0)
+        } else {
+            f64::INFINITY
+        };
         let t = t.clamp(0.0, last);
         engine.seek(t / song.rate);
         self.pending_seek = Some(t);
@@ -505,18 +646,30 @@ impl Preview {
         let at = engine.position_ms(now)? * song.rate;
         let map_end = self.map.as_ref().map_or(0.0, |(_, _, d, _)| d.length_ms);
         let whole = song.full.then(|| song.end_ms(engine.rate) * song.rate);
-        Some((at, song_length(whole, self.known_length.as_ref(), &song.path, map_end)))
+        Some((
+            at,
+            song_length(whole, self.known_length.as_ref(), &song.path, map_end),
+        ))
     }
 
     /// Fills `out` with the last mono samples played; false if nothing is.
     pub fn sounding(&self, engine: Option<&Engine>, now: Instant, out: &mut [f32]) -> bool {
-        let (Some(engine), Some(song)) = (engine, self.audio.as_ref().filter(|_| self.audio_active)) else { return false };
-        let Some(at) = engine.position_ms(now) else { return false };
+        let (Some(engine), Some(song)) =
+            (engine, self.audio.as_ref().filter(|_| self.audio_active))
+        else {
+            return false;
+        };
+        let Some(at) = engine.position_ms(now) else {
+            return false;
+        };
         let last = (at / 1000.0 * engine.rate as f64) as i64 - song.base;
         let first = last - out.len() as i64;
         for (i, s) in out.iter_mut().enumerate() {
             let frame = first + i as i64;
-            *s = usize::try_from(frame).ok().and_then(|f| song.track.samples.get(f * 2..f * 2 + 2)).map_or(0.0, |lr| (lr[0] + lr[1]) / 2.0);
+            *s = usize::try_from(frame)
+                .ok()
+                .and_then(|f| song.track.samples.get(f * 2..f * 2 + 2))
+                .map_or(0.0, |lr| (lr[0] + lr[1]) / 2.0);
         }
         true
     }
@@ -527,7 +680,8 @@ impl Preview {
         let (_, map, _, _) = self.map.as_ref().filter(|_| self.audio_active)?;
         // Only a beat that is one: NaN timing points (osu!team's FM Synthesis Experiment), or
         // no preview clock yet, made every selector and the menu's notes draw as black boxes.
-        beat_at(&map.control_points, self.last_time).filter(|&(into, len)| into.is_finite() && len.is_finite() && len > 0.0)
+        beat_at(&map.control_points, self.last_time)
+            .filter(|&(into, len)| into.is_finite() && len.is_finite() && len > 0.0)
     }
 
     /// Where the music is in map time, while `entry`'s song plays.
@@ -538,12 +692,20 @@ impl Preview {
 
     /// Whether the music is in a kiai now.
     pub fn kiai(&self) -> bool {
-        let Some((_, map, _, _)) = self.map.as_ref().filter(|_| self.audio_active) else { return false };
-        map.control_points.iter().rev().find(|p| p.time <= self.last_time).is_some_and(|p| p.kiai)
+        let Some((_, map, _, _)) = self.map.as_ref().filter(|_| self.audio_active) else {
+            return false;
+        };
+        map.control_points
+            .iter()
+            .rev()
+            .find(|p| p.time <= self.last_time)
+            .is_some_and(|p| p.kiai)
     }
 
     pub fn seek_by(&mut self, delta_ms: f64, engine: Option<&Engine>) {
-        let now = self.pending_seek.or_else(|| self.game.as_ref().map(|g| g.time));
+        let now = self
+            .pending_seek
+            .or_else(|| self.game.as_ref().map(|g| g.time));
         if let Some(t) = now {
             self.seek(t + delta_ms, engine);
         }
@@ -551,24 +713,35 @@ impl Preview {
 
     /// The start point picked for `e`'s song, if any.
     pub fn marker(&self, e: &Entry) -> Option<f64> {
-        self.marker.as_ref().filter(|(p, _)| *p == audio_path(e)).map(|(_, t)| *t)
+        self.marker
+            .as_ref()
+            .filter(|(p, _)| *p == audio_path(e))
+            .map(|(_, t)| *t)
     }
 
     pub fn play_button_at(&self, x: f32, y: f32) -> bool {
-        self.play_rect.is_some_and(|[bx, by, bw, bh]| x >= bx && x <= bx + bw && y >= by && y <= by + bh)
+        self.play_rect
+            .is_some_and(|[bx, by, bw, bh]| x >= bx && x <= bx + bw && y >= by && y <= by + bh)
     }
 
     pub fn box_at(&self, x: f32, y: f32) -> bool {
-        self.box_rect.is_some_and(|[bx, by, bw, bh]| x >= bx && x <= bx + bw && y >= by && y <= by + bh)
+        self.box_rect
+            .is_some_and(|[bx, by, bw, bh]| x >= bx && x <= bx + bw && y >= by && y <= by + bh)
     }
 
     /// Whether entry `i`'s preview can be shown: its map is loaded and its own music is playing
     /// (until then the autoplay would run on the previous song's clock).
     fn ready(&self, library: &[Entry], i: usize) -> bool {
-        let Some(e) = library.get(i) else { return false };
-        let map = self.map.as_ref().is_some_and(|(mi, ..)| *mi == i) && self.seen == Some(i) && self.game.is_some();
+        let Some(e) = library.get(i) else {
+            return false;
+        };
+        let map = self.map.as_ref().is_some_and(|(mi, ..)| *mi == i)
+            && self.seen == Some(i)
+            && self.game.is_some();
         let music = self.audio_active
-            && self.audio.as_ref().is_some_and(|s| s.path == audio_path(e) && (s.rate, s.keep_pitch) == self.requested_rate);
+            && self.audio.as_ref().is_some_and(|s| {
+                s.path == audio_path(e) && (s.rate, s.keep_pitch) == self.requested_rate
+            });
         map && music
     }
 
@@ -580,16 +753,37 @@ impl Preview {
 
     /// The difficulty timeline of `e` (the selected map) in `rect`, with the start point and,
     /// if `button` is given as (verb, key hint), a "<verb> 1:23" button under it.
-    pub fn draw_timeline(&mut self, c: &mut Canvas, e: &Entry, rect: [f32; 4], button: Option<(&str, &str)>) {
+    pub fn draw_timeline(
+        &mut self,
+        c: &mut Canvas,
+        e: &Entry,
+        rect: [f32; 4],
+        button: Option<(&str, &str)>,
+    ) {
         self.graph_rect = None;
         self.play_rect = None;
         let loaded = self.map.as_ref().filter(|(mi, ..)| Some(*mi) == self.seen);
-        let (Some((_, _, _, graph)), Some(game)) = (loaded, self.game.as_ref()) else { return };
+        let (Some((_, _, _, graph)), Some(game)) = (loaded, self.game.as_ref()) else {
+            return;
+        };
         let marker = self.marker(e);
         // The playhead goes where it was sent at once, not when the music gets there.
-        self.timeline = draw_graph(c, graph, rect, self.pending_seek.unwrap_or(game.time), e.meta.preview_time, marker);
+        self.timeline = draw_graph(
+            c,
+            graph,
+            rect,
+            self.pending_seek.unwrap_or(game.time),
+            e.meta.preview_time,
+            marker,
+        );
         self.graph_rect = Some(rect);
-        self.play_rect = draw_play_button(c, rect[0] + rect[2] / 2.0, rect[1] + rect[3] + 17.0, marker, button);
+        self.play_rect = draw_play_button(
+            c,
+            rect[0] + rect[2] / 2.0,
+            rect[1] + rect[3] + 17.0,
+            marker,
+            button,
+        );
     }
 
     pub fn graph_rect(&self) -> Option<[f32; 4]> {
@@ -611,7 +805,19 @@ impl Preview {
     #[allow(clippy::too_many_arguments)]
     /// `button`: the action under the timeline as (verb, key hint), e.g. ("Play from", "Shift+Enter").
     /// `status`: the map's on osu! (label, colour), shown by the mapper's name.
-    pub fn draw_panel(&mut self, c: &mut Canvas, library: &[Entry], x: f32, y: f32, w: f32, h: f32, scroll_speed: f64, stars: Option<f32>, button: Option<(&str, &str)>, status: Option<(&str, u32)>) -> Option<(std::ops::Range<usize>, crate::layout::Area)> {
+    pub fn draw_panel(
+        &mut self,
+        c: &mut Canvas,
+        library: &[Entry],
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        scroll_speed: f64,
+        stars: Option<f32>,
+        button: Option<(&str, &str)>,
+        status: Option<(&str, u32)>,
+    ) -> Option<(std::ops::Range<usize>, crate::layout::Area)> {
         // The preview shows ~640 units of lane (several notes ahead), so its height follows the
         // panel width; the panel shrinks to fit instead of leaving empty space.
         // The lane alone fills the box, laid out as on a 4:3 screen (640 units wide): bigger notes,
@@ -623,11 +829,20 @@ impl Preview {
         // The preview's height per unit of its size. Smaller, it shows more of the lane ahead in
         // a shorter box: as small as dragged, and smaller still where the panel would otherwise
         // be taller than `h` (the details above it being `head` tall).
-        let (k_full, lane_w) = lane_fit(w, crate::ui::Select::panel_width(c.width, crate::ui::LIST_SHARE.2));
+        let (k_full, lane_w) = lane_fit(
+            w,
+            crate::ui::Select::panel_width(c.width, crate::ui::LIST_SHARE.2),
+        );
         let unit = band_h * k_full;
         self.size_unit = unit;
-        let wanted = if self.size > 0.0 { self.size.clamp(PREVIEW_SIZE.0, PREVIEW_SIZE.1) } else { PREVIEW_SIZE.1 };
-        let fitted = |head: f32| ((h - head - after_box - 12.0) / unit).clamp(PREVIEW_SIZE.0, PREVIEW_SIZE.1);
+        let wanted = if self.size > 0.0 {
+            self.size.clamp(PREVIEW_SIZE.0, PREVIEW_SIZE.1)
+        } else {
+            PREVIEW_SIZE.1
+        };
+        let fitted = |head: f32| {
+            ((h - head - after_box - 12.0) / unit).clamp(PREVIEW_SIZE.0, PREVIEW_SIZE.1)
+        };
         self.graph_rect = None;
         self.play_rect = None;
         self.box_rect = None;
@@ -635,7 +850,14 @@ impl Preview {
             (self.size_cap, self.size_shown) = (fitted(110.0), wanted.min(fitted(110.0)));
             let below = unit * self.size_shown + 12.0 + after_box;
             self.panel_bottom = y + h.min(110.0 + below);
-            c.round_rect([x, y], [w, h.min(110.0 + below)], 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
+            c.round_rect(
+                [x, y],
+                [w, h.min(110.0 + below)],
+                8.0,
+                rgba(0x15151d, 0.82),
+                rgba(0x2a2a38, 1.0),
+                1.0,
+            );
             return None;
         };
         let e = &library[i];
@@ -650,19 +872,31 @@ impl Preview {
             self.shown_for = Some(i);
             self.ready_at = Some(Instant::now());
         }
-        let fade = self.ready_at.filter(|_| ready).map(|t| crate::render::progress(t, 180.0)).unwrap_or(0.0);
+        let fade = self
+            .ready_at
+            .filter(|_| ready)
+            .map(|t| crate::render::progress(t, 180.0))
+            .unwrap_or(0.0);
         let loaded = self.map.as_ref().filter(|(mi, _, _, _)| *mi == i && ready);
 
         // Text sits on a 14 unit inset; long names wrap onto a second line before they are cut.
         let (lx, iw) = (x + 14.0, w - 28.0);
-        let (th_title, th_body, th_small) = (Canvas::text_height(12.0), Canvas::text_height(9.0), Canvas::text_height(8.0));
+        let (th_title, th_body, th_small) = (
+            Canvas::text_height(12.0),
+            Canvas::text_height(9.0),
+            Canvas::text_height(8.0),
+        );
         let title = wrap(12.0, iw, &e.meta.title, 2);
         let artist = wrap(9.0, iw, &e.meta.artist, 2);
         // The star pill is about this wide; the difficulty name wraps beside it.
         let pill_w = Canvas::text_width(9.0, "0.00") + 9.0 * 1.6 + 6.0;
         let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
         // Stats as label + value, flowed left to right; the first group is the map's, the second its notes.
-        let mut stats: [Vec<StatCell>; 3] = [vec![("OD", format!("{:.1}", e.meta.od), 1.0)], Vec::new(), Vec::new()];
+        let mut stats: [Vec<StatCell>; 3] = [
+            vec![("OD", format!("{:.1}", e.meta.od), 1.0)],
+            Vec::new(),
+            Vec::new(),
+        ];
         // What a full combo would give: SS, 99%, 98%.
         if let Some(pp) = self.potential {
             for (label, pp) in ["SS", "99%", "98%"].into_iter().zip(pp) {
@@ -672,7 +906,11 @@ impl Preview {
         if let Some((_, _, d, _)) = loaded {
             // At the speed played (DT, HT, the rate): as fast and as long as it'll be.
             let speed = self.requested_rate.0.max(0.01);
-            let bpm = if (d.bpm.1 - d.bpm.0).abs() < 0.5 { format!("{:.0}", d.bpm.0 * speed) } else { format!("{:.0}-{:.0}", d.bpm.0 * speed, d.bpm.1 * speed) };
+            let bpm = if (d.bpm.1 - d.bpm.0).abs() < 0.5 {
+                format!("{:.0}", d.bpm.0 * speed)
+            } else {
+                format!("{:.0}-{:.0}", d.bpm.0 * speed, d.bpm.1 * speed)
+            };
             stats[0].push(("BPM", bpm, fade));
             stats[0].push(("Length", fmt_time(d.length_ms / speed), fade));
             if self.map_offset != 0.0 {
@@ -688,7 +926,8 @@ impl Preview {
                 stats[1].push(("Swells", d.swells.to_string(), fade));
             }
         }
-        let cell_w = |(label, value, _): &StatCell| Canvas::text_width(8.0, &format!("{label} {value}"));
+        let cell_w =
+            |(label, value, _): &StatCell| Canvas::text_width(8.0, &format!("{label} {value}"));
         let rows: Vec<Vec<StatRow<'_>>> = stats
             .iter()
             .map(|group| {
@@ -710,7 +949,17 @@ impl Preview {
         // arrive.
         let stat_rows = rows.iter().map(Vec::len).sum::<usize>().max(3);
         let (title_step, body_step, row_h) = (th_title + 4.0, th_body + 3.0, th_small + 4.0);
-        let head = 12.0 + title.len() as f32 * title_step + 3.0 + artist.len() as f32 * body_step + 4.0 + 13.0 + 6.0 + (version.len() as f32 * body_step).max(15.0) + 6.0 + stat_rows as f32 * row_h + 6.0;
+        let head = 12.0
+            + title.len() as f32 * title_step
+            + 3.0
+            + artist.len() as f32 * body_step
+            + 4.0
+            + 13.0
+            + 6.0
+            + (version.len() as f32 * body_step).max(15.0)
+            + 6.0
+            + stat_rows as f32 * row_h
+            + 6.0;
         (self.size_cap, self.size_shown) = (fitted(head), wanted.min(fitted(head)));
         // The lane fills the panel's width (at the size chosen), however little room the details
         // leave: the panel grows down, into the leaderboard's room, rather than the lane shrink.
@@ -718,7 +967,14 @@ impl Preview {
         let preview_h = band_h * k;
         let h = head + preview_h + after_box;
         self.panel_bottom = y + h;
-        c.round_rect([x, y], [w, h], 8.0, rgba(0x15151d, 0.82), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect(
+            [x, y],
+            [w, h],
+            8.0,
+            rgba(0x15151d, 0.82),
+            rgba(0x2a2a38, 1.0),
+            1.0,
+        );
 
         let mut cy = y + 12.0;
         for line in &title {
@@ -736,14 +992,27 @@ impl Preview {
             Some((label, col)) => {
                 let lw = Canvas::text_width(7.0, label) + 12.0;
                 let sx = x + w - 14.0 - lw;
-                c.round_rect([sx, cy], [lw, 13.0], 6.5, rgba(col, 0.15), rgba(col, 0.9), 1.0);
+                c.round_rect(
+                    [sx, cy],
+                    [lw, 13.0],
+                    6.5,
+                    rgba(col, 0.15),
+                    rgba(col, 0.9),
+                    1.0,
+                );
                 c.text_centered(sx + lw / 2.0, cy + 3.0, 7.0, rgba(col, 1.0), label);
                 lw + 8.0
             }
             None => 0.0,
         };
         let mapper = Canvas::fit(8.0, iw - status_w, &format!("mapped by {}", e.meta.creator));
-        c.text(lx, cy + (13.0 - th_small) / 2.0, 8.0, rgba(0x8a8aa0, 1.0), &mapper);
+        c.text(
+            lx,
+            cy + (13.0 - th_small) / 2.0,
+            8.0,
+            rgba(0x8a8aa0, 1.0),
+            &mapper,
+        );
         cy += 13.0 + 6.0;
         crate::stars::draw_pill(c, x + w - 14.0, cy + 3.0, 9.0, stars);
         for line in &version {
@@ -762,13 +1031,22 @@ impl Preview {
                 cy += row_h;
             }
         }
-        cy = cy.max(y + 12.0) + (stat_rows.saturating_sub(rows.iter().map(Vec::len).sum()) as f32) * row_h + 6.0;
+        cy = cy.max(y + 12.0)
+            + (stat_rows.saturating_sub(rows.iter().map(Vec::len).sum()) as f32) * row_h
+            + 6.0;
 
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
         // As wide as the lane at that scale (all of the panel at full size), centred.
         let bw = lane_w * k;
         let (bx, by, bh) = (x + 10.0 + (w - 20.0 - bw) / 2.0, cy, preview_h);
-        c.round_rect([bx, by], [bw, bh], 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect(
+            [bx, by],
+            [bw, bh],
+            6.0,
+            rgba(0x0c0c12, 1.0),
+            rgba(0x2a2a38, 1.0),
+            1.0,
+        );
         self.box_rect = Some([bx, by, bw, bh]);
         let loaded = loaded.is_some();
         if loaded {
@@ -779,7 +1057,13 @@ impl Preview {
                 self.play_rect = None;
             }
             if fade < 1.0 {
-                c.rect(bx - 1.0, by + bh + 4.0, bw + 2.0, GRAPH_H + 40.0, rgba(0x15151d, 1.0 - fade));
+                c.rect(
+                    bx - 1.0,
+                    by + bh + 4.0,
+                    bw + 2.0,
+                    GRAPH_H + 40.0,
+                    rgba(0x15151d, 1.0 - fade),
+                );
             }
         } else {
             self.graph_rect = None;
@@ -796,12 +1080,30 @@ impl Preview {
         c.width = full_w;
         if button.is_some() {
             // Song select only (download previews have no fullscreen view).
-            c.text_right(bx + bw - 6.0, by + bh - 10.0, 6.0, rgba(0x6f6f86, 1.0), "click: fullscreen (Ctrl+Enter)");
+            c.text_right(
+                bx + bw - 6.0,
+                by + bh - 10.0,
+                6.0,
+                rgba(0x6f6f86, 1.0),
+                "click: fullscreen (Ctrl+Enter)",
+            );
         }
         if fade < 1.0 {
-            c.round_rect([bx, by], [bw, bh], 6.0, rgba(0x0c0c12, 1.0 - fade), rgba(0, 0.0), 0.0);
+            c.round_rect(
+                [bx, by],
+                [bw, bh],
+                6.0,
+                rgba(0x0c0c12, 1.0 - fade),
+                rgba(0, 0.0),
+                0.0,
+            );
         }
-        let clip = crate::layout::Area { x: bx / full_w, y: by / VIRTUAL_HEIGHT, w: bw / full_w, h: bh / VIRTUAL_HEIGHT };
+        let clip = crate::layout::Area {
+            x: bx / full_w,
+            y: by / VIRTUAL_HEIGHT,
+            w: bw / full_w,
+            h: bh / VIRTUAL_HEIGHT,
+        };
         Some((start..c.shapes.len(), clip))
     }
 }
@@ -820,7 +1122,8 @@ fn wrap(size: f32, max_w: f32, s: &str, lines: usize) -> Vec<String> {
     let mut rest = s;
     while !rest.is_empty() && out.len() < lines {
         // At least one character a line, however narrow.
-        let fits = Canvas::fitting_prefix(size, max_w, rest).max(rest.chars().next().map_or(0, char::len_utf8));
+        let fits = Canvas::fitting_prefix(size, max_w, rest)
+            .max(rest.chars().next().map_or(0, char::len_utf8));
         if fits == rest.len() {
             out.push(rest.to_string());
             rest = "";
@@ -833,7 +1136,8 @@ fn wrap(size: f32, max_w: f32, s: &str, lines: usize) -> Vec<String> {
         rest = rest[at..].trim_start_matches(' ');
     }
     if !rest.is_empty()
-        && let Some(last) = out.last_mut() {
+        && let Some(last) = out.last_mut()
+    {
         *last = Canvas::fit(size, max_w, &format!("{last} {rest}"));
     }
     out
@@ -846,28 +1150,64 @@ fn fmt_time(ms: f64) -> String {
 
 /// Difficulty timeline like lazer's song progress graph: strain bars over the map's length,
 /// kiai tinted, the preview point marked, and a playhead. Returns the time range it spans.
-pub fn draw_graph(c: &mut Canvas, g: &Graph, [x, y, w, h]: [f32; 4], now: f64, preview_at: f64, marker: Option<f64>) -> (f64, f64) {
+pub fn draw_graph(
+    c: &mut Canvas,
+    g: &Graph,
+    [x, y, w, h]: [f32; 4],
+    now: f64,
+    preview_at: f64,
+    marker: Option<f64>,
+) -> (f64, f64) {
     let (t0, t1) = (g.start.min(0.0).max(g.start - 2000.0), g.end);
     let span = (t1 - t0).max(1.0);
     let x_of = |t: f64| x + (((t - t0) / span).clamp(0.0, 1.0) as f32) * w;
-    c.round_rect([x, y], [w, h], 5.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+    c.round_rect(
+        [x, y],
+        [w, h],
+        5.0,
+        rgba(0x0c0c12, 1.0),
+        rgba(0x2a2a38, 1.0),
+        1.0,
+    );
     for &(s, e) in &g.kiai {
-        c.rect(x_of(s), y + 1.0, (x_of(e) - x_of(s)).max(1.0), h - 2.0, rgba(0xff8a3d, 0.12));
+        c.rect(
+            x_of(s),
+            y + 1.0,
+            (x_of(e) - x_of(s)).max(1.0),
+            h - 2.0,
+            rgba(0xff8a3d, 0.12),
+        );
     }
     // Bars cover the strain sections; the axis starts a little earlier for the intro.
-    let (bx0, bx1) = (x_of(g.peaks_start), x_of(g.peaks_start + g.peaks.len() as f64 * g.section));
+    let (bx0, bx1) = (
+        x_of(g.peaks_start),
+        x_of(g.peaks_start + g.peaks.len() as f64 * g.section),
+    );
     let n = (((bx1 - bx0) / 2.5) as usize).max(1);
     let bar_w = (bx1 - bx0) / n as f32;
     for (i, v) in g.bins(n).into_iter().enumerate() {
         let bh = 2.0 + v * (h - 8.0);
         // Cool blue for easy parts, through yellow, to red at the peaks.
         let lerp = |a: u32, b: u32, t: f32| -> u32 {
-            let ch = |s: u32| ((a >> s & 0xff) as f32 + ((b >> s & 0xff) as f32 - (a >> s & 0xff) as f32) * t) as u32;
+            let ch = |s: u32| {
+                ((a >> s & 0xff) as f32 + ((b >> s & 0xff) as f32 - (a >> s & 0xff) as f32) * t)
+                    as u32
+            };
             (ch(16) << 16) | (ch(8) << 8) | ch(0)
         };
-        let col = if v < 0.5 { lerp(0x3d6f8c, 0xFCB806, v * 2.0) } else { lerp(0xFCB806, 0xEB452C, (v - 0.5) * 2.0) };
+        let col = if v < 0.5 {
+            lerp(0x3d6f8c, 0xFCB806, v * 2.0)
+        } else {
+            lerp(0xFCB806, 0xEB452C, (v - 0.5) * 2.0)
+        };
         let played = (bx0 + (i as f32 + 0.5) * bar_w) <= x_of(now);
-        c.rect(bx0 + i as f32 * bar_w, y + h - 3.0 - bh, (bar_w - 0.5).max(0.5), bh, rgba(col, if played { 1.0 } else { 0.55 }));
+        c.rect(
+            bx0 + i as f32 * bar_w,
+            y + h - 3.0 - bh,
+            (bar_w - 0.5).max(0.5),
+            bh,
+            rgba(col, if played { 1.0 } else { 0.55 }),
+        );
     }
     if preview_at >= 0.0 {
         let px = x_of(preview_at);
@@ -881,8 +1221,18 @@ pub fn draw_graph(c: &mut Canvas, g: &Graph, [x, y, w, h]: [f32; 4], now: f64, p
     }
     let hx = x_of(now);
     c.rect(hx - 0.75, y - 2.0, 1.5, h + 4.0, rgba(0xffffff, 0.95));
-    c.text(x, y + h + 5.0, 7.0, rgba(0xc8c8d8, 1.0), &format!("{} / {}", fmt_time(now - t0.min(0.0)), fmt_time(t1)));
-    let peak = format!("peak {:.1} notes/s at {}", g.peak_nps, fmt_time(g.peak_nps_at));
+    c.text(
+        x,
+        y + h + 5.0,
+        7.0,
+        rgba(0xc8c8d8, 1.0),
+        &format!("{} / {}", fmt_time(now - t0.min(0.0)), fmt_time(t1)),
+    );
+    let peak = format!(
+        "peak {:.1} notes/s at {}",
+        g.peak_nps,
+        fmt_time(g.peak_nps_at)
+    );
     c.text_right(x + w, y + h + 5.0, 7.0, rgba(0x8a8aa0, 1.0), &peak);
     (t0, t1)
 }
@@ -892,30 +1242,69 @@ pub const MARKER: u32 = 0x4fb4ff;
 /// "<verb> 1:23" under the timeline once a start point is picked (else a hint). `button` is
 /// (verb, key hint); None shows no button (only the host picks a match's start). Returns the
 /// button's rect.
-fn draw_play_button(c: &mut Canvas, cx: f32, y: f32, marker: Option<f64>, button: Option<(&str, &str)>) -> Option<[f32; 4]> {
+fn draw_play_button(
+    c: &mut Canvas,
+    cx: f32,
+    y: f32,
+    marker: Option<f64>,
+    button: Option<(&str, &str)>,
+) -> Option<[f32; 4]> {
     let (Some(t), Some((verb, hint))) = (marker, button) else {
-        let text = if button.is_some() { "click / drag / wheel to scroll - play from where you stop" } else { "click / drag / wheel to scroll" };
+        let text = if button.is_some() {
+            "click / drag / wheel to scroll - play from where you stop"
+        } else {
+            "click / drag / wheel to scroll"
+        };
         c.text_centered(cx, y + 4.0, 6.0, rgba(0x6f6f86, 1.0), text);
         return None;
     };
     let label = format!("{verb} {}", fmt_time(t));
-    let (lw, hw) = (Canvas::text_width(8.0, &label), Canvas::text_width(6.0, hint));
+    let (lw, hw) = (
+        Canvas::text_width(8.0, &label),
+        Canvas::text_width(6.0, hint),
+    );
     let bw = 14.0 + 10.0 + lw + 10.0 + hw + 10.0;
     let (bx, bh) = (cx - bw / 2.0, 17.0);
-    c.round_rect([bx, y], [bw, bh], 5.0, rgba(0x173049, 1.0), rgba(MARKER, 1.0), 1.0);
+    c.round_rect(
+        [bx, y],
+        [bw, bh],
+        5.0,
+        rgba(0x173049, 1.0),
+        rgba(MARKER, 1.0),
+        1.0,
+    );
     // A play triangle out of thin slices (the font is plain ASCII).
     for i in 0..7 {
         let f = i as f32;
-        c.rect(bx + 9.0 + f, y + 4.5 + f * 0.5, 1.0, 8.0 - f, rgba(0xffffff, 1.0));
+        c.rect(
+            bx + 9.0 + f,
+            y + 4.5 + f * 0.5,
+            1.0,
+            8.0 - f,
+            rgba(0xffffff, 1.0),
+        );
     }
     c.text(bx + 24.0, y + 5.0, 8.0, rgba(0xffffff, 1.0), &label);
-    c.text(bx + 24.0 + lw + 10.0, y + 6.0, 6.0, rgba(0x9ac8f0, 1.0), hint);
+    c.text(
+        bx + 24.0 + lw + 10.0,
+        y + 6.0,
+        6.0,
+        rgba(0x9ac8f0, 1.0),
+        hint,
+    );
     Some([bx, y, bw, bh])
 }
 
 fn new_preview_game(map: &Beatmap, rate: f64) -> Game {
     // No samples: the preview only borrows the music's clock; `rate` maps it to map time.
-    let mut g = Game::new(map.clone(), Arc::new(Track { samples: Vec::new(), rate }), None);
+    let mut g = Game::new(
+        map.clone(),
+        Arc::new(Track {
+            samples: Vec::new(),
+            rate,
+        }),
+        None,
+    );
     g.mute_hits = true;
     g
 }
@@ -928,12 +1317,31 @@ mod beat_tests {
     #[test]
     fn details_show_with_the_map_and_the_autoplay_waits_for_its_music() {
         let map = beatmap::calibration_map(500.0, 4, 16);
-        let library = [Entry::new(PathBuf::from("/nonexistent/a.osu"), map.meta.clone())];
-        let mut p = Preview { seen: Some(0), ..Default::default() };
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.osu"),
+            map.meta.clone(),
+        )];
+        let mut p = Preview {
+            seen: Some(0),
+            ..Default::default()
+        };
         let draw = |p: &mut Preview| {
             let mut c = Canvas::default();
             c.clear(853.3);
-            let autoplay = p.draw_panel(&mut c, &library, 500.0, 40.0, 340.0, 400.0, 1.0, None, Some(("Play from", "Shift+Enter")), None).is_some();
+            let autoplay = p
+                .draw_panel(
+                    &mut c,
+                    &library,
+                    500.0,
+                    40.0,
+                    340.0,
+                    400.0,
+                    1.0,
+                    None,
+                    Some(("Play from", "Shift+Enter")),
+                    None,
+                )
+                .is_some();
             (autoplay, c.shapes.len())
         };
         let (_, empty) = draw(&mut p);
@@ -942,7 +1350,10 @@ mod beat_tests {
         let (autoplay, with_map) = draw(&mut p);
         assert!(!autoplay);
         assert!(with_map > empty, "the details are there before the music");
-        assert!(p.graph_rect.is_none() && p.play_rect.is_none(), "nothing to seek in yet");
+        assert!(
+            p.graph_rect.is_none() && p.play_rect.is_none(),
+            "nothing to seek in yet"
+        );
 
         p.ready_for = Some(0);
         assert!(draw(&mut p).0);
@@ -952,15 +1363,36 @@ mod beat_tests {
     #[test]
     fn a_new_speed_doesnt_change_how_long_the_song_is() {
         let known = (PathBuf::from("a.mp3"), 214_000.0);
-        assert_eq!(song_length(Some(214_500.0), Some(&known), Path::new("a.mp3"), 180_000.0), 214_500.0);
-        assert_eq!(song_length(None, Some(&known), Path::new("a.mp3"), 180_000.0), 214_000.0, "its quick part stands in");
-        assert_eq!(song_length(None, Some(&known), Path::new("b.mp3"), 180_000.0), 180_000.0, "a song not heard whole yet");
-        assert_eq!(song_length(None, None, Path::new("a.mp3"), 180_000.0), 180_000.0);
+        assert_eq!(
+            song_length(Some(214_500.0), Some(&known), Path::new("a.mp3"), 180_000.0),
+            214_500.0
+        );
+        assert_eq!(
+            song_length(None, Some(&known), Path::new("a.mp3"), 180_000.0),
+            214_000.0,
+            "its quick part stands in"
+        );
+        assert_eq!(
+            song_length(None, Some(&known), Path::new("b.mp3"), 180_000.0),
+            180_000.0,
+            "a song not heard whole yet"
+        );
+        assert_eq!(
+            song_length(None, None, Path::new("a.mp3"), 180_000.0),
+            180_000.0
+        );
     }
 
     #[test]
     fn green_lines_dont_move_the_beat() {
-        let line = |time: f64, sv: f64| ControlPoint { time, beat_origin: 100.0, beat_length: 400.0, sv, kiai: false, volume: 1.0 };
+        let line = |time: f64, sv: f64| ControlPoint {
+            time,
+            beat_origin: 100.0,
+            beat_length: 400.0,
+            sv,
+            kiai: false,
+            volume: 1.0,
+        };
         let points = [line(100.0, 1.0), line(1234.0, 1.5), line(2345.0, 0.75)];
         for t in [1200.0, 1300.0, 2400.0] {
             assert_eq!(beat_at(&points, t), Some((t - 100.0, 400.0)));
@@ -979,7 +1411,9 @@ mod lane_fit_tests {
         assert_eq!(lane_fit(300.0, 380.0).1, FOUR_THREE);
         // Wider: the same height, more lane.
         let (k, lane) = lane_fit(470.0, 380.0);
-        assert!((k - lane_fit(380.0, 380.0).0).abs() < 1e-5 && lane > FOUR_THREE && lane < SIXTEEN_NINE);
+        assert!(
+            (k - lane_fit(380.0, 380.0).0).abs() < 1e-5 && lane > FOUR_THREE && lane < SIXTEEN_NINE
+        );
         // Much wider: 16:9 at most, scaled up past that.
         let (k, lane) = lane_fit(900.0, 380.0);
         assert_eq!(lane, SIXTEEN_NINE);

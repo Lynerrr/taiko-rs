@@ -35,11 +35,17 @@ pub struct Span {
 
 impl Span {
     pub fn from(min: f64) -> Span {
-        Span { min: Some(min), max: None }
+        Span {
+            min: Some(min),
+            max: None,
+        }
     }
 
     pub fn to(max: f64) -> Span {
-        Span { min: None, max: Some(max) }
+        Span {
+            min: None,
+            max: Some(max),
+        }
     }
 
     fn has(&self, v: f64) -> bool {
@@ -92,7 +98,11 @@ impl Filter {
         (!self.clean || p.clean())
             && (!self.full_combo || (p.miss == 0 && notes >= 50))
             && self.accuracy.has(p.accuracy)
-            && (self.accuracy_near.is_empty() || self.accuracy_near.iter().any(|a| (p.accuracy - a).abs() < ACCURACY_NEAR))
+            && (self.accuracy_near.is_empty()
+                || self
+                    .accuracy_near
+                    .iter()
+                    .any(|a| (p.accuracy - a).abs() < ACCURACY_NEAR))
             && self.stars.has(p.stars)
             && self.combo.has(f64::from(p.combo))
             && self.great.has(f64::from(p.great))
@@ -111,12 +121,16 @@ impl Filter {
             && self.day.is_none_or(|d| month_day(p.date).1 == d)
             && (!self.great_is_ok || p.great == p.ok)
             && (!self.combo_is_hits || p.combo == p.great + p.ok)
-            && (!self.mod_in_title || crate::medal_list::mod_names().iter().any(|(acronym, name)| p.has(acronym) && has_word(&p.title, name)))
+            && (!self.mod_in_title
+                || crate::medal_list::mod_names()
+                    .iter()
+                    .any(|(acronym, name)| p.has(acronym) && has_word(&p.title, name)))
     }
 }
 
 fn contains(text: &str, part: &Option<String>) -> bool {
-    part.as_ref().is_none_or(|part| text.to_lowercase().contains(&part.to_lowercase()))
+    part.as_ref()
+        .is_none_or(|part| text.to_lowercase().contains(&part.to_lowercase()))
 }
 
 /// Whether `word` is in `text` as whole words, whatever the case.
@@ -124,7 +138,9 @@ fn has_word(text: &str, word: &str) -> bool {
     let text = text.to_lowercase();
     let word = word.to_lowercase();
     let boundary = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric());
-    text.match_indices(&word).any(|(at, _)| boundary(text[..at].chars().next_back()) && boundary(text[at + word.len()..].chars().next()))
+    text.match_indices(&word).any(|(at, _)| {
+        boundary(text[..at].chars().next_back()) && boundary(text[at + word.len()..].chars().next())
+    })
 }
 
 /// The UTC month and day of a Unix time.
@@ -169,7 +185,11 @@ pub enum Rule {
     /// All of these mods in the collection.
     Group { mods: Vec<String> },
     /// This many of `mods`, each in a play like this.
-    Variety { need: u64, mods: Vec<String>, filter: Filter },
+    Variety {
+        need: u64,
+        mods: Vec<String>,
+        filter: Filter,
+    },
     /// This many maps first played with a helping mod, then at 90% without it.
     Weaned { need: u64 },
     /// One map at 90% slower than 1x, at 1x, and at 1.4x or more.
@@ -244,7 +264,12 @@ pub struct Play {
 
 impl Play {
     pub fn of(s: &OnlineScore, gives: bool) -> Play {
-        let (song, version) = s.map.rsplit_once(" [").map_or((s.map.as_str(), ""), |(song, v)| (song, v.trim_end_matches(']')));
+        let (song, version) = s
+            .map
+            .rsplit_once(" [")
+            .map_or((s.map.as_str(), ""), |(song, v)| {
+                (song, v.trim_end_matches(']'))
+            });
         let (artist, title) = song.split_once(" - ").unwrap_or(("", song));
         Play {
             date: s.date,
@@ -282,7 +307,11 @@ impl Play {
         if self.accuracy < 0.80 || self.stars < 3.0 || self.mods.len() > 3 {
             return Vec::new();
         }
-        self.mods.iter().map(String::as_str).filter(|m| all.contains(m) && (*m == "NF" || !self.has("NF"))).collect()
+        self.mods
+            .iter()
+            .map(String::as_str)
+            .filter(|m| all.contains(m) && (*m == "NF" || !self.has("NF")))
+            .collect()
     }
 }
 
@@ -303,16 +332,25 @@ impl Rivals {
                 continue;
             }
             let board = boards.entry(p.map_hash).or_default();
-            let lead = board.iter().max_by_key(|(_, s)| **s).map(|(who, s)| (*who, *s));
+            let lead = board
+                .iter()
+                .max_by_key(|(_, s)| **s)
+                .map(|(who, s)| (*who, *s));
             if p.score > board.get(player).copied().unwrap_or(0) {
                 board.insert(player, p.score);
             }
             if lead.is_none_or(|(_, s)| p.score > s) {
                 if lead.is_some_and(|(who, _)| who != player) {
-                    out.snipes.entry(player.to_string()).or_default().push(p.date);
+                    out.snipes
+                        .entry(player.to_string())
+                        .or_default()
+                        .push(p.date);
                 }
                 if board.len() >= 3 {
-                    out.hills.entry(player.to_string()).or_default().push(p.date);
+                    out.hills
+                        .entry(player.to_string())
+                        .or_default()
+                        .push(p.date);
                 }
             }
         }
@@ -340,7 +378,11 @@ struct Standing {
 impl Standing {
     /// A count, with the date it got there.
     fn counted(have: u64, need: u64, met: Option<u64>) -> Standing {
-        Standing { met, have: have.min(need), need }
+        Standing {
+            met,
+            have: have.min(need),
+            need,
+        }
     }
 }
 
@@ -358,7 +400,11 @@ fn running(plays: &[Play], need: u64, count: impl Fn(&Play) -> u64) -> Standing 
 }
 
 /// When the number of different keys reaches `need`, and how far it got.
-fn distinct<K: std::hash::Hash + Eq>(plays: &[Play], need: u64, key: impl Fn(&Play) -> Option<K>) -> Standing {
+fn distinct<K: std::hash::Hash + Eq>(
+    plays: &[Play],
+    need: u64,
+    key: impl Fn(&Play) -> Option<K>,
+) -> Standing {
     let mut seen = HashSet::new();
     let mut met = None;
     for p in plays {
@@ -374,11 +420,19 @@ fn distinct<K: std::hash::Hash + Eq>(plays: &[Play], need: u64, key: impl Fn(&Pl
 
 /// The longest run of days in a row with a play like `filter`.
 fn days_in_a_row(plays: &[Play], need: u64, filter: &Filter) -> Standing {
-    let mut days: Vec<u64> = plays.iter().filter(|p| filter.passes(p)).map(|p| p.date / DAY).collect();
+    let mut days: Vec<u64> = plays
+        .iter()
+        .filter(|p| filter.passes(p))
+        .map(|p| p.date / DAY)
+        .collect();
     days.dedup();
     let (mut run, mut best, mut last, mut met) = (0, 0, None, None);
     for d in days {
-        run = if last.is_some_and(|l: u64| l + 1 == d) { run + 1 } else { 1 };
+        run = if last.is_some_and(|l: u64| l + 1 == d) {
+            run + 1
+        } else {
+            1
+        };
         last = Some(d);
         best = best.max(run);
         if best >= need && met.is_none() {
@@ -388,7 +442,12 @@ fn days_in_a_row(plays: &[Play], need: u64, filter: &Filter) -> Standing {
     Standing::counted(best, need, met)
 }
 
-fn collection<'a>(plays: &'a [Play], all: &HashSet<&str>, within: impl Fn(&str) -> bool, need: u64) -> Standing {
+fn collection<'a>(
+    plays: &'a [Play],
+    all: &HashSet<&str>,
+    within: impl Fn(&str) -> bool,
+    need: u64,
+) -> Standing {
     let mut seen: HashSet<&'a str> = HashSet::new();
     let mut met = None;
     for p in plays {
@@ -421,7 +480,10 @@ fn weaned(plays: &[Play], need: u64) -> Standing {
 
 fn speed_ladder(plays: &[Play]) -> Option<u64> {
     let mut seen: HashMap<&str, [bool; 3]> = HashMap::new();
-    for p in plays.iter().filter(|p| p.clean() && p.accuracy >= 0.90 && p.stars >= 3.0) {
+    for p in plays
+        .iter()
+        .filter(|p| p.clean() && p.accuracy >= 0.90 && p.stars >= 3.0)
+    {
         let band = if p.rate < 0.95 {
             0
         } else if p.rate < 1.05 {
@@ -445,7 +507,11 @@ fn rematch(plays: &[Play]) -> Option<u64> {
     for p in plays {
         match first.get(&p.map_hash) {
             Some(&(date, accuracy)) => {
-                if p.date - date >= 7 * DAY && p.accuracy >= accuracy + 0.03 && p.clean() && p.accuracy >= 0.85 {
+                if p.date - date >= 7 * DAY
+                    && p.accuracy >= accuracy + 0.03
+                    && p.clean()
+                    && p.accuracy >= 0.85
+                {
                     return Some(p.date);
                 }
             }
@@ -459,7 +525,10 @@ fn rematch(plays: &[Play]) -> Option<u64> {
 
 fn same_score(plays: &[Play]) -> Option<u64> {
     let mut seen = HashSet::new();
-    plays.iter().find(|p| !seen.insert((p.map_hash, p.score)) && p.score > 0 && p.accuracy < 0.99999).map(|p| p.date)
+    plays
+        .iter()
+        .find(|p| !seen.insert((p.map_hash, p.score)) && p.score > 0 && p.accuracy < 0.99999)
+        .map(|p| p.date)
 }
 
 fn in_a_day(plays: &[Play], need: u64) -> Standing {
@@ -480,14 +549,25 @@ fn in_a_day(plays: &[Play], need: u64) -> Standing {
 const NOW: u64 = 0;
 
 fn standing(rule: &Rule, plays: &[Play], facts: &Facts) -> Standing {
-    let date = |met: Option<u64>| Standing { met, ..Standing::default() };
-    let nth = |dates: &[u64], need: u64| Standing::counted(dates.len() as u64, need, dates.get(need as usize - 1).copied());
+    let date = |met: Option<u64>| Standing {
+        met,
+        ..Standing::default()
+    };
+    let nth = |dates: &[u64], need: u64| {
+        Standing::counted(
+            dates.len() as u64,
+            need,
+            dates.get(need as usize - 1).copied(),
+        )
+    };
     match rule {
         Rule::Play(f) => date(plays.iter().find(|p| f.passes(p)).map(|p| p.date)),
         Rule::Plays { need } => running(plays, *need, |_| 1),
         Rule::Hits { need } => running(plays, *need, |p| u64::from(p.great + p.ok)),
         Rule::Rolls { need } => running(plays, *need, |p| u64::from(p.rolls)),
-        Rule::Maps { need, filter } => distinct(plays, *need, |p| filter.passes(p).then_some(p.map_hash)),
+        Rule::Maps { need, filter } => {
+            distinct(plays, *need, |p| filter.passes(p).then_some(p.map_hash))
+        }
         Rule::Songs { need, filter } => {
             let mut songs: HashMap<String, HashSet<String>> = HashMap::new();
             let mut met = None;
@@ -509,7 +589,12 @@ fn standing(rule: &Rule, plays: &[Play], facts: &Facts) -> Standing {
             Standing::counted(have, *need, (have >= *need).then_some(NOW))
         }
         Rule::Collection { need } => collection(plays, &facts.collectable, |_| true, *need),
-        Rule::Group { mods } => collection(plays, &facts.collectable, |m| mods.iter().any(|x| x == m), mods.len() as u64),
+        Rule::Group { mods } => collection(
+            plays,
+            &facts.collectable,
+            |m| mods.iter().any(|x| x == m),
+            mods.len() as u64,
+        ),
         Rule::Variety { need, mods, filter } => {
             let mut seen = HashSet::new();
             let mut met = None;
@@ -529,11 +614,19 @@ fn standing(rule: &Rule, plays: &[Play], facts: &Facts) -> Standing {
         Rule::Before { time } => date(plays.first().filter(|p| p.date < *time).map(|p| p.date)),
         Rule::After { first, then } => {
             let start = plays.iter().position(|p| first.passes(p));
-            date(start.and_then(|s| plays[s..].iter().find(|p| then.passes(p))).map(|p| p.date))
+            date(
+                start
+                    .and_then(|s| plays[s..].iter().find(|p| then.passes(p)))
+                    .map(|p| p.date),
+            )
         }
         Rule::SameScore => date(same_score(plays)),
         Rule::Count { event, need } => {
-            let have = facts.events.and_then(|e| e.get(event)).copied().unwrap_or(0);
+            let have = facts
+                .events
+                .and_then(|e| e.get(event))
+                .copied()
+                .unwrap_or(0);
             Standing::counted(have, *need, (have >= *need).then_some(NOW))
         }
     }
@@ -585,7 +678,12 @@ impl Medals {
             }
         }
         let saved = file.as_deref().map(crate::load_saved).unwrap_or_default();
-        Medals { list, file, saved, holders: HashMap::new() }
+        Medals {
+            list,
+            file,
+            saved,
+            holders: HashMap::new(),
+        }
     }
 
     fn save(&self) {
@@ -632,16 +730,38 @@ impl Medals {
     /// `exact`: drops what they no longer meet. Otherwise a medal stays: what a rule sees can
     /// change for the moment (a map whose status isn't known yet), and earning one twice would
     /// announce it twice.
-    fn settle_one(&mut self, player: &str, plays: &[Play], rivals: &Rivals, ms: u64, now: u64, exact: bool) -> Vec<String> {
+    fn settle_one(
+        &mut self,
+        player: &str,
+        plays: &[Play],
+        rivals: &Rivals,
+        ms: u64,
+        now: u64,
+        exact: bool,
+    ) -> Vec<String> {
         let before = self.saved.earned.get(player).cloned().unwrap_or_default();
-        let mut after = if exact { BTreeMap::new() } else { before.clone() };
+        let mut after = if exact {
+            BTreeMap::new()
+        } else {
+            before.clone()
+        };
         let facts = self.facts(player, rivals, ms);
         for m in &self.list {
             if let Some(met) = standing(&m.rule, plays, &facts).met {
-                after.insert(m.id.clone(), before.get(&m.id).copied().unwrap_or(if met == NOW { now } else { met }));
+                after.insert(
+                    m.id.clone(),
+                    before
+                        .get(&m.id)
+                        .copied()
+                        .unwrap_or(if met == NOW { now } else { met }),
+                );
             }
         }
-        let new = after.keys().filter(|id| !before.contains_key(*id)).cloned().collect();
+        let new = after
+            .keys()
+            .filter(|id| !before.contains_key(*id))
+            .cloned()
+            .collect();
         self.saved.earned.insert(player.to_string(), after);
         new
     }
@@ -656,11 +776,21 @@ impl Medals {
     }
 
     /// `player`'s medals after something changed: the new ones, as the game shows them.
-    pub fn settle(&mut self, player: &str, plays: &[Play], rivals: &Rivals, ms: u64, now: u64) -> Vec<MedalNote> {
+    pub fn settle(
+        &mut self,
+        player: &str,
+        plays: &[Play],
+        rivals: &Rivals,
+        ms: u64,
+        now: u64,
+    ) -> Vec<MedalNote> {
         let new = self.settle_one(player, plays, rivals, ms, now, false);
         self.recount();
         self.save();
-        new.iter().filter_map(|id| self.medal(id)).map(Medal::note).collect()
+        new.iter()
+            .filter_map(|id| self.medal(id))
+            .map(Medal::note)
+            .collect()
     }
 
     /// `player`'s medals after a score of theirs was deleted: what it earned goes with it.
@@ -683,12 +813,21 @@ impl Medals {
 
     /// How many of the medals there are now `earned` has: a secret can go when its file does.
     fn held(&self, earned: &BTreeMap<String, u64>) -> u32 {
-        self.list.iter().filter(|m| earned.contains_key(&m.id)).count() as u32
+        self.list
+            .iter()
+            .filter(|m| earned.contains_key(&m.id))
+            .count() as u32
     }
 
     /// Adds to a count (`absolute`: sets it). Returns whether it changed.
     pub fn count(&mut self, player: &str, event: &str, by: u64, absolute: bool) -> bool {
-        let n = self.saved.events.entry(player.to_string()).or_default().entry(event.to_string()).or_default();
+        let n = self
+            .saved
+            .events
+            .entry(player.to_string())
+            .or_default()
+            .entry(event.to_string())
+            .or_default();
         let next = if absolute { by } else { *n + by };
         let changed = next != *n;
         *n = next;
@@ -711,17 +850,30 @@ impl Medals {
                 !m.quiet
                     && (m.tier >= 4
                         || (m.secret && m.tier >= 2)
-                        || (m.tier == 3 && (holders <= 1 || f64::from(holders) <= f64::from(players) * RARE_SHARE)))
+                        || (m.tier == 3
+                            && (holders <= 1
+                                || f64::from(holders) <= f64::from(players) * RARE_SHARE)))
             })
             .min_by_key(|m| (self.holders(&m.id), std::cmp::Reverse(m.tier)))
             .map(|m| {
                 let holders = self.holders(&m.id);
-                Announcement { medal: m.clone(), first: holders <= 1, holders, players }
+                Announcement {
+                    medal: m.clone(),
+                    first: holders <= 1,
+                    holders,
+                    players,
+                }
             })
     }
 
     /// Every medal, and how `player` stands with them (`rivals`, `plays`, `ms` being theirs).
-    pub fn view(&self, player: Option<&str>, plays: &[Play], rivals: &Rivals, ms: u64) -> MedalsView {
+    pub fn view(
+        &self,
+        player: Option<&str>,
+        plays: &[Play],
+        rivals: &Rivals,
+        ms: u64,
+    ) -> MedalsView {
         let all = crate::medal_list::collectable();
         let earned = player.and_then(|p| self.saved.earned.get(p));
         let facts = self.facts(player.unwrap_or(""), rivals, ms);
@@ -732,7 +884,11 @@ impl Medals {
                 let at = earned.and_then(|e| e.get(&m.id)).copied();
                 let holders = self.holders(&m.id);
                 let shown = !m.secret || holders > 0 || at.is_some();
-                let s = if player.is_some() && !m.secret { standing(&m.rule, plays, &facts) } else { Standing::default() };
+                let s = if player.is_some() && !m.secret {
+                    standing(&m.rule, plays, &facts)
+                } else {
+                    Standing::default()
+                };
                 MedalRow {
                     id: m.id.clone(),
                     section: m.section,
@@ -752,27 +908,48 @@ impl Medals {
         let tiles: HashSet<&str> = plays.iter().flat_map(|p| p.tiles(&all)).collect();
         let mut collection: Vec<String> = tiles.into_iter().map(str::to_string).collect();
         collection.sort();
-        MedalsView { players: self.players(), earned: earned.map_or(0, |e| self.held(e)), medals, collection, collection_size: all.len() as u32 }
+        MedalsView {
+            players: self.players(),
+            earned: earned.map_or(0, |e| self.held(e)),
+            medals,
+            collection,
+            collection_size: all.len() as u32,
+        }
     }
 
     /// What a profile shows of `player`'s medals.
     pub fn summary(&self, player: &str) -> MedalSummary {
         let earned = self.saved.earned.get(player);
         let has = |m: &&Medal| earned.is_some_and(|e| e.contains_key(&m.id));
-        let dan = self.list.iter().filter(|m| m.id.starts_with("dan_")).rfind(has).map(|m| m.name.clone());
+        let dan = self
+            .list
+            .iter()
+            .filter(|m| m.id.starts_with("dan_"))
+            .rfind(has)
+            .map(|m| m.name.clone());
         let mut rarest: Vec<&Medal> = self.list.iter().filter(has).collect();
         rarest.sort_by_key(|m| (self.holders(&m.id), std::cmp::Reverse(m.tier)));
         MedalSummary {
             earned: earned.map_or(0, |e| self.held(e)),
             total: self.list.len() as u32,
             dan,
-            rarest: rarest.into_iter().take(PROFILE_MEDALS).map(Medal::note).collect(),
+            rarest: rarest
+                .into_iter()
+                .take(PROFILE_MEDALS)
+                .map(Medal::note)
+                .collect(),
         }
     }
 
     /// Who has the most medals, most first: (name key, how many).
     pub fn table(&self) -> Vec<(String, u32)> {
-        let mut rows: Vec<(String, u32)> = self.saved.earned.iter().map(|(p, e)| (p.clone(), self.held(e))).filter(|(_, n)| *n > 0).collect();
+        let mut rows: Vec<(String, u32)> = self
+            .saved
+            .earned
+            .iter()
+            .map(|(p, e)| (p.clone(), self.held(e)))
+            .filter(|(_, n)| *n > 0)
+            .collect();
         rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         rows
     }
@@ -780,21 +957,46 @@ impl Medals {
 
 impl Medal {
     pub fn note(&self) -> MedalNote {
-        MedalNote { id: self.id.clone(), name: self.name.clone(), about: self.about.clone(), tier: self.tier, secret: self.secret, art: self.art.clone() }
+        MedalNote {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            about: self.about.clone(),
+            tier: self.tier,
+            secret: self.secret,
+            art: self.art.clone(),
+        }
     }
 }
 
 impl Secret {
     fn medal(self) -> Medal {
-        Medal { id: self.id, section: SECRET_SECTION, tier: self.tier, secret: true, name: self.name, about: self.hint, art: self.art, rule: self.rule, quiet: false }
+        Medal {
+            id: self.id,
+            section: SECRET_SECTION,
+            tier: self.tier,
+            secret: true,
+            name: self.name,
+            about: self.hint,
+            art: self.art,
+            rule: self.rule,
+            quiet: false,
+        }
     }
 }
 
 /// A medal's text as a line of plain English for the chat of older games.
 pub fn chat_text(player: &str, a: &Announcement) -> String {
     let name = &a.medal.name[0];
-    let line = if a.medal.secret { format!("{player} found the secret {name}") } else { format!("{player} earned {name}") };
-    let rarity = if a.first { "first on the server".to_string() } else { format!("{} of {} have it", a.holders, a.players) };
+    let line = if a.medal.secret {
+        format!("{player} found the secret {name}")
+    } else {
+        format!("{player} earned {name}")
+    };
+    let rarity = if a.first {
+        "first on the server".to_string()
+    } else {
+        format!("{} of {} have it", a.holders, a.players)
+    };
     format!("{line} · {rarity}")
 }
 
@@ -803,11 +1005,34 @@ mod tests {
     use super::*;
 
     fn play(date: u64) -> Play {
-        Play { date, map: "a - b [c]".into(), map_hash: 1, artist: "a".into(), title: "b".into(), version: "c".into(), accuracy: 0.95, stars: 5.0, great: 100, ok: 10, miss: 1, combo: 90, rate: 1.0, score: 1000, gives: true, ..Play::default() }
+        Play {
+            date,
+            map: "a - b [c]".into(),
+            map_hash: 1,
+            artist: "a".into(),
+            title: "b".into(),
+            version: "c".into(),
+            accuracy: 0.95,
+            stars: 5.0,
+            great: 100,
+            ok: 10,
+            miss: 1,
+            combo: 90,
+            rate: 1.0,
+            score: 1000,
+            gives: true,
+            ..Play::default()
+        }
     }
 
     fn facts(collectable: HashSet<&str>) -> Facts<'_> {
-        Facts { ms: 0, events: None, snipes: &[], hills: &[], collectable }
+        Facts {
+            ms: 0,
+            events: None,
+            snipes: &[],
+            hills: &[],
+            collectable,
+        }
     }
 
     fn met(rule: &Rule, plays: &[Play]) -> Option<u64> {
@@ -823,24 +1048,52 @@ mod tests {
 
     #[test]
     fn a_clean_play_is_on_a_map_with_pp_and_without_no_fail() {
-        let f = Filter { clean: true, ..Filter::default() };
+        let f = Filter {
+            clean: true,
+            ..Filter::default()
+        };
         assert!(f.passes(&play(1)));
-        assert!(!f.passes(&Play { gives: false, ..play(1) }));
-        assert!(!f.passes(&Play { mods: vec!["NF".into()], ..play(1) }));
+        assert!(!f.passes(&Play {
+            gives: false,
+            ..play(1)
+        }));
+        assert!(!f.passes(&Play {
+            mods: vec!["NF".into()],
+            ..play(1)
+        }));
     }
 
     #[test]
     fn accuracy_near_is_to_the_two_decimals_shown() {
-        let f = Filter { accuracy_near: vec![0.5, 0.25], ..Filter::default() };
-        assert!(f.passes(&Play { accuracy: 0.50004, ..play(1) }));
-        assert!(f.passes(&Play { accuracy: 0.24996, ..play(1) }));
-        assert!(!f.passes(&Play { accuracy: 0.5002, ..play(1) }));
+        let f = Filter {
+            accuracy_near: vec![0.5, 0.25],
+            ..Filter::default()
+        };
+        assert!(f.passes(&Play {
+            accuracy: 0.50004,
+            ..play(1)
+        }));
+        assert!(f.passes(&Play {
+            accuracy: 0.24996,
+            ..play(1)
+        }));
+        assert!(!f.passes(&Play {
+            accuracy: 0.5002,
+            ..play(1)
+        }));
     }
 
     #[test]
     fn a_mod_in_a_title_has_to_be_a_whole_word() {
-        let f = Filter { mod_in_title: true, ..Filter::default() };
-        let on = |title: &str, m: &str| Play { title: title.into(), mods: vec![m.into()], ..play(1) };
+        let f = Filter {
+            mod_in_title: true,
+            ..Filter::default()
+        };
+        let on = |title: &str, m: &str| Play {
+            title: title.into(),
+            mods: vec![m.into()],
+            ..play(1)
+        };
         assert!(f.passes(&on("The Mirror Song", "MR")));
         assert!(f.passes(&on("mirror", "MR")));
         assert!(!f.passes(&on("Mirrors", "MR")));
@@ -856,29 +1109,63 @@ mod tests {
 
     #[test]
     fn days_in_a_row_start_over_after_a_gap() {
-        let rule = Rule::Days { need: 3, filter: Filter::default() };
+        let rule = Rule::Days {
+            need: 3,
+            filter: Filter::default(),
+        };
         let on = |days: &[u64]| days.iter().map(|d| play(d * DAY)).collect::<Vec<_>>();
         assert_eq!(met(&rule, &on(&[1, 2, 4, 5])), None);
         assert_eq!(met(&rule, &on(&[1, 2, 2, 3])), Some(3 * DAY));
-        assert_eq!(standing(&rule, &on(&[1, 2, 4]), &facts(HashSet::new())).have, 2);
+        assert_eq!(
+            standing(&rule, &on(&[1, 2, 4]), &facts(HashSet::new())).have,
+            2
+        );
     }
 
     #[test]
     fn the_collection_takes_real_plays_with_few_mods() {
         let rule = Rule::Collection { need: 2 };
-        let with = |mods: &[&str], accuracy: f64, stars: f64| Play { mods: mods.iter().map(|m| m.to_string()).collect(), accuracy, stars, ..play(1) };
+        let with = |mods: &[&str], accuracy: f64, stars: f64| Play {
+            mods: mods.iter().map(|m| m.to_string()).collect(),
+            accuracy,
+            stars,
+            ..play(1)
+        };
         assert_eq!(met(&rule, &[with(&["HD", "HR"], 0.9, 4.0)]), Some(1));
-        assert_eq!(met(&rule, &[with(&["HD", "HR"], 0.7, 4.0)]), None, "under 80%");
-        assert_eq!(met(&rule, &[with(&["HD", "HR"], 0.9, 2.0)]), None, "too easy a map");
-        assert_eq!(met(&rule, &[with(&["HD", "HR", "SW", "AB"], 0.9, 4.0)]), None, "four mods at once");
-        assert_eq!(met(&rule, &[with(&["HD", "NF"], 0.9, 4.0)]), None, "No Fail only counts for itself");
-        assert_eq!(met(&rule, &[with(&["AT", "RX"], 0.9, 4.0)]), None, "not in the collection");
+        assert_eq!(
+            met(&rule, &[with(&["HD", "HR"], 0.7, 4.0)]),
+            None,
+            "under 80%"
+        );
+        assert_eq!(
+            met(&rule, &[with(&["HD", "HR"], 0.9, 2.0)]),
+            None,
+            "too easy a map"
+        );
+        assert_eq!(
+            met(&rule, &[with(&["HD", "HR", "SW", "AB"], 0.9, 4.0)]),
+            None,
+            "four mods at once"
+        );
+        assert_eq!(
+            met(&rule, &[with(&["HD", "NF"], 0.9, 4.0)]),
+            None,
+            "No Fail only counts for itself"
+        );
+        assert_eq!(
+            met(&rule, &[with(&["AT", "RX"], 0.9, 4.0)]),
+            None,
+            "not in the collection"
+        );
     }
 
     #[test]
     fn weaning_needs_the_help_first() {
         let rule = Rule::Weaned { need: 1 };
-        let helped = Play { mods: vec!["HT".into()], ..play(1) };
+        let helped = Play {
+            mods: vec!["HT".into()],
+            ..play(1)
+        };
         assert_eq!(met(&rule, &[play(1), helped.clone()]), None);
         assert_eq!(met(&rule, &[helped, play(2)]), Some(2));
     }
@@ -887,35 +1174,96 @@ mod tests {
     fn a_speed_ladder_takes_all_three_on_one_map() {
         let at = |rate: f64| Play { rate, ..play(1) };
         assert_eq!(met(&Rule::SpeedLadder, &[at(0.75), at(1.0)]), None);
-        assert_eq!(met(&Rule::SpeedLadder, &[at(0.75), at(1.0), at(1.5)]), Some(1));
+        assert_eq!(
+            met(&Rule::SpeedLadder, &[at(0.75), at(1.0), at(1.5)]),
+            Some(1)
+        );
     }
 
     #[test]
     fn a_rematch_is_a_week_later_and_better() {
-        let later = |days: u64, accuracy: f64| Play { accuracy, ..play(1 + days * DAY) };
-        assert_eq!(met(&Rule::Rematch, &[later(0, 0.90), later(6, 0.95)]), None, "too soon");
-        assert_eq!(met(&Rule::Rematch, &[later(0, 0.90), later(8, 0.92)]), None, "not enough");
-        assert_eq!(met(&Rule::Rematch, &[later(0, 0.90), later(8, 0.93)]), Some(1 + 8 * DAY));
+        let later = |days: u64, accuracy: f64| Play {
+            accuracy,
+            ..play(1 + days * DAY)
+        };
+        assert_eq!(
+            met(&Rule::Rematch, &[later(0, 0.90), later(6, 0.95)]),
+            None,
+            "too soon"
+        );
+        assert_eq!(
+            met(&Rule::Rematch, &[later(0, 0.90), later(8, 0.92)]),
+            None,
+            "not enough"
+        );
+        assert_eq!(
+            met(&Rule::Rematch, &[later(0, 0.90), later(8, 0.93)]),
+            Some(1 + 8 * DAY)
+        );
     }
 
     #[test]
     fn the_same_score_twice_counts_but_not_perfect_ones() {
         assert_eq!(met(&Rule::SameScore, &[play(1), play(2)]), Some(2));
-        let perfect = |d: u64| Play { accuracy: 1.0, ..play(d) };
+        let perfect = |d: u64| Play {
+            accuracy: 1.0,
+            ..play(d)
+        };
         assert_eq!(met(&Rule::SameScore, &[perfect(1), perfect(2)]), None);
     }
 
     #[test]
     fn taking_first_place_needs_someone_to_take_it_from() {
         let mut p = play(1);
-        let rivals = Rivals::of([("a", p.clone()), ("a", Play { score: 2000, ..p.clone() }), ("b", Play { score: 1500, ..p.clone() }), ("b", Play { score: 3000, ..p.clone() }), ("c", Play { score: 3500, ..p.clone() })].into_iter());
+        let rivals = Rivals::of(
+            [
+                ("a", p.clone()),
+                (
+                    "a",
+                    Play {
+                        score: 2000,
+                        ..p.clone()
+                    },
+                ),
+                (
+                    "b",
+                    Play {
+                        score: 1500,
+                        ..p.clone()
+                    },
+                ),
+                (
+                    "b",
+                    Play {
+                        score: 3000,
+                        ..p.clone()
+                    },
+                ),
+                (
+                    "c",
+                    Play {
+                        score: 3500,
+                        ..p.clone()
+                    },
+                ),
+            ]
+            .into_iter(),
+        );
         assert!(!rivals.snipes.contains_key("a"), "their own score");
         assert_eq!(rivals.snipes["b"].len(), 1);
         assert_eq!(rivals.snipes["c"].len(), 1);
         assert_eq!(rivals.hills["c"].len(), 1, "third on the board");
-        assert!(!rivals.hills.contains_key("b"), "only two on the board then");
+        assert!(
+            !rivals.hills.contains_key("b"),
+            "only two on the board then"
+        );
         p.gives = false;
-        assert!(Rivals::of([("a", p.clone()), ("b", Play { score: 2000, ..p })].into_iter()).snipes.is_empty(), "maps without pp don't count");
+        assert!(
+            Rivals::of([("a", p.clone()), ("b", Play { score: 2000, ..p })].into_iter())
+                .snipes
+                .is_empty(),
+            "maps without pp don't count"
+        );
     }
 
     #[test]
@@ -924,7 +1272,11 @@ mod tests {
         let rivals = Rivals::default();
         let new = m.settle("a", &[play(1)], &rivals, 0, 10);
         assert!(new.iter().any(|n| n.id == "first_play"));
-        assert_eq!(m.settle("a", &[play(1)], &rivals, 0, 20), vec![], "already had them");
+        assert_eq!(
+            m.settle("a", &[play(1)], &rivals, 0, 20),
+            vec![],
+            "already had them"
+        );
         m.settle("a", &[], &rivals, 0, 25);
         assert!(m.summary("a").earned > 0, "only a deletion takes one back");
         m.revoke("a", &[], &rivals, 0, 30);
@@ -938,8 +1290,16 @@ mod tests {
         let rivals = Rivals::default();
         m.settle("a", &[play(100)], &rivals, 3_600_000, 500);
         let at = |m: &Medals, id: &str| m.saved.earned["a"][id];
-        assert_eq!(at(&m, "first_play"), 100, "a medal of a play: that play's date");
-        assert_eq!(at(&m, "hours_1"), 500, "no play to date it by: when it came");
+        assert_eq!(
+            at(&m, "first_play"),
+            100,
+            "a medal of a play: that play's date"
+        );
+        assert_eq!(
+            at(&m, "hours_1"),
+            500,
+            "no play to date it by: when it came"
+        );
         m.settle("a", &[play(100), play(200)], &rivals, 3_600_000, 900);
         assert_eq!(at(&m, "hours_1"), 500);
     }
@@ -965,7 +1325,22 @@ mod tests {
         let common = m.medal("first_play").unwrap().note();
         assert!(m.announcement(&[common]).is_none());
         // The first to get a Muzukashii one, whatever else came with it.
-        let new = m.settle("p0", &[play(1), Play { accuracy: 1.0, stars: 5.5, miss: 0, combo: 300, ..play(2) }], &rivals, 0, 20);
+        let new = m.settle(
+            "p0",
+            &[
+                play(1),
+                Play {
+                    accuracy: 1.0,
+                    stars: 5.5,
+                    miss: 0,
+                    combo: 300,
+                    ..play(2)
+                },
+            ],
+            &rivals,
+            0,
+            20,
+        );
         let a = m.announcement(&new).expect("rare");
         assert_eq!(a.medal.id, "ss_5");
         assert!(a.first);
@@ -973,22 +1348,72 @@ mod tests {
         assert_eq!(a.players, 10);
         // A quiet one never is, however rare.
         assert!(m.medal("r_founder").unwrap().quiet);
-        let quiet = Medals { list: m.list.iter().filter(|x| x.id == "r_founder").cloned().map(|x| Medal { tier: 4, ..x }).collect(), file: None, saved: Saved::default(), holders: HashMap::new() };
+        let quiet = Medals {
+            list: m
+                .list
+                .iter()
+                .filter(|x| x.id == "r_founder")
+                .cloned()
+                .map(|x| Medal { tier: 4, ..x })
+                .collect(),
+            file: None,
+            saved: Saved::default(),
+            holders: HashMap::new(),
+        };
         assert!(quiet.announcement(&[quiet.list[0].note()]).is_none());
     }
 
     #[test]
     fn a_secret_stays_hidden_until_someone_finds_it() {
         let mut m = Medals::load(None);
-        m.list.push(Medal { id: "s".into(), section: SECRET_SECTION, tier: 2, secret: true, name: Default::default(), about: ["hint".into(), "h".into(), "h".into()], art: vec!["x".into()], rule: Rule::Play(Filter { combo: Span { min: Some(777.0), max: Some(777.0) }, ..Filter::default() }), quiet: false });
+        m.list.push(Medal {
+            id: "s".into(),
+            section: SECRET_SECTION,
+            tier: 2,
+            secret: true,
+            name: Default::default(),
+            about: ["hint".into(), "h".into(), "h".into()],
+            art: vec!["x".into()],
+            rule: Rule::Play(Filter {
+                combo: Span {
+                    min: Some(777.0),
+                    max: Some(777.0),
+                },
+                ..Filter::default()
+            }),
+            quiet: false,
+        });
         let rivals = Rivals::default();
-        let row = |m: &Medals, who: &str| m.view(Some(who), &[], &rivals, 0).medals.into_iter().find(|r| r.id == "s").unwrap();
+        let row = |m: &Medals, who: &str| {
+            m.view(Some(who), &[], &rivals, 0)
+                .medals
+                .into_iter()
+                .find(|r| r.id == "s")
+                .unwrap()
+        };
         m.settle("a", &[play(1)], &rivals, 0, 5);
         let hidden = row(&m, "a");
-        assert!(hidden.name.is_none() && hidden.hint.is_none() && hidden.how.is_none() && hidden.art.is_empty());
-        m.settle("b", &[Play { combo: 777, ..play(1) }], &rivals, 0, 5);
+        assert!(
+            hidden.name.is_none()
+                && hidden.hint.is_none()
+                && hidden.how.is_none()
+                && hidden.art.is_empty()
+        );
+        m.settle(
+            "b",
+            &[Play {
+                combo: 777,
+                ..play(1)
+            }],
+            &rivals,
+            0,
+            5,
+        );
         let found = row(&m, "a");
-        assert!(found.name.is_some() && found.hint.is_some() && found.how.is_none(), "the hint opens for everyone, the rule never does");
+        assert!(
+            found.name.is_some() && found.hint.is_some() && found.how.is_none(),
+            "the hint opens for everyone, the rule never does"
+        );
     }
 
     #[test]
@@ -1000,7 +1425,10 @@ mod tests {
                          {"id":"s_z","tier":3,"name":["a","b","c"],"hint":["d","e","f"],"art":[],"rule":"same_score"}]"#;
         std::fs::write(dir.join("medal-secrets.json"), secret).unwrap();
         let m = Medals::load(Some(&dir));
-        assert!(m.medal("s_x").is_some_and(|x| x.secret && x.section == SECRET_SECTION));
+        assert!(
+            m.medal("s_x")
+                .is_some_and(|x| x.secret && x.section == SECRET_SECTION)
+        );
         assert_eq!(m.medal("s_z").unwrap().rule, Rule::SameScore);
         std::fs::write(dir.join("medal-secrets.json"), "{").unwrap();
         let m = Medals::load(Some(&dir));
@@ -1012,7 +1440,19 @@ mod tests {
     #[test]
     fn the_dan_on_a_profile_is_the_highest_one() {
         let mut m = Medals::load(None);
-        m.settle("a", &[Play { stars: 7.5, ..play(1) }], &Rivals::default(), 0, 5);
-        assert_eq!(m.summary("a").dan.unwrap()[0], m.medal("dan_7").unwrap().name[0]);
+        m.settle(
+            "a",
+            &[Play {
+                stars: 7.5,
+                ..play(1)
+            }],
+            &Rivals::default(),
+            0,
+            5,
+        );
+        assert_eq!(
+            m.summary("a").dan.unwrap()[0],
+            m.medal("dan_7").unwrap().name[0]
+        );
     }
 }

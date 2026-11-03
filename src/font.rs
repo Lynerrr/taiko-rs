@@ -185,7 +185,10 @@ pub const CELL_W: usize = 8;
 
 fn misaki(k: usize) -> (u32, &'static [u8]) {
     let g = &MISAKI[k * 12..k * 12 + 12];
-    (u32::from_le_bytes([g[0], g[1], g[2], g[3]]), &g[5..5 + g[4] as usize])
+    (
+        u32::from_le_bytes([g[0], g[1], g[2], g[3]]),
+        &g[5..5 + g[4] as usize],
+    )
 }
 
 /// The glyph `c` draws as, numbered 0..COUNT: printable ASCII from 0, Cyrillic from 95, then
@@ -237,7 +240,11 @@ fn by_index(i: usize) -> &'static [u8] {
 
 /// How many columns glyph `i` (`index`) is: it advances one more, the gap.
 pub fn columns(i: usize) -> usize {
-    if i < MISAKI_BASE { 5 } else { by_index(i).len() }
+    if i < MISAKI_BASE {
+        5
+    } else {
+        by_index(i).len()
+    }
 }
 
 /// How far `c` advances the text, in font pixels (6, or 8 for Japanese).
@@ -292,7 +299,9 @@ mod tests {
 
     #[test]
     fn japanese_has_glyphs_seven_wide() {
-        let kana = ('ぁ'..='ん').chain('ァ'..='ヶ').chain(['ー', '、', '。', '「', '」', '・']);
+        let kana = ('ぁ'..='ん')
+            .chain('ァ'..='ヶ')
+            .chain(['ー', '、', '。', '「', '」', '・']);
         for c in kana.chain("設定音量譜面難易度速度曲選択終了".chars()) {
             assert!(drawable(c), "{c}");
             assert_eq!(glyph(c).len(), 7, "{c}");

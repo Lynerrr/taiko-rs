@@ -20,7 +20,24 @@ pub fn is_command(text: &str) -> bool {
     let word = text.split_whitespace().next().unwrap_or("");
     matches!(
         word.to_ascii_lowercase().as_str(),
-        "/ban" | "/unban" | "/kick" | "/mute" | "/unmute" | "/rename" | "/nominator" | "/rmpfp" | "/purge" | "/lookup" | "/watch" | "/announce" | "/delplay" | "/pp" | "/roomkick" | "/closeroom" | "/overview" | "/help"
+        "/ban"
+            | "/unban"
+            | "/kick"
+            | "/mute"
+            | "/unmute"
+            | "/rename"
+            | "/nominator"
+            | "/rmpfp"
+            | "/purge"
+            | "/lookup"
+            | "/watch"
+            | "/announce"
+            | "/delplay"
+            | "/pp"
+            | "/roomkick"
+            | "/closeroom"
+            | "/overview"
+            | "/help"
     )
 }
 
@@ -31,7 +48,9 @@ fn minutes(s: &str) -> Result<u32, String> {
         Some((i, _)) => (&s[..i], &s[i..]),
         None => (s.as_str(), "m"),
     };
-    let n: u32 = n.parse().map_err(|_| format!("how long is \"{s}\"? say 30m, 2h or 1d"))?;
+    let n: u32 = n
+        .parse()
+        .map_err(|_| format!("how long is \"{s}\"? say 30m, 2h or 1d"))?;
     let per = match unit {
         "m" | "min" => 1,
         "h" => 60,
@@ -46,16 +65,29 @@ pub fn parse(text: &str) -> Result<Command, String> {
     let mut words = text.split_whitespace();
     let cmd = words.next().unwrap_or("").to_ascii_lowercase();
     let args: Vec<&str> = words.collect();
-    let need = |n: usize, usage: &str| if args.len() < n { Err(format!("usage: {usage}")) } else { Ok(()) };
+    let need = |n: usize, usage: &str| {
+        if args.len() < n {
+            Err(format!("usage: {usage}"))
+        } else {
+            Ok(())
+        }
+    };
     let name = |i: usize| args[i].to_string();
-    let id = |i: usize| args[i].parse::<u64>().map_err(|_| format!("\"{}\" isn't a play's number", args[i]));
+    let id = |i: usize| {
+        args[i]
+            .parse::<u64>()
+            .map_err(|_| format!("\"{}\" isn't a play's number", args[i]))
+    };
     let op = |o: AdminOp| Ok(Command::Op(o));
     match cmd.as_str() {
         "/help" => Ok(Command::Help),
         "/overview" => op(AdminOp::Overview),
         "/ban" | "/unban" => {
             need(1, &format!("{cmd} name"))?;
-            op(AdminOp::Ban { name: name(0), on: cmd == "/ban" })
+            op(AdminOp::Ban {
+                name: name(0),
+                on: cmd == "/ban",
+            })
         }
         "/kick" => {
             need(1, "/kick name")?;
@@ -63,23 +95,39 @@ pub fn parse(text: &str) -> Result<Command, String> {
         }
         "/mute" => {
             need(1, "/mute name [30m|2h|1d]")?;
-            let m = if args.len() > 1 { minutes(args[1])? } else { 30 };
+            let m = if args.len() > 1 {
+                minutes(args[1])?
+            } else {
+                30
+            };
             if m == 0 {
                 return Err("a mute lasts at least a minute (/unmute lets them back)".into());
             }
-            op(AdminOp::Mute { name: name(0), minutes: m })
+            op(AdminOp::Mute {
+                name: name(0),
+                minutes: m,
+            })
         }
         "/unmute" => {
             need(1, "/unmute name")?;
-            op(AdminOp::Mute { name: name(0), minutes: 0 })
+            op(AdminOp::Mute {
+                name: name(0),
+                minutes: 0,
+            })
         }
         "/rename" => {
             need(2, "/rename name new_name")?;
-            op(AdminOp::Rename { name: name(0), new: name(1) })
+            op(AdminOp::Rename {
+                name: name(0),
+                new: name(1),
+            })
         }
         "/nominator" => {
             need(1, "/nominator name [on|off]")?;
-            let on = !matches!(args.get(1).map(|s| s.to_ascii_lowercase()).as_deref(), Some("off" | "0" | "no"));
+            let on = !matches!(
+                args.get(1).map(|s| s.to_ascii_lowercase()).as_deref(),
+                Some("off" | "0" | "no")
+            );
             op(AdminOp::Nominator { name: name(0), on })
         }
         "/rmpfp" => {
@@ -111,17 +159,32 @@ pub fn parse(text: &str) -> Result<Command, String> {
         }
         "/pp" => {
             need(2, "/pp id value|reset")?;
-            let pp = if args[1].eq_ignore_ascii_case("reset") { None } else { Some(args[1].parse::<f64>().map_err(|_| "pp is a number, or reset".to_string())?) };
+            let pp = if args[1].eq_ignore_ascii_case("reset") {
+                None
+            } else {
+                Some(
+                    args[1]
+                        .parse::<f64>()
+                        .map_err(|_| "pp is a number, or reset".to_string())?,
+                )
+            };
             op(AdminOp::SetPp { id: id(0)?, pp })
         }
         "/roomkick" => {
             need(2, "/roomkick room name")?;
-            let room = args[0].parse().map_err(|_| format!("\"{}\" isn't a lobby's number", args[0]))?;
-            op(AdminOp::KickFromRoom { room, name: name(1) })
+            let room = args[0]
+                .parse()
+                .map_err(|_| format!("\"{}\" isn't a lobby's number", args[0]))?;
+            op(AdminOp::KickFromRoom {
+                room,
+                name: name(1),
+            })
         }
         "/closeroom" => {
             need(1, "/closeroom room")?;
-            let room = args[0].parse().map_err(|_| format!("\"{}\" isn't a lobby's number", args[0]))?;
+            let room = args[0]
+                .parse()
+                .map_err(|_| format!("\"{}\" isn't a lobby's number", args[0]))?;
             op(AdminOp::CloseRoom { room })
         }
         _ => Err(format!("no such command: {cmd} (/help lists them)")),
@@ -144,17 +207,79 @@ mod tests {
 
     #[test]
     fn commands_become_admin_ops() {
-        assert_eq!(parse("/ban troll"), Ok(Command::Op(AdminOp::Ban { name: "troll".into(), on: true })));
-        assert_eq!(parse("/UNBAN troll"), Ok(Command::Op(AdminOp::Ban { name: "troll".into(), on: false })));
-        assert_eq!(parse("/mute troll 2h"), Ok(Command::Op(AdminOp::Mute { name: "troll".into(), minutes: 120 })));
-        assert_eq!(parse("/mute troll"), Ok(Command::Op(AdminOp::Mute { name: "troll".into(), minutes: 30 })));
-        assert_eq!(parse("/mute troll 1d"), Ok(Command::Op(AdminOp::Mute { name: "troll".into(), minutes: 1440 })));
-        assert_eq!(parse("/unmute troll"), Ok(Command::Op(AdminOp::Mute { name: "troll".into(), minutes: 0 })));
-        assert_eq!(parse("/nominator ann off"), Ok(Command::Op(AdminOp::Nominator { name: "ann".into(), on: false })));
-        assert_eq!(parse("/announce  restart in 5 minutes!"), Ok(Command::Op(AdminOp::Announce("restart in 5 minutes!".into()))));
-        assert_eq!(parse("/pp 12 reset"), Ok(Command::Op(AdminOp::SetPp { id: 12, pp: None })));
-        assert_eq!(parse("/pp 12 345.5"), Ok(Command::Op(AdminOp::SetPp { id: 12, pp: Some(345.5) })));
-        assert_eq!(parse("/roomkick 3 troll"), Ok(Command::Op(AdminOp::KickFromRoom { room: 3, name: "troll".into() })));
+        assert_eq!(
+            parse("/ban troll"),
+            Ok(Command::Op(AdminOp::Ban {
+                name: "troll".into(),
+                on: true
+            }))
+        );
+        assert_eq!(
+            parse("/UNBAN troll"),
+            Ok(Command::Op(AdminOp::Ban {
+                name: "troll".into(),
+                on: false
+            }))
+        );
+        assert_eq!(
+            parse("/mute troll 2h"),
+            Ok(Command::Op(AdminOp::Mute {
+                name: "troll".into(),
+                minutes: 120
+            }))
+        );
+        assert_eq!(
+            parse("/mute troll"),
+            Ok(Command::Op(AdminOp::Mute {
+                name: "troll".into(),
+                minutes: 30
+            }))
+        );
+        assert_eq!(
+            parse("/mute troll 1d"),
+            Ok(Command::Op(AdminOp::Mute {
+                name: "troll".into(),
+                minutes: 1440
+            }))
+        );
+        assert_eq!(
+            parse("/unmute troll"),
+            Ok(Command::Op(AdminOp::Mute {
+                name: "troll".into(),
+                minutes: 0
+            }))
+        );
+        assert_eq!(
+            parse("/nominator ann off"),
+            Ok(Command::Op(AdminOp::Nominator {
+                name: "ann".into(),
+                on: false
+            }))
+        );
+        assert_eq!(
+            parse("/announce  restart in 5 minutes!"),
+            Ok(Command::Op(AdminOp::Announce(
+                "restart in 5 minutes!".into()
+            )))
+        );
+        assert_eq!(
+            parse("/pp 12 reset"),
+            Ok(Command::Op(AdminOp::SetPp { id: 12, pp: None }))
+        );
+        assert_eq!(
+            parse("/pp 12 345.5"),
+            Ok(Command::Op(AdminOp::SetPp {
+                id: 12,
+                pp: Some(345.5)
+            }))
+        );
+        assert_eq!(
+            parse("/roomkick 3 troll"),
+            Ok(Command::Op(AdminOp::KickFromRoom {
+                room: 3,
+                name: "troll".into()
+            }))
+        );
         assert_eq!(parse("/watch bob"), Ok(Command::Watch("bob".into())));
         assert!(parse("/ban").unwrap_err().starts_with("usage"));
         assert!(parse("/mute troll forever").is_err());

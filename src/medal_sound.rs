@@ -27,7 +27,10 @@ struct Track {
 
 impl Track {
     fn new(sr: f32, seconds: f32) -> Track {
-        Track { sr, out: vec![0.0; (seconds * sr) as usize] }
+        Track {
+            sr,
+            out: vec![0.0; (seconds * sr) as usize],
+        }
     }
 
     fn at(&self, seconds: f32) -> usize {
@@ -88,7 +91,8 @@ impl Track {
             read += speed;
             let at = read as usize;
             let t = read.fract();
-            *s = tail.get(at).copied().unwrap_or(0.0) * (1.0 - t) + tail.get(at + 1).copied().unwrap_or(0.0) * t;
+            *s = tail.get(at).copied().unwrap_or(0.0) * (1.0 - t)
+                + tail.get(at + 1).copied().unwrap_or(0.0) * t;
         }
     }
 
@@ -118,7 +122,11 @@ impl Track {
             let d = ((delay * self.sr) as usize).max(1);
             let dry = bank.clone();
             for i in 0..bank.len() {
-                let (back, past) = if i >= d { (dry[i - d], bank[i - d]) } else { (0.0, 0.0) };
+                let (back, past) = if i >= d {
+                    (dry[i - d], bank[i - d])
+                } else {
+                    (0.0, 0.0)
+                };
                 bank[i] = -g * dry[i] + back + g * past;
             }
         }
@@ -134,7 +142,8 @@ impl Track {
         let len = self.out.len();
         let fade = (0.04 * self.sr) as usize;
         for (i, s) in self.out.iter_mut().enumerate() {
-            *s = (*s / most * drive).tanh() / top * peak * ((len - i) as f32 / fade as f32).min(1.0);
+            *s =
+                (*s / most * drive).tanh() / top * peak * ((len - i) as f32 / fade as f32).min(1.0);
         }
         self.out
     }
@@ -149,7 +158,9 @@ fn drum(sr: f32, seconds: f32, freq: f32, decay: f32, slap: f32, hiss: &mut Hiss
             let t = i as f32 / sr;
             phase += freq * (1.0 + 2.8 * (-t * 34.0).exp()) / sr;
             low += 0.35 * (hiss.next() - low);
-            (-t * decay).exp() * (phase * TAU).sin() + 0.4 * (-t * decay * 1.8).exp() * (phase * 1.59 * TAU).sin() + slap * (-t * 55.0).exp() * low * 2.0
+            (-t * decay).exp() * (phase * TAU).sin()
+                + 0.4 * (-t * decay * 1.8).exp() * (phase * 1.59 * TAU).sin()
+                + slap * (-t * 55.0).exp() * low * 2.0
         })
         .collect()
 }
@@ -172,7 +183,14 @@ fn bells(sr: f32, seconds: f32, freqs: &[f32], decay: f32) -> Vec<f32> {
         .map(|i| {
             let t = i as f32 / sr;
             let env = (t / 0.004).min(1.0) * (-t * decay).exp();
-            env * freqs.iter().map(|f| (t * f * TAU).sin() + 0.3 * (t * f * 2.0 * TAU).sin() + 0.1 * (t * f * 3.01 * TAU).sin()).sum::<f32>()
+            env * freqs
+                .iter()
+                .map(|f| {
+                    (t * f * TAU).sin()
+                        + 0.3 * (t * f * 2.0 * TAU).sin()
+                        + 0.1 * (t * f * 3.01 * TAU).sin()
+                })
+                .sum::<f32>()
         })
         .collect()
 }
@@ -265,7 +283,11 @@ fn muzukashii(sr: f32) -> Vec<f32> {
     wind_up(&mut t, &mut hiss, 8, 0.3);
     let hit = drum(sr, 1.4, 82.0, 4.6, 0.55, &mut hiss);
     t.add(LAND, &hit, 1.3);
-    t.add(LAND, &saws(sr, 1.5, &[130.81, 196.0, 261.63, 329.63, 392.0], 2.6), 0.14);
+    t.add(
+        LAND,
+        &saws(sr, 1.5, &[130.81, 196.0, 261.63, 329.63, 392.0], 2.6),
+        0.14,
+    );
     t.add(LAND, &bells(sr, 1.2, &[1046.5, 1568.0, 2093.0], 3.5), 0.08);
     t.reverb(1.2, 0.74, 0.28);
     t.stutter(LAND + 0.3, 0.05, 3);
@@ -286,8 +308,14 @@ fn oni(sr: f32) -> Vec<f32> {
     t.add(LAND, &hit, 1.7);
     let second = drum(sr, 1.0, 110.0, 6.0, 0.5, &mut hiss);
     t.add(LAND, &second, 0.6);
-    t.add(LAND, &saws(sr, 2.2, &[73.42, 110.0, 146.83, 220.0, 293.66, 311.13], 1.5), 0.2);
-    let crash: Vec<f32> = (0..(1.6 * sr) as usize).map(|i| hiss.next() * (-(i as f32) / sr * 4.0).exp()).collect();
+    t.add(
+        LAND,
+        &saws(sr, 2.2, &[73.42, 110.0, 146.83, 220.0, 293.66, 311.13], 1.5),
+        0.2,
+    );
+    let crash: Vec<f32> = (0..(1.6 * sr) as usize)
+        .map(|i| hiss.next() * (-(i as f32) / sr * 4.0).exp())
+        .collect();
     t.add(LAND, &crash, 0.09);
     t.ring(LAND + 0.05, 57.0, 0.35);
     t.reverb(1.3, 0.76, 0.3);
@@ -310,7 +338,11 @@ fn ura(sr: f32) -> Vec<f32> {
     t.add(0.0, &back, 0.24);
     let hit = drum(sr, 2.2, 41.0, 2.1, 0.5, &mut hiss);
     t.add(LAND, &hit, 1.6);
-    t.add(LAND, &saws(sr, 2.5, &[73.42, 77.78, 103.83, 155.56], 1.1), 0.24);
+    t.add(
+        LAND,
+        &saws(sr, 2.5, &[73.42, 77.78, 103.83, 155.56], 1.1),
+        0.24,
+    );
     let bucket = (0.04 * sr) as usize;
     let mut static_on = true;
     let burst: Vec<f32> = (0..(2.0 * sr) as usize)
@@ -319,7 +351,11 @@ fn ura(sr: f32) -> Vec<f32> {
                 static_on = hiss.next() > 0.1;
             }
             let x = hiss.next();
-            if static_on { x * (-(i as f32) / sr * 1.6).exp() } else { 0.0 }
+            if static_on {
+                x * (-(i as f32) / sr * 1.6).exp()
+            } else {
+                0.0
+            }
         })
         .collect();
     t.add(LAND, &burst, 0.2);
@@ -347,17 +383,26 @@ mod tests {
 
     /// The loudest sample in a stretch of seconds.
     fn peak(s: &[f32], from: f32, to: f32) -> f32 {
-        let (from, to) = ((from * RATE as f32) as usize, ((to * RATE as f32) as usize).min(s.len()));
+        let (from, to) = (
+            (from * RATE as f32) as usize,
+            ((to * RATE as f32) as usize).min(s.len()),
+        );
         s[from..to].iter().fold(0.0, |m, x| m.max(x.abs()))
     }
 
     #[test]
     fn every_sound_hits_on_the_landing_and_stays_in_range() {
         for (tier, s) in sounds(RATE).iter().enumerate() {
-            assert!(s.iter().all(|x| x.is_finite() && x.abs() <= 1.0), "tier {tier}");
+            assert!(
+                s.iter().all(|x| x.is_finite() && x.abs() <= 1.0),
+                "tier {tier}"
+            );
             let before = peak(s, 0.0, LAND - 0.01);
             let after = peak(s, LAND, LAND + 0.12);
-            assert!(after > before * 1.3, "tier {tier}: {before} before, {after} on the hit");
+            assert!(
+                after > before * 1.3,
+                "tier {tier}: {before} before, {after} on the hit"
+            );
         }
     }
 
@@ -380,10 +425,15 @@ mod tests {
     #[test]
     fn the_tape_runs_down_to_nothing() {
         let mut t = Track::new(RATE as f32, 1.0);
-        let tone: Vec<f32> = (0..RATE as usize).map(|i| (i as f32 / 100.0).sin()).collect();
+        let tone: Vec<f32> = (0..RATE as usize)
+            .map(|i| (i as f32 / 100.0).sin())
+            .collect();
         t.add(0.0, &tone, 1.0);
         t.tape_stop(0.5);
-        assert!(peak(&t.out, 0.96, 0.999) < peak(&t.out, 0.5, 0.6), "slower and slower, so it changes less and less");
+        assert!(
+            peak(&t.out, 0.96, 0.999) < peak(&t.out, 0.5, 0.6),
+            "slower and slower, so it changes less and less"
+        );
     }
 
     #[test]

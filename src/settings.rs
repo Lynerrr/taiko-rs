@@ -3,7 +3,7 @@
 
 use std::cell::Cell;
 
-use crate::render::{accent, approach, rgba, Canvas, Glide, Hit};
+use crate::render::{Canvas, Glide, Hit, accent, approach, rgba};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
@@ -47,6 +47,7 @@ pub enum Item {
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
+    BlackLane,
     HideGreat,
     ChatFilter,
     MessageSound,
@@ -112,7 +113,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 124] = [
+pub const ITEMS: [(&str, Item); 125] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -139,6 +140,7 @@ pub const ITEMS: [(&str, Item); 124] = [
     ("VIEW", Item::BackgroundDim),
     ("VIEW", Item::BackgroundDimBlack),
     ("VIEW", Item::KiaiEffects),
+    ("VIEW", Item::BlackLane),
     ("INPUT", Item::Key(0)),
     ("INPUT", Item::Key(1)),
     ("INPUT", Item::Key(2)),
@@ -255,7 +257,10 @@ pub const SECTIONS: [(&str, &str); 10] = [
 
 /// First item of section `s`.
 pub fn section_start(s: usize) -> usize {
-    ITEMS.iter().position(|(sec, _)| *sec == SECTIONS[s].0).unwrap_or(0)
+    ITEMS
+        .iter()
+        .position(|(sec, _)| *sec == SECTIONS[s].0)
+        .unwrap_or(0)
 }
 
 /// Section `s`'s name, as shown (`SECTIONS` has the English, which `ITEMS` refers to it by).
@@ -278,16 +283,48 @@ pub fn section_name(s: usize) -> &'static str {
 /// Section `s`'s one-line summary for the sidebar.
 pub fn section_summary(s: usize) -> &'static str {
     match SECTIONS.get(s).map_or("", |s| s.0) {
-        "LIBRARY" => tr!("Songs folder, hidden maps, data", "Songsフォルダ、非表示の譜面、データ", "папка Songs, скрытые карты, данные"),
-        "GAMEPLAY" => tr!("speed, rate, interface", "速度、レート、インターフェース", "скорость, рейт, интерфейс"),
-        "VIEW" => tr!("playfield, background", "プレイフィールド、背景", "игровое поле, фон"),
-        "INPUT" => tr!("drum keys, hotkeys, touch", "太鼓のキー、ショートカット、タッチ", "клавиши, горячие клавиши"),
-        "OFFSET" => tr!("audio offset, calibration", "音声オフセット、調整", "смещение звука, калибровка"),
+        "LIBRARY" => tr!(
+            "Songs folder, hidden maps, data",
+            "Songsフォルダ、非表示の譜面、データ",
+            "папка Songs, скрытые карты, данные"
+        ),
+        "GAMEPLAY" => tr!(
+            "speed, rate, interface",
+            "速度、レート、インターフェース",
+            "скорость, рейт, интерфейс"
+        ),
+        "VIEW" => tr!(
+            "playfield, background",
+            "プレイフィールド、背景",
+            "игровое поле, фон"
+        ),
+        "INPUT" => tr!(
+            "drum keys, hotkeys, touch",
+            "太鼓のキー、ショートカット、タッチ",
+            "клавиши, горячие клавиши"
+        ),
+        "OFFSET" => tr!(
+            "audio offset, calibration",
+            "音声オフセット、調整",
+            "смещение звука, калибровка"
+        ),
         "AUDIO" => tr!("volume, latency", "音量、遅延", "громкость, задержка"),
         "VIDEO" => tr!("frame pacing, display", "フレーム、画面", "кадры, экран"),
-        "SKIN" => tr!("notes, hit flash, colour", "ノーツ、ヒット時の光、色", "ноты, вспышка, цвет"),
-        "ONLINE" => tr!("chat, notifications, Discord", "チャット、通知、Discord", "чат, уведомления, Discord"),
-        "SYSTEM" => tr!("language, startup, updates", "言語、起動、アップデート", "язык, запуск, обновления"),
+        "SKIN" => tr!(
+            "notes, hit flash, colour",
+            "ノーツ、ヒット時の光、色",
+            "ноты, вспышка, цвет"
+        ),
+        "ONLINE" => tr!(
+            "chat, notifications, Discord",
+            "チャット、通知、Discord",
+            "чат, уведомления, Discord"
+        ),
+        "SYSTEM" => tr!(
+            "language, startup, updates",
+            "言語、起動、アップデート",
+            "язык, запуск, обновления"
+        ),
         _ => "",
     }
 }
@@ -300,7 +337,11 @@ pub fn group_heading(item: Item) -> Option<&'static str> {
         Item::PlayfieldArea => tr!("Playfield", "プレイフィールド", "Игровое поле"),
         Item::BackgroundDim => tr!("Background", "背景", "Фон"),
         Item::Key(0) => tr!("Drum", "太鼓", "Барабан"),
-        Item::PresetKey(0) => tr!("Playfield presets", "プレイフィールドのプリセット", "Пресеты поля"),
+        Item::PresetKey(0) => tr!(
+            "Playfield presets",
+            "プレイフィールドのプリセット",
+            "Пресеты поля"
+        ),
         Item::Hotkey(0) => tr!("In a song", "プレイ中", "В песне"),
         Item::Hotkey(6) => tr!("Song select", "選曲画面", "Выбор песни"),
         Item::Hotkey(16) => tr!("Results", "リザルト", "Результаты"),
@@ -355,60 +396,177 @@ impl Item {
     pub fn label(self) -> &'static str {
         match self {
             Item::ScrollSpeed => tr!("Scroll speed", "スクロール速度", "Скорость прокрутки"),
-            Item::PlayfieldArea => tr!("Playfield area", "プレイフィールドの範囲", "Область игрового поля"),
-            Item::PlayfieldReset => tr!("Reset playfield area", "プレイフィールドを元に戻す", "Сбросить игровое поле"),
-            Item::PlayfieldPreset => tr!("Playfield preset", "プレイフィールドのプリセット", "Пресет игрового поля"),
+            Item::PlayfieldArea => tr!(
+                "Playfield area",
+                "プレイフィールドの範囲",
+                "Область игрового поля"
+            ),
+            Item::PlayfieldReset => tr!(
+                "Reset playfield area",
+                "プレイフィールドを元に戻す",
+                "Сбросить игровое поле"
+            ),
+            Item::PlayfieldPreset => tr!(
+                "Playfield preset",
+                "プレイフィールドのプリセット",
+                "Пресет игрового поля"
+            ),
             Item::Rate => tr!("Speed (rate)", "再生速度 (レート)", "Скорость (рейт)"),
-            Item::RateKeepPitch => tr!("Rate keeps pitch", "レートで音程を保つ", "Рейт сохраняет тон"),
+            Item::RateKeepPitch => tr!(
+                "Rate keeps pitch",
+                "レートで音程を保つ",
+                "Рейт сохраняет тон"
+            ),
             Item::Offset => tr!("Audio offset", "音声オフセット", "Смещение звука"),
             Item::VisualOffset => tr!("Visual offset", "表示オフセット", "Смещение картинки"),
-            Item::Calibrate => tr!("Offset calibration", "オフセット調整", "Калибровка смещения"),
+            Item::Calibrate => tr!(
+                "Offset calibration",
+                "オフセット調整",
+                "Калибровка смещения"
+            ),
             Item::CalibrationBpm => tr!("Calibration tempo", "調整のテンポ", "Темп калибровки"),
-            Item::LiveOffset => tr!("Live offset suggestion", "プレイ中のオフセット提案", "Подсказка смещения в игре"),
-            Item::LiveOffsetUr => tr!("Scale suggestion to UR", "提案をURに合わせる", "Подсказка с учётом UR"),
-            Item::VsyncCompensation => tr!("Vsync compensation", "垂直同期の補正", "Компенсация vsync"),
-            Item::VsyncTune => tr!("Vsync compensation: fine tune", "垂直同期の補正: 微調整", "Компенсация vsync: точно"),
+            Item::LiveOffset => tr!(
+                "Live offset suggestion",
+                "プレイ中のオフセット提案",
+                "Подсказка смещения в игре"
+            ),
+            Item::LiveOffsetUr => tr!(
+                "Scale suggestion to UR",
+                "提案をURに合わせる",
+                "Подсказка с учётом UR"
+            ),
+            Item::VsyncCompensation => {
+                tr!("Vsync compensation", "垂直同期の補正", "Компенсация vsync")
+            }
+            Item::VsyncTune => tr!(
+                "Vsync compensation: fine tune",
+                "垂直同期の補正: 微調整",
+                "Компенсация vsync: точно"
+            ),
             Item::VsyncCalibrate => tr!("Vsync calibration", "垂直同期の調整", "Калибровка vsync"),
             Item::ResumeDelay => tr!("Resume delay", "再開までの待ち時間", "Задержка продолжения"),
             Item::Interface => tr!("Interface", "インターフェース", "Интерфейс"),
-            Item::InterfaceHides => tr!("Interface toggle hides", "切り替えで隠すもの", "Что скрывает переключение"),
-            Item::InterfaceKey => tr!("Interface toggle key", "インターフェースの切替キー", "Клавиша интерфейса"),
-            Item::SongSelectLayout => tr!("Song select layout", "選曲画面のレイアウト", "Макет выбора песни"),
-            Item::AutoplayStyle => tr!("Autoplay playstyle", "オートプレイの叩き方", "Стиль автоигры"),
-            Item::AutoplayBinding => tr!("Autoplay binding", "オートプレイのキー配置", "Раскладка автоигры"),
-            Item::AutoplayLeftHanded => tr!("Autoplay left-handed", "オートプレイを左利きに", "Автоигра левой рукой"),
+            Item::InterfaceHides => tr!(
+                "Interface toggle hides",
+                "切り替えで隠すもの",
+                "Что скрывает переключение"
+            ),
+            Item::InterfaceKey => tr!(
+                "Interface toggle key",
+                "インターフェースの切替キー",
+                "Клавиша интерфейса"
+            ),
+            Item::SongSelectLayout => tr!(
+                "Song select layout",
+                "選曲画面のレイアウト",
+                "Макет выбора песни"
+            ),
+            Item::AutoplayStyle => tr!(
+                "Autoplay playstyle",
+                "オートプレイの叩き方",
+                "Стиль автоигры"
+            ),
+            Item::AutoplayBinding => tr!(
+                "Autoplay binding",
+                "オートプレイのキー配置",
+                "Раскладка автоигры"
+            ),
+            Item::AutoplayLeftHanded => tr!(
+                "Autoplay left-handed",
+                "オートプレイを左利きに",
+                "Автоигра левой рукой"
+            ),
             Item::Key(i) => key_label(i),
-            Item::PresetKey(0) => tr!("Previous preset key", "前のプリセットのキー", "Клавиша: пред. пресет"),
-            Item::PresetKey(_) => tr!("Next preset key", "次のプリセットのキー", "Клавиша: след. пресет"),
+            Item::PresetKey(0) => tr!(
+                "Previous preset key",
+                "前のプリセットのキー",
+                "Клавиша: пред. пресет"
+            ),
+            Item::PresetKey(_) => tr!(
+                "Next preset key",
+                "次のプリセットのキー",
+                "Клавиша: след. пресет"
+            ),
             Item::Hotkey(i) => crate::keys::Hotkey::ALL[i].label(),
             Item::TouchLayout => tr!("Touch layout", "タッチの配置", "Сенсорная раскладка"),
             Item::Screenshots => tr!("Screenshots", "スクリーンショット", "Скриншоты"),
             // Also in English, so anyone who picked a language by mistake finds their way back.
             Item::Language => tr!("Language", "言語 (Language)", "Язык (Language)"),
-            Item::ShowPlayfieldSize => tr!("Show playfield size", "プレイフィールドのサイズを表示", "Показывать размер поля"),
-            Item::WheelResize => tr!("Wheel resizes playfield", "ホイールでサイズを変える", "Колесо меняет размер поля"),
+            Item::ShowPlayfieldSize => tr!(
+                "Show playfield size",
+                "プレイフィールドのサイズを表示",
+                "Показывать размер поля"
+            ),
+            Item::WheelResize => tr!(
+                "Wheel resizes playfield",
+                "ホイールでサイズを変える",
+                "Колесо меняет размер поля"
+            ),
             Item::KiaiEffects => tr!("Kiai effects", "キアイの演出", "Эффекты киай"),
-            Item::HideGreat => tr!("Hide GREAT splash", "GREATの表示を隠す", "Скрыть вспышку GREAT"),
+            Item::BlackLane => tr!("Black lane", "黒いレーン", "Чёрная дорожка"),
+            Item::HideGreat => tr!(
+                "Hide GREAT splash",
+                "GREATの表示を隠す",
+                "Скрыть вспышку GREAT"
+            ),
             Item::HitFlash => tr!("Hit flash", "ヒット時の光", "Вспышка при попадании"),
             Item::ChatFilter => tr!("Chat filter", "チャットフィルター", "Фильтр чата"),
             Item::MessageSound => tr!("Message sound", "メッセージの音", "Звук сообщений"),
-            Item::NotifyMessages => tr!("Notify: messages", "通知: メッセージ", "Уведомлять: сообщения"),
-            Item::NotifyMentions => tr!("Notify: chat mentions", "通知: チャットでの呼びかけ", "Уведомлять: упоминания"),
-            Item::NotifyRequests => tr!("Notify: friend requests", "通知: フレンド申請", "Уведомлять: заявки в друзья"),
-            Item::NotifyOnline => tr!("Notify: friend online", "通知: フレンドのログイン", "Уведомлять: друг в сети"),
-            Item::NotifyPlaying => tr!("Notify: friend playing", "通知: フレンドのプレイ", "Уведомлять: друг играет"),
-            Item::ShowConverts => tr!("Show osu!standard converts", "osu!standardの変換譜面を表示", "Карты osu!standard (конверты)"),
-            Item::SongHeadings => tr!("Song list headings", "曲リストの見出し", "Заголовки в списке песен"),
+            Item::NotifyMessages => tr!(
+                "Notify: messages",
+                "通知: メッセージ",
+                "Уведомлять: сообщения"
+            ),
+            Item::NotifyMentions => tr!(
+                "Notify: chat mentions",
+                "通知: チャットでの呼びかけ",
+                "Уведомлять: упоминания"
+            ),
+            Item::NotifyRequests => tr!(
+                "Notify: friend requests",
+                "通知: フレンド申請",
+                "Уведомлять: заявки в друзья"
+            ),
+            Item::NotifyOnline => tr!(
+                "Notify: friend online",
+                "通知: フレンドのログイン",
+                "Уведомлять: друг в сети"
+            ),
+            Item::NotifyPlaying => tr!(
+                "Notify: friend playing",
+                "通知: フレンドのプレイ",
+                "Уведомлять: друг играет"
+            ),
+            Item::ShowConverts => tr!(
+                "Show osu!standard converts",
+                "osu!standardの変換譜面を表示",
+                "Карты osu!standard (конверты)"
+            ),
+            Item::SongHeadings => tr!(
+                "Song list headings",
+                "曲リストの見出し",
+                "Заголовки в списке песен"
+            ),
             Item::HiddenMaps => tr!("Hidden maps", "非表示の譜面", "Скрытые карты"),
             Item::SongsFolder => tr!("Songs folder", "Songsフォルダ", "Папка Songs"),
-            Item::DataFolder => tr!("Game data folder", "ゲームデータのフォルダ", "Папка данных игры"),
+            Item::DataFolder => tr!(
+                "Game data folder",
+                "ゲームデータのフォルダ",
+                "Папка данных игры"
+            ),
             Item::MasterVolume => tr!("Master volume", "全体の音量", "Общая громкость"),
             Item::MusicVolume => tr!("Music volume", "音楽の音量", "Громкость музыки"),
             Item::FxVolume => tr!("Hitsound volume", "ヒット音の音量", "Громкость хитсаундов"),
             Item::AudioBuffer => tr!("Audio buffer", "オーディオバッファ", "Аудиобуфер"),
             Item::BackgroundDim => tr!("Background dim", "背景の暗さ", "Затемнение фона"),
-            Item::BackgroundDimBlack => tr!("Dim to black", "黒まで暗くする", "Затемнять до чёрного"),
-            Item::PresentMode => tr!("Present mode (gameplay)", "表示モード (プレイ中)", "Режим вывода (в игре)"),
+            Item::BackgroundDimBlack => {
+                tr!("Dim to black", "黒まで暗くする", "Затемнять до чёрного")
+            }
+            Item::PresentMode => tr!(
+                "Present mode (gameplay)",
+                "表示モード (プレイ中)",
+                "Режим вывода (в игре)"
+            ),
             Item::Renderer => tr!("Renderer", "レンダラー", "Рендер"),
             Item::MenuVsync => tr!("Menus use vsync", "メニューは垂直同期", "Vsync в меню"),
             Item::HalfResolution => tr!("Half resolution", "半分の解像度", "Половинное разрешение"),
@@ -418,29 +576,70 @@ impl Item {
             Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
             Item::LegacyMenu => tr!("Legacy menu", "旧メニュー", "Старое меню"),
             Item::Letterbox => tr!("Letterbox", "レターボックス", "Чёрные поля (letterbox)"),
-            Item::LetterboxSize => tr!("Letterbox resolution", "レターボックスの解像度", "Разрешение с полями"),
-            Item::LetterboxX => tr!("Letterbox position: sideways", "レターボックスの位置: 横", "Положение: по горизонтали"),
-            Item::LetterboxY => tr!("Letterbox position: up and down", "レターボックスの位置: 縦", "Положение: по вертикали"),
-            Item::MenuNotes => tr!("Notes behind the main menu", "メインメニューの背景のノーツ", "Ноты за главным меню"),
-            Item::MenuNotesDim => tr!("Menu lane notes dim", "メニューのレーンのノーツの暗さ", "Затемнение нот на дорожке меню"),
-            Item::ResetMapOffsets => tr!("Reset map offsets", "譜面のオフセットをリセット", "Сбросить оффсеты карт"),
+            Item::LetterboxSize => tr!(
+                "Letterbox resolution",
+                "レターボックスの解像度",
+                "Разрешение с полями"
+            ),
+            Item::LetterboxX => tr!(
+                "Letterbox position: sideways",
+                "レターボックスの位置: 横",
+                "Положение: по горизонтали"
+            ),
+            Item::LetterboxY => tr!(
+                "Letterbox position: up and down",
+                "レターボックスの位置: 縦",
+                "Положение: по вертикали"
+            ),
+            Item::MenuNotes => tr!(
+                "Notes behind the main menu",
+                "メインメニューの背景のノーツ",
+                "Ноты за главным меню"
+            ),
+            Item::MenuNotesDim => tr!(
+                "Menu lane notes dim",
+                "メニューのレーンのノーツの暗さ",
+                "Затемнение нот на дорожке меню"
+            ),
+            Item::ResetMapOffsets => tr!(
+                "Reset map offsets",
+                "譜面のオフセットをリセット",
+                "Сбросить оффсеты карт"
+            ),
             Item::Guide => tr!("First steps guide", "はじめてのガイド", "Первые шаги"),
             Item::UpdateChannel => tr!("Build channel", "ビルドのチャンネル", "Канал сборок"),
             Item::Update => tr!("Update", "アップデート", "Обновление"),
             Item::Changelog => tr!("What's new", "更新内容", "Что нового"),
-            Item::KrokodilKoban => tr!("krokodil_koban mode", "krokodil_kobanモード", "Режим krokodil_koban"),
+            Item::KrokodilKoban => tr!(
+                "krokodil_koban mode",
+                "krokodil_kobanモード",
+                "Режим krokodil_koban"
+            ),
             Item::CheckUpdates => tr!("Check at startup", "起動時に確認", "Проверять при запуске"),
             Item::Fullscreen => tr!("Fullscreen", "フルスクリーン", "Полный экран"),
             Item::WindowSize => tr!("Window size", "ウィンドウのサイズ", "Размер окна"),
-            Item::DiscordPresence => tr!("Discord status", "Discordのステータス", "Статус в Discord"),
+            Item::DiscordPresence => {
+                tr!("Discord status", "Discordのステータス", "Статус в Discord")
+            }
             Item::IdleScreen => tr!("Idle screen", "待機画面", "Экран бездействия"),
-            Item::CrashReports => tr!("Send crash reports", "クラッシュレポートを送る", "Отправлять отчёты о вылетах"),
+            Item::CrashReports => tr!(
+                "Send crash reports",
+                "クラッシュレポートを送る",
+                "Отправлять отчёты о вылетах"
+            ),
             Item::Skin => tr!("Skin", "スキン", "Скин"),
             Item::SkinParts => tr!("Skin parts", "スキンのパーツ", "Части скина"),
-            Item::SkinPart(i) => crate::skin::Part::ALL.get(i).map_or(tr!("Skin part", "スキンのパーツ", "Часть скина"), |p| p.label()),
+            Item::SkinPart(i) => crate::skin::Part::ALL.get(i).map_or(
+                tr!("Skin part", "スキンのパーツ", "Часть скина"),
+                |p| p.label(),
+            ),
             Item::SkinFolder => tr!("Skins folder", "スキンのフォルダ", "Папка скинов"),
             Item::Accent => tr!("UI colour", "UIの色", "Цвет интерфейса"),
-            Item::AccentHue => tr!("UI colour: fine tune", "UIの色: 微調整", "Цвет интерфейса: точно"),
+            Item::AccentHue => tr!(
+                "UI colour: fine tune",
+                "UIの色: 微調整",
+                "Цвет интерфейса: точно"
+            ),
             Item::NoteColours => tr!("Note colours", "ノーツの色", "Цвета нот"),
             Item::DonColour => tr!("Don colour", "ドンの色", "Цвет дона"),
             Item::KatColour => tr!("Kat colour", "カッの色", "Цвет ката"),
@@ -497,6 +696,7 @@ impl Item {
             | Item::BackgroundDimBlack
             | Item::Interface
             | Item::KiaiEffects
+            | Item::BlackLane
             | Item::AutoplayLeftHanded
             | Item::HideGreat
             | Item::HitFlash
@@ -522,7 +722,18 @@ impl Item {
             | Item::DiscordPresence
             | Item::CrashReports => Kind::Toggle,
             Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => Kind::Key,
-            Item::PlayfieldArea | Item::PlayfieldReset | Item::ResetMapOffsets | Item::Guide | Item::Calibrate | Item::VsyncCalibrate | Item::HiddenMaps | Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout | Item::SkinFolder => Kind::Action,
+            Item::PlayfieldArea
+            | Item::PlayfieldReset
+            | Item::ResetMapOffsets
+            | Item::Guide
+            | Item::Calibrate
+            | Item::VsyncCalibrate
+            | Item::HiddenMaps
+            | Item::Update
+            | Item::Changelog
+            | Item::KrokodilKoban
+            | Item::SongSelectLayout
+            | Item::SkinFolder => Kind::Action,
         }
     }
 
@@ -683,6 +894,11 @@ impl Item {
                 "リプレイ、スコア、動画、ダウンロードした譜面、スキン、キャッシュ。Enter: 別のフォルダやドライブへ移動。",
                 "Повторы, рекорды, видео, скачанные карты, скины и кэш. Enter: перенести в другую папку или на диск."
             ),
+            Item::BlackLane => tr!(
+                "The lane the notes scroll on, and the drum's panel, are pure black: no kiai tint, no skin's lane picture.",
+                "ノーツが流れるレーンと太鼓のパネルを真っ黒に。キアイの色もスキンのレーン画像もなし。",
+                "Дорожка, по которой едут ноты, и панель барабана полностью чёрные: без подсветки киай и картинки дорожки из скина."
+            ),
             Item::KiaiEffects => tr!(
                 "During kiai time, tint the lane and pulse the hit target with the beat. The main menu joins in too.",
                 "キアイタイム中、レーンに色を付け、判定枠を拍に合わせて脈打たせます。メインメニューも盛り上がります。",
@@ -738,7 +954,11 @@ impl Item {
                 "音楽とヒット音の音量。どこでも: Altを押しながらマウスホイール。",
                 "Громкость музыки и хитсаундов. Везде: Alt и колесо мыши."
             ),
-            Item::MusicVolume | Item::FxVolume => tr!("Left / Right to adjust.", "左 / 右で調整。", "Влево / вправо — изменить."),
+            Item::MusicVolume | Item::FxVolume => tr!(
+                "Left / Right to adjust.",
+                "左 / 右で調整。",
+                "Влево / вправо — изменить."
+            ),
             Item::AudioBuffer => tr!(
                 "Smaller = less audio latency; raise it if you hear crackling.",
                 "小さいほど音の遅延が少ない。ノイズが聞こえたら上げます。",
@@ -872,9 +1092,9 @@ impl Item {
                 "Автоигра начинает с левой руки, а не с правой."
             ),
             Item::SongSelectLayout => tr!(
-                "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
-                "曲リスト、譜面パネル、ランキングの間の境目をドラッグ。Enter: 初期設定に戻す。",
-                "Тяните границы между списком песен, панелью карты и таблицей рекордов. Enter: по умолчанию."
+                "Drag the edge between the song list and the map panel. Enter: back to the default.",
+                "曲リストと譜面パネルの間の境目をドラッグ。Enter: 初期設定に戻す。",
+                "Тяните границу между списком песен и панелью карты. Enter: по умолчанию."
             ),
             Item::Changelog => tr!(
                 "Enter: the latest changes. They also show by themselves after an update.",
@@ -1045,7 +1265,10 @@ const DROPDOWN_WHEEL: f32 = 45.0;
 
 impl Dropdown {
     pub fn new(cursor: usize) -> Dropdown {
-        Dropdown { cursor, ..Default::default() }
+        Dropdown {
+            cursor,
+            ..Default::default()
+        }
     }
 
     /// The cursor moved by key: the list scrolls to keep it in sight.
@@ -1061,22 +1284,31 @@ impl Dropdown {
 
     /// Whether (`x`, `y`) is on the scroll bar.
     pub fn on_bar(&self, x: f32, y: f32) -> bool {
-        self.bar.is_some_and(|[bx, by, bw, bh]| inside(&[bx - 4.0, by, bw + 8.0, bh], x, y))
+        self.bar
+            .is_some_and(|[bx, by, bw, bh]| inside(&[bx - 4.0, by, bw + 8.0, bh], x, y))
     }
 
     /// A press on the scroll bar: held by the thumb where it was grabbed, or (off the thumb)
     /// with the thumb's middle jumping to the pointer.
     pub fn grab_bar(&mut self, y: f32) {
-        let Some([_, top, _, track]) = self.bar else { return };
+        let Some([_, top, _, track]) = self.bar else {
+            return;
+        };
         let thumb_y = top + self.scroll / self.max_scroll.max(1.0) * (track - self.thumb);
-        let grip = if (thumb_y..thumb_y + self.thumb).contains(&y) { y - thumb_y } else { self.thumb / 2.0 };
+        let grip = if (thumb_y..thumb_y + self.thumb).contains(&y) {
+            y - thumb_y
+        } else {
+            self.thumb / 2.0
+        };
         self.dragging = Some(grip);
         self.drag_bar(y);
     }
 
     /// The held scroll bar follows the pointer; false when it isn't held.
     pub fn drag_bar(&mut self, y: f32) -> bool {
-        let (Some(grip), Some([_, top, _, track])) = (self.dragging, self.bar) else { return false };
+        let (Some(grip), Some([_, top, _, track])) = (self.dragging, self.bar) else {
+            return false;
+        };
         let frac = ((y - grip - top) / (track - self.thumb).max(1.0)).clamp(0.0, 1.0);
         self.scroll = frac * self.max_scroll;
         self.follow = Follow::Stay;
@@ -1105,11 +1337,17 @@ impl Dropdown {
 
     /// Index of the row under (`x`, `y`) in virtual units.
     pub fn row_at(&self, x: f32, y: f32) -> Option<usize> {
-        self.rows.iter().find(|(_, r)| inside(r, x, y)).map(|(i, _)| *i)
+        self.rows
+            .iter()
+            .find(|(_, r)| inside(r, x, y))
+            .map(|(i, _)| *i)
     }
 
     pub fn button_at(&self, x: f32, y: f32) -> Option<PresetAction> {
-        self.buttons.iter().find(|(_, r)| inside(r, x, y)).map(|(a, _)| *a)
+        self.buttons
+            .iter()
+            .find(|(_, r)| inside(r, x, y))
+            .map(|(a, _)| *a)
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
@@ -1119,7 +1357,14 @@ impl Dropdown {
     fn button(&mut self, c: &mut Canvas, x: f32, y: f32, label: &str, action: PresetAction) -> f32 {
         let w = Canvas::text_width(6.0, label) + 10.0;
         let hover = c.hovered(x, y, w, 12.0);
-        c.round_rect([x, y], [w, 12.0], 3.0, rgba(if hover { 0x4a4a64 } else { 0x2a2a3a }, 1.0), rgba(0x5a5a74, 1.0), 1.0);
+        c.round_rect(
+            [x, y],
+            [w, 12.0],
+            3.0,
+            rgba(if hover { 0x4a4a64 } else { 0x2a2a3a }, 1.0),
+            rgba(0x5a5a74, 1.0),
+            1.0,
+        );
         c.text(x + 5.0, y + 3.0, 6.0, rgba(0xffffff, 1.0), label);
         self.buttons.push((action, [x, y, w, 12.0]));
         w
@@ -1180,13 +1425,44 @@ impl Dropdown {
         let bh = (y + 8.0 + 78.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         self.bounds = [bx, by, bw, bh];
-        c.round_rect([bx, by], [bw, bh], 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
-        let title_w = c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), Item::PlayfieldPreset.label());
+        c.round_rect(
+            [bx, by],
+            [bw, bh],
+            8.0,
+            rgba(0x15151d, 0.98),
+            rgba(accent(), 0.8),
+            1.5,
+        );
+        let title_w = c.text(
+            bx + 14.0,
+            by + 12.0,
+            9.0,
+            rgba(0xffffff, 1.0),
+            Item::PlayfieldPreset.label(),
+        );
         let screen = tr!("screen {}x{}", "画面 {}x{}", "экран {}x{}"; native.0, native.1);
-        c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, bw - 28.0 - title_w - 10.0, &screen));
+        c.text_right(
+            bx + bw - 14.0,
+            by + 13.0,
+            7.0,
+            rgba(0x6f6f86, 1.0),
+            &Canvas::fit(7.0, bw - 28.0 - title_w - 10.0, &screen),
+        );
         let save_label = tr!("+ Save current {}x{}", "+ 今の{}x{}を保存", "+ Сохранить текущий {}x{}"; playfield.0, playfield.1);
-        let bw0 = self.button(c, bx + 14.0, by + 28.0, &save_label, PresetAction::SaveCurrent);
-        self.button(c, bx + 20.0 + bw0, by + 28.0, tr!("+ Add size", "+ サイズを追加", "+ Добавить размер"), PresetAction::Add);
+        let bw0 = self.button(
+            c,
+            bx + 14.0,
+            by + 28.0,
+            &save_label,
+            PresetAction::SaveCurrent,
+        );
+        self.button(
+            c,
+            bx + 20.0 + bw0,
+            by + 28.0,
+            tr!("+ Add size", "+ サイズを追加", "+ Добавить размер"),
+            PresetAction::Add,
+        );
 
         let (top, view) = (by + 48.0, bh - 78.0);
         let focus = layout.iter().find(|(l, _)| match (l, &self.editing) {
@@ -1198,7 +1474,11 @@ impl Dropdown {
         let focus_y = focus.map(|l| l.1).unwrap_or(0.0);
         self.max_scroll = (y - view).max(0.0);
         // A size being typed stays in sight; otherwise the list only moves when asked to.
-        let follow = if self.editing.is_some() && self.follow == Follow::Stay { Follow::Show } else { self.follow };
+        let follow = if self.editing.is_some() && self.follow == Follow::Stay {
+            Follow::Show
+        } else {
+            self.follow
+        };
         self.scroll = match follow {
             Follow::Centre => focus_y - view / 2.0,
             Follow::Show => self.scroll.min(focus_y).max(focus_y + ROW - view),
@@ -1211,10 +1491,29 @@ impl Dropdown {
         self.rows.clear();
         let caret = self.caret;
         let text_input = |c: &mut Canvas, ry: f32, text: &str| {
-            c.round_rect([bx + 8.0, ry], [bw - 16.0, ROW - 2.0], 4.0, rgba(0x1d1d27, 1.0), rgba(0xFFD34D, 1.0), 1.0);
+            c.round_rect(
+                [bx + 8.0, ry],
+                [bw - 16.0, ROW - 2.0],
+                4.0,
+                rgba(0x1d1d27, 1.0),
+                rgba(0xFFD34D, 1.0),
+                1.0,
+            );
             c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), text);
-            c.rect(bx + 22.0 + caret_x(7.0, text, caret), ry + 2.5, 1.0, 9.0, rgba(0xFFD34D, 1.0));
-            c.text_right(bx + bw - 22.0, ry + 3.5, 6.0, rgba(0x8a8aa0, 1.0), tr!("width x height", "幅 x 高さ", "ширина x высота"));
+            c.rect(
+                bx + 22.0 + caret_x(7.0, text, caret),
+                ry + 2.5,
+                1.0,
+                9.0,
+                rgba(0xFFD34D, 1.0),
+            );
+            c.text_right(
+                bx + bw - 22.0,
+                ry + 3.5,
+                6.0,
+                rgba(0x8a8aa0, 1.0),
+                tr!("width x height", "幅 x 高さ", "ширина x высота"),
+            );
         };
         for (line, ly) in layout {
             let ry = top + ly - self.scroll;
@@ -1245,16 +1544,30 @@ impl Dropdown {
                 }
                 Line::Row(i, rw, rh) => {
                     if let Some((Some(e), text)) = &self.editing
-                        && *e == i {
+                        && *e == i
+                    {
                         text_input(c, ry, text);
                         continue;
                     }
                     let selected = i == self.cursor && self.editing.is_none();
                     if selected {
-                        c.round_rect([bx + 8.0, ry], [bw - 16.0, ROW - 2.0], 4.0, rgba(0x34344a, 1.0), rgba(accent(), 1.0), 1.0);
+                        c.round_rect(
+                            [bx + 8.0, ry],
+                            [bw - 16.0, ROW - 2.0],
+                            4.0,
+                            rgba(0x34344a, 1.0),
+                            rgba(accent(), 1.0),
+                            1.0,
+                        );
                     }
                     self.rows.push((i, [bx + 8.0, ry, bw - 16.0, ROW - 2.0]));
-                    c.text(bx + 22.0, ry + 3.5, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &format!("{rw} x {rh}"));
+                    c.text(
+                        bx + 22.0,
+                        ry + 3.5,
+                        7.0,
+                        rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0),
+                        &format!("{rw} x {rh}"),
+                    );
                     let fits = rw <= native.0 && rh <= native.1;
                     let mut right = bx + bw - 22.0;
                     if selected && i < saved {
@@ -1292,14 +1605,39 @@ impl Dropdown {
             self.thumb = (view * view / (view + self.max_scroll)).clamp(18.0, view);
             let thumb_y = top + self.scroll / self.max_scroll * (view - self.thumb);
             let lit = self.dragging.is_some() || c.hovered(bar_x - 4.0, top, bar_w + 8.0, view);
-            c.round_rect([bar_x, top], [bar_w, view], 2.0, rgba(0x0e0e14, 0.9), rgba(0x2a2a38, 1.0), 1.0);
-            c.round_rect([bar_x, thumb_y], [bar_w, self.thumb], 2.0, rgba(if lit { accent() } else { 0x8a8aa8 }, 0.95), rgba(0, 0.0), 0.0);
+            c.round_rect(
+                [bar_x, top],
+                [bar_w, view],
+                2.0,
+                rgba(0x0e0e14, 0.9),
+                rgba(0x2a2a38, 1.0),
+                1.0,
+            );
+            c.round_rect(
+                [bar_x, thumb_y],
+                [bar_w, self.thumb],
+                2.0,
+                rgba(if lit { accent() } else { 0x8a8aa8 }, 0.95),
+                rgba(0, 0.0),
+                0.0,
+            );
         }
         let (line1, line2) = if self.editing.is_some() {
-            (tr!("type a size like 1280x720   Enter save   Esc cancel", "1280x720のように入力   Enter 保存   Esc 取消", "введите размер вроде 1280x720   Enter сохранить   Esc отмена"), "")
+            (
+                tr!(
+                    "type a size like 1280x720   Enter save   Esc cancel",
+                    "1280x720のように入力   Enter 保存   Esc 取消",
+                    "введите размер вроде 1280x720   Enter сохранить   Esc отмена"
+                ),
+                "",
+            )
         } else {
             (
-                tr!("Up/Down or mouse choose   Enter/click apply   Esc close", "上下かマウスで選択   Enter/クリック 適用   Esc 閉じる", "Вверх/вниз или мышь   Enter/клик применить   Esc закрыть"),
+                tr!(
+                    "Up/Down or mouse choose   Enter/click apply   Esc close",
+                    "上下かマウスで選択   Enter/クリック 適用   Esc 閉じる",
+                    "Вверх/вниз или мышь   Enter/клик применить   Esc закрыть"
+                ),
                 tr!(
                     "S save current   A add   E edit   Del delete   Shift+Up/Down move",
                     "S 今のを保存   A 追加   E 編集   Del 削除   Shift+上下 移動",
@@ -1324,7 +1662,12 @@ pub struct Edit {
 
 impl Edit {
     pub fn new(item: Item, text: String) -> Edit {
-        Edit { item, caret: text.chars().count(), text, fresh: true }
+        Edit {
+            item,
+            caret: text.chars().count(),
+            text,
+            fresh: true,
+        }
     }
 
     /// Adds typed text at the caret (control characters dropped), up to `max` characters.
@@ -1397,7 +1740,9 @@ pub fn caret_nav(text: &mut String, caret: &mut usize, code: winit::keyboard::Ke
 }
 
 fn byte_at(text: &str, caret: usize) -> usize {
-    text.char_indices().nth(caret).map_or(text.len(), |(b, _)| b)
+    text.char_indices()
+        .nth(caret)
+        .map_or(text.len(), |(b, _)| b)
 }
 
 /// Where the caret is drawn: the text before it, in `size`, from the text's left edge.
@@ -1420,7 +1765,13 @@ pub struct Choices {
 impl Choices {
     /// Opens on the choice in use.
     pub fn new(item: Item, names: Vec<String>, current: Option<usize>, note: String) -> Choices {
-        Choices { item, names, current, note, cursor: current.unwrap_or(0) }
+        Choices {
+            item,
+            names,
+            current,
+            note,
+            cursor: current.unwrap_or(0),
+        }
     }
 
     pub fn move_cursor(&mut self, delta: i32) {
@@ -1435,11 +1786,31 @@ impl Choices {
         let (bw, max_h) = ((w - 48.0).min(420.0), 380.0);
         let bh = (n as f32 * ROW + 56.0).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
-        c.round_rect([bx, by], [bw, bh], 8.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
-        let title_w = c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), self.item.label());
-        c.text_right(bx + bw - 14.0, by + 13.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_end(7.0, bw - 38.0 - title_w, &self.note));
+        c.round_rect(
+            [bx, by],
+            [bw, bh],
+            8.0,
+            rgba(0x15151d, 0.98),
+            rgba(accent(), 0.8),
+            1.5,
+        );
+        let title_w = c.text(
+            bx + 14.0,
+            by + 12.0,
+            9.0,
+            rgba(0xffffff, 1.0),
+            self.item.label(),
+        );
+        c.text_right(
+            bx + bw - 14.0,
+            by + 13.0,
+            7.0,
+            rgba(0x6f6f86, 1.0),
+            &Canvas::fit_end(7.0, bw - 38.0 - title_w, &self.note),
+        );
         let (top, view) = (by + 32.0, bh - 50.0);
-        let scroll = (self.cursor as f32 * ROW - view / 2.0).clamp(0.0, (n as f32 * ROW - view).max(0.0));
+        let scroll =
+            (self.cursor as f32 * ROW - view / 2.0).clamp(0.0, (n as f32 * ROW - view).max(0.0));
         for (i, name) in self.names.iter().enumerate() {
             let y = top + i as f32 * ROW - scroll;
             if y < top - 1.0 || y + ROW > top + view + 1.0 {
@@ -1448,18 +1819,53 @@ impl Choices {
             let selected = i == self.cursor;
             let hover = c.hovered(bx + 8.0, y, bw - 16.0, ROW - 2.0);
             if selected || hover {
-                c.round_rect([bx + 8.0, y], [bw - 16.0, ROW - 2.0], 4.0, rgba(0x34344a, 1.0), rgba(if selected { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+                c.round_rect(
+                    [bx + 8.0, y],
+                    [bw - 16.0, ROW - 2.0],
+                    4.0,
+                    rgba(0x34344a, 1.0),
+                    rgba(if selected { accent() } else { 0x3a3a4e }, 1.0),
+                    1.0,
+                );
             }
             c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::ChoiceRow(i));
             let current = self.current == Some(i);
-            let room = bw - 40.0 - if current { Canvas::text_width(7.0, current_tag()) + 8.0 } else { 0.0 };
-            c.text(bx + 20.0, y + 5.0, 7.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), &Canvas::fit(7.0, room, name));
+            let room = bw
+                - 40.0
+                - if current {
+                    Canvas::text_width(7.0, current_tag()) + 8.0
+                } else {
+                    0.0
+                };
+            c.text(
+                bx + 20.0,
+                y + 5.0,
+                7.0,
+                rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0),
+                &Canvas::fit(7.0, room, name),
+            );
             if current {
-                c.text_right(bx + bw - 20.0, y + 5.0, 7.0, rgba(0x86E05A, 1.0), current_tag());
+                c.text_right(
+                    bx + bw - 20.0,
+                    y + 5.0,
+                    7.0,
+                    rgba(0x86E05A, 1.0),
+                    current_tag(),
+                );
             }
         }
-        let hint = tr!("Up/Down or mouse   Enter/click use   Esc close", "上下かマウス   Enter/クリック 使う   Esc 閉じる", "Вверх/вниз или мышь   Enter/клик выбрать   Esc закрыть");
-        c.text_centered(w / 2.0, by + bh - 11.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, bw - 16.0, hint));
+        let hint = tr!(
+            "Up/Down or mouse   Enter/click use   Esc close",
+            "上下かマウス   Enter/クリック 使う   Esc 閉じる",
+            "Вверх/вниз или мышь   Enter/клик выбрать   Esc закрыть"
+        );
+        c.text_centered(
+            w / 2.0,
+            by + bh - 11.0,
+            6.0,
+            rgba(0x6f6f86, 1.0),
+            &Canvas::fit_hints(6.0, bw - 16.0, hint),
+        );
     }
 }
 
@@ -1481,8 +1887,15 @@ impl SettingsUi {
         self.free.set(None);
         self.editing = None;
         if !self.search.is_empty() {
-            let at = self.results.iter().position(|&i| i == self.cursor).unwrap_or(0) as i32;
-            if let Some(&i) = self.results.get((at + delta).clamp(0, self.results.len() as i32 - 1) as usize) {
+            let at = self
+                .results
+                .iter()
+                .position(|&i| i == self.cursor)
+                .unwrap_or(0) as i32;
+            if let Some(&i) = self
+                .results
+                .get((at + delta).clamp(0, self.results.len() as i32 - 1) as usize)
+            {
                 self.cursor = i;
             }
             return;
@@ -1492,7 +1905,11 @@ impl SettingsUi {
         // Past a row that isn't shown, or back where it was at the end of the list.
         while !self.shows(ITEMS[self.cursor].1) {
             let next = self.cursor as i32 + delta.signum();
-            self.cursor = if (0..ITEMS.len() as i32).contains(&next) && delta != 0 { next as usize } else { start };
+            self.cursor = if (0..ITEMS.len() as i32).contains(&next) && delta != 0 {
+                next as usize
+            } else {
+                start
+            };
             if self.cursor == start {
                 break;
             }
@@ -1538,13 +1955,20 @@ impl SettingsUi {
     /// Whether `item` is in the list (krokodil_koban mode is only for them, and a phone's screen
     /// has no use for black bars).
     pub fn shows(&self, item: Item) -> bool {
-        let letterbox = matches!(item, Item::Letterbox | Item::LetterboxSize | Item::LetterboxX | Item::LetterboxY);
-        (item != Item::KrokodilKoban || self.krokodil) && !(letterbox && cfg!(target_os = "android"))
+        let letterbox = matches!(
+            item,
+            Item::Letterbox | Item::LetterboxSize | Item::LetterboxX | Item::LetterboxY
+        );
+        (item != Item::KrokodilKoban || self.krokodil)
+            && !(letterbox && cfg!(target_os = "android"))
     }
 
     /// Section of the selected item.
     pub fn section(&self) -> usize {
-        SECTIONS.iter().position(|(name, _)| *name == ITEMS[self.cursor].0).unwrap_or(0)
+        SECTIONS
+            .iter()
+            .position(|(name, _)| *name == ITEMS[self.cursor].0)
+            .unwrap_or(0)
     }
 
     /// What's listed, in order: the section's rows under their groups' headings, or the
@@ -1552,7 +1976,12 @@ impl SettingsUi {
     fn lines(&self, section: usize) -> (Vec<Line>, f32) {
         let mut y = 0.0;
         if !self.search.is_empty() {
-            let lines = self.results.iter().enumerate().map(|(k, &i)| Line::Row(i, k as f32 * ROW)).collect::<Vec<_>>();
+            let lines = self
+                .results
+                .iter()
+                .enumerate()
+                .map(|(k, &i)| Line::Row(i, k as f32 * ROW))
+                .collect::<Vec<_>>();
             return (lines, self.results.len() as f32 * ROW);
         }
         let mut lines = Vec::new();
@@ -1572,7 +2001,13 @@ impl SettingsUi {
 
     /// A sidebar of sections and the selected section's settings, or what the search found.
     /// `value` gives the current display value of each item, `control` how it's shown.
-    pub fn draw(&self, c: &mut Canvas, value: &dyn Fn(Item) -> String, control: &dyn Fn(Item) -> Control, footer: &str) {
+    pub fn draw(
+        &self,
+        c: &mut Canvas,
+        value: &dyn Fn(Item) -> String,
+        control: &dyn Fn(Item) -> Control,
+        footer: &str,
+    ) {
         let w = c.width;
         let total = (w - 48.0).min(780.0);
         let x0 = (w - total) / 2.0;
@@ -1585,30 +2020,67 @@ impl SettingsUi {
         // open one bigger and lit, the others dimmed, the selector sliding between them. While
         // searching, how much was found in each section.
         const PITCH: f32 = 40.0;
-        crate::style::panel(c, x0 - 6.0, TOP - 8.0, side_w + 12.0, SECTIONS.len() as f32 * PITCH + 4.0);
+        crate::style::panel(
+            c,
+            x0 - 6.0,
+            TOP - 8.0,
+            side_w + 12.0,
+            SECTIONS.len() as f32 * PITCH + 4.0,
+        );
         let colours = crate::multiverse::note_colours();
         for (i, (id, _)) in SECTIONS.iter().enumerate() {
             let name = section_name(i);
             let found = self.results.iter().filter(|&&r| ITEMS[r].0 == *id).count();
-            let about = if searching { tr!("found: {found}", "{found}件", "найдено: {found}";) } else { section_summary(i).to_string() };
+            let about = if searching {
+                tr!("found: {found}", "{found}件", "найдено: {found}";)
+            } else {
+                section_summary(i).to_string()
+            };
             let y = TOP + i as f32 * PITCH;
             let on = i == section && !searching;
             let hover = !on && c.hovered(x0, y, side_w, 34.0);
             let dim = searching && found == 0;
             if hover {
-                c.round_rect([x0, y], [side_w, 34.0], 7.0, rgba(0x262634, 0.6), rgba(0, 0.0), 0.0);
+                c.round_rect(
+                    [x0, y],
+                    [side_w, 34.0],
+                    7.0,
+                    rgba(0x262634, 0.6),
+                    rgba(0, 0.0),
+                    0.0,
+                );
             }
             let (nx, ny) = (x0 + 17.0, y + 17.0);
-            let col = if i % 2 == 0 { colours.don() } else { colours.kat() };
+            let col = if i % 2 == 0 {
+                colours.don()
+            } else {
+                colours.kat()
+            };
             let r = if on { 11.0 } else { 8.0 };
             if on {
-                crate::style::selector(c, "settings-section", [x0 - 2.0, y - 1.0, side_w + 4.0, 36.0]);
+                crate::style::selector(
+                    c,
+                    "settings-section",
+                    [x0 - 2.0, y - 1.0, side_w + 4.0, 36.0],
+                );
             }
             crate::style::note(c, nx, ny, r, col, on, if dim { 0.35 } else { 0.6 });
             c.hit(x0, y, side_w, 34.0, Hit::SettingsSection(i));
-            let text = if on || hover { 0xffffff } else if dim { 0x6f6f86 } else { 0xa8a8bc };
+            let text = if on || hover {
+                0xffffff
+            } else if dim {
+                0x6f6f86
+            } else {
+                0xa8a8bc
+            };
             c.text(x0 + 36.0, y + 7.0, 9.0, rgba(text, 1.0), name);
-            c.text(x0 + 36.0, y + 21.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, side_w - 44.0, &about));
+            c.text(
+                x0 + 36.0,
+                y + 21.0,
+                6.0,
+                rgba(0x8a8aa0, 1.0),
+                &Canvas::fit(6.0, side_w - 44.0, &about),
+            );
         }
 
         // The list: it scrolls by itself to keep the cursor in sight, and by the wheel.
@@ -1617,7 +2089,10 @@ impl SettingsUi {
         // Room for the rows: the panel (help lines under them, however tall the text comes out)
         // ends above the keys' hint at the bottom.
         let help_room = 10.0 + 2.0 * (Canvas::text_height(7.0) + 4.0) + 14.0;
-        let view = ((crate::render::VIRTUAL_HEIGHT - 26.0 - help_room - list_top) / ROW).floor().max(1.0) * ROW;
+        let view = ((crate::render::VIRTUAL_HEIGHT - 26.0 - help_room - list_top) / ROW)
+            .floor()
+            .max(1.0)
+            * ROW;
         let max = (height - view).max(0.0);
         self.scroll_max.set(max);
         // One panel for the section: its title, its rows and what the selected one does.
@@ -1625,23 +2100,60 @@ impl SettingsUi {
         let glyph_h = Canvas::text_height(7.0);
         let line_h = glyph_h + 4.0;
         let help_y = list_top + list_h.max(ROW) + 10.0;
-        crate::style::panel(c, cx - 10.0, TOP - 14.0, col + 20.0, help_y + line_h * 2.0 + 14.0 - (TOP - 14.0));
+        crate::style::panel(
+            c,
+            cx - 10.0,
+            TOP - 14.0,
+            col + 20.0,
+            help_y + line_h * 2.0 + 14.0 - (TOP - 14.0),
+        );
 
         // The title and the search box beside it: typing anywhere goes into it.
         let box_w = (col * 0.5).min(240.0);
         let box_x = cx + col - box_w;
         let n = self.results.len();
-        let title = if searching { tr!("Found: {n}", "{n}件", "Найдено: {n}";) } else { section_name(section).to_string() };
-        crate::style::title(c, cx, TOP - 4.0, 13.0, accent(), &Canvas::fit(13.0, col - box_w - 8.0, &title));
-        c.round_rect([box_x, TOP - 7.0], [box_w, 19.0], 5.0, rgba(0x23232f, 0.9), rgba(if searching { accent() } else { 0x3a3a4e }, 1.0), 1.0);
-        let (text, col_text) = if searching {
-            (Canvas::fit_end(8.0, box_w - 18.0, &format!("{}_", self.search)), 0xffffff)
+        let title = if searching {
+            tr!("Found: {n}", "{n}件", "Найдено: {n}";)
         } else {
-            (Canvas::fit(8.0, box_w - 18.0, tr!("type to search...", "入力して検索...", "начни печатать для поиска...")), 0x6f6f86)
+            section_name(section).to_string()
+        };
+        crate::style::title(
+            c,
+            cx,
+            TOP - 4.0,
+            13.0,
+            accent(),
+            &Canvas::fit(13.0, col - box_w - 8.0, &title),
+        );
+        c.round_rect(
+            [box_x, TOP - 7.0],
+            [box_w, 19.0],
+            5.0,
+            rgba(0x23232f, 0.9),
+            rgba(if searching { accent() } else { 0x3a3a4e }, 1.0),
+            1.0,
+        );
+        let (text, col_text) = if searching {
+            (
+                Canvas::fit_end(8.0, box_w - 18.0, &format!("{}_", self.search)),
+                0xffffff,
+            )
+        } else {
+            (
+                Canvas::fit(
+                    8.0,
+                    box_w - 18.0,
+                    tr!(
+                        "type to search...",
+                        "入力して検索...",
+                        "начни печатать для поиска..."
+                    ),
+                ),
+                0x6f6f86,
+            )
         };
         c.text(box_x + 9.0, TOP - 1.5, 8.0, rgba(col_text, 1.0), &text);
         c.hit(box_x, TOP - 7.0, box_w, 19.0, Hit::SettingsSearch);
-
 
         let listing = if searching { RESULTS } else { section };
         let fresh = self.shown.get() != Some(listing);
@@ -1689,27 +2201,61 @@ impl SettingsUi {
             // Where the rows shown are in the whole list.
             let bar_h = view - 4.0;
             let (from, len) = (scroll / height * bar_h, (view / height * bar_h).max(12.0));
-            c.round_rect([cx + col + 4.0, list_top], [3.0, bar_h], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
-            c.round_rect([cx + col + 4.0, list_top + from], [3.0, len], 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
+            c.round_rect(
+                [cx + col + 4.0, list_top],
+                [3.0, bar_h],
+                1.5,
+                rgba(0x2a2a38, 1.0),
+                rgba(0, 0.0),
+                0.0,
+            );
+            c.round_rect(
+                [cx + col + 4.0, list_top + from],
+                [3.0, len],
+                1.5,
+                rgba(accent(), 0.9),
+                rgba(0, 0.0),
+                0.0,
+            );
         }
         if searching && lines.is_empty() {
-            c.text(cx + 12.0, list_top + 10.0, 8.0, rgba(0x8a8aa0, 1.0), tr!("Nothing found.", "見つかりませんでした。", "Ничего не найдено."));
+            c.text(
+                cx + 12.0,
+                list_top + 10.0,
+                8.0,
+                rgba(0x8a8aa0, 1.0),
+                tr!(
+                    "Nothing found.",
+                    "見つかりませんでした。",
+                    "Ничего не найдено."
+                ),
+            );
         }
         let track_w = (col * 0.2).clamp(50.0, 110.0);
-        self.track.set((cx + col - 12.0 - Canvas::text_width(8.0, "100%") - 12.0 - track_w, track_w));
+        self.track.set((
+            cx + col - 12.0 - Canvas::text_width(8.0, "100%") - 12.0 - track_w,
+            track_w,
+        ));
         let in_list = c.hovered(cx, list_top - 2.0, col, list_h + 2.0);
         let mut hovered = None;
         let (start, hits) = (c.shapes.len(), c.hits.len());
         for line in &lines {
-            let y = list_top - scroll + match line {
-                Line::Group(_, y) | Line::Row(_, y) => *y,
-            };
+            let y = list_top - scroll
+                + match line {
+                    Line::Group(_, y) | Line::Row(_, y) => *y,
+                };
             if y + ROW < list_top - 2.0 || y > list_top + view {
                 continue;
             }
             match line {
                 Line::Group(heading, _) => {
-                    c.text(cx + 2.0, y + 6.0, 7.0, rgba(crate::style::selector_colour(), 0.85), heading);
+                    c.text(
+                        cx + 2.0,
+                        y + 6.0,
+                        7.0,
+                        rgba(crate::style::selector_colour(), 0.85),
+                        heading,
+                    );
                 }
                 Line::Row(i, _) => {
                     let row_hover = in_list && c.hovered(cx, y, col, ROW - 4.0);
@@ -1721,7 +2267,11 @@ impl SettingsUi {
             }
         }
         if cursor_y.is_some() {
-            crate::style::brackets(c, [cx - 3.0, list_top + hl - scroll - 3.0, col + 6.0, ROW + 2.0], 1.0);
+            crate::style::brackets(
+                c,
+                [cx - 3.0, list_top + hl - scroll - 3.0, col + 6.0, ROW + 2.0],
+                1.0,
+            );
         }
         c.clip_since(start, cx - 2.0, list_top - 2.0, col + 4.0, view + 2.0);
         for h in &mut c.hits[hits..] {
@@ -1733,34 +2283,88 @@ impl SettingsUi {
         // What the setting under the pointer does, or else the selected one: two lines, spaced
         // for however tall the text comes out (taller on a text grid), under a divider.
         c.rect(cx, help_y - 3.0, col, 1.0, rgba(0x2a2a38, 1.0));
-        let help = hovered.or(cursor_y.map(|_| self.item())).map_or("", Item::help);
+        let help = hovered
+            .or(cursor_y.map(|_| self.item()))
+            .map_or("", Item::help);
         let (line1, line2) = split_help(help, 7.0, col - 20.0);
         // `text` centres taller glyphs on the line; this puts their top 6 below the box's.
         let first = help_y + 6.0 + (glyph_h - 7.0) / 2.0;
         c.text(cx + 10.0, first, 7.0, rgba(0x9a9ab0, 1.0), &line1);
         c.text(cx + 10.0, first + line_h, 7.0, rgba(0x9a9ab0, 1.0), &line2);
-        c.text_centered(w / 2.0, 462.0, 8.0, rgba(0x55556a, 1.0), &Canvas::fit_hints(8.0, w - 48.0, footer));
+        c.text_centered(
+            w / 2.0,
+            462.0,
+            8.0,
+            rgba(0x55556a, 1.0),
+            &Canvas::fit_hints(8.0, w - 48.0, footer),
+        );
     }
 
     /// Row `i` of `ITEMS` at `[x, y, width]`: its name, and its value in the way that suits it.
-    fn draw_row(&self, c: &mut Canvas, i: usize, [cx, y, col]: [f32; 3], hover: bool, value: &dyn Fn(Item) -> String, control: &dyn Fn(Item) -> Control) {
+    fn draw_row(
+        &self,
+        c: &mut Canvas,
+        i: usize,
+        [cx, y, col]: [f32; 3],
+        hover: bool,
+        value: &dyn Fn(Item) -> String,
+        control: &dyn Fn(Item) -> Control,
+    ) {
         let item = ITEMS[i].1;
         let selected = i == self.cursor;
         // Rows are lines on the panel: the selected one lit in the selector's colour, a divider under each.
         if selected {
-            c.round_rect([cx, y], [col, ROW - 4.0], 6.0, rgba(crate::style::selector_colour(), 0.10 + 0.05 * crate::style::pulse()), rgba(0, 0.0), 0.0);
+            c.round_rect(
+                [cx, y],
+                [col, ROW - 4.0],
+                6.0,
+                rgba(
+                    crate::style::selector_colour(),
+                    0.10 + 0.05 * crate::style::pulse(),
+                ),
+                rgba(0, 0.0),
+                0.0,
+            );
         } else if hover {
-            c.round_rect([cx, y], [col, ROW - 4.0], 6.0, rgba(0x262634, 0.6), rgba(0, 0.0), 0.0);
+            c.round_rect(
+                [cx, y],
+                [col, ROW - 4.0],
+                6.0,
+                rgba(0x262634, 0.6),
+                rgba(0, 0.0),
+                0.0,
+            );
         }
-        c.rect(cx + 8.0, y + ROW - 3.0, col - 16.0, 1.0, rgba(0x23232f, 1.0));
+        c.rect(
+            cx + 8.0,
+            y + ROW - 3.0,
+            col - 16.0,
+            1.0,
+            rgba(0x23232f, 1.0),
+        );
         c.hit(cx, y - 2.0, col, ROW, Hit::SettingRow(i));
         // Found by a search, the row says which section it's in.
         let mut x = cx + 12.0;
         if !self.search.is_empty() {
-            let s = SECTIONS.iter().position(|(name, _)| *name == ITEMS[i].0).unwrap_or(0);
-            x += c.text(x, y + 10.5, 6.0, rgba(0x8a8aa0, 1.0), &format!("{}  ", section_name(s)));
+            let s = SECTIONS
+                .iter()
+                .position(|(name, _)| *name == ITEMS[i].0)
+                .unwrap_or(0);
+            x += c.text(
+                x,
+                y + 10.5,
+                6.0,
+                rgba(0x8a8aa0, 1.0),
+                &format!("{}  ", section_name(s)),
+            );
         }
-        c.text(x, y + 9.5, 8.0, rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0), item.label());
+        c.text(
+            x,
+            y + 9.5,
+            8.0,
+            rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0),
+            item.label(),
+        );
         let right = cx + col - 12.0;
         // The value gets what the label leaves, and is cut short past that.
         let room = right - x - 12.0 - Canvas::text_width(8.0, item.label());
@@ -1769,18 +2373,51 @@ impl SettingsUi {
             let text = Canvas::fit_end(8.0, room - 24.0, &edit.text);
             let tw = Canvas::text_width(8.0, &text);
             let bw = (tw + 24.0).max(90.0).min(room);
-            c.round_rect([right + 6.0 - bw, y + 4.0], [bw, ROW - 12.0], 4.0, rgba(0x15151d, 1.0), rgba(0xFFD34D, 1.0), 1.0);
+            c.round_rect(
+                [right + 6.0 - bw, y + 4.0],
+                [bw, ROW - 12.0],
+                4.0,
+                rgba(0x15151d, 1.0),
+                rgba(0xFFD34D, 1.0),
+                1.0,
+            );
             if edit.fresh && !text.is_empty() {
-                c.rect(right - 7.0 - tw, y + 7.0, tw + 2.0, ROW - 18.0, rgba(accent(), 0.45));
+                c.rect(
+                    right - 7.0 - tw,
+                    y + 7.0,
+                    tw + 2.0,
+                    ROW - 18.0,
+                    rgba(accent(), 0.45),
+                );
             }
             c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
             // At the caret in the text (at the end when the start was cut off to fit).
-            let at = if text == edit.text { caret_x(8.0, &text, edit.caret) } else { tw };
-            c.rect(right - 6.0 - tw + at, y + 7.0, 1.0, ROW - 18.0, rgba(0xFFD34D, 1.0));
+            let at = if text == edit.text {
+                caret_x(8.0, &text, edit.caret)
+            } else {
+                tw
+            };
+            c.rect(
+                right - 6.0 - tw + at,
+                y + 7.0,
+                1.0,
+                ROW - 18.0,
+                rgba(0xFFD34D, 1.0),
+            );
             return;
         }
         if selected && self.binding.is_some() {
-            c.text_right(right, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), tr!("press a key...", "キーを押してください...", "нажмите клавишу..."));
+            c.text_right(
+                right,
+                y + 9.5,
+                8.0,
+                rgba(0xFFD34D, 1.0),
+                tr!(
+                    "press a key...",
+                    "キーを押してください...",
+                    "нажмите клавишу..."
+                ),
+            );
             return;
         }
         let shown = value(item);
@@ -1789,47 +2426,129 @@ impl SettingsUi {
                 let (sw, sh) = (22.0, 11.0);
                 let (sx, sy) = (right - sw, y + (ROW - 4.0 - sh) / 2.0);
                 let fill = if on { accent() } else { 0x3a3a4e };
-                c.round_rect([sx, sy], [sw, sh], sh / 2.0, rgba(fill, 1.0), rgba(fill, 1.0), 0.0);
+                c.round_rect(
+                    [sx, sy],
+                    [sw, sh],
+                    sh / 2.0,
+                    rgba(fill, 1.0),
+                    rgba(fill, 1.0),
+                    0.0,
+                );
                 let knob = if on { sx + sw - sh + 1.5 } else { sx + 1.5 };
-                c.round_rect([knob, sy + 1.5], [sh - 3.0, sh - 3.0], (sh - 3.0) / 2.0, rgba(0xffffff, 1.0), rgba(0xffffff, 1.0), 0.0);
+                c.round_rect(
+                    [knob, sy + 1.5],
+                    [sh - 3.0, sh - 3.0],
+                    (sh - 3.0) / 2.0,
+                    rgba(0xffffff, 1.0),
+                    rgba(0xffffff, 1.0),
+                    0.0,
+                );
                 // The rare switch with more to say than on or off.
                 if shown.chars().count() > 4 {
-                    c.text_right(sx - 8.0, y + 9.5, 8.0, rgba(0xc8c8d8, 1.0), &Canvas::fit(8.0, room - sw - 8.0, &shown));
+                    c.text_right(
+                        sx - 8.0,
+                        y + 9.5,
+                        8.0,
+                        rgba(0xc8c8d8, 1.0),
+                        &Canvas::fit(8.0, room - sw - 8.0, &shown),
+                    );
                 }
             }
             (_, Control::Level(level)) => {
                 let (tx, tw) = self.track.get();
                 let ty = y + (ROW - 4.0) / 2.0 - 2.0;
-                c.round_rect([tx, ty], [tw, 4.0], 2.0, rgba(0x3a3a4e, 1.0), rgba(0, 0.0), 0.0);
-                c.round_rect([tx, ty], [(tw * level).max(4.0), 4.0], 2.0, rgba(accent(), 1.0), rgba(0, 0.0), 0.0);
-                c.round_rect([tx + tw * level - 4.0, ty - 3.0], [8.0, 10.0], 3.0, rgba(0xffffff, 1.0), rgba(0, 0.0), 0.0);
+                c.round_rect(
+                    [tx, ty],
+                    [tw, 4.0],
+                    2.0,
+                    rgba(0x3a3a4e, 1.0),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+                c.round_rect(
+                    [tx, ty],
+                    [(tw * level).max(4.0), 4.0],
+                    2.0,
+                    rgba(accent(), 1.0),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+                c.round_rect(
+                    [tx + tw * level - 4.0, ty - 3.0],
+                    [8.0, 10.0],
+                    3.0,
+                    rgba(0xffffff, 1.0),
+                    rgba(0, 0.0),
+                    0.0,
+                );
                 c.hit(tx - 5.0, y, tw + 10.0, ROW - 4.0, Hit::SettingLevel(i));
                 c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &shown);
             }
             (Kind::Key, _) => {
                 let text = Canvas::fit(8.0, room - 12.0, &shown);
                 let bw = Canvas::text_width(8.0, &text) + 12.0;
-                c.round_rect([right + 6.0 - bw, y + 5.0], [bw, ROW - 14.0], 3.0, rgba(0x2a2a3a, 1.0), rgba(0x5a5a74, 1.0), 1.0);
+                c.round_rect(
+                    [right + 6.0 - bw, y + 5.0],
+                    [bw, ROW - 14.0],
+                    3.0,
+                    rgba(0x2a2a3a, 1.0),
+                    rgba(0x5a5a74, 1.0),
+                    1.0,
+                );
                 c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &text);
             }
             (Kind::Action, _) => {
                 let text = Canvas::fit(8.0, room, &shown);
-                c.text_right(right, y + 9.5, 8.0, rgba(if hover || selected { 0xffffff } else { 0x9a9ab0 }, 1.0), &text);
+                c.text_right(
+                    right,
+                    y + 9.5,
+                    8.0,
+                    rgba(
+                        if hover || selected {
+                            0xffffff
+                        } else {
+                            0x9a9ab0
+                        },
+                        1.0,
+                    ),
+                    &text,
+                );
             }
             (_, control) => {
                 let stepped = selected || hover;
-                let swatch = if matches!(control, Control::Swatch(_)) { 14.0 } else { 0.0 };
+                let swatch = if matches!(control, Control::Swatch(_)) {
+                    14.0
+                } else {
+                    0.0
+                };
                 let arrows = Canvas::text_width(8.0, "<    >");
                 let text = Canvas::fit(8.0, room - arrows - swatch, &shown);
-                let v = if stepped { format!("<  {text}  >") } else { text.clone() };
+                let v = if stepped {
+                    format!("<  {text}  >")
+                } else {
+                    text.clone()
+                };
                 c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &v);
                 let tw = Canvas::text_width(8.0, &v);
                 if let Control::Swatch(colour) = control {
-                    c.round_rect([right - tw - 15.0, y + 8.0], [10.0, 10.0], 2.0, rgba(colour, 1.0), rgba(0xffffff, 0.6), 1.0);
+                    c.round_rect(
+                        [right - tw - 15.0, y + 8.0],
+                        [10.0, 10.0],
+                        2.0,
+                        rgba(colour, 1.0),
+                        rgba(0xffffff, 0.6),
+                        1.0,
+                    );
                 }
                 if stepped {
                     // The "<" and ">" around the value step it.
-                    c.hit(right - tw - 6.0, y, 20.0, ROW - 4.0, Hit::SettingStep(i, -1));
+                    c.hit(
+                        right - tw - 6.0,
+                        y,
+                        20.0,
+                        ROW - 4.0,
+                        Hit::SettingStep(i, -1),
+                    );
                     c.hit(right - 14.0, y, 24.0, ROW - 4.0, Hit::SettingStep(i, 1));
                 }
             }
@@ -1856,7 +2575,10 @@ fn split_help(text: &str, size: f32, max_w: f32) -> (String, String) {
         .next_back()
         .filter(|&i| i > 0)
         .unwrap_or(full);
-    (text[..cut].to_string(), Canvas::fit(size, max_w, text[cut..].trim_start()))
+    (
+        text[..cut].to_string(),
+        Canvas::fit(size, max_w, text[cut..].trim_start()),
+    )
 }
 
 /// The logo and the name, top left; returns where they end.
@@ -1886,7 +2608,12 @@ pub fn back_button(c: &mut Canvas, y: f32, label: &str, hit: Hit) -> f32 {
 
 /// Top of a screen: the way back, what the screen is, and `right_text` to the side.
 fn header(c: &mut Canvas, active: usize, right_text: &str) {
-    let w = back_button(c, 21.0, tr!("< BACK", "< 戻る", "< НАЗАД"), Hit::Key(winit::keyboard::KeyCode::Escape));
+    let w = back_button(
+        c,
+        21.0,
+        tr!("< BACK", "< 戻る", "< НАЗАД"),
+        Hit::Key(winit::keyboard::KeyCode::Escape),
+    );
     let title = [
         tr!("SONGS", "曲", "ПЕСНИ"),
         tr!("SETTINGS", "設定", "НАСТРОЙКИ"),
@@ -1900,7 +2627,13 @@ fn header(c: &mut Canvas, active: usize, right_text: &str) {
     if Canvas::text_width(8.0, right_text) <= room {
         c.text_right(right, 28.0, 8.0, rgba(0x9a9ab0, 1.0), right_text);
     } else {
-        c.text(x, 45.0, 6.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(6.0, c.width - 110.0 - x, right_text));
+        c.text(
+            x,
+            45.0,
+            6.0,
+            rgba(0x9a9ab0, 1.0),
+            &Canvas::fit(6.0, c.width - 110.0 - x, right_text),
+        );
     }
 }
 
@@ -1927,7 +2660,14 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
         let on = i == active;
         let hover = !on && c.hovered(x, 20.0, tw + 20.0, 22.0);
         let fill = if hover { 0x34344a } else { 0x23232f };
-        c.round_rect([x, 20.0], [tw + 20.0, 22.0], 6.0, rgba(fill, 1.0), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect(
+            [x, 20.0],
+            [tw + 20.0, 22.0],
+            6.0,
+            rgba(fill, 1.0),
+            rgba(0x3a3a4e, 1.0),
+            1.0,
+        );
         c.hit(x, 20.0, tw + 20.0, 22.0, Hit::Tab(i));
         if on {
             target = (x, tw + 20.0);
@@ -1941,11 +2681,24 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
     approach(&mut px, target.0, c.dt_ms, 40.0);
     approach(&mut pw, target.1, c.dt_ms, 40.0);
     PILL.with(|p| p.set((px, pw)));
-    c.round_rect([px, 20.0], [pw, 22.0], 6.0, rgba(accent(), 1.0), rgba(accent(), 1.0), 1.0);
+    c.round_rect(
+        [px, 20.0],
+        [pw, 22.0],
+        6.0,
+        rgba(accent(), 1.0),
+        rgba(accent(), 1.0),
+        1.0,
+    );
     let mut x = x0;
     for (i, name) in names.iter().enumerate() {
         let tw = Canvas::text_width(9.0, name);
-        c.text(x + 10.0, 27.0, 9.0, rgba(if i == active { 0xffffff } else { 0x9a9ab0 }, 1.0), name);
+        c.text(
+            x + 10.0,
+            27.0,
+            9.0,
+            rgba(if i == active { 0xffffff } else { 0x9a9ab0 }, 1.0),
+            name,
+        );
         x += tw + 28.0;
     }
     c.text(x + 4.0, 27.0, 8.0, rgba(0x55556a, 1.0), "Tab");
@@ -1956,6 +2709,12 @@ pub fn tab_bar(c: &mut Canvas, active: usize, right_text: &str) {
     if Canvas::text_width(8.0, right_text) <= room {
         c.text_right(right, 28.0, 8.0, rgba(0x9a9ab0, 1.0), right_text);
     } else {
-        c.text(x0 + 2.0, 45.0, 6.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(6.0, c.width - 110.0 - x0, right_text));
+        c.text(
+            x0 + 2.0,
+            45.0,
+            6.0,
+            rgba(0x9a9ab0, 1.0),
+            &Canvas::fit(6.0, c.width - 110.0 - x0, right_text),
+        );
     }
 }

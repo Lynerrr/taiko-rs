@@ -54,14 +54,33 @@ fn cache_path() -> Option<PathBuf> {
 type Cache = HashMap<PathBuf, (u64, u64, Info)>;
 
 fn load_cache() -> Cache {
-    let Some(text) = cache_path().and_then(|p| std::fs::read_to_string(p).ok()) else { return HashMap::new() };
+    let Some(text) = cache_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return HashMap::new();
+    };
     text.lines()
         .filter_map(|line| {
             let mut f = line.split('\t');
             let path = PathBuf::from(f.next()?);
             let mut num = || f.next()?.parse::<f64>().ok();
-            let (mtime, size, stars, length_ms, bpm) = (num()? as u64, num()? as u64, num()? as f32, num()? as f32, num()? as f32);
-            Some((path, (mtime, size, Info { stars, length_ms, bpm })))
+            let (mtime, size, stars, length_ms, bpm) = (
+                num()? as u64,
+                num()? as u64,
+                num()? as f32,
+                num()? as f32,
+                num()? as f32,
+            );
+            Some((
+                path,
+                (
+                    mtime,
+                    size,
+                    Info {
+                        stars,
+                        length_ms,
+                        bpm,
+                    },
+                ),
+            ))
         })
         .collect()
 }
@@ -72,13 +91,18 @@ fn save_cache(cache: &Cache) {
         let _ = std::fs::create_dir_all(dir);
     }
     let tmp = path.with_extension("tmp");
-    let Ok(mut file) = std::fs::File::create(&tmp) else { return };
+    let Ok(mut file) = std::fs::File::create(&tmp) else {
+        return;
+    };
     let mut out = String::with_capacity(cache.len() * 96);
     for (p, (mtime, size, i)) in cache {
         // Tabs and newlines can't appear in paths we care about; skip any that do.
         let s = p.to_string_lossy();
         if !s.contains(['\t', '\n']) {
-            out.push_str(&format!("{s}\t{mtime}\t{size}\t{:.4}\t{:.0}\t{:.2}\n", i.stars, i.length_ms, i.bpm));
+            out.push_str(&format!(
+                "{s}\t{mtime}\t{size}\t{:.4}\t{:.0}\t{:.2}\n",
+                i.stars, i.length_ms, i.bpm
+            ));
         }
     }
     if file.write_all(out.as_bytes()).is_ok() {
@@ -92,10 +116,17 @@ fn analyze(path: &Path) -> Option<Info> {
     if !crate::stars::calculable(&map) {
         return None;
     }
-    let stars = Difficulty::new().calculate_for_mode::<Taiko>(&map).ok()?.stars as f32;
+    let stars = Difficulty::new()
+        .calculate_for_mode::<Taiko>(&map)
+        .ok()?
+        .stars as f32;
     let first = map.hit_objects.first().map(|h| h.start_time).unwrap_or(0.0);
     let last = map.hit_objects.last().map(|h| h.start_time).unwrap_or(0.0);
-    Some(Info { stars, length_ms: (last - first).max(0.0) as f32, bpm: map.bpm() as f32 })
+    Some(Info {
+        stars,
+        length_ms: (last - first).max(0.0) as f32,
+        bpm: map.bpm() as f32,
+    })
 }
 
 impl MapInfo {
@@ -106,7 +137,13 @@ impl MapInfo {
         let done = Arc::new(AtomicUsize::new(0));
         let total = Arc::new(AtomicUsize::new(maps.len()));
         let held = Arc::new(AtomicBool::new(held));
-        let info = MapInfo { results: results.clone(), done: done.clone(), total, held: held.clone(), started: Instant::now() };
+        let info = MapInfo {
+            results: results.clone(),
+            done: done.clone(),
+            total,
+            held: held.clone(),
+            started: Instant::now(),
+        };
         std::thread::Builder::new()
             .name("mapinfo".into())
             .spawn(move || run(maps, results, done, held))
@@ -135,7 +172,12 @@ impl MapInfo {
     /// How far it's got (done, total), while it's worth showing.
     pub fn progress(&self, now: Instant) -> Option<(usize, usize)> {
         let shown = !self.finished() && now.saturating_duration_since(self.started) >= SHOW_AFTER;
-        shown.then(|| (self.done.load(Ordering::Relaxed), self.total.load(Ordering::Relaxed)))
+        shown.then(|| {
+            (
+                self.done.load(Ordering::Relaxed),
+                self.total.load(Ordering::Relaxed),
+            )
+        })
     }
 
     pub fn finished(&self) -> bool {
@@ -143,7 +185,12 @@ impl MapInfo {
     }
 }
 
-fn run(maps: Vec<(usize, PathBuf, u64, u64)>, results: Shared, done: Arc<AtomicUsize>, held: Arc<AtomicBool>) {
+fn run(
+    maps: Vec<(usize, PathBuf, u64, u64)>,
+    results: Shared,
+    done: Arc<AtomicUsize>,
+    held: Arc<AtomicBool>,
+) {
     let cache = load_cache();
     let mut todo = Vec::new();
     {
@@ -169,25 +216,29 @@ fn run(maps: Vec<(usize, PathBuf, u64, u64)>, results: Shared, done: Arc<AtomicU
     let cache = Mutex::new(cache);
     std::thread::scope(|s| {
         for _ in 0..threads {
-            s.spawn(|| loop {
-                while held.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                let k = next.fetch_add(1, Ordering::Relaxed);
-                let Some((i, path, mtime, size)) = todo.get(k) else { break };
-                let info = std::panic::catch_unwind(|| analyze(path)).ok().flatten();
-                if let Some(info) = info {
-                    if let Some(slot) = results.lock().unwrap().get_mut(*i) {
-                        *slot = Some(info);
+            s.spawn(|| {
+                loop {
+                    while held.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(100));
                     }
-                    let mut cache = cache.lock().unwrap();
-                    cache.insert(path.clone(), (*mtime, *size, info));
-                    if unsaved.fetch_add(1, Ordering::Relaxed) + 1 >= SAVE_EVERY {
-                        unsaved.store(0, Ordering::Relaxed);
-                        save_cache(&cache);
+                    let k = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((i, path, mtime, size)) = todo.get(k) else {
+                        break;
+                    };
+                    let info = std::panic::catch_unwind(|| analyze(path)).ok().flatten();
+                    if let Some(info) = info {
+                        if let Some(slot) = results.lock().unwrap().get_mut(*i) {
+                            *slot = Some(info);
+                        }
+                        let mut cache = cache.lock().unwrap();
+                        cache.insert(path.clone(), (*mtime, *size, info));
+                        if unsaved.fetch_add(1, Ordering::Relaxed) + 1 >= SAVE_EVERY {
+                            unsaved.store(0, Ordering::Relaxed);
+                            save_cache(&cache);
+                        }
                     }
+                    done.fetch_add(1, Ordering::Relaxed);
                 }
-                done.fetch_add(1, Ordering::Relaxed);
             });
         }
     });
@@ -199,7 +250,9 @@ mod tests {
     use super::*;
 
     fn maps(n: usize) -> Vec<(usize, PathBuf, u64, u64)> {
-        (0..n).map(|i| (i, PathBuf::from(format!("/nonexistent/{i}.osu")), 0, 0)).collect()
+        (0..n)
+            .map(|i| (i, PathBuf::from(format!("/nonexistent/{i}.osu")), 0, 0))
+            .collect()
     }
 
     fn wait_for(info: &MapInfo) -> bool {
@@ -213,15 +266,27 @@ mod tests {
     fn it_waits_while_held_and_goes_on_after() {
         let info = MapInfo::spawn(maps(5), 5, true);
         std::thread::sleep(Duration::from_millis(250));
-        assert_eq!(info.done.load(Ordering::Relaxed), 0, "nothing while a song plays");
+        assert_eq!(
+            info.done.load(Ordering::Relaxed),
+            0,
+            "nothing while a song plays"
+        );
         info.hold(false);
-        assert!(wait_for(&info), "{} done", info.done.load(Ordering::Relaxed));
+        assert!(
+            wait_for(&info),
+            "{} done",
+            info.done.load(Ordering::Relaxed)
+        );
     }
 
     #[test]
     fn progress_shows_only_when_it_takes_a_while_and_until_it_ends() {
         let info = MapInfo::spawn(maps(3), 3, true);
-        assert_eq!(info.progress(info.started), None, "a moment in: maybe it's all cached");
+        assert_eq!(
+            info.progress(info.started),
+            None,
+            "a moment in: maybe it's all cached"
+        );
         assert_eq!(info.progress(info.started + SHOW_AFTER), Some((0, 3)));
         info.hold(false);
         assert!(wait_for(&info));

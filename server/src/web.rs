@@ -73,9 +73,15 @@ pub struct Web {
 
 /// Answers on `port` until the process ends (threads of its own).
 pub fn serve(state: Arc<State>, port: u16, behind_proxy: bool) {
-    let web = Arc::new(Web { busy: AtomicUsize::new(0), recent: Mutex::new(HashMap::new()), behind_proxy });
+    let web = Arc::new(Web {
+        busy: AtomicUsize::new(0),
+        recent: Mutex::new(HashMap::new()),
+        behind_proxy,
+    });
     for addr in ["::", "0.0.0.0"] {
-        let Ok(listener) = TcpListener::bind((addr, port)) else { continue };
+        let Ok(listener) = TcpListener::bind((addr, port)) else {
+            continue;
+        };
         let (state, web) = (state.clone(), web.clone());
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
@@ -95,11 +101,23 @@ pub fn serve(state: Arc<State>, port: u16, behind_proxy: bool) {
             }
         });
     }
-    println!("website on port {port}{}", if behind_proxy { " (behind a proxy)" } else { "" });
+    println!(
+        "website on port {port}{}",
+        if behind_proxy {
+            " (behind a proxy)"
+        } else {
+            ""
+        }
+    );
     // Forget addresses now and then.
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(120));
-        web.recent.lock().unwrap().retain(|_, v| v.last().is_some_and(|t| t.elapsed() < Duration::from_secs(60)));
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(120));
+            web.recent.lock().unwrap().retain(|_, v| {
+                v.last()
+                    .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
+            });
+        }
     });
 }
 
@@ -143,7 +161,10 @@ impl Req<'_> {
     }
 
     fn arg(&self, name: &str) -> Option<String> {
-        self.query.split('&').find_map(|kv| kv.strip_prefix(name)?.strip_prefix('=')).map(decode)
+        self.query
+            .split('&')
+            .find_map(|kv| kv.strip_prefix(name)?.strip_prefix('='))
+            .map(decode)
     }
 
     fn field(&self, name: &str) -> &str {
@@ -155,19 +176,31 @@ impl Req<'_> {
     }
 
     /// A page with its own link preview.
-    fn page_with(&self, status: u16, title: &str, nav: &str, meta: &pages::Meta, body: String) -> Reply {
+    fn page_with(
+        &self,
+        status: u16,
+        title: &str,
+        nav: &str,
+        meta: &pages::Meta,
+        body: String,
+    ) -> Reply {
         Reply::html(status, title, nav, self.viewer.as_deref(), meta, body)
     }
 
     /// A step of an account form: never kept, it has the email typed in it.
     fn account_step(&self, status: u16, title: &str, body: String) -> Reply {
-        Reply { cache: "no-store", ..self.page(status, title, "", body) }
+        Reply {
+            cache: "no-store",
+            ..self.page(status, title, "", body)
+        }
     }
 
     /// Whether a failed step of an account form goes back to where the code is typed: a code was
     /// typed, or one is on its way, or it failed asking for another (the last one still works).
     fn at_code(&self, error: &str) -> bool {
-        self.form.contains_key("code") || self.form.contains_key("again") || error == crate::mail::JUST_SENT
+        self.form.contains_key("code")
+            || self.form.contains_key("again")
+            || error == crate::mail::JUST_SENT
     }
 
     fn not_found(&self, why: &str) -> Reply {
@@ -178,18 +211,26 @@ impl Req<'_> {
 /// A POST that didn't come from the site's own pages: the browser says so, or its origin isn't
 /// the host asked (a subdomain next to ours counts as elsewhere: SameSite doesn't stop those).
 fn from_elsewhere(fetch_site: &str, origin: Option<&str>, host: &str) -> bool {
-    matches!(fetch_site, "cross-site" | "same-site") || origin.is_some_and(|o| !o.split_once("://").is_some_and(|(_, h)| h.eq_ignore_ascii_case(host)))
+    matches!(fetch_site, "cross-site" | "same-site")
+        || origin.is_some_and(|o| {
+            !o.split_once("://")
+                .is_some_and(|(_, h)| h.eq_ignore_ascii_case(host))
+        })
 }
 
 /// Where a form on a map's page goes back to, with nothing in it but the map's hash.
 fn map_page(back: &str) -> bool {
-    back.strip_prefix("/m/").is_some_and(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+    back.strip_prefix("/m/")
+        .is_some_and(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 fn answer(state: &State, web: &Web, stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
-    let peer = stream.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
+    let peer = stream
+        .peer_addr()
+        .map(|a| a.ip())
+        .unwrap_or(IpAddr::from([0, 0, 0, 0]));
     let mut reader = BufReader::new((&stream).take(MAX_REQUEST));
     let mut line = String::new();
     if reader.read_line(&mut line).is_err() {
@@ -215,14 +256,23 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
             Ok(_) => {
                 if let Some((k, v)) = h.split_once(':') {
                     let v = v.trim();
-                    if k.eq_ignore_ascii_case("cf-connecting-ip") || (visitor.is_none() && k.eq_ignore_ascii_case("x-forwarded-for")) {
-                        visitor = v.split(',').next().and_then(|ip| ip.trim().parse::<IpAddr>().ok());
+                    if k.eq_ignore_ascii_case("cf-connecting-ip")
+                        || (visitor.is_none() && k.eq_ignore_ascii_case("x-forwarded-for"))
+                    {
+                        visitor = v
+                            .split(',')
+                            .next()
+                            .and_then(|ip| ip.trim().parse::<IpAddr>().ok());
                     } else if k.eq_ignore_ascii_case("user-agent") {
                         agent = v.to_string();
                     } else if k.eq_ignore_ascii_case("range") {
                         range = Some(v.to_string());
                     } else if k.eq_ignore_ascii_case("cookie") {
-                        token = v.split(';').find_map(|c| c.trim().strip_prefix(COOKIE)?.strip_prefix('=')).filter(|t| !t.is_empty()).map(str::to_string);
+                        token = v
+                            .split(';')
+                            .find_map(|c| c.trim().strip_prefix(COOKIE)?.strip_prefix('='))
+                            .filter(|t| !t.is_empty())
+                            .map(str::to_string);
                     } else if k.eq_ignore_ascii_case("content-length") {
                         length = v.parse().unwrap_or(usize::MAX);
                     } else if k.eq_ignore_ascii_case("sec-fetch-site") {
@@ -240,16 +290,27 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
             }
         }
     }
-    let ip = if web.behind_proxy { visitor.unwrap_or(peer) } else { peer };
+    let ip = if web.behind_proxy {
+        visitor.unwrap_or(peer)
+    } else {
+        peer
+    };
     let mut parts = line.split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     // A picture upload may be bigger than a form.
-    let upload = method == "POST" && (path == "/avatar" || (path.starts_with("/u/") && path.ends_with("/avatar")));
+    let upload = method == "POST"
+        && (path == "/avatar" || (path.starts_with("/u/") && path.ends_with("/avatar")));
     // Claude's answers too (a long one in Cyrillic is ~6 bytes a letter).
     let claude = bearer.as_deref().is_some_and(crate::discord::claude_key);
     let mailer = bearer.as_deref().is_some_and(crate::mail::mailer_key);
-    let max_body = if upload { crate::avatars::MAX_BYTES + MAX_FORM } else if claude { MAX_CLAUDE_FORM } else { MAX_FORM };
+    let max_body = if upload {
+        crate::avatars::MAX_BYTES + MAX_FORM
+    } else if claude {
+        MAX_CLAUDE_FORM
+    } else {
+        MAX_FORM
+    };
     let mut body = Vec::new();
     if method == "POST" && length <= max_body {
         if upload || claude {
@@ -261,11 +322,27 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
         }
     }
     let viewer = token.as_deref().and_then(|t| state.user(t));
-    let file = upload.then(|| crate::avatars::multipart_file(&content_type, &body, "avatar").map(<[u8]>::to_vec)).flatten();
-    let req = Req { method, path, query, form: if upload { HashMap::new() } else { form(&body) }, upload: file, os: Os::of(&agent), ip, token, viewer, claude, mailer };
+    let file = upload
+        .then(|| crate::avatars::multipart_file(&content_type, &body, "avatar").map(<[u8]>::to_vec))
+        .flatten();
+    let req = Req {
+        method,
+        path,
+        query,
+        form: if upload { HashMap::new() } else { form(&body) },
+        upload: file,
+        os: Os::of(&agent),
+        ip,
+        token,
+        viewer,
+        claude,
+        mailer,
+    };
     let mut reply = if !mailer && !web.allow(ip) {
         Reply::text(429, "too many requests, wait a minute")
-    } else if method == "POST" && (from_elsewhere(&fetch_site, origin.as_deref(), &host) || length > max_body) {
+    } else if method == "POST"
+        && (from_elsewhere(&fetch_site, origin.as_deref(), &host) || length > max_body)
+    {
         Reply::text(403, "no")
     } else if !matches!(method, "GET" | "HEAD" | "POST") {
         Reply::text(405, "only GET and POST")
@@ -276,10 +353,21 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     if req.viewer.is_some() && !reply.ranges {
         reply.cache = "private, no-store";
     }
-    let mut extra = reply.location.as_ref().map(|l| format!("Location: {l}\r\n")).unwrap_or_default();
+    let mut extra = reply
+        .location
+        .as_ref()
+        .map(|l| format!("Location: {l}\r\n"))
+        .unwrap_or_default();
     if let Some(c) = &reply.cookie {
         let secure = if web.behind_proxy { "; Secure" } else { "" };
-        extra += &format!("Set-Cookie: {COOKIE}={c}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{secure}\r\n", if c.is_empty() { 0 } else { COOKIE_DAYS * 86_400 });
+        extra += &format!(
+            "Set-Cookie: {COOKIE}={c}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax{secure}\r\n",
+            if c.is_empty() {
+                0
+            } else {
+                COOKIE_DAYS * 86_400
+            }
+        );
     }
     if reply.kind.starts_with("text/html") {
         extra += "Vary: Cookie\r\n";
@@ -326,7 +414,10 @@ fn decode(s: &str) -> String {
     while i < b.len() {
         match b[i] {
             b'+' => out.push(b' '),
-            b'%' if i + 2 < b.len() => match std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
+            b'%' if i + 2 < b.len() => match std::str::from_utf8(&b[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+            {
                 Some(v) => {
                     out.push(v);
                     i += 2;
@@ -342,12 +433,24 @@ fn decode(s: &str) -> String {
 
 /// A text made safe to put in a link's query.
 fn encode(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
 }
 
 /// An `a=1&b=2` form body.
 fn form(body: &[u8]) -> HashMap<String, String> {
-    String::from_utf8_lossy(body).split('&').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (decode(k), decode(v))).collect()
+    String::from_utf8_lossy(body)
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .map(|(k, v)| (decode(k), decode(v)))
+        .collect()
 }
 
 /// The first byte range of a `Range: bytes=...` header for a body of `total` bytes, as
@@ -361,7 +464,10 @@ fn byte_range(header: &str, total: usize) -> Option<(usize, usize)> {
             (total.checked_sub(n.min(total))?, total.checked_sub(1)?)
         }
         (s, "") => (s.parse().ok()?, total.checked_sub(1)?),
-        (s, e) => (s.parse().ok()?, e.parse::<usize>().ok()?.min(total.checked_sub(1)?)),
+        (s, e) => (
+            s.parse().ok()?,
+            e.parse::<usize>().ok()?.min(total.checked_sub(1)?),
+        ),
     };
     (start <= end && end < total).then_some((start, end))
 }
@@ -399,29 +505,64 @@ struct Reply {
 
 impl Reply {
     fn new(status: u16, kind: &'static str, body: Cow<'static, [u8]>) -> Reply {
-        Reply { status, kind, body, location: None, cookie: None, cache: "public, max-age=30", ranges: false }
+        Reply {
+            status,
+            kind,
+            body,
+            location: None,
+            cookie: None,
+            cache: "public, max-age=30",
+            ranges: false,
+        }
     }
 
     /// A page; `nav` is the header link it's under ("" for none), `viewer` who's logged in.
-    fn html(status: u16, title: &str, nav: &str, viewer: Option<&str>, meta: &pages::Meta, body: String) -> Reply {
-        Reply::new(status, "text/html; charset=utf-8", pages::page(title, nav, viewer, meta, &body).into_bytes().into())
+    fn html(
+        status: u16,
+        title: &str,
+        nav: &str,
+        viewer: Option<&str>,
+        meta: &pages::Meta,
+        body: String,
+    ) -> Reply {
+        Reply::new(
+            status,
+            "text/html; charset=utf-8",
+            pages::page(title, nav, viewer, meta, &body)
+                .into_bytes()
+                .into(),
+        )
     }
 
     fn json<T: serde::Serialize>(value: &T) -> Reply {
-        Reply::new(200, "application/json", serde_json::to_vec(value).unwrap_or_default().into())
+        Reply::new(
+            200,
+            "application/json",
+            serde_json::to_vec(value).unwrap_or_default().into(),
+        )
     }
 
     fn text(status: u16, text: &str) -> Reply {
-        Reply::new(status, "text/plain; charset=utf-8", text.as_bytes().to_vec().into())
+        Reply::new(
+            status,
+            "text/plain; charset=utf-8",
+            text.as_bytes().to_vec().into(),
+        )
     }
 
     fn redirect(to: String) -> Reply {
-        Reply { location: Some(to), ..Reply::new(302, "text/plain", Cow::Borrowed(&[])) }
+        Reply {
+            location: Some(to),
+            ..Reply::new(302, "text/plain", Cow::Borrowed(&[]))
+        }
     }
 
     /// Where to go after a post.
     fn see_other(to: String) -> Reply {
-        Reply { location: Some(to), ..Reply::new(303, "text/plain", Cow::Borrowed(&[])) }
+        Reply {
+            location: Some(to),
+            ..Reply::new(303, "text/plain", Cow::Borrowed(&[]))
+        }
     }
 
     /// A clip, its poster, the font or the logo: the same for everyone and never changing
@@ -435,7 +576,11 @@ impl Reply {
             Some("js") => "text/javascript; charset=utf-8",
             _ => "application/octet-stream",
         };
-        Reply { cache: "public, max-age=86400", ranges: true, ..Reply::new(200, kind, Cow::Borrowed(bytes)) }
+        Reply {
+            cache: "public, max-age=86400",
+            ranges: true,
+            ..Reply::new(200, kind, Cow::Borrowed(bytes))
+        }
     }
 
     /// Pages that differ by the visitor's system (the download button).
@@ -447,7 +592,12 @@ impl Reply {
 
 /// The reply to a request.
 fn route(state: &State, req: &Req) -> Reply {
-    let segs: Vec<&str> = req.path.trim_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+    let segs: Vec<&str> = req
+        .path
+        .trim_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
     if req.method == "POST" {
         return post(state, req, &segs);
     }
@@ -460,23 +610,50 @@ fn route(state: &State, req: &Req) -> Reply {
             let latest = scores.latest(8);
             drop(scores);
             let (online, rooms) = (state.online_players(), state.rooms());
-            let live = pages::Live { online: &online, rooms: &rooms, latest: &latest };
-            req.page(200, "a taiko client for osu! beatmaps", "", pages::home(&ranked, &maps, ranked.len(), plays, req.os, live)).per_visitor()
+            let live = pages::Live {
+                online: &online,
+                rooms: &rooms,
+                latest: &latest,
+            };
+            req.page(
+                200,
+                "a taiko client for osu! beatmaps",
+                "",
+                pages::home(&ranked, &maps, ranked.len(), plays, req.os, live),
+            )
+            .per_visitor()
         }
-        ["rankings"] => req.page(200, "Performance Ranking", "rankings", pages::rankings(&state.scores.lock().unwrap().rankings(RANKINGS))),
+        ["rankings"] => req.page(
+            200,
+            "Performance Ranking",
+            "rankings",
+            pages::rankings(&state.scores.lock().unwrap().rankings(RANKINGS)),
+        ),
         ["medals"] => {
             let (view, table) = state.medals_page(None);
-            req.page(200, "Medals", "medals", pages::medals_page(&view, None, &table))
+            req.page(
+                200,
+                "Medals",
+                "medals",
+                pages::medals_page(&view, None, &table),
+            )
         }
         ["u", name, "medals"] => match state.profile(name) {
             Some(p) => {
                 let (view, table) = state.medals_page(Some(&p.name));
-                req.page(200, &format!("{}'s medals", p.name), "medals", pages::medals_page(&view, Some(&p.name), &table))
+                req.page(
+                    200,
+                    &format!("{}'s medals", p.name),
+                    "medals",
+                    pages::medals_page(&view, Some(&p.name), &table),
+                )
             }
             None => req.not_found("There is no player by that name"),
         },
         ["api", "rankings"] => Reply::json(&state.scores.lock().unwrap().rankings(RANKINGS)),
-        ["download"] => req.page(200, "Download", "download", pages::download(req.os)).per_visitor(),
+        ["download"] => req
+            .page(200, "Download", "download", pages::download(req.os))
+            .per_visitor(),
         // The search box: /u?name=...
         ["u"] => match req.arg("name") {
             Some(name) if crate::online::valid_name(&name) => Reply::redirect(format!("/u/{name}")),
@@ -487,7 +664,10 @@ fn route(state: &State, req: &Req) -> Reply {
                 let key = p.name.to_ascii_lowercase();
                 let extras = state.scores.lock().unwrap().extras(&key);
                 let (activity, friends) = (state.activity(&p.name), state.friends_online(&p.name));
-                let tie = req.key().map(|me| state.friendship(&me, &key)).unwrap_or(pages::Friendship::None);
+                let tie = req
+                    .key()
+                    .map(|me| state.friendship(&me, &key))
+                    .unwrap_or(pages::Friendship::None);
                 let notice = req.arg("msg");
                 let own = req.key().as_deref() == Some(key.as_str());
                 let nominator = state.is_nominator(&key);
@@ -500,7 +680,21 @@ fn route(state: &State, req: &Req) -> Reply {
                     // Their own page tells a nominator how to love maps from Discord.
                     verify_code: (own && nominator).then(|| state.verify_code(&key)),
                 };
-                req.page_with(200, &p.name, "rankings", &pages::profile_meta(&p), pages::profile(&p, &extras, activity.as_ref(), &friends, tie, notice.as_deref(), &roles))
+                req.page_with(
+                    200,
+                    &p.name,
+                    "rankings",
+                    &pages::profile_meta(&p),
+                    pages::profile(
+                        &p,
+                        &extras,
+                        activity.as_ref(),
+                        &friends,
+                        tie,
+                        notice.as_deref(),
+                        &roles,
+                    ),
+                )
             }
             None => req.not_found("There is no player by that name"),
         },
@@ -518,20 +712,58 @@ fn route(state: &State, req: &Req) -> Reply {
         },
         ["register"] => match &req.viewer {
             Some(me) => Reply::redirect(format!("/u/{me}")),
-            None => req.page(200, "Sign up", "", pages::register(None, "", "", crate::mail::on())),
+            None => req.page(
+                200,
+                "Sign up",
+                "",
+                pages::register(None, "", "", crate::mail::on()),
+            ),
         },
         ["reset"] => req.page(200, "Reset password", "", pages::reset(None, "")),
         ["chat"] | ["chat", _] => {
-            let (Some(me), Some(key)) = (req.viewer.as_deref(), req.key()) else { return Reply::redirect("/login".into()) };
+            let (Some(me), Some(key)) = (req.viewer.as_deref(), req.key()) else {
+                return Reply::redirect("/login".into());
+            };
             let people = state.conversations(&key);
             let error = req.arg("err");
             match segs.get(1) {
-                None => req.page(200, "Chat", "chat", pages::chat(me, None, &state.global_chat(), &people, true, error.as_deref())),
+                None => req.page(
+                    200,
+                    "Chat",
+                    "chat",
+                    pages::chat(
+                        me,
+                        None,
+                        &state.global_chat(),
+                        &people,
+                        true,
+                        error.as_deref(),
+                    ),
+                ),
                 Some(other) => {
-                    let Some(p) = state.profile(other) else { return req.not_found("There is no player by that name") };
-                    let friends = state.friendship(&key, &p.name.to_ascii_lowercase()) == pages::Friendship::Friends;
-                    let lines = if friends { state.chat_with(&key, &p.name) } else { Vec::new() };
-                    req.page(200, &format!("Chat with {}", p.name), "chat", pages::chat(me, Some(&p.name), &lines, &people, friends, error.as_deref()))
+                    let Some(p) = state.profile(other) else {
+                        return req.not_found("There is no player by that name");
+                    };
+                    let friends = state.friendship(&key, &p.name.to_ascii_lowercase())
+                        == pages::Friendship::Friends;
+                    let lines = if friends {
+                        state.chat_with(&key, &p.name)
+                    } else {
+                        Vec::new()
+                    };
+                    req.page(
+                        200,
+                        &format!("Chat with {}", p.name),
+                        "chat",
+                        pages::chat(
+                            me,
+                            Some(&p.name),
+                            &lines,
+                            &people,
+                            friends,
+                            error.as_deref(),
+                        ),
+                    )
                 }
             }
         }
@@ -542,19 +774,31 @@ fn route(state: &State, req: &Req) -> Reply {
         }
         ["api", "claude", "pings"] if req.claude => {
             let after = req.arg("after").and_then(|a| a.parse().ok()).unwrap_or(0);
-            Reply { cache: "no-store", ..Reply::json(&crate::discord::pings(after)) }
+            Reply {
+                cache: "no-store",
+                ..Reply::json(&crate::discord::pings(after))
+            }
         }
         ["api", "chat"] | ["api", "chat", _] => {
-            let Some(key) = req.key() else { return Reply::text(401, "log in first") };
+            let Some(key) = req.key() else {
+                return Reply::text(401, "log in first");
+            };
             match segs.get(2) {
                 None => Reply::json(&state.global_chat()),
                 Some(other) => Reply::json(&state.chat_with(&key, other)),
             }
         }
-        ["beatmaps"] => req.page(200, "Beatmaps", "beatmaps", pages::beatmaps(&state.scores.lock().unwrap().maps(MAPS))),
+        ["beatmaps"] => req.page(
+            200,
+            "Beatmaps",
+            "beatmaps",
+            pages::beatmaps(&state.scores.lock().unwrap().maps(MAPS)),
+        ),
         ["api", "beatmaps"] => Reply::json(&state.scores.lock().unwrap().maps(MAPS)),
         ["m", hash] | ["api", "m", hash] => {
-            let Ok(map) = u64::from_str_radix(hash, 16) else { return req.not_found("That is not a map link") };
+            let Ok(map) = u64::from_str_radix(hash, 16) else {
+                return req.not_found("That is not a map link");
+            };
             let scores = state.scores.lock().unwrap();
             let rows = scores.map_scores(map);
             if segs[0] == "api" {
@@ -568,26 +812,54 @@ fn route(state: &State, req: &Req) -> Reply {
                         can_love: req.key().is_some_and(|me| state.is_nominator(&me)),
                         notice: req.arg("msg"),
                     };
-                    req.page_with(200, &m.name, "beatmaps", &pages::map_meta(&m, &rows), pages::map_page(&m, &rows, &love))
+                    req.page_with(
+                        200,
+                        &m.name,
+                        "beatmaps",
+                        &pages::map_meta(&m, &rows),
+                        pages::map_page(&m, &rows, &love),
+                    )
                 }
                 None => req.not_found("Nobody has sent a play on that map yet"),
             }
         }
         ["s", id] | ["s", id, "card.png"] | ["api", "s", id] => {
-            let Ok(id) = id.parse::<u64>() else { return req.not_found("That is not a score link") };
+            let Ok(id) = id.parse::<u64>() else {
+                return req.not_found("That is not a score link");
+            };
             let (score, place) = {
                 let scores = state.scores.lock().unwrap();
-                let Some(s) = scores.score(id) else { return req.not_found("That score isn't on the server") };
+                let Some(s) = scores.score(id) else {
+                    return req.not_found("That score isn't on the server");
+                };
                 let place = scores.place_of(s.map_hash, id);
                 (s, place)
             };
             match segs.as_slice() {
                 ["api", ..] => Reply::json(&score),
-                [_, _, _] => Reply { cache: "public, max-age=86400", ..Reply::new(200, "image/png", crate::card::png(&score).into()) },
+                [_, _, _] => Reply {
+                    cache: "public, max-age=86400",
+                    ..Reply::new(200, "image/png", crate::card::png(&score).into())
+                },
                 _ => {
-                    let admin = req.key().filter(|me| crate::is_admin(me)).and_then(|_| state.scores.lock().unwrap().pp_of(score.id));
+                    let admin = req
+                        .key()
+                        .filter(|me| crate::is_admin(me))
+                        .and_then(|_| state.scores.lock().unwrap().pp_of(score.id));
                     let notice = req.arg("msg");
-                    req.page_with(200, &score.map, "beatmaps", &pages::score_meta(&score), pages::score_page(&score, place, req.arg("watch").is_some(), admin, notice.as_deref()))
+                    req.page_with(
+                        200,
+                        &score.map,
+                        "beatmaps",
+                        &pages::score_meta(&score),
+                        pages::score_page(
+                            &score,
+                            place,
+                            req.arg("watch").is_some(),
+                            admin,
+                            notice.as_deref(),
+                        ),
+                    )
                 }
             }
         }
@@ -595,17 +867,27 @@ fn route(state: &State, req: &Req) -> Reply {
         ["loved"] => {
             let mut sets: Vec<pages::LovedRow> = crate::loved::all()
                 .into_iter()
-                .map(|(set, loved)| pages::LovedRow { set, names: crate::covers::names(set), loved })
+                .map(|(set, loved)| pages::LovedRow {
+                    set,
+                    names: crate::covers::names(set),
+                    loved,
+                })
                 .collect();
             // The latest loved first.
             sets.sort_by_key(|r| std::cmp::Reverse(r.loved.at));
             req.page(200, "Loved here", "loved", pages::loved(&sets))
         }
         ["a", name] => match crate::avatars::load(&name.to_ascii_lowercase()) {
-            Some((kind, bytes)) => Reply { cache: "public, max-age=86400", ..Reply::new(200, kind, bytes.into()) },
+            Some((kind, bytes)) => Reply {
+                cache: "public, max-age=86400",
+                ..Reply::new(200, kind, bytes.into())
+            },
             None => Reply::text(404, "no picture"),
         },
-        [dir @ ("clips" | "site"), name] => match pages::STATIC_FILES.iter().find(|(f, _)| f.strip_prefix(dir).and_then(|f| f.strip_prefix('/')) == Some(name)) {
+        [dir @ ("clips" | "site"), name] => match pages::STATIC_FILES
+            .iter()
+            .find(|(f, _)| f.strip_prefix(dir).and_then(|f| f.strip_prefix('/')) == Some(name))
+        {
             Some((f, bytes)) => Reply::file(f, bytes),
             None => req.not_found("There is no such file"),
         },
@@ -620,7 +902,10 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
         ["login"] => {
             let name = req.field("name").trim();
             match state.web_login(req.ip, name, req.field("password")) {
-                Ok((name, token)) => Reply { cookie: Some(token), ..Reply::see_other(format!("/u/{name}")) },
+                Ok((name, token)) => Reply {
+                    cookie: Some(token),
+                    ..Reply::see_other(format!("/u/{name}"))
+                },
                 Err(e) => req.account_step(401, "Log in", pages::login(Some(&e), name)),
             }
         }
@@ -628,32 +913,71 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
         // password) the account is made.
         ["register"] => {
             let (name, email) = (req.field("name").trim(), req.field("email").trim());
-            let (code, password) = (req.form.get("code").map(String::as_str), req.form.get("password").map(String::as_str));
+            let (code, password) = (
+                req.form.get("code").map(String::as_str),
+                req.form.get("password").map(String::as_str),
+            );
             match state.web_register(req.ip, name, password, email, code) {
-                WebAuth::LoggedIn { name, token } => Reply { cookie: Some(token), ..Reply::see_other(format!("/u/{name}")) },
-                WebAuth::CodeSent(to) => req.account_step(200, "Sign up", pages::register_code(None, Some(&to), name, email)),
-                WebAuth::Failed(e) if req.at_code(&e) => req.account_step(400, "Sign up", pages::register_code(Some(&e), None, name, email)),
-                WebAuth::Failed(e) => req.account_step(400, "Sign up", pages::register(Some(&e), name, email, crate::mail::on())),
+                WebAuth::LoggedIn { name, token } => Reply {
+                    cookie: Some(token),
+                    ..Reply::see_other(format!("/u/{name}"))
+                },
+                WebAuth::CodeSent(to) => req.account_step(
+                    200,
+                    "Sign up",
+                    pages::register_code(None, Some(&to), name, email),
+                ),
+                WebAuth::Failed(e) if req.at_code(&e) => req.account_step(
+                    400,
+                    "Sign up",
+                    pages::register_code(Some(&e), None, name, email),
+                ),
+                WebAuth::Failed(e) => req.account_step(
+                    400,
+                    "Sign up",
+                    pages::register(Some(&e), name, email, crate::mail::on()),
+                ),
             }
         }
         ["reset"] => {
             let who = req.field("who").trim();
-            let (code, password) = (req.form.get("code").map(String::as_str), req.form.get("password").map(String::as_str));
+            let (code, password) = (
+                req.form.get("code").map(String::as_str),
+                req.form.get("password").map(String::as_str),
+            );
             match state.web_reset(req.ip, who, code, password) {
-                WebAuth::LoggedIn { name, token } => Reply { cookie: Some(token), ..Reply::see_other(format!("/u/{name}")) },
-                WebAuth::CodeSent(to) => req.account_step(200, "Reset password", pages::reset_code(None, Some(&to), who)),
-                WebAuth::Failed(e) if req.at_code(&e) => req.account_step(400, "Reset password", pages::reset_code(Some(&e), None, who)),
-                WebAuth::Failed(e) => req.account_step(400, "Reset password", pages::reset(Some(&e), who)),
+                WebAuth::LoggedIn { name, token } => Reply {
+                    cookie: Some(token),
+                    ..Reply::see_other(format!("/u/{name}"))
+                },
+                WebAuth::CodeSent(to) => req.account_step(
+                    200,
+                    "Reset password",
+                    pages::reset_code(None, Some(&to), who),
+                ),
+                WebAuth::Failed(e) if req.at_code(&e) => req.account_step(
+                    400,
+                    "Reset password",
+                    pages::reset_code(Some(&e), None, who),
+                ),
+                WebAuth::Failed(e) => {
+                    req.account_step(400, "Reset password", pages::reset(Some(&e), who))
+                }
             }
         }
         ["logout"] => {
             if let Some(t) = &req.token {
                 state.logout(t);
             }
-            Reply { cookie: Some(String::new()), ..Reply::see_other("/".into()) }
+            Reply {
+                cookie: Some(String::new()),
+                ..Reply::see_other("/".into())
+            }
         }
         ["avatar"] => {
-            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
             let msg = match &req.upload {
                 Some(file) => crate::avatars::save(&key, file, crate::now_secs())
                     .map(|_| {
@@ -663,11 +987,19 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
                     .unwrap_or_else(|e| e),
                 None => "pick a picture first".into(),
             };
-            Reply::see_other(format!("/u/{}?msg={}", state.display_name(&key), encode(&msg)))
+            Reply::see_other(format!(
+                "/u/{}?msg={}",
+                state.display_name(&key),
+                encode(&msg)
+            ))
         }
         ["u", name, "avatar"] | ["u", name, "avatar", "remove"] => {
-            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
-            let Some(p) = state.profile(name) else { return req.not_found("There is no player by that name") };
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let Some(p) = state.profile(name) else {
+                return req.not_found("There is no player by that name");
+            };
             let target = p.name.to_ascii_lowercase();
             let msg = if !crate::is_admin(&key) {
                 "only admins can do that".to_string()
@@ -676,7 +1008,9 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
                 format!("{}'s picture is off", p.name)
             } else {
                 match &req.upload {
-                    Some(file) => crate::avatars::save(&target, file, crate::now_secs()).map(|_| format!("{}'s picture is set", p.name)).unwrap_or_else(|e| e),
+                    Some(file) => crate::avatars::save(&target, file, crate::now_secs())
+                        .map(|_| format!("{}'s picture is set", p.name))
+                        .unwrap_or_else(|e| e),
                     None => "pick a picture first".into(),
                 }
             };
@@ -684,18 +1018,35 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             Reply::see_other(format!("/u/{}?msg={}", p.name, encode(&msg)))
         }
         ["avatar", "remove"] => {
-            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
             crate::avatars::remove(&key);
-            Reply::see_other(format!("/u/{}?msg={}", state.display_name(&key), encode("Your picture is off")))
+            Reply::see_other(format!(
+                "/u/{}?msg={}",
+                state.display_name(&key),
+                encode("Your picture is off")
+            ))
         }
         ["s", id, "pp"] => {
-            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
-            let Ok(id) = id.parse::<u64>() else { return req.not_found("That is not a score link") };
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let Ok(id) = id.parse::<u64>() else {
+                return req.not_found("That is not a score link");
+            };
             let value = req.field("pp").trim();
             let msg = if !crate::is_admin(&key) {
                 "only admins can do that".to_string()
             } else {
-                let pp = if value.is_empty() { Ok(None) } else { value.parse::<f64>().map(Some).map_err(|_| "pp is a number".to_string()) };
+                let pp = if value.is_empty() {
+                    Ok(None)
+                } else {
+                    value
+                        .parse::<f64>()
+                        .map(Some)
+                        .map_err(|_| "pp is a number".to_string())
+                };
                 match pp.and_then(|pp| state.scores.lock().unwrap().set_pp(id, pp).map(|_| pp)) {
                     Ok(pp) => {
                         println!("score {id}: pp set to {pp:?} by {key}");
@@ -710,45 +1061,82 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             Reply::see_other(format!("/s/{id}?msg={}", encode(&msg)))
         }
         ["s", id, "delete"] => {
-            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
-            let Ok(id) = id.parse::<u64>() else { return req.not_found("That is not a score link") };
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let Ok(id) = id.parse::<u64>() else {
+                return req.not_found("That is not a score link");
+            };
             if !crate::is_admin(&key) {
-                return Reply::see_other(format!("/s/{id}?msg={}", encode("only admins can do that")));
+                return Reply::see_other(format!(
+                    "/s/{id}?msg={}",
+                    encode("only admins can do that")
+                ));
             }
             let removed = state.scores.lock().unwrap().remove(id);
             match removed {
                 Ok(player) => {
                     println!("score {id} by {player} deleted by {key}");
-                    Reply::see_other(format!("/u/{player}?msg={}", encode(&format!("Score {id} is deleted"))))
+                    Reply::see_other(format!(
+                        "/u/{player}?msg={}",
+                        encode(&format!("Score {id} is deleted"))
+                    ))
                 }
                 Err(e) => Reply::see_other(format!("/s/{id}?msg={}", encode(&e))),
             }
         }
         ["u", name, "ban"] => {
-            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
-            let Some(p) = state.profile(name) else { return req.not_found("There is no player by that name") };
-            let msg = state.set_banned(&key, &p.name, req.field("on") != "0").unwrap_or_else(|e| e);
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let Some(p) = state.profile(name) else {
+                return req.not_found("There is no player by that name");
+            };
+            let msg = state
+                .set_banned(&key, &p.name, req.field("on") != "0")
+                .unwrap_or_else(|e| e);
             Reply::see_other(format!("/u/{}?msg={}", p.name, encode(&msg)))
         }
         ["u", name, "rename"] => {
-            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
-            let Some(p) = state.profile(name) else { return req.not_found("There is no player by that name") };
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let Some(p) = state.profile(name) else {
+                return req.not_found("There is no player by that name");
+            };
             match state.rename(&key, &p.name, req.field("name")) {
-                Ok(new) => Reply::see_other(format!("/u/{new}?msg={}", encode(&format!("{} is {new} now", p.name)))),
+                Ok(new) => Reply::see_other(format!(
+                    "/u/{new}?msg={}",
+                    encode(&format!("{} is {new} now", p.name))
+                )),
                 Err(e) => Reply::see_other(format!("/u/{}?msg={}", p.name, encode(&e))),
             }
         }
         ["love", set] => {
-            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
-            let Ok(set) = set.parse::<u32>() else { return req.not_found("That is not a map set") };
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let Ok(set) = set.parse::<u32>() else {
+                return req.not_found("That is not a map set");
+            };
             let back = req.field("back");
-            let back = if map_page(back) { back.to_string() } else { "/loved".into() };
-            let msg = state.love(&key, set, req.field("on") != "0").unwrap_or_else(|e| e);
+            let back = if map_page(back) {
+                back.to_string()
+            } else {
+                "/loved".into()
+            };
+            let msg = state
+                .love(&key, set, req.field("on") != "0")
+                .unwrap_or_else(|e| e);
             Reply::see_other(format!("{back}?msg={}", encode(&msg)))
         }
         ["u", name, "nominator"] => {
-            let Some(key) = req.key() else { return Reply::see_other("/login".into()) };
-            let msg = state.set_nominator(&key, name, req.field("on") != "0").unwrap_or_else(|e| e);
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let msg = state
+                .set_nominator(&key, name, req.field("on") != "0")
+                .unwrap_or_else(|e| e);
             Reply::see_other(format!("/u/{}?msg={}", encode(name), encode(&msg)))
         }
         ["api", "claude", "reply"] if req.claude => {
@@ -759,35 +1147,72 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             }
         }
         ["api", "claude", "score"] if req.claude => {
-            let map = u64::from_str_radix(req.field("map"), 16).map_err(|_| "map is its hash, in hex".to_string());
-            let pp = req.field("pp").parse::<f64>().map_err(|_| "pp is a number".to_string());
+            let map = u64::from_str_radix(req.field("map"), 16)
+                .map_err(|_| "map is its hash, in hex".to_string());
+            let pp = req
+                .field("pp")
+                .parse::<f64>()
+                .map_err(|_| "pp is a number".to_string());
             let score = req.field("score").parse::<u64>().unwrap_or(1_000_000);
-            let mods = req.field("mods").split(',').map(|m| crate::online::clean_text(m.trim(), 4)).filter(|m| !m.is_empty()).take(40).collect();
+            let mods = req
+                .field("mods")
+                .split(',')
+                .map(|m| crate::online::clean_text(m.trim(), 4))
+                .filter(|m| !m.is_empty())
+                .take(40)
+                .collect();
             let name = state.display_name("claude");
-            match map.and_then(|map| state.scores.lock().unwrap().add_hidden("claude", &name, map, pp?, score, mods, crate::now_secs())) {
+            match map.and_then(|map| {
+                state.scores.lock().unwrap().add_hidden(
+                    "claude",
+                    &name,
+                    map,
+                    pp?,
+                    score,
+                    mods,
+                    crate::now_secs(),
+                )
+            }) {
                 Ok(id) => Reply::text(200, &format!("score {id}")),
                 Err(e) => Reply::text(400, &e),
             }
         }
-        ["api", "claude", "mark"] if req.claude => match crate::discord::mark(req.field("channel"), req.field("message"), req.field("tag")) {
-            Ok(done) => Reply::text(200, &done),
-            Err(e) => Reply::text(502, &e),
-        },
+        ["api", "claude", "mark"] if req.claude => {
+            match crate::discord::mark(req.field("channel"), req.field("message"), req.field("tag"))
+            {
+                Ok(done) => Reply::text(200, &done),
+                Err(e) => Reply::text(502, &e),
+            }
+        }
         ["friend", other] => {
-            let (Some(me), Some(key)) = (req.viewer.as_deref(), req.key()) else { return Reply::see_other("/login".into()) };
-            let Some(p) = state.profile(other) else { return req.not_found("There is no player by that name") };
+            let (Some(me), Some(key)) = (req.viewer.as_deref(), req.key()) else {
+                return Reply::see_other("/login".into());
+            };
+            let Some(p) = state.profile(other) else {
+                return req.not_found("There is no player by that name");
+            };
             let msg = state.add_friend(&key, me, &p.name).unwrap_or_else(|e| e);
             Reply::see_other(format!("/u/{}?msg={}", p.name, encode(&msg)))
         }
         ["chat"] | ["chat", _] => {
             let js = req.query.split('&').any(|kv| kv == "js=1");
             let (Some(me), Some(key)) = (req.viewer.as_deref(), req.key()) else {
-                return if js { Reply::json(&serde_json::json!({ "error": "log in first" })) } else { Reply::see_other("/login".into()) };
+                return if js {
+                    Reply::json(&serde_json::json!({ "error": "log in first" }))
+                } else {
+                    Reply::see_other("/login".into())
+                };
             };
             let text = req.field("text");
             let (sent, back) = match segs.get(1) {
-                None => (state.post_global(me, text, |hub| hub.web_chat_allowed(&key)), "/chat".to_string()),
-                Some(other) => (state.post_chat(&key, me, other, text, |hub| hub.web_chat_allowed(&key)), format!("/chat/{}", encode(other))),
+                None => (
+                    state.post_global(me, text, |hub| hub.web_chat_allowed(&key)),
+                    "/chat".to_string(),
+                ),
+                Some(other) => (
+                    state.post_chat(&key, me, other, text, |hub| hub.web_chat_allowed(&key)),
+                    format!("/chat/{}", encode(other)),
+                ),
             };
             match (sent, js) {
                 (Ok(_), true) => Reply::json(&serde_json::json!({ "ok": true })),
@@ -807,9 +1232,17 @@ mod tests {
     #[test]
     fn posts_only_come_from_the_site_itself() {
         let site = "rstaiko.auneu.space";
-        assert!(!from_elsewhere("same-origin", Some("https://rstaiko.auneu.space"), site));
+        assert!(!from_elsewhere(
+            "same-origin",
+            Some("https://rstaiko.auneu.space"),
+            site
+        ));
         assert!(!from_elsewhere("", None, site));
-        assert!(!from_elsewhere("", Some("http://localhost:8080"), "localhost:8080"));
+        assert!(!from_elsewhere(
+            "",
+            Some("http://localhost:8080"),
+            "localhost:8080"
+        ));
         assert!(from_elsewhere("cross-site", None, site));
         assert!(from_elsewhere("same-site", None, site));
         assert!(from_elsewhere("", Some("https://other.auneu.space"), site));

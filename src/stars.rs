@@ -5,11 +5,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use rosu_pp::taiko::Taiko;
 use rosu_pp::model::mode::GameMode;
+use rosu_pp::taiko::Taiko;
 use rosu_pp::{Beatmap, Difficulty};
 
-use crate::render::{rgba, Canvas};
+use crate::render::{Canvas, rgba};
 
 /// Section length of lazer's strain skills (in rate-adjusted time).
 const SECTION_MS: f64 = 400.0;
@@ -30,7 +30,9 @@ pub(crate) fn calculable(map: &Beatmap) -> bool {
     match map.check_suspicion() {
         Ok(()) => true,
         // rosu-pp stops at the count, before the length and density checks: those still apply.
-        Err(TooSuspicious::ObjectCount) if map.mode == GameMode::Taiko && map.hit_objects.len() <= MAX_TAIKO_OBJECTS => {
+        Err(TooSuspicious::ObjectCount)
+            if map.mode == GameMode::Taiko && map.hit_objects.len() <= MAX_TAIKO_OBJECTS =>
+        {
             let times: Vec<f64> = map.hit_objects.iter().map(|h| h.start_time).collect();
             reasonable_taiko(&times)
         }
@@ -45,7 +47,8 @@ fn reasonable_taiko(times: &[f64]) -> bool {
     const PER_1S: usize = 400;
     const PER_10S: usize = 1000;
     if let [first, .., last] = times
-        && last - first > DAY_MS {
+        && last - first > DAY_MS
+    {
         return false;
     }
     let dense = |i: usize, n: usize, ms: f64| times.get(i + n).is_some_and(|t| t - times[i] < ms);
@@ -55,10 +58,19 @@ fn reasonable_taiko(times: &[f64]) -> bool {
 /// The map at `path` as a play with `mods` has it: Half takes notes off (by `half`), Swap and
 /// Random change their colours (like `game::apply_to_map`), and pp and star ratings go by what's
 /// left. `seed`: Random's colouring (`Game::seed`).
-pub(crate) fn load_played(path: &Path, mods: crate::mods::Mods, seed: u64, half_rule: crate::mods::HalfRule) -> Option<Beatmap> {
+pub(crate) fn load_played(
+    path: &Path,
+    mods: crate::mods::Mods,
+    seed: u64,
+    half_rule: crate::mods::HalfRule,
+) -> Option<Beatmap> {
     use crate::mods::Mod;
     let mut map = load(path)?;
-    let (half, swap, random) = (mods.has(Mod::Half), mods.has(Mod::Swap), mods.has(Mod::Random));
+    let (half, swap, random) = (
+        mods.has(Mod::Half),
+        mods.has(Mod::Swap),
+        mods.has(Mod::Random),
+    );
     if !(half || swap || random) {
         return Some(map);
     }
@@ -71,7 +83,12 @@ pub(crate) fn load_played(path: &Path, mods: crate::mods::Mods, seed: u64, half_
             let k = points.partition_point(|p| p.time <= t).saturating_sub(1);
             points.get(k).map_or((0.0, 500.0), |p| (p.time, p.beat_len))
         };
-        let times: Vec<f64> = map.hit_objects.iter().filter(|o| o.is_circle()).map(|o| o.start_time).collect();
+        let times: Vec<f64> = map
+            .hit_objects
+            .iter()
+            .filter(|o| o.is_circle())
+            .map(|o| o.start_time)
+            .collect();
         crate::mods::half_keeps(&times, half_rule, &beat_at)
     } else {
         Vec::new()
@@ -87,7 +104,11 @@ pub(crate) fn load_played(path: &Path, mods: crate::mods::Mods, seed: u64, half_
                 continue;
             }
             let kat = (bits & RIM != 0) != swap;
-            let kat = if random { !crate::game::random_don(object.start_time, seed) } else { kat };
+            let kat = if random {
+                !crate::game::random_don(object.start_time, seed)
+            } else {
+                kat
+            };
             bits = if kat { bits | 8 } else { bits & !RIM };
         }
         map.hit_objects.push(object);
@@ -104,47 +125,85 @@ pub fn star_rating(path: &Path, rate: f64) -> Option<f64> {
 /// scroll speed and hit windows) and Relax, besides the speed.
 pub fn star_rating_with(path: &Path, rate: f64, mods: u32) -> Option<f64> {
     let map = load(path)?;
-    Difficulty::new().mods(mods).clock_rate(rate).calculate_for_mode::<Taiko>(&map).ok().map(|a| a.stars)
+    Difficulty::new()
+        .mods(mods)
+        .clock_rate(rate)
+        .calculate_for_mode::<Taiko>(&map)
+        .ok()
+        .map(|a| a.stars)
 }
 
 /// With mods and the scroll speed setting, the way pp counts them (`pp::formula_mods`: slower
 /// notes read easier, faster ones harder). Relax goes by its mod bits, scroll speed aside.
-pub fn star_rating_for(path: &Path, rate: f64, mods: crate::mods::Mods, scroll_speed: f64) -> Option<f64> {
+pub fn star_rating_for(
+    path: &Path,
+    rate: f64,
+    mods: crate::mods::Mods,
+    scroll_speed: f64,
+) -> Option<f64> {
     star_rating_played(path, rate, mods, scroll_speed, 0, Default::default())
 }
 
 /// The same for a play, whose `seed` says how Random coloured it.
-pub fn star_rating_played(path: &Path, rate: f64, mods: crate::mods::Mods, scroll_speed: f64, seed: u64, half_rule: crate::mods::HalfRule) -> Option<f64> {
+pub fn star_rating_played(
+    path: &Path,
+    rate: f64,
+    mods: crate::mods::Mods,
+    scroll_speed: f64,
+    seed: u64,
+    half_rule: crate::mods::HalfRule,
+) -> Option<f64> {
     let map = load_played(path, mods, seed, half_rule)?;
     let difficulty = if mods.has(crate::mods::Mod::Relax) {
         Difficulty::new().mods(mod_bits(mods))
     } else {
         Difficulty::new().mods(crate::pp::formula_mods(mods, scroll_speed))
     };
-    difficulty.clock_rate(rate).calculate_for_mode::<Taiko>(&map).ok().map(|a| a.stars)
+    difficulty
+        .clock_rate(rate)
+        .calculate_for_mode::<Taiko>(&map)
+        .ok()
+        .map(|a| a.stars)
 }
 
 /// The mods of `mods` osu!taiko's star rating counts, as osu!'s mod bits (the speed is passed as
 /// a rate).
 pub fn mod_bits(mods: crate::mods::Mods) -> u32 {
     use crate::mods::Mod;
-    [(Mod::Easy, 2), (Mod::HardRock, 16), (Mod::Relax, 128)].into_iter().filter(|(m, _)| mods.has(*m)).map(|(_, b)| b).sum()
+    [(Mod::Easy, 2), (Mod::HardRock, 16), (Mod::Relax, 128)]
+        .into_iter()
+        .filter(|(m, _)| mods.has(*m))
+        .map(|(_, b)| b)
+        .sum()
 }
 
 /// The mods that change the notes (`load_played`), as bits next to `mod_bits` in a rating's key.
 fn note_bits(mods: crate::mods::Mods) -> u32 {
     use crate::mods::Mod;
-    [(Mod::Half, 1 << 16), (Mod::Swap, 1 << 17), (Mod::Random, 1 << 18)].into_iter().filter(|(m, _)| mods.has(*m)).map(|(_, b)| b).sum()
+    [
+        (Mod::Half, 1 << 16),
+        (Mod::Swap, 1 << 17),
+        (Mod::Random, 1 << 18),
+    ]
+    .into_iter()
+    .filter(|(m, _)| mods.has(*m))
+    .map(|(_, b)| b)
+    .sum()
 }
 
 /// Combined skill strain per section, the map time the first section starts at, and the
 /// section length in map time — for the song select difficulty graph.
 pub fn strain_curve(path: &Path, rate: f64, first_object_ms: f64) -> Option<(Vec<f64>, f64, f64)> {
     let map = load(path)?;
-    let s = Difficulty::new().clock_rate(rate).strains_for_mode::<Taiko>(&map).ok()?;
+    let s = Difficulty::new()
+        .clock_rate(rate)
+        .strains_for_mode::<Taiko>(&map)
+        .ok()?;
     let at = |v: &Vec<f64>, i: usize| v.get(i).copied().unwrap_or(0.0);
     let n = s.color.len().max(s.stamina.len()).max(s.rhythm.len());
-    let combined = (0..n).map(|i| at(&s.color, i) + at(&s.rhythm, i) + at(&s.stamina, i) + at(&s.reading, i)).collect();
+    let combined = (0..n)
+        .map(|i| at(&s.color, i) + at(&s.rhythm, i) + at(&s.stamina, i) + at(&s.reading, i))
+        .collect();
     // lazer's first section ends at the first multiple of the section length after the first
     // object (times divided by the clock rate).
     let first_end = (first_object_ms / rate / SECTION_MS).ceil() * SECTION_MS;
@@ -178,14 +237,26 @@ impl Default for Stars {
             .name("stars".into())
             .spawn(move || {
                 for (key, path, rate, mods, scroll_speed) in jobs {
-                    let stars = std::panic::catch_unwind(|| star_rating_for(&path, rate, mods, scroll_speed)).ok().flatten().map(|s| s as f32);
+                    let stars = std::panic::catch_unwind(|| {
+                        star_rating_for(&path, rate, mods, scroll_speed)
+                    })
+                    .ok()
+                    .flatten()
+                    .map(|s| s as f32);
                     if done.send((key, stars)).is_err() {
                         return;
                     }
                 }
             })
             .expect("spawn star worker");
-        Stars { tx, rx, cache: HashMap::new(), requested: HashSet::new(), mods: crate::mods::Mods::NONE, scroll_speed: 1.0 }
+        Stars {
+            tx,
+            rx,
+            cache: HashMap::new(),
+            requested: HashSet::new(),
+            mods: crate::mods::Mods::NONE,
+            scroll_speed: 1.0,
+        }
     }
 }
 
@@ -197,13 +268,20 @@ impl Stars {
     }
 
     fn key(&self, index: usize, rate: f64) -> Key {
-        (index, rate_key(rate), mod_bits(self.mods) | note_bits(self.mods), rate_key(self.scroll_speed))
+        (
+            index,
+            rate_key(rate),
+            mod_bits(self.mods) | note_bits(self.mods),
+            rate_key(self.scroll_speed),
+        )
     }
 
     pub fn request(&mut self, index: usize, path: &Path, rate: f64) {
         let key = self.key(index, rate);
         if self.requested.insert(key) {
-            let _ = self.tx.send((key, path.to_path_buf(), rate, self.mods, self.scroll_speed));
+            let _ = self
+                .tx
+                .send((key, path.to_path_buf(), rate, self.mods, self.scroll_speed));
         }
     }
 
@@ -227,8 +305,17 @@ impl Stars {
 /// osu!'s star rating colour spectrum.
 pub fn color(stars: f32) -> u32 {
     const STOPS: [(f32, u32); 11] = [
-        (0.1, 0x4290FB), (1.25, 0x4FC0FF), (2.0, 0x4FFFD5), (2.5, 0x7CFF4F), (3.3, 0xF6F05C), (4.2, 0xFF8068),
-        (4.9, 0xFF4E6F), (5.8, 0xC645B8), (6.7, 0x6563DE), (7.7, 0x18158E), (9.0, 0x000000),
+        (0.1, 0x4290FB),
+        (1.25, 0x4FC0FF),
+        (2.0, 0x4FFFD5),
+        (2.5, 0x7CFF4F),
+        (3.3, 0xF6F05C),
+        (4.2, 0xFF8068),
+        (4.9, 0xFF4E6F),
+        (5.8, 0xC645B8),
+        (6.7, 0x6563DE),
+        (7.7, 0x18158E),
+        (9.0, 0x000000),
     ];
     if stars <= STOPS[0].0 {
         return STOPS[0].1;
@@ -237,7 +324,10 @@ pub fn color(stars: f32) -> u32 {
         let ((a, ca), (b, cb)) = (w[0], w[1]);
         if stars <= b {
             let t = (stars - a) / (b - a);
-            let ch = |s: u32| ((ca >> s & 0xff) as f32 + ((cb >> s & 0xff) as f32 - (ca >> s & 0xff) as f32) * t) as u32;
+            let ch = |s: u32| {
+                ((ca >> s & 0xff) as f32 + ((cb >> s & 0xff) as f32 - (ca >> s & 0xff) as f32) * t)
+                    as u32
+            };
             return (ch(16) << 16) | (ch(8) << 8) | ch(0);
         }
     }
@@ -247,7 +337,9 @@ pub fn color(stars: f32) -> u32 {
 /// A small star-rating pill ("4.82") in the spectrum colour, right-aligned at `right`.
 /// Returns its width. `None` draws a placeholder while it is being calculated.
 pub fn draw_pill(c: &mut Canvas, right: f32, y: f32, size: f32, stars: Option<f32>) -> f32 {
-    let text = stars.map(|s| format!("{s:.2}")).unwrap_or_else(|| "...".into());
+    let text = stars
+        .map(|s| format!("{s:.2}"))
+        .unwrap_or_else(|| "...".into());
     let tw = Canvas::text_width(size, &text);
     let (w, h) = (tw + size * 1.6 + 6.0, size + 6.0);
     let x = right - w;
@@ -255,16 +347,32 @@ pub fn draw_pill(c: &mut Canvas, right: f32, y: f32, size: f32, stars: Option<f3
         Some(s) => {
             let col = color(s);
             // Dark text on the light end of the spectrum, light text on the dark end.
-            let luma = 0.299 * (col >> 16 & 0xff) as f32 + 0.587 * (col >> 8 & 0xff) as f32 + 0.114 * (col & 0xff) as f32;
+            let luma = 0.299 * (col >> 16 & 0xff) as f32
+                + 0.587 * (col >> 8 & 0xff) as f32
+                + 0.114 * (col & 0xff) as f32;
             (col, if luma > 140.0 { 0x15151d } else { 0xffffff })
         }
         None => (0x2a2a38, 0x8a8aa0),
     };
-    c.round_rect([x, y - 3.0], [w, h], h / 2.0, rgba(bg, 1.0), rgba(bg, 1.0), 0.0);
+    c.round_rect(
+        [x, y - 3.0],
+        [w, h],
+        h / 2.0,
+        rgba(bg, 1.0),
+        rgba(bg, 1.0),
+        0.0,
+    );
     // A small diamond stands in for the star glyph the pixel font doesn't have.
     let d = size * 0.32;
     let (dx, dy) = (x + size * 0.6 + 2.0, y - 3.0 + h / 2.0);
-    c.round_rect([dx - d, dy - d], [d * 2.0, d * 2.0], d * 0.4, rgba(fg, 1.0), rgba(fg, 1.0), 0.0);
+    c.round_rect(
+        [dx - d, dy - d],
+        [d * 2.0, d * 2.0],
+        d * 0.4,
+        rgba(fg, 1.0),
+        rgba(fg, 1.0),
+        0.0,
+    );
     c.text(x + size * 1.3 + 4.0, y, size, rgba(fg, 1.0), &text);
     w
 }
@@ -294,7 +402,10 @@ mod tests {
         let slow = star_rating_for(&path, 1.0, none, 0.5).unwrap();
         assert!(slow < nomod, "nomod {nomod} at 0.5x scroll {slow}");
         assert!((star_rating_for(&path, 1.0, none, 1.0).unwrap() - nomod).abs() < 1e-9);
-        assert!((star_rating_for(&path, 1.0, crate::mods::Mods::parse("HR"), 1.0).unwrap() - hr).abs() < 1e-9);
+        assert!(
+            (star_rating_for(&path, 1.0, crate::mods::Mods::parse("HR"), 1.0).unwrap() - hr).abs()
+                < 1e-9
+        );
         // Mods the rating doesn't count don't change it.
         assert_eq!(mod_bits(crate::mods::Mods::parse("HD,FL,PF")), 0);
         let _ = std::fs::remove_file(&path);
@@ -320,9 +431,18 @@ mod tests {
     fn marathons_over_rosu_pps_object_count_are_rated() {
         // Nana Party's size: 63,841 notes in three hours.
         let map = stream(63_841, 170.0);
-        assert!(matches!(map.check_suspicion(), Err(rosu_pp::model::beatmap::TooSuspicious::ObjectCount)));
+        assert!(matches!(
+            map.check_suspicion(),
+            Err(rosu_pp::model::beatmap::TooSuspicious::ObjectCount)
+        ));
         assert!(calculable(&map));
-        assert!(Difficulty::new().calculate_for_mode::<Taiko>(&map).unwrap().stars > 0.0);
+        assert!(
+            Difficulty::new()
+                .calculate_for_mode::<Taiko>(&map)
+                .unwrap()
+                .stars
+                > 0.0
+        );
         // Under rosu-pp's count, its own checks decide as before.
         assert!(calculable(&stream(1000, 100.0)));
     }
@@ -333,7 +453,15 @@ mod tests {
         assert!(!calculable(&stream(MAX_TAIKO_OBJECTS + 1, 100.0)));
         // Over the count, the checks rosu-pp skips for it still apply: 401 notes within a second
         // (a burst in a 20 ms stream)...
-        let burst = |n: usize| map_of((0..40_000).map(move |k| if k < n { k as f64 * 2.0 } else { 1e6 + k as f64 * 20.0 }));
+        let burst = |n: usize| {
+            map_of((0..40_000).map(move |k| {
+                if k < n {
+                    k as f64 * 2.0
+                } else {
+                    1e6 + k as f64 * 20.0
+                }
+            }))
+        };
         assert!(!calculable(&burst(401)));
         assert!(calculable(&burst(400)));
         // ...1,001 within ten seconds...

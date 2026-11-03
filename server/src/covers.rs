@@ -70,14 +70,21 @@ fn gives_pp_by(set: Option<&Set>) -> Option<bool> {
 /// status may have changed since.
 fn stale(set: &Set, now: u64) -> bool {
     match set {
-        Set::Found(info) => info.status.is_empty() || info.checksums.is_empty() || (!status_gives_pp(&info.status) && now.saturating_sub(info.checked) >= RECHECK_SECS),
+        Set::Found(info) => {
+            info.status.is_empty()
+                || info.checksums.is_empty()
+                || (!status_gives_pp(&info.status)
+                    && now.saturating_sub(info.checked) >= RECHECK_SECS)
+        }
         Set::Missing => false,
     }
 }
 
 /// Whether a set known as missing should be asked about now (and notes that it is).
 fn missing_due(asked: &mut HashMap<u32, u64>, set: u32, now: u64) -> bool {
-    let due = asked.get(&set).is_none_or(|at| now.saturating_sub(*at) >= MISSING_RECHECK_SECS);
+    let due = asked
+        .get(&set)
+        .is_none_or(|at| now.saturating_sub(*at) >= MISSING_RECHECK_SECS);
     if due {
         asked.insert(set, now);
     }
@@ -85,7 +92,10 @@ fn missing_due(asked: &mut HashMap<u32, u64>, set: u32, now: u64) -> bool {
 }
 
 fn now_secs() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 struct Covers {
@@ -119,11 +129,22 @@ pub fn init(dir: PathBuf) {
     let sets: HashMap<u32, Set> = std::fs::read_to_string(&file)
         .ok()
         .and_then(|text| serde_json::from_str::<HashMap<String, serde_json::Value>>(&text).ok())
-        .map(|raw| raw.into_iter().filter_map(|(k, v)| Some((k.parse().ok()?, serde_json::from_value(v).ok()?))).collect())
+        .map(|raw| {
+            raw.into_iter()
+                .filter_map(|(k, v)| Some((k.parse().ok()?, serde_json::from_value(v).ok()?)))
+                .collect()
+        })
         .unwrap_or_default();
     println!("{} map sets' covers known ({})", sets.len(), file.display());
     let (tx, rx) = mpsc::channel::<u32>();
-    let covers = Covers { file, blocked_file: dir.join("covers-blocked.txt"), sets: Mutex::new(sets), asked: Mutex::new(HashSet::new()), missing_asked: Mutex::new(HashMap::new()), tx: Mutex::new(tx) };
+    let covers = Covers {
+        file,
+        blocked_file: dir.join("covers-blocked.txt"),
+        sets: Mutex::new(sets),
+        asked: Mutex::new(HashSet::new()),
+        missing_asked: Mutex::new(HashMap::new()),
+        tx: Mutex::new(tx),
+    };
     if COVERS.set(covers).is_err() {
         return;
     }
@@ -176,14 +197,17 @@ impl Covers {
 /// Whether set `set`'s cover may show. One not looked up yet doesn't, and is looked up.
 pub fn allowed(set: u32) -> bool {
     let Some(c) = COVERS.get() else { return true };
-    let blocked = std::fs::read_to_string(&c.blocked_file).is_ok_and(|t| t.lines().any(|l| l.trim().parse() == Ok(set)));
+    let blocked = std::fs::read_to_string(&c.blocked_file)
+        .is_ok_and(|t| t.lines().any(|l| l.trim().parse() == Ok(set)));
     allowed_by(c.known(set).as_ref(), blocked).unwrap_or(false)
 }
 
 /// Whether plays on `set` give pp (None: not known yet, and it's being looked up). Plays on maps
 /// with no set never do. Without `init` (tests) every play does.
 pub fn gives_pp(set: Option<u32>) -> Option<bool> {
-    let Some(c) = COVERS.get() else { return Some(true) };
+    let Some(c) = COVERS.get() else {
+        return Some(true);
+    };
     let Some(set) = set else { return Some(false) };
     gives_pp_by(c.known(set).as_ref())
 }
@@ -192,13 +216,17 @@ pub fn gives_pp(set: Option<u32>) -> Option<bool> {
 /// changed, a rate baked in) isn't, and gives no pp even on a ranked set. True while it can't be
 /// told (the set not looked up yet, or before checksums were kept).
 pub fn official(set: Option<u32>, md5: &str) -> bool {
-    let (Some(c), Some(set)) = (COVERS.get(), set) else { return true };
+    let (Some(c), Some(set)) = (COVERS.get(), set) else {
+        return true;
+    };
     official_by(c.known(set).as_ref(), md5)
 }
 
 fn official_by(set: Option<&Set>, md5: &str) -> bool {
     match set {
-        Some(Set::Found(info)) if !info.checksums.is_empty() => info.checksums.iter().any(|m| m.eq_ignore_ascii_case(md5)),
+        Some(Set::Found(info)) if !info.checksums.is_empty() => {
+            info.checksums.iter().any(|m| m.eq_ignore_ascii_case(md5))
+        }
         _ => true,
     }
 }
@@ -227,7 +255,9 @@ pub fn learn(set: Option<u32>) {
     if gives_pp(set).is_some() {
         return;
     }
-    let (Some(set), Some(c)) = (set, COVERS.get()) else { return };
+    let (Some(set), Some(c)) = (set, COVERS.get()) else {
+        return;
+    };
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(look_up(set));
@@ -263,21 +293,48 @@ fn look_up(set: u32) -> Option<Set> {
         #[serde(default)]
         beatmaps: Vec<Beatmap>,
     }
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(15))).http_status_as_error(false).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .http_status_as_error(false)
+        .build()
+        .into();
     let mut missing = 0;
-    let mirrors = ["https://catboy.best/api/v2/s/", "https://osu.direct/api/v2/s/"];
+    let mirrors = [
+        "https://catboy.best/api/v2/s/",
+        "https://osu.direct/api/v2/s/",
+    ];
     for base in mirrors {
-        let Ok(mut reply) = agent.get(&format!("{base}{set}")).header("User-Agent", "taiko.rs-server (+https://rstaiko.auneu.space)").call() else { continue };
+        let Ok(mut reply) = agent
+            .get(&format!("{base}{set}"))
+            .header(
+                "User-Agent",
+                "taiko.rs-server (+https://rstaiko.auneu.space)",
+            )
+            .call()
+        else {
+            continue;
+        };
         match reply.status().as_u16() {
             200 => {
-                let Some(r) = reply.body_mut().read_to_string().ok().and_then(|t| serde_json::from_str::<Remote>(&t).ok()) else { continue };
+                let Some(r) = reply
+                    .body_mut()
+                    .read_to_string()
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<Remote>(&t).ok())
+                else {
+                    continue;
+                };
                 return Some(Set::Found(Info {
                     artist_unicode: r.artist_unicode.unwrap_or_else(|| r.artist.clone()),
                     title_unicode: r.title_unicode.unwrap_or_else(|| r.title.clone()),
                     artist: r.artist,
                     title: r.title,
                     nsfw: r.nsfw,
-                    checksums: r.beatmaps.iter().filter_map(|b| b.checksum.as_ref().map(|m| m.to_ascii_lowercase())).collect(),
+                    checksums: r
+                        .beatmaps
+                        .iter()
+                        .filter_map(|b| b.checksum.as_ref().map(|m| m.to_ascii_lowercase()))
+                        .collect(),
                     versions: r.beatmaps.into_iter().map(|b| b.version).collect(),
                     status: r.status,
                     checked: now_secs(),
@@ -296,29 +353,64 @@ mod tests {
 
     #[test]
     fn only_osus_own_difficulties_are_official() {
-        let set = Set::Found(Info { status: "ranked".into(), checksums: vec!["aa11".into(), "bb22".into()], ..Default::default() });
+        let set = Set::Found(Info {
+            status: "ranked".into(),
+            checksums: vec!["aa11".into(), "bb22".into()],
+            ..Default::default()
+        });
         assert!(official_by(Some(&set), "BB22"));
         assert!(!official_by(Some(&set), "cc33"), "an edited copy");
         // Not known yet, or looked up before checksums were kept: can't tell.
         assert!(official_by(None, "cc33"));
-        assert!(official_by(Some(&Set::Found(Info { status: "ranked".into(), ..Default::default() })), "cc33"));
+        assert!(official_by(
+            Some(&Set::Found(Info {
+                status: "ranked".into(),
+                ..Default::default()
+            })),
+            "cc33"
+        ));
     }
 
     #[test]
     fn nsfw_and_blocked_sets_hide_their_cover_and_unknown_ones_wait() {
-        let safe = Set::Found(Info { nsfw: false, ..Default::default() });
-        let nsfw = Set::Found(Info { nsfw: true, ..Default::default() });
+        let safe = Set::Found(Info {
+            nsfw: false,
+            ..Default::default()
+        });
+        let nsfw = Set::Found(Info {
+            nsfw: true,
+            ..Default::default()
+        });
         assert_eq!(allowed_by(Some(&safe), false), Some(true));
         assert_eq!(allowed_by(Some(&nsfw), false), Some(false));
-        assert_eq!(allowed_by(Some(&safe), true), Some(false), "blocked by hand");
+        assert_eq!(
+            allowed_by(Some(&safe), true),
+            Some(false),
+            "blocked by hand"
+        );
         assert_eq!(allowed_by(Some(&Set::Missing), false), Some(true));
         assert_eq!(allowed_by(None, false), None);
     }
 
     #[test]
     fn only_ranked_approved_and_loved_sets_give_pp() {
-        let with = |status: &str| Set::Found(Info { status: status.into(), checked: 100, checksums: vec!["aa11".into()], ..Default::default() });
-        for (status, gives) in [("ranked", true), ("approved", true), ("loved", true), ("qualified", false), ("pending", false), ("wip", false), ("graveyard", false)] {
+        let with = |status: &str| {
+            Set::Found(Info {
+                status: status.into(),
+                checked: 100,
+                checksums: vec!["aa11".into()],
+                ..Default::default()
+            })
+        };
+        for (status, gives) in [
+            ("ranked", true),
+            ("approved", true),
+            ("loved", true),
+            ("qualified", false),
+            ("pending", false),
+            ("wip", false),
+            ("graveyard", false),
+        ] {
             assert_eq!(gives_pp_by(Some(&with(status))), Some(gives), "{status}");
         }
         assert_eq!(gives_pp_by(Some(&Set::Missing)), Some(false));
@@ -326,7 +418,11 @@ mod tests {
         assert!(missing_due(&mut asked, 1, 1000));
         assert!(!missing_due(&mut asked, 1, 1000 + MISSING_RECHECK_SECS - 1));
         assert!(missing_due(&mut asked, 1, 1000 + MISSING_RECHECK_SECS));
-        assert_eq!(gives_pp_by(Some(&with(""))), None, "looked up before statuses were kept");
+        assert_eq!(
+            gives_pp_by(Some(&with(""))),
+            None,
+            "looked up before statuses were kept"
+        );
         assert_eq!(gives_pp_by(None), None);
         // Statuses that may still change are asked about again, a day on.
         assert!(stale(&with(""), 100));
@@ -334,7 +430,14 @@ mod tests {
         assert!(!stale(&with("qualified"), 100 + RECHECK_SECS - 1));
         assert!(stale(&with("qualified"), 100 + RECHECK_SECS));
         // Looked up before the difficulties' checksums were kept: again, for them.
-        assert!(stale(&Set::Found(Info { status: "ranked".into(), checked: 100, ..Default::default() }), 101));
+        assert!(stale(
+            &Set::Found(Info {
+                status: "ranked".into(),
+                checked: 100,
+                ..Default::default()
+            }),
+            101
+        ));
     }
 
     #[test]

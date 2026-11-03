@@ -71,9 +71,16 @@ pub type Sounds = [Arc<[f32]>; 12];
 
 enum Cmd {
     /// `base`: the song frame the track's first sample belongs at (a partial decode).
-    Play { track: Arc<Track>, start_frame: i64, base: i64 },
+    Play {
+        track: Arc<Track>,
+        start_frame: i64,
+        base: i64,
+    },
     /// Replaces the playing track without moving the play position.
-    Swap { track: Arc<Track>, base: i64 },
+    Swap {
+        track: Arc<Track>,
+        base: i64,
+    },
     Seek(i64),
     /// Sent after each Play / Seek: the stamp describes the new position from here on.
     Epoch(u64),
@@ -123,7 +130,9 @@ pub struct Engine {
 impl Engine {
     pub fn new(buffer_frames: u32) -> Result<Engine, String> {
         let host = pick_host();
-        let device = host.default_output_device().ok_or("no audio output device")?;
+        let device = host
+            .default_output_device()
+            .ok_or("no audio output device")?;
         let supported = device.default_output_config().map_err(|e| e.to_string())?;
         let rate = supported.sample_rate();
         let channels = supported.channels() as usize;
@@ -132,8 +141,18 @@ impl Engine {
             config.buffer_size = cpal::BufferSize::Fixed(buffer_frames.clamp(*min, *max));
         }
 
-        let stamp = Arc::new(Mutex::new(Stamp { playing: false, frame: 0, at: Instant::now(), latency: Duration::ZERO, reported: Duration::ZERO, epoch: 0 }));
-        let volume = Arc::new([AtomicU32::new(0.8f32.to_bits()), AtomicU32::new(1.0f32.to_bits())]);
+        let stamp = Arc::new(Mutex::new(Stamp {
+            playing: false,
+            frame: 0,
+            at: Instant::now(),
+            latency: Duration::ZERO,
+            reported: Duration::ZERO,
+            epoch: 0,
+        }));
+        let volume = Arc::new([
+            AtomicU32::new(0.8f32.to_bits()),
+            AtomicU32::new(1.0f32.to_bits()),
+        ]);
         let fmt = supported.sample_format();
         let open = |config: StreamConfig| -> Result<(cpal::Stream, Sender<Cmd>, Receiver<Garbage>), String> {
             let (tx, rx) = mpsc::channel();
@@ -159,17 +178,40 @@ impl Engine {
         };
         stream.play().map_err(|e| e.to_string())?;
 
-        let description = format!("{:?} {} Hz, {} ch, buffer {:?}", host.id(), rate, channels, config.buffer_size);
+        let description = format!(
+            "{:?} {} Hz, {} ch, buffer {:?}",
+            host.id(),
+            rate,
+            channels,
+            config.buffer_size
+        );
         if crate::audiolog::start() {
-            let name = device.description().map(|d| d.name().to_string()).unwrap_or_default();
+            let name = device
+                .description()
+                .map(|d| d.name().to_string())
+                .unwrap_or_default();
             crate::audiolog::line(&format!("audio {description} device={name}"));
             let stamp = Arc::downgrade(&stamp);
             crate::audiolog::every(rate, move || {
                 let s = *stamp.upgrade()?.lock().ok()?;
-                Some(format!("clock playing={} frame={} latency_ms={:.3}", u8::from(s.playing), s.frame, s.latency.as_secs_f64() * 1000.0))
+                Some(format!(
+                    "clock playing={} frame={} latency_ms={:.3}",
+                    u8::from(s.playing),
+                    s.frame,
+                    s.latency.as_secs_f64() * 1000.0
+                ))
             });
         }
-        Ok(Engine { _stream: stream, tx, garbage, stamp, epoch: AtomicU64::new(0), volume, rate, description })
+        Ok(Engine {
+            _stream: stream,
+            tx,
+            garbage,
+            stamp,
+            epoch: AtomicU64::new(0),
+            volume,
+            rate,
+            description,
+        })
     }
 
     pub fn play(&self, track: Arc<Track>, start_ms: f64) {
@@ -179,7 +221,11 @@ impl Engine {
     /// Plays part of a song: `base` is the song frame the track's first sample belongs at.
     pub fn play_part(&self, track: Arc<Track>, base: i64, start_ms: f64) {
         let start_frame = (start_ms / 1000.0 * self.rate as f64).round() as i64;
-        self.jump(Cmd::Play { track, start_frame, base });
+        self.jump(Cmd::Play {
+            track,
+            start_frame,
+            base,
+        });
     }
 
     /// Sends a command that moves the play position. Until the callback has applied it, the stamp
@@ -231,7 +277,10 @@ impl Engine {
     /// The output latency (ms) the clock goes by, and what the stream reports.
     pub fn latencies_ms(&self) -> (f64, f64) {
         let s = *self.stamp.lock().unwrap();
-        (s.latency.as_secs_f64() * 1000.0, s.reported.as_secs_f64() * 1000.0)
+        (
+            s.latency.as_secs_f64() * 1000.0,
+            s.reported.as_secs_f64() * 1000.0,
+        )
     }
 
     /// Song position (ms) audible at `now`, or None when nothing is playing yet.
@@ -259,7 +308,11 @@ fn pick_host() -> cpal::Host {
     cpal::default_host()
 }
 
-fn build<T>(device: &cpal::Device, config: StreamConfig, mut mixer: Mixer) -> Result<cpal::Stream, String>
+fn build<T>(
+    device: &cpal::Device,
+    config: StreamConfig,
+    mut mixer: Mixer,
+) -> Result<cpal::Stream, String>
 where
     T: SizedSample + FromSample<f32>,
 {
@@ -283,12 +336,25 @@ struct Voice {
 
 /// Starts `sound`, fading out its oldest play if it already rings `SFX_CONCURRENCY` times.
 fn start_voice(voices: &mut Vec<Voice>, sound: Sfx, volume: f32) {
-    let ringing = voices.iter().filter(|v| v.sound == sound && v.fade == 0).count();
-    if let Some(oldest) = voices.iter_mut().filter(|v| v.sound == sound && v.fade == 0).max_by_key(|v| v.pos).filter(|_| ringing >= SFX_CONCURRENCY) {
+    let ringing = voices
+        .iter()
+        .filter(|v| v.sound == sound && v.fade == 0)
+        .count();
+    if let Some(oldest) = voices
+        .iter_mut()
+        .filter(|v| v.sound == sound && v.fade == 0)
+        .max_by_key(|v| v.pos)
+        .filter(|_| ringing >= SFX_CONCURRENCY)
+    {
         oldest.fade = CHOKE_FRAMES;
     }
     if voices.len() < voices.capacity() {
-        voices.push(Voice { sound, pos: 0, volume, fade: 0 });
+        voices.push(Voice {
+            sound,
+            pos: 0,
+            volume,
+            fade: 0,
+        });
     }
 }
 
@@ -311,7 +377,11 @@ struct SteadyLatency {
 
 impl SteadyLatency {
     fn new() -> SteadyLatency {
-        SteadyLatency { callbacks: 0, seen: Vec::with_capacity(LATENCY_SAMPLES), total: None }
+        SteadyLatency {
+            callbacks: 0,
+            seen: Vec::with_capacity(LATENCY_SAMPLES),
+            total: None,
+        }
     }
 
     /// The latency of a callback asked for `frames`, `reported` being what the stream says.
@@ -361,15 +431,39 @@ impl Mixer {
         channels: usize,
     ) -> Mixer {
         let sounds = Arc::new(hitsound_set(rate, Custom::default()));
-        Mixer { rx, gc, stamp, volume, channels, rate, steady: SteadyLatency::new(), track: None, base: 0, frame: 0, epoch: 0, paused: false, voices: Vec::with_capacity(64), sounds, limiter: Limiter::new(rate) }
+        Mixer {
+            rx,
+            gc,
+            stamp,
+            volume,
+            channels,
+            rate,
+            steady: SteadyLatency::new(),
+            track: None,
+            base: 0,
+            frame: 0,
+            epoch: 0,
+            paused: false,
+            voices: Vec::with_capacity(64),
+            sounds,
+            limiter: Limiter::new(rate),
+        }
     }
 
-    fn render<T: SizedSample + FromSample<f32>>(&mut self, out: &mut [T], info: &OutputCallbackInfo) {
+    fn render<T: SizedSample + FromSample<f32>>(
+        &mut self,
+        out: &mut [T],
+        info: &OutputCallbackInfo,
+    ) {
         let now = Instant::now();
         {
             while let Ok(cmd) = self.rx.try_recv() {
                 match cmd {
-                    Cmd::Play { track, start_frame, base } => {
+                    Cmd::Play {
+                        track,
+                        start_frame,
+                        base,
+                    } => {
                         if let Some(old) = self.track.replace(track) {
                             let _ = self.gc.send(Garbage::Track(old));
                         }
@@ -392,7 +486,9 @@ impl Mixer {
                         }
                     }
                     Cmd::Sounds(sounds) => {
-                        let _ = self.gc.send(Garbage::Sounds(std::mem::replace(&mut self.sounds, sounds)));
+                        let _ = self
+                            .gc
+                            .send(Garbage::Sounds(std::mem::replace(&mut self.sounds, sounds)));
                     }
                     Cmd::Sfx(sound, volume) => start_voice(&mut self.voices, sound, volume),
                 }
@@ -401,9 +497,21 @@ impl Mixer {
 
         let ts = info.timestamp();
         let reported = ts.playback.duration_since(ts.callback);
-        let latency = if cfg!(windows) { self.steady.of(reported, out.len() / self.channels, self.rate) } else { reported };
+        let latency = if cfg!(windows) {
+            self.steady
+                .of(reported, out.len() / self.channels, self.rate)
+        } else {
+            reported
+        };
         if let Ok(mut s) = self.stamp.try_lock() {
-            *s = Stamp { playing: self.track.is_some() && !self.paused, frame: self.frame, at: now, latency, reported, epoch: self.epoch };
+            *s = Stamp {
+                playing: self.track.is_some() && !self.paused,
+                frame: self.frame,
+                at: now,
+                latency,
+                reported,
+                epoch: self.epoch,
+            };
         }
 
         let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed));
@@ -422,7 +530,11 @@ impl Mixer {
             }
             for v in &mut self.voices {
                 let buf = &self.sounds[v.sound as usize];
-                let fade = if v.fade == 0 { 1.0 } else { v.fade as f32 / CHOKE_FRAMES as f32 };
+                let fade = if v.fade == 0 {
+                    1.0
+                } else {
+                    v.fade as f32 / CHOKE_FRAMES as f32
+                };
                 if let Some(s) = buf.get(v.pos) {
                     l += s * fx_vol * v.volume * fade;
                     r += s * fx_vol * v.volume * fade;
@@ -448,9 +560,12 @@ impl Mixer {
             }
         }
         let sounds = &self.sounds;
-        self.voices.retain(|v| v.pos < sounds[v.sound as usize].len());
+        self.voices
+            .retain(|v| v.pos < sounds[v.sound as usize].len());
         if crate::audiolog::STALL.load(Ordering::Relaxed) != 0 {
-            std::thread::sleep(Duration::from_millis(crate::audiolog::STALL.swap(0, Ordering::Relaxed) as u64));
+            std::thread::sleep(Duration::from_millis(
+                crate::audiolog::STALL.swap(0, Ordering::Relaxed) as u64,
+            ));
         }
     }
 }
@@ -467,13 +582,24 @@ impl Limiter {
     pub const CEILING: f32 = 0.95;
 
     pub fn new(rate: u32) -> Limiter {
-        Limiter { gain: 1.0, release: 1.0 - (-1.0 / (0.15 * rate as f32)).exp() }
+        Limiter {
+            gain: 1.0,
+            release: 1.0 - (-1.0 / (0.15 * rate as f32)).exp(),
+        }
     }
 
     pub fn apply(&mut self, l: f32, r: f32) -> (f32, f32) {
         let peak = l.abs().max(r.abs());
-        let target = if peak > Self::CEILING { Self::CEILING / peak } else { 1.0 };
-        self.gain = if target < self.gain { target } else { self.gain + (target - self.gain) * self.release };
+        let target = if peak > Self::CEILING {
+            Self::CEILING / peak
+        } else {
+            1.0
+        };
+        self.gain = if target < self.gain {
+            target
+        } else {
+            self.gain + (target - self.gain) * self.release
+        };
         (l * self.gain, r * self.gain)
     }
 }
@@ -489,13 +615,32 @@ mod tests {
         assert!(a.iter().zip(&b).all(|(a, b)| Arc::ptr_eq(a, b)));
         let other = hitsound_set(44_100, Custom::default());
         assert_ne!(a[Sfx::Don as usize].len(), other[Sfx::Don as usize].len());
-        let custom = hitsound_set(48_000, Custom { don: Some(vec![0.2, 0.3]), finish: Some(vec![0.1]), ..Default::default() });
+        let custom = hitsound_set(
+            48_000,
+            Custom {
+                don: Some(vec![0.2, 0.3]),
+                finish: Some(vec![0.1]),
+                ..Default::default()
+            },
+        );
         assert_eq!(&*custom[Sfx::Don as usize], &[0.2, 0.3]);
         assert_eq!(&*custom[Sfx::BigDon as usize], mix(&[0.2, 0.3], &[0.1]));
-        assert_eq!(&*custom[Sfx::BigKat as usize], mix(&a[Sfx::Kat as usize], &[0.1]));
-        assert!(Arc::ptr_eq(&custom[Sfx::Kat as usize], &a[Sfx::Kat as usize]));
-        assert!(Arc::ptr_eq(&custom[Sfx::ComboBreak as usize], &a[Sfx::ComboBreak as usize]));
-        assert!(Arc::ptr_eq(&hitsound_set(48_000, Custom::default())[0], &a[0]));
+        assert_eq!(
+            &*custom[Sfx::BigKat as usize],
+            mix(&a[Sfx::Kat as usize], &[0.1])
+        );
+        assert!(Arc::ptr_eq(
+            &custom[Sfx::Kat as usize],
+            &a[Sfx::Kat as usize]
+        ));
+        assert!(Arc::ptr_eq(
+            &custom[Sfx::ComboBreak as usize],
+            &a[Sfx::ComboBreak as usize]
+        ));
+        assert!(Arc::ptr_eq(
+            &hitsound_set(48_000, Custom::default())[0],
+            &a[0]
+        ));
     }
 
     #[test]
@@ -504,10 +649,21 @@ mod tests {
         let mut lim = super::Limiter::new(48000);
         let wave: Vec<f32> = (0..9600).map(|i| 2.5 * (i as f32 * 0.0576).sin()).collect();
         let out: Vec<f32> = wave.iter().map(|&x| lim.apply(x, x).0).collect();
-        assert!(out.iter().all(|y| y.abs() <= super::Limiter::CEILING + 1e-6));
+        assert!(
+            out.iter()
+                .all(|y| y.abs() <= super::Limiter::CEILING + 1e-6)
+        );
         // Once it has caught the peak, the shape is the input's, only quieter.
-        let ratios: Vec<f32> = wave.iter().zip(&out).skip(200).filter(|(x, _)| x.abs() > 0.5).map(|(x, y)| y / x).collect();
-        let (lo, hi) = ratios.iter().fold((f32::MAX, 0f32), |(lo, hi), &r| (lo.min(r), hi.max(r)));
+        let ratios: Vec<f32> = wave
+            .iter()
+            .zip(&out)
+            .skip(200)
+            .filter(|(x, _)| x.abs() > 0.5)
+            .map(|(x, y)| y / x)
+            .collect();
+        let (lo, hi) = ratios
+            .iter()
+            .fold((f32::MAX, 0f32), |(lo, hi), &r| (lo.min(r), hi.max(r)));
         assert!(hi / lo < 1.02, "{lo}..{hi}");
     }
 
@@ -521,10 +677,20 @@ mod tests {
             }
         }
         start_voice(&mut voices, Sfx::Kat, 1.0);
-        let ringing = |s: Sfx| voices.iter().filter(|v| v.sound == s && v.fade == 0).count();
+        let ringing = |s: Sfx| {
+            voices
+                .iter()
+                .filter(|v| v.sound == s && v.fade == 0)
+                .count()
+        };
         assert_eq!((ringing(Sfx::BigDon), ringing(Sfx::Kat)), (2, 1));
         // The two playing on are the newest.
-        assert!(voices.iter().filter(|v| v.fade == 0 && v.sound == Sfx::BigDon).all(|v| v.pos <= 200));
+        assert!(
+            voices
+                .iter()
+                .filter(|v| v.fade == 0 && v.sound == Sfx::BigDon)
+                .all(|v| v.pos <= 200)
+        );
     }
 
     #[test]
@@ -533,35 +699,61 @@ mod tests {
         for i in 0..BUILT_IN.len() {
             let s = built_in(i, 48_000);
             let peak = s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
-            assert!((4_800..48_000).contains(&s.len()) && peak > 0.5, "sound {i}: {} samples, peak {peak}", s.len());
+            assert!(
+                (4_800..48_000).contains(&s.len()) && peak > 0.5,
+                "sound {i}: {} samples, peak {peak}",
+                s.len()
+            );
         }
     }
 
     fn sine(freq: f32, seconds: f32, sr: u32) -> Vec<f32> {
         let n = (seconds * sr as f32) as usize;
-        (0..n).flat_map(|i| {
-            let v = (i as f32 / sr as f32 * freq * std::f32::consts::TAU).sin() * 0.5;
-            [v, v]
-        }).collect()
+        (0..n)
+            .flat_map(|i| {
+                let v = (i as f32 / sr as f32 * freq * std::f32::consts::TAU).sin() * 0.5;
+                [v, v]
+            })
+            .collect()
     }
 
     /// Dominant frequency from upward zero crossings of the left channel.
     fn frequency(samples: &[f32], sr: u32) -> f32 {
         let left: Vec<f32> = samples.iter().step_by(2).copied().collect();
-        let crossings = left.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+        let crossings = left
+            .windows(2)
+            .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
+            .count();
         crossings as f32 / (left.len() as f32 / sr as f32)
     }
 
     #[test]
     fn keep_pitch_changes_length_not_pitch() {
         let sr = 48000;
-        let input = Track { samples: sine(440.0, 4.0, sr), rate: 1.0 };
+        let input = Track {
+            samples: sine(440.0, 4.0, sr),
+            rate: 1.0,
+        };
         for rate in [0.75, 1.5, 2.0] {
-            let out = change_rate(Track { samples: input.samples.clone(), rate: 1.0 }, sr, rate, true);
+            let out = change_rate(
+                Track {
+                    samples: input.samples.clone(),
+                    rate: 1.0,
+                },
+                sr,
+                rate,
+                true,
+            );
             let len_ratio = input.frames() as f64 / out.frames() as f64;
-            assert!((len_ratio - rate).abs() < 0.03, "rate {rate}: length ratio {len_ratio}");
+            assert!(
+                (len_ratio - rate).abs() < 0.03,
+                "rate {rate}: length ratio {len_ratio}"
+            );
             let f = frequency(&out.samples, sr);
-            assert!((f - 440.0).abs() < 8.0, "rate {rate}: pitch moved to {f} Hz");
+            assert!(
+                (f - 440.0).abs() < 8.0,
+                "rate {rate}: pitch moved to {f} Hz"
+            );
             assert_eq!(out.rate, rate);
         }
     }
@@ -600,12 +792,22 @@ mod tests {
             let full = decode(&path, rate).unwrap();
             let (part, base) = decode_part(&path, rate, Some((2500.0, 2000.0))).unwrap();
             let start_ms = base as f64 / rate as f64 * 1000.0;
-            assert!((2400.0..=2500.0).contains(&start_ms), "starts at {start_ms} ms");
-            assert!(part.frames() as u32 >= rate * 19 / 10, "only {} frames", part.frames());
+            assert!(
+                (2400.0..=2500.0).contains(&start_ms),
+                "starts at {start_ms} ms"
+            );
+            assert!(
+                part.frames() as u32 >= rate * 19 / 10,
+                "only {} frames",
+                part.frames()
+            );
             // Away from the edges (where resampling clamps), the samples are the same.
             for i in 8..part.frames() - 8 {
                 let j = (base as usize + i) * 2;
-                assert!((full.samples[j] - part.samples[i * 2]).abs() < 1e-4, "frame {i} differs at {rate} Hz");
+                assert!(
+                    (full.samples[j] - part.samples[i * 2]).abs() < 1e-4,
+                    "frame {i} differs at {rate} Hz"
+                );
             }
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -641,15 +843,32 @@ mod tests {
     fn with_ogg_position_moved(mut ogg: Vec<u8>, page: usize, by: i64) -> Vec<u8> {
         let mut at = 0;
         for _ in 0..page {
-            at += 27 + ogg[at + 26] as usize + ogg[at + 27..at + 27 + ogg[at + 26] as usize].iter().map(|&s| s as usize).sum::<usize>();
+            at += 27
+                + ogg[at + 26] as usize
+                + ogg[at + 27..at + 27 + ogg[at + 26] as usize]
+                    .iter()
+                    .map(|&s| s as usize)
+                    .sum::<usize>();
         }
         let segments = ogg[at + 26] as usize;
-        let end = at + 27 + segments + ogg[at + 27..at + 27 + segments].iter().map(|&s| s as usize).sum::<usize>();
+        let end = at
+            + 27
+            + segments
+            + ogg[at + 27..at + 27 + segments]
+                .iter()
+                .map(|&s| s as usize)
+                .sum::<usize>();
         let position = i64::from_le_bytes(ogg[at + 6..at + 14].try_into().unwrap()) + by;
         ogg[at + 6..at + 14].copy_from_slice(&position.to_le_bytes());
         ogg[at + 22..at + 26].fill(0);
         let crc = ogg[at..end].iter().fold(0u32, |crc, &byte| {
-            (0..8).fold(crc ^ (byte as u32) << 24, |c, _| if c & 0x8000_0000 != 0 { c << 1 ^ 0x04c1_1db7 } else { c << 1 })
+            (0..8).fold(crc ^ (byte as u32) << 24, |c, _| {
+                if c & 0x8000_0000 != 0 {
+                    c << 1 ^ 0x04c1_1db7
+                } else {
+                    c << 1
+                }
+            })
         });
         ogg[at + 22..at + 26].copy_from_slice(&crc.to_le_bytes());
         ogg
@@ -661,7 +880,16 @@ mod tests {
         // music ended 252 ms ahead of its notes and of BASS.
         let clean = include_bytes!("../assets/splash.ogg").to_vec();
         let bent = with_ogg_position_moved(clean.clone(), 2, 412);
-        let decoded = |ogg: Vec<u8>| decode_source(Box::new(std::io::Cursor::new(ogg)), Some("ogg"), 48000, None).unwrap().0;
+        let decoded = |ogg: Vec<u8>| {
+            decode_source(
+                Box::new(std::io::Cursor::new(ogg)),
+                Some("ogg"),
+                48000,
+                None,
+            )
+            .unwrap()
+            .0
+        };
         let (clean, bent) = (decoded(clean), decoded(bent));
         assert_eq!(clean.frames(), bent.frames());
         assert_eq!(clean.samples, bent.samples);
@@ -691,11 +919,25 @@ mod tests {
         // so osu!, stable and lazer alike) cuts them; left in, its music came 25 ms late.
         let frames = |encoder: &[u8; 9], trim| {
             let mp3 = mp3_with_info_tag(encoder, trim, 20);
-            decode_source(Box::new(std::io::Cursor::new(mp3)), Some("mp3"), 44100, None).unwrap().0.frames()
+            decode_source(
+                Box::new(std::io::Cursor::new(mp3)),
+                Some("mp3"),
+                44100,
+                None,
+            )
+            .unwrap()
+            .0
+            .frames()
         };
         let whole = 20 * 1152;
-        assert_eq!(frames(b"SIT4.50.0", [0x24, 0x08, 0x28]), whole - 1105 - 1559);
-        assert_eq!(frames(b"GOGO\0\0\0\0\0", [0x24, 0x08, 0x28]), whole - 1105 - 1559);
+        assert_eq!(
+            frames(b"SIT4.50.0", [0x24, 0x08, 0x28]),
+            whole - 1105 - 1559
+        );
+        assert_eq!(
+            frames(b"GOGO\0\0\0\0\0", [0x24, 0x08, 0x28]),
+            whole - 1105 - 1559
+        );
         // And what BASS doesn't cut, left alone: no name, or an empty field.
         assert_eq!(frames(b"\0ABCDEFGH", [0x24, 0x08, 0x28]), whole);
         assert_eq!(frames(b"SIT4.50.0", [0, 0, 0]), whole);
@@ -706,9 +948,15 @@ mod tests {
     #[test]
     #[ignore]
     fn part_of_real_files_lines_up() {
-        let Some(list) = std::env::var_os("TAIKO_TEST_AUDIO") else { return };
+        let Some(list) = std::env::var_os("TAIKO_TEST_AUDIO") else {
+            return;
+        };
         let rate = 48000;
-        for path in std::fs::read_to_string(list).unwrap().lines().filter(|l| !l.is_empty()) {
+        for path in std::fs::read_to_string(list)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.is_empty())
+        {
             let path = std::path::Path::new(path);
             let full = decode(path, rate).unwrap();
             for from in [30_000.0, 61_234.0] {
@@ -721,7 +969,11 @@ mod tests {
                             (2000..2000 + window)
                                 .map(|i| {
                                     let j = base + i as i64 + lag;
-                                    let f = full.samples.get(j.max(0) as usize * 2).copied().unwrap_or(0.0);
+                                    let f = full
+                                        .samples
+                                        .get(j.max(0) as usize * 2)
+                                        .copied()
+                                        .unwrap_or(0.0);
                                     ((f - part.samples[i * 2]) as f64).powi(2)
                                 })
                                 .sum()
@@ -729,7 +981,19 @@ mod tests {
                         err(a).total_cmp(&err(b))
                     })
                     .unwrap();
-                println!("{:60} from {from:>6} ms: part is {best:+} frames ({:+.1} ms) off the full decode", path.display().to_string().chars().rev().take(60).collect::<String>().chars().rev().collect::<String>(), best as f64 / rate as f64 * 1000.0);
+                println!(
+                    "{:60} from {from:>6} ms: part is {best:+} frames ({:+.1} ms) off the full decode",
+                    path.display()
+                        .to_string()
+                        .chars()
+                        .rev()
+                        .take(60)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>(),
+                    best as f64 / rate as f64 * 1000.0
+                );
             }
         }
     }
@@ -741,7 +1005,15 @@ mod tests {
         let sr = 48000;
         let input = metronome(sr, 500.0, 16, 1000.0);
         for rate in [0.75, 1.3, 1.5] {
-            let out = change_rate(Track { samples: input.samples.clone(), rate: 1.0 }, sr, rate, true);
+            let out = change_rate(
+                Track {
+                    samples: input.samples.clone(),
+                    rate: 1.0,
+                },
+                sr,
+                rate,
+                true,
+            );
             let mut sum = 0.0;
             for b in 2..14 {
                 let expected = b as f64 * 500.0 / rate;
@@ -749,15 +1021,22 @@ mod tests {
                 // sample can come early without being heard early.
                 let ms = |t: f64| (t / 1000.0 * sr as f64) as usize;
                 let (from, to) = (ms(expected - 40.0), ms(expected + 60.0));
-                let peak = (from..to).map(|i| out.samples[i * 2].abs()).fold(0.0, f32::max);
-                let onset = (from..to).find(|&i| out.samples[i * 2].abs() >= peak * 0.5).unwrap();
+                let peak = (from..to)
+                    .map(|i| out.samples[i * 2].abs())
+                    .fold(0.0, f32::max);
+                let onset = (from..to)
+                    .find(|&i| out.samples[i * 2].abs() >= peak * 0.5)
+                    .unwrap();
                 let err = onset as f64 / sr as f64 * 1000.0 - expected;
                 // A click can straddle two grains: each lands within a few ms, on time on average.
                 assert!(err.abs() < 6.0, "rate {rate}: beat {b} off by {err:.1} ms");
                 sum += err;
             }
             let mean = sum / 12.0;
-            assert!(mean.abs() < 3.5, "rate {rate}: beats {mean:.1} ms off on average");
+            assert!(
+                mean.abs() < 3.5,
+                "rate {rate}: beats {mean:.1} ms off on average"
+            );
         }
     }
 
@@ -765,18 +1044,38 @@ mod tests {
     fn wind_up_puts_beats_where_the_speed_map_says() {
         let sr = 48000;
         let input = metronome(sr, 500.0, 24, 1000.0);
-        let speed = crate::mods::Speed { r0: 1.0, r1: 1.5, m0: 1000.0, m1: 11_000.0 };
+        let speed = crate::mods::Speed {
+            r0: 1.0,
+            r1: 1.5,
+            m0: 1000.0,
+            m1: 11_000.0,
+        };
         for keep_pitch in [true, false] {
-            let out = change_speed(Track { samples: input.samples.clone(), rate: 1.0 }, sr, &speed, keep_pitch);
+            let out = change_speed(
+                Track {
+                    samples: input.samples.clone(),
+                    rate: 1.0,
+                },
+                sr,
+                &speed,
+                keep_pitch,
+            );
             assert_eq!(out.rate, 1.0);
             for b in 2..22 {
                 let expected = speed.track(b as f64 * 500.0);
                 let ms = |t: f64| (t / 1000.0 * sr as f64) as usize;
                 let (from, to) = (ms(expected - 40.0), ms(expected + 60.0));
-                let peak = (from..to).map(|i| out.samples[i * 2].abs()).fold(0.0, f32::max);
-                let onset = (from..to).find(|&i| out.samples[i * 2].abs() >= peak * 0.5).unwrap();
+                let peak = (from..to)
+                    .map(|i| out.samples[i * 2].abs())
+                    .fold(0.0, f32::max);
+                let onset = (from..to)
+                    .find(|&i| out.samples[i * 2].abs() >= peak * 0.5)
+                    .unwrap();
                 let err = onset as f64 / sr as f64 * 1000.0 - expected;
-                assert!(err.abs() < 6.0, "keep_pitch {keep_pitch}: beat {b} off by {err:.1} ms");
+                assert!(
+                    err.abs() < 6.0,
+                    "keep_pitch {keep_pitch}: beat {b} off by {err:.1} ms"
+                );
             }
         }
     }
@@ -784,7 +1083,15 @@ mod tests {
     #[test]
     fn without_keep_pitch_pitch_follows_speed() {
         let sr = 48000;
-        let out = change_rate(Track { samples: sine(440.0, 2.0, sr), rate: 1.0 }, sr, 1.5, false);
+        let out = change_rate(
+            Track {
+                samples: sine(440.0, 2.0, sr),
+                rate: 1.0,
+            },
+            sr,
+            1.5,
+            false,
+        );
         let f = frequency(&out.samples, sr);
         assert!((f - 660.0).abs() < 8.0, "expected ~660 Hz, got {f}");
     }
@@ -822,12 +1129,20 @@ const BUILT_IN: [(&[u8], &str); 4] = [
 /// A built-in sound as mono samples at `rate`.
 fn built_in(index: usize, rate: u32) -> Vec<f32> {
     let (bytes, ext) = BUILT_IN[index];
-    decode_bytes(bytes, ext, rate).map(|t| mono(&t)).unwrap_or_default()
+    decode_bytes(bytes, ext, rate)
+        .map(|t| mono(&t))
+        .unwrap_or_default()
 }
 
 /// Stereo samples folded down to mono.
 pub fn mono(track: &Track) -> Vec<f32> {
-    track.samples.as_chunks::<2>().0.iter().map(|f| (f[0] + f[1]) * 0.5).collect()
+    track
+        .samples
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|f| (f[0] + f[1]) * 0.5)
+        .collect()
 }
 
 /// The sounds (indexed by `Sfx`) at `rate`: a skin's where given, else built-in. Like osu!, a
@@ -846,24 +1161,50 @@ pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
         let kat = built_in(1, rate);
         let finish = built_in(2, rate);
         let [kantan, futsuu, muzukashii, oni, ura] = crate::medal_sound::sounds(rate);
-        let sounds = [don.clone(), kat.clone(), mix(&don, &finish), mix(&kat, &finish), built_in(3, rate), screech(rate), chime(rate), kantan, futsuu, muzukashii, oni, ura].map(Arc::from);
-        let value = Arc::new(Builtin { sounds, finish: finish.into() });
+        let sounds = [
+            don.clone(),
+            kat.clone(),
+            mix(&don, &finish),
+            mix(&kat, &finish),
+            built_in(3, rate),
+            screech(rate),
+            chime(rate),
+            kantan,
+            futsuu,
+            muzukashii,
+            oni,
+            ura,
+        ]
+        .map(Arc::from);
+        let value = Arc::new(Builtin {
+            sounds,
+            finish: finish.into(),
+        });
         cache.lock().unwrap().entry(rate).or_insert(value).clone()
     });
     let mut sounds = base.sounds.clone();
     let custom_don = custom.don.is_some();
     let custom_kat = custom.kat.is_some();
     let custom_finish = custom.finish.is_some();
-    if let Some(don) = custom.don { sounds[Sfx::Don as usize] = don.into(); }
-    if let Some(kat) = custom.kat { sounds[Sfx::Kat as usize] = kat.into(); }
-    let finish = custom.finish.map(Arc::from).unwrap_or_else(|| base.finish.clone());
+    if let Some(don) = custom.don {
+        sounds[Sfx::Don as usize] = don.into();
+    }
+    if let Some(kat) = custom.kat {
+        sounds[Sfx::Kat as usize] = kat.into();
+    }
+    let finish = custom
+        .finish
+        .map(Arc::from)
+        .unwrap_or_else(|| base.finish.clone());
     if custom_don || custom_finish {
         sounds[Sfx::BigDon as usize] = mix(&sounds[Sfx::Don as usize], &finish).into();
     }
     if custom_kat || custom_finish {
         sounds[Sfx::BigKat as usize] = mix(&sounds[Sfx::Kat as usize], &finish).into();
     }
-    if let Some(combo) = custom.combobreak { sounds[Sfx::ComboBreak as usize] = combo.into(); }
+    if let Some(combo) = custom.combobreak {
+        sounds[Sfx::ComboBreak as usize] = combo.into();
+    }
     sounds
 }
 
@@ -933,7 +1274,9 @@ pub fn metronome(rate: u32, beat_ms: f64, beats: u32, tail_ms: f64) -> Track {
         let freq = if accent { 1760.0 } else { 1320.0 };
         let gain = if accent { 0.75 } else { 0.55 };
         for i in 0..click_len {
-            let Some(frame) = samples.get_mut((start + i) * 2..(start + i) * 2 + 2) else { break };
+            let Some(frame) = samples.get_mut((start + i) * 2..(start + i) * 2 + 2) else {
+                break;
+            };
             let t = i as f32 / sr as f32;
             let tone = (t * freq * std::f32::consts::TAU).sin() * (-t * 110.0).exp();
             let tick = noise.next() * (-t * 900.0).exp() * 0.6;
@@ -967,9 +1310,14 @@ pub fn decode_shared(path: &Path, rate: u32) -> Result<Arc<Track>, String> {
             }
         }
     };
-    let result = slot.get_or_init(|| decode(path, rate).map(Arc::new)).clone();
+    let result = slot
+        .get_or_init(|| decode(path, rate).map(Arc::new))
+        .clone();
     if mine {
-        IN_FLIGHT.lock().unwrap().retain(|(_, _, s)| !Arc::ptr_eq(s, &slot));
+        IN_FLIGHT
+            .lock()
+            .unwrap()
+            .retain(|(_, _, s)| !Arc::ptr_eq(s, &slot));
     }
     result
 }
@@ -979,20 +1327,38 @@ pub fn with_rate(track: Arc<Track>, sample_rate: u32, rate: f64, keep_pitch: boo
     if (rate - 1.0).abs() < 1e-6 {
         return track;
     }
-    Arc::new(change_rate(Track { samples: track.samples.clone(), rate: track.rate }, sample_rate, rate, keep_pitch))
+    Arc::new(change_rate(
+        Track {
+            samples: track.samples.clone(),
+            rate: track.rate,
+        },
+        sample_rate,
+        rate,
+        keep_pitch,
+    ))
 }
 
 /// Decodes `len_ms` of audio starting at (or just before) `from_ms`, or the whole file with
 /// `None`. Also returns the device-rate frame the first sample belongs at: the samples are
 /// identical to the same stretch of a full decode, so one can be swapped for the other mid-song.
-pub fn decode_part(path: &Path, rate: u32, part: Option<(f64, f64)>) -> Result<(Track, i64), String> {
+pub fn decode_part(
+    path: &Path,
+    rate: u32,
+    part: Option<(f64, f64)>,
+) -> Result<(Track, i64), String> {
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    decode_source(Box::new(file), path.extension().and_then(|e| e.to_str()), rate, part)
+    decode_source(
+        Box::new(file),
+        path.extension().and_then(|e| e.to_str()),
+        rate,
+        part,
+    )
 }
 
 /// Decodes audio built into the binary (`ext`: its format's file extension).
 pub fn decode_bytes(bytes: &'static [u8], ext: &str, rate: u32) -> Result<Track, String> {
-    decode_source(Box::new(std::io::Cursor::new(bytes)), Some(ext), rate, None).map(|(track, _)| track)
+    decode_source(Box::new(std::io::Cursor::new(bytes)), Some(ext), rate, None)
+        .map(|(track, _)| track)
 }
 
 fn decode_source(
@@ -1015,18 +1381,37 @@ fn decode_source(
         hint.with_extension(ext);
     }
     let mut format = symphonia::default::get_probe()
-        .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
+        .probe(
+            &hint,
+            mss,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
         .map_err(|e| format!("probe: {e}"))?;
-    let track = format.default_track(TrackType::Audio).ok_or("no audio track")?;
+    let track = format
+        .default_track(TrackType::Audio)
+        .ok_or("no audio track")?;
     let track_id = track.id;
     let time_base = track.time_base;
-    let params = track.codec_params.as_ref().and_then(|p| p.audio()).ok_or("no audio codec params")?;
+    let params = track
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or("no audio codec params")?;
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(params, &AudioDecoderOptions::default())
         .map_err(|e| format!("decoder: {e}"))?;
     if let Some((from_ms, _)) = part {
         let time = Time::try_from_secs_f64(from_ms.max(0.0) / 1000.0).ok_or("bad seek time")?;
-        format.seek(SeekMode::Accurate, SeekTo::Time { time, track_id: Some(track_id) }).map_err(|e| format!("seek: {e}"))?;
+        format
+            .seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(track_id),
+                },
+            )
+            .map_err(|e| format!("seek: {e}"))?;
     }
 
     let mut src_rate = 0u32;
@@ -1056,7 +1441,11 @@ fn decode_source(
             Err(e) => return Err(format!("decode: {e}")),
         };
         // (A packet can ask to cut more than it holds: the rest of the padding, counted again.)
-        tail = if cut == 0 { 0 } else { tail + cut.min(buf.frames()) };
+        tail = if cut == 0 {
+            0
+        } else {
+            tail + cut.min(buf.frames())
+        };
         src_rate = buf.spec().rate();
         if src_start.is_none() {
             // After a seek, a decoder may give back less than the packet's frames (Vorbis's first
@@ -1067,7 +1456,8 @@ fn decode_source(
                 continue;
             }
             let tb = time_base.ok_or("no time base")?;
-            let to_frames = |t: i128| t * tb.numer.get() as i128 * src_rate as i128 / tb.denom.get() as i128;
+            let to_frames =
+                |t: i128| t * tb.numer.get() as i128 * src_rate as i128 / tb.denom.get() as i128;
             let dur = to_frames(packet.dur.get() as i128);
             let frame = to_frames(pts as i128) + (dur - out).max(0);
             src_start = Some(frame as i64);
@@ -1075,12 +1465,17 @@ fn decode_source(
         let ch = buf.spec().channels().count().max(1);
         buf.copy_to_vec_interleaved(&mut packet_buf);
         for frame in packet_buf.chunks_exact(ch) {
-            let (l, r) = if ch == 1 { (frame[0], frame[0]) } else { (frame[0], frame[1]) };
+            let (l, r) = if ch == 1 {
+                (frame[0], frame[0])
+            } else {
+                (frame[0], frame[1])
+            };
             stereo.push(l);
             stereo.push(r);
         }
         if let Some((_, len_ms)) = part
-            && stereo.len() as f64 / 2.0 >= len_ms / 1000.0 * src_rate as f64 {
+            && stereo.len() as f64 / 2.0 >= len_ms / 1000.0 * src_rate as f64
+        {
             break;
         }
     }
@@ -1089,7 +1484,13 @@ fn decode_source(
         return Err("audio file decoded to nothing".into());
     };
     if src_rate == rate {
-        return Ok((Track { samples: stereo, rate: 1.0 }, src_start));
+        return Ok((
+            Track {
+                samples: stereo,
+                rate: 1.0,
+            },
+            src_start,
+        ));
     }
     // Resample on the same grid as a full decode: output frame n reads source position n * ratio.
     let ratio = src_rate as f64 / rate as f64;
@@ -1107,7 +1508,12 @@ pub fn change_rate(track: Track, sample_rate: u32, rate: f64, keep_pitch: bool) 
     }
     let samples = if keep_pitch {
         let frames = track.samples.len() / 2;
-        time_stretch(&track.samples, sample_rate, |n| n * rate, (frames as f64 / rate) as usize)
+        time_stretch(
+            &track.samples,
+            sample_rate,
+            |n| n * rate,
+            (frames as f64 / rate) as usize,
+        )
     } else {
         resample_ratio(&track.samples, rate)
     };
@@ -1127,12 +1533,25 @@ pub fn shifted(track: Track, sample_rate: u32, rate: f64, keep_pitch: bool, shif
     let moved = resample_ratio(&track.samples, pitch);
     let stretch = rate / pitch;
     let frames = moved.len() / 2;
-    Track { samples: time_stretch(&moved, sample_rate, |n| n * stretch, (frames as f64 / stretch) as usize), rate }
+    Track {
+        samples: time_stretch(
+            &moved,
+            sample_rate,
+            |n| n * stretch,
+            (frames as f64 / stretch) as usize,
+        ),
+        rate,
+    }
 }
 
 /// Like `change_rate`, for a speed that changes over the song (Wind Up / Down): output (song)
 /// time t plays the map at `speed.map(t)`. The track's `rate` is the starting speed.
-pub fn change_speed(track: Track, sample_rate: u32, speed: &crate::mods::Speed, keep_pitch: bool) -> Track {
+pub fn change_speed(
+    track: Track,
+    sample_rate: u32,
+    speed: &crate::mods::Speed,
+    keep_pitch: bool,
+) -> Track {
     if speed.is_constant() || track.samples.is_empty() {
         return change_rate(track, sample_rate, speed.r0, keep_pitch);
     }
@@ -1146,24 +1565,39 @@ pub fn change_speed(track: Track, sample_rate: u32, speed: &crate::mods::Speed, 
     } else {
         resample_by(&track.samples, out_frames, |n| in_of(n as f64))
     };
-    Track { samples, rate: speed.r0 }
+    Track {
+        samples,
+        rate: speed.r0,
+    }
 }
 
 /// WSOLA time stretch of interleaved stereo: overlap-adds Hann-windowed ~40 ms grains, choosing
 /// each grain's source position within +-8 ms so its waveform lines up with the previous grain.
 /// `in_of` maps an output frame to the input frame that should sound there; the output is
 /// `out_len` frames long.
-fn time_stretch(input: &[f32], sample_rate: u32, in_of: impl Fn(f64) -> f64, out_len: usize) -> Vec<f32> {
+fn time_stretch(
+    input: &[f32],
+    sample_rate: u32,
+    in_of: impl Fn(f64) -> f64,
+    out_len: usize,
+) -> Vec<f32> {
     let frames = input.len() / 2;
     let sr = sample_rate as f64;
     let win = ((sr * 0.040) as usize).max(64) & !1;
     let hop_out = win / 2;
     let search = (sr * 0.008) as usize;
-    let window: Vec<f32> = (0..win).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / win as f32).cos()).collect();
+    let window: Vec<f32> = (0..win)
+        .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / win as f32).cos())
+        .collect();
     // Alignment is searched on a 4x-decimated mono copy (then refined at full rate) to stay fast.
     const DEC: usize = 4;
-    let mono: Vec<f32> = (0..frames).map(|i| 0.5 * (input[2 * i] + input[2 * i + 1])).collect();
-    let coarse: Vec<f32> = mono.chunks(DEC).map(|c| c.iter().sum::<f32>() / c.len() as f32).collect();
+    let mono: Vec<f32> = (0..frames)
+        .map(|i| 0.5 * (input[2 * i] + input[2 * i + 1]))
+        .collect();
+    let coarse: Vec<f32> = mono
+        .chunks(DEC)
+        .map(|c| c.iter().sum::<f32>() / c.len() as f32)
+        .collect();
     let corr = |sig: &[f32], a: usize, b: usize, len: usize, step: usize| -> f32 {
         let mut s = 0.0f32;
         let mut i = 0;
@@ -1183,7 +1617,10 @@ fn time_stretch(input: &[f32], sample_rate: u32, in_of: impl Fn(f64) -> f64, out
     let half = win as f64 / 2.0;
     // Candidates nearest `nominal` first, so ties (silence) keep the grain on time.
     let around = |centre: usize, lo: usize, hi: usize| {
-        (0..=(hi - lo)).flat_map(move |d| [centre.checked_sub(d), Some(centre + d)]).flatten().filter(move |&c| c >= lo && c <= hi)
+        (0..=(hi - lo))
+            .flat_map(move |d| [centre.checked_sub(d), Some(centre + d)])
+            .flatten()
+            .filter(move |&c| c >= lo && c <= hi)
     };
     let mut prev: Option<usize> = None;
     let mut k = 0usize;
@@ -1204,7 +1641,8 @@ fn time_stretch(input: &[f32], sample_rate: u32, in_of: impl Fn(f64) -> f64, out
                 let ov = hop_out;
                 let (mut best, mut best_c) = (nominal, f32::MIN);
                 for cand in around(nominal / DEC, lo / DEC, hi / DEC) {
-                    if (target + ov) / DEC < coarse.len() && (cand * DEC + ov) / DEC < coarse.len() {
+                    if (target + ov) / DEC < coarse.len() && (cand * DEC + ov) / DEC < coarse.len()
+                    {
                         let c = corr(&coarse, target / DEC, cand, ov / DEC, 1);
                         if c > best_c {
                             best_c = c;
@@ -1214,7 +1652,11 @@ fn time_stretch(input: &[f32], sample_rate: u32, in_of: impl Fn(f64) -> f64, out
                 }
                 let (mut fine, mut fine_c) = (best, f32::MIN);
                 let fine_lo = best.saturating_sub(DEC);
-                for c in around(best, fine_lo, (best + DEC).min(frames - win - 1).max(fine_lo)) {
+                for c in around(
+                    best,
+                    fine_lo,
+                    (best + DEC).min(frames - win - 1).max(fine_lo),
+                ) {
                     let v = corr(&mono, target.min(frames - ov - 1), c, ov, 2);
                     if v > fine_c {
                         fine_c = v;
@@ -1253,7 +1695,9 @@ fn resample_ratio(input: &[f32], ratio: f64) -> Vec<f32> {
 /// Like `resample_ratio`, with output frame n reading input position `phase + n * ratio`.
 fn resample_from(input: &[f32], ratio: f64, phase: f64) -> Vec<f32> {
     let frames_out = ((input.len() / 2) as f64 - phase) / ratio;
-    resample_by(input, frames_out.floor().max(0.0) as usize, |n| phase + n as f64 * ratio)
+    resample_by(input, frames_out.floor().max(0.0) as usize, |n| {
+        phase + n as f64 * ratio
+    })
 }
 
 /// Cubic resampling where output frame n reads input position `pos(n)`.
@@ -1271,7 +1715,11 @@ fn resample_by(input: &[f32], frames_out: usize, pos: impl Fn(usize) -> f64) -> 
         for c in 0..2 {
             let (p0, p1, p2, p3) = (at(i - 1, c), at(i, c), at(i + 1, c), at(i + 2, c));
             let v = p1
-                + 0.5 * t * (p2 - p0 + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0)));
+                + 0.5
+                    * t
+                    * (p2 - p0
+                        + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3
+                            + t * (3.0 * (p1 - p2) + p3 - p0)));
             out.push(v);
         }
     }
