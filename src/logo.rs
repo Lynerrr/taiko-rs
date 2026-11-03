@@ -21,7 +21,9 @@ type PixelRun = (u32, u32, u32, [f32; 4]);
 fn runs() -> &'static [PixelRun] {
     static RUNS: OnceLock<Vec<PixelRun>> = OnceLock::new();
     RUNS.get_or_init(|| {
-        let Ok(img) = image::load_from_memory(ICON_32) else { return Vec::new() };
+        let Ok(img) = image::load_from_memory(ICON_32) else {
+            return Vec::new();
+        };
         let img = img.to_rgba8();
         let mut out: Vec<PixelRun> = Vec::new();
         for (x, y, p) in img.enumerate_pixels() {
@@ -43,6 +45,12 @@ pub fn draw(c: &mut Canvas, x: f32, y: f32, size: f32) {
     let px = size / 32.0;
     for &(rx, ry, len, col) in runs() {
         // A hair oversized so neighbouring runs leave no seams.
-        c.rect(x + rx as f32 * px, y + ry as f32 * px, len as f32 * px + 0.2, px + 0.2, col);
+        c.rect(
+            x + rx as f32 * px,
+            y + ry as f32 * px,
+            len as f32 * px + 0.2,
+            px + 0.2,
+            col,
+        );
     }
 }

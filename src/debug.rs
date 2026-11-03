@@ -15,7 +15,11 @@ pub fn write_png(path: &Path, width: u32, height: u32, rgb: &[u8]) -> std::io::R
         for &b in data {
             crc ^= b as u32;
             for _ in 0..8 {
-                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
             }
         }
         !crc
@@ -68,9 +72,15 @@ impl ShotPlan {
     pub fn from_env() -> Option<ShotPlan> {
         let v = std::env::var("TAIKO_SHOTS").ok()?;
         let (dir, times) = v.rsplit_once(':')?;
-        let mut times: Vec<f64> = times.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        let mut times: Vec<f64> = times
+            .split(',')
+            .filter_map(|t| t.trim().parse().ok())
+            .collect();
         times.sort_by(|a, b| b.total_cmp(a));
-        Some(ShotPlan { dir: PathBuf::from(dir), times })
+        Some(ShotPlan {
+            dir: PathBuf::from(dir),
+            times,
+        })
     }
 }
 
@@ -98,7 +108,14 @@ pub struct Smoothness {
 impl Smoothness {
     /// `shown_ms`: when the frame got its swapchain image; `drawn_ms`: the time its notes are
     /// drawn at.
-    pub fn sample(&mut self, wall_ms: f64, game_ms: f64, audio_ms: Option<f64>, shown_ms: f64, drawn_ms: f64) {
+    pub fn sample(
+        &mut self,
+        wall_ms: f64,
+        game_ms: f64,
+        audio_ms: Option<f64>,
+        shown_ms: f64,
+        drawn_ms: f64,
+    ) {
         if let Some((s, d)) = self.last_shown {
             self.shown_steps.push((shown_ms - s, drawn_ms - d));
         }
@@ -214,7 +231,12 @@ pub enum Action {
     Wheel(i32),
     /// Press at the area's centre (or its bottom-right corner), drag by (dx, dy) px, and release
     /// unless `hold` (then `Release` ends it), so screenshots can catch an in-progress drag.
-    Drag { corner: bool, dx: f64, dy: f64, hold: bool },
+    Drag {
+        corner: bool,
+        dx: f64,
+        dy: f64,
+        hold: bool,
+    },
     Release,
     /// Click the song select difficulty timeline at this fraction of its width.
     ClickGraph(f32),
@@ -252,23 +274,46 @@ impl InputScript {
                 let action = match k.trim() {
                     "WheelUp" => Action::Wheel(1),
                     "WheelDown" => Action::Wheel(-1),
-                    "MoveDown" => Action::Drag { corner: false, dx: 0.0, dy: 60.0, hold: false },
-                    "MoveRight" => Action::Drag { corner: false, dx: 60.0, dy: 0.0, hold: false },
-                    "ShrinkCorner" => Action::Drag { corner: true, dx: -300.0, dy: -200.0, hold: false },
+                    "MoveDown" => Action::Drag {
+                        corner: false,
+                        dx: 0.0,
+                        dy: 60.0,
+                        hold: false,
+                    },
+                    "MoveRight" => Action::Drag {
+                        corner: false,
+                        dx: 60.0,
+                        dy: 0.0,
+                        hold: false,
+                    },
+                    "ShrinkCorner" => Action::Drag {
+                        corner: true,
+                        dx: -300.0,
+                        dy: -200.0,
+                        hold: false,
+                    },
                     "Release" => Action::Release,
                     "RightUp" => Action::RightUp,
                     "LeftUp" => Action::LeftUp,
                     k if k.starts_with("LeftDown:") || k.starts_with("LeftMove:") => {
                         let mut p = k.split(':').skip(1).filter_map(|v| v.parse::<f32>().ok());
                         let (x, y) = (p.next()?, p.next()?);
-                        if k.starts_with("LeftDown:") { Action::LeftDown(x, y) } else { Action::LeftMove(x, y) }
+                        if k.starts_with("LeftDown:") {
+                            Action::LeftDown(x, y)
+                        } else {
+                            Action::LeftMove(x, y)
+                        }
                     }
                     "AltWheelUp" => Action::AltWheel(1),
                     "AltWheelDown" => Action::AltWheel(-1),
                     k if k.starts_with("RightDown:") || k.starts_with("RightMove:") => {
                         let mut p = k.split(':').skip(1).filter_map(|v| v.parse::<f32>().ok());
                         let (x, y) = (p.next()?, p.next()?);
-                        if k.starts_with("RightDown:") { Action::RightDown(x, y) } else { Action::RightMove(x, y) }
+                        if k.starts_with("RightDown:") {
+                            Action::RightDown(x, y)
+                        } else {
+                            Action::RightMove(x, y)
+                        }
                     }
                     k if k.starts_with("Click:") => {
                         let mut p = k.split(':').skip(1).filter_map(|v| v.parse::<f32>().ok());
@@ -280,7 +325,12 @@ impl InputScript {
                     k if k.starts_with("Move:") || k.starts_with("Hold:") => {
                         let mut p = k.split(':').skip(1).filter_map(|v| v.parse::<f64>().ok());
                         let (dx, dy) = (p.next()?, p.next()?);
-                        Action::Drag { corner: false, dx, dy, hold: k.starts_with("Hold:") }
+                        Action::Drag {
+                            corner: false,
+                            dx,
+                            dy,
+                            hold: k.starts_with("Hold:"),
+                        }
                     }
                     k if k.starts_with("Shift+") => Action::ShiftKey(parse_keycode(&k[6..])?),
                     k if k.starts_with("Ctrl+") => Action::CtrlKey(parse_keycode(&k[5..])?),
@@ -307,11 +357,29 @@ impl InputScript {
 fn parse_keycode(name: &str) -> Option<winit::keyboard::KeyCode> {
     use winit::keyboard::KeyCode::*;
     let fixed = [
-        ("Escape", Escape), ("Tab", Tab), ("Enter", Enter), ("Space", Space), ("Backspace", Backspace),
-        ("ArrowUp", ArrowUp), ("ArrowDown", ArrowDown), ("ArrowLeft", ArrowLeft), ("ArrowRight", ArrowRight),
-        ("F1", F1), ("F3", F3), ("F4", F4), ("F7", F7), ("F8", F8), ("F9", F9), ("F10", F10), ("F12", F12),
+        ("Escape", Escape),
+        ("Tab", Tab),
+        ("Enter", Enter),
+        ("Space", Space),
+        ("Backspace", Backspace),
+        ("ArrowUp", ArrowUp),
+        ("ArrowDown", ArrowDown),
+        ("ArrowLeft", ArrowLeft),
+        ("ArrowRight", ArrowRight),
+        ("F1", F1),
+        ("F3", F3),
+        ("F4", F4),
+        ("F7", F7),
+        ("F8", F8),
+        ("F9", F9),
+        ("F10", F10),
+        ("F12", F12),
     ];
-    fixed.iter().find(|(n, _)| *n == name).map(|(_, k)| *k).or_else(|| crate::config::parse_key(name))
+    fixed
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, k)| *k)
+        .or_else(|| crate::config::parse_key(name))
 }
 
 /// `TAIKO_WALL_SHOTS=ms,ms` captures screenshots at wall-clock times after launch (any screen).
@@ -330,7 +398,9 @@ pub fn medals_from_env() -> Option<crate::online::MedalsView> {
 
 /// Medals to play the earning of, from `TAIKO_UNLOCK`.
 pub fn unlock_from_env() -> Vec<crate::online::MedalNote> {
-    std::env::var_os("TAIKO_UNLOCK").and_then(|f| serde_json::from_str(&std::fs::read_to_string(f).ok()?).ok()).unwrap_or_default()
+    std::env::var_os("TAIKO_UNLOCK")
+        .and_then(|f| serde_json::from_str(&std::fs::read_to_string(f).ok()?).ok())
+        .unwrap_or_default()
 }
 
 /// Text that doesn't fit, as readable lines: off screen, sticking out of the rounded box it sits
@@ -340,21 +410,42 @@ pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
     const EPS: f32 = 0.6;
     let bounds = |i: usize| -> Rect {
         let s = &c.shapes[i];
-        [s.center[0] - s.half[0], s.center[1] - s.half[1], s.center[0] + s.half[0], s.center[1] + s.half[1]]
+        [
+            s.center[0] - s.half[0],
+            s.center[1] - s.half[1],
+            s.center[0] + s.half[0],
+            s.center[1] + s.half[1],
+        ]
     };
     let contains = |r: Rect, x: f32, y: f32| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
-    let inside = |a: Rect, b: Rect| a[0] >= b[0] - EPS && a[2] <= b[2] + EPS && a[1] >= b[1] - EPS && a[3] <= b[3] + EPS;
+    let inside = |a: Rect, b: Rect| {
+        a[0] >= b[0] - EPS && a[2] <= b[2] + EPS && a[1] >= b[1] - EPS && a[3] <= b[3] + EPS
+    };
     let clip_of = |i: usize| -> Option<Rect> {
-        c.clips.iter().filter(|(r, _)| r.contains(&i)).fold(None, |acc: Option<Rect>, (_, [x, y, w, h])| {
-            let r = [*x, *y, x + w, y + h];
-            Some(match acc {
-                Some(a) => [a[0].max(r[0]), a[1].max(r[1]), a[2].min(r[2]), a[3].min(r[3])],
-                None => r,
-            })
-        })
+        c.clips.iter().filter(|(r, _)| r.contains(&i)).fold(
+            None,
+            |acc: Option<Rect>, (_, [x, y, w, h])| {
+                let r = [*x, *y, x + w, y + h];
+                Some(match acc {
+                    Some(a) => [
+                        a[0].max(r[0]),
+                        a[1].max(r[1]),
+                        a[2].min(r[2]),
+                        a[3].min(r[3]),
+                    ],
+                    None => r,
+                })
+            },
+        )
     };
     let fmt = |r: Rect| format!("{:.0}..{:.0} x {:.0}..{:.0}", r[0], r[2], r[1], r[3]);
-    let short = |s: &str| if s.chars().count() > 48 { format!("{}...", s.chars().take(45).collect::<String>()) } else { s.to_string() };
+    let short = |s: &str| {
+        if s.chars().count() > 48 {
+            format!("{}...", s.chars().take(45).collect::<String>())
+        } else {
+            s.to_string()
+        }
+    };
 
     // Visible texts: (first shape, last shape + 1, ink rect, visible part, string).
     let mut texts: Vec<(usize, usize, Rect, Rect, &str)> = Vec::new();
@@ -363,32 +454,73 @@ pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
         if range.is_empty() || c.shapes[range.start].fill[3] < 0.15 {
             continue;
         }
-        let ink = range.clone().map(bounds).fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+        let ink =
+            range
+                .clone()
+                .map(bounds)
+                .fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |a, b| {
+                    [
+                        a[0].min(b[0]),
+                        a[1].min(b[1]),
+                        a[2].max(b[2]),
+                        a[3].max(b[3]),
+                    ]
+                });
         let mut seen = ink;
         if let Some(clip) = clip_of(range.start) {
-            seen = [ink[0].max(clip[0]), ink[1].max(clip[1]), ink[2].min(clip[2]), ink[3].min(clip[3])];
+            seen = [
+                ink[0].max(clip[0]),
+                ink[1].max(clip[1]),
+                ink[2].min(clip[2]),
+                ink[3].min(clip[3]),
+            ];
             if seen[0] >= seen[2] || seen[1] >= seen[3] {
                 continue;
             }
             if ink[0] < clip[0] - EPS || ink[2] > clip[2] + EPS {
-                out.push(format!("cut off: \"{}\" {} by its clip {}", short(s), fmt(ink), fmt(clip)));
+                out.push(format!(
+                    "cut off: \"{}\" {} by its clip {}",
+                    short(s),
+                    fmt(ink),
+                    fmt(clip)
+                ));
             }
         }
-        if ink[0] < -EPS || ink[2] > c.width + EPS || ink[1] < -EPS || ink[3] > crate::render::VIRTUAL_HEIGHT + EPS {
-            out.push(format!("off screen: \"{}\" {} (width {:.0})", short(s), fmt(ink), c.width));
+        if ink[0] < -EPS
+            || ink[2] > c.width + EPS
+            || ink[1] < -EPS
+            || ink[3] > crate::render::VIRTUAL_HEIGHT + EPS
+        {
+            out.push(format!(
+                "off screen: \"{}\" {} (width {:.0})",
+                short(s),
+                fmt(ink),
+                c.width
+            ));
         }
         // The box under the text's start and under its middle (centred labels): the topmost
         // visible rounded box drawn before it.
         let mid_y = (ink[1] + ink[3]) / 2.0;
         for x in [ink[0] + 1.0, (ink[0] + ink[2]) / 2.0] {
-            let holder = c.boxes.iter().rev().filter(|&&b| b < range.start).find(|&&b| {
-                let sh = &c.shapes[b];
-                let visible = sh.fill[3] > 0.1 || (sh.border[3] > 0.1 && sh.params[1] > 0.0);
-                visible && contains(bounds(b), x, mid_y)
-            });
+            let holder = c
+                .boxes
+                .iter()
+                .rev()
+                .filter(|&&b| b < range.start)
+                .find(|&&b| {
+                    let sh = &c.shapes[b];
+                    let visible = sh.fill[3] > 0.1 || (sh.border[3] > 0.1 && sh.params[1] > 0.0);
+                    visible && contains(bounds(b), x, mid_y)
+                });
             if let Some(&b) = holder
-                && !inside(seen, bounds(b)) {
-                out.push(format!("sticks out: \"{}\" {} past its box {}", short(s), fmt(seen), fmt(bounds(b))));
+                && !inside(seen, bounds(b))
+            {
+                out.push(format!(
+                    "sticks out: \"{}\" {} past its box {}",
+                    short(s),
+                    fmt(seen),
+                    fmt(bounds(b))
+                ));
                 break;
             }
         }
@@ -396,7 +528,12 @@ pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
     }
     for (i, a) in texts.iter().enumerate() {
         for b in &texts[i + 1..] {
-            let r = [a.3[0].max(b.3[0]), a.3[1].max(b.3[1]), a.3[2].min(b.3[2]), a.3[3].min(b.3[3])];
+            let r = [
+                a.3[0].max(b.3[0]),
+                a.3[1].max(b.3[1]),
+                a.3[2].min(b.3[2]),
+                a.3[3].min(b.3[3]),
+            ];
             if r[2] - r[0] < 1.0 || r[3] - r[1] < 1.0 {
                 continue;
             }
@@ -408,10 +545,20 @@ pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
             let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
             let covered = (a.1..b.0).any(|k| {
                 let sh = &c.shapes[k];
-                sh.fill[3] >= 0.6 && sh.half[0] >= 3.0 && sh.half[1] >= 3.0 && sh.params[3] < 0.5 && contains(bounds(k), cx, cy)
+                sh.fill[3] >= 0.6
+                    && sh.half[0] >= 3.0
+                    && sh.half[1] >= 3.0
+                    && sh.params[3] < 0.5
+                    && contains(bounds(k), cx, cy)
             });
             if !covered {
-                out.push(format!("overlap: \"{}\" {} and \"{}\" {}", short(a.4), fmt(a.3), short(b.4), fmt(b.3)));
+                out.push(format!(
+                    "overlap: \"{}\" {} and \"{}\" {}",
+                    short(a.4),
+                    fmt(a.3),
+                    short(b.4),
+                    fmt(b.3)
+                ));
             }
         }
     }
@@ -422,28 +569,50 @@ pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
 /// and text, no glows or skin images. For looking at test frames without a window.
 #[cfg(test)]
 pub fn rasterize(c: &crate::render::Canvas, scale: f32) -> (u32, u32, Vec<u8>) {
-    let (w, h) = ((c.width * scale).round() as u32, (crate::render::VIRTUAL_HEIGHT * scale).round() as u32);
+    let (w, h) = (
+        (c.width * scale).round() as u32,
+        (crate::render::VIRTUAL_HEIGHT * scale).round() as u32,
+    );
     let mut px = vec![[0.071f32, 0.071, 0.098]; (w * h) as usize];
     for (i, sh) in c.shapes.iter().enumerate() {
         if sh.params[2] > 0.0 || sh.params[3] >= 9.5 {
             continue;
         }
-        let clip = c.clips.iter().filter(|(r, _)| r.contains(&i)).fold([0.0, 0.0, f32::MAX, f32::MAX], |a: [f32; 4], (_, [x, y, cw, ch])| {
-            [a[0].max(*x), a[1].max(*y), a[2].min(x + cw), a[3].min(y + ch)]
-        });
+        let clip = c.clips.iter().filter(|(r, _)| r.contains(&i)).fold(
+            [0.0, 0.0, f32::MAX, f32::MAX],
+            |a: [f32; 4], (_, [x, y, cw, ch])| {
+                [
+                    a[0].max(*x),
+                    a[1].max(*y),
+                    a[2].min(x + cw),
+                    a[3].min(y + ch),
+                ]
+            },
+        );
         let (hx, hy) = (sh.half[0].abs(), sh.half[1].abs());
         let radius = sh.params[0].min(hx).min(hy);
         let border = sh.params[1];
         // A turned shape is looked at in its own frame, within the circle around it.
         let (sin, cos) = sh.angle.sin_cos();
-        let (ex, ey) = if sh.angle == 0.0 { (hx, hy) } else { (hx.hypot(hy), hx.hypot(hy)) };
+        let (ex, ey) = if sh.angle == 0.0 {
+            (hx, hy)
+        } else {
+            (hx.hypot(hy), hx.hypot(hy))
+        };
         let x0 = ((sh.center[0] - ex).max(clip[0]) * scale).floor().max(0.0) as u32;
-        let x1 = ((sh.center[0] + ex).min(clip[2]) * scale).ceil().clamp(0.0, w as f32) as u32;
+        let x1 = ((sh.center[0] + ex).min(clip[2]) * scale)
+            .ceil()
+            .clamp(0.0, w as f32) as u32;
         let y0 = ((sh.center[1] - ey).max(clip[1]) * scale).floor().max(0.0) as u32;
-        let y1 = ((sh.center[1] + ey).min(clip[3]) * scale).ceil().clamp(0.0, h as f32) as u32;
+        let y1 = ((sh.center[1] + ey).min(clip[3]) * scale)
+            .ceil()
+            .clamp(0.0, h as f32) as u32;
         for y in y0..y1 {
             for x in x0..x1 {
-                let (dx, dy) = ((x as f32 + 0.5) / scale - sh.center[0], (y as f32 + 0.5) / scale - sh.center[1]);
+                let (dx, dy) = (
+                    (x as f32 + 0.5) / scale - sh.center[0],
+                    (y as f32 + 0.5) / scale - sh.center[1],
+                );
                 let (lx, ly) = (dx * cos + dy * sin, -dx * sin + dy * cos);
                 if (sh.params[3] == 1.0 && lx > 0.0) || (sh.params[3] == 2.0 && lx < 0.0) {
                     continue;
@@ -455,8 +624,16 @@ pub fn rasterize(c: &crate::render::Canvas, scale: f32) -> (u32, u32, Vec<u8>) {
                     continue;
                 }
                 // A profile picture: a grey disc stands in.
-                let fill = if sh.params[3] < -0.5 { [0.45, 0.45, 0.55, sh.fill[3]] } else { sh.fill };
-                let col = if border > 0.0 && d > -border { sh.border } else { fill };
+                let fill = if sh.params[3] < -0.5 {
+                    [0.45, 0.45, 0.55, sh.fill[3]]
+                } else {
+                    sh.fill
+                };
+                let col = if border > 0.0 && d > -border {
+                    sh.border
+                } else {
+                    fill
+                };
                 let p = &mut px[(y * w + x) as usize];
                 for k in 0..3 {
                     p[k] += (col[k] - p[k]) * col[3];
@@ -464,5 +641,11 @@ pub fn rasterize(c: &crate::render::Canvas, scale: f32) -> (u32, u32, Vec<u8>) {
             }
         }
     }
-    (w, h, px.iter().flat_map(|p| p.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8)).collect())
+    (
+        w,
+        h,
+        px.iter()
+            .flat_map(|p| p.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8))
+            .collect(),
+    )
 }

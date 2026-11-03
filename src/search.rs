@@ -65,10 +65,22 @@ enum Field {
 #[derive(Clone, PartialEq, Debug)]
 enum Cond {
     /// `value` within `tolerance` counts as equal.
-    Num { key: Num, op: Op, value: f64, tolerance: f64 },
-    Text { field: Field, negated: bool, value: String },
+    Num {
+        key: Num,
+        op: Op,
+        value: f64,
+        tolerance: f64,
+    },
+    Text {
+        field: Field,
+        negated: bool,
+        value: String,
+    },
     /// The codes the typed status stands for.
-    Status { op: Op, codes: Vec<u8> },
+    Status {
+        op: Op,
+        codes: Vec<u8>,
+    },
     Unplayed,
 }
 
@@ -190,13 +202,27 @@ fn statuses(s: &str) -> Option<Vec<u8>> {
     if s.is_empty() {
         return None;
     }
-    names.iter().find(|(name, _)| name.starts_with(&s)).map(|(_, codes)| codes.to_vec())
+    names
+        .iter()
+        .find(|(name, _)| name.starts_with(&s))
+        .map(|(_, codes)| codes.to_vec())
 }
 
 fn cond(key: &str, op: Op, value: &str) -> Option<Cond> {
-    let num = |key: Num, parsed: Option<(f64, f64)>| parsed.map(|(value, tolerance)| Cond::Num { key, op, value, tolerance });
+    let num = |key: Num, parsed: Option<(f64, f64)>| {
+        parsed.map(|(value, tolerance)| Cond::Num {
+            key,
+            op,
+            value,
+            tolerance,
+        })
+    };
     let text = |field: Field| match op {
-        Op::Eq | Op::Ne if !value.is_empty() => Some(Cond::Text { field, negated: op == Op::Ne, value: value.to_lowercase() }),
+        Op::Eq | Op::Ne if !value.is_empty() => Some(Cond::Text {
+            field,
+            negated: op == Op::Ne,
+            value: value.to_lowercase(),
+        }),
         _ => None,
     };
     match key.to_lowercase().as_str() {
@@ -240,7 +266,13 @@ pub struct Text {
 
 impl Text {
     pub fn new(meta: &crate::beatmap::Meta, label: &str) -> Self {
-        Self { label: label.to_lowercase(), creator: meta.creator.to_lowercase(), artist: meta.artist.to_lowercase(), title: meta.title.to_lowercase(), version: meta.version.to_lowercase() }
+        Self {
+            label: label.to_lowercase(),
+            creator: meta.creator.to_lowercase(),
+            artist: meta.artist.to_lowercase(),
+            title: meta.title.to_lowercase(),
+            version: meta.version.to_lowercase(),
+        }
     }
 }
 
@@ -266,7 +298,15 @@ impl Query {
 
     /// Filters on what the background analysis works out (stars, length, BPM).
     pub fn needs_info(&self) -> bool {
-        self.conds.iter().any(|c| matches!(c, Cond::Num { key: Num::Stars | Num::Length | Num::Bpm, .. }))
+        self.conds.iter().any(|c| {
+            matches!(
+                c,
+                Cond::Num {
+                    key: Num::Stars | Num::Length | Num::Bpm,
+                    ..
+                }
+            )
+        })
     }
 
     #[cfg(test)]
@@ -275,10 +315,18 @@ impl Query {
     }
 
     pub fn matches_text(&self, meta: &crate::beatmap::Meta, text: &Text, facts: &Facts) -> bool {
-        let words = self.words.iter().all(|w| text.label.contains(w.as_str()) || text.creator.contains(w.as_str()));
+        let words = self
+            .words
+            .iter()
+            .all(|w| text.label.contains(w.as_str()) || text.creator.contains(w.as_str()));
         words
             && self.conds.iter().all(|c| match c {
-                Cond::Num { key, op, value, tolerance } => {
+                Cond::Num {
+                    key,
+                    op,
+                    value,
+                    tolerance,
+                } => {
                     let have = match key {
                         Num::Stars => facts.stars,
                         Num::Od => Some(meta.od),
@@ -289,7 +337,11 @@ impl Query {
                     };
                     have.is_some_and(|h| compare(*op, h, *value, *tolerance))
                 }
-                Cond::Text { field, negated, value } => {
+                Cond::Text {
+                    field,
+                    negated,
+                    value,
+                } => {
                     let have = match field {
                         Field::Creator => &text.creator,
                         Field::Artist => &text.artist,
@@ -303,7 +355,13 @@ impl Query {
                     Op::Ne => !codes.contains(&facts.status),
                     // Ordered as osu! has them (graveyard with pending).
                     _ => {
-                        let rank = |c: u8| if c == GRAVEYARD { PENDING as f64 } else { c as f64 };
+                        let rank = |c: u8| {
+                            if c == GRAVEYARD {
+                                PENDING as f64
+                            } else {
+                                c as f64
+                            }
+                        };
                         compare(*op, rank(facts.status), rank(codes[0]), 0.5)
                     }
                 },
@@ -318,11 +376,25 @@ mod tests {
     use crate::beatmap::Meta;
 
     fn meta() -> Meta {
-        Meta { artist: "Camellia".into(), title: "Ghost".into(), creator: "Mapper".into(), version: "Inner Oni".into(), od: 6.5, hp: 5.0, ..Default::default() }
+        Meta {
+            artist: "Camellia".into(),
+            title: "Ghost".into(),
+            creator: "Mapper".into(),
+            version: "Inner Oni".into(),
+            od: 6.5,
+            hp: 5.0,
+            ..Default::default()
+        }
     }
 
     fn facts() -> Facts {
-        Facts { stars: Some(5.23), length_s: Some(150.0), bpm: Some(180.0), played_days: Some(3.0), status: RANKED }
+        Facts {
+            stars: Some(5.23),
+            length_s: Some(150.0),
+            bpm: Some(180.0),
+            played_days: Some(3.0),
+            status: RANKED,
+        }
     }
 
     fn hit(q: &str) -> bool {
@@ -331,7 +403,19 @@ mod tests {
 
     #[test]
     fn numbers_compare_to_the_precision_typed() {
-        for q in ["sr>5", "stars>=5.23", "sr=5", "sr=5.2", "star:5.23", "sr<6", "sr!=4", "od=6.5", "hp<=5", "bpm=180", "bpm>179.5"] {
+        for q in [
+            "sr>5",
+            "stars>=5.23",
+            "sr=5",
+            "sr=5.2",
+            "star:5.23",
+            "sr<6",
+            "sr!=4",
+            "od=6.5",
+            "hp<=5",
+            "bpm=180",
+            "bpm>179.5",
+        ] {
             assert!(hit(q), "{q}");
         }
         for q in ["sr>6", "sr=5.3", "sr<5", "sr!=5", "od>7", "hp>5", "bpm<180"] {
@@ -341,7 +425,15 @@ mod tests {
 
     #[test]
     fn lengths_take_units_and_minutes() {
-        for q in ["length=150", "length=2:30", "len=2m30s", "length>2m", "length<3m", "length=150000ms", "length<=150s"] {
+        for q in [
+            "length=150",
+            "length=2:30",
+            "len=2m30s",
+            "length>2m",
+            "length<3m",
+            "length=150000ms",
+            "length<=150s",
+        ] {
             assert!(hit(q), "{q}");
         }
         for q in ["length>2:30", "length<1m", "length=3m"] {
@@ -351,27 +443,56 @@ mod tests {
 
     #[test]
     fn statuses_by_letter_word_or_order() {
-        for q in ["status=r", "status=ranked", "status:rank", "status!=l", "status>=r", "status<l", "status>p"] {
+        for q in [
+            "status=r",
+            "status=ranked",
+            "status:rank",
+            "status!=l",
+            "status>=r",
+            "status<l",
+            "status>p",
+        ] {
             assert!(hit(q), "{q}");
         }
         for q in ["status=l", "status=g", "status>r"] {
             assert!(!hit(q), "{q}");
         }
         // osu!.db's pending could be either.
-        let pending = Facts { status: PENDING, ..facts() };
+        let pending = Facts {
+            status: PENDING,
+            ..facts()
+        };
         assert!(Query::parse("status=g").matches(&meta(), "", &pending));
         assert!(Query::parse("status=p").matches(&meta(), "", &pending));
-        let graveyard = Facts { status: GRAVEYARD, ..facts() };
+        let graveyard = Facts {
+            status: GRAVEYARD,
+            ..facts()
+        };
         assert!(!Query::parse("status=p").matches(&meta(), "", &graveyard));
         assert!(Query::parse("status<r").matches(&meta(), "", &graveyard));
     }
 
     #[test]
     fn text_fields_words_and_quotes() {
-        for q in ["ghost", "GHOST cam", "mapper", "creator=map", "artist=camellia title=ghost", "diff=oni", "artist!=xi", "title=\"gho\"", "sr>5 ghost status=r"] {
+        for q in [
+            "ghost",
+            "GHOST cam",
+            "mapper",
+            "creator=map",
+            "artist=camellia title=ghost",
+            "diff=oni",
+            "artist!=xi",
+            "title=\"gho\"",
+            "sr>5 ghost status=r",
+        ] {
             assert!(hit(q), "{q}");
         }
-        for q in ["ghost xi", "artist=xi", "creator!=mapper", "diff=\"muzukashii\""] {
+        for q in [
+            "ghost xi",
+            "artist=xi",
+            "creator!=mapper",
+            "diff=\"muzukashii\"",
+        ] {
             assert!(!hit(q), "{q}");
         }
         // Unknown keys and odd values are just text.
@@ -383,14 +504,20 @@ mod tests {
     #[test]
     fn played_and_unplayed() {
         assert!(hit("played<7") && !hit("played>7") && !hit("unplayed"));
-        let never = Facts { played_days: None, ..facts() };
+        let never = Facts {
+            played_days: None,
+            ..facts()
+        };
         assert!(Query::parse("unplayed").matches(&meta(), "", &never));
         assert!(!Query::parse("played>7").matches(&meta(), "", &never));
     }
 
     #[test]
     fn unknown_numbers_dont_match_until_known() {
-        let analysing = Facts { stars: None, ..facts() };
+        let analysing = Facts {
+            stars: None,
+            ..facts()
+        };
         assert!(!Query::parse("sr>1").matches(&meta(), "", &analysing));
         assert!(Query::parse("sr>1").needs_info() && !Query::parse("od>1 status=r").needs_info());
     }

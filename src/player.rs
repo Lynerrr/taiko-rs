@@ -3,10 +3,10 @@
 //! the other, and everything for playing it: shuffle, repeat, volume, speed and pitch.
 
 use crate::game::DON;
-use crate::library::Entry;
 use crate::genres::GENRES;
+use crate::library::Entry;
 use crate::playlist::{Folder, Playlist, Repeat};
-use crate::render::{pixel_size, rgba, snap_to_grid, Canvas, Hit};
+use crate::render::{Canvas, Hit, pixel_size, rgba, snap_to_grid};
 
 /// Spectrum bands, each drawn twice (mirrored left and right).
 const BANDS: usize = 64;
@@ -69,7 +69,12 @@ pub enum Speed {
 }
 
 impl Speed {
-    pub const ALL: [Speed; 4] = [Speed::DoubleTime, Speed::Nightcore, Speed::HalfTime, Speed::Daycore];
+    pub const ALL: [Speed; 4] = [
+        Speed::DoubleTime,
+        Speed::Nightcore,
+        Speed::HalfTime,
+        Speed::Daycore,
+    ];
 
     fn name(self) -> &'static str {
         match self {
@@ -100,17 +105,103 @@ pub enum Drag {
 
 type Icon = [&'static str; 9];
 
-const PREV: Icon = ["##.....##", "##....###", "##...####", "##..#####", "##.######", "##..#####", "##...####", "##....###", "##.....##"];
-const NEXT: Icon = ["##.....##", "###....##", "####...##", "#####..##", "######.##", "#####..##", "####...##", "###....##", "##.....##"];
-const PLAY: Icon = ["##.......", "####.....", "######...", "########.", "#########", "########.", "######...", "####.....", "##......."];
-const PAUSE: Icon = ["###...###", "###...###", "###...###", "###...###", "###...###", "###...###", "###...###", "###...###", "###...###"];
-const HEART: Icon = [".........", ".##...##.", "####.####", "#########", "#########", ".#######.", "..#####..", "...###...", "....#...."];
-const SHUFFLE: Icon = [".........", ".......#.", "###...###", "...#.#.#.", "....#....", "...#.#.#.", "###...###", ".......#.", "........."];
-const LOOP: Icon = ["....#....", "..#####..", ".##.#..#.", ".#.....#.", ".#.....#.", ".#..#.##.", "..#####..", "....#....", "........."];
-const DISC: Icon = ["..#####..", ".#######.", "###...###", "##..#..##", "##.###.##", "##..#..##", "###...###", ".#######.", "..#####.."];
+const PREV: Icon = [
+    "##.....##",
+    "##....###",
+    "##...####",
+    "##..#####",
+    "##.######",
+    "##..#####",
+    "##...####",
+    "##....###",
+    "##.....##",
+];
+const NEXT: Icon = [
+    "##.....##",
+    "###....##",
+    "####...##",
+    "#####..##",
+    "######.##",
+    "#####..##",
+    "####...##",
+    "###....##",
+    "##.....##",
+];
+const PLAY: Icon = [
+    "##.......",
+    "####.....",
+    "######...",
+    "########.",
+    "#########",
+    "########.",
+    "######...",
+    "####.....",
+    "##.......",
+];
+const PAUSE: Icon = [
+    "###...###",
+    "###...###",
+    "###...###",
+    "###...###",
+    "###...###",
+    "###...###",
+    "###...###",
+    "###...###",
+    "###...###",
+];
+const HEART: Icon = [
+    ".........",
+    ".##...##.",
+    "####.####",
+    "#########",
+    "#########",
+    ".#######.",
+    "..#####..",
+    "...###...",
+    "....#....",
+];
+const SHUFFLE: Icon = [
+    ".........",
+    ".......#.",
+    "###...###",
+    "...#.#.#.",
+    "....#....",
+    "...#.#.#.",
+    "###...###",
+    ".......#.",
+    ".........",
+];
+const LOOP: Icon = [
+    "....#....",
+    "..#####..",
+    ".##.#..#.",
+    ".#.....#.",
+    ".#.....#.",
+    ".#..#.##.",
+    "..#####..",
+    "....#....",
+    ".........",
+];
+const DISC: Icon = [
+    "..#####..",
+    ".#######.",
+    "###...###",
+    "##..#..##",
+    "##.###.##",
+    "##..#..##",
+    "###...###",
+    ".#######.",
+    "..#####..",
+];
 
 /// One of the small buttons, its icon in whole screen pixels.
-pub fn button(c: &mut Canvas, [x, y, w, h]: [f32; 4], control: Control, paused: bool, accent: bool) {
+pub fn button(
+    c: &mut Canvas,
+    [x, y, w, h]: [f32; 4],
+    control: Control,
+    paused: bool,
+    accent: bool,
+) {
     let hover = c.hovered(x, y, w, h);
     let (fill, border) = match (accent, hover) {
         (true, false) => (0x2b1a17, DON),
@@ -131,11 +222,20 @@ pub fn button(c: &mut Canvas, [x, y, w, h]: [f32; 4], control: Control, paused: 
         Control::Favourite => &HEART,
     };
     let px = pixel_size(1.34);
-    let (left, top) = (snap_to_grid(x + w / 2.0 - 4.5 * px), snap_to_grid(y + h / 2.0 - 4.5 * px));
+    let (left, top) = (
+        snap_to_grid(x + w / 2.0 - 4.5 * px),
+        snap_to_grid(y + h / 2.0 - 4.5 * px),
+    );
     for (row, line) in icon.iter().enumerate() {
         for (col, b) in line.bytes().enumerate() {
             if b == b'#' {
-                c.rect(left + col as f32 * px, top + row as f32 * px, px, px, rgba(0xffffff, 1.0));
+                c.rect(
+                    left + col as f32 * px,
+                    top + row as f32 * px,
+                    px,
+                    px,
+                    rgba(0xffffff, 1.0),
+                );
             }
         }
     }
@@ -167,7 +267,12 @@ pub struct Spectrum {
 
 impl Default for Spectrum {
     fn default() -> Spectrum {
-        Spectrum { samples: vec![0.0; WINDOW], bands: [0.0; BANDS], re: vec![0.0; WINDOW], im: vec![0.0; WINDOW] }
+        Spectrum {
+            samples: vec![0.0; WINDOW],
+            bands: [0.0; BANDS],
+            re: vec![0.0; WINDOW],
+            im: vec![0.0; WINDOW],
+        }
     }
 }
 
@@ -176,7 +281,11 @@ impl Spectrum {
     /// falling back over `dt_ms` where it's quieter.
     pub fn update(&mut self, dt_ms: f32, sounding: bool, rate: u32) {
         let fall = (-dt_ms / FALL_MS).exp();
-        let heard = if sounding { self.analyse(rate) } else { [0.0; BANDS] };
+        let heard = if sounding {
+            self.analyse(rate)
+        } else {
+            [0.0; BANDS]
+        };
         for (band, new) in self.bands.iter_mut().zip(heard) {
             *band = new.max(*band * fall);
         }
@@ -190,12 +299,18 @@ impl Spectrum {
         self.im.fill(0.0);
         fft(&mut self.re, &mut self.im);
         let per_bin = rate as f32 / WINDOW as f32;
-        let edge = |band: usize| LOWEST_HZ * (HIGHEST_HZ / LOWEST_HZ).powf(band as f32 / BANDS as f32) / per_bin;
+        let edge = |band: usize| {
+            LOWEST_HZ * (HIGHEST_HZ / LOWEST_HZ).powf(band as f32 / BANDS as f32) / per_bin
+        };
         let mut out = [0.0; BANDS];
         for (band, v) in out.iter_mut().enumerate() {
             let lo = edge(band) as usize;
             let hi = (edge(band + 1) as usize).clamp(lo + 1, WINDOW / 2);
-            let peak = (lo..hi).map(|k| self.re[k].hypot(self.im[k])).fold(0.0, f32::max) * 4.0 / WINDOW as f32;
+            let peak = (lo..hi)
+                .map(|k| self.re[k].hypot(self.im[k]))
+                .fold(0.0, f32::max)
+                * 4.0
+                / WINDOW as f32;
             let db = 20.0 * (peak + 1e-6).log10() + TILT_DB * band as f32 / BANDS as f32;
             *v = (1.0 - db / FLOOR_DB).clamp(0.0, 1.0);
         }
@@ -213,9 +328,15 @@ impl Spectrum {
             for b in 0..blocks {
                 let r = disc_r + 7.0 + b as f32 * step;
                 let t = b as f32 / MAX_BLOCKS as f32;
-                let col = rgba(crate::menu::tint(crate::render::accent(), 0xffffff, t * t), alpha);
+                let col = rgba(
+                    crate::menu::tint(crate::render::accent(), 0xffffff, t * t),
+                    alpha,
+                );
                 for side in [-1.0, 1.0] {
-                    let (x, y) = (snap_to_grid(cx + side * sin * r), snap_to_grid(cy - cos * r));
+                    let (x, y) = (
+                        snap_to_grid(cx + side * sin * r),
+                        snap_to_grid(cy - cos * r),
+                    );
                     c.rect(x - block / 2.0, y - block / 2.0, block, block, col);
                 }
             }
@@ -355,7 +476,6 @@ impl Player {
         self.followed = None;
     }
 
-
     pub fn draw(&mut self, c: &mut Canvas, f: &Frame) {
         self.spectrum.update(c.dt_ms, f.sounding, f.rate);
         if !f.paused {
@@ -365,7 +485,10 @@ impl Player {
             self.times = t;
         }
         let wide = c.width >= QUEUE_FROM;
-        let (left, right) = (LIST_W + 20.0, c.width - if wide { QUEUE_W + 20.0 } else { 10.0 });
+        let (left, right) = (
+            LIST_W + 20.0,
+            c.width - if wide { QUEUE_W + 20.0 } else { 10.0 },
+        );
         let x = (left + right) / 2.0;
         self.spectrum.draw_rays(c, x, DISC_Y, DISC_R, 1.0);
         draw_disc(c, x, DISC_Y, self.angle, f.pictured);
@@ -376,7 +499,16 @@ impl Player {
                 c.ring(x, DISC_Y, DISC_R * groove, rgba(0x000000, 0.12), 1.0);
             }
         }
-        c.button(10.0, 24.0, 74.0, 20.0, tr!("< menu", "< メニュー", "< меню"), 8.0, Hit::Key(winit::keyboard::KeyCode::Escape), false);
+        c.button(
+            10.0,
+            24.0,
+            74.0,
+            20.0,
+            tr!("< menu", "< メニュー", "< меню"),
+            8.0,
+            Hit::Key(winit::keyboard::KeyCode::Escape),
+            false,
+        );
         if wide {
             c.text_right(c.width - 14.0, 34.0, 7.0, rgba(0x9a9ab0, 1.0), f.hint);
         }
@@ -388,17 +520,42 @@ impl Player {
         if wide {
             self.draw_queue(c, c.width - QUEUE_W - 10.0);
         }
-        c.text_centered(x, BAR_Y - 18.0, 9.0, rgba(0xffffff, 1.0), &Canvas::fit(9.0, right - left, f.song));
+        c.text_centered(
+            x,
+            BAR_Y - 18.0,
+            9.0,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(9.0, right - left, f.song),
+        );
         self.draw_timeline(c, x, right - left);
         let (w, gap, y) = (40.0, 6.0, BAR_Y + 18.0);
         let start = x - (w * 6.0 + gap * 5.0) / 2.0;
         let loved = self.list.is_favourite(self.list.now());
-        let row = [(Control::Shuffle, self.list.is_shuffled()), (Control::Prev, false), (Control::Toggle, true), (Control::Next, false), (Control::Repeat, self.list.repeat != Repeat::Off), (Control::Favourite, loved)];
+        let row = [
+            (Control::Shuffle, self.list.is_shuffled()),
+            (Control::Prev, false),
+            (Control::Toggle, true),
+            (Control::Next, false),
+            (Control::Repeat, self.list.repeat != Repeat::Off),
+            (Control::Favourite, loved),
+        ];
         for (i, (control, on)) in row.into_iter().enumerate() {
-            button(c, [start + i as f32 * (w + gap), y, w, 26.0], control, f.paused, on);
+            button(
+                c,
+                [start + i as f32 * (w + gap), y, w, 26.0],
+                control,
+                f.paused,
+                on,
+            );
         }
         if self.list.repeat == Repeat::One {
-            c.text(start + 4.0 * (w + gap) + w - 9.0, y + 3.0, 7.0, rgba(0xffffff, 1.0), "1");
+            c.text(
+                start + 4.0 * (w + gap) + w - 9.0,
+                y + 3.0,
+                7.0,
+                rgba(0xffffff, 1.0),
+                "1",
+            );
         }
         self.draw_sound(c, x, y + 34.0, f.volume);
     }
@@ -417,9 +574,35 @@ impl Player {
     fn draw_folder_button(&self, c: &mut Canvas) {
         let hover = c.hovered(10.0 + 84.0, 24.0, LIST_W - 84.0, 20.0);
         let open = self.folders_open;
-        c.round_rect([94.0, 24.0], [LIST_W - 84.0, 20.0], 4.0, rgba(if hover { 0x34344a } else { 0x23232f }, 1.0), rgba(if open { crate::render::accent() } else { 0x3a3a4e }, 1.0), 1.0);
-        draw_folder_icon(c, 100.0, 29.0, pixel_size(1.0), folder_colour(self.list.folder));
-        c.text(120.0, 30.5, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, LIST_W - 118.0, Self::folder_name(self.list.folder)));
+        c.round_rect(
+            [94.0, 24.0],
+            [LIST_W - 84.0, 20.0],
+            4.0,
+            rgba(if hover { 0x34344a } else { 0x23232f }, 1.0),
+            rgba(
+                if open {
+                    crate::render::accent()
+                } else {
+                    0x3a3a4e
+                },
+                1.0,
+            ),
+            1.0,
+        );
+        draw_folder_icon(
+            c,
+            100.0,
+            29.0,
+            pixel_size(1.0),
+            folder_colour(self.list.folder),
+        );
+        c.text(
+            120.0,
+            30.5,
+            7.0,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(7.0, LIST_W - 118.0, Self::folder_name(self.list.folder)),
+        );
         c.hit(94.0, 24.0, LIST_W - 84.0, 20.0, Hit::PlayerFolders);
     }
 
@@ -436,14 +619,33 @@ impl Player {
             let on = folder == self.list.folder;
             let hover = c.hovered(X, y, LIST_W, h);
             let colour = folder_colour(folder);
-            c.round_rect([X, y], [LIST_W, h], 4.0, rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.92), rgba(if on { colour } else { 0x3a3a4e }, 1.0), 1.0);
+            c.round_rect(
+                [X, y],
+                [LIST_W, h],
+                4.0,
+                rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.92),
+                rgba(if on { colour } else { 0x3a3a4e }, 1.0),
+                1.0,
+            );
             let px = pixel_size(1.0);
             draw_folder_icon(c, X + 7.0, y + (h - 12.0 * px) / 2.0, px, colour);
             let count = count.to_string();
             let name_x = X + 8.0 + 16.0 * px + 8.0;
             let room = X + LIST_W - 8.0 - Canvas::text_width(7.0, &count) - 8.0 - name_x;
-            c.text(name_x, y + (h - 7.0) / 2.0, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, room, Self::folder_name(folder)));
-            c.text_right(X + LIST_W - 8.0, y + (h - 7.0) / 2.0, 7.0, rgba(0x9a9ab0, 1.0), &count);
+            c.text(
+                name_x,
+                y + (h - 7.0) / 2.0,
+                7.0,
+                rgba(0xffffff, 1.0),
+                &Canvas::fit(7.0, room, Self::folder_name(folder)),
+            );
+            c.text_right(
+                X + LIST_W - 8.0,
+                y + (h - 7.0) / 2.0,
+                7.0,
+                rgba(0x9a9ab0, 1.0),
+                &count,
+            );
             c.hit(X, y, LIST_W, h, Hit::PlayerFolder(i));
         }
     }
@@ -452,78 +654,192 @@ impl Player {
     fn draw_list(&mut self, c: &mut Canvas) {
         const X: f32 = 10.0;
         self.draw_folder_button(c);
-        let border = if self.searching { rgba(crate::render::accent(), 1.0) } else { rgba(0x3a3a4e, 1.0) };
-        c.round_rect([X, LIST_TOP], [LIST_W, 18.0], 4.0, rgba(0x15151d, 0.95), border, 1.0);
+        let border = if self.searching {
+            rgba(crate::render::accent(), 1.0)
+        } else {
+            rgba(0x3a3a4e, 1.0)
+        };
+        c.round_rect(
+            [X, LIST_TOP],
+            [LIST_W, 18.0],
+            4.0,
+            rgba(0x15151d, 0.95),
+            border,
+            1.0,
+        );
         let filter = self.list.filter.clone();
-        let (text, col) = if filter.is_empty() && !self.searching { (tr!("search (Ctrl+F)", "検索 (Ctrl+F)", "поиск (Ctrl+F)").to_string(), 0x6f6f86) } else { (format!("{filter}_"), 0xffffff) };
-        c.text(X + 7.0, LIST_TOP + 5.5, 7.0, rgba(col, 1.0), &Canvas::fit_end(7.0, LIST_W - 14.0, &text));
+        let (text, col) = if filter.is_empty() && !self.searching {
+            (
+                tr!("search (Ctrl+F)", "検索 (Ctrl+F)", "поиск (Ctrl+F)").to_string(),
+                0x6f6f86,
+            )
+        } else {
+            (format!("{filter}_"), 0xffffff)
+        };
+        c.text(
+            X + 7.0,
+            LIST_TOP + 5.5,
+            7.0,
+            rgba(col, 1.0),
+            &Canvas::fit_end(7.0, LIST_W - 14.0, &text),
+        );
         c.hit(X, LIST_TOP, LIST_W, 18.0, Hit::PlayerSearch);
 
         let top = LIST_TOP + 22.0;
-        c.round_rect([X, top], [LIST_W, ROWS as f32 * ROW_H + 4.0], 4.0, rgba(0x15151d, 0.82), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect(
+            [X, top],
+            [LIST_W, ROWS as f32 * ROW_H + 4.0],
+            4.0,
+            rgba(0x15151d, 0.82),
+            rgba(0x3a3a4e, 1.0),
+            1.0,
+        );
         let now = self.list.now();
         // A new song comes into view; scrolling away from it stays.
         if self.followed != Some(now) {
             self.followed = Some(now);
             if let Some(pos) = self.list.shown.iter().position(|&t| t == now)
-                && (pos < self.scroll || pos >= self.scroll + ROWS) {
+                && (pos < self.scroll || pos >= self.scroll + ROWS)
+            {
                 self.scroll = pos.saturating_sub(ROWS / 2);
                 self.scroll_by(0);
             }
         }
         const ADD_W: f32 = 18.0;
         const HEART_W: f32 = 16.0;
-        for (row, &track) in self.list.shown.iter().skip(self.scroll).take(ROWS).enumerate() {
+        for (row, &track) in self
+            .list
+            .shown
+            .iter()
+            .skip(self.scroll)
+            .take(ROWS)
+            .enumerate()
+        {
             let y = top + 2.0 + row as f32 * ROW_H;
             let hover = c.hovered(X, y, LIST_W, ROW_H);
             if track == now {
-                c.rect(X + 2.0, y, LIST_W - 4.0, ROW_H, rgba(crate::render::accent(), 0.3));
+                c.rect(
+                    X + 2.0,
+                    y,
+                    LIST_W - 4.0,
+                    ROW_H,
+                    rgba(crate::render::accent(), 0.3),
+                );
             } else if hover {
                 c.rect(X + 2.0, y, LIST_W - 4.0, ROW_H, rgba(0x34344a, 0.8));
             }
             let room = LIST_W - 14.0 - ADD_W - HEART_W;
-            c.text(X + 7.0, y + 6.5, 7.0, rgba(if track == now { 0xffffff } else { 0xc8c8d8 }, 1.0), &Canvas::fit(7.0, room, &self.list.tracks[track].label));
+            c.text(
+                X + 7.0,
+                y + 6.5,
+                7.0,
+                rgba(if track == now { 0xffffff } else { 0xc8c8d8 }, 1.0),
+                &Canvas::fit(7.0, room, &self.list.tracks[track].label),
+            );
             let heart_x = X + LIST_W - ADD_W - HEART_W - 2.0;
             c.hit(X, y, heart_x - X, ROW_H, Hit::PlayerRow(track));
             let loved = self.list.is_favourite(track);
             if loved || hover {
-                draw_heart(c, heart_x + 4.0, y + 6.0, pixel_size(1.0), if loved { 0xff5fa2 } else { 0x6a6a88 });
+                draw_heart(
+                    c,
+                    heart_x + 4.0,
+                    y + 6.0,
+                    pixel_size(1.0),
+                    if loved { 0xff5fa2 } else { 0x6a6a88 },
+                );
             }
             c.hit(heart_x, y, HEART_W, ROW_H, Hit::PlayerFavourite(track));
             if hover {
-                c.text_centered(X + LIST_W - ADD_W / 2.0 - 2.0, y + 6.5, 7.0, rgba(0xffffff, 1.0), "+");
+                c.text_centered(
+                    X + LIST_W - ADD_W / 2.0 - 2.0,
+                    y + 6.5,
+                    7.0,
+                    rgba(0xffffff, 1.0),
+                    "+",
+                );
             }
-            c.hit(X + LIST_W - ADD_W - 2.0, y, ADD_W, ROW_H, Hit::PlayerQueue(track));
+            c.hit(
+                X + LIST_W - ADD_W - 2.0,
+                y,
+                ADD_W,
+                ROW_H,
+                Hit::PlayerQueue(track),
+            );
         }
         if self.list.shown.is_empty() {
-            c.text(X + 7.0, top + 9.0, 7.0, rgba(0x9a9ab0, 1.0), tr!("nothing found", "見つかりません", "ничего не нашлось"));
+            c.text(
+                X + 7.0,
+                top + 9.0,
+                7.0,
+                rgba(0x9a9ab0, 1.0),
+                tr!("nothing found", "見つかりません", "ничего не нашлось"),
+            );
         }
         let count = self.list.shown.len();
-        c.text(X + 2.0, top + ROWS as f32 * ROW_H + 9.0, 7.0, rgba(0x9a9ab0, 1.0), &tr!("{count} songs", "{count}曲", "{count} песен";));
+        c.text(
+            X + 2.0,
+            top + ROWS as f32 * ROW_H + 9.0,
+            7.0,
+            rgba(0x9a9ab0, 1.0),
+            &tr!("{count} songs", "{count}曲", "{count} песен";),
+        );
     }
 
     /// What plays next; a click takes it off.
     fn draw_queue(&self, c: &mut Canvas, x: f32) {
-        c.text(x + 2.0, LIST_TOP + 5.5, 7.0, rgba(0x9a9ab0, 1.0), tr!("UP NEXT", "次に再生", "ДАЛЬШЕ"));
+        c.text(
+            x + 2.0,
+            LIST_TOP + 5.5,
+            7.0,
+            rgba(0x9a9ab0, 1.0),
+            tr!("UP NEXT", "次に再生", "ДАЛЬШЕ"),
+        );
         let top = LIST_TOP + 22.0;
-        c.round_rect([x, top], [QUEUE_W, ROWS as f32 * ROW_H + 4.0], 4.0, rgba(0x15151d, 0.82), rgba(0x3a3a4e, 1.0), 1.0);
+        c.round_rect(
+            [x, top],
+            [QUEUE_W, ROWS as f32 * ROW_H + 4.0],
+            4.0,
+            rgba(0x15151d, 0.82),
+            rgba(0x3a3a4e, 1.0),
+            1.0,
+        );
         for (row, &track) in self.list.queue.iter().take(ROWS).enumerate() {
             let y = top + 2.0 + row as f32 * ROW_H;
             if c.hovered(x, y, QUEUE_W, ROW_H) {
                 c.rect(x + 2.0, y, QUEUE_W - 4.0, ROW_H, rgba(0x34344a, 0.8));
             }
-            c.text(x + 7.0, y + 6.5, 7.0, rgba(0xc8c8d8, 1.0), &Canvas::fit(7.0, QUEUE_W - 14.0, &self.list.tracks[track].label));
+            c.text(
+                x + 7.0,
+                y + 6.5,
+                7.0,
+                rgba(0xc8c8d8, 1.0),
+                &Canvas::fit(7.0, QUEUE_W - 14.0, &self.list.tracks[track].label),
+            );
             c.hit(x, y, QUEUE_W, ROW_H, Hit::PlayerUnqueue(row));
         }
         if self.list.queue.is_empty() {
-            c.text(x + 7.0, top + 9.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, QUEUE_W - 14.0, tr!("+ on a song adds it", "曲の + で追加", "+ у песни добавит")));
+            c.text(
+                x + 7.0,
+                top + 9.0,
+                7.0,
+                rgba(0x6f6f86, 1.0),
+                &Canvas::fit(
+                    7.0,
+                    QUEUE_W - 14.0,
+                    tr!("+ on a song adds it", "曲の + で追加", "+ у песни добавит"),
+                ),
+            );
         }
     }
 
     /// The bottom row: going to the map, the speed mods, the pitch, the volume.
     fn draw_sound(&mut self, c: &mut Canvas, cx: f32, y: f32, volume: f32) {
         const H: f32 = 18.0;
-        let pitch = if self.semitones == 0 { tr!("pitch [ ]", "ピッチ [ ]", "питч [ ]").to_string() } else { format!("{:+} [ ]", self.semitones) };
+        let pitch = if self.semitones == 0 {
+            tr!("pitch [ ]", "ピッチ [ ]", "питч [ ]").to_string()
+        } else {
+            format!("{:+} [ ]", self.semitones)
+        };
         let play = tr!("play map", "譜面をプレイ", "сыграть карту");
         let play_w = Canvas::text_width(7.0, play) + 12.0;
         let pitch_w = Canvas::text_width(7.0, &pitch) + 10.0;
@@ -532,18 +848,59 @@ impl Player {
         const GAP: f32 = 4.0;
         let total = play_w + GAP * 2.0 + (MOD_W + GAP) * 4.0 + pitch_w + GAP * 2.0 + VOLUME_W;
         let mut x = cx - total / 2.0;
-        c.button(x, y, play_w, H, play, 7.0, Hit::Music(Control::PlayMap), true);
+        c.button(
+            x,
+            y,
+            play_w,
+            H,
+            play,
+            7.0,
+            Hit::Music(Control::PlayMap),
+            true,
+        );
         x += play_w + GAP * 2.0;
         for (i, speed) in Speed::ALL.into_iter().enumerate() {
             let on = self.speed == Some(speed);
             let hover = c.hovered(x, y, MOD_W, H);
-            let fill = if on { crate::render::accent() } else if hover { 0x34344a } else { 0x23232f };
-            c.round_rect([x, y], [MOD_W, H], 4.0, rgba(fill, 1.0), rgba(if on { 0xffffff } else { 0x3a3a4e }, 1.0), 1.0);
-            c.text_centered(x + MOD_W / 2.0, y + 5.5, 7.0, rgba(0xffffff, 1.0), speed.name());
+            let fill = if on {
+                crate::render::accent()
+            } else if hover {
+                0x34344a
+            } else {
+                0x23232f
+            };
+            c.round_rect(
+                [x, y],
+                [MOD_W, H],
+                4.0,
+                rgba(fill, 1.0),
+                rgba(if on { 0xffffff } else { 0x3a3a4e }, 1.0),
+                1.0,
+            );
+            c.text_centered(
+                x + MOD_W / 2.0,
+                y + 5.5,
+                7.0,
+                rgba(0xffffff, 1.0),
+                speed.name(),
+            );
             c.hit(x, y, MOD_W, H, Hit::PlayerSpeed(i));
             x += MOD_W + GAP;
         }
-        c.text(x + 3.0, y + 5.5, 7.0, rgba(if self.semitones == 0 { 0x9a9ab0 } else { 0xffffff }, 1.0), &pitch);
+        c.text(
+            x + 3.0,
+            y + 5.5,
+            7.0,
+            rgba(
+                if self.semitones == 0 {
+                    0x9a9ab0
+                } else {
+                    0xffffff
+                },
+                1.0,
+            ),
+            &pitch,
+        );
         c.hit(x, y, pitch_w, H, Hit::PlayerPitch);
         x += pitch_w + GAP * 2.0;
         self.volume_bar = (x, VOLUME_W);
@@ -552,12 +909,21 @@ impl Player {
         let lit = (volume.clamp(0.0, 1.0) * blocks as f32).round() as usize;
         for b in 0..blocks {
             let tall = pixel_size(4.0 + b as f32 / blocks as f32 * 10.0);
-            let col = if b < lit { rgba(0xffffff, 1.0) } else { rgba(0x3a3a4e, 1.0) };
-            c.rect(snap_to_grid(x) + b as f32 * step, snap_to_grid(y + H - 2.0 - tall), step - pixel_size(1.0), tall, col);
+            let col = if b < lit {
+                rgba(0xffffff, 1.0)
+            } else {
+                rgba(0x3a3a4e, 1.0)
+            };
+            c.rect(
+                snap_to_grid(x) + b as f32 * step,
+                snap_to_grid(y + H - 2.0 - tall),
+                step - pixel_size(1.0),
+                tall,
+                col,
+            );
         }
         c.hit(x - 2.0, y, VOLUME_W + 4.0, H, Hit::PlayerVolume);
     }
-
 
     /// The song's progress in blocks, with the times either side.
     fn draw_timeline(&mut self, c: &mut Canvas, cx: f32, room: f32) {
@@ -565,18 +931,44 @@ impl Player {
         let w = (room - 80.0).min(420.0);
         let left = cx - w / 2.0;
         self.timeline = (left, w, len);
-        let done = if len > 0.0 { (at / len).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let done = if len > 0.0 {
+            (at / len).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
         let step = pixel_size(4.0);
         let blocks = (w / step) as usize;
         let lit = (done * blocks as f32).round() as usize;
         let top = snap_to_grid(BAR_Y);
         for b in 0..blocks {
-            let col = if b < lit { rgba(crate::render::accent(), 1.0) } else { rgba(0x3a3a4e, 1.0) };
-            c.rect(snap_to_grid(left) + b as f32 * step, top, step - pixel_size(1.0), pixel_size(6.0), col);
+            let col = if b < lit {
+                rgba(crate::render::accent(), 1.0)
+            } else {
+                rgba(0x3a3a4e, 1.0)
+            };
+            c.rect(
+                snap_to_grid(left) + b as f32 * step,
+                top,
+                step - pixel_size(1.0),
+                pixel_size(6.0),
+                col,
+            );
         }
         c.hit(left - 4.0, BAR_Y - 6.0, w + 8.0, 18.0, Hit::MusicBar);
-        let clock = |ms: f64| format!("{}:{:02}", (ms / 60_000.0) as u32, (ms / 1000.0) as u32 % 60);
-        c.text_right(left - 8.0, BAR_Y, 7.0, rgba(0xc8c8d8, 1.0), &clock(at.max(0.0)));
+        let clock = |ms: f64| {
+            format!(
+                "{}:{:02}",
+                (ms / 60_000.0) as u32,
+                (ms / 1000.0) as u32 % 60
+            )
+        };
+        c.text_right(
+            left - 8.0,
+            BAR_Y,
+            7.0,
+            rgba(0xc8c8d8, 1.0),
+            &clock(at.max(0.0)),
+        );
         c.text(left + w + 8.0, BAR_Y, 7.0, rgba(0xc8c8d8, 1.0), &clock(len));
     }
 }
@@ -587,7 +979,13 @@ fn draw_heart(c: &mut Canvas, x: f32, y: f32, px: f32, colour: u32) {
     for (row, line) in HEART.iter().skip(1).enumerate() {
         for (col, b) in line.bytes().enumerate() {
             if b == b'#' {
-                c.rect(x + col as f32 * px, y + row as f32 * px, px, px, rgba(colour, 1.0));
+                c.rect(
+                    x + col as f32 * px,
+                    y + row as f32 * px,
+                    px,
+                    px,
+                    rgba(colour, 1.0),
+                );
             }
         }
     }
@@ -619,7 +1017,11 @@ fn draw_folder_icon(c: &mut Canvas, x: f32, y: f32, px: f32, colour: u32) {
         ".##############.",
     ];
     let (x, y) = (snap_to_grid(x), snap_to_grid(y));
-    let (line_colour, front, base) = (crate::menu::tint(colour, 0x000000, 0.55), colour, crate::menu::tint(colour, 0x000000, 0.25));
+    let (line_colour, front, base) = (
+        crate::menu::tint(colour, 0x000000, 0.55),
+        colour,
+        crate::menu::tint(colour, 0x000000, 0.25),
+    );
     for (row, line) in ART.iter().enumerate() {
         for (col, b) in line.bytes().enumerate() {
             let shade = match b {
@@ -628,7 +1030,13 @@ fn draw_folder_icon(c: &mut Canvas, x: f32, y: f32, px: f32, colour: u32) {
                 b'-' => base,
                 _ => continue,
             };
-            c.rect(x + col as f32 * px, y + row as f32 * px, px, px, rgba(shade, 1.0));
+            c.rect(
+                x + col as f32 * px,
+                y + row as f32 * px,
+                px,
+                px,
+                rgba(shade, 1.0),
+            );
         }
     }
 }
@@ -640,7 +1048,15 @@ fn draw_disc(c: &mut Canvas, x: f32, y: f32, angle: f32, pictured: bool) {
 }
 
 /// The same record at radius `r` and opacity `alpha` (the idle screen's).
-pub(crate) fn draw_disc_sized(c: &mut Canvas, x: f32, y: f32, r: f32, angle: f32, pictured: bool, alpha: f32) {
+pub(crate) fn draw_disc_sized(
+    c: &mut Canvas,
+    x: f32,
+    y: f32,
+    r: f32,
+    angle: f32,
+    pictured: bool,
+    alpha: f32,
+) {
     let px = pixel_size(r * 2.0 / DISC_PIXELS as f32);
     let half = DISC_PIXELS as f32 / 2.0;
     let (left, top) = (snap_to_grid(x - half * px), snap_to_grid(y - half * px));
@@ -654,7 +1070,11 @@ pub(crate) fn draw_disc_sized(c: &mut Canvas, x: f32, y: f32, r: f32, angle: f32
             } else if d > 0.95 {
                 OUTLINE
             } else if d > DISC_RIM {
-                if dx + dy > half * 0.9 { 0xc8c8d8 } else { 0xffffff }
+                if dx + dy > half * 0.9 {
+                    0xc8c8d8
+                } else {
+                    0xffffff
+                }
             } else if d < 0.08 {
                 0x121219
             } else if d < 0.15 {
@@ -668,7 +1088,13 @@ pub(crate) fn draw_disc_sized(c: &mut Canvas, x: f32, y: f32, r: f32, angle: f32
                 Some((_, was)) if was == colour => {}
                 _ => {
                     if let Some((from, was)) = run.filter(|r| r.1 != 0) {
-                        c.rect(left + from as f32 * px, top + row as f32 * px, (col - from) as f32 * px, px, rgba(was, alpha));
+                        c.rect(
+                            left + from as f32 * px,
+                            top + row as f32 * px,
+                            (col - from) as f32 * px,
+                            px,
+                            rgba(was, alpha),
+                        );
                     }
                     run = Some((col, colour));
                 }
@@ -679,7 +1105,11 @@ pub(crate) fn draw_disc_sized(c: &mut Canvas, x: f32, y: f32, r: f32, angle: f32
 
 /// The disc's colour without a picture, at `angle` round it.
 fn slice_at(angle: f32) -> u32 {
-    if (angle / std::f32::consts::FRAC_PI_4).floor() as i32 % 2 == 0 { 0x34344a } else { 0x23232f }
+    if (angle / std::f32::consts::FRAC_PI_4).floor() as i32 % 2 == 0 {
+        0x34344a
+    } else {
+        0x23232f
+    }
 }
 
 #[cfg(test)]
@@ -698,16 +1128,30 @@ mod tests {
     fn a_tone_lights_up_its_own_band() {
         for hz in [200.0, 1000.0, 8000.0] {
             let bands = tone(hz, 48_000).analyse(48_000);
-            let loudest = (0..BANDS).max_by(|&a, &b| bands[a].total_cmp(&bands[b])).unwrap();
+            let loudest = (0..BANDS)
+                .max_by(|&a, &b| bands[a].total_cmp(&bands[b]))
+                .unwrap();
             let expected = (hz / LOWEST_HZ).ln() / (HIGHEST_HZ / LOWEST_HZ).ln() * BANDS as f32;
-            assert!((loudest as f32 - expected).abs() <= 3.0, "{hz} Hz in band {loudest}, not {expected}");
-            assert!(bands[loudest] > 0.8, "{hz} Hz only reaches {}", bands[loudest]);
+            assert!(
+                (loudest as f32 - expected).abs() <= 3.0,
+                "{hz} Hz in band {loudest}, not {expected}"
+            );
+            assert!(
+                bands[loudest] > 0.8,
+                "{hz} Hz only reaches {}",
+                bands[loudest]
+            );
         }
     }
 
     #[test]
     fn silence_shows_nothing() {
-        assert!(Spectrum::default().analyse(48_000).iter().all(|&v| v == 0.0));
+        assert!(
+            Spectrum::default()
+                .analyse(48_000)
+                .iter()
+                .all(|&v| v == 0.0)
+        );
     }
 
     #[test]
@@ -718,9 +1162,15 @@ mod tests {
         assert!(lit > 0.8);
         sp.update(100.0, false, 48_000);
         let after = sp.bands.iter().copied().fold(0.0, f32::max);
-        assert!(after < lit && after > 0.0, "falls, not drops: {lit} then {after}");
+        assert!(
+            after < lit && after > 0.0,
+            "falls, not drops: {lit} then {after}"
+        );
         sp.update(1000.0, false, 48_000);
-        assert!(sp.bands.iter().all(|&v| v < 0.01), "a second of silence and it's gone");
+        assert!(
+            sp.bands.iter().all(|&v| v < 0.01),
+            "a second of silence and it's gone"
+        );
     }
 
     #[test]

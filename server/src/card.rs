@@ -36,7 +36,9 @@ struct Canvas {
 
 impl Canvas {
     fn new() -> Canvas {
-        let mut c = Canvas { px: vec![0; W * H * 3] };
+        let mut c = Canvas {
+            px: vec![0; W * H * 3],
+        };
         c.fill(0, 0, W, H, BG, 1.0);
         c
     }
@@ -137,7 +139,14 @@ fn draw(s: &OnlineScore) -> Canvas {
     let band = 150;
     for x in (0..W).step_by(8) {
         let t = x as f64 / W as f64;
-        c.fill(x, 0, 8, band, hsl(hue + 60.0 * t, 0.40 - 0.05 * t, 0.22 - 0.10 * t), 1.0);
+        c.fill(
+            x,
+            0,
+            8,
+            band,
+            hsl(hue + 60.0 * t, 0.40 - 0.05 * t, 0.22 - 0.10 * t),
+            1.0,
+        );
     }
     for y in (0..band).step_by(4) {
         c.fill(0, y, W, 2, 0x000000, 0.2);
@@ -182,7 +191,11 @@ fn draw(s: &OnlineScore) -> Canvas {
         None => c.text(left, 218, 8, DIM, "no pp"),
     } + 48;
     x = c.text(x, 218, 8, WHITE, &format!("{:.2}%", s.accuracy * 100.0)) + 32;
-    let (label, colour) = if s.miss == 0 { ("FC".to_string(), GREEN) } else { (format!("{} MISS", s.miss), RED) };
+    let (label, colour) = if s.miss == 0 {
+        ("FC".to_string(), GREEN)
+    } else {
+        (format!("{} MISS", s.miss), RED)
+    };
     let w = width(&label, 4) + 48;
     if x + w < W {
         c.fill(x, 222, w, 48, colour, 0.18);
@@ -194,8 +207,16 @@ fn draw(s: &OnlineScore) -> Canvas {
     let stats = [
         ("GREAT", s.great.to_string(), KAT),
         ("OK", s.ok.to_string(), GREEN),
-        ("MISS", s.miss.to_string(), if s.miss == 0 { DIM } else { RED }),
-        ("COMBO", format!("{}x", thousands(s.max_combo as u64)), WHITE),
+        (
+            "MISS",
+            s.miss.to_string(),
+            if s.miss == 0 { DIM } else { RED },
+        ),
+        (
+            "COMBO",
+            format!("{}x", thousands(s.max_combo as u64)),
+            WHITE,
+        ),
         ("SCORE", thousands(s.score), WHITE),
     ];
     let mut x = left;
@@ -217,7 +238,9 @@ fn draw(s: &OnlineScore) -> Canvas {
         *x += w + 12;
     };
     for m in &s.mods {
-        let colour = crate::pages::mod_info(m).and_then(|(hex, _)| u32::from_str_radix(hex.trim_start_matches('#'), 16).ok()).unwrap_or(DIM);
+        let colour = crate::pages::mod_info(m)
+            .and_then(|(hex, _)| u32::from_str_radix(hex.trim_start_matches('#'), 16).ok())
+            .unwrap_or(DIM);
         chip(&mut c, &mut x, m, colour);
     }
     if (s.rate - 1.0).abs() > 1e-6 {
@@ -248,7 +271,11 @@ fn encode(px: &[u8]) -> Vec<u8> {
     let mut raw = Vec::with_capacity((W * 3 + 1) * H);
     for row in px.chunks(W * 3) {
         raw.push(1);
-        raw.extend(row.iter().enumerate().map(|(i, &v)| if i < 3 { v } else { v.wrapping_sub(row[i - 3]) }));
+        raw.extend(
+            row.iter()
+                .enumerate()
+                .map(|(i, &v)| if i < 3 { v } else { v.wrapping_sub(row[i - 3]) }),
+        );
     }
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut ihdr = Vec::new();
@@ -256,7 +283,11 @@ fn encode(px: &[u8]) -> Vec<u8> {
     ihdr.extend((H as u32).to_be_bytes());
     ihdr.extend([8, 2, 0, 0, 0]);
     chunk(&mut out, b"IHDR", &ihdr);
-    chunk(&mut out, b"IDAT", &miniz_oxide::deflate::compress_to_vec_zlib(&raw, 9));
+    chunk(
+        &mut out,
+        b"IDAT",
+        &miniz_oxide::deflate::compress_to_vec_zlib(&raw, 9),
+    );
     chunk(&mut out, b"IEND", &[]);
     out
 }
@@ -274,7 +305,11 @@ fn crc32(bytes: &[u8]) -> u32 {
     for &b in bytes {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc

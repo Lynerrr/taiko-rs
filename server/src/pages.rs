@@ -29,29 +29,98 @@ struct Clip {
 }
 
 const CLIPS: [Clip; 6] = [
-    Clip { file: "multiverse", title: "Multiverse", mods: &["MV"], what: "Eight playfields circle about, each with its own look and mods. The outlined one is live; the next one is already on its way.", fx: "mv" },
-    Clip { file: "shapeshift", title: "Shapeshift", mods: &["SS", "CR"], what: "Every few bars the lane bends into another shape: a loop, a hook, a straight again.", fx: "ss" },
-    Clip { file: "portal", title: "Portal + Barrel Roll", mods: &["AC", "LP", "SK", "BA", "PT"], what: "Notes dive into one portal and come out of another, streams slither and every kiai spins the lane.", fx: "ba" },
-    Clip { file: "loop", title: "Loop + Crumble", mods: &["LP", "CR"], what: "A loop-the-loop in the middle of the lane, and every hit knocks a piece out of it.", fx: "lp" },
-    Clip { file: "crumble", title: "Crumble", mods: &["CR"], what: "Hits knock the lane apart, harder as the combo grows; a miss puts it back together.", fx: "cr" },
-    Clip { file: "shatter", title: "Shatter + Decoy", mods: &["BR", "WV", "DY", "LP", "SH", "CK"], what: "The lane breaks into pieces that slide apart, and see-through fakes fly between the real notes.", fx: "sh" },
+    Clip {
+        file: "multiverse",
+        title: "Multiverse",
+        mods: &["MV"],
+        what: "Eight playfields circle about, each with its own look and mods. The outlined one is live; the next one is already on its way.",
+        fx: "mv",
+    },
+    Clip {
+        file: "shapeshift",
+        title: "Shapeshift",
+        mods: &["SS", "CR"],
+        what: "Every few bars the lane bends into another shape: a loop, a hook, a straight again.",
+        fx: "ss",
+    },
+    Clip {
+        file: "portal",
+        title: "Portal + Barrel Roll",
+        mods: &["AC", "LP", "SK", "BA", "PT"],
+        what: "Notes dive into one portal and come out of another, streams slither and every kiai spins the lane.",
+        fx: "ba",
+    },
+    Clip {
+        file: "loop",
+        title: "Loop + Crumble",
+        mods: &["LP", "CR"],
+        what: "A loop-the-loop in the middle of the lane, and every hit knocks a piece out of it.",
+        fx: "lp",
+    },
+    Clip {
+        file: "crumble",
+        title: "Crumble",
+        mods: &["CR"],
+        what: "Hits knock the lane apart, harder as the combo grows; a miss puts it back together.",
+        fx: "cr",
+    },
+    Clip {
+        file: "shatter",
+        title: "Shatter + Decoy",
+        mods: &["BR", "WV", "DY", "LP", "SH", "CK"],
+        what: "The lane breaks into pieces that slide apart, and see-through fakes fly between the real notes.",
+        fx: "sh",
+    },
 ];
 
 /// Files served under /clips/ and /site/ (`web.rs`).
 pub const STATIC_FILES: [(&str, &[u8]); 18] = [
-    ("clips/multiverse.mp4", include_bytes!("../site/clips/multiverse.mp4")),
-    ("clips/multiverse.jpg", include_bytes!("../site/clips/multiverse.jpg")),
+    (
+        "clips/multiverse.mp4",
+        include_bytes!("../site/clips/multiverse.mp4"),
+    ),
+    (
+        "clips/multiverse.jpg",
+        include_bytes!("../site/clips/multiverse.jpg"),
+    ),
     ("clips/loop.mp4", include_bytes!("../site/clips/loop.mp4")),
     ("clips/loop.jpg", include_bytes!("../site/clips/loop.jpg")),
-    ("clips/shapeshift.mp4", include_bytes!("../site/clips/shapeshift.mp4")),
-    ("clips/shapeshift.jpg", include_bytes!("../site/clips/shapeshift.jpg")),
-    ("clips/portal.mp4", include_bytes!("../site/clips/portal.mp4")),
-    ("clips/portal.jpg", include_bytes!("../site/clips/portal.jpg")),
-    ("clips/crumble.mp4", include_bytes!("../site/clips/crumble.mp4")),
-    ("clips/crumble.jpg", include_bytes!("../site/clips/crumble.jpg")),
-    ("clips/shatter.mp4", include_bytes!("../site/clips/shatter.mp4")),
-    ("clips/shatter.jpg", include_bytes!("../site/clips/shatter.jpg")),
-    ("site/taiko5x7.woff2", include_bytes!("../site/taiko5x7.woff2")),
+    (
+        "clips/shapeshift.mp4",
+        include_bytes!("../site/clips/shapeshift.mp4"),
+    ),
+    (
+        "clips/shapeshift.jpg",
+        include_bytes!("../site/clips/shapeshift.jpg"),
+    ),
+    (
+        "clips/portal.mp4",
+        include_bytes!("../site/clips/portal.mp4"),
+    ),
+    (
+        "clips/portal.jpg",
+        include_bytes!("../site/clips/portal.jpg"),
+    ),
+    (
+        "clips/crumble.mp4",
+        include_bytes!("../site/clips/crumble.mp4"),
+    ),
+    (
+        "clips/crumble.jpg",
+        include_bytes!("../site/clips/crumble.jpg"),
+    ),
+    (
+        "clips/shatter.mp4",
+        include_bytes!("../site/clips/shatter.mp4"),
+    ),
+    (
+        "clips/shatter.jpg",
+        include_bytes!("../site/clips/shatter.jpg"),
+    ),
+    (
+        "site/taiko5x7.woff2",
+        include_bytes!("../site/taiko5x7.woff2"),
+    ),
     ("site/logo.png", include_bytes!("../../assets/icon-64.png")),
     ("site/chat.js", include_bytes!("../site/chat.js")),
     ("site/copy.js", include_bytes!("../site/copy.js")),
@@ -76,7 +145,8 @@ struct ModInfo {
 
 fn groups() -> &'static [Group] {
     static GROUPS: OnceLock<Vec<Group>> = OnceLock::new();
-    GROUPS.get_or_init(|| serde_json::from_str(include_str!("../site/mods.json")).unwrap_or_default())
+    GROUPS
+        .get_or_init(|| serde_json::from_str(include_str!("../site/mods.json")).unwrap_or_default())
 }
 
 fn mod_count() -> usize {
@@ -85,7 +155,12 @@ fn mod_count() -> usize {
 
 /// A mod's column colour and name, by its acronym.
 pub(crate) fn mod_info(acronym: &str) -> Option<(&'static str, &'static str)> {
-    groups().iter().find_map(|g| g.mods.iter().find(|m| m.acronym == acronym).map(|m| (g.colour.as_str(), m.name.as_str())))
+    groups().iter().find_map(|g| {
+        g.mods
+            .iter()
+            .find(|m| m.acronym == acronym)
+            .map(|m| (g.colour.as_str(), m.name.as_str()))
+    })
 }
 
 /// Badges next to a player's name on their profile, like osu!'s groups: (lowercased name,
@@ -101,7 +176,9 @@ fn badges(name: &str) -> String {
     BADGES
         .iter()
         .filter(|b| b.0 == key)
-        .map(|(_, label, colour, what)| format!("<span class=badge style=\"--c:{colour}\" title=\"{what}\">{label}</span>"))
+        .map(|(_, label, colour, what)| {
+            format!("<span class=badge style=\"--c:{colour}\" title=\"{what}\">{label}</span>")
+        })
         .collect()
 }
 
@@ -122,13 +199,27 @@ pub struct Roles {
 }
 
 fn role_badges(r: &Roles) -> String {
-    let badge = |label: &str, colour: &str, what: &str| format!("<span class=badge style=\"--c:{colour}\" title=\"{what}\">{label}</span>");
+    let badge = |label: &str, colour: &str, what: &str| {
+        format!("<span class=badge style=\"--c:{colour}\" title=\"{what}\">{label}</span>")
+    };
     if r.banned {
-        badge("BANNED", "#8a8a9a", "banned: can't log in, and their plays are off the boards")
+        badge(
+            "BANNED",
+            "#8a8a9a",
+            "banned: can't log in, and their plays are off the boards",
+        )
     } else if r.admin {
-        badge("ADMIN", "#9b59ff", "taiko.rs admin: makes loved nominators, and loves maps")
+        badge(
+            "ADMIN",
+            "#9b59ff",
+            "taiko.rs admin: makes loved nominators, and loves maps",
+        )
     } else if r.nominator {
-        badge("LOVED", "#ff66aa", "loved nominator: loves graveyard maps so they give pp here")
+        badge(
+            "LOVED",
+            "#ff66aa",
+            "loved nominator: loves graveyard maps so they give pp here",
+        )
     } else {
         String::new()
     }
@@ -161,11 +252,21 @@ fn profile_tools(p: &Profile, r: &Roles) -> String {
         let nominator = if r.admin {
             String::new()
         } else {
-            let (on, label) = if r.nominator { ("0", "remove loved nominator") } else { ("1", "make loved nominator") };
-            format!("<form method=post action=\"/u/{}/nominator\"><input type=hidden name=on value={on}><button class=\"btn small\">{label}</button></form>", esc(&p.name))
+            let (on, label) = if r.nominator {
+                ("0", "remove loved nominator")
+            } else {
+                ("1", "make loved nominator")
+            };
+            format!(
+                "<form method=post action=\"/u/{}/nominator\"><input type=hidden name=on value={on}><button class=\"btn small\">{label}</button></form>",
+                esc(&p.name)
+            )
         };
         let remove = if crate::avatars::version(&p.name.to_ascii_lowercase()).is_some() {
-            format!("<form method=post action=\"/u/{}/avatar/remove\"><button class=\"btn small\">remove picture</button></form>", esc(&p.name))
+            format!(
+                "<form method=post action=\"/u/{}/avatar/remove\"><button class=\"btn small\">remove picture</button></form>",
+                esc(&p.name)
+            )
         } else {
             String::new()
         };
@@ -174,9 +275,15 @@ fn profile_tools(p: &Profile, r: &Roles) -> String {
             String::new()
         } else {
             let ban = if r.banned {
-                format!("<form method=post action=\"/u/{}/ban\"><input type=hidden name=on value=0><button class=\"btn small\">unban</button></form>", esc(&p.name))
+                format!(
+                    "<form method=post action=\"/u/{}/ban\"><input type=hidden name=on value=0><button class=\"btn small\">unban</button></form>",
+                    esc(&p.name)
+                )
             } else {
-                format!("<form method=post action=\"/u/{}/ban\"><input type=hidden name=on value=1>{SURE}<button class=\"btn small\">ban</button></form>", esc(&p.name))
+                format!(
+                    "<form method=post action=\"/u/{}/ban\"><input type=hidden name=on value=1>{SURE}<button class=\"btn small\">ban</button></form>",
+                    esc(&p.name)
+                )
             };
             format!(
                 "<form method=post action=\"/u/{0}/rename\"><input name=name value=\"{0}\" minlength=3 maxlength=16 required aria-label=\"new name\"><button class=\"btn small\">rename</button></form>{ban}",
@@ -189,7 +296,14 @@ fn profile_tools(p: &Profile, r: &Roles) -> String {
             esc(&p.name)
         ));
     }
-    if parts.is_empty() { String::new() } else { format!("<section class=\"panel tools\">{}</section>", parts.concat()) }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<section class=\"panel tools\">{}</section>",
+            parts.concat()
+        )
+    }
 }
 
 /// A map page's love button and state.
@@ -263,7 +377,10 @@ pub struct Meta {
 
 impl Default for Meta {
     fn default() -> Meta {
-        Meta { description: TAGLINE.into(), image: None }
+        Meta {
+            description: TAGLINE.into(),
+            image: None,
+        }
     }
 }
 
@@ -286,16 +403,30 @@ pub fn profile_meta(p: &Profile) -> Meta {
 /// A fingerprint of the site's card image, in its link: a new card is a new link, so neither the
 /// proxy nor Discord keeps showing the old one.
 fn card_version() -> String {
-    let bytes = STATIC_FILES.iter().find(|(f, _)| *f == "site/og.jpg").map(|(_, b)| *b).unwrap_or_default();
-    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+    let bytes = STATIC_FILES
+        .iter()
+        .find(|(f, _)| *f == "site/og.jpg")
+        .map(|(_, b)| *b)
+        .unwrap_or_default();
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+        (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
+    });
     format!("{:08x}", hash >> 32)
 }
 
 /// A score's preview: its numbers, with its card (`card.rs`) as the picture.
 pub fn score_meta(s: &OnlineScore) -> Meta {
     let pp = s.pp.map(|p| format!("{p:.0}pp · ")).unwrap_or_default();
-    let mods = if s.mods.is_empty() { String::new() } else { format!(" +{}", s.mods.concat()) };
-    let rate = if (s.rate - 1.0).abs() > 1e-6 { format!(" {:.2}x", s.rate) } else { String::new() };
+    let mods = if s.mods.is_empty() {
+        String::new()
+    } else {
+        format!(" +{}", s.mods.concat())
+    };
+    let rate = if (s.rate - 1.0).abs() > 1e-6 {
+        format!(" {:.2}x", s.rate)
+    } else {
+        String::new()
+    };
     Meta {
         description: format!(
             "{} by {}: {pp}{:.2}% · {} · x{} · {} miss{}{mods}{rate}. Watch the replay in taiko.rs.",
@@ -315,8 +446,25 @@ pub fn score_meta(s: &OnlineScore) -> Meta {
 pub fn map_meta(m: &MapRow, rows: &[OnlineScore]) -> Meta {
     let (_, version) = split_map(&m.name);
     let stars = m.stars.map(|s| format!("{s:.2}* ")).unwrap_or_default();
-    let top = rows.first().map(|r| format!(" #1: {} with {} ({:.2}%).", r.player, thousands(r.score), r.accuracy * 100.0)).unwrap_or_default();
-    Meta { description: format!("{stars}[{version}] · {} plays by {} players on taiko.rs.{top}", thousands(m.plays as u64), m.players), image: cover(m.set_id, "cover@2x") }
+    let top = rows
+        .first()
+        .map(|r| {
+            format!(
+                " #1: {} with {} ({:.2}%).",
+                r.player,
+                thousands(r.score),
+                r.accuracy * 100.0
+            )
+        })
+        .unwrap_or_default();
+    Meta {
+        description: format!(
+            "{stars}[{version}] · {} plays by {} players on taiko.rs.{top}",
+            thousands(m.plays as u64),
+            m.players
+        ),
+        image: cover(m.set_id, "cover@2x"),
+    }
 }
 
 /// What's live on the server, for the home page.
@@ -379,7 +527,20 @@ fn month_year(t: u64) -> String {
     let mp = (5 * doy + 2) / 153;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
-    const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
     format!("{} {year}", MONTHS[(month - 1) as usize])
 }
 
@@ -398,13 +559,16 @@ fn split_song(song: &str) -> (&str, &str) {
 
 /// A set's cover from osu!, unless it's NSFW, blocked or not checked yet (`covers`).
 fn cover(set: Option<u32>, size: &str) -> Option<String> {
-    set.filter(|&s| crate::covers::allowed(s)).map(|s| format!("https://assets.ppy.sh/beatmaps/{s}/covers/{size}.jpg"))
+    set.filter(|&s| crate::covers::allowed(s))
+        .map(|s| format!("https://assets.ppy.sh/beatmaps/{s}/covers/{size}.jpg"))
 }
 
 /// The style for a block with a map's cover behind it: the map's own hue (for when it has no
 /// cover), and the picture if there is one.
 fn cover_style(set: Option<u32>, hash: u64, size: &str) -> String {
-    let img = cover(set, size).map(|u| format!(";--cover:url('{u}')")).unwrap_or_default();
+    let img = cover(set, size)
+        .map(|u| format!(";--cover:url('{u}')"))
+        .unwrap_or_default();
     format!(" style=\"--h:{}{img}\"", hash % 360)
 }
 
@@ -424,11 +588,24 @@ fn play_time(ms: u64) -> String {
 fn avatar(name: &str, class: &str) -> String {
     let key = name.to_ascii_lowercase();
     if let Some(v) = crate::avatars::version(&key) {
-        return format!("<img class=\"avatar {class}\" src=\"/a/{}?v={v}\" alt=\"\" loading=lazy>", esc(&key));
+        return format!(
+            "<img class=\"avatar {class}\" src=\"/a/{}?v={v}\" alt=\"\" loading=lazy>",
+            esc(&key)
+        );
     }
-    let hue = name.bytes().fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b.to_ascii_lowercase() as u32)) % 360;
-    let initial = name.chars().next().map(|c| c.to_ascii_uppercase()).unwrap_or('?');
-    format!("<span class=\"avatar {class}\" style=\"--h:{hue}\" aria-hidden=true>{}</span>", esc(&initial.to_string()))
+    let hue = name.bytes().fold(7u32, |h, b| {
+        h.wrapping_mul(31)
+            .wrapping_add(b.to_ascii_lowercase() as u32)
+    }) % 360;
+    let initial = name
+        .chars()
+        .next()
+        .map(|c| c.to_ascii_uppercase())
+        .unwrap_or('?');
+    format!(
+        "<span class=\"avatar {class}\" style=\"--h:{hue}\" aria-hidden=true>{}</span>",
+        esc(&initial.to_string())
+    )
 }
 
 fn player_link(name: &str) -> String {
@@ -446,7 +623,11 @@ fn mod_chips<S: AsRef<str>>(m: &[S], rate: f64) -> String {
         .map(|a| {
             let a = a.as_ref();
             match mod_info(a) {
-                Some((colour, name)) => format!("<span class=mod style=\"--c:{colour}\" title=\"{}\">{}</span>", esc(name), esc(a)),
+                Some((colour, name)) => format!(
+                    "<span class=mod style=\"--c:{colour}\" title=\"{}\">{}</span>",
+                    esc(name),
+                    esc(a)
+                ),
                 None => format!("<span class=mod>{}</span>", esc(a)),
             }
         })
@@ -463,9 +644,19 @@ const MODS_IN_A_ROW: usize = 6;
 /// `mod_chips` for a row in a list: a stack of mods mustn't push it off the page, so past the
 /// first few they're a count, named when hovered.
 fn short_mod_chips(m: &[String], rate: f64) -> String {
-    let Some(rest) = m.get(MODS_IN_A_ROW..).filter(|r| !r.is_empty()) else { return mod_chips(m, rate) };
-    let more = format!("<span class=mod title=\"{}\">+{}</span>", esc(&rest.join(" ")), rest.len());
-    format!("{}{more}{}", mod_chips(&m[..MODS_IN_A_ROW], 1.0), mod_chips::<&str>(&[], rate))
+    let Some(rest) = m.get(MODS_IN_A_ROW..).filter(|r| !r.is_empty()) else {
+        return mod_chips(m, rate);
+    };
+    let more = format!(
+        "<span class=mod title=\"{}\">+{}</span>",
+        esc(&rest.join(" ")),
+        rest.len()
+    );
+    format!(
+        "{}{more}{}",
+        mod_chips(&m[..MODS_IN_A_ROW], 1.0),
+        mod_chips::<&str>(&[], rate)
+    )
 }
 
 /// osu!'s colour for a star rating: blue for easy through red and purple to black.
@@ -490,7 +681,8 @@ pub(crate) fn star_colour(s: f64) -> [u8; 3] {
         let ((a, ca), (b, cb)) = (w[0], w[1]);
         if s <= b {
             let t = (s - a) / (b - a);
-            return [0, 1, 2].map(|i| (ca[i] as f64 + (cb[i] as f64 - ca[i] as f64) * t).round() as u8);
+            return [0, 1, 2]
+                .map(|i| (ca[i] as f64 + (cb[i] as f64 - ca[i] as f64) * t).round() as u8);
         }
     }
     STOPS[STOPS.len() - 1].1
@@ -570,7 +762,14 @@ const BUILDS: [Build; 4] = [
         kind: ".tar.gz",
         alt: None,
     },
-    Build { os: Os::Android, name: "Android", note: "Android 8.0+, 64-bit ARM.", file: "taiko-rs-android.apk", kind: "APK", alt: None },
+    Build {
+        os: Os::Android,
+        name: "Android",
+        note: "Android 8.0+, 64-bit ARM.",
+        file: "taiko-rs-android.apk",
+        kind: "APK",
+        alt: None,
+    },
 ];
 
 /// The install commands: install.sh does Linux and macOS.
@@ -585,7 +784,9 @@ fn powershell_command() -> String {
 /// A command to paste, with a button that copies it (`site/copy.js`).
 fn cmd(command: &str) -> String {
     let c = esc(command);
-    format!("<div class=cmd><code><span class=prompt>$ </span>{c}</code><button class=copy type=button data-copy=\"{c}\">copy</button></div>")
+    format!(
+        "<div class=cmd><code><span class=prompt>$ </span>{c}</code><button class=copy type=button data-copy=\"{c}\">copy</button></div>"
+    )
 }
 
 fn download_url(file: &str) -> String {
@@ -595,7 +796,11 @@ fn download_url(file: &str) -> String {
 /// The big download button for the visitor's system (or a pointer to the choices). On the
 /// download page itself the choices are right below.
 fn download_cta(os: Os, on_download_page: bool) -> String {
-    let others = if on_download_page { String::new() } else { " &middot; <a href=\"/download\">other systems</a>".into() };
+    let others = if on_download_page {
+        String::new()
+    } else {
+        " &middot; <a href=\"/download\">other systems</a>".into()
+    };
     match BUILDS.iter().find(|b| b.os == os) {
         Some(b) if matches!(b.os, Os::Linux | Os::Mac) => format!(
             "<div class=cta-label>Install on {}: paste this in a terminal</div>{}<div class=hint>installs, adds it to your apps and keeps it updated &middot; <a href=\"{}\">or the .tar.gz</a>{others}</div>",
@@ -625,11 +830,24 @@ const COMBO_BARS: usize = 20;
 /// a kat one half of its rim blue, the hands taking turns; a finisher lights both halves. And
 /// the combo, one more on every note. All in step with `notes`: (keyframes, markup).
 fn drum() -> (String, String) {
-    let hits: Vec<(f64, char)> = PATTERN.chars().enumerate().filter(|(_, c)| *c != '_').map(|(i, c)| (i as f64 * 0.25, c)).collect();
+    let hits: Vec<(f64, char)> = PATTERN
+        .chars()
+        .enumerate()
+        .filter(|(_, c)| *c != '_')
+        .map(|(i, c)| (i as f64 * 0.25, c))
+        .collect();
     // Which halves each hit lights: L, R, or both for a finisher.
     // Two bars, so the hands keep taking turns when the bar (an odd number of notes) loops.
-    let mut tracks: [(&str, String); 4] = [("donl", String::new()), ("donr", String::new()), ("katl", String::new()), ("katr", String::new())];
-    let two_bars = hits.iter().map(|&(t, c)| (t, c)).chain(hits.iter().map(|&(t, c)| (t + 6.0, c)));
+    let mut tracks: [(&str, String); 4] = [
+        ("donl", String::new()),
+        ("donr", String::new()),
+        ("katl", String::new()),
+        ("katr", String::new()),
+    ];
+    let two_bars = hits
+        .iter()
+        .map(|&(t, c)| (t, c))
+        .chain(hits.iter().map(|&(t, c)| (t + 6.0, c)));
     for (n, (t, c)) in two_bars.enumerate() {
         let p = t / 12.0 * 100.0;
         let frames = format!("{p:.2}%{{opacity:1}}{:.2}%{{opacity:0}}", p + 1.0);
@@ -644,7 +862,16 @@ fn drum() -> (String, String) {
     }
     let mut css: String = tracks
         .iter()
-        .map(|(name, track)| format!("@keyframes {name}{{{}{track}}}", if track.starts_with("0.00%") { "" } else { "0%{opacity:0}" }))
+        .map(|(name, track)| {
+            format!(
+                "@keyframes {name}{{{}{track}}}",
+                if track.starts_with("0.00%") {
+                    ""
+                } else {
+                    "0%{opacity:0}"
+                }
+            )
+        })
         .collect();
     // The combo: a strip of numbers, moved one up on every hit.
     let total = COMBO_BARS as f64 * 6.0;
@@ -653,7 +880,11 @@ fn drum() -> (String, String) {
     for bar in 0..COMBO_BARS {
         for &(t, _) in &hits {
             n += 1;
-            combo += &format!("{:.3}%{{transform:translateY(-{}em)}}", (bar as f64 * 6.0 + t) / total * 100.0, n as f64 * 3.25);
+            combo += &format!(
+                "{:.3}%{{transform:translateY(-{}em)}}",
+                (bar as f64 * 6.0 + t) / total * 100.0,
+                n as f64 * 3.25
+            );
         }
     }
     css += &(combo + "}");
@@ -679,7 +910,10 @@ fn notes() -> String {
                 'K' => "k big",
                 _ => return None,
             };
-            Some(format!("<i class=\"n {class}\" style=\"--t:{}s\"></i>", i as f64 * 0.25))
+            Some(format!(
+                "<i class=\"n {class}\" style=\"--t:{}s\"></i>",
+                i as f64 * 0.25
+            ))
         })
         .collect()
 }
@@ -690,11 +924,33 @@ fn stage(players: usize, plays: usize, online: usize, bg: &str, cta: &str) -> St
     let notes = notes();
     let (flashes, drum) = drum();
     let lane = |class: &str| {
-        let segs: String = (0..10i32).map(|i| format!("<b class=seg style=\"--dy:{};--r:{}\"></b>", (i * 37) % 9 - 4, (i * 53) % 7 - 3)).collect();
-        format!("<div class=\"lane {class}\"><div class=segs>{segs}</div>{drum}<div class=judge></div><div class=track>{notes}</div></div>")
+        let segs: String = (0..10i32)
+            .map(|i| {
+                format!(
+                    "<b class=seg style=\"--dy:{};--r:{}\"></b>",
+                    (i * 37) % 9 - 4,
+                    (i * 53) % 7 - 3
+                )
+            })
+            .collect();
+        format!(
+            "<div class=\"lane {class}\"><div class=segs>{segs}</div>{drum}<div class=judge></div><div class=track>{notes}</div></div>"
+        )
     };
-    let mods = ["NM no mod", "TL tilt", "WV wave", "BA barrel roll", "MR mirror", "MV multiverse", "SH shatter"];
-    let labels: String = mods.iter().chain(&mods[..1]).map(|m| format!("<span>{m}</span>")).collect();
+    let mods = [
+        "NM no mod",
+        "TL tilt",
+        "WV wave",
+        "BA barrel roll",
+        "MR mirror",
+        "MV multiverse",
+        "SH shatter",
+    ];
+    let labels: String = mods
+        .iter()
+        .chain(&mods[..1])
+        .map(|m| format!("<span>{m}</span>"))
+        .collect();
     format!(
         "{flashes}<section class=stage{bg} aria-label=\"taiko.rs gameplay, switching mods\">\
          <div class=hud-tl>{online} online &middot; {players} ranked &middot; server up</div>\
@@ -760,9 +1016,20 @@ fn online_list(online: &[OnlinePlayer]) -> String {
     let rows: String = online
         .iter()
         .take(12)
-        .map(|p| format!("<li><span class=dot></span>{}{}<span class=what>{}</span></li>", avatar(&p.name, "tiny"), player_link(&p.name), esc(&p.activity.describe())))
+        .map(|p| {
+            format!(
+                "<li><span class=dot></span>{}{}<span class=what>{}</span></li>",
+                avatar(&p.name, "tiny"),
+                player_link(&p.name),
+                esc(&p.activity.describe())
+            )
+        })
         .collect();
-    let more = if online.len() > 12 { format!("<p class=dim>and {} more</p>", online.len() - 12) } else { String::new() };
+    let more = if online.len() > 12 {
+        format!("<p class=dim>and {} more</p>", online.len() - 12)
+    } else {
+        String::new()
+    };
     format!("<ul class=people>{rows}</ul>{more}")
 }
 
@@ -814,12 +1081,31 @@ fn top_player(r: &Ranked) -> String {
 /// How many of the rankings the home page lists: as tall as the latest plays beside them.
 const TOP_PLAYERS: usize = 13;
 
-pub fn home(rankings: &[Ranked], maps: &[MapRow], players: usize, plays: usize, os: Os, live: Live) -> String {
-    let bg = maps.iter().find_map(|m| cover(m.set_id, "cover@2x")).map(|u| format!(" style=\"--cover:url('{u}')\"")).unwrap_or_default();
+pub fn home(
+    rankings: &[Ranked],
+    maps: &[MapRow],
+    players: usize,
+    plays: usize,
+    os: Os,
+    live: Live,
+) -> String {
+    let bg = maps
+        .iter()
+        .find_map(|m| cover(m.set_id, "cover@2x"))
+        .map(|u| format!(" style=\"--cover:url('{u}')\""))
+        .unwrap_or_default();
     let top: String = rankings.iter().take(TOP_PLAYERS).map(top_player).collect();
-    let top = if top.is_empty() { "<p class=dim>Nobody has sent a play yet.</p>".into() } else { format!("<ol class=board-list>{top}</ol>") };
+    let top = if top.is_empty() {
+        "<p class=dim>Nobody has sent a play yet.</p>".into()
+    } else {
+        format!("<ol class=board-list>{top}</ol>")
+    };
     let latest: String = live.latest.iter().take(8).map(feed_row).collect();
-    let latest = if latest.is_empty() { "<p class=dim>No plays yet.</p>".into() } else { format!("<ul class=feed>{latest}</ul>") };
+    let latest = if latest.is_empty() {
+        "<p class=dim>No plays yet.</p>".into()
+    } else {
+        format!("<ul class=feed>{latest}</ul>")
+    };
     let clips: String = CLIPS[..3].iter().map(clip_card).collect();
     format!(
         "{}<div class=page>\
@@ -834,7 +1120,13 @@ pub fn home(rankings: &[Ranked], maps: &[MapRow], players: usize, plays: usize, 
          <div class=section-head><h2 class=glitch-soft>MODS OSU! DOESN'T HAVE</h2><a class=more href=\"/mods\">all {} mods</a></div>\
          <div class=\"clips three\">{clips}</div>\
          <section class=panel><div class=panel-head><h2>RECENTLY PLAYED</h2><a class=more href=\"/beatmaps\">all beatmaps</a></div>{}</section></div>",
-        stage(players, plays, live.online.len(), &bg, &download_cta(os, false)),
+        stage(
+            players,
+            plays,
+            live.online.len(),
+            &bg,
+            &download_cta(os, false)
+        ),
         live.online.len(),
         online_list(live.online),
         live.rooms.len(),
@@ -876,8 +1168,17 @@ fn ranking_row(r: &Ranked) -> String {
 
 pub fn rankings(rows: &[Ranked]) -> String {
     let body: String = rows.iter().map(ranking_row).collect();
-    let table = if body.is_empty() { "<p class=dim>Nobody has sent a play yet.</p>".into() } else { format!("<div class=scroll><table class=list>{}<tbody>{body}</tbody></table></div>", ranking_head()) };
-    format!("<div class=band><div class=inner><h1 class=glitch data-text=\"RANKINGS\">RANKINGS</h1><p class=dim>Everyone by total pp, the best play counting most (osu!'s 95% weighting).</p></div></div><div class=page><section class=panel>{table}</section></div>")
+    let table = if body.is_empty() {
+        "<p class=dim>Nobody has sent a play yet.</p>".into()
+    } else {
+        format!(
+            "<div class=scroll><table class=list>{}<tbody>{body}</tbody></table></div>",
+            ranking_head()
+        )
+    };
+    format!(
+        "<div class=band><div class=inner><h1 class=glitch data-text=\"RANKINGS\">RANKINGS</h1><p class=dim>Everyone by total pp, the best play counting most (osu!'s 95% weighting).</p></div></div><div class=page><section class=panel>{table}</section></div>"
+    )
 }
 
 /// The pp history as a step line, newest on the right.
@@ -888,7 +1189,13 @@ fn pp_chart(history: &[(u64, f64)]) -> String {
     let (w, h) = (600.0, 140.0);
     let (t0, t1) = (history[0].0 as f64, history[history.len() - 1].0 as f64);
     let top = history.iter().map(|p| p.1).fold(0.0, f64::max).max(1.0);
-    let x = |t: u64| if t1 > t0 { (t as f64 - t0) / (t1 - t0) * w } else { w };
+    let x = |t: u64| {
+        if t1 > t0 {
+            (t as f64 - t0) / (t1 - t0) * w
+        } else {
+            w
+        }
+    };
     let y = |pp: f64| h - pp / top * (h - 8.0);
     let mut d = format!("M0 {:.1}", y(history[0].1));
     for p in &history[1..] {
@@ -903,25 +1210,53 @@ fn pp_chart(history: &[(u64, f64)]) -> String {
     )
 }
 
-pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friends: &[(String, bool)], tie: Friendship, notice: Option<&str>, roles: &Roles) -> String {
+pub fn profile(
+    p: &Profile,
+    extras: &Extras,
+    activity: Option<&Activity>,
+    friends: &[(String, bool)],
+    tie: Friendship,
+    notice: Option<&str>,
+    roles: &Roles,
+) -> String {
     let st = &p.stats;
     let level = online::level(st.total_score);
-    let cover = p.top.first().map(|s| cover_style(s.set_id, s.map_hash, "cover@2x")).unwrap_or_default();
+    let cover = p
+        .top
+        .first()
+        .map(|s| cover_style(s.set_id, s.map_hash, "cover@2x"))
+        .unwrap_or_default();
     let status = match activity {
-        Some(a) => format!("<span class=\"status on\">ONLINE</span> <span class=dim>{}</span>", esc(&a.describe())),
+        Some(a) => format!(
+            "<span class=\"status on\">ONLINE</span> <span class=dim>{}</span>",
+            esc(&a.describe())
+        ),
         None if p.online => "<span class=\"status on\">ONLINE</span>".into(),
         None => "<span class=status>OFFLINE</span>".into(),
     };
-    let rank = p.rank.map(|r| format!("#{}", thousands(r as u64))).unwrap_or_else(|| "-".into());
-    let befriend = |label: &str| format!("<form method=post action=\"/friend/{0}\"><button class=btn>{label}</button></form>", esc(&p.name));
+    let rank = p
+        .rank
+        .map(|r| format!("#{}", thousands(r as u64)))
+        .unwrap_or_else(|| "-".into());
+    let befriend = |label: &str| {
+        format!(
+            "<form method=post action=\"/friend/{0}\"><button class=btn>{label}</button></form>",
+            esc(&p.name)
+        )
+    };
     let actions = match tie {
         Friendship::Me => "<a class=btn href=\"/chat\">open chat</a>".to_string(),
-        Friendship::Friends => format!("<a class=\"btn hot small-hot\" href=\"/chat/{0}\">message</a><span class=\"tag live\">FRIENDS</span>", esc(&p.name)),
+        Friendship::Friends => format!(
+            "<a class=\"btn hot small-hot\" href=\"/chat/{0}\">message</a><span class=\"tag live\">FRIENDS</span>",
+            esc(&p.name)
+        ),
         Friendship::TheyAsked => befriend("accept friend request"),
         Friendship::Asked => "<span class=tag>FRIEND REQUEST SENT</span>".to_string(),
         Friendship::None => befriend("add friend"),
     };
-    let notice = notice.map(|n| format!("<div class=notice>{}</div>", esc(n))).unwrap_or_default();
+    let notice = notice
+        .map(|n| format!("<div class=notice>{}</div>", esc(n)))
+        .unwrap_or_default();
     let notice = notice + &profile_tools(p, roles);
     let hud = |k: &str, v: String| format!("<div class=hudstat><span>{k}</span><b>{v}</b></div>");
     let stats = [
@@ -947,7 +1282,17 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
     let fav_mods = if extras.mods.is_empty() {
         "<p class=dim>Plays without mods so far.</p>".into()
     } else {
-        extras.mods.iter().take(12).map(|(m, n)| format!("<span class=modcount>{}<span class=dim>{n}</span></span>", mod_chips(&[m], 1.0))).collect::<String>()
+        extras
+            .mods
+            .iter()
+            .take(12)
+            .map(|(m, n)| {
+                format!(
+                    "<span class=modcount>{}<span class=dim>{n}</span></span>",
+                    mod_chips(&[m], 1.0)
+                )
+            })
+            .collect::<String>()
     };
     let most_played = if extras.most_played.is_empty() {
         "<p class=dim>Nothing yet.</p>".into()
@@ -973,17 +1318,46 @@ pub fn profile(p: &Profile, extras: &Extras, activity: Option<&Activity>, friend
         let rows: String = friends
             .iter()
             .take(16)
-            .map(|(f, on)| format!("<li>{}{}{}</li>", if *on { "<span class=dot></span>" } else { "<span class=\"dot off\"></span>" }, avatar(f, "tiny"), player_link(f)))
+            .map(|(f, on)| {
+                format!(
+                    "<li>{}{}{}</li>",
+                    if *on {
+                        "<span class=dot></span>"
+                    } else {
+                        "<span class=\"dot off\"></span>"
+                    },
+                    avatar(f, "tiny"),
+                    player_link(f)
+                )
+            })
             .collect();
         format!("<ul class=people>{rows}</ul>")
     };
     let best = if p.top.is_empty() {
         "<p class=dim>No performance records yet.</p>".into()
     } else {
-        p.top.iter().enumerate().map(|(i, s)| play_row(s, Some(i), false)).collect::<String>()
+        p.top
+            .iter()
+            .enumerate()
+            .map(|(i, s)| play_row(s, Some(i), false))
+            .collect::<String>()
     };
-    let firsts = if p.firsts.is_empty() { "<p class=dim>No first place ranks yet.</p>".into() } else { p.firsts.iter().map(|s| play_row(s, None, false)).collect::<String>() };
-    let recent = if p.recent.is_empty() { "<p class=dim>No recent plays.</p>".into() } else { p.recent.iter().map(|s| play_row(s, None, true)).collect::<String>() };
+    let firsts = if p.firsts.is_empty() {
+        "<p class=dim>No first place ranks yet.</p>".into()
+    } else {
+        p.firsts
+            .iter()
+            .map(|s| play_row(s, None, false))
+            .collect::<String>()
+    };
+    let recent = if p.recent.is_empty() {
+        "<p class=dim>No recent plays.</p>".into()
+    } else {
+        p.recent
+            .iter()
+            .map(|s| play_row(s, None, true))
+            .collect::<String>()
+    };
     format!(
         "<div class=cover{cover}></div>\
          <div class=page><div class=\"panel head\">\
@@ -1026,14 +1400,22 @@ fn play_row(s: &OnlineScore, weighted: Option<usize>, show_score: bool) -> Strin
             let w = weighted
                 .map(|i| {
                     let k = 0.95f64.powi(i as i32);
-                    format!("<div class=weight>{:.0}% = {:.0}pp</div>", k * 100.0, pp * k)
+                    format!(
+                        "<div class=weight>{:.0}% = {:.0}pp</div>",
+                        k * 100.0,
+                        pp * k
+                    )
                 })
                 .unwrap_or_default();
             format!("<div class=pp>{pp:.0}pp{w}</div>")
         }
         None => "<div class=pp>-</div>".into(),
     };
-    let score = if show_score { format!("<span class=\"dim score\">{:08}</span>", s.score) } else { String::new() };
+    let score = if show_score {
+        format!("<span class=\"dim score\">{:08}</span>", s.score)
+    } else {
+        String::new()
+    };
     format!(
         "<div class=play><a href=\"/s/{}\" title=\"this play\">{}</a><div class=what><a href=\"/m/{:x}\">{}</a><div class=meta>{}<span class=version>{}</span><span class=dim>{}</span></div></div><div class=mods>{}</div>{score}<div class=acc>{:.2}%</div>{pp}</div>",
         s.id,
@@ -1052,7 +1434,13 @@ fn play_row(s: &OnlineScore, weighted: Option<usize>, show_score: bool) -> Strin
 /// the `taiko-rs://` link the game registers. `watch`: from a "Watch replay" button, so the
 /// page opens the game itself straight away (`site/watch.js`).
 /// `admin`: the viewer is an admin, and this play's pp as sent and as set by an admin (if).
-pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Option<(Option<f64>, Option<f64>)>, notice: Option<&str>) -> String {
+pub fn score_page(
+    s: &OnlineScore,
+    place: Option<u32>,
+    watch: bool,
+    admin: Option<(Option<f64>, Option<f64>)>,
+    notice: Option<&str>,
+) -> String {
     let (song, version) = split_map(&s.map);
     let (artist, title) = split_song(song);
     let head = format!(
@@ -1065,8 +1453,14 @@ pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Optio
         esc(version),
         s.map_hash
     );
-    let mods = if s.mods.is_empty() && (s.rate - 1.0).abs() < 1e-6 { "-".into() } else { mod_chips(&s.mods, s.rate) };
-    let place = place.map(|p| format!("<div class=place>#{p}</div>")).unwrap_or_default();
+    let mods = if s.mods.is_empty() && (s.rate - 1.0).abs() < 1e-6 {
+        "-".into()
+    } else {
+        mod_chips(&s.mods, s.rate)
+    };
+    let place = place
+        .map(|p| format!("<div class=place>#{p}</div>"))
+        .unwrap_or_default();
     let top = format!(
         "<div class=\"panel topscore\">{place}<span class=bigrade>{}</span><div class=who>{}<div>{}<div class=dim>{}</div></div></div>\
          <div class=hudrow-in><div class=hudstat><span>PP</span><b class=pp>{}</b></div><div class=hudstat><span>ACCURACY</span><b>{:.2}%</b></div>\
@@ -1076,7 +1470,8 @@ pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Optio
         avatar(&s.player, "mid"),
         player_link(&s.player),
         ago(s.date),
-        s.pp.map(|p| format!("{p:.0}")).unwrap_or_else(|| "-".into()),
+        s.pp.map(|p| format!("{p:.0}"))
+            .unwrap_or_else(|| "-".into()),
         s.accuracy * 100.0,
         s.great,
         s.ok,
@@ -1091,7 +1486,9 @@ pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Optio
          Nothing happens? <a href=\"/download\">Get taiko.rs</a>, open it once, and try again.</p></section>",
         s.id
     );
-    let notice = notice.map(|n| format!("<div class=notice>{}</div>", esc(n))).unwrap_or_default();
+    let notice = notice
+        .map(|n| format!("<div class=notice>{}</div>", esc(n)))
+        .unwrap_or_default();
     let admin = admin
         .map(|(sent, fixed)| {
             let sent = sent.map(|p| format!("{p:.2}pp")).unwrap_or_else(|| "no pp".into());
@@ -1105,24 +1502,45 @@ pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Optio
             )
         })
         .unwrap_or_default();
-    format!("{head}<div class=page>{notice}{top}{watch_panel}{admin}</div><script src=\"/site/watch.js\" defer></script>")
+    format!(
+        "{head}<div class=page>{notice}{top}{watch_panel}{admin}</div><script src=\"/site/watch.js\" defer></script>"
+    )
 }
 
 pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
     let (song, version) = split_map(&m.name);
     let (artist, title) = split_song(song);
-    let mut osu = m.set_id.map(|s| format!("<a class=\"btn small\" href=\"https://osu.ppy.sh/beatmapsets/{s}\">osu! page</a>")).unwrap_or_default();
+    let mut osu = m
+        .set_id
+        .map(|s| {
+            format!(
+                "<a class=\"btn small\" href=\"https://osu.ppy.sh/beatmapsets/{s}\">osu! page</a>"
+            )
+        })
+        .unwrap_or_default();
     if let Some(l) = &love.loved {
-        osu += &format!("<span class=\"tag loved\" title=\"loved by {0} {1}\">LOVED HERE</span>", esc(&l.by), ago(l.at));
+        osu += &format!(
+            "<span class=\"tag loved\" title=\"loved by {0} {1}\">LOVED HERE</span>",
+            esc(&l.by),
+            ago(l.at)
+        );
     }
     if let (true, Some(set)) = (love.can_love, m.set_id) {
-        let (on, label) = if love.loved.is_some() { ("0", "unlove") } else { ("1", "love: give pp here") };
+        let (on, label) = if love.loved.is_some() {
+            ("0", "unlove")
+        } else {
+            ("1", "love: give pp here")
+        };
         osu += &format!(
             "<form method=post action=\"/love/{set}\" class=inline><input type=hidden name=on value={on}><input type=hidden name=back value=\"/m/{:x}\"><button class=\"btn small hot\">{label}</button></form>",
             m.hash
         );
     }
-    let notice = love.notice.as_ref().map(|n| format!("<div class=notice>{}</div>", esc(n))).unwrap_or_default();
+    let notice = love
+        .notice
+        .as_ref()
+        .map(|n| format!("<div class=notice>{}</div>", esc(n)))
+        .unwrap_or_default();
     let head = format!(
         "<div class=\"cover map\"{}><div class=inner><div class=artist>{}</div><h1>{}</h1>\
          <div class=sub>{}<span class=version>[{}]</span><span class=dim>{} plays &middot; {} players</span>{osu}</div></div></div>",
@@ -1134,8 +1552,16 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
         thousands(m.plays as u64),
         m.players
     );
-    let Some(first) = rows.first() else { return format!("{head}<div class=page>{notice}<section class=panel><p class=dim>No scores yet.</p></section></div>") };
-    let mods = if first.mods.is_empty() && (first.rate - 1.0).abs() < 1e-6 { "-".into() } else { mod_chips(&first.mods, first.rate) };
+    let Some(first) = rows.first() else {
+        return format!(
+            "{head}<div class=page>{notice}<section class=panel><p class=dim>No scores yet.</p></section></div>"
+        );
+    };
+    let mods = if first.mods.is_empty() && (first.rate - 1.0).abs() < 1e-6 {
+        "-".into()
+    } else {
+        mod_chips(&first.mods, first.rate)
+    };
     let top = format!(
         "<div class=\"panel topscore\"><a class=place href=\"/s/{}\" title=\"this play\">#1</a><span class=bigrade>{}</span><div class=who>{}<div>{}<div class=dim>{}</div></div></div>\
          <div class=hudrow-in><div class=hudstat><span>SCORE</span><b>{:08}</b></div><div class=hudstat><span>ACCURACY</span><b>{:.2}%</b></div><div class=hudstat><span>COMBO</span><b>{}x</b></div>\
@@ -1148,7 +1574,10 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
         first.score,
         first.accuracy * 100.0,
         thousands(first.max_combo as u64),
-        first.pp.map(|p| format!("{p:.0}")).unwrap_or_else(|| "-".into()),
+        first
+            .pp
+            .map(|p| format!("{p:.0}"))
+            .unwrap_or_else(|| "-".into()),
     );
     let body: String = rows
         .iter()
@@ -1207,7 +1636,10 @@ fn map_cards(maps: &[MapRow]) -> String {
 }
 
 pub fn beatmaps(maps: &[MapRow]) -> String {
-    format!("<div class=band><div class=inner><h1 class=glitch data-text=\"BEATMAPS\">BEATMAPS</h1><p class=dim>Every map someone has sent a play on, the latest first.</p></div></div><div class=page>{}</div>", map_cards(maps))
+    format!(
+        "<div class=band><div class=inner><h1 class=glitch data-text=\"BEATMAPS\">BEATMAPS</h1><p class=dim>Every map someone has sent a play on, the latest first.</p></div></div><div class=page>{}</div>",
+        map_cards(maps)
+    )
 }
 
 pub fn download(os: Os) -> String {
@@ -1216,19 +1648,40 @@ pub fn download(os: Os) -> String {
         .map(|b| {
             let mine = b.os == os;
             let hot = if mine { " hot" } else { "" };
-            let button = format!("<a class=\"btn{hot}\" href=\"{}\">Download {}</a>", download_url(b.file), b.kind);
-            let alt = |(file, label): (&str, &str)| format!("<a class=alt href=\"{}\">or the {label}</a>", download_url(file));
+            let button = format!(
+                "<a class=\"btn{hot}\" href=\"{}\">Download {}</a>",
+                download_url(b.file),
+                b.kind
+            );
+            let alt = |(file, label): (&str, &str)| {
+                format!(
+                    "<a class=alt href=\"{}\">or the {label}</a>",
+                    download_url(file)
+                )
+            };
             let how = match b.os {
                 // The command, the archive for those who'd rather.
-                Os::Linux | Os::Mac => format!("<h3>In a terminal</h3>{}{}", cmd(&unix_command()), alt((b.file, b.kind))),
-                Os::Windows => format!("{button}{}<h3>Or from PowerShell</h3>{}", b.alt.map(alt).unwrap_or_default(), cmd(&powershell_command())),
+                Os::Linux | Os::Mac => format!(
+                    "<h3>In a terminal</h3>{}{}",
+                    cmd(&unix_command()),
+                    alt((b.file, b.kind))
+                ),
+                Os::Windows => format!(
+                    "{button}{}<h3>Or from PowerShell</h3>{}",
+                    b.alt.map(alt).unwrap_or_default(),
+                    cmd(&powershell_command())
+                ),
                 _ => button,
             };
             format!(
                 "<div class=\"panel build{}\"><h2>{}{}</h2><p class=dim>{}</p>{how}</div>",
                 if mine { " mine" } else { "" },
                 b.name,
-                if mine { " <span class=yours>YOUR SYSTEM</span>" } else { "" },
+                if mine {
+                    " <span class=yours>YOUR SYSTEM</span>"
+                } else {
+                    ""
+                },
                 b.note,
             )
         })
@@ -1242,11 +1695,19 @@ pub fn download(os: Os) -> String {
 }
 
 fn error_notice(error: Option<&str>) -> String {
-    error.map(|e| format!("<div class=\"notice bad\">{}</div>", esc(e))).unwrap_or_default()
+    error
+        .map(|e| format!("<div class=\"notice bad\">{}</div>", esc(e)))
+        .unwrap_or_default()
 }
 
 fn sent_notice(to: Option<&str>) -> String {
-    to.map(|to| format!("<div class=notice>We sent a code to {}. It works for 15 minutes.</div>", esc(to))).unwrap_or_default()
+    to.map(|to| {
+        format!(
+            "<div class=notice>We sent a code to {}. It works for 15 minutes.</div>",
+            esc(to)
+        )
+    })
+    .unwrap_or_default()
 }
 
 /// The login form.
@@ -1270,7 +1731,12 @@ pub fn register(error: Option<&str>, name: &str, email: &str, mail: bool) -> Str
     let error = error_notice(error);
     let (name, email) = (esc(name), esc(email));
     let (field, button) = if mail {
-        (format!("<label>email<input name=email type=email value=\"{email}\" maxlength=254 autocomplete=email required></label>"), "send me a code")
+        (
+            format!(
+                "<label>email<input name=email type=email value=\"{email}\" maxlength=254 autocomplete=email required></label>"
+            ),
+            "send me a code",
+        )
     } else {
         (PASSWORD.to_string(), "sign up")
     };
@@ -1284,8 +1750,18 @@ pub fn register(error: Option<&str>, name: &str, email: &str, mail: bool) -> Str
 }
 
 /// Signing up, second step: the code that was mailed and the password.
-pub fn register_code(error: Option<&str>, sent_to: Option<&str>, name: &str, email: &str) -> String {
-    let (error, sent, name, email) = (error_notice(error), sent_notice(sent_to), esc(name), esc(email));
+pub fn register_code(
+    error: Option<&str>,
+    sent_to: Option<&str>,
+    name: &str,
+    email: &str,
+) -> String {
+    let (error, sent, name, email) = (
+        error_notice(error),
+        sent_notice(sent_to),
+        esc(name),
+        esc(email),
+    );
     format!(
         "<div class=page><section class=\"panel login\"><h1 class=glitch data-text=\"SIGN UP\">SIGN UP</h1>{sent}{error}\
          <form method=post action=\"/register\"><input type=hidden name=name value=\"{name}\"><input type=hidden name=email value=\"{email}\">\
@@ -1326,8 +1802,20 @@ const NEW_PASSWORD: &str = "<label>new password<input name=password type=passwor
 
 fn chat_line(l: &ChatLine) -> String {
     let t = l.at % 86_400;
-    let (class, who) = if l.medal.is_some() { (" class=medal", format!("<span class=player>{}</span>", esc(&l.from))) } else { ("", player_link(&l.from)) };
-    format!("<li{class}><span class=time>{:02}:{:02}</span>{who}<span class=text>{}</span></li>", t / 3600, t / 60 % 60, esc(&l.text))
+    let (class, who) = if l.medal.is_some() {
+        (
+            " class=medal",
+            format!("<span class=player>{}</span>", esc(&l.from)),
+        )
+    } else {
+        ("", player_link(&l.from))
+    };
+    format!(
+        "<li{class}><span class=time>{:02}:{:02}</span>{who}<span class=text>{}</span></li>",
+        t / 3600,
+        t / 60 % 60,
+        esc(&l.text)
+    )
 }
 
 /// A medal's badge as a picture: a path per colour, one short run at a time. A page shows well
@@ -1346,34 +1834,60 @@ fn badge(art: &[String], tier: u8, secret: bool, lit: bool, size: u32) -> String
             while x < row.len() && row[x] == Some(colour) {
                 x += 1;
             }
-            let i = paths.iter().position(|(c, _)| *c == colour).unwrap_or_else(|| {
-                paths.push((colour, String::new()));
-                paths.len() - 1
-            });
+            let i = paths
+                .iter()
+                .position(|(c, _)| *c == colour)
+                .unwrap_or_else(|| {
+                    paths.push((colour, String::new()));
+                    paths.len() - 1
+                });
             paths[i].1 += &format!("M{start} {y}h{}v1H{start}z", x - start);
         }
     }
-    let inner: String = paths.iter().map(|(colour, d)| format!("<path fill=\"#{colour:06x}\" d=\"{d}\"/>")).collect();
+    let inner: String = paths
+        .iter()
+        .map(|(colour, d)| format!("<path fill=\"#{colour:06x}\" d=\"{d}\"/>"))
+        .collect();
     let n = crate::online::BADGE;
-    format!("<svg class=badge width={size} height={size} viewBox=\"0 0 {n} {n}\" shape-rendering=\"crispEdges\" aria-hidden=\"true\">{inner}</svg>")
+    format!(
+        "<svg class=badge width={size} height={size} viewBox=\"0 0 {n} {n}\" shape-rendering=\"crispEdges\" aria-hidden=\"true\">{inner}</svg>"
+    )
 }
 
 const TIER_NAMES: [&str; 4] = ["Kantan", "Futsuu", "Muzukashii", "Oni"];
 
 fn tier_label(tier: u8, secret: bool) -> &'static str {
-    if secret { "Ura" } else { TIER_NAMES[usize::from(tier.clamp(1, 4)) - 1] }
+    if secret {
+        "Ura"
+    } else {
+        TIER_NAMES[usize::from(tier.clamp(1, 4)) - 1]
+    }
 }
 
 /// The medals on a profile: their highest dan and their rarest ones.
 fn medal_panel(p: &Profile) -> String {
     let m = &p.medals;
-    let dan = m.dan.as_ref().map(|d| format!("<p><span class=dim>Dan</span> <b>{}</b></p>", esc(&d[0]))).unwrap_or_default();
+    let dan = m
+        .dan
+        .as_ref()
+        .map(|d| format!("<p><span class=dim>Dan</span> <b>{}</b></p>", esc(&d[0])))
+        .unwrap_or_default();
     let rarest: String = m
         .rarest
         .iter()
-        .map(|n| format!("<span class=rare title=\"{}\">{}</span>", esc(&n.name[0]), badge(&n.art, n.tier, n.secret, true, 48)))
+        .map(|n| {
+            format!(
+                "<span class=rare title=\"{}\">{}</span>",
+                esc(&n.name[0]),
+                badge(&n.art, n.tier, n.secret, true, 48)
+            )
+        })
         .collect();
-    let rarest = if rarest.is_empty() { "<p class=dim>No medals yet.</p>".to_string() } else { format!("<div class=medalrow>{rarest}</div>") };
+    let rarest = if rarest.is_empty() {
+        "<p class=dim>No medals yet.</p>".to_string()
+    } else {
+        format!("<div class=medalrow>{rarest}</div>")
+    };
     format!(
         "<section class=panel><div class=panel-head><h2>MEDALS <span class=count>{} / {}</span></h2><a class=more href=\"/u/{}/medals\">all</a></div>{dan}{rarest}</section>",
         m.earned,
@@ -1391,10 +1905,24 @@ fn medal_card(m: &crate::online::MedalRow, players: u32, owned: bool) -> String 
         badge(&m.art, m.tier, m.secret, lit, 64)
     };
     let name = m.name.as_ref().map_or("???", |n| n[0].as_str());
-    let about = m.how.as_ref().or(m.hint.as_ref()).map_or("Nobody has found this one.".to_string(), |t| esc(&t[0]));
-    let share = if players > 0 { f64::from(m.holders) * 100.0 / f64::from(players) } else { 0.0 };
-    let earned = m.at.map(|t| format!(" · earned {}", month_year(t))).unwrap_or_default();
-    let progress = if m.need > 0 && owned && m.at.is_none() { format!(" · {} / {}", thousands(m.have), thousands(m.need)) } else { String::new() };
+    let about = m
+        .how
+        .as_ref()
+        .or(m.hint.as_ref())
+        .map_or("Nobody has found this one.".to_string(), |t| esc(&t[0]));
+    let share = if players > 0 {
+        f64::from(m.holders) * 100.0 / f64::from(players)
+    } else {
+        0.0
+    };
+    let earned =
+        m.at.map(|t| format!(" · earned {}", month_year(t)))
+            .unwrap_or_default();
+    let progress = if m.need > 0 && owned && m.at.is_none() {
+        format!(" · {} / {}", thousands(m.have), thousands(m.need))
+    } else {
+        String::new()
+    };
     format!(
         "<li class=\"medal{}\">{picture}<div><b>{}</b><p>{about}</p><span class=dim><span class=\"tier t{}{}\">{}</span> · {share:.0}% of players{earned}{progress}</span></div></li>",
         if lit { " got" } else { "" },
@@ -1406,15 +1934,31 @@ fn medal_card(m: &crate::online::MedalRow, players: u32, owned: bool) -> String 
 }
 
 /// Every medal; with a player's name, how they stand. `table`: who has the most.
-pub fn medals_page(view: &crate::online::MedalsView, player: Option<&str>, table: &[(String, u32)]) -> String {
+pub fn medals_page(
+    view: &crate::online::MedalsView,
+    player: Option<&str>,
+    table: &[(String, u32)],
+) -> String {
     let mut sections = String::new();
     for (i, title) in crate::medal_list::SECTIONS.iter().enumerate() {
-        let cards: String = view.medals.iter().filter(|m| usize::from(m.section) == i).map(|m| medal_card(m, view.players, player.is_some())).collect();
+        let cards: String = view
+            .medals
+            .iter()
+            .filter(|m| usize::from(m.section) == i)
+            .map(|m| medal_card(m, view.players, player.is_some()))
+            .collect();
         if !cards.is_empty() {
-            sections += &format!("<section class=panel><div class=panel-head><h2>{}</h2></div><ul class=medals>{cards}</ul></section>", esc(&title.to_uppercase()));
+            sections += &format!(
+                "<section class=panel><div class=panel-head><h2>{}</h2></div><ul class=medals>{cards}</ul></section>",
+                esc(&title.to_uppercase())
+            );
         }
     }
-    let top: String = table.iter().take(10).map(|(name, n)| format!("<li>{}<span class=times>{n}</span></li>", player_link(name))).collect();
+    let top: String = table
+        .iter()
+        .take(10)
+        .map(|(name, n)| format!("<li>{}<span class=times>{n}</span></li>", player_link(name)))
+        .collect();
     let lead = match player {
         Some(name) => format!("<h1>{}'s medals</h1><p class=dim>{} of {}. Earn them in the game; a medal stays yours as long as the play that earned it does.</p>", esc(name), view.earned, view.medals.len()),
         None => "<h1>Medals</h1><p class=dim>Earned by playing. Secret ones show a hint once somebody has found them; how to earn them is never said.</p>".to_string(),
@@ -1427,28 +1971,78 @@ pub fn medals_page(view: &crate::online::MedalsView, player: Option<&str>, table
 /// The chat, like osu!'s: channels on the left (the global one and every friend), the open one
 /// on the right with a box to type in. `with`: the friend open (None: the global chat);
 /// `can_send`: false when that's someone who isn't a friend.
-pub fn chat(me: &str, with: Option<&str>, lines: &[ChatLine], people: &[Conversation], can_send: bool, error: Option<&str>) -> String {
-    let channel = |href: &str, label: String, on: bool, extra: String| format!("<a class=\"chan{}\" href=\"{href}\">{label}{extra}</a>", if on { " on" } else { "" });
-    let mut list = channel("/chat", "<span class=hash>#</span>global".into(), with.is_none(), String::new());
+pub fn chat(
+    me: &str,
+    with: Option<&str>,
+    lines: &[ChatLine],
+    people: &[Conversation],
+    can_send: bool,
+    error: Option<&str>,
+) -> String {
+    let channel = |href: &str, label: String, on: bool, extra: String| {
+        format!(
+            "<a class=\"chan{}\" href=\"{href}\">{label}{extra}</a>",
+            if on { " on" } else { "" }
+        )
+    };
+    let mut list = channel(
+        "/chat",
+        "<span class=hash>#</span>global".into(),
+        with.is_none(),
+        String::new(),
+    );
     for c in people {
         let on = with.is_some_and(|w| w.eq_ignore_ascii_case(&c.name));
-        let last = c.last.as_ref().map(|l| format!("<span class=last>{}</span>", esc(&l.text))).unwrap_or_default();
-        list += &channel(&format!("/chat/{}", esc(&c.name)), format!("<span class=\"dot{}\"></span>{}<span class=cname>{}</span>", if c.online { "" } else { " off" }, avatar(&c.name, "tiny"), esc(&c.name)), on, last);
+        let last = c
+            .last
+            .as_ref()
+            .map(|l| format!("<span class=last>{}</span>", esc(&l.text)))
+            .unwrap_or_default();
+        list += &channel(
+            &format!("/chat/{}", esc(&c.name)),
+            format!(
+                "<span class=\"dot{}\"></span>{}<span class=cname>{}</span>",
+                if c.online { "" } else { " off" },
+                avatar(&c.name, "tiny"),
+                esc(&c.name)
+            ),
+            on,
+            last,
+        );
     }
     if people.is_empty() {
         list += "<p class=\"dim small\">Add friends from their profiles to message them.</p>";
     }
     let (title, api, action) = match with {
-        Some(w) => (format!("{} {}", avatar(w, "tiny"), player_link(w)), format!("/api/chat/{}", esc(w)), format!("/chat/{}", esc(w))),
-        None => ("<span class=hash>#</span>global".to_string(), "/api/chat".to_string(), "/chat".to_string()),
+        Some(w) => (
+            format!("{} {}", avatar(w, "tiny"), player_link(w)),
+            format!("/api/chat/{}", esc(w)),
+            format!("/chat/{}", esc(w)),
+        ),
+        None => (
+            "<span class=hash>#</span>global".to_string(),
+            "/api/chat".to_string(),
+            "/chat".to_string(),
+        ),
     };
     let log: String = lines.iter().map(chat_line).collect();
-    let empty = if lines.is_empty() { "<li class=\"dim empty\">No messages yet. Say hi.</li>" } else { "" };
-    let error = error.map(|e| format!("<div class=\"notice bad\">{}</div>", esc(e))).unwrap_or_default();
-    let say = if can_send {
-        format!("<form class=say method=post action=\"{action}\"><input name=text maxlength=300 placeholder=\"type a message\" autocomplete=off required aria-label=\"Message\"><button class=\"btn hot\">send</button></form>")
+    let empty = if lines.is_empty() {
+        "<li class=\"dim empty\">No messages yet. Say hi.</li>"
     } else {
-        format!("<div class=\"notice\">You can only message friends. <a href=\"/u/{0}\">Add {0} as a friend</a> first.</div>", esc(with.unwrap_or("")))
+        ""
+    };
+    let error = error
+        .map(|e| format!("<div class=\"notice bad\">{}</div>", esc(e)))
+        .unwrap_or_default();
+    let say = if can_send {
+        format!(
+            "<form class=say method=post action=\"{action}\"><input name=text maxlength=300 placeholder=\"type a message\" autocomplete=off required aria-label=\"Message\"><button class=\"btn hot\">send</button></form>"
+        )
+    } else {
+        format!(
+            "<div class=\"notice\">You can only message friends. <a href=\"/u/{0}\">Add {0} as a friend</a> first.</div>",
+            esc(with.unwrap_or(""))
+        )
     };
     format!(
         "<div class=page><div class=chat><aside class=\"panel chans\"><div class=panel-head><h2>CHAT</h2></div>{list}</aside>\
@@ -1459,13 +2053,19 @@ pub fn chat(me: &str, with: Option<&str>, lines: &[ChatLine], people: &[Conversa
 }
 
 pub fn not_found(why: &str) -> String {
-    format!("<div class=page><section class=\"panel lost\"><h1 class=glitch data-text=\"MISS\">MISS</h1><p class=dim>{}.</p><p><a class=btn href=\"/\">Back to the menu</a></p></section></div>", esc(why))
+    format!(
+        "<div class=page><section class=\"panel lost\"><h1 class=glitch data-text=\"MISS\">MISS</h1><p class=dim>{}.</p><p><a class=btn href=\"/\">Back to the menu</a></p></section></div>",
+        esc(why)
+    )
 }
 
 /// A whole page: `nav` is the header link to mark as the current one ("" for none); `viewer`
 /// the logged-in player, if any (their profile and chat in the header, else a log in button).
 pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &str) -> String {
-    let image = meta.image.clone().unwrap_or_else(|| format!("{SITE}/site/og.jpg?v={}", card_version()));
+    let image = meta
+        .image
+        .clone()
+        .unwrap_or_else(|| format!("{SITE}/site/og.jpg?v={}", card_version()));
     let og = format!(
         "<meta name=description content=\"{0}\"><meta property=og:site_name content=taiko.rs><meta property=og:type content=website>\
          <meta property=og:title content=\"{1}\"><meta property=og:description content=\"{0}\"><meta property=og:image content=\"{2}\">\
@@ -1484,14 +2084,27 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
         }
         None => "<a class=\"navbtn join\" href=\"/register\">sign up</a><a class=\"navbtn hot\" href=\"/login\">log in</a>".into(),
     };
-    let links: String = [("rankings", "/rankings"), ("medals", "/medals"), ("beatmaps", "/beatmaps"), ("loved", "/loved"), ("mods", "/mods"), ("download", "/download")]
-        .iter()
-        .map(|(name, href)| {
-            let on = if *name == nav { " class=on aria-current=page" } else { "" };
-            format!("<a href=\"{href}\"{on}>{name}</a>")
-        })
-        .chain(std::iter::once(format!("<a href=\"{DISCORD}\" target=_blank rel=noopener>discord</a>")))
-        .collect();
+    let links: String = [
+        ("rankings", "/rankings"),
+        ("medals", "/medals"),
+        ("beatmaps", "/beatmaps"),
+        ("loved", "/loved"),
+        ("mods", "/mods"),
+        ("download", "/download"),
+    ]
+    .iter()
+    .map(|(name, href)| {
+        let on = if *name == nav {
+            " class=on aria-current=page"
+        } else {
+            ""
+        };
+        format!("<a href=\"{href}\"{on}>{name}</a>")
+    })
+    .chain(std::iter::once(format!(
+        "<a href=\"{DISCORD}\" target=_blank rel=noopener>discord</a>"
+    )))
+    .collect();
     format!(
         r#"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>{} · taiko.rs</title>
 <meta name=theme-color content=#EB452C><meta name=color-scheme content=dark><link rel=icon href="/site/logo.png">{og}
@@ -1755,14 +2368,32 @@ mod tests {
 
     #[test]
     fn only_admins_get_the_moderation_forms() {
-        let p = Profile { name: "Ryuji".into(), ..Default::default() };
-        let roles = |viewer_admin, banned, admin| Roles { admin, nominator: false, own: false, viewer_admin, banned, verify_code: None };
+        let p = Profile {
+            name: "Ryuji".into(),
+            ..Default::default()
+        };
+        let roles = |viewer_admin, banned, admin| Roles {
+            admin,
+            nominator: false,
+            own: false,
+            viewer_admin,
+            banned,
+            verify_code: None,
+        };
         assert!(profile_tools(&p, &roles(false, false, false)).is_empty());
         let tools = profile_tools(&p, &roles(true, false, false));
-        assert!(tools.contains("/u/Ryuji/rename") && tools.contains("/u/Ryuji/ban") && tools.contains("value=1") && tools.contains("type=checkbox"));
+        assert!(
+            tools.contains("/u/Ryuji/rename")
+                && tools.contains("/u/Ryuji/ban")
+                && tools.contains("value=1")
+                && tools.contains("type=checkbox")
+        );
         assert!(profile_tools(&p, &roles(true, true, false)).contains(">unban<"));
         assert!(!profile_tools(&p, &roles(true, false, true)).contains("/rename"));
-        let claude = Profile { name: "claude".into(), ..Default::default() };
+        let claude = Profile {
+            name: "claude".into(),
+            ..Default::default()
+        };
         assert!(!profile_tools(&claude, &roles(true, false, false)).contains("/ban"));
         assert!(role_badges(&roles(false, true, false)).contains("BANNED"));
     }
@@ -1771,24 +2402,55 @@ mod tests {
     fn account_forms() {
         // Never the password: it isn't kept between the steps.
         let code = register_code(Some("wrong <code>"), None, "Ryuji", "a\"b@c.io");
-        assert!(code.contains("name=code") && code.contains("value=\"a&quot;b@c.io\"") && code.contains("wrong &lt;code&gt;"));
+        assert!(
+            code.contains("name=code")
+                && code.contains("value=\"a&quot;b@c.io\"")
+                && code.contains("wrong &lt;code&gt;")
+        );
         assert!(!register(None, "Ryuji", "r@c.io", true).contains("name=password"));
         assert!(!register(None, "Ryuji", "", false).contains("name=email"));
         assert!(reset_code(None, Some("r***@c.io"), "Ryuji").contains("r***@c.io"));
         // Asking for another code says so, to come back here if that fails.
-        assert!(code.contains("name=again") && reset_code(None, None, "Ryuji").contains("name=again"));
+        assert!(
+            code.contains("name=again") && reset_code(None, None, "Ryuji").contains("name=again")
+        );
     }
 
     #[test]
     fn helpers() {
-        assert_eq!(esc("<b>\"A&B'</b>"), "&lt;b&gt;&quot;A&amp;B&#39;&lt;/b&gt;");
+        assert_eq!(
+            esc("<b>\"A&B'</b>"),
+            "&lt;b&gt;&quot;A&amp;B&#39;&lt;/b&gt;"
+        );
         assert!(page("<x>", "", None, &Meta::default(), "").contains("&lt;x&gt; · taiko.rs"));
-        assert!(page("Rankings", "rankings", None, &Meta::default(), "").contains("href=\"/rankings\" class=on"));
+        assert!(
+            page("Rankings", "rankings", None, &Meta::default(), "")
+                .contains("href=\"/rankings\" class=on")
+        );
         assert!(page("x", "", None, &Meta::default(), "").contains("href=\"/login\""));
-        let card = page("A \"quote\"", "", None, &Meta { description: "d<b>".into(), image: None }, "");
-        assert!(card.contains(&format!("og:image content=\"https://rstaiko.auneu.space/site/og.jpg?v={}\"", card_version())) && card.contains("og:title content=\"A &quot;quote&quot;\"") && card.contains("d&lt;b&gt;"));
+        let card = page(
+            "A \"quote\"",
+            "",
+            None,
+            &Meta {
+                description: "d<b>".into(),
+                image: None,
+            },
+            "",
+        );
+        assert!(
+            card.contains(&format!(
+                "og:image content=\"https://rstaiko.auneu.space/site/og.jpg?v={}\"",
+                card_version()
+            )) && card.contains("og:title content=\"A &quot;quote&quot;\"")
+                && card.contains("d&lt;b&gt;")
+        );
         let mine = page("x", "chat", Some("Ryuji"), &Meta::default(), "");
-        assert!(mine.contains("href=\"/u/Ryuji\"") && mine.contains("action=\"/logout\"") && !mine.contains("href=\"/login\""));
+        assert!(
+            mine.contains("href=\"/u/Ryuji\"")
+                && mine.contains("action=\"/logout\"")
+                && !mine.contains("href=\"/login\"")
+        );
         assert_eq!(thousands(1234567), "1,234,567");
         assert_eq!(thousands(12), "12");
         assert_eq!(month_year(1_792_916_574), "October 2026");
@@ -1822,7 +2484,14 @@ mod tests {
     fn badges_go_by_name_in_any_case() {
         assert!(badges("Auneu").contains(">DEV<"));
         assert!(badges("claude").contains(">MAIN DEV<"));
-        assert_eq!((play_time(59_999), play_time(3_660_000), play_time(90_061_000)), ("0m".into(), "1h 1m".into(), "1d 1h 1m".into()));
+        assert_eq!(
+            (
+                play_time(59_999),
+                play_time(3_660_000),
+                play_time(90_061_000)
+            ),
+            ("0m".into(), "1h 1m".into(), "1d 1h 1m".into())
+        );
         assert!(badges("lynerrr").contains(">DEV<"));
         assert!(badges("Ryuji").is_empty());
     }
@@ -1844,7 +2513,12 @@ mod tests {
         for c in &CLIPS {
             for ext in ["mp4", "jpg"] {
                 let name = format!("clips/{}.{ext}", c.file);
-                assert!(STATIC_FILES.iter().any(|(f, bytes)| *f == name && !bytes.is_empty()), "{name}");
+                assert!(
+                    STATIC_FILES
+                        .iter()
+                        .any(|(f, bytes)| *f == name && !bytes.is_empty()),
+                    "{name}"
+                );
             }
             for m in c.mods {
                 assert!(mod_info(m).is_some(), "{m}");
@@ -1858,7 +2532,10 @@ mod tests {
         assert_eq!(short_mod_chips(&mods(6), 1.0), mod_chips(&mods(6), 1.0));
         let row = short_mod_chips(&mods(34), 1.35);
         assert_eq!(row.matches("class=mod").count(), 7);
-        assert!(row.contains(">+28<") && row.contains("title=\"M6 M7") && row.contains("1.35x"), "{row}");
+        assert!(
+            row.contains(">+28<") && row.contains("title=\"M6 M7") && row.contains("1.35x"),
+            "{row}"
+        );
     }
 
     #[test]

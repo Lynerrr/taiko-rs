@@ -30,7 +30,11 @@ fn arrow_rgba(scale: usize, hover: bool) -> (Vec<u8>, usize, usize) {
     let (w, h) = (ARROW[0].len() * scale, ARROW.len() * scale);
     let a = crate::render::accent();
     let accent = [(a >> 16) as u8, (a >> 8) as u8, a as u8, 0xff];
-    let (body, edge) = if hover { (accent, WHITE) } else { (WHITE, accent) };
+    let (body, edge) = if hover {
+        (accent, WHITE)
+    } else {
+        (WHITE, accent)
+    };
     let mut px = vec![0u8; w * h * 4];
     for (y, row) in ARROW.iter().enumerate() {
         for (x, ch) in row.bytes().enumerate() {
@@ -64,9 +68,14 @@ impl Cursors {
         let make = |hover| {
             let (px, w, h) = arrow_rgba(scale, hover);
             let tip = (scale / 2) as u16;
-            CustomCursor::from_rgba(px, w as u16, h as u16, tip, tip).ok().map(|s| event_loop.create_custom_cursor(s))
+            CustomCursor::from_rgba(px, w as u16, h as u16, tip, tip)
+                .ok()
+                .map(|s| event_loop.create_custom_cursor(s))
         };
-        Some(Cursors { arrow: make(false)?, hover: make(true)? })
+        Some(Cursors {
+            arrow: make(false)?,
+            hover: make(true)?,
+        })
     }
 
     /// The pixel arrowhead for the plain and "clickable" pointers; the system ones for resizing

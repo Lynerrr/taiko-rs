@@ -4,76 +4,76 @@
 // First, so `tr!` is there for every module after it.
 #[macro_use]
 mod lang;
+mod admin;
 #[cfg(target_os = "android")]
 mod android;
 mod audio;
-mod admin;
 mod autoplay;
 mod avatars;
 mod beatmap;
 mod browse;
 mod calibrate;
-mod medal_sound;
-mod medals;
 mod changelog;
 mod changelog_entry;
-mod clock;
 mod clipboard;
+mod clock;
 mod config;
 mod cursor;
 mod debug;
-mod discord;
-mod online;
-mod tls;
 mod difficulty;
+mod discord;
 mod download;
 mod font;
 mod game;
 mod genres;
 mod guide;
+mod hud;
+mod idle;
+mod keys;
 mod layout;
 #[cfg(test)]
 mod layout_tests;
-#[cfg(test)]
-mod perf_audit;
-#[cfg(test)]
-mod results_tests;
-#[cfg(test)]
-mod settings_tests;
 mod library;
 mod link;
 mod logo;
 mod mapguessr;
 mod mapinfo;
+mod medal_sound;
+mod medals;
 mod media;
 mod menu;
 mod menu_notes;
-mod hud;
-mod idle;
-mod keys;
 mod mods;
-mod multiverse;
 mod multiplayer;
+mod multiverse;
 mod net;
+mod online;
 mod osudb;
+#[cfg(test)]
+mod perf_audit;
 mod player;
 mod playlist;
 mod pp;
-mod profile;
 mod preview;
+mod profile;
 mod recalc;
 mod render;
+#[cfg(test)]
+mod results_tests;
 mod scores;
 mod search;
 mod setstatus;
 mod settings;
 mod settings_search;
+#[cfg(test)]
+mod settings_tests;
 mod shapeshift;
 mod skin;
 mod social;
 mod splash;
 mod stars;
 mod style;
+mod tls;
 mod ui;
 mod update;
 mod video;
@@ -82,8 +82,8 @@ mod volume;
 mod wayland_dnd;
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -99,40 +99,75 @@ use beatmap::Beatmap;
 use config::{Config, FPS_CAPS, RATE_RANGE};
 use game::{Game, PAUSE_ITEMS};
 use layout::{Area, Grip};
-use winit::window::CursorIcon;
 use library::Entry;
-use render::{accent, rgba, themed, Canvas, PresentChoice, Renderer};
-use settings::{Choices, Dropdown, Edit, Item, Kind, PresetAction, SettingsUi};
 use mods::Mods;
+use render::{Canvas, PresentChoice, Renderer, accent, rgba, themed};
+use settings::{Choices, Dropdown, Edit, Item, Kind, PresetAction, SettingsUi};
 use ui::{Results, Select, SelectAction};
+use winit::window::CursorIcon;
 
 type Loaded = Result<(Beatmap, Arc<Track>), String>;
 
 enum Scene {
     Select,
     /// `from`: map time to start at (picked on the song select timeline), None = from the start.
-    Loading { rx: Receiver<Loaded>, label: String, entry: usize, from: Option<f64> },
-    Play { game: Box<Game>, entry: usize, from: Option<f64> },
-    Results { results: Results, entry: usize, from: Option<f64> },
+    Loading {
+        rx: Receiver<Loaded>,
+        label: String,
+        entry: usize,
+        from: Option<f64>,
+    },
+    Play {
+        game: Box<Game>,
+        entry: usize,
+        from: Option<f64>,
+    },
+    Results {
+        results: Results,
+        entry: usize,
+        from: Option<f64>,
+    },
     /// Settings tab; `prev` is restored on exit (song select, or a paused game).
-    Settings { prev: Box<Scene> },
+    Settings {
+        prev: Box<Scene>,
+    },
     /// Offset calibration run; `back` is where to return (the settings tab).
     /// Offset calibration (by ear), or with `vsync` the vsync compensation's (by sight).
-    Calibrate { game: Box<Game>, back: Box<Scene>, vsync: bool },
-    CalibrateDone { estimate: calibrate::Estimate, back: Box<Scene>, vsync: bool },
+    Calibrate {
+        game: Box<Game>,
+        back: Box<Scene>,
+        vsync: bool,
+    },
+    CalibrateDone {
+        estimate: calibrate::Estimate,
+        back: Box<Scene>,
+        vsync: bool,
+    },
     /// Full-screen editor for the playfield area, opened from settings.
-    LayoutEdit { back: Box<Scene> },
+    LayoutEdit {
+        back: Box<Scene>,
+    },
     /// The autoplay preview over the whole screen (in the playfield area, which can be moved
     /// and resized here), with the timeline. `back`: song select or the multiplayer lobby.
-    Preview { back: Box<Scene> },
+    Preview {
+        back: Box<Scene>,
+    },
     /// Download tab: search the mirrors, download sets into the Songs folder.
     Download,
     /// Multiplayer: host/join form, room lobby, waiting/countdown, match, results.
     MpMenu,
     Lobby,
     /// `from`: map time the match starts at.
-    MpWait { rx: Option<Receiver<Loaded>>, loaded: Option<(Beatmap, Arc<Track>)>, start: Option<Instant>, from: Option<f64> },
-    MpPlay { game: Box<Game>, quit_armed: Option<Instant> },
+    MpWait {
+        rx: Option<Receiver<Loaded>>,
+        loaded: Option<(Beatmap, Arc<Track>)>,
+        start: Option<Instant>,
+        from: Option<f64>,
+    },
+    MpPlay {
+        game: Box<Game>,
+        quit_armed: Option<Instant>,
+    },
     /// Watching the match in progress.
     Spectate(Box<SpectateView>),
     /// Watching a friend's solo play.
@@ -188,11 +223,15 @@ struct SpectateView {
 impl SpectateView {
     /// When every player has skipped the intro, skips it too, staying `SPECTATE_DELAY` behind.
     fn follow_skip(&mut self, audio: Option<&audio::Engine>, offset: f64) {
-        if self.skip_done || self.games.is_empty() || !self.players.iter().all(|(id, _)| self.skipped.contains(id)) {
+        if self.skip_done
+            || self.games.is_empty()
+            || !self.players.iter().all(|(id, _)| self.skipped.contains(id))
+        {
             return;
         }
         self.skip_done = true;
-        let target = self.games[0].1.skip_target() - SPECTATE_DELAY.as_secs_f64() * 1000.0 * self.rate;
+        let target =
+            self.games[0].1.skip_target() - SPECTATE_DELAY.as_secs_f64() * 1000.0 * self.rate;
         if self.games[0].1.time < target {
             for (_, g) in &mut self.games {
                 g.seek(target, audio, offset);
@@ -222,14 +261,29 @@ struct WatchView {
 
 impl WatchView {
     fn new(player: String) -> WatchView {
-        WatchView { player, play: None, entry: None, rx: None, game: None, inputs: Vec::new(), clock: (-1.0e9, Instant::now(), true), held: false, fetching: false, looked: None }
+        WatchView {
+            player,
+            play: None,
+            entry: None,
+            rx: None,
+            game: None,
+            inputs: Vec::new(),
+            clock: (-1.0e9, Instant::now(), true),
+            held: false,
+            fetching: false,
+            looked: None,
+        }
     }
 
     /// Where the player is now (map time).
     fn their_time(&self) -> f64 {
         let (t, at, paused) = self.clock;
         let rate = self.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
-        if paused { t } else { t + at.elapsed().as_secs_f64() * 1000.0 * rate }
+        if paused {
+            t
+        } else {
+            t + at.elapsed().as_secs_f64() * 1000.0 * rate
+        }
     }
 
     fn status(&self) -> String {
@@ -238,8 +292,15 @@ impl WatchView {
                 let player = &self.player;
                 tr!("waiting for {player} to play something...", "{player}が何かプレイするのを待っています...", "ждём, когда {player} начнёт играть...";)
             }
-            (Some(_), None) if self.fetching => tr!("getting the map...", "譜面を取得中...", "получаем карту...").into(),
-            (Some(_), None) => tr!("looking for the map...", "譜面を探しています...", "ищем карту...").into(),
+            (Some(_), None) if self.fetching => {
+                tr!("getting the map...", "譜面を取得中...", "получаем карту...").into()
+            }
+            (Some(_), None) => tr!(
+                "looking for the map...",
+                "譜面を探しています...",
+                "ищем карту..."
+            )
+            .into(),
             (Some(_), Some(_)) => tr!("loading...", "読み込み中...", "загрузка...").into(),
         }
     }
@@ -372,7 +433,8 @@ struct State {
     pending_changelog: Option<changelog::View>,
     /// Online leaderboards fetched (by map hash: when, and the rows or why not), and the one
     /// being fetched.
-    online_boards: std::collections::HashMap<u64, (Instant, Result<Vec<online::OnlineScore>, String>)>,
+    online_boards:
+        std::collections::HashMap<u64, (Instant, Result<Vec<online::OnlineScore>, String>)>,
     board_fetch: Option<BoardFetch>,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
@@ -648,11 +710,28 @@ fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool) -> [f32; 4] {
     let f = ((game.time - start) / (end - start).max(1.0)).clamp(0.0, 1.0) as f32;
     let th = if hover { 4.0 } else { 2.0 };
     c.text(18.0, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &label);
-    c.text(x, y + 9.0, 6.0, rgba(0x6f6f86, 1.0), tr!("Left/Right or drag: seek", "左右かドラッグ: シーク", "Влево/вправо или тяните: перемотка"));
+    c.text(
+        x,
+        y + 9.0,
+        6.0,
+        rgba(0x6f6f86, 1.0),
+        tr!(
+            "Left/Right or drag: seek",
+            "左右かドラッグ: シーク",
+            "Влево/вправо или тяните: перемотка"
+        ),
+    );
     c.rect(x, y - th / 2.0, bw, th, rgba(0x2a2a38, 1.0));
     c.rect(x, y - th / 2.0, bw * f, th, rgba(accent(), 1.0));
     let k = if hover { 5.0 } else { 3.5 };
-    c.round_rect([x + bw * f - k, y - k], [k * 2.0, k * 2.0], 1.0, rgba(0xffffff, 1.0), rgba(accent(), 1.0), 1.5);
+    c.round_rect(
+        [x + bw * f - k, y - k],
+        [k * 2.0, k * 2.0],
+        1.0,
+        rgba(0xffffff, 1.0),
+        rgba(accent(), 1.0),
+        1.5,
+    );
     rect
 }
 
@@ -660,7 +739,14 @@ fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool) -> [f32; 4] {
 /// Each player's strip shows where they play: the lane, or wherever the mods take it (rails,
 /// Multiverse's playfield in focus...), fitted in and followed smoothly. `zones` keeps what each
 /// strip shows between frames; `dt` is the time since the last one (s).
-fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[(u32, String)], scroll: f64, zones: &mut Vec<[f32; 4]>, dt: f32) {
+fn draw_spectate_all(
+    c: &mut Canvas,
+    games: &mut [(u32, Box<Game>)],
+    players: &[(u32, String)],
+    scroll: f64,
+    zones: &mut Vec<[f32; 4]>,
+    dt: f32,
+) {
     let n = games.len().max(1) as f32;
     let (band_top, band_h) = game::lane_band();
     let (top, bottom) = (40.0, 470.0);
@@ -676,14 +762,23 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
         "観戦中  -  全員   左右かA: 一人   Esc 退出",
         "НАБЛЮДЕНИЕ  -  все   Влево/вправо или A: один игрок   Esc выйти"
     );
-    c.text_centered(full_w / 2.0, 16.0, 9.0, rgba(0x4fb4ff, 1.0), &Canvas::fit(9.0, full_w - 16.0, head));
+    c.text_centered(
+        full_w / 2.0,
+        16.0,
+        9.0,
+        rgba(0x4fb4ff, 1.0),
+        &Canvas::fit(9.0, full_w - 16.0, head),
+    );
     for (i, (id, g)) in games.iter_mut().enumerate() {
         let y = top + i as f32 * strip;
         let start = c.shapes.len();
         c.width = full_w / k;
         g.draw_playfield(c, scroll);
         c.width = full_w;
-        let target = g.play_zone().filter(|z| z[2] > 1.0 && z[3] > 1.0).unwrap_or(plain);
+        let target = g
+            .play_zone()
+            .filter(|z| z[2] > 1.0 && z[3] > 1.0)
+            .unwrap_or(plain);
         let z = &mut zones[i];
         if z[0].is_nan() {
             *z = target;
@@ -694,14 +789,33 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
         }
         let [zx, zy, zw, zh] = *z;
         let scale = (full_w / zw).min(strip / zh);
-        let (dx, dy) = ((full_w - zw * scale) / 2.0 - zx * scale, y + (strip - zh * scale) / 2.0 - zy * scale);
+        let (dx, dy) = (
+            (full_w - zw * scale) / 2.0 - zx * scale,
+            y + (strip - zh * scale) / 2.0 - zy * scale,
+        );
         c.transform_since(start, [0.0, 0.0], scale, dx, dy);
         c.clip_since(start, 0.0, y, full_w, strip - 2.0);
-        let name = players.iter().find(|(p, _)| p == id).map(|(_, n)| n.as_str()).unwrap_or("?");
+        let name = players
+            .iter()
+            .find(|(p, _)| p == id)
+            .map(|(_, n)| n.as_str())
+            .unwrap_or("?");
         let st = &g.stats;
-        let line = format!("{name}   {:08}   {:.2}%   {}x", st.score, st.accuracy() * 100.0, st.combo);
+        let line = format!(
+            "{name}   {:08}   {:.2}%   {}x",
+            st.score,
+            st.accuracy() * 100.0,
+            st.combo
+        );
         let tw = Canvas::text_width(8.0, &line);
-        c.round_rect([full_w - tw - 28.0, y + 4.0], [tw + 16.0, 16.0], 6.0, rgba(0x000000, 0.6), rgba(0, 0.0), 0.0);
+        c.round_rect(
+            [full_w - tw - 28.0, y + 4.0],
+            [tw + 16.0, 16.0],
+            6.0,
+            rgba(0x000000, 0.6),
+            rgba(0, 0.0),
+            0.0,
+        );
         c.text_right(full_w - 20.0, y + 8.0, 8.0, rgba(0xffffff, 1.0), &line);
     }
 }
@@ -709,12 +823,31 @@ fn draw_spectate_all(c: &mut Canvas, games: &mut [(u32, Box<Game>)], players: &[
 /// The leaderboard's LOCAL / ONLINE tabs; returns how wide they are.
 fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
     let mut tx = x;
-    for (label, on) in [(tr!("LOCAL", "ローカル", "ЛОКАЛЬНО"), false), (tr!("ONLINE", "オンライン", "ОНЛАЙН"), true)] {
+    for (label, on) in [
+        (tr!("LOCAL", "ローカル", "ЛОКАЛЬНО"), false),
+        (tr!("ONLINE", "オンライン", "ОНЛАЙН"), true),
+    ] {
         let tw = Canvas::text_width(7.0, label) + 10.0;
         let lit = on == online;
         let h = Canvas::text_height(7.0) + 3.0;
-        c.round_rect([tx, y - 1.5], [tw, h], 3.0, rgba(if lit { accent() } else { 0x1d1d27 }, if lit { 0.9 } else { 1.0 }), rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), 1.0);
-        c.text(tx + 5.0, y + 1.5, 7.0, rgba(if lit { 0xffffff } else { 0x8a8aa0 }, 1.0), label);
+        c.round_rect(
+            [tx, y - 1.5],
+            [tw, h],
+            3.0,
+            rgba(
+                if lit { accent() } else { 0x1d1d27 },
+                if lit { 0.9 } else { 1.0 },
+            ),
+            rgba(if lit { accent() } else { 0x3a3a4e }, 1.0),
+            1.0,
+        );
+        c.text(
+            tx + 5.0,
+            y + 1.5,
+            7.0,
+            rgba(if lit { 0xffffff } else { 0x8a8aa0 }, 1.0),
+            label,
+        );
         c.hit(tx, y - 1.5, tw, h, render::Hit::BoardTab(on));
         tx += tw + 4.0;
     }
@@ -722,12 +855,22 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
 }
 
 /// The server's scores for the selected map: each player's best (`board` None while loading).
-fn draw_online_leaderboard(c: &mut Canvas, [x, y]: [f32; 2], w: f32, board: Option<&Result<Vec<online::OnlineScore>, String>>, me: &str, fits: usize, first: usize) {
+fn draw_online_leaderboard(
+    c: &mut Canvas,
+    [x, y]: [f32; 2],
+    w: f32,
+    board: Option<&Result<Vec<online::OnlineScore>, String>>,
+    me: &str,
+    fits: usize,
+    first: usize,
+) {
     let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true);
     let at = x + 4.0 + tabs_w + 10.0;
     let note = match board {
         None => Some(tr!("loading...", "読み込み中...", "загрузка...").to_string()),
-        Some(Err(e)) => Some(tr!("can't reach the server: {e}", "サーバーに届きません: {e}", "сервер недоступен: {e}";)),
+        Some(Err(e)) => Some(
+            tr!("can't reach the server: {e}", "サーバーに届きません: {e}", "сервер недоступен: {e}";),
+        ),
         Some(Ok(rows)) if rows.is_empty() => Some(
             tr!(
                 "no online scores yet - log in (F9) and finish a play",
@@ -739,29 +882,88 @@ fn draw_online_leaderboard(c: &mut Canvas, [x, y]: [f32; 2], w: f32, board: Opti
         Some(Ok(_)) => None,
     };
     if let Some(note) = note {
-        c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, &note));
+        c.text(
+            at,
+            y + 2.0,
+            7.0,
+            rgba(0x6f6f86, 1.0),
+            &Canvas::fit(7.0, x + w - 4.0 - at, &note),
+        );
         return;
     }
     let Some(Ok(rows)) = board else { return };
-    let hint = tr!("click: results and replay", "クリック: リザルトとリプレイ", "клик: итоги и повтор");
-    c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, w - 20.0 - tabs_w, hint));
+    let hint = tr!(
+        "click: results and replay",
+        "クリック: リザルトとリプレイ",
+        "клик: итоги и повтор"
+    );
+    c.text_right(
+        x + w - 4.0,
+        y + 2.0,
+        6.0,
+        rgba(0x6f6f86, 1.0),
+        &Canvas::fit_hints(6.0, w - 20.0 - tabs_w, hint),
+    );
     let shown = rows.len().saturating_sub(first).min(fits);
     board_scrollbar(c, x + w + 5.0, y + 14.0, shown.max(1), first, rows.len());
     for (k, r) in rows.iter().skip(first).take(fits).enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
         let mine = r.player.eq_ignore_ascii_case(me);
         let hover = c.hovered(x, ry, w, 16.0);
-        let bg = if hover { 0x262634 } else if mine { 0x23232f } else { 0x15151d };
-        c.round_rect([x, ry], [w, 16.0], 5.0, rgba(bg, 0.9), rgba(if mine { accent() } else { 0x2a2a38 }, 1.0), 1.0);
+        let bg = if hover {
+            0x262634
+        } else if mine {
+            0x23232f
+        } else {
+            0x15151d
+        };
+        c.round_rect(
+            [x, ry],
+            [w, 16.0],
+            5.0,
+            rgba(bg, 0.9),
+            rgba(if mine { accent() } else { 0x2a2a38 }, 1.0),
+            1.0,
+        );
         c.hit(x, ry, w, 16.0, render::Hit::OnlineScoreRow(k));
-        let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
-        let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods.concat()) };
+        let rate = if (r.rate - 1.0).abs() > 1e-6 {
+            format!("  {:.2}x", r.rate)
+        } else {
+            String::new()
+        };
+        let mods = if r.mods.is_empty() {
+            String::new()
+        } else {
+            format!("  +{}", r.mods.concat())
+        };
         let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!("#{}  {}  {:08}  {:.2}%{pp}  {}x", first + k + 1, r.player, r.score, r.accuracy * 100.0, r.max_combo);
+        let core = format!(
+            "#{}  {}  {:08}  {:.2}%{pp}  {}x",
+            first + k + 1,
+            r.player,
+            r.score,
+            r.accuracy * 100.0,
+            r.max_combo
+        );
         let room = w - 16.0;
-        let right = Canvas::fit(6.5, room - Canvas::text_width(6.5, &core) - 12.0, &misses_and_age(r.miss, r.date));
-        let left_room = room - if right.is_empty() { 0.0 } else { Canvas::text_width(6.5, &right) + 8.0 };
-        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
+        let right = Canvas::fit(
+            6.5,
+            room - Canvas::text_width(6.5, &core) - 12.0,
+            &misses_and_age(r.miss, r.date),
+        );
+        let left_room = room
+            - if right.is_empty() {
+                0.0
+            } else {
+                Canvas::text_width(6.5, &right) + 8.0
+            };
+        c.text(
+            x + 8.0,
+            ry + 5.0,
+            6.5,
+            rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0),
+            &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")),
+        );
         c.text_right(x + w - 8.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
 }
@@ -774,55 +976,159 @@ fn misses_and_age(miss: u32, date: u64) -> String {
 
 /// Local scores for the selected map, under the song select panel: `rows` from place `first`
 /// on, of `total`.
-fn draw_leaderboard(c: &mut Canvas, x: f32, y: f32, w: f32, rows: &[&scores::ScoreRow], first: usize, total: usize) {
+fn draw_leaderboard(
+    c: &mut Canvas,
+    x: f32,
+    y: f32,
+    w: f32,
+    rows: &[&scores::ScoreRow],
+    first: usize,
+    total: usize,
+) {
     let label_w = board_tabs(c, x + 4.0, y + 1.0, false);
     if rows.is_empty() {
         let at = x + 4.0 + label_w + 14.0;
-        let none = tr!("none yet - finish a play to set one", "まだありません - プレイを終えると記録されます", "пока нет - доиграйте карту");
-        c.text(at, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit(7.0, x + w - 4.0 - at, none));
+        let none = tr!(
+            "none yet - finish a play to set one",
+            "まだありません - プレイを終えると記録されます",
+            "пока нет - доиграйте карту"
+        );
+        c.text(
+            at,
+            y + 2.0,
+            7.0,
+            rgba(0x6f6f86, 1.0),
+            &Canvas::fit(7.0, x + w - 4.0 - at, none),
+        );
         return;
     }
     let room = w - 20.0 - label_w;
-    let hint = tr!("click: results and replay   video: export it", "クリック: リザルトとリプレイ   動画: 書き出し", "клик: итоги и повтор   видео: экспорт");
-    c.text_right(x + w - 4.0, y + 2.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(6.0, room, hint));
+    let hint = tr!(
+        "click: results and replay   video: export it",
+        "クリック: リザルトとリプレイ   動画: 書き出し",
+        "клик: итоги и повтор   видео: экспорт"
+    );
+    c.text_right(
+        x + w - 4.0,
+        y + 2.0,
+        6.0,
+        rgba(0x6f6f86, 1.0),
+        &Canvas::fit_hints(6.0, room, hint),
+    );
     for (k, r) in rows.iter().enumerate() {
         let ry = y + 14.0 + k as f32 * 18.0;
         let hover = c.hovered(x, ry, w, 16.0);
-        c.round_rect([x, ry], [w, 16.0], 5.0, rgba(if hover { 0x262634 } else { 0x15151d }, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+        c.round_rect(
+            [x, ry],
+            [w, 16.0],
+            5.0,
+            rgba(if hover { 0x262634 } else { 0x15151d }, 0.9),
+            rgba(0x2a2a38, 1.0),
+            1.0,
+        );
         c.hit(x, ry, w, 16.0, render::Hit::ScoreRow(k));
-        let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
-        let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods) };
+        let rate = if (r.rate - 1.0).abs() > 1e-6 {
+            format!("  {:.2}x", r.rate)
+        } else {
+            String::new()
+        };
+        let mods = if r.mods.is_empty() {
+            String::new()
+        } else {
+            format!("  +{}", r.mods)
+        };
         let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!("#{}  {:08}  {:.2}%{pp}  {}x", first + k + 1, r.score, r.accuracy * 100.0, r.max_combo);
+        let core = format!(
+            "#{}  {:08}  {:.2}%{pp}  {}x",
+            first + k + 1,
+            r.score,
+            r.accuracy * 100.0,
+            r.max_combo
+        );
         // The video button sits on top of the row (drawn after it, so it wins the click).
         let video = tr!("video", "動画", "видео");
         let bw = Canvas::text_width(6.0, video) + 12.0;
         let bx = x + w - bw - 3.0;
         // Room goes to the score first, then the player and age on the right, then rate and mods.
         let room = bx - 6.0 - (x + 8.0);
-        let right = Canvas::fit(6.5, room - Canvas::text_width(6.5, &core) - 12.0, &format!("{}  {}", r.player, misses_and_age(r.miss, r.date)));
-        let left_room = room - if right.is_empty() { 0.0 } else { Canvas::text_width(6.5, &right) + 8.0 };
-        c.text(x + 8.0, ry + 5.0, 6.5, rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0), &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")));
-        c.button(bx, ry + 2.0, bw, 12.0, video, 6.0, render::Hit::ScoreVideo(k), false);
+        let right = Canvas::fit(
+            6.5,
+            room - Canvas::text_width(6.5, &core) - 12.0,
+            &format!("{}  {}", r.player, misses_and_age(r.miss, r.date)),
+        );
+        let left_room = room
+            - if right.is_empty() {
+                0.0
+            } else {
+                Canvas::text_width(6.5, &right) + 8.0
+            };
+        c.text(
+            x + 8.0,
+            ry + 5.0,
+            6.5,
+            rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0),
+            &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")),
+        );
+        c.button(
+            bx,
+            ry + 2.0,
+            bw,
+            12.0,
+            video,
+            6.0,
+            render::Hit::ScoreVideo(k),
+            false,
+        );
         c.text_right(bx - 6.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
     }
-    board_scrollbar(c, x + w + 5.0, y + 14.0, rows.len().max(1), first, total.max(rows.len()));
+    board_scrollbar(
+        c,
+        x + w + 5.0,
+        y + 14.0,
+        rows.len().max(1),
+        first,
+        total.max(rows.len()),
+    );
 }
 
 /// A song select divider in `rect` (`upright`: between left and right, else between top and
 /// bottom): a short grip, lit along its length while hovered or dragged. Only the grip takes the
 /// mouse, not the whole edge: passing along it shouldn't light it up.
-fn draw_divider(c: &mut Canvas, [x, y, w, h]: [f32; 4], upright: bool, dragging: bool, hit: render::Hit) {
+fn draw_divider(
+    c: &mut Canvas,
+    [x, y, w, h]: [f32; 4],
+    upright: bool,
+    dragging: bool,
+    hit: render::Hit,
+) {
     const GRIP: f32 = 48.0;
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
-    let [gx, gy, gw, gh] = if upright { [x, cy - GRIP / 2.0, w, GRIP] } else { [cx - GRIP / 2.0, y, GRIP, h] };
+    let [gx, gy, gw, gh] = if upright {
+        [x, cy - GRIP / 2.0, w, GRIP]
+    } else {
+        [cx - GRIP / 2.0, y, GRIP, h]
+    };
     let lit = dragging || c.hovered(gx, gy, gw, gh);
     if upright {
         let len = if lit { h } else { 28.0 };
-        c.round_rect([cx - 1.0, cy - len / 2.0], [2.0, len], 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
+        c.round_rect(
+            [cx - 1.0, cy - len / 2.0],
+            [2.0, len],
+            1.0,
+            rgba(if lit { accent() } else { 0x3a3a4e }, 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
     } else {
         let len = if lit { w } else { 28.0 };
-        c.round_rect([cx - len / 2.0, cy - 1.0], [len, 2.0], 1.0, rgba(if lit { accent() } else { 0x3a3a4e }, 1.0), rgba(0, 0.0), 0.0);
+        c.round_rect(
+            [cx - len / 2.0, cy - 1.0],
+            [len, 2.0],
+            1.0,
+            rgba(if lit { accent() } else { 0x3a3a4e }, 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
     }
     c.hit(gx, gy, gw, gh, hit);
 }
@@ -835,24 +1141,61 @@ fn board_scrollbar(c: &mut Canvas, x: f32, y: f32, shown: usize, first: usize, t
     let h = shown as f32 * 18.0 - 2.0;
     let thumb = (h * shown as f32 / total as f32).max(10.0);
     let at = (h - thumb) * first as f32 / (total - shown) as f32;
-    c.round_rect([x, y], [3.0, h], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
-    c.round_rect([x, y + at], [3.0, thumb], 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
+    c.round_rect(
+        [x, y],
+        [3.0, h],
+        1.5,
+        rgba(0x2a2a38, 1.0),
+        rgba(0, 0.0),
+        0.0,
+    );
+    c.round_rect(
+        [x, y + at],
+        [3.0, thumb],
+        1.5,
+        rgba(accent(), 0.9),
+        rgba(0, 0.0),
+        0.0,
+    );
 }
 
 /// Sends a play to the online leaderboards on a background thread.
-fn submit_score(server: String, token: String, mut play: online::ScoreSubmit, path: PathBuf, params: pp::Play) -> Receiver<Result<online::Reply, String>> {
+fn submit_score(
+    server: String,
+    token: String,
+    mut play: online::ScoreSubmit,
+    path: PathBuf,
+    params: pp::Play,
+) -> Receiver<Result<online::Reply, String>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        play.stars = stars::star_rating_played(&path, params.rate, params.mods, params.scroll_speed, params.seed, params.half);
-        play.md5 = std::fs::read(&path).ok().map(|bytes| download::md5_hex(&bytes));
-        let _ = tx.send(online::call(&server, online::Request::SubmitScore { token, play: Box::new(play) }));
+        play.stars = stars::star_rating_played(
+            &path,
+            params.rate,
+            params.mods,
+            params.scroll_speed,
+            params.seed,
+            params.half,
+        );
+        play.md5 = std::fs::read(&path)
+            .ok()
+            .map(|bytes| download::md5_hex(&bytes));
+        let _ = tx.send(online::call(
+            &server,
+            online::Request::SubmitScore {
+                token,
+                play: Box::new(play),
+            },
+        ));
     });
     rx
 }
 
 /// "Artist - Title [Version]  1.10x  +HDHR  from 1:23" for a results screen.
 fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
-    let part = from.map(|t| format!("  from {}", fmt_time(t))).unwrap_or_default();
+    let part = from
+        .map(|t| format!("  from {}", fmt_time(t)))
+        .unwrap_or_default();
     format!("{} - {} [{}]{part}", m.artist, m.title, m.version)
 }
 
@@ -862,34 +1205,57 @@ fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
 /// Whether plays on library map `e` give pp (only ranked, approved and loved ones do, as on
 /// osu!), from the mirrors' status else osu!.db's; None when it isn't known. The server has the
 /// last word.
-fn map_gives_pp(e: &Entry, set_status: &std::collections::HashMap<u32, Option<String>>, db_status: &std::collections::HashMap<PathBuf, u8>, server_loved: &std::collections::HashSet<u32>) -> Option<bool> {
-    let Some(set) = e.set_id() else { return Some(false) };
+fn map_gives_pp(
+    e: &Entry,
+    set_status: &std::collections::HashMap<u32, Option<String>>,
+    db_status: &std::collections::HashMap<PathBuf, u8>,
+    server_loved: &std::collections::HashSet<u32>,
+) -> Option<bool> {
+    let Some(set) = e.set_id() else {
+        return Some(false);
+    };
     // Loved on the online server: it gives pp there.
     if server_loved.contains(&set) {
         return Some(true);
     }
-    if let Some(Some(s)) = set_status.get(&set).filter(|s| s.as_deref() != Some(setstatus::MISSING)) {
+    if let Some(Some(s)) = set_status
+        .get(&set)
+        .filter(|s| s.as_deref() != Some(setstatus::MISSING))
+    {
         return Some(matches!(s.as_str(), "ranked" | "approved" | "loved"));
     }
-    db_status.get(&e.path).filter(|&&s| s != 0).map(|s| matches!(s, 4 | 5 | 7))
+    db_status
+        .get(&e.path)
+        .filter(|&&s| s != 0)
+        .map(|s| matches!(s, 4 | 5 | 7))
 }
 
-fn results_job(path: PathBuf, play: pp::Play, local: Option<PathBuf>, online: Option<(String, online::OnlineScore, String)>) -> Receiver<ui::Detail> {
+fn results_job(
+    path: PathBuf,
+    play: pp::Play,
+    local: Option<PathBuf>,
+    online: Option<(String, online::OnlineScore, String)>,
+) -> Receiver<ui::Detail> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut d = ui::Detail { breakdown: pp::breakdown(&path, &play), ..Default::default() };
+        let mut d = ui::Detail {
+            breakdown: pp::breakdown(&path, &play),
+            ..Default::default()
+        };
         let replay = match (local, online) {
             (Some(file), _) => scores::load_replay(&file).ok(),
-            (None, Some((server, score, label))) => match fetch_replay(&server, &score, &path, label) {
-                Ok((file, r)) => {
-                    d.replay = Some(Ok(file));
-                    Some(r)
+            (None, Some((server, score, label))) => {
+                match fetch_replay(&server, &score, &path, label) {
+                    Ok((file, r)) => {
+                        d.replay = Some(Ok(file));
+                        Some(r)
+                    }
+                    Err(e) => {
+                        d.replay = Some(Err(e));
+                        None
+                    }
                 }
-                Err(e) => {
-                    d.replay = Some(Err(e));
-                    None
-                }
-            },
+            }
             (None, None) => None,
         };
         d.stats = replay.and_then(|r| scores::simulate(&path, &r));
@@ -899,23 +1265,46 @@ fn results_job(path: PathBuf, play: pp::Play, local: Option<PathBuf>, online: Op
 }
 
 /// Gets an online score's replay from the server and keeps it as a replay file of our own.
-fn fetch_replay(server: &str, score: &online::OnlineScore, map_path: &std::path::Path, map_label: String) -> Result<(PathBuf, scores::Replay), String> {
+fn fetch_replay(
+    server: &str,
+    score: &online::OnlineScore,
+    map_path: &std::path::Path,
+    map_label: String,
+) -> Result<(PathBuf, scores::Replay), String> {
     if score.id == 0 {
-        return Err(tr!("the server doesn't keep replays yet", "このサーバーはまだリプレイを保存していません", "сервер пока не хранит повторы").into());
+        return Err(tr!(
+            "the server doesn't keep replays yet",
+            "このサーバーはまだリプレイを保存していません",
+            "сервер пока не хранит повторы"
+        )
+        .into());
     }
     if let Some(file) = scores::online_replay_path(score.id).filter(|f| f.is_file())
-        && let Ok(r) = scores::load_replay(&file) {
+        && let Ok(r) = scores::load_replay(&file)
+    {
         return Ok((file, r));
     }
     let got = match online::call(server, online::Request::Replay { id: score.id }) {
         Ok(online::Reply::Replay(r)) => *r,
         Ok(_) => return Err(crate::lang::odd_reply()),
         // Servers from before replays don't know the request.
-        Err(e) if e == "bad request" => return Err(tr!("the server doesn't hand out replays yet", "このサーバーはまだリプレイを配っていません", "сервер пока не отдаёт повторы").into()),
+        Err(e) if e == "bad request" => {
+            return Err(tr!(
+                "the server doesn't hand out replays yet",
+                "このサーバーはまだリプレイを配っていません",
+                "сервер пока не отдаёт повторы"
+            )
+            .into());
+        }
         Err(e) => return Err(e),
     };
     if got.version > scores::new_version() {
-        return Err(tr!("replay from a newer version", "新しいバージョンのリプレイです", "повтор из более новой версии").into());
+        return Err(tr!(
+            "replay from a newer version",
+            "新しいバージョンのリプレイです",
+            "повтор из более новой версии"
+        )
+        .into());
     }
     let replay = scores::Replay {
         version: got.version,
@@ -981,7 +1370,11 @@ fn built_in_text() -> &'static str {
 }
 
 fn scroll_in_select() -> &'static str {
-    tr!("change the scroll speed in song select, not during a song", "スクロール速度は曲中ではなく選曲画面で変えてください", "меняйте скорость прокрутки в выборе песни, не в песне")
+    tr!(
+        "change the scroll speed in song select, not during a song",
+        "スクロール速度は曲中ではなく選曲画面で変えてください",
+        "меняйте скорость прокрутки в выборе песни, не в песне"
+    )
 }
 
 /// The list's choice to type a folder's path.
@@ -1010,10 +1403,11 @@ fn updating_badge(p: f32) -> String {
 fn fetch_board(server: String, map: u64) -> Receiver<Result<Vec<online::OnlineScore>, String>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let rows = online::call(&server, online::Request::MapScores { map }).and_then(|r| match r {
-            online::Reply::Scores(rows) => Ok(rows),
-            _ => Err(crate::lang::odd_reply()),
-        });
+        let rows =
+            online::call(&server, online::Request::MapScores { map }).and_then(|r| match r {
+                online::Reply::Scores(rows) => Ok(rows),
+                _ => Err(crate::lang::odd_reply()),
+            });
         let _ = tx.send(rows);
     });
     rx
@@ -1041,12 +1435,26 @@ fn open_url(url: &str) -> bool {
         let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
         let (verb, file) = (wide("open"), wide(url));
         // SAFETY: both strings are nul-terminated and live through the call; the rest may be null.
-        let result = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
         // Above 32 is success, the rest are error codes.
         result as usize > 32
     }
     #[cfg(not(windows))]
-    std::process::Command::new("xdg-open").arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().is_ok()
+    std::process::Command::new("xdg-open")
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
 }
 
 /// `file://` URI for a local path.
@@ -1071,23 +1479,49 @@ fn draw_analysis(c: &mut Canvas, done: usize, total: usize) {
     let tw = Canvas::text_width(6.0, &text);
     let w = tw + BAR + 20.0;
     let (x, y) = (c.width - w - 8.0, 4.0);
-    c.round_rect([x, y], [w, 13.0], 4.0, rgba(0x101018, 0.82), rgba(0x3a3a4e, 1.0), 1.0);
+    c.round_rect(
+        [x, y],
+        [w, 13.0],
+        4.0,
+        rgba(0x101018, 0.82),
+        rgba(0x3a3a4e, 1.0),
+        1.0,
+    );
     c.text(x + 7.0, y + 3.5, 6.0, rgba(0xc8c8d8, 1.0), &text);
     let (bx, by) = (x + tw + 13.0, y + 5.0);
-    c.round_rect([bx, by], [BAR, 3.0], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+    c.round_rect(
+        [bx, by],
+        [BAR, 3.0],
+        1.5,
+        rgba(0x2a2a38, 1.0),
+        rgba(0, 0.0),
+        0.0,
+    );
     let part = done as f32 / total.max(1) as f32;
     if part > 0.0 {
-        c.round_rect([bx, by], [(BAR * part).max(3.0), 3.0], 1.5, rgba(render::accent(), 1.0), rgba(0, 0.0), 0.0);
+        c.round_rect(
+            [bx, by],
+            [(BAR * part).max(3.0), 3.0],
+            1.5,
+            rgba(render::accent(), 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
     }
 }
 
 /// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
 fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
     let mut out = std::collections::HashMap::new();
-    let Some(text) = config::data_dir().and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok()) else { return out };
+    let Some(text) =
+        config::data_dir().and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok())
+    else {
+        return out;
+    };
     for line in text.lines() {
         if let Some((t, path)) = line.split_once('\t')
-            && let Ok(t) = t.parse::<u64>() {
+            && let Ok(t) = t.parse::<u64>()
+        {
             let slot = out.entry(PathBuf::from(path)).or_insert(0);
             *slot = (*slot).max(t);
         }
@@ -1138,44 +1572,118 @@ fn download_dir(inputs: &[PathBuf]) -> PathBuf {
 
 /// Marks the fullscreen preview as a preview: a blue frame and badge on the playfield area, and
 /// a header with the map and the controls.
-fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f32>, lobby: bool, size_label: &str) {
+fn draw_preview_chrome(
+    c: &mut Canvas,
+    cfg: &Config,
+    e: &Entry,
+    stars: Option<f32>,
+    lobby: bool,
+    size_label: &str,
+) {
     let blue = preview::MARKER;
     let a = cfg.playfield_area;
-    let (ax, ay, aw, ah) = (a.x * c.width, a.y * render::VIRTUAL_HEIGHT, a.w * c.width, a.h * render::VIRTUAL_HEIGHT);
-    c.round_rect([ax + 1.0, ay + 1.0], [aw - 2.0, ah - 2.0], 4.0, rgba(0, 0.0), rgba(blue, 0.55), 1.5);
+    let (ax, ay, aw, ah) = (
+        a.x * c.width,
+        a.y * render::VIRTUAL_HEIGHT,
+        a.w * c.width,
+        a.h * render::VIRTUAL_HEIGHT,
+    );
+    c.round_rect(
+        [ax + 1.0, ay + 1.0],
+        [aw - 2.0, ah - 2.0],
+        4.0,
+        rgba(0, 0.0),
+        rgba(blue, 0.55),
+        1.5,
+    );
     let badge = tr!("AUTOPLAY PREVIEW", "オートのプレビュー", "ПРЕВЬЮ АВТОПЛЕЯ");
     let bw = Canvas::text_width(7.0, badge) + 16.0;
     // Below the header when the area reaches the top of the screen.
     let by = (ay + 8.0).max(52.0);
-    c.round_rect([ax + 8.0, by], [bw, 16.0], 8.0, rgba(blue, 0.85), rgba(0, 0.0), 0.0);
+    c.round_rect(
+        [ax + 8.0, by],
+        [bw, 16.0],
+        8.0,
+        rgba(blue, 0.85),
+        rgba(0, 0.0),
+        0.0,
+    );
     c.text(ax + 16.0, by + 4.5, 7.0, rgba(0x0c1a28, 1.0), badge);
 
-    c.round_rect([24.0, 10.0], [c.width - 48.0, 34.0], 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+    c.round_rect(
+        [24.0, 10.0],
+        [c.width - 48.0, 34.0],
+        8.0,
+        rgba(0x15151d, 0.9),
+        rgba(0x2a2a38, 1.0),
+        1.0,
+    );
     let tag = tr!("PREVIEW", "プレビュー", "ПРЕВЬЮ");
     let tag_w = Canvas::text_width(8.0, tag) + 18.0;
-    c.round_rect([32.0, 18.0], [tag_w, 18.0], 9.0, rgba(0x173049, 1.0), rgba(blue, 1.0), 1.0);
+    c.round_rect(
+        [32.0, 18.0],
+        [tag_w, 18.0],
+        9.0,
+        rgba(0x173049, 1.0),
+        rgba(blue, 1.0),
+        1.0,
+    );
     c.text(41.0, 23.0, 8.0, rgba(0xffffff, 1.0), tag);
     let pill = stars::draw_pill(c, c.width - 36.0, 22.0, 8.0, stars);
-    let back = if lobby { tr!("Lobby  (Esc)", "ロビー  (Esc)", "Лобби  (Esc)") } else { tr!("Back  (Esc)", "戻る  (Esc)", "Назад  (Esc)") };
+    let back = if lobby {
+        tr!("Lobby  (Esc)", "ロビー  (Esc)", "Лобби  (Esc)")
+    } else {
+        tr!("Back  (Esc)", "戻る  (Esc)", "Назад  (Esc)")
+    };
     let bw = Canvas::text_width(8.0, back) + 24.0;
     let bx = c.width - 44.0 - pill - bw;
-    c.button(bx, 17.0, bw, 20.0, back, 8.0, render::Hit::Key(KeyCode::Escape), false);
+    c.button(
+        bx,
+        17.0,
+        bw,
+        20.0,
+        back,
+        8.0,
+        render::Hit::Key(KeyCode::Escape),
+        false,
+    );
     // Right to left: the size button, the hints and the title share what's left. On a narrow
     // screen the hints go first, then the size button gets shorter, so the title keeps TITLE_MIN.
     const TITLE_MIN: f32 = 120.0;
     let title_x = 32.0 + tag_w + 10.0;
     let short_size = size_label.split(" (").next().unwrap_or(size_label);
-    let presets = [format!("{size_label}  (F5/F6)"), size_label.to_string(), short_size.to_string()]
-        .into_iter()
-        .find(|p| bx - 8.0 - (Canvas::text_width(8.0, p) + 24.0) - title_x - 12.0 >= TITLE_MIN)
-        .unwrap_or_else(|| short_size.to_string());
+    let presets = [
+        format!("{size_label}  (F5/F6)"),
+        size_label.to_string(),
+        short_size.to_string(),
+    ]
+    .into_iter()
+    .find(|p| bx - 8.0 - (Canvas::text_width(8.0, p) + 24.0) - title_x - 12.0 >= TITLE_MIN)
+    .unwrap_or_else(|| short_size.to_string());
     let pw = Canvas::text_width(8.0, &presets) + 24.0;
     let px = bx - 8.0 - pw;
-    c.button(px, 17.0, pw, 20.0, &presets, 8.0, render::Hit::Presets, false);
+    c.button(
+        px,
+        17.0,
+        pw,
+        20.0,
+        &presets,
+        8.0,
+        render::Hit::Presets,
+        false,
+    );
     let hints = if lobby {
-        tr!("drag / wheel: playfield", "ドラッグ / ホイール: プレイフィールド", "тяните / колесо: поле")
+        tr!(
+            "drag / wheel: playfield",
+            "ドラッグ / ホイール: プレイフィールド",
+            "тяните / колесо: поле"
+        )
     } else {
-        tr!("Enter play   drag / wheel: playfield", "Enter プレイ   ドラッグ / ホイール: プレイフィールド", "Enter играть   тяните / колесо: поле")
+        tr!(
+            "Enter play   drag / wheel: playfield",
+            "Enter プレイ   ドラッグ / ホイール: プレイフィールド",
+            "Enter играть   тяните / колесо: поле"
+        )
     };
     let mut title_end = px - 12.0;
     if title_end - Canvas::text_width(7.0, hints) - 12.0 - title_x >= TITLE_MIN + 60.0 {
@@ -1183,14 +1691,23 @@ fn draw_preview_chrome(c: &mut Canvas, cfg: &Config, e: &Entry, stars: Option<f3
         title_end -= Canvas::text_width(7.0, hints) + 12.0;
     }
     let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
-    c.text(title_x, 22.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, title_end - title_x, &title));
+    c.text(
+        title_x,
+        22.0,
+        10.0,
+        rgba(0xffffff, 1.0),
+        &Canvas::fit(10.0, title_end - title_x, &title),
+    );
 }
 
 /// Of a set's maps, the ones to show: its taiko difficulties, else (a set of converts) all.
 fn main_maps<'a>(maps: impl Iterator<Item = &'a Entry>) -> Vec<PathBuf> {
     let maps: Vec<&Entry> = maps.collect();
     let taiko = maps.iter().any(|e| e.meta.mode == 1);
-    maps.into_iter().filter(|e| !taiko || e.meta.mode == 1).map(|e| e.path.clone()).collect()
+    maps.into_iter()
+        .filter(|e| !taiko || e.meta.mode == 1)
+        .map(|e| e.path.clone())
+        .collect()
 }
 
 /// How a map is named to other players (lobby map, a solo play friends watch), with our
@@ -1214,7 +1731,10 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
 
 /// A new seed for Random's colouring (never 0, the one from before seeds).
 fn fresh_seed() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64).max(1)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |d| d.as_nanos() as u64)
+        .max(1)
 }
 
 /// The Random colouring a lobby map plays with: the one it has, else a new one. Every map
@@ -1227,21 +1747,30 @@ fn lobby_seed(had: Option<u64>) -> Option<u64> {
 /// Our settings of the mods in `mods` that have them (Multiverse's universes, Shapeshift's
 /// setup), as the config writes them: what a lobby we host plays with.
 fn mod_settings(mods: Mods) -> (Option<String>, Option<String>) {
-    let universes = mods.has(mods::Mod::Multiverse).then(|| multiverse::format(&multiverse::get()));
-    let shapes = mods.has(mods::Mod::Shapeshift).then(|| shapeshift::get().format());
+    let universes = mods
+        .has(mods::Mod::Multiverse)
+        .then(|| multiverse::format(&multiverse::get()));
+    let shapes = mods
+        .has(mods::Mod::Shapeshift)
+        .then(|| shapeshift::get().format());
     (universes, shapes)
 }
 
 /// Plays `game` with the mod settings `map` carries (the lobby host's, or the friend's being
 /// watched) where it has them; ours otherwise. Our config and presets aren't touched.
 fn use_mod_settings(game: &mut Game, map: &net::MapInfo) {
-    game.use_mod_settings(map.multiverse.as_deref().map(multiverse::parse), map.shapeshift.as_deref().map(shapeshift::Config::parse));
+    game.use_mod_settings(
+        map.multiverse.as_deref().map(multiverse::parse),
+        map.shapeshift.as_deref().map(shapeshift::Config::parse),
+    );
 }
 
 /// The library entry for a map someone else named: the file's content hash identifies it (the
 /// title can differ, e.g. romanised on one side and Cyrillic on the other).
 fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
-    library.iter().position(|e| e.meta.version == m.version && e.hash() == m.hash)
+    library
+        .iter()
+        .position(|e| e.meta.version == m.version && e.hash() == m.hash)
 }
 
 /// A score a `taiko-rs://` link asked for: being fetched from the server, then waiting for its
@@ -1271,8 +1800,12 @@ fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Option<usize> {
 /// A character typed into a playfield size: a digit, or `x` between width and height.
 fn size_char(code: KeyCode) -> Option<char> {
     use KeyCode::*;
-    let digits = [Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9];
-    let numpad = [Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9];
+    let digits = [
+        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    ];
+    let numpad = [
+        Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9,
+    ];
     if let Some(d) = digits.iter().chain(numpad.iter()).position(|&k| k == code) {
         return char::from_digit(d as u32 % 10, 10);
     }
@@ -1295,7 +1828,11 @@ fn parse_number(text: &str) -> Option<f64> {
     if ["off", "unlimited", "none"].contains(&t.as_str()) {
         return Some(0.0);
     }
-    let num: String = t.chars().take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '+' | '-')).map(|c| if c == ',' { '.' } else { c }).collect();
+    let num: String = t
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '+' | '-'))
+        .map(|c| if c == ',' { '.' } else { c })
+        .collect();
     num.parse().ok().filter(|n: &f64| n.is_finite())
 }
 
@@ -1318,7 +1855,11 @@ fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Vec<Entry>>, Arc<AtomicUsize>) 
         .spawn(move || {
             let started = Instant::now();
             let library = library::scan(&inputs, &counter);
-            eprintln!("scanned {} files in {:.0} ms", counter.load(Ordering::Relaxed), started.elapsed().as_secs_f64() * 1000.0);
+            eprintln!(
+                "scanned {} files in {:.0} ms",
+                counter.load(Ordering::Relaxed),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
             let _ = tx.send(library);
         })
         .expect("spawn library scan");
@@ -1327,19 +1868,31 @@ fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Vec<Entry>>, Arc<AtomicUsize>) 
 
 impl State {
     fn toast(&mut self, text: String) {
-        self.toast = Some(Toast { text, until: Instant::now() + Duration::from_millis(1500) });
+        self.toast = Some(Toast {
+            text,
+            until: Instant::now() + Duration::from_millis(1500),
+        });
     }
 
     /// Scenes that use the gameplay present mode; everything else is a menu.
     /// In a song (or its pause menu's settings): what counts for pp stays as it started.
     fn mid_song(&self) -> bool {
-        self.in_song() || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. } | Scene::MpPlay { .. }))
+        self.in_song()
+            || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. } | Scene::MpPlay { .. }))
     }
 
     /// Screens that go idle after a while: menus and lists, never a song or an open dialog.
     fn idle_allowed(&self) -> bool {
-        matches!(self.scene, Scene::Select | Scene::Settings { .. } | Scene::Download | Scene::MpMenu | Scene::Lobby | Scene::Results { .. } | Scene::MpResults)
-            && !self.quit_asked
+        matches!(
+            self.scene,
+            Scene::Select
+                | Scene::Settings { .. }
+                | Scene::Download
+                | Scene::MpMenu
+                | Scene::Lobby
+                | Scene::Results { .. }
+                | Scene::MpResults
+        ) && !self.quit_asked
             && self.crash.is_none()
             && self.splash.is_none()
             && self.settings_ui.binding.is_none()
@@ -1356,7 +1909,15 @@ impl State {
     }
 
     fn in_song(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Calibrate { .. } | Scene::Spectate(_) | Scene::Watch(_))
+        matches!(
+            self.scene,
+            Scene::Play { .. }
+                | Scene::MpPlay { .. }
+                | Scene::MpWait { .. }
+                | Scene::Calibrate { .. }
+                | Scene::Spectate(_)
+                | Scene::Watch(_)
+        )
     }
 
     /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
@@ -1370,23 +1931,36 @@ impl State {
         }
         let menu = matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_some() && game.resuming.is_none());
         let screen = (self.refresh_hz.round() as u32).max(30);
-        if menu && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > screen) { screen } else { self.cfg.fps_cap }
+        if menu && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > screen) {
+            screen
+        } else {
+            self.cfg.fps_cap
+        }
     }
 
     /// The present mode this frame should use.
     fn wanted_present(&self) -> PresentChoice {
         // Watching someone else play needs no low input latency: always vsync (smoothest).
-        if matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_) | Scene::Calibrate { vsync: true, .. }) {
+        if matches!(
+            self.scene,
+            Scene::Spectate(_) | Scene::Watch(_) | Scene::Calibrate { vsync: true, .. }
+        ) {
             return PresentChoice::Fifo;
         }
-        if self.cfg.menu_vsync && !self.player_plays() { PresentChoice::Fifo } else { self.cfg.present }
+        if self.cfg.menu_vsync && !self.player_plays() {
+            PresentChoice::Fifo
+        } else {
+            self.cfg.present
+        }
     }
 
     /// The player is hitting notes (the gameplay present mode's job): not a replay or autoplay,
     /// not waiting for a multiplayer match to start.
     fn player_plays(&self) -> bool {
         match &self.scene {
-            Scene::Play { game, .. } => game.replay.is_none() && !self.auto && !game.mods.has(mods::Mod::Autoplay),
+            Scene::Play { game, .. } => {
+                game.replay.is_none() && !self.auto && !game.mods.has(mods::Mod::Autoplay)
+            }
             Scene::MpPlay { .. } | Scene::Calibrate { .. } => true,
             _ => false,
         }
@@ -1405,7 +1979,8 @@ impl State {
     /// The screen's refresh interval (ms): as the frames came with vsync, else as the window
     /// system says.
     fn refresh_ms(&self) -> f64 {
-        self.seen_refresh_ms.unwrap_or(1000.0 / self.refresh_hz.clamp(24.0, 1000.0))
+        self.seen_refresh_ms
+            .unwrap_or(1000.0 / self.refresh_hz.clamp(24.0, 1000.0))
     }
 
     fn stop_audio(&mut self) {
@@ -1417,7 +1992,8 @@ impl State {
 
     /// The preview's decoded song, when it was prepared at the speed `entry` is about to play at.
     fn cached_track(&self, entry: usize, rate: f64, keep_pitch: bool) -> Option<Arc<Track>> {
-        self.preview.cached_track(&self.library[entry], rate, keep_pitch)
+        self.preview
+            .cached_track(&self.library[entry], rate, keep_pitch)
     }
 
     /// Speed and pitch of a play started now: the selected speed, or what DT/HT/NC/DC force.
@@ -1435,9 +2011,20 @@ impl State {
 
     /// Speed the preview plays at: the match rate for the lobby map, else the selected rate.
     fn preview_rate(&self) -> (f64, bool) {
-        let lobby_rate = self.mp.as_ref().and_then(|s| s.map.as_ref().filter(|_| s.map_entry.is_some() && s.map_entry == self.preview_target()).map(|m| m.rate));
-        let lobby = matches!(self.scene, Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_))
-            || matches!(&self.scene, Scene::Preview { back } | Scene::Settings { prev: back } if matches!(**back, Scene::Lobby));
+        let lobby_rate = self.mp.as_ref().and_then(|s| {
+            s.map
+                .as_ref()
+                .filter(|_| s.map_entry.is_some() && s.map_entry == self.preview_target())
+                .map(|m| m.rate)
+        });
+        let lobby = matches!(
+            self.scene,
+            Scene::Lobby
+                | Scene::MpWait { .. }
+                | Scene::MpPlay { .. }
+                | Scene::MpResults
+                | Scene::Spectate(_)
+        ) || matches!(&self.scene, Scene::Preview { back } | Scene::Settings { prev: back } if matches!(**back, Scene::Lobby));
         if let Some(p) = &self.player {
             return p.rate();
         }
@@ -1448,7 +2035,10 @@ impl State {
     /// The playfield area's size in pixels.
     fn playfield_size(&self) -> (u32, u32) {
         let a = self.cfg.playfield_area;
-        ((a.w * self.window_w).round() as u32, (a.h * self.window_h).round() as u32)
+        (
+            (a.w * self.window_w).round() as u32,
+            (a.h * self.window_h).round() as u32,
+        )
     }
 
     /// "1280x720 (full screen)": the playfield's size in pixels.
@@ -1482,7 +2072,11 @@ impl State {
             .library
             .iter()
             .position(|e| e.path.to_string_lossy() == r.map_path && e.hash() == r.map_hash)
-            .or_else(|| self.library.iter().position(|e| e.label() == r.map_label && e.hash() == r.map_hash));
+            .or_else(|| {
+                self.library
+                    .iter()
+                    .position(|e| e.label() == r.map_label && e.hash() == r.map_hash)
+            });
         let Some(entry) = entry else {
             let map = &r.map_label;
             self.toast(tr!("{map} isn't in your songs", "{map}は曲の中にありません", "{map} нет среди ваших песен";));
@@ -1491,7 +2085,11 @@ impl State {
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
         let rx = self.load_with(entry, r.rate, Mods::from_list(&r.mods));
-        self.video_status = if video::find_ffmpeg().is_some() { String::new() } else { no_ffmpeg() };
+        self.video_status = if video::find_ffmpeg().is_some() {
+            String::new()
+        } else {
+            no_ffmpeg()
+        };
         self.last_video = None;
         self.scene = Scene::VideoEdit(Box::new(video::Editor::new(r, rx, self.cfg.video)));
     }
@@ -1504,21 +2102,39 @@ impl State {
                 if let Some(ex) = self.export.take() {
                     ex.encoder.cancel.store(true, Ordering::Relaxed);
                 }
-                self.video_status = tr!("export cancelled", "書き出しを取り消しました", "экспорт отменён").into();
+                self.video_status = tr!(
+                    "export cancelled",
+                    "書き出しを取り消しました",
+                    "экспорт отменён"
+                )
+                .into();
             }
             return;
         }
-        let Scene::VideoEdit(ed) = &mut self.scene else { return };
+        let Scene::VideoEdit(ed) = &mut self.scene else {
+            return;
+        };
         // Typing the target size takes the keys until Enter or Esc.
         if let Some(text) = &mut ed.typing {
             match code {
                 KeyCode::Enter | KeyCode::NumpadEnter => {
-                    match text.parse::<f64>().ok().filter(|mb| mb.is_finite() && *mb >= 1.0) {
+                    match text
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|mb| mb.is_finite() && *mb >= 1.0)
+                    {
                         Some(mb) => {
                             ed.settings.target_mb = (mb.min(4000.0) * 10.0).round() / 10.0;
                             ed.typing = None;
                         }
-                        None => self.video_status = tr!("type a size of at least 1 MB, like 10 or 25", "1 MB以上のサイズを入力 (10や25など)", "введите размер от 1 МБ, например 10 или 25").into(),
+                        None => {
+                            self.video_status = tr!(
+                                "type a size of at least 1 MB, like 10 or 25",
+                                "1 MB以上のサイズを入力 (10や25など)",
+                                "введите размер от 1 МБ, например 10 или 25"
+                            )
+                            .into()
+                        }
                     }
                 }
                 KeyCode::Escape => ed.typing = None,
@@ -1531,7 +2147,10 @@ impl State {
                 }
                 _ => {
                     let ch = match code {
-                        KeyCode::Period | KeyCode::Comma | KeyCode::NumpadDecimal | KeyCode::NumpadComma => Some('.'),
+                        KeyCode::Period
+                        | KeyCode::Comma
+                        | KeyCode::NumpadDecimal
+                        | KeyCode::NumpadComma => Some('.'),
                         _ => size_char(code).filter(|c| c.is_ascii_digit()),
                     };
                     if let Some(ch) = ch.filter(|_| text.len() < 6) {
@@ -1554,7 +2173,12 @@ impl State {
         let before = ed.settings;
         match code {
             KeyCode::ArrowLeft | KeyCode::ArrowRight => {
-                let t = ed.cursor + if code == KeyCode::ArrowRight { step } else { -step };
+                let t = ed.cursor
+                    + if code == KeyCode::ArrowRight {
+                        step
+                    } else {
+                        -step
+                    };
                 ed.playing = None;
                 if let Some(a) = &self.audio {
                     a.stop();
@@ -1568,7 +2192,11 @@ impl State {
                         a.stop();
                     }
                 } else if let (Some((_, track)), Some(a)) = (&ed.map, &self.audio) {
-                    let at = ed.game.as_ref().map(|g| g.track_at(ed.cursor)).unwrap_or(ed.cursor / rate);
+                    let at = ed
+                        .game
+                        .as_ref()
+                        .map(|g| g.track_at(ed.cursor))
+                        .unwrap_or(ed.cursor / rate);
                     a.play(track.clone(), at);
                     ed.playing = Some((Instant::now(), ed.cursor));
                 }
@@ -1577,13 +2205,20 @@ impl State {
             KeyCode::KeyO if ed.cursor > ed.start => ed.end = ed.cursor,
             KeyCode::KeyC => {
                 let presets = video::crop_presets();
-                let i = presets.iter().position(|(n, _)| *n == ed.crop_name).map(|i| i + 1).unwrap_or(0) % presets.len();
+                let i = presets
+                    .iter()
+                    .position(|(n, _)| *n == ed.crop_name)
+                    .map(|i| i + 1)
+                    .unwrap_or(0)
+                    % presets.len();
                 (ed.crop_name, ed.crop) = presets[i];
             }
             KeyCode::KeyZ => ed.settings.size = cycle(ed.settings.size, video::SIZES.len()),
             KeyCode::KeyF => ed.settings.fps = cycle(ed.settings.fps, video::FRAME_RATES.len()),
             KeyCode::KeyB => ed.settings.blur = cycle(ed.settings.blur, video::BLURS.len()),
-            KeyCode::KeyQ => ed.settings.quality = cycle(ed.settings.quality, video::QUALITIES.len()),
+            KeyCode::KeyQ => {
+                ed.settings.quality = cycle(ed.settings.quality, video::QUALITIES.len())
+            }
             KeyCode::KeyT => {
                 // Aiming at a size, and typing it.
                 ed.settings.quality = video::QUALITIES.len() - 1;
@@ -1617,7 +2252,9 @@ impl State {
 
     /// Starts rendering the editor's cut to an MP4.
     fn start_export(&mut self) {
-        let Scene::VideoEdit(ed) = &mut self.scene else { return };
+        let Scene::VideoEdit(ed) = &mut self.scene else {
+            return;
+        };
         let Some((map, track)) = &ed.map else { return };
         let Some(ffmpeg) = video::find_ffmpeg() else {
             self.video_status = no_ffmpeg();
@@ -1632,12 +2269,31 @@ impl State {
         let mut sim = video::replay_game(map, track, &ed.replay);
         sim.sfx_log = Some(Vec::new());
         sim.set_time(ed.end);
-        let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.settings.hitsounds { sim.sfx_log.take().unwrap_or_default() } else { Vec::new() };
-        let sounds = audio::hitsound_set(sr, skin::hitsounds(&self.cfg.skin, &self.cfg.skin_parts, sr));
+        let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.settings.hitsounds {
+            sim.sfx_log.take().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let sounds = audio::hitsound_set(
+            sr,
+            skin::hitsounds(&self.cfg.skin, &self.cfg.skin_parts, sr),
+        );
         let (music, fx) = self.cfg.volumes();
         let speed = sim.speed();
-        let samples = video::mix_audio(track, sr, &speed, ed.start, ed.end, music.max(0.05), &sfx, &sounds, fx);
-        let Some(dir) = video::videos_dir() else { return };
+        let samples = video::mix_audio(
+            track,
+            sr,
+            &speed,
+            ed.start,
+            ed.end,
+            music.max(0.05),
+            &sfx,
+            &sounds,
+            fx,
+        );
+        let Some(dir) = video::videos_dir() else {
+            return;
+        };
         let _ = std::fs::create_dir_all(&dir);
         let wav = dir.join(format!(".audio-{}.wav", std::process::id()));
         if let Err(e) = video::write_wav(&wav, &samples, sr) {
@@ -1652,12 +2308,31 @@ impl State {
         let step = 1000.0 / fps as f64;
         let (t0, t1) = (speed.track(ed.start), speed.track(ed.end));
         let frames = ((t1 - t0) / step).ceil().max(1.0) as u64;
-        let job = video::Job { size, fps, crop: ed.crop_px(), settings, seconds: frames as f64 / fps as f64, wav: wav.clone(), out: out.clone() };
+        let job = video::Job {
+            size,
+            fps,
+            crop: ed.crop_px(),
+            settings,
+            seconds: frames as f64 / fps as f64,
+            wav: wav.clone(),
+            out: out.clone(),
+        };
         match video::start_encoder(&ffmpeg, job) {
             Ok(encoder) => {
                 let mut game = Box::new(video::replay_game(map, track, &ed.replay));
                 game.set_time(ed.start);
-                self.export = Some(video::Export { game, t: t0, step, t0, sub: 0, settings, size, encoder, frame: 0, frames });
+                self.export = Some(video::Export {
+                    game,
+                    t: t0,
+                    step,
+                    t0,
+                    sub: 0,
+                    settings,
+                    size,
+                    encoder,
+                    frame: 0,
+                    frames,
+                });
                 self.video_status = String::new();
             }
             Err(e) => {
@@ -1672,7 +2347,11 @@ impl State {
     fn export_frame(&mut self, c: &mut Canvas) -> Option<ExportView> {
         let scroll = self.cfg.scroll_speed;
         let kiai = self.cfg.kiai_effects;
-        let brightness = if self.preview.has_background { 1.0 - self.cfg.bg_dim } else { 0.0 };
+        let brightness = if self.preview.has_background {
+            1.0 - self.cfg.bg_dim
+        } else {
+            0.0
+        };
         let ex = self.export.as_mut()?;
         if ex.frame >= ex.frames {
             // Closing ffmpeg's input lets it finish the file.
@@ -1691,7 +2370,14 @@ impl State {
         }
         let blended = ex.views() > 1;
         let last = ex.advance();
-        Some(ExportView { size: (w, h), tx, brightness, clear: self.backdrop(true), blended, last })
+        Some(ExportView {
+            size: (w, h),
+            tx,
+            brightness,
+            clear: self.backdrop(true),
+            blended,
+            last,
+        })
     }
 
     /// Loads the map of a saved replay and plays it back.
@@ -1708,7 +2394,11 @@ impl State {
             .library
             .iter()
             .position(|e| e.path.to_string_lossy() == r.map_path && e.hash() == r.map_hash)
-            .or_else(|| self.library.iter().position(|e| e.label() == r.map_label && e.hash() == r.map_hash));
+            .or_else(|| {
+                self.library
+                    .iter()
+                    .position(|e| e.label() == r.map_label && e.hash() == r.map_hash)
+            });
         let Some(entry) = entry else {
             let map = &r.map_label;
             self.toast(tr!("{map} isn't in your songs", "{map}は曲の中にありません", "{map} нет среди ваших песен";));
@@ -1720,7 +2410,12 @@ impl State {
         let label = tr!("replay of {player}: {map}", "{player}のリプレイ: {map}", "повтор {player}: {map}";);
         let rx = self.load_with(entry, r.rate, Mods::from_list(&r.mods));
         self.pending_replay = Some(r);
-        self.scene = Scene::Loading { rx, label, entry, from: None };
+        self.scene = Scene::Loading {
+            rx,
+            label,
+            entry,
+            from: None,
+        };
     }
 
     /// Song select's layout as it comes: the list's share.
@@ -1739,7 +2434,9 @@ impl State {
 
     /// The results screen of a local score on the selected map (its leaderboard row).
     fn open_local_score(&mut self, file: &std::path::Path) {
-        let Some(entry) = self.select.selected() else { return };
+        let Some(entry) = self.select.selected() else {
+            return;
+        };
         let r = match scores::load_replay(file) {
             Ok(r) => r,
             Err(e) => {
@@ -1747,20 +2444,55 @@ impl State {
                 return;
             }
         };
-        let stats = game::Stats { great: r.great, ok: r.ok, miss: r.miss, max_combo: r.max_combo, score: r.score, ..Default::default() };
+        let stats = game::Stats {
+            great: r.great,
+            ok: r.ok,
+            miss: r.miss,
+            max_combo: r.max_combo,
+            score: r.score,
+            ..Default::default()
+        };
         let mods = Mods::from_list(&r.mods);
         let e = &self.library[entry];
-        let mut results = Results::new(results_title(&e.meta, None), stats, game::Windows::new(e.meta.od));
+        let mut results = Results::new(
+            results_title(&e.meta, None),
+            stats,
+            game::Windows::new(e.meta.od),
+        );
         results.set_mods(mods, r.rate);
         results.replay = Some(file.to_path_buf());
         results.partial = true;
-        results.pp = self.scores.iter().find(|row| row.file == file).and_then(|row| row.pp);
-        results.no_pp = mods.unranked().then_some(tr!("Autoplay and Relax get no pp", "AutoplayとRelaxではppは付きません", "Autoplay и Relax не дают pp"));
-        results.opened = Some(ui::Opened { player: r.player.clone(), date: r.date, online: false });
+        results.pp = self
+            .scores
+            .iter()
+            .find(|row| row.file == file)
+            .and_then(|row| row.pp);
+        results.no_pp = mods.unranked().then_some(tr!(
+            "Autoplay and Relax get no pp",
+            "AutoplayとRelaxではppは付きません",
+            "Autoplay и Relax не дают pp"
+        ));
+        results.opened = Some(ui::Opened {
+            player: r.player.clone(),
+            date: r.date,
+            online: false,
+        });
         let all = scores::top(&self.scores, r.map_hash, usize::MAX);
-        results.rank = all.iter().position(|row| row.file == file).map(|p| (p + 1, all.len()));
-        results.job = Some(results_job(e.path.clone(), r.pp_play(), Some(file.to_path_buf()), None));
-        self.scene = Scene::Results { results, entry, from: None };
+        results.rank = all
+            .iter()
+            .position(|row| row.file == file)
+            .map(|p| (p + 1, all.len()));
+        results.job = Some(results_job(
+            e.path.clone(),
+            r.pp_play(),
+            Some(file.to_path_buf()),
+            None,
+        ));
+        self.scene = Scene::Results {
+            results,
+            entry,
+            from: None,
+        };
     }
 
     /// Opens what a `taiko-rs://` link asks for: a score's results, its replay ready to watch.
@@ -1774,14 +2506,27 @@ impl State {
                     let got = match online::call(&server, online::Request::Score { id }) {
                         Ok(online::Reply::Score(s)) => Ok(*s),
                         Ok(_) => Err(crate::lang::odd_reply()),
-                        Err(e) if e == "bad request" => Err(tr!("the server can't open score links yet", "このサーバーはまだスコアのリンクを開けません", "сервер пока не открывает ссылки на рекорды").to_string()),
+                        Err(e) if e == "bad request" => Err(tr!(
+                            "the server can't open score links yet",
+                            "このサーバーはまだスコアのリンクを開けません",
+                            "сервер пока не открывает ссылки на рекорды"
+                        )
+                        .to_string()),
                         Err(e) => Err(e),
                     };
                     let _ = tx.send(got);
                 });
-                self.score_link = Some(ScoreLink { fetch: Some(rx), score: None, downloading: None });
+                self.score_link = Some(ScoreLink {
+                    fetch: Some(rx),
+                    score: None,
+                    downloading: None,
+                });
                 let later = if self.in_song() || self.mp.is_some() {
-                    tr!(" (it opens once you're back in song select)", " (選曲に戻ると開きます)", " (откроется, когда вернётесь к выбору песни)")
+                    tr!(
+                        " (it opens once you're back in song select)",
+                        " (選曲に戻ると開きます)",
+                        " (откроется, когда вернётесь к выбору песни)"
+                    )
                 } else {
                     ""
                 };
@@ -1793,7 +2538,9 @@ impl State {
     /// Opens a linked score's results once it's here, its map is (downloading it if need be)
     /// and the player is in song select.
     fn poll_score_link(&mut self) {
-        let Some(l) = &mut self.score_link else { return };
+        let Some(l) = &mut self.score_link else {
+            return;
+        };
         if let Some(rx) = &l.fetch {
             match rx.try_recv() {
                 Ok(Ok(s)) => {
@@ -1812,11 +2559,16 @@ impl State {
                 }
             }
         }
-        let free = matches!(self.scene, Scene::Select | Scene::Results { .. } | Scene::Preview { .. } | Scene::Download) && self.mp.is_none();
+        let free = matches!(
+            self.scene,
+            Scene::Select | Scene::Results { .. } | Scene::Preview { .. } | Scene::Download
+        ) && self.mp.is_none();
         if self.scan.is_some() || !free {
             return;
         }
-        let Some(score) = self.score_link.as_ref().and_then(|l| l.score.clone()) else { return };
+        let Some(score) = self.score_link.as_ref().and_then(|l| l.score.clone()) else {
+            return;
+        };
         if let Some(entry) = find_score_map(&self.library, &score) {
             self.score_link = None;
             self.scene = Scene::Select;
@@ -1834,7 +2586,12 @@ impl State {
         let downloading = self.score_link.as_ref().and_then(|l| l.downloading);
         match (downloading, score.set_id) {
             (Some(since), _) => {
-                if since.elapsed() > SCORE_LINK_WAIT && !self.downloads.iter().any(|j| Some(j.set.id) == score.set_id) {
+                if since.elapsed() > SCORE_LINK_WAIT
+                    && !self
+                        .downloads
+                        .iter()
+                        .any(|j| Some(j.set.id) == score.set_id)
+                {
                     self.score_link = None;
                 }
             }
@@ -1848,7 +2605,10 @@ impl State {
                 ));
             }
             (None, Some(id)) => {
-                let song = score.map.rsplit_once(" [").map_or(score.map.as_str(), |(s, _)| s);
+                let song = score
+                    .map
+                    .rsplit_once(" [")
+                    .map_or(score.map.as_str(), |(s, _)| s);
                 let (artist, title) = song.split_once(" - ").unwrap_or(("", song));
                 self.start_download(download::SetInfo {
                     id,
@@ -1870,7 +2630,9 @@ impl State {
             (None, None) => {
                 self.score_link = None;
                 let map = &score.map;
-                self.toast(tr!("you haven't got {map}", "{map}を持っていません", "у вас нет {map}";));
+                self.toast(
+                    tr!("you haven't got {map}", "{map}を持っていません", "у вас нет {map}";),
+                );
             }
         }
     }
@@ -1878,25 +2640,60 @@ impl State {
     /// The results screen of an online score on the selected map; its replay is fetched
     /// meanwhile.
     fn open_online_score(&mut self, score: online::OnlineScore) {
-        let Some(entry) = self.select.selected() else { return };
+        let Some(entry) = self.select.selected() else {
+            return;
+        };
         self.open_online_score_on(entry, score);
     }
 
     /// The results screen of an online score on map `entry`.
     fn open_online_score_on(&mut self, entry: usize, score: online::OnlineScore) {
-        let stats = game::Stats { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, score: score.score, ..Default::default() };
+        let stats = game::Stats {
+            great: score.great,
+            ok: score.ok,
+            miss: score.miss,
+            max_combo: score.max_combo,
+            score: score.score,
+            ..Default::default()
+        };
         let mods = Mods::from_list(&score.mods);
         let e = &self.library[entry];
-        let mut results = Results::new(results_title(&e.meta, None), stats, game::Windows::new(e.meta.od));
+        let mut results = Results::new(
+            results_title(&e.meta, None),
+            stats,
+            game::Windows::new(e.meta.od),
+        );
         results.set_mods(mods, score.rate);
         results.partial = true;
         results.pp = score.pp;
-        results.no_pp = mods.unranked().then_some(tr!("Autoplay and Relax get no pp", "AutoplayとRelaxではppは付きません", "Autoplay и Relax не дают pp"));
-        results.opened = Some(ui::Opened { player: score.player.clone(), date: score.date, online: true });
-        let play = pp::Play { great: score.great, ok: score.ok, miss: score.miss, max_combo: score.max_combo, rate: score.rate, mods, scroll_speed: score.scroll_speed.unwrap_or(1.0), seed: 0, half: mods::HalfRule::of_pp_version(score.pp_version) };
+        results.no_pp = mods.unranked().then_some(tr!(
+            "Autoplay and Relax get no pp",
+            "AutoplayとRelaxではppは付きません",
+            "Autoplay и Relax не дают pp"
+        ));
+        results.opened = Some(ui::Opened {
+            player: score.player.clone(),
+            date: score.date,
+            online: true,
+        });
+        let play = pp::Play {
+            great: score.great,
+            ok: score.ok,
+            miss: score.miss,
+            max_combo: score.max_combo,
+            rate: score.rate,
+            mods,
+            scroll_speed: score.scroll_speed.unwrap_or(1.0),
+            seed: 0,
+            half: mods::HalfRule::of_pp_version(score.pp_version),
+        };
         let online = (self.cfg.online_server.clone(), score, e.label());
         results.job = Some(results_job(e.path.clone(), play, None, Some(online)));
-        self.scene = Scene::Results { results, entry, from: None };
+        self.scene = Scene::Results {
+            results,
+            entry,
+            from: None,
+        };
     }
 
     fn start_loading_from(&mut self, entry: usize, from: Option<f64>) {
@@ -1910,18 +2707,34 @@ impl State {
             label.push_str(&tr!("  (from {at})", "  ({at}から)", "  (с {at})";));
         }
         let rx = self.load_with(entry, self.cfg.rate, self.cfg.mods);
-        self.scene = Scene::Loading { rx, label, entry, from };
+        self.scene = Scene::Loading {
+            rx,
+            label,
+            entry,
+            from,
+        };
     }
 
     /// The map the preview shows: the lobby map in the lobby (and its preview), else the song
     /// select selection.
     fn preview_target(&self) -> Option<usize> {
-        if let Some(entry) = self.player.as_ref().and_then(|p| p.list.entry()).filter(|_| self.on_menu()) {
+        if let Some(entry) = self
+            .player
+            .as_ref()
+            .and_then(|p| p.list.entry())
+            .filter(|_| self.on_menu())
+        {
             return Some(entry);
         }
         let lobby = match &self.scene {
-            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) => true,
-            Scene::Preview { back } | Scene::Settings { prev: back } => matches!(**back, Scene::Lobby),
+            Scene::Lobby
+            | Scene::MpWait { .. }
+            | Scene::MpPlay { .. }
+            | Scene::MpResults
+            | Scene::Spectate(_) => true,
+            Scene::Preview { back } | Scene::Settings { prev: back } => {
+                matches!(**back, Scene::Lobby)
+            }
             _ => false,
         };
         let lobby_map = self.mp.as_ref().and_then(|s| s.map_entry).filter(|_| lobby);
@@ -1933,7 +2746,9 @@ impl State {
             return;
         }
         let back = std::mem::replace(&mut self.scene, Scene::Select);
-        self.scene = Scene::Preview { back: Box::new(back) };
+        self.scene = Scene::Preview {
+            back: Box::new(back),
+        };
     }
 
     fn close_preview(&mut self) {
@@ -1952,7 +2767,9 @@ impl State {
         if !s.is_host() || s.in_match {
             return;
         }
-        let (Some(i), Some(mut m)) = (s.map_entry, s.map.clone()) else { return };
+        let (Some(i), Some(mut m)) = (s.map_entry, s.map.clone()) else {
+            return;
+        };
         m.from = self.preview.marker(&self.library[i]);
         let text = match m.from {
             Some(t) => format!("the match starts at {}", fmt_time(t)),
@@ -1977,7 +2794,11 @@ impl State {
 
     fn preview_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
         if matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-            let step = if code == KeyCode::ArrowRight { 5000.0 } else { -5000.0 };
+            let step = if code == KeyCode::ArrowRight {
+                5000.0
+            } else {
+                -5000.0
+            };
             self.preview.seek_by(step, self.audio.as_ref());
             return;
         }
@@ -1988,7 +2809,9 @@ impl State {
             KeyCode::Escape | KeyCode::Backspace => self.close_preview(),
             KeyCode::Enter | KeyCode::NumpadEnter if self.modifiers_ctrl => self.close_preview(),
             KeyCode::Enter | KeyCode::NumpadEnter => {
-                let marked = self.preview_target().is_some_and(|i| self.preview.marker(&self.library[i]).is_some());
+                let marked = self
+                    .preview_target()
+                    .is_some_and(|i| self.preview.marker(&self.library[i]).is_some());
                 if marked || self.previewing_lobby() || self.picking_lobby_map {
                     self.preview_button();
                 } else if let Some(i) = self.select.selected() {
@@ -2001,7 +2824,9 @@ impl State {
 
     /// Plays the selected map from the start point picked on its timeline.
     fn play_from_marker(&mut self) {
-        let Some(i) = self.select.selected() else { return };
+        let Some(i) = self.select.selected() else {
+            return;
+        };
         if let Some(t) = self.preview.marker(&self.library[i]) {
             self.start_loading_from(i, Some(t));
         }
@@ -2029,7 +2854,14 @@ impl State {
     /// Parses the map and decodes its audio on a background thread.
     /// `speed`: rate modifier to prepare the track for (time-stretched or resampled once here).
     /// Loads a map and its song prepared at `speed` (plus Wind Up / Down from `mods`).
-    fn spawn_loader(&self, entry: usize, speed: f64, keep_pitch: bool, mods: Mods, cached: Option<Arc<Track>>) -> Receiver<Loaded> {
+    fn spawn_loader(
+        &self,
+        entry: usize,
+        speed: f64,
+        keep_pitch: bool,
+        mods: Mods,
+        cached: Option<Arc<Track>>,
+    ) -> Receiver<Loaded> {
         let path = self.library[entry].path.clone();
         let rate = self.audio.as_ref().map(|a| a.rate);
         let (tx, rx) = mpsc::channel();
@@ -2048,10 +2880,21 @@ impl State {
                         if speed.is_constant() {
                             audio::with_rate(track, rate, speed.r0, keep_pitch)
                         } else {
-                            Arc::new(audio::change_speed(Track { samples: track.samples.clone(), rate: track.rate }, rate, &speed, keep_pitch))
+                            Arc::new(audio::change_speed(
+                                Track {
+                                    samples: track.samples.clone(),
+                                    rate: track.rate,
+                                },
+                                rate,
+                                &speed,
+                                keep_pitch,
+                            ))
                         }
                     }
-                    (None, None) => Arc::new(Track { samples: Vec::new(), rate: 1.0 }),
+                    (None, None) => Arc::new(Track {
+                        samples: Vec::new(),
+                        rate: 1.0,
+                    }),
                 };
                 Ok((map, track))
             })();
@@ -2068,21 +2911,33 @@ impl State {
 
     fn report_smoothness(&mut self) {
         if let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene) {
-            eprintln!("--- smoothness ({}) ---\n{}", self.present.name(), sm.report());
+            eprintln!(
+                "--- smoothness ({}) ---\n{}",
+                self.present.name(),
+                sm.report()
+            );
             *sm = debug::Smoothness::default();
         }
     }
 
     fn refresh_status(&mut self) {
-        let audio_desc = self.audio.as_ref().map(|a| a.description.clone()).unwrap_or_else(|| tr!("no audio", "音声なし", "нет звука").into());
-        let config = config::config_path().map(|p| p.display().to_string()).unwrap_or_else(|| tr!("not saved", "保存されません", "не сохраняется").into());
+        let audio_desc = self
+            .audio
+            .as_ref()
+            .map(|a| a.description.clone())
+            .unwrap_or_else(|| tr!("no audio", "音声なし", "нет звука").into());
+        let config = config::config_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| tr!("not saved", "保存されません", "не сохраняется").into());
         let (adapter, hz) = (&self.adapter, self.refresh_hz);
         self.status = tr!("{adapter}  |  {audio_desc}  |  {hz:.0} Hz  |  config: {config}", "{adapter}  |  {audio_desc}  |  {hz:.0} Hz  |  設定: {config}", "{adapter}  |  {audio_desc}  |  {hz:.0} Гц  |  конфиг: {config}";);
     }
 
     fn open_settings(&mut self) {
         let prev = std::mem::replace(&mut self.scene, Scene::Select);
-        self.scene = Scene::Settings { prev: Box::new(prev) };
+        self.scene = Scene::Settings {
+            prev: Box::new(prev),
+        };
         self.settings_ui.binding = None;
         self.settings_ui.choices = None;
         self.settings_ui.editing = None;
@@ -2106,14 +2961,22 @@ impl State {
 
     fn guide_action(&mut self, action: guide::Action) {
         let Some(page) = self.guide else { return };
-        if self.guide_hold_left().is_some() && matches!(action, guide::Action::Next | guide::Action::Close | guide::Action::Page(_)) {
+        if self.guide_hold_left().is_some()
+            && matches!(
+                action,
+                guide::Action::Next | guide::Action::Close | guide::Action::Page(_)
+            )
+        {
             return;
         }
         self.guide_binding = None;
-        let closing = action == guide::Action::Close || (action == guide::Action::Next && page + 1 == guide::PAGES);
+        let closing = action == guide::Action::Close
+            || (action == guide::Action::Next && page + 1 == guide::PAGES);
         match action {
             // A new player doesn't leave without the page that says to calibrate.
-            _ if closing && !self.cfg.guide_seen && !self.guide_read[guide::OFFSET_PAGE] => self.guide = Some(guide::OFFSET_PAGE),
+            _ if closing && !self.cfg.guide_seen && !self.guide_read[guide::OFFSET_PAGE] => {
+                self.guide = Some(guide::OFFSET_PAGE)
+            }
             guide::Action::Bind(slot) => self.guide_binding = Some(slot),
             guide::Action::Back => self.guide = Some(page.saturating_sub(1)),
             guide::Action::Next if page + 1 < guide::PAGES => self.guide = Some(page + 1),
@@ -2134,8 +2997,13 @@ impl State {
 
     /// What's left of the time a new player stays on this page of the guide.
     fn guide_hold_left(&self) -> Option<Duration> {
-        let page = self.guide.filter(|&p| !self.cfg.guide_seen && (p == 0 || p == guide::OFFSET_PAGE) && !self.guide_read[p])?;
-        let shown = self.guide_shown.filter(|s| s.0 == page).map_or(Duration::ZERO, |s| s.1.elapsed());
+        let page = self.guide.filter(|&p| {
+            !self.cfg.guide_seen && (p == 0 || p == guide::OFFSET_PAGE) && !self.guide_read[p]
+        })?;
+        let shown = self
+            .guide_shown
+            .filter(|s| s.0 == page)
+            .map_or(Duration::ZERO, |s| s.1.elapsed());
         Some(GUIDE_HOLD.saturating_sub(shown)).filter(|left| !left.is_zero())
     }
 
@@ -2153,7 +3021,8 @@ impl State {
     }
 
     fn reset_is_armed(&self) -> bool {
-        self.reset_armed.is_some_and(|at| at.elapsed() < RESET_CONFIRM)
+        self.reset_armed
+            .is_some_and(|at| at.elapsed() < RESET_CONFIRM)
     }
 
     /// The first press of "Reset map offsets" only asks: it's a lot to lose to a stray click.
@@ -2184,9 +3053,21 @@ impl State {
         }
         match &mut self.scene {
             Scene::Play { game, .. } => game.pause(self.audio.as_ref()),
-            Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby | Scene::Results { .. } | Scene::Preview { .. } => {}
+            Scene::Select
+            | Scene::Download
+            | Scene::MpMenu
+            | Scene::Lobby
+            | Scene::Results { .. }
+            | Scene::Preview { .. } => {}
             _ => {
-                self.toast(tr!("settings can't open here", "ここでは設定を開けません", "здесь настройки не открыть").into());
+                self.toast(
+                    tr!(
+                        "settings can't open here",
+                        "ここでは設定を開けません",
+                        "здесь настройки не открыть"
+                    )
+                    .into(),
+                );
                 return;
             }
         }
@@ -2200,7 +3081,10 @@ impl State {
 
     /// The main menu is what's showing.
     fn on_menu(&self) -> bool {
-        self.main_menu.is_some() && matches!(self.scene, Scene::Select) && self.mp.is_none() && !self.picking_lobby_map
+        self.main_menu.is_some()
+            && matches!(self.scene, Scene::Select)
+            && self.mp.is_none()
+            && !self.picking_lobby_map
     }
 
     fn menu_key(&mut self, code: KeyCode) {
@@ -2217,7 +3101,9 @@ impl State {
             (KeyCode::Escape, _) => self.ask_quit(),
             (KeyCode::ArrowLeft, _) | (_, Some(0)) => self.menu_step(-1),
             (KeyCode::ArrowRight, _) | (_, Some(3)) => self.menu_step(1),
-            (KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space, _) | (_, Some(1 | 2)) => self.menu_hit(),
+            (KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space, _) | (_, Some(1 | 2)) => {
+                self.menu_hit()
+            }
             _ => {}
         }
     }
@@ -2243,7 +3129,11 @@ impl State {
                 KeyCode::Backspace => {
                     filter.pop();
                 }
-                _ => filter.extend(text.into_iter().flat_map(str::chars).filter(|c| !c.is_control())),
+                _ => filter.extend(
+                    text.into_iter()
+                        .flat_map(str::chars)
+                        .filter(|c| !c.is_control()),
+                ),
             }
             p.search(filter);
             return;
@@ -2270,7 +3160,9 @@ impl State {
             (KeyCode::ArrowRight, _) => self.music_seek_by(MUSIC_SEEK_MS),
             (_, Some(0)) => self.music_control(player::Control::Prev),
             (_, Some(3)) => self.music_control(player::Control::Next),
-            (KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space, _) | (_, Some(1 | 2)) => self.music_control(player::Control::Toggle),
+            (KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space, _) | (_, Some(1 | 2)) => {
+                self.music_control(player::Control::Toggle)
+            }
             _ => {}
         }
     }
@@ -2281,7 +3173,10 @@ impl State {
             player::Control::Next => self.music_step(1),
             player::Control::Toggle => self.set_music_paused(!self.music_paused),
             player::Control::Open => {
-                self.player = Some(Box::new(player::Player::new(&self.library, self.select.selected())));
+                self.player = Some(Box::new(player::Player::new(
+                    &self.library,
+                    self.select.selected(),
+                )));
                 if self.media.is_none() && !cfg!(test) {
                     self.media = Some(media::Media::start(self.window_handle));
                 }
@@ -2362,11 +3257,14 @@ impl State {
                 }
             }
         }
-        let Some((p, media)) = self.player.as_ref().zip(self.media.as_ref()) else { return };
+        let Some((p, media)) = self.player.as_ref().zip(self.media.as_ref()) else {
+            return;
+        };
         let state = (p.list.now(), !self.music_paused);
         if self.media_told != Some(state) {
             if self.media_told.is_none_or(|t| t.0 != state.0)
-                && let Some(e) = p.list.entry().and_then(|i| self.library.get(i)) {
+                && let Some(e) = p.list.entry().and_then(|i| self.library.get(i))
+            {
                 media.song(e.meta.title.clone(), e.meta.artist.clone());
             }
             media.playing(state.1);
@@ -2396,12 +3294,16 @@ impl State {
         let was = self.select.selected();
         self.select.jump_songs(by, &self.library);
         if self.select.selected() == was {
-            self.select.jump_songs(-by * self.library.len() as i32, &self.library);
+            self.select
+                .jump_songs(-by * self.library.len() as i32, &self.library);
         }
     }
 
     fn music_seek_by(&mut self, ms: f64) {
-        if let Some((at, _)) = self.preview.music_times(self.audio.as_ref(), Instant::now()) {
+        if let Some((at, _)) = self
+            .preview
+            .music_times(self.audio.as_ref(), Instant::now())
+        {
             self.preview.seek_music(at + ms, self.audio.as_ref());
         }
     }
@@ -2424,7 +3326,9 @@ impl State {
 
     /// A note or its name clicked: it rides up to the circle and is hit, all in one click.
     fn menu_click(&mut self, i: usize) {
-        let Some(m) = self.main_menu.as_mut().filter(|m| !m.is_leaving()) else { return };
+        let Some(m) = self.main_menu.as_mut().filter(|m| !m.is_leaving()) else {
+            return;
+        };
         m.pick(i);
         self.menu_hit();
     }
@@ -2454,7 +3358,9 @@ impl State {
     fn medals_earned(&mut self, new: Vec<online::MedalNote>) {
         let more = self.unlock.add(new);
         if more > 0 {
-            self.toast(tr!("and {more} more medals", "ほか{more}個のメダル", "и ещё медалей: {more}";));
+            self.toast(
+                tr!("and {more} more medals", "ほか{more}個のメダル", "и ещё медалей: {more}";),
+            );
         }
     }
 
@@ -2477,7 +3383,10 @@ impl State {
 
     /// Logged in as krokodil_koban (their settings row shows).
     fn is_krokodil(&self) -> bool {
-        self.mp_menu.account.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("krokodil_koban"))
+        self.mp_menu
+            .account
+            .as_deref()
+            .is_some_and(|a| a.eq_ignore_ascii_case("krokodil_koban"))
     }
 
     fn close_settings(&mut self) {
@@ -2493,7 +3402,12 @@ impl State {
 
     /// Stars out the swear words already in the chats (the chat filter was just switched on).
     fn censor_chats(&mut self) {
-        let lines = self.social.chats.values_mut().flatten().chain(self.social.global.iter_mut());
+        let lines = self
+            .social
+            .chats
+            .values_mut()
+            .flatten()
+            .chain(self.social.global.iter_mut());
         for line in lines {
             line.text = net::censor(&line.text);
         }
@@ -2515,8 +3429,15 @@ impl State {
     fn sync_letterbox(&mut self) -> Option<[u32; 4]> {
         let (w, h) = self.real_window;
         let on = self.cfg.letterbox && self.fullscreen;
-        self.letterbox = layout::letterbox((w as u32, h as u32), self.cfg.letterbox_size, self.cfg.letterbox_pos).filter(|_| on);
-        let (gw, gh) = self.letterbox.map_or((w, h), |[_, _, gw, gh]| (gw as f32, gh as f32));
+        self.letterbox = layout::letterbox(
+            (w as u32, h as u32),
+            self.cfg.letterbox_size,
+            self.cfg.letterbox_pos,
+        )
+        .filter(|_| on);
+        let (gw, gh) = self
+            .letterbox
+            .map_or((w, h), |[_, _, gw, gh]| (gw as f32, gh as f32));
         if (gw, gh) != (self.window_w, self.window_h) {
             (self.window_w, self.window_h) = (gw, gh);
             self.refresh_presets();
@@ -2526,12 +3447,17 @@ impl State {
 
     /// A point of the window as the game sees it: from the game's own corner.
     fn to_game(&self, x: f64, y: f64) -> (f64, f64) {
-        self.letterbox.map_or((x, y), |[gx, gy, ..]| (x - gx as f64, y - gy as f64))
+        self.letterbox
+            .map_or((x, y), |[gx, gy, ..]| (x - gx as f64, y - gy as f64))
     }
 
     /// The window's size in pixels.
     fn window_px(&self) -> (f32, f32) {
-        if self.letterbox.is_some() { self.real_window } else { (self.window_w, self.window_h) }
+        if self.letterbox.is_some() {
+            self.real_window
+        } else {
+            (self.window_w, self.window_h)
+        }
     }
 
     /// The resolutions Letterbox can use: all the monitor reports, custom ones from the driver
@@ -2539,7 +3465,10 @@ impl State {
     fn letterbox_sizes(&self) -> Vec<(u32, u32)> {
         let (mw, mh) = self.monitor_size;
         let sizes = layout::presets(&self.monitor_modes, mw, mh);
-        layout::group_presets(&sizes, self.monitor_size).into_iter().flat_map(|(_, l)| l).collect()
+        layout::group_presets(&sizes, self.monitor_size)
+            .into_iter()
+            .flat_map(|(_, l)| l)
+            .collect()
     }
 
     /// How a setting's row shows its value.
@@ -2556,7 +3485,9 @@ impl State {
             Item::KatColour => Control::Swatch(c.note_colours.kat()),
             Item::Accent | Item::AccentHue => Control::Swatch(c.accent),
             Item::Interface => Control::Switch(!c.interface_hidden),
-            _ if item.kind() == Kind::Toggle => Control::Switch(self.setting_value(item) != off_text()),
+            _ if item.kind() == Kind::Toggle => {
+                Control::Switch(self.setting_value(item) != off_text())
+            }
             _ => Control::Text,
         }
     }
@@ -2578,7 +3509,12 @@ impl State {
     /// Text typed on the settings screen goes into its search; true if it took the key.
     fn settings_type(&mut self, code: KeyCode, text: Option<&str>) -> bool {
         let ui = &self.settings_ui;
-        if ui.choices.is_some() || ui.binding.is_some() || ui.dropdown.is_some() || self.modifiers_ctrl || self.modifiers_alt {
+        if ui.choices.is_some()
+            || ui.binding.is_some()
+            || ui.dropdown.is_some()
+            || self.modifiers_ctrl
+            || self.modifiers_alt
+        {
             return false;
         }
         let searching = !ui.search.is_empty();
@@ -2590,7 +3526,11 @@ impl State {
             KeyCode::Escape if searching => search.clear(),
             // Space still works the row until there's something to search for.
             KeyCode::Space if !searching => return false,
-            _ if keys::starts_text(code) || (searching && keys::types_text(code)) => search.extend(text.into_iter().flat_map(str::chars).filter(|c| !c.is_control())),
+            _ if keys::starts_text(code) || (searching && keys::types_text(code)) => search.extend(
+                text.into_iter()
+                    .flat_map(str::chars)
+                    .filter(|c| !c.is_control()),
+            ),
             _ => return false,
         }
         self.search_settings(search);
@@ -2599,12 +3539,21 @@ impl State {
 
     fn search_settings(&mut self, text: String) {
         let hotkeys = self.settings_key_names();
-        self.settings_ui.set_search(text, &|item| hotkeys.iter().find(|(i, _)| *i == item).map_or(String::new(), |(_, name)| name.clone()));
+        self.settings_ui.set_search(text, &|item| {
+            hotkeys
+                .iter()
+                .find(|(i, _)| *i == item)
+                .map_or(String::new(), |(_, name)| name.clone())
+        });
     }
 
     /// Every key setting with the key it's on.
     fn settings_key_names(&self) -> Vec<(Item, String)> {
-        settings::ITEMS.iter().filter(|(_, item)| item.kind() == Kind::Key).map(|&(_, item)| (item, self.setting_value(item))).collect()
+        settings::ITEMS
+            .iter()
+            .filter(|(_, item)| item.kind() == Kind::Key)
+            .map(|&(_, item)| (item, self.setting_value(item)))
+            .collect()
     }
 
     fn setting_value(&self, item: Item) -> String {
@@ -2625,7 +3574,11 @@ impl State {
             }
             Item::Key(i) => config::key_name(c.keys[i]),
             Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
-            Item::Hotkey(i) => c.hotkeys.get(keys::Hotkey::ALL[i]).map(keys::Chord::name).unwrap_or_else(|| none_text().into()),
+            Item::Hotkey(i) => c
+                .hotkeys
+                .get(keys::Hotkey::ALL[i])
+                .map(keys::Chord::name)
+                .unwrap_or_else(|| none_text().into()),
             Item::TouchLayout => c.touch_layout.name().into(),
             Item::AutoplayStyle => c.autoplay.style.name().into(),
             Item::AutoplayBinding => autoplay::BINDINGS[c.autoplay.binding].into(),
@@ -2651,21 +3604,38 @@ impl State {
             Item::ShowConverts => on(self.select.show_converts),
             Item::SongHeadings => on(self.select.headings),
             Item::HiddenMaps => self.select.hidden.describe(),
-            Item::SongsFolder if self.folder_pick.is_some() && self.folder_pick_for == Item::SongsFolder => picking_text().into(),
-            Item::DataFolder if self.folder_pick.is_some() && self.folder_pick_for == Item::DataFolder => picking_text().into(),
-            Item::DataFolder if self.data_move.is_some() => tr!("moving...", "移動中...", "перенос...").into(),
+            Item::SongsFolder
+                if self.folder_pick.is_some() && self.folder_pick_for == Item::SongsFolder =>
+            {
+                picking_text().into()
+            }
+            Item::DataFolder
+                if self.folder_pick.is_some() && self.folder_pick_for == Item::DataFolder =>
+            {
+                picking_text().into()
+            }
+            Item::DataFolder if self.data_move.is_some() => {
+                tr!("moving...", "移動中...", "перенос...").into()
+            }
             Item::DataFolder => match &c.data_folder {
                 Some(dir) => short_path(dir),
                 None => tr!("the usual places", "いつもの場所", "обычные места").into(),
             },
-            Item::SongsFolder if self.scan.is_some() => tr!("scanning...", "スキャン中...", "сканирование...").into(),
+            Item::SongsFolder if self.scan.is_some() => {
+                tr!("scanning...", "スキャン中...", "сканирование...").into()
+            }
             Item::SongsFolder => match (&c.songs_folder, self.song_dirs.first()) {
                 (Some(dir), _) => short_path(dir),
                 (None, Some(dir)) => {
                     let dir = short_path(dir);
                     tr!("found {dir}", "見つけた: {dir}", "найдена {dir}";)
                 }
-                (None, None) => tr!("none found, Enter to pick", "見つかりません、Enterで選択", "не найдена, Enter — выбрать").into(),
+                (None, None) => tr!(
+                    "none found, Enter to pick",
+                    "見つかりません、Enterで選択",
+                    "не найдена, Enter — выбрать"
+                )
+                .into(),
             },
             Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
             Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
@@ -2680,7 +3650,11 @@ impl State {
             Item::Renderer => {
                 // What's drawing now (the adapter's name ends in its API), and a word when the
                 // pick waits for a restart.
-                let api = self.adapter.rsplit_once('(').map(|(_, a)| a.trim_end_matches(')').to_ascii_lowercase()).unwrap_or_default();
+                let api = self
+                    .adapter
+                    .rsplit_once('(')
+                    .map(|(_, a)| a.trim_end_matches(')').to_ascii_lowercase())
+                    .unwrap_or_default();
                 let running = match api.as_str() {
                     "vulkan" => "vulkan",
                     "dx12" => "dx12",
@@ -2691,7 +3665,10 @@ impl State {
                 let name = config::renderer_name(&c.graphics_api);
                 if c.graphics_api == "auto" && !running.is_empty() {
                     format!("{name} ({})", config::renderer_name(running))
-                } else if c.graphics_api != "auto" && !running.is_empty() && c.graphics_api != running {
+                } else if c.graphics_api != "auto"
+                    && !running.is_empty()
+                    && c.graphics_api != running
+                {
                     tr!("{name} (after a restart)", "{name} (再起動後)", "{name} (после перезапуска)";)
                 } else {
                     name.to_string()
@@ -2719,10 +3696,21 @@ impl State {
             Item::Update => {
                 let build = update::BUILD.map(update::short);
                 match (self.updater.status(), build) {
-                    (_, None) => tr!("local build (no updates)", "ローカルビルド (更新なし)", "локальная сборка (без обновлений)").into(),
-                    (update::Status::Off, Some(b)) => tr!("{b}, Enter to check", "{b}、Enterで確認", "{b}, Enter — проверить";),
-                    (update::Status::Checking, _) => tr!("checking...", "確認中...", "проверка...").into(),
-                    (update::Status::UpToDate, Some(b)) => tr!("{b}, up to date", "{b}、最新です", "{b}, последняя";),
+                    (_, None) => tr!(
+                        "local build (no updates)",
+                        "ローカルビルド (更新なし)",
+                        "локальная сборка (без обновлений)"
+                    )
+                    .into(),
+                    (update::Status::Off, Some(b)) => {
+                        tr!("{b}, Enter to check", "{b}、Enterで確認", "{b}, Enter — проверить";)
+                    }
+                    (update::Status::Checking, _) => {
+                        tr!("checking...", "確認中...", "проверка...").into()
+                    }
+                    (update::Status::UpToDate, Some(b)) => {
+                        tr!("{b}, up to date", "{b}、最新です", "{b}, последняя";)
+                    }
                     (update::Status::Available { commit, .. }, Some(b)) => {
                         let new = update::short(&commit);
                         tr!("{b} -> {new}, Enter to install", "{b} -> {new}、Enterでインストール", "{b} -> {new}, Enter — установить";)
@@ -2731,13 +3719,27 @@ impl State {
                         let p = self.updater.progress() * 100.0;
                         tr!("downloading {p:.0}%", "ダウンロード中 {p:.0}%", "загрузка {p:.0}%";)
                     }
-                    (update::Status::Installed, _) => tr!("restarting...", "再起動中...", "перезапуск...").into(),
-                    (update::Status::Failed(_), _) => tr!("failed, Enter to retry", "失敗、Enterで再試行", "ошибка, Enter — ещё раз").into(),
+                    (update::Status::Installed, _) => {
+                        tr!("restarting...", "再起動中...", "перезапуск...").into()
+                    }
+                    (update::Status::Failed(_), _) => tr!(
+                        "failed, Enter to retry",
+                        "失敗、Enterで再試行",
+                        "ошибка, Enter — ещё раз"
+                    )
+                    .into(),
                 }
             }
             Item::Changelog => tr!("Enter to read", "Enterで読む", "Enter — читать").into(),
-            Item::SongSelectLayout if self.song_layout_is_default() => tr!("default", "初期設定", "по умолчанию").into(),
-            Item::SongSelectLayout => tr!("custom, Enter: default", "カスタム、Enter: 初期設定", "свой, Enter: по умолчанию").into(),
+            Item::SongSelectLayout if self.song_layout_is_default() => {
+                tr!("default", "初期設定", "по умолчанию").into()
+            }
+            Item::SongSelectLayout => tr!(
+                "custom, Enter: default",
+                "カスタム、Enter: 初期設定",
+                "свой, Enter: по умолчанию"
+            )
+            .into(),
             Item::KrokodilKoban => String::new(),
             Item::Fullscreen => on(self.fullscreen),
             Item::WindowSize if self.fullscreen => {
@@ -2750,8 +3752,15 @@ impl State {
             }
             Item::Calibrate => enter_to_start().into(),
             Item::Guide => enter_to_start().into(),
-            Item::ResetMapOffsets if self.map_offsets.is_empty() => tr!("none set", "なし", "их нет").into(),
-            Item::ResetMapOffsets if self.reset_is_armed() => tr!("Enter again to reset", "もう一度Enterでリセット", "Enter ещё раз — сбросить").into(),
+            Item::ResetMapOffsets if self.map_offsets.is_empty() => {
+                tr!("none set", "なし", "их нет").into()
+            }
+            Item::ResetMapOffsets if self.reset_is_armed() => tr!(
+                "Enter again to reset",
+                "もう一度Enterでリセット",
+                "Enter ещё раз — сбросить"
+            )
+            .into(),
             Item::ResetMapOffsets => {
                 let n = self.map_offsets.len();
                 tr!("{n} maps", "{n}譜面", "карт: {n}";)
@@ -2775,8 +3784,12 @@ impl State {
                 tr!("hidden ({key})", "非表示 ({key})", "скрыт ({key})";)
             }
             Item::Interface => tr!("shown", "表示", "виден").into(),
-            Item::InterfaceHides if c.interface_hides == hud::Parts::ALL => tr!("everything", "すべて", "всё").into(),
-            Item::InterfaceHides if c.interface_hides == hud::Parts::NONE => tr!("nothing", "なし", "ничего").into(),
+            Item::InterfaceHides if c.interface_hides == hud::Parts::ALL => {
+                tr!("everything", "すべて", "всё").into()
+            }
+            Item::InterfaceHides if c.interface_hides == hud::Parts::NONE => {
+                tr!("nothing", "なし", "ничего").into()
+            }
             Item::InterfaceHides => {
                 let (n, all) = (c.interface_hides.len(), hud::Part::ALL.len());
                 tr!("{n} of {all}", "{all}個中{n}個", "{n} из {all}";)
@@ -2788,23 +3801,34 @@ impl State {
                 tr!("{s:.2} s", "{s:.2}秒", "{s:.2} с";)
             }
             Item::PlayfieldArea => c.playfield_area.describe(),
-            Item::PlayfieldPreset => self.current_preset().map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| tr!("custom", "カスタム", "свой").into()),
+            Item::PlayfieldPreset => self
+                .current_preset()
+                .map(|(w, h)| format!("{w}x{h}"))
+                .unwrap_or_else(|| tr!("custom", "カスタム", "свой").into()),
             Item::BackgroundDim => format!("{:.0}%", c.bg_dim * 100.0),
             Item::MenuNotesDim => format!("{:.0}%", c.menu_notes_dim * 100.0),
-            Item::PlayfieldReset => tr!("Enter to reset", "Enterで元に戻す", "Enter — сбросить").into(),
+            Item::PlayfieldReset => {
+                tr!("Enter to reset", "Enterで元に戻す", "Enter — сбросить").into()
+            }
             Item::Rate => format!("{:.2}x", c.rate),
             Item::RateKeepPitch => on(c.rate_keep_pitch),
             Item::Skin if c.skin.is_empty() => built_in_text().into(),
             Item::Skin => c.skin.clone(),
             Item::SkinParts => {
-                let changed = skin::Part::ALL.iter().filter(|&&p| *c.skin_parts.get(p) != p.default_source()).count();
+                let changed = skin::Part::ALL
+                    .iter()
+                    .filter(|&&p| *c.skin_parts.get(p) != p.default_source())
+                    .count();
                 if changed == 0 {
                     tr!("notes from the skin", "ノーツはスキンから", "ноты из скина").into()
                 } else {
                     tr!("{changed} changed", "{changed}個を変更", "изменено: {changed}";)
                 }
             }
-            Item::SkinPart(i) => skin::Part::ALL.get(i).map(|&p| self.skin_source_name(c.skin_parts.get(p))).unwrap_or_default(),
+            Item::SkinPart(i) => skin::Part::ALL
+                .get(i)
+                .map(|&p| self.skin_source_name(c.skin_parts.get(p)))
+                .unwrap_or_default(),
             Item::SkinFolder => tr!("Enter to open", "Enterで開く", "Enter — открыть").into(),
             Item::Accent => render::accent_name(c.accent),
             Item::AccentHue => format!("#{:06x}", c.accent),
@@ -2822,9 +3846,13 @@ impl State {
             return;
         }
         match item {
-            Item::ScrollSpeed => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, d),
+            Item::ScrollSpeed => {
+                self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, d)
+            }
             Item::Offset => self.cfg.offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
-            Item::VisualOffset => self.cfg.visual_offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
+            Item::VisualOffset => {
+                self.cfg.visual_offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 }
+            }
             Item::UpdateChannel => {
                 let channel = match self.updater.channel() {
                     update::Channel::Stable => update::Channel::Dev,
@@ -2844,13 +3872,20 @@ impl State {
             Item::AutoplayStyle => self.cfg.autoplay.style = self.cfg.autoplay.style.step(dir),
             Item::AutoplayBinding => {
                 let n = autoplay::BINDINGS.len() as i32;
-                self.cfg.autoplay.binding = (self.cfg.autoplay.binding as i32 + dir).rem_euclid(n) as usize;
+                self.cfg.autoplay.binding =
+                    (self.cfg.autoplay.binding as i32 + dir).rem_euclid(n) as usize;
             }
-            Item::AutoplayLeftHanded => self.cfg.autoplay.left_handed = !self.cfg.autoplay.left_handed,
+            Item::AutoplayLeftHanded => {
+                self.cfg.autoplay.left_handed = !self.cfg.autoplay.left_handed
+            }
             Item::Screenshots => self.cfg.screenshot_to = self.cfg.screenshot_to.step(dir),
             Item::IdleScreen => {
-                let i = idle::MINUTES.iter().position(|&m| m == self.cfg.idle_minutes).unwrap_or(2) as i32;
-                self.cfg.idle_minutes = idle::MINUTES[(i + dir).rem_euclid(idle::MINUTES.len() as i32) as usize];
+                let i = idle::MINUTES
+                    .iter()
+                    .position(|&m| m == self.cfg.idle_minutes)
+                    .unwrap_or(2) as i32;
+                self.cfg.idle_minutes =
+                    idle::MINUTES[(i + dir).rem_euclid(idle::MINUTES.len() as i32) as usize];
             }
             Item::Language => self.cfg.language = self.cfg.language.step(dir),
             Item::Accent => {
@@ -2863,15 +3898,23 @@ impl State {
                 };
                 self.cfg.accent = render::ACCENTS[next as usize].1;
             }
-            Item::AccentHue => self.cfg.accent = render::rotate_hue(self.cfg.accent, 10.0 * d as f32),
+            Item::AccentHue => {
+                self.cfg.accent = render::rotate_hue(self.cfg.accent, 10.0 * d as f32)
+            }
             Item::NoteColours => self.cfg.note_colours = self.cfg.note_colours.step(dir),
             Item::DonColour | Item::KatColour => {
                 let (don, kat) = (self.cfg.note_colours.don(), self.cfg.note_colours.kat());
                 let turn = |c: u32| render::rotate_hue(c, 10.0 * d as f32);
-                self.cfg.note_colours = if item == Item::DonColour { multiverse::Colours::own(turn(don), kat) } else { multiverse::Colours::own(don, turn(kat)) };
+                self.cfg.note_colours = if item == Item::DonColour {
+                    multiverse::Colours::own(turn(don), kat)
+                } else {
+                    multiverse::Colours::own(don, turn(kat))
+                };
             }
             Item::ShowPlayfieldSize => self.cfg.show_playfield_size = !self.cfg.show_playfield_size,
-            Item::WheelResize => self.cfg.wheel_resizes_playfield = !self.cfg.wheel_resizes_playfield,
+            Item::WheelResize => {
+                self.cfg.wheel_resizes_playfield = !self.cfg.wheel_resizes_playfield
+            }
             Item::BackgroundDimBlack => self.cfg.bg_dim_black = !self.cfg.bg_dim_black,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
@@ -2902,19 +3945,33 @@ impl State {
                 return;
             }
             Item::SongHeadings => {
-                self.select.set_headings(!self.select.headings, &self.library);
+                self.select
+                    .set_headings(!self.select.headings, &self.library);
                 self.cfg.song_headings = self.select.headings;
                 self.cfg.save();
                 return;
             }
             // Act on Enter in `settings_key`.
             Item::HiddenMaps | Item::SongsFolder | Item::DataFolder => return,
-            Item::MasterVolume => self.cfg.master_volume = (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
-            Item::MusicVolume => self.cfg.music_volume = (self.cfg.music_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
-            Item::FxVolume => self.cfg.fx_volume = (self.cfg.fx_volume + 0.05 * dir as f32).clamp(0.0, 1.0),
+            Item::MasterVolume => {
+                self.cfg.master_volume =
+                    (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0)
+            }
+            Item::MusicVolume => {
+                self.cfg.music_volume = (self.cfg.music_volume + 0.05 * dir as f32).clamp(0.0, 1.0)
+            }
+            Item::FxVolume => {
+                self.cfg.fx_volume = (self.cfg.fx_volume + 0.05 * dir as f32).clamp(0.0, 1.0)
+            }
             Item::AudioBuffer => {
-                let i = AUDIO_BUFFERS.iter().position(|&b| b >= self.cfg.audio_buffer).unwrap_or(2);
-                self.set_audio_buffer(AUDIO_BUFFERS[(i as i32 + dir).clamp(0, AUDIO_BUFFERS.len() as i32 - 1) as usize]);
+                let i = AUDIO_BUFFERS
+                    .iter()
+                    .position(|&b| b >= self.cfg.audio_buffer)
+                    .unwrap_or(2);
+                self.set_audio_buffer(
+                    AUDIO_BUFFERS
+                        [(i as i32 + dir).clamp(0, AUDIO_BUFFERS.len() as i32 - 1) as usize],
+                );
             }
             Item::PresentMode => self.cfg.present = self.step_present(dir),
             // Each pick restarts the game, so Left/Right open the list rather than step through it.
@@ -2922,7 +3979,10 @@ impl State {
             Item::MenuVsync => self.cfg.menu_vsync = !self.cfg.menu_vsync,
             Item::HalfResolution => self.cfg.half_resolution = !self.cfg.half_resolution,
             Item::FpsCap => {
-                let i = FPS_CAPS.iter().position(|&c| c == self.cfg.fps_cap).unwrap_or(0) as i32;
+                let i = FPS_CAPS
+                    .iter()
+                    .position(|&c| c == self.cfg.fps_cap)
+                    .unwrap_or(0) as i32;
                 self.cfg.fps_cap = FPS_CAPS[(i + dir).rem_euclid(FPS_CAPS.len() as i32) as usize];
             }
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
@@ -2946,13 +4006,29 @@ impl State {
                 let sizes = self.letterbox_sizes();
                 let area = |&(w, h): &(u32, u32)| w as u64 * h as u64;
                 let now = area(&self.cfg.letterbox_size);
-                let next = if dir > 0 { sizes.iter().filter(|s| area(s) > now).min_by_key(|s| area(s)) } else { sizes.iter().filter(|s| area(s) < now).max_by_key(|s| area(s)) };
+                let next = if dir > 0 {
+                    sizes
+                        .iter()
+                        .filter(|s| area(s) > now)
+                        .min_by_key(|s| area(s))
+                } else {
+                    sizes
+                        .iter()
+                        .filter(|s| area(s) < now)
+                        .max_by_key(|s| area(s))
+                };
                 if let Some(&size) = next {
                     self.cfg.letterbox_size = size;
                 }
             }
-            Item::LetterboxX => self.cfg.letterbox_pos.0 = (self.cfg.letterbox_pos.0 + 5.0 * dir as f32).clamp(-100.0, 100.0),
-            Item::LetterboxY => self.cfg.letterbox_pos.1 = (self.cfg.letterbox_pos.1 + 5.0 * dir as f32).clamp(-100.0, 100.0),
+            Item::LetterboxX => {
+                self.cfg.letterbox_pos.0 =
+                    (self.cfg.letterbox_pos.0 + 5.0 * dir as f32).clamp(-100.0, 100.0)
+            }
+            Item::LetterboxY => {
+                self.cfg.letterbox_pos.1 =
+                    (self.cfg.letterbox_pos.1 + 5.0 * dir as f32).clamp(-100.0, 100.0)
+            }
             Item::CheckUpdates => self.cfg.check_updates = !self.cfg.check_updates,
             // Acts on Enter in `settings_key`.
             Item::Update | Item::Changelog | Item::KrokodilKoban | Item::SongSelectLayout => return,
@@ -2964,11 +4040,18 @@ impl State {
                 let area = (self.window_w * self.window_h) as u64;
                 let aspect = layout::aspect_name(self.window_w as u32, self.window_h as u32);
                 let step = |same: bool| {
-                    let near = sizes.iter().filter(|&&(w, h)| !same || layout::aspect_name(w, h) == aspect).map(|&(w, h)| ((w * h) as u64, (w, h)));
+                    let near = sizes
+                        .iter()
+                        .filter(|&&(w, h)| !same || layout::aspect_name(w, h) == aspect)
+                        .map(|&(w, h)| ((w * h) as u64, (w, h)));
                     if dir > 0 {
-                        near.filter(|&(a, _)| a > area).min_by_key(|&(a, _)| a).map(|(_, s)| s)
+                        near.filter(|&(a, _)| a > area)
+                            .min_by_key(|&(a, _)| a)
+                            .map(|(_, s)| s)
                     } else {
-                        near.filter(|&(a, _)| a < area).max_by_key(|&(a, _)| a).map(|(_, s)| s)
+                        near.filter(|&(a, _)| a < area)
+                            .max_by_key(|&(a, _)| a)
+                            .map(|(_, s)| s)
                     }
                 };
                 let next = step(true).or_else(|| step(false));
@@ -2976,10 +4059,20 @@ impl State {
                 match next {
                     Some(&size) => self.window_request = Some(size),
                     None => self.toast(if dir > 0 {
-            tr!("the largest size that fits this screen", "この画面に収まる最大のサイズです", "это самый большой размер для экрана").into()
-        } else {
-            tr!("the smallest size there is", "これが最小のサイズです", "это самый маленький размер").into()
-        }),
+                        tr!(
+                            "the largest size that fits this screen",
+                            "この画面に収まる最大のサイズです",
+                            "это самый большой размер для экрана"
+                        )
+                        .into()
+                    } else {
+                        tr!(
+                            "the smallest size there is",
+                            "これが最小のサイズです",
+                            "это самый маленький размер"
+                        )
+                        .into()
+                    }),
                 }
                 return;
             }
@@ -2988,25 +4081,41 @@ impl State {
             Item::LiveOffset => self.cfg.show_offset_hint = !self.cfg.show_offset_hint,
             Item::LiveOffsetUr => self.cfg.offset_hint_ur_scaled = !self.cfg.offset_hint_ur_scaled,
             Item::VsyncCompensation => self.cfg.vsync_compensation = !self.cfg.vsync_compensation,
-            Item::VsyncTune => self.cfg.vsync_tune_ms = (self.cfg.vsync_tune_ms + d * if self.modifiers_shift { 5.0 } else { 1.0 }).clamp(-200.0, 200.0),
+            Item::VsyncTune => {
+                self.cfg.vsync_tune_ms = (self.cfg.vsync_tune_ms
+                    + d * if self.modifiers_shift { 5.0 } else { 1.0 })
+                .clamp(-200.0, 200.0)
+            }
             // Started with Enter in `settings_key`.
             Item::VsyncCalibrate => return,
-            Item::ResumeDelay => self.cfg.resume_delay_ms = (self.cfg.resume_delay_ms + 250.0 * d).clamp(0.0, 3000.0),
+            Item::ResumeDelay => {
+                self.cfg.resume_delay_ms = (self.cfg.resume_delay_ms + 250.0 * d).clamp(0.0, 3000.0)
+            }
             // Both act on Enter in `settings_key`.
             Item::PlayfieldArea | Item::PlayfieldReset => return,
             Item::PlayfieldPreset => {
                 self.cycle_preset(dir);
                 return;
             }
-            Item::BackgroundDim => self.cfg.bg_dim = (((self.cfg.bg_dim + 0.05 * dir as f32) * 20.0).round() / 20.0).clamp(0.0, 1.0),
-            Item::MenuNotesDim => self.cfg.menu_notes_dim = (((self.cfg.menu_notes_dim + 0.05 * dir as f32) * 20.0).round() / 20.0).clamp(0.0, 1.0),
+            Item::BackgroundDim => {
+                self.cfg.bg_dim =
+                    (((self.cfg.bg_dim + 0.05 * dir as f32) * 20.0).round() / 20.0).clamp(0.0, 1.0)
+            }
+            Item::MenuNotesDim => {
+                self.cfg.menu_notes_dim =
+                    (((self.cfg.menu_notes_dim + 0.05 * dir as f32) * 20.0).round() / 20.0)
+                        .clamp(0.0, 1.0)
+            }
             Item::Rate => {
                 let step = 0.05 * if self.modifiers_shift { 5.0 } else { 1.0 };
-                self.cfg.rate = (((self.cfg.rate + step * d) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
+                self.cfg.rate = (((self.cfg.rate + step * d) * 100.0).round() / 100.0)
+                    .clamp(RATE_RANGE.0, RATE_RANGE.1);
             }
             Item::RateKeepPitch => self.cfg.rate_keep_pitch = !self.cfg.rate_keep_pitch,
             Item::Skin => {
-                let names: Vec<String> = std::iter::once(String::new()).chain(skin::list().into_iter().map(|(n, _)| n)).collect();
+                let names: Vec<String> = std::iter::once(String::new())
+                    .chain(skin::list().into_iter().map(|(n, _)| n))
+                    .collect();
                 let i = names.iter().position(|n| *n == self.cfg.skin).unwrap_or(0) as i32;
                 self.cfg.skin = names[(i + dir).rem_euclid(names.len() as i32) as usize].clone();
                 self.load_skin();
@@ -3029,14 +4138,28 @@ impl State {
     fn set_update_channel(&mut self, channel: update::Channel) {
         self.updater.set_channel(channel);
         if update::BUILD.is_none() {
-            self.toast(tr!("a local build doesn't update itself", "ローカルビルドは自分で更新しません", "локальная сборка не обновляется сама").into());
+            self.toast(
+                tr!(
+                    "a local build doesn't update itself",
+                    "ローカルビルドは自分で更新しません",
+                    "локальная сборка не обновляется сама"
+                )
+                .into(),
+            );
         }
     }
 
     /// Reopens the audio device with a buffer of `frames` (not during a song).
     fn set_audio_buffer(&mut self, frames: u32) {
         if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
-            self.toast(tr!("change the audio buffer from song select", "オーディオバッファは選曲画面で変えてください", "меняйте аудиобуфер в выборе песни").into());
+            self.toast(
+                tr!(
+                    "change the audio buffer from song select",
+                    "オーディオバッファは選曲画面で変えてください",
+                    "меняйте аудиобуфер в выборе песни"
+                )
+                .into(),
+            );
             return;
         }
         self.cfg.audio_buffer = frames;
@@ -3060,32 +4183,78 @@ impl State {
         let (names, current, note) = match item {
             Item::TouchLayout => {
                 let all = config::TouchLayout::ALL;
-                (strings(&mut all.iter().map(|l| l.name())), all.iter().position(|&l| l == c.touch_layout), String::new())
+                (
+                    strings(&mut all.iter().map(|l| l.name())),
+                    all.iter().position(|&l| l == c.touch_layout),
+                    String::new(),
+                )
             }
             Item::Language => {
                 let all = lang::Lang::ALL;
-                (strings(&mut all.iter().map(|l| l.name())), all.iter().position(|&l| l == c.language), String::new())
+                (
+                    strings(&mut all.iter().map(|l| l.name())),
+                    all.iter().position(|&l| l == c.language),
+                    String::new(),
+                )
             }
-            Item::IdleScreen => {
-                (idle::MINUTES.iter().map(|&m| idle::minutes_name(m)).collect(), idle::MINUTES.iter().position(|&m| m == c.idle_minutes), String::new())
-            }
+            Item::IdleScreen => (
+                idle::MINUTES
+                    .iter()
+                    .map(|&m| idle::minutes_name(m))
+                    .collect(),
+                idle::MINUTES.iter().position(|&m| m == c.idle_minutes),
+                String::new(),
+            ),
             Item::Screenshots => {
                 let all = config::ScreenshotTo::ALL;
-                (strings(&mut all.iter().map(|t| t.name())), all.iter().position(|&t| t == c.screenshot_to), String::new())
+                (
+                    strings(&mut all.iter().map(|t| t.name())),
+                    all.iter().position(|&t| t == c.screenshot_to),
+                    String::new(),
+                )
             }
             Item::AutoplayStyle => {
                 let all = autoplay::Style::ALL;
-                (strings(&mut all.iter().map(|s| s.name())), all.iter().position(|&s| s == c.autoplay.style), String::new())
+                (
+                    strings(&mut all.iter().map(|s| s.name())),
+                    all.iter().position(|&s| s == c.autoplay.style),
+                    String::new(),
+                )
             }
-            Item::AutoplayBinding => (strings(&mut autoplay::BINDINGS.iter().copied()), Some(c.autoplay.binding), String::new()),
+            Item::AutoplayBinding => (
+                strings(&mut autoplay::BINDINGS.iter().copied()),
+                Some(c.autoplay.binding),
+                String::new(),
+            ),
             Item::Renderer => {
                 let all = config::RENDERERS;
-                (strings(&mut all.iter().map(|&r| config::renderer_name(r))), all.iter().position(|&r| r == c.graphics_api), tr!("picking one restarts the game", "選ぶとゲームが再起動します", "выбор перезапустит игру").into())
+                (
+                    strings(&mut all.iter().map(|&r| config::renderer_name(r))),
+                    all.iter().position(|&r| r == c.graphics_api),
+                    tr!(
+                        "picking one restarts the game",
+                        "選ぶとゲームが再起動します",
+                        "выбор перезапустит игру"
+                    )
+                    .into(),
+                )
             }
             Item::PresentMode => {
                 let all = &self.present_modes;
-                let note = if all.len() == 1 { tr!("the only one this renderer has", "このレンダラーはこれだけ", "у этого рендера только он") } else { tr!("during songs", "曲の間", "во время песен") };
-                (strings(&mut all.iter().map(|p| p.name())), all.iter().position(|&p| p == c.present.within(all)), note.into())
+                let note = if all.len() == 1 {
+                    tr!(
+                        "the only one this renderer has",
+                        "このレンダラーはこれだけ",
+                        "у этого рендера только он"
+                    )
+                } else {
+                    tr!("during songs", "曲の間", "во время песен")
+                };
+                (
+                    strings(&mut all.iter().map(|p| p.name())),
+                    all.iter().position(|&p| p == c.present.within(all)),
+                    note.into(),
+                )
             }
             Item::AudioBuffer => {
                 let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
@@ -3096,68 +4265,194 @@ impl State {
                         tr!("{b} frames ({ms:.1} ms)", "{b}フレーム ({ms:.1} ms)", "{b} кадров ({ms:.1} мс)";)
                     })
                     .collect();
-                (names, AUDIO_BUFFERS.iter().position(|&b| b == c.audio_buffer), format!("{rate} Hz"))
+                (
+                    names,
+                    AUDIO_BUFFERS.iter().position(|&b| b == c.audio_buffer),
+                    format!("{rate} Hz"),
+                )
             }
             Item::UpdateChannel => {
                 let all = [update::Channel::Stable, update::Channel::Dev];
                 let running = update::BUILD_CHANNEL.name();
-                (strings(&mut all.iter().map(|ch| ch.name())), all.iter().position(|&ch| ch == self.updater.channel()), tr!("running {running}", "実行中: {running}", "запущен {running}";))
+                (
+                    strings(&mut all.iter().map(|ch| ch.name())),
+                    all.iter().position(|&ch| ch == self.updater.channel()),
+                    tr!("running {running}", "実行中: {running}", "запущен {running}";),
+                )
             }
-            Item::Accent => (strings(&mut render::ACCENTS.iter().map(|a| a.0)), render::ACCENTS.iter().position(|a| a.1 == c.accent), String::new()),
+            Item::Accent => (
+                strings(&mut render::ACCENTS.iter().map(|a| a.0)),
+                render::ACCENTS.iter().position(|a| a.1 == c.accent),
+                String::new(),
+            ),
             Item::WindowSize => {
                 let sizes = self.window_sizes();
                 let now = (self.window_w as u32, self.window_h as u32);
                 let type_size = tr!("Type a size", "サイズを入力", "Ввести размер").to_string();
-                let names = std::iter::once(type_size).chain(sizes.iter().map(|&(w, h)| format!("{w} x {h}   {}", layout::aspect_name(w, h)))).collect();
-                let current = sizes.iter().position(|&s| s == now && !self.fullscreen).map(|i| i + 1);
+                let names = std::iter::once(type_size)
+                    .chain(
+                        sizes
+                            .iter()
+                            .map(|&(w, h)| format!("{w} x {h}   {}", layout::aspect_name(w, h))),
+                    )
+                    .collect();
+                let current = sizes
+                    .iter()
+                    .position(|&s| s == now && !self.fullscreen)
+                    .map(|i| i + 1);
                 let (mw, mh) = self.monitor_size;
-                (names, current, tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}";))
+                (
+                    names,
+                    current,
+                    tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}";),
+                )
             }
             Item::LetterboxSize => {
                 let sizes = self.letterbox_sizes();
                 let type_size = tr!("Type a size", "サイズを入力", "Ввести размер").to_string();
-                let names = std::iter::once(type_size).chain(sizes.iter().map(|&(w, h)| format!("{w} x {h}   {}", layout::aspect_name(w, h)))).collect();
-                let current = sizes.iter().position(|&s| s == c.letterbox_size).map(|i| i + 1);
+                let names = std::iter::once(type_size)
+                    .chain(
+                        sizes
+                            .iter()
+                            .map(|&(w, h)| format!("{w} x {h}   {}", layout::aspect_name(w, h))),
+                    )
+                    .collect();
+                let current = sizes
+                    .iter()
+                    .position(|&s| s == c.letterbox_size)
+                    .map(|i| i + 1);
                 let (mw, mh) = self.monitor_size;
-                (names, current, tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}";))
+                (
+                    names,
+                    current,
+                    tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}";),
+                )
             }
             Item::InterfaceHides => {
-                let names = hud::Part::ALL.iter().map(|&p| format!("{}  {}", if c.interface_hides.has(p) { "[x]" } else { "[ ]" }, p.label())).collect();
-                (names, None, tr!("hidden when toggled off", "オフにした時に隠すもの", "прячется при выключении").into())
+                let names = hud::Part::ALL
+                    .iter()
+                    .map(|&p| {
+                        format!(
+                            "{}  {}",
+                            if c.interface_hides.has(p) {
+                                "[x]"
+                            } else {
+                                "[ ]"
+                            },
+                            p.label()
+                        )
+                    })
+                    .collect();
+                (
+                    names,
+                    None,
+                    tr!(
+                        "hidden when toggled off",
+                        "オフにした時に隠すもの",
+                        "прячется при выключении"
+                    )
+                    .into(),
+                )
             }
             Item::NoteColours => {
                 let own = c.note_colours.custom;
-                let custom = format!("{}  #{:06x} / #{:06x}", multiverse::palette_label(multiverse::CUSTOM), own[0], own[1]);
-                let names = (0..multiverse::PALETTES.len()).map(|i| multiverse::palette_label(i).to_string()).chain(std::iter::once(custom)).collect();
-                (names, Some(c.note_colours.palette), tr!("don / kat", "ドン / カッ", "дон / кат").into())
+                let custom = format!(
+                    "{}  #{:06x} / #{:06x}",
+                    multiverse::palette_label(multiverse::CUSTOM),
+                    own[0],
+                    own[1]
+                );
+                let names = (0..multiverse::PALETTES.len())
+                    .map(|i| multiverse::palette_label(i).to_string())
+                    .chain(std::iter::once(custom))
+                    .collect();
+                (
+                    names,
+                    Some(c.note_colours.palette),
+                    tr!("don / kat", "ドン / カッ", "дон / кат").into(),
+                )
             }
             Item::SkinParts => {
-                let names = skin::Part::ALL.iter().map(|&p| format!("{}:  {}", p.label(), self.skin_source_name(c.skin_parts.get(p)))).collect();
-                (names, None, tr!("Enter: where it comes from", "Enter: 出どころを選ぶ", "Enter: откуда берётся").into())
+                let names = skin::Part::ALL
+                    .iter()
+                    .map(|&p| {
+                        format!(
+                            "{}:  {}",
+                            p.label(),
+                            self.skin_source_name(c.skin_parts.get(p))
+                        )
+                    })
+                    .collect();
+                (
+                    names,
+                    None,
+                    tr!(
+                        "Enter: where it comes from",
+                        "Enter: 出どころを選ぶ",
+                        "Enter: откуда берётся"
+                    )
+                    .into(),
+                )
             }
             Item::SkinPart(i) => {
-                let Some(&part) = skin::Part::ALL.get(i) else { return };
+                let Some(&part) = skin::Part::ALL.get(i) else {
+                    return;
+                };
                 let skins: Vec<String> = skin::list().into_iter().map(|(n, _)| n).collect();
-                let main = if c.skin.is_empty() { built_in_text().to_string() } else { c.skin.clone() };
+                let main = if c.skin.is_empty() {
+                    built_in_text().to_string()
+                } else {
+                    c.skin.clone()
+                };
                 let picked = tr!("The skin picked ({main})", "選んだスキン ({main})", "Выбранный скин ({main})";);
-                let names: Vec<String> = [picked, tr!("Built-in", "内蔵", "Встроенный").into()].into_iter().chain(skins.iter().cloned()).collect();
+                let names: Vec<String> = [picked, tr!("Built-in", "内蔵", "Встроенный").into()]
+                    .into_iter()
+                    .chain(skins.iter().cloned())
+                    .collect();
                 let current = match c.skin_parts.get(part) {
                     skin::Source::Main => Some(0),
                     skin::Source::BuiltIn => Some(1),
                     skin::Source::Skin(n) => skins.iter().position(|s| s == n).map(|k| k + 2),
                 };
-                (names, current, tr!("Esc: back to the parts", "Esc: パーツに戻る", "Esc: назад к частям").into())
+                (
+                    names,
+                    current,
+                    tr!(
+                        "Esc: back to the parts",
+                        "Esc: パーツに戻る",
+                        "Esc: назад к частям"
+                    )
+                    .into(),
+                )
             }
             Item::Skin => {
                 let skins = skin::list();
                 let n = skins.len();
                 let note = tr!("{n} installed", "{n}個インストール済み", "установлено: {n}";);
-                let names: Vec<String> = std::iter::once(built_in_text().to_string()).chain(skins.into_iter().map(|(n, _)| n)).collect();
-                let current = if c.skin.is_empty() { Some(0) } else { names.iter().skip(1).position(|n| *n == c.skin).map(|i| i + 1) };
+                let names: Vec<String> = std::iter::once(built_in_text().to_string())
+                    .chain(skins.into_iter().map(|(n, _)| n))
+                    .collect();
+                let current = if c.skin.is_empty() {
+                    Some(0)
+                } else {
+                    names
+                        .iter()
+                        .skip(1)
+                        .position(|n| *n == c.skin)
+                        .map(|i| i + 1)
+                };
                 (names, current, note)
             }
             Item::SongsFolder => {
-                let mut names = vec![type_path(), tr!("Find osu!'s Songs folder automatically", "osu!のSongsフォルダを自動で探す", "Искать папку Songs osu! самому").to_string()];
+                let mut names = vec![
+                    type_path(),
+                    tr!(
+                        "Find osu!'s Songs folder automatically",
+                        "osu!のSongsフォルダを自動で探す",
+                        "Искать папку Songs osu! самому"
+                    )
+                    .to_string(),
+                ];
                 if !cfg!(target_os = "android") {
                     names.insert(0, browse_text());
                 }
@@ -3172,11 +4467,25 @@ impl State {
                 (names, None, note)
             }
             Item::DataFolder => {
-                let mut names = vec![type_path(), tr!("Back to the usual places", "いつもの場所に戻す", "Вернуть в обычные места").to_string()];
+                let mut names = vec![
+                    type_path(),
+                    tr!(
+                        "Back to the usual places",
+                        "いつもの場所に戻す",
+                        "Вернуть в обычные места"
+                    )
+                    .to_string(),
+                ];
                 if !cfg!(target_os = "android") {
                     names.insert(0, browse_text());
                 }
-                (names, None, config::data_dir().map(|d| d.display().to_string()).unwrap_or_default())
+                (
+                    names,
+                    None,
+                    config::data_dir()
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_default(),
+                )
             }
             _ => return,
         };
@@ -3185,8 +4494,12 @@ impl State {
 
     /// Uses row `i` of the open list of choices and closes it.
     fn pick_choice(&mut self, i: usize) {
-        let Some(list) = self.settings_ui.choices.take() else { return };
-        let Some(name) = list.names.get(i) else { return };
+        let Some(list) = self.settings_ui.choices.take() else {
+            return;
+        };
+        let Some(name) = list.names.get(i) else {
+            return;
+        };
         match list.item {
             Item::TouchLayout => self.cfg.touch_layout = config::TouchLayout::ALL[i],
             Item::Screenshots => self.cfg.screenshot_to = config::ScreenshotTo::ALL[i],
@@ -3194,14 +4507,22 @@ impl State {
             Item::AutoplayStyle => self.cfg.autoplay.style = autoplay::Style::ALL[i],
             Item::AutoplayBinding => self.cfg.autoplay.binding = i,
             Item::Language => self.cfg.language = lang::Lang::ALL[i],
-            Item::PresentMode => self.cfg.present = self.present_modes.get(i).copied().unwrap_or(PresentChoice::Fifo),
+            Item::PresentMode => {
+                self.cfg.present = self
+                    .present_modes
+                    .get(i)
+                    .copied()
+                    .unwrap_or(PresentChoice::Fifo)
+            }
             Item::Renderer if config::RENDERERS[i] != self.cfg.graphics_api => {
                 self.cfg.graphics_api = config::RENDERERS[i].to_string();
                 self.restart_for_renderer();
             }
             Item::Renderer => {}
             Item::AudioBuffer if Some(i) != list.current => self.set_audio_buffer(AUDIO_BUFFERS[i]),
-            Item::UpdateChannel => self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i]),
+            Item::UpdateChannel => {
+                self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i])
+            }
             Item::Accent => self.cfg.accent = render::ACCENTS[i].1,
             Item::NoteColours => self.cfg.note_colours.palette = i,
             Item::InterfaceHides => {
@@ -3264,7 +4585,11 @@ impl State {
                 }
             }
             Item::DataFolder => {
-                let i = if cfg!(target_os = "android") { i + 1 } else { i };
+                let i = if cfg!(target_os = "android") {
+                    i + 1
+                } else {
+                    i
+                };
                 match i {
                     0 => self.browse_folder(Item::DataFolder),
                     1 => self.start_edit(Item::DataFolder),
@@ -3278,7 +4603,11 @@ impl State {
             }
             Item::SongsFolder => {
                 // Without the "Browse..." row (Android) the others move up one.
-                let i = if cfg!(target_os = "android") { i + 1 } else { i };
+                let i = if cfg!(target_os = "android") {
+                    i + 1
+                } else {
+                    i
+                };
                 match i {
                     0 => self.browse_folder(Item::SongsFolder),
                     1 => self.start_edit(Item::SongsFolder),
@@ -3320,8 +4649,15 @@ impl State {
             Item::DonColour => format!("#{:06x}", c.note_colours.don()),
             Item::KatColour => format!("#{:06x}", c.note_colours.kat()),
             Item::WindowSize => format!("{:.0}x{:.0}", self.window_w, self.window_h),
-            Item::SongsFolder => c.songs_folder.as_ref().or(self.song_dirs.first()).map(|d| d.display().to_string()).unwrap_or_default(),
-            Item::DataFolder => config::data_dir().map(|d| d.display().to_string()).unwrap_or_default(),
+            Item::SongsFolder => c
+                .songs_folder
+                .as_ref()
+                .or(self.song_dirs.first())
+                .map(|d| d.display().to_string())
+                .unwrap_or_default(),
+            Item::DataFolder => config::data_dir()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default(),
             _ => return,
         };
         if let Some(i) = settings::ITEMS.iter().position(|(_, it)| *it == item) {
@@ -3333,19 +4669,34 @@ impl State {
     /// Keys while typing a setting's value: Enter sets it, Esc leaves it as it was.
     fn edit_key(&mut self, code: KeyCode, text: Option<&str>) {
         let ctrl = self.modifiers_ctrl;
-        let Some(edit) = &mut self.settings_ui.editing else { return };
-        let max = if matches!(edit.item, Item::SongsFolder | Item::DataFolder) { 400 } else { 12 };
+        let Some(edit) = &mut self.settings_ui.editing else {
+            return;
+        };
+        let max = if matches!(edit.item, Item::SongsFolder | Item::DataFolder) {
+            400
+        } else {
+            12
+        };
         match code {
             KeyCode::Escape => self.settings_ui.editing = None,
             KeyCode::Enter | KeyCode::NumpadEnter => {
-                let Some(edit) = self.settings_ui.editing.take() else { return };
+                let Some(edit) = self.settings_ui.editing.take() else {
+                    return;
+                };
                 if let Err(e) = self.apply_typed(edit.item, &edit.text) {
                     self.toast(e);
-                    self.settings_ui.editing = Some(Edit { fresh: false, ..edit });
+                    self.settings_ui.editing = Some(Edit {
+                        fresh: false,
+                        ..edit
+                    });
                 }
             }
             KeyCode::Backspace => edit.backspace(),
-            KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End | KeyCode::Delete => {
+            KeyCode::ArrowLeft
+            | KeyCode::ArrowRight
+            | KeyCode::Home
+            | KeyCode::End
+            | KeyCode::Delete => {
                 edit.nav(code);
             }
             _ if ctrl => {}
@@ -3362,19 +4713,33 @@ impl State {
         if item == Item::ScrollSpeed && self.mid_song() {
             return Err(scroll_in_select().into());
         }
-        let number = || parse_number(text).ok_or_else(|| tr!("type a number", "数字を入力してください", "введите число").to_string());
+        let number = || {
+            parse_number(text).ok_or_else(|| {
+                tr!("type a number", "数字を入力してください", "введите число").to_string()
+            })
+        };
         let percent = || number().map(|n| (n / 100.0).clamp(0.0, 1.0) as f32);
         let c = &mut self.cfg;
         match item {
             Item::LetterboxX => c.letterbox_pos.0 = number()?.round().clamp(-100.0, 100.0) as f32,
             Item::LetterboxY => c.letterbox_pos.1 = number()?.round().clamp(-100.0, 100.0) as f32,
-            Item::ScrollSpeed => c.scroll_speed = ((number()? * 100.0).round() / 100.0).clamp(0.3, 4.0),
-            Item::Rate => c.rate = ((number()? * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1),
+            Item::ScrollSpeed => {
+                c.scroll_speed = ((number()? * 100.0).round() / 100.0).clamp(0.3, 4.0)
+            }
+            Item::Rate => {
+                c.rate = ((number()? * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1)
+            }
             Item::Offset => c.offset_ms = number()?.round().clamp(-1000.0, 1000.0),
             Item::VisualOffset => c.visual_offset_ms = number()?.round().clamp(-1000.0, 1000.0),
             Item::VsyncTune => c.vsync_tune_ms = number()?.round().clamp(-200.0, 200.0),
-            Item::CalibrationBpm => c.calibration_bpm = number()?.round().clamp(calibrate::BPM_RANGE.0, calibrate::BPM_RANGE.1),
-            Item::ResumeDelay => c.resume_delay_ms = (number()? * 1000.0).round().clamp(0.0, 3000.0),
+            Item::CalibrationBpm => {
+                c.calibration_bpm = number()?
+                    .round()
+                    .clamp(calibrate::BPM_RANGE.0, calibrate::BPM_RANGE.1)
+            }
+            Item::ResumeDelay => {
+                c.resume_delay_ms = (number()? * 1000.0).round().clamp(0.0, 3000.0)
+            }
             Item::MasterVolume => c.master_volume = percent()?,
             Item::MusicVolume => c.music_volume = percent()?,
             Item::FxVolume => c.fx_volume = percent()?,
@@ -3382,37 +4747,73 @@ impl State {
             Item::MenuNotesDim => c.menu_notes_dim = percent()?,
             Item::FpsCap => {
                 let fps = number()?.round();
-                c.fps_cap = if fps <= 0.0 { 0 } else { fps.clamp(30.0, 10000.0) as u32 };
+                c.fps_cap = if fps <= 0.0 {
+                    0
+                } else {
+                    fps.clamp(30.0, 10000.0) as u32
+                };
             }
             Item::AccentHue => {
                 let t = text.trim();
-                let hex = if t.starts_with('#') { t.to_string() } else { format!("#{t}") };
-                c.accent = render::parse_accent(t).or_else(|| render::parse_accent(&hex)).ok_or(tr!("type a colour like #ff8800", "#ff8800のように色を入力", "введите цвет вроде #ff8800"))?;
+                let hex = if t.starts_with('#') {
+                    t.to_string()
+                } else {
+                    format!("#{t}")
+                };
+                c.accent = render::parse_accent(t)
+                    .or_else(|| render::parse_accent(&hex))
+                    .ok_or(tr!(
+                        "type a colour like #ff8800",
+                        "#ff8800のように色を入力",
+                        "введите цвет вроде #ff8800"
+                    ))?;
             }
             Item::LetterboxSize => {
-                let (w, h) = layout::parse_size(text).ok_or(tr!("type a size like 1280x720", "1280x720のようにサイズを入力", "введите размер вроде 1280x720"))?;
+                let (w, h) = layout::parse_size(text).ok_or(tr!(
+                    "type a size like 1280x720",
+                    "1280x720のようにサイズを入力",
+                    "введите размер вроде 1280x720"
+                ))?;
                 let (mw, mh) = self.monitor_size;
                 if w > mw || h > mh {
-                    return Err(tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})";));
+                    return Err(
+                        tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})";),
+                    );
                 }
                 if w < MIN_WINDOW.0 as u32 || h < MIN_WINDOW.1 as u32 {
-                    return Err(tr!("at least {}x{}", "{}x{}以上", "минимум {}x{}"; MIN_WINDOW.0, MIN_WINDOW.1));
+                    return Err(
+                        tr!("at least {}x{}", "{}x{}以上", "минимум {}x{}"; MIN_WINDOW.0, MIN_WINDOW.1),
+                    );
                 }
                 c.letterbox_size = (w, h);
             }
             Item::WindowSize => {
-                let (w, h) = layout::parse_size(text).ok_or(tr!("type a size like 1280x720", "1280x720のようにサイズを入力", "введите размер вроде 1280x720"))?;
+                let (w, h) = layout::parse_size(text).ok_or(tr!(
+                    "type a size like 1280x720",
+                    "1280x720のようにサイズを入力",
+                    "введите размер вроде 1280x720"
+                ))?;
                 let (mw, mh) = self.monitor_size;
                 if w > mw || h > mh {
-                    return Err(tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})";));
+                    return Err(
+                        tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})";),
+                    );
                 }
                 self.window_request = Some((w, h));
                 return Ok(());
             }
             Item::DonColour | Item::KatColour => {
-                let typed = multiverse::parse_hex(text).ok_or(tr!("type a colour like #eb452c", "#eb452cのように色を入力", "введите цвет вроде #eb452c"))?;
+                let typed = multiverse::parse_hex(text).ok_or(tr!(
+                    "type a colour like #eb452c",
+                    "#eb452cのように色を入力",
+                    "введите цвет вроде #eb452c"
+                ))?;
                 let (don, kat) = (c.note_colours.don(), c.note_colours.kat());
-                c.note_colours = if item == Item::DonColour { multiverse::Colours::own(typed, kat) } else { multiverse::Colours::own(don, typed) };
+                c.note_colours = if item == Item::DonColour {
+                    multiverse::Colours::own(typed, kat)
+                } else {
+                    multiverse::Colours::own(don, typed)
+                };
             }
             Item::SongsFolder | Item::DataFolder => {
                 let t = text.trim().trim_matches('"');
@@ -3420,7 +4821,11 @@ impl State {
                     (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
                     _ => PathBuf::from(t),
                 };
-                return if item == Item::SongsFolder { self.set_songs_folder(Some(path)) } else { self.move_data_to(Some(path)) };
+                return if item == Item::SongsFolder {
+                    self.set_songs_folder(Some(path))
+                } else {
+                    self.move_data_to(Some(path))
+                };
             }
             _ => return Ok(()),
         }
@@ -3441,8 +4846,17 @@ impl State {
             return;
         }
         self.folder_pick_for = item;
-        let current = if item == Item::DataFolder { config::data_dir() } else { self.cfg.songs_folder.clone().or_else(|| self.song_dirs.first().cloned()) };
-        let start = current.or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_default();
+        let current = if item == Item::DataFolder {
+            config::data_dir()
+        } else {
+            self.cfg
+                .songs_folder
+                .clone()
+                .or_else(|| self.song_dirs.first().cloned())
+        };
+        let start = current
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+            .unwrap_or_default();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(library::pick_folder(&start));
@@ -3463,7 +4877,11 @@ impl State {
         let item = self.folder_pick_for;
         match picked {
             Ok(Some(dir)) => {
-                let done = if item == Item::DataFolder { self.move_data_to(Some(dir)) } else { self.set_songs_folder(Some(dir)) };
+                let done = if item == Item::DataFolder {
+                    self.move_data_to(Some(dir))
+                } else {
+                    self.set_songs_folder(Some(dir))
+                };
                 if let Err(e) = done {
                     self.toast(e);
                 }
@@ -3484,30 +4902,61 @@ impl State {
     /// places), on its own thread. `poll_data_move` takes it from there.
     fn move_data_to(&mut self, target: Option<PathBuf>) -> Result<(), String> {
         if matches!(&self.scene, Scene::Settings { prev } if !matches!(**prev, Scene::Select)) {
-            return Err(tr!("move the game data from song select", "ゲームデータは選曲画面で移動してください", "переносите данные из выбора песни").into());
+            return Err(tr!(
+                "move the game data from song select",
+                "ゲームデータは選曲画面で移動してください",
+                "переносите данные из выбора песни"
+            )
+            .into());
         }
         if self.data_move.is_some() {
-            return Err(tr!("the game data is already on its way", "ゲームデータはもう移動中です", "данные уже переносятся").into());
+            return Err(tr!(
+                "the game data is already on its way",
+                "ゲームデータはもう移動中です",
+                "данные уже переносятся"
+            )
+            .into());
         }
-        let target = target.map(|t| if t.file_name().is_some_and(|n| n == "taiko-rs") { t } else { t.join("taiko-rs") });
+        let target = target.map(|t| {
+            if t.file_name().is_some_and(|n| n == "taiko-rs") {
+                t
+            } else {
+                t.join("taiko-rs")
+            }
+        });
         if target == self.cfg.data_folder {
-            return Err(tr!("the game data is there already", "ゲームデータはもうそこにあります", "данные уже там").into());
+            return Err(tr!(
+                "the game data is there already",
+                "ゲームデータはもうそこにあります",
+                "данные уже там"
+            )
+            .into());
         }
         if let Some(t) = &target {
             if !t.parent().is_some_and(std::path::Path::is_dir) {
                 let dir = t.parent().unwrap_or(t).display();
-                return Err(tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка";));
+                return Err(
+                    tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка";),
+                );
             }
             std::fs::create_dir_all(t).map_err(|e| format!("{}: {e}", t.display()))?;
         }
-        let (done, total) = (Arc::new(std::sync::atomic::AtomicU64::new(0)), Arc::new(std::sync::atomic::AtomicU64::new(0)));
+        let (done, total) = (
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        );
         let (tx, rx) = mpsc::channel();
         let (from, to) = (self.cfg.data_folder.clone(), target.clone());
         let (d, t) = (done.clone(), total.clone());
         std::thread::spawn(move || {
             let _ = tx.send(config::move_data(from.as_deref(), to.as_deref(), &d, &t));
         });
-        self.data_move = Some(DataMove { rx, done, total, to: target });
+        self.data_move = Some(DataMove {
+            rx,
+            done,
+            total,
+            to: target,
+        });
         Ok(())
     }
 
@@ -3518,15 +4967,25 @@ impl State {
         let result = match m.rx.try_recv() {
             Ok(r) => r,
             Err(mpsc::TryRecvError::Empty) => {
-                let (done, total) = (m.done.load(Ordering::Relaxed) as f64, m.total.load(Ordering::Relaxed) as f64);
+                let (done, total) = (
+                    m.done.load(Ordering::Relaxed) as f64,
+                    m.total.load(Ordering::Relaxed) as f64,
+                );
                 let mb = |b: f64| b / 1e6;
                 let (done, total) = (mb(done), mb(total));
                 self.toast(tr!("moving the game data: {done:.0} of {total:.0} MB", "ゲームデータを移動中: {total:.0} MB中{done:.0} MB", "перенос данных: {done:.0} из {total:.0} МБ";));
                 return;
             }
-            Err(mpsc::TryRecvError::Disconnected) => Err(tr!("the move stopped", "移動が止まりました", "перенос прервался").into()),
+            Err(mpsc::TryRecvError::Disconnected) => Err(tr!(
+                "the move stopped",
+                "移動が止まりました",
+                "перенос прервался"
+            )
+            .into()),
         };
-        let Some(m) = self.data_move.take() else { return };
+        let Some(m) = self.data_move.take() else {
+            return;
+        };
         match result {
             Ok(()) => {
                 self.cfg.data_folder = m.to;
@@ -3543,12 +5002,19 @@ impl State {
     /// Scans `folder` for maps from now on (None: look for osu!'s again) and rescans the library.
     fn set_songs_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
         if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
-            return Err(tr!("change the Songs folder from song select", "Songsフォルダは選曲画面で変えてください", "меняйте папку Songs в выборе песни").into());
+            return Err(tr!(
+                "change the Songs folder from song select",
+                "Songsフォルダは選曲画面で変えてください",
+                "меняйте папку Songs в выборе песни"
+            )
+            .into());
         }
         let folder = folder.map(|f| library::picked_songs(&f));
         if let Some(f) = folder.as_ref().filter(|f| !f.is_dir()) {
             let dir = f.display();
-            return Err(tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка";));
+            return Err(
+                tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка";),
+            );
         }
         self.cfg.songs_folder = folder.clone();
         self.cfg.save();
@@ -3565,7 +5031,12 @@ impl State {
                 let dir = dir.display();
                 tr!("found {dir}", "見つけた: {dir}", "найдена {dir}";)
             }
-            (None, None) => tr!("no osu! Songs folder found", "osu!のSongsフォルダが見つかりません", "папка Songs osu! не найдена").into(),
+            (None, None) => tr!(
+                "no osu! Songs folder found",
+                "osu!のSongsフォルダが見つかりません",
+                "папка Songs osu! не найдена"
+            )
+            .into(),
         });
         self.scan = Some(start_scan(inputs));
         self.select.scanning = Some(0);
@@ -3575,7 +5046,14 @@ impl State {
     /// Installs the newer build when there is one, else looks for one.
     fn update_now(&mut self) {
         if update::BUILD.is_none() {
-            self.toast(tr!("a local build doesn't update itself", "ローカルビルドは自分で更新しません", "локальная сборка не обновляется сама").into());
+            self.toast(
+                tr!(
+                    "a local build doesn't update itself",
+                    "ローカルビルドは自分で更新しません",
+                    "локальная сборка не обновляется сама"
+                )
+                .into(),
+            );
             return;
         }
         match self.updater.status() {
@@ -3587,7 +5065,14 @@ impl State {
             update::Status::Checking | update::Status::Downloading | update::Status::Installed => {}
             _ => {
                 self.updater.check();
-                self.toast(tr!("checking for updates...", "アップデートを確認中...", "проверяем обновления...").into());
+                self.toast(
+                    tr!(
+                        "checking for updates...",
+                        "アップデートを確認中...",
+                        "проверяем обновления..."
+                    )
+                    .into(),
+                );
             }
         }
     }
@@ -3596,10 +5081,20 @@ impl State {
     /// once it's installed.
     fn draw_update(&mut self, c: &mut Canvas) {
         // What's new, top right in the menus (left of the update badge when there is one).
-        let menus = matches!(self.scene, Scene::Select | Scene::Settings { .. } | Scene::MpMenu | Scene::Download);
-        if menus && self.splash.is_none() && self.changelog.is_none() && self.player.is_none() && self.guide.is_none() {
+        let menus = matches!(
+            self.scene,
+            Scene::Select | Scene::Settings { .. } | Scene::MpMenu | Scene::Download
+        );
+        if menus
+            && self.splash.is_none()
+            && self.changelog.is_none()
+            && self.player.is_none()
+            && self.guide.is_none()
+        {
             let badge = match self.updater.status() {
-                update::Status::Available { commit, .. } => Canvas::text_width(7.0, &update_badge(&commit)) + 20.0,
+                update::Status::Available { commit, .. } => {
+                    Canvas::text_width(7.0, &update_badge(&commit)) + 20.0
+                }
                 update::Status::Downloading => Canvas::text_width(7.0, &updating_badge(1.0)) + 20.0,
                 _ => 0.0,
             };
@@ -3607,21 +5102,61 @@ impl State {
             let w = Canvas::text_width(7.0, label) + 14.0;
             let x = c.width - 8.0 - badge - w;
             let hover = c.hovered(x, 3.0, w, 14.0);
-            c.round_rect([x, 3.0], [w, 14.0], 4.0, rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95), rgba(0x3a3a4e, 1.0), 1.0);
-            c.text(x + 7.0, 6.5, 7.0, rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0), label);
+            c.round_rect(
+                [x, 3.0],
+                [w, 14.0],
+                4.0,
+                rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95),
+                rgba(0x3a3a4e, 1.0),
+                1.0,
+            );
+            c.text(
+                x + 7.0,
+                6.5,
+                7.0,
+                rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0),
+                label,
+            );
             c.hit(x, 3.0, w, 14.0, render::Hit::Changelog);
             // Who's logged in and their pp, left of it: their profile on the website.
             let (name, rest) = match (&self.mp_menu.account, self.me) {
-                (Some(name), Some((pp, rank))) => (name.clone(), format!("  {pp:.0} pp{}", rank.map(|r| format!("  #{r}")).unwrap_or_default())),
+                (Some(name), Some((pp, rank))) => (
+                    name.clone(),
+                    format!(
+                        "  {pp:.0} pp{}",
+                        rank.map(|r| format!("  #{r}")).unwrap_or_default()
+                    ),
+                ),
                 (Some(name), None) => (name.clone(), String::new()),
-                (None, _) => (tr!("log in", "ログイン", "войти").to_string(), String::new()),
+                (None, _) => (
+                    tr!("log in", "ログイン", "войти").to_string(),
+                    String::new(),
+                ),
             };
             // Their picture first.
-            let pic = if self.mp_menu.account.is_some() { 12.0 } else { 0.0 };
+            let pic = if self.mp_menu.account.is_some() {
+                12.0
+            } else {
+                0.0
+            };
             let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0 + pic;
             let ax = x - 6.0 - aw;
             let hover = c.hovered(ax, 3.0, aw, 14.0);
-            c.round_rect([ax, 3.0], [aw, 14.0], 4.0, rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95), rgba(if self.mp_menu.account.is_some() { accent() } else { 0x3a3a4e }, 1.0), 1.0);
+            c.round_rect(
+                [ax, 3.0],
+                [aw, 14.0],
+                4.0,
+                rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95),
+                rgba(
+                    if self.mp_menu.account.is_some() {
+                        accent()
+                    } else {
+                        0x3a3a4e
+                    },
+                    1.0,
+                ),
+                1.0,
+            );
             if pic > 0.0 {
                 c.avatar(&name, ax + 9.0, 10.0, 4.5, accent(), 1.0);
             }
@@ -3650,7 +5185,14 @@ impl State {
         let w = Canvas::text_width(7.0, &text) + 14.0;
         let x = c.width - 8.0 - w;
         let hover = c.hovered(x, 3.0, w, 14.0);
-        c.round_rect([x, 3.0], [w, 14.0], 4.0, rgba(if hover { 0x2f8f4a } else { 0x1f6b36 }, 0.95), rgba(0x86E05A, 1.0), 1.0);
+        c.round_rect(
+            [x, 3.0],
+            [w, 14.0],
+            4.0,
+            rgba(if hover { 0x2f8f4a } else { 0x1f6b36 }, 0.95),
+            rgba(0x86E05A, 1.0),
+            1.0,
+        );
         c.text(x + 7.0, 6.5, 7.0, rgba(0xffffff, 1.0), &text);
         c.hit(x, 3.0, w, 14.0, render::Hit::Update);
     }
@@ -3686,15 +5228,24 @@ impl State {
     }
 
     fn request_skin(&mut self, reload: bool) {
-        self.skin_loader.get_or_insert_with(skin::Loader::new).request(skin::Key {
-            main: self.cfg.skin.clone(), parts: self.cfg.skin_parts.clone(),
-            rate: self.audio.as_ref().map(|a| a.rate), map_dir: self.skin_map.clone(),
-        }, reload);
+        self.skin_loader
+            .get_or_insert_with(skin::Loader::new)
+            .request(
+                skin::Key {
+                    main: self.cfg.skin.clone(),
+                    parts: self.cfg.skin_parts.clone(),
+                    rate: self.audio.as_ref().map(|a| a.rate),
+                    map_dir: self.skin_map.clone(),
+                },
+                reload,
+            );
     }
 
     fn poll_skin(&mut self) {
         if let Some(ready) = self.skin_loader.as_ref().and_then(skin::Loader::poll)
-            && self.skin_key.as_ref().is_none_or(|(key, image)| *key != ready.key || !image.ptr_eq(&Arc::downgrade(&ready.assets.images)))
+            && self.skin_key.as_ref().is_none_or(|(key, image)| {
+                *key != ready.key || !image.ptr_eq(&Arc::downgrade(&ready.assets.images))
+            })
         {
             self.skin_key = Some((ready.key, Arc::downgrade(&ready.assets.images)));
             self.sprites_upload = Some(ready.assets.images.clone());
@@ -3720,7 +5271,10 @@ impl State {
             },
             _ => None,
         };
-        let dir = entry.and_then(|e| self.library.get(e)).and_then(|e| e.path.parent()).map(Path::to_path_buf);
+        let dir = entry
+            .and_then(|e| self.library.get(e))
+            .and_then(|e| e.path.parent())
+            .map(Path::to_path_buf);
         if dir == self.skin_map_seen {
             return;
         }
@@ -3732,10 +5286,20 @@ impl State {
     fn open_skins_folder(&mut self) {
         let Some(dir) = skin::own_dir() else { return };
         let _ = std::fs::create_dir_all(&dir);
-        let opener = if cfg!(windows) { "explorer" } else { "xdg-open" };
-        if std::process::Command::new(opener).arg(&dir).spawn().is_err() {
+        let opener = if cfg!(windows) {
+            "explorer"
+        } else {
+            "xdg-open"
+        };
+        if std::process::Command::new(opener)
+            .arg(&dir)
+            .spawn()
+            .is_err()
+        {
             let dir = dir.display();
-            self.toast(tr!("skins go in {dir}", "スキンは{dir}に置きます", "скины кладутся в {dir}";));
+            self.toast(
+                tr!("skins go in {dir}", "スキンは{dir}に置きます", "скины кладутся в {dir}";),
+            );
         }
     }
 
@@ -3747,7 +5311,13 @@ impl State {
         self.apply_cached_statuses();
         self.status_sweep_due = Some(Instant::now() + Duration::from_secs(10));
         if let Some(info) = &self.mapinfo {
-            info.extend(self.library[start..].iter().enumerate().map(|(k, e)| (start + k, e.path.clone(), e.modified, e.size)).collect());
+            info.extend(
+                self.library[start..]
+                    .iter()
+                    .enumerate()
+                    .map(|(k, e)| (start + k, e.path.clone(), e.modified, e.size))
+                    .collect(),
+            );
             self.mapinfo_sorted = false;
         }
         self.select.refilter(&self.library);
@@ -3764,11 +5334,20 @@ impl State {
             FileDrag::Drop(paths) => {
                 self.drag_hover = None;
                 for path in paths {
-                    let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("osz")) {
+                    let name = path
+                        .file_stem()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    if path
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("osz"))
+                    {
                         self.import_osz(path, &name, false);
                     } else {
-                        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        let file = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
                         self.toast(tr!("{file} isn't a map: drop .osz files", "{file}は譜面ではありません: .oszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz";));
                     }
                 }
@@ -3794,20 +5373,39 @@ impl State {
                 return;
             }
         };
-        let pending: std::collections::HashSet<u64> = self.downloads.iter().flat_map(|j| j.maps.iter().copied()).collect();
+        let pending: std::collections::HashSet<u64> = self
+            .downloads
+            .iter()
+            .flat_map(|j| j.maps.iter().copied())
+            .collect();
         let (fresh, home) = library::osz_news(&self.library, &pending, &maps);
         if fresh == 0 {
             if temporary {
                 let _ = std::fs::remove_file(&archive);
             }
-            let here = home.map(|home| main_maps(self.library.iter().filter(|e| e.path.parent() == Some(home))));
+            let here = home.map(|home| {
+                main_maps(
+                    self.library
+                        .iter()
+                        .filter(|e| e.path.parent() == Some(home)),
+                )
+            });
             self.reveal_maps(here.unwrap_or_default());
             self.toast(tr!("{name} is already in your songs", "{name}はもう曲の中にあります", "{name} уже есть среди ваших песен";));
             return;
         }
-        let folder = home.filter(|d| d.parent() == Some(self.songs_dir.as_path())).and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned());
+        let folder = home
+            .filter(|d| d.parent() == Some(self.songs_dir.as_path()))
+            .and_then(|d| d.file_name())
+            .map(|n| n.to_string_lossy().into_owned());
         self.toast(tr!("importing {name}...", "{name}を取り込み中...", "добавляем {name}...";));
-        let job = download::import(archive, folder.as_deref().unwrap_or(name), self.songs_dir.clone(), temporary, maps.into_iter().map(|m| m.1).collect());
+        let job = download::import(
+            archive,
+            folder.as_deref().unwrap_or(name),
+            self.songs_dir.clone(),
+            temporary,
+            maps.into_iter().map(|m| m.1).collect(),
+        );
         self.downloads.push(job);
     }
 
@@ -3817,21 +5415,49 @@ impl State {
         let a = (now.saturating_duration_since(since).as_secs_f32() / 0.12).min(1.0);
         let (w, h) = (canvas.width, render::VIRTUAL_HEIGHT);
         canvas.rect(0.0, 0.0, w, h, rgba(0x000000, 0.6 * a));
-        canvas.round_rect([24.0, 24.0], [w - 48.0, h - 48.0], 16.0, rgba(0x000000, 0.0), rgba(accent(), 0.9 * a), 2.5);
-        let drop = tr!("Drop .osz maps to add them", ".oszの譜面をドロップで追加", "Бросьте карты .osz, чтобы добавить");
-        canvas.text_centered(w / 2.0, h / 2.0 - 22.0, 18.0, rgba(0xffffff, a), &Canvas::fit(18.0, w - 64.0, drop));
+        canvas.round_rect(
+            [24.0, 24.0],
+            [w - 48.0, h - 48.0],
+            16.0,
+            rgba(0x000000, 0.0),
+            rgba(accent(), 0.9 * a),
+            2.5,
+        );
+        let drop = tr!(
+            "Drop .osz maps to add them",
+            ".oszの譜面をドロップで追加",
+            "Бросьте карты .osz, чтобы добавить"
+        );
+        canvas.text_centered(
+            w / 2.0,
+            h / 2.0 - 22.0,
+            18.0,
+            rgba(0xffffff, a),
+            &Canvas::fit(18.0, w - 64.0, drop),
+        );
         let dir = self.songs_dir.display();
-        let to = Canvas::fit(9.0, w - 96.0, &tr!("into {dir}", "追加先: {dir}", "в {dir}";));
+        let to = Canvas::fit(
+            9.0,
+            w - 96.0,
+            &tr!("into {dir}", "追加先: {dir}", "в {dir}";),
+        );
         canvas.text_centered(w / 2.0, h / 2.0 + 14.0, 9.0, rgba(0x9a9ab0, a), &to);
     }
 
     /// Keeps the Discord status in line with what's on screen (checked about once a second).
     fn update_presence(&mut self) {
-        if self.presence_at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+        if self
+            .presence_at
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
+        {
             return;
         }
         self.presence_at = Some(Instant::now());
-        let app_id = if self.cfg.discord_app_id.is_empty() { discord::DEFAULT_APP_ID } else { self.cfg.discord_app_id.as_str() };
+        let app_id = if self.cfg.discord_app_id.is_empty() {
+            discord::DEFAULT_APP_ID
+        } else {
+            self.cfg.discord_app_id.as_str()
+        };
         if !self.cfg.discord_presence || app_id.is_empty() {
             // Dropping the connection clears the status.
             self.discord = None;
@@ -3839,14 +5465,22 @@ impl State {
             return;
         }
         let app_id = app_id.to_string();
-        let Some((details, state)) = self.presence_text() else { return };
-        let discord = self.discord.get_or_insert_with(|| discord::Presence::start(app_id));
+        let Some((details, state)) = self.presence_text() else {
+            return;
+        };
+        let discord = self
+            .discord
+            .get_or_insert_with(|| discord::Presence::start(app_id));
         // The timer restarts when the top line changes (a new map, a new screen).
         let start = match &self.presence {
             Some(p) if p.details == details => p.start,
             _ => discord::unix_now(),
         };
-        let activity = discord::Activity { details, state, start };
+        let activity = discord::Activity {
+            details,
+            state,
+            start,
+        };
         if self.presence.as_ref() != Some(&activity) {
             discord.set(Some(activity.clone()));
             self.presence = Some(activity);
@@ -3862,7 +5496,13 @@ impl State {
             let ru = lang::ru_plural(n, ["игрок", "игрока", "игроков"]);
             tr!("{n} player{s}", "{n}人", "{n} {ru}";)
         };
-        let rate_text = |rate: f64| if (rate - 1.0).abs() > 1e-6 { format!("  {rate:.2}x") } else { String::new() };
+        let rate_text = |rate: f64| {
+            if (rate - 1.0).abs() > 1e-6 {
+                format!("  {rate:.2}x")
+            } else {
+                String::new()
+            }
+        };
         let lobby = |s: &multiplayer::Session| {
             let n = players(s);
             let details = if s.is_host() {
@@ -3870,16 +5510,25 @@ impl State {
             } else {
                 tr!("Multiplayer lobby ({n}, in)", "マルチのロビー ({n}、参加中)", "Лобби мультиплеера ({n}, участник)";)
             };
-            let state = s.map.as_ref().map(map_label).unwrap_or_else(|| tr!("picking a map", "譜面を選択中", "выбирает карту").into());
+            let state =
+                s.map.as_ref().map(map_label).unwrap_or_else(|| {
+                    tr!("picking a map", "譜面を選択中", "выбирает карту").into()
+                });
             (details, state)
         };
         // Away: the idle screen is all the way in (the timer then counts the time away).
         if self.idle.amount() >= 1.0 {
-            let song = self.idle_song().map(|(title, artist)| format!("{artist} - {title}")).unwrap_or_default();
+            let song = self
+                .idle_song()
+                .map(|(title, artist)| format!("{artist} - {title}"))
+                .unwrap_or_default();
             return Some((tr!("AFK", "離席中", "Отошёл").into(), song));
         }
         Some(match &self.scene {
-            Scene::Loading { entry, .. } => (self.library.get(*entry)?.label(), tr!("Loading...", "読み込み中...", "Загрузка...").into()),
+            Scene::Loading { entry, .. } => (
+                self.library.get(*entry)?.label(),
+                tr!("Loading...", "読み込み中...", "Загрузка...").into(),
+            ),
             Scene::Play { game, entry, .. } => {
                 let label = self.library.get(*entry)?.label();
                 let state = if let Some(who) = &game.replay_of {
@@ -3887,22 +5536,49 @@ impl State {
                 } else if game.paused.is_some() {
                     tr!("Paused", "ポーズ中", "Пауза").into()
                 } else {
-                    let stars = self.stars.get(*entry, game.rate).map(|s| format!("  {s:.2}*")).unwrap_or_default();
+                    let stars = self
+                        .stars
+                        .get(*entry, game.rate)
+                        .map(|s| format!("  {s:.2}*"))
+                        .unwrap_or_default();
                     let rate = rate_text(game.rate);
                     tr!("Playing{stars}{rate}", "プレイ中{stars}{rate}", "Играет{stars}{rate}";)
                 };
                 (label, state)
             }
-            Scene::Results { entry, .. } => (self.library.get(*entry)?.label(), tr!("Looking at the results", "リザルトを見ています", "Смотрит итоги").into()),
+            Scene::Results { entry, .. } => (
+                self.library.get(*entry)?.label(),
+                tr!(
+                    "Looking at the results",
+                    "リザルトを見ています",
+                    "Смотрит итоги"
+                )
+                .into(),
+            ),
             Scene::MpWait { .. } | Scene::MpPlay { .. } => {
                 let s = self.mp.as_ref()?;
                 let label = s.map.as_ref().map(map_label).unwrap_or_default();
-                let (n, rate) = (players(s), rate_text(s.map.as_ref().map(|m| m.rate).unwrap_or(1.0)));
-                (label, tr!("Multiplayer match, {n}{rate}", "マルチの対戦、{n}{rate}", "Матч мультиплеера, {n}{rate}";))
+                let (n, rate) = (
+                    players(s),
+                    rate_text(s.map.as_ref().map(|m| m.rate).unwrap_or(1.0)),
+                );
+                (
+                    label,
+                    tr!("Multiplayer match, {n}{rate}", "マルチの対戦、{n}{rate}", "Матч мультиплеера, {n}{rate}";),
+                )
             }
             Scene::Spectate(v) => {
-                let label = self.mp.as_ref().and_then(|s| s.map.as_ref()).map(map_label).unwrap_or_default();
-                let who = v.focus.and_then(|k| v.games.get(k)).and_then(|(id, _)| v.players.iter().find(|p| p.0 == *id)).map(|p| p.1.clone());
+                let label = self
+                    .mp
+                    .as_ref()
+                    .and_then(|s| s.map.as_ref())
+                    .map(map_label)
+                    .unwrap_or_default();
+                let who = v
+                    .focus
+                    .and_then(|k| v.games.get(k))
+                    .and_then(|(id, _)| v.players.iter().find(|p| p.0 == *id))
+                    .map(|p| p.1.clone());
                 let state = match who {
                     Some(w) => tr!("Spectating {w}", "{w}を観戦中", "Наблюдает за {w}";),
                     None => tr!("Spectating everyone", "全員を観戦中", "Наблюдает за всеми").into(),
@@ -3911,25 +5587,86 @@ impl State {
             }
             Scene::Watch(v) => {
                 let who = &v.player;
-                (tr!("Watching {who}", "{who}を観戦中", "Смотрит {who}";), v.play.as_ref().map(|p| p.map.label()).unwrap_or_default())
+                (
+                    tr!("Watching {who}", "{who}を観戦中", "Смотрит {who}";),
+                    v.play.as_ref().map(|p| p.map.label()).unwrap_or_default(),
+                )
             }
-            Scene::MpResults => (self.mp.as_ref().and_then(|s| s.map.as_ref()).map(map_label).unwrap_or_default(), tr!("Multiplayer results", "マルチのリザルト", "Итоги мультиплеера").into()),
-            Scene::VideoEdit(ed) => (tr!("Making a replay video", "リプレイの動画を作成中", "Делает видео повтора").into(), ed.replay.map_label.clone()),
+            Scene::MpResults => (
+                self.mp
+                    .as_ref()
+                    .and_then(|s| s.map.as_ref())
+                    .map(map_label)
+                    .unwrap_or_default(),
+                tr!(
+                    "Multiplayer results",
+                    "マルチのリザルト",
+                    "Итоги мультиплеера"
+                )
+                .into(),
+            ),
+            Scene::VideoEdit(ed) => (
+                tr!(
+                    "Making a replay video",
+                    "リプレイの動画を作成中",
+                    "Делает видео повтора"
+                )
+                .into(),
+                ed.replay.map_label.clone(),
+            ),
             // Anywhere else while in a room (its lobby, or song select picking its map).
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
-            Scene::MpMenu => (tr!("Multiplayer menu", "マルチのメニュー", "Меню мультиплеера").into(), String::new()),
+            Scene::MpMenu => (
+                tr!("Multiplayer menu", "マルチのメニュー", "Меню мультиплеера").into(),
+                String::new(),
+            ),
             Scene::Select if self.player.is_some() => {
-                let song = self.player.as_ref().and_then(|p| p.list.entry()).and_then(|i| self.library.get(i)).map(Entry::label);
-                (tr!("Listening to music", "音楽を聴いている", "Слушает музыку").into(), song.unwrap_or_default())
+                let song = self
+                    .player
+                    .as_ref()
+                    .and_then(|p| p.list.entry())
+                    .and_then(|i| self.library.get(i))
+                    .map(Entry::label);
+                (
+                    tr!("Listening to music", "音楽を聴いている", "Слушает музыку").into(),
+                    song.unwrap_or_default(),
+                )
             }
             _ if self.on_menu() => {
-                let song = self.idle_song().map(|(title, artist)| format!("{artist} - {title}")).unwrap_or_default();
-                (tr!("In the main menu", "メインメニュー", "В главном меню").into(), song)
+                let song = self
+                    .idle_song()
+                    .map(|(title, artist)| format!("{artist} - {title}"))
+                    .unwrap_or_default();
+                (
+                    tr!("In the main menu", "メインメニュー", "В главном меню").into(),
+                    song,
+                )
             }
-            Scene::Download => (tr!("Looking for new maps", "新しい譜面を探しています", "Ищет новые карты").into(), String::new()),
-            Scene::Settings { .. } | Scene::LayoutEdit { .. } => (tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(), String::new()),
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => (tr!("Calibrating", "調整中", "Калибровка").into(), String::new()),
-            _ => (tr!("Choosing a song", "曲を選んでいます", "Выбирает песню").into(), self.select.selected().and_then(|i| self.library.get(i)).map(|e| e.label()).unwrap_or_default()),
+            Scene::Download => (
+                tr!(
+                    "Looking for new maps",
+                    "新しい譜面を探しています",
+                    "Ищет новые карты"
+                )
+                .into(),
+                String::new(),
+            ),
+            Scene::Settings { .. } | Scene::LayoutEdit { .. } => (
+                tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
+                String::new(),
+            ),
+            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => (
+                tr!("Calibrating", "調整中", "Калибровка").into(),
+                String::new(),
+            ),
+            _ => (
+                tr!("Choosing a song", "曲を選んでいます", "Выбирает песню").into(),
+                self.select
+                    .selected()
+                    .and_then(|i| self.library.get(i))
+                    .map(|e| e.label())
+                    .unwrap_or_default(),
+            ),
         })
     }
 
@@ -3955,14 +5692,24 @@ impl State {
             // otherwise just open its folder.
             let uri = file_uri(path);
             let selected = Command::new("dbus-send")
-                .args(["--session", "--print-reply", "--dest=org.freedesktop.FileManager1", "--type=method_call", "/org/freedesktop/FileManager1", "org.freedesktop.FileManager1.ShowItems"])
+                .args([
+                    "--session",
+                    "--print-reply",
+                    "--dest=org.freedesktop.FileManager1",
+                    "--type=method_call",
+                    "/org/freedesktop/FileManager1",
+                    "org.freedesktop.FileManager1.ShowItems",
+                ])
                 .arg(format!("array:string:{uri}"))
                 .arg("string:")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
                 .is_ok_and(|s| s.success());
-            selected || path.parent().is_some_and(|dir| Command::new("xdg-open").arg(dir).spawn().is_ok())
+            selected
+                || path
+                    .parent()
+                    .is_some_and(|dir| Command::new("xdg-open").arg(dir).spawn().is_ok())
         };
         if !opened {
             self.toast(tr!("the video is in {}", "動画は{}にあります", "видео в {}"; path.parent().unwrap_or(path).display()));
@@ -3992,8 +5739,12 @@ impl State {
                     self.pick_choice(i);
                 }
                 // From one part's skins, back to the parts.
-                KeyCode::Escape | KeyCode::Backspace if let Item::SkinPart(i) = p.item => self.reopen_skin_parts(i),
-                KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab => self.settings_ui.choices = None,
+                KeyCode::Escape | KeyCode::Backspace if let Item::SkinPart(i) = p.item => {
+                    self.reopen_skin_parts(i)
+                }
+                KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab => {
+                    self.settings_ui.choices = None
+                }
                 _ => {}
             }
             return;
@@ -4001,7 +5752,14 @@ impl State {
         if let Some(item) = self.settings_ui.binding.take() {
             let modifier = matches!(
                 code,
-                KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::ControlLeft | KeyCode::ControlRight | KeyCode::AltLeft | KeyCode::AltRight | KeyCode::SuperLeft | KeyCode::SuperRight
+                KeyCode::ShiftLeft
+                    | KeyCode::ShiftRight
+                    | KeyCode::ControlLeft
+                    | KeyCode::ControlRight
+                    | KeyCode::AltLeft
+                    | KeyCode::AltRight
+                    | KeyCode::SuperLeft
+                    | KeyCode::SuperRight
             );
             if matches!(item, Item::InterfaceKey | Item::Hotkey(_)) && modifier {
                 // Held for the key to come.
@@ -4026,8 +5784,19 @@ impl State {
                 match item {
                     Item::Hotkey(i) => {
                         let h = keys::Hotkey::ALL[i];
-                        let chord = keys::Chord { key: code, ctrl: self.modifiers_ctrl, shift: self.modifiers_shift, alt: self.modifiers_alt };
-                        if self.cfg.keys.contains(&code) && !chord.ctrl && !chord.alt && h.places().iter().any(|p| matches!(p, keys::Place::Play | keys::Place::Paused)) {
+                        let chord = keys::Chord {
+                            key: code,
+                            ctrl: self.modifiers_ctrl,
+                            shift: self.modifiers_shift,
+                            alt: self.modifiers_alt,
+                        };
+                        if self.cfg.keys.contains(&code)
+                            && !chord.ctrl
+                            && !chord.alt
+                            && h.places()
+                                .iter()
+                                .any(|p| matches!(p, keys::Place::Play | keys::Place::Paused))
+                        {
                             self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; config::key_name(code)));
                             return;
                         }
@@ -4095,7 +5864,8 @@ impl State {
             KeyCode::ArrowUp => self.settings_ui.move_cursor(-1),
             KeyCode::ArrowDown => self.settings_ui.move_cursor(1),
             KeyCode::PageUp | KeyCode::PageDown if !self.settings_ui.search.is_empty() => {
-                self.settings_ui.move_cursor(if code == KeyCode::PageDown { 8 } else { -8 });
+                self.settings_ui
+                    .move_cursor(if code == KeyCode::PageDown { 8 } else { -8 });
             }
             KeyCode::PageUp | KeyCode::PageDown => {
                 let n = settings::SECTIONS.len() as i32;
@@ -4105,41 +5875,105 @@ impl State {
             }
             KeyCode::ArrowLeft => self.adjust_setting(item, -1, window),
             KeyCode::ArrowRight => self.adjust_setting(item, 1, window),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => self.start_calibration_as(false),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Guide => self.guide = Some(0),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::ResetMapOffsets => self.press_reset_map_offsets(),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::VsyncCalibrate => self.start_calibration_as(true),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldArea => self.open_layout_editor(),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldPreset => self.open_dropdown(),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => self.open_skins_folder(),
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Calibrate => {
+                self.start_calibration_as(false)
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Guide => {
+                self.guide = Some(0)
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::ResetMapOffsets =>
+            {
+                self.press_reset_map_offsets()
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::VsyncCalibrate =>
+            {
+                self.start_calibration_as(true)
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::PlayfieldArea =>
+            {
+                self.open_layout_editor()
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::PlayfieldPreset =>
+            {
+                self.open_dropdown()
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => {
+                self.open_skins_folder()
+            }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::HiddenMaps => {
                 if self.select.hidden.is_empty() {
-                    self.toast(tr!("nothing is hidden: right-click a song in the list to hide it", "何も隠れていません: リストの曲を右クリックで隠せます", "ничего не скрыто: правый клик по песне в списке прячет её").into());
+                    self.toast(
+                        tr!(
+                            "nothing is hidden: right-click a song in the list to hide it",
+                            "何も隠れていません: リストの曲を右クリックで隠せます",
+                            "ничего не скрыто: правый клик по песне в списке прячет её"
+                        )
+                        .into(),
+                    );
                 } else {
                     let what = self.select.hidden.describe();
                     self.select.unhide_all(&self.library);
                     self.toast(tr!("{what} back in the song list", "{what}を曲リストに戻しました", "{what} снова в списке песен";));
                 }
             }
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::List => self.open_choices(item),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::Value => self.start_edit(item),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Update => self.update_now(),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::KrokodilKoban && self.settings_ui.krokodil => match library::launch_osu() {
-                Ok(()) => self.quit = true,
-                Err(e) => self.toast(e),
-            },
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SongSelectLayout => {
-                self.reset_song_layout();
-                self.toast(tr!("song select: the usual layout", "選曲画面: いつものレイアウト", "выбор песни: обычный макет").into());
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::List => {
+                self.open_choices(item)
             }
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Changelog => self.changelog = Some(changelog::View::recent(false)),
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::PlayfieldReset => {
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item.kind() == Kind::Value =>
+            {
+                self.start_edit(item)
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Update => {
+                self.update_now()
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::KrokodilKoban && self.settings_ui.krokodil =>
+            {
+                match library::launch_osu() {
+                    Ok(()) => self.quit = true,
+                    Err(e) => self.toast(e),
+                }
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::SongSelectLayout =>
+            {
+                self.reset_song_layout();
+                self.toast(
+                    tr!(
+                        "song select: the usual layout",
+                        "選曲画面: いつものレイアウト",
+                        "выбор песни: обычный макет"
+                    )
+                    .into(),
+                );
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Changelog => {
+                self.changelog = Some(changelog::View::recent(false))
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::PlayfieldReset =>
+            {
                 self.cfg.playfield_area = Area::FULL;
                 self.cfg.save();
-                self.toast(tr!("playfield fills the screen", "プレイフィールドを全画面にしました", "поле на весь экран").into());
+                self.toast(
+                    tr!(
+                        "playfield fills the screen",
+                        "プレイフィールドを全画面にしました",
+                        "поле на весь экран"
+                    )
+                    .into(),
+                );
             }
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.adjust_setting(item, 1, window),
-            KeyCode::Tab if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select)) => {
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
+                self.adjust_setting(item, 1, window)
+            }
+            KeyCode::Tab if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select)) =>
+            {
                 self.open_multiplayer();
             }
             KeyCode::Escape | KeyCode::Tab | KeyCode::F1 => self.close_settings(),
@@ -4157,7 +5991,14 @@ impl State {
     /// with no sound, hit by sight.
     fn start_calibration_as(&mut self, vsync: bool) {
         if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
-            self.toast(tr!("quit the song first to calibrate", "調整するには先に曲をやめてください", "сначала выйдите из песни").into());
+            self.toast(
+                tr!(
+                    "quit the song first to calibrate",
+                    "調整するには先に曲をやめてください",
+                    "сначала выйдите из песни"
+                )
+                .into(),
+            );
             return;
         }
         let back = match std::mem::replace(&mut self.scene, Scene::Select) {
@@ -4179,19 +6020,44 @@ impl State {
         // Your own hitsounds would let you sync to yourself instead of to the click.
         game.mute_hits = true;
         game.show_hp = false;
-        self.scene = Scene::Calibrate { game: Box::new(game), back: Box::new(back), vsync };
+        self.scene = Scene::Calibrate {
+            game: Box::new(game),
+            back: Box::new(back),
+            vsync,
+        };
     }
 
     fn finish_calibration(&mut self) {
-        let Scene::Calibrate { game, back, vsync } = std::mem::replace(&mut self.scene, Scene::Select) else { return };
+        let Scene::Calibrate { game, back, vsync } =
+            std::mem::replace(&mut self.scene, Scene::Select)
+        else {
+            return;
+        };
         self.stop_audio();
         // By sight in vsync, hitting late means the frames reach the screen later than assumed.
-        let current = if vsync { self.cfg.vsync_tune_ms } else { self.cfg.offset_ms };
+        let current = if vsync {
+            self.cfg.vsync_tune_ms
+        } else {
+            self.cfg.offset_ms
+        };
         match calibrate::estimate(&game.stats.errors, current) {
-            Some(estimate) if estimate.hits >= 4 => self.scene = Scene::CalibrateDone { estimate, back, vsync },
+            Some(estimate) if estimate.hits >= 4 => {
+                self.scene = Scene::CalibrateDone {
+                    estimate,
+                    back,
+                    vsync,
+                }
+            }
             _ => {
                 self.scene = *back;
-                self.toast(tr!("calibration needs more hits", "調整にはもっと叩く必要があります", "для калибровки нужно больше ударов").into());
+                self.toast(
+                    tr!(
+                        "calibration needs more hits",
+                        "調整にはもっと叩く必要があります",
+                        "для калибровки нужно больше ударов"
+                    )
+                    .into(),
+                );
             }
         }
     }
@@ -4200,7 +6066,11 @@ impl State {
         self.stop_audio();
         match std::mem::replace(&mut self.scene, Scene::Select) {
             Scene::Calibrate { back, .. } => self.scene = *back,
-            Scene::CalibrateDone { estimate, back, vsync } => {
+            Scene::CalibrateDone {
+                estimate,
+                back,
+                vsync,
+            } => {
                 if apply && vsync {
                     self.cfg.vsync_tune_ms = estimate.suggested_offset.clamp(-200.0, 200.0);
                     self.cfg.save();
@@ -4216,11 +6086,22 @@ impl State {
         }
     }
 
-    fn calibration_key(&mut self, code: KeyCode, repeat: bool, at: Instant, window: Option<&Window>) {
+    fn calibration_key(
+        &mut self,
+        code: KeyCode,
+        repeat: bool,
+        at: Instant,
+        window: Option<&Window>,
+    ) {
         if let Scene::Calibrate { game, .. } = &mut self.scene {
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
                 if !repeat {
-                    game.press(calibrate::centre_key(k), at, self.audio.as_ref(), self.play_offset);
+                    game.press(
+                        calibrate::centre_key(k),
+                        at,
+                        self.audio.as_ref(),
+                        self.play_offset,
+                    );
                 }
                 return;
             }
@@ -4245,7 +6126,11 @@ impl State {
             KeyCode::Escape => self.leave_calibration(false),
             KeyCode::KeyR => self.start_calibration(),
             KeyCode::ArrowLeft | KeyCode::ArrowRight => {
-                let step = if code == KeyCode::ArrowRight { 5.0 } else { -5.0 };
+                let step = if code == KeyCode::ArrowRight {
+                    5.0
+                } else {
+                    -5.0
+                };
                 let (lo, hi) = calibrate::BPM_RANGE;
                 self.cfg.calibration_bpm = (self.cfg.calibration_bpm + step).clamp(lo, hi);
                 self.cfg.save();
@@ -4264,8 +6149,12 @@ impl State {
         if self.cfg.hotkeys.get(keys::Hotkey::ApplyOffset).is_none() {
             return;
         }
-        let Some(entry) = self.song_entry() else { return };
-        let (Scene::Play { game, .. } | Scene::MpPlay { game, .. }) = &self.scene else { return };
+        let Some(entry) = self.song_entry() else {
+            return;
+        };
+        let (Scene::Play { game, .. } | Scene::MpPlay { game, .. }) = &self.scene else {
+            return;
+        };
         match game.offset_suggestion(self.play_offset) {
             Some(h) if !h.significant => {
                 let text = tr!("offset already within +-{:.1} ms of your hits", "オフセットはもう叩きの±{:.1} ms以内です", "смещение уже в пределах +-{:.1} мс от ударов"; h.estimate.margin_ms);
@@ -4286,15 +6175,26 @@ impl State {
                 self.set_map_offset(entry, map);
                 self.toast(tr!("this map: offset {map:+.0} ms (was {was:+.0})", "この譜面: オフセット {map:+.0} ms (前は{was:+.0})", "эта карта: смещение {map:+.0} мс (было {was:+.0})";));
             }
-            None => self.toast(tr!("need at least 10 hits for a suggestion", "提案には10回以上叩く必要があります", "для подсказки нужно хотя бы 10 ударов").into()),
+            None => self.toast(
+                tr!(
+                    "need at least 10 hits for a suggestion",
+                    "提案には10回以上叩く必要があります",
+                    "для подсказки нужно хотя бы 10 ударов"
+                )
+                .into(),
+            ),
         }
     }
 
     /// The map played now, or whose results are up (its own offset is what -/+ and O change).
     fn song_entry(&self) -> Option<usize> {
         match &self.scene {
-            Scene::Loading { entry, .. } | Scene::Play { entry, .. } | Scene::Results { entry, .. } => Some(*entry),
-            Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => self.mp.as_ref().and_then(|s| s.map_entry),
+            Scene::Loading { entry, .. }
+            | Scene::Play { entry, .. }
+            | Scene::Results { entry, .. } => Some(*entry),
+            Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => {
+                self.mp.as_ref().and_then(|s| s.map_entry)
+            }
             _ => None,
         }
     }
@@ -4313,11 +6213,17 @@ impl State {
         if self.map_offsets.is_empty() {
             return 0.0;
         }
-        entry.and_then(|i| self.library.get(i)).and_then(|e| self.map_offsets.get(&e.hash())).copied().unwrap_or(0.0)
+        entry
+            .and_then(|i| self.library.get(i))
+            .and_then(|e| self.map_offsets.get(&e.hash()))
+            .copied()
+            .unwrap_or(0.0)
     }
 
     fn set_map_offset(&mut self, entry: usize, ms: f64) {
-        let Some(e) = self.library.get(entry) else { return };
+        let Some(e) = self.library.get(entry) else {
+            return;
+        };
         let ms = ms.round();
         if ms == 0.0 {
             self.map_offsets.remove(&e.hash());
@@ -4350,7 +6256,9 @@ impl State {
             self.restart_map();
             return;
         }
-        let Scene::Play { game, entry, from } = &mut self.scene else { return };
+        let Scene::Play { game, entry, from } = &mut self.scene else {
+            return;
+        };
         if game.resuming.is_some() {
             // Counting down: Esc goes back to the menu, everything else waits.
             if code == KeyCode::Escape {
@@ -4385,19 +6293,32 @@ impl State {
             // Song select's search box has the keys: they're letters of the search (there's an
             // artist called -45).
             KeyCode::Minus | KeyCode::Equal | KeyCode::NumpadSubtract | KeyCode::NumpadAdd
-                if self.player.as_ref().is_some_and(|p| p.searching) || (matches!(self.scene, Scene::Select) && self.select.searching && !self.modifiers_ctrl) =>
+                if self.player.as_ref().is_some_and(|p| p.searching)
+                    || (matches!(self.scene, Scene::Select)
+                        && self.select.searching
+                        && !self.modifiers_ctrl) =>
             {
-                return false
+                return false;
             }
-            KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd if self.modifiers_ctrl => {
-                let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) { -step } else { step };
+            KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd
+                if self.modifiers_ctrl =>
+            {
+                let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) {
+                    -step
+                } else {
+                    step
+                };
                 self.cfg.visual_offset_ms += d;
                 self.cfg.save();
                 self.toast(tr!("visual offset {:+.0} ms (notes drawn earlier)", "表示オフセット {:+.0} ms (ノーツを早めに描画)", "смещение картинки {:+.0} мс (ноты раньше)"; self.cfg.visual_offset_ms));
                 return true;
             }
             KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd => {
-                let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) { -step } else { step };
+                let d = if matches!(key, KeyCode::Minus | KeyCode::NumpadSubtract) {
+                    -step
+                } else {
+                    step
+                };
                 match self.song_entry() {
                     Some(entry) => {
                         let ms = self.map_offset(Some(entry)) + d;
@@ -4419,26 +6340,50 @@ impl State {
                 self.toast(scroll_in_select().into());
                 return true;
             }
-            KeyCode::F3 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, -1.0),
-            KeyCode::F4 => self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, 1.0),
+            KeyCode::F3 => {
+                self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, -1.0)
+            }
+            KeyCode::F4 => {
+                self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, 1.0)
+            }
             KeyCode::F7 => {
                 self.cfg.present = self.step_present(1);
                 self.cfg.save();
-                let note = if self.cfg.menu_vsync && !self.player_plays() { tr!(" (menus stay on vsync)", " (メニューは垂直同期のまま)", " (меню остаются с vsync)") } else { "" };
+                let note = if self.cfg.menu_vsync && !self.player_plays() {
+                    tr!(
+                        " (menus stay on vsync)",
+                        " (メニューは垂直同期のまま)",
+                        " (меню остаются с vsync)"
+                    )
+                } else {
+                    ""
+                };
                 let text = tr!("gameplay present mode: {}{note}", "プレイ中の表示モード: {}{note}", "режим вывода в игре: {}{note}"; self.cfg.present.name());
                 self.toast(text);
                 return true;
             }
             KeyCode::F8 => {
-                let i = FPS_CAPS.iter().position(|&c| c == self.cfg.fps_cap).unwrap_or(0);
+                let i = FPS_CAPS
+                    .iter()
+                    .position(|&c| c == self.cfg.fps_cap)
+                    .unwrap_or(0);
                 self.cfg.fps_cap = FPS_CAPS[(i + 1) % FPS_CAPS.len()];
                 let mut text = if self.cfg.fps_cap == 0 {
-    tr!("fps cap: unlimited", "FPSの上限: 無制限", "ограничение FPS: нет").to_string()
-} else {
-    tr!("fps cap: {}", "FPSの上限: {}", "ограничение FPS: {}"; self.cfg.fps_cap)
-};
+                    tr!(
+                        "fps cap: unlimited",
+                        "FPSの上限: 無制限",
+                        "ограничение FPS: нет"
+                    )
+                    .to_string()
+                } else {
+                    tr!("fps cap: {}", "FPSの上限: {}", "ограничение FPS: {}"; self.cfg.fps_cap)
+                };
                 if self.present == PresentChoice::Fifo {
-                    text.push_str(tr!(" (mailbox/immediate only)", " (mailbox/immediateのみ)", " (только mailbox/immediate)"));
+                    text.push_str(tr!(
+                        " (mailbox/immediate only)",
+                        " (mailbox/immediateのみ)",
+                        " (только mailbox/immediate)"
+                    ));
                 }
                 self.toast(text);
                 self.cfg.save();
@@ -4475,12 +6420,16 @@ impl State {
     /// Replays: seeks to the timeline position under the pointer, if it's on the timeline.
     /// `grabbed` (dragging along it) takes any height, so the pointer can wander off the bar.
     fn replay_seek_to_pointer(&mut self, grabbed: bool) -> bool {
-        let Some([x, y, w, h]) = self.replay_bar else { return false };
+        let Some([x, y, w, h]) = self.replay_bar else {
+            return false;
+        };
         let (vx, vy) = self.mouse_virtual();
         if !grabbed && !(vx >= x - 6.0 && vx <= x + w + 6.0 && vy >= y && vy <= y + h) {
             return false;
         }
-        let Scene::Play { game, .. } = &mut self.scene else { return false };
+        let Scene::Play { game, .. } = &mut self.scene else {
+            return false;
+        };
         let (start, end) = game.span();
         let t = start + ((vx - x) / w.max(1.0)).clamp(0.0, 1.0) as f64 * (end - start);
         game.seek(t, self.audio.as_ref(), self.play_offset);
@@ -4491,7 +6440,9 @@ impl State {
     /// menu) always show it.
     fn cursor_hidden(&self, now: Instant) -> bool {
         let playing = match &self.scene {
-            Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } => game.paused.is_none(),
+            Scene::Play { game, .. }
+            | Scene::MpPlay { game, .. }
+            | Scene::Calibrate { game, .. } => game.paused.is_none(),
             // Watching: hidden unless the friends overlay is open (it needs the pointer).
             Scene::Spectate(_) | Scene::Watch(_) => !self.social.open,
             _ => false,
@@ -4509,19 +6460,40 @@ impl State {
 
     /// Scenes where the playfield area can be moved and resized with the mouse.
     fn area_editable(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. })
+        matches!(
+            self.scene,
+            Scene::Play { .. }
+                | Scene::MpPlay { .. }
+                | Scene::Calibrate { .. }
+                | Scene::LayoutEdit { .. }
+                | Scene::Preview { .. }
+        )
     }
 
     fn open_layout_editor(&mut self) {
         let back = std::mem::replace(&mut self.scene, Scene::Select);
-        self.scene = Scene::LayoutEdit { back: Box::new(back) };
+        self.scene = Scene::LayoutEdit {
+            back: Box::new(back),
+        };
     }
 
     fn layout_key(&mut self, code: KeyCode) {
         let a = self.cfg.playfield_area;
         let step = 0.01;
         // Arrows move; Shift+arrows resize from the bottom-right, like a window.
-        let resize = |dx: f32, dy: f32| layout::drag(a, Grip::Resize { left: false, right: true, top: false, bottom: true }, dx, dy);
+        let resize = |dx: f32, dy: f32| {
+            layout::drag(
+                a,
+                Grip::Resize {
+                    left: false,
+                    right: true,
+                    top: false,
+                    bottom: true,
+                },
+                dx,
+                dy,
+            )
+        };
         let moved = |dx: f32, dy: f32| layout::drag(a, Grip::Move, dx, dy);
         let shift = self.modifiers_shift;
         let next = match code {
@@ -4540,7 +6512,9 @@ impl State {
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                 self.cfg.save();
-                if let Scene::LayoutEdit { back } = std::mem::replace(&mut self.scene, Scene::Select) {
+                if let Scene::LayoutEdit { back } =
+                    std::mem::replace(&mut self.scene, Scene::Select)
+                {
                     self.scene = *back;
                 }
                 return;
@@ -4552,7 +6526,11 @@ impl State {
     }
 
     fn refresh_presets(&mut self) {
-        self.resolutions = layout::presets(&self.monitor_modes, self.window_w as u32, self.window_h as u32);
+        self.resolutions = layout::presets(
+            &self.monitor_modes,
+            self.window_w as u32,
+            self.window_h as u32,
+        );
     }
 
     /// The preset the current area matches (within a pixel), if any.
@@ -4570,7 +6548,10 @@ impl State {
         let (mw, mh) = self.monitor_size;
         let sizes = layout::presets(&self.monitor_modes, mw, mh.saturating_sub(60));
         // Grouped like the playfield presets: the screen's aspect ratio first, largest first.
-        layout::group_presets(&sizes, self.monitor_size).into_iter().flat_map(|(_, l)| l).collect()
+        layout::group_presets(&sizes, self.monitor_size)
+            .into_iter()
+            .flat_map(|(_, l)| l)
+            .collect()
     }
 
     fn screen_size(&self) -> (u32, u32) {
@@ -4580,7 +6561,12 @@ impl State {
     /// The saved sizes first, then the built-in ones grouped by aspect ratio.
     fn preset_groups(&self) -> Vec<(&'static str, Vec<(u32, u32)>)> {
         let saved = &self.cfg.saved_presets;
-        let others: Vec<(u32, u32)> = self.resolutions.iter().copied().filter(|r| !saved.contains(r)).collect();
+        let others: Vec<(u32, u32)> = self
+            .resolutions
+            .iter()
+            .copied()
+            .filter(|r| !saved.contains(r))
+            .collect();
         let mut groups = layout::group_presets(&others, self.screen_size());
         if !saved.is_empty() {
             groups.insert(0, (settings::SAVED, saved.clone()));
@@ -4594,7 +6580,10 @@ impl State {
 
     /// Presets in dropdown order (grouped by aspect ratio, largest first).
     fn preset_list(&self) -> Vec<(u32, u32)> {
-        self.preset_groups().into_iter().flat_map(|(_, l)| l).collect()
+        self.preset_groups()
+            .into_iter()
+            .flat_map(|(_, l)| l)
+            .collect()
     }
 
     fn apply_preset(&mut self, (w, h): (u32, u32)) {
@@ -4619,15 +6608,35 @@ impl State {
 
     /// Steps through resolution presets in dropdown order, applying each as a centred area.
     fn cycle_preset(&mut self, dir: i32) {
-        let list: Vec<(u32, u32)> = self.preset_list().into_iter().filter(|&r| self.fits_window(r)).collect();
+        let list: Vec<(u32, u32)> = self
+            .preset_list()
+            .into_iter()
+            .filter(|&r| self.fits_window(r))
+            .collect();
         if list.is_empty() {
-            self.toast(tr!("no smaller resolutions fit this window", "このウィンドウに収まる、より小さい解像度はありません", "меньших разрешений для этого окна нет").into());
+            self.toast(
+                tr!(
+                    "no smaller resolutions fit this window",
+                    "このウィンドウに収まる、より小さい解像度はありません",
+                    "меньших разрешений для этого окна нет"
+                )
+                .into(),
+            );
             return;
         }
         let n = list.len() as i32;
-        let i = match self.current_preset().and_then(|p| list.iter().position(|&r| r == p)) {
+        let i = match self
+            .current_preset()
+            .and_then(|p| list.iter().position(|&r| r == p))
+        {
             Some(i) => (i as i32 + dir).rem_euclid(n),
-            None => if dir > 0 { 0 } else { n - 1 },
+            None => {
+                if dir > 0 {
+                    0
+                } else {
+                    n - 1
+                }
+            }
         } as usize;
         self.apply_preset(list[i]);
     }
@@ -4635,7 +6644,10 @@ impl State {
     /// Opens the preset list, even when it's empty: saved sizes can be added there.
     fn open_dropdown(&mut self) {
         let list = self.preset_list();
-        let cursor = self.current_preset().and_then(|p| list.iter().position(|&r| r == p)).unwrap_or(0);
+        let cursor = self
+            .current_preset()
+            .and_then(|p| list.iter().position(|&r| r == p))
+            .unwrap_or(0);
         self.settings_ui.dropdown = Some(Dropdown::new(cursor));
     }
 
@@ -4647,12 +6659,18 @@ impl State {
         let n = list.len();
         let saved = self.cfg.saved_presets.len();
         let shift = self.modifiers_shift;
-        let Some(dd) = &mut self.settings_ui.dropdown else { return };
+        let Some(dd) = &mut self.settings_ui.dropdown else {
+            return;
+        };
         if let Some((_, text)) = &mut dd.editing {
             match code {
                 KeyCode::Escape => dd.editing = None,
                 KeyCode::Backspace => settings::caret_backspace(text, &mut dd.caret),
-                KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End | KeyCode::Delete => {
+                KeyCode::ArrowLeft
+                | KeyCode::ArrowRight
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::Delete => {
                     settings::caret_nav(text, &mut dd.caret, code);
                 }
                 KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -4662,7 +6680,12 @@ impl State {
                 }
                 _ => {
                     if let Some(ch) = size_char(code) {
-                        settings::caret_insert(text, &mut dd.caret, ch.encode_utf8(&mut [0; 4]), 11);
+                        settings::caret_insert(
+                            text,
+                            &mut dd.caret,
+                            ch.encode_utf8(&mut [0; 4]),
+                            11,
+                        );
                     }
                 }
             }
@@ -4698,7 +6721,9 @@ impl State {
     fn preset_action(&mut self, action: PresetAction) {
         let saved = self.cfg.saved_presets.len();
         let size = self.playfield_size();
-        let Some(dd) = &mut self.settings_ui.dropdown else { return };
+        let Some(dd) = &mut self.settings_ui.dropdown else {
+            return;
+        };
         dd.show_cursor();
         let i = dd.cursor;
         match action {
@@ -4710,7 +6735,9 @@ impl State {
                 }
                 self.cfg.saved_presets.push(size);
                 dd.cursor = saved;
-                self.toast(tr!("saved {}x{}", "{}x{}を保存しました", "сохранён {}x{}"; size.0, size.1));
+                self.toast(
+                    tr!("saved {}x{}", "{}x{}を保存しました", "сохранён {}x{}"; size.0, size.1),
+                );
             }
             PresetAction::Add => {
                 dd.editing = Some((None, String::new()));
@@ -4749,7 +6776,14 @@ impl State {
     /// Saves a typed size: a new saved size (`index` None) or a change to saved size `index`.
     fn finish_preset_edit(&mut self, index: Option<usize>, text: String) {
         let Some(size) = layout::parse_size(&text) else {
-            self.toast(tr!("type a size like 1280x720", "1280x720のようにサイズを入力", "введите размер вроде 1280x720").into());
+            self.toast(
+                tr!(
+                    "type a size like 1280x720",
+                    "1280x720のようにサイズを入力",
+                    "введите размер вроде 1280x720"
+                )
+                .into(),
+            );
             if let Some(dd) = &mut self.settings_ui.dropdown {
                 dd.caret = text.len();
                 dd.editing = Some((index, text));
@@ -4839,11 +6873,14 @@ impl State {
         if matches!(self.scene, Scene::Preview { .. }) {
             let (vx, vy) = self.mouse_virtual();
             if self.preview.time_at(vx, vy).is_some() {
-                self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref());
+                self.preview
+                    .seek_by(notches as f64 * 5000.0, self.audio.as_ref());
                 return;
             }
         }
-        if self.area_editable() && (self.cfg.wheel_resizes_playfield || matches!(self.scene, Scene::LayoutEdit { .. })) {
+        if self.area_editable()
+            && (self.cfg.wheel_resizes_playfield || matches!(self.scene, Scene::LayoutEdit { .. }))
+        {
             self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
             self.cfg.save();
             let text = tr!("playfield: {}", "プレイフィールド: {}", "поле: {}"; self.cfg.playfield_area.describe());
@@ -4869,19 +6906,29 @@ impl State {
             }
             return;
         }
-        let on_board = self.board_rect.is_some_and(|[bx, by, bw, bh]| vx >= bx && vx <= bx + bw && vy >= by && vy <= by + bh);
+        let on_board = self
+            .board_rect
+            .is_some_and(|[bx, by, bw, bh]| vx >= bx && vx <= bx + bw && vy >= by && vy <= by + bh);
         if matches!(self.scene, Scene::Select) && on_board && self.select.picker.is_none() {
-            self.board_scroll = (self.board_scroll as i64 - notches as i64).clamp(0, self.board_max as i64) as usize;
+            self.board_scroll = (self.board_scroll as i64 - notches as i64)
+                .clamp(0, self.board_max as i64) as usize;
             return;
         }
         match &self.scene {
-            Scene::Select if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
+            Scene::Select if self.preview.time_at(vx, vy).is_some() => self
+                .preview
+                .seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Select if self.select.picker.is_some() => {
                 let n = self.select.picker_len() as i32;
-                self.select.picker = self.select.picker.map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
+                self.select.picker = self
+                    .select
+                    .picker
+                    .map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
             Scene::Select => self.select.scroll_by(-notches, &self.library),
-            Scene::Download if self.preview.time_at(vx, vy).is_some() => self.preview.seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
+            Scene::Download if self.preview.time_at(vx, vy).is_some() => self
+                .preview
+                .seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
             Scene::Download => self.browse.move_by(-notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
@@ -4911,11 +6958,21 @@ impl State {
     /// A finger on a touch screen (`x`, `y` in pixels). During play each new finger hits the drum
     /// in its column (`cfg.touch_layout`), timed like a key press; elsewhere the first finger
     /// is the mouse (tap = click, drag = drag).
-    fn touch(&mut self, id: u64, phase: TouchPhase, x: f64, y: f64, at: Instant, window: Option<&Window>) {
+    fn touch(
+        &mut self,
+        id: u64,
+        phase: TouchPhase,
+        x: f64,
+        y: f64,
+        at: Instant,
+        window: Option<&Window>,
+    ) {
         self.idle.input(at);
         self.touch_used = true;
         if phase == TouchPhase::Started && self.touch_drums() {
-            let col = (x / self.window_w.max(1.0) as f64 * 4.0).floor().clamp(0.0, 3.0) as usize;
+            let col = (x / self.window_w.max(1.0) as f64 * 4.0)
+                .floor()
+                .clamp(0.0, 3.0) as usize;
             self.touch_flash[col] = Some(at);
             let code = self.cfg.keys[self.cfg.touch_layout.keys()[col]];
             self.key(code, false, None, at, window);
@@ -4947,13 +7004,25 @@ impl State {
         let h = render::VIRTUAL_HEIGHT;
         for (col, key) in self.cfg.touch_layout.keys().into_iter().enumerate() {
             let colours = multiverse::note_colours();
-            let color = if key == 0 || key == 3 { colours.kat() } else { colours.don() };
+            let color = if key == 0 || key == 3 {
+                colours.kat()
+            } else {
+                colours.don()
+            };
             let x = col as f32 * col_w;
-            let flash = self.touch_flash[col].map(|t| 1.0 - (now.saturating_duration_since(t).as_secs_f32() / 0.15).min(1.0)).unwrap_or(0.0);
+            let flash = self.touch_flash[col]
+                .map(|t| 1.0 - (now.saturating_duration_since(t).as_secs_f32() / 0.15).min(1.0))
+                .unwrap_or(0.0);
             if flash > 0.0 {
                 c.rect(x, 0.0, col_w, h, rgba(color, 0.10 * flash));
             }
-            c.rect(x + 2.0, h - 6.0, col_w - 4.0, 6.0, rgba(color, 0.35 + 0.5 * flash));
+            c.rect(
+                x + 2.0,
+                h - 6.0,
+                col_w - 4.0,
+                6.0,
+                rgba(color, 0.35 + 0.5 * flash),
+            );
         }
     }
 
@@ -4971,9 +7040,15 @@ impl State {
         self.volume.point(vx, vy, width, Instant::now());
         // On the main menu, pointing at a note selects it (moving: a pointer left resting doesn't
         // take the selection back from the keys).
-        if moved && self.on_menu() && self.player.is_none()
+        if moved
+            && self.on_menu()
+            && self.player.is_none()
             && let Some(render::Hit::MenuItem(i)) = self.hit_at(vx, vy)
-            && let Some(m) = self.main_menu.as_mut().filter(|m| !m.is_leaving() && !m.is_selected(i)) {
+            && let Some(m) = self
+                .main_menu
+                .as_mut()
+                .filter(|m| !m.is_leaving() && !m.is_selected(i))
+        {
             m.pick(i);
         }
         if let Some(last) = self.replay_scrub {
@@ -4992,7 +7067,8 @@ impl State {
         }
         if let Some((px, py, _)) = self.right_press {
             let (vx, vy) = self.mouse_virtual();
-            if !self.right_scroll && ((vx - px).abs() > DRAG_START || (vy - py).abs() > DRAG_START) {
+            if !self.right_scroll && ((vx - px).abs() > DRAG_START || (vy - py).abs() > DRAG_START)
+            {
                 self.right_scroll = true;
             }
         }
@@ -5053,12 +7129,24 @@ impl State {
             }
             if let Some((grip, (px, py), from)) = ed.grip {
                 let [_, _, fw, fh] = ed.frame_rect;
-                ed.crop = layout::drag(from, grip, ((x - px) / (fw as f64 * k)) as f32, ((y - py) / (fh as f64 * k)) as f32).clamped();
+                ed.crop = layout::drag(
+                    from,
+                    grip,
+                    ((x - px) / (fw as f64 * k)) as f32,
+                    ((y - py) / (fh as f64 * k)) as f32,
+                )
+                .clamped();
                 ed.crop_name = "custom";
                 return grip.cursor();
             }
             let [fx, fy, fw, fh] = ed.frame_rect;
-            if let Some(g) = layout::hit(ed.crop, x - fx as f64 * k, y - fy as f64 * k, fw as f64 * k, fh as f64 * k) {
+            if let Some(g) = layout::hit(
+                ed.crop,
+                x - fx as f64 * k,
+                y - fy as f64 * k,
+                fw as f64 * k,
+                fh as f64 * k,
+            ) {
                 return g.cursor();
             }
         }
@@ -5075,7 +7163,11 @@ impl State {
             }
             return CursorIcon::Default;
         }
-        if self.grip.is_none() && self.readout_rect.is_some_and(|r| vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3]) {
+        if self.grip.is_none()
+            && self
+                .readout_rect
+                .is_some_and(|r| vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3])
+        {
             self.hover = None;
             return CursorIcon::Pointer;
         }
@@ -5092,7 +7184,8 @@ impl State {
             return grip.cursor();
         }
         if self.scrubbing.is_none()
-            && let Some(hit) = self.hit_at(vx, vy) {
+            && let Some(hit) = self.hit_at(vx, vy)
+        {
             if let (render::Hit::PauseItem(i), Scene::Play { game, .. }) = (hit, &mut self.scene) {
                 game.paused = Some(i);
             }
@@ -5105,7 +7198,11 @@ impl State {
         if let Some(drag) = self.player.as_ref().and_then(|p| p.drag) {
             match drag {
                 player::Drag::Volume => self.music_volume_to_pointer(),
-                player::Drag::Timeline if self.music_seeked.is_none_or(|t| t.elapsed() >= Duration::from_millis(33)) => {
+                player::Drag::Timeline
+                    if self
+                        .music_seeked
+                        .is_none_or(|t| t.elapsed() >= Duration::from_millis(33)) =>
+                {
                     self.music_seeked = Some(Instant::now());
                     self.music_seek_to_pointer();
                 }
@@ -5113,7 +7210,12 @@ impl State {
             }
             return CursorIcon::Pointer;
         }
-        if !self.on_menu() && matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
+        if !self.on_menu()
+            && matches!(
+                self.scene,
+                Scene::Select | Scene::Preview { .. } | Scene::Download
+            )
+        {
             if let Some((last, at)) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
                 if last.elapsed() >= Duration::from_millis(33) {
@@ -5126,7 +7228,10 @@ impl State {
                 return CursorIcon::Pointer;
             }
             let on_box = matches!(self.scene, Scene::Select) && self.preview.box_at(vx, vy);
-            if self.preview.time_at(vx, vy).is_some() || self.preview.play_button_at(vx, vy) || on_box {
+            if self.preview.time_at(vx, vy).is_some()
+                || self.preview.play_button_at(vx, vy)
+                || on_box
+            {
                 self.hover = None;
                 return CursorIcon::Pointer;
             }
@@ -5146,7 +7251,9 @@ impl State {
             return CursorIcon::Default;
         }
         self.hover = layout::hit(self.cfg.playfield_area, x, y, sw, sh);
-        self.hover.map(|g| g.cursor()).unwrap_or(CursorIcon::Default)
+        self.hover
+            .map(|g| g.cursor())
+            .unwrap_or(CursorIcon::Default)
     }
 
     /// Right button on song select: hold it and move up and down to fly through the list, like
@@ -5176,12 +7283,15 @@ impl State {
         if self.on_menu() {
             return;
         }
-        let free = self.splash.is_none() && self.select.picker.is_none() && self.settings_ui.dropdown.is_none();
+        let free = self.splash.is_none()
+            && self.select.picker.is_none()
+            && self.settings_ui.dropdown.is_none();
         let (vx, vy) = self.mouse_virtual();
         if pressed {
             self.select.menu = None;
             self.right_scroll = false;
-            self.right_press = (free && matches!(self.scene, Scene::Select)).then(|| (vx, vy, self.hit_at(vx, vy)));
+            self.right_press = (free && matches!(self.scene, Scene::Select))
+                .then(|| (vx, vy, self.hit_at(vx, vy)));
             return;
         }
         let press = self.right_press.take();
@@ -5189,9 +7299,25 @@ impl State {
             return;
         }
         match press {
-            Some((x, y, Some(render::Hit::SongRow(row)))) => self.select.menu = Some(ui::SongMenu { row, header: false, x, y }),
-            Some((x, y, Some(render::Hit::SongHeader(row)))) => self.select.menu = Some(ui::SongMenu { row, header: true, x, y }),
-            Some((_, y, Some(render::Hit::SongScrollbar))) => self.select.scroll_to(y, &self.library),
+            Some((x, y, Some(render::Hit::SongRow(row)))) => {
+                self.select.menu = Some(ui::SongMenu {
+                    row,
+                    header: false,
+                    x,
+                    y,
+                })
+            }
+            Some((x, y, Some(render::Hit::SongHeader(row)))) => {
+                self.select.menu = Some(ui::SongMenu {
+                    row,
+                    header: true,
+                    x,
+                    y,
+                })
+            }
+            Some((_, y, Some(render::Hit::SongScrollbar))) => {
+                self.select.scroll_to(y, &self.library)
+            }
             _ => {}
         }
     }
@@ -5206,15 +7332,25 @@ impl State {
             return;
         }
         // Letting go of the preset list's scroll bar is all a release does then.
-        if !pressed && self.settings_ui.dropdown.as_mut().is_some_and(Dropdown::release_bar) {
+        if !pressed
+            && self
+                .settings_ui
+                .dropdown
+                .as_mut()
+                .is_some_and(Dropdown::release_bar)
+        {
             return;
         }
         if pressed && self.splash.is_none() {
             let (vx, vy) = self.mouse_virtual();
             let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
             let [px, py, pw, ph] = social::panel_rect(width);
-            let on_panel = self.social.open && vx >= px && vx <= px + pw && vy >= py && vy <= py + ph;
-            let on_social = matches!(self.hit_at(vx, vy), Some(render::Hit::SocialToggle | render::Hit::SocialNote(_)));
+            let on_panel =
+                self.social.open && vx >= px && vx <= px + pw && vy >= py && vy <= py + ph;
+            let on_social = matches!(
+                self.hit_at(vx, vy),
+                Some(render::Hit::SocialToggle | render::Hit::SocialNote(_))
+            );
             if on_panel || on_social {
                 if let Some(hit) = self.hit_at(vx, vy) {
                     self.click(hit, window);
@@ -5242,7 +7378,9 @@ impl State {
             // Its tabs and its Back button.
             if pressed {
                 let (vx, vy) = self.mouse_virtual();
-                if let Some(hit @ (render::Hit::Key(_) | render::Hit::MedalTab(_))) = self.hit_at(vx, vy) {
+                if let Some(hit @ (render::Hit::Key(_) | render::Hit::MedalTab(_))) =
+                    self.hit_at(vx, vy)
+                {
                     self.click(hit, window);
                 }
             }
@@ -5267,7 +7405,15 @@ impl State {
                     use render::Hit as H;
                     matches!(
                         hit,
-                        Some(H::UniverseCell(..) | H::UniversePreset(_) | H::UniversePresetDelete(_) | H::ShapeshiftCell(..) | H::ShapeshiftMove(_) | H::CustomTab(_) | H::Key(_))
+                        Some(
+                            H::UniverseCell(..)
+                                | H::UniversePreset(_)
+                                | H::UniversePresetDelete(_)
+                                | H::ShapeshiftCell(..)
+                                | H::ShapeshiftMove(_)
+                                | H::CustomTab(_)
+                                | H::Key(_)
+                        )
                     )
                 } else {
                     matches!(hit, Some(render::Hit::ModToggle(_) | render::Hit::Key(_)))
@@ -5288,7 +7434,10 @@ impl State {
             return;
         }
         if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
-            let (vx, vy) = (self.mouse.0 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0), self.mouse.1 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0));
+            let (vx, vy) = (
+                self.mouse.0 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0),
+                self.mouse.1 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0),
+            );
             let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
             if !pressed {
                 ed.scrubbing = false;
@@ -5304,7 +7453,13 @@ impl State {
                 return;
             } else {
                 let [fx, fy, fw, fh] = ed.frame_rect;
-                if let Some(g) = layout::hit(ed.crop, self.mouse.0 - fx as f64 * k, self.mouse.1 - fy as f64 * k, fw as f64 * k, fh as f64 * k) {
+                if let Some(g) = layout::hit(
+                    ed.crop,
+                    self.mouse.0 - fx as f64 * k,
+                    self.mouse.1 - fy as f64 * k,
+                    fw as f64 * k,
+                    fh as f64 * k,
+                ) {
                     ed.grip = Some((g, self.mouse, ed.crop));
                     return;
                 }
@@ -5316,12 +7471,16 @@ impl State {
                 self.click(hit, window);
             }
             if let Some(p) = self.player.as_mut().filter(|_| !pressed)
-                && p.drag.take() == Some(player::Drag::Volume) {
+                && p.drag.take() == Some(player::Drag::Volume)
+            {
                 self.cfg.save();
             }
             return;
         }
-        if matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download) {
+        if matches!(
+            self.scene,
+            Scene::Select | Scene::Preview { .. } | Scene::Download
+        ) {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
                 if self.preview.play_button_at(vx, vy) {
@@ -5352,7 +7511,10 @@ impl State {
         }
         if pressed && self.settings_ui.dropdown.is_none() {
             let (vx, vy) = self.mouse_virtual();
-            if self.readout_rect.is_some_and(|r| vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3]) {
+            if self
+                .readout_rect
+                .is_some_and(|r| vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3])
+            {
                 // Clicking the resolution readout opens the preset list; single-player pauses
                 // first (a multiplayer match keeps running).
                 if let Scene::Play { game, .. } | Scene::Calibrate { game, .. } = &mut self.scene {
@@ -5364,7 +7526,12 @@ impl State {
         }
         if pressed && self.settings_ui.dropdown.is_some() {
             let (vx, vy) = self.mouse_virtual();
-            if let Some(dd) = self.settings_ui.dropdown.as_mut().filter(|d| d.editing.is_none() && d.on_bar(vx, vy)) {
+            if let Some(dd) = self
+                .settings_ui
+                .dropdown
+                .as_mut()
+                .filter(|d| d.editing.is_none() && d.on_bar(vx, vy))
+            {
                 dd.grab_bar(vy);
                 return;
             }
@@ -5421,18 +7588,26 @@ impl State {
             if matches!(self.scene, Scene::Select) {
                 self.select.searching = hit == Some(render::Hit::TextField);
             }
-            if self.select.picker.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::PickRow(_))) {
+            if self.select.picker.is_some()
+                && matches!(self.scene, Scene::Select)
+                && !matches!(hit, Some(render::Hit::PickRow(_)))
+            {
                 self.select.picker = None;
                 return;
             }
-            if self.select.menu.is_some() && matches!(self.scene, Scene::Select) && !matches!(hit, Some(render::Hit::SongMenu(_))) {
+            if self.select.menu.is_some()
+                && matches!(self.scene, Scene::Select)
+                && !matches!(hit, Some(render::Hit::SongMenu(_)))
+            {
                 self.select.menu = None;
                 return;
             }
             if let (Scene::Select, Some(h @ render::Hit::SplitList)) = (&self.scene, hit) {
                 // Twice in quick succession: back to the usual size.
                 let now = Instant::now();
-                if self.split_click.take().is_some_and(|(last, at)| last == h && now.duration_since(at) < Duration::from_millis(400)) {
+                if self.split_click.take().is_some_and(|(last, at)| {
+                    last == h && now.duration_since(at) < Duration::from_millis(400)
+                }) {
                     self.reset_song_layout();
                     return;
                 }
@@ -5446,11 +7621,20 @@ impl State {
                 self.select.scroll_to(vy, &self.library);
                 return;
             }
-            if let (Scene::Select, Some(h @ (render::Hit::SongRow(_) | render::Hit::SongHeader(_)))) = (&self.scene, hit) {
-                self.list_drag = Some(ListDrag { from_y: vy, hit: h, moved: false });
+            if let (
+                Scene::Select,
+                Some(h @ (render::Hit::SongRow(_) | render::Hit::SongHeader(_))),
+            ) = (&self.scene, hit)
+            {
+                self.list_drag = Some(ListDrag {
+                    from_y: vy,
+                    hit: h,
+                    moved: false,
+                });
                 return;
             }
-            if self.settings_ui.choices.is_some() && !matches!(hit, Some(render::Hit::ChoiceRow(_))) {
+            if self.settings_ui.choices.is_some() && !matches!(hit, Some(render::Hit::ChoiceRow(_)))
+            {
                 self.settings_ui.choices = None;
                 return;
             }
@@ -5464,7 +7648,9 @@ impl State {
             }
             if self.area_editable() {
                 let (sw, sh) = (self.window_w as f64, self.window_h as f64);
-                if let Some(g) = layout::hit(self.cfg.playfield_area, self.mouse.0, self.mouse.1, sw, sh) {
+                if let Some(g) =
+                    layout::hit(self.cfg.playfield_area, self.mouse.0, self.mouse.1, sw, sh)
+                {
                     self.grip = Some((g, self.mouse, self.cfg.playfield_area));
                 }
             }
@@ -5478,8 +7664,15 @@ impl State {
     fn simulate_drag(&mut self, corner: bool, dx: f64, dy: f64, hold: bool) {
         let a = self.cfg.playfield_area;
         let (sw, sh) = (self.window_w as f64, self.window_h as f64);
-        let (fx, fy) = if corner { (a.x + a.w, a.y + a.h) } else { (a.x + a.w / 2.0, a.y + a.h / 2.0) };
-        let start = (fx as f64 * sw - if corner { 2.0 } else { 0.0 }, fy as f64 * sh - if corner { 2.0 } else { 0.0 });
+        let (fx, fy) = if corner {
+            (a.x + a.w, a.y + a.h)
+        } else {
+            (a.x + a.w / 2.0, a.y + a.h / 2.0)
+        };
+        let start = (
+            fx as f64 * sw - if corner { 2.0 } else { 0.0 },
+            fy as f64 * sh - if corner { 2.0 } else { 0.0 },
+        );
         self.mouse_moved(start.0, start.1);
         self.mouse_button(true, None);
         self.mouse_moved(start.0 + dx, start.1 + dy);
@@ -5489,7 +7682,11 @@ impl State {
     }
 
     fn open_multiplayer(&mut self) {
-        self.scene = if self.mp.is_some() { Scene::Lobby } else { Scene::MpMenu };
+        self.scene = if self.mp.is_some() {
+            Scene::Lobby
+        } else {
+            Scene::MpMenu
+        };
     }
 
     fn pick_lobby_map(&mut self, entry: usize) {
@@ -5497,7 +7694,10 @@ impl State {
         if let (Some(s), Some(g)) = (self.mp.as_ref().filter(|s| s.mapguessr), &mut self.guessr) {
             let e = &self.library[entry];
             if g.can_guess(s) {
-                s.client.send(net::ClientMsg::Guess { hash: e.hash(), song: mapguessr::entry_song(e) });
+                s.client.send(net::ClientMsg::Guess {
+                    hash: e.hash(),
+                    song: mapguessr::entry_song(e),
+                });
                 g.last_guess = Some(format!("{} - {}", e.meta.artist, e.meta.title));
             }
             self.scene = Scene::Lobby;
@@ -5519,10 +7719,18 @@ impl State {
         self.scene = Scene::MpMenu;
     }
 
-    fn multiplayer_key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+    fn multiplayer_key(
+        &mut self,
+        code: KeyCode,
+        repeat: bool,
+        text: Option<&str>,
+        at: Instant,
+        window: Option<&Window>,
+    ) {
         // Drum keys during a match go straight to the game.
         if let Scene::MpPlay { game, .. } = &mut self.scene
-            && let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
+            && let Some(k) = self.cfg.keys.iter().position(|&k| k == code)
+        {
             if !repeat && game.replay.is_none() {
                 game.press(k, at, self.audio.as_ref(), self.play_offset);
             }
@@ -5532,8 +7740,18 @@ impl State {
             // The form takes typed text, so only function keys act as shortcuts here.
             let function_key = matches!(
                 code,
-                KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 | KeyCode::F5 | KeyCode::F6
-                    | KeyCode::F7 | KeyCode::F8 | KeyCode::F9 | KeyCode::F10 | KeyCode::F11 | KeyCode::F12
+                KeyCode::F1
+                    | KeyCode::F2
+                    | KeyCode::F3
+                    | KeyCode::F4
+                    | KeyCode::F5
+                    | KeyCode::F6
+                    | KeyCode::F7
+                    | KeyCode::F8
+                    | KeyCode::F9
+                    | KeyCode::F10
+                    | KeyCode::F11
+                    | KeyCode::F12
             );
             if !(function_key && !repeat && self.handle_global_key(code, window)) {
                 self.mp_menu_key(code, text);
@@ -5566,11 +7784,16 @@ impl State {
                         }
                     }
                     KeyCode::BracketLeft | KeyCode::BracketRight if s.is_host() && !s.in_match => {
-                        let step = if code == KeyCode::BracketRight { 0.05 } else { -0.05 } * if self.modifiers_shift { 5.0 } else { 1.0 };
+                        let step = if code == KeyCode::BracketRight {
+                            0.05
+                        } else {
+                            -0.05
+                        } * if self.modifiers_shift { 5.0 } else { 1.0 };
                         self.cfg.rate = ((self.cfg.rate + step) * 100.0).round() / 100.0;
                         self.cfg.rate = self.cfg.rate.clamp(RATE_RANGE.0, RATE_RANGE.1);
                         self.cfg.save();
-                        let (rate, mods) = (self.cfg.mods.speed(self.cfg.rate, true).0, self.cfg.mods);
+                        let (rate, mods) =
+                            (self.cfg.mods.speed(self.cfg.rate, true).0, self.cfg.mods);
                         if let Some(mut m) = s.map.clone() {
                             m.rate = rate;
                             m.mods = mods.list();
@@ -5583,7 +7806,9 @@ impl State {
                     }
                     KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
                     KeyCode::F1 => self.open_mod_select(),
-                    KeyCode::KeyS if s.in_match && s.me().is_some_and(|p| p.status == net::Status::Lobby) => {
+                    KeyCode::KeyS
+                        if s.in_match && s.me().is_some_and(|p| p.status == net::Status::Lobby) =>
+                    {
                         if s.have_map {
                             s.client.send(net::ClientMsg::Spectate(true));
                         } else {
@@ -5595,14 +7820,28 @@ impl State {
                         let on = !s.me().is_some_and(|p| p.spectator);
                         s.ready = false;
                         s.client.send(net::ClientMsg::Spectator(on));
-                        self.toast(if on { "you'll spectate the match" } else { "you'll play the match" }.into());
+                        self.toast(
+                            if on {
+                                "you'll spectate the match"
+                            } else {
+                                "you'll play the match"
+                            }
+                            .into(),
+                        );
                     }
                     // Missing the map: from the host by default (fast, works for any map), the
                     // mirrors with M or Shift+D.
-                    KeyCode::KeyD | KeyCode::KeyM if !s.have_map && s.map.is_some() && !s.is_host() && (code == KeyCode::KeyM || self.modifiers_shift) => {
+                    KeyCode::KeyD | KeyCode::KeyM
+                        if !s.have_map
+                            && s.map.is_some()
+                            && !s.is_host()
+                            && (code == KeyCode::KeyM || self.modifiers_shift) =>
+                    {
                         self.download_lobby_map()
                     }
-                    KeyCode::KeyD | KeyCode::KeyH if !s.have_map && s.map.is_some() && !s.is_host() => {
+                    KeyCode::KeyD | KeyCode::KeyH
+                        if !s.have_map && s.map.is_some() && !s.is_host() =>
+                    {
                         if self.host_transfer.is_none() {
                             s.client.send(net::ClientMsg::RequestMap);
                             self.host_map_asked = true;
@@ -5622,7 +7861,11 @@ impl State {
                     }
                     KeyCode::Tab => self.scene = Scene::Select,
                     KeyCode::Escape => {
-                        let why = if s.owns_room() { "room closed" } else { "left the room" };
+                        let why = if s.owns_room() {
+                            "room closed"
+                        } else {
+                            "left the room"
+                        };
                         self.leave_room(why);
                     }
                     _ => {}
@@ -5632,7 +7875,10 @@ impl State {
                 if code == KeyCode::Escape {
                     if let Some(s) = &self.mp {
                         s.client.send(net::ClientMsg::Loaded(false));
-                        s.client.send(net::ClientMsg::Finished(net::Final { quit: true, ..Default::default() }));
+                        s.client.send(net::ClientMsg::Finished(net::Final {
+                            quit: true,
+                            ..Default::default()
+                        }));
                     }
                     self.scene = Scene::Lobby;
                 }
@@ -5642,11 +7888,19 @@ impl State {
                 KeyCode::Tab => {
                     self.cfg.mp_scoreboard = !self.cfg.mp_scoreboard;
                     self.cfg.save();
-                    self.toast(if self.cfg.mp_scoreboard { "scoreboard shown (Tab)" } else { "scoreboard hidden (Tab)" }.into());
+                    self.toast(
+                        if self.cfg.mp_scoreboard {
+                            "scoreboard shown (Tab)"
+                        } else {
+                            "scoreboard hidden (Tab)"
+                        }
+                        .into(),
+                    );
                 }
                 KeyCode::Space => {
                     if game.skip(self.audio.as_ref(), self.play_offset)
-                        && let Some(s) = &self.mp {
+                        && let Some(s) = &self.mp
+                    {
                         s.client.send(net::ClientMsg::Skipped);
                     }
                 }
@@ -5654,7 +7908,11 @@ impl State {
                     // No pausing in a match; a second Esc forfeits.
                     if quit_armed.is_some_and(|t| t.elapsed() < Duration::from_millis(1500)) {
                         if let Some(s) = &self.mp {
-                            s.client.send(net::ClientMsg::Finished(multiplayer::final_from(&game.stats, true)));
+                            s.client
+                                .send(net::ClientMsg::Finished(multiplayer::final_from(
+                                    &game.stats,
+                                    true,
+                                )));
                         }
                         self.stop_audio();
                         self.scene = Scene::MpResults;
@@ -5667,7 +7925,10 @@ impl State {
             },
             Scene::MpResults => {
                 // Results stay on the session so the lobby can show the last winner.
-                if matches!(code, KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape) {
+                if matches!(
+                    code,
+                    KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape
+                ) {
                     self.scene = Scene::Lobby;
                 }
             }
@@ -5677,10 +7938,18 @@ impl State {
 
     /// A key in a mapguessr lobby.
     fn guessr_key(&mut self, code: KeyCode) {
-        let (Some(s), Some(g)) = (&self.mp, &mut self.guessr) else { return };
+        let (Some(s), Some(g)) = (&self.mp, &mut self.guessr) else {
+            return;
+        };
         let in_game = s.in_match;
         match code {
-            KeyCode::KeyG | KeyCode::Tab | KeyCode::Space | KeyCode::Enter | KeyCode::NumpadEnter if in_game => {
+            KeyCode::KeyG
+            | KeyCode::Tab
+            | KeyCode::Space
+            | KeyCode::Enter
+            | KeyCode::NumpadEnter
+                if in_game =>
+            {
                 if g.can_guess(s) {
                     self.picking_lobby_map = true;
                     self.scene = Scene::Select;
@@ -5699,16 +7968,28 @@ impl State {
                 };
             }
             KeyCode::Enter | KeyCode::NumpadEnter if s.is_host() && !in_game => {
-                s.client.send(net::ClientMsg::StartGuessr { rounds: g.rounds });
+                s.client
+                    .send(net::ClientMsg::StartGuessr { rounds: g.rounds });
             }
             KeyCode::KeyS if !in_game => {
                 let on = !s.me().is_some_and(|p| p.spectator);
                 s.client.send(net::ClientMsg::Spectator(on));
-                self.toast(if on { "you'll watch the next game" } else { "you'll play the next game" }.into());
+                self.toast(
+                    if on {
+                        "you'll watch the next game"
+                    } else {
+                        "you'll play the next game"
+                    }
+                    .into(),
+                );
             }
             KeyCode::Tab => self.scene = Scene::Select,
             KeyCode::Escape => {
-                let why = if s.owns_room() { "room closed" } else { "left the room" };
+                let why = if s.owns_room() {
+                    "room closed"
+                } else {
+                    "left the room"
+                };
                 self.leave_room(why);
             }
             _ => {}
@@ -5721,7 +8002,9 @@ impl State {
         let rows = self.mp_menu.rows().len();
         let server = self.cfg.online_server.clone();
         match code {
-            KeyCode::ArrowUp => self.mp_menu.cursor = self.mp_menu.cursor.min(rows - 1).saturating_sub(1),
+            KeyCode::ArrowUp => {
+                self.mp_menu.cursor = self.mp_menu.cursor.min(rows - 1).saturating_sub(1)
+            }
             KeyCode::ArrowDown => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
             // Between the columns: online (left), direct play (right).
             KeyCode::ArrowLeft => self.mp_menu.cursor = 0,
@@ -5770,9 +8053,13 @@ impl State {
                 let email = menu.email.trim().to_string();
                 let busy = menu.account_request.is_some();
                 match row {
-                    Row::User | Row::Email | Row::Code => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
+                    Row::User | Row::Email | Row::Code => {
+                        self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1)
+                    }
                     // Only on the login form does the password send.
-                    Row::Password if menu.form != Form::Main => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
+                    Row::Password if menu.form != Form::Main => {
+                        self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1)
+                    }
                     // The ways to the other forms.
                     Row::Register if menu.form == Form::Main => {
                         menu.open(Form::Register);
@@ -5798,7 +8085,8 @@ impl State {
                         menu.open(Form::Main);
                         self.mp_status.clear();
                     }
-                    Row::LogIn | Row::Register | Row::Password | Row::Forgot | Row::LinkEmail if busy => {}
+                    Row::LogIn | Row::Register | Row::Password | Row::Forgot | Row::LinkEmail
+                        if busy => {}
                     Row::Forgot => {
                         // Logged in, it's this account's password.
                         let who = match &menu.account {
@@ -5806,99 +8094,220 @@ impl State {
                             None => menu.user.trim().to_string(),
                         };
                         if who.is_empty() {
-                            self.mp_status = tr!("type your name or email first", "先に名前かメールを入力してください", "сначала впиши ник или почту").into();
+                            self.mp_status = tr!(
+                                "type your name or email first",
+                                "先に名前かメールを入力してください",
+                                "сначала впиши ник или почту"
+                            )
+                            .into();
                             self.mp_menu.select(Row::User);
                         } else if menu.code_for == Some(CodeFor::Reset) {
                             if code.is_none() {
-                                self.mp_status = tr!("type the code from the email first", "先にメールのコードを入力してください", "сначала введи код из письма").into();
+                                self.mp_status = tr!(
+                                    "type the code from the email first",
+                                    "先にメールのコードを入力してください",
+                                    "сначала введи код из письма"
+                                )
+                                .into();
                                 self.mp_menu.select(Row::Code);
                             } else if !online::valid_password(&menu.password) {
-                                self.mp_status = tr!("type a new password of at least 6 characters", "6文字以上の新しいパスワードを入力してください", "впиши новый пароль от 6 символов").into();
+                                self.mp_status = tr!(
+                                    "type a new password of at least 6 characters",
+                                    "6文字以上の新しいパスワードを入力してください",
+                                    "впиши новый пароль от 6 символов"
+                                )
+                                .into();
                                 self.mp_menu.select(Row::Password);
                             } else {
                                 let password = Some(menu.password.clone());
-                                self.mp_status = tr!("setting the new password...", "新しいパスワードを設定中...", "сохраняю новый пароль...").into();
-                                menu.account_call(&server, online::Request::ResetPassword { who, code, password });
+                                self.mp_status = tr!(
+                                    "setting the new password...",
+                                    "新しいパスワードを設定中...",
+                                    "сохраняю новый пароль..."
+                                )
+                                .into();
+                                menu.account_call(
+                                    &server,
+                                    online::Request::ResetPassword {
+                                        who,
+                                        code,
+                                        password,
+                                    },
+                                );
                             }
                         } else {
                             menu.asking = Some(CodeFor::Reset);
-                            self.mp_status = tr!("sending a code to the account's email...", "アカウントのメールにコードを送信中...", "отправляю код на почту аккаунта...").into();
-                            menu.account_call(&server, online::Request::ResetPassword { who, code: None, password: None });
+                            self.mp_status = tr!(
+                                "sending a code to the account's email...",
+                                "アカウントのメールにコードを送信中...",
+                                "отправляю код на почту аккаунта..."
+                            )
+                            .into();
+                            menu.account_call(
+                                &server,
+                                online::Request::ResetPassword {
+                                    who,
+                                    code: None,
+                                    password: None,
+                                },
+                            );
                         }
                     }
                     Row::LinkEmail => {
                         if !email.contains('@') {
-                            self.mp_status = tr!("type your email first", "先にメールを入力してください", "сначала впиши почту").into();
+                            self.mp_status = tr!(
+                                "type your email first",
+                                "先にメールを入力してください",
+                                "сначала впиши почту"
+                            )
+                            .into();
                             self.mp_menu.select(Row::Email);
                         } else if menu.code_for == Some(CodeFor::Link) && code.is_some() {
-                            self.mp_status = tr!("linking the email...", "メールを登録中...", "привязываю почту...").into();
-                            menu.account_call(&server, online::Request::LinkEmail { token, email, code });
+                            self.mp_status = tr!(
+                                "linking the email...",
+                                "メールを登録中...",
+                                "привязываю почту..."
+                            )
+                            .into();
+                            menu.account_call(
+                                &server,
+                                online::Request::LinkEmail { token, email, code },
+                            );
                         } else {
                             menu.asking = Some(CodeFor::Link);
                             self.mp_status = tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}...";);
-                            menu.account_call(&server, online::Request::LinkEmail { token, email, code: None });
+                            menu.account_call(
+                                &server,
+                                online::Request::LinkEmail {
+                                    token,
+                                    email,
+                                    code: None,
+                                },
+                            );
                         }
                     }
                     Row::Register => {
                         let user = menu.user.trim().to_string();
                         if !online::valid_name(&user) {
-                            self.mp_status = tr!("names are {}", "名前は {}", "ник: {}"; online::NAME_RULES);
+                            self.mp_status =
+                                tr!("names are {}", "名前は {}", "ник: {}"; online::NAME_RULES);
                             self.mp_menu.select(Row::User);
                         } else if !online::valid_password(&menu.password) {
-                            self.mp_status = tr!("pick a password of at least 6 characters", "6文字以上のパスワードを決めてください", "придумай пароль от 6 символов").into();
+                            self.mp_status = tr!(
+                                "pick a password of at least 6 characters",
+                                "6文字以上のパスワードを決めてください",
+                                "придумай пароль от 6 символов"
+                            )
+                            .into();
                             self.mp_menu.select(Row::Password);
                         } else if !email.contains('@') {
-                            self.mp_status = tr!("type your email: the code goes there", "メールを入力してください: コードはそこに届きます", "впиши почту: туда придёт код").into();
+                            self.mp_status = tr!(
+                                "type your email: the code goes there",
+                                "メールを入力してください: コードはそこに届きます",
+                                "впиши почту: туда придёт код"
+                            )
+                            .into();
                             self.mp_menu.select(Row::Email);
                         } else {
                             let code = code.filter(|_| menu.code_for == Some(CodeFor::Register));
-                            self.mp_status = if code.is_some() { tr!("creating {user}...", "{user} を作成中...", "создаю {user}...";) } else { tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}...";) };
+                            self.mp_status = if code.is_some() {
+                                tr!("creating {user}...", "{user} を作成中...", "создаю {user}...";)
+                            } else {
+                                tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}...";)
+                            };
                             menu.asking = Some(CodeFor::Register);
                             let password = menu.password.clone();
-                            menu.account_call(&server, online::Request::Register { name: user, password, email: Some(email), code });
+                            menu.account_call(
+                                &server,
+                                online::Request::Register {
+                                    name: user,
+                                    password,
+                                    email: Some(email),
+                                    code,
+                                },
+                            );
                         }
                     }
                     Row::LogIn | Row::Password => {
                         let user = menu.user.trim().to_string();
                         if !online::valid_login(&user) {
-                            self.mp_status = tr!("type your name (or the account's email)", "名前(またはアカウントのメール)を入力してください", "впиши ник (или почту аккаунта)").into();
+                            self.mp_status = tr!(
+                                "type your name (or the account's email)",
+                                "名前(またはアカウントのメール)を入力してください",
+                                "впиши ник (или почту аккаунта)"
+                            )
+                            .into();
                             self.mp_menu.select(Row::User);
                         } else if menu.password.is_empty() {
-                            self.mp_status = tr!("type your password", "パスワードを入力してください", "впиши пароль").into();
+                            self.mp_status = tr!(
+                                "type your password",
+                                "パスワードを入力してください",
+                                "впиши пароль"
+                            )
+                            .into();
                             self.mp_menu.select(Row::Password);
                         } else {
                             // Logging in forgets the typed password.
                             let password = std::mem::take(&mut menu.password);
                             self.mp_status = tr!("logging in as {user}...", "{user} でログイン中...", "вхожу как {user}...";);
-                            menu.account_call(&server, online::Request::Login { name: user, password });
+                            menu.account_call(
+                                &server,
+                                online::Request::Login {
+                                    name: user,
+                                    password,
+                                },
+                            );
                         }
                     }
                     Row::LogOut => {
-                        self.mp_menu.account_call(&server, online::Request::Logout { token });
+                        self.mp_menu
+                            .account_call(&server, online::Request::Logout { token });
                         self.sign_out("logged out");
                     }
                     Row::HostOnline | Row::HostGuessr => {
                         let mapguessr = row == Row::HostGuessr;
-                        self.mp_status = if mapguessr { "opening a mapguessr lobby..." } else { "opening a lobby on the server..." }.into();
-                        let request = online::Request::CreateRoom { token, title: String::new(), mapguessr };
-                        self.mp_connecting = Some(multiplayer::start_online(server, request, account));
+                        self.mp_status = if mapguessr {
+                            "opening a mapguessr lobby..."
+                        } else {
+                            "opening a lobby on the server..."
+                        }
+                        .into();
+                        let request = online::Request::CreateRoom {
+                            token,
+                            title: String::new(),
+                            mapguessr,
+                        };
+                        self.mp_connecting =
+                            Some(multiplayer::start_online(server, request, account));
                     }
                     Row::Lobby(k) => {
-                        let Some(room) = self.mp_menu.rooms.get(k).cloned() else { return };
+                        let Some(room) = self.mp_menu.rooms.get(k).cloned() else {
+                            return;
+                        };
                         self.mp_status = format!("joining {}...", room.title);
-                        let request = online::Request::JoinRoom { token, room: room.id };
-                        self.mp_connecting = Some(multiplayer::start_online(server, request, account));
+                        let request = online::Request::JoinRoom {
+                            token,
+                            room: room.id,
+                        };
+                        self.mp_connecting =
+                            Some(multiplayer::start_online(server, request, account));
                     }
                     Row::HostDirect => {
                         self.mp_status = format!("opening room on port {}...", self.cfg.mp_port);
-                        self.mp_connecting = Some(multiplayer::start_host(self.cfg.mp_port, name, false));
+                        self.mp_connecting =
+                            Some(multiplayer::start_host(self.cfg.mp_port, name, false));
                     }
-                    Row::JoinDirect if self.cfg.mp_address.trim().is_empty() => self.mp_status = "type the host's address first".into(),
+                    Row::JoinDirect if self.cfg.mp_address.trim().is_empty() => {
+                        self.mp_status = "type the host's address first".into()
+                    }
                     Row::JoinDirect => {
                         self.mp_status = format!("connecting to {}...", self.cfg.mp_address);
-                        self.mp_connecting = Some(multiplayer::start_join(self.cfg.mp_address.clone(), name));
+                        self.mp_connecting =
+                            Some(multiplayer::start_join(self.cfg.mp_address.clone(), name));
                     }
-                    Row::Name | Row::Port | Row::Address => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
+                    Row::Name | Row::Port | Row::Address => {
+                        self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1)
+                    }
                 }
                 self.cfg.save();
             }
@@ -5906,11 +8315,21 @@ impl State {
                 let Some(text) = text else { return };
                 for ch in text.chars().filter(|c| net::drawable_char(*c)) {
                     match row {
-                        Row::User if self.mp_menu.user.len() < 254 && ch.is_ascii_graphic() => self.mp_menu.user.push(ch),
-                        Row::Password if self.mp_menu.password.chars().count() < 128 => self.mp_menu.password.push(ch),
-                        Row::Email if self.mp_menu.email.len() < 254 && ch.is_ascii_graphic() => self.mp_menu.email.push(ch),
-                        Row::Code if self.mp_menu.code.len() < 6 && ch.is_ascii_digit() => self.mp_menu.code.push(ch),
-                        Row::Name if self.cfg.mp_name.chars().count() < 20 => self.cfg.mp_name.push(ch),
+                        Row::User if self.mp_menu.user.len() < 254 && ch.is_ascii_graphic() => {
+                            self.mp_menu.user.push(ch)
+                        }
+                        Row::Password if self.mp_menu.password.chars().count() < 128 => {
+                            self.mp_menu.password.push(ch)
+                        }
+                        Row::Email if self.mp_menu.email.len() < 254 && ch.is_ascii_graphic() => {
+                            self.mp_menu.email.push(ch)
+                        }
+                        Row::Code if self.mp_menu.code.len() < 6 && ch.is_ascii_digit() => {
+                            self.mp_menu.code.push(ch)
+                        }
+                        Row::Name if self.cfg.mp_name.chars().count() < 20 => {
+                            self.cfg.mp_name.push(ch)
+                        }
                         Row::Port => {
                             if let Some(d) = ch.to_digit(10) {
                                 let p = self.cfg.mp_port as u32 * 10 + d;
@@ -5919,7 +8338,9 @@ impl State {
                                 }
                             }
                         }
-                        Row::Address if self.cfg.mp_address.len() < 64 && ch != ' ' => self.cfg.mp_address.push(ch),
+                        Row::Address if self.cfg.mp_address.len() < 64 && ch != ' ' => {
+                            self.cfg.mp_address.push(ch)
+                        }
                         _ => {}
                     }
                 }
@@ -5931,8 +8352,14 @@ impl State {
     /// The present mode `dir` steps from the one in effect, among those the renderer can do.
     fn step_present(&self, dir: i32) -> PresentChoice {
         let modes = &self.present_modes;
-        let at = modes.iter().position(|&p| p == self.cfg.present.within(modes)).unwrap_or(0) as i32;
-        modes.get((at + dir).rem_euclid(modes.len().max(1) as i32) as usize).copied().unwrap_or(PresentChoice::Fifo)
+        let at = modes
+            .iter()
+            .position(|&p| p == self.cfg.present.within(modes))
+            .unwrap_or(0) as i32;
+        modes
+            .get((at + dir).rem_euclid(modes.len().max(1) as i32) as usize)
+            .copied()
+            .unwrap_or(PresentChoice::Fifo)
     }
 
     /// The renderer is picked when the graphics start: the game starts again with the new one.
@@ -5949,7 +8376,14 @@ impl State {
             Err(e) => self.toast(tr!("restart taiko.rs to switch the renderer ({e})", "レンダラーの切り替えはtaiko.rsの再起動後 ({e})", "рендер сменится после перезапуска taiko.rs ({e})";)),
         }
         #[cfg(target_os = "android")]
-        self.toast(tr!("restart taiko.rs to switch the renderer", "レンダラーの切り替えはtaiko.rsの再起動後", "рендер сменится после перезапуска taiko.rs").into());
+        self.toast(
+            tr!(
+                "restart taiko.rs to switch the renderer",
+                "レンダラーの切り替えはtaiko.rsの再起動後",
+                "рендер сменится после перезапуска taiko.rs"
+            )
+            .into(),
+        );
     }
 
     /// What's on screen, and the map, for a crash report (`CRASH_SCENE`).
@@ -5958,7 +8392,13 @@ impl State {
             Scene::Select if self.on_menu() => "main menu",
             Scene::Select => "song select",
             Scene::Loading { .. } => "loading a map",
-            Scene::Play { game, .. } => if game.replay.is_some() { "watching a replay" } else { "playing" },
+            Scene::Play { game, .. } => {
+                if game.replay.is_some() {
+                    "watching a replay"
+                } else {
+                    "playing"
+                }
+            }
             Scene::Results { .. } => "results",
             Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => "calibration",
@@ -5973,9 +8413,22 @@ impl State {
             Scene::Watch(_) => "watching a friend",
             Scene::VideoEdit(_) => "video editor",
         };
-        let map = self.offset_entry().and_then(|i| self.library.get(i)).map(|e| format!(", map {} [{}] by {}", e.meta.title, e.meta.version, e.meta.creator)).unwrap_or_default();
+        let map = self
+            .offset_entry()
+            .and_then(|i| self.library.get(i))
+            .map(|e| {
+                format!(
+                    ", map {} [{}] by {}",
+                    e.meta.title, e.meta.version, e.meta.creator
+                )
+            })
+            .unwrap_or_default();
         let mods = self.cfg.mods.label();
-        let mods = if mods.is_empty() { String::new() } else { format!(", mods {mods}") };
+        let mods = if mods.is_empty() {
+            String::new()
+        } else {
+            format!(", mods {mods}")
+        };
         if let Ok(mut s) = CRASH_SCENE.lock() {
             *s = format!("screen: {screen}{map}{mods}");
         }
@@ -6008,7 +8461,8 @@ impl State {
             }
         }
         let g = game_of(&self.scene)?;
-        (g.replay.is_none() && !self.auto && !g.mods.has(mods::Mod::Autoplay)).then_some(g.played_ms)
+        (g.replay.is_none() && !self.auto && !g.mods.has(mods::Mod::Autoplay))
+            .then_some(g.played_ms)
     }
 
     /// Follows the live play; once it's gone without going to the leaderboards (failed, quit,
@@ -6019,14 +8473,25 @@ impl State {
             self.playing = Some(ms);
             return;
         }
-        let Some(ms) = self.playing.take() else { return };
+        let Some(ms) = self.playing.take() else {
+            return;
+        };
         // A start that's left at once isn't a play.
         if ms < 1000.0 || self.cfg.online_token.is_empty() {
             return;
         }
-        let (server, token) = (self.cfg.online_server.clone(), self.cfg.online_token.clone());
+        let (server, token) = (
+            self.cfg.online_server.clone(),
+            self.cfg.online_token.clone(),
+        );
         std::thread::spawn(move || {
-            if let Err(e) = online::call(&server, online::Request::Played { token, ms: ms as u64 }) {
+            if let Err(e) = online::call(
+                &server,
+                online::Request::Played {
+                    token,
+                    ms: ms as u64,
+                },
+            ) {
                 eprintln!("counting the play: {e}");
             }
         });
@@ -6036,7 +8501,11 @@ impl State {
     /// it back, in the background.
     fn call_loved(&mut self, change: Option<(u32, bool)>) {
         let request = match change {
-            Some((set, loved)) => online::Request::SetLoved { token: self.cfg.online_token.clone(), set, loved },
+            Some((set, loved)) => online::Request::SetLoved {
+                token: self.cfg.online_token.clone(),
+                set,
+                loved,
+            },
             None => online::Request::LovedSets,
         };
         let (tx, rx) = mpsc::channel();
@@ -6053,7 +8522,9 @@ impl State {
             self.loved_asked = true;
             self.call_loved(None);
         }
-        let Some((rx, change)) = &self.loved_call else { return };
+        let Some((rx, change)) = &self.loved_call else {
+            return;
+        };
         let Ok(result) = rx.try_recv() else { return };
         let change = *change;
         self.loved_call = None;
@@ -6064,7 +8535,11 @@ impl State {
                     self.select.refilter(&self.library);
                 }
                 if let Some((set, loved)) = change {
-                    self.toast(if loved { format!("loved set {set} on taiko.rs: its plays give pp now") } else { format!("set {set} isn't loved on taiko.rs any more") });
+                    self.toast(if loved {
+                        format!("loved set {set} on taiko.rs: its plays give pp now")
+                    } else {
+                        format!("set {set} isn't loved on taiko.rs any more")
+                    });
                 }
             }
             (Err(e), Some(_)) => self.toast(format!("couldn't: {e}")),
@@ -6091,16 +8566,24 @@ impl State {
                 Ok(result) => {
                     menu.account_request = None;
                     match result {
-                        Ok(online::Reply::Account { name, token, nominator, admin, email }) => {
+                        Ok(online::Reply::Account {
+                            name,
+                            token,
+                            nominator,
+                            admin,
+                            email,
+                        }) => {
                             self.select.nominator = nominator;
                             self.admin = admin;
                             self.loved_asked = false;
-                            let fresh = menu.account.as_deref() != Some(&name) || self.cfg.online_token != token;
+                            let fresh = menu.account.as_deref() != Some(&name)
+                                || self.cfg.online_token != token;
                             menu.account = Some(name.clone());
                             menu.online = Some(Ok(()));
                             menu.has_email = email;
                             menu.asking = None;
-                            let reset = menu.form == multiplayer::Form::Reset && menu.code_for.is_some();
+                            let reset =
+                                menu.form == multiplayer::Form::Reset && menu.code_for.is_some();
                             if menu.form != multiplayer::Form::Main || menu.code_for.is_some() {
                                 menu.open(multiplayer::Form::Main);
                             }
@@ -6142,7 +8625,9 @@ impl State {
                                 menu.online = Some(Err(e.clone()));
                             }
                             // A wrong password: where to go from there.
-                            self.mp_status = if e.starts_with("wrong name or password") && menu.account.is_none() {
+                            self.mp_status = if e.starts_with("wrong name or password")
+                                && menu.account.is_none()
+                            {
                                 menu.select(multiplayer::Row::Password);
                                 tr!("wrong name or password (forgot it? FORGOT PASSWORD below)", "名前かパスワードが違います(忘れたら下の「パスワードを忘れた?」)", "неверный ник или пароль (забыл? жми ЗАБЫЛ ПАРОЛЬ ниже)").into()
                             } else {
@@ -6184,14 +8669,21 @@ impl State {
                 Err(mpsc::TryRecvError::Disconnected) => menu.rooms_request = None,
             }
         }
-        if matches!(self.scene, Scene::MpMenu) && self.mp_menu.last_refresh.is_none_or(|t| t.elapsed() > Duration::from_secs(4)) {
+        if matches!(self.scene, Scene::MpMenu)
+            && self
+                .mp_menu
+                .last_refresh
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(4))
+        {
             self.mp_menu.refresh(&self.cfg.online_server);
         }
     }
 
     /// Installs the library once the background scan finishes.
     fn poll_scan(&mut self) {
-        let Some((rx, found)) = &self.scan else { return };
+        let Some((rx, found)) = &self.scan else {
+            return;
+        };
         self.select.scanning = Some(found.load(Ordering::Relaxed));
         let library = match rx.try_recv() {
             Ok(library) => library,
@@ -6210,7 +8702,8 @@ impl State {
         let nominator = self.select.nominator;
         let sort = self.select.sort;
         self.select = Select::new(&self.library);
-        self.select.keep_converts(&self.library, self.cfg.show_converts);
+        self.select
+            .keep_converts(&self.library, self.cfg.show_converts);
         self.select.filter = filter;
         self.select.played = played;
         self.select.status = status;
@@ -6219,7 +8712,12 @@ impl State {
         self.select.sort = sort;
         self.select.headings = self.cfg.song_headings;
         self.select.mods_label = self.cfg.mods.label();
-        let maps = self.library.iter().enumerate().map(|(i, e)| (i, e.path.clone(), e.modified, e.size)).collect();
+        let maps = self
+            .library
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (i, e.path.clone(), e.modified, e.size))
+            .collect();
         let info = mapinfo::MapInfo::spawn(maps, self.library.len(), self.in_song());
         self.select.info = Some(info.results.clone());
         self.mapinfo = Some(info);
@@ -6251,7 +8749,8 @@ impl State {
         }
         // A lobby map may have been announced before our library was ready.
         if let Some(s) = &mut self.mp
-            && let Some(m) = &s.map {
+            && let Some(m) = &s.map
+        {
             s.map_entry = find_map(&self.library, m);
             s.have_map = s.map_entry.is_some();
             s.client.send(net::ClientMsg::HasMap(s.have_map));
@@ -6262,7 +8761,8 @@ impl State {
     /// difficulty analysis finishes.
     fn poll_sorting(&mut self) {
         if let Some(rx) = &self.osudb_rx
-            && let Ok(db) = rx.try_recv() {
+            && let Ok(db) = rx.try_recv()
+        {
             self.osudb_rx = None;
             if let Some(db) = db {
                 self.apply_osu_db(db);
@@ -6273,7 +8773,8 @@ impl State {
         let Some(info) = &self.mapinfo else { return };
         let finished = info.finished();
         // Sorting or searching by stars, length or BPM waits on the analysis.
-        let needs_info = self.select.sort.needs_info() || search::Query::parse(&self.select.filter).needs_info();
+        let needs_info =
+            self.select.sort.needs_info() || search::Query::parse(&self.select.filter).needs_info();
         if finished && !self.mapinfo_sorted {
             self.mapinfo_sorted = true;
             if needs_info {
@@ -6294,37 +8795,67 @@ impl State {
                 Some((key(folder, file), i))
             })
             .collect();
-        let entry_of = |md5: &str| db.by_md5.get(md5).and_then(|m| index.get(&key(&m.folder, &m.file)).copied());
+        let entry_of = |md5: &str| {
+            db.by_md5
+                .get(md5)
+                .and_then(|m| index.get(&key(&m.folder, &m.file)).copied())
+        };
         for m in db.by_md5.values() {
             if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
-                self.db_status.insert(self.library[i].path.clone(), m.status);
+                self.db_status
+                    .insert(self.library[i].path.clone(), m.status);
                 // Unless the mirrors have said better already.
-                self.select.status.entry(self.library[i].path.clone()).or_insert(m.status);
+                self.select
+                    .status
+                    .entry(self.library[i].path.clone())
+                    .or_insert(m.status);
             }
         }
         for m in db.by_md5.values().filter(|m| m.last_played > 0) {
             if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
-                let t = self.select.played.entry(self.library[i].path.clone()).or_insert(0);
+                let t = self
+                    .select
+                    .played
+                    .entry(self.library[i].path.clone())
+                    .or_insert(0);
                 *t = (*t).max(m.last_played);
             }
         }
         self.select.collections = db
             .collections
             .iter()
-            .map(|(name, maps)| (name.clone(), maps.iter().filter_map(|h| entry_of(h)).collect::<std::collections::HashSet<usize>>()))
+            .map(|(name, maps)| {
+                (
+                    name.clone(),
+                    maps.iter()
+                        .filter_map(|h| entry_of(h))
+                        .collect::<std::collections::HashSet<usize>>(),
+                )
+            })
             .filter(|(_, set)| !set.is_empty())
             .collect();
-        eprintln!("osu!.db: {} maps, {} collections with maps here", db.by_md5.len(), self.select.collections.len());
+        eprintln!(
+            "osu!.db: {} maps, {} collections with maps here",
+            db.by_md5.len(),
+            self.select.collections.len()
+        );
         self.select.refilter(&self.library);
     }
 
     /// Remembers that `entry` was just played (for "recently played").
     fn record_play(&mut self, entry: usize) {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let path = self.library[entry].path.clone();
         if let Some(file) = config::data_dir().map(|d| d.join("plays.tsv")) {
             use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file)
+            {
                 let _ = writeln!(f, "{now}\t{}", path.display());
             }
         }
@@ -6333,7 +8864,13 @@ impl State {
 
     /// F1 / the Mods button: the mod select, on the first mod that's on.
     fn open_mod_select(&mut self) {
-        let first = self.cfg.mods.iter().next().and_then(|m| mods::ALL.iter().position(|&x| x == m)).unwrap_or(0);
+        let first = self
+            .cfg
+            .mods
+            .iter()
+            .next()
+            .and_then(|m| mods::ALL.iter().position(|&x| x == m))
+            .unwrap_or(0);
         self.mod_select = Some(first);
     }
 
@@ -6342,7 +8879,11 @@ impl State {
     fn shown_mods(&self) -> Mods {
         match &self.mp {
             Some(s) if matches!(self.scene, Scene::Lobby) && !s.is_host() => {
-                let lobby = s.map.as_ref().map(|m| Mods::from_list(&m.mods).shared()).unwrap_or(Mods::NONE);
+                let lobby = s
+                    .map
+                    .as_ref()
+                    .map(|m| Mods::from_list(&m.mods).shared())
+                    .unwrap_or(Mods::NONE);
                 lobby.plus(self.cfg.mods.free())
             }
             _ => self.cfg.mods,
@@ -6351,8 +8892,14 @@ impl State {
 
     fn toggle_mod(&mut self, m: mods::Mod) {
         // In a lobby the host picks the speed for everyone.
-        if m.shared() && matches!(self.scene, Scene::Lobby) && self.mp.as_ref().is_some_and(|s| !s.is_host()) {
-            self.toast(format!("the host picks the speed ({} is theirs to pick)", m.acronym()));
+        if m.shared()
+            && matches!(self.scene, Scene::Lobby)
+            && self.mp.as_ref().is_some_and(|s| !s.is_host())
+        {
+            self.toast(format!(
+                "the host picks the speed ({} is theirs to pick)",
+                m.acronym()
+            ));
             return;
         }
         self.cfg.mods.toggle(m);
@@ -6380,17 +8927,19 @@ impl State {
     fn update_lobby_map(&self) {
         let (rate, mods) = (self.play_speed().0, self.cfg.mods);
         if let Some(s) = &self.mp
-            && s.is_host() && !s.in_match
-                && let Some(mut m) = s.map.clone() {
-                    m.rate = rate;
-                    // Only the speed's: everyone picks their other mods themselves.
-                    m.mods = mods.shared().list();
-                    (m.multiverse, m.shapeshift) = mod_settings(mods);
-                    m.seed = lobby_seed(m.seed);
-                    if Some(&m) != s.map.as_ref() {
-                        s.client.send(net::ClientMsg::SelectMap(m));
-                    }
-                }
+            && s.is_host()
+            && !s.in_match
+            && let Some(mut m) = s.map.clone()
+        {
+            m.rate = rate;
+            // Only the speed's: everyone picks their other mods themselves.
+            m.mods = mods.shared().list();
+            (m.multiverse, m.shapeshift) = mod_settings(mods);
+            m.seed = lobby_seed(m.seed);
+            if Some(&m) != s.map.as_ref() {
+                s.client.send(net::ClientMsg::SelectMap(m));
+            }
+        }
     }
 
     /// Keys while the mod select is open.
@@ -6401,20 +8950,26 @@ impl State {
             KeyCode::ArrowRight => self.mod_select = Some(mods::step(cur, 1, 0)),
             KeyCode::ArrowUp => self.mod_select = Some(mods::step(cur, 0, -1)),
             KeyCode::ArrowDown => self.mod_select = Some(mods::step(cur, 0, 1)),
-            KeyCode::Space | KeyCode::Enter | KeyCode::NumpadEnter => self.toggle_mod(mods::ALL[cur]),
+            KeyCode::Space | KeyCode::Enter | KeyCode::NumpadEnter => {
+                self.toggle_mod(mods::ALL[cur])
+            }
             KeyCode::Backspace | KeyCode::Delete => {
                 self.cfg.mods = Mods::NONE;
                 self.mods_changed();
             }
             KeyCode::KeyR => {
-                let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as u64);
                 self.cfg.mods = Mods::shuffle(seed);
                 self.mods_changed();
             }
             KeyCode::KeyF => self.toggle_favourite(mods::ALL[cur]),
             KeyCode::KeyC | KeyCode::KeyM => match mods::customizable(self.cfg.mods).first() {
                 Some(&m) => self.open_customization(m),
-                None => self.toast("switch on Multiverse or Shapeshift to customize it".to_string()),
+                None => {
+                    self.toast("switch on Multiverse or Shapeshift to customize it".to_string())
+                }
             },
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
@@ -6428,7 +8983,8 @@ impl State {
 
     /// Opens the mod customization on mod `m`'s tab.
     fn open_customization(&mut self, m: mods::Mod) {
-        self.universe_setup = (m == mods::Mod::Multiverse).then(|| multiverse::Setup::new(game::FIRST_FOCUS, 0));
+        self.universe_setup =
+            (m == mods::Mod::Multiverse).then(|| multiverse::Setup::new(game::FIRST_FOCUS, 0));
         self.shapeshift_setup = (m == mods::Mod::Shapeshift).then(shapeshift::Setup::default);
     }
 
@@ -6437,29 +8993,50 @@ impl State {
         if self.universe_setup.is_some() {
             Some(mods::Mod::Multiverse)
         } else {
-            self.shapeshift_setup.is_some().then_some(mods::Mod::Shapeshift)
+            self.shapeshift_setup
+                .is_some()
+                .then_some(mods::Mod::Shapeshift)
         }
     }
 
     /// Keys in the mod customization: Tab goes to the next tab (closes it with only one), the
     /// rest go to the open one.
     fn customization_key(&mut self, code: KeyCode, text: Option<&str>, repeat: bool) {
-        let typing = self.universe_setup.as_ref().is_some_and(|s| s.typing.is_some());
+        let typing = self
+            .universe_setup
+            .as_ref()
+            .is_some_and(|s| s.typing.is_some());
         let tabs = mods::customizable(self.cfg.mods);
         if code == KeyCode::Tab && !typing && tabs.len() > 1 {
-            let at = tabs.iter().position(|&m| Some(m) == self.customization_tab()).unwrap_or(0);
+            let at = tabs
+                .iter()
+                .position(|&m| Some(m) == self.customization_tab())
+                .unwrap_or(0);
             self.open_customization(tabs[(at + 1) % tabs.len()]);
             return;
         }
-        let arrows = matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight);
+        let arrows = matches!(
+            code,
+            KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight
+        );
         if repeat && !typing && !arrows {
             return;
         }
         if let Some(setup) = &mut self.universe_setup {
-            let action = setup.key(code, text, self.modifiers_shift, &mut self.cfg.universes, &mut self.cfg.universe_presets, game::FIRST_FOCUS);
+            let action = setup.key(
+                code,
+                text,
+                self.modifiers_shift,
+                &mut self.cfg.universes,
+                &mut self.cfg.universe_presets,
+                game::FIRST_FOCUS,
+            );
             self.universe_action(action);
         } else if let Some(setup) = &mut self.shapeshift_setup {
-            if matches!(code, KeyCode::Escape | KeyCode::F1 | KeyCode::Backspace | KeyCode::Tab) {
+            if matches!(
+                code,
+                KeyCode::Escape | KeyCode::F1 | KeyCode::Backspace | KeyCode::Tab
+            ) {
                 self.shapeshift_setup = None;
             } else if setup.key(code, self.modifiers_shift, &mut self.cfg.shapeshift) {
                 self.shapeshift_changed();
@@ -6493,9 +9070,20 @@ impl State {
         self.social.open
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
-            || self.universe_setup.as_ref().is_some_and(|u| u.typing.is_some())
-            || (self.mod_select.is_none() && !self.on_menu() && matches!(self.scene, Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby))
-            || (matches!(self.scene, Scene::Settings { .. }) && self.settings_ui.binding.is_none() && self.settings_ui.choices.is_none() && self.settings_ui.dropdown.is_none())
+            || self
+                .universe_setup
+                .as_ref()
+                .is_some_and(|u| u.typing.is_some())
+            || (self.mod_select.is_none()
+                && !self.on_menu()
+                && matches!(
+                    self.scene,
+                    Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby
+                ))
+            || (matches!(self.scene, Scene::Settings { .. })
+                && self.settings_ui.binding.is_none()
+                && self.settings_ui.choices.is_none()
+                && self.settings_ui.dropdown.is_none())
     }
 
     /// Android: something is being typed that took the keys by itself (not a field that was
@@ -6503,8 +9091,15 @@ impl State {
     #[cfg(target_os = "android")]
     fn typing_on_its_own(&self) -> bool {
         (self.settings_ui.editing.is_some() && matches!(self.scene, Scene::Settings { .. }))
-            || self.settings_ui.dropdown.as_ref().is_some_and(|d| d.editing.is_some())
-            || self.universe_setup.as_ref().is_some_and(|u| u.typing.is_some())
+            || self
+                .settings_ui
+                .dropdown
+                .as_ref()
+                .is_some_and(|d| d.editing.is_some())
+            || self
+                .universe_setup
+                .as_ref()
+                .is_some_and(|u| u.typing.is_some())
     }
 
     /// Android: whether tapping `hit` is tapping a text field.
@@ -6513,8 +9108,14 @@ impl State {
         use render::Hit;
         match hit {
             Hit::TextField | Hit::SettingsSearch => true,
-            Hit::MpRow(i) => matches!(self.scene, Scene::MpMenu) && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action()),
-            Hit::SocialRow(i) => matches!(self.social.rows(self.mp.is_some()).get(i), Some(social::Row::AddFriend | social::Row::Search)),
+            Hit::MpRow(i) => {
+                matches!(self.scene, Scene::MpMenu)
+                    && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action())
+            }
+            Hit::SocialRow(i) => matches!(
+                self.social.rows(self.mp.is_some()).get(i),
+                Some(social::Row::AddFriend | social::Row::Search)
+            ),
             _ => false,
         }
     }
@@ -6536,7 +9137,9 @@ impl State {
     /// tapped text field that still takes text) and hides it after.
     #[cfg(target_os = "android")]
     fn update_keyboard(&mut self) {
-        let field = self.keyboard.asked && self.takes_text() && !(matches!(self.scene, Scene::MpMenu) && self.mp_menu.row().is_action());
+        let field = self.keyboard.asked
+            && self.takes_text()
+            && !(matches!(self.scene, Scene::MpMenu) && self.mp_menu.row().is_action());
         if !field {
             // Not again by itself when coming back to the screen.
             self.keyboard.asked = false;
@@ -6575,10 +9178,20 @@ impl State {
     /// keyboard, which may cover where it is. None for the search boxes, which are above it.
     #[cfg(target_os = "android")]
     fn typing_line(&self) -> Option<(String, String)> {
-        if let Some((_, text)) = self.settings_ui.dropdown.as_ref().and_then(|d| d.editing.as_ref()) {
+        if let Some((_, text)) = self
+            .settings_ui
+            .dropdown
+            .as_ref()
+            .and_then(|d| d.editing.as_ref())
+        {
             return Some(("Size".into(), text.clone()));
         }
-        if let Some(e) = self.settings_ui.editing.as_ref().filter(|_| matches!(self.scene, Scene::Settings { .. })) {
+        if let Some(e) = self
+            .settings_ui
+            .editing
+            .as_ref()
+            .filter(|_| matches!(self.scene, Scene::Settings { .. }))
+        {
             return Some((e.item.label().into(), e.text.clone()));
         }
         if let Some(t) = self.universe_setup.as_ref().and_then(|u| u.typing.as_ref()) {
@@ -6598,10 +9211,22 @@ impl State {
         if matches!(self.scene, Scene::MpMenu) {
             use multiplayer::Row;
             return match self.mp_menu.row() {
-                r @ Row::User => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), self.mp_menu.user.clone())),
-                r @ Row::Password => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), "*".repeat(self.mp_menu.password.chars().count()))),
-                r @ Row::Email => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), self.mp_menu.email.clone())),
-                r @ Row::Code => Some((self.mp_menu.field_label(r).unwrap_or_default().into(), self.mp_menu.code.clone())),
+                r @ Row::User => Some((
+                    self.mp_menu.field_label(r).unwrap_or_default().into(),
+                    self.mp_menu.user.clone(),
+                )),
+                r @ Row::Password => Some((
+                    self.mp_menu.field_label(r).unwrap_or_default().into(),
+                    "*".repeat(self.mp_menu.password.chars().count()),
+                )),
+                r @ Row::Email => Some((
+                    self.mp_menu.field_label(r).unwrap_or_default().into(),
+                    self.mp_menu.email.clone(),
+                )),
+                r @ Row::Code => Some((
+                    self.mp_menu.field_label(r).unwrap_or_default().into(),
+                    self.mp_menu.code.clone(),
+                )),
                 Row::Name => Some(("Your name".into(), self.cfg.mp_name.clone())),
                 Row::Port => Some(("Host on port".into(), self.cfg.mp_port.to_string())),
                 Row::Address => Some(("Join address".into(), self.cfg.mp_address.clone())),
@@ -6614,12 +9239,20 @@ impl State {
     /// Android: the text being typed in a strip along the top, clear of the on-screen keyboard.
     #[cfg(target_os = "android")]
     fn draw_typing(&self, c: &mut Canvas) {
-        let Some((label, text)) = self.typing_line() else { return };
+        let Some((label, text)) = self.typing_line() else {
+            return;
+        };
         c.rect(0.0, 0.0, c.width, 30.0, rgba(0x15151d, 1.0));
         c.rect(0.0, 30.0, c.width, 1.0, rgba(render::accent(), 1.0));
         let lw = c.text(16.0, 10.5, 9.0, rgba(render::accent(), 1.0), &label);
         let x = 16.0 + lw + 12.0;
-        c.text(x, 10.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit_end(10.0, c.width - x - 16.0, &format!("{text}_")));
+        c.text(
+            x,
+            10.0,
+            10.0,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit_end(10.0, c.width - x - 16.0, &format!("{text}_")),
+        );
         c.hit(0.0, 0.0, c.width, 31.0, render::Hit::TextField);
     }
 
@@ -6672,9 +9305,20 @@ impl State {
             return Some(self.social.input.clone()).filter(|t| !t.is_empty());
         }
         match &self.scene {
-            Scene::Select if !self.select.filter.is_empty() && self.select.selected().is_none() => Some(self.select.filter.clone()),
-            Scene::Select => self.select.selected().and_then(|i| self.library.get(i)).map(Entry::label),
-            Scene::Download => self.browse.selected().map(|s| format!("{} - {}  https://osu.ppy.sh/beatmapsets/{}", s.artist, s.title, s.id)),
+            Scene::Select if !self.select.filter.is_empty() && self.select.selected().is_none() => {
+                Some(self.select.filter.clone())
+            }
+            Scene::Select => self
+                .select
+                .selected()
+                .and_then(|i| self.library.get(i))
+                .map(Entry::label),
+            Scene::Download => self.browse.selected().map(|s| {
+                format!(
+                    "{} - {}  https://osu.ppy.sh/beatmapsets/{}",
+                    s.artist, s.title, s.id
+                )
+            }),
             _ => None,
         }
     }
@@ -6683,7 +9327,9 @@ impl State {
     /// else osu!.db's (which can't tell graveyard from pending).
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
-        let Some(set) = e.set_id().filter(|_| !self.select.edited.contains(&e.path)) else { return Some(("NOT SUBMITTED", 0x8a8aa0)) };
+        let Some(set) = e.set_id().filter(|_| !self.select.edited.contains(&e.path)) else {
+            return Some(("NOT SUBMITTED", 0x8a8aa0));
+        };
         if self.select.server_loved.contains(&set) {
             return Some(("LOVED HERE", 0xff66aa));
         }
@@ -6721,7 +9367,10 @@ impl State {
     /// The sets' statuses the cache has, for the maps in the library (before osu!.db's).
     fn apply_cached_statuses(&mut self) {
         for e in &self.library {
-            let code = e.set_id().and_then(|set| self.status_cache.status(set)).and_then(search::status_code);
+            let code = e
+                .set_id()
+                .and_then(|set| self.status_cache.status(set))
+                .and_then(search::status_code);
             if let Some(code) = code {
                 self.select.status.insert(e.path.clone(), code);
             }
@@ -6744,7 +9393,9 @@ impl State {
         let mut maps: Vec<(u32, u32)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for e in &self.library {
-            let (Some(set), Some(map)) = (e.meta.set_id, e.meta.beatmap_id) else { continue };
+            let (Some(set), Some(map)) = (e.meta.set_id, e.meta.beatmap_id) else {
+                continue;
+            };
             let sure = matches!(self.db_status.get(&e.path), Some(4 | 5 | 7));
             if !sure && self.status_cache.due(set, now) && seen.insert(set) {
                 maps.push((set, map));
@@ -6753,7 +9404,10 @@ impl State {
         if maps.is_empty() {
             return;
         }
-        let (server, token) = (self.cfg.online_server.clone(), self.cfg.online_token.clone());
+        let (server, token) = (
+            self.cfg.online_server.clone(),
+            self.cfg.online_token.clone(),
+        );
         let tx = self.set_status_tx.clone();
         std::thread::spawn(move || {
             let mut failed = 0;
@@ -6768,11 +9422,20 @@ impl State {
                 }
                 let mut left = Vec::new();
                 for chunk in maps.chunks(online::MAX_STATUS_MAPS) {
-                    match online::call(&server, online::Request::SetStatuses { token: token.clone(), maps: chunk.to_vec() }) {
+                    match online::call(
+                        &server,
+                        online::Request::SetStatuses {
+                            token: token.clone(),
+                            maps: chunk.to_vec(),
+                        },
+                    ) {
                         Ok(online::Reply::SetStatuses(found)) => {
                             failed = 0;
-                            let got: std::collections::HashSet<u32> = found.iter().map(|(set, _)| *set).collect();
-                            left.extend(chunk.iter().filter(|(set, _)| !got.contains(set)).copied());
+                            let got: std::collections::HashSet<u32> =
+                                found.iter().map(|(set, _)| *set).collect();
+                            left.extend(
+                                chunk.iter().filter(|(set, _)| !got.contains(set)).copied(),
+                            );
                             for (set, status) in found {
                                 if tx.send((set, Some(status))).is_err() {
                                     return;
@@ -6804,7 +9467,8 @@ impl State {
             // The mirrors know graveyard from pending, which osu!.db doesn't: the search uses theirs.
             if let Some(code) = status.as_deref().and_then(search::status_code) {
                 let by_set = by_set.get_or_insert_with(|| {
-                    let mut m: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
+                    let mut m: std::collections::HashMap<u32, Vec<usize>> =
+                        std::collections::HashMap::new();
                     for (i, e) in self.library.iter().enumerate() {
                         if let Some(set) = e.set_id() {
                             m.entry(set).or_default().push(i);
@@ -6813,7 +9477,9 @@ impl State {
                     m
                 });
                 for &i in by_set.get(&set).into_iter().flatten() {
-                    self.select.status.insert(self.library[i].path.clone(), code);
+                    self.select
+                        .status
+                        .insert(self.library[i].path.clone(), code);
                 }
             }
             if let Some(status) = &status {
@@ -6831,13 +9497,21 @@ impl State {
             self.status_saved = now;
         }
         // The list sorted (or searched) by status follows what the mirrors have said since.
-        let by_status = self.select.sort == ui::SortMode::Status || self.select.filter.contains("status");
-        if self.status_new && by_status && now.saturating_duration_since(self.status_resorted) >= Duration::from_secs(10) {
+        let by_status =
+            self.select.sort == ui::SortMode::Status || self.select.filter.contains("status");
+        if self.status_new
+            && by_status
+            && now.saturating_duration_since(self.status_resorted) >= Duration::from_secs(10)
+        {
             self.status_new = false;
             self.status_resorted = now;
             self.select.refilter(&self.library);
         }
-        let set = self.select.selected().and_then(|i| self.library.get(i)).and_then(Entry::set_id);
+        let set = self
+            .select
+            .selected()
+            .and_then(|i| self.library.get(i))
+            .and_then(Entry::set_id);
         let Some(set) = set.filter(|s| !self.set_status.contains_key(s)) else {
             self.status_wait = None;
             return;
@@ -6869,14 +9543,25 @@ impl State {
     fn dims_background(&self) -> bool {
         matches!(
             self.scene,
-            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. } | Scene::Loading { .. } | Scene::Preview { .. } | Scene::Spectate(_) | Scene::Watch(_) | Scene::VideoEdit(_)
+            Scene::Play { .. }
+                | Scene::MpPlay { .. }
+                | Scene::MpWait { .. }
+                | Scene::Loading { .. }
+                | Scene::Preview { .. }
+                | Scene::Spectate(_)
+                | Scene::Watch(_)
+                | Scene::VideoEdit(_)
         )
     }
 
     /// What the window is cleared to under the background: black in a song when the background
     /// dims to black, else the interface's grey.
     fn backdrop(&self, in_song: bool) -> [f64; 3] {
-        if in_song && self.cfg.bg_dim_black { [0.0; 3] } else { render::clear_colour() }
+        if in_song && self.cfg.bg_dim_black {
+            [0.0; 3]
+        } else {
+            render::clear_colour()
+        }
     }
 
     fn toggle_map_info(&mut self) {
@@ -6897,7 +9582,9 @@ impl State {
 
     fn open_collections(&mut self) {
         if self.select.collections.is_empty() {
-            self.toast("no osu! collections found (collection.db next to your Songs folder)".into());
+            self.toast(
+                "no osu! collections found (collection.db next to your Songs folder)".into(),
+            );
         } else {
             self.select.sorting = false;
             self.select.picker = Some(self.select.collection.map(|c| c + 1).unwrap_or(0));
@@ -6906,7 +9593,9 @@ impl State {
 
     fn open_sorts(&mut self) {
         self.select.sorting = true;
-        self.select.picker = ui::SortMode::ALL.iter().position(|&m| m == self.select.sort);
+        self.select.picker = ui::SortMode::ALL
+            .iter()
+            .position(|&m| m == self.select.sort);
     }
 
     /// Row `i` of the collection or sort list.
@@ -6950,14 +9639,20 @@ impl State {
         let talking = self.social.in_conversation(in_lobby);
         match code {
             KeyCode::Escape if talking => self.social.close_conversation(),
-            KeyCode::Escape if self.social.tab == social::Tab::Admin && self.social.info.is_some() => self.social.info = None,
+            KeyCode::Escape
+                if self.social.tab == social::Tab::Admin && self.social.info.is_some() =>
+            {
+                self.social.info = None
+            }
             KeyCode::Escape => self.social.close(),
             KeyCode::Tab => self.social.cycle_tab(self.modifiers_shift),
             KeyCode::PageUp => self.social.wheel(5, in_lobby),
             KeyCode::PageDown => self.social.wheel(-5, in_lobby),
             KeyCode::ArrowUp if talking => self.social.wheel(1, in_lobby),
             KeyCode::ArrowDown if talking => self.social.wheel(-1, in_lobby),
-            KeyCode::ArrowUp => self.social.cursor = self.social.cursor.min(rows - 1).saturating_sub(1),
+            KeyCode::ArrowUp => {
+                self.social.cursor = self.social.cursor.min(rows - 1).saturating_sub(1)
+            }
             KeyCode::ArrowDown => self.social.cursor = (self.social.cursor + 1).min(rows - 1),
             KeyCode::Backspace => {
                 self.social.input.pop();
@@ -6976,11 +9671,24 @@ impl State {
             KeyCode::KeyW if self.modifiers_ctrl => self.social_action(social::Action::Watch),
             KeyCode::KeyP if self.modifiers_ctrl => self.social_action(social::Action::Profile),
             KeyCode::KeyJ if self.modifiers_ctrl => self.social_action(social::Action::Join),
-            KeyCode::KeyK if self.modifiers_ctrl && self.admin => self.social_action(social::Action::Kick),
-            KeyCode::KeyM if self.modifiers_ctrl && self.admin => self.social_action(social::Action::Mute),
-            KeyCode::KeyL if self.modifiers_ctrl && self.admin => self.social_action(social::Action::Lookup),
+            KeyCode::KeyK if self.modifiers_ctrl && self.admin => {
+                self.social_action(social::Action::Kick)
+            }
+            KeyCode::KeyM if self.modifiers_ctrl && self.admin => {
+                self.social_action(social::Action::Mute)
+            }
+            KeyCode::KeyL if self.modifiers_ctrl && self.admin => {
+                self.social_action(social::Action::Lookup)
+            }
             // An admin's /command, from any chat box (or the admin tab's).
-            KeyCode::Enter | KeyCode::NumpadEnter if self.admin && admin::is_command(&self.social.input) && matches!(row, Row::AdminInput | Row::Friend(_) | Row::Lobby | Row::Global) => {
+            KeyCode::Enter | KeyCode::NumpadEnter
+                if self.admin
+                    && admin::is_command(&self.social.input)
+                    && matches!(
+                        row,
+                        Row::AdminInput | Row::Friend(_) | Row::Lobby | Row::Global
+                    ) =>
+            {
                 let text = std::mem::take(&mut self.social.input);
                 self.admin_command(text.trim());
             }
@@ -6992,7 +9700,9 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 let mut text = self.social.input.trim().to_string();
                 // `/np` in a chat: the map on screen, with its osu! link (a link others can click).
-                if text.eq_ignore_ascii_case("/np") && matches!(row, Row::Friend(_) | Row::Lobby | Row::Global) {
+                if text.eq_ignore_ascii_case("/np")
+                    && matches!(row, Row::Friend(_) | Row::Lobby | Row::Global)
+                {
                     match self.now_playing() {
                         Some(np) => text = np,
                         None => {
@@ -7011,8 +9721,12 @@ impl State {
                     }
                     Row::Request(_) => self.social_action(social::Action::Accept),
                     Row::Friend(k) if !text.is_empty() => {
-                        if let (Some(f), Some(c)) = (self.social.friends.get(k), &self.social.conn) {
-                            c.send(online::Up::Chat { to: f.name.clone(), text });
+                        if let (Some(f), Some(c)) = (self.social.friends.get(k), &self.social.conn)
+                        {
+                            c.send(online::Up::Chat {
+                                to: f.name.clone(),
+                                text,
+                            });
                         }
                         self.social.input.clear();
                     }
@@ -7023,7 +9737,8 @@ impl State {
                         self.social.input.clear();
                     }
                     Row::Global if !text.is_empty() => {
-                        if let Some(c) = self.social.conn.as_ref().filter(|_| self.social.connected) {
+                        if let Some(c) = self.social.conn.as_ref().filter(|_| self.social.connected)
+                        {
                             c.send(online::Up::GlobalChat(text));
                             self.social.input.clear();
                             self.social.chat_scroll = 0;
@@ -7032,7 +9747,13 @@ impl State {
                         }
                     }
                     Row::Player(k) => {
-                        let name = self.social.players.as_ref().and_then(|v| v.get(k)).map(|p| p.name.clone()).unwrap_or_default();
+                        let name = self
+                            .social
+                            .players
+                            .as_ref()
+                            .and_then(|v| v.get(k))
+                            .map(|p| p.name.clone())
+                            .unwrap_or_default();
                         match self.social.standing(&name) {
                             social::Standing::Stranger => self.social_action(social::Action::Add),
                             social::Standing::AsksUs => self.social_action(social::Action::Accept),
@@ -7047,14 +9768,21 @@ impl State {
                 let Some(text) = text else { return };
                 let searching = self.social.tab == social::Tab::Players;
                 // Typing on a friend starts talking to them.
-                if matches!(row, Row::Friend(_) | Row::Lobby) && !talking && text.chars().any(|c| net::drawable_char(c) && c != ' ') {
+                if matches!(row, Row::Friend(_) | Row::Lobby)
+                    && !talking
+                    && text.chars().any(|c| net::drawable_char(c) && c != ' ')
+                {
                     self.social.open_conversation();
                 }
                 for ch in text.chars().filter(|c| net::drawable_char(*c)) {
                     let len = self.social.input.chars().count();
                     let ok = match row {
-                        _ if searching => len < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
-                        Row::AddFriend => len < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
+                        _ if searching => {
+                            len < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+                        }
+                        Row::AddFriend => {
+                            len < 16 && (ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+                        }
                         _ => len < 200,
                     };
                     if ok {
@@ -7064,8 +9792,10 @@ impl State {
             }
         }
         self.social.mark_read(in_lobby);
-        if self.social.row(in_lobby) == Row::Lobby && self.social.in_conversation(in_lobby)
-            && let Some(s) = &mut self.mp {
+        if self.social.row(in_lobby) == Row::Lobby
+            && self.social.in_conversation(in_lobby)
+            && let Some(s) = &mut self.mp
+        {
             s.chat_unread = 0;
         }
     }
@@ -7076,17 +9806,32 @@ impl State {
         let in_lobby = self.mp.is_some();
         match (self.social.row(in_lobby), action) {
             (Row::Request(k), Action::Accept | Action::Decline) => {
-                let Some(name) = self.social.requests.get(k).cloned() else { return };
+                let Some(name) = self.social.requests.get(k).cloned() else {
+                    return;
+                };
                 if let Some(c) = &self.social.conn {
-                    c.send(if action == Action::Accept { online::Up::AddFriend(name) } else { online::Up::RemoveFriend(name) });
+                    c.send(if action == Action::Accept {
+                        online::Up::AddFriend(name)
+                    } else {
+                        online::Up::RemoveFriend(name)
+                    });
                 }
             }
             (Row::Player(k), Action::Add | Action::Accept | Action::Chat) => {
-                let Some(name) = self.social.players.as_ref().and_then(|v| v.get(k)).map(|p| p.name.clone()) else { return };
+                let Some(name) = self
+                    .social
+                    .players
+                    .as_ref()
+                    .and_then(|v| v.get(k))
+                    .map(|p| p.name.clone())
+                else {
+                    return;
+                };
                 if action == Action::Chat {
                     self.social.select_friend(&name, in_lobby);
                     self.social.mark_read(in_lobby);
-                } else if let Some(c) = self.social.conn.as_ref().filter(|_| self.social.connected) {
+                } else if let Some(c) = self.social.conn.as_ref().filter(|_| self.social.connected)
+                {
                     // Accepting is the same request: the server sees they asked first.
                     c.send(online::Up::AddFriend(name));
                 } else {
@@ -7114,19 +9859,38 @@ impl State {
                 }
             }
             (Row::AdminPlayer(k), action) => {
-                let Some(p) = self.social.overview.as_ref().and_then(|o| o.players.get(k)).cloned() else { return };
+                let Some(p) = self
+                    .social
+                    .overview
+                    .as_ref()
+                    .and_then(|o| o.players.get(k))
+                    .cloned()
+                else {
+                    return;
+                };
                 let muted = p.muted_until.is_some_and(|t| t > discord::unix_now());
                 match action {
                     Action::Watch => self.watch(p.name),
                     Action::Profile => self.open_profile(p.name),
                     Action::Kick => self.admin_op(online::AdminOp::Kick { name: p.name }),
-                    Action::Mute => self.admin_op(online::AdminOp::Mute { name: p.name, minutes: if muted { 0 } else { 30 } }),
+                    Action::Mute => self.admin_op(online::AdminOp::Mute {
+                        name: p.name,
+                        minutes: if muted { 0 } else { 30 },
+                    }),
                     Action::Lookup => self.admin_op(online::AdminOp::Lookup { name: p.name }),
                     _ => {}
                 }
             }
             (Row::AdminRoom(k), action) => {
-                let Some(r) = self.social.overview.as_ref().and_then(|o| o.rooms.get(k)).cloned() else { return };
+                let Some(r) = self
+                    .social
+                    .overview
+                    .as_ref()
+                    .and_then(|o| o.rooms.get(k))
+                    .cloned()
+                else {
+                    return;
+                };
                 match action {
                     Action::Join => self.join_room(r.id, r.title),
                     Action::CloseRoom => self.admin_op(online::AdminOp::CloseRoom { room: r.id }),
@@ -7140,8 +9904,14 @@ impl State {
                 }
             }
             (Row::Friend(k), Action::Join) => {
-                let Some(f) = self.social.friends.get(k).cloned() else { return };
-                let Some(online::Activity::Lobby { room: Some(room), title }) = f.activity else {
+                let Some(f) = self.social.friends.get(k).cloned() else {
+                    return;
+                };
+                let Some(online::Activity::Lobby {
+                    room: Some(room),
+                    title,
+                }) = f.activity
+                else {
                     self.toast(format!("{} isn't in an online lobby", f.name));
                     return;
                 };
@@ -7160,9 +9930,16 @@ impl State {
         self.social.close();
         self.mp_status = format!("joining {title}...");
         self.scene = Scene::MpMenu;
-        let request = online::Request::JoinRoom { token: self.cfg.online_token.clone(), room };
+        let request = online::Request::JoinRoom {
+            token: self.cfg.online_token.clone(),
+            room,
+        };
         let account = self.mp_menu.account.clone().unwrap_or_default();
-        self.mp_connecting = Some(multiplayer::start_online(self.cfg.online_server.clone(), request, account));
+        self.mp_connecting = Some(multiplayer::start_online(
+            self.cfg.online_server.clone(),
+            request,
+            account,
+        ));
     }
 
     /// Sends an admin action (the server answers with a notice).
@@ -7184,7 +9961,19 @@ impl State {
             Ok(admin::Command::Watch(name)) => self.watch(name),
             Ok(admin::Command::Help) => {
                 self.social.set_tab(social::Tab::Admin);
-                self.social.info = Some(("admin commands".into(), admin::HELP.split(" /").map(|c| if c.starts_with('/') { c.to_string() } else { format!("/{c}") }).collect()));
+                self.social.info = Some((
+                    "admin commands".into(),
+                    admin::HELP
+                        .split(" /")
+                        .map(|c| {
+                            if c.starts_with('/') {
+                                c.to_string()
+                            } else {
+                                format!("/{c}")
+                            }
+                        })
+                        .collect(),
+                ));
             }
             Err(e) => self.toast(e),
         }
@@ -7221,13 +10010,36 @@ impl State {
     /// What we're doing, for friends.
     fn activity(&self) -> online::Activity {
         use online::Activity;
-        let lobby_map = || self.mp.as_ref().and_then(|s| s.map.as_ref()).map(|m| m.label()).unwrap_or_default();
+        let lobby_map = || {
+            self.mp
+                .as_ref()
+                .and_then(|s| s.map.as_ref())
+                .map(|m| m.label())
+                .unwrap_or_default()
+        };
         match &self.scene {
-            Scene::Play { game, entry, .. } if game.replay.is_none() => Activity::Playing { map: self.library.get(*entry).map(|e| e.label()).unwrap_or_default() },
-            Scene::Watch(v) => Activity::Watching { name: v.player.clone() },
-            Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_) => Activity::Match { map: lobby_map() },
+            Scene::Play { game, entry, .. } if game.replay.is_none() => Activity::Playing {
+                map: self
+                    .library
+                    .get(*entry)
+                    .map(|e| e.label())
+                    .unwrap_or_default(),
+            },
+            Scene::Watch(v) => Activity::Watching {
+                name: v.player.clone(),
+            },
+            Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_) => {
+                Activity::Match { map: lobby_map() }
+            }
             _ => match &self.mp {
-                Some(s) => Activity::Lobby { room: s.online_room, title: s.label.strip_prefix("online: ").unwrap_or(&s.label).to_string() },
+                Some(s) => Activity::Lobby {
+                    room: s.online_room,
+                    title: s
+                        .label
+                        .strip_prefix("online: ")
+                        .unwrap_or(&s.label)
+                        .to_string(),
+                },
                 None => Activity::Menus,
             },
         }
@@ -7236,10 +10048,18 @@ impl State {
     /// The social connection: (re)connects while logged in, applies what the server says and
     /// keeps our status current.
     fn poll_social(&mut self) {
-        if self.social.conn.is_none() && self.mp_menu.account.is_some() && !self.cfg.online_token.is_empty() {
-            self.social.conn = Some(online::Social::start(self.cfg.online_server.clone(), self.cfg.online_token.clone()));
+        if self.social.conn.is_none()
+            && self.mp_menu.account.is_some()
+            && !self.cfg.online_token.is_empty()
+        {
+            self.social.conn = Some(online::Social::start(
+                self.cfg.online_server.clone(),
+                self.cfg.online_token.clone(),
+            ));
         }
-        let Some(conn) = &self.social.conn else { return };
+        let Some(conn) = &self.social.conn else {
+            return;
+        };
         for event in conn.poll() {
             match event {
                 online::SocialEvent::Connected(name) => {
@@ -7261,7 +10081,12 @@ impl State {
                 }
                 online::SocialEvent::Disconnected(_) => {
                     if self.social.connected {
-                        self.social.notify("offline", "lost the connection to the server", 0xFF4B4B, social::NoteAction::None);
+                        self.social.notify(
+                            "offline",
+                            "lost the connection to the server",
+                            0xFF4B4B,
+                            social::NoteAction::None,
+                        );
                     }
                     self.social.connected = false;
                     self.social.players = None;
@@ -7290,49 +10115,84 @@ impl State {
             self.social.set_tab(social::Tab::Friends);
         }
         // The admin tab keeps its overview fresh while it's open.
-        if self.admin && self.social.open && self.social.tab == social::Tab::Admin && self.social.connected
-            && self.social.overview_asked.is_none_or(|t| t.elapsed() > Duration::from_secs(3))
-            && let Some(c) = &self.social.conn {
+        if self.admin
+            && self.social.open
+            && self.social.tab == social::Tab::Admin
+            && self.social.connected
+            && self
+                .social
+                .overview_asked
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(3))
+            && let Some(c) = &self.social.conn
+        {
             c.send(online::Up::Admin(online::AdminOp::Overview));
             self.social.overview_asked = Some(Instant::now());
         }
         let hold = !self.overlay_allowed();
         self.social.expire_notes(hold);
-        if self.social.open && self.social.row(self.mp.is_some()) == social::Row::Lobby && self.social.in_conversation(self.mp.is_some())
-            && let Some(s) = &mut self.mp {
+        if self.social.open
+            && self.social.row(self.mp.is_some()) == social::Row::Lobby
+            && self.social.in_conversation(self.mp.is_some())
+            && let Some(s) = &mut self.mp
+        {
             s.chat_unread = 0;
         }
     }
 
     fn social_down(&mut self, d: online::Down) {
         use online::{Activity, Down};
-        use social::{key, NoteAction};
+        use social::{NoteAction, key};
         match d {
-            Down::Friends { friends, requests, sent } => {
+            Down::Friends {
+                friends,
+                requests,
+                sent,
+            } => {
                 if self.social.have_list {
                     for f in &friends {
-                        let old = self.social.friends.iter().find(|o| key(&o.name) == key(&f.name));
+                        let old = self
+                            .social
+                            .friends
+                            .iter()
+                            .find(|o| key(&o.name) == key(&f.name));
                         // A new friend isn't "coming online"; only one who was offline is.
                         let was_online = old.is_none_or(|o| o.activity.is_some());
-                        let was_playing = old.is_some_and(|o| matches!(o.activity, Some(Activity::Playing { .. })));
+                        let was_playing = old
+                            .is_some_and(|o| matches!(o.activity, Some(Activity::Playing { .. })));
                         match &f.activity {
-                            Some(Activity::Playing { map }) if !was_playing && self.cfg.notify_playing => {
-                                self.social.notify(format!("{} is playing", f.name), map.clone(), 0x438EAD, NoteAction::Watch(f.name.clone()))
+                            Some(Activity::Playing { map })
+                                if !was_playing && self.cfg.notify_playing =>
+                            {
+                                self.social.notify(
+                                    format!("{} is playing", f.name),
+                                    map.clone(),
+                                    0x438EAD,
+                                    NoteAction::Watch(f.name.clone()),
+                                )
                             }
-                            Some(a) if !was_online && self.cfg.notify_online => {
-                                self.social.notify(format!("{} is online", f.name), a.describe(), 0x86E05A, NoteAction::Chat(f.name.clone()))
-                            }
+                            Some(a) if !was_online && self.cfg.notify_online => self.social.notify(
+                                format!("{} is online", f.name),
+                                a.describe(),
+                                0x86E05A,
+                                NoteAction::Chat(f.name.clone()),
+                            ),
                             _ => {}
                         }
                     }
                     for r in &requests {
                         if !self.social.requests.contains(r) && self.cfg.notify_requests {
-                            self.social.notify("friend request", format!("{r} wants to be friends"), 0xFFD34D, NoteAction::Requests);
+                            self.social.notify(
+                                "friend request",
+                                format!("{r} wants to be friends"),
+                                0xFFD34D,
+                                NoteAction::Requests,
+                            );
                         }
                     }
                 }
                 self.social.have_list = true;
-                self.social.set_friends(friends, requests, sent, self.mp.is_some());
+                self.social
+                    .set_friends(friends, requests, sent, self.mp.is_some());
             }
             Down::Chat(mut line) => {
                 if self.cfg.chat_filter {
@@ -7340,7 +10200,11 @@ impl State {
                 }
                 let me = self.social.me.clone().unwrap_or_default();
                 let mine = key(&line.from) == key(&me);
-                let other = if mine { line.to.clone() } else { line.from.clone() };
+                let other = if mine {
+                    line.to.clone()
+                } else {
+                    line.from.clone()
+                };
                 // Lines from before we connected are history (sent again on connect): no alerts.
                 let fresh = line.at + 10 >= discord::unix_now();
                 let log = self.social.chats.entry(key(&other)).or_default();
@@ -7348,21 +10212,34 @@ impl State {
                 if log.len() > 200 {
                     log.remove(0);
                 }
-                let viewing = self.social.open && self.social.in_conversation(self.mp.is_some()) && matches!(self.social.row(self.mp.is_some()), social::Row::Friend(k) if self.social.friends.get(k).is_some_and(|f| key(&f.name) == key(&other)));
+                let viewing = self.social.open
+                    && self.social.in_conversation(self.mp.is_some())
+                    && matches!(self.social.row(self.mp.is_some()), social::Row::Friend(k) if self.social.friends.get(k).is_some_and(|f| key(&f.name) == key(&other)));
                 // A chime for every fresh message from a friend, unless it would land in the middle
                 // of a play.
-                if !mine && fresh && self.cfg.message_sound && !self.playing()
-                    && let Some(a) = &self.audio {
+                if !mine
+                    && fresh
+                    && self.cfg.message_sound
+                    && !self.playing()
+                    && let Some(a) = &self.audio
+                {
                     a.sfx_at(audio::Sfx::Message, 1.0);
                 }
                 if !mine && fresh && !viewing {
                     *self.social.unread.entry(key(&other)).or_default() += 1;
                     if self.cfg.notify_messages {
-                        self.social.notify(line.from.clone(), line.text.clone(), 0x4fb4ff, NoteAction::Chat(line.from.clone()));
+                        self.social.notify(
+                            line.from.clone(),
+                            line.text.clone(),
+                            0x4fb4ff,
+                            NoteAction::Chat(line.from.clone()),
+                        );
                     }
                 }
             }
-            Down::Notice(text) => self.social.notify("taiko.rs", text, 0x9a9ab0, NoteAction::None),
+            Down::Notice(text) => self
+                .social
+                .notify("taiko.rs", text, 0x9a9ab0, NoteAction::None),
             Down::GlobalChatDeleted { from, at } => self.social.delete_global(&from, at),
             Down::AdminOverview(o) => self.social.set_overview(*o, self.mp.is_some()),
             Down::AdminLookup(l) => {
@@ -7372,7 +10249,11 @@ impl State {
                     if l.online { "online" } else { "offline" },
                     admin::span(now.saturating_sub(l.created)),
                     l.plays,
-                    if l.has_email { "email linked" } else { "no email" }
+                    if l.has_email {
+                        "email linked"
+                    } else {
+                        "no email"
+                    }
                 )];
                 let mut marks = Vec::new();
                 if l.banned {
@@ -7387,25 +10268,39 @@ impl State {
                 if !marks.is_empty() {
                     lines.push(marks.join("  "));
                 }
-                lines.push(if l.alts.is_empty() { "no other accounts from the same places".into() } else { format!("same places as: {}", l.alts.join(", ")) });
+                lines.push(if l.alts.is_empty() {
+                    "no other accounts from the same places".into()
+                } else {
+                    format!("same places as: {}", l.alts.join(", "))
+                });
                 self.social.info = Some((l.name.clone(), lines));
             }
             Down::Players { count, players } => {
-                self.social.set_players(count as usize, players, self.mp.is_some());
+                self.social
+                    .set_players(count as usize, players, self.mp.is_some());
             }
             Down::Medals(new) => self.medals_earned(new),
             Down::GlobalChat(mut line) => {
                 if self.cfg.chat_filter {
                     line.text = net::censor(&line.text);
                 }
-                let mine = self.social.me.as_deref().is_some_and(|me| key(me) == key(&line.from));
+                let mine = self
+                    .social
+                    .me
+                    .as_deref()
+                    .is_some_and(|me| key(me) == key(&line.from));
                 let fresh = line.at + 10 >= discord::unix_now();
                 let viewing = self.social.open && self.social.tab == social::Tab::Chat;
                 if !mine && fresh && !viewing {
                     self.social.global_unread += 1;
                     // Only lines that call us by name pop up: the rest just count.
                     if self.cfg.notify_mentions && self.social.mentions_me(&line.text) {
-                        self.social.notify(format!("{} in chat", line.from), line.shown(), 0x4fb4ff, NoteAction::Global);
+                        self.social.notify(
+                            format!("{} in chat", line.from),
+                            line.shown(),
+                            0x4fb4ff,
+                            NoteAction::Global,
+                        );
                     }
                 }
                 // Scrolled back, the view stays on the same lines.
@@ -7417,9 +10312,16 @@ impl State {
                     self.social.global.remove(0);
                 }
             }
-            Down::WatchStart { player, play, t, paused, inputs } => {
+            Down::WatchStart {
+                player,
+                play,
+                t,
+                paused,
+                inputs,
+            } => {
                 if let Scene::Watch(v) = &mut self.scene
-                    && key(&v.player) == key(&player) {
+                    && key(&v.player) == key(&player)
+                {
                     v.play = Some(play);
                     v.inputs = inputs;
                     v.clock = (t, Instant::now(), paused);
@@ -7445,7 +10347,8 @@ impl State {
             }
             Down::WatchEnd { player } => {
                 if let Scene::Watch(v) = &mut self.scene
-                    && key(&v.player) == key(&player) {
+                    && key(&v.player) == key(&player)
+                {
                     let name = v.player.clone();
                     **v = WatchView::new(name);
                     if let Some(a) = &self.audio {
@@ -7469,13 +10372,20 @@ impl State {
     fn stream_play(&mut self) {
         let connected = self.social.connected;
         let Scene::Play { game, entry, .. } = &mut self.scene else {
-            if self.stream.take().is_some() && connected
-                && let Some(c) = &self.social.conn {
+            if self.stream.take().is_some()
+                && connected
+                && let Some(c) = &self.social.conn
+            {
                 c.send(online::Up::PlayEnd);
             }
             return;
         };
-        let Some(conn) = self.social.conn.as_ref().filter(|_| connected && game.replay.is_none()) else {
+        let Some(conn) = self
+            .social
+            .conn
+            .as_ref()
+            .filter(|_| connected && game.replay.is_none())
+        else {
             self.stream = None;
             return;
         };
@@ -7485,16 +10395,30 @@ impl State {
                 conn.send(online::Up::PlayEnd);
             }
             game.log_inputs = true;
-            let Some(e) = self.library.get(*entry) else { return };
-            conn.send(online::Up::PlayStart(online::SoloPlay { map: net::MapInfo { seed: (game.seed != 0).then_some(game.seed), ..map_info(e, game.rate, game.mods) }, anti_mash: true }));
+            let Some(e) = self.library.get(*entry) else {
+                return;
+            };
+            conn.send(online::Up::PlayStart(online::SoloPlay {
+                map: net::MapInfo {
+                    seed: (game.seed != 0).then_some(game.seed),
+                    ..map_info(e, game.rate, game.mods)
+                },
+                anti_mash: true,
+            }));
             self.stream = Some((id, 0, Instant::now() - Duration::from_secs(1)));
         }
-        let Some((_, sent, last)) = self.stream.as_mut() else { return };
+        let Some((_, sent, last)) = self.stream.as_mut() else {
+            return;
+        };
         if last.elapsed() >= Duration::from_millis(100) {
             *last = Instant::now();
             let inputs = game.inputs.get(*sent..).unwrap_or_default().to_vec();
             *sent = game.inputs.len();
-            conn.send(online::Up::PlayFrame { t: game.time, paused: game.paused.is_some() || game.resuming.is_some(), inputs });
+            conn.send(online::Up::PlayFrame {
+                t: game.time,
+                paused: game.paused.is_some() || game.resuming.is_some(),
+                inputs,
+            });
         }
     }
 
@@ -7504,9 +10428,13 @@ impl State {
         if !matches!(self.scene, Scene::Watch(_)) {
             return;
         }
-        let Scene::Watch(mut v) = std::mem::replace(&mut self.scene, Scene::Select) else { return };
+        let Scene::Watch(mut v) = std::mem::replace(&mut self.scene, Scene::Select) else {
+            return;
+        };
         if let (Some(play), None, None) = (v.play.clone(), v.entry, &v.game)
-            && v.looked.is_none_or(|t| t.elapsed() > Duration::from_secs(1)) {
+            && v.looked
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(1))
+        {
             v.looked = Some(Instant::now());
             match find_map(&self.library, &play.map) {
                 Some(i) => {
@@ -7526,10 +10454,23 @@ impl State {
                 Ok(Ok((map, track))) => {
                     v.rx = None;
                     let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
-                    let mods = v.play.as_ref().map(|p| Mods::from_list(&p.map.mods)).unwrap_or_default();
+                    let mods = v
+                        .play
+                        .as_ref()
+                        .map(|p| Mods::from_list(&p.map.mods))
+                        .unwrap_or_default();
                     let seed = v.play.as_ref().and_then(|p| p.map.seed).unwrap_or(0);
                     let mut g = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
-                    g.live_pp = v.entry.and_then(|i| pp::Live::start(self.library[i].path.clone(), g.rate, mods, 1.0, seed, Default::default()));
+                    g.live_pp = v.entry.and_then(|i| {
+                        pp::Live::start(
+                            self.library[i].path.clone(),
+                            g.rate,
+                            mods,
+                            1.0,
+                            seed,
+                            Default::default(),
+                        )
+                    });
                     if let Some(p) = &v.play {
                         use_mod_settings(&mut g, &p.map);
                     }
@@ -7606,7 +10547,13 @@ impl State {
     fn handle_server_msg(&mut self, msg: net::ServerMsg) {
         use net::ServerMsg;
         match msg {
-            ServerMsg::Room { players, map, in_match, mapguessr, common } => {
+            ServerMsg::Room {
+                players,
+                map,
+                in_match,
+                mapguessr,
+                common,
+            } => {
                 let library = &self.library;
                 let Some(s) = &mut self.mp else { return };
                 let game_over = s.in_match && !in_match;
@@ -7620,7 +10567,9 @@ impl State {
                 s.mapguessr = mapguessr;
                 s.common = common;
                 if mapguessr {
-                    let g = self.guessr.get_or_insert_with(|| mapguessr::Guessr::new(library));
+                    let g = self
+                        .guessr
+                        .get_or_insert_with(|| mapguessr::Guessr::new(library));
                     if game_over {
                         g.game_over();
                         if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
@@ -7649,7 +10598,10 @@ impl State {
             ServerMsg::Prepare(map) => {
                 let Some(s) = &self.mp else { return };
                 // Not in a position to play (single-player song, calibration): sit this one out.
-                if matches!(self.scene, Scene::Play { .. } | Scene::Calibrate { .. } | Scene::Loading { .. }) {
+                if matches!(
+                    self.scene,
+                    Scene::Play { .. } | Scene::Calibrate { .. } | Scene::Loading { .. }
+                ) {
                     s.client.send(net::ClientMsg::Loaded(false));
                     return;
                 }
@@ -7659,9 +10611,16 @@ impl State {
                         self.picking_lobby_map = false;
                         self.preview.show_background_for(&self.library[i]);
                         // The host's speed mods, and our own others.
-                        let mods = Mods::from_list(&map.mods).shared().plus(self.cfg.mods.free());
+                        let mods = Mods::from_list(&map.mods)
+                            .shared()
+                            .plus(self.cfg.mods.free());
                         let rx = self.load_with(i, map.rate, mods);
-                        self.scene = Scene::MpWait { rx: Some(rx), loaded: None, start: None, from: map.from };
+                        self.scene = Scene::MpWait {
+                            rx: Some(rx),
+                            loaded: None,
+                            start: None,
+                            from: map.from,
+                        };
                     }
                     None => s.client.send(net::ClientMsg::Loaded(false)),
                 }
@@ -7722,7 +10681,10 @@ impl State {
                             }
                         }
                         None => {
-                            v.pending.entry(from).or_default().extend_from_slice(&inputs);
+                            v.pending
+                                .entry(from)
+                                .or_default()
+                                .extend_from_slice(&inputs);
                         }
                     }
                 }
@@ -7738,7 +10700,14 @@ impl State {
                 }
             }
             ServerMsg::Rejected(why) | ServerMsg::Disconnected(why) => {
-                let in_mp = matches!(self.scene, Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_));
+                let in_mp = matches!(
+                    self.scene,
+                    Scene::Lobby
+                        | Scene::MpWait { .. }
+                        | Scene::MpPlay { .. }
+                        | Scene::MpResults
+                        | Scene::Spectate(_)
+                );
                 self.toast(format!("multiplayer: {why}"));
                 self.mp = None;
                 self.picking_lobby_map = false;
@@ -7748,7 +10717,13 @@ impl State {
                     self.scene = Scene::MpMenu;
                 }
             }
-            ServerMsg::GuessRound { round, rounds, hash, from, seconds } => {
+            ServerMsg::GuessRound {
+                round,
+                rounds,
+                hash,
+                from,
+                seconds,
+            } => {
                 if let Some(g) = &mut self.guessr {
                     g.start_round(round, rounds, hash, from, seconds);
                 }
@@ -7757,7 +10732,11 @@ impl State {
                 if let Some(g) = &mut self.guessr {
                     g.tries = tries;
                 }
-                self.toast(if tries == 0 { "wrong, and that was your last guess".into() } else { format!("wrong! {tries} left") });
+                self.toast(if tries == 0 {
+                    "wrong, and that was your last guess".into()
+                } else {
+                    format!("wrong! {tries} left")
+                });
             }
             ServerMsg::GuessReveal { hash, got, last } => {
                 if let Some(g) = &mut self.guessr {
@@ -7770,7 +10749,11 @@ impl State {
                 }
             }
             ServerMsg::Chat { from, text } => {
-                let text = if self.cfg.chat_filter { net::censor(&text) } else { text };
+                let text = if self.cfg.chat_filter {
+                    net::censor(&text)
+                } else {
+                    text
+                };
                 if from == net::GUESSR_NAME {
                     self.toast(text.clone());
                 }
@@ -7800,9 +10783,17 @@ impl State {
     /// A key while "Exit taiko.rs?" is up: yes, no, or nothing. 1 and 2 answer like osu!'s.
     fn quit_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::KeyY | KeyCode::Digit1 | KeyCode::Numpad1 => self.quit = true,
+            KeyCode::Enter
+            | KeyCode::NumpadEnter
+            | KeyCode::KeyY
+            | KeyCode::Digit1
+            | KeyCode::Numpad1 => self.quit = true,
             KeyCode::KeyQ if self.modifiers_ctrl => self.quit = true,
-            KeyCode::Escape | KeyCode::KeyN | KeyCode::Backspace | KeyCode::Digit2 | KeyCode::Numpad2 => self.quit_asked = false,
+            KeyCode::Escape
+            | KeyCode::KeyN
+            | KeyCode::Backspace
+            | KeyCode::Digit2
+            | KeyCode::Numpad2 => self.quit_asked = false,
             _ => {}
         }
     }
@@ -7815,16 +10806,35 @@ impl State {
     /// A key while "taiko.rs crashed last time" is up: copy the report, or not.
     fn crash_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::KeyC | KeyCode::Digit1 | KeyCode::Numpad1 => {
-                let Some(report) = self.crash.take() else { return };
-                let text = if clipboard::set(&report) {
-                    tr!("crash log copied: paste it in #bugs on Discord", "クラッシュログをコピーしました: Discordの#bugsに貼ってください", "лог краша скопирован: вставьте его в #bugs в Discord")
-                } else {
-                    tr!("couldn't copy it: send crash.log from the game's data folder", "コピーできませんでした: データフォルダのcrash.logを送ってください", "не удалось скопировать: пришлите crash.log из папки данных игры")
+            KeyCode::Enter
+            | KeyCode::NumpadEnter
+            | KeyCode::KeyC
+            | KeyCode::Digit1
+            | KeyCode::Numpad1 => {
+                let Some(report) = self.crash.take() else {
+                    return;
                 };
-                self.toast = Some(Toast { text: text.into(), until: Instant::now() + Duration::from_secs(6) });
+                let text = if clipboard::set(&report) {
+                    tr!(
+                        "crash log copied: paste it in #bugs on Discord",
+                        "クラッシュログをコピーしました: Discordの#bugsに貼ってください",
+                        "лог краша скопирован: вставьте его в #bugs в Discord"
+                    )
+                } else {
+                    tr!(
+                        "couldn't copy it: send crash.log from the game's data folder",
+                        "コピーできませんでした: データフォルダのcrash.logを送ってください",
+                        "не удалось скопировать: пришлите crash.log из папки данных игры"
+                    )
+                };
+                self.toast = Some(Toast {
+                    text: text.into(),
+                    until: Instant::now() + Duration::from_secs(6),
+                });
             }
-            KeyCode::Escape | KeyCode::Backspace | KeyCode::Digit2 | KeyCode::Numpad2 => self.crash = None,
+            KeyCode::Escape | KeyCode::Backspace | KeyCode::Digit2 | KeyCode::Numpad2 => {
+                self.crash = None
+            }
             _ => {}
         }
     }
@@ -7838,33 +10848,91 @@ impl State {
         c.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
         let (bw, bh) = (380.0f32.min(w - 32.0), 132.0);
         let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
-        c.round_rect([x, y], [bw, bh], 10.0, rgba(0x1d1d27, 1.0), rgba(accent(), 1.0), 1.5);
-        c.text_centered(w / 2.0, y + 18.0, 12.0, rgba(0xffffff, 1.0), tr!("taiko.rs crashed last time", "前回taiko.rsがクラッシュしました", "taiko.rs вылетел в прошлый раз"));
+        c.round_rect(
+            [x, y],
+            [bw, bh],
+            10.0,
+            rgba(0x1d1d27, 1.0),
+            rgba(accent(), 1.0),
+            1.5,
+        );
+        c.text_centered(
+            w / 2.0,
+            y + 18.0,
+            12.0,
+            rgba(0xffffff, 1.0),
+            tr!(
+                "taiko.rs crashed last time",
+                "前回taiko.rsがクラッシュしました",
+                "taiko.rs вылетел в прошлый раз"
+            ),
+        );
         let room = bw - 32.0;
         let lines = if self.crash_sent {
             [
-                tr!("Its report went to the developers by itself.", "レポートは自動で開発者に送られました。", "Отчёт уже ушёл разработчикам сам."),
-                tr!("To say what you were doing, paste the log in #bugs.", "何をしていたか伝えるには、ログを#bugsに貼ってください。", "Чтобы рассказать, что вы делали, вставьте лог в #bugs."),
+                tr!(
+                    "Its report went to the developers by itself.",
+                    "レポートは自動で開発者に送られました。",
+                    "Отчёт уже ушёл разработчикам сам."
+                ),
+                tr!(
+                    "To say what you were doing, paste the log in #bugs.",
+                    "何をしていたか伝えるには、ログを#bugsに貼ってください。",
+                    "Чтобы рассказать, что вы делали, вставьте лог в #bugs."
+                ),
             ]
         } else {
             [
-                tr!("Copy the crash log and paste it in #bugs", "クラッシュログをコピーして", "Скопируйте лог краша и вставьте его"),
-                tr!("on the taiko.rs Discord, so it gets fixed.", "Discordの#bugsに貼ってください。", "в #bugs в Discord taiko.rs, чтобы мы починили."),
+                tr!(
+                    "Copy the crash log and paste it in #bugs",
+                    "クラッシュログをコピーして",
+                    "Скопируйте лог краша и вставьте его"
+                ),
+                tr!(
+                    "on the taiko.rs Discord, so it gets fixed.",
+                    "Discordの#bugsに貼ってください。",
+                    "в #bugs в Discord taiko.rs, чтобы мы починили."
+                ),
             ]
         };
-        for (k, line) in lines
-        .iter()
-        .enumerate()
-        {
+        for (k, line) in lines.iter().enumerate() {
             let size = Canvas::fit_size(8.0, 6.5, room, line);
-            c.text_centered(w / 2.0, y + 42.0 + 13.0 * k as f32, size, rgba(0xc8c8d8, 1.0), &Canvas::fit(size, room, line));
+            c.text_centered(
+                w / 2.0,
+                y + 42.0 + 13.0 * k as f32,
+                size,
+                rgba(0xc8c8d8, 1.0),
+                &Canvas::fit(size, room, line),
+            );
         }
         let gap = 10.0;
         let button = (bw - 36.0 - gap) / 2.0;
-        let copy = tr!("1. Copy log  (Enter)", "1. コピー  (Enter)", "1. Копировать  (Enter)");
+        let copy = tr!(
+            "1. Copy log  (Enter)",
+            "1. コピー  (Enter)",
+            "1. Копировать  (Enter)"
+        );
         let close = tr!("2. Close  (Esc)", "2. 閉じる  (Esc)", "2. Закрыть  (Esc)");
-        c.button(x + 18.0, y + 88.0, button, 26.0, copy, 9.0, render::Hit::Key(KeyCode::KeyC), true);
-        c.button(x + 18.0 + button + gap, y + 88.0, button, 26.0, close, 9.0, render::Hit::Key(KeyCode::Escape), false);
+        c.button(
+            x + 18.0,
+            y + 88.0,
+            button,
+            26.0,
+            copy,
+            9.0,
+            render::Hit::Key(KeyCode::KeyC),
+            true,
+        );
+        c.button(
+            x + 18.0 + button + gap,
+            y + 88.0,
+            button,
+            26.0,
+            close,
+            9.0,
+            render::Hit::Key(KeyCode::Escape),
+            false,
+        );
     }
 
     /// The exit question over everything.
@@ -7879,35 +10947,86 @@ impl State {
         let (bw, bh) = (340.0f32.min(w - 32.0), 124.0);
         let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
         style::panel(c, x, y, bw, bh);
-        let title = tr!("Exit taiko.rs?", "taiko.rsを終了しますか?", "Выйти из taiko.rs?");
+        let title = tr!(
+            "Exit taiko.rs?",
+            "taiko.rsを終了しますか?",
+            "Выйти из taiko.rs?"
+        );
         let size = Canvas::fit_size(16.0, 10.0, bw - 28.0, title);
-        style::title(c, w / 2.0 - Canvas::text_width(size, title) / 2.0, y + 18.0, size, 0xffffff, title);
+        style::title(
+            c,
+            w / 2.0 - Canvas::text_width(size, title) / 2.0,
+            y + 18.0,
+            size,
+            0xffffff,
+            title,
+        );
         let gap = 12.0;
         let button = (bw - 36.0 - gap) / 2.0;
         let colours = multiverse::note_colours();
         let options = [
-            (x + 18.0, tr!("Exit", "終了", "Выйти"), "1 / Enter", colours.don(), render::Hit::Key(KeyCode::KeyY)),
-            (x + 18.0 + button + gap, tr!("Stay", "戻る", "Остаться"), "2 / Esc", colours.kat(), render::Hit::Key(KeyCode::KeyN)),
+            (
+                x + 18.0,
+                tr!("Exit", "終了", "Выйти"),
+                "1 / Enter",
+                colours.don(),
+                render::Hit::Key(KeyCode::KeyY),
+            ),
+            (
+                x + 18.0 + button + gap,
+                tr!("Stay", "戻る", "Остаться"),
+                "2 / Esc",
+                colours.kat(),
+                render::Hit::Key(KeyCode::KeyN),
+            ),
         ];
         let oy = y + 62.0;
-        let hovered = options.iter().position(|o| c.hovered(o.0, oy, button, 40.0));
+        let hovered = options
+            .iter()
+            .position(|o| c.hovered(o.0, oy, button, 40.0));
         let on = hovered.unwrap_or(0);
         for (k, (ox, label, keys, col, hit)) in options.into_iter().enumerate() {
             let selected = k == on;
             if selected {
-                c.round_rect([ox, oy], [button, 40.0], 8.0, rgba(style::selector_colour(), 0.12 + 0.05 * style::pulse()), rgba(0, 0.0), 0.0);
+                c.round_rect(
+                    [ox, oy],
+                    [button, 40.0],
+                    8.0,
+                    rgba(style::selector_colour(), 0.12 + 0.05 * style::pulse()),
+                    rgba(0, 0.0),
+                    0.0,
+                );
                 style::selector(c, "quit", [ox - 3.0, oy - 3.0, button + 6.0, 46.0]);
             }
             c.hit(ox, oy, button, 40.0, hit);
             let (nx, ny, r) = (ox + 20.0, oy + 20.0, if selected { 10.0 } else { 8.0 });
             style::note(c, nx, ny, r, col, selected, 0.6);
             let room = button - 44.0;
-            c.text(ox + 38.0, oy + 9.0, 11.0, rgba(if selected { 0xffffff } else { 0xa8a8bc }, 1.0), &Canvas::fit(11.0, room, label));
-            c.text(ox + 38.0, oy + 24.0, 6.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(6.0, room, keys));
+            c.text(
+                ox + 38.0,
+                oy + 9.0,
+                11.0,
+                rgba(if selected { 0xffffff } else { 0xa8a8bc }, 1.0),
+                &Canvas::fit(11.0, room, label),
+            );
+            c.text(
+                ox + 38.0,
+                oy + 24.0,
+                6.0,
+                rgba(0x8a8aa0, 1.0),
+                &Canvas::fit(6.0, room, keys),
+            );
         }
     }
 
-    fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+    fn key(
+        &mut self,
+        code: KeyCode,
+        repeat: bool,
+        text: Option<&str>,
+        at: Instant,
+        window: Option<&Window>,
+    ) {
         // A key that wakes the idle screen does nothing else.
         if self.idle.input(at) {
             return;
@@ -7924,15 +11043,35 @@ impl State {
             }
             return;
         }
-        let pressed = keys::Chord { key: code, ctrl: self.modifiers_ctrl, shift: self.modifiers_shift, alt: self.modifiers_alt };
-        match self.hotkey_place(code).map(|place| self.cfg.hotkeys.resolve(pressed, place)) {
+        let pressed = keys::Chord {
+            key: code,
+            ctrl: self.modifiers_ctrl,
+            shift: self.modifiers_shift,
+            alt: self.modifiers_alt,
+        };
+        match self
+            .hotkey_place(code)
+            .map(|place| self.cfg.hotkeys.resolve(pressed, place))
+        {
             None | Some(keys::Resolved::Same) => self.key_inner(code, repeat, text, at, window),
             Some(keys::Resolved::Nothing) => {}
             Some(keys::Resolved::As(c)) => {
-                let held = (self.modifiers_ctrl, self.modifiers_shift, self.modifiers_alt);
-                (self.modifiers_ctrl, self.modifiers_shift, self.modifiers_alt) = (c.ctrl, c.shift, c.alt);
+                let held = (
+                    self.modifiers_ctrl,
+                    self.modifiers_shift,
+                    self.modifiers_alt,
+                );
+                (
+                    self.modifiers_ctrl,
+                    self.modifiers_shift,
+                    self.modifiers_alt,
+                ) = (c.ctrl, c.shift, c.alt);
                 self.key_inner(c.key, repeat, None, at, window);
-                (self.modifiers_ctrl, self.modifiers_shift, self.modifiers_alt) = held;
+                (
+                    self.modifiers_ctrl,
+                    self.modifiers_shift,
+                    self.modifiers_alt,
+                ) = held;
             }
         }
     }
@@ -7952,13 +11091,20 @@ impl State {
             || self.mod_select.is_some()
             || self.customization_tab().is_some();
         let plain = !self.modifiers_ctrl && !self.modifiers_alt;
-        let settings_idle = matches!(self.scene, Scene::Settings { .. }) && self.settings_ui.search.is_empty() && !keys::starts_text(code);
-        if busy || (plain && self.in_song() && self.cfg.keys.contains(&code)) || (plain && self.takes_text() && keys::types_text(code) && !settings_idle) {
+        let settings_idle = matches!(self.scene, Scene::Settings { .. })
+            && self.settings_ui.search.is_empty()
+            && !keys::starts_text(code);
+        if busy
+            || (plain && self.in_song() && self.cfg.keys.contains(&code))
+            || (plain && self.takes_text() && keys::types_text(code) && !settings_idle)
+        {
             return None;
         }
         Some(match &self.scene {
             Scene::Select if self.on_menu() => keys::Place::Other,
-            Scene::Select if self.select.picker.is_none() && self.select.menu.is_none() => keys::Place::Select,
+            Scene::Select if self.select.picker.is_none() && self.select.menu.is_none() => {
+                keys::Place::Select
+            }
             Scene::Play { game, .. } if game.paused.is_some() => keys::Place::Paused,
             Scene::Play { .. } => keys::Place::Play,
             Scene::Results { .. } => keys::Place::Results,
@@ -7966,7 +11112,14 @@ impl State {
         })
     }
 
-    fn key_inner(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+    fn key_inner(
+        &mut self,
+        code: KeyCode,
+        repeat: bool,
+        text: Option<&str>,
+        at: Instant,
+        window: Option<&Window>,
+    ) {
         if self.quit_asked {
             if !repeat {
                 self.quit_key(code);
@@ -7990,7 +11143,14 @@ impl State {
         if let Some(slot) = self.guide_binding.filter(|_| self.guide.is_some()) {
             let modifier = matches!(
                 code,
-                KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::ControlLeft | KeyCode::ControlRight | KeyCode::AltLeft | KeyCode::AltRight | KeyCode::SuperLeft | KeyCode::SuperRight
+                KeyCode::ShiftLeft
+                    | KeyCode::ShiftRight
+                    | KeyCode::ControlLeft
+                    | KeyCode::ControlRight
+                    | KeyCode::AltLeft
+                    | KeyCode::AltRight
+                    | KeyCode::SuperLeft
+                    | KeyCode::SuperRight
             );
             if repeat || modifier {
                 return;
@@ -8003,12 +11163,25 @@ impl State {
         }
         if self.guide.is_some() {
             match code {
-                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space | KeyCode::ArrowRight => self.guide_action(guide::Action::Next),
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space | KeyCode::ArrowRight => {
+                    self.guide_action(guide::Action::Next)
+                }
                 KeyCode::ArrowLeft | KeyCode::Backspace => self.guide_action(guide::Action::Back),
                 KeyCode::Escape => self.guide_action(guide::Action::Close),
-                KeyCode::KeyC if self.guide == Some(guide::OFFSET_PAGE) => self.guide_action(guide::Action::Calibrate),
-                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 if self.guide == Some(0) => {
-                    let slot = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4].iter().position(|&k| k == code);
+                KeyCode::KeyC if self.guide == Some(guide::OFFSET_PAGE) => {
+                    self.guide_action(guide::Action::Calibrate)
+                }
+                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4
+                    if self.guide == Some(0) =>
+                {
+                    let slot = [
+                        KeyCode::Digit1,
+                        KeyCode::Digit2,
+                        KeyCode::Digit3,
+                        KeyCode::Digit4,
+                    ]
+                    .iter()
+                    .position(|&k| k == code);
                     self.guide_binding = slot;
                 }
                 _ => {}
@@ -8017,24 +11190,45 @@ impl State {
         }
         // Being typed or bound, Ctrl+O is just a key.
         let free = self.settings_ui.binding.is_none() && self.settings_ui.editing.is_none();
-        if free && self.modifiers_alt && !self.modifiers_ctrl && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-            self.volume.pick_next(if code == KeyCode::ArrowLeft { -1 } else { 1 }, Instant::now());
+        if free
+            && self.modifiers_alt
+            && !self.modifiers_ctrl
+            && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight)
+        {
+            self.volume.pick_next(
+                if code == KeyCode::ArrowLeft { -1 } else { 1 },
+                Instant::now(),
+            );
             return;
         }
         // Alt+Up/Down turn it like Alt+wheel (held, it keeps turning).
-        if free && self.modifiers_alt && !self.modifiers_ctrl && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown) {
+        if free
+            && self.modifiers_alt
+            && !self.modifiers_ctrl
+            && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown)
+        {
             self.turn_volume(if code == KeyCode::ArrowUp { 1 } else { -1 });
             return;
         }
-        if free && code == KeyCode::KeyO && self.modifiers_ctrl && !self.modifiers_shift && !self.modifiers_alt {
+        if free
+            && code == KeyCode::KeyO
+            && self.modifiers_ctrl
+            && !self.modifiers_shift
+            && !self.modifiers_alt
+        {
             if !repeat {
                 self.settings_anywhere();
             }
             return;
         }
         if let Some(view) = &mut self.changelog {
-            if (!repeat || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown))
-                && view.key(code) {
+            if (!repeat
+                || matches!(
+                    code,
+                    KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown
+                ))
+                && view.key(code)
+            {
                 self.changelog = None;
             }
             return;
@@ -8059,7 +11253,10 @@ impl State {
         }
         // A profile is over everything: any of these closes it, the rest do nothing.
         if self.profile.is_some() {
-            if matches!(code, KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter) {
+            if matches!(
+                code,
+                KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter
+            ) {
                 self.profile = None;
             } else if code == KeyCode::KeyM {
                 let name = self.profile.take().map(|p| p.name);
@@ -8070,7 +11267,9 @@ impl State {
         // Ctrl+V: the clipboard's text, typed into whatever takes text here.
         if self.modifiers_ctrl && code == KeyCode::KeyV && self.takes_text() {
             if !repeat {
-                let text = clipboard::get().map(|t| clipboard::one_line(&t)).unwrap_or_default();
+                let text = clipboard::get()
+                    .map(|t| clipboard::one_line(&t))
+                    .unwrap_or_default();
                 if !text.is_empty() {
                     self.modifiers_ctrl = false;
                     self.key_inner(KeyCode::KeyV, false, Some(&text), at, window);
@@ -8101,7 +11300,17 @@ impl State {
         if self.social.open {
             let function_key = matches!(
                 code,
-                KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 | KeyCode::F5 | KeyCode::F6 | KeyCode::F7 | KeyCode::F8 | KeyCode::F10 | KeyCode::F11 | KeyCode::F12
+                KeyCode::F1
+                    | KeyCode::F2
+                    | KeyCode::F3
+                    | KeyCode::F4
+                    | KeyCode::F5
+                    | KeyCode::F6
+                    | KeyCode::F7
+                    | KeyCode::F8
+                    | KeyCode::F10
+                    | KeyCode::F11
+                    | KeyCode::F12
             );
             if !(function_key && self.handle_global_key(code, window)) {
                 self.social_key(code, text);
@@ -8113,7 +11322,15 @@ impl State {
             return;
         }
         if self.mod_select.is_some() {
-            if !repeat || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+            if !repeat
+                || matches!(
+                    code,
+                    KeyCode::ArrowUp
+                        | KeyCode::ArrowDown
+                        | KeyCode::ArrowLeft
+                        | KeyCode::ArrowRight
+                )
+            {
                 self.mod_select_key(code);
             }
             return;
@@ -8122,24 +11339,53 @@ impl State {
         if self.settings_ui.dropdown.is_some() && !repeat {
             let nav = matches!(
                 code,
-                KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End
-                    | KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space | KeyCode::Escape | KeyCode::Backspace | KeyCode::Tab
-                    | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyE | KeyCode::F2 | KeyCode::Insert | KeyCode::Delete
+                KeyCode::ArrowUp
+                    | KeyCode::ArrowDown
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+                    | KeyCode::Home
+                    | KeyCode::End
+                    | KeyCode::Enter
+                    | KeyCode::NumpadEnter
+                    | KeyCode::Space
+                    | KeyCode::Escape
+                    | KeyCode::Backspace
+                    | KeyCode::Tab
+                    | KeyCode::KeyS
+                    | KeyCode::KeyA
+                    | KeyCode::KeyE
+                    | KeyCode::F2
+                    | KeyCode::Insert
+                    | KeyCode::Delete
             );
             // Typing a size takes every key.
-            let typing = self.settings_ui.dropdown.as_ref().is_some_and(|d| d.editing.is_some());
+            let typing = self
+                .settings_ui
+                .dropdown
+                .as_ref()
+                .is_some_and(|d| d.editing.is_some());
             if nav || typing {
                 self.dropdown_key(code);
                 return;
             }
         }
         if self.settings_ui.editing.is_some() && matches!(self.scene, Scene::Settings { .. }) {
-            if !repeat || !matches!(code, KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape) {
+            if !repeat
+                || !matches!(
+                    code,
+                    KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape
+                )
+            {
                 self.edit_key(code, text);
             }
             return;
         }
-        if !repeat && self.in_song() && self.settings_ui.binding.is_none() && (self.modifiers_shift, code) == self.cfg.interface_key && !(self.cfg.keys.contains(&code) && !self.modifiers_shift) {
+        if !repeat
+            && self.in_song()
+            && self.settings_ui.binding.is_none()
+            && (self.modifiers_shift, code) == self.cfg.interface_key
+            && !(self.cfg.keys.contains(&code) && !self.modifiers_shift)
+        {
             self.cfg.interface_hidden = !self.cfg.interface_hidden;
             self.cfg.save();
             return;
@@ -8150,12 +11396,18 @@ impl State {
             }
             return;
         }
-        if !repeat && !matches!(self.scene, Scene::MpMenu | Scene::Settings { .. }) && self.settings_ui.dropdown.is_none()
-            && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code) {
+        if !repeat
+            && !matches!(self.scene, Scene::MpMenu | Scene::Settings { .. })
+            && self.settings_ui.dropdown.is_none()
+            && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code)
+        {
             self.cycle_preset(if i == 0 { -1 } else { 1 });
             return;
         }
-        if matches!(self.scene, Scene::Calibrate { .. } | Scene::CalibrateDone { .. }) {
+        if matches!(
+            self.scene,
+            Scene::Calibrate { .. } | Scene::CalibrateDone { .. }
+        ) {
             self.calibration_key(code, repeat, at, window);
             return;
         }
@@ -8168,13 +11420,25 @@ impl State {
             return;
         }
         if matches!(self.scene, Scene::Download) {
-            if !repeat || matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::Backspace | KeyCode::PageUp | KeyCode::PageDown) {
+            if !repeat
+                || matches!(
+                    code,
+                    KeyCode::ArrowUp
+                        | KeyCode::ArrowDown
+                        | KeyCode::Backspace
+                        | KeyCode::PageUp
+                        | KeyCode::PageDown
+                )
+            {
                 self.download_key(code, text, window);
             }
             return;
         }
         // Any key closes the row menu; Esc does nothing else.
-        if matches!(self.scene, Scene::Select) && self.select.menu.take().is_some() && code == KeyCode::Escape {
+        if matches!(self.scene, Scene::Select)
+            && self.select.menu.take().is_some()
+            && code == KeyCode::Escape
+        {
             return;
         }
         if let (Scene::Select, Some(cursor)) = (&self.scene, self.select.picker) {
@@ -8204,10 +11468,16 @@ impl State {
             let n = v.players.len().max(1);
             match code {
                 KeyCode::ArrowLeft | KeyCode::ArrowRight if !repeat => {
-                    let dir = if code == KeyCode::ArrowRight { 1 } else { n - 1 };
+                    let dir = if code == KeyCode::ArrowRight {
+                        1
+                    } else {
+                        n - 1
+                    };
                     v.focus = Some(v.focus.map(|f| (f + dir) % n).unwrap_or(0));
                 }
-                KeyCode::KeyA | KeyCode::Tab if !repeat => v.focus = if v.focus.is_some() { None } else { Some(0) },
+                KeyCode::KeyA | KeyCode::Tab if !repeat => {
+                    v.focus = if v.focus.is_some() { None } else { Some(0) }
+                }
                 KeyCode::Escape if !repeat => {
                     if let Some(s) = &self.mp {
                         s.client.send(net::ClientMsg::Spectate(false));
@@ -8223,7 +11493,14 @@ impl State {
             }
             return;
         }
-        if matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults) {
+        if matches!(
+            self.scene,
+            Scene::MpMenu
+                | Scene::Lobby
+                | Scene::MpWait { .. }
+                | Scene::MpPlay { .. }
+                | Scene::MpResults
+        ) {
             self.multiplayer_key(code, repeat, text, at, window);
             return;
         }
@@ -8254,7 +11531,10 @@ impl State {
         }
         if let Scene::Play { game, .. } = &mut self.scene {
             if game.paused.is_some() {
-                if !repeat && !self.cfg.keys.contains(&code) && !self.handle_global_key(code, window) {
+                if !repeat
+                    && !self.cfg.keys.contains(&code)
+                    && !self.handle_global_key(code, window)
+                {
                     self.pause_key(code);
                 }
                 return;
@@ -8266,13 +11546,31 @@ impl State {
                 return;
             }
             if game.replay.is_some() && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-                let step = if self.modifiers_shift { 15_000.0 } else { 5_000.0 };
-                let t = game.time + if code == KeyCode::ArrowRight { step } else { -step };
+                let step = if self.modifiers_shift {
+                    15_000.0
+                } else {
+                    5_000.0
+                };
+                let t = game.time
+                    + if code == KeyCode::ArrowRight {
+                        step
+                    } else {
+                        -step
+                    };
                 game.seek(t, self.audio.as_ref(), self.play_offset);
                 return;
             }
         }
-        if repeat && !matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::Backspace | KeyCode::PageUp | KeyCode::PageDown) {
+        if repeat
+            && !matches!(
+                code,
+                KeyCode::ArrowUp
+                    | KeyCode::ArrowDown
+                    | KeyCode::Backspace
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+            )
+        {
             return;
         }
         if self.handle_global_key(code, window) {
@@ -8287,24 +11585,42 @@ impl State {
             return;
         }
         match &mut self.scene {
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyF => self.select.searching = true,
+            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyF => {
+                self.select.searching = true
+            }
             // In the search box the keys that have a job here otherwise (speed's [ and ]) type.
-            Scene::Select if self.select.searching && !self.modifiers_ctrl && matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) => {
+            Scene::Select
+                if self.select.searching
+                    && !self.modifiers_ctrl
+                    && matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) =>
+            {
                 if let Some(text) = text {
                     self.select.type_text(text, &self.library);
                 }
             }
-            Scene::Select if self.modifiers_shift && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) && !self.picking_lobby_map => {
+            Scene::Select
+                if self.modifiers_shift
+                    && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
+                    && !self.picking_lobby_map =>
+            {
                 self.play_from_marker();
             }
-            Scene::Select if self.modifiers_ctrl && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) => self.open_preview(),
+            Scene::Select
+                if self.modifiers_ctrl && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) =>
+            {
+                self.open_preview()
+            }
             Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyD => self.open_download(),
             Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyS => {
                 let dir = if self.modifiers_shift { -1 } else { 1 };
                 self.cycle_sort(dir);
             }
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyL => self.open_collections(),
-            Scene::Select if self.modifiers_ctrl && self.modifiers_shift && code == KeyCode::KeyU => {
+            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyL => {
+                self.open_collections()
+            }
+            Scene::Select
+                if self.modifiers_ctrl && self.modifiers_shift && code == KeyCode::KeyU =>
+            {
                 if let Some(i) = self.select.selected() {
                     self.update_set(i);
                 }
@@ -8316,18 +11632,39 @@ impl State {
                     self.select.random(&self.library);
                 }
             }
-            Scene::Select if self.modifiers_ctrl && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) => {
-                let step = if code == KeyCode::ArrowRight { 5000.0 } else { -5000.0 };
+            Scene::Select
+                if self.modifiers_ctrl
+                    && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) =>
+            {
+                let step = if code == KeyCode::ArrowRight {
+                    5000.0
+                } else {
+                    -5000.0
+                };
                 self.preview.seek_by(step, self.audio.as_ref());
             }
             Scene::Select if matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) => {
-                let step = if code == KeyCode::BracketRight { 0.05 } else { -0.05 } * if self.modifiers_shift { 5.0 } else { 1.0 };
-                self.cfg.rate = (((self.cfg.rate + step) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
+                let step = if code == KeyCode::BracketRight {
+                    0.05
+                } else {
+                    -0.05
+                } * if self.modifiers_shift { 5.0 } else { 1.0 };
+                self.cfg.rate = (((self.cfg.rate + step) * 100.0).round() / 100.0)
+                    .clamp(RATE_RANGE.0, RATE_RANGE.1);
                 self.cfg.save();
-                let pitch = if self.cfg.rate_keep_pitch { "keeps pitch" } else { "pitch shifts" };
+                let pitch = if self.cfg.rate_keep_pitch {
+                    "keeps pitch"
+                } else {
+                    "pitch shifts"
+                };
                 self.toast(format!("speed {:.2}x ({pitch})", self.cfg.rate));
             }
-            Scene::Select if self.library.is_empty() && self.scan.is_none() && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) && !cfg!(target_os = "android") => {
+            Scene::Select
+                if self.library.is_empty()
+                    && self.scan.is_none()
+                    && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
+                    && !cfg!(target_os = "android") =>
+            {
                 self.browse_songs_folder();
             }
             Scene::Select if self.modifiers_ctrl && code == KeyCode::Backspace => {
@@ -8339,7 +11676,9 @@ impl State {
                 SelectAction::Play(i) => self.start_loading(i),
                 SelectAction::Settings => self.open_settings(),
                 SelectAction::Mods => self.open_mod_select(),
-                SelectAction::Quit if self.cfg.main_menu => self.main_menu = Some(menu::Menu::new()),
+                SelectAction::Quit if self.cfg.main_menu => {
+                    self.main_menu = Some(menu::Menu::new())
+                }
                 SelectAction::Quit => self.ask_quit(),
                 SelectAction::None => {
                     if let Some(text) = text {
@@ -8357,8 +11696,19 @@ impl State {
                     self.settings_key(code, window);
                 }
             }
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } | Scene::Preview { .. } | Scene::Download => {}
-            Scene::MpMenu | Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults | Scene::Spectate(_) | Scene::Watch(_) | Scene::VideoEdit(_) => {}
+            Scene::Calibrate { .. }
+            | Scene::CalibrateDone { .. }
+            | Scene::LayoutEdit { .. }
+            | Scene::Preview { .. }
+            | Scene::Download => {}
+            Scene::MpMenu
+            | Scene::Lobby
+            | Scene::MpWait { .. }
+            | Scene::MpPlay { .. }
+            | Scene::MpResults
+            | Scene::Spectate(_)
+            | Scene::Watch(_)
+            | Scene::VideoEdit(_) => {}
             Scene::Play { game, entry, from } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
@@ -8373,10 +11723,25 @@ impl State {
                 KeyCode::KeyR if self.modifiers_ctrl => self.restart_map(),
                 _ => {}
             },
-            Scene::Results { results, .. } if matches!(code, KeyCode::ArrowDown | KeyCode::ArrowUp | KeyCode::PageDown | KeyCode::PageUp | KeyCode::Home | KeyCode::End) => {
-                results.scroll(matches!(code, KeyCode::ArrowDown | KeyCode::PageDown | KeyCode::End));
+            Scene::Results { results, .. }
+                if matches!(
+                    code,
+                    KeyCode::ArrowDown
+                        | KeyCode::ArrowUp
+                        | KeyCode::PageDown
+                        | KeyCode::PageUp
+                        | KeyCode::Home
+                        | KeyCode::End
+                ) =>
+            {
+                results.scroll(matches!(
+                    code,
+                    KeyCode::ArrowDown | KeyCode::PageDown | KeyCode::End
+                ));
             }
-            Scene::Results { .. } if code == KeyCode::KeyR && self.modifiers_ctrl => self.restart_map(),
+            Scene::Results { .. } if code == KeyCode::KeyR && self.modifiers_ctrl => {
+                self.restart_map()
+            }
             Scene::Results { results, .. } if code == KeyCode::KeyV && results.replay.is_some() => {
                 if let Some(file) = results.replay.clone() {
                     self.open_video_editor(&file);
@@ -8384,7 +11749,10 @@ impl State {
             }
             // A leaderboard score's results: Enter watches it too.
             Scene::Results { results, .. }
-                if results.replay.is_some() && (code == KeyCode::KeyR || (results.opened.is_some() && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter))) =>
+                if results.replay.is_some()
+                    && (code == KeyCode::KeyR
+                        || (results.opened.is_some()
+                            && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter))) =>
             {
                 if let Some(file) = results.replay.clone() {
                     self.watch_replay(&file);
@@ -8430,7 +11798,10 @@ impl State {
             self.volume_save_at = None;
             self.cfg.save();
         }
-        if self.window_resized_at.is_some_and(|t| now.saturating_duration_since(t) > Duration::from_secs(1)) {
+        if self
+            .window_resized_at
+            .is_some_and(|t| now.saturating_duration_since(t) > Duration::from_secs(1))
+        {
             self.window_resized_at = None;
             self.cfg.save();
         }
@@ -8438,7 +11809,11 @@ impl State {
         // until the frame is on screen.
         let visual_offset = self.cfg.visual_offset_ms + self.vsync_lead() + self.pace_shift_ms;
         // The interface toggle: what it hides, while it's off.
-        let hidden = if self.cfg.interface_hidden { self.cfg.interface_hides } else { hud::Parts::NONE };
+        let hidden = if self.cfg.interface_hidden {
+            self.cfg.interface_hides
+        } else {
+            hud::Parts::NONE
+        };
         let dt = now.duration_since(self.stats.last).as_secs_f64() * 1000.0;
         self.stats.last = now;
         self.stats.frames += 1;
@@ -8459,7 +11834,8 @@ impl State {
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
         let idle_allowed = self.idle_allowed();
-        self.idle.update(now, canvas.dt_ms, idle_allowed, self.cfg.idle_minutes);
+        self.idle
+            .update(now, canvas.dt_ms, idle_allowed, self.cfg.idle_minutes);
         render::set_animations(self.cfg.animations);
         render::set_accent(self.cfg.accent);
         game::set_hide_great(self.cfg.hide_great);
@@ -8484,12 +11860,19 @@ impl State {
                 self.preview_remote = browsing;
                 self.preview.forget();
             }
-            let in_select = matches!(self.scene, Scene::Select | Scene::Preview { .. } | Scene::Download);
+            let in_select = matches!(
+                self.scene,
+                Scene::Select | Scene::Preview { .. } | Scene::Download
+            );
             let in_menu = in_select
                 || matches!(&self.scene, Scene::Results { results, .. } if results.opened.is_some() && results.music.is_none())
                 || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::Preview { .. }))
                 || matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::Download);
-            let (entries, selected) = if browsing { (&self.browse.remote, self.browse.shown) } else { (&self.library, self.preview_target()) };
+            let (entries, selected) = if browsing {
+                (&self.browse.remote, self.browse.shown)
+            } else {
+                (&self.library, self.preview_target())
+            };
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
             self.preview.autoplay = self.cfg.autoplay;
@@ -8499,13 +11882,23 @@ impl State {
             self.preview.pitch = self.player.as_ref().map_or(1.0, |p| p.pitch());
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
-            self.preview.update(now, entries, selected, self.audio.as_ref(), in_menu, in_select, self.play_offset, rate);
+            self.preview.update(
+                now,
+                entries,
+                selected,
+                self.audio.as_ref(),
+                in_menu,
+                in_select,
+                self.play_offset,
+                rate,
+            );
             self.stars.poll();
             self.stars.set_mods(self.cfg.mods, self.cfg.scroll_speed);
             let play_rate = self.play_speed().0;
             if self.cfg.menu_notes && self.on_menu() {
                 let playing = self.preview_target();
-                self.menu_notes.update(playing, &self.library, &mut self.stars, play_rate);
+                self.menu_notes
+                    .update(playing, &self.library, &mut self.stars, play_rate);
             }
             if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
                 self.stars.request(i, &self.library[i].path, play_rate);
@@ -8516,19 +11909,27 @@ impl State {
                     self.stars.request(i, &self.library[i].path, play_rate);
                 }
                 let (stars, rate) = (&self.stars, play_rate);
-                self.select.sort_selected_set(&self.library, &|i| stars.get(i, rate));
+                self.select
+                    .sort_selected_set(&self.library, &|i| stars.get(i, rate));
                 self.select.remember_selection(&self.library);
             }
             let has_bg = self.preview.has_background;
             self.bg_brightness = match self.scene {
                 _ if !has_bg => 0.0,
                 _ if self.dims_background() => 1.0 - self.cfg.bg_dim,
-                _ if self.on_menu() => if self.player.is_some() { 0.25 } else { 0.5 },
-                Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
+                _ if self.on_menu() => {
+                    if self.player.is_some() {
+                        0.25
+                    } else {
+                        0.5
+                    }
+                }
+                Scene::Calibrate { .. }
+                | Scene::CalibrateDone { .. }
+                | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
             self.bg_brightness *= 1.0 - idle::DARKEN * self.idle.amount();
-
         }
         self.poll_multiplayer();
         self.track_play();
@@ -8544,7 +11945,10 @@ impl State {
             match ex.encoder.done.try_recv() {
                 Ok(Ok(path)) => {
                     self.export = None;
-                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
                     self.video_status = format!("saved \"{name}\" in the videos folder");
                     self.last_video = Some(path);
                     self.toast("video saved".into());
@@ -8573,7 +11977,12 @@ impl State {
                 match action {
                     debug::Action::Key(code) => self.key(code, false, None, now, None),
                     debug::Action::Wheel(n) => self.wheel(n),
-                    debug::Action::Drag { corner, dx, dy, hold } => self.simulate_drag(corner, dx, dy, hold),
+                    debug::Action::Drag {
+                        corner,
+                        dx,
+                        dy,
+                        hold,
+                    } => self.simulate_drag(corner, dx, dy, hold),
                     debug::Action::Release => self.mouse_button(false, None),
                     debug::Action::ClickGraph(f) => {
                         if let Some([gx, gy, gw, gh]) = self.preview.graph_rect() {
@@ -8645,7 +12054,8 @@ impl State {
                 _ => None,
             };
             if let Some(name) = screen
-                && let Some(pos) = self.pending_screen_shots.iter().position(|&s| s == name) {
+                && let Some(pos) = self.pending_screen_shots.iter().position(|&s| s == name)
+            {
                 self.pending_screen_shots.remove(pos);
                 capture = Some(format!("{name}.png"));
                 if name == "results" && self.exit_when_done {
@@ -8657,11 +12067,24 @@ impl State {
             self.mod_select = None;
         }
         // A song or a replay opened by any road leaves the menu behind.
-        if matches!(self.scene, Scene::Loading { .. } | Scene::Play { .. } | Scene::Results { .. } | Scene::Preview { .. } | Scene::Watch(_) | Scene::VideoEdit(_)) {
+        if matches!(
+            self.scene,
+            Scene::Loading { .. }
+                | Scene::Play { .. }
+                | Scene::Results { .. }
+                | Scene::Preview { .. }
+                | Scene::Watch(_)
+                | Scene::VideoEdit(_)
+        ) {
             self.main_menu = None;
         }
         // Back from calibrating: on with the guide.
-        if self.guide_after.is_some() && !matches!(self.scene, Scene::Calibrate { .. } | Scene::CalibrateDone { .. }) {
+        if self.guide_after.is_some()
+            && !matches!(
+                self.scene,
+                Scene::Calibrate { .. } | Scene::CalibrateDone { .. }
+            )
+        {
             self.guide = self.guide_after.take();
         }
         if !self.on_menu() {
@@ -8686,7 +12109,11 @@ impl State {
                 None => {}
             }
         }
-        if let Some(p) = self.player.as_ref().filter(|p| p.library_len != self.library.len()) {
+        if let Some(p) = self
+            .player
+            .as_ref()
+            .filter(|p| p.library_len != self.library.len())
+        {
             // The library changed under the list: same song on, if it's still there.
             let entry = p.list.entry();
             self.player = Some(Box::new(player::Player::new(&self.library, entry)));
@@ -8707,19 +12134,40 @@ impl State {
         // Another screen (not a song: nothing may stand between the player and the notes)
         // fades in.
         let scene = std::mem::discriminant(&self.scene);
-        if self.shown_scene.is_some_and(|s| s != scene) && !self.in_song() && !matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } | Scene::Loading { .. } | Scene::MpWait { .. }) {
+        if self.shown_scene.is_some_and(|s| s != scene)
+            && !self.in_song()
+            && !matches!(
+                self.scene,
+                Scene::Play { .. }
+                    | Scene::MpPlay { .. }
+                    | Scene::Calibrate { .. }
+                    | Scene::Loading { .. }
+                    | Scene::MpWait { .. }
+            )
+        {
             self.screen_fade = Some(0.0);
         }
         self.shown_scene = Some(scene);
         // Every screen's selector and titles move with the music, as the main menu does.
         let playing = !self.music_paused && !self.in_song();
-        let phase = self.preview.beat().filter(|b| b.1 > 1.0 && playing).map(|(into, len)| (into / len).rem_euclid(1.0) as f32);
-        style::set_beat(phase, playing && self.cfg.kiai_effects && self.preview.kiai());
+        let phase = self
+            .preview
+            .beat()
+            .filter(|b| b.1 > 1.0 && playing)
+            .map(|(into, len)| (into / len).rem_euclid(1.0) as f32);
+        style::set_beat(
+            phase,
+            playing && self.cfg.kiai_effects && self.preview.kiai(),
+        );
         match &mut self.scene {
             Scene::Select if on_menu => {
                 self.board_rect = None;
                 self.leaderboard.clear();
-                let shown = self.player.as_ref().and_then(|p| p.list.entry()).or(self.select.selected());
+                let shown = self
+                    .player
+                    .as_ref()
+                    .and_then(|p| p.list.entry())
+                    .or(self.select.selected());
                 let song = shown.and_then(|i| self.library.get(i)).map(Entry::label);
                 let k = |i: usize| config::key_name(self.cfg.keys[i]);
                 let (a, b, d, e) = (k(0), k(3), k(1), k(2));
@@ -8727,7 +12175,8 @@ impl State {
                 if let Some(p) = &mut self.player {
                     let now = Instant::now();
                     let engine = self.audio.as_ref();
-                    let sounding = !paused && self.preview.sounding(engine, now, &mut p.spectrum.samples);
+                    let sounding =
+                        !paused && self.preview.sounding(engine, now, &mut p.spectrum.samples);
                     let hint = tr!("{a} {b} song   {d} {e} pause   L love   Tab folders", "{a} {b} 曲   {d} {e} ポーズ   L お気に入り   Tab フォルダ", "{a} {b} трек   {d} {e} пауза   L любимое   Tab папки";);
                     let volume = self.cfg.music_volume;
                     let frame = player::Frame {
@@ -8744,22 +12193,52 @@ impl State {
                 } else if let Some(m) = &mut self.main_menu {
                     let kiai = self.cfg.kiai_effects && !paused && self.preview.kiai();
                     let shows = self.cfg.menu_notes && render::animations();
-                    let ghosts = self.preview.map_time(self.menu_notes.entry()).filter(|_| shows).and_then(|t| self.menu_notes.view(t));
-                    let frame = menu::Frame { beat: self.preview.beat(), kiai, ghosts, lane_dim: self.cfg.menu_notes_dim, song: song.as_deref(), maps: self.library.len(), paused };
+                    let ghosts = self
+                        .preview
+                        .map_time(self.menu_notes.entry())
+                        .filter(|_| shows)
+                        .and_then(|t| self.menu_notes.view(t));
+                    let frame = menu::Frame {
+                        beat: self.preview.beat(),
+                        kiai,
+                        ghosts,
+                        lane_dim: self.cfg.menu_notes_dim,
+                        song: song.as_deref(),
+                        maps: self.library.len(),
+                        paused,
+                    };
                     m.draw(canvas, &frame);
                 }
             }
             Scene::Select => {
                 // DT / HT show on the Mods button instead.
-                self.select.rate_label = if (self.cfg.rate - 1.0).abs() > 1e-6 && self.cfg.mods.rate_override().is_none() {
-                    format!("  |  {:.2}x{}", self.cfg.rate, if self.cfg.rate_keep_pitch { "" } else { " (pitch)" })
+                self.select.rate_label = if (self.cfg.rate - 1.0).abs() > 1e-6
+                    && self.cfg.mods.rate_override().is_none()
+                {
+                    format!(
+                        "  |  {:.2}x{}",
+                        self.cfg.rate,
+                        if self.cfg.rate_keep_pitch {
+                            ""
+                        } else {
+                            " (pitch)"
+                        }
+                    )
                 } else {
                     String::new()
                 };
                 let (stars, rate, plays) = (&self.stars, self.play_speed().0, &self.scores);
-                self.select.scrubbing = (self.right_scroll || self.scrollbar_drag).then(|| self.mouse_virtual().1);
+                self.select.scrubbing =
+                    (self.right_scroll || self.scrollbar_drag).then(|| self.mouse_virtual().1);
                 self.select.list_share = self.cfg.song_list_share;
-                self.select.draw(canvas, &self.library, dt, &self.status, &|i| stars.get(i, rate), &|e| scores::best_grade(plays, e.hash()));
+                self.select.draw(
+                    canvas,
+                    &self.library,
+                    dt,
+                    &self.status,
+                    &|i| stars.get(i, rate),
+                    &|e| scores::best_grade(plays, e.hash()),
+                );
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
                 let x = 24.0 + lw + 12.0;
                 let pw = canvas.width - x - 24.0;
@@ -8768,7 +12247,12 @@ impl State {
                 self.preview.size = preview::PREVIEW_SIZE.1;
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
                 self.preview.potential = match self.select.selected() {
-                    Some(i) => self.potentials.get(&self.library[i].path, rate, self.cfg.mods, self.cfg.scroll_speed),
+                    Some(i) => self.potentials.get(
+                        &self.library[i].path,
+                        rate,
+                        self.cfg.mods,
+                        self.cfg.scroll_speed,
+                    ),
                     None => None,
                 };
                 self.leaderboard.clear();
@@ -8776,7 +12260,18 @@ impl State {
                     let status = self.select.selected().and_then(|i| self.map_status(i));
                     // No taller than leaves the leaderboard three rows (its tabs, rows and gaps).
                     let panel_h = 436.0 - 54.0 - 8.0 - (16.0 + 3.0 * 18.0 + 14.0);
-                    if let Some(clip) = self.preview.draw_panel(canvas, &self.library, x, 54.0, pw, panel_h, self.cfg.scroll_speed, selected_stars, Some(("Play from", "Shift+Enter")), status) {
+                    if let Some(clip) = self.preview.draw_panel(
+                        canvas,
+                        &self.library,
+                        x,
+                        54.0,
+                        pw,
+                        panel_h,
+                        self.cfg.scroll_speed,
+                        selected_stars,
+                        Some(("Play from", "Shift+Enter")),
+                        status,
+                    ) {
                         self.frame_clip = Some(clip);
                     }
                     if let Some(i) = self.select.selected() {
@@ -8791,42 +12286,114 @@ impl State {
                             self.board_rect = Some([x, top + 12.0, pw, fits as f32 * 18.0]);
                             if self.board_online {
                                 let board = self.online_board(hash).cloned();
-                                let total = board.as_ref().and_then(|b| b.as_ref().ok()).map_or(0, Vec::len);
+                                let total = board
+                                    .as_ref()
+                                    .and_then(|b| b.as_ref().ok())
+                                    .map_or(0, Vec::len);
                                 self.board_max = total.saturating_sub(fits);
                                 self.board_scroll = self.board_scroll.min(self.board_max);
-                                draw_online_leaderboard(canvas, [x, top], pw, board.as_ref(), &self.cfg.online_user, fits, self.board_scroll);
+                                draw_online_leaderboard(
+                                    canvas,
+                                    [x, top],
+                                    pw,
+                                    board.as_ref(),
+                                    &self.cfg.online_user,
+                                    fits,
+                                    self.board_scroll,
+                                );
                                 self.online_leaderboard = match board {
-                                    Some(Ok(rows)) => rows.into_iter().skip(self.board_scroll).take(fits).collect(),
+                                    Some(Ok(rows)) => rows
+                                        .into_iter()
+                                        .skip(self.board_scroll)
+                                        .take(fits)
+                                        .collect(),
                                     _ => Vec::new(),
                                 };
                             } else {
                                 let all = scores::top(&self.scores, hash, usize::MAX);
                                 self.board_max = all.len().saturating_sub(fits);
                                 self.board_scroll = self.board_scroll.min(self.board_max);
-                                let rows: Vec<&scores::ScoreRow> = all.iter().skip(self.board_scroll).take(fits).copied().collect();
+                                let rows: Vec<&scores::ScoreRow> = all
+                                    .iter()
+                                    .skip(self.board_scroll)
+                                    .take(fits)
+                                    .copied()
+                                    .collect();
                                 self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
-                                draw_leaderboard(canvas, x, top, pw, &rows, self.board_scroll, all.len());
+                                draw_leaderboard(
+                                    canvas,
+                                    x,
+                                    top,
+                                    pw,
+                                    &rows,
+                                    self.board_scroll,
+                                    all.len(),
+                                );
                             }
                         }
                     }
                     // The song list's right edge: the gap between the list's box (`ui`, ending
                     // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
                     let dragging = matches!(self.split_drag, Some((render::Hit::SplitList, ..)));
-                    draw_divider(canvas, [24.0 + lw + 4.0, 54.0, 8.0, 382.0], true, dragging, render::Hit::SplitList);
+                    draw_divider(
+                        canvas,
+                        [24.0 + lw + 4.0, 54.0, 8.0, 382.0],
+                        true,
+                        dragging,
+                        render::Hit::SplitList,
+                    );
                 }
                 let guessing = self.mp.as_ref().is_some_and(|s| s.mapguessr);
-                if let Some(g) = self.guessr.as_mut().filter(|_| self.picking_lobby_map && guessing) {
+                if let Some(g) = self
+                    .guessr
+                    .as_mut()
+                    .filter(|_| self.picking_lobby_map && guessing)
+                {
                     mapguessr::draw_picking(canvas, g, self.cfg.scroll_speed, Instant::now());
                 } else if self.picking_lobby_map {
                     let w = canvas.width;
-                    canvas.round_rect([24.0, 438.0], [w - 48.0, 34.0], 8.0, rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0), rgba(accent(), 1.0), 1.5);
-                    canvas.text_centered(w / 2.0, 450.0, 10.0, rgba(0xffffff, 1.0), &Canvas::fit(10.0, w - 64.0, "Picking the lobby map: Enter to choose, Esc to cancel"));
+                    canvas.round_rect(
+                        [24.0, 438.0],
+                        [w - 48.0, 34.0],
+                        8.0,
+                        rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0),
+                        rgba(accent(), 1.0),
+                        1.5,
+                    );
+                    canvas.text_centered(
+                        w / 2.0,
+                        450.0,
+                        10.0,
+                        rgba(0xffffff, 1.0),
+                        &Canvas::fit(
+                            10.0,
+                            w - 64.0,
+                            "Picking the lobby map: Enter to choose, Esc to cancel",
+                        ),
+                    );
                 }
                 self.select.draw_popups(canvas, &self.library);
             }
-            Scene::Loading { rx, label, entry, from } => {
-                canvas.text_centered(canvas.width / 2.0, 200.0, 14.0, rgba(0xffffff, 1.0), "Loading");
-                canvas.text_centered(canvas.width / 2.0, 226.0, 10.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(10.0, canvas.width - 48.0, label));
+            Scene::Loading {
+                rx,
+                label,
+                entry,
+                from,
+            } => {
+                canvas.text_centered(
+                    canvas.width / 2.0,
+                    200.0,
+                    14.0,
+                    rgba(0xffffff, 1.0),
+                    "Loading",
+                );
+                canvas.text_centered(
+                    canvas.width / 2.0,
+                    226.0,
+                    10.0,
+                    rgba(0x9a9ab0, 1.0),
+                    &Canvas::fit(10.0, canvas.width - 48.0, label),
+                );
                 match rx.try_recv() {
                     Ok(Ok((map, track))) => {
                         let mods = std::mem::take(&mut self.pending_mods);
@@ -8836,10 +12403,21 @@ impl State {
                             None if mods.has(mods::Mod::Random) => fresh_seed(),
                             None => 0,
                         };
-                        let half = self.pending_replay.as_ref().map_or(Default::default(), |r| r.half_rule());
-                        let mut game = Game::with_half(map, track, self.audio.as_ref(), mods, seed, half);
+                        let half = self
+                            .pending_replay
+                            .as_ref()
+                            .map_or(Default::default(), |r| r.half_rule());
+                        let mut game =
+                            Game::with_half(map, track, self.audio.as_ref(), mods, seed, half);
                         game.scroll_speed = self.cfg.scroll_speed;
-                        game.live_pp = pp::Live::start(self.library[*entry].path.clone(), game.rate, mods, game.scroll_speed, game.seed, half);
+                        game.live_pp = pp::Live::start(
+                            self.library[*entry].path.clone(),
+                            game.rate,
+                            mods,
+                            game.scroll_speed,
+                            game.seed,
+                            half,
+                        );
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
                         }
@@ -8853,13 +12431,20 @@ impl State {
                             }
                             // Full plays (not autoplay, not from a start point) are kept.
                             None => {
-                                game.record = (!self.auto || std::env::var_os("TAIKO_RECORD_AUTO").is_some()) && from.is_none() && !mods.unranked();
+                                game.record = (!self.auto
+                                    || std::env::var_os("TAIKO_RECORD_AUTO").is_some())
+                                    && from.is_none()
+                                    && !mods.unranked();
                                 if mods.has(mods::Mod::Autoplay) {
                                     game.banner = Some("AUTOPLAY".into());
                                 }
                             }
                         }
-                        next = Some(Scene::Play { game: Box::new(game), entry: *entry, from: *from });
+                        next = Some(Scene::Play {
+                            game: Box::new(game),
+                            entry: *entry,
+                            from: *from,
+                        });
                     }
                     Ok(Err(e)) => {
                         self.status = format!("failed to load {label}: {e}");
@@ -8882,29 +12467,58 @@ impl State {
                         sm.break_sequence();
                     } else {
                         let wall = now.duration_since(self.started).as_secs_f64() * 1000.0;
-                        let shown = self.frame_acquired.unwrap_or(now).duration_since(self.started).as_secs_f64() * 1000.0;
-                        sm.sample(wall, game.raw_time, game.last_audio_ms, shown, game.raw_time + visual_offset);
+                        let shown = self
+                            .frame_acquired
+                            .unwrap_or(now)
+                            .duration_since(self.started)
+                            .as_secs_f64()
+                            * 1000.0;
+                        sm.sample(
+                            wall,
+                            game.raw_time,
+                            game.last_audio_ms,
+                            shown,
+                            game.raw_time + visual_offset,
+                        );
                     }
                 }
                 // Offset advice is for live play (and its line would sit on the replay timeline).
-                game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
-                game.offset_key = self.cfg.hotkeys.get(keys::Hotkey::ApplyOffset).map(keys::Chord::name);
+                game.show_offset_hint =
+                    self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
+                game.offset_key = self
+                    .cfg
+                    .hotkeys
+                    .get(keys::Hotkey::ApplyOffset)
+                    .map(keys::Chord::name);
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
-                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
-                    game.draw_playfield(c, game.scroll_speed);
-                });
+                draw_game_area(
+                    canvas,
+                    &self.cfg,
+                    &mut self.frame_clip,
+                    &self.grip,
+                    &self.hover,
+                    self.bg_brightness > 0.0,
+                    |c| {
+                        game.draw_playfield(c, game.scroll_speed);
+                    },
+                );
                 game.draw_hud(canvas);
-                if game.replay.is_none() && game.paused.is_none() && !hidden.has(hud::Part::Spectators) {
+                if game.replay.is_none()
+                    && game.paused.is_none()
+                    && !hidden.has(hud::Part::Spectators)
+                {
                     social::draw_spectators(canvas, &self.social.spectators());
                 }
                 if game.replay.is_some() && game.paused.is_none() {
-                    self.replay_bar = Some(draw_replay_bar(canvas, game, self.replay_scrub.is_some()));
+                    self.replay_bar =
+                        Some(draw_replay_bar(canvas, game, self.replay_scrub.is_some()));
                 }
                 if let Some(plan) = &mut self.shots
-                    && plan.times.last().is_some_and(|&t| game.time >= t) {
+                    && plan.times.last().is_some_and(|&t| game.time >= t)
+                {
                     let t = plan.times.pop().unwrap();
                     capture = Some(format!("play-{t:.0}.png"));
                 }
@@ -8925,7 +12539,11 @@ impl State {
                     // from the preview point again once it ends.
                     if !game.failed_early() && self.audio.is_some() {
                         let preview = game.map.meta.preview_time;
-                        let again = if preview >= 0.0 { game.track_at(preview) } else { game.track_at(game.end_time()) * 0.4 };
+                        let again = if preview >= 0.0 {
+                            game.track_at(preview)
+                        } else {
+                            game.track_at(game.end_time()) * 0.4
+                        };
                         results.music = Some((game.track.clone(), again.max(0.0)));
                     }
                     let e = &self.library[*entry];
@@ -8946,7 +12564,13 @@ impl State {
                         Some("failed plays get no pp")
                     } else if from.is_some() {
                         Some("plays from a start point get no pp")
-                    } else if map_gives_pp(&self.library[*entry], &self.set_status, &self.db_status, &self.select.server_loved) == Some(false) {
+                    } else if map_gives_pp(
+                        &self.library[*entry],
+                        &self.set_status,
+                        &self.db_status,
+                        &self.select.server_loved,
+                    ) == Some(false)
+                    {
                         Some("only ranked and loved maps give pp")
                     } else {
                         results.job = Some(results_job(e.path.clone(), play, None, None));
@@ -8962,7 +12586,10 @@ impl State {
                             map_path: e.path.to_string_lossy().into_owned(),
                             map_label: e.label(),
                             player: self.cfg.mp_name.clone(),
-                            date: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+                            date: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0),
                             rate: game.rate,
                             keep_pitch: self.cfg.rate_keep_pitch,
                             anti_mash: true,
@@ -8984,7 +12611,10 @@ impl State {
                             results.no_pp = Some("the map couldn't be rated");
                         }
                         // Whole plays go to the online leaderboards too, when logged in.
-                        if from.is_none() && !self.cfg.online_token.is_empty() && !game.mods.unranked() {
+                        if from.is_none()
+                            && !self.cfg.online_token.is_empty()
+                            && !game.mods.unranked()
+                        {
                             let m = &game.map.meta;
                             let play = online::ScoreSubmit {
                                 map: net::MapInfo {
@@ -9017,7 +12647,11 @@ impl State {
                                 play_ms: Some(game.played_ms as u64),
                                 md5: None,
                                 timing: {
-                                    let (latency_ms, reported_latency_ms) = self.audio.as_ref().map(|a| a.latencies_ms()).unwrap_or_default();
+                                    let (latency_ms, reported_latency_ms) = self
+                                        .audio
+                                        .as_ref()
+                                        .map(|a| a.latencies_ms())
+                                        .unwrap_or_default();
                                     Some(online::PlayTiming {
                                         os: std::env::consts::OS.into(),
                                         present: self.present.name().into(),
@@ -9028,7 +12662,13 @@ impl State {
                                     })
                                 },
                             };
-                            self.submits.push(submit_score(self.cfg.online_server.clone(), self.cfg.online_token.clone(), play, e.path.clone(), replay.pp_play()));
+                            self.submits.push(submit_score(
+                                self.cfg.online_server.clone(),
+                                self.cfg.online_token.clone(),
+                                play,
+                                e.path.clone(),
+                                replay.pp_play(),
+                            ));
                             // Counted with the play itself.
                             self.playing = None;
                             results.total_due = true;
@@ -9039,13 +12679,20 @@ impl State {
                                 results.replay = Some(row.file.clone());
                                 self.scores.push(row);
                                 let all = scores::top(&self.scores, replay.map_hash, usize::MAX);
-                                let rank = all.iter().position(|r| r.date == replay.date && r.score == replay.score).map(|p| p + 1);
+                                let rank = all
+                                    .iter()
+                                    .position(|r| r.date == replay.date && r.score == replay.score)
+                                    .map(|p| p + 1);
                                 results.rank = rank.map(|r| (r, all.len()));
                             }
                             Err(e) => eprintln!("couldn't save the replay: {e}"),
                         }
                     }
-                    next = Some(Scene::Results { results, entry: *entry, from: *from });
+                    next = Some(Scene::Results {
+                        results,
+                        entry: *entry,
+                        from: *from,
+                    });
                 }
             }
             Scene::Results { results, .. } => {
@@ -9065,17 +12712,35 @@ impl State {
                 let dir = self.songs_dir.display().to_string();
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
                 self.preview.size = preview::PREVIEW_SIZE.1;
-                self.browse.draw(canvas, &self.downloads, &installed, &dir, lw);
+                self.browse
+                    .draw(canvas, &self.downloads, &installed, &dir, lw);
                 self.installed_sets = Some(installed);
                 // The selected set's preview, like song select's.
                 let x = 24.0 + lw + 12.0;
                 let pw = canvas.width - x - 24.0;
                 let stars = self.browse.selected_diff().map(|d| d.stars);
                 if pw > 160.0 && self.browse.selected().is_some() {
-                    match self.preview.draw_panel(canvas, &self.browse.remote, x, 54.0, pw, 380.0, self.cfg.scroll_speed, stars, None, None) {
+                    match self.preview.draw_panel(
+                        canvas,
+                        &self.browse.remote,
+                        x,
+                        54.0,
+                        pw,
+                        380.0,
+                        self.cfg.scroll_speed,
+                        stars,
+                        None,
+                        None,
+                    ) {
                         Some(clip) => self.frame_clip = Some(clip),
                         None if self.browse.shown.is_none() => {
-                            canvas.text_centered(x + pw / 2.0, 160.0, 8.0, rgba(0x8a8aa0, 1.0), "loading preview...");
+                            canvas.text_centered(
+                                x + pw / 2.0,
+                                160.0,
+                                8.0,
+                                rgba(0x8a8aa0, 1.0),
+                                "loading preview...",
+                            );
                         }
                         None => {}
                     }
@@ -9090,25 +12755,54 @@ impl State {
                         let kiai = self.cfg.kiai_effects;
                         if let Some(game) = self.preview.game_for(&self.library, i) {
                             game.kiai_effects = kiai;
-                            draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, see_through, |c| game.draw_playfield(c, scroll));
+                            draw_game_area(
+                                canvas,
+                                &self.cfg,
+                                &mut self.frame_clip,
+                                &self.grip,
+                                &self.hover,
+                                see_through,
+                                |c| game.draw_playfield(c, scroll),
+                            );
                         }
                         let e = &self.library[i];
                         let stars = self.stars.get(i, self.play_speed().0);
                         draw_preview_chrome(canvas, &self.cfg, e, stars, lobby, &size_label);
                         let (x, y, w) = (24.0, 394.0, canvas.width - 48.0);
-                        canvas.round_rect([x, y], [w, 78.0], 8.0, rgba(0x15151d, 0.9), rgba(0x2a2a38, 1.0), 1.0);
+                        canvas.round_rect(
+                            [x, y],
+                            [w, 78.0],
+                            8.0,
+                            rgba(0x15151d, 0.9),
+                            rgba(0x2a2a38, 1.0),
+                            1.0,
+                        );
                         let button = match (lobby, lobby_host) {
                             (false, _) => Some(("Play from", "Enter")),
                             (true, true) => Some(("Start the match from", "Enter")),
                             (true, false) => None,
                         };
-                        self.preview.draw_timeline(canvas, e, [x + 12.0, y + 10.0, w - 24.0, 34.0], button);
+                        self.preview.draw_timeline(
+                            canvas,
+                            e,
+                            [x + 12.0, y + 10.0, w - 24.0, 34.0],
+                            button,
+                        );
                     }
                     None => next = Some(*std::mem::replace(back, Box::new(Scene::Select))),
                 }
             }
             Scene::MpMenu => {
-                multiplayer::draw_menu(canvas, &self.mp_menu, &self.cfg.mp_name, self.cfg.mp_port, &self.cfg.mp_address, &self.cfg.online_server, &self.mp_status, self.mp_connecting.is_some());
+                multiplayer::draw_menu(
+                    canvas,
+                    &self.mp_menu,
+                    &self.cfg.mp_name,
+                    self.cfg.mp_port,
+                    &self.cfg.mp_address,
+                    &self.cfg.online_server,
+                    &self.mp_status,
+                    self.mp_connecting.is_some(),
+                );
             }
             Scene::Lobby => match &self.mp {
                 Some(s) if s.mapguessr => {
@@ -9121,7 +12815,12 @@ impl State {
                 }
                 None => next = Some(Scene::MpMenu),
             },
-            Scene::MpWait { rx, loaded, start, from } => {
+            Scene::MpWait {
+                rx,
+                loaded,
+                start,
+                from,
+            } => {
                 if let Some(r) = rx {
                     match r.try_recv() {
                         Ok(Ok(l)) => {
@@ -9143,12 +12842,26 @@ impl State {
                     }
                 }
                 if start.is_some_and(|at| now >= at)
-                    && let Some((map, track)) = loaded.take() {
-                    let seed = self.mp.as_ref().and_then(|s| s.map.as_ref()).and_then(|m| m.seed).unwrap_or(0);
-                    let mut game = Game::with_seed(map, track, self.audio.as_ref(), self.pending_mods, seed);
+                    && let Some((map, track)) = loaded.take()
+                {
+                    let seed = self
+                        .mp
+                        .as_ref()
+                        .and_then(|s| s.map.as_ref())
+                        .and_then(|m| m.seed)
+                        .unwrap_or(0);
+                    let mut game =
+                        Game::with_seed(map, track, self.audio.as_ref(), self.pending_mods, seed);
                     game.scroll_speed = self.cfg.scroll_speed;
                     if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
-                        game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, game.scroll_speed, game.seed, Default::default());
+                        game.live_pp = pp::Live::start(
+                            self.library[i].path.clone(),
+                            game.rate,
+                            self.pending_mods,
+                            game.scroll_speed,
+                            game.seed,
+                            Default::default(),
+                        );
                     }
                     if let Some(m) = self.mp.as_ref().and_then(|s| s.map.as_ref()) {
                         use_mod_settings(&mut game, m);
@@ -9160,7 +12873,10 @@ impl State {
                     if let Some(s) = &mut self.mp {
                         s.inputs_sent = 0;
                     }
-                    next = Some(Scene::MpPlay { game: Box::new(game), quit_armed: None });
+                    next = Some(Scene::MpPlay {
+                        game: Box::new(game),
+                        quit_armed: None,
+                    });
                 }
                 if let Some(s) = &self.mp {
                     multiplayer::draw_waiting(canvas, s, *start, loaded.is_some(), now);
@@ -9173,18 +12889,33 @@ impl State {
                     game.autoplay(self.audio.as_ref());
                 }
                 game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
-                game.offset_key = self.cfg.hotkeys.get(keys::Hotkey::ApplyOffset).map(keys::Chord::name);
+                game.offset_key = self
+                    .cfg
+                    .hotkeys
+                    .get(keys::Hotkey::ApplyOffset)
+                    .map(keys::Chord::name);
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
-                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
-                    game.draw_playfield(c, game.scroll_speed);
-                });
+                draw_game_area(
+                    canvas,
+                    &self.cfg,
+                    &mut self.frame_clip,
+                    &self.grip,
+                    &self.hover,
+                    self.bg_brightness > 0.0,
+                    |c| {
+                        game.draw_playfield(c, game.scroll_speed);
+                    },
+                );
                 game.draw_hud(canvas);
-                if let Some(s) = mp.as_ref().filter(|_| self.cfg.mp_scoreboard && !hidden.has(hud::Part::Scoreboard)) {
+                if let Some(s) = mp
+                    .as_ref()
+                    .filter(|_| self.cfg.mp_scoreboard && !hidden.has(hud::Part::Scoreboard))
+                {
                     multiplayer::draw_scoreboard(canvas, s, &live);
                 }
                 if let Some(s) = &mut self.mp {
@@ -9194,15 +12925,21 @@ impl State {
                         if game.inputs.len() > s.inputs_sent {
                             let inputs = game.inputs[s.inputs_sent..].to_vec();
                             s.inputs_sent = game.inputs.len();
-                            s.client.send(net::ClientMsg::Inputs { inputs, anti_mash: true });
+                            s.client.send(net::ClientMsg::Inputs {
+                                inputs,
+                                anti_mash: true,
+                            });
                         }
                     }
                     if done {
                         // Failing (SD / PF) ends the match for you like forfeiting does.
                         let failed = game.failed_early();
-                        s.client.send(net::ClientMsg::Finished(multiplayer::final_from(&game.stats, failed)));
-                        if failed
-                            && let Some(a) = &self.audio {
+                        s.client
+                            .send(net::ClientMsg::Finished(multiplayer::final_from(
+                                &game.stats,
+                                failed,
+                            )));
+                        if failed && let Some(a) = &self.audio {
                             a.stop();
                         }
                         next = Some(Scene::MpResults);
@@ -9226,26 +12963,47 @@ impl State {
                 }
                 // Start once the map is ready and the delay has passed: the music where the
                 // players were SPECTATE_DELAY ago, every player's game snapping to it.
-                if v.games.is_empty() && now >= v.start + SPECTATE_DELAY
-                    && let (Some((map, track)), Some(audio)) = (v.loaded.take(), self.audio.as_ref()) {
+                if v.games.is_empty()
+                    && now >= v.start + SPECTATE_DELAY
+                    && let (Some((map, track)), Some(audio)) =
+                        (v.loaded.take(), self.audio.as_ref())
+                {
                     let probe = Game::with_mods(map.clone(), track.clone(), None, v.mods);
                     let first_ms = match v.from {
-                        Some(t) => (probe.track_at(t) - 2000.0).max(probe.track_at(probe.time)) + self.play_offset,
+                        Some(t) => {
+                            (probe.track_at(t) - 2000.0).max(probe.track_at(probe.time))
+                                + self.play_offset
+                        }
                         None => probe.track_at(probe.time),
                     };
                     let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
                     audio.play(track.clone(), first_ms + behind);
                     for (k, (id, name)) in v.players.iter().enumerate() {
                         // The lobby's speed mods, and the player's own others.
-                        let own = self.mp.as_ref().and_then(|s| s.players.iter().find(|p| p.id == *id)).map(|p| Mods::from_list(&p.mods).free()).unwrap_or(Mods::NONE);
-                        let mut g = Game::with_seed(map.clone(), track.clone(), None, v.mods.shared().plus(own), v.map.seed.unwrap_or(0));
+                        let own = self
+                            .mp
+                            .as_ref()
+                            .and_then(|s| s.players.iter().find(|p| p.id == *id))
+                            .map(|p| Mods::from_list(&p.mods).free())
+                            .unwrap_or(Mods::NONE);
+                        let mut g = Game::with_seed(
+                            map.clone(),
+                            track.clone(),
+                            None,
+                            v.mods.shared().plus(own),
+                            v.map.seed.unwrap_or(0),
+                        );
                         use_mod_settings(&mut g, &v.map);
                         if let Some(t) = v.from {
                             g.skip_to(t);
                         }
                         let inputs = v.pending.remove(id).unwrap_or_default();
                         g.replay = Some((inputs, 0));
-                        g.banner = Some(format!("SPECTATING  -  {name}  ({}/{})", k + 1, v.players.len()));
+                        g.banner = Some(format!(
+                            "SPECTATING  -  {name}  ({}/{})",
+                            k + 1,
+                            v.players.len()
+                        ));
                         g.watched = true;
                         v.games.push((*id, Box::new(g)));
                     }
@@ -9253,7 +13011,13 @@ impl State {
                     v.follow_skip(self.audio.as_ref(), self.play_offset);
                 }
                 if v.games.is_empty() {
-                    canvas.text_centered(canvas.width / 2.0, 220.0, 12.0, rgba(0xffffff, 1.0), "joining the match...");
+                    canvas.text_centered(
+                        canvas.width / 2.0,
+                        220.0,
+                        12.0,
+                        rgba(0xffffff, 1.0),
+                        "joining the match...",
+                    );
                 }
                 let scroll = self.cfg.scroll_speed;
                 for (k, (_, g)) in v.games.iter_mut().enumerate() {
@@ -9266,16 +13030,39 @@ impl State {
                 match v.focus {
                     Some(k) if k < v.games.len() => {
                         let g = &mut v.games[k].1;
-                        draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
-                            g.draw_playfield(c, scroll);
-                        });
+                        draw_game_area(
+                            canvas,
+                            &self.cfg,
+                            &mut self.frame_clip,
+                            &self.grip,
+                            &self.hover,
+                            self.bg_brightness > 0.0,
+                            |c| {
+                                g.draw_playfield(c, scroll);
+                            },
+                        );
                         g.draw_hud(canvas);
-                        canvas.text_centered(canvas.width / 2.0, 470.0, 7.0, rgba(0x9a9ab0, 1.0), "Left/Right: other player   A: everyone   Esc: leave");
+                        canvas.text_centered(
+                            canvas.width / 2.0,
+                            470.0,
+                            7.0,
+                            rgba(0x9a9ab0, 1.0),
+                            "Left/Right: other player   A: everyone   Esc: leave",
+                        );
                     }
                     _ if !v.games.is_empty() => {
-                        let dt = v.zones_at.map_or(0.0, |at| now.saturating_duration_since(at).as_secs_f32());
+                        let dt = v
+                            .zones_at
+                            .map_or(0.0, |at| now.saturating_duration_since(at).as_secs_f32());
                         v.zones_at = Some(now);
-                        draw_spectate_all(canvas, &mut v.games, &v.players, scroll, &mut v.zones, dt);
+                        draw_spectate_all(
+                            canvas,
+                            &mut v.games,
+                            &v.players,
+                            scroll,
+                            &mut v.zones,
+                            dt,
+                        );
                     }
                     _ => {}
                 }
@@ -9287,17 +13074,43 @@ impl State {
                         g.kiai_effects = self.cfg.kiai_effects;
                         g.hidden = hidden;
                         g.update(now, self.audio.as_ref(), self.play_offset);
-                        draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
-                            g.draw_playfield(c, scroll);
-                        });
+                        draw_game_area(
+                            canvas,
+                            &self.cfg,
+                            &mut self.frame_clip,
+                            &self.grip,
+                            &self.hover,
+                            self.bg_brightness > 0.0,
+                            |c| {
+                                g.draw_playfield(c, scroll);
+                            },
+                        );
                         g.draw_hud(canvas);
                         if v.held {
-                            canvas.text_centered(canvas.width / 2.0, 300.0, 9.0, rgba(0x9a9ab0, 1.0), &format!("{} paused", v.player));
+                            canvas.text_centered(
+                                canvas.width / 2.0,
+                                300.0,
+                                9.0,
+                                rgba(0x9a9ab0, 1.0),
+                                &format!("{} paused", v.player),
+                            );
                         }
                     }
-                    None => canvas.text_centered(canvas.width / 2.0, 220.0, 12.0, rgba(0xffffff, 1.0), &v.status()),
+                    None => canvas.text_centered(
+                        canvas.width / 2.0,
+                        220.0,
+                        12.0,
+                        rgba(0xffffff, 1.0),
+                        &v.status(),
+                    ),
                 }
-                canvas.text_centered(canvas.width / 2.0, 470.0, 7.0, rgba(0x9a9ab0, 1.0), "Esc: stop watching   F9: friends");
+                canvas.text_centered(
+                    canvas.width / 2.0,
+                    470.0,
+                    7.0,
+                    rgba(0x9a9ab0, 1.0),
+                    "Esc: stop watching   F9: friends",
+                );
             }
             Scene::VideoEdit(ed) => {
                 match ed.poll() {
@@ -9327,7 +13140,13 @@ impl State {
                 if let Some(g) = &mut ed.game {
                     g.kiai_effects = self.cfg.kiai_effects;
                 }
-                ed.draw(canvas, self.cfg.scroll_speed, progress, &self.video_status, self.last_video.is_some());
+                ed.draw(
+                    canvas,
+                    self.cfg.scroll_speed,
+                    progress,
+                    &self.video_status,
+                    self.last_video.is_some(),
+                );
             }
             Scene::MpResults => match &self.mp {
                 Some(s) => multiplayer::draw_results(canvas, s),
@@ -9343,17 +13162,31 @@ impl State {
                 }
                 if *vsync {
                     game.set_visual_offset(visual_offset);
-                    draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
-                        game.draw_playfield(c, self.cfg.scroll_speed);
-                    });
+                    draw_game_area(
+                        canvas,
+                        &self.cfg,
+                        &mut self.frame_clip,
+                        &self.grip,
+                        &self.hover,
+                        self.bg_brightness > 0.0,
+                        |c| {
+                            game.draw_playfield(c, self.cfg.scroll_speed);
+                        },
+                    );
                     game.draw_hud(canvas);
                     calibrate::draw_by_sight(canvas, game, self.cfg.vsync_tune_ms);
                 } else {
                     calibrate::draw_by_ear(canvas, game);
                 }
             }
-            Scene::CalibrateDone { estimate, vsync, .. } => {
-                let current = if *vsync { self.cfg.vsync_tune_ms } else { self.cfg.offset_ms };
+            Scene::CalibrateDone {
+                estimate, vsync, ..
+            } => {
+                let current = if *vsync {
+                    self.cfg.vsync_tune_ms
+                } else {
+                    self.cfg.offset_ms
+                };
                 calibrate::draw_result(canvas, estimate, current, self.cfg.calibration_bpm, *vsync);
             }
             Scene::Settings { prev } => {
@@ -9361,7 +13194,12 @@ impl State {
                 self.settings_ui.krokodil = self.is_krokodil();
                 settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
                 let searching = !self.settings_ui.search.is_empty();
-                let footer = if self.settings_ui.editing.as_ref().is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder)) {
+                let footer = if self
+                    .settings_ui
+                    .editing
+                    .as_ref()
+                    .is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder))
+                {
                     "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
                 } else if self.settings_ui.editing.is_some() {
                     "type a value   Enter set   Esc cancel".to_string()
@@ -9380,27 +13218,61 @@ impl State {
                     } else {
                         "Esc or Tab back"
                     };
-                    format!("Type to search   Up/Down select   Left/Right change   {enter}   {back}")
+                    format!(
+                        "Type to search   Up/Down select   Left/Right change   {enter}   {back}"
+                    )
                 };
                 let this = &*self;
-                this.settings_ui.draw(canvas, &|item| this.setting_value(item), &|item| this.setting_control(item), &footer);
+                this.settings_ui.draw(
+                    canvas,
+                    &|item| this.setting_value(item),
+                    &|item| this.setting_control(item),
+                    &footer,
+                );
                 if let Some(p) = &self.settings_ui.choices {
                     p.draw(canvas);
                 }
             }
             Scene::LayoutEdit { .. } => {
-                draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, false, game::draw_preview);
+                draw_game_area(
+                    canvas,
+                    &self.cfg,
+                    &mut self.frame_clip,
+                    &self.grip,
+                    &self.hover,
+                    false,
+                    game::draw_preview,
+                );
                 game::draw_preview_hud(canvas);
                 let area = self.cfg.playfield_area;
                 layout::draw_frame(canvas, area, true);
                 let w = canvas.width;
                 let bw = (w - 32.0).min(660.0);
-                canvas.round_rect([w / 2.0 - bw / 2.0, 440.0], [bw, 34.0], 8.0, rgba(0x000000, 0.75), rgba(accent(), 0.6), 1.0);
+                canvas.round_rect(
+                    [w / 2.0 - bw / 2.0, 440.0],
+                    [bw, 34.0],
+                    8.0,
+                    rgba(0x000000, 0.75),
+                    rgba(accent(), 0.6),
+                    1.0,
+                );
                 let room = bw - 16.0;
-                canvas.text_centered(w / 2.0, 446.0, 8.0, rgba(0xffffff, 1.0), &Canvas::fit(8.0, room, &format!("Playfield area: {}", area.describe())));
+                canvas.text_centered(
+                    w / 2.0,
+                    446.0,
+                    8.0,
+                    rgba(0xffffff, 1.0),
+                    &Canvas::fit(8.0, room, &format!("Playfield area: {}", area.describe())),
+                );
                 let help = "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done";
                 let size = Canvas::fit_size(7.0, 5.5, room, help);
-                canvas.text_centered(w / 2.0, 460.0 + (7.0 - size) / 2.0, size, rgba(0x9a9ab0, 1.0), &Canvas::fit(size, room, help));
+                canvas.text_centered(
+                    w / 2.0,
+                    460.0 + (7.0 - size) / 2.0,
+                    size,
+                    rgba(0x9a9ab0, 1.0),
+                    &Canvas::fit(size, room, help),
+                );
             }
         }
         // A screen just opened comes up out of black, its background too.
@@ -9411,7 +13283,13 @@ impl State {
                 self.screen_fade = None;
             } else {
                 let w = canvas.width;
-                canvas.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 1.0 - k * k * (3.0 - 2.0 * k)));
+                canvas.rect(
+                    0.0,
+                    0.0,
+                    w,
+                    render::VIRTUAL_HEIGHT,
+                    rgba(0x000000, 1.0 - k * k * (3.0 - 2.0 * k)),
+                );
             }
         }
         if self.grip.is_some() {
@@ -9420,7 +13298,12 @@ impl State {
         if self.touch_used && self.touch_drums() {
             self.draw_touch_zones(canvas, now);
         }
-        if self.cfg.show_playfield_size && matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }) {
+        if self.cfg.show_playfield_size
+            && matches!(
+                self.scene,
+                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }
+            )
+        {
             let text = self.playfield_label();
             let tw = Canvas::text_width(7.0, &text);
             canvas.text_right(canvas.width - 8.0, 468.0, 7.0, rgba(0x8a8aa0, 0.85), &text);
@@ -9431,7 +13314,12 @@ impl State {
         if let Some(cur) = self.mod_select {
             ui::draw_mod_select(canvas, self.shown_mods(), self.cfg.favourite_mods, cur);
             if let Some(setup) = &self.universe_setup {
-                setup.draw(canvas, &self.cfg.universes, &self.cfg.universe_presets, game::FIRST_FOCUS);
+                setup.draw(
+                    canvas,
+                    &self.cfg.universes,
+                    &self.cfg.universe_presets,
+                    game::FIRST_FOCUS,
+                );
             }
             if let Some(setup) = &self.shapeshift_setup {
                 setup.draw_panel(canvas, &self.cfg.shapeshift, game::rail_outline);
@@ -9441,7 +13329,11 @@ impl State {
             }
         }
         if self.settings_ui.dropdown.is_some() {
-            let (groups, current, screen) = (self.preset_groups(), self.current_preset(), self.screen_size());
+            let (groups, current, screen) = (
+                self.preset_groups(),
+                self.current_preset(),
+                self.screen_size(),
+            );
             let (saved, playfield) = (self.cfg.saved_presets.len(), self.playfield_size());
             if let Some(dd) = &mut self.settings_ui.dropdown {
                 dd.draw(canvas, &groups, saved, current, screen, playfield);
@@ -9457,7 +13349,11 @@ impl State {
             } else if matches!(s, Scene::Results { .. } | Scene::Select) {
                 self.stop_audio();
                 if let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene) {
-                    eprintln!("--- smoothness ({}) ---\n{}", self.present.name(), sm.report());
+                    eprintln!(
+                        "--- smoothness ({}) ---\n{}",
+                        self.present.name(),
+                        sm.report()
+                    );
                     *sm = debug::Smoothness::default();
                 }
             }
@@ -9465,7 +13361,16 @@ impl State {
                 let st = &results.stats;
                 eprintln!(
                     "result: {:.2}%  great {} ok {} miss {}  max combo {}  UR {:.1}  mean {:+.2} ms  rolls {}  swells {}  big {}",
-                    st.accuracy() * 100.0, st.great, st.ok, st.miss, st.max_combo, st.unstable_rate(), st.mean_error(), st.roll_ticks, st.swells, st.strong
+                    st.accuracy() * 100.0,
+                    st.great,
+                    st.ok,
+                    st.miss,
+                    st.max_combo,
+                    st.unstable_rate(),
+                    st.mean_error(),
+                    st.roll_ticks,
+                    st.swells,
+                    st.strong
                 );
             }
             self.scene = s;
@@ -9473,7 +13378,13 @@ impl State {
 
         let fade = render::progress(self.scene_since, 160.0);
         if fade < 1.0 {
-            canvas.rect(0.0, 0.0, canvas.width, render::VIRTUAL_HEIGHT, rgba(0x121219, 0.85 * (1.0 - fade)));
+            canvas.rect(
+                0.0,
+                0.0,
+                canvas.width,
+                render::VIRTUAL_HEIGHT,
+                rgba(0x121219, 0.85 * (1.0 - fade)),
+            );
         }
         if self.cfg.show_fps {
             let mode = match self.present {
@@ -9481,12 +13392,29 @@ impl State {
                 p if self.cfg.fps_cap > 0 => format!("{} cap {}", p.name(), self.cfg.fps_cap),
                 p => p.name().to_string(),
             };
-            let text = format!("{:.0} fps  {:.2} ms  worst {:.1} ms  {mode}", self.stats.fps, 1000.0 / self.stats.fps.max(1.0), self.stats.worst_ms);
+            let text = format!(
+                "{:.0} fps  {:.2} ms  worst {:.1} ms  {mode}",
+                self.stats.fps,
+                1000.0 / self.stats.fps.max(1.0),
+                self.stats.worst_ms
+            );
             let tw = Canvas::text_width(8.0, &text);
-            canvas.round_rect([6.0, 6.0], [tw + 12.0, 16.0], 4.0, rgba(0x000000, 0.55), rgba(0, 0.0), 0.0);
+            canvas.round_rect(
+                [6.0, 6.0],
+                [tw + 12.0, 16.0],
+                4.0,
+                rgba(0x000000, 0.55),
+                rgba(0, 0.0),
+                0.0,
+            );
             canvas.text(12.0, 10.0, 8.0, rgba(0x9fe09f, 1.0), &text);
         }
-        if let Some((done, total)) = self.mapinfo.as_ref().and_then(|i| i.progress(now)).filter(|_| !self.in_song() && self.splash.is_none()) {
+        if let Some((done, total)) = self
+            .mapinfo
+            .as_ref()
+            .and_then(|i| i.progress(now))
+            .filter(|_| !self.in_song() && self.splash.is_none())
+        {
             draw_analysis(canvas, done, total);
         }
         // Not during a song, where a pointer left there would hold it over the notes for good.
@@ -9521,7 +13449,9 @@ impl State {
             social::draw_notes(canvas, &self.social);
         }
         if let Some(page) = self.guide.filter(|_| self.splash.is_none()) {
-            let hold = self.guide_hold_left().map(|left| left.as_secs_f32().ceil() as u32);
+            let hold = self
+                .guide_hold_left()
+                .map(|left| left.as_secs_f32().ceil() as u32);
             guide::draw(canvas, page, self.guide_binding, hold, &self.cfg);
         }
         if let Some(p) = &self.profile {
@@ -9544,21 +13474,36 @@ impl State {
             let text = Canvas::fit_end(10.0, room, &self.ime_preedit);
             let tw = Canvas::text_width(10.0, &text);
             let x = canvas.width / 2.0 - tw / 2.0;
-            canvas.round_rect([x - 10.0, 344.0], [tw + 20.0, 24.0], 6.0, rgba(0x15151d, 0.95), rgba(0xFFD34D, 1.0), 1.0);
+            canvas.round_rect(
+                [x - 10.0, 344.0],
+                [tw + 20.0, 24.0],
+                6.0,
+                rgba(0x15151d, 0.95),
+                rgba(0xFFD34D, 1.0),
+                1.0,
+            );
             canvas.text(x, 351.0, 10.0, rgba(0xFFD34D, 1.0), &text);
             canvas.rect(x, 363.0, tw, 1.0, rgba(0xFFD34D, 0.8));
         }
         if let Some(t) = &self.toast {
             if now < t.until {
                 let a = (t.until.duration_since(now).as_secs_f32() / 0.3).min(1.0);
-                let rise = (1.0 - render::progress(t.until - Duration::from_millis(1500), 160.0)) * 14.0;
+                let rise =
+                    (1.0 - render::progress(t.until - Duration::from_millis(1500), 160.0)) * 14.0;
                 // Long messages get smaller print, then are cut short.
                 let room = canvas.width - 72.0;
                 let size = Canvas::fit_size(12.0, 8.0, room, &t.text);
                 let text = Canvas::fit(size, room, &t.text);
                 let tw = Canvas::text_width(size, &text);
                 let x = canvas.width / 2.0 - tw / 2.0;
-                canvas.round_rect([x - 12.0, 380.0 + rise], [tw + 24.0, 28.0], 8.0, rgba(0x000000, 0.7 * a), rgba(0xffffff, 0.2 * a), 1.0);
+                canvas.round_rect(
+                    [x - 12.0, 380.0 + rise],
+                    [tw + 24.0, 28.0],
+                    8.0,
+                    rgba(0x000000, 0.7 * a),
+                    rgba(0xffffff, 0.2 * a),
+                    1.0,
+                );
                 canvas.text(x, 394.0 - size / 2.0 + rise, size, rgba(0xffffff, a), &text);
             } else {
                 self.toast = None;
@@ -9569,11 +13514,20 @@ impl State {
         // The idle screen's rays hear what the menu or player plays.
         if self.idle.amount() > 0.0 {
             let engine = self.audio.as_ref();
-            let sounding = !self.music_paused && self.preview.sounding(engine, now, &mut self.idle.spectrum.samples);
-            self.idle.spectrum.update(canvas.dt_ms, sounding, engine.map_or(48_000, |a| a.rate));
+            let sounding = !self.music_paused
+                && self
+                    .preview
+                    .sounding(engine, now, &mut self.idle.spectrum.samples);
+            self.idle
+                .spectrum
+                .update(canvas.dt_ms, sounding, engine.map_or(48_000, |a| a.rate));
         }
         let song = self.idle_song();
-        self.idle.draw(canvas, self.preview.has_background, song.as_ref().map(|(t, a)| (t.as_str(), a.as_str())));
+        self.idle.draw(
+            canvas,
+            self.preview.has_background,
+            song.as_ref().map(|(t, a)| (t.as_str(), a.as_str())),
+        );
         self.draw_drag_hover(canvas, now);
         self.draw_crash(canvas);
         self.draw_quit(canvas);
@@ -9582,7 +13536,8 @@ impl State {
             // Some window managers never report focus: don't wait forever.
             let ready = self.focus_seen || self.started.elapsed() > Duration::from_secs(5);
             if let Some(s) = &mut self.splash
-                && !s.draw(canvas, now, self.audio.as_ref(), &boot, ready) {
+                && !s.draw(canvas, now, self.audio.as_ref(), &boot, ready)
+            {
                 self.splash = None;
             }
         }
@@ -9593,11 +13548,21 @@ impl State {
     /// What the splash's boot log shows: what is actually starting up.
     fn boot_log(&self) -> Vec<String> {
         let songs = match &self.scan {
-            Some((_, found)) => format!("songs  scanning... {} files", found.load(Ordering::Relaxed)),
+            Some((_, found)) => {
+                format!("songs  scanning... {} files", found.load(Ordering::Relaxed))
+            }
             None => format!("songs  {} difficulties", self.library.len()),
         };
-        let audio = self.audio.as_ref().map(|a| a.description.clone()).unwrap_or_else(|| "none (silent)".into());
-        let skin = if self.cfg.skin.is_empty() { "built-in" } else { &self.cfg.skin };
+        let audio = self
+            .audio
+            .as_ref()
+            .map(|a| a.description.clone())
+            .unwrap_or_else(|| "none (silent)".into());
+        let skin = if self.cfg.skin.is_empty() {
+            "built-in"
+        } else {
+            &self.cfg.skin
+        };
         vec![
             format!("taiko.rs {}", env!("CARGO_PKG_VERSION")),
             format!("gpu    {}", self.adapter),
@@ -9610,9 +13575,8 @@ impl State {
 
     fn installed_sets(&mut self) -> &mut std::collections::HashSet<u32> {
         let library = &self.library;
-        self.installed_sets.get_or_insert_with(|| {
-            library.iter().filter_map(Entry::set_id).collect()
-        })
+        self.installed_sets
+            .get_or_insert_with(|| library.iter().filter_map(Entry::set_id).collect())
     }
 
     fn open_download(&mut self) {
@@ -9625,7 +13589,10 @@ impl State {
     /// Downloads a set unless it's already here or on its way.
     fn start_download(&mut self, set: download::SetInfo) {
         if self.installed_sets().contains(&set.id) {
-            self.toast(format!("{} - {} is already in your songs", set.artist, set.title));
+            self.toast(format!(
+                "{} - {} is already in your songs",
+                set.artist, set.title
+            ));
             return;
         }
         if self.downloads.iter().any(|j| j.set.id == set.id) {
@@ -9637,7 +13604,9 @@ impl State {
 
     /// Lobby: fetch the map we don't have (by its set ID, else by searching for it).
     fn download_lobby_map(&mut self) {
-        let Some(m) = self.mp.as_ref().and_then(|s| s.map.clone()) else { return };
+        let Some(m) = self.mp.as_ref().and_then(|s| s.map.clone()) else {
+            return;
+        };
         if self.mp.as_ref().is_some_and(|s| s.have_map) || self.lobby_lookup.is_some() {
             return;
         }
@@ -9665,9 +13634,19 @@ impl State {
             None => {
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let found = download::search(&format!("{} {}", m.artist, m.title), download::Category::Any, download::SortKey::Relevance, true, 0).and_then(|(sets, _)| {
+                    let found = download::search(
+                        &format!("{} {}", m.artist, m.title),
+                        download::Category::Any,
+                        download::SortKey::Relevance,
+                        true,
+                        0,
+                    )
+                    .and_then(|(sets, _)| {
                         sets.into_iter()
-                            .find(|s| s.title.eq_ignore_ascii_case(&m.title) && s.diffs.iter().any(|d| d.version == m.version))
+                            .find(|s| {
+                                s.title.eq_ignore_ascii_case(&m.title)
+                                    && s.diffs.iter().any(|d| d.version == m.version)
+                            })
                             .ok_or_else(|| "not found on the mirrors".to_string())
                     });
                     let _ = tx.send(found);
@@ -9682,15 +13661,26 @@ impl State {
     fn send_map_to(&mut self, to: u32) {
         let Some(s) = &self.mp else { return };
         let tx = s.client.sender();
-        let folder = s.map_entry.and_then(|i| self.library[i].path.parent().map(|p| p.to_path_buf()));
+        let folder = s
+            .map_entry
+            .and_then(|i| self.library[i].path.parent().map(|p| p.to_path_buf()));
         std::thread::spawn(move || {
             let send = |part: net::MapPart| tx.send(net::ClientMsg::MapFile { to, part }).is_ok();
-            let error = |why: String| net::MapPart { name: String::new(), total: 0, offset: 0, data: String::new(), error: Some(why) };
+            let error = |why: String| net::MapPart {
+                name: String::new(),
+                total: 0,
+                offset: 0,
+                data: String::new(),
+                error: Some(why),
+            };
             let Some(folder) = folder else {
                 send(error("the host doesn't have the map either".into()));
                 return;
             };
-            let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = folder
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             match download::pack_folder(&folder) {
                 Ok(bytes) => {
                     let total = bytes.len() as u64;
@@ -9723,12 +13713,16 @@ impl State {
             // Fall back to the mirrors.
             self.host_map_asked = false;
             self.host_transfer = None;
-            self.toast(format!("the host couldn't send it ({e}); trying the mirrors"));
+            self.toast(format!(
+                "the host couldn't send it ({e}); trying the mirrors"
+            ));
             self.download_lobby_map();
             return;
         }
         if part.offset == 0 {
-            let Some(m) = self.mp.as_ref().and_then(|s| s.map.clone()) else { return };
+            let Some(m) = self.mp.as_ref().and_then(|s| s.map.clone()) else {
+                return;
+            };
             self.host_map_asked = false;
             if part.total > download::MAX_HOST_MAP {
                 self.toast("the host's map is too big; trying the mirrors".into());
@@ -9747,11 +13741,19 @@ impl State {
                 rating: 0.0,
                 ranked_date: String::new(),
             };
-            let (job, feed) = download::receive(set, part.name.clone(), part.total, m.hash, self.songs_dir.clone());
+            let (job, feed) = download::receive(
+                set,
+                part.name.clone(),
+                part.total,
+                m.hash,
+                self.songs_dir.clone(),
+            );
             self.downloads.push(job);
             self.host_transfer = Some(feed);
         }
-        let Some(feed) = &self.host_transfer else { return };
+        let Some(feed) = &self.host_transfer else {
+            return;
+        };
         match download::base64_decode(&part.data) {
             Some(bytes) => {
                 let last = part.offset + bytes.len() as u64 >= part.total;
@@ -9772,7 +13774,9 @@ impl State {
             return Some("looking it up...".into());
         }
         let m = self.mp.as_ref()?.map.as_ref()?;
-        let job = self.downloads.iter().find(|j| Some(j.set.id) == m.set_id || (j.set.title == m.title && j.set.artist == m.artist))?;
+        let job = self.downloads.iter().find(|j| {
+            Some(j.set.id) == m.set_id || (j.set.title == m.title && j.set.artist == m.artist)
+        })?;
         Some(match job.fraction() {
             Some(f) => format!("downloading {:.0}%", f * 100.0),
             None => "downloading...".into(),
@@ -9784,12 +13788,19 @@ impl State {
     fn poll_pp_backfill(&mut self) {
         if !self.pp_backfill_started {
             self.pp_backfill_started = true;
-            let missing: Vec<PathBuf> = self.scores.iter().filter(|r| r.pp.is_none()).map(|r| r.file.clone()).collect();
+            let missing: Vec<PathBuf> = self
+                .scores
+                .iter()
+                .filter(|r| r.pp.is_none())
+                .map(|r| r.file.clone())
+                .collect();
             if !missing.is_empty() {
                 self.pp_backfill = Some(scores::backfill_pp(missing));
             }
         }
-        let Some(found) = self.pp_backfill.as_ref().and_then(|rx| rx.try_recv().ok()) else { return };
+        let Some(found) = self.pp_backfill.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+            return;
+        };
         self.pp_backfill = None;
         if found.is_empty() {
             return;
@@ -9818,18 +13829,33 @@ impl State {
         });
         for r in done {
             let text = match r {
-                Ok(online::Reply::Submitted { map_rank, pp, rank, medals }) => {
+                Ok(online::Reply::Submitted {
+                    map_rank,
+                    pp,
+                    rank,
+                    medals,
+                }) => {
                     self.medals_earned(medals);
                     let before = self.me.map(|(b, _)| b);
                     // + 0.0: servers before the fix sent a new player's pp as -0.0 ("-0 pp").
                     let pp = pp + 0.0;
                     self.me = Some((pp, rank));
                     if let Scene::Results { results, .. } = &mut self.scene
-                        && results.opened.is_none() && results.replay.is_some() {
-                        results.total = Some(ui::Total { before, after: pp, rank });
+                        && results.opened.is_none()
+                        && results.replay.is_some()
+                    {
+                        results.total = Some(ui::Total {
+                            before,
+                            after: pp,
+                            rank,
+                        });
                     }
-                    let place = map_rank.map(|r| format!("#{r} on this map")).unwrap_or_else(|| "sent (not your best here)".into());
-                    let total = rank.map(|r| format!("  |  {pp:.0} pp, #{r} overall")).unwrap_or_default();
+                    let place = map_rank
+                        .map(|r| format!("#{r} on this map"))
+                        .unwrap_or_else(|| "sent (not your best here)".into());
+                    let total = rank
+                        .map(|r| format!("  |  {pp:.0} pp, #{r} overall"))
+                        .unwrap_or_default();
                     format!("online: {place}{total}")
                 }
                 // Servers from before scores don't know the request.
@@ -9840,8 +13866,15 @@ impl State {
             self.toast(text);
         }
         if let Some((map, rx)) = &self.board_fetch
-            && let Ok(rows) = rx.try_recv() {
-            let rows = rows.map_err(|e| if e == "bad request" { "the server doesn't keep scores yet".into() } else { e });
+            && let Ok(rows) = rx.try_recv()
+        {
+            let rows = rows.map_err(|e| {
+                if e == "bad request" {
+                    "the server doesn't keep scores yet".into()
+                } else {
+                    e
+                }
+            });
             self.online_boards.insert(*map, (Instant::now(), rows));
             self.board_fetch = None;
         }
@@ -9849,7 +13882,10 @@ impl State {
 
     /// The online leaderboard of map `hash` (fetched in the background; again after a minute).
     fn online_board(&mut self, hash: u64) -> Option<&Result<Vec<online::OnlineScore>, String>> {
-        let stale = self.online_boards.get(&hash).is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(60));
+        let stale = self
+            .online_boards
+            .get(&hash)
+            .is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(60));
         if stale && self.board_fetch.is_none() {
             self.board_fetch = Some((hash, fetch_board(self.cfg.online_server.clone(), hash)));
         }
@@ -9866,10 +13902,11 @@ impl State {
             if !account.is_empty() {
                 let (server, (tx, rx)) = (self.cfg.online_server.clone(), mpsc::channel());
                 std::thread::spawn(move || {
-                    let result = online::call(&server, online::Request::Profile { name: account }).and_then(|r| match r {
-                        online::Reply::Profile(p) => Ok(*p),
-                        _ => Err(crate::lang::odd_reply()),
-                    });
+                    let result = online::call(&server, online::Request::Profile { name: account })
+                        .and_then(|r| match r {
+                            online::Reply::Profile(p) => Ok(*p),
+                            _ => Err(crate::lang::odd_reply()),
+                        });
                     let _ = tx.send(result);
                 });
                 self.me_fetch = Some(rx);
@@ -9958,7 +13995,10 @@ impl State {
                         self.select.updates.insert(set.id, ui::SetUpdate::Unknown);
                     }
                     eprintln!("download {} failed: {e}", set.id);
-                    self.toast(format!("download failed: {}", e.chars().take(80).collect::<String>()));
+                    self.toast(format!(
+                        "download failed: {}",
+                        e.chars().take(80).collect::<String>()
+                    ));
                 }
             }
         }
@@ -9977,7 +14017,11 @@ impl State {
                         self.select.edited.extend(edited);
                         self.select.refilter(&self.library);
                     }
-                    if outdated { ui::SetUpdate::Available } else { ui::SetUpdate::UpToDate }
+                    if outdated {
+                        ui::SetUpdate::Available
+                    } else {
+                        ui::SetUpdate::UpToDate
+                    }
                 }
                 Ok(Err(e)) => {
                     eprintln!("checking set {id} for updates: {e}");
@@ -9988,20 +14032,34 @@ impl State {
             };
             self.set_check = None;
             // An update started meanwhile keeps its state.
-            self.select.updates.entry(id).and_modify(|s| if *s == ui::SetUpdate::Checking { *s = state }).or_insert(state);
+            self.select
+                .updates
+                .entry(id)
+                .and_modify(|s| {
+                    if *s == ui::SetUpdate::Checking {
+                        *s = state
+                    }
+                })
+                .or_insert(state);
         }
         if !self.cfg.check_updates || !matches!(self.scene, Scene::Select) {
             self.set_check_due = None;
             return;
         }
-        let Some(entry) = self.select.selected() else { return };
-        let Some(id) = self.library[entry].set_id() else { return };
+        let Some(entry) = self.select.selected() else {
+            return;
+        };
+        let Some(id) = self.library[entry].set_id() else {
+            return;
+        };
         if self.select.updates.contains_key(&id) {
             return;
         }
         match self.set_check_due {
             Some((due, since)) if due == id => {
-                if self.set_check.is_some() || now.saturating_duration_since(since) < Duration::from_millis(800) {
+                if self.set_check.is_some()
+                    || now.saturating_duration_since(since) < Duration::from_millis(800)
+                {
                     return;
                 }
             }
@@ -10015,16 +14073,32 @@ impl State {
         let maps: Vec<(Option<u32>, PathBuf)> = self
             .library
             .iter()
-            .filter(|e| e.set_id() == Some(id) && e.path.parent() == folder.as_deref() && !self.select.gone.contains(&e.path))
+            .filter(|e| {
+                e.set_id() == Some(id)
+                    && e.path.parent() == folder.as_deref()
+                    && !self.select.gone.contains(&e.path)
+            })
             .map(|e| (e.meta.beatmap_id, e.path.clone()))
             .collect();
         self.select.updates.insert(id, ui::SetUpdate::Checking);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = download::set_checksums(id).map(|online| {
-                let here: Vec<(Option<u32>, String, &PathBuf)> = maps.iter().filter_map(|(bid, p)| Some((*bid, download::md5_hex(&std::fs::read(p).ok()?), p))).collect();
-                let ids: Vec<(Option<u32>, String)> = here.iter().map(|(bid, md5, _)| (*bid, md5.clone())).collect();
-                let edited = here.iter().filter(|(_, md5, _)| !download::is_osus(md5, &online)).map(|(_, _, p)| (*p).clone()).collect();
+                let here: Vec<(Option<u32>, String, &PathBuf)> = maps
+                    .iter()
+                    .filter_map(|(bid, p)| {
+                        Some((*bid, download::md5_hex(&std::fs::read(p).ok()?), p))
+                    })
+                    .collect();
+                let ids: Vec<(Option<u32>, String)> = here
+                    .iter()
+                    .map(|(bid, md5, _)| (*bid, md5.clone()))
+                    .collect();
+                let edited = here
+                    .iter()
+                    .filter(|(_, md5, _)| !download::is_osus(md5, &online))
+                    .map(|(_, _, p)| (*p).clone())
+                    .collect();
                 (download::outdated(&ids, &online), edited)
             });
             let _ = tx.send(result);
@@ -10036,7 +14110,8 @@ impl State {
     /// difficulties are replaced, home-made ones (no beatmap ID) stay.
     fn update_set(&mut self, entry: usize) {
         let e = &self.library[entry];
-        let (Some(id), Some(folder)) = (e.set_id(), e.path.parent().map(|p| p.to_path_buf())) else {
+        let (Some(id), Some(folder)) = (e.set_id(), e.path.parent().map(|p| p.to_path_buf()))
+        else {
             self.toast("this map has no osu! set ID to update it by".into());
             return;
         };
@@ -10046,7 +14121,12 @@ impl State {
         let replaced: Vec<PathBuf> = self
             .library
             .iter()
-            .filter(|m| m.path.parent() == Some(folder.as_path()) && m.meta.beatmap_id.is_some() && m.set_id() == Some(id) && !self.select.gone.contains(&m.path))
+            .filter(|m| {
+                m.path.parent() == Some(folder.as_path())
+                    && m.meta.beatmap_id.is_some()
+                    && m.set_id() == Some(id)
+                    && !self.select.gone.contains(&m.path)
+            })
             .map(|m| m.path.clone())
             .collect();
         let set = download::SetInfo {
@@ -10063,13 +14143,18 @@ impl State {
         };
         self.toast(format!("updating {} - {}...", set.artist, set.title));
         self.select.updates.insert(id, ui::SetUpdate::Updating);
-        self.downloads.push(download::start_update(set, folder, replaced));
+        self.downloads
+            .push(download::start_update(set, folder, replaced));
     }
 
     /// A set downloaded again (see `update_set`): its difficulties in the library are read anew in
     /// place (indices stay valid), ones it no longer has leave the list, new ones join it.
     fn add_updated(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
-        let mut fresh: std::collections::HashMap<PathBuf, Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0)).into_iter().map(|e| (e.path.clone(), e)).collect();
+        let mut fresh: std::collections::HashMap<PathBuf, Entry> =
+            library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0))
+                .into_iter()
+                .map(|e| (e.path.clone(), e))
+                .collect();
         let mut changed = Vec::new();
         for (i, e) in self.library.iter_mut().enumerate() {
             if e.path.parent() != Some(folder) {
@@ -10101,7 +14186,11 @@ impl State {
     /// Song select goes to the maps just added, whatever its filters. During a game they're only
     /// listed: the cursor stays where the player left it.
     fn reveal_maps(&mut self, maps: Vec<PathBuf>) {
-        if !matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. }) && self.mp.is_none() {
+        if !matches!(
+            self.scene,
+            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. }
+        ) && self.mp.is_none()
+        {
             self.select.reveal(&self.library, maps);
         } else {
             self.select.pin(&self.library, maps);
@@ -10110,24 +14199,43 @@ impl State {
 
     /// Adds a freshly downloaded set to the library (appended, so existing indices stay valid).
     fn add_downloaded(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
-        let known: std::collections::HashSet<PathBuf> = self.library.iter().filter(|e| e.path.starts_with(folder)).map(|e| e.path.clone()).collect();
-        let fresh: Vec<Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0)).into_iter().filter(|e| !known.contains(&e.path)).collect();
+        let known: std::collections::HashSet<PathBuf> = self
+            .library
+            .iter()
+            .filter(|e| e.path.starts_with(folder))
+            .map(|e| e.path.clone())
+            .collect();
+        let fresh: Vec<Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0))
+            .into_iter()
+            .filter(|e| !known.contains(&e.path))
+            .collect();
         // Nothing new (unpacked over the same files): the set that's there is what was added.
-        let maps = if fresh.is_empty() { main_maps(self.library.iter().filter(|e| e.path.starts_with(folder))) } else { main_maps(fresh.iter()) };
+        let maps = if fresh.is_empty() {
+            main_maps(self.library.iter().filter(|e| e.path.starts_with(folder)))
+        } else {
+            main_maps(fresh.iter())
+        };
         let n = fresh.len();
         self.append_maps(fresh);
         self.installed_sets().insert(set.id);
-        eprintln!("downloaded set {} into {} ({n} maps)", set.id, folder.display());
+        eprintln!(
+            "downloaded set {} into {} ({n} maps)",
+            set.id,
+            folder.display()
+        );
         // Lobby: the map we were missing may be here now.
         let library = &self.library;
         let mut lobby_note = None;
         if let Some(s) = &mut self.mp
-            && let (Some(m), false) = (&s.map, s.have_map) {
+            && let (Some(m), false) = (&s.map, s.have_map)
+        {
             s.map_entry = find_map(library, m);
             s.have_map = s.map_entry.is_some();
             s.client.send(net::ClientMsg::HasMap(s.have_map));
             if !s.have_map && m.set_id == Some(set.id) {
-                lobby_note = Some("downloaded, but the host has a different version of this map".to_string());
+                lobby_note = Some(
+                    "downloaded, but the host has a different version of this map".to_string(),
+                );
             }
         }
         self.reveal_maps(maps);
@@ -10143,14 +14251,27 @@ impl State {
     fn download_key(&mut self, code: KeyCode, text: Option<&str>, window: Option<&Window>) {
         let function_key = matches!(
             code,
-            KeyCode::F1 | KeyCode::F2 | KeyCode::F3 | KeyCode::F4 | KeyCode::F7 | KeyCode::F8 | KeyCode::F9 | KeyCode::F10 | KeyCode::F11 | KeyCode::F12
+            KeyCode::F1
+                | KeyCode::F2
+                | KeyCode::F3
+                | KeyCode::F4
+                | KeyCode::F7
+                | KeyCode::F8
+                | KeyCode::F9
+                | KeyCode::F10
+                | KeyCode::F11
+                | KeyCode::F12
         );
         if function_key && self.handle_global_key(code, window) {
             return;
         }
         match code {
-            KeyCode::ArrowLeft | KeyCode::ArrowRight if self.modifiers_ctrl => self.browse.step_category(if code == KeyCode::ArrowRight { 1 } else { -1 }),
-            KeyCode::ArrowUp | KeyCode::ArrowDown if self.modifiers_ctrl => self.browse.step_sort(if code == KeyCode::ArrowDown { 1 } else { -1 }),
+            KeyCode::ArrowLeft | KeyCode::ArrowRight if self.modifiers_ctrl => self
+                .browse
+                .step_category(if code == KeyCode::ArrowRight { 1 } else { -1 }),
+            KeyCode::ArrowUp | KeyCode::ArrowDown if self.modifiers_ctrl => self
+                .browse
+                .step_sort(if code == KeyCode::ArrowDown { 1 } else { -1 }),
             KeyCode::ArrowUp => self.browse.move_by(-1),
             KeyCode::ArrowDown => self.browse.move_by(1),
             KeyCode::ArrowLeft => self.browse.cycle_diff(-1),
@@ -10176,7 +14297,11 @@ impl State {
 
     /// The topmost clickable thing under (`x`, `y`), from the last frame.
     fn hit_at(&self, x: f32, y: f32) -> Option<render::Hit> {
-        self.hits.iter().rev().find(|h| h.contains(x, y)).map(|h| h.hit)
+        self.hits
+            .iter()
+            .rev()
+            .find(|h| h.contains(x, y))
+            .map(|h| h.hit)
     }
 
     /// The SONGS tab: the songs themselves, not the menu over them.
@@ -10316,19 +14441,26 @@ impl State {
             Hit::SocialRow(i) => {
                 let in_lobby = self.mp.is_some();
                 self.social.cursor = i;
-                if matches!(self.social.row(in_lobby), social::Row::Friend(_) | social::Row::Lobby) {
+                if matches!(
+                    self.social.row(in_lobby),
+                    social::Row::Friend(_) | social::Row::Lobby
+                ) {
                     self.social.open_conversation();
                 }
                 self.social.mark_read(in_lobby);
                 if self.social.row(in_lobby) == social::Row::Lobby
-                    && let Some(s) = &mut self.mp {
+                    && let Some(s) = &mut self.mp
+                {
                     s.chat_unread = 0;
                 }
             }
             Hit::SocialBack => self.social.close_conversation(),
             Hit::SocialDeleteChat(i) => {
                 if let Some(l) = self.social.global.get(i).cloned() {
-                    self.admin_op(online::AdminOp::DeleteGlobal { from: l.from, at: l.at });
+                    self.admin_op(online::AdminOp::DeleteGlobal {
+                        from: l.from,
+                        at: l.at,
+                    });
                 }
             }
             Hit::SocialAction(i, action) => {
@@ -10349,7 +14481,12 @@ impl State {
                             self.social.set_tab(social::Tab::Friends);
                             self.social.close_conversation();
                             let in_lobby = self.mp.is_some();
-                            if let Some(r) = self.social.rows(in_lobby).iter().position(|r| matches!(r, social::Row::Request(_))) {
+                            if let Some(r) = self
+                                .social
+                                .rows(in_lobby)
+                                .iter()
+                                .position(|r| matches!(r, social::Row::Request(_)))
+                            {
                                 self.social.cursor = r;
                             }
                         }
@@ -10366,7 +14503,12 @@ impl State {
             Hit::GiveHost(id) => {
                 if let Some(s) = &self.mp {
                     s.client.send(net::ClientMsg::GiveHost(id));
-                    let name = s.players.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_default();
+                    let name = s
+                        .players
+                        .iter()
+                        .find(|p| p.id == id)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
                     self.toast(format!("{name} is the host now"));
                 }
             }
@@ -10404,7 +14546,9 @@ impl State {
             Hit::SongsFolder => self.browse_songs_folder(),
             // Taken when pressed (`mouse_button`).
             Hit::SongScrollbar => {}
-            Hit::DlRow(i) if i == self.browse.cursor => self.download_key(KeyCode::Enter, None, window),
+            Hit::DlRow(i) if i == self.browse.cursor => {
+                self.download_key(KeyCode::Enter, None, window)
+            }
             Hit::DlRow(i) => self.browse.cursor = i,
             Hit::DlGet(i) => {
                 self.browse.cursor = i;
@@ -10436,7 +14580,8 @@ impl State {
             }
             Hit::ShapeshiftMove(dir) => {
                 if let Some(setup) = &mut self.shapeshift_setup
-                    && setup.move_shape(&mut self.cfg.shapeshift, dir) {
+                    && setup.move_shape(&mut self.cfg.shapeshift, dir)
+                {
                     self.shapeshift_changed();
                 }
             }
@@ -10446,7 +14591,8 @@ impl State {
                 }
             }
             Hit::UniversePreset(i) => {
-                let action = multiverse::Setup::load(&mut self.cfg.universes, &self.cfg.universe_presets, i);
+                let action =
+                    multiverse::Setup::load(&mut self.cfg.universes, &self.cfg.universe_presets, i);
                 self.universe_action(action);
             }
             Hit::UniversePresetDelete(i) => {
@@ -10455,10 +14601,17 @@ impl State {
             }
             Hit::UpdateSet(i) => self.update_set(i),
             Hit::SongMenu(k) => {
-                let action = self.select.menu_items(&self.library).get(k).map(|(_, a)| *a);
+                let action = self
+                    .select
+                    .menu_items(&self.library)
+                    .get(k)
+                    .map(|(_, a)| *a);
                 if let Some(ui::MenuAction::Love(set, loved)) = action {
                     self.select.menu = None;
-                    self.toast(format!("{} set {set} on taiko.rs...", if loved { "loving" } else { "unloving" }));
+                    self.toast(format!(
+                        "{} set {set} on taiko.rs...",
+                        if loved { "loving" } else { "unloving" }
+                    ));
                     self.call_loved(Some((set, loved)));
                 } else if action == Some(ui::MenuAction::UpdateSong) {
                     if let Some(i) = self.select.menu_map() {
@@ -10470,9 +14623,15 @@ impl State {
                 }
             }
             // Like osu!: the first click selects, clicking the selected difficulty plays it.
-            Hit::SongRow(row) if row == self.select.cursor() => self.key_inner(KeyCode::Enter, false, None, Instant::now(), window),
+            Hit::SongRow(row) if row == self.select.cursor() => {
+                self.key_inner(KeyCode::Enter, false, None, Instant::now(), window)
+            }
             // A song's own row picks its remembered (or hardest) difficulty.
-            Hit::SongRow(row) if self.select.is_song_start(row) && !self.select.in_open_song(row) => self.select.enter_song(row, &self.library),
+            Hit::SongRow(row)
+                if self.select.is_song_start(row) && !self.select.in_open_song(row) =>
+            {
+                self.select.enter_song(row, &self.library)
+            }
             Hit::SongRow(row) => self.select.set_cursor(row),
             // One click does what the row does: flips a switch, opens a list, waits for a key.
             Hit::SettingRow(i) => {
@@ -10522,8 +14681,14 @@ pub fn graphics_backends(api: &str) -> wgpu::Backends {
 #[cfg(windows)]
 fn auto_backends() -> wgpu::Backends {
     // DXGI lists the cards without touching their Vulkan drivers.
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::DX12, ..wgpu::InstanceDescriptor::new_without_display_handle() });
-    let cards = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12)).iter().filter(|a| a.get_info().device_type != wgpu::DeviceType::Cpu).count();
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::DX12,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let cards = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12))
+        .iter()
+        .filter(|a| a.get_info().device_type != wgpu::DeviceType::Cpu)
+        .count();
     if cards > 0 {
         return wgpu::Backends::DX12;
     }
@@ -10557,7 +14722,10 @@ mod gpu_start {
     pub fn starting() {
         if let Some(p) = path() {
             let _ = std::fs::create_dir_all(p.parent().unwrap_or(&p));
-            let _ = std::fs::write(p, "the graphics are starting; this goes once they're going\n");
+            let _ = std::fs::write(
+                p,
+                "the graphics are starting; this goes once they're going\n",
+            );
         }
     }
 
@@ -10574,7 +14742,10 @@ mod gpu_start {
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn hook_crashed() {
         if let Some(d) = crate::config::data_dir() {
-            let _ = std::fs::write(d.join(HOOK_FILE), "a hook crashed the game drawing with Vulkan; the next start takes DX12\n");
+            let _ = std::fs::write(
+                d.join(HOOK_FILE),
+                "a hook crashed the game drawing with Vulkan; the next start takes DX12\n",
+            );
         }
     }
 
@@ -10600,15 +14771,24 @@ const DRAWING_HOOKS: [(&str, &str); 4] = [
 #[cfg_attr(not(windows), allow(dead_code))]
 fn drawing_hook(frames: &str) -> Option<(&'static str, &'static str)> {
     let frames = frames.to_ascii_lowercase();
-    frames.split_whitespace().find_map(|f| DRAWING_HOOKS.iter().find(|(dll, _)| f.split('+').next() == Some(dll)).copied())
+    frames.split_whitespace().find_map(|f| {
+        DRAWING_HOOKS
+            .iter()
+            .find(|(dll, _)| f.split('+').next() == Some(dll))
+            .copied()
+    })
 }
 
 /// What the crash window says to do about a crash in `who`.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn drawing_hook_advice(who: &str, dll: &str, to_dx12: bool, vulkan: bool) -> String {
-    let mut out = format!("It crashed inside {who} ({dll}), which hooks into the game's drawing, not in the game's own code.");
+    let mut out = format!(
+        "It crashed inside {who} ({dll}), which hooks into the game's drawing, not in the game's own code."
+    );
     if to_dx12 {
-        out.push_str(" The next start draws with DX12 instead of Vulkan, which usually gets along with it.");
+        out.push_str(
+            " The next start draws with DX12 instead of Vulkan, which usually gets along with it.",
+        );
     } else if vulkan {
         out.push_str(" Picking DX12 in Settings > Video > Renderer may avoid it.");
     }
@@ -10647,25 +14827,45 @@ fn save_screenshot(state: &Arc<Mutex<State>>, w: u32, h: u32, rgb: Vec<u8>) {
         let to = lock(&state).cfg.screenshot_to;
         let copied = to.clipboard() && clipboard::set_image(w, h, &rgb);
         let text = if !to.folder() {
-            if copied { "screenshot copied".to_string() } else { "screenshot failed: no clipboard to copy to".to_string() }
+            if copied {
+                "screenshot copied".to_string()
+            } else {
+                "screenshot failed: no clipboard to copy to".to_string()
+            }
         } else {
             let saved = (|| {
-                let dir = config::own_dir("Screenshots").ok_or("no folder to keep screenshots in")?;
+                let dir =
+                    config::own_dir("Screenshots").ok_or("no folder to keep screenshots in")?;
                 std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                let path = (1..).map(|n| dir.join(format!("taiko-rs-{n}.png"))).find(|p| !p.exists()).unwrap();
-                image::save_buffer(&path, &rgb, w, h, image::ColorType::Rgb8).map_err(|e| e.to_string())?;
+                let path = (1..)
+                    .map(|n| dir.join(format!("taiko-rs-{n}.png")))
+                    .find(|p| !p.exists())
+                    .unwrap();
+                image::save_buffer(&path, &rgb, w, h, image::ColorType::Rgb8)
+                    .map_err(|e| e.to_string())?;
                 Ok::<_, String>(path)
             })();
             match saved {
                 Ok(path) => {
-                    let name = path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
-                    format!("screenshot {}saved: Screenshots/{name}", if copied { "copied and " } else { "" })
+                    let name = path
+                        .file_name()
+                        .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+                    format!(
+                        "screenshot {}saved: Screenshots/{name}",
+                        if copied { "copied and " } else { "" }
+                    )
                 }
-                Err(e) => format!("screenshot {}failed: {e}", if copied { "copied, saving " } else { "" }),
+                Err(e) => format!(
+                    "screenshot {}failed: {e}",
+                    if copied { "copied, saving " } else { "" }
+                ),
             }
         };
         eprintln!("{text}");
-        lock(&state).toast = Some(Toast { text, until: Instant::now() + Duration::from_millis(4000) });
+        lock(&state).toast = Some(Toast {
+            text,
+            until: Instant::now() + Duration::from_millis(4000),
+        });
     });
 }
 
@@ -10736,7 +14936,8 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     // The waits are only measured for the profile and the smoothness report: reading the clock
     // can cost microseconds a time (HPET).
     let timing = profile || std::env::var_os("TAIKO_STATS").is_some();
-    let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) = (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
+    let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) =
+        (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
     let (mut prof_acquire, mut prof_acquire_max) = (0.0f64, 0.0f64);
     // TAIKO_LAYOUT=1: print each text that doesn't fit (once), see `debug::layout_problems`.
     canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
@@ -10751,7 +14952,14 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             let mut s = lock(&state);
             if s.quit {
                 // In game.log: the game was closed on purpose, not lost.
-                eprintln!("closing: quit from the game ({})", if s.quit_asked { "answered the exit question" } else { "no question asked" });
+                eprintln!(
+                    "closing: quit from the game ({})",
+                    if s.quit_asked {
+                        "answered the exit question"
+                    } else {
+                        "no question asked"
+                    }
+                );
                 break;
             }
             s.poll_skin();
@@ -10763,12 +14971,25 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             {
                 sm.sample_waits(waits.0, waits.1, waits.2);
             }
-            (s.wanted_present(), s.frame_cap(), s.refresh_hz, surface, size,
-             s.sprites_upload.take(), letterbox, if s.cfg.half_resolution { 2 } else { 1 }, s.avatars.take_uploads())
+            (
+                s.wanted_present(),
+                s.frame_cap(),
+                s.refresh_hz,
+                surface,
+                size,
+                s.sprites_upload.take(),
+                letterbox,
+                if s.cfg.half_resolution { 2 } else { 1 },
+                s.avatars.take_uploads(),
+            )
         };
         // GPU waits and uploads never hold the input/state mutex.
-        if let Some((surface, w, h)) = surface { renderer.set_surface(surface, w, h); }
-        if let Some((w, h)) = size { renderer.resize(w, h); }
+        if let Some((surface, w, h)) = surface {
+            renderer.set_surface(surface, w, h);
+        }
+        if let Some((w, h)) = size {
+            renderer.resize(w, h);
+        }
         renderer.letterbox = letterbox;
         if requested_present != Some(wanted) {
             renderer.set_present(wanted);
@@ -10799,7 +15020,11 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         // itself (and judging) runs on the real clock.
         let pace_shift_ms = if present == PresentChoice::Fifo && pace {
             let t = pacer.frame_time(acquired, refresh_hz);
-            if t >= acquired { (t - acquired).as_secs_f64() * 1000.0 } else { -(acquired - t).as_secs_f64() * 1000.0 }
+            if t >= acquired {
+                (t - acquired).as_secs_f64() * 1000.0
+            } else {
+                -(acquired - t).as_secs_f64() * 1000.0
+            }
         } else {
             pacer.reset();
             0.0
@@ -10808,14 +15033,34 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         let exporting = Instant::now();
         while exporting.elapsed() < Duration::from_millis(30) {
             let job = lock(&state).export_frame(&mut export_canvas);
-            let Some(ExportView { size: (w, h), tx, brightness, clear, blended, last }) = job else { break };
+            let Some(ExportView {
+                size: (w, h),
+                tx,
+                brightness,
+                clear,
+                blended,
+                last,
+            }) = job
+            else {
+                break;
+            };
             let shown = renderer.bg_brightness;
             renderer.bg_brightness = brightness;
             let vw = export_canvas.width.max(1.0);
             let clips: Vec<(std::ops::Range<usize>, [f32; 4])> = export_canvas
                 .clips
                 .iter()
-                .map(|(r, [x, y, cw, ch])| (r.clone(), [x / vw, y / render::VIRTUAL_HEIGHT, cw / vw, ch / render::VIRTUAL_HEIGHT]))
+                .map(|(r, [x, y, cw, ch])| {
+                    (
+                        r.clone(),
+                        [
+                            x / vw,
+                            y / render::VIRTUAL_HEIGHT,
+                            cw / vw,
+                            ch / render::VIRTUAL_HEIGHT,
+                        ],
+                    )
+                })
                 .collect();
             let frame = renderer.render_offscreen(&export_canvas.shapes, &clips, w, h, clear);
             renderer.bg_brightness = shown;
@@ -10862,32 +15107,86 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 let _ = proxy.send_event(UserEvent::HideCursor(hide));
             }
             let background = s.preview.bg_upload.take();
-            if background.is_some() { s.bg_changed = Some(Instant::now()); }
+            if background.is_some() {
+                s.bg_changed = Some(Instant::now());
+            }
             renderer.bg_brightness = s.bg_brightness;
             renderer.bg_blur = s.idle.amount();
             // A new background cross-fades from the previous one.
-            let fade = if s.on_menu() { MENU_BACKGROUND_FADE_MS } else { 300.0 };
-            renderer.bg_mix = s.bg_changed.map(|t| render::progress(t, fade)).unwrap_or(1.0);
-            (capture, s.frame_clip.take(), s.backdrop(s.dims_background()), background)
+            let fade = if s.on_menu() {
+                MENU_BACKGROUND_FADE_MS
+            } else {
+                300.0
+            };
+            renderer.bg_mix = s
+                .bg_changed
+                .map(|t| render::progress(t, fade))
+                .unwrap_or(1.0);
+            (
+                capture,
+                s.frame_clip.take(),
+                s.backdrop(s.dims_background()),
+                background,
+            )
         };
-        if let Some(image) = background { renderer.set_background(image); }
+        if let Some(image) = background {
+            renderer.set_background(image);
+        }
         // The playfield / preview clip (fractions) plus the lists' (virtual units).
         let vw = canvas.width.max(1.0);
-        let to_fraction = |[x, y, w, h]: [f32; 4]| [x / vw, y / render::VIRTUAL_HEIGHT, w / vw, h / render::VIRTUAL_HEIGHT];
+        let to_fraction = |[x, y, w, h]: [f32; 4]| {
+            [
+                x / vw,
+                y / render::VIRTUAL_HEIGHT,
+                w / vw,
+                h / render::VIRTUAL_HEIGHT,
+            ]
+        };
         let opaque = canvas
-            .opaque_rect(clip.as_ref().map(|(range, a)| (range, [a.x * vw, a.y * render::VIRTUAL_HEIGHT, a.w * vw, a.h * render::VIRTUAL_HEIGHT])))
+            .opaque_rect(clip.as_ref().map(|(range, a)| {
+                (
+                    range,
+                    [
+                        a.x * vw,
+                        a.y * render::VIRTUAL_HEIGHT,
+                        a.w * vw,
+                        a.h * render::VIRTUAL_HEIGHT,
+                    ],
+                )
+            }))
             .map(to_fraction);
-        let mut clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clip.into_iter().map(|(range, a)| (range, [a.x, a.y, a.w, a.h])).collect();
-        clips.extend(canvas.clips.drain(..).map(|(range, r)| (range, to_fraction(r))));
+        let mut clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clip
+            .into_iter()
+            .map(|(range, a)| (range, [a.x, a.y, a.w, a.h]))
+            .collect();
+        clips.extend(
+            canvas
+                .clips
+                .drain(..)
+                .map(|(range, r)| (range, to_fraction(r))),
+        );
         renderer.disc = canvas.disc.map(|d| (d, vw));
         let t1 = timing.then(Instant::now);
-        let shot = renderer.submit(frame, &canvas.shapes, backdrop, capture.is_some(), clips, opaque);
+        let shot = renderer.submit(
+            frame,
+            &canvas.shapes,
+            backdrop,
+            capture.is_some(),
+            clips,
+            opaque,
+        );
         if let (Some(t0), Some(t1)) = (t0, t1) {
             let presented = Instant::now();
             // Clock-sample-to-next-refresh: approximates how stale the previous frame was when shown.
-            let sample_age = last_sample.map(|s| (acquired - s).as_secs_f64() * 1000.0).unwrap_or(0.0);
+            let sample_age = last_sample
+                .map(|s| (acquired - s).as_secs_f64() * 1000.0)
+                .unwrap_or(0.0);
             last_sample = Some(now);
-            waits = ((acquired - t0).as_secs_f64() * 1000.0, (presented - t1).as_secs_f64() * 1000.0, sample_age);
+            waits = (
+                (acquired - t0).as_secs_f64() * 1000.0,
+                (presented - t1).as_secs_f64() * 1000.0,
+                sample_age,
+            );
             if profile {
                 prof_n += 1;
                 prof_acquire += waits.0;
@@ -10897,7 +15196,10 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 prof_shapes = prof_shapes.max(canvas.shapes.len());
                 if prof_start.elapsed() >= Duration::from_secs(2) {
                     let n = prof_n.max(1) as f64;
-                    let gpu = renderer.take_gpu_ms().map(|ms| format!("  gpu {ms:.2} ms")).unwrap_or_default();
+                    let gpu = renderer
+                        .take_gpu_ms()
+                        .map(|ms| format!("  gpu {ms:.2} ms"))
+                        .unwrap_or_default();
                     // Overdraw: the pixels this frame's quads cover, in screens (TAIKO_PROFILE=shapes
                     // also lists the biggest).
                     let ppu = renderer.size().1 as f32 / render::VIRTUAL_HEIGHT;
@@ -10909,16 +15211,30 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                     let cover: f32 = canvas.shapes.iter().map(area).sum::<f32>() / screen;
                     eprintln!(
                         "profile: {:.0} fps  acquire {:.2} ms (max {:.2})  build {:.2} ms  submit {:.2} ms  shapes {}{gpu}  cover {cover:.2}",
-                        n / prof_start.elapsed().as_secs_f64(), prof_acquire / n, prof_acquire_max, prof_build / n, prof_submit / n, prof_shapes
+                        n / prof_start.elapsed().as_secs_f64(),
+                        prof_acquire / n,
+                        prof_acquire_max,
+                        prof_build / n,
+                        prof_submit / n,
+                        prof_shapes
                     );
                     if std::env::var("TAIKO_PROFILE").is_ok_and(|v| v == "shapes") {
                         let mut big: Vec<&render::Shape> = canvas.shapes.iter().collect();
                         big.sort_by(|a, b| area(b).total_cmp(&area(a)));
                         for sh in big.iter().take(12) {
-                            eprintln!("  {:.3}  c {:?} h {:?} fill {:?} border {:?} p {:?}", area(sh) / screen, sh.center, sh.half, sh.fill, sh.border, sh.params);
+                            eprintln!(
+                                "  {:.3}  c {:?} h {:?} fill {:?} border {:?} p {:?}",
+                                area(sh) / screen,
+                                sh.center,
+                                sh.half,
+                                sh.fill,
+                                sh.border,
+                                sh.params
+                            );
                         }
                     }
-                    (prof_start, prof_n, prof_build, prof_submit, prof_shapes) = (Instant::now(), 0, 0.0, 0.0, 0);
+                    (prof_start, prof_n, prof_build, prof_submit, prof_shapes) =
+                        (Instant::now(), 0, 0.0, 0.0, 0);
                     (prof_acquire, prof_acquire_max) = (0.0, 0.0);
                 }
             }
@@ -10983,8 +15299,10 @@ impl App {
 impl App {
     fn handle_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         // A new UI colour: the pointer is drawn in it too.
-        if self.cursors.is_some() && self.cursor_accent != render::accent()
-            && let Some(window) = &self.window {
+        if self.cursors.is_some()
+            && self.cursor_accent != render::accent()
+            && let Some(window) = &self.window
+        {
             self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
             self.cursor_accent = render::accent();
             self.set_cursor(self.cursor);
@@ -10993,9 +15311,15 @@ impl App {
             WindowEvent::CloseRequested => lock(&self.state).ask_quit(),
             WindowEvent::HoveredFile(_) => lock(&self.state).file_drag(FileDrag::Hover),
             WindowEvent::HoveredFileCancelled => lock(&self.state).file_drag(FileDrag::Left),
-            WindowEvent::DroppedFile(path) => lock(&self.state).file_drag(FileDrag::Drop(vec![path])),
+            WindowEvent::DroppedFile(path) => {
+                lock(&self.state).file_drag(FileDrag::Drop(vec![path]))
+            }
             WindowEvent::Resized(size) => self.resized(size),
-            WindowEvent::KeyboardInput { event, is_synthetic, .. } => {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } => {
                 // Timestamp before anything else, including taking the lock.
                 let at = Instant::now();
                 // Synthetic presses are keys already held when the window gets focus (the Tab of
@@ -11016,7 +15340,13 @@ impl App {
                 if !s.focused || (s.modifiers_alt && code == KeyCode::Tab) {
                     return;
                 }
-                s.key(code, event.repeat, event.text.as_deref(), at, self.window.as_deref());
+                s.key(
+                    code,
+                    event.repeat,
+                    event.text.as_deref(),
+                    at,
+                    self.window.as_deref(),
+                );
             }
             WindowEvent::Ime(ime) => {
                 let mut s = lock(&self.state);
@@ -11028,10 +15358,18 @@ impl App {
                         // meaning of its own, carrying each character.
                         let at = Instant::now();
                         for ch in text.chars().filter(|c| !c.is_control()) {
-                            s.key(KeyCode::Lang1, false, Some(&ch.to_string()), at, self.window.as_deref());
+                            s.key(
+                                KeyCode::Lang1,
+                                false,
+                                Some(&ch.to_string()),
+                                at,
+                                self.window.as_deref(),
+                            );
                         }
                     }
-                    winit::event::Ime::Enabled | winit::event::Ime::Disabled => s.ime_preedit.clear(),
+                    winit::event::Ime::Enabled | winit::event::Ime::Disabled => {
+                        s.ime_preedit.clear()
+                    }
                 }
             }
             WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } => self.read_monitor(),
@@ -11058,10 +15396,21 @@ impl App {
                 s.wheel_acc -= notches;
                 s.wheel(notches as i32);
             }
-            WindowEvent::MouseInput { state: button_state, button: winit::event::MouseButton::Left, .. } => {
-                lock(&self.state).mouse_button(button_state == ElementState::Pressed, self.window.as_deref());
+            WindowEvent::MouseInput {
+                state: button_state,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
+                lock(&self.state).mouse_button(
+                    button_state == ElementState::Pressed,
+                    self.window.as_deref(),
+                );
             }
-            WindowEvent::MouseInput { state: button_state, button: winit::event::MouseButton::Right, .. } => {
+            WindowEvent::MouseInput {
+                state: button_state,
+                button: winit::event::MouseButton::Right,
+                ..
+            } => {
                 lock(&self.state).right_button(button_state == ElementState::Pressed);
             }
             WindowEvent::Touch(t) => {
@@ -11112,14 +15461,22 @@ impl App {
     /// resized, moved or focused: on Wayland it isn't known until the window is on screen, and
     /// the window can go to another one.
     fn read_monitor(&self) {
-        let Some(m) = self.window.as_ref().and_then(|w| w.current_monitor()) else { return };
+        let Some(m) = self.window.as_ref().and_then(|w| w.current_monitor()) else {
+            return;
+        };
         let mut s = lock(&self.state);
         s.monitor_size = (m.size().width, m.size().height);
-        let modes: Vec<(u32, u32)> = m.video_modes().map(|v| (v.size().width, v.size().height)).collect();
+        let modes: Vec<(u32, u32)> = m
+            .video_modes()
+            .map(|v| (v.size().width, v.size().height))
+            .collect();
         if !modes.is_empty() {
             s.monitor_modes = modes;
         }
-        if let Some(hz) = m.refresh_rate_millihertz().map(|mhz| mhz as f64 / 1000.0).filter(|&hz| hz >= 24.0)
+        if let Some(hz) = m
+            .refresh_rate_millihertz()
+            .map(|mhz| mhz as f64 / 1000.0)
+            .filter(|&hz| hz >= 24.0)
             && (hz - s.refresh_hz).abs() > 0.01
         {
             eprintln!("screen refresh {hz:.2} Hz");
@@ -11157,7 +15514,10 @@ impl App {
                 // Its candidates go by where the composed text is shown (`ime_preedit`).
                 let scale = window.inner_size().height as f64 / render::VIRTUAL_HEIGHT as f64;
                 let x = window.inner_size().width as f64 / 2.0;
-                window.set_ime_cursor_area(winit::dpi::PhysicalPosition::new(x, 344.0 * scale), winit::dpi::PhysicalSize::new(1.0, 24.0 * scale));
+                window.set_ime_cursor_area(
+                    winit::dpi::PhysicalPosition::new(x, 344.0 * scale),
+                    winit::dpi::PhysicalSize::new(1.0, 24.0 * scale),
+                );
             } else {
                 s.ime_preedit.clear();
             }
@@ -11167,7 +15527,9 @@ impl App {
     fn apply_window_request(&mut self) {
         let Some(window) = &self.window else { return };
         let mut s = lock(&self.state);
-        let Some((w, h)) = s.window_request.take() else { return };
+        let Some((w, h)) = s.window_request.take() else {
+            return;
+        };
         if window.fullscreen().is_some() {
             window.set_fullscreen(None);
             s.fullscreen = false;
@@ -11188,7 +15550,9 @@ impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(window) = &self.window {
             // Back from the background (Android): the old window is gone, draw into the new one.
-            let Some(instance) = &self.instance else { return };
+            let Some(instance) = &self.instance else {
+                return;
+            };
             let size = window.inner_size();
             match instance.create_surface(window.clone()) {
                 Ok(surface) => {
@@ -11206,7 +15570,12 @@ impl ApplicationHandler<UserEvent> for App {
             .with_title("taiko.rs")
             .with_window_icon(logo::window_icon())
             .with_min_inner_size(winit::dpi::LogicalSize::new(MIN_WINDOW.0, MIN_WINDOW.1))
-            .with_fullscreen(lock(&self.state).cfg.fullscreen.then_some(Fullscreen::Borderless(None)));
+            .with_fullscreen(
+                lock(&self.state)
+                    .cfg
+                    .fullscreen
+                    .then_some(Fullscreen::Borderless(None)),
+            );
         #[cfg(target_os = "linux")]
         {
             use winit::platform::wayland::WindowAttributesExtWayland;
@@ -11240,7 +15609,9 @@ impl ApplicationHandler<UserEvent> for App {
         // start would crash again).
         #[cfg(windows)]
         if api == "auto" && gpu_start::failed_last_time() {
-            eprintln!("graphics: the last start never got going: Vulkan from now on (graphics_api in config.txt)");
+            eprintln!(
+                "graphics: the last start never got going: Vulkan from now on (graphics_api in config.txt)"
+            );
             api = "vulkan".into();
             let mut s = lock(&self.state);
             s.cfg.graphics_api = api.clone();
@@ -11250,13 +15621,17 @@ impl ApplicationHandler<UserEvent> for App {
         // same, they get along with DX12 (and it would crash again).
         #[cfg(windows)]
         if gpu_start::hook_crashed_last_time() && api == "auto" {
-            eprintln!("graphics: the last run crashed in a hook into Vulkan's drawing: DX12 from now on (graphics_api in config.txt)");
+            eprintln!(
+                "graphics: the last run crashed in a hook into Vulkan's drawing: DX12 from now on (graphics_api in config.txt)"
+            );
             api = "dx12".into();
             let mut s = lock(&self.state);
             s.cfg.graphics_api = api.clone();
             s.cfg.save();
         }
-        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(event_loop.owned_display_handle()));
+        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
+            event_loop.owned_display_handle(),
+        ));
         desc.backends = graphics_backends(&api);
         // WGPU_BACKEND still has the last word.
         let instance = wgpu::Instance::new(desc.with_env());
@@ -11268,7 +15643,9 @@ impl ApplicationHandler<UserEvent> for App {
                 eprintln!("failed to initialise GPU: {e}");
                 // Without a console the window just closed: say why.
                 #[cfg(windows)]
-                crash_box(&format!("taiko.rs couldn't start the graphics card, so it closed.\n\n{e}\n\nUpdating the graphics driver usually fixes this. If it doesn't, send this message in #bugs on the taiko.rs Discord."));
+                crash_box(&format!(
+                    "taiko.rs couldn't start the graphics card, so it closed.\n\n{e}\n\nUpdating the graphics driver usually fixes this. If it doesn't, send this message in #bugs on the taiko.rs Discord."
+                ));
                 event_loop.exit();
                 return;
             }
@@ -11281,10 +15658,17 @@ impl ApplicationHandler<UserEvent> for App {
         {
             let mut s = lock(&self.state);
             s.adapter = renderer.adapter_name.clone();
-            s.set_window(window.inner_size().width as f32, window.inner_size().height as f32);
+            s.set_window(
+                window.inner_size().width as f32,
+                window.inner_size().height as f32,
+            );
             s.monitor_modes = window
                 .current_monitor()
-                .map(|m| m.video_modes().map(|v| (v.size().width, v.size().height)).collect())
+                .map(|m| {
+                    m.video_modes()
+                        .map(|v| (v.size().width, v.size().height))
+                        .collect()
+                })
                 .unwrap_or_default();
             if let Some(m) = window.current_monitor() {
                 s.monitor_size = (m.size().width, m.size().height);
@@ -11292,10 +15676,22 @@ impl ApplicationHandler<UserEvent> for App {
             s.refresh_presets();
             s.refresh_hz = refresh_hz;
             s.refresh_status();
-            eprintln!("renderer: {}, present: {}, refresh {refresh_hz:.2} Hz", renderer.adapter_name, renderer.present.name());
-            let _ = CRASH_CONTEXT.set(format!("renderer: {}, present: {}, setting graphics_api = {}", renderer.adapter_name, renderer.present.name(), s.cfg.graphics_api));
+            eprintln!(
+                "renderer: {}, present: {}, refresh {refresh_hz:.2} Hz",
+                renderer.adapter_name,
+                renderer.present.name()
+            );
+            let _ = CRASH_CONTEXT.set(format!(
+                "renderer: {}, present: {}, setting graphics_api = {}",
+                renderer.adapter_name,
+                renderer.present.name(),
+                s.cfg.graphics_api
+            ));
             VULKAN.store(renderer.backend == wgpu::Backend::Vulkan, Ordering::Relaxed);
-            VULKAN_ON_AUTO.store(renderer.backend == wgpu::Backend::Vulkan && s.cfg.graphics_api == "auto", Ordering::Relaxed);
+            VULKAN_ON_AUTO.store(
+                renderer.backend == wgpu::Backend::Vulkan && s.cfg.graphics_api == "auto",
+                Ordering::Relaxed,
+            );
             // What it could do, not what was asked: OpenGL on Linux has only vsync, and that
             // mustn't become the setting (it stayed vsync after going back to Vulkan).
             s.present = renderer.present;
@@ -11328,7 +15724,10 @@ impl ApplicationHandler<UserEvent> for App {
             s.set_background(true);
         }
         let deadline = Instant::now() + Duration::from_millis(1000);
-        while self.render_thread.as_ref().is_some_and(|t| !t.is_finished())
+        while self
+            .render_thread
+            .as_ref()
+            .is_some_and(|t| !t.is_finished())
             && lock(&self.state).surface_swap.is_some()
             && Instant::now() < deadline
         {
@@ -11349,7 +15748,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             #[cfg(target_os = "android")]
-            UserEvent::Typed(typed) => lock(&self.state).soft_keyboard(typed, self.window.as_deref()),
+            UserEvent::Typed(typed) => {
+                lock(&self.state).soft_keyboard(typed, self.window.as_deref())
+            }
             UserEvent::HideCursor(hide) => {
                 if hide != self.cursor_hidden {
                     self.cursor_hidden = hide;
@@ -11416,9 +15817,14 @@ impl State {
         let fullscreen = cfg.fullscreen;
         SEND_CRASH_REPORTS.store(cfg.send_crash_reports, Ordering::Relaxed);
         let crash = crash_report();
-        let crash_sent = cfg.send_crash_reports && crash.as_ref().is_some_and(|r| send_crash_report(&cfg.online_server, r));
+        let crash_sent = cfg.send_crash_reports
+            && crash
+                .as_ref()
+                .is_some_and(|r| send_crash_report(&cfg.online_server, r));
         // Pictures are on the website of our own server only.
-        let avatars = avatars::Avatars::new((cfg.online_server == online::DEFAULT_SERVER).then(|| online::WEBSITE.to_string()));
+        let avatars = avatars::Avatars::new(
+            (cfg.online_server == online::DEFAULT_SERVER).then(|| online::WEBSITE.to_string()),
+        );
         State {
             avatars,
             admin: false,
@@ -11430,7 +15836,12 @@ impl State {
             scene: Scene::Select,
             audio,
             toast: None,
-            medals: debug::medals_from_env().map(|view| medals::View { name: Some("TAIKO_MEDALS".into()), state: medals::State::Loaded(Box::new(view)), tab: 0, scroll: 0 }),
+            medals: debug::medals_from_env().map(|view| medals::View {
+                name: Some("TAIKO_MEDALS".into()),
+                state: medals::State::Loaded(Box::new(view)),
+                tab: 0,
+                scroll: 0,
+            }),
             unlock: {
                 let mut unlock = medals::Unlock::default();
                 unlock.preview(debug::unlock_from_env());
@@ -11533,7 +15944,10 @@ impl State {
             song_dirs,
             osudb_rx: None,
             db_status: Default::default(),
-            set_status: status_cache.iter().map(|(set, status)| (set, Some(status.to_string()))).collect(),
+            set_status: status_cache
+                .iter()
+                .map(|(set, status)| (set, Some(status.to_string())))
+                .collect(),
             status_cache,
             status_saved: Instant::now(),
             status_resorted: Instant::now(),
@@ -11555,7 +15969,9 @@ impl State {
             quit: false,
             quit_asked: false,
             screenshot_due: false,
-            smooth: std::env::var_os("TAIKO_STATS").is_some().then(debug::Smoothness::default),
+            smooth: std::env::var_os("TAIKO_STATS")
+                .is_some()
+                .then(debug::Smoothness::default),
             frame_acquired: None,
             pace_shift_ms: 0.0,
             seen_refresh_ms: None,
@@ -11663,9 +16079,13 @@ pub fn desktop_main() {
         return;
     }
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu | taiko-rs://score/<id>]...");
+        println!(
+            "usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu | taiko-rs://score/<id>]..."
+        );
         println!("       taiko-rs --info file.osu...   print converted map stats");
-        println!("With no arguments, scans osu! stable install locations and `songs =` lines in the config.");
+        println!(
+            "With no arguments, scans osu! stable install locations and `songs =` lines in the config."
+        );
         return;
     }
     if args.first().is_some_and(|a| a == "--info") {
@@ -11674,7 +16094,9 @@ pub fn desktop_main() {
         }
         return;
     }
-    let event_loop = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
+        .build()
+        .expect("event loop");
     // Scripted runs (tests) neither take links nor become their handler.
     if std::env::var_os("TAIKO_SHOTS").is_none() && std::env::var_os("TAIKO_INPUT").is_none() {
         let proxy = event_loop.create_proxy();
@@ -11696,7 +16118,10 @@ const CRASH_REPORT: &str = "crash-report.txt";
 fn log_crashes() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let thread = std::thread::current().name().unwrap_or("?").to_string();
         let text = format!(
             "--- taiko.rs crash at unix {at}, build {} ({}, {})\nthread {thread}: {info}\n{}\n{}",
@@ -11712,7 +16137,11 @@ fn log_crashes() {
         let text = format!("{text}{}", native_crashes::frames());
         if let Some(dir) = config::data_dir() {
             let _ = std::fs::create_dir_all(&dir);
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("crash.log"))
+            {
                 let _ = std::io::Write::write_all(&mut f, text.as_bytes());
             }
             if cfg!(panic = "abort") {
@@ -11724,10 +16153,20 @@ fn log_crashes() {
         #[cfg(all(windows, panic = "abort"))]
         {
             // A clipboard of its own: the game's may be what was held when it crashed.
-            let copied = arboard::Clipboard::new().and_then(|mut b| b.set_text(text.clone())).is_ok();
-            let what = if copied { "The crash log is copied: paste it (Ctrl+V)" } else { "Send the crash log (crash.log in the game's data folder)" };
+            let copied = arboard::Clipboard::new()
+                .and_then(|mut b| b.set_text(text.clone()))
+                .is_ok();
+            let what = if copied {
+                "The crash log is copied: paste it (Ctrl+V)"
+            } else {
+                "Send the crash log (crash.log in the game's data folder)"
+            };
             let what = format!("{what} in #bugs on the taiko.rs Discord, so it can be fixed.");
-            crash_box(&format!("taiko.rs crashed.\n\n{}\n\n{}", crash_box_words(&what), info));
+            crash_box(&format!(
+                "taiko.rs crashed.\n\n{}\n\n{}",
+                crash_box_words(&what),
+                info
+            ));
         }
     }));
 }
@@ -11778,7 +16217,9 @@ mod native_crashes {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
 
     pub fn install() {
-        let Some(dir) = crate::config::data_dir() else { return };
+        let Some(dir) = crate::config::data_dir() else {
+            return;
+        };
         let _ = std::fs::create_dir_all(&dir);
         let log = dir.join("game.log");
         let _ = std::fs::rename(&log, dir.join("game-prev.log"));
@@ -11819,7 +16260,12 @@ mod native_crashes {
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
-        fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut *mut c_void, hash: *mut u32) -> u16;
+        fn RtlCaptureStackBackTrace(
+            skip: u32,
+            count: u32,
+            frames: *mut *mut c_void,
+            hash: *mut u32,
+        ) -> u16;
     }
 
     /// This thread's stack as `frames: taiko-rs.exe+0x1a2b3c ...` (the module and offset of
@@ -11827,7 +16273,14 @@ mod native_crashes {
     pub fn frames() -> String {
         let mut frames = [std::ptr::null_mut::<c_void>(); 62];
         // SAFETY: the buffer holds the 62 frames asked for.
-        let n = unsafe { RtlCaptureStackBackTrace(1, frames.len() as u32, frames.as_mut_ptr(), std::ptr::null_mut()) } as usize;
+        let n = unsafe {
+            RtlCaptureStackBackTrace(
+                1,
+                frames.len() as u32,
+                frames.as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+        } as usize;
         let mut out = String::from("frames:");
         for f in &frames[..n.min(frames.len())] {
             out.push(' ');
@@ -11855,9 +16308,16 @@ mod native_crashes {
 
     unsafe extern "system" fn filter(info: *mut ExceptionPointers) -> i32 {
         // SAFETY: Windows passes valid exception pointers to an unhandled exception filter.
-        let Some(record) = (unsafe { info.as_ref().and_then(|i| i.record.as_ref()) }) else { return CONTINUE_SEARCH };
-        let Some(dir) = DIR.get() else { return CONTINUE_SEARCH };
-        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let Some(record) = (unsafe { info.as_ref().and_then(|i| i.record.as_ref()) }) else {
+            return CONTINUE_SEARCH;
+        };
+        let Some(dir) = DIR.get() else {
+            return CONTINUE_SEARCH;
+        };
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let mut text = format!(
             "--- taiko.rs crash at unix {at}, build {} ({}, windows)\n{} 0x{:08X} at {}\n",
             crate::update::BUILD.unwrap_or("local"),
@@ -11881,7 +16341,8 @@ mod native_crashes {
         if let Some((dll, who)) = hook {
             text.push_str(&format!("in a hook: {who} ({dll})\n"));
         }
-        let to_dx12 = hook.is_some() && super::VULKAN_ON_AUTO.load(std::sync::atomic::Ordering::Relaxed);
+        let to_dx12 =
+            hook.is_some() && super::VULKAN_ON_AUTO.load(std::sync::atomic::Ordering::Relaxed);
         if to_dx12 {
             super::gpu_start::hook_crashed();
         }
@@ -11894,15 +16355,35 @@ mod native_crashes {
                 text.push('\n');
             }
         }
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("crash.log"))
+        {
             let _ = std::io::Write::write_all(&mut f, text.as_bytes());
         }
         let _ = std::fs::write(dir.join(super::CRASH_REPORT), &text);
-        let words = super::crash_box_words("The next start offers to copy the crash log: paste it in #bugs on the taiko.rs Discord, so it can be fixed.");
+        let words = super::crash_box_words(
+            "The next start offers to copy the crash log: paste it in #bugs on the taiko.rs Discord, so it can be fixed.",
+        );
         let advice = hook
-            .map(|(dll, who)| format!("{}\n\n", super::drawing_hook_advice(who, dll, to_dx12, super::VULKAN.load(std::sync::atomic::Ordering::Relaxed))))
+            .map(|(dll, who)| {
+                format!(
+                    "{}\n\n",
+                    super::drawing_hook_advice(
+                        who,
+                        dll,
+                        to_dx12,
+                        super::VULKAN.load(std::sync::atomic::Ordering::Relaxed)
+                    )
+                )
+            })
             .unwrap_or_default();
-        super::crash_box(&format!("taiko.rs crashed.\n\n{advice}{words}\n\n{} 0x{:08X}", what(record.code), record.code));
+        super::crash_box(&format!(
+            "taiko.rs crashed.\n\n{advice}{words}\n\n{} 0x{:08X}",
+            what(record.code),
+            record.code
+        ));
         // Windows' own handling goes on (its error report, and the end of the process).
         CONTINUE_SEARCH
     }
@@ -11913,15 +16394,29 @@ mod native_crashes {
 fn crash_box(text: &str) {
     #[link(name = "user32")]
     unsafe extern "system" {
-        fn MessageBoxW(hwnd: *mut std::ffi::c_void, text: *const u16, caption: *const u16, kind: u32) -> i32;
+        fn MessageBoxW(
+            hwnd: *mut std::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            kind: u32,
+        ) -> i32;
     }
     const MB_ICONERROR: u32 = 0x10;
     const MB_TOPMOST: u32 = 0x4_0000;
-    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let wide = |s: &str| {
+        s.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
     let (text, caption) = (wide(text), wide("taiko.rs crashed"));
     // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call; no owner window.
     unsafe {
-        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_ICONERROR | MB_TOPMOST);
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_ICONERROR | MB_TOPMOST,
+        );
     }
 }
 
@@ -11938,7 +16433,10 @@ static CRASH_CONTEXT: OnceLock<String> = OnceLock::new();
 static CRASH_SCENE: Mutex<String> = Mutex::new(String::new());
 
 fn crash_context() -> String {
-    let mut out = CRASH_CONTEXT.get().map(|c| format!("{c}\n")).unwrap_or_default();
+    let mut out = CRASH_CONTEXT
+        .get()
+        .map(|c| format!("{c}\n"))
+        .unwrap_or_default();
     if let Ok(scene) = CRASH_SCENE.try_lock()
         && !scene.is_empty()
     {
@@ -11970,14 +16468,27 @@ fn send_crash_report(server: &str, report: &str) -> bool {
     if text.len() > online::MAX_CRASH_REPORT {
         // The start (what crashed) and the end (the log's last lines) say most.
         let head: String = text.chars().take(online::MAX_CRASH_REPORT / 2).collect();
-        let tail: String = text.chars().rev().take(online::MAX_CRASH_REPORT / 2 - 100).collect::<Vec<_>>().into_iter().rev().collect();
+        let tail: String = text
+            .chars()
+            .rev()
+            .take(online::MAX_CRASH_REPORT / 2 - 100)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         text = format!("{head}\n[...]\n{tail}");
     }
-    let r = online::CrashReport { build: update::BUILD.unwrap_or("local").to_string(), os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH), report: text };
+    let r = online::CrashReport {
+        build: update::BUILD.unwrap_or("local").to_string(),
+        os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        report: text,
+    };
     let server = server.to_string();
-    std::thread::spawn(move || match online::call(&server, online::Request::CrashReport(Box::new(r))) {
-        Ok(_) => eprintln!("crash report sent"),
-        Err(e) => eprintln!("crash report not sent: {e}"),
+    std::thread::spawn(move || {
+        match online::call(&server, online::Request::CrashReport(Box::new(r))) {
+            Ok(_) => eprintln!("crash report sent"),
+            Err(e) => eprintln!("crash report not sent: {e}"),
+        }
     });
     true
 }
@@ -11998,20 +16509,33 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
     android::setup(&app);
     let cfg = Config::load();
-    let event_loop = EventLoop::<UserEvent>::with_user_event().with_android_app(app).build().expect("event loop");
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
+        .with_android_app(app)
+        .build()
+        .expect("event loop");
     android::set_proxy(event_loop.create_proxy());
     run(cfg, Vec::new(), false, None, event_loop);
 }
 
 /// Scans the library, opens audio and runs the game until it quits. `args`: songs folders, map
 /// folders, .osz or a single .osu to play; empty = the usual song folders. `link`: a score to open.
-fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, link: Option<link::Link>, event_loop: EventLoop<UserEvent>) {
+fn run(
+    cfg: Config,
+    args: Vec<PathBuf>,
+    auto: bool,
+    link: Option<link::Link>,
+    event_loop: EventLoop<UserEvent>,
+) {
     config::set_data_folder(cfg.data_folder.clone());
     library::set_songs_folder(cfg.songs_folder.clone());
     multiverse::set(cfg.universes);
     shapeshift::set(cfg.shapeshift);
     multiverse::set_note_colours(cfg.note_colours);
-    let inputs = if args.is_empty() { song_inputs(&cfg) } else { args.clone() };
+    let inputs = if args.is_empty() {
+        song_inputs(&cfg)
+    } else {
+        args.clone()
+    };
     let songs_dir = download_dir(&inputs);
     let songs_dirs_for_db: Vec<PathBuf> = inputs.iter().filter(|p| p.is_dir()).cloned().collect();
     let scan = start_scan(inputs);
@@ -12033,13 +16557,28 @@ fn run(cfg: Config, args: Vec<PathBuf>, auto: bool, link: Option<link::Link>, ev
     // A single .osu on the command line goes straight into gameplay.
     let play_when_scanned = args.len() == 1 && args[0].extension().is_some_and(|e| e == "osu");
     // No splash before a map given on the command line, or in scripted runs (TAIKO_SPLASH=1 forces it).
-    let scripted = std::env::var_os("TAIKO_SHOTS").is_some() || std::env::var_os("TAIKO_INPUT").is_some();
-    let want_splash = std::env::var_os("TAIKO_SPLASH").is_some() || (cfg.splash && !play_when_scanned && !scripted);
-    let splash = if want_splash { splash::Splash::new(audio.as_ref().map(|a| a.rate)) } else { None };
+    let scripted =
+        std::env::var_os("TAIKO_SHOTS").is_some() || std::env::var_os("TAIKO_INPUT").is_some();
+    let want_splash = std::env::var_os("TAIKO_SPLASH").is_some()
+        || (cfg.splash && !play_when_scanned && !scripted);
+    let splash = if want_splash {
+        splash::Splash::new(audio.as_ref().map(|a| a.rate))
+    } else {
+        None
+    };
     update::cleanup();
     let main_menu = cfg.main_menu && !play_when_scanned && !scripted;
     let guide = !cfg.guide_seen && !play_when_scanned && !scripted;
-    let mut state = State::new(cfg, audio, splash, songs_dir, songs_dirs_for_db, Some(scan), play_when_scanned, auto);
+    let mut state = State::new(
+        cfg,
+        audio,
+        splash,
+        songs_dir,
+        songs_dirs_for_db,
+        Some(scan),
+        play_when_scanned,
+        auto,
+    );
     state.main_menu = main_menu.then(menu::Menu::new);
     state.guide = guide.then_some(0);
     state.load_skin();
@@ -12070,7 +16609,10 @@ fn info(path: &std::path::Path) {
     let count = |k: beatmap::Kind| map.notes.iter().filter(|n| n.kind == k).count();
     let big = map.notes.iter().filter(|n| n.big).count();
     let m = &map.meta;
-    println!("{} - {} [{}] mode {} v{} OD {}", m.artist, m.title, m.version, m.mode, m.format_version, m.od);
+    println!(
+        "{} - {} [{}] mode {} v{} OD {}",
+        m.artist, m.title, m.version, m.mode, m.format_version, m.od
+    );
     println!(
         "  don {}  kat {}  big {}  roll {}  swell {}  barlines {}  control points {}",
         count(beatmap::Kind::Don),
@@ -12081,14 +16623,28 @@ fn info(path: &std::path::Path) {
         map.barlines.len(),
         map.control_points.len()
     );
-    let (lo, hi) = map.notes.iter().fold((f64::MAX, 0.0f64), |(lo, hi), n| (lo.min(n.velocity), hi.max(n.velocity)));
-    println!("  first {:.0} ms  last {:.0} ms  velocity {lo:.3}..{hi:.3} px/ms", map.notes[0].time, map.notes.last().unwrap().end_time);
+    let (lo, hi) = map.notes.iter().fold((f64::MAX, 0.0f64), |(lo, hi), n| {
+        (lo.min(n.velocity), hi.max(n.velocity))
+    });
+    println!(
+        "  first {:.0} ms  last {:.0} ms  velocity {lo:.3}..{hi:.3} px/ms",
+        map.notes[0].time,
+        map.notes.last().unwrap().end_time
+    );
     let (sr, sr_dt) = (stars::star_rating(path, 1.0), stars::star_rating(path, 1.5));
-    println!("  stars {:.2} (1.5x: {:.2})", sr.unwrap_or(f64::NAN), sr_dt.unwrap_or(f64::NAN));
+    println!(
+        "  stars {:.2} (1.5x: {:.2})",
+        sr.unwrap_or(f64::NAN),
+        sr_dt.unwrap_or(f64::NAN)
+    );
     let audio_path = path.parent().unwrap_or(path).join(&m.audio_file);
     let t = Instant::now();
     match audio::decode(&audio_path, 48000) {
-        Ok(track) => println!("  audio {:.1} s decoded in {:.0} ms", track.frames() as f64 / 48000.0, t.elapsed().as_secs_f64() * 1000.0),
+        Ok(track) => println!(
+            "  audio {:.1} s decoded in {:.0} ms",
+            track.frames() as f64 / 48000.0,
+            t.elapsed().as_secs_f64() * 1000.0
+        ),
         Err(e) => println!("  audio error: {e}"),
     }
 }
@@ -12100,9 +16656,18 @@ mod drawing_hook_tests {
     #[test]
     fn finds_obs_game_capture_in_the_frames() {
         let frames = "frames: taiko-rs.exe+0x7b154f KERNELBASE.dll+0x10f4e3 dxcore.dll+0x26d72 d3d11.dll+0xd2f7 graphics-hook64.dll+0x9b45 taiko-rs.exe+0xa1ee83";
-        assert_eq!(drawing_hook(frames), Some(("graphics-hook64.dll", "OBS's game capture")));
-        assert_eq!(drawing_hook("frames: GameOverlayRenderer64.dll+0x10 taiko-rs.exe+0x1").map(|h| h.1), Some("the Steam overlay"));
-        assert_eq!(drawing_hook("frames: taiko-rs.exe+0x1 nvoglv64.dll+0x2"), None);
+        assert_eq!(
+            drawing_hook(frames),
+            Some(("graphics-hook64.dll", "OBS's game capture"))
+        );
+        assert_eq!(
+            drawing_hook("frames: GameOverlayRenderer64.dll+0x10 taiko-rs.exe+0x1").map(|h| h.1),
+            Some("the Steam overlay")
+        );
+        assert_eq!(
+            drawing_hook("frames: taiko-rs.exe+0x1 nvoglv64.dll+0x2"),
+            None
+        );
         assert_eq!(drawing_hook("frames: not-graphics-hook64.dll+0x2"), None);
     }
 
@@ -12110,8 +16675,21 @@ mod drawing_hook_tests {
     fn advice_says_what_happens_next() {
         let a = drawing_hook_advice("OBS's game capture", "graphics-hook64.dll", true, true);
         assert!(a.contains("DX12 instead of Vulkan") && a.contains("Window Capture"));
-        let b = drawing_hook_advice("the Steam overlay", "gameoverlayrenderer64.dll", false, true);
+        let b = drawing_hook_advice(
+            "the Steam overlay",
+            "gameoverlayrenderer64.dll",
+            false,
+            true,
+        );
         assert!(b.contains("Settings > Video > Renderer") && b.contains("overlay off"));
-        assert!(!drawing_hook_advice("the Steam overlay", "gameoverlayrenderer64.dll", false, false).contains("DX12"));
+        assert!(
+            !drawing_hook_advice(
+                "the Steam overlay",
+                "gameoverlayrenderer64.dll",
+                false,
+                false
+            )
+            .contains("DX12")
+        );
     }
 }

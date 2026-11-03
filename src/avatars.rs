@@ -3,8 +3,8 @@
 //! (`Canvas::avatar` asks); until then, and for players without one, their initial shows.
 
 use std::collections::HashMap;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 /// A cell's side (pixels), and how many cells to a side of the texture.
@@ -50,7 +50,16 @@ pub struct Avatars {
 impl Avatars {
     pub fn new(base: Option<String>) -> Self {
         let (tx, rx) = mpsc::channel();
-        Avatars { base, entries: HashMap::new(), slots: Arc::default(), owners: vec![None; SLOTS], fetching: 0, tx, rx, uploads: Vec::new() }
+        Avatars {
+            base,
+            entries: HashMap::new(),
+            slots: Arc::default(),
+            owners: vec![None; SLOTS],
+            fetching: 0,
+            tx,
+            rx,
+            uploads: Vec::new(),
+        }
     }
 
     /// The pictures the renderer has, for the canvas.
@@ -80,7 +89,9 @@ impl Avatars {
                 self.owners[slot as usize] = Some((name.clone(), now));
             }
         }
-        let Some(base) = self.base.clone() else { return };
+        let Some(base) = self.base.clone() else {
+            return;
+        };
         for name in wanted {
             if self.fetching >= IN_FLIGHT {
                 break;
@@ -113,9 +124,17 @@ impl Avatars {
             Some(&slot) => slot,
             None => {
                 // A free slot, else the one drawn longest ago.
-                let slot = self.owners.iter().position(Option::is_none).unwrap_or_else(|| {
-                    self.owners.iter().enumerate().min_by_key(|(_, o)| o.as_ref().map(|(_, at)| *at)).map_or(0, |(i, _)| i)
-                }) as u32;
+                let slot = self
+                    .owners
+                    .iter()
+                    .position(Option::is_none)
+                    .unwrap_or_else(|| {
+                        self.owners
+                            .iter()
+                            .enumerate()
+                            .min_by_key(|(_, o)| o.as_ref().map(|(_, at)| *at))
+                            .map_or(0, |(i, _)| i)
+                    }) as u32;
                 if let Some((old, _)) = self.owners[slot as usize].take() {
                     Arc::make_mut(&mut self.slots).remove(&old);
                     // Fetched again when next drawn.
@@ -146,25 +165,47 @@ impl Avatars {
 
 /// Names as accounts have them (so nothing odd goes into a URL).
 fn valid_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 32 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    !name.is_empty()
+        && name.len() <= 32
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// The picture at `url` as a cell (None: the player has none).
 fn fetch(url: &str) -> Result<Option<Vec<u8>>, String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(15))).build().into();
-    let mut response = match agent.get(url).header("User-Agent", concat!("taiko-rs/", env!("CARGO_PKG_VERSION"))).call() {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .build()
+        .into();
+    let mut response = match agent
+        .get(url)
+        .header(
+            "User-Agent",
+            concat!("taiko-rs/", env!("CARGO_PKG_VERSION")),
+        )
+        .call()
+    {
         Ok(r) => r,
         Err(ureq::Error::StatusCode(404)) => return Ok(None),
         Err(e) => return Err(e.to_string()),
     };
-    let bytes = response.body_mut().with_config().limit(MAX_BYTES).read_to_vec().map_err(|e| e.to_string())?;
+    let bytes = response
+        .body_mut()
+        .with_config()
+        .limit(MAX_BYTES)
+        .read_to_vec()
+        .map_err(|e| e.to_string())?;
     cell(&bytes).map(Some)
 }
 
 /// `bytes` (an image file) as a `CELL` square: the middle of it, premultiplied RGBA.
 pub fn cell(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let image = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
-    let mut px = image.resize_to_fill(CELL, CELL, image::imageops::FilterType::Triangle).to_rgba8().into_raw();
+    let mut px = image
+        .resize_to_fill(CELL, CELL, image::imageops::FilterType::Triangle)
+        .to_rgba8()
+        .into_raw();
     for p in px.as_chunks_mut::<4>().0 {
         let a = u16::from(p[3]);
         for v in &mut p[..3] {
@@ -200,7 +241,11 @@ mod tests {
         // In the past, so that being drawn now is the latest.
         let t0 = Instant::now() - Duration::from_secs(1);
         for i in 0..SLOTS {
-            a.store(format!("p{i}"), blank.clone(), t0 + Duration::from_millis(i as u64));
+            a.store(
+                format!("p{i}"),
+                blank.clone(),
+                t0 + Duration::from_millis(i as u64),
+            );
         }
         assert!(a.owners.iter().all(Option::is_some));
         // p0 is drawn again, so p1 is the one drawn longest ago.

@@ -15,7 +15,11 @@ pub enum HalfRule {
 impl HalfRule {
     /// The rule of a play sent with `pp_version` (`online::PP_VERSION`).
     pub fn of_pp_version(pp_version: u32) -> HalfRule {
-        if pp_version >= 2 { HalfRule::OnTheBeat } else { HalfRule::EveryOther }
+        if pp_version >= 2 {
+            HalfRule::OnTheBeat
+        } else {
+            HalfRule::EveryOther
+        }
     }
 }
 
@@ -41,7 +45,9 @@ pub fn half_keeps(times: &[f64], rule: HalfRule, beat_at: &dyn Fn(f64) -> (f64, 
     while start + 1 < times.len() {
         let spacing = gap(start);
         let mut end = start + 1;
-        while end + 1 < times.len() && (gap(end) - spacing).abs() <= GRID_TOLERANCE.max(spacing * 0.08) {
+        while end + 1 < times.len()
+            && (gap(end) - spacing).abs() <= GRID_TOLERANCE.max(spacing * 0.08)
+        {
             end += 1;
         }
         let (origin, beat) = beat_at(times[start]);
@@ -54,7 +60,10 @@ pub fn half_keeps(times: &[f64], rule: HalfRule, beat_at: &dyn Fn(f64) -> (f64, 
                 .iter()
                 .map(|t| {
                     let place = (t - origin) / step;
-                    (steps >= 2 && step > GRID_TOLERANCE * 2.0 && (place - place.round()).abs() * step <= GRID_TOLERANCE).then_some(place.round() as i64)
+                    (steps >= 2
+                        && step > GRID_TOLERANCE * 2.0
+                        && (place - place.round()).abs() * step <= GRID_TOLERANCE)
+                        .then_some(place.round() as i64)
                 })
                 .collect();
             for k in start..=end {
@@ -163,24 +172,159 @@ pub enum Mod {
 use Mod::*;
 
 pub const ALL: [Mod; 76] = [
-    Easy, NoFail, HalfTime, Daycore, Half, NoFinishers, HardRock, SuddenDeath, Perfect, DoubleTime, Nightcore, Hidden,
-    Flashlight, Precise, GreatOrNothing, Relax, Autoplay, Swap, Random, ConstantSpeed, Alternate, WindUp, WindDown, AllBig,
-    Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette, AntiSv, HyperSv, Even, Split, Swing,
-    Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed, Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy,
-    Party, Overtime, Liar, Radar, Echo, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop,
-    Crossfire, Shatter, Cracked, Crumble, Portal, Multiverse,
+    Easy,
+    NoFail,
+    HalfTime,
+    Daycore,
+    Half,
+    NoFinishers,
+    HardRock,
+    SuddenDeath,
+    Perfect,
+    DoubleTime,
+    Nightcore,
+    Hidden,
+    Flashlight,
+    Precise,
+    GreatOrNothing,
+    Relax,
+    Autoplay,
+    Swap,
+    Random,
+    ConstantSpeed,
+    Alternate,
+    WindUp,
+    WindDown,
+    AllBig,
+    Accel,
+    Brake,
+    Wave,
+    Pulse,
+    Stutter,
+    SvChaos,
+    Crescendo,
+    Drop,
+    Gearbox,
+    Roulette,
+    AntiSv,
+    HyperSv,
+    Even,
+    Split,
+    Swing,
+    Leapfrog,
+    Panic,
+    Mercy,
+    LagSpike,
+    Moonwalk,
+    SnapSpeed,
+    Sudden,
+    Blink,
+    Blackout,
+    Spotlight,
+    Colorless,
+    Memory,
+    Decoy,
+    Party,
+    Overtime,
+    Liar,
+    Radar,
+    Echo,
+    Zigzag,
+    UTurn,
+    Spiral,
+    Loop,
+    Elbow,
+    Shapeshift,
+    Snake,
+    Mirror,
+    Tilt,
+    Spin,
+    Mania,
+    BarrelRoll,
+    FlipFlop,
+    Crossfire,
+    Shatter,
+    Cracked,
+    Crumble,
+    Portal,
+    Multiverse,
 ];
 
 /// Mod select columns: (title, accent colour, mods).
 pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
-    ("REDUCTION", 0x86E05A, &[Easy, NoFail, HalfTime, Daycore, Half, NoFinishers]),
-    ("INCREASE", 0xEB452C, &[HardRock, SuddenDeath, Perfect, DoubleTime, Nightcore, Hidden, Flashlight, Precise, GreatOrNothing]),
-    ("CONVERSION", 0x4fb4ff, &[Relax, Autoplay, Swap, Random, ConstantSpeed, Alternate, WindUp, WindDown, AllBig]),
-    ("SCROLL", 0xFFD34D, &[Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette]),
-    ("SV LAB", 0xFF8A3D, &[AntiSv, HyperSv, Even, Split, Swing, Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed]),
-    ("VISUAL", 0xc77dff, &[Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Party, Overtime, Liar, Radar, Echo]),
-    ("RAILS", 0x5ee6c8, &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Crossfire]),
-    ("PLAYFIELD", 0xff5fa2, &[Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal, Multiverse]),
+    (
+        "REDUCTION",
+        0x86E05A,
+        &[Easy, NoFail, HalfTime, Daycore, Half, NoFinishers],
+    ),
+    (
+        "INCREASE",
+        0xEB452C,
+        &[
+            HardRock,
+            SuddenDeath,
+            Perfect,
+            DoubleTime,
+            Nightcore,
+            Hidden,
+            Flashlight,
+            Precise,
+            GreatOrNothing,
+        ],
+    ),
+    (
+        "CONVERSION",
+        0x4fb4ff,
+        &[
+            Relax,
+            Autoplay,
+            Swap,
+            Random,
+            ConstantSpeed,
+            Alternate,
+            WindUp,
+            WindDown,
+            AllBig,
+        ],
+    ),
+    (
+        "SCROLL",
+        0xFFD34D,
+        &[
+            Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette,
+        ],
+    ),
+    (
+        "SV LAB",
+        0xFF8A3D,
+        &[
+            AntiSv, HyperSv, Even, Split, Swing, Leapfrog, Panic, Mercy, LagSpike, Moonwalk,
+            SnapSpeed,
+        ],
+    ),
+    (
+        "VISUAL",
+        0xc77dff,
+        &[
+            Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Party, Overtime, Liar,
+            Radar, Echo,
+        ],
+    ),
+    (
+        "RAILS",
+        0x5ee6c8,
+        &[
+            Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Crossfire,
+        ],
+    ),
+    (
+        "PLAYFIELD",
+        0xff5fa2,
+        &[
+            Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal,
+            Multiverse,
+        ],
+    ),
 ];
 
 /// The mods with settings of their own, in the order of the mod customization's tabs.
@@ -194,7 +338,11 @@ pub fn customizable(mods: Mods) -> Vec<Mod> {
 /// Mod select keyboard navigation: the mod `dx` columns and `dy` rows from `index` (into `ALL`).
 pub fn step(index: usize, dx: i32, dy: i32) -> usize {
     let m = ALL[index.min(ALL.len() - 1)];
-    let (col, row) = GROUPS.iter().enumerate().find_map(|(c, g)| g.2.iter().position(|&x| x == m).map(|r| (c, r))).unwrap_or((0, 0));
+    let (col, row) = GROUPS
+        .iter()
+        .enumerate()
+        .find_map(|(c, g)| g.2.iter().position(|&x| x == m).map(|r| (c, r)))
+        .unwrap_or((0, 0));
     let col = (col as i32 + dx).rem_euclid(GROUPS.len() as i32) as usize;
     let list = GROUPS[col].2;
     let row = (row as i32 + dy).clamp(0, list.len() as i32 - 1) as usize;
@@ -410,38 +558,64 @@ impl Mod {
             Mercy => "Every miss slows notes down for a few seconds.",
             LagSpike => "The lane freezes now and then, then skips ahead. Like a bad stream.",
             Moonwalk => "On every bar the notes slide backwards for a moment.",
-            SnapSpeed => "Speed by rhythm: 1/3s slower, 1/6s faster, 1/8s a bit faster than the rest.",
+            SnapSpeed => {
+                "Speed by rhythm: 1/3s slower, 1/6s faster, 1/8s a bit faster than the rest."
+            }
             Sudden => "Notes only show up close to the drum.",
             Blink => "Approaching notes vanish on the second half of every beat.",
             Blackout => "Kiai time turns the lights off: only the drum stays lit.",
             Spotlight => "Flashlight whose circle breathes with the beat.",
             Colorless => "Dons and kats look the same. Play by ear and memory.",
             Memory => "Notes are only shown for the first 15 seconds.",
-            Decoy => "See-through fake notes fly in between the real ones and vanish before the drum.",
+            Decoy => {
+                "See-through fake notes fly in between the real ones and vanish before the drum."
+            }
             Overtime => "It's me.",
-            Liar => "Far off, triplets are spaced like 1/4s; their real spacing shows near the drum.",
-            Radar => "The lane is dark: a beam sweeps it every other beat and lights notes up as it passes.",
-            Echo => "Notes are grey; the next bar shows in colour under the lane, a cursor running along it.",
-            Party => "Everything flashy at once; notes pulse to their own rhythm, 1/4s four times a beat.",
+            Liar => {
+                "Far off, triplets are spaced like 1/4s; their real spacing shows near the drum."
+            }
+            Radar => {
+                "The lane is dark: a beam sweeps it every other beat and lights notes up as it passes."
+            }
+            Echo => {
+                "Notes are grey; the next bar shows in colour under the lane, a cursor running along it."
+            }
+            Party => {
+                "Everything flashy at once; notes pulse to their own rhythm, 1/4s four times a beat."
+            }
             Zigzag => "The lane zigzags across the screen.",
             UTurn => "Notes come in along the top, make a U-turn and come back to the drum.",
             Spiral => "The lane coils into a spiral; notes wind their way in.",
             Loop => "The lane has a loop-the-loop in the middle.",
             Elbow => "Notes fall from the top and turn into the lane at a corner.",
-            Shapeshift => "Every few bars the lane bends into another rails shape (C: how often, which order).",
-            Snake => "Streams slither along the lane, triplets the other way; 1/1 notes fly straight.",
+            Shapeshift => {
+                "Every few bars the lane bends into another rails shape (C: how often, which order)."
+            }
+            Snake => {
+                "Streams slither along the lane, triplets the other way; 1/1 notes fly straight."
+            }
             Mirror => "The lane is flipped: notes come from the left.",
             Tilt => "The lane rocks from side to side with the beat.",
             Spin => "The lane moves to the middle and turns full circle every 24 seconds.",
             Mania => "The lane stands up: notes fall down onto the drum.",
             BarrelRoll => "Every kiai starts with a full spin of the lane.",
             FlipFlop => "Every 8 bars the lane flips over to the other side.",
-            Crossfire => "The drum sits in the middle: kats come from the left, dons from the right.",
-            Shatter => "The lane breaks into pieces that slide apart and back; further where streams are.",
-            Cracked => "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it.",
-            Crumble => "Hits knock pieces out of the lane, harder as the combo grows; a miss puts them back.",
+            Crossfire => {
+                "The drum sits in the middle: kats come from the left, dons from the right."
+            }
+            Shatter => {
+                "The lane breaks into pieces that slide apart and back; further where streams are."
+            }
+            Cracked => {
+                "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it."
+            }
+            Crumble => {
+                "Hits knock pieces out of the lane, harder as the combo grows; a miss puts them back."
+            }
             Portal => "Notes dive into one portal and come out of another; they move every 8 bars.",
-            Multiverse => "Eight playfields circle about, each with its own look and mods (C sets them up).",
+            Multiverse => {
+                "Eight playfields circle about, each with its own look and mods (C sets them up)."
+            }
         }
     }
 
@@ -460,13 +634,16 @@ impl Mod {
             Spotlight | Blackout | Memory | Colorless => 1.1,
             // Hard to read or to play: notes that lie about where or when they'll arrive.
             SvChaos | Even => 1.08,
-            Sudden | Blink | Decoy | Liar | Radar | Echo | Alternate | WindUp | Stutter | Roulette | HyperSv | Split | Leapfrog | LagSpike | Moonwalk => 1.06,
+            Sudden | Blink | Decoy | Liar | Radar | Echo | Alternate | WindUp | Stutter
+            | Roulette | HyperSv | Split | Leapfrog | LagSpike | Moonwalk => 1.06,
             Spiral | Shapeshift | Spin | Portal => 1.06,
             // Noticeably harder.
-            GreatOrNothing | Random | Accel | Brake | Pulse | Crescendo | Drop | Gearbox | AntiSv | Swing | Panic | SnapSpeed => 1.04,
+            GreatOrNothing | Random | Accel | Brake | Pulse | Crescendo | Drop | Gearbox
+            | AntiSv | Swing | Panic | SnapSpeed => 1.04,
             UTurn | Loop | Snake | FlipFlop | Crossfire | Shatter | Crumble => 1.04,
             // A little harder: the lane moves or bends, the notes read as usual.
-            AllBig | Wave | Zigzag | Elbow | Mirror | Tilt | Mania | BarrelRoll | Cracked | Party => 1.02,
+            AllBig | Wave | Zigzag | Elbow | Mirror | Tilt | Mania | BarrelRoll | Cracked
+            | Party => 1.02,
             _ => 1.0,
         }
     }
@@ -479,7 +656,9 @@ impl Mod {
             NoFail => &[SuddenDeath, Perfect, Relax, Autoplay],
             SuddenDeath => &[NoFail, Perfect, Relax, Autoplay],
             Perfect => &[NoFail, SuddenDeath, Relax, Autoplay],
-            HalfTime | Daycore | DoubleTime | Nightcore => &[HalfTime, Daycore, DoubleTime, Nightcore, WindUp, WindDown],
+            HalfTime | Daycore | DoubleTime | Nightcore => {
+                &[HalfTime, Daycore, DoubleTime, Nightcore, WindUp, WindDown]
+            }
             WindUp | WindDown => &[HalfTime, Daycore, DoubleTime, Nightcore, WindUp, WindDown],
             Relax => &[Autoplay, NoFail, SuddenDeath, Perfect, Alternate],
             Autoplay => &[Relax, NoFail, SuddenDeath, Perfect, Alternate],
@@ -499,10 +678,14 @@ impl Mod {
             Spotlight => &[Flashlight, Multiverse, Radar],
             // Radar decides when far notes show and lights the whole lane: nothing else may hide
             // them or keep the light to one spot. Its window-sized lanes are Multiverse's own.
-            Radar => &[Hidden, Sudden, Memory, Flashlight, Spotlight, Blackout, Multiverse],
+            Radar => &[
+                Hidden, Sudden, Memory, Flashlight, Spotlight, Blackout, Multiverse,
+            ],
             // Echo's bar sits under the lane: nothing may move the lane over it. Colorless does
             // its grey already, and Multiverse's colours are what the windows go by.
-            Echo => &[Colorless, Multiverse, Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift],
+            Echo => &[
+                Colorless, Multiverse, Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift,
+            ],
             // The map's own speeds are what these bend, so they don't mix with each other or
             // with one speed for everything.
             ConstantSpeed => &[AntiSv, HyperSv],
@@ -510,12 +693,22 @@ impl Mod {
             HyperSv => &[AntiSv, ConstantSpeed],
             Panic => &[Mercy],
             Mercy => &[Panic],
-            Spin => &[Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Crossfire, Echo],
-            Mania => &[Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Crossfire, Echo],
-            Zigzag | UTurn | Spiral | Loop | Elbow | Shapeshift => &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Mania, Spin, Multiverse, Crossfire, Echo],
+            Spin => &[
+                Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Crossfire, Echo,
+            ],
+            Mania => &[
+                Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Crossfire, Echo,
+            ],
+            Zigzag | UTurn | Spiral | Loop | Elbow | Shapeshift => &[
+                Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Mania, Spin, Multiverse, Crossfire,
+                Echo,
+            ],
             // The drum in the middle, a lane each way: nothing else may move the drum, bend the
             // lane or break it into pieces.
-            Crossfire => &[Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Shatter, Cracked, Crumble, Portal],
+            Crossfire => &[
+                Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Shatter,
+                Cracked, Crumble, Portal,
+            ],
             Shatter | Portal => &[Crossfire],
             // Its playfields are small windows side by side: nothing may move them off their
             // spots, light only one of them or take its colours away.
@@ -523,7 +716,8 @@ impl Mod {
             Colorless => &[Multiverse, Echo],
             Blackout => &[Multiverse, Radar],
             Multiverse => &[
-                Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Colorless, Flashlight, Spotlight, Blackout, Crossfire, Radar, Echo,
+                Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift,
+                Colorless, Flashlight, Spotlight, Blackout, Crossfire, Radar, Echo,
             ],
             Cracked => &[Crumble, Crossfire],
             Crumble => &[Cracked, Crossfire],
@@ -536,13 +730,17 @@ impl Mod {
     /// early, or there's nothing left to read).
     fn shuffle_cost(self) -> Option<i32> {
         Some(match self {
-            Autoplay | Relax | SuddenDeath | Perfect | GreatOrNothing | Memory | Overtime => return None,
+            Autoplay | Relax | SuddenDeath | Perfect | GreatOrNothing | Memory | Overtime => {
+                return None;
+            }
             Half => -3,
             Easy | HalfTime | Daycore => -2,
             NoFail | NoFinishers | ConstantSpeed | WindDown | Mercy => 0,
             DoubleTime | Nightcore | Flashlight | Spotlight | Colorless => 3,
-            HardRock | Hidden | Sudden | Blink | Decoy | Radar | Echo | Random | Alternate | WindUp => 2,
-            Stutter | SvChaos | Roulette | HyperSv | Even | Split | Leapfrog | Panic | LagSpike | Moonwalk => 2,
+            HardRock | Hidden | Sudden | Blink | Decoy | Radar | Echo | Random | Alternate
+            | WindUp => 2,
+            Stutter | SvChaos | Roulette | HyperSv | Even | Split | Leapfrog | Panic | LagSpike
+            | Moonwalk => 2,
             Spiral | Shapeshift | Spin | FlipFlop | Portal | Multiverse => 2,
             _ => 1,
         })
@@ -550,12 +748,28 @@ impl Mod {
 
     /// Mods that hide or disguise notes: one of them at a time is plenty.
     fn obscures(self) -> bool {
-        matches!(self, Hidden | Sudden | Flashlight | Spotlight | Blink | Colorless | Decoy | Liar | Radar | Echo | Multiverse)
+        matches!(
+            self,
+            Hidden
+                | Sudden
+                | Flashlight
+                | Spotlight
+                | Blink
+                | Colorless
+                | Decoy
+                | Liar
+                | Radar
+                | Echo
+                | Multiverse
+        )
     }
 
     /// Mods that change where and how fast notes travel.
     fn moves_notes(self) -> bool {
-        GROUPS.iter().filter(|g| ["SCROLL", "SV LAB", "RAILS", "PLAYFIELD"].contains(&g.0)).any(|g| g.2.contains(&self))
+        GROUPS
+            .iter()
+            .filter(|g| ["SCROLL", "SV LAB", "RAILS", "PLAYFIELD"].contains(&g.0))
+            .any(|g| g.2.contains(&self))
     }
 
     fn bit(self) -> u128 {
@@ -563,7 +777,9 @@ impl Mod {
     }
 
     pub fn from_acronym(s: &str) -> Option<Mod> {
-        ALL.iter().copied().find(|m| m.acronym().eq_ignore_ascii_case(s.trim()))
+        ALL.iter()
+            .copied()
+            .find(|m| m.acronym().eq_ignore_ascii_case(s.trim()))
     }
 }
 
@@ -573,7 +789,14 @@ pub struct Mods(u128);
 
 /// Mods that change the song's speed: everyone in a lobby plays the host's, so the song stays
 /// in step for all. The rest each player picks for themselves.
-const SPEED: [Mod; 6] = [Mod::DoubleTime, Mod::Nightcore, Mod::HalfTime, Mod::Daycore, Mod::WindUp, Mod::WindDown];
+const SPEED: [Mod; 6] = [
+    Mod::DoubleTime,
+    Mod::Nightcore,
+    Mod::HalfTime,
+    Mod::Daycore,
+    Mod::WindUp,
+    Mod::WindDown,
+];
 
 impl Mod {
     /// A lobby's host picks it for everyone (it changes the song's speed).
@@ -644,7 +867,11 @@ impl Mods {
 
     /// Just a set of mods, conflicting ones too (the favourites): "HD,HR,EZ".
     pub fn parse_set(s: &str) -> Mods {
-        Mods(s.split([',', ' ']).filter_map(Mod::from_acronym).fold(0, |bits, m| bits | m.bit()))
+        Mods(
+            s.split([',', ' '])
+                .filter_map(Mod::from_acronym)
+                .fold(0, |bits, m| bits | m.bit()),
+        )
     }
 
     /// `self` with `m` added or taken out, conflicts or not.
@@ -690,7 +917,9 @@ impl Mods {
                 .iter()
                 .copied()
                 .filter(|&m| {
-                    let Some(c) = m.shuffle_cost() else { return false };
+                    let Some(c) = m.shuffle_cost() else {
+                        return false;
+                    };
                     m != NoFail
                         && cost + c <= budget
                         && !m.conflicts().iter().any(|&x| out.has(x))
@@ -813,13 +1042,23 @@ pub struct Speed {
 
 impl Speed {
     pub fn constant(rate: f64) -> Speed {
-        Speed { r0: rate, r1: rate, m0: 0.0, m1: 0.0 }
+        Speed {
+            r0: rate,
+            r1: rate,
+            m0: 0.0,
+            m1: 0.0,
+        }
     }
 
     /// For a play of `mods` at base `rate` whose notes run from `first` to `last` (map ms).
     pub fn for_play(mods: Mods, rate: f64, first: f64, last: f64) -> Speed {
         match mods.wind() {
-            Some(f) if last > first => Speed { r0: rate, r1: rate * f, m0: first, m1: last },
+            Some(f) if last > first => Speed {
+                r0: rate,
+                r1: rate * f,
+                m0: first,
+                m1: last,
+            },
             _ => Speed::constant(rate),
         }
     }
@@ -877,7 +1116,12 @@ mod tests {
     fn kept(beats: &[f64]) -> Vec<f64> {
         let times: Vec<f64> = beats.iter().map(|b| (b * 500.0_f64).round()).collect();
         let keep = half_keeps(&times, HalfRule::OnTheBeat, &|_| (0.0, 500.0));
-        beats.iter().zip(keep).filter(|(_, k)| *k).map(|(b, _)| *b).collect()
+        beats
+            .iter()
+            .zip(keep)
+            .filter(|(_, k)| *k)
+            .map(|(b, _)| *b)
+            .collect()
     }
 
     #[test]
@@ -892,7 +1136,10 @@ mod tests {
         // A triplet goes to the beat.
         assert_eq!(kept(&[0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]), [0.0, 1.0]);
         // Whatever the length of the stream, the beat stays.
-        let odd: Vec<f64> = (0..=4).map(|k| 1.0 + k as f64 / 4.0).chain([3.0, 3.25, 3.5]).collect();
+        let odd: Vec<f64> = (0..=4)
+            .map(|k| 1.0 + k as f64 / 4.0)
+            .chain([3.0, 3.25, 3.5])
+            .collect();
         assert_eq!(kept(&odd), [1.0, 1.5, 2.0, 3.0, 3.5]);
     }
 
@@ -917,9 +1164,15 @@ mod tests {
     #[test]
     fn old_plays_keep_every_other_note() {
         let times = [0.0, 100.0, 300.0, 500.0, 700.0];
-        assert_eq!(half_keeps(&times, HalfRule::EveryOther, &|_| (0.0, 500.0)), [true, false, true, false, true]);
+        assert_eq!(
+            half_keeps(&times, HalfRule::EveryOther, &|_| (0.0, 500.0)),
+            [true, false, true, false, true]
+        );
         assert_eq!(HalfRule::of_pp_version(1), HalfRule::EveryOther);
-        assert_eq!(HalfRule::of_pp_version(crate::online::PP_VERSION), HalfRule::OnTheBeat);
+        assert_eq!(
+            HalfRule::of_pp_version(crate::online::PP_VERSION),
+            HalfRule::OnTheBeat
+        );
     }
 
     #[test]
@@ -930,7 +1183,12 @@ mod tests {
         // A player's game: the host's speed, their own others (not the host's).
         let mine = Mods::parse("HT,EZ,FL");
         assert_eq!(host.shared().plus(mine.free()), Mods::parse("DT,EZ,FL"));
-        assert!(Mod::WindUp.shared() && Mod::Nightcore.shared() && !Mod::Hidden.shared() && !Mod::Random.shared());
+        assert!(
+            Mod::WindUp.shared()
+                && Mod::Nightcore.shared()
+                && !Mod::Hidden.shared()
+                && !Mod::Random.shared()
+        );
     }
 
     #[test]
@@ -945,17 +1203,29 @@ mod tests {
                 Some(_) => x >= 1.1,
                 None => true,
             };
-            assert!(ok, "{}: x{x} for a shuffle cost of {:?}", m.name(), m.shuffle_cost());
+            assert!(
+                ok,
+                "{}: x{x} for a shuffle cost of {:?}",
+                m.name(),
+                m.shuffle_cost()
+            );
         }
         // A heavy custom set adds up, but stays in reach of osu!'s HDHRDTFL (x1.42).
         let set = Mods::parse("CH,EV,SS,SU,ST");
-        assert!((1.3..1.5).contains(&set.multiplier()), "{}", set.multiplier());
+        assert!(
+            (1.3..1.5).contains(&set.multiplier()),
+            "{}",
+            set.multiplier()
+        );
     }
 
     #[test]
     fn favourites_keep_conflicting_mods_and_round_trip() {
         // Easy and Hard Rock conflict, but both can be favourites.
-        let favs = Mods::NONE.flip(Mod::Easy).flip(Mod::HardRock).flip(Mod::Hidden);
+        let favs = Mods::NONE
+            .flip(Mod::Easy)
+            .flip(Mod::HardRock)
+            .flip(Mod::Hidden);
         assert!(favs.has(Mod::Easy) && favs.has(Mod::HardRock));
         assert_eq!(Mods::parse_set(&favs.to_config()), favs);
         assert!(!favs.flip(Mod::Hidden).has(Mod::Hidden));
@@ -981,10 +1251,19 @@ mod tests {
     fn conflicts_go_both_ways_and_descriptions_fit_the_mod_select() {
         for m in ALL {
             for &c in m.conflicts() {
-                assert!(c == m || c.conflicts().contains(&m), "{} -> {}", m.acronym(), c.acronym());
+                assert!(
+                    c == m || c.conflicts().contains(&m),
+                    "{} -> {}",
+                    m.acronym(),
+                    c.acronym()
+                );
             }
             // The mod select's description line at 5:4 (600 wide).
-            assert!(crate::render::Canvas::text_width(7.0, m.description()) <= 600.0 - 64.0, "{}", m.name());
+            assert!(
+                crate::render::Canvas::text_width(7.0, m.description()) <= 600.0 - 64.0,
+                "{}",
+                m.name()
+            );
         }
     }
 
@@ -1011,13 +1290,29 @@ mod tests {
             let cost: i32 = picked.iter().map(|x| x.shuffle_cost().unwrap()).sum();
             assert!(cost <= 6, "{}", m.to_config());
             assert_eq!(m.has(NoFail), cost >= 5, "{}", m.to_config());
-            assert!(picked.iter().filter(|x| x.obscures()).count() <= 1, "{}", m.to_config());
-            assert!(picked.iter().filter(|x| x.moves_notes()).count() <= 3, "{}", m.to_config());
+            assert!(
+                picked.iter().filter(|x| x.obscures()).count() <= 1,
+                "{}",
+                m.to_config()
+            );
+            assert!(
+                picked.iter().filter(|x| x.moves_notes()).count() <= 3,
+                "{}",
+                m.to_config()
+            );
             for g in GROUPS {
-                assert!(picked.iter().filter(|x| g.2.contains(x)).count() <= 1, "{}", m.to_config());
+                assert!(
+                    picked.iter().filter(|x| g.2.contains(x)).count() <= 1,
+                    "{}",
+                    m.to_config()
+                );
             }
             for x in m.iter() {
-                assert!(!x.conflicts().iter().any(|&c| c != x && m.has(c)), "{}", m.to_config());
+                assert!(
+                    !x.conflicts().iter().any(|&c| c != x && m.has(c)),
+                    "{}",
+                    m.to_config()
+                );
             }
             seen = Mods(seen.0 | m.0);
         }
@@ -1061,9 +1356,17 @@ mod tests {
         let text = serde_json::to_string_pretty(&groups).unwrap() + "\n";
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("server/site/mods.json");
         // Line endings aside: a Windows checkout may have turned them into CRLF.
-        if std::fs::read_to_string(&path).ok().map(|t| t.replace("\r\n", "\n")).as_deref() != Some(text.as_str()) {
+        if std::fs::read_to_string(&path)
+            .ok()
+            .map(|t| t.replace("\r\n", "\n"))
+            .as_deref()
+            != Some(text.as_str())
+        {
             std::fs::write(&path, &text).unwrap();
-            panic!("{} was out of date and has been rewritten: commit it", path.display());
+            panic!(
+                "{} was out of date and has been rewritten: commit it",
+                path.display()
+            );
         }
     }
 }

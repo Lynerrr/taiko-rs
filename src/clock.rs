@@ -25,7 +25,13 @@ pub struct GameClock {
 
 impl GameClock {
     pub fn new(start_ms: f64, wait_for_audio: bool) -> Self {
-        GameClock { time: start_ms, at: Instant::now(), synced: false, wait_for_audio, jump: None }
+        GameClock {
+            time: start_ms,
+            at: Instant::now(),
+            synced: false,
+            wait_for_audio,
+            jump: None,
+        }
     }
 
     /// Advances to `now`, nudging toward the audio position if one is known.
@@ -36,7 +42,10 @@ impl GameClock {
         self.time = match audio_ms {
             Some(audio) => {
                 let err = audio - predicted;
-                let confirmed = self.jump.take().is_some_and(|e| (err - e).abs() <= SNAP_THRESHOLD_MS);
+                let confirmed = self
+                    .jump
+                    .take()
+                    .is_some_and(|e| (err - e).abs() <= SNAP_THRESHOLD_MS);
                 if !self.synced || (err.abs() > SNAP_THRESHOLD_MS && confirmed) {
                     self.synced = true;
                     audio
@@ -97,7 +106,12 @@ pub struct VsyncPacer {
 
 impl Default for VsyncPacer {
     fn default() -> Self {
-        VsyncPacer { period: 1000.0 / 60.0, told_hz: 0.0, last: None, steps: Default::default() }
+        VsyncPacer {
+            period: 1000.0 / 60.0,
+            told_hz: 0.0,
+            last: None,
+            steps: Default::default(),
+        }
     }
 }
 
@@ -117,8 +131,20 @@ impl VsyncPacer {
             self.last = None;
             self.steps.clear();
         }
-        let ms = |a: Instant, b: Instant| if a >= b { (a - b).as_secs_f64() * 1000.0 } else { -((b - a).as_secs_f64() * 1000.0) };
-        let shift = |t: Instant, by: f64| if by >= 0.0 { t + Duration::from_secs_f64(by / 1000.0) } else { t - Duration::from_secs_f64(-by / 1000.0) };
+        let ms = |a: Instant, b: Instant| {
+            if a >= b {
+                (a - b).as_secs_f64() * 1000.0
+            } else {
+                -((b - a).as_secs_f64() * 1000.0)
+            }
+        };
+        let shift = |t: Instant, by: f64| {
+            if by >= 0.0 {
+                t + Duration::from_secs_f64(by / 1000.0)
+            } else {
+                t - Duration::from_secs_f64(-by / 1000.0)
+            }
+        };
         let Some((prev, prev_acquired)) = self.last else {
             self.last = Some((acquired, acquired));
             return acquired;
@@ -181,7 +207,10 @@ impl VsyncPacer {
         let median = sorted[sorted.len() / 2];
         // A slow frame (two refreshes or more) and the quick one after it are well outside; any
         // jitter, however lopsided, inside.
-        let near: Vec<f64> = sorted.into_iter().filter(|s| (s - median).abs() < 0.5 * median).collect();
+        let near: Vec<f64> = sorted
+            .into_iter()
+            .filter(|s| (s - median).abs() < 0.5 * median)
+            .collect();
         Some(near.iter().sum::<f64>() / near.len() as f64)
     }
 
@@ -207,7 +236,14 @@ mod tests {
     fn paced(acquired: &[f64]) -> Vec<f64> {
         let start = Instant::now();
         let mut p = VsyncPacer::default();
-        acquired.iter().map(|&a| (p.frame_time(start + Duration::from_secs_f64(a / 1000.0), 60.0) - start).as_secs_f64() * 1000.0).collect()
+        acquired
+            .iter()
+            .map(|&a| {
+                (p.frame_time(start + Duration::from_secs_f64(a / 1000.0), 60.0) - start)
+                    .as_secs_f64()
+                    * 1000.0
+            })
+            .collect()
     }
 
     #[test]
@@ -215,7 +251,9 @@ mod tests {
         let r = 1000.0 / 60.0;
         // Images handed out up to 3 ms either side of each refresh.
         let jitter = [0.0, 2.1, -1.4, 2.9, -2.6, 0.7, -0.3, 1.8, -2.9, 2.2];
-        let acquired: Vec<f64> = (0..200).map(|k| k as f64 * r + jitter[k % jitter.len()]).collect();
+        let acquired: Vec<f64> = (0..200)
+            .map(|k| k as f64 * r + jitter[k % jitter.len()])
+            .collect();
         let t = paced(&acquired);
         for w in t.windows(2).skip(1) {
             assert!((w[1] - w[0] - r).abs() < 0.25, "step {}", w[1] - w[0]);
@@ -235,10 +273,22 @@ mod tests {
         }
         acquired[11] = acquired[10] + 1.0;
         let t = paced(&acquired);
-        let steps: Vec<f64> = t.windows(2).map(|w| ((w[1] - w[0]) / r * 100.0).round() / 100.0).collect();
+        let steps: Vec<f64> = t
+            .windows(2)
+            .map(|w| ((w[1] - w[0]) / r * 100.0).round() / 100.0)
+            .collect();
         // One step of two refreshes (the frame shown twice), all the rest one.
-        assert_eq!(steps.iter().filter(|&&s| (s - 2.0).abs() < 0.05).count(), 1, "{steps:?}");
-        assert!(steps.iter().all(|&s| (s - 1.0).abs() < 0.05 || (s - 2.0).abs() < 0.05), "{steps:?}");
+        assert_eq!(
+            steps.iter().filter(|&&s| (s - 2.0).abs() < 0.05).count(),
+            1,
+            "{steps:?}"
+        );
+        assert!(
+            steps
+                .iter()
+                .all(|&s| (s - 1.0).abs() < 0.05 || (s - 2.0).abs() < 0.05),
+            "{steps:?}"
+        );
     }
 
     /// Frame times (ms from the first) for images handed out at `acquired` (ms), told the screen
@@ -246,7 +296,14 @@ mod tests {
     fn paced_told(acquired: &[f64], told_hz: f64) -> (Vec<f64>, VsyncPacer) {
         let start = Instant::now();
         let mut p = VsyncPacer::default();
-        let t = acquired.iter().map(|&a| (p.frame_time(start + Duration::from_secs_f64(a / 1000.0), told_hz) - start).as_secs_f64() * 1000.0).collect();
+        let t = acquired
+            .iter()
+            .map(|&a| {
+                (p.frame_time(start + Duration::from_secs_f64(a / 1000.0), told_hz) - start)
+                    .as_secs_f64()
+                    * 1000.0
+            })
+            .collect();
         (t, p)
     }
 
@@ -257,14 +314,26 @@ mod tests {
         for (real, told) in [(180.0, 60.0), (60.0, 180.0), (144.0, 60.0), (240.0, 144.0)] {
             let r = 1000.0 / real;
             let jitter = [0.0, 0.4, -0.3, 0.6, -0.5, 0.2];
-            let acquired: Vec<f64> = (0..600).map(|k| k as f64 * r + jitter[k % jitter.len()]).collect();
+            let acquired: Vec<f64> = (0..600)
+                .map(|k| k as f64 * r + jitter[k % jitter.len()])
+                .collect();
             let (t, p) = paced_told(&acquired, told);
             // Once it has seen a few dozen frames, every step is one of its refreshes.
             for (k, w) in t.windows(2).enumerate().skip(40) {
-                assert!((w[1] - w[0] - r).abs() < 0.2, "{real} Hz told {told}: step {k} is {}", w[1] - w[0]);
+                assert!(
+                    (w[1] - w[0] - r).abs() < 0.2,
+                    "{real} Hz told {told}: step {k} is {}",
+                    w[1] - w[0]
+                );
             }
-            assert!((t[599] - acquired[599]).abs() < 2.0, "{real} Hz told {told}: drifted off");
-            assert!((p.refresh_ms().unwrap() - r).abs() < 0.05, "{real} Hz told {told}");
+            assert!(
+                (t[599] - acquired[599]).abs() < 2.0,
+                "{real} Hz told {told}: drifted off"
+            );
+            assert!(
+                (p.refresh_ms().unwrap() - r).abs() < 0.05,
+                "{real} Hz told {told}"
+            );
         }
     }
 
@@ -272,7 +341,9 @@ mod tests {
     fn a_game_drawing_every_other_refresh_still_steps_evenly() {
         // A 240 Hz screen, frames every second refresh: shown 2 refreshes apart, evenly.
         let r = 2.0 * 1000.0 / 240.0;
-        let acquired: Vec<f64> = (0..400).map(|k| k as f64 * r + if k % 2 == 0 { 0.3 } else { -0.3 }).collect();
+        let acquired: Vec<f64> = (0..400)
+            .map(|k| k as f64 * r + if k % 2 == 0 { 0.3 } else { -0.3 })
+            .collect();
         let (t, _) = paced_told(&acquired, 240.0);
         for w in t.windows(2).skip(40) {
             assert!((w[1] - w[0] - r).abs() < 0.2, "step {}", w[1] - w[0]);
@@ -291,7 +362,9 @@ mod tests {
         // A song in mailbox, then vsync again: straight back on the 180 Hz grid.
         p.reset();
         let t0 = 10_000.0;
-        let t: Vec<f64> = (0..10).map(|k| (p.frame_time(at(t0 + k as f64 * r), 60.0) - start).as_secs_f64() * 1000.0).collect();
+        let t: Vec<f64> = (0..10)
+            .map(|k| (p.frame_time(at(t0 + k as f64 * r), 60.0) - start).as_secs_f64() * 1000.0)
+            .collect();
         assert!(t.windows(2).all(|w| (w[1] - w[0] - r).abs() < 0.2), "{t:?}");
     }
 

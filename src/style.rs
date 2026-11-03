@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::render::{self, pixel_size, rgba, snap_to_grid, Canvas};
+use crate::render::{self, Canvas, pixel_size, rgba, snap_to_grid};
 
 const GOLD: u32 = 0xFFD34D;
 const GLITCH_RED: u32 = 0x9f2137;
@@ -25,13 +25,23 @@ static KIAI: AtomicU32 = AtomicU32::new(0);
 pub fn set_beat(phase: Option<f32>, kiai: bool) {
     let pulse = pulse_at(phase.filter(|_| render::animations()));
     PULSE.store(pulse.to_bits(), Ordering::Relaxed);
-    KIAI.store(if kiai && render::animations() { 1.0f32 } else { 0.0 }.to_bits(), Ordering::Relaxed);
+    KIAI.store(
+        if kiai && render::animations() {
+            1.0f32
+        } else {
+            0.0
+        }
+        .to_bits(),
+        Ordering::Relaxed,
+    );
 }
 
 /// The beat's light at `phase` (0 on the beat to 1), none without one.
 fn pulse_at(phase: Option<f32>) -> f32 {
     // NaN would pass through clamp into every colour lit by the beat (drawn black).
-    phase.filter(|p| p.is_finite()).map_or(0.0, |p| (1.0 - p.clamp(0.0, 1.0)).powi(3))
+    phase
+        .filter(|p| p.is_finite())
+        .map_or(0.0, |p| (1.0 - p.clamp(0.0, 1.0)).powi(3))
 }
 
 pub fn pulse() -> f32 {
@@ -44,7 +54,14 @@ pub fn kiai() -> f32 {
 
 /// A dark panel with the main menu's rounded edge.
 pub fn panel(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32) {
-    c.round_rect([x, y], [w, h], 10.0, rgba(PANEL, 0.95), rgba(PANEL_EDGE, 1.0), 1.5);
+    c.round_rect(
+        [x, y],
+        [w, h],
+        10.0,
+        rgba(PANEL, 0.95),
+        rgba(PANEL_EDGE, 1.0),
+        1.5,
+    );
 }
 
 /// The selector's colour now: the accent, or gold in a kiai.
@@ -56,7 +73,12 @@ pub fn selector_colour() -> u32 {
 pub fn brackets(c: &mut Canvas, [x, y, w, h]: [f32; 4], alpha: f32) {
     let t = pixel_size(2.0);
     let arm = (w.min(h) * 0.35).clamp(5.0, 10.0);
-    let (l, r, top, bot) = (snap_to_grid(x), snap_to_grid(x + w), snap_to_grid(y), snap_to_grid(y + h));
+    let (l, r, top, bot) = (
+        snap_to_grid(x),
+        snap_to_grid(x + w),
+        snap_to_grid(y),
+        snap_to_grid(y + h),
+    );
     let col = rgba(selector_colour(), alpha * (0.75 + 0.25 * pulse()));
     for (cx, sx) in [(l, 1.0), (r, -1.0)] {
         for (cy, sy) in [(top, 1.0), (bot, -1.0)] {
@@ -84,7 +106,14 @@ pub fn selector(c: &mut Canvas, key: &'static str, target: [f32; 4]) -> [f32; 4]
     });
     // A soft light of its colour over what it's on, breathing with the beat.
     let [x, y, w, h] = now;
-    c.round_rect([x + 3.0, y + 3.0], [w - 6.0, h - 6.0], 7.0, rgba(selector_colour(), 0.06 + 0.06 * pulse()), rgba(0, 0.0), 0.0);
+    c.round_rect(
+        [x + 3.0, y + 3.0],
+        [w - 6.0, h - 6.0],
+        7.0,
+        rgba(selector_colour(), 0.06 + 0.06 * pulse()),
+        rgba(0, 0.0),
+        0.0,
+    );
     brackets(c, now, 1.0);
     now
 }
@@ -141,7 +170,10 @@ fn small_art(fill: u32) -> SmallArt {
     for (y, by) in [(6, 1), (10, 2), (15, 1)] {
         let row = &mut art[y];
         let rim = |p: &u32| *p != 0 && *p != OUTLINE;
-        let (Some(left), Some(right)) = (row.iter().position(rim), row.iter().rposition(rim)) else { continue };
+        let (Some(left), Some(right)) = (row.iter().position(rim), row.iter().rposition(rim))
+        else {
+            continue;
+        };
         row[left.saturating_sub(by + 1)..left].fill(GLITCH_RED);
         row[right + 1..(right + 2 + by).min(SMALL)].fill(GLITCH_CYAN);
     }
@@ -200,12 +232,25 @@ pub fn note(c: &mut Canvas, x: f32, y: f32, r: f32, col: u32, lit: bool, brightn
     // A disc of the note's own colour under the pixels: where two rectangles meet, any seam shows
     // the same colour.
     let mid = [left + SMALL_MID * px, top + SMALL_MID * px];
-    c.circle(mid[0], mid[1], 7.0 * px, rgba(col, 1.0), rgba(col, 1.0), 0.0);
+    c.circle(
+        mid[0],
+        mid[1],
+        7.0 * px,
+        rgba(col, 1.0),
+        rgba(col, 1.0),
+        0.0,
+    );
     ARTS.with(|arts| {
         let mut arts = arts.borrow_mut();
         let rects = arts.entry(col).or_insert_with(|| merged(&small_art(col)));
         for &(rx, ry, rw, rh, colour) in rects.iter() {
-            c.rect(left + rx as f32 * px, top + ry as f32 * px, rw as f32 * px, rh as f32 * px, rgba(colour, 1.0));
+            c.rect(
+                left + rx as f32 * px,
+                top + ry as f32 * px,
+                rw as f32 * px,
+                rh as f32 * px,
+                rgba(colour, 1.0),
+            );
         }
     });
     if !lit && brightness < 1.0 {
@@ -215,7 +260,14 @@ pub fn note(c: &mut Canvas, x: f32, y: f32, r: f32, col: u32, lit: bool, brightn
 
 /// A pill behind a label that's on: `col`'s fill, a faint white edge.
 pub fn pill(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32, col: u32) {
-    c.round_rect([x, y], [w, h], h / 2.0, rgba(crate::menu::tint(col, 0x000000, 0.25), 0.95), rgba(0xffffff, 0.35), 1.0);
+    c.round_rect(
+        [x, y],
+        [w, h],
+        h / 2.0,
+        rgba(crate::menu::tint(col, 0x000000, 0.25), 0.95),
+        rgba(0xffffff, 0.35),
+        1.0,
+    );
 }
 
 /// A screen's title at (`x`, `y`): in a kiai, each beat splits it red and cyan for a moment.
@@ -249,18 +301,40 @@ mod tests {
             at = slide(at, to, 16.0, true);
         }
         assert!((at[1] - 40.0).abs() < 0.01);
-        assert_eq!(slide(from, to, 16.0, false), to, "without animations: there");
-        assert_eq!(slide(from, [10.0, 900.0, 100.0, 20.0], 16.0, true)[1], 900.0, "from far: at once");
+        assert_eq!(
+            slide(from, to, 16.0, false),
+            to,
+            "without animations: there"
+        );
+        assert_eq!(
+            slide(from, [10.0, 900.0, 100.0, 20.0], 16.0, true)[1],
+            900.0,
+            "from far: at once"
+        );
     }
 
     #[test]
     fn a_small_note_is_round_and_its_rectangles_cover_it_exactly() {
         let art = small_art(0xEB452C);
         // Round: as wide across the middle as from top to bottom, and its corners empty.
-        let row = |y: usize| art[y].iter().filter(|&&p| p != 0 && p != GLITCH_RED && p != GLITCH_CYAN).count();
+        let row = |y: usize| {
+            art[y]
+                .iter()
+                .filter(|&&p| p != 0 && p != GLITCH_RED && p != GLITCH_CYAN)
+                .count()
+        };
         let column = |x: usize| (0..SMALL).filter(|&y| art[y][x] != 0).count();
-        assert_eq!(row(11), column(11), "as wide as it is tall (a row without the glitch)");
-        assert!(art[0][0] == 0 && art[0][SMALL - 1] == 0 && art[SMALL - 1][0] == 0 && art[SMALL - 1][SMALL - 1] == 0);
+        assert_eq!(
+            row(11),
+            column(11),
+            "as wide as it is tall (a row without the glitch)"
+        );
+        assert!(
+            art[0][0] == 0
+                && art[0][SMALL - 1] == 0
+                && art[SMALL - 1][0] == 0
+                && art[SMALL - 1][SMALL - 1] == 0
+        );
         // The rectangles paint every pixel once, in its colour, and there are far fewer of them.
         let rects = merged(&art);
         let mut painted = [[0u32; SMALL]; SMALL];
@@ -273,8 +347,15 @@ mod tests {
             }
         }
         assert_eq!(painted, art);
-        let runs: usize = art.iter().map(|r| r.windows(2).filter(|w| w[0] != w[1]).count() + 1).sum();
-        assert!(rects.len() < runs, "{} rectangles for {runs} row runs", rects.len());
+        let runs: usize = art
+            .iter()
+            .map(|r| r.windows(2).filter(|w| w[0] != w[1]).count() + 1)
+            .sum();
+        assert!(
+            rects.len() < runs,
+            "{} rectangles for {runs} row runs",
+            rects.len()
+        );
     }
 
     #[test]

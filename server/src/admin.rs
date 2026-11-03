@@ -10,12 +10,12 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::online::{self, AdminLookup, AdminOp, AdminOverview, AdminPlayer, ChatLine, Down};
-use crate::{is_admin, now_secs, State, CHAT_HISTORY};
+use crate::{CHAT_HISTORY, State, is_admin, now_secs};
 
 /// How long a kicked player stays out.
 const KICKED_FOR: Duration = Duration::from_secs(120);
@@ -40,14 +40,23 @@ pub struct AdminState {
 impl AdminState {
     pub fn load(dir: &Path) -> AdminState {
         let seen = crate::load_saved(&dir.join("seen.json"));
-        AdminState { dir: dir.to_path_buf(), kicked: Mutex::default(), seen: Mutex::new(seen), seen_changed: AtomicBool::new(false), log: Mutex::default(), started: Instant::now() }
+        AdminState {
+            dir: dir.to_path_buf(),
+            kicked: Mutex::default(),
+            seen: Mutex::new(seen),
+            seen_changed: AtomicBool::new(false),
+            log: Mutex::default(),
+            started: Instant::now(),
+        }
     }
 
     /// How long `key` stays out after a kick, if they're still out.
     pub fn kicked_for(&self, key: &str) -> Option<Duration> {
         let mut kicked = self.kicked.lock().unwrap();
         kicked.retain(|_, until| *until > Instant::now());
-        kicked.get(key).map(|until| until.saturating_duration_since(Instant::now()))
+        kicked
+            .get(key)
+            .map(|until| until.saturating_duration_since(Instant::now()))
     }
 
     /// `key` logged in or connected from `ip` (its `limit_key`).
@@ -66,8 +75,16 @@ impl AdminState {
     /// Other accounts seen at one of `key`'s addresses.
     fn alts(&self, key: &str) -> Vec<String> {
         let seen = self.seen.lock().unwrap();
-        let Some(mine) = seen.get(key) else { return Vec::new() };
-        let mut out: Vec<String> = seen.iter().filter(|(k, list)| *k != key && list.iter().any(|(a, _)| mine.iter().any(|(m, _)| m == a))).map(|(k, _)| k.clone()).collect();
+        let Some(mine) = seen.get(key) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = seen
+            .iter()
+            .filter(|(k, list)| {
+                *k != key && list.iter().any(|(a, _)| mine.iter().any(|(m, _)| m == a))
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
         out.sort();
         out
     }
@@ -77,7 +94,9 @@ impl AdminState {
         if !self.seen_changed.swap(false, Ordering::Relaxed) {
             return;
         }
-        let Ok(text) = serde_json::to_string(&*self.seen.lock().unwrap()) else { return };
+        let Ok(text) = serde_json::to_string(&*self.seen.lock().unwrap()) else {
+            return;
+        };
         if let Err(e) = crate::write_private(&self.dir.join("seen.json"), &text) {
             eprintln!("saving seen.json: {e}");
         }
@@ -89,7 +108,11 @@ impl AdminState {
         let line = format!("{:02}:{:02} {by} {what}", secs / 3600 % 24, secs / 60 % 60);
         println!("admin: {by} {what}");
         let path = self.dir.join("admin.log");
-        match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             Ok(mut f) => {
                 let _ = writeln!(f, "{secs} {by} {what}");
             }
@@ -127,7 +150,10 @@ fn run(state: &State, key: &str, op: AdminOp) -> Result<Option<(String, bool)>, 
     let done = |msg: String| Ok(Some((msg, true)));
     match op {
         AdminOp::Ban { name, on } => done(state.set_banned(key, &name, on)?),
-        AdminOp::Rename { name, new } => done(format!("{name} is called {} now", state.rename(key, &name, &new)?)),
+        AdminOp::Rename { name, new } => done(format!(
+            "{name} is called {} now",
+            state.rename(key, &name, &new)?
+        )),
         AdminOp::Nominator { name, on } => done(state.set_nominator(key, &name, on)?),
         AdminOp::RemoveAvatar { name } => {
             let (target, shown) = account(state, &name)?;
@@ -136,21 +162,32 @@ fn run(state: &State, key: &str, op: AdminOp) -> Result<Option<(String, bool)>, 
         }
         AdminOp::Kick { name } => {
             let (target, shown) = state.admin_target(key, &name)?;
-            state.admin.kicked.lock().unwrap().insert(target.clone(), Instant::now() + KICKED_FOR);
+            state
+                .admin
+                .kicked
+                .lock()
+                .unwrap()
+                .insert(target.clone(), Instant::now() + KICKED_FOR);
             let hub = state.hub.lock().unwrap();
             if !hub.conns.contains_key(&target) {
                 return Err(format!("{shown} isn't online"));
             }
             hub.send_to(&target, &Down::Notice("an admin disconnected you".into()));
             hub.close_account(&target);
-            done(format!("kicked {shown} (out for {} minutes)", KICKED_FOR.as_secs() / 60))
+            done(format!(
+                "kicked {shown} (out for {} minutes)",
+                KICKED_FOR.as_secs() / 60
+            ))
         }
         AdminOp::Mute { name, minutes } => {
             let (target, shown) = state.admin_target(key, &name)?;
             let minutes = minutes.min(MAX_MUTE_MINUTES);
             {
                 let mut a = state.accounts.lock().unwrap();
-                let user = a.users.get_mut(&target).ok_or("there's no player by that name")?;
+                let user = a
+                    .users
+                    .get_mut(&target)
+                    .ok_or("there's no player by that name")?;
                 user.muted_until = (minutes > 0).then(|| now_secs() + u64::from(minutes) * 60);
             }
             state.save();
@@ -158,7 +195,13 @@ fn run(state: &State, key: &str, op: AdminOp) -> Result<Option<(String, bool)>, 
                 state.notice(&target, "you can talk in the global chat again".into());
                 done(format!("unmuted {shown}"))
             } else {
-                state.notice(&target, format!("an admin muted you in the global chat for {}", span(minutes)));
+                state.notice(
+                    &target,
+                    format!(
+                        "an admin muted you in the global chat for {}",
+                        span(minutes)
+                    ),
+                );
                 done(format!("muted {shown} for {}", span(minutes)))
             }
         }
@@ -167,7 +210,13 @@ fn run(state: &State, key: &str, op: AdminOp) -> Result<Option<(String, bool)>, 
             if text.is_empty() {
                 return Err("nothing to announce".into());
             }
-            let line = ChatLine { from: online::SERVER_NAME.to_string(), to: String::new(), text: text.clone(), at: now_secs(), medal: None };
+            let line = ChatLine {
+                from: online::SERVER_NAME.to_string(),
+                to: String::new(),
+                text: text.clone(),
+                at: now_secs(),
+                medal: None,
+            };
             {
                 let mut hub = state.hub.lock().unwrap();
                 hub.global.push_back(line.clone());
@@ -190,17 +239,27 @@ fn run(state: &State, key: &str, op: AdminOp) -> Result<Option<(String, bool)>, 
         }
         AdminOp::PurgeGlobal { name } => {
             let k = name.trim().to_ascii_lowercase();
-            let n = take_down(state, |l| l.from.to_ascii_lowercase() == k && l.medal.is_none());
+            let n = take_down(state, |l| {
+                l.from.to_ascii_lowercase() == k && l.medal.is_none()
+            });
             done(format!("took down {n} global chat lines of {name}"))
         }
         AdminOp::Overview => {
             let overview = overview(state);
-            state.hub.lock().unwrap().send_to(key, &Down::AdminOverview(Box::new(overview)));
+            state
+                .hub
+                .lock()
+                .unwrap()
+                .send_to(key, &Down::AdminOverview(Box::new(overview)));
             Ok(None)
         }
         AdminOp::Lookup { name } => {
             let lookup = lookup(state, &name)?;
-            state.hub.lock().unwrap().send_to(key, &Down::AdminLookup(Box::new(lookup)));
+            state
+                .hub
+                .lock()
+                .unwrap()
+                .send_to(key, &Down::AdminLookup(Box::new(lookup)));
             Ok(None)
         }
         AdminOp::DeletePlay { id } => {
@@ -224,7 +283,12 @@ fn run(state: &State, key: &str, op: AdminOp) -> Result<Option<(String, bool)>, 
             done(format!("took {name} out of lobby {room} \"{}\"", l.title))
         }
         AdminOp::CloseRoom { room } => {
-            let l = state.lobbies.lock().unwrap().remove(&room).ok_or("that lobby is gone")?;
+            let l = state
+                .lobbies
+                .lock()
+                .unwrap()
+                .remove(&room)
+                .ok_or("that lobby is gone")?;
             done(format!("closed lobby {room} \"{}\"", l.title))
         }
     }
@@ -233,7 +297,13 @@ fn run(state: &State, key: &str, op: AdminOp) -> Result<Option<(String, bool)>, 
 /// `name`'s key and name as written, for any account (admins included).
 fn account(state: &State, name: &str) -> Result<(String, String), String> {
     let key = name.trim().to_ascii_lowercase();
-    let shown = state.accounts.lock().unwrap().users.get(&key).map(|u| u.name.clone());
+    let shown = state
+        .accounts
+        .lock()
+        .unwrap()
+        .users
+        .get(&key)
+        .map(|u| u.name.clone());
     Ok((key, shown.ok_or("there's no player by that name")?))
 }
 
@@ -255,7 +325,10 @@ fn take_down(state: &State, which: impl Fn(&ChatLine) -> bool) -> usize {
     let gone: Vec<ChatLine> = hub.global.iter().filter(|l| which(l)).cloned().collect();
     hub.global.retain(|l| !which(l));
     for l in &gone {
-        hub.send_to_all(&Down::GlobalChatDeleted { from: l.from.clone(), at: l.at });
+        hub.send_to_all(&Down::GlobalChatDeleted {
+            from: l.from.clone(),
+            at: l.at,
+        });
     }
     if !gone.is_empty() {
         hub.chat_changed = true;
@@ -268,7 +341,15 @@ fn take_down(state: &State, which: impl Fn(&ChatLine) -> bool) -> usize {
 fn overview(state: &State) -> AdminOverview {
     let (accounts, sessions, mutes) = {
         let a = state.accounts.lock().unwrap();
-        let mutes: HashMap<String, u64> = a.users.iter().filter_map(|(k, u)| u.muted_until.filter(|&t| t > now_secs()).map(|t| (k.clone(), t))).collect();
+        let mutes: HashMap<String, u64> = a
+            .users
+            .iter()
+            .filter_map(|(k, u)| {
+                u.muted_until
+                    .filter(|&t| t > now_secs())
+                    .map(|t| (k.clone(), t))
+            })
+            .collect();
         (a.users.len() as u32, a.sessions.len() as u32, mutes)
     };
     let mut players: Vec<AdminPlayer> = {
@@ -280,7 +361,9 @@ fn overview(state: &State) -> AdminOverview {
                 Some(AdminPlayer {
                     name: last.name.clone(),
                     activity: Some(match conns.iter().find_map(|c| c.watching.clone()) {
-                        Some(w) => online::Activity::Watching { name: shown_name(&w, &hub) },
+                        Some(w) => online::Activity::Watching {
+                            name: shown_name(&w, &hub),
+                        },
                         None => last.activity.clone(),
                     }),
                     connections: conns.len() as u32,
@@ -291,12 +374,23 @@ fn overview(state: &State) -> AdminOverview {
             .collect()
     };
     players.sort_by_cached_key(|p| p.name.to_lowercase());
-    AdminOverview { uptime_secs: state.admin.started.elapsed().as_secs(), accounts, sessions, players, rooms: state.rooms(), log: state.admin.log.lock().unwrap().iter().cloned().collect() }
+    AdminOverview {
+        uptime_secs: state.admin.started.elapsed().as_secs(),
+        accounts,
+        sessions,
+        players,
+        rooms: state.rooms(),
+        log: state.admin.log.lock().unwrap().iter().cloned().collect(),
+    }
 }
 
 /// A watched player's name as written, from the hub (the accounts lock isn't taken with it).
 fn shown_name(key: &str, hub: &crate::Hub) -> String {
-    hub.conns.get(key).and_then(|v| v.last()).map(|c| c.name.clone()).unwrap_or_else(|| key.to_string())
+    hub.conns
+        .get(key)
+        .and_then(|v| v.last())
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| key.to_string())
 }
 
 fn lookup(state: &State, name: &str) -> Result<AdminLookup, String> {
@@ -304,7 +398,15 @@ fn lookup(state: &State, name: &str) -> Result<AdminLookup, String> {
     let mut out = {
         let a = state.accounts.lock().unwrap();
         let u = a.users.get(&key).ok_or("there's no player by that name")?;
-        AdminLookup { name: u.name.clone(), created: u.created, banned: u.banned, nominator: u.nominator || is_admin(&key), has_email: u.email.is_some(), muted_until: u.muted_until.filter(|&t| t > now_secs()), ..AdminLookup::default() }
+        AdminLookup {
+            name: u.name.clone(),
+            created: u.created,
+            banned: u.banned,
+            nominator: u.nominator || is_admin(&key),
+            has_email: u.email.is_some(),
+            muted_until: u.muted_until.filter(|&t| t > now_secs()),
+            ..AdminLookup::default()
+        }
     };
     out.online = state.hub.lock().unwrap().conns.contains_key(&key);
     out.plays = state.scores.lock().unwrap().plays_of(&key).len() as u32;

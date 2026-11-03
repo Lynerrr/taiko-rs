@@ -54,7 +54,10 @@ struct Status {
 static STATUS: OnceLock<Status> = OnceLock::new();
 
 fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn due(status: &str, at: u64, now: u64) -> bool {
@@ -72,7 +75,11 @@ pub fn init(dir: PathBuf) {
     let known: HashMap<u32, (String, u64)> = std::fs::read_to_string(&file)
         .ok()
         .and_then(|t| serde_json::from_str::<HashMap<String, (String, u64)>>(&t).ok())
-        .map(|raw| raw.into_iter().filter_map(|(k, v)| Some((k.parse().ok()?, v))).collect())
+        .map(|raw| {
+            raw.into_iter()
+                .filter_map(|(k, v)| Some((k.parse().ok()?, v)))
+                .collect()
+        })
         .unwrap_or_default();
     let credentials = std::fs::read_to_string(dir.join("osu-api"))
         .ok()
@@ -80,20 +87,49 @@ pub fn init(dir: PathBuf) {
             let mut lines = t.lines().map(str::trim).filter(|l| !l.is_empty());
             Some((lines.next()?.to_string(), lines.next()?.to_string()))
         })
-        .or_else(|| Some((std::env::var("OSU_CLIENT_ID").ok()?, std::env::var("OSU_CLIENT_SECRET").ok()?)));
-    println!("{} map sets' statuses known, osu! API {}", known.len(), if credentials.is_some() { "on" } else { "off (no osu-api file)" });
-    let s = Status { file, credentials, inner: Mutex::new(Inner { known, queue: VecDeque::new(), queued: HashSet::new(), token: None, dirty: false }), wake: Condvar::new() };
+        .or_else(|| {
+            Some((
+                std::env::var("OSU_CLIENT_ID").ok()?,
+                std::env::var("OSU_CLIENT_SECRET").ok()?,
+            ))
+        });
+    println!(
+        "{} map sets' statuses known, osu! API {}",
+        known.len(),
+        if credentials.is_some() {
+            "on"
+        } else {
+            "off (no osu-api file)"
+        }
+    );
+    let s = Status {
+        file,
+        credentials,
+        inner: Mutex::new(Inner {
+            known,
+            queue: VecDeque::new(),
+            queued: HashSet::new(),
+            token: None,
+            dirty: false,
+        }),
+        wake: Condvar::new(),
+    };
     if STATUS.set(s).is_err() {
         return;
     }
-    std::thread::Builder::new().name("osu-statuses".into()).spawn(worker).expect("osu statuses thread");
+    std::thread::Builder::new()
+        .name("osu-statuses".into())
+        .spawn(worker)
+        .expect("osu statuses thread");
 }
 
 /// What's known of the sets `maps` are (set ID, the ID of one of its maps): (set, status), the
 /// sets not known yet left out. Up to `budget` of those and the ones that may have changed are looked
 /// up in the background, for the next time (and how many that was comes back too).
 pub fn lookup(maps: &[(u32, u32)], budget: usize) -> (Vec<(u32, String)>, usize) {
-    let Some(s) = STATUS.get() else { return (Vec::new(), 0) };
+    let Some(s) = STATUS.get() else {
+        return (Vec::new(), 0);
+    };
     let mut inner = s.inner.lock().unwrap();
     let now = now();
     let mut out = Vec::new();
@@ -102,12 +138,23 @@ pub fn lookup(maps: &[(u32, u32)], budget: usize) -> (Vec<(u32, String)>, usize)
     for &(set, map) in maps {
         // Something the covers' mirror lookups have seen costs nothing.
         let mirror = crate::covers::osu_status(set).filter(|m| m != MISSING);
-        let known = inner.known.get(&set).map(|(st, at)| (st.clone(), *at)).or_else(|| mirror.map(|m| (m, now)));
+        let known = inner
+            .known
+            .get(&set)
+            .map(|(st, at)| (st.clone(), *at))
+            .or_else(|| mirror.map(|m| (m, now)));
         let stale = known.as_ref().is_none_or(|(st, at)| due(st, *at, now));
         if let Some((status, _)) = known {
             out.push((set, status));
         }
-        if queued < budget && stale && s.credentials.is_some() && map > 0 && inner.queue.len() < MAX_QUEUE && inner.known.len() < MAX_KNOWN && inner.queued.insert(set) {
+        if queued < budget
+            && stale
+            && s.credentials.is_some()
+            && map > 0
+            && inner.queue.len() < MAX_QUEUE
+            && inner.known.len() < MAX_KNOWN
+            && inner.queued.insert(set)
+        {
             inner.queue.push_back((set, map));
             queued += 1;
             woke = true;
@@ -125,7 +172,11 @@ impl Status {
             return;
         }
         inner.dirty = false;
-        let all: HashMap<String, &(String, u64)> = inner.known.iter().map(|(k, v)| (k.to_string(), v)).collect();
+        let all: HashMap<String, &(String, u64)> = inner
+            .known
+            .iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
         let tmp = self.file.with_extension("json.tmp");
         let text = serde_json::to_string(&all).unwrap_or_default();
         if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &self.file)) {
@@ -135,7 +186,11 @@ impl Status {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).http_status_as_error(false).build().into()
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(20)))
+        .http_status_as_error(false)
+        .build()
+        .into()
 }
 
 /// A bearer token for the public API (client credentials), kept until it's near its end.
@@ -147,12 +202,19 @@ fn token(s: &Status, agent: &ureq::Agent) -> Option<String> {
         expires_in: u64,
     }
     if let Some((t, until)) = &s.inner.lock().unwrap().token
-        && Instant::now() < *until {
+        && Instant::now() < *until
+    {
         return Some(t.clone());
     }
     let (id, secret) = s.credentials.as_ref()?;
     let body = serde_json::json!({ "client_id": id.parse::<u64>().ok().map(serde_json::Value::from).unwrap_or_else(|| id.clone().into()), "client_secret": secret, "grant_type": "client_credentials", "scope": "public" }).to_string();
-    let mut reply = agent.post("https://osu.ppy.sh/oauth/token").header("User-Agent", USER_AGENT).header("Content-Type", "application/json").header("Accept", "application/json").send(body).ok()?;
+    let mut reply = agent
+        .post("https://osu.ppy.sh/oauth/token")
+        .header("User-Agent", USER_AGENT)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .send(body)
+        .ok()?;
     if reply.status().as_u16() != 200 {
         eprintln!("osu statuses: the token answer was {}", reply.status());
         return None;
@@ -164,7 +226,11 @@ fn token(s: &Status, agent: &ureq::Agent) -> Option<String> {
 }
 
 /// The API's answer for a batch of maps: (map, set, status) of each map it knows.
-fn ask(agent: &ureq::Agent, token: &str, maps: &[u32]) -> Result<Vec<(u32, u32, String)>, Duration> {
+fn ask(
+    agent: &ureq::Agent,
+    token: &str,
+    maps: &[u32],
+) -> Result<Vec<(u32, u32, String)>, Duration> {
     #[derive(Deserialize)]
     struct Map {
         id: u32,
@@ -175,7 +241,11 @@ fn ask(agent: &ureq::Agent, token: &str, maps: &[u32]) -> Result<Vec<(u32, u32, 
     struct Answer {
         beatmaps: Vec<Map>,
     }
-    let mut req = agent.get("https://osu.ppy.sh/api/v2/beatmaps").header("User-Agent", USER_AGENT).header("Authorization", &format!("Bearer {token}")).header("Accept", "application/json");
+    let mut req = agent
+        .get("https://osu.ppy.sh/api/v2/beatmaps")
+        .header("User-Agent", USER_AGENT)
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("Accept", "application/json");
     for m in maps {
         req = req.query("ids[]", m.to_string());
     }
@@ -190,7 +260,10 @@ fn ask(agent: &ureq::Agent, token: &str, maps: &[u32]) -> Result<Vec<(u32, u32, 
                 eprintln!("osu statuses: unreadable answer: {e}");
                 SLOW_DOWN
             })?;
-            Ok(a.beatmaps.into_iter().map(|m| (m.id, m.beatmapset_id, m.status)).collect())
+            Ok(a.beatmaps
+                .into_iter()
+                .map(|m| (m.id, m.beatmapset_id, m.status))
+                .collect())
         }
         code => {
             eprintln!("osu statuses: the API answered {code}");
@@ -202,7 +275,11 @@ fn ask(agent: &ureq::Agent, token: &str, maps: &[u32]) -> Result<Vec<(u32, u32, 
 /// The sets of a batch whose map osu! doesn't have. The pairs come from players: a map it does
 /// have, under some other set, says nothing about that set.
 fn unanswered(batch: &[(u32, u32)], found: &[(u32, u32, String)]) -> Vec<u32> {
-    batch.iter().filter(|(set, map)| !found.iter().any(|(m, s, _)| m == map || s == set)).map(|(set, _)| *set).collect()
+    batch
+        .iter()
+        .filter(|(set, map)| !found.iter().any(|(m, s, _)| m == map || s == set))
+        .map(|(set, _)| *set)
+        .collect()
 }
 
 fn worker() {
@@ -225,13 +302,21 @@ fn worker() {
             std::thread::sleep(SLOW_DOWN);
             continue;
         };
-        match ask(&agent, &token, &batch.iter().map(|&(_, m)| m).collect::<Vec<_>>()) {
+        match ask(
+            &agent,
+            &token,
+            &batch.iter().map(|&(_, m)| m).collect::<Vec<_>>(),
+        ) {
             Ok(found) => {
                 let mut inner = s.inner.lock().unwrap();
                 let at = now();
                 // A map osu! doesn't have: its set is looked up again in a while.
                 for set in unanswered(&batch, &found) {
-                    if inner.known.get(&set).is_none_or(|(status, _)| status == MISSING) {
+                    if inner
+                        .known
+                        .get(&set)
+                        .is_none_or(|(status, _)| status == MISSING)
+                    {
                         inner.known.insert(set, (MISSING.to_string(), at));
                     }
                 }
@@ -244,7 +329,11 @@ fn worker() {
                 inner.dirty = true;
                 batches += 1;
                 if batches.is_multiple_of(20) {
-                    println!("osu statuses: {} sets known, {} waiting", inner.known.len(), inner.queue.len());
+                    println!(
+                        "osu statuses: {} sets known, {} waiting",
+                        inner.known.len(),
+                        inner.queue.len()
+                    );
                 }
                 if last_save.elapsed() >= Duration::from_secs(30) {
                     s.save(&mut inner);
