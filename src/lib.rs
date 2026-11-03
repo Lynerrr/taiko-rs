@@ -8,6 +8,7 @@ mod lang;
 mod android;
 mod audio;
 mod autoplay;
+mod avatars;
 mod beatmap;
 mod browse;
 mod calibrate;
@@ -404,6 +405,8 @@ struct State {
     bg_changed: Option<Instant>,
     /// A newly loaded skin's note images, for the render thread to upload.
     sprites_upload: Option<Arc<render::Atlas>>,
+    /// Profile pictures: fetched as they're drawn, uploaded by the render thread.
+    avatars: avatars::Avatars,
     skin_loader: Option<skin::Loader>,
     skin_key: Option<(skin::Key, std::sync::Weak<render::Atlas>)>,
     /// The playing map's folder when it carries skin images (they're in the loaded skin), and
@@ -3614,12 +3617,17 @@ impl State {
                 (Some(name), None) => (name.clone(), String::new()),
                 (None, _) => (tr!("log in", "ログイン", "войти").to_string(), String::new()),
             };
-            let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0;
+            // Their picture first.
+            let pic = if self.mp_menu.account.is_some() { 12.0 } else { 0.0 };
+            let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0 + pic;
             let ax = x - 6.0 - aw;
             let hover = c.hovered(ax, 3.0, aw, 14.0);
             c.round_rect([ax, 3.0], [aw, 14.0], 4.0, rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95), rgba(if self.mp_menu.account.is_some() { accent() } else { 0x3a3a4e }, 1.0), 1.0);
-            let nw = c.text(ax + 7.0, 6.5, 7.0, rgba(0xffffff, 1.0), &name);
-            c.text(ax + 7.0 + nw, 6.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
+            if pic > 0.0 {
+                c.avatar(&name, ax + 9.0, 10.0, 4.5, accent(), 1.0);
+            }
+            let nw = c.text(ax + 7.0 + pic, 6.5, 7.0, rgba(0xffffff, 1.0), &name);
+            c.text(ax + 7.0 + pic + nw, 6.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
             c.hit(ax, 3.0, aw, 14.0, render::Hit::Account);
         }
         let text = match self.updater.status() {
@@ -4817,7 +4825,7 @@ impl State {
             let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
             let [px, py, pw, ph] = social::panel_rect(width);
             if vx >= px && vx <= px + pw && vy >= py && vy <= py + ph {
-                self.social.wheel(notches, vy, self.mp.is_some());
+                self.social.wheel(notches, self.mp.is_some());
                 return;
             }
         }
@@ -6949,17 +6957,21 @@ impl State {
         let in_lobby = self.mp.is_some();
         let rows = self.social.rows(in_lobby).len();
         let row = self.social.row(in_lobby);
+        let talking = self.social.in_conversation(in_lobby);
         match code {
+            KeyCode::Escape if talking => self.social.close_conversation(),
             KeyCode::Escape => self.social.close(),
             KeyCode::Tab => self.social.cycle_tab(self.modifiers_shift),
-            KeyCode::PageUp => self.social.wheel(5, f32::MAX, in_lobby),
-            KeyCode::PageDown => self.social.wheel(-5, f32::MAX, in_lobby),
+            KeyCode::PageUp => self.social.wheel(5, in_lobby),
+            KeyCode::PageDown => self.social.wheel(-5, in_lobby),
+            KeyCode::ArrowUp if talking => self.social.wheel(1, in_lobby),
+            KeyCode::ArrowDown if talking => self.social.wheel(-1, in_lobby),
             KeyCode::ArrowUp => self.social.cursor = self.social.cursor.min(rows - 1).saturating_sub(1),
             KeyCode::ArrowDown => self.social.cursor = (self.social.cursor + 1).min(rows - 1),
             KeyCode::Backspace => {
                 self.social.input.pop();
             }
-            KeyCode::Delete if self.social.input.is_empty() => match row {
+            KeyCode::Delete if self.social.input.is_empty() && !talking => match row {
                 Row::Request(_) => self.social_action(social::Action::Decline),
                 Row::Friend(k) => {
                     if let (Some(f), Some(c)) = (self.social.friends.get(k), &self.social.conn) {
@@ -6985,6 +6997,7 @@ impl State {
                     }
                 }
                 match row {
+                    Row::Friend(_) | Row::Lobby if !talking => self.social.open_conversation(),
                     Row::AddFriend if !text.is_empty() => {
                         if let Some(c) = &self.social.conn {
                             c.send(online::Up::AddFriend(text));
@@ -7028,6 +7041,10 @@ impl State {
             _ => {
                 let Some(text) = text else { return };
                 let searching = self.social.tab == social::Tab::Players;
+                // Typing on a friend starts talking to them.
+                if matches!(row, Row::Friend(_) | Row::Lobby) && !talking && text.chars().any(|c| net::drawable_char(c) && c != ' ') {
+                    self.social.open_conversation();
+                }
                 for ch in text.chars().filter(|c| net::drawable_char(*c)) {
                     let len = self.social.input.chars().count();
                     let ok = match row {
@@ -7042,7 +7059,7 @@ impl State {
             }
         }
         self.social.mark_read(in_lobby);
-        if self.social.row(in_lobby) == Row::Lobby
+        if self.social.row(in_lobby) == Row::Lobby && self.social.in_conversation(in_lobby)
             && let Some(s) = &mut self.mp {
             s.chat_unread = 0;
         }
@@ -7209,7 +7226,7 @@ impl State {
         }
         let hold = !self.overlay_allowed();
         self.social.expire_notes(hold);
-        if self.social.open && self.social.row(self.mp.is_some()) == social::Row::Lobby
+        if self.social.open && self.social.row(self.mp.is_some()) == social::Row::Lobby && self.social.in_conversation(self.mp.is_some())
             && let Some(s) = &mut self.mp {
             s.chat_unread = 0;
         }
@@ -7243,11 +7260,7 @@ impl State {
                     }
                 }
                 self.social.have_list = true;
-                self.social.friends = friends;
-                self.social.requests = requests;
-                self.social.sent = sent;
-                let rows = self.social.rows(self.mp.is_some()).len();
-                self.social.cursor = self.social.cursor.min(rows - 1);
+                self.social.set_friends(friends, requests, sent, self.mp.is_some());
             }
             Down::Chat(mut line) => {
                 if self.cfg.chat_filter {
@@ -7263,7 +7276,7 @@ impl State {
                 if log.len() > 200 {
                     log.remove(0);
                 }
-                let viewing = self.social.open && matches!(self.social.row(self.mp.is_some()), social::Row::Friend(k) if self.social.friends.get(k).is_some_and(|f| key(&f.name) == key(&other)));
+                let viewing = self.social.open && self.social.in_conversation(self.mp.is_some()) && matches!(self.social.row(self.mp.is_some()), social::Row::Friend(k) if self.social.friends.get(k).is_some_and(|f| key(&f.name) == key(&other)));
                 // A chime for every fresh message from a friend, unless it would land in the middle
                 // of a play.
                 if !mine && fresh && self.cfg.message_sound && !self.playing()
@@ -7279,10 +7292,7 @@ impl State {
             }
             Down::Notice(text) => self.social.notify("taiko.rs", text, 0x9a9ab0, NoteAction::None),
             Down::Players { count, players } => {
-                self.social.online_total = count as usize;
-                self.social.players = Some(players);
-                let rows = self.social.rows(self.mp.is_some()).len();
-                self.social.cursor = self.social.cursor.min(rows - 1);
+                self.social.set_players(count as usize, players, self.mp.is_some());
             }
             Down::Medals(new) => self.medals_earned(new),
             Down::GlobalChat(mut line) => {
@@ -7301,7 +7311,7 @@ impl State {
                 }
                 // Scrolled back, the view stays on the same lines.
                 if self.social.chat_scroll > 0 && viewing {
-                    self.social.chat_scroll += social::wrap(&format!("{}: {}", line.from, line.text), social::chat_width()).len();
+                    self.social.chat_scroll += self.social.global_rows_added(&line);
                 }
                 self.social.global.push(line);
                 if self.social.global.len() > 200 {
@@ -8343,7 +8353,10 @@ impl State {
             self.stats.window_start = now;
         }
 
+        // The pictures the last frame drew, then the ones the renderer has for this one.
+        self.avatars.update(&canvas.avatars_wanted);
         canvas.clear(width);
+        canvas.avatar_slots = self.avatars.slots();
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
         let idle_allowed = self.idle_allowed();
@@ -9392,11 +9405,13 @@ impl State {
                 Some(s) => (Some(&s.chat[..]), s.chat_unread),
                 None => (None, 0),
             };
+            // The screen behind darkens, but not a play being watched.
+            let dim = !self.in_song();
             if self.social.open {
-                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread);
+                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread, dim);
             } else if let Some(p) = self.social.closing() {
                 let (start, hits) = (canvas.shapes.len(), canvas.hits.len());
-                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread);
+                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread, dim);
                 canvas.hits.truncate(hits);
                 canvas.transform_since(start, [0.0, 0.0], 1.0, p * 30.0, 0.0);
                 for sh in &mut canvas.shapes[start..] {
@@ -10202,9 +10217,18 @@ impl State {
                 self.social.mark_read(self.mp.is_some());
             }
             Hit::SocialRow(i) => {
+                let in_lobby = self.mp.is_some();
                 self.social.cursor = i;
-                self.social.mark_read(self.mp.is_some());
+                if matches!(self.social.row(in_lobby), social::Row::Friend(_) | social::Row::Lobby) {
+                    self.social.open_conversation();
+                }
+                self.social.mark_read(in_lobby);
+                if self.social.row(in_lobby) == social::Row::Lobby
+                    && let Some(s) = &mut self.mp {
+                    s.chat_unread = 0;
+                }
             }
+            Hit::SocialBack => self.social.close_conversation(),
             Hit::SocialAction(i, action) => {
                 self.social.cursor = i;
                 self.social_action(action);
@@ -10221,6 +10245,7 @@ impl State {
                         social::NoteAction::Requests => {
                             self.open_social();
                             self.social.set_tab(social::Tab::Friends);
+                            self.social.close_conversation();
                             let in_lobby = self.mp.is_some();
                             if let Some(r) = self.social.rows(in_lobby).iter().position(|r| matches!(r, social::Row::Request(_))) {
                                 self.social.cursor = r;
@@ -10620,7 +10645,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         if frames == gpu_start::FRAMES {
             gpu_start::going();
         }
-        let (wanted, cap, refresh_hz, surface, size, atlas, letterbox, pixel_scale) = {
+        let (wanted, cap, refresh_hz, surface, size, atlas, letterbox, pixel_scale, avatar_uploads) = {
             let mut s = lock(&state);
             if s.quit {
                 // In game.log: the game was closed on purpose, not lost.
@@ -10637,7 +10662,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 sm.sample_waits(waits.0, waits.1, waits.2);
             }
             (s.wanted_present(), s.frame_cap(), s.refresh_hz, surface, size,
-             s.sprites_upload.take(), letterbox, if s.cfg.half_resolution { 2 } else { 1 })
+             s.sprites_upload.take(), letterbox, if s.cfg.half_resolution { 2 } else { 1 }, s.avatars.take_uploads())
         };
         // GPU waits and uploads never hold the input/state mutex.
         if let Some((surface, w, h)) = surface { renderer.set_surface(surface, w, h); }
@@ -10650,6 +10675,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         }
         let present = renderer.present;
         renderer.pixel_scale = pixel_scale;
+        for (slot, rgba) in avatar_uploads {
+            renderer.set_avatar(slot, &rgba);
+        }
         if let Some(atlas) = atlas {
             renderer.set_sprites(&atlas);
             for c in [&mut canvas, &mut export_canvas] {
@@ -11287,7 +11315,10 @@ impl State {
         SEND_CRASH_REPORTS.store(cfg.send_crash_reports, Ordering::Relaxed);
         let crash = crash_report();
         let crash_sent = cfg.send_crash_reports && crash.as_ref().is_some_and(|r| send_crash_report(&cfg.online_server, r));
+        // Pictures are on the website of our own server only.
+        let avatars = avatars::Avatars::new((cfg.online_server == online::DEFAULT_SERVER).then(|| online::WEBSITE.to_string()));
         State {
+            avatars,
             crash,
             crash_sent,
             cfg,

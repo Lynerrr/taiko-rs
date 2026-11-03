@@ -454,7 +454,9 @@ pub fn rasterize(c: &crate::render::Canvas, scale: f32) -> (u32, u32, Vec<u8>) {
                 if d > 0.0 {
                     continue;
                 }
-                let col = if border > 0.0 && d > -border { sh.border } else { sh.fill };
+                // A profile picture: a grey disc stands in.
+                let fill = if sh.params[3] < -0.5 { [0.45, 0.45, 0.55, sh.fill[3]] } else { sh.fill };
+                let col = if border > 0.0 && d > -border { sh.border } else { fill };
                 let p = &mut px[(y * w + x) as usize];
                 for k in 0..3 {
                     p[k] += (col[k] - p[k]) * col[3];

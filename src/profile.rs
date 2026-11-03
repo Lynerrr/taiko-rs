@@ -88,7 +88,10 @@ impl View {
             "{rank}   {pp:.0} pp   {plays} {plays_ru}   {time}с нами {joined}";
         );
         let stats_w = Canvas::text_width(8.0, &stats).min(pw * 0.6);
-        c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), &Canvas::fit(14.0, pw - stats_w - 48.0, &p.name));
+        // Their picture, left of the name and the medals line.
+        c.avatar(&p.name, px + 30.0, py + 25.0, 14.0, accent(), 1.0);
+        let hx = px + 30.0;
+        c.text(hx + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), &Canvas::fit(14.0, pw - 30.0 - stats_w - 48.0, &p.name));
         c.text_right(px + pw - 16.0, py + 16.0, 8.0, rgba(0xff8ad8, 1.0), &Canvas::fit(8.0, stats_w, &stats));
         // Their medals: how many, their dan and their rarest.
         let (earned, total) = (p.medals.earned, p.medals.total);
@@ -97,7 +100,7 @@ impl View {
             line += "   ";
             line += online::said(dan);
         }
-        c.text(px + 16.0, py + 31.0, 7.0, rgba(0xFFD34D, 1.0), &Canvas::fit(7.0, pw * 0.5, &line));
+        c.text(hx + 16.0, py + 31.0, 7.0, rgba(0xFFD34D, 1.0), &Canvas::fit(7.0, pw * 0.5 - 30.0, &line));
         for (i, m) in p.medals.rarest.iter().enumerate() {
             crate::medals::small_badge(c, px + pw - 22.0 - i as f32 * 24.0, py + 35.0, m);
         }
