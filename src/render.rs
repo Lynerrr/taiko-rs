@@ -20,7 +20,8 @@ pub struct Shape {
     pub border: [f32; 4],
     /// x: corner radius, y: border width, z: glow/softness width, w: half clip (0 none, 1 left, 2 right)
     /// or a skin image (`SPRITE_BASE` + `Sprite`, tinted by `fill`) or a character of the font
-    /// (`GLYPH_BASE` + `font::index`, in `fill`, filling the quad's 5x7 font pixels).
+    /// (`GLYPH_BASE` + `font::index`, in `fill`, filling the quad's 5x7 font pixels) or a profile
+    /// picture (-1 - its `avatars` slot, rounded by x, faded by fill's alpha).
     pub params: [f32; 4],
     /// Rotation (radians, clockwise on screen) about the centre; 0 for nearly everything.
     pub angle: f32,
@@ -303,6 +304,9 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     /// The font's glyphs (`font::atlas`), for text quads.
     font_view: wgpu::TextureView,
+    /// Profile pictures, a grid of `avatars::CELL` squares (`Renderer::set_avatar`).
+    avatar_texture: wgpu::Texture,
+    avatar_view: wgpu::TextureView,
     instances: wgpu::Buffer,
     capacity: usize,
     supported_modes: Vec<wgpu::PresentMode>,
@@ -687,6 +691,8 @@ fn shape_shader() -> String {
         .replace("SPRITE_LAST", &(SPRITES - 1).to_string())
         .replace("FONT_COLS", &crate::font::ATLAS_COLS.to_string())
         .replace("FONT_CELL_W", &crate::font::CELL_W.to_string())
+        .replace("AVATAR_GRID", &crate::avatars::GRID.to_string())
+        .replace("AVATAR_CELL", &crate::avatars::CELL.to_string())
 }
 
 const SHADER: &str = r#"
@@ -696,6 +702,7 @@ struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32 };
 @group(0) @binding(2) var atlas: texture_2d<f32>;
 @group(0) @binding(3) var samp: sampler;
 @group(0) @binding(4) var font: texture_2d<f32>;
+@group(0) @binding(5) var avatars: texture_2d<f32>;
 
 struct Inst {
     @location(0) center: vec2<f32>,
@@ -757,6 +764,17 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 
 fn shade(in: VOut) -> vec4<f32> {
+    if (in.params.w < -0.5) {
+        // A profile picture (premultiplied) from its cell of the avatar texture, rounded.
+        let slot = u32(-in.params.w - 0.5);
+        let cell = vec2<f32>(f32(slot % AVATAR_GRIDu), f32(slot / AVATAR_GRIDu));
+        let edge = 0.5 / f32(AVATAR_CELL);
+        let uv = clamp(in.local / (2.0 * in.half) + 0.5, vec2<f32>(edge), vec2<f32>(1.0 - edge));
+        let t = textureSampleLevel(avatars, samp, (cell + uv) / f32(AVATAR_GRID), 0.0);
+        let r = min(in.params.x, min(in.half.x, in.half.y));
+        let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
+        return t * in.fill.a * cover;
+    }
     if (in.params.w > 99.5) {
         // A character: how much of this pixel the font pixels under it cover (a box filter, so
         // edges look like single rects did, with no seams between neighbouring font pixels).
@@ -897,6 +915,16 @@ impl Renderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let font_view = {
@@ -931,7 +959,19 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let bind_group = Self::shape_bind_group(&device, &queue, &bgl, &globals, &sprite_rects, &sampler, &font_view, &Atlas::default());
+        let avatar_side = crate::avatars::GRID * crate::avatars::CELL;
+        let avatar_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("avatars"),
+            size: wgpu::Extent3d { width: avatar_side, height: avatar_side, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let avatar_view = avatar_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = Self::shape_bind_group(&device, &queue, &bgl, &globals, &sprite_rects, &sampler, &font_view, &avatar_view, &Atlas::default());
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[Some(&bgl)],
@@ -1149,6 +1189,8 @@ impl Renderer {
             sprite_rects,
             sampler,
             font_view,
+            avatar_texture,
+            avatar_view,
             instances,
             capacity,
             supported_modes: caps.present_modes,
@@ -1197,7 +1239,22 @@ impl Renderer {
 
     /// Uploads a skin's images; an empty atlas removes them.
     pub fn set_sprites(&mut self, atlas: &Atlas) {
-        self.bind_group = Self::shape_bind_group(&self.device, &self.queue, &self.shape_layout, &self.globals, &self.sprite_rects, &self.sampler, &self.font_view, atlas);
+        self.bind_group = Self::shape_bind_group(&self.device, &self.queue, &self.shape_layout, &self.globals, &self.sprite_rects, &self.sampler, &self.font_view, &self.avatar_view, atlas);
+    }
+
+    /// Puts a profile picture (`avatars::CELL` square, premultiplied RGBA) in `slot`.
+    pub fn set_avatar(&mut self, slot: u32, rgba: &[u8]) {
+        let cell = crate::avatars::CELL;
+        if slot >= crate::avatars::GRID * crate::avatars::GRID || rgba.len() != (cell * cell * 4) as usize {
+            return;
+        }
+        let (gx, gy) = (slot % crate::avatars::GRID, slot / crate::avatars::GRID);
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &self.avatar_texture, mip_level: 0, origin: wgpu::Origin3d { x: gx * cell, y: gy * cell, z: 0 }, aspect: wgpu::TextureAspect::All },
+            rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * cell), rows_per_image: Some(cell) },
+            wgpu::Extent3d { width: cell, height: cell, depth_or_array_layers: 1 },
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1209,6 +1266,7 @@ impl Renderer {
         rects: &wgpu::Buffer,
         sampler: &wgpu::Sampler,
         font: &wgpu::TextureView,
+        avatars: &wgpu::TextureView,
         atlas: &Atlas,
     ) -> wgpu::BindGroup {
         // The texture can't be empty: no images is one transparent pixel.
@@ -1246,6 +1304,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(font) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(avatars) },
             ],
         })
     }
@@ -2034,6 +2093,8 @@ pub enum Hit {
     /// notification card.
     SocialToggle,
     SocialPanel,
+    /// Back from a conversation to the friend list.
+    SocialBack,
     SocialTab(crate::social::Tab),
     SocialRow(usize),
     SocialAction(usize, crate::social::Action),
@@ -2087,6 +2148,10 @@ pub struct Canvas {
     /// A plain opaque rect (shape index) that hides the background under it, so the renderer
     /// needn't draw the background there (`opaque_rect`).
     pub opaque: Option<usize>,
+    /// Which profile pictures the renderer has, by lowercased name: their slots.
+    pub avatar_slots: std::sync::Arc<std::collections::HashMap<String, u32>>,
+    /// Pictures asked for this frame (lowercased names), so they get fetched.
+    pub avatars_wanted: Vec<String>,
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
@@ -2224,6 +2289,7 @@ const CLEAR: [f32; 4] = [0.0; 4];
 impl Canvas {
     pub fn clear(&mut self, width: f32) {
         self.shapes.clear();
+        self.avatars_wanted.clear();
         self.disc = None;
         self.hits.clear();
         self.clips.clear();
@@ -2419,6 +2485,25 @@ impl Canvas {
         }
         // Negative where a glow's softness goes; big, so scaling the playfield keeps it below -0.5.
         self.shapes[start].params[2] = -1.0e6;
+    }
+
+    /// `name`'s profile picture, round, centred on (`x`, `y`) with radius `r`; until it's here
+    /// (and without one) their initial on a disc of `colour`.
+    pub fn avatar(&mut self, name: &str, x: f32, y: f32, r: f32, colour: u32, a: f32) {
+        let key = name.to_ascii_lowercase();
+        let slot = self.avatar_slots.get(&key).copied();
+        if !self.avatars_wanted.contains(&key) {
+            self.avatars_wanted.push(key);
+        }
+        match slot {
+            Some(slot) => self.shapes.push(Shape { center: [x, y], half: [r, r], fill: [1.0, 1.0, 1.0, a], border: CLEAR, params: [r, 0.0, 0.0, -1.0 - slot as f32], angle: 0.0 }),
+            None => {
+                self.circle(x, y, r, rgba(colour, 0.9 * a), CLEAR, 0.0);
+                let initial: String = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into());
+                let size = (r * 1.15).max(4.0);
+                self.text_centered(x + size / 14.0, y - size / 2.0, size, rgba(0x0d0d15, a), &initial);
+            }
+        }
     }
 
     /// A skin image stretched over the box centred on (`x`, `y`), `hw` by `hh` either side.

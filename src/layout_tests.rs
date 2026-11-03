@@ -574,7 +574,11 @@ fn assert_every_screen_fits() {
     s.social.cursor = 0;
     s.social.input = "a message being typed that is longer than the input box can show".into();
     check(&mut s, "friends chat", &mut out);
-    s.social.input.clear();
+    s.social.unread.insert("bob".into(), 12);
+    s.social.cursor = 2;
+    s.social.open_conversation();
+    check(&mut s, "friends conversation", &mut out);
+    s.social.close_conversation();
     s.social.tab = social::Tab::Players;
     s.social.online_total = 1234;
     s.social.players = Some(
@@ -589,6 +593,10 @@ fn assert_every_screen_fits() {
         let medal = online::ChatMedal { player: LONG_NAME.into(), name: [LONG_NAME.to_string(), LONG_NAME.to_string(), LONG_NAME.to_string()], tier, secret, first: true, holders: 1, players: 28 };
         s.social.global[i] = online::ChatLine { from: online::SERVER_NAME.into(), medal: Some(medal), ..line("", "") };
     }
+    // A run from one sender, a line calling us by name, and one of ours.
+    s.social.global[30] = line(&format!("{LONG_NAME}29"), "");
+    s.social.global[34].text = "hey MyOwnAccountName, want to play?".into();
+    s.social.global[38] = line("MyOwnAccountName", "");
     s.social.global_unread = 12;
     s.social.input = "a message being typed that is longer than the input box can show".into();
     check(&mut s, "global chat", &mut out);
