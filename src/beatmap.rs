@@ -246,6 +246,13 @@ pub fn load(path: &Path) -> Result<Beatmap, String> {
 }
 
 impl Beatmap {
+    /// A map song select shows no playfield preview of: rolls or swells it made endless
+    /// (`playable_length` cut them to the longest), or more notes than any real map. Its preview
+    /// took the whole client down to 1 fps (osu!team's FM Synthesis Experiment).
+    pub fn too_wild_to_preview(&self) -> bool {
+        self.notes.len() > 100_000 || self.notes.iter().any(|n| n.end_time - n.time >= LONGEST_NOTE_MS || n.fake_len >= LONGEST_NOTE_MS)
+    }
+
     /// Moves every map time (notes, barlines, timing) `ms` later. Audio positions (the preview
     /// point) and durations stay.
     pub fn shift(&mut self, ms: f64) {
@@ -680,6 +687,8 @@ SliderTickRate:1
         // What picking it in song select does: its difficulty graph and a game to preview.
         let graph = crate::difficulty::analyze(&map);
         assert!(graph.peaks.len() <= 1_000_000);
+        assert!(map.too_wild_to_preview(), "song select shows it no playfield");
+        assert!(!parse(MAP).too_wild_to_preview());
         let _ = crate::game::Game::new(map, std::sync::Arc::new(crate::audio::Track { samples: Vec::new(), rate: 1.0 }), None);
     }
 
