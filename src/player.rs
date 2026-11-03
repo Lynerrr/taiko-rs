@@ -24,7 +24,7 @@ const FALL_MS: f32 = 140.0;
 const DISC_PIXELS: usize = 46;
 const DISC_R: f32 = 92.0;
 /// Where the rim starts, as a part of the radius.
-const DISC_RIM: f32 = 0.85;
+pub(crate) const DISC_RIM: f32 = 0.85;
 const DISC_Y: f32 = 196.0;
 /// How fast it turns (radians a second).
 const SPIN: f32 = 0.6;
@@ -614,7 +614,12 @@ fn draw_folder_icon(c: &mut Canvas, x: f32, y: f32, px: f32, colour: u32) {
 /// The record's pixel parts, around the picture the renderer puts under them: a white rim like a
 /// note's and the spindle. Without a background, slices that show it turning fill it.
 fn draw_disc(c: &mut Canvas, x: f32, y: f32, angle: f32, pictured: bool) {
-    let px = pixel_size(DISC_R * 2.0 / DISC_PIXELS as f32);
+    draw_disc_sized(c, x, y, DISC_R, angle, pictured, 1.0);
+}
+
+/// The same record at radius `r` and opacity `alpha` (the idle screen's).
+pub(crate) fn draw_disc_sized(c: &mut Canvas, x: f32, y: f32, r: f32, angle: f32, pictured: bool, alpha: f32) {
+    let px = pixel_size(r * 2.0 / DISC_PIXELS as f32);
     let half = DISC_PIXELS as f32 / 2.0;
     let (left, top) = (snap_to_grid(x - half * px), snap_to_grid(y - half * px));
     for row in 0..DISC_PIXELS {
@@ -641,7 +646,7 @@ fn draw_disc(c: &mut Canvas, x: f32, y: f32, angle: f32, pictured: bool) {
                 Some((_, was)) if was == colour => {}
                 _ => {
                     if let Some((from, was)) = run.filter(|r| r.1 != 0) {
-                        c.rect(left + from as f32 * px, top + row as f32 * px, (col - from) as f32 * px, px, rgba(was, 1.0));
+                        c.rect(left + from as f32 * px, top + row as f32 * px, (col - from) as f32 * px, px, rgba(was, alpha));
                     }
                     run = Some((col, colour));
                 }

@@ -47,6 +47,7 @@ mod media;
 mod menu;
 mod menu_notes;
 mod hud;
+mod idle;
 mod keys;
 mod mods;
 mod multiverse;
@@ -568,6 +569,8 @@ struct State {
     potentials: pp::Potentials,
     /// Background brightness for this frame (0 hides it).
     bg_brightness: f32,
+    /// The idle screen, after a while with no input.
+    idle: idle::Idle,
     /// Where the playfield size readout was drawn (virtual units), so it can be clicked.
     readout_rect: Option<[f32; 4]>,
     /// Watching a replay: the timeline drawn this frame (virtual units), and when the pointer
@@ -1325,6 +1328,25 @@ impl State {
     /// In a song (or its pause menu's settings): what counts for pp stays as it started.
     fn mid_song(&self) -> bool {
         self.in_song() || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. } | Scene::MpPlay { .. }))
+    }
+
+    /// Screens that go idle after a while: menus and lists, never a song or an open dialog.
+    fn idle_allowed(&self) -> bool {
+        matches!(self.scene, Scene::Select | Scene::Settings { .. } | Scene::Download | Scene::MpMenu | Scene::Lobby | Scene::Results { .. } | Scene::MpResults)
+            && !self.quit_asked
+            && self.crash.is_none()
+            && self.splash.is_none()
+            && self.settings_ui.binding.is_none()
+    }
+
+    /// The idle screen's song: the player's, or the one on this screen (title, artist).
+    fn idle_song(&self) -> Option<(String, String)> {
+        let entry = match &self.player {
+            Some(p) => p.list.entry(),
+            None => self.offset_entry(),
+        }?;
+        let e = self.library.get(entry)?;
+        Some((e.meta.title.clone(), e.meta.artist.clone()))
     }
 
     fn in_song(&self) -> bool {
@@ -2607,6 +2629,7 @@ impl State {
             Item::AutoplayBinding => autoplay::BINDINGS[c.autoplay.binding].into(),
             Item::AutoplayLeftHanded => on(c.autoplay.left_handed),
             Item::Screenshots => c.screenshot_to.name().into(),
+            Item::IdleScreen => idle::minutes_name(c.idle_minutes),
             Item::Language => c.language.name().into(),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::WheelResize => on(c.wheel_resizes_playfield),
@@ -2823,6 +2846,10 @@ impl State {
             }
             Item::AutoplayLeftHanded => self.cfg.autoplay.left_handed = !self.cfg.autoplay.left_handed,
             Item::Screenshots => self.cfg.screenshot_to = self.cfg.screenshot_to.step(dir),
+            Item::IdleScreen => {
+                let i = idle::MINUTES.iter().position(|&m| m == self.cfg.idle_minutes).unwrap_or(2) as i32;
+                self.cfg.idle_minutes = idle::MINUTES[(i + dir).rem_euclid(idle::MINUTES.len() as i32) as usize];
+            }
             Item::Language => self.cfg.language = self.cfg.language.step(dir),
             Item::Accent => {
                 let n = render::ACCENTS.len() as i32;
@@ -3037,6 +3064,9 @@ impl State {
                 let all = lang::Lang::ALL;
                 (strings(&mut all.iter().map(|l| l.name())), all.iter().position(|&l| l == c.language), String::new())
             }
+            Item::IdleScreen => {
+                (idle::MINUTES.iter().map(|&m| idle::minutes_name(m)).collect(), idle::MINUTES.iter().position(|&m| m == c.idle_minutes), String::new())
+            }
             Item::Screenshots => {
                 let all = config::ScreenshotTo::ALL;
                 (strings(&mut all.iter().map(|t| t.name())), all.iter().position(|&t| t == c.screenshot_to), String::new())
@@ -3158,6 +3188,7 @@ impl State {
         match list.item {
             Item::TouchLayout => self.cfg.touch_layout = config::TouchLayout::ALL[i],
             Item::Screenshots => self.cfg.screenshot_to = config::ScreenshotTo::ALL[i],
+            Item::IdleScreen => self.cfg.idle_minutes = idle::MINUTES[i],
             Item::AutoplayStyle => self.cfg.autoplay.style = autoplay::Style::ALL[i],
             Item::AutoplayBinding => self.cfg.autoplay.binding = i,
             Item::Language => self.cfg.language = lang::Lang::ALL[i],
@@ -3835,6 +3866,11 @@ impl State {
             let state = s.map.as_ref().map(map_label).unwrap_or_else(|| tr!("picking a map", "譜面を選択中", "выбирает карту").into());
             (details, state)
         };
+        // Away: the idle screen is all the way in (the timer then counts the time away).
+        if self.idle.amount() >= 1.0 {
+            let song = self.idle_song().map(|(title, artist)| format!("{artist} - {title}")).unwrap_or_default();
+            return Some((tr!("AFK", "離席中", "Отошёл").into(), song));
+        }
         Some(match &self.scene {
             Scene::Loading { entry, .. } => (self.library.get(*entry)?.label(), tr!("Loading...", "読み込み中...", "Загрузка...").into()),
             Scene::Play { game, entry, .. } => {
@@ -3878,6 +3914,10 @@ impl State {
             Scene::Select if self.player.is_some() => {
                 let song = self.player.as_ref().and_then(|p| p.list.entry()).and_then(|i| self.library.get(i)).map(Entry::label);
                 (tr!("Listening to music", "音楽を聴いている", "Слушает музыку").into(), song.unwrap_or_default())
+            }
+            _ if self.on_menu() => {
+                let song = self.idle_song().map(|(title, artist)| format!("{artist} - {title}")).unwrap_or_default();
+                (tr!("In the main menu", "メインメニュー", "В главном меню").into(), song)
             }
             Scene::Download => (tr!("Looking for new maps", "新しい譜面を探しています", "Ищет новые карты").into(), String::new()),
             Scene::Settings { .. } | Scene::LayoutEdit { .. } => (tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(), String::new()),
@@ -4449,6 +4489,10 @@ impl State {
             Scene::Spectate(_) | Scene::Watch(_) => !self.social.open,
             _ => false,
         };
+        // The idle screen all the way in: nothing to point at.
+        if self.idle.amount() >= 1.0 {
+            return true;
+        }
         playing
             && self.grip.is_none()
             && self.replay_scrub.is_none()
@@ -4749,6 +4793,9 @@ impl State {
     }
 
     fn wheel(&mut self, notches: i32) {
+        if self.idle.input(Instant::now()) {
+            return;
+        }
         if notches == 0 {
             return;
         }
@@ -4858,6 +4905,7 @@ impl State {
     /// in its column (`cfg.touch_layout`), timed like a key press; elsewhere the first finger
     /// is the mouse (tap = click, drag = drag).
     fn touch(&mut self, id: u64, phase: TouchPhase, x: f64, y: f64, at: Instant, window: Option<&Window>) {
+        self.idle.input(at);
         self.touch_used = true;
         if phase == TouchPhase::Started && self.touch_drums() {
             let col = (x / self.window_w.max(1.0) as f64 * 4.0).floor().clamp(0.0, 3.0) as usize;
@@ -4908,6 +4956,7 @@ impl State {
         let moved = (x, y) != self.mouse;
         if moved {
             self.mouse_moved_at = Instant::now();
+            self.idle.input(self.mouse_moved_at);
         }
         self.mouse = (x, y);
         let (vx, vy) = self.mouse_virtual();
@@ -5104,6 +5153,15 @@ impl State {
     /// osu!'s right-click scrolling. The selection stays.
     /// Released without moving, it opens the row's menu; on the scrollbar, it goes there.
     fn right_button(&mut self, pressed: bool) {
+        // A click that wakes the idle screen does nothing else, its release neither.
+        if pressed {
+            if self.idle.input(Instant::now()) {
+                self.idle.swallow_right = true;
+                return;
+            }
+        } else if std::mem::take(&mut self.idle.swallow_right) {
+            return;
+        }
         if self.mod_select.is_some() {
             // Right-clicking a mod makes it a favourite (or not any more).
             if pressed && self.customization_tab().is_none() {
@@ -5139,6 +5197,14 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
+        if pressed {
+            if self.idle.input(Instant::now()) {
+                self.idle.swallow_left = true;
+                return;
+            }
+        } else if std::mem::take(&mut self.idle.swallow_left) {
+            return;
+        }
         // Letting go of the preset list's scroll bar is all a release does then.
         if !pressed && self.settings_ui.dropdown.as_mut().is_some_and(Dropdown::release_bar) {
             return;
@@ -7733,6 +7799,10 @@ impl State {
     }
 
     fn key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant, window: Option<&Window>) {
+        // A key that wakes the idle screen does nothing else.
+        if self.idle.input(at) {
+            return;
+        }
         if self.quit_asked {
             if !repeat {
                 self.quit_key(code);
@@ -8276,6 +8346,8 @@ impl State {
         canvas.clear(width);
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
+        let idle_allowed = self.idle_allowed();
+        self.idle.update(now, canvas.dt_ms, idle_allowed, self.cfg.idle_minutes);
         render::set_animations(self.cfg.animations);
         render::set_accent(self.cfg.accent);
         game::set_hide_great(self.cfg.hide_great);
@@ -8343,6 +8415,7 @@ impl State {
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. } | Scene::LayoutEdit { .. } => 0.0,
                 _ => 0.35,
             };
+            self.bg_brightness *= 1.0 - idle::DARKEN * self.idle.amount();
 
         }
         self.poll_multiplayer();
@@ -9380,6 +9453,9 @@ impl State {
             }
         }
         self.draw_update(canvas);
+        // Over everything so far (the top bar's buttons too); a dialog or a drop goes on top.
+        let song = self.idle_song();
+        self.idle.draw(canvas, self.preview.has_background, song.as_ref().map(|(t, a)| (t.as_str(), a.as_str())));
         self.draw_drag_hover(canvas, now);
         self.draw_crash(canvas);
         self.draw_quit(canvas);
@@ -10652,6 +10728,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             let background = s.preview.bg_upload.take();
             if background.is_some() { s.bg_changed = Some(Instant::now()); }
             renderer.bg_brightness = s.bg_brightness;
+            renderer.bg_blur = s.idle.amount();
             // A new background cross-fades from the previous one.
             let fade = if s.on_menu() { MENU_BACKGROUND_FADE_MS } else { 300.0 };
             renderer.bg_mix = s.bg_changed.map(|t| render::progress(t, fade)).unwrap_or(1.0);
@@ -11392,6 +11469,7 @@ impl State {
             stars: stars::Stars::default(),
             potentials: pp::Potentials::default(),
             bg_brightness: 0.0,
+            idle: idle::Idle::new(Instant::now()),
             resolutions: Vec::new(),
             monitor_modes: Vec::new(),
             monitor_size: (1920, 1080),

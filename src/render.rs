@@ -325,6 +325,8 @@ pub struct Renderer {
     pub bg_mix: f32,
     /// 0 hides the background, 1 shows it at full brightness.
     pub bg_brightness: f32,
+    /// How far the background has faded into its blurred copy, 0 (sharp) to 1 (the idle screen's).
+    pub bg_blur: f32,
     pub present: PresentChoice,
     pub adapter_name: String,
     /// The graphics API it draws with.
@@ -542,6 +544,55 @@ struct BgLayer {
     disc_uniform: wgpu::Buffer,
 }
 
+/// The blurred copy's height (pixels): each is about 1/48 of the picture, then box-blurred.
+const BLUR_ROWS: u32 = 48;
+
+/// The size of a background's blurred copy: `BLUR_ROWS` high, its aspect kept.
+fn blurred_size(w: u32, h: u32) -> (u32, u32) {
+    let sh = BLUR_ROWS.min(h).max(1);
+    ((w as u64 * sh as u64 / h.max(1) as u64).max(1) as u32, sh)
+}
+
+/// `src` (`w` x `h`, `comps` bytes a pixel) averaged down to `sw` x `sh`, then three passes of
+/// a 3-wide box blur each way (close to a Gaussian); the GPU's filtering smooths it back up.
+fn shrink_blur(src: &[u8], w: u32, h: u32, comps: usize, sw: u32, sh: u32) -> Vec<u8> {
+    let (w, h, sw, sh) = (w as usize, h as usize, sw as usize, sh as usize);
+    let mut out = vec![0f32; sw * sh * comps];
+    for sy in 0..sh {
+        let (y0, y1) = (sy * h / sh, ((sy + 1) * h / sh).max(sy * h / sh + 1).min(h));
+        for sx in 0..sw {
+            let (x0, x1) = (sx * w / sw, ((sx + 1) * w / sw).max(sx * w / sw + 1).min(w));
+            let n = ((y1 - y0) * (x1 - x0)).max(1) as f32;
+            for c in 0..comps {
+                let mut sum = 0u32;
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        sum += src.get((y * w + x) * comps + c).copied().unwrap_or(0) as u32;
+                    }
+                }
+                out[(sy * sw + sx) * comps + c] = sum as f32 / n;
+            }
+        }
+    }
+    for _ in 0..3 {
+        for (dx, dy) in [(1isize, 0isize), (0, 1)] {
+            let prev = out.clone();
+            for y in 0..sh as isize {
+                for x in 0..sw as isize {
+                    for c in 0..comps {
+                        let at = |x: isize, y: isize| {
+                            let (x, y) = (x.clamp(0, sw as isize - 1) as usize, y.clamp(0, sh as isize - 1) as usize);
+                            prev[(y * sw + x) * comps + c]
+                        };
+                        out[(y as usize * sw + x as usize) * comps + c] = (at(x - dx, y - dy) + at(x, y) + at(x + dx, y + dy)) / 3.0;
+                    }
+                }
+            }
+        }
+    }
+    out.into_iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect()
+}
+
 const BG_SHADER: &str = r#"
 struct Bg { uv: vec4<f32>, params: vec4<f32> };
 @group(0) @binding(0) var<uniform> bg: Bg;
@@ -560,13 +611,22 @@ fn vs(@builtin(vertex_index) vi: u32) -> V {
     return o;
 }
 
+@group(0) @binding(4) var luma_blur: texture_2d<f32>;
+@group(0) @binding(5) var chroma_blur: texture_2d<f32>;
+
+// YCbCr (JPEG's full-range BT.601) back to RGB.
+fn to_rgb(y: f32, cbcr: vec2<f32>) -> vec3<f32> {
+    let c = cbcr - vec2<f32>(0.5);
+    return vec3<f32>(y + 1.402 * c.y, y - 0.344136 * c.x - 0.714136 * c.y, y + 1.772 * c.x);
+}
+
 @fragment
 fn fs(i: V) -> @location(0) vec4<f32> {
-    // YCbCr (JPEG's full-range BT.601) back to RGB.
-    let y = textureSample(luma, samp, i.uv).r;
-    let c = textureSample(chroma, samp, i.uv).rg - vec2<f32>(0.5);
-    let rgb = vec3<f32>(y + 1.402 * c.y, y - 0.344136 * c.x - 0.714136 * c.y, y + 1.772 * c.x);
-    // params: brightness, opacity (for cross-fading into a new background).
+    // params: brightness, opacity (for cross-fading into a new background), how far into its
+    // blurred copy (the idle screen).
+    let sharp = to_rgb(textureSample(luma, samp, i.uv).r, textureSample(chroma, samp, i.uv).rg);
+    let soft = to_rgb(textureSample(luma_blur, samp, i.uv).r, textureSample(chroma_blur, samp, i.uv).rg);
+    let rgb = mix(sharp, soft, bg.params.z);
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * bg.params.x, bg.params.y);
 }
 "#;
@@ -948,6 +1008,27 @@ impl Renderer {
                     },
                     count: None,
                 },
+                // The small blurred copies (the idle screen's).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let bg_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1081,6 +1162,7 @@ impl Renderer {
             bg_prev: None,
             bg_mix: 1.0,
             bg_brightness: 0.0,
+            bg_blur: 0.0,
             present,
             adapter_name,
             backend: adapter.get_info().backend,
@@ -1212,6 +1294,10 @@ impl Renderer {
         let (cw, ch) = BgImage::chroma_size(w, h);
         let luma = plane("background luma", w, h, wgpu::TextureFormat::R8Unorm, 1, &img.luma);
         let chroma = plane("background chroma", cw, ch, wgpu::TextureFormat::Rg8Unorm, 2, &img.chroma);
+        // Small blurred copies to fade into on the idle screen: a few reads a pixel at any blur.
+        let (sw, sh) = blurred_size(w, h);
+        let luma_blur = plane("background luma blurred", sw, sh, wgpu::TextureFormat::R8Unorm, 1, &shrink_blur(&img.luma, w, h, 1, sw, sh));
+        let chroma_blur = plane("background chroma blurred", sw, sh, wgpu::TextureFormat::Rg8Unorm, 2, &shrink_blur(&img.chroma, cw, ch, 2, sw, sh));
         // Each layer has its own uniform: its crop depends on its own aspect.
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("background"),
@@ -1227,6 +1313,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&luma) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.bg_sampler) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&chroma) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&luma_blur) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&chroma_blur) },
             ],
         });
         let disc_uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1243,6 +1331,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&luma) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.bg_sampler) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&chroma) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&luma_blur) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&chroma_blur) },
             ],
         });
         self.bg = Some(BgLayer { bind_group, aspect: w as f32 / h as f32, uniform, alpha: 1.0, disc_bind_group, disc_uniform });
@@ -1414,7 +1504,7 @@ impl Renderer {
             if let Some(l) = layer {
                 // "Cover" fit: crop the image's long side so it fills the screen without stretching.
                 let (u, v) = if l.aspect > screen { (screen / l.aspect, 1.0) } else { (1.0, l.aspect / screen) };
-                let uniform = [(1.0 - u) / 2.0, (1.0 - v) / 2.0, (1.0 + u) / 2.0, (1.0 + v) / 2.0, self.bg_brightness, alpha, 0.0, 0.0];
+                let uniform = [(1.0 - u) / 2.0, (1.0 - v) / 2.0, (1.0 + u) / 2.0, (1.0 + v) / 2.0, self.bg_brightness, alpha, self.bg_blur.clamp(0.0, 1.0), 0.0];
                 self.queue.write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
                 l.alpha = alpha;
             }
@@ -2572,6 +2662,18 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_background_s_blurred_copy_is_small_and_keeps_its_colours() {
+        assert_eq!(super::blurred_size(1920, 1080), (85, 48));
+        assert_eq!(super::blurred_size(10, 4), (10, 4), "never bigger than the picture");
+        // A flat picture stays flat; a bright half bleeds into the dark one.
+        let flat = super::shrink_blur(&[90; 64 * 32 * 2], 64, 32, 2, 16, 8);
+        assert!(flat.iter().all(|&v| v == 90));
+        let half: Vec<u8> = (0..64 * 32).map(|i| if i % 64 < 32 { 0 } else { 255 }).collect();
+        let soft = super::shrink_blur(&half, 64, 32, 1, 16, 8);
+        assert!(soft[7] > 0 && soft[7] < soft[8] && soft[8] < 255, "{:?}", &soft[..16]);
+    }
+
     #[test]
     fn a_present_mode_the_renderer_lacks_falls_back_like_the_renderer_does() {
         use super::PresentChoice::*;
