@@ -19,8 +19,23 @@ const DEBOUNCE: Duration = Duration::from_millis(60);
 const QUIET: Duration = Duration::from_millis(300);
 /// The preview music starts from a quick decode of this much audio at the preview point; the
 /// full song replaces it a moment later without a gap.
-/// The width (virtual units, 480 tall) the preview lays the playfield out at: a 4:3 screen's.
+/// The width (virtual units, 480 tall) the preview lays the playfield out at: a 4:3 screen's,
+/// widening up to a 16:9 screen's as the panel is dragged wider than its default.
 const FOUR_THREE: f32 = 640.0;
+const SIXTEEN_NINE: f32 = 480.0 * 16.0 / 9.0;
+
+/// The preview's scale at full size and the lane width (virtual units) it shows, for a panel
+/// `w` wide whose default width is `base_w`. Up to the default it is a 4:3 lane scaled to fit;
+/// wider, the lane keeps the default's height and shows more of itself, up to 16:9, then scales.
+fn lane_fit(w: f32, base_w: f32) -> (f32, f32) {
+    let k = (w - 20.0) / FOUR_THREE;
+    let base = (base_w - 20.0) / FOUR_THREE;
+    if k <= base || base <= 0.0 {
+        return (k, FOUR_THREE);
+    }
+    let lane_w = ((w - 20.0) / base).min(SIXTEEN_NINE);
+    ((w - 20.0) / lane_w, lane_w)
+}
 
 const SNIPPET_MS: f64 = 15_000.0;
 
@@ -608,7 +623,8 @@ impl Preview {
         // The preview's height per unit of its size. Smaller, it shows more of the lane ahead in
         // a shorter box: as small as dragged, and smaller still where the panel would otherwise
         // be taller than `h` (the details above it being `head` tall).
-        let unit = band_h * (w - 20.0) / FOUR_THREE;
+        let (k_full, lane_w) = lane_fit(w, crate::ui::Select::panel_width(c.width, crate::ui::LIST_SHARE.2));
+        let unit = band_h * k_full;
         self.size_unit = unit;
         let wanted = if self.size > 0.0 { self.size.clamp(PREVIEW_SIZE.0, PREVIEW_SIZE.1) } else { PREVIEW_SIZE.1 };
         let fitted = |head: f32| ((h - head - after_box - 12.0) / unit).clamp(PREVIEW_SIZE.0, PREVIEW_SIZE.1);
@@ -698,7 +714,7 @@ impl Preview {
         (self.size_cap, self.size_shown) = (fitted(head), wanted.min(fitted(head)));
         // The lane fills the panel's width (at the size chosen), however little room the details
         // leave: the panel grows down, into the leaderboard's room, rather than the lane shrink.
-        let k = (w - 20.0) / FOUR_THREE * wanted;
+        let k = k_full * wanted;
         let preview_h = band_h * k;
         let h = head + preview_h + after_box;
         self.panel_bottom = y + h;
@@ -749,8 +765,8 @@ impl Preview {
         cy = cy.max(y + 12.0) + (stat_rows.saturating_sub(rows.iter().map(Vec::len).sum()) as f32) * row_h + 6.0;
 
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
-        // As wide as 640 units at that scale (all of the panel at full size), centred.
-        let bw = FOUR_THREE * k;
+        // As wide as the lane at that scale (all of the panel at full size), centred.
+        let bw = lane_w * k;
         let (bx, by, bh) = (x + 10.0 + (w - 20.0 - bw) / 2.0, cy, preview_h);
         c.round_rect([bx, by], [bw, bh], 6.0, rgba(0x0c0c12, 1.0), rgba(0x2a2a38, 1.0), 1.0);
         self.box_rect = Some([bx, by, bw, bh]);
@@ -772,7 +788,7 @@ impl Preview {
         let game = self.game.as_mut().filter(|_| loaded && playing)?;
         let full_w = c.width;
         let start = c.shapes.len();
-        c.width = FOUR_THREE;
+        c.width = lane_w;
         game.kiai_effects = self.kiai_effects;
         game.draw_playfield(c, scroll_speed);
         let oy = by - band_top * k;
@@ -949,5 +965,24 @@ mod beat_tests {
         for t in [1200.0, 1300.0, 2400.0] {
             assert_eq!(beat_at(&points, t), Some((t - 100.0, 400.0)));
         }
+    }
+}
+
+#[cfg(test)]
+mod lane_fit_tests {
+    use super::*;
+
+    #[test]
+    fn four_three_by_default_widening_to_sixteen_nine() {
+        // At or under the default width: a 4:3 lane, scaled to the panel.
+        assert_eq!(lane_fit(380.0, 380.0).1, FOUR_THREE);
+        assert_eq!(lane_fit(300.0, 380.0).1, FOUR_THREE);
+        // Wider: the same height, more lane.
+        let (k, lane) = lane_fit(470.0, 380.0);
+        assert!((k - lane_fit(380.0, 380.0).0).abs() < 1e-5 && lane > FOUR_THREE && lane < SIXTEEN_NINE);
+        // Much wider: 16:9 at most, scaled up past that.
+        let (k, lane) = lane_fit(900.0, 380.0);
+        assert_eq!(lane, SIXTEEN_NINE);
+        assert!(k > lane_fit(380.0, 380.0).0);
     }
 }
