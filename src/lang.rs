@@ -35,7 +35,9 @@ impl Lang {
     }
 
     pub fn parse(s: &str) -> Option<Lang> {
-        Lang::ALL.into_iter().find(|l| l.code().eq_ignore_ascii_case(s.trim()))
+        Lang::ALL
+            .into_iter()
+            .find(|l| l.code().eq_ignore_ascii_case(s.trim()))
     }
 
     /// The language `dir` steps away (wrapping).
@@ -138,7 +140,12 @@ macro_rules! tr {
 
 /// The server answered something that makes no sense where it was asked.
 pub fn odd_reply() -> String {
-    tr!("odd reply from the server", "サーバーからの応答がおかしい", "странный ответ сервера").into()
+    tr!(
+        "odd reply from the server",
+        "サーバーからの応答がおかしい",
+        "странный ответ сервера"
+    )
+    .into()
 }
 
 #[cfg(test)]
@@ -164,6 +171,31 @@ mod tests {
     #[test]
     fn russian_plurals() {
         let f = |n| ru_plural(n, ["карта", "карты", "карт"]);
-        assert_eq!([f(1), f(2), f(5), f(11), f(12), f(21), f(22), f(25), f(111), f(0)], ["карта", "карты", "карт", "карт", "карт", "карта", "карты", "карт", "карт", "карт"]);
+        assert_eq!(
+            [
+                f(1),
+                f(2),
+                f(5),
+                f(11),
+                f(12),
+                f(21),
+                f(22),
+                f(25),
+                f(111),
+                f(0)
+            ],
+            [
+                "карта",
+                "карты",
+                "карт",
+                "карт",
+                "карт",
+                "карта",
+                "карты",
+                "карт",
+                "карт",
+                "карт"
+            ]
+        );
     }
 }

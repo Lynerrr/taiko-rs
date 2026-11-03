@@ -27,7 +27,11 @@ const MAX_LINE: u64 = 256 * 1024;
 /// Mapguessr: how long a round lasts, how long its answer shows before the next, and guesses
 /// per round.
 pub const GUESS_ROUND: Duration = Duration::from_secs(45);
-const GUESS_REVEAL: Duration = if cfg!(test) { Duration::from_millis(200) } else { Duration::from_secs(6) };
+const GUESS_REVEAL: Duration = if cfg!(test) {
+    Duration::from_millis(200)
+} else {
+    Duration::from_secs(6)
+};
 pub const GUESS_TRIES: u8 = 3;
 /// Mapguessr: map list entries per `Library` message (well under `MAX_LINE`), and the most kept.
 pub const LIBRARY_CHUNK: usize = 4000;
@@ -95,7 +99,11 @@ fn one() -> f64 {
 
 impl MapInfo {
     pub fn label(&self) -> String {
-        let rate = if (self.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", self.rate) } else { String::new() };
+        let rate = if (self.rate - 1.0).abs() > 1e-6 {
+            format!("  {:.2}x", self.rate)
+        } else {
+            String::new()
+        };
         let from = self
             .from
             .map(|t| {
@@ -103,8 +111,15 @@ impl MapInfo {
                 tr!("  from {m}:{s:02}", "  {m}:{s:02}から", "  с {m}:{s:02}";)
             })
             .unwrap_or_default();
-        let mods = if self.mods.is_empty() { String::new() } else { format!("  +{}", self.mods.concat()) };
-        format!("{} - {} [{}]{rate}{mods}{from}", self.artist, self.title, self.version)
+        let mods = if self.mods.is_empty() {
+            String::new()
+        } else {
+            format!("  +{}", self.mods.concat())
+        };
+        format!(
+            "{} - {} [{}]{rate}{mods}{from}",
+            self.artist, self.title, self.version
+        )
     }
 }
 
@@ -168,8 +183,14 @@ pub struct PlayerInfo {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ClientMsg {
     /// `host_token` is set only by the host's own client, proving it owns the room.
-    Hello { name: String, protocol: u32, host_token: Option<u64> },
-    Ping { t: f64 },
+    Hello {
+        name: String,
+        protocol: u32,
+        host_token: Option<u64>,
+    },
+    Ping {
+        t: f64,
+    },
     SelectMap(MapInfo),
     HasMap(bool),
     Ready(bool),
@@ -180,10 +201,16 @@ pub enum ClientMsg {
     /// A player without the lobby map asks the host for it.
     RequestMap,
     /// Host: a piece of the map set archive for player `to`.
-    MapFile { to: u32, part: MapPart },
+    MapFile {
+        to: u32,
+        part: MapPart,
+    },
     /// During a match: presses judged since the last batch (map time, key). `anti_mash` is
     /// older builds' setting, always sent on (judging is `Mash::Nearest` now).
-    Inputs { inputs: Vec<(f64, u8)>, anti_mash: bool },
+    Inputs {
+        inputs: Vec<(f64, u8)>,
+        anti_mash: bool,
+    },
     /// Start / stop watching the match in progress.
     Spectate(bool),
     /// Lobby: be a spectator (watch every match from its start) or a player.
@@ -199,11 +226,19 @@ pub enum ClientMsg {
     Mods(Vec<String>),
     /// Mapguessr: part of our map list as (map hash, song key); `done` on the last part. A new
     /// list after a done one replaces it.
-    Library { maps: Vec<(u64, u64)>, done: bool },
+    Library {
+        maps: Vec<(u64, u64)>,
+        done: bool,
+    },
     /// Mapguessr, host: start a game of this many rounds.
-    StartGuessr { rounds: u32 },
+    StartGuessr {
+        rounds: u32,
+    },
     /// Mapguessr: it's this map (any difficulty of the song counts: `song` is its song key).
-    Guess { hash: u64, song: u64 },
+    Guess {
+        hash: u64,
+        song: u64,
+    },
 }
 
 /// A piece of a map set archive sent from the host's Songs folder. `data` is base64; the
@@ -222,9 +257,14 @@ pub struct MapPart {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ServerMsg {
-    Welcome { id: u32 },
+    Welcome {
+        id: u32,
+    },
     Rejected(String),
-    Pong { t: f64, server: f64 },
+    Pong {
+        t: f64,
+        server: f64,
+    },
     /// `mapguessr`: the room plays mapguessr, where `common` maps are in every player's list
     /// (None while a list hasn't arrived).
     Room {
@@ -238,28 +278,57 @@ pub enum ServerMsg {
     },
     Prepare(MapInfo),
     /// Start the song at this server time (ms).
-    Start { at: f64 },
+    Start {
+        at: f64,
+    },
     Results(Vec<PlayerInfo>),
     /// To the host: player `from` wants the lobby map's files.
-    MapRequested { from: u32 },
+    MapRequested {
+        from: u32,
+    },
     /// From the host: part of the lobby map's files.
     MapFile(MapPart),
     /// Watching the match: its map, when it started (server ms) and who plays (id, name).
-    Spectate { map: MapInfo, at: f64, players: Vec<(u32, String)> },
+    Spectate {
+        map: MapInfo,
+        at: f64,
+        players: Vec<(u32, String)>,
+    },
     /// A player's presses, to spectators.
-    Inputs { from: u32, inputs: Vec<(f64, u8)>, anti_mash: bool },
+    Inputs {
+        from: u32,
+        inputs: Vec<(f64, u8)>,
+        anti_mash: bool,
+    },
     /// A player skipped the intro, to spectators.
-    Skipped { from: u32 },
+    Skipped {
+        from: u32,
+    },
     /// Lobby chat (also the recent lines, to someone who just joined).
-    Chat { from: String, text: String },
+    Chat {
+        from: String,
+        text: String,
+    },
     /// Mapguessr: round `round` of `rounds` shows map `hash` (in every player's list) from
     /// `from` (0-1, how far through its notes) for `seconds`.
-    GuessRound { round: u32, rounds: u32, hash: u64, from: f64, seconds: u32 },
+    GuessRound {
+        round: u32,
+        rounds: u32,
+        hash: u64,
+        from: f64,
+        seconds: u32,
+    },
     /// Mapguessr: our guess was wrong; guesses left.
-    GuessWrong { tries: u8 },
+    GuessWrong {
+        tries: u8,
+    },
     /// Mapguessr: the round is over and it was `hash`; who got it and the points each got.
     /// `last`: the game ends with it.
-    GuessReveal { hash: u64, got: Vec<(u32, u32)>, last: bool },
+    GuessReveal {
+        hash: u64,
+        got: Vec<(u32, u32)>,
+        last: bool,
+    },
     /// Synthesised locally when the connection drops.
     Disconnected(String),
 }
@@ -272,12 +341,18 @@ fn send_line<T: Serialize>(w: &mut TcpStream, msg: &T) -> std::io::Result<()> {
 
 /// Printable ASCII, Cyrillic and Japanese: what the built-in font draws.
 pub fn drawable_char(c: char) -> bool {
-    c.is_ascii_graphic() || c == ' ' || (!c.is_ascii() && !c.is_control() && crate::font::drawable(c))
+    c.is_ascii_graphic()
+        || c == ' '
+        || (!c.is_ascii() && !c.is_control() && crate::font::drawable(c))
 }
 
 /// A chat line: what the font draws, at most 200 characters, trimmed.
 pub fn clean_chat(text: &str) -> String {
-    let t: String = text.chars().filter(|c| drawable_char(*c)).take(200).collect();
+    let t: String = text
+        .chars()
+        .filter(|c| drawable_char(*c))
+        .take(200)
+        .collect();
     t.trim().to_string()
 }
 
@@ -356,7 +431,12 @@ fn swear_word(word: &str) -> bool {
             })
         })
         .collect();
-    [cyr.clone(), squeeze(&cyr)].iter().any(|w| russian_swear(w)) || [lat.clone(), squeeze(&lat)].iter().any(|w| english_swear(w))
+    [cyr.clone(), squeeze(&cyr)]
+        .iter()
+        .any(|w| russian_swear(w))
+        || [lat.clone(), squeeze(&lat)]
+            .iter()
+            .any(|w| english_swear(w))
 }
 
 /// Runs of three or more of one letter cut to one ("бляяя" -> "бля"); pairs stay ("shiite").
@@ -385,39 +465,104 @@ fn russian_swear(w: &str) -> bool {
     }
     // хуй, хуе, хуя, хуи anywhere but in "страхуй"; хую only at the start ("тихую", "плохую",
     // "психую").
-    if ["хуй", "хуе", "хуя", "хуи"].iter().any(|r| w.match_indices(r).any(|(i, _)| !w[..i].ends_with("стра"))) || w.starts_with("хую") {
+    if ["хуй", "хуе", "хуя", "хуи"]
+        .iter()
+        .any(|r| w.match_indices(r).any(|(i, _)| !w[..i].ends_with("стра")))
+        || w.starts_with("хую")
+    {
         return true;
     }
     // бля, блядь, блять: at the start of a word only ("корабля", "рубля"), not "бляха", "бляшка",
     // "блямба".
-    if w.strip_prefix("бля").is_some_and(|rest| !rest.starts_with(['х', 'ш', 'м'])) {
+    if w.strip_prefix("бля")
+        .is_some_and(|rest| !rest.starts_with(['х', 'ш', 'м']))
+    {
         return true;
     }
     // сука and сучка in their forms, not "сукно" or "сучок" (a knot).
-    const FORMS: [&str; 16] = ["сука", "суки", "суке", "суку", "сукой", "сучий", "сукин", "сукины", "сучка", "сучки", "сучке", "сучку", "сучкой", "сучара", "сучары", "сучье"];
+    const FORMS: [&str; 16] = [
+        "сука",
+        "суки",
+        "суке",
+        "суку",
+        "сукой",
+        "сучий",
+        "сукин",
+        "сукины",
+        "сучка",
+        "сучки",
+        "сучке",
+        "сучку",
+        "сучкой",
+        "сучара",
+        "сучары",
+        "сучье",
+    ];
     if FORMS.contains(&w) {
         return true;
     }
     // еб-: after a prefix ("заебал", "уебок", "долбоеб"), never inside a word ("хлеб", "небо",
     // "себе").
     const PREFIXES: [&str; 22] = [
-        "", "за", "у", "вы", "на", "до", "от", "отъ", "про", "раз", "разъ", "рас", "по", "съ", "об", "объ", "подъ", "при", "пере", "недо", "долбо", "долба",
+        "",
+        "за",
+        "у",
+        "вы",
+        "на",
+        "до",
+        "от",
+        "отъ",
+        "про",
+        "раз",
+        "разъ",
+        "рас",
+        "по",
+        "съ",
+        "об",
+        "объ",
+        "подъ",
+        "при",
+        "пере",
+        "недо",
+        "долбо",
+        "долба",
     ];
-    PREFIXES.iter().any(|p| w.strip_prefix(p).is_some_and(|rest| rest.starts_with("еб") && !rest.starts_with("ебони")))
+    PREFIXES.iter().any(|p| {
+        w.strip_prefix(p)
+            .is_some_and(|rest| rest.starts_with("еб") && !rest.starts_with("ебони"))
+    })
 }
 
 fn english_swear(w: &str) -> bool {
-    const ANYWHERE: [&str; 11] = ["fuck", "shit", "bitch", "cunt", "nigger", "faggot", "whore", "asshole", "motherf", "blyat", "pizd"];
-    const WHOLE: [&str; 18] = ["fck", "fuk", "fag", "fags", "slut", "sluts", "nigga", "niggas", "niggaz", "pussy", "retard", "retards", "suka", "huy", "hui", "xuy", "xyu", "xui"];
-    ANYWHERE.iter().any(|r| w.contains(r)) || WHOLE.contains(&w) || ["nahui", "nahuy", "blyad", "ebat", "pidor", "pidar"].iter().any(|r| w.starts_with(r))
+    const ANYWHERE: [&str; 11] = [
+        "fuck", "shit", "bitch", "cunt", "nigger", "faggot", "whore", "asshole", "motherf",
+        "blyat", "pizd",
+    ];
+    const WHOLE: [&str; 18] = [
+        "fck", "fuk", "fag", "fags", "slut", "sluts", "nigga", "niggas", "niggaz", "pussy",
+        "retard", "retards", "suka", "huy", "hui", "xuy", "xyu", "xui",
+    ];
+    ANYWHERE.iter().any(|r| w.contains(r))
+        || WHOLE.contains(&w)
+        || ["nahui", "nahuy", "blyad", "ebat", "pidor", "pidar"]
+            .iter()
+            .any(|r| w.starts_with(r))
 }
 
 /// Keeps what the built-in font can draw and caps the length.
 fn clean_name(name: &str) -> String {
-    let n: String = name.chars().filter(|c| drawable_char(*c)).take(20).collect();
+    let n: String = name
+        .chars()
+        .filter(|c| drawable_char(*c))
+        .take(20)
+        .collect();
     let n = n.trim().to_string();
     // Mapguessr's notices are from a name nobody else gets.
-    if n.is_empty() || n.eq_ignore_ascii_case(GUESSR_NAME) { "player".into() } else { n }
+    if n.is_empty() || n.eq_ignore_ascii_case(GUESSR_NAME) {
+        "player".into()
+    } else {
+        n
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -467,7 +612,9 @@ pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
     }
     if listeners.is_empty() {
         let e = last_err.map(|e| e.to_string()).unwrap_or_default();
-        return Err(tr!("can't listen on port {port}: {e}", "ポート{port}で待ち受けできません: {e}", "не удаётся слушать порт {port}: {e}";));
+        return Err(
+            tr!("can't listen on port {port}: {e}", "ポート{port}で待ち受けできません: {e}", "не удаётся слушать порт {port}: {e}";),
+        );
     }
     for l in &listeners {
         l.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -486,7 +633,13 @@ pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
                     for listener in &listeners {
                         if let Ok((stream, _)) = listener.accept() {
                             let _ = stream.set_nonblocking(false);
-                            spawn_connection(BufReader::new(stream), next_id, events.clone(), None, ());
+                            spawn_connection(
+                                BufReader::new(stream),
+                                next_id,
+                                events.clone(),
+                                None,
+                                (),
+                            );
                             next_id += 1;
                             accepted = true;
                         }
@@ -500,7 +653,10 @@ pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
     }
     {
         let stop = stop.clone();
-        thread::Builder::new().name("mp-room".into()).spawn(move || room_loop(rx, stop, token, None, mapguessr)).map_err(|e| e.to_string())?;
+        thread::Builder::new()
+            .name("mp-room".into())
+            .spawn(move || room_loop(rx, stop, token, None, mapguessr))
+            .map_err(|e| e.to_string())?;
     }
     Ok(Server { stop, token, port })
 }
@@ -509,7 +665,12 @@ pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
 fn new_token() -> u64 {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+    );
     h.finish()
 }
 
@@ -562,13 +723,22 @@ pub fn on_match(hook: MatchHook) {
 pub fn open_room(mapguessr: bool) -> Room {
     let stop = Arc::new(AtomicBool::new(false));
     let token = new_token();
-    let summary = Arc::new(Mutex::new(Summary { mapguessr, ..Summary::default() }));
+    let summary = Arc::new(Mutex::new(Summary {
+        mapguessr,
+        ..Summary::default()
+    }));
     let (events, rx) = mpsc::channel();
     {
         let (stop, summary) = (stop.clone(), summary.clone());
         thread::spawn(move || room_loop(rx, stop, token, Some(summary), mapguessr));
     }
-    Room { events, stop, next_id: AtomicU32::new(1), token, summary }
+    Room {
+        events,
+        stop,
+        next_id: AtomicU32::new(1),
+        token,
+        summary,
+    }
 }
 
 #[allow(dead_code)] // used by the online server (server/)
@@ -576,7 +746,12 @@ impl Room {
     /// Hands over a connection (its reader may already hold buffered input). `name` replaces
     /// the one the client sends in Hello.
     /// `keep` lives as long as the connection does.
-    pub fn attach<K: Send + 'static>(&self, reader: BufReader<TcpStream>, name: Option<String>, keep: K) {
+    pub fn attach<K: Send + 'static>(
+        &self,
+        reader: BufReader<TcpStream>,
+        name: Option<String>,
+        keep: K,
+    ) {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         spawn_connection(reader, id, self.events.clone(), name, keep);
     }
@@ -587,9 +762,17 @@ impl Room {
     }
 }
 
-fn spawn_connection<K: Send + 'static>(mut reader: BufReader<TcpStream>, id: u32, events: Sender<Event>, name: Option<String>, keep: K) {
+fn spawn_connection<K: Send + 'static>(
+    mut reader: BufReader<TcpStream>,
+    id: u32,
+    events: Sender<Event>,
+    name: Option<String>,
+    keep: K,
+) {
     let _ = reader.get_ref().set_nodelay(true);
-    let Ok(mut writer) = reader.get_ref().try_clone() else { return };
+    let Ok(mut writer) = reader.get_ref().try_clone() else {
+        return;
+    };
     let (tx, rx) = mpsc::channel::<ServerMsg>();
     // Out of threads: this connection is turned away, not whoever is starting it.
     let writing = thread::Builder::new().spawn(move || {
@@ -612,7 +795,8 @@ fn spawn_connection<K: Send + 'static>(mut reader: BufReader<TcpStream>, id: u32
         let mut line = String::new();
         while let Ok(Some(())) = read_message(&mut reader, &mut line) {
             if let Ok(msg) = serde_json::from_str::<ClientMsg>(&line)
-                && events.send(Event::Msg(id, msg)).is_err() {
+                && events.send(Event::Msg(id, msg)).is_err()
+            {
                 break;
             }
         }
@@ -653,11 +837,24 @@ struct GuessGame {
 type Libraries = std::collections::HashMap<u32, (std::collections::HashMap<u64, u64>, bool)>;
 
 /// The maps (hash, song key) in every list of `ids`, leaving out songs in `used`.
-fn common_maps(ids: &[u32], libraries: &Libraries, used: &std::collections::HashSet<u64>) -> Vec<(u64, u64)> {
-    let lists: Option<Vec<&std::collections::HashMap<u64, u64>>> = ids.iter().map(|id| libraries.get(id).map(|l| &l.0)).collect();
-    let Some(mut lists) = lists.filter(|l| !l.is_empty()) else { return Vec::new() };
+fn common_maps(
+    ids: &[u32],
+    libraries: &Libraries,
+    used: &std::collections::HashSet<u64>,
+) -> Vec<(u64, u64)> {
+    let lists: Option<Vec<&std::collections::HashMap<u64, u64>>> = ids
+        .iter()
+        .map(|id| libraries.get(id).map(|l| &l.0))
+        .collect();
+    let Some(mut lists) = lists.filter(|l| !l.is_empty()) else {
+        return Vec::new();
+    };
     lists.sort_by_key(|l| l.len());
-    let mut out: Vec<(u64, u64)> = lists[0].iter().filter(|(h, song)| !used.contains(*song) && lists[1..].iter().all(|l| l.contains_key(*h))).map(|(&h, &song)| (h, song)).collect();
+    let mut out: Vec<(u64, u64)> = lists[0]
+        .iter()
+        .filter(|(h, song)| !used.contains(*song) && lists[1..].iter().all(|l| l.contains_key(*h)))
+        .map(|(&h, &song)| (h, song))
+        .collect();
     // The same order every time, so a pick doesn't depend on how the lists were stored.
     out.sort_unstable();
     out
@@ -666,7 +863,10 @@ fn common_maps(ids: &[u32], libraries: &Libraries, used: &std::collections::Hash
 /// A lobby chat line from mapguessr itself (not kept in the chat history).
 fn notice(players: &[Player], text: String) {
     for p in players.iter().filter(|p| p.hello) {
-        let _ = p.tx.send(ServerMsg::Chat { from: GUESSR_NAME.into(), text: text.clone() });
+        let _ = p.tx.send(ServerMsg::Chat {
+            from: GUESSR_NAME.into(),
+            text: text.clone(),
+        });
     }
 }
 
@@ -679,7 +879,13 @@ enum Phase {
 
 /// `summary`: kept up to date for the online server's lobby list. `mapguessr`: the room plays
 /// mapguessr (see `GuessGame`) instead of matches.
-fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Option<Arc<Mutex<Summary>>>, mapguessr: bool) {
+fn room_loop(
+    rx: Receiver<Event>,
+    stop: Arc<AtomicBool>,
+    token: u64,
+    summary: Option<Arc<Mutex<Summary>>>,
+    mapguessr: bool,
+) {
     let epoch = Instant::now();
     let now_ms = || epoch.elapsed().as_secs_f64() * 1000.0;
     let mut players: Vec<Player> = Vec::new();
@@ -694,11 +900,13 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
     // presses so far (with their mash setting).
     let mut match_map: Option<MapInfo> = None;
     let mut start_at: Option<f64> = None;
-    let mut match_inputs: std::collections::HashMap<u32, (Vec<(f64, u8)>, bool)> = std::collections::HashMap::new();
+    let mut match_inputs: std::collections::HashMap<u32, (Vec<(f64, u8)>, bool)> =
+        std::collections::HashMap::new();
     let mut match_skips: std::collections::HashSet<u32> = std::collections::HashSet::new();
     // Recent lobby chat (name, line) for whoever joins, and each player's last lines (flood limit).
     let mut chat: std::collections::VecDeque<(String, String)> = std::collections::VecDeque::new();
-    let mut chat_times: std::collections::HashMap<u32, std::collections::VecDeque<Instant>> = std::collections::HashMap::new();
+    let mut chat_times: std::collections::HashMap<u32, std::collections::VecDeque<Instant>> =
+        std::collections::HashMap::new();
     // Mapguessr: everyone's map list, the game in progress, and how many maps all the players
     // have (None while a list is missing), worked out again when `common_dirty`.
     let mut libraries: Libraries = std::collections::HashMap::new();
@@ -709,9 +917,17 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
     while !stop.load(Ordering::Relaxed) {
         let event = match rx.recv_timeout(Duration::from_millis(50)) {
             // A kick is the player leaving, after a word to them (their link closes with it).
-            Ok(Event::Kick(name)) => match players.iter().find(|p| p.info.name.eq_ignore_ascii_case(&name) || p.forced_name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&name))) {
+            Ok(Event::Kick(name)) => match players.iter().find(|p| {
+                p.info.name.eq_ignore_ascii_case(&name)
+                    || p.forced_name
+                        .as_deref()
+                        .is_some_and(|n| n.eq_ignore_ascii_case(&name))
+            }) {
                 Some(p) => {
-                    let _ = p.tx.send(ServerMsg::Chat { from: "taiko.rs".into(), text: "an admin took you out of this lobby".into() });
+                    let _ = p.tx.send(ServerMsg::Chat {
+                        from: "taiko.rs".into(),
+                        text: "an admin took you out of this lobby".into(),
+                    });
                     Ok(Event::Left(p.info.id))
                 }
                 None => Err(RecvTimeoutError::Timeout),
@@ -753,7 +969,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                 common_dirty = true;
                 // A handed-over host leaving gives it back to the room's owner (or anyone left).
                 if host_id == Some(id) {
-                    host_id = owner_id.filter(|o| players.iter().any(|p| p.info.id == *o)).or_else(|| players.iter().find(|p| p.hello).map(|p| p.info.id));
+                    host_id = owner_id
+                        .filter(|o| players.iter().any(|p| p.info.id == *o))
+                        .or_else(|| players.iter().find(|p| p.hello).map(|p| p.info.id));
                     for p in &mut players {
                         p.info.host = Some(p.info.id) == host_id;
                     }
@@ -765,15 +983,16 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                 // Map transfers are relayed between the host and one player, lobby only.
                 let msg = match msg {
                     ClientMsg::RequestMap => {
-                        if let (Some(h), true, true) = (host_id, phase == Phase::Lobby, map.is_some())
-                            && let Some(host) = players.iter().find(|p| p.info.id == h) {
+                        if let (Some(h), true, true) =
+                            (host_id, phase == Phase::Lobby, map.is_some())
+                            && let Some(host) = players.iter().find(|p| p.info.id == h)
+                        {
                             let _ = host.tx.send(ServerMsg::MapRequested { from: id });
                         }
                         continue;
                     }
                     ClientMsg::MapFile { to, part } => {
-                        if is_host
-                            && let Some(dest) = players.iter().find(|p| p.info.id == to) {
+                        if is_host && let Some(dest) = players.iter().find(|p| p.info.id == to) {
                             let _ = dest.tx.send(ServerMsg::MapFile(part));
                         }
                         continue;
@@ -793,7 +1012,11 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                             let log = match_inputs.entry(id).or_default();
                             log.0.extend_from_slice(&inputs);
                             log.1 = anti_mash;
-                            let msg = ServerMsg::Inputs { from: id, inputs, anti_mash };
+                            let msg = ServerMsg::Inputs {
+                                from: id,
+                                inputs,
+                                anti_mash,
+                            };
                             for s in players.iter().filter(|p| p.spectating) {
                                 let _ = s.tx.send(msg.clone());
                             }
@@ -801,7 +1024,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         continue;
                     }
                     ClientMsg::Skipped => {
-                        if players.iter().any(|p| p.info.id == id && p.in_match) && match_skips.insert(id) {
+                        if players.iter().any(|p| p.info.id == id && p.in_match)
+                            && match_skips.insert(id)
+                        {
                             for s in players.iter().filter(|p| p.spectating) {
                                 let _ = s.tx.send(ServerMsg::Skipped { from: id });
                             }
@@ -811,7 +1036,13 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                     ClientMsg::Chat(text) => {
                         // A room's chat is public: starred out for everyone.
                         let text = censor(&clean_chat(&text));
-                        let Some(name) = players.iter().find(|p| p.info.id == id && p.hello).map(|p| p.info.name.clone()) else { continue };
+                        let Some(name) = players
+                            .iter()
+                            .find(|p| p.info.id == id && p.hello)
+                            .map(|p| p.info.name.clone())
+                        else {
+                            continue;
+                        };
                         // At most 5 lines per 3 s each.
                         let times = chat_times.entry(id).or_default();
                         times.retain(|t| t.elapsed() < Duration::from_secs(3));
@@ -824,20 +1055,39 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                             chat.pop_front();
                         }
                         for p in players.iter().filter(|p| p.hello) {
-                            let _ = p.tx.send(ServerMsg::Chat { from: name.clone(), text: text.clone() });
+                            let _ = p.tx.send(ServerMsg::Chat {
+                                from: name.clone(),
+                                text: text.clone(),
+                            });
                         }
                         continue;
                     }
                     ClientMsg::Spectate(on) => {
-                        let roster: Vec<(u32, String)> = players.iter().filter(|p| p.in_match).map(|p| (p.info.id, p.info.name.clone())).collect();
-                        let Some(p) = players.iter_mut().find(|p| p.info.id == id) else { continue };
+                        let roster: Vec<(u32, String)> = players
+                            .iter()
+                            .filter(|p| p.in_match)
+                            .map(|p| (p.info.id, p.info.name.clone()))
+                            .collect();
+                        let Some(p) = players.iter_mut().find(|p| p.info.id == id) else {
+                            continue;
+                        };
                         p.spectating = false;
-                        if let (true, Phase::Playing, false, Some(m), Some(at)) = (on, &phase, p.in_match, &match_map, start_at) {
+                        if let (true, Phase::Playing, false, Some(m), Some(at)) =
+                            (on, &phase, p.in_match, &match_map, start_at)
+                        {
                             p.spectating = true;
-                            let _ = p.tx.send(ServerMsg::Spectate { map: m.clone(), at, players: roster });
+                            let _ = p.tx.send(ServerMsg::Spectate {
+                                map: m.clone(),
+                                at,
+                                players: roster,
+                            });
                             // Everything played so far, so a late spectator catches up.
                             for (&from, (inputs, anti_mash)) in &match_inputs {
-                                let _ = p.tx.send(ServerMsg::Inputs { from, inputs: inputs.clone(), anti_mash: *anti_mash });
+                                let _ = p.tx.send(ServerMsg::Inputs {
+                                    from,
+                                    inputs: inputs.clone(),
+                                    anti_mash: *anti_mash,
+                                });
                             }
                             for &from in &match_skips {
                                 let _ = p.tx.send(ServerMsg::Skipped { from });
@@ -863,11 +1113,27 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         }
                         continue;
                     }
-                    ClientMsg::StartGuessr { rounds } if mapguessr && is_host && guess.is_none() => {
-                        let ids: Vec<u32> = players.iter().filter(|p| p.hello && !p.info.spectator).map(|p| p.info.id).collect();
-                        let waiting: Vec<String> = players.iter().filter(|p| ids.contains(&p.info.id) && !libraries.get(&p.info.id).is_some_and(|l| l.1)).map(|p| p.info.name.clone()).collect();
+                    ClientMsg::StartGuessr { rounds }
+                        if mapguessr && is_host && guess.is_none() =>
+                    {
+                        let ids: Vec<u32> = players
+                            .iter()
+                            .filter(|p| p.hello && !p.info.spectator)
+                            .map(|p| p.info.id)
+                            .collect();
+                        let waiting: Vec<String> = players
+                            .iter()
+                            .filter(|p| {
+                                ids.contains(&p.info.id)
+                                    && !libraries.get(&p.info.id).is_some_and(|l| l.1)
+                            })
+                            .map(|p| p.info.name.clone())
+                            .collect();
                         if !waiting.is_empty() {
-                            notice(&players, format!("waiting for the map list of {}", waiting.join(", ")));
+                            notice(
+                                &players,
+                                format!("waiting for the map list of {}", waiting.join(", ")),
+                            );
                         } else if ids.is_empty() {
                             notice(&players, "nobody is playing: everyone's spectating".into());
                         } else if common_maps(&ids, &libraries, &Default::default()).is_empty() {
@@ -878,17 +1144,41 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                             }
                             // The first round starts right away (see below).
                             let now = Instant::now();
-                            guess = Some(GuessGame { rounds: rounds.clamp(1, 50), round: 0, players: ids, used: Default::default(), answer: (0, 0), ends: now, reveal_until: Some(now), got: Vec::new(), last: false });
+                            guess = Some(GuessGame {
+                                rounds: rounds.clamp(1, 50),
+                                round: 0,
+                                players: ids,
+                                used: Default::default(),
+                                answer: (0, 0),
+                                ends: now,
+                                reveal_until: Some(now),
+                                got: Vec::new(),
+                                last: false,
+                            });
                             dirty = true;
                         }
                         continue;
                     }
                     ClientMsg::Guess { song, .. } => {
-                        let Some(g) = guess.as_mut().filter(|g| g.reveal_until.is_none() && g.players.contains(&id)) else { continue };
-                        let Some(p) = players.iter_mut().find(|p| p.info.id == id && !p.info.guessed && p.info.tries > 0) else { continue };
+                        let Some(g) = guess
+                            .as_mut()
+                            .filter(|g| g.reveal_until.is_none() && g.players.contains(&id))
+                        else {
+                            continue;
+                        };
+                        let Some(p) = players
+                            .iter_mut()
+                            .find(|p| p.info.id == id && !p.info.guessed && p.info.tries > 0)
+                        else {
+                            continue;
+                        };
                         if song == g.answer.1 {
                             // 100 for getting it, up to 100 more for getting it fast.
-                            let left = g.ends.saturating_duration_since(Instant::now()).as_secs_f64() / GUESS_ROUND.as_secs_f64();
+                            let left = g
+                                .ends
+                                .saturating_duration_since(Instant::now())
+                                .as_secs_f64()
+                                / GUESS_ROUND.as_secs_f64();
                             let points = 100 + (100.0 * left).round() as u32;
                             p.info.guessed = true;
                             p.info.points += points;
@@ -897,16 +1187,24 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                             notice(&players, format!("{name} got it! (+{points})"));
                         } else {
                             p.info.tries -= 1;
-                            let _ = p.tx.send(ServerMsg::GuessWrong { tries: p.info.tries });
+                            let _ = p.tx.send(ServerMsg::GuessWrong {
+                                tries: p.info.tries,
+                            });
                         }
                         dirty = true;
                         continue;
                     }
                     other => other,
                 };
-                let Some(p) = players.iter_mut().find(|p| p.info.id == id) else { continue };
+                let Some(p) = players.iter_mut().find(|p| p.info.id == id) else {
+                    continue;
+                };
                 match msg {
-                    ClientMsg::Hello { name, protocol, host_token } => {
+                    ClientMsg::Hello {
+                        name,
+                        protocol,
+                        host_token,
+                    } => {
                         // Only the client holding the room's token becomes host, however fast
                         // anyone else connects.
                         if host_token == Some(token) && host_id.is_none() {
@@ -915,7 +1213,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                             p.info.host = true;
                         }
                         if protocol != PROTOCOL {
-                            let _ = p.tx.send(ServerMsg::Rejected(format!("version mismatch (host {PROTOCOL}, you {protocol})")));
+                            let _ = p.tx.send(ServerMsg::Rejected(format!(
+                                "version mismatch (host {PROTOCOL}, you {protocol})"
+                            )));
                             players.retain(|p| p.info.id != id);
                             continue;
                         }
@@ -924,12 +1224,18 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         common_dirty = true;
                         let _ = p.tx.send(ServerMsg::Welcome { id });
                         for (from, text) in &chat {
-                            let _ = p.tx.send(ServerMsg::Chat { from: from.clone(), text: text.clone() });
+                            let _ = p.tx.send(ServerMsg::Chat {
+                                from: from.clone(),
+                                text: text.clone(),
+                            });
                         }
                         dirty = true;
                     }
                     ClientMsg::Ping { t } => {
-                        let _ = p.tx.send(ServerMsg::Pong { t, server: now_ms() });
+                        let _ = p.tx.send(ServerMsg::Pong {
+                            t,
+                            server: now_ms(),
+                        });
                     }
                     ClientMsg::SelectMap(m) if is_host && phase == Phase::Lobby && !mapguessr => {
                         // Same map at a new rate: everyone still has it, they just re-ready.
@@ -963,7 +1269,10 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                     ClientMsg::StartMatch if is_host && phase == Phase::Lobby && !mapguessr => {
                         if let Some(m) = &map {
                             let mut any = false;
-                            for p in players.iter_mut().filter(|p| p.hello && p.info.ready && p.info.has_map) {
+                            for p in players
+                                .iter_mut()
+                                .filter(|p| p.hello && p.info.ready && p.info.has_map)
+                            {
                                 p.in_match = true;
                                 p.loaded = None;
                                 p.info.status = Status::Loading;
@@ -973,7 +1282,9 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                                 any = true;
                             }
                             if any {
-                                phase = Phase::Loading { deadline: Instant::now() + LOAD_TIMEOUT };
+                                phase = Phase::Loading {
+                                    deadline: Instant::now() + LOAD_TIMEOUT,
+                                };
                                 dirty = true;
                             }
                         }
@@ -982,7 +1293,14 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         p.loaded = Some(ok);
                     }
                     ClientMsg::Mods(list) => {
-                        let list: Vec<String> = list.into_iter().take(40).filter(|m| (1..=4).contains(&m.len()) && m.chars().all(|c| c.is_ascii_alphanumeric())).collect();
+                        let list: Vec<String> = list
+                            .into_iter()
+                            .take(40)
+                            .filter(|m| {
+                                (1..=4).contains(&m.len())
+                                    && m.chars().all(|c| c.is_ascii_alphanumeric())
+                            })
+                            .collect();
                         if p.info.mods != list {
                             p.info.mods = list;
                             dirty = true;
@@ -994,12 +1312,11 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                             dirty = true;
                         }
                     }
-                    ClientMsg::Finished(f)
-                        if p.in_match => {
-                            p.info.result = Some(f);
-                            p.info.status = Status::Finished;
-                            dirty = true;
-                        }
+                    ClientMsg::Finished(f) if p.in_match => {
+                        p.info.result = Some(f);
+                        p.info.status = Status::Finished;
+                        dirty = true;
+                    }
                     _ => {}
                 }
             }
@@ -1027,21 +1344,45 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         p.info.status = Status::Lobby;
                     }
                 }
-                phase = if started { Phase::Playing } else { Phase::Lobby };
+                phase = if started {
+                    Phase::Playing
+                } else {
+                    Phase::Lobby
+                };
                 // Spectators watch from the start.
                 if let (true, Some(m)) = (started, &map) {
-                    let roster: Vec<(u32, String)> = players.iter().filter(|p| p.in_match).map(|p| (p.info.id, p.info.name.clone())).collect();
-                    for p in players.iter_mut().filter(|p| p.hello && p.info.spectator && !p.in_match) {
+                    let roster: Vec<(u32, String)> = players
+                        .iter()
+                        .filter(|p| p.in_match)
+                        .map(|p| (p.info.id, p.info.name.clone()))
+                        .collect();
+                    for p in players
+                        .iter_mut()
+                        .filter(|p| p.hello && p.info.spectator && !p.in_match)
+                    {
                         p.spectating = true;
-                        let _ = p.tx.send(ServerMsg::Spectate { map: m.clone(), at, players: roster.clone() });
+                        let _ = p.tx.send(ServerMsg::Spectate {
+                            map: m.clone(),
+                            at,
+                            players: roster.clone(),
+                        });
                     }
                 }
                 dirty = true;
             }
         }
         // Everyone still in the match has finished (or left): publish results, back to the lobby.
-        if phase == Phase::Playing && players.iter().filter(|p| p.in_match).all(|p| p.info.status == Status::Finished) {
-            let results: Vec<PlayerInfo> = players.iter().filter(|p| p.in_match).map(|p| p.info.clone()).collect();
+        if phase == Phase::Playing
+            && players
+                .iter()
+                .filter(|p| p.in_match)
+                .all(|p| p.info.status == Status::Finished)
+        {
+            let results: Vec<PlayerInfo> = players
+                .iter()
+                .filter(|p| p.in_match)
+                .map(|p| p.info.clone())
+                .collect();
             if let Some(hook) = MATCH_OVER.get() {
                 hook(&results);
             }
@@ -1059,7 +1400,8 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
         // Mapguessr: once the answer has shown, start the next round (or end the game); show the
         // answer once everyone has it or is out of guesses, or the time is up.
         if let Some(g) = &mut guess {
-            g.players.retain(|id| players.iter().any(|p| p.info.id == *id));
+            g.players
+                .retain(|id| players.iter().any(|p| p.info.id == *id));
             let now = Instant::now();
             match g.reveal_until {
                 Some(until) if now >= until => {
@@ -1081,7 +1423,13 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                         g.ends = now + GUESS_ROUND;
                         // Somewhere between a tenth and two thirds of the way through.
                         let from = 0.1 + random_below(1000) as f64 / 1000.0 * 0.55;
-                        let msg = ServerMsg::GuessRound { round: g.round, rounds: g.rounds, hash, from, seconds: GUESS_ROUND.as_secs() as u32 };
+                        let msg = ServerMsg::GuessRound {
+                            round: g.round,
+                            rounds: g.rounds,
+                            hash,
+                            from,
+                            seconds: GUESS_ROUND.as_secs() as u32,
+                        };
                         for p in players.iter_mut().filter(|p| p.hello) {
                             if g.players.contains(&p.info.id) {
                                 p.info.guessed = false;
@@ -1095,11 +1443,21 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                 }
                 Some(_) => {}
                 None => {
-                    let done = |id: &u32| players.iter().find(|p| p.info.id == *id).is_none_or(|p| p.info.guessed || p.info.tries == 0);
+                    let done = |id: &u32| {
+                        players
+                            .iter()
+                            .find(|p| p.info.id == *id)
+                            .is_none_or(|p| p.info.guessed || p.info.tries == 0)
+                    };
                     if now >= g.ends || g.players.iter().all(done) {
-                        g.last = g.round >= g.rounds || common_maps(&g.players, &libraries, &g.used).is_empty();
+                        g.last = g.round >= g.rounds
+                            || common_maps(&g.players, &libraries, &g.used).is_empty();
                         g.reveal_until = Some(now + GUESS_REVEAL);
-                        let msg = ServerMsg::GuessReveal { hash: g.answer.0, got: g.got.clone(), last: g.last };
+                        let msg = ServerMsg::GuessReveal {
+                            hash: g.answer.0,
+                            got: g.got.clone(),
+                            last: g.last,
+                        };
                         for p in players.iter().filter(|p| p.hello) {
                             let _ = p.tx.send(msg.clone());
                         }
@@ -1109,17 +1467,31 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
             }
         }
         if mapguessr && std::mem::take(&mut common_dirty) {
-            let ids: Vec<u32> = players.iter().filter(|p| p.hello && !p.info.spectator).map(|p| p.info.id).collect();
-            let all_in = !ids.is_empty() && ids.iter().all(|id| libraries.get(id).is_some_and(|l| l.1));
-            common = all_in.then(|| common_maps(&ids, &libraries, &Default::default()).len() as u32);
+            let ids: Vec<u32> = players
+                .iter()
+                .filter(|p| p.hello && !p.info.spectator)
+                .map(|p| p.info.id)
+                .collect();
+            let all_in =
+                !ids.is_empty() && ids.iter().all(|id| libraries.get(id).is_some_and(|l| l.1));
+            common =
+                all_in.then(|| common_maps(&ids, &libraries, &Default::default()).len() as u32);
             dirty = true;
         }
 
         let in_match = phase != Phase::Lobby || guess.is_some();
-        let interval = if in_match { MATCH_BROADCAST } else { Duration::ZERO };
+        let interval = if in_match {
+            MATCH_BROADCAST
+        } else {
+            Duration::ZERO
+        };
         if dirty && last_broadcast.elapsed() >= interval {
             let room = ServerMsg::Room {
-                players: players.iter().filter(|p| p.hello).map(|p| p.info.clone()).collect(),
+                players: players
+                    .iter()
+                    .filter(|p| p.hello)
+                    .map(|p| p.info.clone())
+                    .collect(),
                 map: map.clone(),
                 in_match,
                 mapguessr,
@@ -1131,7 +1503,11 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
             if let Some(s) = &summary {
                 let mut s = s.lock().unwrap();
                 s.players = players.iter().filter(|p| p.hello).count() as u32;
-                s.host = players.iter().find(|p| p.info.host).map(|p| p.info.name.clone()).unwrap_or_default();
+                s.host = players
+                    .iter()
+                    .find(|p| p.info.host)
+                    .map(|p| p.info.name.clone())
+                    .unwrap_or_default();
                 s.map = map.as_ref().map(MapInfo::label);
                 s.in_match = in_match;
             }
@@ -1171,7 +1547,10 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
         addr.to_string()
     } else if addr.parse::<std::net::Ipv6Addr>().is_ok() {
         format!("[{addr}]:{DEFAULT_PORT}")
-    } else if addr.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok()) {
+    } else if addr
+        .rsplit_once(':')
+        .is_some_and(|(_, p)| p.parse::<u16>().is_ok())
+    {
         addr.to_string()
     } else {
         format!("{addr}:{DEFAULT_PORT}")
@@ -1192,7 +1571,11 @@ impl Client {
 
     /// The room protocol over a connection that's already open (the online server's, after
     /// joining a room there; its reader may hold buffered input).
-    pub fn over(reader: BufReader<TcpStream>, name: &str, host_token: Option<u64>) -> Result<Client, String> {
+    pub fn over(
+        reader: BufReader<TcpStream>,
+        name: &str,
+        host_token: Option<u64>,
+    ) -> Result<Client, String> {
         // Timeouts are per handle on Windows: clear the request ones on the reader's own handle
         // too, not just the clone, or a quiet lobby drops after 10 s there.
         let _ = reader.get_ref().set_read_timeout(None);
@@ -1218,11 +1601,22 @@ impl Client {
             let mut line = String::new();
             while let Ok(Some(())) = read_message(&mut reader, &mut line) {
                 if let Ok(msg) = serde_json::from_str::<ServerMsg>(&line)
-                    && inbox.send((Instant::now(), msg)).is_err() {
+                    && inbox.send((Instant::now(), msg)).is_err()
+                {
                     return;
                 }
             }
-            let _ = inbox.send((Instant::now(), ServerMsg::Disconnected(tr!("connection closed", "接続が切れました", "соединение закрыто").into())));
+            let _ = inbox.send((
+                Instant::now(),
+                ServerMsg::Disconnected(
+                    tr!(
+                        "connection closed",
+                        "接続が切れました",
+                        "соединение закрыто"
+                    )
+                    .into(),
+                ),
+            ));
         });
         // Ping quickly at first to sync clocks, then once a second to track drift.
         let pinger = tx.clone();
@@ -1235,8 +1629,21 @@ impl Client {
                 thread::sleep(Duration::from_millis(if i < 10 { 100 } else { 1000 }));
             }
         });
-        let _ = tx.send(ClientMsg::Hello { name: name.to_string(), protocol: PROTOCOL, host_token });
-        Ok(Client { tx, rx, stream, epoch, best_rtt: f64::INFINITY, offset: 0.0, rtt_ms: 0.0, id: None })
+        let _ = tx.send(ClientMsg::Hello {
+            name: name.to_string(),
+            protocol: PROTOCOL,
+            host_token,
+        });
+        Ok(Client {
+            tx,
+            rx,
+            stream,
+            epoch,
+            best_rtt: f64::INFINITY,
+            offset: 0.0,
+            rtt_ms: 0.0,
+            id: None,
+        })
     }
 
     pub fn send(&self, msg: ClientMsg) {
@@ -1299,7 +1706,27 @@ mod tests {
         assert_eq!(censor("what the fuuuck, sh1t"), "what the ******, ****");
         assert_eq!(censor("f*ck you"), "**** you");
         // Ordinary words with a swear inside stay.
-        for ok in ["корабля", "рубля", "застрахую", "хлеб", "небо", "себе", "сукно", "бляха", "бляшка", "спидран", "скипидар", "плохую", "тихую", "психую", "сучок", "оскорблять", "команда", "hello there", "shiitake"] {
+        for ok in [
+            "корабля",
+            "рубля",
+            "застрахую",
+            "хлеб",
+            "небо",
+            "себе",
+            "сукно",
+            "бляха",
+            "бляшка",
+            "спидран",
+            "скипидар",
+            "плохую",
+            "тихую",
+            "психую",
+            "сучок",
+            "оскорблять",
+            "команда",
+            "hello there",
+            "shiitake",
+        ] {
             assert_eq!(censor(ok), ok);
         }
         assert_eq!(censor(""), "");
@@ -1363,7 +1790,10 @@ mod tests {
         let mut buf = [0u8; 16];
         // The host closes the socket: read returns 0 (EOF) or an error, rather than hanging.
         let res = std::io::Read::read(&mut raw, &mut buf);
-        assert!(matches!(res, Ok(0) | Err(_)), "connection still open: {res:?}");
+        assert!(
+            matches!(res, Ok(0) | Err(_)),
+            "connection still open: {res:?}"
+        );
     }
 
     #[test]
@@ -1375,46 +1805,126 @@ mod tests {
         let mut b = Client::connect(&addr, "bob", None).unwrap();
         wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
         // Maps 2 and 3 (songs 20 and 30) are the ones both have; bob's list comes in two parts.
-        a.send(ClientMsg::Library { maps: vec![(1, 10), (2, 20), (3, 30)], done: true });
-        b.send(ClientMsg::Library { maps: vec![(2, 20)], done: false });
-        b.send(ClientMsg::Library { maps: vec![(3, 30), (4, 40)], done: true });
-        wait_for(&mut a, |m| matches!(m, ServerMsg::Room { mapguessr: true, common: Some(2), .. }));
+        a.send(ClientMsg::Library {
+            maps: vec![(1, 10), (2, 20), (3, 30)],
+            done: true,
+        });
+        b.send(ClientMsg::Library {
+            maps: vec![(2, 20)],
+            done: false,
+        });
+        b.send(ClientMsg::Library {
+            maps: vec![(3, 30), (4, 40)],
+            done: true,
+        });
+        wait_for(&mut a, |m| {
+            matches!(
+                m,
+                ServerMsg::Room {
+                    mapguessr: true,
+                    common: Some(2),
+                    ..
+                }
+            )
+        });
         // Only the host starts it.
         b.send(ClientMsg::StartGuessr { rounds: 5 });
         thread::sleep(Duration::from_millis(100));
         a.send(ClientMsg::StartGuessr { rounds: 5 });
-        let ServerMsg::GuessRound { round: 1, hash, from, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::GuessRound { .. })) else { unreachable!() };
+        let ServerMsg::GuessRound {
+            round: 1,
+            hash,
+            from,
+            ..
+        } = wait_for(&mut a, |m| matches!(m, ServerMsg::GuessRound { .. }))
+        else {
+            unreachable!()
+        };
         assert!([2, 3].contains(&hash) && (0.1..0.7).contains(&from));
-        assert!(matches!(wait_for(&mut b, |m| matches!(m, ServerMsg::GuessRound { .. })), ServerMsg::GuessRound { hash: h, .. } if h == hash));
+        assert!(
+            matches!(wait_for(&mut b, |m| matches!(m, ServerMsg::GuessRound { .. })), ServerMsg::GuessRound { hash: h, .. } if h == hash)
+        );
         let song = hash * 10;
         // Alice gets it (any difficulty of the song: another hash, same song key); bob runs out.
         a.send(ClientMsg::Guess { hash: 99, song });
         for left in (0..GUESS_TRIES).rev() {
             b.send(ClientMsg::Guess { hash: 1, song: 10 });
-            assert!(matches!(wait_for(&mut b, |m| matches!(m, ServerMsg::GuessWrong { .. })), ServerMsg::GuessWrong { tries } if tries == left));
+            assert!(
+                matches!(wait_for(&mut b, |m| matches!(m, ServerMsg::GuessWrong { .. })), ServerMsg::GuessWrong { tries } if tries == left)
+            );
         }
-        let ServerMsg::GuessReveal { hash: answer, got, last } = wait_for(&mut b, |m| matches!(m, ServerMsg::GuessReveal { .. })) else { unreachable!() };
+        let ServerMsg::GuessReveal {
+            hash: answer,
+            got,
+            last,
+        } = wait_for(&mut b, |m| matches!(m, ServerMsg::GuessReveal { .. }))
+        else {
+            unreachable!()
+        };
         assert_eq!(answer, hash);
         assert!(!last);
-        assert!(got.len() == 1 && got[0].1 > 100 && got[0].1 <= 200, "{got:?}");
+        assert!(
+            got.len() == 1 && got[0].1 > 100 && got[0].1 <= 200,
+            "{got:?}"
+        );
         // The other map's song next, and then it's over: there's no third map everyone has.
-        let ServerMsg::GuessRound { round: 2, hash: second, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::GuessRound { .. })) else { unreachable!() };
+        let ServerMsg::GuessRound {
+            round: 2,
+            hash: second,
+            ..
+        } = wait_for(&mut a, |m| matches!(m, ServerMsg::GuessRound { .. }))
+        else {
+            unreachable!()
+        };
         assert_ne!(second, hash);
-        a.send(ClientMsg::Guess { hash: second, song: second * 10 });
-        b.send(ClientMsg::Guess { hash: second, song: second * 10 });
-        assert!(matches!(wait_for(&mut a, |m| matches!(m, ServerMsg::GuessReveal { .. })), ServerMsg::GuessReveal { last: true, ref got, .. } if got.len() == 2));
-        let ServerMsg::Room { players, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::Room { in_match: false, players, .. } if players.iter().any(|p| p.points > 0))) else { unreachable!() };
-        let points = |n: &str| players.iter().find(|p| p.name == n).map(|p| p.points).unwrap();
+        a.send(ClientMsg::Guess {
+            hash: second,
+            song: second * 10,
+        });
+        b.send(ClientMsg::Guess {
+            hash: second,
+            song: second * 10,
+        });
+        assert!(
+            matches!(wait_for(&mut a, |m| matches!(m, ServerMsg::GuessReveal { .. })), ServerMsg::GuessReveal { last: true, ref got, .. } if got.len() == 2)
+        );
+        let ServerMsg::Room { players, .. } = wait_for(
+            &mut a,
+            |m| matches!(m, ServerMsg::Room { in_match: false, players, .. } if players.iter().any(|p| p.points > 0)),
+        ) else {
+            unreachable!()
+        };
+        let points = |n: &str| {
+            players
+                .iter()
+                .find(|p| p.name == n)
+                .map(|p| p.points)
+                .unwrap()
+        };
         assert!(points("alice") > points("bob") && points("bob") > 100);
     }
 
     #[test]
     fn players_tell_the_room_their_own_mods() {
         let server = host(0, false).unwrap();
-        let mut a = Client::connect(&format!("127.0.0.1:{}", server.port), "alice", Some(server.token)).unwrap();
+        let mut a = Client::connect(
+            &format!("127.0.0.1:{}", server.port),
+            "alice",
+            Some(server.token),
+        )
+        .unwrap();
         wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        a.send(ClientMsg::Mods(vec!["HD".into(), "HR".into(), "<script>".into()]));
-        let ServerMsg::Room { players, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::Room { players, .. } if !players.is_empty() && !players[0].mods.is_empty())) else { unreachable!() };
+        a.send(ClientMsg::Mods(vec![
+            "HD".into(),
+            "HR".into(),
+            "<script>".into(),
+        ]));
+        let ServerMsg::Room { players, .. } = wait_for(
+            &mut a,
+            |m| matches!(m, ServerMsg::Room { players, .. } if !players.is_empty() && !players[0].mods.is_empty()),
+        ) else {
+            unreachable!()
+        };
         assert_eq!(players[0].mods, ["HD", "HR"], "odd ones left out");
     }
 
@@ -1428,16 +1938,45 @@ mod tests {
         wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
         let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
         wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None, seed: None }));
+        b.send(ClientMsg::SelectMap(MapInfo {
+            hash: 7,
+            artist: String::new(),
+            title: String::new(),
+            version: String::new(),
+            rate: 1.0,
+            from: None,
+            set_id: None,
+            mods: Vec::new(),
+            multiverse: None,
+            shapeshift: None,
+            seed: None,
+        }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
         a.send(ClientMsg::HasMap(false));
-        let ServerMsg::Room { players, map, .. } = wait_for(&mut a, |m| matches!(m, ServerMsg::Room { players, .. } if players.len() == 2)) else { unreachable!() };
+        let ServerMsg::Room { players, map, .. } = wait_for(
+            &mut a,
+            |m| matches!(m, ServerMsg::Room { players, .. } if players.len() == 2),
+        ) else {
+            unreachable!()
+        };
         assert!(map.is_none(), "non-host picked the map");
         assert!(players.iter().any(|p| p.name == "alice" && p.host));
         assert!(players.iter().any(|p| p.name == "bob" && !p.host));
 
-        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9), mods: vec!["HD".into()], multiverse: None, shapeshift: Some("every=4".into()), seed: None };
+        let map = MapInfo {
+            hash: 42,
+            artist: "a".into(),
+            title: "t".into(),
+            version: "v".into(),
+            rate: 1.5,
+            from: Some(30_000.0),
+            set_id: Some(9),
+            mods: vec!["HD".into()],
+            multiverse: None,
+            shapeshift: Some("every=4".into()),
+            seed: None,
+        };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
         for c in [&a, &b] {
@@ -1447,21 +1986,45 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
         a.send(ClientMsg::StartMatch);
         for c in [&mut a, &mut b] {
-            assert!(matches!(wait_for(c, |m| matches!(m, ServerMsg::Prepare(_))), ServerMsg::Prepare(m) if m.hash == 42 && m.rate == 1.5 && m.shapeshift.as_deref() == Some("every=4")));
+            assert!(
+                matches!(wait_for(c, |m| matches!(m, ServerMsg::Prepare(_))), ServerMsg::Prepare(m) if m.hash == 42 && m.rate == 1.5 && m.shapeshift.as_deref() == Some("every=4"))
+            );
             c.send(ClientMsg::Loaded(true));
         }
-        let ServerMsg::Start { at: at_a } = wait_for(&mut a, |m| matches!(m, ServerMsg::Start { .. })) else { unreachable!() };
-        let ServerMsg::Start { at: at_b } = wait_for(&mut b, |m| matches!(m, ServerMsg::Start { .. })) else { unreachable!() };
+        let ServerMsg::Start { at: at_a } =
+            wait_for(&mut a, |m| matches!(m, ServerMsg::Start { .. }))
+        else {
+            unreachable!()
+        };
+        let ServerMsg::Start { at: at_b } =
+            wait_for(&mut b, |m| matches!(m, ServerMsg::Start { .. }))
+        else {
+            unreachable!()
+        };
         assert_eq!(at_a, at_b);
         // Both clocks map the start to (nearly) the same local instant.
         let (ia, ib) = (a.local_instant(at_a), b.local_instant(at_b));
         let diff = if ia > ib { ia - ib } else { ib - ia };
-        assert!(diff < Duration::from_millis(5), "start instants differ by {diff:?}");
+        assert!(
+            diff < Duration::from_millis(5),
+            "start instants differ by {diff:?}"
+        );
 
-        a.send(ClientMsg::Finished(Final { score: 900, ..Default::default() }));
-        b.send(ClientMsg::Finished(Final { score: 1200, ..Default::default() }));
-        let ServerMsg::Results(r) = wait_for(&mut a, |m| matches!(m, ServerMsg::Results(_))) else { unreachable!() };
+        a.send(ClientMsg::Finished(Final {
+            score: 900,
+            ..Default::default()
+        }));
+        b.send(ClientMsg::Finished(Final {
+            score: 1200,
+            ..Default::default()
+        }));
+        let ServerMsg::Results(r) = wait_for(&mut a, |m| matches!(m, ServerMsg::Results(_))) else {
+            unreachable!()
+        };
         assert_eq!(r.len(), 2);
-        assert!(r.iter().any(|p| p.name == "bob" && p.result.as_ref().unwrap().score == 1200));
+        assert!(
+            r.iter()
+                .any(|p| p.name == "bob" && p.result.as_ref().unwrap().score == 1200)
+        );
     }
 }

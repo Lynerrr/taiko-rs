@@ -69,10 +69,23 @@ impl ScoreRow {
     /// Its line in the index.
     fn line(&self) -> String {
         let pp = self.pp.map(|p| format!("{p:.2}")).unwrap_or_default();
-        let name = self.file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = self
+            .file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         format!(
             "{:016x}\t{}\t{}\t{:.6}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{pp}\n",
-            self.map_hash, self.date, self.score, self.accuracy, self.max_combo, self.miss, self.rate, self.player, name, self.mods
+            self.map_hash,
+            self.date,
+            self.score,
+            self.accuracy,
+            self.max_combo,
+            self.miss,
+            self.rate,
+            self.player,
+            name,
+            self.mods
         )
     }
 }
@@ -87,7 +100,9 @@ fn index_path() -> Option<PathBuf> {
 
 /// Reads the score index.
 pub fn load_index() -> Vec<ScoreRow> {
-    let Some(text) = index_path().and_then(|p| std::fs::read_to_string(p).ok()) else { return Vec::new() };
+    let Some(text) = index_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return Vec::new();
+    };
     let base = dir().unwrap_or_default();
     text.lines()
         .filter_map(|line| {
@@ -119,7 +134,11 @@ pub fn save(replay: &Replay, pp: Option<f64>) -> Result<ScoreRow, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let name = format!("{}-{:016x}.json", replay.date, replay.map_hash);
     let file = dir.join(&name);
-    std::fs::write(&file, serde_json::to_vec(replay).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &file,
+        serde_json::to_vec(replay).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     let row = ScoreRow {
         map_hash: replay.map_hash,
         date: replay.date,
@@ -128,14 +147,23 @@ pub fn save(replay: &Replay, pp: Option<f64>) -> Result<ScoreRow, String> {
         max_combo: replay.max_combo,
         miss: replay.miss,
         rate: replay.rate,
-        player: replay.player.chars().filter(|c| *c != '\t' && *c != '\n').collect(),
+        player: replay
+            .player
+            .chars()
+            .filter(|c| *c != '\t' && *c != '\n')
+            .collect(),
         file,
         mods: crate::mods::Mods::from_list(&replay.mods).label(),
         pp,
     };
     let index = index_path().ok_or("no data folder")?;
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(index).map_err(|e| e.to_string())?;
-    f.write_all(row.line().as_bytes()).map_err(|e| e.to_string())?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(index)
+        .map_err(|e| e.to_string())?;
+    f.write_all(row.line().as_bytes())
+        .map_err(|e| e.to_string())?;
     Ok(row)
 }
 
@@ -199,17 +227,29 @@ pub fn load_replay(path: &Path) -> Result<Replay, String> {
 impl Replay {
     /// How the play's presses are judged.
     pub fn mash(&self) -> crate::game::Mash {
-        if self.version >= 2 { crate::game::Mash::Nearest } else { crate::game::Mash::legacy(self.anti_mash) }
+        if self.version >= 2 {
+            crate::game::Mash::Nearest
+        } else {
+            crate::game::Mash::legacy(self.anti_mash)
+        }
     }
 
     /// Which notes Half took off.
     pub fn half_rule(&self) -> crate::mods::HalfRule {
-        if self.version >= 4 { crate::mods::HalfRule::OnTheBeat } else { crate::mods::HalfRule::EveryOther }
+        if self.version >= 4 {
+            crate::mods::HalfRule::OnTheBeat
+        } else {
+            crate::mods::HalfRule::EveryOther
+        }
     }
 
     /// How its score was worked out.
     pub fn scoring(&self) -> crate::game::Scoring {
-        if self.version >= 3 { crate::game::Scoring::Standard } else { crate::game::Scoring::Classic }
+        if self.version >= 3 {
+            crate::game::Scoring::Standard
+        } else {
+            crate::game::Scoring::Classic
+        }
     }
 }
 
@@ -218,7 +258,10 @@ impl Replay {
 /// can't be read.
 pub fn simulate(map_path: &Path, r: &Replay) -> Option<(crate::game::Stats, crate::game::Windows)> {
     let map = crate::beatmap::load(map_path).ok()?;
-    let track = std::sync::Arc::new(crate::audio::Track { samples: Vec::new(), rate: r.rate });
+    let track = std::sync::Arc::new(crate::audio::Track {
+        samples: Vec::new(),
+        rate: r.rate,
+    });
     let mut g = crate::video::replay_game(&map, &track, r);
     // Frame by frame, as it was played.
     let end = g.end_time() + 2000.0;
@@ -233,7 +276,9 @@ pub fn simulate(map_path: &Path, r: &Replay) -> Option<(crate::game::Stats, crat
 /// Where online replays are kept once fetched (outside the score index; in the temporary
 /// folder without a data folder).
 pub fn online_replay_path(id: u64) -> Option<PathBuf> {
-    let dir = dir().map(|d| d.join("online")).unwrap_or_else(|| std::env::temp_dir().join("taiko-rs-online-replays"));
+    let dir = dir()
+        .map(|d| d.join("online"))
+        .unwrap_or_else(|| std::env::temp_dir().join("taiko-rs-online-replays"));
     Some(dir.join(format!("{id}.json")))
 }
 
@@ -243,7 +288,11 @@ pub fn save_online(id: u64, replay: &Replay) -> Result<PathBuf, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&path, serde_json::to_vec(replay).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &path,
+        serde_json::to_vec(replay).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(path)
 }
 
@@ -267,12 +316,18 @@ fn row_grade(row: &ScoreRow) -> &'static str {
 /// The best letter of the plays on a map, like osu!'s song select shows.
 pub fn best_grade(rows: &[ScoreRow], map_hash: u64) -> Option<&'static str> {
     let rank = |g: &str| ["D", "C", "B", "A", "S", "SS"].iter().position(|l| *l == g);
-    rows.iter().filter(|r| r.map_hash == map_hash).map(row_grade).max_by_key(|g| rank(g))
+    rows.iter()
+        .filter(|r| r.map_hash == map_hash)
+        .map(row_grade)
+        .max_by_key(|g| rank(g))
 }
 
 /// "3d" style age of a Unix time (for "3d ago").
 pub fn age(date: u64) -> String {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let s = now.saturating_sub(date);
     match s {
         0..=59 => tr!("now", "今", "сейчас").into(),

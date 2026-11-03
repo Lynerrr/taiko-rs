@@ -18,19 +18,38 @@ pub struct Chord {
 
 impl Chord {
     pub const fn plain(key: KeyCode) -> Chord {
-        Chord { key, ctrl: false, shift: false, alt: false }
+        Chord {
+            key,
+            ctrl: false,
+            shift: false,
+            alt: false,
+        }
     }
     const fn ctrl(key: KeyCode) -> Chord {
-        Chord { key, ctrl: true, shift: false, alt: false }
+        Chord {
+            key,
+            ctrl: true,
+            shift: false,
+            alt: false,
+        }
     }
     const fn shift(key: KeyCode) -> Chord {
-        Chord { key, ctrl: false, shift: true, alt: false }
+        Chord {
+            key,
+            ctrl: false,
+            shift: true,
+            alt: false,
+        }
     }
 
     /// "Ctrl+Shift+F3".
     pub fn name(self) -> String {
         let mut s = String::new();
-        for (on, m) in [(self.ctrl, "Ctrl+"), (self.alt, "Alt+"), (self.shift, "Shift+")] {
+        for (on, m) in [
+            (self.ctrl, "Ctrl+"),
+            (self.alt, "Alt+"),
+            (self.shift, "Shift+"),
+        ] {
             if on {
                 s.push_str(m);
             }
@@ -61,7 +80,10 @@ impl Chord {
     /// Whether pressing `pressed` sets it off. With `shift_free` Shift may be held or not (the
     /// hotkey uses it to go the other way, or further), unless the chord itself needs it.
     fn fits(self, pressed: Chord, shift_free: bool) -> bool {
-        self.key == pressed.key && self.ctrl == pressed.ctrl && self.alt == pressed.alt && (self.shift == pressed.shift || (shift_free && !self.shift))
+        self.key == pressed.key
+            && self.ctrl == pressed.ctrl
+            && self.alt == pressed.alt
+            && (self.shift == pressed.shift || (shift_free && !self.shift))
     }
 }
 
@@ -116,7 +138,13 @@ pub enum Hotkey {
     ExportVideo,
 }
 
-const ANYWHERE: &[Place] = &[Place::Select, Place::Play, Place::Paused, Place::Results, Place::Other];
+const ANYWHERE: &[Place] = &[
+    Place::Select,
+    Place::Play,
+    Place::Paused,
+    Place::Results,
+    Place::Other,
+];
 
 impl Hotkey {
     pub const ALL: [Hotkey; 34] = [
@@ -165,7 +193,9 @@ impl Hotkey {
             Hotkey::ScrollFaster => const { &[Chord::plain(F4)] },
             Hotkey::OffsetDown => const { &[Chord::plain(Minus), Chord::plain(NumpadSubtract)] },
             Hotkey::OffsetUp => const { &[Chord::plain(Equal), Chord::plain(NumpadAdd)] },
-            Hotkey::VisualOffsetDown => const { &[Chord::ctrl(Minus), Chord::ctrl(NumpadSubtract)] },
+            Hotkey::VisualOffsetDown => {
+                const { &[Chord::ctrl(Minus), Chord::ctrl(NumpadSubtract)] }
+            }
             Hotkey::VisualOffsetUp => const { &[Chord::ctrl(Equal), Chord::ctrl(NumpadAdd)] },
             Hotkey::PresentMode => const { &[Chord::plain(F7)] },
             Hotkey::FpsCap => const { &[Chord::plain(F8)] },
@@ -214,7 +244,14 @@ impl Hotkey {
     fn shift_free(self) -> bool {
         matches!(
             self,
-            Hotkey::OffsetDown | Hotkey::OffsetUp | Hotkey::VisualOffsetDown | Hotkey::VisualOffsetUp | Hotkey::Random | Hotkey::SpeedDown | Hotkey::SpeedUp | Hotkey::Sort
+            Hotkey::OffsetDown
+                | Hotkey::OffsetUp
+                | Hotkey::VisualOffsetDown
+                | Hotkey::VisualOffsetUp
+                | Hotkey::Random
+                | Hotkey::SpeedDown
+                | Hotkey::SpeedUp
+                | Hotkey::Sort
         )
     }
 
@@ -241,40 +278,132 @@ impl Hotkey {
     /// For the settings list.
     pub fn label(self) -> &'static str {
         match self {
-            Hotkey::ScrollSlower => tr!("Scroll speed down", "スクロール速度 -", "Скорость прокрутки -"),
-            Hotkey::ScrollFaster => tr!("Scroll speed up", "スクロール速度 +", "Скорость прокрутки +"),
-            Hotkey::OffsetDown => tr!("Offset - (map / all)", "オフセット - (譜面 / 全体)", "Смещение - (карта / все)"),
-            Hotkey::OffsetUp => tr!("Offset + (map / all)", "オフセット + (譜面 / 全体)", "Смещение + (карта / все)"),
-            Hotkey::VisualOffsetDown => tr!("Visual offset -", "表示オフセット -", "Смещение картинки -"),
-            Hotkey::VisualOffsetUp => tr!("Visual offset +", "表示オフセット +", "Смещение картинки +"),
-            Hotkey::PresentMode => tr!("Next present mode", "次の表示モード", "Следующий режим вывода"),
+            Hotkey::ScrollSlower => tr!(
+                "Scroll speed down",
+                "スクロール速度 -",
+                "Скорость прокрутки -"
+            ),
+            Hotkey::ScrollFaster => tr!(
+                "Scroll speed up",
+                "スクロール速度 +",
+                "Скорость прокрутки +"
+            ),
+            Hotkey::OffsetDown => tr!(
+                "Offset - (map / all)",
+                "オフセット - (譜面 / 全体)",
+                "Смещение - (карта / все)"
+            ),
+            Hotkey::OffsetUp => tr!(
+                "Offset + (map / all)",
+                "オフセット + (譜面 / 全体)",
+                "Смещение + (карта / все)"
+            ),
+            Hotkey::VisualOffsetDown => {
+                tr!("Visual offset -", "表示オフセット -", "Смещение картинки -")
+            }
+            Hotkey::VisualOffsetUp => {
+                tr!("Visual offset +", "表示オフセット +", "Смещение картинки +")
+            }
+            Hotkey::PresentMode => tr!(
+                "Next present mode",
+                "次の表示モード",
+                "Следующий режим вывода"
+            ),
             Hotkey::FpsCap => tr!("Next FPS cap", "次のFPS上限", "Следующее ограничение FPS"),
             Hotkey::FpsOverlay => tr!("FPS overlay", "FPSの表示", "Счётчик FPS"),
             Hotkey::Fullscreen => tr!("Fullscreen", "フルスクリーン", "Полный экран"),
             Hotkey::Quit => tr!("Quit taiko.rs", "taiko.rsを終了", "Выйти из taiko.rs"),
             Hotkey::Screenshot => tr!("Screenshot", "スクリーンショット", "Скриншот"),
             Hotkey::Friends => tr!("Friends and chat", "フレンドとチャット", "Друзья и чат"),
-            Hotkey::OpenSettings => tr!("Settings, from anywhere", "設定 (どこからでも)", "Настройки откуда угодно"),
+            Hotkey::OpenSettings => tr!(
+                "Settings, from anywhere",
+                "設定 (どこからでも)",
+                "Настройки откуда угодно"
+            ),
             Hotkey::Update => tr!("Update", "アップデート", "Обновление"),
             Hotkey::Mods => tr!("Song select: mods", "選曲: Mod", "Выбор песни: моды"),
-            Hotkey::Settings => tr!("Song select: settings", "選曲: 設定", "Выбор песни: настройки"),
-            Hotkey::Random => tr!("Song select: random (Shift: back)", "選曲: ランダム (Shift: 戻る)", "Выбор песни: случайная (Shift: назад)"),
-            Hotkey::SpeedDown => tr!("Song select: speed -", "選曲: 速度 -", "Выбор песни: скорость -"),
-            Hotkey::SpeedUp => tr!("Song select: speed +", "選曲: 速度 +", "Выбор песни: скорость +"),
-            Hotkey::PlayFrom => tr!("Song select: play from the flag", "選曲: 旗の位置からプレイ", "Выбор песни: играть с флажка"),
-            Hotkey::Preview => tr!("Song select: autoplay preview", "選曲: オートのプレビュー", "Выбор песни: превью автоплея"),
-            Hotkey::Download => tr!("Song select: download maps", "選曲: 譜面をダウンロード", "Выбор песни: скачать карты"),
-            Hotkey::Sort => tr!("Song select: sort", "選曲: 並べ替え", "Выбор песни: сортировка"),
-            Hotkey::Collections => tr!("Song select: collections", "選曲: コレクション", "Выбор песни: коллекции"),
+            Hotkey::Settings => tr!(
+                "Song select: settings",
+                "選曲: 設定",
+                "Выбор песни: настройки"
+            ),
+            Hotkey::Random => tr!(
+                "Song select: random (Shift: back)",
+                "選曲: ランダム (Shift: 戻る)",
+                "Выбор песни: случайная (Shift: назад)"
+            ),
+            Hotkey::SpeedDown => tr!(
+                "Song select: speed -",
+                "選曲: 速度 -",
+                "Выбор песни: скорость -"
+            ),
+            Hotkey::SpeedUp => tr!(
+                "Song select: speed +",
+                "選曲: 速度 +",
+                "Выбор песни: скорость +"
+            ),
+            Hotkey::PlayFrom => tr!(
+                "Song select: play from the flag",
+                "選曲: 旗の位置からプレイ",
+                "Выбор песни: играть с флажка"
+            ),
+            Hotkey::Preview => tr!(
+                "Song select: autoplay preview",
+                "選曲: オートのプレビュー",
+                "Выбор песни: превью автоплея"
+            ),
+            Hotkey::Download => tr!(
+                "Song select: download maps",
+                "選曲: 譜面をダウンロード",
+                "Выбор песни: скачать карты"
+            ),
+            Hotkey::Sort => tr!(
+                "Song select: sort",
+                "選曲: 並べ替え",
+                "Выбор песни: сортировка"
+            ),
+            Hotkey::Collections => tr!(
+                "Song select: collections",
+                "選曲: コレクション",
+                "Выбор песни: коллекции"
+            ),
             Hotkey::Pause => tr!("Song: pause", "曲: ポーズ", "Песня: пауза"),
-            Hotkey::SkipIntro => tr!("Song: skip intro", "曲: イントロを飛ばす", "Песня: пропустить вступление"),
-            Hotkey::QuickRetry => tr!("Song: quick retry", "曲: すぐにやり直す", "Песня: быстрый перезапуск"),
-            Hotkey::Restart => tr!("Song / results: restart", "曲 / リザルト: 最初から", "Песня / итоги: заново"),
-            Hotkey::ApplyOffset => tr!("Song: apply offset suggestion", "曲: オフセットの提案を適用", "Песня: применить подсказку смещения"),
-            Hotkey::MapInfo => tr!("Song: offset / UR line", "曲: オフセット / URの行", "Песня: строка смещения / UR"),
+            Hotkey::SkipIntro => tr!(
+                "Song: skip intro",
+                "曲: イントロを飛ばす",
+                "Песня: пропустить вступление"
+            ),
+            Hotkey::QuickRetry => tr!(
+                "Song: quick retry",
+                "曲: すぐにやり直す",
+                "Песня: быстрый перезапуск"
+            ),
+            Hotkey::Restart => tr!(
+                "Song / results: restart",
+                "曲 / リザルト: 最初から",
+                "Песня / итоги: заново"
+            ),
+            Hotkey::ApplyOffset => tr!(
+                "Song: apply offset suggestion",
+                "曲: オフセットの提案を適用",
+                "Песня: применить подсказку смещения"
+            ),
+            Hotkey::MapInfo => tr!(
+                "Song: offset / UR line",
+                "曲: オフセット / URの行",
+                "Песня: строка смещения / UR"
+            ),
             Hotkey::Retry => tr!("Results: retry", "リザルト: リトライ", "Итоги: ещё раз"),
-            Hotkey::WatchReplay => tr!("Results: watch replay", "リザルト: リプレイを見る", "Итоги: смотреть повтор"),
-            Hotkey::ExportVideo => tr!("Results: export video", "リザルト: 動画を書き出す", "Итоги: экспорт видео"),
+            Hotkey::WatchReplay => tr!(
+                "Results: watch replay",
+                "リザルト: リプレイを見る",
+                "Итоги: смотреть повтор"
+            ),
+            Hotkey::ExportVideo => tr!(
+                "Results: export video",
+                "リザルト: 動画を書き出す",
+                "Итоги: экспорт видео"
+            ),
         }
     }
 
@@ -361,7 +490,12 @@ impl Bindings {
         if let Some(c) = chord {
             for other in Hotkey::ALL {
                 let shared = other.places().iter().any(|p| h.places().contains(p));
-                if other != h && shared && self.get(other).is_some_and(|o| o.fits(c, other.shift_free()) || c.fits(o, h.shift_free())) {
+                if other != h
+                    && shared
+                    && self
+                        .get(other)
+                        .is_some_and(|o| o.fits(c, other.shift_free()) || c.fits(o, h.shift_free()))
+                {
                     self.0[other.index()] = None;
                     bumped = Some(other);
                 }
@@ -373,11 +507,17 @@ impl Bindings {
 
     /// The player's own keys, for the config (only those that differ from the defaults).
     pub fn config_lines(&self) -> String {
-        let mut out = String::from("# hotkeys moved or removed: hotkey.<name> = a key with Ctrl+ / Alt+ / Shift+ before it, or none\n");
+        let mut out = String::from(
+            "# hotkeys moved or removed: hotkey.<name> = a key with Ctrl+ / Alt+ / Shift+ before it, or none\n",
+        );
         for h in Hotkey::ALL {
             let c = self.get(h);
             if c != h.first_key() {
-                out.push_str(&format!("hotkey.{} = {}\n", h.key(), c.map(Chord::name).unwrap_or_else(|| "none".into())));
+                out.push_str(&format!(
+                    "hotkey.{} = {}\n",
+                    h.key(),
+                    c.map(Chord::name).unwrap_or_else(|| "none".into())
+                ));
             }
         }
         out
@@ -385,7 +525,9 @@ impl Bindings {
 
     /// One `hotkey.<name> = ...` line of the config.
     pub fn parse_line(&mut self, name: &str, value: &str) {
-        let Some(h) = Hotkey::ALL.iter().copied().find(|h| h.key() == name) else { return };
+        let Some(h) = Hotkey::ALL.iter().copied().find(|h| h.key() == name) else {
+            return;
+        };
         if value.eq_ignore_ascii_case("none") {
             self.0[h.index()] = None;
         } else if let Some(c) = Chord::parse(value) {
@@ -395,7 +537,11 @@ impl Bindings {
 
     /// What `pressed` does in `place`.
     pub fn resolve(&self, pressed: Chord, place: Place) -> Resolved {
-        let here = || Hotkey::ALL.into_iter().filter(|h| h.places().contains(&place));
+        let here = || {
+            Hotkey::ALL
+                .into_iter()
+                .filter(|h| h.places().contains(&place))
+        };
         for h in here() {
             let Some(mine) = self.get(h) else { continue };
             if mine.fits(pressed, h.shift_free()) {
@@ -407,7 +553,10 @@ impl Bindings {
                 return Resolved::As(to);
             }
         }
-        if here().any(|h| self.get(h) != Some(h.default()) && h.defaults().iter().any(|d| d.fits(pressed, h.shift_free()))) {
+        if here().any(|h| {
+            self.get(h) != Some(h.default())
+                && h.defaults().iter().any(|d| d.fits(pressed, h.shift_free()))
+        }) {
             return Resolved::Nothing;
         }
         Resolved::Same
@@ -419,7 +568,21 @@ impl Bindings {
 pub fn types_text(key: KeyCode) -> bool {
     use KeyCode::*;
     let name = format!("{key:?}");
-    name.starts_with("Key") || name.starts_with("Digit") || matches!(key, Space | Minus | Equal | Backslash | Semicolon | Quote | Comma | Period | Slash | Backquote)
+    name.starts_with("Key")
+        || name.starts_with("Digit")
+        || matches!(
+            key,
+            Space
+                | Minus
+                | Equal
+                | Backslash
+                | Semicolon
+                | Quote
+                | Comma
+                | Period
+                | Slash
+                | Backquote
+        )
 }
 
 /// Whether `key` starts a word: punctuation keeps its other jobs until something's been typed.
@@ -433,55 +596,117 @@ mod tests {
     use super::*;
 
     fn press(key: KeyCode, ctrl: bool, shift: bool) -> Chord {
-        Chord { key, ctrl, shift, alt: false }
+        Chord {
+            key,
+            ctrl,
+            shift,
+            alt: false,
+        }
     }
 
     #[test]
     fn chords_round_trip_through_their_names() {
-        for c in [Chord::plain(KeyCode::F3), Chord::ctrl(KeyCode::KeyU), Chord { key: KeyCode::KeyK, ctrl: true, shift: true, alt: true }] {
+        for c in [
+            Chord::plain(KeyCode::F3),
+            Chord::ctrl(KeyCode::KeyU),
+            Chord {
+                key: KeyCode::KeyK,
+                ctrl: true,
+                shift: true,
+                alt: true,
+            },
+        ] {
             assert_eq!(Chord::parse(&c.name()), Some(c), "{}", c.name());
         }
-        assert_eq!(Chord::parse("ctrl+shift+f2"), Some(Chord { key: KeyCode::F2, ctrl: true, shift: true, alt: false }));
+        assert_eq!(
+            Chord::parse("ctrl+shift+f2"),
+            Some(Chord {
+                key: KeyCode::F2,
+                ctrl: true,
+                shift: true,
+                alt: false
+            })
+        );
         assert_eq!(Chord::parse("Ctrl+"), None);
     }
 
     #[test]
     fn defaults_do_what_they_always_did() {
         let b = Bindings::default();
-        assert_eq!(b.resolve(press(KeyCode::F3, false, false), Place::Select), Resolved::Same);
-        assert_eq!(b.resolve(press(KeyCode::KeyQ, false, false), Place::Play), Resolved::Same);
+        assert_eq!(
+            b.resolve(press(KeyCode::F3, false, false), Place::Select),
+            Resolved::Same
+        );
+        assert_eq!(
+            b.resolve(press(KeyCode::KeyQ, false, false), Place::Play),
+            Resolved::Same
+        );
     }
 
     #[test]
     fn a_moved_hotkey_answers_to_its_new_key_only() {
         let mut b = Bindings::default();
         b.set(Hotkey::Random, Some(Chord::ctrl(KeyCode::KeyX)));
-        assert_eq!(b.resolve(press(KeyCode::KeyX, true, false), Place::Select), Resolved::As(Chord::plain(KeyCode::F2)));
+        assert_eq!(
+            b.resolve(press(KeyCode::KeyX, true, false), Place::Select),
+            Resolved::As(Chord::plain(KeyCode::F2))
+        );
         // Shift still sends it back.
-        assert_eq!(b.resolve(press(KeyCode::KeyX, true, true), Place::Select), Resolved::As(Chord::shift(KeyCode::F2)));
-        assert_eq!(b.resolve(press(KeyCode::F2, false, false), Place::Select), Resolved::Nothing);
-        assert_eq!(b.resolve(press(KeyCode::F2, false, true), Place::Select), Resolved::Nothing);
+        assert_eq!(
+            b.resolve(press(KeyCode::KeyX, true, true), Place::Select),
+            Resolved::As(Chord::shift(KeyCode::F2))
+        );
+        assert_eq!(
+            b.resolve(press(KeyCode::F2, false, false), Place::Select),
+            Resolved::Nothing
+        );
+        assert_eq!(
+            b.resolve(press(KeyCode::F2, false, true), Place::Select),
+            Resolved::Nothing
+        );
         // Only where the hotkey works.
-        assert_eq!(b.resolve(press(KeyCode::KeyX, true, false), Place::Play), Resolved::Same);
-        assert_eq!(b.resolve(press(KeyCode::F2, false, false), Place::Other), Resolved::Same);
+        assert_eq!(
+            b.resolve(press(KeyCode::KeyX, true, false), Place::Play),
+            Resolved::Same
+        );
+        assert_eq!(
+            b.resolve(press(KeyCode::F2, false, false), Place::Other),
+            Resolved::Same
+        );
     }
 
     #[test]
     fn a_removed_hotkey_does_nothing_and_its_numpad_key_neither() {
         let mut b = Bindings::default();
         b.set(Hotkey::OffsetDown, None);
-        assert_eq!(b.resolve(press(KeyCode::Minus, false, false), Place::Play), Resolved::Nothing);
-        assert_eq!(b.resolve(press(KeyCode::NumpadSubtract, false, true), Place::Play), Resolved::Nothing);
-        assert_eq!(b.resolve(press(KeyCode::Minus, true, false), Place::Play), Resolved::Same, "Ctrl - is the visual offset's");
+        assert_eq!(
+            b.resolve(press(KeyCode::Minus, false, false), Place::Play),
+            Resolved::Nothing
+        );
+        assert_eq!(
+            b.resolve(press(KeyCode::NumpadSubtract, false, true), Place::Play),
+            Resolved::Nothing
+        );
+        assert_eq!(
+            b.resolve(press(KeyCode::Minus, true, false), Place::Play),
+            Resolved::Same,
+            "Ctrl - is the visual offset's"
+        );
     }
 
     #[test]
     fn binding_a_taken_key_takes_it_from_the_other_hotkey() {
         let mut b = Bindings::default();
-        assert_eq!(b.set(Hotkey::Fullscreen, Some(Chord::plain(KeyCode::F3))), Some(Hotkey::ScrollSlower));
+        assert_eq!(
+            b.set(Hotkey::Fullscreen, Some(Chord::plain(KeyCode::F3))),
+            Some(Hotkey::ScrollSlower)
+        );
         assert_eq!(b.get(Hotkey::ScrollSlower), None);
         // Tab is settings on song select and the offset line in a song: no clash.
-        assert_eq!(b.set(Hotkey::MapInfo, Some(Chord::plain(KeyCode::Tab))), None);
+        assert_eq!(
+            b.set(Hotkey::MapInfo, Some(Chord::plain(KeyCode::Tab))),
+            None
+        );
         assert_eq!(b.get(Hotkey::Settings), Some(Chord::plain(KeyCode::Tab)));
     }
 

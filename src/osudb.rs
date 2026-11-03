@@ -81,7 +81,11 @@ impl<'a> Reader<'a> {
 /// .NET DateTime ticks (100 ns since year 1) to Unix seconds.
 fn ticks_to_unix(ticks: i64) -> u64 {
     const EPOCH_TICKS: i64 = 621_355_968_000_000_000;
-    if ticks <= EPOCH_TICKS { 0 } else { ((ticks - EPOCH_TICKS) / 10_000_000) as u64 }
+    if ticks <= EPOCH_TICKS {
+        0
+    } else {
+        ((ticks - EPOCH_TICKS) / 10_000_000) as u64
+    }
 }
 
 fn parse_osu_db(b: &[u8]) -> Option<HashMap<String, DbMap>> {
@@ -114,7 +118,11 @@ fn parse_osu_db(b: &[u8]) -> Option<HashMap<String, DbMap>> {
         }
         r.skip(8)?; // slider velocity
         if version >= FLOAT_DIFF_VERSION {
-            let pair = if version >= FLOAT_STARS_VERSION { 1 + 4 + 1 + 4 } else { 1 + 4 + 1 + 8 };
+            let pair = if version >= FLOAT_STARS_VERSION {
+                1 + 4 + 1 + 4
+            } else {
+                1 + 4 + 1 + 8
+            };
             for _ in 0..4 {
                 let n = r.i32()?.max(0) as usize;
                 r.skip(n.checked_mul(pair)?)?;
@@ -144,7 +152,15 @@ fn parse_osu_db(b: &[u8]) -> Option<HashMap<String, DbMap>> {
         r.i32()?; // last modification (?)
         r.u8()?; // mania scroll speed
         if !md5.is_empty() {
-            out.insert(md5, DbMap { folder, file, last_played: ticks_to_unix(last_played), status });
+            out.insert(
+                md5,
+                DbMap {
+                    folder,
+                    file,
+                    last_played: ticks_to_unix(last_played),
+                    status,
+                },
+            );
         }
     }
     Some(out)
@@ -175,8 +191,14 @@ pub fn load(songs: &Path) -> Option<OsuDb> {
         eprintln!("osu!.db: unrecognised format, collections and play history unavailable");
         HashMap::new()
     });
-    let collections = std::fs::read(dir.join("collection.db")).ok().and_then(|b| parse_collections(&b)).unwrap_or_default();
-    Some(OsuDb { by_md5, collections })
+    let collections = std::fs::read(dir.join("collection.db"))
+        .ok()
+        .and_then(|b| parse_collections(&b))
+        .unwrap_or_default();
+    Some(OsuDb {
+        by_md5,
+        collections,
+    })
 }
 
 #[cfg(test)]
@@ -198,7 +220,17 @@ mod tests {
         b.extend_from_slice(&0i64.to_le_bytes());
         s(&mut b, "me");
         b.extend_from_slice(&1i32.to_le_bytes()); // one map
-        for v in ["A", "A", "T", "T", "C", "Oni", "audio.mp3", "abc123", "A - T (C) [Oni].osu"] {
+        for v in [
+            "A",
+            "A",
+            "T",
+            "T",
+            "C",
+            "Oni",
+            "audio.mp3",
+            "abc123",
+            "A - T (C) [Oni].osu",
+        ] {
             s(&mut b, v);
         }
         b.push(4);
@@ -224,7 +256,9 @@ mod tests {
         b.push(0); // font
         b.push(0); // unplayed
         // 2021-01-01 00:00:00 UTC.
-        b.extend_from_slice(&(621_355_968_000_000_000i64 + 1_609_459_200 * 10_000_000).to_le_bytes());
+        b.extend_from_slice(
+            &(621_355_968_000_000_000i64 + 1_609_459_200 * 10_000_000).to_le_bytes(),
+        );
         b.push(0);
         s(&mut b, "123 A - T");
         b.extend_from_slice(&0i64.to_le_bytes());
@@ -233,7 +267,10 @@ mod tests {
         b.push(0);
         let maps = parse_osu_db(&b).expect("parses");
         let m = &maps["abc123"];
-        assert_eq!((m.folder.as_str(), m.file.as_str(), m.last_played), ("123 A - T", "A - T (C) [Oni].osu", 1_609_459_200));
+        assert_eq!(
+            (m.folder.as_str(), m.file.as_str(), m.last_played),
+            ("123 A - T", "A - T (C) [Oni].osu", 1_609_459_200)
+        );
 
         let mut c = Vec::new();
         c.extend_from_slice(&20250108i32.to_le_bytes());
@@ -242,6 +279,12 @@ mod tests {
         c.extend_from_slice(&2i32.to_le_bytes());
         s(&mut c, "abc123");
         s(&mut c, "def456");
-        assert_eq!(parse_collections(&c).unwrap(), vec![("practice".to_string(), vec!["abc123".to_string(), "def456".to_string()])]);
+        assert_eq!(
+            parse_collections(&c).unwrap(),
+            vec![(
+                "practice".to_string(),
+                vec!["abc123".to_string(), "def456".to_string()]
+            )]
+        );
     }
 }

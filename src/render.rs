@@ -163,7 +163,8 @@ impl Sprite {
 
     /// The combo font's glyph for `ch` (digits).
     pub fn combo_glyph(ch: char) -> Option<Sprite> {
-        ch.to_digit(10).map(|d| Sprite::ALL[Sprite::Combo0 as usize + d as usize])
+        ch.to_digit(10)
+            .map(|d| Sprite::ALL[Sprite::Combo0 as usize + d as usize])
     }
 }
 const SPRITE_BASE: f32 = 10.0;
@@ -173,7 +174,10 @@ const SPRITE_BASE: f32 = 10.0;
 fn flip_x(sh: &mut Shape) {
     let sprite = |s: Sprite| SPRITE_BASE + s as usize as f32;
     // The drum's halves have their mirror images in the atlas.
-    let pairs = [(Sprite::DrumInner, Sprite::DrumInnerFlipped), (Sprite::DrumOuter, Sprite::DrumOuterFlipped)];
+    let pairs = [
+        (Sprite::DrumInner, Sprite::DrumInnerFlipped),
+        (Sprite::DrumOuter, Sprite::DrumOuterFlipped),
+    ];
     // Turned the other way in the mirror (the pieces of a bent lane: left as they were, its
     // bends came out turned against the lane and cut into it).
     sh.angle = -sh.angle;
@@ -181,8 +185,15 @@ fn flip_x(sh: &mut Shape) {
         sh.params[3] = 3.0 - sh.params[3];
     } else if sh.params[3] == sprite(Sprite::RollEnd) {
         sh.angle += std::f32::consts::PI;
-    } else if let Some(&(a, b)) = pairs.iter().find(|&&(a, b)| sh.params[3] == sprite(a) || sh.params[3] == sprite(b)) {
-        sh.params[3] = if sh.params[3] == sprite(a) { sprite(b) } else { sprite(a) };
+    } else if let Some(&(a, b)) = pairs
+        .iter()
+        .find(|&&(a, b)| sh.params[3] == sprite(a) || sh.params[3] == sprite(b))
+    {
+        sh.params[3] = if sh.params[3] == sprite(a) {
+            sprite(b)
+        } else {
+            sprite(a)
+        };
     }
 }
 
@@ -251,17 +262,33 @@ pub enum PresentChoice {
 
 impl PresentChoice {
     /// In the order the settings list shows them.
-    pub const ALL: [PresentChoice; 3] = [PresentChoice::Fifo, PresentChoice::Mailbox, PresentChoice::Immediate];
+    pub const ALL: [PresentChoice; 3] = [
+        PresentChoice::Fifo,
+        PresentChoice::Mailbox,
+        PresentChoice::Immediate,
+    ];
 
     /// The one drawn with when `self` isn't among `modes` (what the renderer can do), as
     /// `Renderer::set_present` falls back.
     pub fn within(self, modes: &[PresentChoice]) -> PresentChoice {
         let order: &[PresentChoice] = match self {
-            PresentChoice::Mailbox => &[PresentChoice::Mailbox, PresentChoice::Immediate, PresentChoice::Fifo],
-            PresentChoice::Immediate => &[PresentChoice::Immediate, PresentChoice::Mailbox, PresentChoice::Fifo],
+            PresentChoice::Mailbox => &[
+                PresentChoice::Mailbox,
+                PresentChoice::Immediate,
+                PresentChoice::Fifo,
+            ],
+            PresentChoice::Immediate => &[
+                PresentChoice::Immediate,
+                PresentChoice::Mailbox,
+                PresentChoice::Fifo,
+            ],
             PresentChoice::Fifo => &[PresentChoice::Fifo],
         };
-        order.iter().copied().find(|p| modes.contains(p)).unwrap_or(PresentChoice::Fifo)
+        order
+            .iter()
+            .copied()
+            .find(|p| modes.contains(p))
+            .unwrap_or(PresentChoice::Fifo)
     }
 
     pub fn name(self) -> &'static str {
@@ -390,7 +417,15 @@ impl GpuTimer {
                 (buf, Arc::default())
             })
             .collect();
-        GpuTimer { queries, resolve, slots, current: None, period_ns: queue.get_timestamp_period() as f64, total_ms: 0.0, frames: 0 }
+        GpuTimer {
+            queries,
+            resolve,
+            slots,
+            current: None,
+            period_ns: queue.get_timestamp_period() as f64,
+            total_ms: 0.0,
+            frames: 0,
+        }
     }
 
     /// Collects finished readbacks and picks this frame's slot.
@@ -410,7 +445,10 @@ impl GpuTimer {
                 state.store(0, Ordering::Release);
             }
         }
-        self.current = self.slots.iter().position(|(_, s)| s.load(Ordering::Acquire) == 0);
+        self.current = self
+            .slots
+            .iter()
+            .position(|(_, s)| s.load(Ordering::Acquire) == 0);
     }
 
     fn writes(&self, begin: bool, end: bool) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
@@ -425,7 +463,12 @@ impl GpuTimer {
     fn resolve(&self, encoder: &mut wgpu::CommandEncoder) {
         let Some(i) = self.current else { return };
         let at = wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT * i as u64;
-        encoder.resolve_query_set(&self.queries, 2 * i as u32..2 * i as u32 + 2, &self.resolve, at);
+        encoder.resolve_query_set(
+            &self.queries,
+            2 * i as u32..2 * i as u32 + 2,
+            &self.resolve,
+            at,
+        );
         encoder.copy_buffer_to_buffer(&self.resolve, at, &self.slots[i].0, 0, 16);
     }
 
@@ -436,7 +479,9 @@ impl GpuTimer {
         let (buf, state) = &self.slots[i];
         state.store(1, Ordering::Release);
         let state = state.clone();
-        buf.slice(..).map_async(wgpu::MapMode::Read, move |r| state.store(if r.is_ok() { 2 } else { 0 }, Ordering::Release));
+        buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            state.store(if r.is_ok() { 2 } else { 0 }, Ordering::Release)
+        });
     }
 }
 
@@ -507,15 +552,29 @@ impl BgImage {
                 for y in (cy * 2)..(cy * 2 + 2).min(h) {
                     for x in (cx * 2)..(cx * 2 + 2).min(w) {
                         let px = &rgba[(y * w + x) * 4..];
-                        (r, g, b, n) = (r + px[0] as f32, g + px[1] as f32, b + px[2] as f32, n + 1.0);
+                        (r, g, b, n) = (
+                            r + px[0] as f32,
+                            g + px[1] as f32,
+                            b + px[2] as f32,
+                            n + 1.0,
+                        );
                     }
                 }
                 let (r, g, b) = (r / n, g / n, b / n);
-                chroma.push((128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b + 0.5).clamp(0.0, 255.0) as u8);
-                chroma.push((128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b + 0.5).clamp(0.0, 255.0) as u8);
+                chroma.push(
+                    (128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b + 0.5).clamp(0.0, 255.0) as u8,
+                );
+                chroma.push(
+                    (128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b + 0.5).clamp(0.0, 255.0) as u8,
+                );
             }
         }
-        BgImage { width, height, luma, chroma }
+        BgImage {
+            width,
+            height,
+            luma,
+            chroma,
+        }
     }
 
     pub fn chroma_size(width: u32, height: u32) -> (u32, u32) {
@@ -524,7 +583,10 @@ impl BgImage {
 
     fn is_valid(&self) -> bool {
         let (cw, ch) = Self::chroma_size(self.width, self.height);
-        self.width > 0 && self.height > 0 && self.luma.len() == (self.width * self.height) as usize && self.chroma.len() == (cw * ch * 2) as usize
+        self.width > 0
+            && self.height > 0
+            && self.luma.len() == (self.width * self.height) as usize
+            && self.chroma.len() == (cw * ch * 2) as usize
     }
 }
 
@@ -585,16 +647,22 @@ fn shrink_blur(src: &[u8], w: u32, h: u32, comps: usize, sw: u32, sh: u32) -> Ve
                 for x in 0..sw as isize {
                     for c in 0..comps {
                         let at = |x: isize, y: isize| {
-                            let (x, y) = (x.clamp(0, sw as isize - 1) as usize, y.clamp(0, sh as isize - 1) as usize);
+                            let (x, y) = (
+                                x.clamp(0, sw as isize - 1) as usize,
+                                y.clamp(0, sh as isize - 1) as usize,
+                            );
                             prev[(y * sw + x) * comps + c]
                         };
-                        out[(y as usize * sw + x as usize) * comps + c] = (at(x - dx, y - dy) + at(x, y) + at(x + dx, y + dy)) / 3.0;
+                        out[(y as usize * sw + x as usize) * comps + c] =
+                            (at(x - dx, y - dy) + at(x, y) + at(x + dx, y + dy)) / 3.0;
                     }
                 }
             }
         }
     }
-    out.into_iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect()
+    out.into_iter()
+        .map(|v| v.round().clamp(0.0, 255.0) as u8)
+        .collect()
 }
 
 const BG_SHADER: &str = r#"
@@ -839,7 +907,11 @@ fn shade(in: VOut) -> vec4<f32> {
 "#;
 
 impl Renderer {
-    pub fn new(instance: &wgpu::Instance, window: Arc<Window>, present: PresentChoice) -> Result<Renderer, String> {
+    pub fn new(
+        instance: &wgpu::Instance,
+        window: Arc<Window>,
+        present: PresentChoice,
+    ) -> Result<Renderer, String> {
         let size = window.inner_size();
         let surface = instance.create_surface(window).map_err(|e| e.to_string())?;
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -849,18 +921,33 @@ impl Renderer {
             ..Default::default()
         }))
         .map_err(|e| e.to_string())?;
-        let adapter_name = format!("{} ({:?})", adapter.get_info().name, adapter.get_info().backend);
-        let time_gpu = std::env::var_os("TAIKO_PROFILE").is_some() && adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let adapter_name = format!(
+            "{} ({:?})",
+            adapter.get_info().name,
+            adapter.get_info().backend
+        );
+        let time_gpu = std::env::var_os("TAIKO_PROFILE").is_some()
+            && adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("taiko"),
-            required_features: if time_gpu { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() },
-            required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+            required_features: if time_gpu {
+                wgpu::Features::TIMESTAMP_QUERY
+            } else {
+                wgpu::Features::empty()
+            },
+            required_limits:
+                wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
             ..Default::default()
         }))
         .map_err(|e| e.to_string())?;
 
         let caps = surface.get_capabilities(&adapter);
-        let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| !f.is_srgb())
+            .unwrap_or(caps.formats[0]);
         let alpha_mode = caps.alpha_modes[0];
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
@@ -881,7 +968,11 @@ impl Renderer {
         let uniform = |binding, visibility| wgpu::BindGroupLayoutEntry {
             binding,
             visibility,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
             count: None,
         };
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -929,7 +1020,11 @@ impl Renderer {
         });
         let font_view = {
             let (w, h, px) = crate::font::atlas();
-            let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+            let size = wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            };
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("font"),
                 size,
@@ -943,7 +1038,11 @@ impl Renderer {
             queue.write_texture(
                 texture.as_image_copy(),
                 &px,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w), rows_per_image: Some(h) },
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w),
+                    rows_per_image: Some(h),
+                },
                 size,
             );
             texture.create_view(&wgpu::TextureViewDescriptor::default())
@@ -962,7 +1061,11 @@ impl Renderer {
         let avatar_side = crate::avatars::GRID * crate::avatars::CELL;
         let avatar_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("avatars"),
-            size: wgpu::Extent3d { width: avatar_side, height: avatar_side, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: avatar_side,
+                height: avatar_side,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -971,7 +1074,17 @@ impl Renderer {
             view_formats: &[],
         });
         let avatar_view = avatar_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = Self::shape_bind_group(&device, &queue, &bgl, &globals, &sprite_rects, &sampler, &font_view, &avatar_view, &Atlas::default());
+        let bind_group = Self::shape_bind_group(
+            &device,
+            &queue,
+            &bgl,
+            &globals,
+            &sprite_rects,
+            &sampler,
+            &font_view,
+            &avatar_view,
+            &Atlas::default(),
+        );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[Some(&bgl)],
@@ -980,34 +1093,37 @@ impl Renderer {
         let attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32];
         let make_pipeline = |format: wgpu::TextureFormat| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("shapes"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Shape>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &attrs,
-                })],
-            },
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        })
+                label: Some("shapes"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Shape>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &attrs,
+                    })],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
         };
         let pipeline = make_pipeline(format);
         // Screenshots render into an offscreen target, independent of what the compositor allows.
@@ -1019,7 +1135,11 @@ impl Renderer {
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
@@ -1081,25 +1201,42 @@ impl Renderer {
             immediate_size: 0,
         });
         let make_bg_pipeline = |format: wgpu::TextureFormat, opaque: bool| {
-            let blend = if opaque { None } else { Some(wgpu::BlendState::ALPHA_BLENDING) };
+            let blend = if opaque {
+                None
+            } else {
+                Some(wgpu::BlendState::ALPHA_BLENDING)
+            };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("background"),
                 layout: Some(&bg_pipeline_layout),
-                vertex: wgpu::VertexState { module: &bg_shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
-                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+                vertex: wgpu::VertexState {
+                    module: &bg_shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &bg_shader,
                     entry_point: Some("fs"),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
                 multiview_mask: None,
                 cache: None,
             })
         };
-        let bg_pipelines = [format, wgpu::TextureFormat::Rgba8Unorm].map(|f| [make_bg_pipeline(f, false), make_bg_pipeline(f, true)]);
+        let bg_pipelines = [format, wgpu::TextureFormat::Rgba8Unorm]
+            .map(|f| [make_bg_pipeline(f, false), make_bg_pipeline(f, true)]);
         let disc_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("disc"),
             source: wgpu::ShaderSource::Wgsl(DISC_SHADER.into()),
@@ -1108,15 +1245,27 @@ impl Renderer {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("disc"),
                 layout: Some(&bg_pipeline_layout),
-                vertex: wgpu::VertexState { module: &disc_shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
-                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+                vertex: wgpu::VertexState {
+                    module: &disc_shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &disc_shader,
                     entry_point: Some("fs"),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -1146,7 +1295,11 @@ impl Renderer {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -1157,12 +1310,19 @@ impl Renderer {
         });
         let upscale_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("upscale"),
-            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts: &[Some(&upscale_layout)],
-                immediate_size: 0,
-            })),
-            vertex: wgpu::VertexState { module: &upscale_shader, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[Some(&upscale_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &upscale_shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
@@ -1170,7 +1330,11 @@ impl Renderer {
                 module: &upscale_shader,
                 entry_point: Some("fs"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
             }),
             multiview_mask: None,
             cache: None,
@@ -1239,21 +1403,50 @@ impl Renderer {
 
     /// Uploads a skin's images; an empty atlas removes them.
     pub fn set_sprites(&mut self, atlas: &Atlas) {
-        self.bind_group = Self::shape_bind_group(&self.device, &self.queue, &self.shape_layout, &self.globals, &self.sprite_rects, &self.sampler, &self.font_view, &self.avatar_view, atlas);
+        self.bind_group = Self::shape_bind_group(
+            &self.device,
+            &self.queue,
+            &self.shape_layout,
+            &self.globals,
+            &self.sprite_rects,
+            &self.sampler,
+            &self.font_view,
+            &self.avatar_view,
+            atlas,
+        );
     }
 
     /// Puts a profile picture (`avatars::CELL` square, premultiplied RGBA) in `slot`.
     pub fn set_avatar(&mut self, slot: u32, rgba: &[u8]) {
         let cell = crate::avatars::CELL;
-        if slot >= crate::avatars::GRID * crate::avatars::GRID || rgba.len() != (cell * cell * 4) as usize {
+        if slot >= crate::avatars::GRID * crate::avatars::GRID
+            || rgba.len() != (cell * cell * 4) as usize
+        {
             return;
         }
         let (gx, gy) = (slot % crate::avatars::GRID, slot / crate::avatars::GRID);
         self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &self.avatar_texture, mip_level: 0, origin: wgpu::Origin3d { x: gx * cell, y: gy * cell, z: 0 }, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.avatar_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: gx * cell,
+                    y: gy * cell,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
             rgba,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * cell), rows_per_image: Some(cell) },
-            wgpu::Extent3d { width: cell, height: cell, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * cell),
+                rows_per_image: Some(cell),
+            },
+            wgpu::Extent3d {
+                width: cell,
+                height: cell,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -1270,12 +1463,19 @@ impl Renderer {
         atlas: &Atlas,
     ) -> wgpu::BindGroup {
         // The texture can't be empty: no images is one transparent pixel.
-        let (w, h, data) = if atlas.rgba.len() == (atlas.width * atlas.height * 4) as usize && atlas.width > 0 && atlas.height > 0 {
+        let (w, h, data) = if atlas.rgba.len() == (atlas.width * atlas.height * 4) as usize
+            && atlas.width > 0
+            && atlas.height > 0
+        {
             (atlas.width, atlas.height, atlas.rgba.as_slice())
         } else {
             (1, 1, &[0u8; 4][..])
         };
-        let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+        let size = wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("skin"),
             size,
@@ -1289,35 +1489,75 @@ impl Renderer {
         queue.write_texture(
             texture.as_image_copy(),
             data,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * w),
+                rows_per_image: Some(h),
+            },
             size,
         );
-        let uv: [[f32; 4]; SPRITES] = atlas.sprites.map(|s| s.map(|(uv, _)| uv).unwrap_or_default());
+        let uv: [[f32; 4]; SPRITES] = atlas
+            .sprites
+            .map(|s| s.map(|(uv, _)| uv).unwrap_or_default());
         queue.write_buffer(rects, 0, bytemuck::cast_slice(&uv));
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: rects.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(sampler) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(font) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(avatars) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: rects.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(font),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(avatars),
+                },
             ],
         })
     }
 
     /// Puts this frame's disc in its uniform.
     fn write_disc(&self) {
-        let (Some(([x, y, r, angle], width)), Some(l)) = (self.disc, &self.bg) else { return };
+        let (Some(([x, y, r, angle], width)), Some(l)) = (self.disc, &self.bg) else {
+            return;
+        };
         let (sin, cos) = angle.sin_cos();
         // A square from the image's middle.
-        let (u, v) = if l.aspect > 1.0 { (1.0 / l.aspect, 1.0) } else { (1.0, l.aspect) };
+        let (u, v) = if l.aspect > 1.0 {
+            (1.0 / l.aspect, 1.0)
+        } else {
+            (1.0, l.aspect)
+        };
         let half_y = VIRTUAL_HEIGHT / 2.0;
-        let uniform = [x / width * 2.0 - 1.0, 1.0 - y / half_y, r / width * 2.0, r / half_y, cos, sin, u, v];
-        self.queue.write_buffer(&l.disc_uniform, 0, bytemuck::cast_slice(&uniform));
+        let uniform = [
+            x / width * 2.0 - 1.0,
+            1.0 - y / half_y,
+            r / width * 2.0,
+            r / half_y,
+            cos,
+            sin,
+            u,
+            v,
+        ];
+        self.queue
+            .write_buffer(&l.disc_uniform, 0, bytemuck::cast_slice(&uniform));
     }
 
     /// Replaces the background image, or removes it with `None`. The old one stays drawn
@@ -1331,7 +1571,11 @@ impl Renderer {
         };
         let (w, h) = (img.width, img.height);
         let plane = |label, w: u32, h: u32, format, bytes: u32, data: &[u8]| {
-            let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+            let size = wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            };
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size,
@@ -1345,18 +1589,50 @@ impl Renderer {
             self.queue.write_texture(
                 texture.as_image_copy(),
                 data,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bytes * w), rows_per_image: Some(h) },
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes * w),
+                    rows_per_image: Some(h),
+                },
                 size,
             );
             texture.create_view(&wgpu::TextureViewDescriptor::default())
         };
         let (cw, ch) = BgImage::chroma_size(w, h);
-        let luma = plane("background luma", w, h, wgpu::TextureFormat::R8Unorm, 1, &img.luma);
-        let chroma = plane("background chroma", cw, ch, wgpu::TextureFormat::Rg8Unorm, 2, &img.chroma);
+        let luma = plane(
+            "background luma",
+            w,
+            h,
+            wgpu::TextureFormat::R8Unorm,
+            1,
+            &img.luma,
+        );
+        let chroma = plane(
+            "background chroma",
+            cw,
+            ch,
+            wgpu::TextureFormat::Rg8Unorm,
+            2,
+            &img.chroma,
+        );
         // Small blurred copies to fade into on the idle screen: a few reads a pixel at any blur.
         let (sw, sh) = blurred_size(w, h);
-        let luma_blur = plane("background luma blurred", sw, sh, wgpu::TextureFormat::R8Unorm, 1, &shrink_blur(&img.luma, w, h, 1, sw, sh));
-        let chroma_blur = plane("background chroma blurred", sw, sh, wgpu::TextureFormat::Rg8Unorm, 2, &shrink_blur(&img.chroma, cw, ch, 2, sw, sh));
+        let luma_blur = plane(
+            "background luma blurred",
+            sw,
+            sh,
+            wgpu::TextureFormat::R8Unorm,
+            1,
+            &shrink_blur(&img.luma, w, h, 1, sw, sh),
+        );
+        let chroma_blur = plane(
+            "background chroma blurred",
+            sw,
+            sh,
+            wgpu::TextureFormat::Rg8Unorm,
+            2,
+            &shrink_blur(&img.chroma, cw, ch, 2, sw, sh),
+        );
         // Each layer has its own uniform: its crop depends on its own aspect.
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("background"),
@@ -1368,12 +1644,30 @@ impl Renderer {
             label: Some("background"),
             layout: &self.bg_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&luma) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.bg_sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&chroma) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&luma_blur) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&chroma_blur) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&luma),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.bg_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&chroma),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&luma_blur),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&chroma_blur),
+                },
             ],
         });
         let disc_uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1386,15 +1680,40 @@ impl Renderer {
             label: Some("disc"),
             layout: &self.bg_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: disc_uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&luma) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.bg_sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&chroma) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&luma_blur) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&chroma_blur) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: disc_uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&luma),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.bg_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&chroma),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&luma_blur),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&chroma_blur),
+                },
             ],
         });
-        self.bg = Some(BgLayer { bind_group, aspect: w as f32 / h as f32, uniform, alpha: 1.0, disc_bind_group, disc_uniform });
+        self.bg = Some(BgLayer {
+            bind_group,
+            aspect: w as f32 / h as f32,
+            uniform,
+            alpha: 1.0,
+            disc_bind_group,
+            disc_uniform,
+        });
     }
 
     /// Applies a present mode, falling back toward vsync if the compositor lacks it.
@@ -1405,13 +1724,24 @@ impl Renderer {
             PresentChoice::Immediate => wgpu::PresentMode::Immediate,
             PresentChoice::Fifo => wgpu::PresentMode::Fifo,
         };
-        PresentChoice::ALL.into_iter().filter(|&p| p == PresentChoice::Fifo || self.supported_modes.contains(&to_wgpu(p))).collect()
+        PresentChoice::ALL
+            .into_iter()
+            .filter(|&p| p == PresentChoice::Fifo || self.supported_modes.contains(&to_wgpu(p)))
+            .collect()
     }
 
     pub fn set_present(&mut self, want: PresentChoice) {
         let order: &[PresentChoice] = match want {
-            PresentChoice::Mailbox => &[PresentChoice::Mailbox, PresentChoice::Immediate, PresentChoice::Fifo],
-            PresentChoice::Immediate => &[PresentChoice::Immediate, PresentChoice::Mailbox, PresentChoice::Fifo],
+            PresentChoice::Mailbox => &[
+                PresentChoice::Mailbox,
+                PresentChoice::Immediate,
+                PresentChoice::Fifo,
+            ],
+            PresentChoice::Immediate => &[
+                PresentChoice::Immediate,
+                PresentChoice::Mailbox,
+                PresentChoice::Fifo,
+            ],
             PresentChoice::Fifo => &[PresentChoice::Fifo],
         };
         let to_wgpu = |p: PresentChoice| match p {
@@ -1419,11 +1749,16 @@ impl Renderer {
             PresentChoice::Immediate => wgpu::PresentMode::Immediate,
             PresentChoice::Fifo => wgpu::PresentMode::Fifo,
         };
-        let chosen = order.iter().copied().find(|p| self.supported_modes.contains(&to_wgpu(*p))).unwrap_or(PresentChoice::Fifo);
+        let chosen = order
+            .iter()
+            .copied()
+            .find(|p| self.supported_modes.contains(&to_wgpu(*p)))
+            .unwrap_or(PresentChoice::Fifo);
         self.present = chosen;
         self.config.present_mode = to_wgpu(chosen);
         // One frame in flight for the uncapped modes keeps input-to-photon latency minimal.
-        self.config.desired_maximum_frame_latency = if chosen == PresentChoice::Fifo { 2 } else { 1 };
+        self.config.desired_maximum_frame_latency =
+            if chosen == PresentChoice::Fifo { 2 } else { 1 };
         self.configure();
     }
 
@@ -1438,7 +1773,12 @@ impl Renderer {
 
     /// Swaps in a surface for a new window (or drops it with `None` when the window goes away),
     /// keeping everything else on the GPU.
-    pub fn set_surface(&mut self, surface: Option<wgpu::Surface<'static>>, width: u32, height: u32) {
+    pub fn set_surface(
+        &mut self,
+        surface: Option<wgpu::Surface<'static>>,
+        width: u32,
+        height: u32,
+    ) {
         self.surface = surface;
         if width > 0 && height > 0 {
             self.config.width = width;
@@ -1456,18 +1796,24 @@ impl Renderer {
     /// Render pixels per virtual unit for crisp text (`set_text_grid`) when drawing at half
     /// resolution.
     pub fn text_grid(&self) -> Option<f32> {
-        (self.pixel_scale > 1).then(|| (self.size().1 / self.pixel_scale).max(1) as f32 / VIRTUAL_HEIGHT)
+        (self.pixel_scale > 1)
+            .then(|| (self.size().1 / self.pixel_scale).max(1) as f32 / VIRTUAL_HEIGHT)
     }
 
     /// Where the game goes, if not on all of the screen. Only a place on the screen as it is now:
     /// one left over from another size would draw outside it.
     fn placed(&self) -> Option<[u32; 4]> {
-        self.letterbox.filter(|&[x, y, w, h]| w > 0 && h > 0 && x + w <= self.config.width && y + h <= self.config.height)
+        self.letterbox.filter(|&[x, y, w, h]| {
+            w > 0 && h > 0 && x + w <= self.config.width && y + h <= self.config.height
+        })
     }
 
     /// The game in pixels: the screen, or its part of it.
     pub fn size(&self) -> (u32, u32) {
-        self.placed().map_or((self.config.width, self.config.height), |[_, _, w, h]| (w, h))
+        self.placed()
+            .map_or((self.config.width, self.config.height), |[_, _, w, h]| {
+                (w, h)
+            })
     }
 
     /// Canvas width in virtual units.
@@ -1516,7 +1862,10 @@ impl Renderer {
         let place = self.placed();
         let scaled = self.pixel_scale > 1 || place.is_some();
         let (gw, gh) = self.size();
-        let (w, h) = ((gw / self.pixel_scale).max(1), (gh / self.pixel_scale).max(1));
+        let (w, h) = (
+            (gw / self.pixel_scale).max(1),
+            (gh / self.pixel_scale).max(1),
+        );
         if scaled {
             self.ensure_low(w, h);
         }
@@ -1547,10 +1896,16 @@ impl Renderer {
             self.capacity = shapes.len().next_power_of_two();
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
-        let globals = Globals { screen_px: [w as f32, h as f32], px_per_unit: h as f32 / VIRTUAL_HEIGHT, _pad: 0.0 };
-        self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        let globals = Globals {
+            screen_px: [w as f32, h as f32],
+            px_per_unit: h as f32 / VIRTUAL_HEIGHT,
+            _pad: 0.0,
+        };
+        self.queue
+            .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !shapes.is_empty() {
-            self.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
+            self.queue
+                .write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
         }
         if self.bg_mix >= 1.0 {
             self.bg_prev = None;
@@ -1562,9 +1917,23 @@ impl Renderer {
         for (layer, alpha) in [(&mut self.bg_prev, prev_alpha), (&mut self.bg, mix)] {
             if let Some(l) = layer {
                 // "Cover" fit: crop the image's long side so it fills the screen without stretching.
-                let (u, v) = if l.aspect > screen { (screen / l.aspect, 1.0) } else { (1.0, l.aspect / screen) };
-                let uniform = [(1.0 - u) / 2.0, (1.0 - v) / 2.0, (1.0 + u) / 2.0, (1.0 + v) / 2.0, self.bg_brightness, alpha, self.bg_blur.clamp(0.0, 1.0), 0.0];
-                self.queue.write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
+                let (u, v) = if l.aspect > screen {
+                    (screen / l.aspect, 1.0)
+                } else {
+                    (1.0, l.aspect / screen)
+                };
+                let uniform = [
+                    (1.0 - u) / 2.0,
+                    (1.0 - v) / 2.0,
+                    (1.0 + u) / 2.0,
+                    (1.0 + v) / 2.0,
+                    self.bg_brightness,
+                    alpha,
+                    self.bg_blur.clamp(0.0, 1.0),
+                    0.0,
+                ];
+                self.queue
+                    .write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
                 l.alpha = alpha;
             }
         }
@@ -1581,20 +1950,58 @@ impl Renderer {
         if let Some(t) = &mut self.gpu_timer {
             t.begin(&self.device);
         }
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         let timer = self.gpu_timer.as_ref();
-        let into = Target { size: (w, h), clips: &clip, hole };
+        let into = Target {
+            size: (w, h),
+            clips: &clip,
+            hole,
+        };
         match self.low.as_ref().filter(|_| scaled) {
             Some(low) => {
-                self.encode_pass(&mut encoder, &low.view, false, shapes.len(), clear, &into, timer.and_then(|t| t.writes(true, false)));
+                self.encode_pass(
+                    &mut encoder,
+                    &low.view,
+                    false,
+                    shapes.len(),
+                    clear,
+                    &into,
+                    timer.and_then(|t| t.writes(true, false)),
+                );
                 let origin = place.map_or([0, 0], |[x, y, ..]| [x, y]);
                 let round = if place.is_some() { [0.0; 3] } else { clear };
-                let uniform = [origin[0] as f32, origin[1] as f32, self.pixel_scale as f32, 0.0];
-                self.queue.write_buffer(&low.place, 0, bytemuck::cast_slice(&uniform));
-                self.encode_upscale(&mut encoder, &view, low, origin, self.pixel_scale, round, timer.and_then(|t| t.writes(false, true)));
+                let uniform = [
+                    origin[0] as f32,
+                    origin[1] as f32,
+                    self.pixel_scale as f32,
+                    0.0,
+                ];
+                self.queue
+                    .write_buffer(&low.place, 0, bytemuck::cast_slice(&uniform));
+                self.encode_upscale(
+                    &mut encoder,
+                    &view,
+                    low,
+                    origin,
+                    self.pixel_scale,
+                    round,
+                    timer.and_then(|t| t.writes(false, true)),
+                );
             }
-            None => self.encode_pass(&mut encoder, &view, false, shapes.len(), clear, &into, timer.and_then(|t| t.writes(true, true))),
+            None => self.encode_pass(
+                &mut encoder,
+                &view,
+                false,
+                shapes.len(),
+                clear,
+                &into,
+                timer.and_then(|t| t.writes(true, true)),
+            ),
         }
         if let Some(t) = timer {
             t.resolve(&mut encoder);
@@ -1604,7 +2011,11 @@ impl Renderer {
         let readback = capture.then(|| {
             let target = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("capture"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -1613,7 +2024,15 @@ impl Renderer {
                 view_formats: &[],
             });
             let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-            self.encode_pass(&mut encoder, &target_view, true, shapes.len(), clear, &into, None);
+            self.encode_pass(
+                &mut encoder,
+                &target_view,
+                true,
+                shapes.len(),
+                clear,
+                &into,
+                None,
+            );
             let bpr = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("capture"),
@@ -1625,9 +2044,17 @@ impl Renderer {
                 target.as_image_copy(),
                 wgpu::TexelCopyBufferInfo {
                     buffer: &buf,
-                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: None },
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bpr),
+                        rows_per_image: None,
+                    },
                 },
-                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
             );
             (buf, bpr)
         });
@@ -1639,7 +2066,12 @@ impl Renderer {
 
         let (buf, bpr) = readback?;
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok()?;
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok()?;
         let data = buf.slice(..).get_mapped_range().ok()?;
         let mut rgb = Vec::with_capacity((w * h * 3) as usize);
         for row in data.chunks_exact(bpr as usize) {
@@ -1652,7 +2084,14 @@ impl Renderer {
 
     /// Renders shapes (with the background) into an offscreen `w` x `h` image and reads it back as
     /// RGBA rows. `clips` are rects as fractions of the image. Used for video frames.
-    pub fn render_offscreen(&mut self, shapes: &[Shape], clips: &[(std::ops::Range<usize>, [f32; 4])], w: u32, h: u32, clear: [f64; 3]) -> Option<Vec<u8>> {
+    pub fn render_offscreen(
+        &mut self,
+        shapes: &[Shape],
+        clips: &[(std::ops::Range<usize>, [f32; 4])],
+        w: u32,
+        h: u32,
+        clear: [f64; 3],
+    ) -> Option<Vec<u8>> {
         let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = clips
             .iter()
             .filter(|(range, _)| range.start < range.end && range.end <= shapes.len())
@@ -1669,16 +2108,36 @@ impl Renderer {
             self.capacity = shapes.len().next_power_of_two();
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
-        let globals = Globals { screen_px: [w as f32, h as f32], px_per_unit: h as f32 / VIRTUAL_HEIGHT, _pad: 0.0 };
-        self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        let globals = Globals {
+            screen_px: [w as f32, h as f32],
+            px_per_unit: h as f32 / VIRTUAL_HEIGHT,
+            _pad: 0.0,
+        };
+        self.queue
+            .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !shapes.is_empty() {
-            self.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
+            self.queue
+                .write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
         }
         let screen = w as f32 / h.max(1) as f32;
         if let Some(l) = &mut self.bg {
-            let (u, v) = if l.aspect > screen { (screen / l.aspect, 1.0) } else { (1.0, l.aspect / screen) };
-            let uniform = [(1.0 - u) / 2.0, (1.0 - v) / 2.0, (1.0 + u) / 2.0, (1.0 + v) / 2.0, self.bg_brightness, 1.0, 0.0, 0.0];
-            self.queue.write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
+            let (u, v) = if l.aspect > screen {
+                (screen / l.aspect, 1.0)
+            } else {
+                (1.0, l.aspect / screen)
+            };
+            let uniform = [
+                (1.0 - u) / 2.0,
+                (1.0 - v) / 2.0,
+                (1.0 + u) / 2.0,
+                (1.0 + v) / 2.0,
+                self.bg_brightness,
+                1.0,
+                0.0,
+                0.0,
+            ];
+            self.queue
+                .write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
             l.alpha = 1.0;
         }
         self.write_disc();
@@ -1686,7 +2145,11 @@ impl Renderer {
         let prev = self.bg_prev.take();
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1695,8 +2158,22 @@ impl Renderer {
             view_formats: &[],
         });
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.encode_pass(&mut encoder, &view, true, shapes.len(), clear, &Target { size: (w, h), clips: &clip, hole: None }, None);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        self.encode_pass(
+            &mut encoder,
+            &view,
+            true,
+            shapes.len(),
+            clear,
+            &Target {
+                size: (w, h),
+                clips: &clip,
+                hole: None,
+            },
+            None,
+        );
         self.bg_prev = prev;
         let bpr = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1707,12 +2184,28 @@ impl Renderer {
         });
         encoder.copy_texture_to_buffer(
             target.as_image_copy(),
-            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: None } },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bpr),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
         self.queue.submit([encoder.finish()]);
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok()?;
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .ok()?;
         let data = buf.slice(..).get_mapped_range().ok()?;
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         for row in data.chunks_exact(bpr as usize) {
@@ -1723,12 +2216,20 @@ impl Renderer {
 
     /// (Re)creates the half-resolution image when the screen size changed.
     fn ensure_low(&mut self, width: u32, height: u32) {
-        if self.low.as_ref().is_some_and(|l| (l.width, l.height) == (width, height)) {
+        if self
+            .low
+            .as_ref()
+            .is_some_and(|l| (l.width, l.height) == (width, height))
+        {
             return;
         }
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("half resolution"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1748,11 +2249,23 @@ impl Renderer {
             label: Some("half resolution"),
             layout: &self.upscale_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: place.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: place.as_entire_binding(),
+                },
             ],
         });
-        self.low = Some(LowRes { view, bind_group, place, width, height });
+        self.low = Some(LowRes {
+            view,
+            bind_group,
+            place,
+            width,
+            height,
+        });
     }
 
     /// Puts the image on the screen at `origin`, `scale` times its size exactly. What it doesn't
@@ -1775,14 +2288,26 @@ impl Renderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r: clear[0], g: clear[1], b: clear[2], a: 1.0 }),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: clear[0],
+                        g: clear[1],
+                        b: clear[2],
+                        a: 1.0,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
             timestamp_writes,
             ..Default::default()
         });
-        pass.set_viewport(origin[0] as f32, origin[1] as f32, (low.width * scale) as f32, (low.height * scale) as f32, 0.0, 1.0);
+        pass.set_viewport(
+            origin[0] as f32,
+            origin[1] as f32,
+            (low.width * scale) as f32,
+            (low.height * scale) as f32,
+            0.0,
+            1.0,
+        );
         pass.set_pipeline(&self.upscale_pipeline);
         pass.set_bind_group(0, &low.bind_group, &[]);
         pass.draw(0..3, 0..1);
@@ -1801,14 +2326,23 @@ impl Renderer {
         timestamp_writes: Option<wgpu::RenderPassTimestampWrites>,
     ) {
         let size = target.size;
-        let layers: Vec<&BgLayer> = if self.bg_brightness > 0.0 { [&self.bg_prev, &self.bg].into_iter().flatten().collect() } else { Vec::new() };
+        let layers: Vec<&BgLayer> = if self.bg_brightness > 0.0 {
+            [&self.bg_prev, &self.bg].into_iter().flatten().collect()
+        } else {
+            Vec::new()
+        };
         // A background layer always covers the whole target: under an opaque one, clearing first
         // would only cost a full-screen write.
         let load = if layers.first().is_some_and(|l| l.alpha >= 1.0) {
             // SAFETY: the opaque layer writes every pixel before anything reads them.
             wgpu::LoadOp::DontCare(unsafe { wgpu::LoadOpDontCare::enabled() })
         } else {
-            wgpu::LoadOp::Clear(wgpu::Color { r: clear[0], g: clear[1], b: clear[2], a: 1.0 })
+            wgpu::LoadOp::Clear(wgpu::Color {
+                r: clear[0],
+                g: clear[1],
+                b: clear[2],
+                a: 1.0,
+            })
         };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -1816,7 +2350,10 @@ impl Renderer {
                 view,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
             })],
             timestamp_writes,
             ..Default::default()
@@ -1824,10 +2361,15 @@ impl Renderer {
         // The background around the hole (bands above and below it, and beside it), or all of it.
         let (w, h) = size;
         let bands: Vec<[u32; 4]> = match target.hole {
-            Some([x0, y0, x1, y1]) => [[0, 0, w, y0], [0, y1, w, h - y1], [0, y0, x0, y1 - y0], [x1, y0, w - x1, y1 - y0]]
-                .into_iter()
-                .filter(|r| r[2] > 0 && r[3] > 0)
-                .collect(),
+            Some([x0, y0, x1, y1]) => [
+                [0, 0, w, y0],
+                [0, y1, w, h - y1],
+                [0, y0, x0, y1 - y0],
+                [x1, y0, w - x1, y1 - y0],
+            ]
+            .into_iter()
+            .filter(|r| r[2] > 0 && r[3] > 0)
+            .collect(),
             None => vec![[0, 0, w, h]],
         };
         for layer in &layers {
@@ -1847,7 +2389,11 @@ impl Renderer {
             pass.set_bind_group(0, &l.disc_bind_group, &[]);
             pass.draw(0..4, 0..1);
         }
-        pass.set_pipeline(if capture { &self.capture_pipeline } else { &self.pipeline });
+        pass.set_pipeline(if capture {
+            &self.capture_pipeline
+        } else {
+            &self.pipeline
+        });
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instances.slice(..));
         // Unclipped runs between the clipped ranges.
@@ -1907,14 +2453,22 @@ pub fn legacy_menu() -> bool {
 /// `v` moved onto the text grid (unchanged without one).
 pub fn snap_to_grid(v: f32) -> f32 {
     let grid = TEXT_GRID.with(std::cell::Cell::get);
-    if grid > 0.0 { (v * grid).round() / grid } else { v }
+    if grid > 0.0 {
+        (v * grid).round() / grid
+    } else {
+        v
+    }
 }
 
 /// `want` (virtual units) as a whole number of screen pixels, so pixel art stays square and
 /// even at any window size (unchanged without a grid).
 pub fn pixel_size(want: f32) -> f32 {
     let grid = TEXT_GRID.with(std::cell::Cell::get);
-    if grid > 0.0 { (want * grid).round().max(1.0) / grid } else { want }
+    if grid > 0.0 {
+        (want * grid).round().max(1.0) / grid
+    } else {
+        want
+    }
 }
 
 static ANIMATIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -1977,7 +2531,9 @@ pub fn progress(since: std::time::Instant, ms: f32) -> f32 {
     if !animations() {
         return 1.0;
     }
-    let now = FRAME_TIME.with(std::cell::Cell::get).unwrap_or_else(std::time::Instant::now);
+    let now = FRAME_TIME
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(std::time::Instant::now);
     let t = (now.saturating_duration_since(since).as_secs_f32() * 1000.0 / ms).clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)
 }
@@ -2157,10 +2713,16 @@ pub struct Canvas {
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
     let acc = accent();
     if acc != DEFAULT_ACCENT
-        && let Some([r, g, b]) = tint_grey(hex, acc) {
+        && let Some([r, g, b]) = tint_grey(hex, acc)
+    {
         return [r, g, b, a];
     }
-    [((hex >> 16) & 0xff) as f32 / 255.0, ((hex >> 8) & 0xff) as f32 / 255.0, (hex & 0xff) as f32 / 255.0, a]
+    [
+        ((hex >> 16) & 0xff) as f32 / 255.0,
+        ((hex >> 8) & 0xff) as f32 / 255.0,
+        (hex & 0xff) as f32 / 255.0,
+        a,
+    ]
 }
 
 /// The interface's red, and the accents it can have instead (Settings -> Skin -> UI colour).
@@ -2212,7 +2774,9 @@ pub fn themed(default: u32, toward: u32, t: f32) -> u32 {
         return default;
     }
     let ch = |hex: u32, s: u32| ((hex >> s) & 0xff) as f32;
-    [16, 8, 0].into_iter().fold(0, |out, s| out | (((ch(acc, s) + (ch(toward, s) - ch(acc, s)) * t).round() as u32) << s))
+    [16, 8, 0].into_iter().fold(0, |out, s| {
+        out | (((ch(acc, s) + (ch(toward, s) - ch(acc, s)) * t).round() as u32) << s)
+    })
 }
 
 /// The interface's greys all have the same slight blue cast (equal red and green, a little more
@@ -2261,7 +2825,9 @@ pub fn rotate_hue(hex: u32, degrees: f32) -> u32 {
         4 => (x, 0.0, d),
         _ => (d, 0.0, x),
     };
-    [r, g, b].into_iter().fold(0, |out, c| (out << 8) | ((c + lo) * 255.0).round() as u32)
+    [r, g, b]
+        .into_iter()
+        .fold(0, |out, c| (out << 8) | ((c + lo) * 255.0).round() as u32)
 }
 
 /// What the window is cleared to under everything (a grey, so it follows the accent too).
@@ -2272,16 +2838,25 @@ pub fn clear_colour() -> [f64; 3] {
 
 /// An accent as the config and settings write it: a preset's name, else "#rrggbb".
 pub fn accent_name(hex: u32) -> String {
-    ACCENTS.iter().find(|a| a.1 == hex).map_or_else(|| format!("#{hex:06x}"), |a| a.0.to_string())
+    ACCENTS
+        .iter()
+        .find(|a| a.1 == hex)
+        .map_or_else(|| format!("#{hex:06x}"), |a| a.0.to_string())
 }
 
 /// `accent_name`'s inverse.
 pub fn parse_accent(s: &str) -> Option<u32> {
     let s = s.trim();
-    ACCENTS.iter().find(|a| a.0.eq_ignore_ascii_case(s)).map(|a| a.1).or_else(|| {
-        let h = s.strip_prefix('#')?;
-        (h.len() == 6).then(|| u32::from_str_radix(h, 16).ok()).flatten()
-    })
+    ACCENTS
+        .iter()
+        .find(|a| a.0.eq_ignore_ascii_case(s))
+        .map(|a| a.1)
+        .or_else(|| {
+            let h = s.strip_prefix('#')?;
+            (h.len() == 6)
+                .then(|| u32::from_str_radix(h, 16).ok())
+                .flatten()
+        })
 }
 
 const CLEAR: [f32; 4] = [0.0; 4];
@@ -2306,7 +2881,10 @@ impl Canvas {
 
     /// Where the `opaque` rect ended up (virtual units, after transforms and clips), if it is
     /// still a plain, unrotated opaque rect.
-    pub fn opaque_rect(&self, frame_clip: Option<(&std::ops::Range<usize>, [f32; 4])>) -> Option<[f32; 4]> {
+    pub fn opaque_rect(
+        &self,
+        frame_clip: Option<(&std::ops::Range<usize>, [f32; 4])>,
+    ) -> Option<[f32; 4]> {
         let i = self.opaque?;
         let sh = self.shapes.get(i)?;
         if sh.fill[3] < 1.0 || sh.params != [0.0; 4] || sh.border != sh.fill || sh.angle != 0.0 {
@@ -2333,7 +2911,11 @@ impl Canvas {
     /// Makes a rect clickable. Call after drawing at least one of its shapes, so it belongs to
     /// the same transformed region.
     pub fn hit(&mut self, x: f32, y: f32, w: f32, h: f32, hit: Hit) {
-        self.hits.push(HitBox { rect: [x, y, w, h], hit, shape: self.shapes.len() });
+        self.hits.push(HitBox {
+            rect: [x, y, w, h],
+            hit,
+            shape: self.shapes.len(),
+        });
     }
 
     pub fn hovered(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
@@ -2343,11 +2925,24 @@ impl Canvas {
 
     /// A clickable button, highlighted under the pointer. `accent`: the main action.
     #[allow(clippy::too_many_arguments)]
-    pub fn button(&mut self, x: f32, y: f32, w: f32, h: f32, label: &str, size: f32, hit: Hit, accent: bool) {
+    pub fn button(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        label: &str,
+        size: f32,
+        hit: Hit,
+        accent: bool,
+    ) {
         let hover = self.hovered(x, y, w, h);
         let (bg, border) = match (accent, hover) {
             (true, false) => (themed(0x2b1a17, 0x15151d, 0.84), crate::render::accent()),
-            (true, true) => (themed(0x4a221b, 0x15151d, 0.7), themed(0xFF6A50, 0xffffff, 0.2)),
+            (true, true) => (
+                themed(0x4a221b, 0x15151d, 0.7),
+                themed(0xFF6A50, 0xffffff, 0.2),
+            ),
             (false, false) => (0x23232f, 0x3a3a4e),
             (false, true) => (0x34344a, 0x6a6a88),
         };
@@ -2355,7 +2950,13 @@ impl Canvas {
         // A label too long for the button shrinks a little, then gets cut short.
         let room = w - 8.0;
         let size = Self::fit_size(size, size * 0.8, room, label);
-        self.text_centered(x + w / 2.0, y + (h - size) / 2.0, size, rgba(0xffffff, 1.0), &Self::fit(size, room, label));
+        self.text_centered(
+            x + w / 2.0,
+            y + (h - size) / 2.0,
+            size,
+            rgba(0xffffff, 1.0),
+            &Self::fit(size, room, label),
+        );
         self.hit(x, y, w, h, hit);
     }
 
@@ -2367,7 +2968,10 @@ impl Canvas {
         let room = self.width - 32.0 - gaps;
         // Too wide for the screen: less padding, then every button narrower alike (labels
         // shrink and get cut in `button`).
-        let text: Vec<f32> = buttons.iter().map(|(l, _, _)| Canvas::text_width(SIZE, l)).collect();
+        let text: Vec<f32> = buttons
+            .iter()
+            .map(|(l, _, _)| Canvas::text_width(SIZE, l))
+            .collect();
         let padded = |pad: f32| text.iter().map(|t| t + pad).collect::<Vec<f32>>();
         let mut widths = padded(28.0);
         if widths.iter().sum::<f32>() > room {
@@ -2386,10 +2990,25 @@ impl Canvas {
     }
 
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, fill: [f32; 4]) {
-        self.shapes.push(Shape { center: [x + w / 2.0, y + h / 2.0], half: [w / 2.0, h / 2.0], fill, border: fill, params: [0.0; 4], angle: 0.0 });
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [w / 2.0, h / 2.0],
+            fill,
+            border: fill,
+            params: [0.0; 4],
+            angle: 0.0,
+        });
     }
 
-    pub fn round_rect(&mut self, [x, y]: [f32; 2], [w, h]: [f32; 2], radius: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
+    pub fn round_rect(
+        &mut self,
+        [x, y]: [f32; 2],
+        [w, h]: [f32; 2],
+        radius: f32,
+        fill: [f32; 4],
+        border: [f32; 4],
+        border_w: f32,
+    ) {
         if self.audit {
             self.boxes.push(self.shapes.len());
         }
@@ -2403,8 +3022,23 @@ impl Canvas {
         });
     }
 
-    pub fn circle(&mut self, x: f32, y: f32, r: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
-        self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, 0.0], angle: 0.0 });
+    pub fn circle(
+        &mut self,
+        x: f32,
+        y: f32,
+        r: f32,
+        fill: [f32; 4],
+        border: [f32; 4],
+        border_w: f32,
+    ) {
+        self.shapes.push(Shape {
+            center: [x, y],
+            half: [r, r],
+            fill,
+            border,
+            params: [r, border_w, 0.0, 0.0],
+            angle: 0.0,
+        });
     }
 
     pub fn ring(&mut self, x: f32, y: f32, r: f32, color: [f32; 4], width: f32) {
@@ -2412,7 +3046,15 @@ impl Canvas {
     }
 
     /// Horizontal capsule from x0 to x1 (centres of the end caps).
-    pub fn capsule(&mut self, [x0, x1]: [f32; 2], y: f32, r: f32, fill: [f32; 4], border: [f32; 4], border_w: f32) {
+    pub fn capsule(
+        &mut self,
+        [x0, x1]: [f32; 2],
+        y: f32,
+        r: f32,
+        fill: [f32; 4],
+        border: [f32; 4],
+        border_w: f32,
+    ) {
         let (a, b) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
         self.shapes.push(Shape {
             center: [(a + b) / 2.0, y],
@@ -2425,14 +3067,31 @@ impl Canvas {
     }
 
     /// Left (`side` 1) or right (`side` 2) half of a circle.
-    pub fn half_circle(&mut self, [x, y]: [f32; 2], r: f32, side: u8, fill: [f32; 4], border: [f32; 4], border_w: f32) {
-        self.shapes.push(Shape { center: [x, y], half: [r, r], fill, border, params: [r, border_w, 0.0, side as f32], angle: 0.0 });
+    pub fn half_circle(
+        &mut self,
+        [x, y]: [f32; 2],
+        r: f32,
+        side: u8,
+        fill: [f32; 4],
+        border: [f32; 4],
+        border_w: f32,
+    ) {
+        self.shapes.push(Shape {
+            center: [x, y],
+            half: [r, r],
+            fill,
+            border,
+            params: [r, border_w, 0.0, side as f32],
+            angle: 0.0,
+        });
     }
 
     /// A skin image centred on (`x`, `y`) for something of radius `r`, tinted by `tint`. False
     /// (nothing drawn) when the skin doesn't have it.
     pub fn sprite(&mut self, sprite: Sprite, x: f32, y: f32, r: f32, tint: [f32; 4]) -> bool {
-        let Some([sx, sy]) = self.sprites[sprite as usize] else { return false };
+        let Some([sx, sy]) = self.sprites[sprite as usize] else {
+            return false;
+        };
         self.sprite_box(sprite, x, y, r * sx, r * sy, tint);
         true
     }
@@ -2447,11 +3106,22 @@ impl Canvas {
     /// sprite size unit) that makes a `0` `h` tall. None when the font lacks a glyph `s` needs.
     fn glyphs(&self, font: Font, h: f32, s: &str) -> Option<(Vec<Glyph>, f32, f32)> {
         let (glyph, zero, overlap): (fn(char) -> Option<Sprite>, Sprite, f32) = match font {
-            Font::Score => (Sprite::score_glyph, Sprite::Score0, self.skin_layout.score_overlap),
-            Font::Combo => (Sprite::combo_glyph, Sprite::Combo0, self.skin_layout.combo_overlap),
+            Font::Score => (
+                Sprite::score_glyph,
+                Sprite::Score0,
+                self.skin_layout.score_overlap,
+            ),
+            Font::Combo => (
+                Sprite::combo_glyph,
+                Sprite::Combo0,
+                self.skin_layout.combo_overlap,
+            ),
         };
         let k = h / self.sprites[zero as usize]?[1];
-        let glyphs = s.chars().map(|ch| glyph(ch).and_then(|g| Some((g, self.sprites[g as usize]?)))).collect::<Option<Vec<_>>>()?;
+        let glyphs = s
+            .chars()
+            .map(|ch| glyph(ch).and_then(|g| Some((g, self.sprites[g as usize]?))))
+            .collect::<Option<Vec<_>>>()?;
         Some((glyphs, overlap / 128.0 * k, k))
     }
 
@@ -2459,13 +3129,18 @@ impl Canvas {
     /// font (or not every glyph `s` needs).
     pub fn number_width(&self, font: Font, h: f32, s: &str) -> Option<f32> {
         let (glyphs, overlap, k) = self.glyphs(font, h, s)?;
-        Some(glyphs.iter().map(|(_, [w, _])| w * k).sum::<f32>() - overlap * glyphs.len().saturating_sub(1) as f32)
+        Some(
+            glyphs.iter().map(|(_, [w, _])| w * k).sum::<f32>()
+                - overlap * glyphs.len().saturating_sub(1) as f32,
+        )
     }
 
     /// `s` in the skin's `font`, its left edge at `x` and a `0`'s top at `y`, `h` tall; glyphs
     /// sit on the same baseline. False (nothing drawn) when the skin can't draw it.
     pub fn number(&mut self, font: Font, x: f32, y: f32, h: f32, tint: [f32; 4], s: &str) -> bool {
-        let Some((glyphs, overlap, k)) = self.glyphs(font, h, s) else { return false };
+        let Some((glyphs, overlap, k)) = self.glyphs(font, h, s) else {
+            return false;
+        };
         let mut x = x;
         for (g, [w, gh]) in glyphs {
             let (w, gh) = (w * k, gh * k);
@@ -2496,26 +3171,60 @@ impl Canvas {
             self.avatars_wanted.push(key);
         }
         match slot {
-            Some(slot) => self.shapes.push(Shape { center: [x, y], half: [r, r], fill: [1.0, 1.0, 1.0, a], border: CLEAR, params: [r, 0.0, 0.0, -1.0 - slot as f32], angle: 0.0 }),
+            Some(slot) => self.shapes.push(Shape {
+                center: [x, y],
+                half: [r, r],
+                fill: [1.0, 1.0, 1.0, a],
+                border: CLEAR,
+                params: [r, 0.0, 0.0, -1.0 - slot as f32],
+                angle: 0.0,
+            }),
             None => {
                 self.circle(x, y, r, rgba(colour, 0.9 * a), CLEAR, 0.0);
-                let initial: String = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into());
+                let initial: String = name
+                    .chars()
+                    .find(|c| c.is_alphanumeric())
+                    .map(|c| c.to_uppercase().collect())
+                    .unwrap_or_else(|| "?".into());
                 let size = (r * 1.15).max(4.0);
-                self.text_centered(x + size / 14.0, y - size / 2.0, size, rgba(0x0d0d15, a), &initial);
+                self.text_centered(
+                    x + size / 14.0,
+                    y - size / 2.0,
+                    size,
+                    rgba(0x0d0d15, a),
+                    &initial,
+                );
             }
         }
     }
 
     /// A skin image stretched over the box centred on (`x`, `y`), `hw` by `hh` either side.
     pub fn sprite_box(&mut self, sprite: Sprite, x: f32, y: f32, hw: f32, hh: f32, tint: [f32; 4]) {
-        self.shapes.push(Shape { center: [x, y], half: [hw, hh], fill: tint, border: tint, params: [0.0, 0.0, 0.0, SPRITE_BASE + sprite as usize as f32], angle: 0.0 });
+        self.shapes.push(Shape {
+            center: [x, y],
+            half: [hw, hh],
+            fill: tint,
+            border: tint,
+            params: [0.0, 0.0, 0.0, SPRITE_BASE + sprite as usize as f32],
+            angle: 0.0,
+        });
     }
 
     /// Scales every shape drawn since `start` about `anchor`, then moves it by (`dx`, `dy`). Radii,
     /// borders and glows scale with it, so the result stays crisp (used for the playfield area).
-    pub fn transform_since(&mut self, start: usize, anchor: [f32; 2], scale: f32, dx: f32, dy: f32) {
+    pub fn transform_since(
+        &mut self,
+        start: usize,
+        anchor: [f32; 2],
+        scale: f32,
+        dx: f32,
+        dy: f32,
+    ) {
         for sh in &mut self.shapes[start..] {
-            sh.center = [anchor[0] + (sh.center[0] - anchor[0]) * scale + dx, anchor[1] + (sh.center[1] - anchor[1]) * scale + dy];
+            sh.center = [
+                anchor[0] + (sh.center[0] - anchor[0]) * scale + dx,
+                anchor[1] + (sh.center[1] - anchor[1]) * scale + dy,
+            ];
             sh.half = [sh.half[0] * scale, sh.half[1] * scale];
             sh.params[0] *= scale;
             sh.params[1] *= scale;
@@ -2523,16 +3232,31 @@ impl Canvas {
         }
         for h in self.hits.iter_mut().filter(|h| h.shape > start) {
             let [x, y, w, hh] = h.rect;
-            h.rect = [anchor[0] + (x - anchor[0]) * scale + dx, anchor[1] + (y - anchor[1]) * scale + dy, w * scale, hh * scale];
+            h.rect = [
+                anchor[0] + (x - anchor[0]) * scale + dx,
+                anchor[1] + (y - anchor[1]) * scale + dy,
+                w * scale,
+                hh * scale,
+            ];
         }
     }
 
     /// Turns every shape drawn since `start` by `angle` (radians, clockwise on screen) and scales
     /// it by `scale` about `pivot`, which lands on `dest`. Hit areas aren't moved.
-    pub fn rotate_since(&mut self, start: usize, pivot: [f32; 2], angle: f32, scale: f32, dest: [f32; 2]) {
+    pub fn rotate_since(
+        &mut self,
+        start: usize,
+        pivot: [f32; 2],
+        angle: f32,
+        scale: f32,
+        dest: [f32; 2],
+    ) {
         let (sin, cos) = angle.sin_cos();
         for sh in &mut self.shapes[start..] {
-            let (x, y) = ((sh.center[0] - pivot[0]) * scale, (sh.center[1] - pivot[1]) * scale);
+            let (x, y) = (
+                (sh.center[0] - pivot[0]) * scale,
+                (sh.center[1] - pivot[1]) * scale,
+            );
             sh.center = [dest[0] + x * cos - y * sin, dest[1] + x * sin + y * cos];
             sh.half = [sh.half[0] * scale, sh.half[1] * scale];
             sh.params[0] *= scale;
@@ -2558,7 +3282,10 @@ impl Canvas {
     /// stadiums (used for squishy notes).
     pub fn stretch_since(&mut self, start: usize, at: [f32; 2], sx: f32, sy: f32) {
         for sh in &mut self.shapes[start..] {
-            sh.center = [at[0] + (sh.center[0] - at[0]) * sx, at[1] + (sh.center[1] - at[1]) * sy];
+            sh.center = [
+                at[0] + (sh.center[0] - at[0]) * sx,
+                at[1] + (sh.center[1] - at[1]) * sy,
+            ];
             sh.half = [sh.half[0] * sx, sh.half[1] * sy];
         }
     }
@@ -2586,7 +3313,14 @@ impl Canvas {
     }
 
     pub fn glow(&mut self, x: f32, y: f32, r: f32, softness: f32, color: [f32; 4]) {
-        self.shapes.push(Shape { center: [x, y], half: [r, r], fill: color, border: color, params: [r, 0.0, softness, 0.0], angle: 0.0 });
+        self.shapes.push(Shape {
+            center: [x, y],
+            half: [r, r],
+            fill: color,
+            border: color,
+            params: [r, 0.0, softness, 0.0],
+            angle: 0.0,
+        });
     }
 
     /// Draws text with the built-in 5x7 font; `size` is the glyph height. Returns the advance width.
@@ -2633,7 +3367,10 @@ impl Canvas {
                         }
                         let len = (row - start) as f32;
                         self.shapes.push(Shape {
-                            center: [cx + (c as f32 + 0.5) * px, y + (start as f32 + len / 2.0) * px],
+                            center: [
+                                cx + (c as f32 + 0.5) * px,
+                                y + (start as f32 + len / 2.0) * px,
+                            ],
                             half: [px * 0.5, px * len * 0.5],
                             fill: color,
                             border: color,
@@ -2688,7 +3425,11 @@ impl Canvas {
             return size;
         }
         let grid = TEXT_GRID.with(std::cell::Cell::get);
-        if grid > 0.0 { (max_h / 7.0 * grid).floor().max(1.0) / grid * 7.0 } else { max_h }
+        if grid > 0.0 {
+            (max_h / 7.0 * grid).floor().max(1.0) / grid * 7.0
+        } else {
+            max_h
+        }
     }
 
     pub fn text_centered(&mut self, cx: f32, y: f32, size: f32, color: [f32; 4], s: &str) {
@@ -2710,7 +3451,10 @@ impl Canvas {
         if max_w < dots + Self::char_width(size) {
             return String::new();
         }
-        format!("{}...", s[..Self::fitting_prefix(size, max_w - dots, s)].trim_end())
+        format!(
+            "{}...",
+            s[..Self::fitting_prefix(size, max_w - dots, s)].trim_end()
+        )
     }
 
     /// Like `fit`, but keeps the end (what is being typed) and cuts the start.
@@ -2724,7 +3468,11 @@ impl Canvas {
         }
         // The longest end that fits after the dots.
         let room = max_w - dots;
-        let start = s.char_indices().map(|(at, _)| at).find(|&at| Self::text_width(size, &s[at..]) <= room).unwrap_or(s.len());
+        let start = s
+            .char_indices()
+            .map(|(at, _)| at)
+            .find(|&at| Self::text_width(size, &s[at..]) <= room)
+            .unwrap_or(s.len());
         format!("...{}", &s[start..])
     }
 
@@ -2734,10 +3482,17 @@ impl Canvas {
         if Self::text_width(size, s) <= max_w {
             return s.to_string();
         }
-        let gap = s.find("  ").map(|i| s[i..].len() - s[i..].trim_start().len()).unwrap_or(2);
+        let gap = s
+            .find("  ")
+            .map(|i| s[i..].len() - s[i..].trim_start().len())
+            .unwrap_or(2);
         let mut out = String::new();
         for item in s.split("  ").map(str::trim).filter(|i| !i.is_empty()) {
-            let next = if out.is_empty() { item.to_string() } else { format!("{out}{}{item}", " ".repeat(gap)) };
+            let next = if out.is_empty() {
+                item.to_string()
+            } else {
+                format!("{out}{}{item}", " ".repeat(gap))
+            };
             if Self::text_width(size, &next) > max_w {
                 break;
             }
@@ -2783,13 +3538,23 @@ mod tests {
     #[test]
     fn a_background_s_blurred_copy_is_small_and_keeps_its_colours() {
         assert_eq!(super::blurred_size(1920, 1080), (85, 48));
-        assert_eq!(super::blurred_size(10, 4), (10, 4), "never bigger than the picture");
+        assert_eq!(
+            super::blurred_size(10, 4),
+            (10, 4),
+            "never bigger than the picture"
+        );
         // A flat picture stays flat; a bright half bleeds into the dark one.
         let flat = super::shrink_blur(&[90; 64 * 32 * 2], 64, 32, 2, 16, 8);
         assert!(flat.iter().all(|&v| v == 90));
-        let half: Vec<u8> = (0..64 * 32).map(|i| if i % 64 < 32 { 0 } else { 255 }).collect();
+        let half: Vec<u8> = (0..64 * 32)
+            .map(|i| if i % 64 < 32 { 0 } else { 255 })
+            .collect();
         let soft = super::shrink_blur(&half, 64, 32, 1, 16, 8);
-        assert!(soft[7] > 0 && soft[7] < soft[8] && soft[8] < 255, "{:?}", &soft[..16]);
+        assert!(
+            soft[7] > 0 && soft[7] < soft[8] && soft[8] < 255,
+            "{:?}",
+            &soft[..16]
+        );
     }
 
     #[test]
@@ -2829,11 +3594,20 @@ mod tests {
     #[test]
     fn shaders_compile() {
         let shapes = super::shape_shader();
-        for (name, src) in [("shapes", shapes.as_str()), ("background", super::BG_SHADER), ("disc", super::DISC_SHADER), ("upscale", super::UPSCALE_SHADER)] {
-            let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
-            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default())
-                .validate(&module)
-                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        for (name, src) in [
+            ("shapes", shapes.as_str()),
+            ("background", super::BG_SHADER),
+            ("disc", super::DISC_SHADER),
+            ("upscale", super::UPSCALE_SHADER),
+        ] {
+            let module = naga::front::wgsl::parse_str(src)
+                .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::default(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         }
     }
 }

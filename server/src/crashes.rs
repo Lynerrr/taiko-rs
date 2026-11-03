@@ -23,7 +23,10 @@ pub fn init(dir: PathBuf) {
 /// What tells one crash from another: the panic's place and message, or the exception and the
 /// module it was in, without the addresses and numbers that differ between runs of the same crash.
 pub fn signature(report: &str) -> String {
-    let mut lines = report.lines().skip_while(|l| l.starts_with("---")).map(str::trim);
+    let mut lines = report
+        .lines()
+        .skip_while(|l| l.starts_with("---"))
+        .map(str::trim);
     let first = lines.next().unwrap_or("");
     // "thread main: panicked at src/x.rs:1:2:" and the message on the next line.
     if let Some(at) = first.find("panicked at ") {
@@ -56,7 +59,11 @@ fn without_numbers(text: &str) -> String {
 
 /// Takes a report from `ip`: kept, and posted on Discord in the background.
 pub fn report(ip: IpAddr, r: CrashReport) -> Result<(), String> {
-    if r.report.trim().is_empty() || r.report.len() > MAX_CRASH_REPORT || r.build.len() > 64 || r.os.len() > 64 {
+    if r.report.trim().is_empty()
+        || r.report.len() > MAX_CRASH_REPORT
+        || r.build.len() > 64
+        || r.os.len() > 64
+    {
         return Err("that crash report doesn't look right".into());
     }
     {
@@ -70,9 +77,16 @@ pub fn report(ip: IpAddr, r: CrashReport) -> Result<(), String> {
     }
     let signature = signature(&r.report);
     if let Some(dir) = DIR.get() {
-        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let line = serde_json::json!({ "at": at, "build": r.build, "os": r.os, "signature": signature, "report": r.report });
-        let written = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crashes.jsonl")).and_then(|mut f| writeln!(f, "{line}"));
+        let written = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("crashes.jsonl"))
+            .and_then(|mut f| writeln!(f, "{line}"));
         if let Err(e) = written {
             eprintln!("crashes.jsonl: {e}");
         }
@@ -91,8 +105,14 @@ mod tests {
         let a = "--- taiko.rs crash at unix 1, build abc (0.1.0, windows)\nthread render: panicked at src/render.rs:120:9:\nindex out of bounds: the len is 3 but the index is 7\nstack backtrace:";
         let b = "--- taiko.rs crash at unix 2, build abc (0.1.0, windows)\nthread render: panicked at src/render.rs:120:9:\nindex out of bounds: the len is 4 but the index is 12\n";
         assert_eq!(signature(a), signature(b));
-        assert_eq!(signature(a), "src/render.rs:120:9: index out of bounds: the len is N but the index is N");
+        assert_eq!(
+            signature(a),
+            "src/render.rs:120:9: index out of bounds: the len is N but the index is N"
+        );
         let native = "--- taiko.rs crash at unix 3, build abc (0.1.0, windows)\naccess violation 0xC0000005 at igvk64.dll+0x13b702\nreading 0x0\n";
-        assert_eq!(signature(native), "access violation 0xC0000005 at igvk64.dll");
+        assert_eq!(
+            signature(native),
+            "access violation 0xC0000005 at igvk64.dll"
+        );
     }
 }

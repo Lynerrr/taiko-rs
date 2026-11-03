@@ -3,15 +3,19 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
 
 /// Mirrors want clients to identify themselves.
-const USER_AGENT: &str = concat!("taiko-rs/", env!("CARGO_PKG_VERSION"), " (+https://github.com/Lynerrr/taiko-rs)");
+const USER_AGENT: &str = concat!(
+    "taiko-rs/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/Lynerrr/taiko-rs)"
+);
 
 struct Mirror {
     name: &'static str,
@@ -26,8 +30,22 @@ struct Mirror {
 /// In the order they're tried. osu.direct first: it can sort searches on its side, and
 /// catboy.best rate-limits downloads per IP (425) after a handful of sets.
 const MIRRORS: [Mirror; 2] = [
-    Mirror { name: "osu.direct", search: "https://osu.direct/api/v2/search", set: "https://osu.direct/api/v2/s/", query_key: "query", amount_key: "amount", download: "https://osu.direct/api/d/" },
-    Mirror { name: "catboy.best", search: "https://catboy.best/api/v2/search", set: "https://catboy.best/api/v2/s/", query_key: "q", amount_key: "limit", download: "https://catboy.best/d/" },
+    Mirror {
+        name: "osu.direct",
+        search: "https://osu.direct/api/v2/search",
+        set: "https://osu.direct/api/v2/s/",
+        query_key: "query",
+        amount_key: "amount",
+        download: "https://osu.direct/api/d/",
+    },
+    Mirror {
+        name: "catboy.best",
+        search: "https://catboy.best/api/v2/search",
+        set: "https://catboy.best/api/v2/s/",
+        query_key: "q",
+        amount_key: "limit",
+        download: "https://catboy.best/d/",
+    },
 ];
 
 /// Search categories, like the osu! website's (beatmap status filters).
@@ -173,8 +191,21 @@ impl SetInfo {
     /// Folder name like osu! uses: "123456 Artist - Title", made safe for any filesystem.
     pub fn folder_name(&self) -> String {
         let raw = format!("{} {} - {}", self.id, self.artist, self.title);
-        let clean: String = raw.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
-        clean.trim_end_matches(['.', ' ']).chars().take(120).collect()
+        let clean: String = raw
+            .chars()
+            .map(|c| {
+                if c.is_control() || r#"<>:"/\|?*"#.contains(c) {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect();
+        clean
+            .trim_end_matches(['.', ' '])
+            .chars()
+            .take(120)
+            .collect()
     }
 }
 
@@ -216,13 +247,17 @@ struct ApiMap {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).build().into()
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(20)))
+        .build()
+        .into()
 }
 
 /// Parses a mirror's search response (osu! API v2 beatmapset objects): the sets with taiko
 /// difficulties, and how many sets the reply had (a full page means there may be more).
 fn parse_sets(json: &str) -> Result<(Vec<SetInfo>, usize), String> {
-    let sets: Vec<ApiSet> = serde_json::from_str(json).map_err(|e| format!("unexpected reply: {e}"))?;
+    let sets: Vec<ApiSet> =
+        serde_json::from_str(json).map_err(|e| format!("unexpected reply: {e}"))?;
     let count = sets.len();
     let sets = sets
         .into_iter()
@@ -231,7 +266,11 @@ fn parse_sets(json: &str) -> Result<(Vec<SetInfo>, usize), String> {
                 .beatmaps
                 .iter()
                 .filter(|b| b.mode_int == Some(1) || b.mode.as_deref() == Some("taiko"))
-                .map(|b| Diff { id: b.id, version: b.version.clone(), stars: b.difficulty_rating })
+                .map(|b| Diff {
+                    id: b.id,
+                    version: b.version.clone(),
+                    stars: b.difficulty_rating,
+                })
                 .collect();
             diffs.sort_by(|a, b| a.stars.total_cmp(&b.stars));
             (!diffs.is_empty()).then_some(SetInfo {
@@ -255,7 +294,13 @@ fn parse_sets(json: &str) -> Result<(Vec<SetInfo>, usize), String> {
 pub const PAGE: usize = 50;
 
 /// Page `page` of one status (or any) from the first mirror that answers.
-fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Option<(&str, bool)>, page: usize) -> Result<(Vec<SetInfo>, usize), String> {
+fn search_status(
+    agent: &ureq::Agent,
+    query: &str,
+    status: Option<i32>,
+    sort: Option<(&str, bool)>,
+    page: usize,
+) -> Result<(Vec<SetInfo>, usize), String> {
     let mut errors = Vec::new();
     for m in &MIRRORS {
         let mut req = agent
@@ -269,12 +314,21 @@ fn search_status(agent: &ureq::Agent, query: &str, status: Option<i32>, sort: Op
             req = req.query("status", st.to_string());
         }
         if let (Some((key, desc)), "osu.direct") = (sort, m.name) {
-            req = req.query("sort", format!("{key}:{}", if desc { "desc" } else { "asc" }));
+            req = req.query(
+                "sort",
+                format!("{key}:{}", if desc { "desc" } else { "asc" }),
+            );
         }
         let result = req
             .call()
             .map_err(|e| e.to_string())
-            .and_then(|mut r| r.body_mut().with_config().limit(64 << 20).read_to_string().map_err(|e| e.to_string()))
+            .and_then(|mut r| {
+                r.body_mut()
+                    .with_config()
+                    .limit(64 << 20)
+                    .read_to_string()
+                    .map_err(|e| e.to_string())
+            })
             .and_then(|body| parse_sets(&body));
         match result {
             Ok(sets) => return Ok(sets),
@@ -291,10 +345,16 @@ pub fn set_status(set: u32) -> Result<String, String> {
     struct Set {
         status: String,
     }
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(8))).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(8)))
+        .build()
+        .into();
     let mut errors = Vec::new();
     let mut not_found = 0;
-    for base in ["https://osu.direct/api/v2/s/", "https://catboy.best/api/v2/s/"] {
+    for base in [
+        "https://osu.direct/api/v2/s/",
+        "https://catboy.best/api/v2/s/",
+    ] {
         let result = agent
             .get(&format!("{base}{set}"))
             .header("User-Agent", USER_AGENT)
@@ -319,15 +379,38 @@ pub fn set_status(set: u32) -> Result<String, String> {
 /// Searches the mirrors for taiko sets matching `query` in `category`, ordered by `sort`
 /// (descending if `desc`): page `page` (from 0) of the results. Categories spanning several
 /// statuses are fetched per status and merged. Also says whether there may be another page.
-pub fn search(query: &str, category: Category, sort: SortKey, desc: bool, page: usize) -> Result<(Vec<SetInfo>, bool), String> {
+pub fn search(
+    query: &str,
+    category: Category,
+    sort: SortKey,
+    desc: bool,
+    page: usize,
+) -> Result<(Vec<SetInfo>, bool), String> {
     let agent = agent();
     // With no text, "relevance" means newest ranked first, as on the website.
-    let (sort, desc) = if sort == SortKey::Relevance && query.trim().is_empty() { (SortKey::Ranked, true) } else { (sort, desc) };
+    let (sort, desc) = if sort == SortKey::Relevance && query.trim().is_empty() {
+        (SortKey::Ranked, true)
+    } else {
+        (sort, desc)
+    };
     let server = sort.server().map(|k| (k, desc));
-    let statuses: Vec<Option<i32>> = if category.statuses().is_empty() { vec![None] } else { category.statuses().iter().map(|&s| Some(s)).collect() };
+    let statuses: Vec<Option<i32>> = if category.statuses().is_empty() {
+        vec![None]
+    } else {
+        category.statuses().iter().map(|&s| Some(s)).collect()
+    };
     let results: Vec<Result<(Vec<SetInfo>, usize), String>> = std::thread::scope(|s| {
-        let handles: Vec<_> = statuses.iter().map(|&st| { let agent = &agent; s.spawn(move || search_status(agent, query, st, server, page)) }).collect();
-        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("search failed".into()))).collect()
+        let handles: Vec<_> = statuses
+            .iter()
+            .map(|&st| {
+                let agent = &agent;
+                s.spawn(move || search_status(agent, query, st, server, page))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|_| Err("search failed".into())))
+            .collect()
     });
     let mut errors = Vec::new();
     let mut sets: Vec<SetInfo> = Vec::new();
@@ -405,7 +488,14 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     std::thread::spawn(move || {
         let _ = tx.send(fetch(id, &name, &songs, &d, &t));
     });
-    Job { set, done, total, rx, maps: Vec::new(), update: false }
+    Job {
+        set,
+        done,
+        total,
+        rx,
+        maps: Vec::new(),
+        update: false,
+    }
 }
 
 /// Downloads set `set` again into its folder `folder`, for the newer version osu! has. The
@@ -420,18 +510,33 @@ pub fn start_update(set: SetInfo, folder: PathBuf, replaced: Vec<PathBuf>) -> Jo
     std::thread::spawn(move || {
         let result = (|| {
             let songs = folder.parent().ok_or("no Songs folder")?;
-            let name = folder.file_name().ok_or("no set folder")?.to_string_lossy().into_owned();
+            let name = folder
+                .file_name()
+                .ok_or("no set folder")?
+                .to_string_lossy()
+                .into_owned();
             replacing(&replaced, || fetch(id, &name, songs, &d, &t))
         })();
         let _ = tx.send(result);
     });
-    Job { set, done, total, rx, maps: Vec::new(), update: true }
+    Job {
+        set,
+        done,
+        total,
+        rx,
+        maps: Vec::new(),
+        update: true,
+    }
 }
 
 /// Runs `get` (which brings the new files) with `old` set aside, not deleted, until it worked;
 /// if it fails they're put back.
 fn replacing<T>(old: &[PathBuf], get: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
-    let aside: Vec<(&PathBuf, PathBuf)> = old.iter().map(|p| (p, p.with_extension("osu.old"))).filter(|(p, o)| std::fs::rename(p, o).is_ok()).collect();
+    let aside: Vec<(&PathBuf, PathBuf)> = old
+        .iter()
+        .map(|p| (p, p.with_extension("osu.old")))
+        .filter(|(p, o)| std::fs::rename(p, o).is_ok())
+        .collect();
     let result = get();
     for (p, o) in &aside {
         if result.is_ok() {
@@ -459,12 +564,28 @@ struct ApiChecksum {
 /// The MD5 of each difficulty of set `id` as osu! has it now, by beatmap ID (from the first
 /// mirror that answers).
 pub fn set_checksums(id: u32) -> Result<std::collections::HashMap<u32, String>, String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .into();
     let mut errors = Vec::new();
     for m in &MIRRORS {
-        let reply = agent.get(&format!("{}{id}", m.set)).header("User-Agent", USER_AGENT).call().map_err(|e| e.to_string()).and_then(|mut r| r.body_mut().read_to_string().map_err(|e| e.to_string()));
-        match reply.and_then(|json| serde_json::from_str::<ApiSetMaps>(&json).map_err(|e| format!("unexpected reply: {e}"))) {
-            Ok(set) if !set.beatmaps.is_empty() => return Ok(set.beatmaps.into_iter().filter_map(|b| Some((b.id, b.checksum?.to_ascii_lowercase()))).collect()),
+        let reply = agent
+            .get(&format!("{}{id}", m.set))
+            .header("User-Agent", USER_AGENT)
+            .call()
+            .map_err(|e| e.to_string())
+            .and_then(|mut r| r.body_mut().read_to_string().map_err(|e| e.to_string()));
+        match reply.and_then(|json| {
+            serde_json::from_str::<ApiSetMaps>(&json).map_err(|e| format!("unexpected reply: {e}"))
+        }) {
+            Ok(set) if !set.beatmaps.is_empty() => {
+                return Ok(set
+                    .beatmaps
+                    .into_iter()
+                    .filter_map(|b| Some((b.id, b.checksum?.to_ascii_lowercase())))
+                    .collect());
+            }
             Ok(_) => errors.push(format!("{}: no such set", m.name)),
             Err(e) => errors.push(format!("{}: {e}", m.name)),
         }
@@ -475,8 +596,13 @@ pub fn set_checksums(id: u32) -> Result<std::collections::HashMap<u32, String>, 
 /// Whether osu! has a newer version of a set than the difficulties here (beatmap ID and the
 /// `.osu`'s MD5 each): one of them changed or is gone from the set. Difficulties without an ID
 /// (home-made) don't count.
-pub fn outdated(local: &[(Option<u32>, String)], online: &std::collections::HashMap<u32, String>) -> bool {
-    local.iter().any(|(id, md5)| id.is_some_and(|id| online.get(&id) != Some(md5)))
+pub fn outdated(
+    local: &[(Option<u32>, String)],
+    online: &std::collections::HashMap<u32, String>,
+) -> bool {
+    local
+        .iter()
+        .any(|(id, md5)| id.is_some_and(|id| online.get(&id) != Some(md5)))
 }
 
 /// Whether a `.osu` with this MD5 is one of the set's on osu! (any of its difficulties; an
@@ -488,10 +614,13 @@ pub fn is_osus(md5: &str, online: &std::collections::HashMap<u32, String>) -> bo
 /// MD5 (RFC 1321) of `data` in lowercase hex: how osu! tells versions of a difficulty apart.
 pub fn md5_hex(data: &[u8]) -> String {
     const S: [u32; 64] = [
-        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15,
-        21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
     ];
-    let k: Vec<u32> = (0..64).map(|i| ((i as f64 + 1.0).sin().abs() * 4_294_967_296.0) as u32).collect();
+    let k: Vec<u32> = (0..64)
+        .map(|i| ((i as f64 + 1.0).sin().abs() * 4_294_967_296.0) as u32)
+        .collect();
     let mut msg = data.to_vec();
     msg.push(0x80);
     while msg.len() % 64 != 56 {
@@ -500,7 +629,10 @@ pub fn md5_hex(data: &[u8]) -> String {
     msg.extend_from_slice(&((data.len() as u64).wrapping_mul(8)).to_le_bytes());
     let mut h: [u32; 4] = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
     for chunk in msg.chunks(64) {
-        let m: Vec<u32> = chunk.chunks(4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]])).collect();
+        let m: Vec<u32> = chunk
+            .chunks(4)
+            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .collect();
         let [mut a, mut b, mut c, mut d] = h;
         for i in 0..64 {
             let (f, g) = match i / 16 {
@@ -519,14 +651,23 @@ pub fn md5_hex(data: &[u8]) -> String {
             *x = x.wrapping_add(y);
         }
     }
-    h.iter().flat_map(|x| x.to_le_bytes()).map(|b| format!("{b:02x}")).collect()
+    h.iter()
+        .flat_map(|x| x.to_le_bytes())
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Passes over the mirrors before a download gives up: osu.direct often answers 503 for a
 /// moment and catboy.best rate-limits (425), and the next try usually works.
 const ROUNDS: u64 = 3;
 
-fn fetch(id: u32, name: &str, songs: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<PathBuf, String> {
+fn fetch(
+    id: u32,
+    name: &str,
+    songs: &Path,
+    done: &AtomicU64,
+    total: &AtomicU64,
+) -> Result<PathBuf, String> {
     std::fs::create_dir_all(songs).map_err(|e| format!("{}: {e}", songs.display()))?;
     let dest = songs.join(name);
     let archive = songs.join(format!("{name}.osz.part"));
@@ -563,24 +704,51 @@ fn fetch(id: u32, name: &str, songs: &Path, done: &AtomicU64, total: &AtomicU64)
             }
         }
     }
-    Err(MIRRORS.iter().zip(errors).filter_map(|(m, e)| Some(format!("{}: {}", m.name, e?))).collect::<Vec<_>>().join("; "))
+    Err(MIRRORS
+        .iter()
+        .zip(errors)
+        .filter_map(|(m, e)| Some(format!("{}: {}", m.name, e?)))
+        .collect::<Vec<_>>()
+        .join("; "))
 }
 
 /// Errors say whether trying again later could help (not for a set the mirror doesn't have).
-fn download_to(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<(), (String, bool)> {
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_connect(Some(Duration::from_secs(15))).build().into();
-    let mut response = agent.get(url).header("User-Agent", USER_AGENT).call().map_err(|e| match e {
-        ureq::Error::StatusCode(404) => ("doesn't have this set".to_string(), false),
-        e => (e.to_string(), true),
-    })?;
+fn download_to(
+    url: &str,
+    path: &Path,
+    done: &AtomicU64,
+    total: &AtomicU64,
+) -> Result<(), (String, bool)> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(15)))
+        .build()
+        .into();
+    let mut response = agent
+        .get(url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::StatusCode(404) => ("doesn't have this set".to_string(), false),
+            e => (e.to_string(), true),
+        })?;
     let body = response.body_mut();
     if let Some(len) = body.content_length() {
         total.store(len, Ordering::Relaxed);
     }
     // A mirror that has no such set answers with a small JSON error instead of an archive.
-    if body.mime_type().is_some_and(|m| m.contains("json") || m.contains("html")) {
+    if body
+        .mime_type()
+        .is_some_and(|m| m.contains("json") || m.contains("html"))
+    {
         let text = body.read_to_string().unwrap_or_default();
-        return Err((if text.is_empty() { "no archive".into() } else { text.chars().take(120).collect() }, false));
+        return Err((
+            if text.is_empty() {
+                "no archive".into()
+            } else {
+                text.chars().take(120).collect()
+            },
+            false,
+        ));
     }
     let mut reader = body.with_config().limit(512 << 20).reader();
     let mut file = std::fs::File::create(path).map_err(|e| (e.to_string(), false))?;
@@ -591,7 +759,8 @@ fn download_to(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> R
         if n == 0 {
             break;
         }
-        file.write_all(&buf[..n]).map_err(|e| (e.to_string(), false))?;
+        file.write_all(&buf[..n])
+            .map_err(|e| (e.to_string(), false))?;
         done.fetch_add(n as u64, Ordering::Relaxed);
     }
     file.flush().map_err(|e| (e.to_string(), false))?;
@@ -620,14 +789,23 @@ pub fn pack_folder(dir: &Path) -> Result<Vec<u8>, String> {
             }
         }
     }
-    let size: u64 = files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
+    let size: u64 = files
+        .iter()
+        .filter_map(|f| std::fs::metadata(f).ok())
+        .map(|m| m.len())
+        .sum();
     if size > LIMIT {
         return Err(format!("the set is too big to send ({} MB)", size >> 20));
     }
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::with_capacity(size as usize + 4096)));
-    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::with_capacity(
+        size as usize + 4096,
+    )));
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for f in files {
-        let Ok(rel) = f.strip_prefix(dir) else { continue };
+        let Ok(rel) = f.strip_prefix(dir) else {
+            continue;
+        };
         let name = rel.to_string_lossy().replace('\\', "/");
         let bytes = std::fs::read(&f).map_err(|e| e.to_string())?;
         zip.start_file(name, options).map_err(|e| e.to_string())?;
@@ -641,7 +819,11 @@ const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 pub fn base64_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
         for i in 0..4 {
             if i <= chunk.len() {
@@ -679,14 +861,38 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
 
 /// A folder name from another machine, made safe to create here.
 pub fn safe_folder_name(name: &str) -> String {
-    let clean: String = name.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
-    let clean = clean.trim().trim_matches('.').chars().take(120).collect::<String>();
-    if clean.is_empty() { "map from host".into() } else { clean }
+    let clean: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || r#"<>:"/\|?*"#.contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let clean = clean
+        .trim()
+        .trim_matches('.')
+        .chars()
+        .take(120)
+        .collect::<String>();
+    if clean.is_empty() {
+        "map from host".into()
+    } else {
+        clean
+    }
 }
 
 /// Receives a map set from the multiplayer host: feed the parts (None aborts); the job
 /// reports the unpacked folder like a mirror download.
-pub fn receive(set: SetInfo, name: String, total: u64, map: u64, songs: PathBuf) -> (Job, Sender<Option<Vec<u8>>>) {
+pub fn receive(
+    set: SetInfo,
+    name: String,
+    total: u64,
+    map: u64,
+    songs: PathBuf,
+) -> (Job, Sender<Option<Vec<u8>>>) {
     let (feed, parts) = mpsc::channel::<Option<Vec<u8>>>();
     let (tx, rx) = mpsc::channel();
     let done = Arc::new(AtomicU64::new(0));
@@ -724,7 +930,17 @@ pub fn receive(set: SetInfo, name: String, total: u64, map: u64, songs: PathBuf)
         })();
         let _ = tx.send(result);
     });
-    (Job { set, done, total: total_bytes, rx, maps: Vec::new(), update: false }, feed)
+    (
+        Job {
+            set,
+            done,
+            total: total_bytes,
+            rx,
+            maps: Vec::new(),
+            update: false,
+        },
+        feed,
+    )
 }
 
 /// Imports an `.osz` that is already on disk (dropped on the window, opened with the game on
@@ -732,11 +948,21 @@ pub fn receive(set: SetInfo, name: String, total: u64, map: u64, songs: PathBuf)
 /// The archive is deleted once unpacked; if that fails it stays, unless it's `temporary` (a copy,
 /// not the player's own file).
 /// `maps`: the content hashes of its difficulties ([`archive_maps`]).
-pub fn import(archive: PathBuf, name: &str, songs: PathBuf, temporary: bool, maps: Vec<u64>) -> Job {
+pub fn import(
+    archive: PathBuf,
+    name: &str,
+    songs: PathBuf,
+    temporary: bool,
+    maps: Vec<u64>,
+) -> Job {
     let name = safe_folder_name(name);
     let set = SetInfo {
         // osu! names its exports "<set id> <artist> - <title>.osz".
-        id: name.split(' ').next().and_then(|n| n.parse().ok()).unwrap_or(0),
+        id: name
+            .split(' ')
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0),
         artist: String::new(),
         title: name.clone(),
         creator: String::new(),
@@ -749,23 +975,36 @@ pub fn import(archive: PathBuf, name: &str, songs: PathBuf, temporary: bool, map
     };
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = std::fs::create_dir_all(&songs).map_err(|e| e.to_string()).and_then(|_| {
-            let dest = songs.join(&name);
-            extract(&archive, &dest).map(|_| dest)
-        });
+        let result = std::fs::create_dir_all(&songs)
+            .map_err(|e| e.to_string())
+            .and_then(|_| {
+                let dest = songs.join(&name);
+                extract(&archive, &dest).map(|_| dest)
+            });
         if temporary || result.is_ok() {
             let _ = std::fs::remove_file(&archive);
         }
         let _ = tx.send(result);
     });
-    Job { set, done: Arc::default(), total: Arc::default(), rx, maps, update: false }
+    Job {
+        set,
+        done: Arc::default(),
+        total: Arc::default(),
+        rx,
+        maps,
+        update: false,
+    }
 }
 
 /// The difficulties in an `.osz`: each `.osu`'s header and content hash (the same hash as
 /// `Entry::hash`), to tell whether the set is already in the list before unpacking it.
 /// Whether the archive has the map with this content hash.
 fn holds_map(archive: &Path, map: u64) -> Result<(), String> {
-    if archive_maps(archive)?.iter().any(|(_, hash)| *hash == map) { Ok(()) } else { Err("that isn't the lobby's map".into()) }
+    if archive_maps(archive)?.iter().any(|(_, hash)| *hash == map) {
+        Ok(())
+    } else {
+        Err("that isn't the lobby's map".into())
+    }
 }
 
 /// `name` in `songs`, or with a number if that's taken.
@@ -774,7 +1013,10 @@ fn free_folder(songs: &Path, name: &str) -> PathBuf {
     if !dest.exists() {
         return dest;
     }
-    (2..).map(|n| songs.join(format!("{name} ({n})"))).find(|d| !d.exists()).unwrap_or(dest)
+    (2..)
+        .map(|n| songs.join(format!("{name} ({n})")))
+        .find(|d| !d.exists())
+        .unwrap_or(dest)
 }
 
 /// Where `dest` is unpacked to first. Added to the name, not replacing its end: a set called
@@ -817,7 +1059,10 @@ fn unpack_within(archive: &Path, to: &Path, limit: u64) -> Result<(), String> {
         if entry.is_symlink() {
             continue;
         }
-        let path = entry.enclosed_name().map(|p| to.join(p)).ok_or("the archive has a bad file path")?;
+        let path = entry
+            .enclosed_name()
+            .map(|p| to.join(p))
+            .ok_or("the archive has a bad file path")?;
         if entry.is_dir() {
             std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
             continue;
@@ -827,7 +1072,8 @@ fn unpack_within(archive: &Path, to: &Path, limit: u64) -> Result<(), String> {
         }
         let mut out = std::fs::File::create(&path).map_err(|e| e.to_string())?;
         // One byte past what's left tells a file that fits exactly from one that doesn't.
-        let written = std::io::copy(&mut entry.by_ref().take(left + 1), &mut out).map_err(|e| e.to_string())?;
+        let written = std::io::copy(&mut entry.by_ref().take(left + 1), &mut out)
+            .map_err(|e| e.to_string())?;
         if written > left {
             return Err("the archive unpacks to too much".into());
         }
@@ -842,12 +1088,23 @@ pub fn archive_maps(archive: &Path) -> Result<Vec<(crate::beatmap::Meta, u64)>, 
     let mut maps = Vec::new();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
-        if !entry.is_file() || !entry.name().is_ok_and(|n| n.to_ascii_lowercase().ends_with(".osu")) {
+        if !entry.is_file()
+            || !entry
+                .name()
+                .is_ok_and(|n| n.to_ascii_lowercase().ends_with(".osu"))
+        {
             continue;
         }
         let mut bytes = Vec::new();
-        entry.by_ref().take(16 << 20).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-        maps.push((crate::beatmap::read_meta(&String::from_utf8_lossy(&bytes)), crate::net::map_hash(&bytes)));
+        entry
+            .by_ref()
+            .take(16 << 20)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        maps.push((
+            crate::beatmap::read_meta(&String::from_utf8_lossy(&bytes)),
+            crate::net::map_hash(&bytes),
+        ));
     }
     Ok(maps)
 }
@@ -888,14 +1145,29 @@ fn merge(from: &Path, into: &Path) -> std::io::Result<()> {
 /// set's ~10 s music clip (from its preview point) and its cover, cached per set. Returns the
 /// `.osu` path; the clip and cover sit next to it.
 pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
-    let dir = crate::config::cache_dir().unwrap_or_else(|| std::env::temp_dir().join("taiko-rs")).join("previews").join(set.to_string());
+    let dir = crate::config::cache_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
+        .join("previews")
+        .join(set.to_string());
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // Short timeout: a throttled mirror shouldn't hold the preview up.
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(8))).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(8)))
+        .build()
+        .into();
     let get = |url: &str| -> Result<(Vec<u8>, String), String> {
-        let mut r = agent.get(url).header("User-Agent", USER_AGENT).call().map_err(|e| e.to_string())?;
+        let mut r = agent
+            .get(url)
+            .header("User-Agent", USER_AGENT)
+            .call()
+            .map_err(|e| e.to_string())?;
         let mime = r.body().mime_type().unwrap_or("").to_string();
-        let bytes = r.body_mut().with_config().limit(32 << 20).read_to_vec().map_err(|e| e.to_string())?;
+        let bytes = r
+            .body_mut()
+            .with_config()
+            .limit(32 << 20)
+            .read_to_vec()
+            .map_err(|e| e.to_string())?;
         Ok((bytes, mime))
     };
     let osu = dir.join(format!("{beatmap}.osu"));
@@ -904,14 +1176,20 @@ pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
         // (catboy.best answers 425 once it rate-limits us, which browsing quickly did).
         let sources = [
             ("osu.ppy.sh", format!("https://osu.ppy.sh/osu/{beatmap}")),
-            ("osu.direct", format!("https://osu.direct/api/osu/{beatmap}")),
+            (
+                "osu.direct",
+                format!("https://osu.direct/api/osu/{beatmap}"),
+            ),
             ("catboy.best", format!("https://catboy.best/osu/{beatmap}")),
         ];
         let mut errors = Vec::new();
         let mut saved = false;
         for (name, url) in &sources {
             match get(url) {
-                Ok((bytes, _)) if bytes.starts_with(b"osu file format") || bytes.windows(15).take(64).any(|w| w == b"osu file format") => {
+                Ok((bytes, _))
+                    if bytes.starts_with(b"osu file format")
+                        || bytes.windows(15).take(64).any(|w| w == b"osu file format") =>
+                {
                     std::fs::write(&osu, bytes).map_err(|e| e.to_string())?;
                     saved = true;
                     break;
@@ -924,16 +1202,29 @@ pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
             return Err(format!("difficulty: {}", errors.join("; ")));
         }
     }
-    let have_clip = std::fs::read_dir(&dir).map(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().starts_with(CLIP_PREFIX))).unwrap_or(false);
+    let have_clip = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with(CLIP_PREFIX))
+        })
+        .unwrap_or(false);
     if !have_clip {
-        let (bytes, mime) = get(&format!("https://b.ppy.sh/preview/{set}.mp3")).map_err(|e| format!("music: {e}"))?;
-        let ext = if mime.contains("ogg") || bytes.starts_with(b"OggS") { "ogg" } else { "mp3" };
-        std::fs::write(dir.join(format!("{CLIP_PREFIX}.{ext}")), bytes).map_err(|e| e.to_string())?;
+        let (bytes, mime) = get(&format!("https://b.ppy.sh/preview/{set}.mp3"))
+            .map_err(|e| format!("music: {e}"))?;
+        let ext = if mime.contains("ogg") || bytes.starts_with(b"OggS") {
+            "ogg"
+        } else {
+            "mp3"
+        };
+        std::fs::write(dir.join(format!("{CLIP_PREFIX}.{ext}")), bytes)
+            .map_err(|e| e.to_string())?;
     }
     let cover = dir.join("cover.jpg");
     if !cover.is_file() {
         // Optional: the preview works without a background.
-        if let Ok((bytes, _)) = get(&format!("https://assets.ppy.sh/beatmaps/{set}/covers/cover.jpg")) {
+        if let Ok((bytes, _)) = get(&format!(
+            "https://assets.ppy.sh/beatmaps/{set}/covers/cover.jpg"
+        )) {
             let _ = std::fs::write(&cover, bytes);
         }
     }
@@ -942,7 +1233,11 @@ pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
 
 /// The clip file in a preview folder.
 pub fn clip_in(dir: &Path) -> Option<String> {
-    std::fs::read_dir(dir).ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).find(|n| n.starts_with(CLIP_PREFIX))
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with(CLIP_PREFIX))
 }
 
 /// The beatmap set ID a library folder or map belongs to: "123456 Artist - Title" folders, as
@@ -950,7 +1245,9 @@ pub fn clip_in(dir: &Path) -> Option<String> {
 pub fn set_id_of_folder(path: &Path) -> Option<u32> {
     let name = path.file_name()?.to_str()?;
     let digits: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
-    (!digits.is_empty() && name[digits.len()..].starts_with(' ')).then(|| digits.parse().ok()).flatten()
+    (!digits.is_empty() && name[digits.len()..].starts_with(' '))
+        .then(|| digits.parse().ok())
+        .flatten()
 }
 
 #[cfg(test)]
@@ -964,7 +1261,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let archive = dir.join("a.osz");
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         for (name, bytes) in entries {
             zip.start_file(*name, stored).unwrap();
             zip.write_all(bytes).unwrap();
@@ -975,7 +1273,10 @@ mod tests {
 
     #[test]
     fn unpacking_stops_at_the_limit_and_leaves_nothing() {
-        let (dir, archive) = a_zip("limit", &[("a/map.osu", &[b'x'; 600]), ("b.bin", &[b'y'; 600])]);
+        let (dir, archive) = a_zip(
+            "limit",
+            &[("a/map.osu", &[b'x'; 600]), ("b.bin", &[b'y'; 600])],
+        );
         let to = dir.join("set");
         assert!(unpack_within(&archive, &to, 1200).is_ok());
         assert_eq!(std::fs::read(to.join("a/map.osu")).unwrap().len(), 600);
@@ -995,7 +1296,10 @@ mod tests {
 
     #[test]
     fn what_the_host_sends_leaves_existing_sets_alone() {
-        let (dir, archive) = a_zip("host", &[("map [Oni].osu", b"the lobby map"), ("run-me.bat", b"x")]);
+        let (dir, archive) = a_zip(
+            "host",
+            &[("map [Oni].osu", b"the lobby map"), ("run-me.bat", b"x")],
+        );
         let songs = dir.join("Songs");
         let theirs = songs.join("999 Someone - Set");
         std::fs::create_dir_all(&theirs).unwrap();
@@ -1006,13 +1310,19 @@ mod tests {
         let dest = free_folder(&songs, "999 Someone - Set");
         extract(&archive, &dest).unwrap();
         assert_eq!(dest, songs.join("999 Someone - Set (2)"));
-        assert_eq!(std::fs::read(theirs.join("map [Oni].osu")).unwrap(), b"mine");
+        assert_eq!(
+            std::fs::read(theirs.join("map [Oni].osu")).unwrap(),
+            b"mine"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn dotted_names_keep_their_own_partial_folder() {
-        assert_ne!(partial_of(Path::new("Songs/A.B")), partial_of(Path::new("Songs/A.C")));
+        assert_ne!(
+            partial_of(Path::new("Songs/A.B")),
+            partial_of(Path::new("Songs/A.C"))
+        );
     }
 
     #[test]
@@ -1025,7 +1335,11 @@ mod tests {
         let (sets, count) = parse_sets(json).unwrap();
         assert_eq!(count, 2, "the reply's own count, for paging");
         assert_eq!(sets.len(), 1, "sets without taiko difficulties are dropped");
-        let names: Vec<(&str, f32)> = sets[0].diffs.iter().map(|d| (d.version.as_str(), d.stars)).collect();
+        let names: Vec<(&str, f32)> = sets[0]
+            .diffs
+            .iter()
+            .map(|d| (d.version.as_str(), d.stars))
+            .collect();
         assert_eq!(names, vec![("Kantan", 1.2), ("Oni", 4.5)]);
         assert_eq!(sets[0].folder_name(), "7 A - T_ x_");
         assert_eq!(set_id_of_folder(Path::new("/s/7 A - T_ x_")), Some(7));
@@ -1036,18 +1350,37 @@ mod tests {
     fn md5_matches_the_rfc_examples() {
         assert_eq!(md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
         assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
-        assert_eq!(md5_hex(b"message digest"), "f96b697d7cb7938d525a2f31aaf161d0");
-        assert_eq!(md5_hex(b"12345678901234567890123456789012345678901234567890123456789012345678901234567890"), "57edf4a22be3c955ac49da2e2107b67a");
+        assert_eq!(
+            md5_hex(b"message digest"),
+            "f96b697d7cb7938d525a2f31aaf161d0"
+        );
+        assert_eq!(
+            md5_hex(
+                b"12345678901234567890123456789012345678901234567890123456789012345678901234567890"
+            ),
+            "57edf4a22be3c955ac49da2e2107b67a"
+        );
     }
 
     #[test]
     fn a_set_is_outdated_when_a_difficulty_changed_or_left_it() {
-        let online: std::collections::HashMap<u32, String> = [(1, "aa".to_string()), (2, "bb".to_string())].into();
-        let here = |v: &[(Option<u32>, &str)]| v.iter().map(|(id, m)| (*id, m.to_string())).collect::<Vec<_>>();
-        assert!(!outdated(&here(&[(Some(1), "aa"), (Some(2), "bb"), (None, "home-made")]), &online));
+        let online: std::collections::HashMap<u32, String> =
+            [(1, "aa".to_string()), (2, "bb".to_string())].into();
+        let here = |v: &[(Option<u32>, &str)]| {
+            v.iter()
+                .map(|(id, m)| (*id, m.to_string()))
+                .collect::<Vec<_>>()
+        };
+        assert!(!outdated(
+            &here(&[(Some(1), "aa"), (Some(2), "bb"), (None, "home-made")]),
+            &online
+        ));
         // A new difficulty online alone doesn't make the ones here outdated.
         assert!(!outdated(&here(&[(Some(1), "aa")]), &online));
-        assert!(outdated(&here(&[(Some(1), "aa"), (Some(2), "old")]), &online));
+        assert!(outdated(
+            &here(&[(Some(1), "aa"), (Some(2), "old")]),
+            &online
+        ));
         assert!(outdated(&here(&[(Some(3), "cc")]), &online));
     }
 
@@ -1055,7 +1388,10 @@ mod tests {
     fn an_update_replaces_the_old_difficulties_or_puts_them_back_if_it_fails() {
         let dir = std::env::temp_dir().join(format!("taiko-rs-update-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let (kept, renamed) = (dir.join("A - T [Oni].osu"), dir.join("A - T [Muzukashii].osu"));
+        let (kept, renamed) = (
+            dir.join("A - T [Oni].osu"),
+            dir.join("A - T [Muzukashii].osu"),
+        );
         let own = dir.join("A - T [mine].osu");
         for p in [&kept, &renamed, &own] {
             std::fs::write(p, "old").unwrap();
@@ -1066,11 +1402,18 @@ mod tests {
             assert_eq!(std::fs::read_to_string(p).unwrap(), "old");
         }
         // The new version keeps one difficulty's name and drops the other's.
-        replacing(&old, || std::fs::write(&kept, "new").map_err(|e| e.to_string())).unwrap();
+        replacing(&old, || {
+            std::fs::write(&kept, "new").map_err(|e| e.to_string())
+        })
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "new");
         assert!(!renamed.exists());
         assert_eq!(std::fs::read_to_string(&own).unwrap(), "old");
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "nothing set aside is left behind");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            2,
+            "nothing set aside is left behind"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1092,7 +1435,8 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let archive = root.join("set.osz");
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("map [Oni].osu", stored).unwrap();
         zip.write_all(b"new").unwrap();
         zip.finish().unwrap();
@@ -1102,10 +1446,16 @@ mod tests {
         std::fs::write(dest.join("map [My Inner Oni].osu"), b"mine").unwrap();
         extract(&archive, &dest).unwrap();
         assert_eq!(std::fs::read(dest.join("map [Oni].osu")).unwrap(), b"new");
-        assert_eq!(std::fs::read(dest.join("map [My Inner Oni].osu")).unwrap(), b"mine");
+        assert_eq!(
+            std::fs::read(dest.join("map [My Inner Oni].osu")).unwrap(),
+            b"mine"
+        );
         assert!(!dest.with_extension("partial").exists());
         let maps = archive_maps(&archive).unwrap();
-        assert_eq!(maps.iter().map(|m| m.1).collect::<Vec<_>>(), [crate::net::map_hash(b"new")]);
+        assert_eq!(
+            maps.iter().map(|m| m.1).collect::<Vec<_>>(),
+            [crate::net::map_hash(b"new")]
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1119,19 +1469,36 @@ mod tests {
 
         let good = root.join("good.osz");
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&good).unwrap());
-        zip.start_file("map [Oni].osu", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.start_file("map [Oni].osu", zip::write::SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"map").unwrap();
         zip.finish().unwrap();
-        let unpacked = import(good.clone(), "good", songs.clone(), false, Vec::new()).rx.recv().unwrap().unwrap();
+        let unpacked = import(good.clone(), "good", songs.clone(), false, Vec::new())
+            .rx
+            .recv()
+            .unwrap()
+            .unwrap();
         assert!(unpacked.join("map [Oni].osu").is_file());
         assert!(!good.exists());
 
         let broken = root.join("broken.osz");
         std::fs::write(&broken, b"not a zip").unwrap();
-        assert!(import(broken.clone(), "broken", songs.clone(), false, Vec::new()).rx.recv().unwrap().is_err());
+        assert!(
+            import(broken.clone(), "broken", songs.clone(), false, Vec::new())
+                .rx
+                .recv()
+                .unwrap()
+                .is_err()
+        );
         assert!(broken.exists());
         // A temporary copy doesn't stay around either way.
-        assert!(import(broken.clone(), "broken", songs, true, Vec::new()).rx.recv().unwrap().is_err());
+        assert!(
+            import(broken.clone(), "broken", songs, true, Vec::new())
+                .rx
+                .recv()
+                .unwrap()
+                .is_err()
+        );
         assert!(!broken.exists());
         let _ = std::fs::remove_dir_all(&root);
     }

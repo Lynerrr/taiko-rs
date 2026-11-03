@@ -39,7 +39,9 @@ impl Graph {
         (0..bins)
             .map(|b| {
                 let lo = b * self.peaks.len() / bins;
-                let hi = ((b + 1) * self.peaks.len() / bins).max(lo + 1).min(self.peaks.len());
+                let hi = ((b + 1) * self.peaks.len() / bins)
+                    .max(lo + 1)
+                    .min(self.peaks.len());
                 self.peaks[lo..hi].iter().copied().fold(0.0, f32::max)
             })
             .collect()
@@ -51,7 +53,8 @@ pub fn analyze(map: &Beatmap) -> Graph {
     let end = map.notes.iter().map(|n| n.end_time).fold(start, f64::max);
     // At most a day's worth: a note's end that far off (rolls are capped in `beatmap`, but a
     // map isn't only from there) mustn't ask for more sections than can be counted.
-    let sections = (((end - start) / SECTION_MS).ceil() as usize).clamp(1, (86_400_000.0 / SECTION_MS) as usize);
+    let sections = (((end - start) / SECTION_MS).ceil() as usize)
+        .clamp(1, (86_400_000.0 / SECTION_MS) as usize);
     let mut peaks = vec![0.0f64; sections];
     let section_of = |t: f64| (((t - start) / SECTION_MS) as usize).min(sections - 1);
     let decay = |strain: f64, ms: f64| strain * DECAY_PER_SECOND.powf(ms / 1000.0);
@@ -98,12 +101,20 @@ pub fn analyze(map: &Beatmap) -> Graph {
                 let rhythm = match (dt, last_dt) {
                     (Some(a), Some(b)) => {
                         let ratio = a.max(b) / a.min(b);
-                        if ratio > 1.15 { 1.0 + 0.25 * (ratio - 1.0).min(2.0) } else { 1.0 }
+                        if ratio > 1.15 {
+                            1.0 + 0.25 * (ratio - 1.0).min(2.0)
+                        } else {
+                            1.0
+                        }
                     }
                     _ => 1.0,
                 };
                 last_dt = dt;
-                if n.big { 0.12 * rate * colour * rhythm * 1.1 } else { 0.12 * rate * colour * rhythm }
+                if n.big {
+                    0.12 * rate * colour * rhythm * 1.1
+                } else {
+                    0.12 * rate * colour * rhythm
+                }
             }
             // Drumrolls and swells are mashing: a modest, steady load.
             Kind::Roll | Kind::Swell => 0.6,
@@ -118,7 +129,12 @@ pub fn analyze(map: &Beatmap) -> Graph {
     let peaks = peaks.iter().map(|&p| (p / max) as f32).collect();
 
     // Densest one-second window of hits.
-    let hits: Vec<f64> = map.notes.iter().filter(|n| matches!(n.kind, Kind::Don | Kind::Kat)).map(|n| n.time).collect();
+    let hits: Vec<f64> = map
+        .notes
+        .iter()
+        .filter(|n| matches!(n.kind, Kind::Don | Kind::Kat))
+        .map(|n| n.time)
+        .collect();
     let (mut peak_nps, mut peak_nps_at, mut j) = (0usize, start, 0usize);
     for (i, &t) in hits.iter().enumerate() {
         // Half-open window (t - 1000, t]: exactly one second.
@@ -148,7 +164,16 @@ pub fn analyze(map: &Beatmap) -> Graph {
         kiai.push((s, end));
     }
 
-    Graph { start, end, peaks, peaks_start: start, section: SECTION_MS, peak_nps: peak_nps as f32, peak_nps_at, kiai }
+    Graph {
+        start,
+        end,
+        peaks,
+        peaks_start: start,
+        section: SECTION_MS,
+        peak_nps: peak_nps as f32,
+        peak_nps_at,
+        kiai,
+    }
 }
 
 impl Graph {
@@ -170,16 +195,56 @@ mod tests {
     use crate::beatmap::{Beatmap, ControlPoint, Meta, Note};
 
     fn note(time: f64, kat: bool) -> Note {
-        Note { time, end_time: time, kind: if kat { Kind::Kat } else { Kind::Don }, big: false, velocity: 0.5, tick_spacing: 0.0, required_hits: 0, fake_len: 0.0, fake_fades: false, fake_length: 0.0, tiny: false, unhittable: false }
+        Note {
+            time,
+            end_time: time,
+            kind: if kat { Kind::Kat } else { Kind::Don },
+            big: false,
+            velocity: 0.5,
+            tick_spacing: 0.0,
+            required_hits: 0,
+            fake_len: 0.0,
+            fake_fades: false,
+            fake_length: 0.0,
+            tiny: false,
+            unhittable: false,
+        }
     }
 
     fn map(notes: Vec<Note>) -> Beatmap {
         let control_points = vec![
-            ControlPoint { time: 0.0, beat_origin: 0.0, beat_length: 500.0, sv: 1.0, kiai: false, volume: 1.0 },
-            ControlPoint { time: 20_000.0, beat_origin: 0.0, beat_length: 500.0, sv: 1.0, kiai: true, volume: 1.0 },
-            ControlPoint { time: 24_000.0, beat_origin: 0.0, beat_length: 500.0, sv: 1.0, kiai: false, volume: 1.0 },
+            ControlPoint {
+                time: 0.0,
+                beat_origin: 0.0,
+                beat_length: 500.0,
+                sv: 1.0,
+                kiai: false,
+                volume: 1.0,
+            },
+            ControlPoint {
+                time: 20_000.0,
+                beat_origin: 0.0,
+                beat_length: 500.0,
+                sv: 1.0,
+                kiai: true,
+                volume: 1.0,
+            },
+            ControlPoint {
+                time: 24_000.0,
+                beat_origin: 0.0,
+                beat_length: 500.0,
+                sv: 1.0,
+                kiai: false,
+                volume: 1.0,
+            },
         ];
-        Beatmap { meta: Meta::default(), notes, barlines: Vec::new(), control_points, first_velocity: 0.0 }
+        Beatmap {
+            meta: Meta::default(),
+            notes,
+            barlines: Vec::new(),
+            control_points,
+            first_velocity: 0.0,
+        }
     }
 
     #[test]
@@ -189,10 +254,23 @@ mod tests {
         notes.extend((0..64).map(|i| note(20_000.0 + i as f64 * 62.5, i % 2 == 1)));
         notes.extend((0..20).map(|i| note(24_500.0 + i as f64 * 500.0, false)));
         let g = analyze(&map(notes));
-        let hardest = g.peaks.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0;
+        let hardest = g
+            .peaks
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .unwrap()
+            .0;
         let hardest_ms = g.start + hardest as f64 * g.section_ms();
-        assert!((20_000.0..24_500.0).contains(&hardest_ms), "peak at {hardest_ms}");
-        assert!(g.peaks[5] < 0.3, "slow intro should be easy: {}", g.peaks[5]);
+        assert!(
+            (20_000.0..24_500.0).contains(&hardest_ms),
+            "peak at {hardest_ms}"
+        );
+        assert!(
+            g.peaks[5] < 0.3,
+            "slow intro should be easy: {}",
+            g.peaks[5]
+        );
         assert_eq!(g.peak_nps, 16.0);
         assert!((20_000.0..21_000.0).contains(&g.peak_nps_at));
         assert_eq!(g.kiai, vec![(20_000.0, 24_000.0)]);

@@ -14,23 +14,14 @@
 #[macro_use]
 #[path = "../../src/lang.rs"]
 mod lang;
-#[allow(dead_code)]
-#[path = "../../src/net.rs"]
-mod net;
-#[allow(dead_code)]
-#[path = "../../src/online.rs"]
-mod online;
-#[path = "../../src/tls.rs"]
-mod tls;
 mod admin;
 mod avatars;
 mod card;
-mod covers;
-mod crashes;
-mod osustatus;
-mod discord;
 #[path = "../../src/changelog_entry.rs"]
 mod changelog_entry;
+mod covers;
+mod crashes;
+mod discord;
 #[allow(dead_code)]
 #[path = "../../src/font.rs"]
 mod font;
@@ -38,8 +29,17 @@ mod loved;
 mod mail;
 mod medal_list;
 mod medals;
-mod scores;
+#[allow(dead_code)]
+#[path = "../../src/net.rs"]
+mod net;
+#[allow(dead_code)]
+#[path = "../../src/online.rs"]
+mod online;
+mod osustatus;
 mod pages;
+mod scores;
+#[path = "../../src/tls.rs"]
+mod tls;
 mod web;
 
 use std::collections::{HashMap, VecDeque};
@@ -47,12 +47,15 @@ use std::io::{BufReader, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
-use online::{Activity, ChatLine, Down, Envelope, Friend, OnlinePlayer, Reply, Request, RoomInfo, SoloPlay, Up};
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use online::{
+    Activity, ChatLine, Down, Envelope, Friend, OnlinePlayer, Reply, Request, RoomInfo, SoloPlay,
+    Up,
+};
 use serde::{Deserialize, Serialize};
 
 /// Sessions last this long without logging in again.
@@ -212,7 +215,12 @@ impl Hub {
             return;
         }
         let l = line(d);
-        for c in self.conns.values().flatten().filter(|c| c.watching.as_deref() == Some(key)) {
+        for c in self
+            .conns
+            .values()
+            .flatten()
+            .filter(|c| c.watching.as_deref() == Some(key))
+        {
             let _ = c.tx.send_line(&l);
         }
     }
@@ -243,11 +251,19 @@ impl Hub {
         if is_admin(key) {
             return;
         }
-        let ids: Vec<u64> = self.conns.get(key).into_iter().flatten().filter(|c| c.watching.as_deref() == Some(whom)).map(|c| c.id).collect();
+        let ids: Vec<u64> = self
+            .conns
+            .get(key)
+            .into_iter()
+            .flatten()
+            .filter(|c| c.watching.as_deref() == Some(whom))
+            .map(|c| c.id)
+            .collect();
         for id in ids {
             self.set_watching(key, id, None);
             if let Some(c) = self.conn(key, id) {
-                let _ = c.tx.send(Down::WatchStopped("you can only watch friends".into()));
+                let _ =
+                    c.tx.send(Down::WatchStopped("you can only watch friends".into()));
             }
         }
     }
@@ -263,7 +279,12 @@ impl Hub {
     /// back under the new name.
     fn rename(&mut self, old: &str, new: &str) {
         self.chat_changed = true;
-        let chats: Vec<(String, String)> = self.history.keys().filter(|(a, b)| a == old || b == old).cloned().collect();
+        let chats: Vec<(String, String)> = self
+            .history
+            .keys()
+            .filter(|(a, b)| a == old || b == old)
+            .cloned()
+            .collect();
         for chat in chats {
             let other = if chat.0 == old { &chat.1 } else { &chat.0 };
             let moved = pair(new, other);
@@ -305,9 +326,20 @@ impl Hub {
 
     /// Everyone online, as `Down::Players`.
     fn players(&self) -> Down {
-        let mut players: Vec<OnlinePlayer> = self.conns.values().filter_map(|v| v.last()).map(|c| OnlinePlayer { name: c.name.clone(), activity: c.activity.clone() }).collect();
+        let mut players: Vec<OnlinePlayer> = self
+            .conns
+            .values()
+            .filter_map(|v| v.last())
+            .map(|c| OnlinePlayer {
+                name: c.name.clone(),
+                activity: c.activity.clone(),
+            })
+            .collect();
         if !self.conns.contains_key(ALWAYS_ONLINE) {
-            players.push(OnlinePlayer { name: ALWAYS_ONLINE.into(), activity: Activity::Menus });
+            players.push(OnlinePlayer {
+                name: ALWAYS_ONLINE.into(),
+                activity: Activity::Menus,
+            });
         }
         players.sort_by_cached_key(|p| p.name.to_lowercase());
         let count = players.len() as u32;
@@ -317,8 +349,11 @@ impl Hub {
 
     /// False (and a notice) when this connection is chatting too fast.
     fn chat_allowed(&mut self, key: &str, id: u64) -> bool {
-        let Some(c) = self.conn(key, id) else { return true };
-        c.chat_times.retain(|t| t.elapsed() < Duration::from_secs(5));
+        let Some(c) = self.conn(key, id) else {
+            return true;
+        };
+        c.chat_times
+            .retain(|t| t.elapsed() < Duration::from_secs(5));
         if c.chat_times.len() >= 8 {
             let _ = c.tx.send(Down::Notice("slow down a little".into()));
             return false;
@@ -329,7 +364,11 @@ impl Hub {
 }
 
 fn pair(a: &str, b: &str) -> (String, String) {
-    if a < b { (a.to_string(), b.to_string()) } else { (b.to_string(), a.to_string()) }
+    if a < b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -355,17 +394,25 @@ impl Accounts {
         self.asked.clear();
         for (key, u) in &self.users {
             for from in &u.requests {
-                self.asked.entry(from.clone()).or_default().push(key.clone());
+                self.asked
+                    .entry(from.clone())
+                    .or_default()
+                    .push(key.clone());
             }
         }
     }
 
     /// `from` asks `to` to be friends (once).
     fn ask(&mut self, from: &str, to: &str) {
-        let Some(them) = self.users.get_mut(to) else { return };
+        let Some(them) = self.users.get_mut(to) else {
+            return;
+        };
         if !them.requests.iter().any(|r| r == from) {
             them.requests.push(from.to_string());
-            self.asked.entry(from.to_string()).or_default().push(to.to_string());
+            self.asked
+                .entry(from.to_string())
+                .or_default()
+                .push(to.to_string());
         }
     }
 
@@ -403,7 +450,10 @@ struct Limits {
 /// What a step of an account form on the website came to.
 enum WebAuth {
     /// Done, and logged in: the account's name as written and a new session token.
-    LoggedIn { name: String, token: String },
+    LoggedIn {
+        name: String,
+        token: String,
+    },
     /// A code is on its way to this (masked) email.
     CodeSent(String),
     Failed(String),
@@ -495,26 +545,41 @@ fn limit_key(ip: IpAddr) -> IpAddr {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn random_bytes<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
-    std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).expect("/dev/urandom");
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut b))
+        .expect("/dev/urandom");
     b
 }
 
 fn new_token() -> String {
-    random_bytes::<32>().iter().map(|b| format!("{b:02x}")).collect()
+    random_bytes::<32>()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn hash_password(password: &str) -> Result<String, String> {
     let salt = SaltString::encode_b64(&random_bytes::<16>()).map_err(|e| e.to_string())?;
-    Argon2::default().hash_password(password.as_bytes(), &salt).map(|h| h.to_string()).map_err(|e| e.to_string())
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| e.to_string())
 }
 
 fn verify_password(password: &str, hash: &str) -> bool {
-    PasswordHash::new(hash).is_ok_and(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
+    PasswordHash::new(hash).is_ok_and(|h| {
+        Argon2::default()
+            .verify_password(password.as_bytes(), &h)
+            .is_ok()
+    })
 }
 
 impl State {
@@ -527,11 +592,26 @@ impl State {
         let mut save = !accounts.users.contains_key("claude");
         if save {
             let hash = hash_password(&new_token()).expect("argon2");
-            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None, muted_until: None });
+            accounts.users.insert(
+                "claude".into(),
+                User {
+                    name: "claude".into(),
+                    hash,
+                    created: now_secs(),
+                    friends: Vec::new(),
+                    requests: Vec::new(),
+                    nominator: false,
+                    banned: false,
+                    email: None,
+                    muted_until: None,
+                },
+            );
         }
         // And its friends, both ways.
         for &friend in CLAUDE_FRIENDS {
-            if !accounts.users.contains_key(friend) || accounts.users["claude"].friends.iter().any(|f| f == friend) {
+            if !accounts.users.contains_key(friend)
+                || accounts.users["claude"].friends.iter().any(|f| f == friend)
+            {
                 continue;
             }
             for (a, b) in [("claude", friend), (friend, "claude")] {
@@ -544,14 +624,30 @@ impl State {
             save = true;
         }
         accounts.index_requests();
-        println!("{} accounts, {} sessions ({})", accounts.users.len(), accounts.sessions.len(), path.display());
+        println!(
+            "{} accounts, {} sessions ({})",
+            accounts.users.len(),
+            accounts.sessions.len(),
+            path.display()
+        );
         // Scores live next to the accounts.
-        let mut scores = scores::Scores::load(Some(path.parent().map(|d| d.to_path_buf()).unwrap_or_default()));
-        for key in accounts.users.iter().filter(|(_, u)| u.banned).map(|(k, _)| k) {
+        let mut scores = scores::Scores::load(Some(
+            path.parent().map(|d| d.to_path_buf()).unwrap_or_default(),
+        ));
+        for key in accounts
+            .users
+            .iter()
+            .filter(|(_, u)| u.banned)
+            .map(|(k, _)| k)
+        {
             scores.set_banned(key, true);
         }
         let chat: SavedChat = load_saved(&path.with_file_name("chat.json"));
-        let history = chat.friends.into_iter().map(|(a, b, log)| ((a, b), log)).collect();
+        let history = chat
+            .friends
+            .into_iter()
+            .map(|(a, b, log)| ((a, b), log))
+            .collect();
         let (saves, wake) = mpsc::channel();
         let path_dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
         let state = State {
@@ -562,7 +658,11 @@ impl State {
             next_room: AtomicU32::new(1),
             limits: Mutex::new(HashMap::new()),
             dummy_hash: hash_password("not a real password").expect("argon2"),
-            hub: Mutex::new(Hub { history, global: chat.global, ..Hub::default() }),
+            hub: Mutex::new(Hub {
+                history,
+                global: chat.global,
+                ..Hub::default()
+            }),
             scores: Mutex::new(scores),
             verify_codes: Mutex::new(HashMap::new()),
             admin: admin::AdminState::load(&path_dir),
@@ -580,7 +680,9 @@ impl State {
 
     /// Writes accounts.json.
     fn write(&self, accounts: &Accounts) {
-        let Ok(text) = serde_json::to_string_pretty(accounts) else { return };
+        let Ok(text) = serde_json::to_string_pretty(accounts) else {
+            return;
+        };
         if let Err(e) = write_private(&self.path, &text) {
             eprintln!("saving accounts: {e}");
         }
@@ -593,27 +695,54 @@ impl State {
             if !std::mem::take(&mut hub.chat_changed) {
                 return;
             }
-            let friends = hub.history.iter().map(|((a, b), log)| (a.clone(), b.clone(), log.clone())).collect();
-            SavedChat { global: hub.global.clone(), friends }
+            let friends = hub
+                .history
+                .iter()
+                .map(|((a, b), log)| (a.clone(), b.clone(), log.clone()))
+                .collect();
+            SavedChat {
+                global: hub.global.clone(),
+                friends,
+            }
         };
-        let Ok(text) = serde_json::to_string(&saved) else { return };
+        let Ok(text) = serde_json::to_string(&saved) else {
+            return;
+        };
         if let Err(e) = write_private(&self.path.with_file_name("chat.json"), &text) {
             eprintln!("saving the chats: {e}");
         }
     }
 
     /// A step of signing up on the website (see `register`).
-    fn web_register(&self, ip: IpAddr, name: &str, password: Option<&str>, email: &str, code: Option<&str>) -> WebAuth {
+    fn web_register(
+        &self,
+        ip: IpAddr,
+        name: &str,
+        password: Option<&str>,
+        email: &str,
+        code: Option<&str>,
+    ) -> WebAuth {
         WebAuth::from(register(self, ip, name, password, Some(email), code))
     }
 
     /// A step of resetting a password on the website (see `reset_password`).
-    fn web_reset(&self, ip: IpAddr, who: &str, code: Option<&str>, password: Option<&str>) -> WebAuth {
+    fn web_reset(
+        &self,
+        ip: IpAddr,
+        who: &str,
+        code: Option<&str>,
+        password: Option<&str>,
+    ) -> WebAuth {
         WebAuth::from(reset_password(self, ip, who, code, password))
     }
 
     /// Logs in from the website: the account's name as written and a new session token.
-    fn web_login(&self, ip: IpAddr, name: &str, password: &str) -> Result<(String, String), String> {
+    fn web_login(
+        &self,
+        ip: IpAddr,
+        name: &str,
+        password: &str,
+    ) -> Result<(String, String), String> {
         match login(self, ip, name, password) {
             Reply::Account { name, token, .. } => Ok((name, token)),
             Reply::Error(e) => Err(e),
@@ -641,13 +770,30 @@ impl State {
     /// The reply for a logged-in `name` (as written) with session `token`.
     fn account(&self, name: String, token: String) -> Reply {
         let key = name.to_ascii_lowercase();
-        let email = self.accounts.lock().unwrap().users.get(&key).map(|u| u.email.is_some());
-        Reply::Account { nominator: self.is_nominator(&key), admin: is_admin(&key), name, token, email }
+        let email = self
+            .accounts
+            .lock()
+            .unwrap()
+            .users
+            .get(&key)
+            .map(|u| u.email.is_some());
+        Reply::Account {
+            nominator: self.is_nominator(&key),
+            admin: is_admin(&key),
+            name,
+            token,
+            email,
+        }
     }
 
     /// Mails a code (`mail::send_code`), a few an hour per address.
     fn mail_code(&self, ip: IpAddr, for_: &str, email: &str, what: &str) -> Result<(), String> {
-        let Some(slot) = self.take_slot(ip, |l| &mut l.mails, Duration::from_secs(3600), MAILS_PER_HOUR) else {
+        let Some(slot) = self.take_slot(
+            ip,
+            |l| &mut l.mails,
+            Duration::from_secs(3600),
+            MAILS_PER_HOUR,
+        ) else {
             return Err("too many codes asked for from here, try again in an hour".into());
         };
         let sent = mail::send_code(for_, email, what);
@@ -660,18 +806,36 @@ impl State {
     /// The account (lowercased name) `email` belongs to.
     fn email_owner(&self, email: &str) -> Option<String> {
         let email = mail::normal(email);
-        self.accounts.lock().unwrap().users.iter().find(|(_, u)| u.email.as_deref() == Some(email.as_str())).map(|(k, _)| k.clone())
+        self.accounts
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .find(|(_, u)| u.email.as_deref() == Some(email.as_str()))
+            .map(|(k, _)| k.clone())
     }
 
     fn new_session(&self, accounts: &mut Accounts, key: &str) -> String {
         let token = new_token();
-        accounts.sessions.insert(token.clone(), Session { user: key.to_string(), created: now_secs() });
+        accounts.sessions.insert(
+            token.clone(),
+            Session {
+                user: key.to_string(),
+                created: now_secs(),
+            },
+        );
         token
     }
 
     /// Takes one of `max` slots `ip` has inside `window`, None when they're gone. Taken before
     /// the slow work: requests arriving during it have to see this one.
-    fn take_slot(&self, ip: IpAddr, pick: fn(&mut Limits) -> &mut Vec<Instant>, window: Duration, max: usize) -> Option<Instant> {
+    fn take_slot(
+        &self,
+        ip: IpAddr,
+        pick: fn(&mut Limits) -> &mut Vec<Instant>,
+        window: Duration,
+        max: usize,
+    ) -> Option<Instant> {
         let mut limits = self.limits.lock().unwrap();
         let list = pick(limits.entry(limit_key(ip)).or_default());
         list.retain(|t| t.elapsed() < window);
@@ -688,7 +852,9 @@ impl State {
         let mut limits = self.limits.lock().unwrap();
         let spent = &mut limits.entry(limit_key(ip)).or_default().lookups;
         match spent {
-            Some((since, n)) if since.elapsed() < Duration::from_secs(3600) => LOOKUPS_PER_HOUR.saturating_sub(*n),
+            Some((since, n)) if since.elapsed() < Duration::from_secs(3600) => {
+                LOOKUPS_PER_HOUR.saturating_sub(*n)
+            }
             _ => {
                 *spent = Some((Instant::now(), 0));
                 LOOKUPS_PER_HOUR
@@ -697,7 +863,14 @@ impl State {
     }
 
     fn spend_lookups(&self, ip: IpAddr, n: usize) {
-        if let Some((_, spent)) = &mut self.limits.lock().unwrap().entry(limit_key(ip)).or_default().lookups {
+        if let Some((_, spent)) = &mut self
+            .limits
+            .lock()
+            .unwrap()
+            .entry(limit_key(ip))
+            .or_default()
+            .lookups
+        {
             *spent += n;
         }
     }
@@ -717,7 +890,19 @@ impl State {
             .iter()
             .filter_map(|(&id, l)| {
                 let s = l.room.summary.lock().unwrap().clone();
-                (s.players > 0).then(|| RoomInfo { id, title: l.title.clone(), host: if s.host.is_empty() { l.owner.clone() } else { s.host }, players: s.players, map: s.map, in_match: s.in_match, mapguessr: s.mapguessr })
+                (s.players > 0).then(|| RoomInfo {
+                    id,
+                    title: l.title.clone(),
+                    host: if s.host.is_empty() {
+                        l.owner.clone()
+                    } else {
+                        s.host
+                    },
+                    players: s.players,
+                    map: s.map,
+                    in_match: s.in_match,
+                    mapguessr: s.mapguessr,
+                })
             })
             .collect();
         out.sort_by_key(|r| r.id);
@@ -733,16 +918,37 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
     let reply = |reader: &mut BufReader<TcpStream>, r: Reply| {
         let _ = online::write_line(reader.get_mut(), &r);
     };
-    let Ok(line) = online::read_line(&mut reader) else { return };
+    let Ok(line) = online::read_line(&mut reader) else {
+        return;
+    };
     let env: Envelope = match serde_json::from_str(&line) {
         Ok(e) => e,
         Err(_) => return reply(&mut reader, Reply::Error("bad request".into())),
     };
     if env.protocol != online::PROTOCOL {
-        return reply(&mut reader, Reply::Error(format!("update taiko.rs (server protocol {}, yours {})", online::PROTOCOL, env.protocol)));
+        return reply(
+            &mut reader,
+            Reply::Error(format!(
+                "update taiko.rs (server protocol {}, yours {})",
+                online::PROTOCOL,
+                env.protocol
+            )),
+        );
     }
     let out = match env.request {
-        Request::Register { name, password, email, code } => register(state, ip, &name, Some(&password), email.as_deref(), code.as_deref()),
+        Request::Register {
+            name,
+            password,
+            email,
+            code,
+        } => register(
+            state,
+            ip,
+            &name,
+            Some(&password),
+            email.as_deref(),
+            code.as_deref(),
+        ),
         Request::Login { name, password } => {
             let r = login(state, ip, &name, &password);
             if let Reply::Account { name, .. } = &r {
@@ -750,8 +956,14 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             }
             r
         }
-        Request::ResetPassword { who, code, password } => reset_password(state, ip, &who, code.as_deref(), password.as_deref()),
-        Request::LinkEmail { token, email, code } => link_email(state, ip, &token, &email, code.as_deref()),
+        Request::ResetPassword {
+            who,
+            code,
+            password,
+        } => reset_password(state, ip, &who, code.as_deref(), password.as_deref()),
+        Request::LinkEmail { token, email, code } => {
+            link_email(state, ip, &token, &email, code.as_deref())
+        }
         Request::WhoAmI { token } => match state.user(&token) {
             Some(name) => state.account(name, token),
             None => Reply::Error("your session expired: log in again".into()),
@@ -761,28 +973,63 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             Reply::LoggedOut
         }
         Request::ListRooms => Reply::Rooms(state.rooms()),
-        Request::CreateRoom { token, title, mapguessr } => {
-            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to host a lobby".into())) };
+        Request::CreateRoom {
+            token,
+            title,
+            mapguessr,
+        } => {
+            let Some(name) = state.user(&token) else {
+                return reply(&mut reader, Reply::Error("log in to host a lobby".into()));
+            };
             let mut lobbies = state.lobbies.lock().unwrap();
             if lobbies.len() >= MAX_ROOMS {
-                return reply(&mut reader, Reply::Error("the server is full, try again later".into()));
+                return reply(
+                    &mut reader,
+                    Reply::Error("the server is full, try again later".into()),
+                );
             }
             let id = state.next_room.fetch_add(1, Ordering::Relaxed);
             let title = online::clean_title(&title, &name, mapguessr);
             let room = net::open_room(mapguessr);
             let host_token = room.token;
             println!("lobby {id} \"{title}\" opened by {name} ({ip})");
-            reply(&mut reader, Reply::Joined { room: id, title: title.clone(), host_token: Some(host_token) });
+            reply(
+                &mut reader,
+                Reply::Joined {
+                    room: id,
+                    title: title.clone(),
+                    host_token: Some(host_token),
+                },
+            );
             let _ = reader.get_ref().set_read_timeout(None);
             room.attach(reader, Some(name.clone()), slot);
-            lobbies.insert(id, Lobby { room, title, owner: name, empty_since: Some(Instant::now()) });
+            lobbies.insert(
+                id,
+                Lobby {
+                    room,
+                    title,
+                    owner: name,
+                    empty_since: Some(Instant::now()),
+                },
+            );
             return;
         }
         Request::Connect { token } => {
-            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
+            let Some(name) = state.user(&token) else {
+                return reply(
+                    &mut reader,
+                    Reply::Error("your session expired: log in again".into()),
+                );
+            };
             let key = name.to_ascii_lowercase();
             if let Some(left) = state.admin.kicked_for(&key) {
-                return reply(&mut reader, Reply::Error(format!("an admin disconnected you: try again in {} s", left.as_secs().max(1))));
+                return reply(
+                    &mut reader,
+                    Reply::Error(format!(
+                        "an admin disconnected you: try again in {} s",
+                        left.as_secs().max(1)
+                    )),
+                );
             }
             state.admin.seen(&key, limit_key(ip));
             reply(&mut reader, state.account(name.clone(), token.clone()));
@@ -790,9 +1037,14 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             return;
         }
         Request::SubmitScore { token, play } => {
-            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to send scores".into())) };
+            let Some(name) = state.user(&token) else {
+                return reply(&mut reader, Reply::Error("log in to send scores".into()));
+            };
             let key = name.to_ascii_lowercase();
-            let map = format!("{} - {} [{}]", play.map.artist, play.map.title, play.map.version);
+            let map = format!(
+                "{} - {} [{}]",
+                play.map.artist, play.map.title, play.map.version
+            );
             // Whether the map gives pp, so the total sent back is right.
             covers::learn(play.map.set_id);
             let mut scores = state.scores.lock().unwrap();
@@ -804,8 +1056,16 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
                     if let Some(a) = announcement {
                         state.announce_medal(&name, &a);
                     }
-                    println!("score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total, {} medals", medals.len());
-                    Reply::Submitted { map_rank, pp, rank, medals }
+                    println!(
+                        "score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total, {} medals",
+                        medals.len()
+                    );
+                    Reply::Submitted {
+                        map_rank,
+                        pp,
+                        rank,
+                        medals,
+                    }
                 }
                 Err(e) => Reply::Error(e),
             }
@@ -829,8 +1089,18 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             Err(e) => Reply::Error(e),
         },
         Request::Played { token, ms } => {
-            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
-            match state.scores.lock().unwrap().played(&name.to_ascii_lowercase(), ms) {
+            let Some(name) = state.user(&token) else {
+                return reply(
+                    &mut reader,
+                    Reply::Error("your session expired: log in again".into()),
+                );
+            };
+            match state
+                .scores
+                .lock()
+                .unwrap()
+                .played(&name.to_ascii_lowercase(), ms)
+            {
                 Ok(()) => Reply::Counted,
                 Err(e) => Reply::Error(e),
             }
@@ -838,15 +1108,30 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
         // What the server knows of the sets (asking osu! in the background about the rest, for
         // logged-in players only: not anyone can spend the API's allowance).
         Request::SetStatuses { token, maps } => {
-            let budget = if state.user(&token).is_some() { state.lookups_left(ip) } else { 0 };
+            let budget = if state.user(&token).is_some() {
+                state.lookups_left(ip)
+            } else {
+                0
+            };
             let maps: Vec<(u32, u32)> = maps.into_iter().take(online::MAX_STATUS_MAPS).collect();
             let (found, queued) = osustatus::lookup(&maps, budget);
             state.spend_lookups(ip, queued);
             Reply::SetStatuses(found)
         }
-        Request::LovedSets => Reply::LovedSets(loved::all().into_iter().map(|(set, _)| set).collect()),
-        Request::SetLoved { token, set, loved: on } => {
-            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("your session expired: log in again".into())) };
+        Request::LovedSets => {
+            Reply::LovedSets(loved::all().into_iter().map(|(set, _)| set).collect())
+        }
+        Request::SetLoved {
+            token,
+            set,
+            loved: on,
+        } => {
+            let Some(name) = state.user(&token) else {
+                return reply(
+                    &mut reader,
+                    Reply::Error("your session expired: log in again".into()),
+                );
+            };
             match state.love(&name.to_ascii_lowercase(), set, on) {
                 Ok(_) => Reply::LovedSets(loved::all().into_iter().map(|(set, _)| set).collect()),
                 Err(e) => Reply::Error(e),
@@ -857,10 +1142,21 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             None => Reply::Error("no such player".into()),
         },
         Request::JoinRoom { token, room } => {
-            let Some(name) = state.user(&token) else { return reply(&mut reader, Reply::Error("log in to join a lobby".into())) };
+            let Some(name) = state.user(&token) else {
+                return reply(&mut reader, Reply::Error("log in to join a lobby".into()));
+            };
             let lobbies = state.lobbies.lock().unwrap();
-            let Some(l) = lobbies.get(&room) else { return reply(&mut reader, Reply::Error("that lobby is gone".into())) };
-            reply(&mut reader, Reply::Joined { room, title: l.title.clone(), host_token: None });
+            let Some(l) = lobbies.get(&room) else {
+                return reply(&mut reader, Reply::Error("that lobby is gone".into()));
+            };
+            reply(
+                &mut reader,
+                Reply::Joined {
+                    room,
+                    title: l.title.clone(),
+                    host_token: None,
+                },
+            );
             let _ = reader.get_ref().set_read_timeout(None);
             l.room.attach(reader, Some(name), slot);
             return;
@@ -870,7 +1166,14 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
 }
 
 /// `password` can wait while only a code is asked for (the website asks for it with the code).
-fn register(state: &State, ip: IpAddr, name: &str, password: Option<&str>, email: Option<&str>, code: Option<&str>) -> Reply {
+fn register(
+    state: &State,
+    ip: IpAddr,
+    name: &str,
+    password: Option<&str>,
+    email: Option<&str>,
+    code: Option<&str>,
+) -> Reply {
     let name = name.trim();
     if !online::valid_name(name) {
         return Reply::Error(format!("names are {}", online::NAME_RULES));
@@ -879,7 +1182,12 @@ fn register(state: &State, ip: IpAddr, name: &str, password: Option<&str>, email
     if !password.map_or(asks_for_code, online::valid_password) {
         return Reply::Error("the password needs at least 6 characters".into());
     }
-    let Some(slot) = state.take_slot(ip, |l| &mut l.registered, Duration::from_secs(3600), REGISTER_PER_HOUR) else {
+    let Some(slot) = state.take_slot(
+        ip,
+        |l| &mut l.registered,
+        Duration::from_secs(3600),
+        REGISTER_PER_HOUR,
+    ) else {
         return Reply::Error("too many new accounts from here, try again later".into());
     };
     let reply = create_account(state, ip, name, password, email, code);
@@ -889,7 +1197,14 @@ fn register(state: &State, ip: IpAddr, name: &str, password: Option<&str>, email
     reply
 }
 
-fn create_account(state: &State, ip: IpAddr, name: &str, password: Option<&str>, email: Option<&str>, code: Option<&str>) -> Reply {
+fn create_account(
+    state: &State,
+    ip: IpAddr,
+    name: &str,
+    password: Option<&str>,
+    email: Option<&str>,
+    code: Option<&str>,
+) -> Reply {
     let key = name.to_ascii_lowercase();
     if state.accounts.lock().unwrap().users.contains_key(&key) {
         return Reply::Error("that name is taken".into());
@@ -898,7 +1213,10 @@ fn create_account(state: &State, ip: IpAddr, name: &str, password: Option<&str>,
     let mut verified = None;
     if mail::on() {
         let Some(email) = email.map(mail::normal).filter(|e| !e.is_empty()) else {
-            return Reply::Error("an email is needed for a new account (update taiko.rs if there's no field for it)".into());
+            return Reply::Error(
+                "an email is needed for a new account (update taiko.rs if there's no field for it)"
+                    .into(),
+            );
         };
         if !mail::valid_email(&email) {
             return Reply::Error("that email doesn't look right".into());
@@ -909,7 +1227,12 @@ fn create_account(state: &State, ip: IpAddr, name: &str, password: Option<&str>,
         let for_ = format!("reg:{key}");
         match code.map(str::trim).filter(|c| !c.is_empty()) {
             None => {
-                return match state.mail_code(ip, &for_, &email, &format!("for creating the account {name}")) {
+                return match state.mail_code(
+                    ip,
+                    &for_,
+                    &email,
+                    &format!("for creating the account {name}"),
+                ) {
                     Ok(()) => {
                         println!("sign-up code for {name} sent ({ip})");
                         Reply::CodeSent(mail::masked(&email))
@@ -919,7 +1242,9 @@ fn create_account(state: &State, ip: IpAddr, name: &str, password: Option<&str>,
             }
             Some(code) => {
                 if mail::pending_email(&for_).is_some_and(|e| e != email) {
-                    return Reply::Error("the code was sent to another email: ask for a new one".into());
+                    return Reply::Error(
+                        "the code was sent to another email: ask for a new one".into(),
+                    );
                 }
                 match mail::check_code(&for_, code) {
                     Ok(e) => verified = Some(e),
@@ -929,23 +1254,55 @@ fn create_account(state: &State, ip: IpAddr, name: &str, password: Option<&str>,
         }
     }
     // Hash outside the lock (it takes a moment), then check again.
-    let Some(Ok(hash)) = password.map(hash_password) else { return Reply::Error("server error".into()) };
+    let Some(Ok(hash)) = password.map(hash_password) else {
+        return Reply::Error("server error".into());
+    };
     let mut a = state.accounts.lock().unwrap();
     if a.users.contains_key(&key) {
         return Reply::Error("that name is taken".into());
     }
     let has_email = verified.is_some();
-    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: verified, muted_until: None });
+    a.users.insert(
+        key.clone(),
+        User {
+            name: name.to_string(),
+            hash,
+            created: now_secs(),
+            friends: Vec::new(),
+            requests: Vec::new(),
+            nominator: false,
+            banned: false,
+            email: verified,
+            muted_until: None,
+        },
+    );
     let token = state.new_session(&mut a, &key);
     state.save();
     drop(a);
     println!("account {name} created ({ip})");
-    Reply::Account { name: name.to_string(), token, nominator: is_admin(&key), admin: is_admin(&key), email: Some(has_email) }
+    Reply::Account {
+        name: name.to_string(),
+        token,
+        nominator: is_admin(&key),
+        admin: is_admin(&key),
+        email: Some(has_email),
+    }
 }
 
 /// A forgotten password (see `Request::ResetPassword`).
-fn reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, password: Option<&str>) -> Reply {
-    let Some(slot) = state.take_slot(ip, |l| &mut l.failed, Duration::from_secs(600), FAILED_LOGINS) else {
+fn reset_password(
+    state: &State,
+    ip: IpAddr,
+    who: &str,
+    code: Option<&str>,
+    password: Option<&str>,
+) -> Reply {
+    let Some(slot) = state.take_slot(
+        ip,
+        |l| &mut l.failed,
+        Duration::from_secs(600),
+        FAILED_LOGINS,
+    ) else {
         return Reply::Error("too many tries, wait a few minutes".into());
     };
     let mut failed = false;
@@ -957,10 +1314,23 @@ fn reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, pass
 }
 
 /// Sets `failed` when this try counts against the address's limit.
-fn try_reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, password: Option<&str>, failed: &mut bool) -> Reply {
+fn try_reset_password(
+    state: &State,
+    ip: IpAddr,
+    who: &str,
+    code: Option<&str>,
+    password: Option<&str>,
+    failed: &mut bool,
+) -> Reply {
     let who = who.trim();
-    let key = if who.contains('@') { state.email_owner(who) } else { Some(who.to_ascii_lowercase()) };
-    let user = key.as_ref().and_then(|k| state.accounts.lock().unwrap().users.get(k).cloned());
+    let key = if who.contains('@') {
+        state.email_owner(who)
+    } else {
+        Some(who.to_ascii_lowercase())
+    };
+    let user = key
+        .as_ref()
+        .and_then(|k| state.accounts.lock().unwrap().users.get(k).cloned());
     let (Some(key), Some(user)) = (key, user) else {
         *failed = true;
         return Reply::Error("no account by that name or email".into());
@@ -973,7 +1343,12 @@ fn try_reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, 
     };
     let for_ = format!("reset:{key}");
     let Some(code) = code.map(str::trim).filter(|c| !c.is_empty()) else {
-        return match state.mail_code(ip, &for_, &email, &format!("for a new password for {}", user.name)) {
+        return match state.mail_code(
+            ip,
+            &for_,
+            &email,
+            &format!("for a new password for {}", user.name),
+        ) {
             Ok(()) => {
                 println!("password reset code for {} sent ({ip})", user.name);
                 Reply::CodeSent(mail::masked(&email))
@@ -988,9 +1363,13 @@ fn try_reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, 
         *failed = true;
         return Reply::Error(e);
     }
-    let Ok(hash) = hash_password(password) else { return Reply::Error("server error".into()) };
+    let Ok(hash) = hash_password(password) else {
+        return Reply::Error("server error".into());
+    };
     let mut a = state.accounts.lock().unwrap();
-    let Some(u) = a.users.get_mut(&key) else { return Reply::Error("no account by that name or email".into()) };
+    let Some(u) = a.users.get_mut(&key) else {
+        return Reply::Error("no account by that name or email".into());
+    };
     u.hash = hash;
     // Whoever had the old password is logged out everywhere.
     a.sessions.retain(|_, s| s.user != key);
@@ -1004,11 +1383,22 @@ fn try_reset_password(state: &State, ip: IpAddr, who: &str, code: Option<&str>, 
 
 /// Links an email to a logged-in account (see `Request::LinkEmail`).
 fn link_email(state: &State, ip: IpAddr, token: &str, email: &str, code: Option<&str>) -> Reply {
-    let Some(name) = state.user(token) else { return Reply::Error("your session expired: log in again".into()) };
+    let Some(name) = state.user(token) else {
+        return Reply::Error("your session expired: log in again".into());
+    };
     let key = name.to_ascii_lowercase();
     // The email gets the account back after a lost password: a session alone can't move that.
-    if state.accounts.lock().unwrap().users.get(&key).is_some_and(|u| u.email.is_some()) {
-        return Reply::Error("this account already has an email: ask an admin on Discord to change it".into());
+    if state
+        .accounts
+        .lock()
+        .unwrap()
+        .users
+        .get(&key)
+        .is_some_and(|u| u.email.is_some())
+    {
+        return Reply::Error(
+            "this account already has an email: ask an admin on Discord to change it".into(),
+        );
     }
     let email = mail::normal(email);
     if !mail::valid_email(&email) {
@@ -1019,7 +1409,12 @@ fn link_email(state: &State, ip: IpAddr, token: &str, email: &str, code: Option<
     }
     let for_ = format!("link:{key}");
     let Some(code) = code.map(str::trim).filter(|c| !c.is_empty()) else {
-        return match state.mail_code(ip, &for_, &email, &format!("for linking this email to {name}")) {
+        return match state.mail_code(
+            ip,
+            &for_,
+            &email,
+            &format!("for linking this email to {name}"),
+        ) {
             Ok(()) => Reply::CodeSent(mail::masked(&email)),
             Err(e) => Reply::Error(e),
         };
@@ -1042,13 +1437,27 @@ fn link_email(state: &State, ip: IpAddr, token: &str, email: &str, code: Option<
 }
 
 fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
-    let Some(slot) = state.take_slot(ip, |l| &mut l.failed, Duration::from_secs(600), FAILED_LOGINS) else {
+    let Some(slot) = state.take_slot(
+        ip,
+        |l| &mut l.failed,
+        Duration::from_secs(600),
+        FAILED_LOGINS,
+    ) else {
         return Reply::Error("too many wrong passwords, wait a few minutes".into());
     };
     let name = name.trim();
-    let key = if name.contains('@') { state.email_owner(name).unwrap_or_default() } else { name.to_ascii_lowercase() };
+    let key = if name.contains('@') {
+        state.email_owner(name).unwrap_or_default()
+    } else {
+        name.to_ascii_lowercase()
+    };
     let user = state.accounts.lock().unwrap().users.get(&key).cloned();
-    let ok = verify_password(password, user.as_ref().map(|u| u.hash.as_str()).unwrap_or(&state.dummy_hash)) && user.is_some();
+    let ok = verify_password(
+        password,
+        user.as_ref()
+            .map(|u| u.hash.as_str())
+            .unwrap_or(&state.dummy_hash),
+    ) && user.is_some();
     let Some(user) = user.filter(|_| ok) else {
         std::thread::sleep(Duration::from_millis(400));
         return Reply::Error("wrong name or password".into());
@@ -1060,14 +1469,26 @@ fn login(state: &State, ip: IpAddr, name: &str, password: &str) -> Reply {
     let mut a = state.accounts.lock().unwrap();
     let token = state.new_session(&mut a, &key);
     state.save();
-    Reply::Account { name: user.name, token, nominator: is_admin(&key) || user.nominator, admin: is_admin(&key), email: Some(user.email.is_some()) }
+    Reply::Account {
+        name: user.name,
+        token,
+        nominator: is_admin(&key) || user.nominator,
+        admin: is_admin(&key),
+        email: Some(user.email.is_some()),
+    }
 }
 
 impl State {
     /// A player's profile, by their name in any case.
     fn profile(&self, name: &str) -> Option<online::Profile> {
         let key = name.trim().to_ascii_lowercase();
-        let (name, joined) = self.accounts.lock().unwrap().users.get(&key).map(|u| (u.name.clone(), u.created))?;
+        let (name, joined) = self
+            .accounts
+            .lock()
+            .unwrap()
+            .users
+            .get(&key)
+            .map(|u| (u.name.clone(), u.created))?;
         let mut p = self.scores.lock().unwrap().profile(&key, &name, joined);
         p.online = key == ALWAYS_ONLINE || self.hub.lock().unwrap().conns.contains_key(&key);
         Some(p)
@@ -1084,7 +1505,14 @@ impl State {
     /// What `name` is doing, if they're online.
     fn activity(&self, name: &str) -> Option<Activity> {
         let key = name.trim().to_ascii_lowercase();
-        let activity = self.hub.lock().unwrap().conns.get(&key).and_then(|v| v.last()).map(|c| c.activity.clone());
+        let activity = self
+            .hub
+            .lock()
+            .unwrap()
+            .conns
+            .get(&key)
+            .and_then(|v| v.last())
+            .map(|c| c.activity.clone());
         activity.or_else(|| (key == ALWAYS_ONLINE).then_some(Activity::Menus))
     }
 
@@ -1092,16 +1520,33 @@ impl State {
     fn friends_online(&self, name: &str) -> Vec<(String, bool)> {
         let key = name.trim().to_ascii_lowercase();
         // Names first: the accounts and the hub are never locked at once here.
-        let named: Vec<(String, String)> = self.friend_keys(&key).into_iter().map(|k| (self.display_name(&k), k)).collect();
+        let named: Vec<(String, String)> = self
+            .friend_keys(&key)
+            .into_iter()
+            .map(|k| (self.display_name(&k), k))
+            .collect();
         let hub = self.hub.lock().unwrap();
-        let mut out: Vec<(String, bool)> = named.into_iter().map(|(name, k)| (name, k == ALWAYS_ONLINE || hub.conns.contains_key(&k))).collect();
-        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+        let mut out: Vec<(String, bool)> = named
+            .into_iter()
+            .map(|(name, k)| (name, k == ALWAYS_ONLINE || hub.conns.contains_key(&k)))
+            .collect();
+        out.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+        });
         out
     }
 
     /// Admins, and those they've made loved nominators.
     fn is_nominator(&self, key: &str) -> bool {
-        is_admin(key) || self.accounts.lock().unwrap().users.get(key).is_some_and(|u| u.nominator && !u.banned)
+        is_admin(key)
+            || self
+                .accounts
+                .lock()
+                .unwrap()
+                .users
+                .get(key)
+                .is_some_and(|u| u.nominator && !u.banned)
     }
 
     /// Seconds `key`'s global chat mute has left, if any.
@@ -1111,7 +1556,12 @@ impl State {
     }
 
     fn is_banned(&self, key: &str) -> bool {
-        self.accounts.lock().unwrap().users.get(key).is_some_and(|u| u.banned)
+        self.accounts
+            .lock()
+            .unwrap()
+            .users
+            .get(key)
+            .is_some_and(|u| u.banned)
     }
 
     /// Whom admin `by` may ban or rename: anyone but admins and Claude, whose roles go by their
@@ -1124,7 +1574,13 @@ impl State {
         if is_admin(&key) || key == ALWAYS_ONLINE {
             return Err("that can't be done to an admin or to Claude".into());
         }
-        let shown = self.accounts.lock().unwrap().users.get(&key).map(|u| u.name.clone());
+        let shown = self
+            .accounts
+            .lock()
+            .unwrap()
+            .users
+            .get(&key)
+            .map(|u| u.name.clone());
         Ok((key, shown.ok_or("there's no player by that name")?))
     }
 
@@ -1134,7 +1590,10 @@ impl State {
         let (key, shown) = self.admin_target(by, name)?;
         {
             let mut a = self.accounts.lock().unwrap();
-            let user = a.users.get_mut(&key).ok_or("there's no player by that name")?;
+            let user = a
+                .users
+                .get_mut(&key)
+                .ok_or("there's no player by that name")?;
             user.banned = on;
             if on {
                 a.sessions.retain(|_, s| s.user != key);
@@ -1145,8 +1604,15 @@ impl State {
         if on {
             self.hub.lock().unwrap().close_account(&key);
         }
-        println!("{shown} {} (by {by})", if on { "banned" } else { "unbanned" });
-        Ok(if on { format!("{shown} is banned") } else { format!("{shown} isn't banned any more") })
+        println!(
+            "{shown} {} (by {by})",
+            if on { "banned" } else { "unbanned" }
+        );
+        Ok(if on {
+            format!("{shown} is banned")
+        } else {
+            format!("{shown} isn't banned any more")
+        })
     }
 
     /// Admin `by` renames `name` to `new`: everything of theirs goes along, and the old name is
@@ -1163,14 +1629,26 @@ impl State {
         let new_key = new.to_ascii_lowercase();
         {
             let mut a = self.accounts.lock().unwrap();
-            if new_key != key && (a.users.contains_key(&new_key) || is_admin(&new_key) || new_key == ALWAYS_ONLINE) {
+            if new_key != key
+                && (a.users.contains_key(&new_key)
+                    || is_admin(&new_key)
+                    || new_key == ALWAYS_ONLINE)
+            {
                 return Err("that name is taken".into());
             }
-            let mut user = a.users.remove(&key).ok_or("there's no player by that name")?;
+            let mut user = a
+                .users
+                .remove(&key)
+                .ok_or("there's no player by that name")?;
             user.name = new.to_string();
             a.users.insert(new_key.clone(), user);
             for user in a.users.values_mut() {
-                for k in user.friends.iter_mut().chain(&mut user.requests).filter(|k| **k == key) {
+                for k in user
+                    .friends
+                    .iter_mut()
+                    .chain(&mut user.requests)
+                    .filter(|k| **k == key)
+                {
                     *k = new_key.clone();
                 }
             }
@@ -1180,7 +1658,10 @@ impl State {
             a.index_requests();
             self.save();
         }
-        self.verify_codes.lock().unwrap().retain(|_, (k, _)| *k != key);
+        self.verify_codes
+            .lock()
+            .unwrap()
+            .retain(|_, (k, _)| *k != key);
         let plays = self.scores.lock().unwrap().rename(&key, &new_key, new);
         avatars::rename(&key, &new_key);
         discord::rename_player(&key, &new_key);
@@ -1204,12 +1685,22 @@ impl State {
             return Err("admins are loved nominators already".into());
         }
         let mut a = self.accounts.lock().unwrap();
-        let user = a.users.get_mut(&key).ok_or("there's no player by that name")?;
+        let user = a
+            .users
+            .get_mut(&key)
+            .ok_or("there's no player by that name")?;
         user.nominator = on;
         let shown = user.name.clone();
         self.save();
-        println!("{shown} {} loved nominator (by {by})", if on { "made" } else { "no longer" });
-        Ok(if on { format!("{shown} is a loved nominator now") } else { format!("{shown} isn't a loved nominator any more") })
+        println!(
+            "{shown} {} loved nominator (by {by})",
+            if on { "made" } else { "no longer" }
+        );
+        Ok(if on {
+            format!("{shown} is a loved nominator now")
+        } else {
+            format!("{shown} isn't a loved nominator any more")
+        })
     }
 
     /// Nominator `by` (lowercased) loves map set `set` here, or takes it back: plays on it give
@@ -1225,9 +1716,16 @@ impl State {
             // Only maps that don't give pp already, and that the mirrors know.
             covers::learn(Some(set));
             match covers::osu_status(set).as_deref() {
-                None => return Err("couldn't look that set up on the beatmap mirrors: try again in a moment".into()),
+                None => {
+                    return Err(
+                        "couldn't look that set up on the beatmap mirrors: try again in a moment"
+                            .into(),
+                    );
+                }
                 Some("missing") => return Err("the beatmap mirrors don't know that set".into()),
-                Some("ranked" | "approved" | "loved") => return Err("that set gives pp already: it's ranked or loved on osu!".into()),
+                Some("ranked" | "approved" | "loved") => {
+                    return Err("that set gives pp already: it's ranked or loved on osu!".into());
+                }
                 Some(_) => {}
             }
         }
@@ -1236,8 +1734,15 @@ impl State {
             return Err("that set isn't loved here".into());
         }
         self.scores.lock().unwrap().count_pp();
-        println!("set {set} {} by {name}", if on { "loved" } else { "unloved" });
-        Ok(if on { format!("Loved set {set}: its plays give pp now") } else { format!("Set {set} isn't loved here any more") })
+        println!(
+            "set {set} {} by {name}",
+            if on { "loved" } else { "unloved" }
+        );
+        Ok(if on {
+            format!("Loved set {set}: its plays give pp now")
+        } else {
+            format!("Set {set} isn't loved here any more")
+        })
     }
 
     /// A code `key` sends the Discord bot (`>verify`) to prove the Discord account is theirs.
@@ -1249,36 +1754,72 @@ impl State {
         }
         // Letters and digits that don't look alike.
         const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        let code: String = random_bytes::<8>().iter().map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char).collect();
+        let code: String = random_bytes::<8>()
+            .iter()
+            .map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char)
+            .collect();
         codes.insert(code.clone(), (key.to_string(), Instant::now()));
         code
     }
 
     /// Whose a `>verify` code is (it works once).
     fn take_verify_code(&self, code: &str) -> Option<String> {
-        let (key, made) = self.verify_codes.lock().unwrap().remove(&code.trim().to_ascii_uppercase())?;
+        let (key, made) = self
+            .verify_codes
+            .lock()
+            .unwrap()
+            .remove(&code.trim().to_ascii_uppercase())?;
         (made.elapsed() < VERIFY_FOR).then_some(key)
     }
 
     fn display_name(&self, key: &str) -> String {
-        self.accounts.lock().unwrap().users.get(key).map(|u| u.name.clone()).unwrap_or_else(|| key.to_string())
+        self.accounts
+            .lock()
+            .unwrap()
+            .users
+            .get(key)
+            .map(|u| u.name.clone())
+            .unwrap_or_else(|| key.to_string())
     }
 
     fn are_friends(&self, a: &str, b: &str) -> bool {
-        self.accounts.lock().unwrap().users.get(a).is_some_and(|u| u.friends.iter().any(|f| f == b))
+        self.accounts
+            .lock()
+            .unwrap()
+            .users
+            .get(a)
+            .is_some_and(|u| u.friends.iter().any(|f| f == b))
     }
 
     fn friend_keys(&self, key: &str) -> Vec<String> {
-        self.accounts.lock().unwrap().users.get(key).map(|u| u.friends.clone()).unwrap_or_default()
+        self.accounts
+            .lock()
+            .unwrap()
+            .users
+            .get(key)
+            .map(|u| u.friends.clone())
+            .unwrap_or_default()
     }
 
     /// The friend list as `key` sees it: friends with what they're doing, requests both ways.
     fn friends_view(&self, key: &str) -> Down {
         let (friends, requests, sent) = {
             let a = self.accounts.lock().unwrap();
-            let Some(u) = a.users.get(key) else { return Down::Friends { friends: Vec::new(), requests: Vec::new(), sent: Vec::new() } };
-            let name = |k: &String| a.users.get(k).map(|u| u.name.clone()).unwrap_or_else(|| k.clone());
-            let friends: Vec<(String, String)> = u.friends.iter().map(|k| (k.clone(), name(k))).collect();
+            let Some(u) = a.users.get(key) else {
+                return Down::Friends {
+                    friends: Vec::new(),
+                    requests: Vec::new(),
+                    sent: Vec::new(),
+                };
+            };
+            let name = |k: &String| {
+                a.users
+                    .get(k)
+                    .map(|u| u.name.clone())
+                    .unwrap_or_else(|| k.clone())
+            };
+            let friends: Vec<(String, String)> =
+                u.friends.iter().map(|k| (k.clone(), name(k))).collect();
             let requests = u.requests.iter().map(name).collect();
             let sent = a.asked.get(key).into_iter().flatten().map(name).collect();
             (friends, requests, sent)
@@ -1287,12 +1828,23 @@ impl State {
         let mut friends: Vec<Friend> = friends
             .into_iter()
             .map(|(k, name)| {
-                let activity = hub.conns.get(&k).and_then(|v| v.last()).map(|c| c.activity.clone());
-                Friend { name, activity: activity.or_else(|| (k == ALWAYS_ONLINE).then_some(Activity::Menus)) }
+                let activity = hub
+                    .conns
+                    .get(&k)
+                    .and_then(|v| v.last())
+                    .map(|c| c.activity.clone());
+                Friend {
+                    name,
+                    activity: activity.or_else(|| (k == ALWAYS_ONLINE).then_some(Activity::Menus)),
+                }
             })
             .collect();
         friends.sort_by_key(|f| (f.activity.is_none(), f.name.to_lowercase()));
-        Down::Friends { friends, requests, sent }
+        Down::Friends {
+            friends,
+            requests,
+            sent,
+        }
     }
 
     fn push_friends(&self, key: &str) {
@@ -1314,7 +1866,13 @@ impl State {
     /// Lines between `key` and `other`, oldest first.
     fn chat_with(&self, key: &str, other: &str) -> Vec<ChatLine> {
         let other = other.trim().to_ascii_lowercase();
-        self.hub.lock().unwrap().history.get(&pair(key, &other)).map(|l| l.iter().cloned().collect()).unwrap_or_default()
+        self.hub
+            .lock()
+            .unwrap()
+            .history
+            .get(&pair(key, &other))
+            .map(|l| l.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     fn global_chat(&self) -> Vec<ChatLine> {
@@ -1324,18 +1882,32 @@ impl State {
     /// Who `key` can talk to: their friends, with whether each is online and their last line,
     /// the latest conversations first.
     fn conversations(&self, key: &str) -> Vec<pages::Conversation> {
-        let named: Vec<(String, String)> = self.friend_keys(key).into_iter().map(|k| (self.display_name(&k), k)).collect();
+        let named: Vec<(String, String)> = self
+            .friend_keys(key)
+            .into_iter()
+            .map(|k| (self.display_name(&k), k))
+            .collect();
         let hub = self.hub.lock().unwrap();
         let mut out: Vec<pages::Conversation> = named
             .into_iter()
             .map(|(name, k)| {
-                let last = hub.history.get(&pair(key, &k)).and_then(|l| l.back().cloned());
-                pages::Conversation { online: hub.conns.contains_key(&k), name, last }
+                let last = hub
+                    .history
+                    .get(&pair(key, &k))
+                    .and_then(|l| l.back().cloned());
+                pages::Conversation {
+                    online: hub.conns.contains_key(&k),
+                    name,
+                    last,
+                }
             })
             .collect();
         out.sort_by(|a, b| {
             let at = |c: &pages::Conversation| c.last.as_ref().map(|l| l.at).unwrap_or(0);
-            at(b).cmp(&at(a)).then(b.online.cmp(&a.online)).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            at(b)
+                .cmp(&at(a))
+                .then(b.online.cmp(&a.online))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
         out
     }
@@ -1343,7 +1915,9 @@ impl State {
     /// How `viewer` and `other` (keys) stand.
     fn friendship(&self, viewer: &str, other: &str) -> pages::Friendship {
         let a = self.accounts.lock().unwrap();
-        let (Some(me), Some(them)) = (a.users.get(viewer), a.users.get(other)) else { return pages::Friendship::None };
+        let (Some(me), Some(them)) = (a.users.get(viewer), a.users.get(other)) else {
+            return pages::Friendship::None;
+        };
         if viewer == other {
             pages::Friendship::Me
         } else if me.friends.iter().any(|f| f == other) {
@@ -1364,14 +1938,34 @@ impl State {
             let scores = self.scores.lock().unwrap();
             (scores.medals_view(key.as_deref()), scores.medals.table())
         };
-        (view, table.into_iter().map(|(key, n)| (self.display_name(&key), n)).collect())
+        (
+            view,
+            table
+                .into_iter()
+                .map(|(key, n)| (self.display_name(&key), n))
+                .collect(),
+        )
     }
 
     /// Says a rare medal in the global chat.
     fn announce_medal(&self, player: &str, a: &medals::Announcement) {
         let m = &a.medal;
-        let medal = online::ChatMedal { player: player.to_string(), name: m.name.clone(), tier: m.tier, secret: m.secret, first: a.first, holders: a.holders, players: a.players };
-        let line = ChatLine { from: online::SERVER_NAME.to_string(), to: String::new(), text: medals::chat_text(player, a), at: now_secs(), medal: Some(medal) };
+        let medal = online::ChatMedal {
+            player: player.to_string(),
+            name: m.name.clone(),
+            tier: m.tier,
+            secret: m.secret,
+            first: a.first,
+            holders: a.holders,
+            players: a.players,
+        };
+        let line = ChatLine {
+            from: online::SERVER_NAME.to_string(),
+            to: String::new(),
+            text: medals::chat_text(player, a),
+            at: now_secs(),
+            medal: Some(medal),
+        };
         let mut hub = self.hub.lock().unwrap();
         hub.global.push_back(line.clone());
         if hub.global.len() > CHAT_HISTORY {
@@ -1406,14 +2000,34 @@ impl State {
 
     /// What earned medals before they were counted: nobody is told of these, they just have them.
     fn sync_medal_counts(&self) {
-        let friends: Vec<(String, u64)> = self.accounts.lock().unwrap().users.iter().map(|(k, u)| (k.clone(), u.friends.len() as u64)).collect();
-        let chatted: Vec<String> = self.hub.lock().unwrap().global.iter().filter(|l| l.medal.is_none()).map(|l| l.from.to_ascii_lowercase()).collect();
-        let links: HashMap<String, String> = load_saved(&self.path.with_file_name("discord-links.json"));
+        let friends: Vec<(String, u64)> = self
+            .accounts
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .map(|(k, u)| (k.clone(), u.friends.len() as u64))
+            .collect();
+        let chatted: Vec<String> = self
+            .hub
+            .lock()
+            .unwrap()
+            .global
+            .iter()
+            .filter(|l| l.medal.is_none())
+            .map(|l| l.from.to_ascii_lowercase())
+            .collect();
+        let links: HashMap<String, String> =
+            load_saved(&self.path.with_file_name("discord-links.json"));
         let mut scores = self.scores.lock().unwrap();
         for (key, n) in friends {
             scores.medals.count(&key, "friends", n, true);
         }
-        for (event, keys) in [("chat", chatted), ("avatar", avatars::keys()), ("discord", links.into_values().collect())] {
+        for (event, keys) in [
+            ("chat", chatted),
+            ("avatar", avatars::keys()),
+            ("discord", links.into_values().collect()),
+        ] {
             for key in keys {
                 scores.medals.count(&key, event, 1, true);
             }
@@ -1423,15 +2037,33 @@ impl State {
 
     /// A lobby match is over: who played and who won it.
     fn match_over(&self, players: &[net::PlayerInfo]) {
-        let finished: Vec<(&str, u64)> = players.iter().filter_map(|p| p.result.as_ref().filter(|r| !r.quit).map(|r| (p.name.as_str(), r.score))).collect();
+        let finished: Vec<(&str, u64)> = players
+            .iter()
+            .filter_map(|p| {
+                p.result
+                    .as_ref()
+                    .filter(|r| !r.quit)
+                    .map(|r| (p.name.as_str(), r.score))
+            })
+            .collect();
         if finished.len() < 2 {
             return;
         }
-        let known = |name: &str| self.accounts.lock().unwrap().users.contains_key(&name.to_ascii_lowercase());
+        let known = |name: &str| {
+            self.accounts
+                .lock()
+                .unwrap()
+                .users
+                .contains_key(&name.to_ascii_lowercase())
+        };
         for (name, _) in finished.iter().filter(|(name, _)| known(name)) {
             self.medal_count(name, "matches", 1, false);
         }
-        if let Some((name, _)) = finished.iter().max_by_key(|(_, score)| *score).filter(|(name, _)| known(name)) {
+        if let Some((name, _)) = finished
+            .iter()
+            .max_by_key(|(_, score)| *score)
+            .filter(|(name, _)| known(name))
+        {
             self.medal_count(name, "wins", 1, false);
         }
     }
@@ -1454,7 +2086,11 @@ impl State {
                 // They asked first: now friends.
                 a.unask(&other, key);
                 a.users.get_mut(key).unwrap().friends.push(other.clone());
-                a.users.get_mut(&other).unwrap().friends.push(key.to_string());
+                a.users
+                    .get_mut(&other)
+                    .unwrap()
+                    .friends
+                    .push(key.to_string());
                 self.save();
                 Ok((true, a.users[&other].name.clone()))
             } else {
@@ -1469,7 +2105,10 @@ impl State {
             (true, other_name) => {
                 let counts: Vec<(&str, u64)> = {
                     let a = self.accounts.lock().unwrap();
-                    vec![(key, a.users[key].friends.len() as u64), (other.as_str(), a.users[&other].friends.len() as u64)]
+                    vec![
+                        (key, a.users[key].friends.len() as u64),
+                        (other.as_str(), a.users[&other].friends.len() as u64),
+                    ]
                 };
                 for (who, n) in counts {
                     self.medal_count(who, "friends", n, true);
@@ -1486,7 +2125,14 @@ impl State {
 
     /// A message from `key` (`name` as written) to their friend `to`, if `allowed` (the sender's
     /// rate limit) lets it through: kept with their chat and sent to both, game and website.
-    fn post_chat(&self, key: &str, name: &str, to: &str, text: &str, allowed: impl FnOnce(&mut Hub) -> bool) -> Result<ChatLine, String> {
+    fn post_chat(
+        &self,
+        key: &str,
+        name: &str,
+        to: &str,
+        text: &str,
+        allowed: impl FnOnce(&mut Hub) -> bool,
+    ) -> Result<ChatLine, String> {
         let to = to.trim().to_ascii_lowercase();
         if !self.are_friends(key, &to) {
             return Err("you can only message friends".into());
@@ -1500,7 +2146,13 @@ impl State {
         if !allowed(&mut hub) {
             return Err("slow down a little".into());
         }
-        let line = ChatLine { from: name.to_string(), to: to_name, text, at: now_secs(), medal: None };
+        let line = ChatLine {
+            from: name.to_string(),
+            to: to_name,
+            text,
+            at: now_secs(),
+            medal: None,
+        };
         let log = hub.history.entry(pair(key, &to)).or_default();
         log.push_back(line.clone());
         if log.len() > CHAT_HISTORY {
@@ -1516,20 +2168,34 @@ impl State {
     }
 
     /// A line in the global chat from `name`, if `allowed` lets it through.
-    fn post_global(&self, name: &str, text: &str, allowed: impl FnOnce(&mut Hub) -> bool) -> Result<ChatLine, String> {
+    fn post_global(
+        &self,
+        name: &str,
+        text: &str,
+        allowed: impl FnOnce(&mut Hub) -> bool,
+    ) -> Result<ChatLine, String> {
         // The global chat is public: starred out for everyone, old clients included.
         let text = net::censor(&net::clean_chat(text));
         if text.is_empty() {
             return Err("nothing to send".into());
         }
         if let Some(left) = self.muted_for(&name.to_ascii_lowercase()) {
-            return Err(format!("you're muted in the global chat for {} more minutes", left.div_ceil(60).max(1)));
+            return Err(format!(
+                "you're muted in the global chat for {} more minutes",
+                left.div_ceil(60).max(1)
+            ));
         }
         let mut hub = self.hub.lock().unwrap();
         if !allowed(&mut hub) {
             return Err("slow down a little".into());
         }
-        let line = ChatLine { from: name.to_string(), to: String::new(), text, at: now_secs(), medal: None };
+        let line = ChatLine {
+            from: name.to_string(),
+            to: String::new(),
+            text,
+            at: now_secs(),
+            medal: None,
+        };
         hub.global.push_back(line.clone());
         if hub.global.len() > CHAT_HISTORY {
             hub.global.pop_front();
@@ -1546,8 +2212,12 @@ impl State {
 /// A player's social connection: friend list, chat, watching and streaming solo plays.
 fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String, token: String) {
     let key = name.to_ascii_lowercase();
-    let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(90)));
-    let Ok(mut writer) = reader.get_ref().try_clone() else { return };
+    let _ = reader
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_secs(90)));
+    let Ok(mut writer) = reader.get_ref().try_clone() else {
+        return;
+    };
     let (tx, rx) = mpsc::channel::<Line>();
     let tx = Tx(tx);
     // A quiet connection gets a Pong every 20 s anyway: games that only ping while they send
@@ -1574,7 +2244,15 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String,
         let mut hub = state.hub.lock().unwrap();
         hub.next_conn += 1;
         let id = hub.next_conn;
-        hub.conns.entry(key.clone()).or_default().push(Conn { id, name: name.clone(), token, tx: tx.clone(), activity: Activity::Menus, watching: None, chat_times: VecDeque::new() });
+        hub.conns.entry(key.clone()).or_default().push(Conn {
+            id,
+            name: name.clone(),
+            token,
+            tx: tx.clone(),
+            activity: Activity::Menus,
+            watching: None,
+            chat_times: VecDeque::new(),
+        });
         hub.players_changed = true;
         let _ = tx.send(hub.players());
         for line in &hub.global {
@@ -1594,7 +2272,9 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String,
     }
     state.tell_friends(&key);
     while let Ok(line) = online::read_line(&mut reader) {
-        let Ok(up) = serde_json::from_str::<Up>(&line) else { continue };
+        let Ok(up) = serde_json::from_str::<Up>(&line) else {
+            continue;
+        };
         social_up(state, &key, &name, id, &tx, up);
     }
     {
@@ -1609,7 +2289,12 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String,
         hub.players_changed = true;
         if hub.plays.get(&key).is_some_and(|p| p.conn == id) {
             hub.plays.remove(&key);
-            hub.send_to_watchers(&key, &Down::WatchEnd { player: name.clone() });
+            hub.send_to_watchers(
+                &key,
+                &Down::WatchEnd {
+                    player: name.clone(),
+                },
+            );
         }
     }
     state.tell_friends(&key);
@@ -1662,14 +2347,16 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &Tx, up: Up) {
             state.push_friends(&other);
         }
         Up::Chat { to, text } => {
-            if let Err(e) = state.post_chat(key, name, &to, &text, |hub| hub.chat_allowed(key, id)) {
+            if let Err(e) = state.post_chat(key, name, &to, &text, |hub| hub.chat_allowed(key, id))
+            {
                 state.notice(key, e);
             }
         }
         Up::GlobalChat(text) => {
             // Going too fast already said so (`chat_allowed`); a mute says how long.
             if let Err(e) = state.post_global(name, &text, |hub| hub.chat_allowed(key, id))
-                && e.starts_with("you're muted") {
+                && e.starts_with("you're muted")
+            {
                 state.notice(key, e);
             }
         }
@@ -1686,7 +2373,13 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &Tx, up: Up) {
             hub.set_watching(key, id, Some(other.clone()));
             let live = match hub.plays.get(&other) {
                 Some(p) => {
-                    let _ = tx.send(Down::WatchStart { player: other_name, play: p.play.clone(), t: p.t, paused: p.paused, inputs: p.inputs.clone() });
+                    let _ = tx.send(Down::WatchStart {
+                        player: other_name,
+                        play: p.play.clone(),
+                        t: p.t,
+                        paused: p.paused,
+                        inputs: p.inputs.clone(),
+                    });
                     true
                 }
                 None => {
@@ -1706,24 +2399,47 @@ fn social_up(state: &State, key: &str, name: &str, id: u64, tx: &Tx, up: Up) {
             let mut hub = state.hub.lock().unwrap();
             // Before its first frame (JSON has no infinity: far before any map starts).
             let t = play.map.from.unwrap_or(-1.0e9);
-            let d = Down::WatchStart { player: name.to_string(), play: play.clone(), t, paused: false, inputs: Vec::new() };
-            hub.plays.insert(key.to_string(), Play { play, inputs: Vec::new(), t, paused: false, conn: id });
+            let d = Down::WatchStart {
+                player: name.to_string(),
+                play: play.clone(),
+                t,
+                paused: false,
+                inputs: Vec::new(),
+            };
+            hub.plays.insert(
+                key.to_string(),
+                Play {
+                    play,
+                    inputs: Vec::new(),
+                    t,
+                    paused: false,
+                    conn: id,
+                },
+            );
             hub.send_to_watchers(key, &d);
         }
         Up::PlayFrame { t, paused, inputs } => {
             let mut hub = state.hub.lock().unwrap();
-            let Some(p) = hub.plays.get_mut(key).filter(|p| p.conn == id) else { return };
+            let Some(p) = hub.plays.get_mut(key).filter(|p| p.conn == id) else {
+                return;
+            };
             p.t = t;
             p.paused = paused;
             let room = scores::MAX_INPUTS.saturating_sub(p.inputs.len());
-            p.inputs.extend_from_slice(&inputs[..inputs.len().min(room)]);
+            p.inputs
+                .extend_from_slice(&inputs[..inputs.len().min(room)]);
             hub.send_to_watchers(key, &Down::WatchFrame { t, paused, inputs });
         }
         Up::PlayEnd => {
             let mut hub = state.hub.lock().unwrap();
             if hub.plays.get(key).is_some_and(|p| p.conn == id) {
                 hub.plays.remove(key);
-                hub.send_to_watchers(key, &Down::WatchEnd { player: name.to_string() });
+                hub.send_to_watchers(
+                    key,
+                    &Down::WatchEnd {
+                        player: name.to_string(),
+                    },
+                );
             }
         }
     }
@@ -1807,7 +2523,7 @@ impl Open {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        let mut open = self.0 .0.lock().unwrap();
+        let mut open = self.0.0.lock().unwrap();
         if let Some(n) = open.get_mut(&self.1) {
             *n -= 1;
             if *n == 0 {
@@ -1820,7 +2536,10 @@ impl Drop for Slot {
 /// Listens on `port`, on IPv6 and IPv4 (on Linux `::` is usually dual-stack and the second bind
 /// just fails).
 fn bind(port: u16) -> Vec<TcpListener> {
-    ["::", "0.0.0.0"].iter().filter_map(|addr| TcpListener::bind((*addr, port)).ok()).collect()
+    ["::", "0.0.0.0"]
+        .iter()
+        .filter_map(|addr| TcpListener::bind((*addr, port)).ok())
+        .collect()
 }
 
 fn main() {
@@ -1834,11 +2553,23 @@ fn main() {
         match a.as_str() {
             "--port" => port = args.next().and_then(|p| p.parse().ok()).expect("--port N"),
             "--data" => data = PathBuf::from(args.next().expect("--data DIR")),
-            "--http-port" => http_port = args.next().and_then(|p| p.parse().ok()).expect("--http-port N"),
-            "--tls-port" => tls_port = args.next().and_then(|p| p.parse().ok()).expect("--tls-port N"),
+            "--http-port" => {
+                http_port = args
+                    .next()
+                    .and_then(|p| p.parse().ok())
+                    .expect("--http-port N")
+            }
+            "--tls-port" => {
+                tls_port = args
+                    .next()
+                    .and_then(|p| p.parse().ok())
+                    .expect("--tls-port N")
+            }
             "--behind-proxy" => behind_proxy = true,
             _ => {
-                eprintln!("usage: taiko-server [--port 7800] [--tls-port 7801] [--data DIR] [--http-port 8080 [--behind-proxy]]");
+                eprintln!(
+                    "usage: taiko-server [--port 7800] [--tls-port 7801] [--data DIR] [--http-port 8080 [--behind-proxy]]"
+                );
                 std::process::exit(2);
             }
         }
@@ -1878,15 +2609,22 @@ fn main() {
     }
     {
         let state = state.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(COUNT_PP_EVERY);
-            state.scores.lock().unwrap().count_pp();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(COUNT_PP_EVERY);
+                state.scores.lock().unwrap().count_pp();
+            }
         });
     }
     let mut listeners = bind(port);
     assert!(!listeners.is_empty(), "can't listen on port {port}");
-    println!("taiko-server listening on port {port} (protocol {}, rooms protocol {})", online::PROTOCOL, net::PROTOCOL);
-    let mut listeners: Vec<(TcpListener, Option<Arc<rustls::ServerConfig>>)> = listeners.drain(..).map(|l| (l, None)).collect();
+    println!(
+        "taiko-server listening on port {port} (protocol {}, rooms protocol {})",
+        online::PROTOCOL,
+        net::PROTOCOL
+    );
+    let mut listeners: Vec<(TcpListener, Option<Arc<rustls::ServerConfig>>)> =
+        listeners.drain(..).map(|l| (l, None)).collect();
     if tls_port != 0 {
         // Without its certificate the plain port still serves everyone.
         match tls::server_config(&data.join("tls-cert.der"), &data.join("tls-key.der")) {
@@ -1907,7 +2645,10 @@ fn main() {
             let open = open.clone();
             std::thread::spawn(move || {
                 for stream in l.incoming().flatten() {
-                    let ip = stream.peer_addr().map(|a| a.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
+                    let ip = stream
+                        .peer_addr()
+                        .map(|a| a.ip())
+                        .unwrap_or(IpAddr::from([0, 0, 0, 0]));
                     let Some(slot) = open.take(ip) else { continue };
                     let state = state.clone();
                     let config = config.clone();
@@ -1938,7 +2679,17 @@ mod tests {
     use super::*;
 
     fn user(name: &str) -> User {
-        User { name: name.into(), hash: String::new(), created: 0, friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None, muted_until: None }
+        User {
+            name: name.into(),
+            hash: String::new(),
+            created: 0,
+            friends: Vec::new(),
+            requests: Vec::new(),
+            nominator: false,
+            banned: false,
+            email: None,
+            muted_until: None,
+        }
     }
 
     #[test]
@@ -1950,7 +2701,11 @@ mod tests {
         let ip: IpAddr = [10, 0, 0, 1].into();
         let code = || {
             let letter = mail::next().expect("a letter");
-            letter.lines().find_map(|l| l.trim().parse::<u32>().ok().filter(|_| l.trim().len() == 6)).map(|c| format!("{c:06}")).expect("a code in it")
+            letter
+                .lines()
+                .find_map(|l| l.trim().parse::<u32>().ok().filter(|_| l.trim().len() == 6))
+                .map(|c| format!("{c:06}"))
+                .expect("a code in it")
         };
         let err = |r: Reply| match r {
             Reply::Error(e) => e,
@@ -1958,36 +2713,135 @@ mod tests {
         };
         let pass = Some("secret1");
         assert!(err(register(&state, ip, "newbie", pass, None, None)).contains("email"));
-        assert!(matches!(register(&state, ip, "newbie", pass, Some("New@Mail.ru"), None), Reply::CodeSent(to) if to == "n**@mail.ru"));
+        assert!(
+            matches!(register(&state, ip, "newbie", pass, Some("New@Mail.ru"), None), Reply::CodeSent(to) if to == "n**@mail.ru")
+        );
         let right = code();
-        assert_eq!(err(register(&state, ip, "newbie", pass, Some("new@mail.ru"), Some("000000"))), "wrong code");
+        assert_eq!(
+            err(register(
+                &state,
+                ip,
+                "newbie",
+                pass,
+                Some("new@mail.ru"),
+                Some("000000")
+            )),
+            "wrong code"
+        );
         // The code isn't used up by coming without a password.
-        assert!(err(register(&state, ip, "newbie", None, Some("new@mail.ru"), Some(&right))).contains("password"));
-        assert!(matches!(register(&state, ip, "newbie", pass, Some("new@mail.ru"), Some(&right)), Reply::Account { email: Some(true), .. }));
-        assert!(err(register(&state, ip, "other", pass, Some("NEW@mail.ru"), None)).contains("already used"));
+        assert!(
+            err(register(
+                &state,
+                ip,
+                "newbie",
+                None,
+                Some("new@mail.ru"),
+                Some(&right)
+            ))
+            .contains("password")
+        );
+        assert!(matches!(
+            register(
+                &state,
+                ip,
+                "newbie",
+                pass,
+                Some("new@mail.ru"),
+                Some(&right)
+            ),
+            Reply::Account {
+                email: Some(true),
+                ..
+            }
+        ));
+        assert!(
+            err(register(
+                &state,
+                ip,
+                "other",
+                pass,
+                Some("NEW@mail.ru"),
+                None
+            ))
+            .contains("already used")
+        );
         // The website's order: the name and email for a code, the password with it.
-        assert!(matches!(state.web_register(ip, "webby", None, "web@mail.ru", None), WebAuth::CodeSent(_)));
+        assert!(matches!(
+            state.web_register(ip, "webby", None, "web@mail.ru", None),
+            WebAuth::CodeSent(_)
+        ));
         assert!(!state.accounts.lock().unwrap().users.contains_key("webby"));
         let right = code();
-        assert!(matches!(state.web_register(ip, "webby", Some("secret2"), "web@mail.ru", Some(&right)), WebAuth::LoggedIn { name, .. } if name == "webby"));
-        assert!(matches!(login(&state, ip, "WEB@mail.ru", "secret2"), Reply::Account { name, .. } if name == "webby"));
-        assert!(matches!(login(&state, ip, "nobody@mail.ru", "secret2"), Reply::Error(_)));
+        assert!(
+            matches!(state.web_register(ip, "webby", Some("secret2"), "web@mail.ru", Some(&right)), WebAuth::LoggedIn { name, .. } if name == "webby")
+        );
+        assert!(
+            matches!(login(&state, ip, "WEB@mail.ru", "secret2"), Reply::Account { name, .. } if name == "webby")
+        );
+        assert!(matches!(
+            login(&state, ip, "nobody@mail.ru", "secret2"),
+            Reply::Error(_)
+        ));
         // Forgot it: a code to the email, by name or by the email itself.
-        assert!(matches!(reset_password(&state, ip, "new@mail.ru", None, None), Reply::CodeSent(_)));
+        assert!(matches!(
+            reset_password(&state, ip, "new@mail.ru", None, None),
+            Reply::CodeSent(_)
+        ));
         let right = code();
-        assert!(err(reset_password(&state, ip, "Newbie", Some(&right), Some("x"))).contains("6 characters"));
-        assert!(matches!(reset_password(&state, ip, "Newbie", Some(&right), Some("better1")), Reply::Account { .. }));
-        assert!(matches!(login(&state, ip, "newbie", "better1"), Reply::Account { .. }));
-        assert!(matches!(login(&state, ip, "newbie", "secret1"), Reply::Error(_)));
+        assert!(
+            err(reset_password(
+                &state,
+                ip,
+                "Newbie",
+                Some(&right),
+                Some("x")
+            ))
+            .contains("6 characters")
+        );
+        assert!(matches!(
+            reset_password(&state, ip, "Newbie", Some(&right), Some("better1")),
+            Reply::Account { .. }
+        ));
+        assert!(matches!(
+            login(&state, ip, "newbie", "better1"),
+            Reply::Account { .. }
+        ));
+        assert!(matches!(
+            login(&state, ip, "newbie", "secret1"),
+            Reply::Error(_)
+        ));
         // An account from before emails links one.
-        state.accounts.lock().unwrap().users.insert("old".into(), user("Old"));
+        state
+            .accounts
+            .lock()
+            .unwrap()
+            .users
+            .insert("old".into(), user("Old"));
         let token = state.new_session(&mut state.accounts.lock().unwrap(), "old");
-        assert!(matches!(state.account("Old".into(), token.clone()), Reply::Account { email: Some(false), .. }));
+        assert!(matches!(
+            state.account("Old".into(), token.clone()),
+            Reply::Account {
+                email: Some(false),
+                ..
+            }
+        ));
         assert!(err(reset_password(&state, ip, "old", None, None)).contains("no email"));
-        assert!(matches!(link_email(&state, ip, &token, "old@x.io", None), Reply::CodeSent(_)));
+        assert!(matches!(
+            link_email(&state, ip, &token, "old@x.io", None),
+            Reply::CodeSent(_)
+        ));
         let right = code();
-        assert!(matches!(link_email(&state, ip, &token, "old@x.io", Some(&right)), Reply::EmailLinked(_)));
-        assert!(matches!(state.account("Old".into(), token), Reply::Account { email: Some(true), .. }));
+        assert!(matches!(
+            link_email(&state, ip, &token, "old@x.io", Some(&right)),
+            Reply::EmailLinked(_)
+        ));
+        assert!(matches!(
+            state.account("Old".into(), token),
+            Reply::Account {
+                email: Some(true),
+                ..
+            }
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2026,7 +2880,15 @@ mod tests {
         let mut hub = state.hub.lock().unwrap();
         hub.next_conn += 1;
         let id = hub.next_conn;
-        hub.conns.entry(key.to_string()).or_default().push(Conn { id, name: key.to_string(), token: token.to_string(), tx: tx.clone(), activity: Activity::Menus, watching: None, chat_times: VecDeque::new() });
+        hub.conns.entry(key.to_string()).or_default().push(Conn {
+            id,
+            name: key.to_string(),
+            token: token.to_string(),
+            tx: tx.clone(),
+            activity: Activity::Menus,
+            watching: None,
+            chat_times: VecDeque::new(),
+        });
         (id, tx, rx)
     }
 
@@ -2041,22 +2903,43 @@ mod tests {
         let hash = hash_password("secret1").unwrap();
         {
             let mut a = state.accounts.lock().unwrap();
-            a.users.insert("troll".into(), User { hash, nominator: true, email: Some("t@mail.ru".into()), ..user("troll") });
+            a.users.insert(
+                "troll".into(),
+                User {
+                    hash,
+                    nominator: true,
+                    email: Some("t@mail.ru".into()),
+                    ..user("troll")
+                },
+            );
             a.users.insert("auneu".into(), user("auneu"));
         }
-        let Reply::Account { token, .. } = login(&state, ip, "troll", "secret1") else { panic!("logs in") };
+        let Reply::Account { token, .. } = login(&state, ip, "troll", "secret1") else {
+            panic!("logs in")
+        };
         let (_, _, rx) = connect(&state, "troll", &token);
 
-        assert!(state.set_banned("troll", "auneu", true).is_err(), "only admins");
-        assert!(state.set_banned("auneu", "auneu", true).is_err() && state.set_banned("auneu", "claude", true).is_err());
+        assert!(
+            state.set_banned("troll", "auneu", true).is_err(),
+            "only admins"
+        );
+        assert!(
+            state.set_banned("auneu", "auneu", true).is_err()
+                && state.set_banned("auneu", "claude", true).is_err()
+        );
         assert!(state.set_banned("auneu", "nobody", true).is_err());
         assert!(state.set_banned("lynerrr", "Troll", true).is_ok());
 
         assert!(state.user(&token).is_none(), "logged out");
         assert!(rx.try_iter().any(|l| l.is_empty()), "connection closed");
         assert!(matches!(login(&state, ip, "troll", "secret1"), Reply::Error(e) if e == BANNED));
-        assert!(matches!(login(&state, ip, "troll", "wrong"), Reply::Error(e) if e != BANNED), "only with the password");
-        assert!(matches!(reset_password(&state, ip, "troll", None, None), Reply::Error(e) if e == BANNED));
+        assert!(
+            matches!(login(&state, ip, "troll", "wrong"), Reply::Error(e) if e != BANNED),
+            "only with the password"
+        );
+        assert!(
+            matches!(reset_password(&state, ip, "troll", None, None), Reply::Error(e) if e == BANNED)
+        );
         assert!(!state.is_nominator("troll"));
 
         // Still banned after a restart.
@@ -2065,7 +2948,10 @@ mod tests {
         assert!(matches!(login(&again, ip, "troll", "secret1"), Reply::Error(e) if e == BANNED));
 
         state.set_banned("auneu", "troll", false).unwrap();
-        assert!(matches!(login(&state, ip, "troll", "secret1"), Reply::Account { .. }));
+        assert!(matches!(
+            login(&state, ip, "troll", "secret1"),
+            Reply::Account { .. }
+        ));
         assert!(state.is_nominator("troll"));
     }
 
@@ -2076,33 +2962,72 @@ mod tests {
         let hash = hash_password("secret1").unwrap();
         {
             let mut a = state.accounts.lock().unwrap();
-            a.users.insert("troll".into(), User { hash, friends: vec!["ann".into()], requests: vec!["bob".into()], ..user("Troll") });
-            a.users.insert("ann".into(), User { friends: vec!["troll".into()], ..user("Ann") });
+            a.users.insert(
+                "troll".into(),
+                User {
+                    hash,
+                    friends: vec!["ann".into()],
+                    requests: vec!["bob".into()],
+                    ..user("Troll")
+                },
+            );
+            a.users.insert(
+                "ann".into(),
+                User {
+                    friends: vec!["troll".into()],
+                    ..user("Ann")
+                },
+            );
             a.users.insert("bob".into(), user("Bob"));
             a.index_requests();
         }
-        let Reply::Account { token, .. } = login(&state, ip, "troll", "secret1") else { panic!("logs in") };
-        state.hub.lock().unwrap().history.insert(pair("ann", "troll"), VecDeque::new());
+        let Reply::Account { token, .. } = login(&state, ip, "troll", "secret1") else {
+            panic!("logs in")
+        };
+        state
+            .hub
+            .lock()
+            .unwrap()
+            .history
+            .insert(pair("ann", "troll"), VecDeque::new());
 
         assert!(state.rename("ann", "troll", "x12").is_err(), "only admins");
-        assert!(state.rename("auneu", "auneu", "boss").is_err() && state.rename("auneu", "claude", "gpt").is_err());
+        assert!(
+            state.rename("auneu", "auneu", "boss").is_err()
+                && state.rename("auneu", "claude", "gpt").is_err()
+        );
         assert!(state.rename("auneu", "troll", "no good!").is_err());
         assert!(state.rename("auneu", "troll", "Troll").is_err());
         for taken in ["ann", "ANN", "claude", "lynerrr"] {
-            assert!(state.rename("auneu", "troll", taken).is_err(), "{taken} is taken");
+            assert!(
+                state.rename("auneu", "troll", taken).is_err(),
+                "{taken} is taken"
+            );
         }
 
         assert_eq!(state.rename("auneu", "Troll", "Nice").unwrap(), "Nice");
         assert_eq!(state.user(&token).as_deref(), Some("Nice"));
-        assert!(matches!(login(&state, ip, "nice", "secret1"), Reply::Account { name, .. } if name == "Nice"));
-        assert!(matches!(login(&state, ip, "troll", "secret1"), Reply::Error(_)));
+        assert!(
+            matches!(login(&state, ip, "nice", "secret1"), Reply::Account { name, .. } if name == "Nice")
+        );
+        assert!(matches!(
+            login(&state, ip, "troll", "secret1"),
+            Reply::Error(_)
+        ));
         assert!(state.are_friends("ann", "nice") && state.are_friends("nice", "ann"));
         {
             let a = state.accounts.lock().unwrap();
             assert_eq!(a.users["nice"].requests, ["bob"]);
             assert_eq!(a.asked["bob"], ["nice"]);
         }
-        assert!(state.hub.lock().unwrap().history.contains_key(&pair("ann", "nice")));
+        assert!(
+            state
+                .hub
+                .lock()
+                .unwrap()
+                .history
+                .contains_key(&pair("ann", "nice"))
+        );
 
         // Case only.
         assert_eq!(state.rename("auneu", "nice", "NICE").unwrap(), "NICE");
@@ -2114,17 +3039,35 @@ mod tests {
         let state = test_state("chat-saved");
         {
             let mut a = state.accounts.lock().unwrap();
-            a.users.insert("ann".into(), User { friends: vec!["bob".into()], ..user("Ann") });
-            a.users.insert("bob".into(), User { friends: vec!["ann".into()], ..user("Bob") });
+            a.users.insert(
+                "ann".into(),
+                User {
+                    friends: vec!["bob".into()],
+                    ..user("Ann")
+                },
+            );
+            a.users.insert(
+                "bob".into(),
+                User {
+                    friends: vec!["ann".into()],
+                    ..user("Bob")
+                },
+            );
         }
-        state.post_chat("ann", "Ann", "bob", "hi bob", |_| true).unwrap();
+        state
+            .post_chat("ann", "Ann", "bob", "hi bob", |_| true)
+            .unwrap();
         state.post_global("Ann", "hi all", |_| true).unwrap();
         state.write_chat();
         let file = state.path.with_file_name("chat.json");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600, "private messages");
+            assert_eq!(
+                std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "private messages"
+            );
         }
 
         let (again, _wake) = State::load(state.path.clone());
@@ -2136,12 +3079,17 @@ mod tests {
         state.write_chat();
         assert!(!file.exists());
         for k in 0..CHAT_HISTORY + 5 {
-            state.post_global("Ann", &format!("line {k}"), |_| true).unwrap();
+            state
+                .post_global("Ann", &format!("line {k}"), |_| true)
+                .unwrap();
         }
         state.write_chat();
         let (again, _wake) = State::load(state.path.clone());
         assert_eq!(again.global_chat().len(), CHAT_HISTORY);
-        assert_eq!(again.global_chat().last().unwrap().text, format!("line {}", CHAT_HISTORY + 4));
+        assert_eq!(
+            again.global_chat().last().unwrap().text,
+            format!("line {}", CHAT_HISTORY + 4)
+        );
     }
 
     #[test]
@@ -2150,13 +3098,26 @@ mod tests {
         let ip = IpAddr::from([127, 0, 0, 1]);
         let token = {
             let mut a = state.accounts.lock().unwrap();
-            a.users.insert("alice".into(), User { email: Some("a@mail.ru".into()), ..user("alice") });
+            a.users.insert(
+                "alice".into(),
+                User {
+                    email: Some("a@mail.ru".into()),
+                    ..user("alice")
+                },
+            );
             state.new_session(&mut a, "alice")
         };
         for code in [None, Some("000000")] {
-            assert!(matches!(link_email(&state, ip, &token, "evil@mail.ru", code), Reply::Error(e) if e.contains("already has an email")));
+            assert!(
+                matches!(link_email(&state, ip, &token, "evil@mail.ru", code), Reply::Error(e) if e.contains("already has an email"))
+            );
         }
-        assert_eq!(state.accounts.lock().unwrap().users["alice"].email.as_deref(), Some("a@mail.ru"));
+        assert_eq!(
+            state.accounts.lock().unwrap().users["alice"]
+                .email
+                .as_deref(),
+            Some("a@mail.ru")
+        );
     }
 
     #[test]
@@ -2177,12 +3138,20 @@ mod tests {
     #[test]
     fn limits_count_a_whole_ipv6_home_as_one() {
         let ip = |s: &str| s.parse::<IpAddr>().unwrap();
-        assert_eq!(limit_key(ip("2001:db8:1:2:aaaa::1")), limit_key(ip("2001:db8:1:2:bbbb::2")));
-        assert_ne!(limit_key(ip("2001:db8:1:2::1")), limit_key(ip("2001:db8:1:3::1")));
+        assert_eq!(
+            limit_key(ip("2001:db8:1:2:aaaa::1")),
+            limit_key(ip("2001:db8:1:2:bbbb::2"))
+        );
+        assert_ne!(
+            limit_key(ip("2001:db8:1:2::1")),
+            limit_key(ip("2001:db8:1:3::1"))
+        );
         assert_eq!(limit_key(ip("::ffff:1.2.3.4")), ip("1.2.3.4"));
         assert_eq!(limit_key(ip("1.2.3.4")), ip("1.2.3.4"));
         let open = Arc::new(Open::default());
-        let slots: Vec<_> = (0..PER_ADDRESS).map(|i| open.take(ip(&format!("2001:db8::{i:x}"))).unwrap()).collect();
+        let slots: Vec<_> = (0..PER_ADDRESS)
+            .map(|i| open.take(ip(&format!("2001:db8::{i:x}"))).unwrap())
+            .collect();
         assert!(open.take(ip("2001:db8::ffff")).is_none());
         drop(slots);
         assert!(open.take(ip("2001:db8::ffff")).is_some());
@@ -2216,8 +3185,14 @@ mod tests {
         let state = test_state("logins");
         let ip = IpAddr::from([127, 0, 0, 1]);
         let wrong = std::thread::scope(|s| {
-            let tries: Vec<_> = (0..FAILED_LOGINS * 3).map(|_| s.spawn(|| login(&state, ip, "nobody", "wrong password"))).collect();
-            tries.into_iter().map(|t| t.join().unwrap()).filter(|r| matches!(r, Reply::Error(e) if e.contains("wrong name"))).count()
+            let tries: Vec<_> = (0..FAILED_LOGINS * 3)
+                .map(|_| s.spawn(|| login(&state, ip, "nobody", "wrong password")))
+                .collect();
+            tries
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .filter(|r| matches!(r, Reply::Error(e) if e.contains("wrong name")))
+                .count()
         });
         assert_eq!(wrong, FAILED_LOGINS);
     }
@@ -2227,9 +3202,18 @@ mod tests {
         let state = test_state("good-login");
         let ip = IpAddr::from([127, 0, 0, 1]);
         let hash = hash_password("a good password").unwrap();
-        state.accounts.lock().unwrap().users.insert("alice".into(), User { hash, ..user("alice") });
+        state.accounts.lock().unwrap().users.insert(
+            "alice".into(),
+            User {
+                hash,
+                ..user("alice")
+            },
+        );
         for _ in 0..FAILED_LOGINS + 1 {
-            assert!(matches!(login(&state, ip, "alice", "a good password"), Reply::Account { .. }));
+            assert!(matches!(
+                login(&state, ip, "alice", "a good password"),
+                Reply::Account { .. }
+            ));
         }
     }
 
@@ -2237,9 +3221,16 @@ mod tests {
     fn a_taken_name_uses_up_no_registration() {
         let state = test_state("taken");
         let ip = IpAddr::from([127, 0, 0, 1]);
-        state.accounts.lock().unwrap().users.insert("alice".into(), user("alice"));
+        state
+            .accounts
+            .lock()
+            .unwrap()
+            .users
+            .insert("alice".into(), user("alice"));
         for _ in 0..REGISTER_PER_HOUR + 1 {
-            assert!(matches!(register(&state, ip, "alice", Some("a good password"), None, None), Reply::Error(e) if e.contains("taken")));
+            assert!(
+                matches!(register(&state, ip, "alice", Some("a good password"), None, None), Reply::Error(e) if e.contains("taken"))
+            );
         }
     }
 
@@ -2256,11 +3247,32 @@ mod tests {
         }
         let (alice, alice_tx, alice_rx) = connect(&state, "alice", "a");
         let (bob, bob_tx, bob_rx) = connect(&state, "bob", "b");
-        social_up(&state, "alice", "alice", alice, &alice_tx, Up::Watch("bob".into()));
-        social_up(&state, "bob", "bob", bob, &bob_tx, Up::Watch("alice".into()));
+        social_up(
+            &state,
+            "alice",
+            "alice",
+            alice,
+            &alice_tx,
+            Up::Watch("bob".into()),
+        );
+        social_up(
+            &state,
+            "bob",
+            "bob",
+            bob,
+            &bob_tx,
+            Up::Watch("alice".into()),
+        );
         lines(&alice_rx);
         lines(&bob_rx);
-        social_up(&state, "alice", "alice", alice, &alice_tx, Up::RemoveFriend("bob".into()));
+        social_up(
+            &state,
+            "alice",
+            "alice",
+            alice,
+            &alice_tx,
+            Up::RemoveFriend("bob".into()),
+        );
         for rx in [&alice_rx, &bob_rx] {
             assert!(lines(rx).iter().any(|l| l.contains("WatchStopped")));
         }
@@ -2283,13 +3295,38 @@ mod tests {
     fn a_live_play_keeps_at_most_max_inputs() {
         let state = test_state("inputs");
         let (id, tx, _rx) = connect(&state, "alice", "a");
-        let map = serde_json::from_str(r#"{"hash":1,"artist":"a","title":"t","version":"v"}"#).unwrap();
-        social_up(&state, "alice", "alice", id, &tx, Up::PlayStart(SoloPlay { map, anti_mash: false }));
+        let map =
+            serde_json::from_str(r#"{"hash":1,"artist":"a","title":"t","version":"v"}"#).unwrap();
+        social_up(
+            &state,
+            "alice",
+            "alice",
+            id,
+            &tx,
+            Up::PlayStart(SoloPlay {
+                map,
+                anti_mash: false,
+            }),
+        );
         for _ in 0..3 {
             let inputs = vec![(0.0, 1); scores::MAX_INPUTS / 2];
-            social_up(&state, "alice", "alice", id, &tx, Up::PlayFrame { t: 0.0, paused: false, inputs });
+            social_up(
+                &state,
+                "alice",
+                "alice",
+                id,
+                &tx,
+                Up::PlayFrame {
+                    t: 0.0,
+                    paused: false,
+                    inputs,
+                },
+            );
         }
-        assert_eq!(state.hub.lock().unwrap().plays["alice"].inputs.len(), scores::MAX_INPUTS);
+        assert_eq!(
+            state.hub.lock().unwrap().plays["alice"].inputs.len(),
+            scores::MAX_INPUTS
+        );
     }
 
     #[test]
@@ -2301,19 +3338,54 @@ mod tests {
                 a.users.insert(n.into(), user(n));
             }
             // carl is the admin's friend: he'd see a "watching" status.
-            a.users.get_mut("auneu").unwrap().friends.push("carl".into());
-            a.users.get_mut("carl").unwrap().friends.push("auneu".into());
+            a.users
+                .get_mut("auneu")
+                .unwrap()
+                .friends
+                .push("carl".into());
+            a.users
+                .get_mut("carl")
+                .unwrap()
+                .friends
+                .push("auneu".into());
         }
         let (admin, admin_tx, admin_rx) = connect(&state, "auneu", "a");
         let (carl, carl_tx, carl_rx) = connect(&state, "carl", "c");
-        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Watch("bob".into()));
-        assert!(lines(&admin_rx).iter().all(|l| !l.contains("WatchStopped")), "not friends, still watching");
+        social_up(
+            &state,
+            "auneu",
+            "auneu",
+            admin,
+            &admin_tx,
+            Up::Watch("bob".into()),
+        );
+        assert!(
+            lines(&admin_rx).iter().all(|l| !l.contains("WatchStopped")),
+            "not friends, still watching"
+        );
         assert_eq!(state.hub.lock().unwrap().watchers.get("bob"), Some(&1));
-        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Status(Activity::Watching { name: "bob".into() }));
-        assert!(lines(&carl_rx).iter().all(|l| !l.contains("Watching")), "friends see the menus");
+        social_up(
+            &state,
+            "auneu",
+            "auneu",
+            admin,
+            &admin_tx,
+            Up::Status(Activity::Watching { name: "bob".into() }),
+        );
+        assert!(
+            lines(&carl_rx).iter().all(|l| !l.contains("Watching")),
+            "friends see the menus"
+        );
         assert!(matches!(state.activity("auneu"), Some(Activity::Menus)));
         // Anyone else still can't.
-        social_up(&state, "carl", "carl", carl, &carl_tx, Up::Watch("bob".into()));
+        social_up(
+            &state,
+            "carl",
+            "carl",
+            carl,
+            &carl_tx,
+            Up::Watch("bob".into()),
+        );
         assert!(lines(&carl_rx).iter().any(|l| l.contains("WatchStopped")));
     }
 
@@ -2327,7 +3399,17 @@ mod tests {
             }
         }
         let (troll, troll_tx, troll_rx) = connect(&state, "troll", "t");
-        social_up(&state, "troll", "troll", troll, &troll_tx, Up::Admin(online::AdminOp::Ban { name: "auneu".into(), on: true }));
+        social_up(
+            &state,
+            "troll",
+            "troll",
+            troll,
+            &troll_tx,
+            Up::Admin(online::AdminOp::Ban {
+                name: "auneu".into(),
+                on: true,
+            }),
+        );
         assert!(lines(&troll_rx).iter().any(|l| l.contains("only admins")));
         assert!(!state.is_banned("auneu"));
     }
@@ -2343,28 +3425,88 @@ mod tests {
         }
         let (admin, admin_tx, _admin_rx) = connect(&state, "auneu", "a");
         let (troll, troll_tx, troll_rx) = connect(&state, "troll", "t");
-        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Admin(online::AdminOp::Mute { name: "Troll".into(), minutes: 30 }));
+        social_up(
+            &state,
+            "auneu",
+            "auneu",
+            admin,
+            &admin_tx,
+            Up::Admin(online::AdminOp::Mute {
+                name: "Troll".into(),
+                minutes: 30,
+            }),
+        );
         lines(&troll_rx);
-        social_up(&state, "troll", "troll", troll, &troll_tx, Up::GlobalChat("spam".into()));
+        social_up(
+            &state,
+            "troll",
+            "troll",
+            troll,
+            &troll_tx,
+            Up::GlobalChat("spam".into()),
+        );
         assert!(lines(&troll_rx).iter().any(|l| l.contains("muted")));
         assert!(state.global_chat().is_empty());
-        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Admin(online::AdminOp::Mute { name: "troll".into(), minutes: 0 }));
-        social_up(&state, "troll", "troll", troll, &troll_tx, Up::GlobalChat("sorry".into()));
+        social_up(
+            &state,
+            "auneu",
+            "auneu",
+            admin,
+            &admin_tx,
+            Up::Admin(online::AdminOp::Mute {
+                name: "troll".into(),
+                minutes: 0,
+            }),
+        );
+        social_up(
+            &state,
+            "troll",
+            "troll",
+            troll,
+            &troll_tx,
+            Up::GlobalChat("sorry".into()),
+        );
         assert_eq!(state.global_chat().len(), 1);
     }
 
     #[test]
     fn a_line_taken_down_goes_for_everyone() {
         let state = test_state("takedown");
-        state.accounts.lock().unwrap().users.insert("auneu".into(), user("auneu"));
+        state
+            .accounts
+            .lock()
+            .unwrap()
+            .users
+            .insert("auneu".into(), user("auneu"));
         let (admin, admin_tx, _) = connect(&state, "auneu", "a");
         let (_, _, viewer) = connect(&state, "viewer", "v");
         let bad = state.post_global("troll", "bad words", |_| true).unwrap();
         state.post_global("ann", "hi", |_| true).unwrap();
         lines(&viewer);
-        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Admin(online::AdminOp::DeleteGlobal { from: bad.from.clone(), at: bad.at }));
-        assert_eq!(state.global_chat().iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["hi"]);
-        assert!(lines(&viewer).iter().any(|l| l.contains("GlobalChatDeleted")));
+        social_up(
+            &state,
+            "auneu",
+            "auneu",
+            admin,
+            &admin_tx,
+            Up::Admin(online::AdminOp::DeleteGlobal {
+                from: bad.from.clone(),
+                at: bad.at,
+            }),
+        );
+        assert_eq!(
+            state
+                .global_chat()
+                .iter()
+                .map(|l| l.text.as_str())
+                .collect::<Vec<_>>(),
+            ["hi"]
+        );
+        assert!(
+            lines(&viewer)
+                .iter()
+                .any(|l| l.contains("GlobalChatDeleted"))
+        );
     }
 
     #[test]
@@ -2378,13 +3520,34 @@ mod tests {
         }
         let (admin, admin_tx, admin_rx) = connect(&state, "auneu", "a");
         let (_, _, troll_rx) = connect(&state, "troll", "t");
-        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Admin(online::AdminOp::Kick { name: "troll".into() }));
+        social_up(
+            &state,
+            "auneu",
+            "auneu",
+            admin,
+            &admin_tx,
+            Up::Admin(online::AdminOp::Kick {
+                name: "troll".into(),
+            }),
+        );
         let got = lines(&troll_rx);
-        assert!(got.iter().any(|l| l.contains("disconnected")) && got.iter().any(|l| l.is_empty()), "told, then closed");
+        assert!(
+            got.iter().any(|l| l.contains("disconnected")) && got.iter().any(|l| l.is_empty()),
+            "told, then closed"
+        );
         assert!(state.admin.kicked_for("troll").is_some());
         assert!(lines(&admin_rx).iter().any(|l| l.contains("kicked")));
         // Admins can't kick admins.
-        social_up(&state, "auneu", "auneu", admin, &admin_tx, Up::Admin(online::AdminOp::Kick { name: "lynerrr".into() }));
+        social_up(
+            &state,
+            "auneu",
+            "auneu",
+            admin,
+            &admin_tx,
+            Up::Admin(online::AdminOp::Kick {
+                name: "lynerrr".into(),
+            }),
+        );
         assert!(lines(&admin_rx).iter().any(|l| l.contains("admin")));
     }
 }

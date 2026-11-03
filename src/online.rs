@@ -38,7 +38,10 @@ pub enum Request {
         #[serde(default)]
         code: Option<String>,
     },
-    Login { name: String, password: String },
+    Login {
+        name: String,
+        password: String,
+    },
     /// A forgotten password: `who` is the name or the email. Without `code` one is mailed to the
     /// account's email (`Reply::CodeSent`); with it and the new `password`, the password is
     /// changed, every other session logged out, and this one logged in (`Reply::Account`).
@@ -58,8 +61,12 @@ pub enum Request {
         code: Option<String>,
     },
     /// Checks a saved session token.
-    WhoAmI { token: String },
-    Logout { token: String },
+    WhoAmI {
+        token: String,
+    },
+    Logout {
+        token: String,
+    },
     ListRooms,
     /// Opens a lobby on the server and joins it as its host; `mapguessr`: one that plays
     /// mapguessr.
@@ -69,34 +76,62 @@ pub enum Request {
         #[serde(default)]
         mapguessr: bool,
     },
-    JoinRoom { token: String, room: u32 },
+    JoinRoom {
+        token: String,
+        room: u32,
+    },
     /// The social connection (friends, chat, watching): after `Reply::Account` the connection
     /// stays open, the game sending `Up` lines and the server `Down` lines.
-    Connect { token: String },
+    Connect {
+        token: String,
+    },
     /// A kept play for the online leaderboards (`Reply::Submitted`).
-    SubmitScore { token: String, play: Box<ScoreSubmit> },
+    SubmitScore {
+        token: String,
+        play: Box<ScoreSubmit>,
+    },
     /// The best score of each player on a map, by its hash (`Reply::Scores`).
-    MapScores { map: u64 },
+    MapScores {
+        map: u64,
+    },
     /// A player's profile (`Reply::Profile`).
-    Profile { name: String },
+    Profile {
+        name: String,
+    },
     /// The presses of an online score, by its `OnlineScore::id` (`Reply::Replay`).
-    Replay { id: u64 },
+    Replay {
+        id: u64,
+    },
     /// One online score, by its `OnlineScore::id` (`Reply::Score`): what a score link opens.
-    Score { id: u64 },
+    Score {
+        id: u64,
+    },
     /// The statuses on osu! of the sets the maps are of, each as (set ID, the ID of one of its
     /// maps): what the server knows now (`Reply::SetStatuses`), and it looks the rest up for
     /// the next time (when `token` is a logged-in player's).
-    SetStatuses { token: String, maps: Vec<(u32, u32)> },
+    SetStatuses {
+        token: String,
+        maps: Vec<(u32, u32)>,
+    },
     /// The map sets loved on the server (`Reply::LovedSets`): they give pp there.
     LovedSets,
     /// A loved nominator loves a map set on the server, or takes it back (`Reply::LovedSets`).
-    SetLoved { token: String, set: u32, loved: bool },
+    SetLoved {
+        token: String,
+        set: u32,
+        loved: bool,
+    },
     /// A play that isn't on the leaderboards (failed, quit, restarted, from a start point, in
     /// a lobby): it counts in the profile's play count, and `ms` of playing in its play time
     /// (`Reply::Counted`).
-    Played { token: String, ms: u64 },
+    Played {
+        token: String,
+        ms: u64,
+    },
     /// Every medal, and how `name` stands with them (`Reply::Medals`); no name: just the list.
-    Medals { name: String },
+    Medals {
+        name: String,
+    },
     /// The game crashed last time: its report, sent on the next start (`Reply::Counted`),
     /// unless the player turned that off (Settings > Online > Send crash reports).
     CrashReport(Box<CrashReport>),
@@ -124,7 +159,9 @@ pub fn scrub_paths(text: &str) -> String {
         let mut rest = out.as_str();
         while let Some(i) = rest.find(marker) {
             let after = &rest[i + marker.len()..];
-            let end = after.find(['\\', '/', '\n', '"', '\'']).unwrap_or(after.len());
+            let end = after
+                .find(['\\', '/', '\n', '"', '\''])
+                .unwrap_or(after.len());
             // The drive before it goes too ("C:" of "C:\Users\...").
             let mut head = &rest[..i];
             if head.len() >= 2 && head.ends_with(':') {
@@ -205,7 +242,9 @@ pub const NOTE_MODS_VERSION: u32 = 2;
 /// Mods that add nothing to pp by their multiplier: osu!'s the formula knows, and those that only
 /// change the speed or the notes.
 #[allow(dead_code)] // used by the server
-pub const NO_FACTOR_MODS: [&str; 12] = ["EZ", "HD", "HR", "FL", "NF", "SD", "PF", "DT", "NC", "HT", "DC", "HA"];
+pub const NO_FACTOR_MODS: [&str; 12] = [
+    "EZ", "HD", "HR", "FL", "NF", "SD", "PF", "DT", "NC", "HT", "DC", "HA",
+];
 /// How many other mods can't reach the ceiling whatever they are.
 #[allow(dead_code)] // used by the server
 pub const MODS_BELOW_CAP: usize = 3;
@@ -213,7 +252,10 @@ pub const MODS_BELOW_CAP: usize = 3;
 /// Whether a play from a game before the ceiling could have gone past it.
 #[allow(dead_code)] // used by the server
 pub fn past_the_cap(mods: &[String]) -> bool {
-    mods.iter().filter(|m| !NO_FACTOR_MODS.contains(&m.as_str())).count() > MODS_BELOW_CAP
+    mods.iter()
+        .filter(|m| !NO_FACTOR_MODS.contains(&m.as_str()))
+        .count()
+        > MODS_BELOW_CAP
 }
 
 /// The mods that change the notes: older games' pp of plays with them are wrong.
@@ -233,6 +275,9 @@ pub struct OnlineScore {
     pub miss: u32,
     pub rate: f64,
     pub mods: Vec<String>,
+    /// Random colouring; absent in scores from before seed metadata.
+    #[serde(default)]
+    pub seed: Option<u64>,
     pub pp: Option<f64>,
     pub date: u64,
     #[serde(default)]
@@ -366,7 +411,9 @@ pub const MAP_SCORES: usize = 50;
 pub fn weighted_pp(mut best: Vec<f64>) -> f64 {
     best.sort_by(|a, b| b.total_cmp(a));
     // A fold from 0: `sum` of no floats is -0.0, which a new player's profile showed as "-0pp".
-    best.iter().enumerate().fold(0.0, |total, (i, pp)| total + pp * 0.95f64.powi(i as i32))
+    best.iter()
+        .enumerate()
+        .fold(0.0, |total, (i, pp)| total + pp * 0.95f64.powi(i as i32))
 }
 
 /// What a player is doing, for their friends.
@@ -374,10 +421,19 @@ pub fn weighted_pp(mut best: Vec<f64>) -> f64 {
 pub enum Activity {
     Menus,
     /// A solo play (friends can watch it).
-    Playing { map: String },
-    Lobby { room: Option<u32>, title: String },
-    Match { map: String },
-    Watching { name: String },
+    Playing {
+        map: String,
+    },
+    Lobby {
+        room: Option<u32>,
+        title: String,
+    },
+    Match {
+        map: String,
+    },
+    Watching {
+        name: String,
+    },
 }
 
 impl Activity {
@@ -385,9 +441,13 @@ impl Activity {
         match self {
             Activity::Menus => tr!("in the menus", "メニュー中", "в меню").into(),
             Activity::Playing { map } => tr!("playing {map}", "プレイ中: {map}", "играет: {map}";),
-            Activity::Lobby { title, .. } => tr!("in lobby {title}", "ロビー: {title}", "в лобби {title}";),
+            Activity::Lobby { title, .. } => {
+                tr!("in lobby {title}", "ロビー: {title}", "в лобби {title}";)
+            }
             Activity::Match { map } => tr!("in a match: {map}", "対戦中: {map}", "в матче: {map}";),
-            Activity::Watching { name } => tr!("watching {name}", "{name}を観戦中", "смотрит {name}";),
+            Activity::Watching { name } => {
+                tr!("watching {name}", "{name}を観戦中", "смотрит {name}";)
+            }
         }
     }
 }
@@ -473,15 +533,23 @@ impl ChatLine {
     /// What the line says, in the game's language.
     #[allow(dead_code)] // used by the game
     pub fn shown(&self) -> String {
-        let Some(m) = &self.medal else { return self.text.clone() };
+        let Some(m) = &self.medal else {
+            return self.text.clone();
+        };
         let (player, name, holders, players) = (&m.player, said(&m.name), m.holders, m.players);
         let line = match m.secret {
-            true => tr!("{player} found the secret {name}", "{player}が秘密のメダル「{name}」を見つけた", "{player} находит секрет «{name}»";),
-            false => tr!("{player} earned {name}", "{player}がメダル「{name}」を獲得", "{player} получает «{name}»";),
+            true => {
+                tr!("{player} found the secret {name}", "{player}が秘密のメダル「{name}」を見つけた", "{player} находит секрет «{name}»";)
+            }
+            false => {
+                tr!("{player} earned {name}", "{player}がメダル「{name}」を獲得", "{player} получает «{name}»";)
+            }
         };
         let rarity = match m.first {
             true => tr!("first on the server", "サーバー初", "первым на сервере").to_string(),
-            false => tr!("{holders} of {players} have it", "{players}人中{holders}人", "есть у {holders} из {players}";),
+            false => {
+                tr!("{holders} of {players} have it", "{players}人中{holders}人", "есть у {holders} из {players}";)
+            }
         };
         format!("{line} · {rarity}")
     }
@@ -544,7 +612,12 @@ pub const BADGE: usize = 28;
 /// a ring in its tier's colour, more ornate the higher the tier, around its picture, whose
 /// pixels are `.` nothing, `#` white, `x` the medal's colour and `o` a dark shade of it. `lit`:
 /// earned; otherwise it's greyed out.
-pub fn medal_badge(art: &[String], tier: u8, secret: bool, lit: bool) -> [[Option<u32>; BADGE]; BADGE] {
+pub fn medal_badge(
+    art: &[String],
+    tier: u8,
+    secret: bool,
+    lit: bool,
+) -> [[Option<u32>; BADGE]; BADGE] {
     let colour = medal_colour(tier, secret);
     let mix = |a: u32, b: u32, t: f32| {
         let part = |shift: u32| {
@@ -553,7 +626,13 @@ pub fn medal_badge(art: &[String], tier: u8, secret: bool, lit: bool) -> [[Optio
         };
         part(16) | part(8) | part(0)
     };
-    let shade = |c: u32| if lit { c } else { mix(mix(c, 0x8a8aa0, 0.85), 0x000000, 0.45) };
+    let shade = |c: u32| {
+        if lit {
+            c
+        } else {
+            mix(mix(c, 0x8a8aa0, 0.85), 0x000000, 0.45)
+        }
+    };
     let points = [0.0, 4.0, 8.0, 12.0][usize::from(tier.clamp(1, 4)) - 1];
     let mut out = [[None; BADGE]; BADGE];
     let mid = (BADGE as f32 - 1.0) / 2.0;
@@ -563,11 +642,16 @@ pub fn medal_badge(art: &[String], tier: u8, secret: bool, lit: bool) -> [[Optio
             let d = dx.hypot(dy);
             // Each tier up adds points around the ring.
             let turn = (dy.atan2(dx) + std::f32::consts::FRAC_PI_4) / std::f32::consts::TAU;
-            let spike = points > 0.0 && d <= 13.9 && ((turn * points).rem_euclid(1.0) - 0.5).abs() < 0.11;
+            let spike =
+                points > 0.0 && d <= 13.9 && ((turn * points).rem_euclid(1.0) - 0.5).abs() < 0.11;
             *px = if d <= 10.6 {
                 Some(0x15151d)
             } else if d <= 12.4 {
-                Some(shade(if dx + dy < 0.0 { mix(colour, 0xffffff, 0.35) } else { colour }))
+                Some(shade(if dx + dy < 0.0 {
+                    mix(colour, 0xffffff, 0.35)
+                } else {
+                    colour
+                }))
             } else if d <= 13.4 || spike {
                 Some(shade(mix(colour, 0x000000, 0.45)))
             } else {
@@ -616,12 +700,19 @@ pub enum Up {
     AddFriend(String),
     /// Unfriends, or declines / withdraws a request.
     RemoveFriend(String),
-    Chat { to: String, text: String },
+    Chat {
+        to: String,
+        text: String,
+    },
     Watch(String),
     StopWatching,
     PlayStart(SoloPlay),
     /// Every ~100 ms of a solo play: its map time, whether it's paused, presses since the last.
-    PlayFrame { t: f64, paused: bool, inputs: Vec<(f64, u8)> },
+    PlayFrame {
+        t: f64,
+        paused: bool,
+        inputs: Vec<(f64, u8)>,
+    },
     PlayEnd,
     Ping,
     /// A line in the global chat (everyone online sees it).
@@ -635,34 +726,67 @@ pub enum Up {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum AdminOp {
     /// Bans `name` (logged out everywhere, off the boards), or lets them back.
-    Ban { name: String, on: bool },
-    Rename { name: String, new: String },
+    Ban {
+        name: String,
+        on: bool,
+    },
+    Rename {
+        name: String,
+        new: String,
+    },
     /// Makes `name` a loved nominator, or not any more.
-    Nominator { name: String, on: bool },
+    Nominator {
+        name: String,
+        on: bool,
+    },
     /// Takes `name`'s profile picture off.
-    RemoveAvatar { name: String },
+    RemoveAvatar {
+        name: String,
+    },
     /// Disconnects `name` (every connection), and keeps them out for a couple of minutes.
-    Kick { name: String },
+    Kick {
+        name: String,
+    },
     /// Keeps `name` out of the global chat for `minutes` (0: lets them back).
-    Mute { name: String, minutes: u32 },
+    Mute {
+        name: String,
+        minutes: u32,
+    },
     /// A message to everyone online: a card, and a line in the global chat.
     Announce(String),
     /// Takes a global chat line down (by who said it and when).
-    DeleteGlobal { from: String, at: u64 },
+    DeleteGlobal {
+        from: String,
+        at: u64,
+    },
     /// Takes every global chat line of `name` down.
-    PurgeGlobal { name: String },
+    PurgeGlobal {
+        name: String,
+    },
     /// Who's on, what they're doing and the lobbies (`Down::AdminOverview`).
     Overview,
     /// An account and the others that log in from the same places (`Down::AdminLookup`).
-    Lookup { name: String },
+    Lookup {
+        name: String,
+    },
     /// Deletes a play from the boards, by its `OnlineScore::id`.
-    DeletePlay { id: u64 },
+    DeletePlay {
+        id: u64,
+    },
     /// Sets a play's pp (None: back to what it was sent with).
-    SetPp { id: u64, pp: Option<f64> },
+    SetPp {
+        id: u64,
+        pp: Option<f64>,
+    },
     /// Takes `name` out of lobby `room`.
-    KickFromRoom { room: u32, name: String },
+    KickFromRoom {
+        room: u32,
+        name: String,
+    },
     /// Closes lobby `room` (everyone in it is dropped).
-    CloseRoom { room: u32 },
+    CloseRoom {
+        room: u32,
+    },
 }
 
 /// Someone online, as an admin sees them.
@@ -711,27 +835,49 @@ pub struct AdminLookup {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Down {
     /// Friends (with what they're doing), requests to us, and ours still waiting.
-    Friends { friends: Vec<Friend>, requests: Vec<String>, sent: Vec<String> },
+    Friends {
+        friends: Vec<Friend>,
+        requests: Vec<String>,
+        sent: Vec<String>,
+    },
     Chat(ChatLine),
     Notice(String),
     /// The watched friend is playing: the play, where they are and every press so far.
-    WatchStart { player: String, play: SoloPlay, t: f64, paused: bool, inputs: Vec<(f64, u8)> },
-    WatchFrame { t: f64, paused: bool, inputs: Vec<(f64, u8)> },
+    WatchStart {
+        player: String,
+        play: SoloPlay,
+        t: f64,
+        paused: bool,
+        inputs: Vec<(f64, u8)>,
+    },
+    WatchFrame {
+        t: f64,
+        paused: bool,
+        inputs: Vec<(f64, u8)>,
+    },
     /// The watched friend's play ended (we keep watching for their next one).
-    WatchEnd { player: String },
+    WatchEnd {
+        player: String,
+    },
     /// Watching isn't possible (any more): why.
     WatchStopped(String),
     Pong,
     /// Everyone online (sorted by name, at most `MAX_LISTED`) and how many that is. Sent on
     /// connecting and then whenever it changes (at most every couple of seconds, less often
     /// with thousands online).
-    Players { count: u32, players: Vec<OnlinePlayer> },
+    Players {
+        count: u32,
+        players: Vec<OnlinePlayer>,
+    },
     /// A global chat line (the recent ones again on connecting).
     /// Medals earned away from a play.
     Medals(Vec<MedalNote>),
     GlobalChat(ChatLine),
     /// A global chat line was taken down by an admin: drop it.
-    GlobalChatDeleted { from: String, at: u64 },
+    GlobalChatDeleted {
+        from: String,
+        at: u64,
+    },
     /// For admins: the answer to `AdminOp::Overview`.
     AdminOverview(Box<AdminOverview>),
     /// For admins: the answer to `AdminOp::Lookup`.
@@ -769,7 +915,11 @@ pub enum Reply {
     Rooms(Vec<RoomInfo>),
     /// In the room: from here on this connection speaks the room protocol. Send Hello with
     /// `host_token` (set when we created the room).
-    Joined { room: u32, title: String, host_token: Option<u64> },
+    Joined {
+        room: u32,
+        title: String,
+        host_token: Option<u64>,
+    },
     Error(String),
     /// The play is on the leaderboards: its place on the map (if it's the player's best there),
     /// and the player's pp total and rank now.
@@ -803,7 +953,10 @@ pub struct RoomInfo {
 pub const NAME_RULES: &str = "3-16 letters, digits, _ or -";
 
 pub fn valid_name(name: &str) -> bool {
-    (3..=16).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    (3..=16).contains(&name.len())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// What logging in takes: an account's name, or its email.
@@ -818,7 +971,14 @@ pub fn valid_password(password: &str) -> bool {
 /// Text the built-in font draws (printable ASCII, Cyrillic and Japanese), at most `max`
 /// characters.
 pub fn clean_text(text: &str, max: usize) -> String {
-    text.chars().filter(|&c| c.is_ascii_graphic() || c == ' ' || (!c.is_control() && !c.is_ascii() && crate::font::drawable(c))).take(max).collect()
+    text.chars()
+        .filter(|&c| {
+            c.is_ascii_graphic()
+                || c == ' '
+                || (!c.is_control() && !c.is_ascii() && crate::font::drawable(c))
+        })
+        .take(max)
+        .collect()
 }
 
 /// A lobby title, at most 32 characters.
@@ -839,9 +999,16 @@ pub fn clean_title(title: &str, owner: &str, mapguessr: bool) -> String {
 /// One line of JSON (without the newline), at most `MAX_LINE` bytes.
 pub fn read_line(reader: &mut impl BufRead) -> Result<String, String> {
     let mut line = String::new();
-    let n = reader.take(MAX_LINE).read_line(&mut line).map_err(|e| network_error(&e))?;
+    let n = reader
+        .take(MAX_LINE)
+        .read_line(&mut line)
+        .map_err(|e| network_error(&e))?;
     if n == 0 {
-        return Err(unreachable(tr!("the connection dropped. Try again", "接続が切れました。もう一度試してください", "соединение оборвалось. Попробуй ещё раз")));
+        return Err(unreachable(tr!(
+            "the connection dropped. Try again",
+            "接続が切れました。もう一度試してください",
+            "соединение оборвалось. Попробуй ещё раз"
+        )));
     }
     if !line.ends_with('\n') {
         return Err("message too large".into());
@@ -862,7 +1029,11 @@ fn unreachable(why: &str) -> String {
 }
 
 fn unreachable_lead() -> &'static str {
-    tr!("can't reach the server: ", "サーバーに接続できません: ", "нет связи с сервером: ")
+    tr!(
+        "can't reach the server: ",
+        "サーバーに接続できません: ",
+        "нет связи с сервером: "
+    )
 }
 
 /// The request never got an answer (the network or the server is down), rather than the
@@ -877,23 +1048,65 @@ pub fn is_unreachable(e: &str) -> bool {
 pub fn network_error(e: &std::io::Error) -> String {
     use std::io::ErrorKind as K;
     unreachable(&match e.kind() {
-        K::TimedOut | K::WouldBlock => tr!("it didn't answer in time. Check your internet and try again", "応答がありません。インターネット接続を確認してもう一度試してください", "он не ответил вовремя. Проверь интернет и попробуй ещё раз").to_string(),
-        K::ConnectionRefused => tr!("it's restarting or down. Try again in a minute", "再起動中か停止中です。少し待ってからもう一度", "он перезапускается или лежит. Попробуй через минуту").to_string(),
-        K::ConnectionReset | K::ConnectionAborted | K::UnexpectedEof | K::BrokenPipe | K::NotConnected => tr!("the connection dropped. Try again", "接続が切れました。もう一度試してください", "соединение оборвалось. Попробуй ещё раз").to_string(),
-        K::HostUnreachable | K::NetworkUnreachable | K::NetworkDown | K::AddrNotAvailable => tr!("no internet connection", "インターネットに接続されていません", "нет подключения к интернету").to_string(),
+        K::TimedOut | K::WouldBlock => tr!(
+            "it didn't answer in time. Check your internet and try again",
+            "応答がありません。インターネット接続を確認してもう一度試してください",
+            "он не ответил вовремя. Проверь интернет и попробуй ещё раз"
+        )
+        .to_string(),
+        K::ConnectionRefused => tr!(
+            "it's restarting or down. Try again in a minute",
+            "再起動中か停止中です。少し待ってからもう一度",
+            "он перезапускается или лежит. Попробуй через минуту"
+        )
+        .to_string(),
+        K::ConnectionReset
+        | K::ConnectionAborted
+        | K::UnexpectedEof
+        | K::BrokenPipe
+        | K::NotConnected => tr!(
+            "the connection dropped. Try again",
+            "接続が切れました。もう一度試してください",
+            "соединение оборвалось. Попробуй ещё раз"
+        )
+        .to_string(),
+        K::HostUnreachable | K::NetworkUnreachable | K::NetworkDown | K::AddrNotAvailable => tr!(
+            "no internet connection",
+            "インターネットに接続されていません",
+            "нет подключения к интернету"
+        )
+        .to_string(),
         // A TLS handshake that went wrong (something between rewrote it, or an old game).
-        K::InvalidData => tr!("the secure connection failed. Check your internet, or update taiko.rs", "安全な接続に失敗しました。インターネット接続を確認するか、taiko.rsを更新してください", "не удалось защищённое соединение. Проверь интернет или обнови taiko.rs").to_string(),
+        K::InvalidData => tr!(
+            "the secure connection failed. Check your internet, or update taiko.rs",
+            "安全な接続に失敗しました。インターネット接続を確認するか、taiko.rsを更新してください",
+            "не удалось защищённое соединение. Проверь интернет или обнови taiko.rs"
+        )
+        .to_string(),
         _ => match e.raw_os_error() {
-            Some(code) => tr!("network error {code}. Try again", "ネットワークエラー {code}。もう一度試してください", "сетевая ошибка {code}. Попробуй ещё раз";),
-            None => tr!("network error. Try again", "ネットワークエラー。もう一度試してください", "сетевая ошибка. Попробуй ещё раз").to_string(),
+            Some(code) => {
+                tr!("network error {code}. Try again", "ネットワークエラー {code}。もう一度試してください", "сетевая ошибка {code}. Попробуй ещё раз";)
+            }
+            None => tr!(
+                "network error. Try again",
+                "ネットワークエラー。もう一度試してください",
+                "сетевая ошибка. Попробуй ещё раз"
+            )
+            .to_string(),
         },
     })
 }
 
 fn connect(server: &str) -> Result<TcpStream, String> {
     let server = server.trim();
-    let has_port = server.rsplit_once(':').is_some_and(|(_, p)| p.parse::<u16>().is_ok());
-    let host = if has_port { server.rsplit_once(':').map_or(server, |(h, _)| h) } else { server };
+    let has_port = server
+        .rsplit_once(':')
+        .is_some_and(|(_, p)| p.parse::<u16>().is_ok());
+    let host = if has_port {
+        server.rsplit_once(':').map_or(server, |(h, _)| h)
+    } else {
+        server
+    };
     // The real server only ever encrypted, whatever port an older config has for it.
     let secure = host.eq_ignore_ascii_case(crate::tls::SERVER_HOST);
     let with_port = if secure {
@@ -903,8 +1116,17 @@ fn connect(server: &str) -> Result<TcpStream, String> {
     } else {
         format!("{server}:{DEFAULT_PORT}")
     };
-    let no_address = || unreachable(tr!("its address wasn't found. Check your internet", "アドレスが見つかりません。インターネット接続を確認してください", "не найден его адрес. Проверь интернет"));
-    let addrs: Vec<_> = with_port.to_socket_addrs().map_err(|_| no_address())?.collect();
+    let no_address = || {
+        unreachable(tr!(
+            "its address wasn't found. Check your internet",
+            "アドレスが見つかりません。インターネット接続を確認してください",
+            "не найден его адрес. Проверь интернет"
+        ))
+    };
+    let addrs: Vec<_> = with_port
+        .to_socket_addrs()
+        .map_err(|_| no_address())?
+        .collect();
     let mut last = no_address();
     for a in addrs {
         match TcpStream::connect_timeout(&a, Duration::from_secs(6)) {
@@ -923,10 +1145,23 @@ fn connect(server: &str) -> Result<TcpStream, String> {
 /// Sends one request; returns the reply and the connection (still open).
 pub fn exchange(server: &str, request: Request) -> Result<(Reply, BufReader<TcpStream>), String> {
     let mut stream = connect(server)?;
-    write_line(&mut stream, &Envelope { protocol: PROTOCOL, request })?;
+    write_line(
+        &mut stream,
+        &Envelope {
+            protocol: PROTOCOL,
+            request,
+        },
+    )?;
     let mut reader = BufReader::new(stream);
     let line = read_line(&mut reader)?;
-    let reply: Reply = serde_json::from_str(&line).map_err(|_| tr!("the server answered something this version doesn't know: update taiko.rs", "サーバーの応答が読めません: taiko.rsを更新してください", "ответ сервера не понятен этой версии: обнови taiko.rs").to_string())?;
+    let reply: Reply = serde_json::from_str(&line).map_err(|_| {
+        tr!(
+            "the server answered something this version doesn't know: update taiko.rs",
+            "サーバーの応答が読めません: taiko.rsを更新してください",
+            "ответ сервера не понятен этой версии: обнови taiko.rs"
+        )
+        .to_string()
+    })?;
     Ok((reply, reader))
 }
 
@@ -962,7 +1197,12 @@ impl Social {
         std::thread::spawn(move || {
             let mut announced_down = false;
             while !stopped.load(Ordering::Relaxed) {
-                let (reply, reader) = match exchange(&server, Request::Connect { token: token.clone() }) {
+                let (reply, reader) = match exchange(
+                    &server,
+                    Request::Connect {
+                        token: token.clone(),
+                    },
+                ) {
                     Ok(r) => r,
                     Err(e) => {
                         if !announced_down {
@@ -991,9 +1231,13 @@ impl Social {
                 };
                 // Socket timeouts are per handle on Windows (shared on Linux): the reader's own
                 // handle must lose the 10 s request timeout, or a quiet stretch drops the link.
-                let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(70)));
+                let _ = reader
+                    .get_ref()
+                    .set_read_timeout(Some(Duration::from_secs(70)));
                 let _ = reader.get_ref().set_write_timeout(None);
-                let Ok(mut stream) = reader.get_ref().try_clone() else { continue };
+                let Ok(mut stream) = reader.get_ref().try_clone() else {
+                    continue;
+                };
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(70)));
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
                 // Whatever piled up while away is stale: the game resends its state on Connected.
@@ -1006,7 +1250,8 @@ impl Social {
                         let mut reader = reader;
                         while let Ok(line) = read_line(&mut reader) {
                             if let Ok(d) = serde_json::from_str::<Down>(&line)
-                                && events.send(SocialEvent::Down(Box::new(d))).is_err() {
+                                && events.send(SocialEvent::Down(Box::new(d))).is_err()
+                            {
                                 break;
                             }
                         }
@@ -1041,7 +1286,14 @@ impl Social {
                     }
                 }
                 let _ = stream.shutdown(std::net::Shutdown::Both);
-                let _ = events.send(SocialEvent::Disconnected(tr!("lost the connection", "接続が切れました", "соединение потеряно").into()));
+                let _ = events.send(SocialEvent::Disconnected(
+                    tr!(
+                        "lost the connection",
+                        "接続が切れました",
+                        "соединение потеряно"
+                    )
+                    .into(),
+                ));
                 announced_down = true;
                 std::thread::sleep(Duration::from_secs(2));
             }
@@ -1079,13 +1331,26 @@ mod tests {
     #[test]
     fn names_and_titles() {
         assert!(valid_name("Lynerrr") && valid_name("den4ik_228") && valid_name("a-b"));
-        assert!(!valid_name("ab") && !valid_name("has space") && !valid_name("x".repeat(17).as_str()) && !valid_name("ünï"));
+        assert!(
+            !valid_name("ab")
+                && !valid_name("has space")
+                && !valid_name("x".repeat(17).as_str())
+                && !valid_name("ünï")
+        );
         assert!(valid_login("Lynerrr") && valid_login("a.long.name+taiko@mail.ru"));
         assert!(!valid_login("ab") && !valid_login("no.at.sign") && !valid_name("me@mail.ru"));
         assert!(valid_password("hunter2") && !valid_password("short"));
-        assert!(weighted_pp(Vec::new()).is_sign_positive(), "a new player has 0 pp, not -0");
-        let scrubbed = scrub_paths("at C:\\Users\\Kowalski\\AppData\\taiko-rs\\x.osu and /home/anna/Songs/a b.osu\nthread main");
-        assert_eq!(scrubbed, "at ~\\AppData\\taiko-rs\\x.osu and ~/Songs/a b.osu\nthread main");
+        assert!(
+            weighted_pp(Vec::new()).is_sign_positive(),
+            "a new player has 0 pp, not -0"
+        );
+        let scrubbed = scrub_paths(
+            "at C:\\Users\\Kowalski\\AppData\\taiko-rs\\x.osu and /home/anna/Songs/a b.osu\nthread main",
+        );
+        assert_eq!(
+            scrubbed,
+            "at ~\\AppData\\taiko-rs\\x.osu and ~/Songs/a b.osu\nthread main"
+        );
         assert_eq!(clean_title("  ", "Lynerrr", false), "Lynerrr's lobby");
         assert_eq!(clean_title("", "Lynerrr", true), "Lynerrr's mapguessr");
         assert_eq!(clean_title("taiko\u{7}  night", "x", true), "taiko  night");
@@ -1093,17 +1358,48 @@ mod tests {
 
     #[test]
     fn messages_round_trip() {
-        let env = Envelope { protocol: PROTOCOL, request: Request::JoinRoom { token: "t".into(), room: 3 } };
+        let env = Envelope {
+            protocol: PROTOCOL,
+            request: Request::JoinRoom {
+                token: "t".into(),
+                room: 3,
+            },
+        };
         let s = serde_json::to_string(&env).unwrap();
         let back: Envelope = serde_json::from_str(&s).unwrap();
         assert!(matches!(back.request, Request::JoinRoom { room: 3, .. }));
         let mut buf = Vec::new();
-        write_line(&mut buf, &Reply::Joined { room: 3, title: "x".into(), host_token: Some(7) }).unwrap();
+        write_line(
+            &mut buf,
+            &Reply::Joined {
+                room: 3,
+                title: "x".into(),
+                host_token: Some(7),
+            },
+        )
+        .unwrap();
         let line = read_line(&mut &buf[..]).unwrap();
-        assert!(matches!(serde_json::from_str::<Reply>(&line).unwrap(), Reply::Joined { host_token: Some(7), .. }));
-        let d = Down::Players { count: 2, players: vec![OnlinePlayer { name: "a".into(), activity: Activity::Lobby { room: Some(1), title: "x".into() } }] };
+        assert!(matches!(
+            serde_json::from_str::<Reply>(&line).unwrap(),
+            Reply::Joined {
+                host_token: Some(7),
+                ..
+            }
+        ));
+        let d = Down::Players {
+            count: 2,
+            players: vec![OnlinePlayer {
+                name: "a".into(),
+                activity: Activity::Lobby {
+                    room: Some(1),
+                    title: "x".into(),
+                },
+            }],
+        };
         let back: Down = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
         assert!(matches!(back, Down::Players { count: 2, ref players } if players.len() == 1));
-        assert!(matches!(serde_json::from_str::<Up>(&serde_json::to_string(&Up::GlobalChat("hi".into())).unwrap()).unwrap(), Up::GlobalChat(t) if t == "hi"));
+        assert!(
+            matches!(serde_json::from_str::<Up>(&serde_json::to_string(&Up::GlobalChat("hi".into())).unwrap()).unwrap(), Up::GlobalChat(t) if t == "hi")
+        );
     }
 }

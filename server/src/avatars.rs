@@ -28,14 +28,24 @@ pub fn init(dir: PathBuf) {
                 .flatten()
                 .filter_map(|e| {
                     let name = e.file_name().into_string().ok()?;
-                    let modified = e.metadata().ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+                    let modified = e
+                        .metadata()
+                        .ok()?
+                        .modified()
+                        .ok()?
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()?
+                        .as_secs();
                     Some((name, modified))
                 })
                 .collect()
         })
         .unwrap_or_default();
     println!("{} profile pictures ({})", has.len(), dir.display());
-    let _ = STORE.set(Store { dir, has: Mutex::new(has) });
+    let _ = STORE.set(Store {
+        dir,
+        has: Mutex::new(has),
+    });
 }
 
 /// What kind of image `bytes` are (its content type), if one that's taken.
@@ -44,7 +54,21 @@ pub fn kind(bytes: &[u8]) -> Option<&'static str> {
         [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
         [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
         [b'G', b'I', b'F', b'8', ..] => Some("image/gif"),
-        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("image/webp"),
+        [
+            b'R',
+            b'I',
+            b'F',
+            b'F',
+            _,
+            _,
+            _,
+            _,
+            b'W',
+            b'E',
+            b'B',
+            b'P',
+            ..,
+        ] => Some("image/webp"),
         _ => None,
     }
 }
@@ -102,27 +126,37 @@ pub fn load(key: &str) -> Option<(&'static str, Vec<u8>)> {
 /// Sets `key`'s picture (`now`: its version).
 pub fn save(key: &str, bytes: &[u8], now: u64) -> Result<(), String> {
     if bytes.len() > MAX_BYTES {
-        return Err(format!("that picture is too big (at most {} MB)", MAX_BYTES / 1024 / 1024));
+        return Err(format!(
+            "that picture is too big (at most {} MB)",
+            MAX_BYTES / 1024 / 1024
+        ));
     }
     kind(bytes).ok_or("pick a PNG, JPEG, GIF or WebP picture")?;
     let (w, h) = size(bytes).ok_or("that picture can't be read")?;
     if w > MAX_SIDE || h > MAX_SIDE {
-        return Err(format!("that picture is too large (at most {MAX_SIDE} by {MAX_SIDE})"));
+        return Err(format!(
+            "that picture is too large (at most {MAX_SIDE} by {MAX_SIDE})"
+        ));
     }
     let s = STORE.get().ok_or("pictures can't be set here")?;
     std::fs::create_dir_all(&s.dir).map_err(|e| e.to_string())?;
     let tmp = s.dir.join(format!("{key}.tmp"));
-    std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, s.dir.join(key))).map_err(|e| {
-        eprintln!("avatars: saving {key}: {e}");
-        "the server couldn't save it".to_string()
-    })?;
+    std::fs::write(&tmp, bytes)
+        .and_then(|_| std::fs::rename(&tmp, s.dir.join(key)))
+        .map_err(|e| {
+            eprintln!("avatars: saving {key}: {e}");
+            "the server couldn't save it".to_string()
+        })?;
     s.has.lock().unwrap().insert(key.to_string(), now);
     Ok(())
 }
 
 /// Everyone with a picture.
 pub fn keys() -> Vec<String> {
-    STORE.get().map(|s| s.has.lock().unwrap().keys().cloned().collect()).unwrap_or_default()
+    STORE
+        .get()
+        .map(|s| s.has.lock().unwrap().keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 pub fn remove(key: &str) {
@@ -134,9 +168,13 @@ pub fn remove(key: &str) {
 
 /// `old`'s picture is `new`'s from now on.
 pub fn rename(old: &str, new: &str) {
-    let Some(s) = STORE.get().filter(|_| old != new) else { return };
+    let Some(s) = STORE.get().filter(|_| old != new) else {
+        return;
+    };
     let mut has = s.has.lock().unwrap();
-    let Some(version) = has.remove(old) else { return };
+    let Some(version) = has.remove(old) else {
+        return;
+    };
     match std::fs::rename(s.dir.join(old), s.dir.join(new)) {
         Ok(()) => has.insert(new.to_string(), version),
         Err(e) => {
@@ -149,10 +187,18 @@ pub fn rename(old: &str, new: &str) {
 /// The file in a `multipart/form-data` body (its field `field`), given the Content-Type
 /// header's value.
 pub fn multipart_file<'a>(content_type: &str, body: &'a [u8], field: &str) -> Option<&'a [u8]> {
-    let boundary = content_type.split(';').find_map(|p| p.trim().strip_prefix("boundary="))?.trim_matches('"');
+    let boundary = content_type
+        .split(';')
+        .find_map(|p| p.trim().strip_prefix("boundary="))?
+        .trim_matches('"');
     let delimiter = format!("--{boundary}");
     let d = delimiter.as_bytes();
-    let find = |hay: &[u8], needle: &[u8], from: usize| hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| p + from);
+    let find = |hay: &[u8], needle: &[u8], from: usize| {
+        hay.get(from..)?
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .map(|p| p + from)
+    };
     let mut at = find(body, d, 0)?;
     loop {
         let start = at + d.len();
@@ -176,10 +222,15 @@ mod tests {
 
     #[test]
     fn sizes_come_from_each_formats_header() {
-        let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+        let mut png = vec![
+            0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13, b'I', b'H', b'D', b'R',
+        ];
         png.extend([0, 0, 1, 0, 0, 1, 0, 0]);
         assert_eq!(size(&png), Some((256, 65536)));
-        assert_eq!(size(&[b'G', b'I', b'F', b'8', b'9', b'a', 0, 2, 0, 1]), Some((512, 256)));
+        assert_eq!(
+            size(&[b'G', b'I', b'F', b'8', b'9', b'a', 0, 2, 0, 1]),
+            Some((512, 256))
+        );
         let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0];
         jpeg.extend([0xFF, 0xC0, 0, 11, 8, 1, 0, 2, 0, 3]);
         assert_eq!(size(&jpeg), Some((512, 256)));
@@ -197,7 +248,9 @@ mod tests {
 
     #[test]
     fn a_huge_picture_is_refused_whatever_it_weighs() {
-        let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+        let mut png = vec![
+            0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13, b'I', b'H', b'D', b'R',
+        ];
         png.extend([0, 1, 0, 0, 0, 1, 0, 0]);
         assert!(save("x", &png, 1).unwrap_err().contains("too large"));
     }
@@ -217,7 +270,10 @@ mod tests {
         let body = b"------x\r\nContent-Disposition: form-data; name=\"other\"\r\n\r\nhello\r\n------x\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\n\x89PNG\r\n\x1a\nDATA\r\n------x--\r\n";
         let file = multipart_file("multipart/form-data; boundary=----x", body, "avatar").unwrap();
         assert_eq!(file, b"\x89PNG\r\n\x1a\nDATA");
-        assert_eq!(multipart_file("multipart/form-data; boundary=\"----x\"", body, "other").unwrap(), b"hello");
+        assert_eq!(
+            multipart_file("multipart/form-data; boundary=\"----x\"", body, "other").unwrap(),
+            b"hello"
+        );
         assert!(multipart_file("multipart/form-data; boundary=----x", body, "nope").is_none());
         assert!(multipart_file("application/x-www-form-urlencoded", body, "avatar").is_none());
     }

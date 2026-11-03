@@ -2,7 +2,7 @@
 //! suggested offset. The vsync compensation's is the same notes by sight, with the sound off.
 
 use crate::game::Game;
-use crate::render::{accent, rgba, Canvas, Hit};
+use crate::render::{Canvas, Hit, accent, rgba};
 use winit::keyboard::KeyCode;
 
 /// Clicks before the first note, so the pulse is established before you have to hit.
@@ -37,7 +37,11 @@ pub fn estimate(errors: &[f64], current_offset: f64) -> Option<Estimate> {
     let mut sorted = errors.to_vec();
     sorted.sort_by(|a, b| a.total_cmp(b));
     let median = sorted[sorted.len() / 2];
-    let kept: Vec<f64> = errors.iter().copied().filter(|e| (e - median).abs() <= 60.0).collect();
+    let kept: Vec<f64> = errors
+        .iter()
+        .copied()
+        .filter(|e| (e - median).abs() <= 60.0)
+        .collect();
     let mean = kept.iter().sum::<f64>() / kept.len() as f64;
     let var = kept.iter().map(|e| (e - mean).powi(2)).sum::<f64>() / kept.len() as f64;
     Some(Estimate {
@@ -64,32 +68,94 @@ pub fn centre_key(key: usize) -> usize {
 fn line(c: &mut Canvas, y: f32, size: f32, color: [f32; 4], text: &str) {
     let room = c.width - 48.0;
     let size = Canvas::fit_size(size, 6.0, room, text);
-    c.text_centered(c.width / 2.0, y, size, color, &Canvas::fit(size, room, text));
+    c.text_centered(
+        c.width / 2.0,
+        y,
+        size,
+        color,
+        &Canvas::fit(size, room, text),
+    );
 }
 
 /// The calibration by ear. Nothing here moves with the beat or tells how the hits are going: with
 /// notes to watch it measures the eyes, and with early / late to read people steer by it, so the
 /// offset it suggests isn't the sound's.
 pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
-    line(c, 70.0, 14.0, rgba(0x9a9ab0, 1.0), tr!("OFFSET CALIBRATION", "オフセット調整", "КАЛИБРОВКА СМЕЩЕНИЯ"));
+    line(
+        c,
+        70.0,
+        14.0,
+        rgba(0x9a9ab0, 1.0),
+        tr!(
+            "OFFSET CALIBRATION",
+            "オフセット調整",
+            "КАЛИБРОВКА СМЕЩЕНИЯ"
+        ),
+    );
     let first = game.map.notes.first().map_or(0.0, |n| n.time);
-    let beat = game.map.control_points.first().map_or(500.0, |p| p.beat_length);
+    let beat = game
+        .map
+        .control_points
+        .first()
+        .map_or(500.0, |p| p.beat_length);
     // Between two clicks, so the words changing isn't a beat to follow.
     let hitting = game.time >= first - beat / 2.0;
-    let headline = if hitting { tr!("Hit on every click", "クリックごとに叩いて", "Бейте на каждый клик") } else { tr!("Listen to the clicks", "クリック音を聞いて", "Слушайте клики") };
+    let headline = if hitting {
+        tr!(
+            "Hit on every click",
+            "クリックごとに叩いて",
+            "Бейте на каждый клик"
+        )
+    } else {
+        tr!(
+            "Listen to the clicks",
+            "クリック音を聞いて",
+            "Слушайте клики"
+        )
+    };
     line(c, 160.0, 20.0, rgba(0xffffff, 1.0), headline);
-    line(c, 204.0, 10.0, rgba(0xc8c8d8, 1.0), tr!("By ear, with any drum key. It works best with your eyes closed", "耳だけで、どのドラムキーでも。目を閉じるのがおすすめです", "Только на слух, любой клавишей барабана. Лучше с закрытыми глазами"));
+    line(
+        c,
+        204.0,
+        10.0,
+        rgba(0xc8c8d8, 1.0),
+        tr!(
+            "By ear, with any drum key. It works best with your eyes closed",
+            "耳だけで、どのドラムキーでも。目を閉じるのがおすすめです",
+            "Только на слух, любой клавишей барабана. Лучше с закрытыми глазами"
+        ),
+    );
     let hits = game.stats.errors.len();
     if hitting {
-        let count = if hits < MIN_HITS { tr!("{hits} of {MIN_HITS} hits", "{hits} / {MIN_HITS} 打", "ударов: {hits} из {MIN_HITS}";) } else { tr!("{hits} hits", "{hits} 打", "ударов: {hits}";) };
+        let count = if hits < MIN_HITS {
+            tr!("{hits} of {MIN_HITS} hits", "{hits} / {MIN_HITS} 打", "ударов: {hits} из {MIN_HITS}";)
+        } else {
+            tr!("{hits} hits", "{hits} 打", "ударов: {hits}";)
+        };
         line(c, 262.0, 10.0, rgba(0xFFD34D, 1.0), &count);
     }
     let w = (c.width - 48.0).min(320.0);
     let x = c.width / 2.0 - w / 2.0;
     c.rect(x, 292.0, w, 4.0, rgba(0xffffff, 0.12));
-    c.rect(x, 292.0, w * game.progress() as f32, 4.0, rgba(accent(), 0.9));
-    let hints = tr!("Enter finish early    Esc cancel", "Enter 早めに終了    Esc 中止", "Enter закончить раньше    Esc отмена");
-    c.text_centered(c.width / 2.0, 448.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(8.0, c.width - 48.0, hints));
+    c.rect(
+        x,
+        292.0,
+        w * game.progress() as f32,
+        4.0,
+        rgba(accent(), 0.9),
+    );
+    let hints = tr!(
+        "Enter finish early    Esc cancel",
+        "Enter 早めに終了    Esc 中止",
+        "Enter закончить раньше    Esc отмена"
+    );
+    c.text_centered(
+        c.width / 2.0,
+        448.0,
+        8.0,
+        rgba(0x6f6f86, 1.0),
+        &Canvas::fit_hints(8.0, c.width - 48.0, hints),
+    );
 }
 
 /// Over the playfield in the vsync calibration (`current_offset` is the fine tune).
@@ -105,7 +171,11 @@ pub fn draw_by_sight(c: &mut Canvas, game: &Game, current_offset: f64) {
                 e.hits,
                 e.error_ms.abs(),
                 e.suggested_offset,
-                if e.hits < MIN_HITS { "  (keep going)" } else { "" }
+                if e.hits < MIN_HITS {
+                    "  (keep going)"
+                } else {
+                    ""
+                }
             )
         }
         None => format!("current {what} {current_offset:+.0} ms   waiting for hits..."),
@@ -113,27 +183,94 @@ pub fn draw_by_sight(c: &mut Canvas, game: &Game, current_offset: f64) {
     // Wide enough for its lines (wider when text comes out bigger), within the screen.
     let widest = Canvas::text_width(8.0, line).max(Canvas::text_width(9.0, &status)) + 40.0;
     let bw = widest.max(500.0).min(w - 32.0);
-    c.round_rect([w / 2.0 - bw / 2.0, 26.0], [bw, 70.0], 10.0, rgba(0x000000, 0.6), rgba(accent(), 0.8), 1.5);
-    c.text_centered(w / 2.0, 36.0, 12.0, rgba(0xffffff, 1.0), "VSYNC CALIBRATION");
+    c.round_rect(
+        [w / 2.0 - bw / 2.0, 26.0],
+        [bw, 70.0],
+        10.0,
+        rgba(0x000000, 0.6),
+        rgba(accent(), 0.8),
+        1.5,
+    );
+    c.text_centered(
+        w / 2.0,
+        36.0,
+        12.0,
+        rgba(0xffffff, 1.0),
+        "VSYNC CALIBRATION",
+    );
     let room = bw - 24.0;
     let size = Canvas::fit_size(8.0, 6.0, room, line);
-    c.text_centered(w / 2.0, 56.0, size, rgba(0xc8c8d8, 1.0), &Canvas::fit(size, room, line));
+    c.text_centered(
+        w / 2.0,
+        56.0,
+        size,
+        rgba(0xc8c8d8, 1.0),
+        &Canvas::fit(size, room, line),
+    );
     let size = Canvas::fit_size(9.0, 6.0, room, &status);
-    c.text_centered(w / 2.0, 74.0, size, rgba(0xFFD34D, 1.0), &Canvas::fit(size, room, &status));
+    c.text_centered(
+        w / 2.0,
+        74.0,
+        size,
+        rgba(0xFFD34D, 1.0),
+        &Canvas::fit(size, room, &status),
+    );
     // Above the playfield size readout in the bottom-right corner.
-    c.text_centered(w / 2.0, 448.0, 8.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(8.0, w - 48.0, "Enter finish early    Esc cancel"));
+    c.text_centered(
+        w / 2.0,
+        448.0,
+        8.0,
+        rgba(0x6f6f86, 1.0),
+        &Canvas::fit_hints(8.0, w - 48.0, "Enter finish early    Esc cancel"),
+    );
 }
 
 /// `vsync`: the result of the vsync calibration (`current_offset` is the fine tune).
 pub fn draw_result(c: &mut Canvas, e: &Estimate, current_offset: f64, bpm: f64, vsync: bool) {
     let w = c.width;
     let cx = w / 2.0;
-    c.text_centered(cx, 70.0, 14.0, rgba(0x9a9ab0, 1.0), if vsync { "VSYNC CALIBRATION" } else { "OFFSET CALIBRATION" });
+    c.text_centered(
+        cx,
+        70.0,
+        14.0,
+        rgba(0x9a9ab0, 1.0),
+        if vsync {
+            "VSYNC CALIBRATION"
+        } else {
+            "OFFSET CALIBRATION"
+        },
+    );
     let dir = if e.error_ms >= 0.0 { "late" } else { "early" };
-    c.text_centered(cx, 120.0, 16.0, rgba(0xffffff, 1.0), &format!("You hit {:.1} +-{:.1} ms {dir} on average", e.error_ms.abs(), e.margin_ms));
-    c.text_centered(cx, 170.0, 40.0, rgba(0xFFD34D, 1.0), &format!("{:+.0} ms", e.suggested_offset));
-    let what = if vsync { "vsync compensation fine tune" } else { "offset" };
-    c.text_centered(cx, 228.0, 10.0, rgba(0xc8c8d8, 1.0), &format!("suggested {what} (currently {current_offset:+.0} ms)"));
+    c.text_centered(
+        cx,
+        120.0,
+        16.0,
+        rgba(0xffffff, 1.0),
+        &format!(
+            "You hit {:.1} +-{:.1} ms {dir} on average",
+            e.error_ms.abs(),
+            e.margin_ms
+        ),
+    );
+    c.text_centered(
+        cx,
+        170.0,
+        40.0,
+        rgba(0xFFD34D, 1.0),
+        &format!("{:+.0} ms", e.suggested_offset),
+    );
+    let what = if vsync {
+        "vsync compensation fine tune"
+    } else {
+        "offset"
+    };
+    c.text_centered(
+        cx,
+        228.0,
+        10.0,
+        rgba(0xc8c8d8, 1.0),
+        &format!("suggested {what} (currently {current_offset:+.0} ms)"),
+    );
     let consistency = match e.ur {
         u if u < 100.0 => "very consistent",
         u if u < 160.0 => "consistent",
@@ -141,20 +278,53 @@ pub fn draw_result(c: &mut Canvas, e: &Estimate, current_offset: f64, bpm: f64, 
         _ if vsync => "inconsistent - retry and focus on the drum",
         _ => "inconsistent - retry and focus on the click",
     };
-    c.text_centered(cx, 270.0, 10.0, rgba(0x9a9ab0, 1.0), &format!("{} hits, UR {:.0} ({consistency})", e.hits, e.ur));
+    c.text_centered(
+        cx,
+        270.0,
+        10.0,
+        rgba(0x9a9ab0, 1.0),
+        &format!("{} hits, UR {:.0} ({consistency})", e.hits, e.ur),
+    );
     if e.hits < MIN_HITS {
-        c.text_centered(cx, 292.0, 9.0, rgba(0xFF4B4B, 1.0), &format!("Only {} hits; at least {MIN_HITS} recommended", e.hits));
+        c.text_centered(
+            cx,
+            292.0,
+            9.0,
+            rgba(0xFF4B4B, 1.0),
+            &format!("Only {} hits; at least {MIN_HITS} recommended", e.hits),
+        );
     }
-    c.button_row(352.0, &[
-        ("Apply  (Enter)", Hit::Key(KeyCode::Enter), true),
-        ("Retry  (R)", Hit::Key(KeyCode::KeyR), false),
-        ("Discard  (Esc)", Hit::Key(KeyCode::Escape), false),
-    ]);
+    c.button_row(
+        352.0,
+        &[
+            ("Apply  (Enter)", Hit::Key(KeyCode::Enter), true),
+            ("Retry  (R)", Hit::Key(KeyCode::KeyR), false),
+            ("Discard  (Esc)", Hit::Key(KeyCode::Escape), false),
+        ],
+    );
     let tempo = format!("retry tempo: {bpm:.0} BPM   (Left/Right)");
     let tw = Canvas::text_width(9.0, &tempo);
     c.text_centered(cx, 388.0, 9.0, rgba(0x9a9ab0, 1.0), &tempo);
-    c.button(cx - tw / 2.0 - 30.0, 384.0, 22.0, 16.0, "<", 8.0, Hit::Key(KeyCode::ArrowLeft), false);
-    c.button(cx + tw / 2.0 + 8.0, 384.0, 22.0, 16.0, ">", 8.0, Hit::Key(KeyCode::ArrowRight), false);
+    c.button(
+        cx - tw / 2.0 - 30.0,
+        384.0,
+        22.0,
+        16.0,
+        "<",
+        8.0,
+        Hit::Key(KeyCode::ArrowLeft),
+        false,
+    );
+    c.button(
+        cx + tw / 2.0 + 8.0,
+        384.0,
+        22.0,
+        16.0,
+        ">",
+        8.0,
+        Hit::Key(KeyCode::ArrowRight),
+        false,
+    );
 }
 
 #[cfg(test)]
@@ -174,7 +344,11 @@ mod tests {
                 let frame = (n.time / 1000.0 * 48000.0).round() as usize;
                 let before = track.samples[(frame - 1) * 2].abs();
                 let after = track.samples[(frame + 1) * 2].abs();
-                assert!(before < 1e-6 && after > 1e-4, "bpm {bpm}: click not at note {}", n.time);
+                assert!(
+                    before < 1e-6 && after > 1e-4,
+                    "bpm {bpm}: click not at note {}",
+                    n.time
+                );
             }
         }
     }

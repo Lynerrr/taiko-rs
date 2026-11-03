@@ -4,7 +4,7 @@
 use std::sync::OnceLock;
 
 use crate::lang::{self, Lang};
-use crate::settings::{section_name, Item, Kind, ITEMS, SECTIONS};
+use crate::settings::{ITEMS, Item, Kind, SECTIONS, section_name};
 
 /// What a setting can be found by, lower case, in all the languages at once.
 struct Entry {
@@ -20,51 +20,90 @@ fn words(item: Item) -> &'static str {
         Item::ScrollSpeed => "sv speed lane fast slow скорость нот быстро медленно",
         Item::Rate => "dt ht nightcore double half time ускорение замедление",
         Item::RateKeepPitch => "nightcore daycore тон высота",
-        Item::Offset | Item::VisualOffset | Item::Calibrate => "latency delay sync timing late early задержка рассинхрон тайминг опаздывает раньше позже",
-        Item::ResetMapOffsets | Item::LiveOffset | Item::LiveOffsetUr => "latency timing задержка тайминг",
-        Item::VsyncCompensation | Item::VsyncTune | Item::VsyncCalibrate => "latency lag input delay задержка лаг",
+        Item::Offset | Item::VisualOffset | Item::Calibrate => {
+            "latency delay sync timing late early задержка рассинхрон тайминг опаздывает раньше позже"
+        }
+        Item::ResetMapOffsets | Item::LiveOffset | Item::LiveOffsetUr => {
+            "latency timing задержка тайминг"
+        }
+        Item::VsyncCompensation | Item::VsyncTune | Item::VsyncCalibrate => {
+            "latency lag input delay задержка лаг"
+        }
         Item::AudioBuffer => "latency lag crackle stutter wasapi задержка лаг треск заикание",
-        Item::MasterVolume | Item::MusicVolume | Item::FxVolume => "sound loud quiet mute audio звук громко тихо мьют音",
+        Item::MasterVolume | Item::MusicVolume | Item::FxVolume => {
+            "sound loud quiet mute audio звук громко тихо мьют音"
+        }
         Item::MessageSound => "ping chat звук пинг",
-        Item::BackgroundDim | Item::BackgroundDimBlack => "background dark brightness фон темнее яркость",
+        Item::BackgroundDim | Item::BackgroundDimBlack => {
+            "background dark brightness фон темнее яркость"
+        }
         Item::KiaiEffects | Item::HitFlash | Item::HideGreat => "effects flash эффекты вспышки",
         Item::Animations => "effects motion эффекты движение",
-        Item::PresentMode | Item::MenuVsync => "vsync mailbox immediate fifo tearing фреймрейт разрывы",
+        Item::PresentMode | Item::MenuVsync => {
+            "vsync mailbox immediate fifo tearing фреймрейт разрывы"
+        }
         Item::FpsCap => "fps framerate limit lag фпс кадры лимит",
         Item::ShowFps => "fps framerate counter фпс кадры счетчик",
         Item::HalfResolution => "performance weak gpu lag производительность слабый лаги",
-        Item::Renderer => "renderer graphics api vulkan directx dx12 opengl metal crash gpu рендер графика вулкан директ вылет краш видеокарта",
+        Item::Renderer => {
+            "renderer graphics api vulkan directx dx12 opengl metal crash gpu рендер графика вулкан директ вылет краш видеокарта"
+        }
         Item::Fullscreen | Item::WindowSize => "resolution borderless windowed разрешение окно",
-        Item::Letterbox | Item::LetterboxSize | Item::LetterboxX | Item::LetterboxY => "resolution custom black bars driver window разрешение кастомное черные полосы окно драйвер",
-        Item::PlayfieldArea | Item::PlayfieldPreset | Item::PlayfieldReset | Item::ShowPlayfieldSize | Item::WheelResize => "size position resolution tablet размер позиция разрешение",
+        Item::Letterbox | Item::LetterboxSize | Item::LetterboxX | Item::LetterboxY => {
+            "resolution custom black bars driver window разрешение кастомное черные полосы окно драйвер"
+        }
+        Item::PlayfieldArea
+        | Item::PlayfieldPreset
+        | Item::PlayfieldReset
+        | Item::ShowPlayfieldSize
+        | Item::WheelResize => "size position resolution tablet размер позиция разрешение",
         Item::Skin | Item::SkinParts | Item::SkinFolder => "theme notes look тема внешний вид ноты",
         Item::Accent | Item::AccentHue => "theme color hue тема цвет оттенок",
-        Item::NoteColours | Item::DonColour | Item::KatColour => "color palette red blue цвет палитра красный синий",
+        Item::NoteColours | Item::DonColour | Item::KatColour => {
+            "color palette red blue цвет палитра красный синий"
+        }
         Item::Language => "english japanese russian locale английский японский русский",
-        Item::SongsFolder | Item::ShowConverts | Item::HiddenMaps => "library beatmaps maps osu stable библиотека карты песни",
-        Item::SongHeadings => "song select list groups sort tabs flat difficulty список группы сортировка вкладки сложность",
+        Item::SongsFolder | Item::ShowConverts | Item::HiddenMaps => {
+            "library beatmaps maps osu stable библиотека карты песни"
+        }
+        Item::SongHeadings => {
+            "song select list groups sort tabs flat difficulty список группы сортировка вкладки сложность"
+        }
         Item::DataFolder => "save scores replays path сохранения рекорды реплеи путь",
         Item::Screenshots => "picture clipboard screen картинка буфер экран",
         Item::ChatFilter => "swear profanity мат цензура",
-        Item::NotifyMessages | Item::NotifyMentions | Item::NotifyRequests | Item::NotifyOnline | Item::NotifyPlaying => "notification ping friends оповещения пинг друзья",
+        Item::NotifyMessages
+        | Item::NotifyMentions
+        | Item::NotifyRequests
+        | Item::NotifyOnline
+        | Item::NotifyPlaying => "notification ping friends оповещения пинг друзья",
         Item::DiscordPresence => "rich presence статус",
         Item::IdleScreen => "afk away screensaver idle timeout отошел заставка простой",
         Item::CrashReports => "crash report bug telemetry вылет краш отчет баг",
-        Item::Update | Item::UpdateChannel | Item::CheckUpdates | Item::Changelog => "version release dev latest версия релиз новое",
+        Item::Update | Item::UpdateChannel | Item::CheckUpdates | Item::Changelog => {
+            "version release dev latest версия релиз новое"
+        }
         Item::Splash | Item::Guide => "intro startup tutorial заставка запуск обучение",
         Item::LegacyMenu => "old classic tabs main menu старый классика вкладки главное меню",
         Item::MenuNotesDim => "lane notes faint dark menu дорожка ноты бледнее меню",
         Item::MenuNotes => "background multiverse route фон мультиверс маршрут",
         Item::Interface | Item::InterfaceHides | Item::InterfaceKey => "hud ui hide скрыть худ",
-        Item::AutoplayStyle | Item::AutoplayBinding | Item::AutoplayLeftHanded => "auto bot кдд авто бот",
+        Item::AutoplayStyle | Item::AutoplayBinding | Item::AutoplayLeftHanded => {
+            "auto bot кдд авто бот"
+        }
         Item::TouchLayout => "phone android tablet телефон андроид планшет",
-        Item::Key(_) | Item::PresetKey(_) | Item::Hotkey(_) => "keybind binding shortcut hotkey бинд клавиша кнопка",
+        Item::Key(_) | Item::PresetKey(_) | Item::Hotkey(_) => {
+            "keybind binding shortcut hotkey бинд клавиша кнопка"
+        }
         _ => "",
     }
 }
 
 fn lower(text: &str) -> String {
-    text.chars().flat_map(char::to_lowercase).map(|c| if c == 'ё' { 'е' } else { c }).collect()
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| if c == 'ё' { 'е' } else { c })
+        .collect()
 }
 
 fn entries() -> &'static [Entry] {
@@ -73,8 +112,12 @@ fn entries() -> &'static [Entry] {
         ITEMS
             .iter()
             .map(|&(section, item)| {
-                let s = SECTIONS.iter().position(|(name, _)| *name == section).unwrap_or(0);
-                let all = |text: &dyn Fn() -> String| Lang::ALL.map(|l| lang::with(l, text)).join("\n");
+                let s = SECTIONS
+                    .iter()
+                    .position(|(name, _)| *name == section)
+                    .unwrap_or(0);
+                let all =
+                    |text: &dyn Fn() -> String| Lang::ALL.map(|l| lang::with(l, text)).join("\n");
                 Entry {
                     label: lower(&all(&|| item.label().to_string())),
                     words: lower(words(item)),
@@ -115,7 +158,11 @@ fn other_layout(text: &str) -> String {
     const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбюе";
     text.chars()
         .map(|c| {
-            let swap = |from: &str, to: &str| from.chars().position(|f| f == c).and_then(|i| to.chars().nth(i));
+            let swap = |from: &str, to: &str| {
+                from.chars()
+                    .position(|f| f == c)
+                    .and_then(|i| to.chars().nth(i))
+            };
             swap(EN, RU).or_else(|| swap(RU, EN)).unwrap_or(c)
         })
         .collect()
@@ -132,8 +179,14 @@ pub fn find(query: &str, key: &dyn Fn(Item) -> String, shown: &dyn Fn(Item) -> b
             .filter(|(i, _)| shown(ITEMS[*i].1))
             .filter_map(|(i, entry)| {
                 let item = ITEMS[i].1;
-                let key = if item.kind() == Kind::Key { lower(&key(item)) } else { String::new() };
-                let total = words.iter().try_fold(0, |sum, word| rank(entry, &key, word).map(|r| sum + r))?;
+                let key = if item.kind() == Kind::Key {
+                    lower(&key(item))
+                } else {
+                    String::new()
+                };
+                let total = words
+                    .iter()
+                    .try_fold(0, |sum, word| rank(entry, &key, word).map(|r| sum + r))?;
                 Some((total, i))
             })
             .collect();
@@ -143,7 +196,11 @@ pub fn find(query: &str, key: &dyn Fn(Item) -> String, shown: &dyn Fn(Item) -> b
     };
     let query = lower(query);
     let hits = run(&query);
-    if hits.is_empty() { run(&other_layout(&query)) } else { hits }
+    if hits.is_empty() {
+        run(&other_layout(&query))
+    } else {
+        hits
+    }
 }
 
 #[cfg(test)]
@@ -151,12 +208,25 @@ mod tests {
     use super::*;
 
     fn first(query: &str) -> Option<Item> {
-        find(query, &|item| if item == Item::Hotkey(8) { "F2".into() } else { "Ctrl+Q".into() }, &|_| true).first().map(|&i| ITEMS[i].1)
+        find(
+            query,
+            &|item| {
+                if item == Item::Hotkey(8) {
+                    "F2".into()
+                } else {
+                    "Ctrl+Q".into()
+                }
+            },
+            &|_| true,
+        )
+        .first()
+        .map(|&i| ITEMS[i].1)
     }
 
     #[test]
     fn a_setting_is_found_by_its_name_in_any_language_whichever_is_on() {
-        for query in ["music volume", "громкость музыки", "音楽の音量", "MUSIC"] {
+        for query in ["music volume", "громкость музыки", "音楽の音量", "MUSIC"]
+        {
             assert_eq!(first(query), Some(Item::MusicVolume), "{query}");
         }
     }
@@ -182,12 +252,17 @@ mod tests {
     #[test]
     fn the_wrong_keyboard_layout_still_finds_it() {
         assert_eq!(other_layout("pderr"), "звукк");
-        assert!(first("uhjvrjcnm").is_some(), "громкость typed on the English layout");
+        assert!(
+            first("uhjvrjcnm").is_some(),
+            "громкость typed on the English layout"
+        );
     }
 
     #[test]
     fn a_row_not_in_the_list_is_not_found() {
-        let hits = find("krokodil", &|_| String::new(), &|item| item != Item::KrokodilKoban);
+        let hits = find("krokodil", &|_| String::new(), &|item| {
+            item != Item::KrokodilKoban
+        });
         assert!(hits.is_empty());
     }
 }

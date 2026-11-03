@@ -27,7 +27,10 @@ impl Link {
 /// `taiko-rs://score/123` (browsers may add a slash or a query).
 pub fn parse(text: &str) -> Option<Link> {
     let text = text.trim();
-    let rest = text.get(..11).filter(|s| s.eq_ignore_ascii_case("taiko-rs://")).map(|_| &text[11..])?;
+    let rest = text
+        .get(..11)
+        .filter(|s| s.eq_ignore_ascii_case("taiko-rs://"))
+        .map(|_| &text[11..])?;
     let path = rest.split(['?', '#']).next()?.trim_end_matches('/');
     match path.split_once('/')? {
         ("score" | "s", id) => id.parse().ok().map(Link::Score),
@@ -45,13 +48,23 @@ fn port_file() -> Option<PathBuf> {
 
 /// Hands `link` to a running game; false if none took it (then this launch opens it).
 pub fn forward(link: Link) -> bool {
-    let Some(port) = port_file().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| t.trim().parse::<u16>().ok()) else { return false };
+    let Some(port) = port_file()
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|t| t.trim().parse::<u16>().ok())
+    else {
+        return false;
+    };
     send(port, link)
 }
 
 /// Says `link` to whatever listens on `port`; true if it was a game and took it.
 fn send(port: u16, link: Link) -> bool {
-    let Ok(mut stream) = TcpStream::connect_timeout(&(Ipv4Addr::LOCALHOST, port).into(), Duration::from_millis(500)) else { return false };
+    let Ok(mut stream) = TcpStream::connect_timeout(
+        &(Ipv4Addr::LOCALHOST, port).into(),
+        Duration::from_millis(500),
+    ) else {
+        return false;
+    };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     if writeln!(stream, "{HELLO} {}", link.url()).is_err() {
         return false;
@@ -63,9 +76,16 @@ fn send(port: u16, link: Link) -> bool {
 /// Takes links from later launches (`forward`) for as long as the game runs.
 pub fn listen(on_link: impl Fn(Link) + Send + 'static) {
     let Some(file) = port_file() else { return };
-    let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) else { return };
-    let Ok(addr) = listener.local_addr() else { return };
-    let written = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&file, addr.port().to_string()));
+    let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) else {
+        return;
+    };
+    let Ok(addr) = listener.local_addr() else {
+        return;
+    };
+    let written = file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|_| std::fs::write(&file, addr.port().to_string()));
     if let Err(e) = written {
         eprintln!("links: {}: {e}", file.display());
         return;
@@ -81,7 +101,9 @@ fn serve(listener: TcpListener, on_link: impl Fn(Link) + Send + 'static) {
             if BufReader::new(&stream).read_line(&mut line).is_err() {
                 continue;
             }
-            let Some(link) = line.trim().strip_prefix(HELLO).and_then(parse) else { continue };
+            let Some(link) = line.trim().strip_prefix(HELLO).and_then(parse) else {
+                continue;
+            };
             let _ = (&stream).write_all(b"ok\n");
             on_link(link);
         }
@@ -98,7 +120,9 @@ fn dev_build(exe: &Path) -> bool {
 /// Makes this game the handler of `taiko-rs://` links (on a thread: it runs `reg` or
 /// `xdg-mime`), unless it already is.
 pub fn register() {
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
     std::thread::spawn(move || register_exe(&exe));
 }
 
@@ -116,17 +140,28 @@ fn register_exe(exe: &Path) {
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().find_map(|l| l.split_once("REG_SZ").map(|(_, v)| v.trim().to_string())));
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .find_map(|l| l.split_once("REG_SZ").map(|(_, v)| v.trim().to_string()))
+        });
     if current.as_deref() == Some(command.as_str()) {
         return;
     }
-    let current_exe = current.as_deref().and_then(|c| c.strip_prefix('"')?.split('"').next()).map(PathBuf::from);
+    let current_exe = current
+        .as_deref()
+        .and_then(|c| c.strip_prefix('"')?.split('"').next())
+        .map(PathBuf::from);
     if dev_build(exe) && current_exe.is_some_and(|e| e.is_file()) {
         return;
     }
     let icon = format!("\"{}\",0", exe.display());
-    let values: [(&str, Option<&str>, &str); 4] =
-        [(KEY, None, "URL:taiko.rs"), (KEY, Some("URL Protocol"), ""), (&format!(r"{KEY}\DefaultIcon"), None, &icon), (&open, None, &command)];
+    let values: [(&str, Option<&str>, &str); 4] = [
+        (KEY, None, "URL:taiko.rs"),
+        (KEY, Some("URL Protocol"), ""),
+        (&format!(r"{KEY}\DefaultIcon"), None, &icon),
+        (&open, None, &command),
+    ];
     for (key, name, data) in values {
         let mut reg = Command::new("reg");
         reg.args(["add", key]);
@@ -134,7 +169,11 @@ fn register_exe(exe: &Path) {
             Some(n) => reg.args(["/v", n]),
             None => reg.arg("/ve"),
         };
-        let ok = reg.args(["/d", data, "/f"]).creation_flags(CREATE_NO_WINDOW).output().is_ok_and(|o| o.status.success());
+        let ok = reg
+            .args(["/d", data, "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .is_ok_and(|o| o.status.success());
         if !ok {
             eprintln!("links: couldn't register taiko-rs:// ({key})");
             return;
@@ -168,7 +207,12 @@ fn register_exe(exe: &Path) {
         eprintln!("links: {}: {e}", file.display());
         return;
     }
-    let quiet = |cmd: &mut Command| cmd.stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+    let quiet = |cmd: &mut Command| {
+        cmd.stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
     let _ = quiet(Command::new("update-desktop-database").arg("-q").arg(&dir));
     if quiet(Command::new("xdg-mime").args(["default", NAME, "x-scheme-handler/taiko-rs"])) {
         eprintln!("links: taiko-rs:// opens {}", exe.display());
@@ -177,14 +221,27 @@ fn register_exe(exe: &Path) {
     }
 }
 
-#[cfg(not(any(windows, all(unix, not(target_os = "macos"), not(target_os = "android")))))]
+#[cfg(not(any(
+    windows,
+    all(unix, not(target_os = "macos"), not(target_os = "android"))
+)))]
 fn register_exe(_exe: &Path) {}
 
 /// The (hidden) desktop entry that opens links with `exe`.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn desktop_entry(exe: &Path) -> String {
     // Inside quotes the desktop entry spec escapes ", `, $ and \ with a backslash.
-    let quoted: String = exe.to_string_lossy().chars().flat_map(|c| if "\"`$\\".contains(c) { vec!['\\', c] } else { vec![c] }).collect();
+    let quoted: String = exe
+        .to_string_lossy()
+        .chars()
+        .flat_map(|c| {
+            if "\"`$\\".contains(c) {
+                vec!['\\', c]
+            } else {
+                vec![c]
+            }
+        })
+        .collect();
     format!(
         "[Desktop Entry]\nType=Application\nName=taiko.rs\nComment=Opens taiko.rs links (scores to watch)\nExec=\"{quoted}\" %u\nIcon=taiko-rs\nTerminal=false\nNoDisplay=true\nMimeType=x-scheme-handler/taiko-rs;\n"
     )
@@ -227,7 +284,11 @@ mod tests {
     fn desktop_entries_name_their_game() {
         let exe = Path::new("/opt/my \"games\"/taiko-rs");
         let entry = desktop_entry(exe);
-        assert!(entry.contains("Exec=\"/opt/my \\\"games\\\"/taiko-rs\" %u") && entry.contains("MimeType=x-scheme-handler/taiko-rs;"), "{entry}");
+        assert!(
+            entry.contains("Exec=\"/opt/my \\\"games\\\"/taiko-rs\" %u")
+                && entry.contains("MimeType=x-scheme-handler/taiko-rs;"),
+            "{entry}"
+        );
         assert_eq!(entry_exe(&entry).as_deref(), Some(exe));
         assert!(dev_build(Path::new("/src/taiko-rs/target/release/taiko-rs")) && !dev_build(exe));
     }

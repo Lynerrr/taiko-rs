@@ -4,10 +4,14 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}, mpsc};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+    mpsc,
+};
 
 use crate::audio;
-use crate::render::{Atlas, SkinLayout, Sprite, SPRITES};
+use crate::render::{Atlas, SPRITES, SkinLayout, Sprite};
 
 /// taiko.rs's own Skins folder, next to its Songs folder. `.osk` files dropped here are
 /// extracted into a folder of the same name.
@@ -17,7 +21,10 @@ pub fn own_dir() -> Option<PathBuf> {
 
 /// Folders holding skins: osu!'s next to each Songs folder it has, then taiko.rs's own.
 fn skin_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = crate::library::song_dirs().iter().filter_map(|s| Some(s.parent()?.join("Skins"))).collect();
+    let mut dirs: Vec<PathBuf> = crate::library::song_dirs()
+        .iter()
+        .filter_map(|s| Some(s.parent()?.join("Skins")))
+        .collect();
     dirs.extend(own_dir());
     dirs.retain(|d| d.is_dir());
     dirs.dedup();
@@ -29,12 +36,16 @@ pub fn list() -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     let own = own_dir();
     for dir in skin_dirs() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
         paths.sort();
         for p in paths {
             // osu! imports the `.osk` files in its own folder itself.
-            let p = if Some(&dir) == own.as_ref() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osk")) {
+            let p = if Some(&dir) == own.as_ref()
+                && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osk"))
+            {
                 match extract_osk(&p) {
                     Ok(d) => d,
                     Err(e) => {
@@ -45,7 +56,9 @@ pub fn list() -> Vec<(String, PathBuf)> {
             } else {
                 p
             };
-            let Some(name) = p.file_name().and_then(|n| n.to_str()).map(str::to_owned) else { continue };
+            let Some(name) = p.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+                continue;
+            };
             // The first folder wins when osu! and taiko.rs both have a skin of that name.
             if p.is_dir() && !out.iter().any(|(n, _)| *n == name) {
                 out.push((name, p));
@@ -65,7 +78,11 @@ fn extract_osk(path: &Path) -> Result<PathBuf, String> {
     let tmp = crate::download::partial_of(&dest);
     crate::download::unpack(path, &tmp)?;
     // Some archives wrap the skin in a folder of its own.
-    let entries: Vec<PathBuf> = std::fs::read_dir(&tmp).map_err(|e| e.to_string())?.flatten().map(|e| e.path()).collect();
+    let entries: Vec<PathBuf> = std::fs::read_dir(&tmp)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .collect();
     let root = match entries.as_slice() {
         [only] if only.is_dir() => only.clone(),
         _ => tmp.clone(),
@@ -83,8 +100,14 @@ impl Files {
     fn read(dir: &Path) -> Files {
         fn walk(dir: &Path, rel: &str, depth: u32, out: &mut HashMap<String, PathBuf>) {
             for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-                let Some(name) = e.file_name().to_str().map(str::to_lowercase) else { continue };
-                let key = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+                let Some(name) = e.file_name().to_str().map(str::to_lowercase) else {
+                    continue;
+                };
+                let key = if rel.is_empty() {
+                    name
+                } else {
+                    format!("{rel}/{name}")
+                };
                 let path = e.path();
                 if path.is_dir() {
                     if depth < 2 {
@@ -102,15 +125,26 @@ impl Files {
 
     /// The first of `stems` present with an audio extension osu! accepts.
     fn sound(&self, stems: &[&str]) -> Option<&Path> {
-        stems.iter().flat_map(|s| ["wav", "ogg", "mp3"].map(|ext| format!("{s}.{ext}"))).find_map(|n| self.0.get(&n)).map(PathBuf::as_path)
+        stems
+            .iter()
+            .flat_map(|s| ["wav", "ogg", "mp3"].map(|ext| format!("{s}.{ext}")))
+            .find_map(|n| self.0.get(&n))
+            .map(PathBuf::as_path)
     }
 
     /// The first of `stems` present as a PNG, preferring the `@2x` version. True when it is one.
     fn image<S: AsRef<str>>(&self, stems: &[S]) -> Option<(&Path, bool)> {
         stems.iter().find_map(|s| {
             let s = s.as_ref();
-            let hd = self.0.get(&format!("{s}@2x.png")).map(|p| (p.as_path(), true));
-            hd.or_else(|| self.0.get(&format!("{s}.png")).map(|p| (p.as_path(), false)))
+            let hd = self
+                .0
+                .get(&format!("{s}@2x.png"))
+                .map(|p| (p.as_path(), true));
+            hd.or_else(|| {
+                self.0
+                    .get(&format!("{s}.png"))
+                    .map(|p| (p.as_path(), false))
+            })
         })
     }
 }
@@ -130,17 +164,30 @@ struct Ini {
 
 impl Ini {
     fn read(files: &Files) -> Ini {
-        let mut ini = Ini { score_prefix: "score".into(), combo_prefix: "score".into(), score_overlap: 0.0, combo_overlap: 0.0, legacy_drum: false };
+        let mut ini = Ini {
+            score_prefix: "score".into(),
+            combo_prefix: "score".into(),
+            score_overlap: 0.0,
+            combo_overlap: 0.0,
+            legacy_drum: false,
+        };
         // No skin.ini: the latest version. One without a version: 1.0.
-        let Some(text) = files.0.get("skin.ini").and_then(|p| std::fs::read(p).ok()) else { return ini };
+        let Some(text) = files.0.get("skin.ini").and_then(|p| std::fs::read(p).ok()) else {
+            return ini;
+        };
         ini.legacy_drum = true;
         let prefix = |v: &str| v.replace('\\', "/").trim_matches('/').to_lowercase();
         for line in String::from_utf8_lossy(&text).lines() {
             let line = line.trim_start_matches('\u{feff}').trim();
-            let Some((k, v)) = line.split_once(':') else { continue };
+            let Some((k, v)) = line.split_once(':') else {
+                continue;
+            };
             let v = v.split("//").next().unwrap_or("").trim();
             match k.trim().to_lowercase().as_str() {
-                "version" => ini.legacy_drum = !v.eq_ignore_ascii_case("latest") && v.parse::<f32>().is_ok_and(|n| n < 2.1),
+                "version" => {
+                    ini.legacy_drum =
+                        !v.eq_ignore_ascii_case("latest") && v.parse::<f32>().is_ok_and(|n| n < 2.1)
+                }
                 "scoreprefix" if !v.is_empty() => ini.score_prefix = prefix(v),
                 "comboprefix" if !v.is_empty() => ini.combo_prefix = prefix(v),
                 "scoreoverlap" => ini.score_overlap = v.parse().unwrap_or(0.0),
@@ -237,10 +284,31 @@ impl Part {
             Part::Swells => &[SpinnerWarning, SpinnerCircle, SpinnerApproach],
             Part::HitTarget => &[HitTarget, HitTargetBig],
             Part::Lane => &[LaneBar, LaneKiai, Barline],
-            Part::Drum => &[DrumPanel, DrumInner, DrumInnerFlipped, DrumOuter, DrumOuterFlipped],
+            Part::Drum => &[
+                DrumPanel,
+                DrumInner,
+                DrumInnerFlipped,
+                DrumOuter,
+                DrumOuterFlipped,
+            ],
             Part::Judgements => &[JudgeGreat, JudgeOk, JudgeMiss],
-            Part::Score => &[Score0, Score1, Score2, Score3, Score4, Score5, Score6, Score7, Score8, Score9, ScorePercent, ScoreDot],
-            Part::Combo => &[Combo0, Combo1, Combo2, Combo3, Combo4, Combo5, Combo6, Combo7, Combo8, Combo9],
+            Part::Score => &[
+                Score0,
+                Score1,
+                Score2,
+                Score3,
+                Score4,
+                Score5,
+                Score6,
+                Score7,
+                Score8,
+                Score9,
+                ScorePercent,
+                ScoreDot,
+            ],
+            Part::Combo => &[
+                Combo0, Combo1, Combo2, Combo3, Combo4, Combo5, Combo6, Combo7, Combo8, Combo9,
+            ],
             Part::Health => &[HealthBg, HealthFill],
             Part::Hitsounds => &[],
         }
@@ -309,8 +377,12 @@ impl Sources {
 
     /// Takes in one config value written by `to_config`; unknown parts are ignored.
     pub fn parse(&mut self, v: &str) {
-        let Some((k, name)) = v.split_once('=') else { return };
-        let Some(&part) = Part::ALL.iter().find(|p| p.key() == k.trim()) else { return };
+        let Some((k, name)) = v.split_once('=') else {
+            return;
+        };
+        let Some(&part) = Part::ALL.iter().find(|p| p.key() == k.trim()) else {
+            return;
+        };
         let name = name.trim();
         self.set(
             part,
@@ -402,8 +474,12 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
     const ROW: u32 = 2048;
     let mut images = Vec::new();
     for sprite in Sprite::ALL {
-        let Some(skin) = from[sprite as usize] else { continue };
-        let Some((path, hd)) = skin.files.image(&image_names(sprite, &skin.ini)) else { continue };
+        let Some(skin) = from[sprite as usize] else {
+            continue;
+        };
+        let Some((path, hd)) = skin.files.image(&image_names(sprite, &skin.ini)) else {
+            continue;
+        };
         let mut img = match image::open(path) {
             Ok(i) => i.to_rgba8(),
             Err(e) => {
@@ -413,7 +489,10 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
         };
         // Sizes in SD px over 128: osu! draws a 128 px circle image at the note's size.
         let sd = if hd { 2.0 } else { 1.0 };
-        let size = [img.width() as f32 / sd / 128.0, img.height() as f32 / sd / 128.0];
+        let size = [
+            img.width() as f32 / sd / 128.0,
+            img.height() as f32 / sd / 128.0,
+        ];
         for px in img.pixels_mut() {
             let a = px[3] as u32;
             for c in &mut px.0[..3] {
@@ -422,7 +501,10 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
         }
         let scale = (max_size(sprite) as f32 / img.width().max(img.height()) as f32).min(1.0);
         if scale < 1.0 {
-            let (w, h) = (((img.width() as f32 * scale).round() as u32).max(1), ((img.height() as f32 * scale).round() as u32).max(1));
+            let (w, h) = (
+                ((img.width() as f32 * scale).round() as u32).max(1),
+                ((img.height() as f32 * scale).round() as u32).max(1),
+            );
             img = image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle);
         }
         // The drum's other half is the mirror image of the one the skin has.
@@ -431,16 +513,23 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
         }
         images.push((sprite, img, size));
     }
-    let has = |images: &[(Sprite, image::RgbaImage, [f32; 2])], s: Sprite| images.iter().any(|(i, _, _)| *i == s);
+    let has = |images: &[(Sprite, image::RgbaImage, [f32; 2])], s: Sprite| {
+        images.iter().any(|(i, _, _)| *i == s)
+    };
     // The circle is what makes a skinned note; overlays alone stay unused.
     if !has(&images, Sprite::HitCircle) && !has(&images, Sprite::BigCircle) {
-        images.retain(|(i, _, _)| !matches!(i, Sprite::HitCircleOverlay | Sprite::BigCircleOverlay));
+        images
+            .retain(|(i, _, _)| !matches!(i, Sprite::HitCircleOverlay | Sprite::BigCircleOverlay));
     }
     // A font missing a digit isn't used at all (built-in numbers rather than gaps).
     for zero in [Sprite::Score0, Sprite::Combo0] {
         let digits = zero as usize..zero as usize + 10;
         if !digits.clone().all(|i| has(&images, Sprite::ALL[i])) {
-            images.retain(|(i, _, _)| !digits.contains(&(*i as usize)) && !(zero == Sprite::Score0 && matches!(i, Sprite::ScorePercent | Sprite::ScoreDot)));
+            images.retain(|(i, _, _)| {
+                !digits.contains(&(*i as usize))
+                    && !(zero == Sprite::Score0
+                        && matches!(i, Sprite::ScorePercent | Sprite::ScoreDot))
+            });
         }
     }
     let layout = |part: Part| from[part.sprites()[0] as usize].map(|s| &s.ini);
@@ -450,7 +539,10 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
         legacy_drum: layout(Part::Drum).is_some_and(|i| i.legacy_drum),
     };
     if images.is_empty() {
-        return Atlas { layout, ..Default::default() };
+        return Atlas {
+            layout,
+            ..Default::default()
+        };
     }
     // Tallest first, so each row wastes little height.
     images.sort_by_key(|(_, img, _)| std::cmp::Reverse(img.height()));
@@ -467,17 +559,31 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
         (x, row_h, width) = (x + cw, row_h.max(ch), width.max(x + cw));
     }
     let height = y + row_h;
-    let mut atlas = Atlas { width, height, rgba: vec![0; (width * height * 4) as usize], layout, ..Default::default() };
+    let mut atlas = Atlas {
+        width,
+        height,
+        rgba: vec![0; (width * height * 4) as usize],
+        layout,
+        ..Default::default()
+    };
     for ((sprite, img, size), (cx, cy)) in images.into_iter().zip(cells) {
         let (iw, ih) = (img.width(), img.height());
         for py in 0..ih + 2 {
             for px in 0..iw + 2 {
-                let p = img.get_pixel(px.saturating_sub(1).min(iw - 1), py.saturating_sub(1).min(ih - 1));
+                let p = img.get_pixel(
+                    px.saturating_sub(1).min(iw - 1),
+                    py.saturating_sub(1).min(ih - 1),
+                );
                 let at = (((cy + py) * width + cx + px) * 4) as usize;
                 atlas.rgba[at..at + 4].copy_from_slice(&p.0);
             }
         }
-        let uv = [(cx + 1) as f32 / width as f32, (cy + 1) as f32 / height as f32, iw as f32 / width as f32, ih as f32 / height as f32];
+        let uv = [
+            (cx + 1) as f32 / width as f32,
+            (cy + 1) as f32 / height as f32,
+            iw as f32 / width as f32,
+            ih as f32 / height as f32,
+        ];
         atlas.sprites[sprite as usize] = Some((uv, size));
     }
     atlas
@@ -527,34 +633,55 @@ impl Loader {
         let (done, rx) = mpsc::channel();
         let revision = Arc::new(AtomicU64::new(0));
         let wanted = revision.clone();
-        std::thread::Builder::new().name("skin assets".into()).spawn(move || {
-            let mut cached: Option<(Key, Arc<Prepared>)> = None;
-            while let Ok(work) = jobs.recv() {
-                let mut next = None;
-                let mut reload = false;
-                for work in std::iter::once(work).chain(jobs.try_iter()) {
-                    match work {
-                        Work::Load(id, key, fresh) => { next = Some((id, *key)); reload |= fresh; }
-                        Work::Recycle(assets) => drop(assets),
+        std::thread::Builder::new()
+            .name("skin assets".into())
+            .spawn(move || {
+                let mut cached: Option<(Key, Arc<Prepared>)> = None;
+                while let Ok(work) = jobs.recv() {
+                    let mut next = None;
+                    let mut reload = false;
+                    for work in std::iter::once(work).chain(jobs.try_iter()) {
+                        match work {
+                            Work::Load(id, key, fresh) => {
+                                next = Some((id, *key));
+                                reload |= fresh;
+                            }
+                            Work::Recycle(assets) => drop(assets),
+                        }
+                    }
+                    let Some((id, mut key)) = next else { continue };
+                    key.map_dir = key.map_dir.filter(|dir| map_has_images(dir));
+                    let assets = match &cached {
+                        Some((old, assets)) if !reload && *old == key => assets.clone(),
+                        _ => {
+                            let skin =
+                                load(&key.main, &key.parts, key.rate, key.map_dir.as_deref());
+                            let sounds = key
+                                .rate
+                                .map(|rate| Arc::new(audio::hitsound_set(rate, skin.hitsounds)));
+                            let assets = Arc::new(Prepared {
+                                images: Arc::new(skin.images),
+                                sounds,
+                                map_spinner: skin.map_spinner,
+                            });
+                            cached = Some((key.clone(), assets.clone()));
+                            assets
+                        }
+                    };
+                    if wanted.load(Ordering::Relaxed) == id
+                        && done
+                            .send(Ready {
+                                key,
+                                assets,
+                                revision: id,
+                            })
+                            .is_err()
+                    {
+                        break;
                     }
                 }
-                let Some((id, mut key)) = next else { continue };
-                key.map_dir = key.map_dir.filter(|dir| map_has_images(dir));
-                let assets = match &cached {
-                    Some((old, assets)) if !reload && *old == key => assets.clone(),
-                    _ => {
-                        let skin = load(&key.main, &key.parts, key.rate, key.map_dir.as_deref());
-                        let sounds = key.rate.map(|rate| Arc::new(audio::hitsound_set(rate, skin.hitsounds)));
-                        let assets = Arc::new(Prepared { images: Arc::new(skin.images), sounds, map_spinner: skin.map_spinner });
-                        cached = Some((key.clone(), assets.clone()));
-                        assets
-                    }
-                };
-                if wanted.load(Ordering::Relaxed) == id && done.send(Ready { key, assets, revision: id }).is_err() {
-                    break;
-                }
-            }
-        }).expect("skin asset worker");
+            })
+            .expect("skin asset worker");
         Self { tx, rx, revision }
     }
 
@@ -576,13 +703,25 @@ impl Loader {
 
 /// The skins `main` and `parts` use, read: by the part they're for (None = built-in).
 fn read_skins(main: &str, parts: &Sources) -> (Vec<Loaded>, [Option<usize>; PARTS]) {
-    let wanted: Vec<&str> = Part::ALL.iter().map(|&p| parts.get(p).resolve(main)).collect();
-    let installed = if wanted.iter().all(|n| n.is_empty()) { Vec::new() } else { list() };
+    let wanted: Vec<&str> = Part::ALL
+        .iter()
+        .map(|&p| parts.get(p).resolve(main))
+        .collect();
+    let installed = if wanted.iter().all(|n| n.is_empty()) {
+        Vec::new()
+    } else {
+        list()
+    };
     let mut loaded: Vec<(PathBuf, Loaded)> = Vec::new();
     let mut of_part = [None; PARTS];
     for (k, name) in wanted.into_iter().enumerate() {
         // A skin that isn't installed (any more) is the built-in look.
-        let Some((_, dir)) = installed.iter().find(|(n, _)| !name.is_empty() && n == name) else { continue };
+        let Some((_, dir)) = installed
+            .iter()
+            .find(|(n, _)| !name.is_empty() && n == name)
+        else {
+            continue;
+        };
         let i = match loaded.iter().position(|(d, _)| d == dir) {
             Some(i) => i,
             None => {
@@ -611,7 +750,9 @@ pub fn apply_map_spinner_warning(present: bool) {
 /// Whether the map folder `dir` carries any skin images of its own (a beatmap skin).
 pub fn map_has_images(dir: &Path) -> bool {
     let map = Loaded::read(dir);
-    Sprite::ALL.iter().any(|&s| map.files.image(&image_names(s, &map.ini)).is_some())
+    Sprite::ALL
+        .iter()
+        .any(|&s| map.files.image(&image_names(s, &map.ini)).is_some())
 }
 
 /// Loads the skin called `main` (built-in for "" or one that isn't installed), each part from
@@ -635,12 +776,20 @@ pub fn load(main: &str, parts: &Sources, rate: Option<u32>, map_dir: Option<&Pat
             }
         }
     }
-    let map_spinner = map.as_ref().is_some_and(|m| m.files.image(&image_names(Sprite::SpinnerWarning, &m.ini)).is_some());
+    let map_spinner = map.as_ref().is_some_and(|m| {
+        m.files
+            .image(&image_names(Sprite::SpinnerWarning, &m.ini))
+            .is_some()
+    });
     let hitsounds = match (rate, skin_of(Part::Hitsounds)) {
         (Some(rate), Some(skin)) => hitsounds_of(&skin.files, rate),
         _ => audio::Custom::default(),
     };
-    Skin { hitsounds, images: atlas(&from), map_spinner }
+    Skin {
+        hitsounds,
+        images: atlas(&from),
+        map_spinner,
+    }
 }
 
 /// Just the hitsounds of `load` (for the video export's audio).
@@ -648,16 +797,26 @@ pub fn hitsounds(main: &str, parts: &Sources, rate: u32) -> audio::Custom {
     let mut only = Sources(std::array::from_fn(|_| Source::BuiltIn));
     only.set(Part::Hitsounds, parts.get(Part::Hitsounds).clone());
     let (skins, of_part) = read_skins(main, &only);
-    of_part[Part::Hitsounds as usize].map_or_else(audio::Custom::default, |i| hitsounds_of(&skins[i].files, rate))
+    of_part[Part::Hitsounds as usize].map_or_else(audio::Custom::default, |i| {
+        hitsounds_of(&skins[i].files, rate)
+    })
 }
 
 fn hitsounds_of(files: &Files, rate: u32) -> audio::Custom {
     audio::Custom {
         // osu!taiko plays the clap for rim hits; some skins only ship the whistle.
-        don: files.sound(&["taiko-normal-hitnormal"]).and_then(|p| decode_sound(p, rate)),
-        kat: files.sound(&["taiko-normal-hitclap", "taiko-normal-hitwhistle"]).and_then(|p| decode_sound(p, rate)),
-        finish: files.sound(&["taiko-normal-hitfinish"]).and_then(|p| decode_sound(p, rate)),
-        combobreak: files.sound(&["combobreak"]).and_then(|p| decode_sound(p, rate)),
+        don: files
+            .sound(&["taiko-normal-hitnormal"])
+            .and_then(|p| decode_sound(p, rate)),
+        kat: files
+            .sound(&["taiko-normal-hitclap", "taiko-normal-hitwhistle"])
+            .and_then(|p| decode_sound(p, rate)),
+        finish: files
+            .sound(&["taiko-normal-hitfinish"])
+            .and_then(|p| decode_sound(p, rate)),
+        combobreak: files
+            .sound(&["combobreak"])
+            .and_then(|p| decode_sound(p, rate)),
     }
 }
 
@@ -681,13 +840,18 @@ mod tests {
     use std::io::Write;
 
     use super::{Loaded, Part, Source, Sources};
-    use crate::render::{Atlas, Sprite, SPRITES};
+    use crate::render::{Atlas, SPRITES, Sprite};
 
     fn wait_for_skin(loader: &super::Loader) -> super::Ready {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
-            if let Some(ready) = loader.poll() { return ready; }
-            assert!(std::time::Instant::now() < deadline, "skin worker did not finish");
+            if let Some(ready) = loader.poll() {
+                return ready;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "skin worker did not finish"
+            );
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
@@ -696,25 +860,43 @@ mod tests {
     fn skin_worker_discards_stale_requests_reuses_plain_maps_and_reloads_images() {
         let dir = std::env::temp_dir().join(format!("taiko-loader-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let key = super::Key { main: String::new(), parts: Sources::default(), rate: Some(48_000), map_dir: None };
+        let key = super::Key {
+            main: String::new(),
+            parts: Sources::default(),
+            rate: Some(48_000),
+            map_dir: None,
+        };
         let loader = super::Loader::new();
         loader.request(key.clone(), false);
         let initial = wait_for_skin(&loader);
         for i in 0..100 {
-            loader.request(super::Key { map_dir: Some(dir.join(i.to_string())), ..key.clone() }, false);
+            loader.request(
+                super::Key {
+                    map_dir: Some(dir.join(i.to_string())),
+                    ..key.clone()
+                },
+                false,
+            );
         }
         let plain = wait_for_skin(&loader);
         assert_eq!(plain.revision, 101);
         assert!(plain.key.map_dir.is_none());
         assert!(std::sync::Arc::ptr_eq(&initial.assets, &plain.assets));
         let image = dir.join("taikohitcircle.png");
-        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255])).save(&image).unwrap();
-        let custom = super::Key { map_dir: Some(dir.clone()), ..key };
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]))
+            .save(&image)
+            .unwrap();
+        let custom = super::Key {
+            map_dir: Some(dir.clone()),
+            ..key
+        };
         loader.request(custom.clone(), false);
         let first = wait_for_skin(&loader);
         assert!(first.assets.images.sprites[Sprite::HitCircle as usize].is_some());
         assert!(first.assets.sounds.is_some());
-        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 255, 0, 255])).save(image).unwrap();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 255, 0, 255]))
+            .save(image)
+            .unwrap();
         loader.request(custom, true);
         let reloaded = wait_for_skin(&loader);
         assert!(!std::sync::Arc::ptr_eq(&first.assets, &reloaded.assets));
@@ -733,7 +915,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert!(!super::map_has_images(&dir));
-        image::RgbaImage::new(2, 2).save(dir.join("Taiko-Roll-End.png")).unwrap();
+        image::RgbaImage::new(2, 2)
+            .save(dir.join("Taiko-Roll-End.png"))
+            .unwrap();
         assert!(super::map_has_images(&dir));
         let built_in = Sources(std::array::from_fn(|_| Source::BuiltIn));
         let skin = super::load("", &built_in, None, Some(&dir));
@@ -749,13 +933,21 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let osk = dir.join("Test.osk");
         let mut zip = zip::ZipWriter::new(std::fs::File::create(&osk).unwrap());
-        zip.start_file("Test/Taiko-Normal-HitNormal.WAV", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.start_file(
+            "Test/Taiko-Normal-HitNormal.WAV",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         zip.write_all(b"x").unwrap();
         zip.finish().unwrap();
 
         let skin = super::extract_osk(&osk).unwrap();
         assert_eq!(skin, dir.join("Test"));
-        assert!(super::Files::read(&skin).sound(&["taiko-normal-hitnormal"]).is_some());
+        assert!(
+            super::Files::read(&skin)
+                .sound(&["taiko-normal-hitnormal"])
+                .is_some()
+        );
         // Extracted once: a second call reuses the folder.
         assert_eq!(super::extract_osk(&osk).unwrap(), skin);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -766,31 +958,61 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("taiko-rs-atlas-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let save = |name: &str, w: u32, h: u32, px: [u8; 4]| image::RgbaImage::from_pixel(w, h, image::Rgba(px)).save(dir.join(name)).unwrap();
+        let save = |name: &str, w: u32, h: u32, px: [u8; 4]| {
+            image::RgbaImage::from_pixel(w, h, image::Rgba(px))
+                .save(dir.join(name))
+                .unwrap()
+        };
         // Overlays without a circle under them are left out.
         save("taikohitcircleoverlay.png", 128, 128, [255, 255, 255, 128]);
         save("spinner-warning.png", 128, 128, [255, 0, 0, 255]);
         let atlas = atlas_of(&dir);
-        assert!(atlas.sprites[Sprite::HitCircleOverlay as usize].is_none() && atlas.sprites[Sprite::SpinnerWarning as usize].is_some());
+        assert!(
+            atlas.sprites[Sprite::HitCircleOverlay as usize].is_none()
+                && atlas.sprites[Sprite::SpinnerWarning as usize].is_some()
+        );
 
         // A 1 px wide roll body, and a full skin too wide for one 2048 px row.
         save("taiko-roll-middle.png", 1, 128, [255, 255, 255, 255]);
         save("Spinner-Circle@2x.png", 1024, 1024, [0, 255, 0, 255]);
         save("spinner-approachcircle.png", 600, 600, [0, 0, 255, 255]);
-        for name in ["taikohitcircle", "taikobigcircle", "taikobigcircleoverlay", "taiko-roll-end"] {
+        for name in [
+            "taikohitcircle",
+            "taikobigcircle",
+            "taikobigcircleoverlay",
+            "taiko-roll-end",
+        ] {
             save(&format!("{name}@2x.png"), 512, 512, [200, 200, 200, 255]);
         }
         let atlas = atlas_of(&dir);
         std::fs::remove_dir_all(&dir).unwrap();
 
-        assert!(atlas.width <= 2048 && atlas.height > 514, "{}x{}", atlas.width, atlas.height);
+        assert!(
+            atlas.width <= 2048 && atlas.height > 514,
+            "{}x{}",
+            atlas.width,
+            atlas.height
+        );
         // osu! sizes: 128 SD px is the radius it's drawn for, @2x counts half.
-        assert_eq!(atlas.sprites[Sprite::SpinnerCircle as usize].unwrap().1, [4.0, 4.0]);
-        assert_eq!(atlas.sprites[Sprite::RollMiddle as usize].unwrap().1, [1.0 / 128.0, 1.0]);
-        assert!(Sprite::ALL[..9].iter().all(|&s| atlas.sprites[s as usize].is_some()));
+        assert_eq!(
+            atlas.sprites[Sprite::SpinnerCircle as usize].unwrap().1,
+            [4.0, 4.0]
+        );
+        assert_eq!(
+            atlas.sprites[Sprite::RollMiddle as usize].unwrap().1,
+            [1.0 / 128.0, 1.0]
+        );
+        assert!(
+            Sprite::ALL[..9]
+                .iter()
+                .all(|&s| atlas.sprites[s as usize].is_some())
+        );
         // Around each image, its edge is repeated: the roll body is white on both sides.
         let (uv, _) = atlas.sprites[Sprite::RollMiddle as usize].unwrap();
-        let (x, y) = ((uv[0] * atlas.width as f32).round() as u32, (uv[1] * atlas.height as f32).round() as u32);
+        let (x, y) = (
+            (uv[0] * atlas.width as f32).round() as u32,
+            (uv[1] * atlas.height as f32).round() as u32,
+        );
         for px in [x - 1, x, x + 1] {
             let at = ((y + 64) * atlas.width + px) as usize * 4;
             assert_eq!(&atlas.rgba[at..at + 4], &[255, 255, 255, 255], "x = {px}");
@@ -800,7 +1022,12 @@ mod tests {
         for (i, a) in rects.iter().enumerate() {
             assert!(a[0] >= 0.0 && a[1] >= 0.0 && a[0] + a[2] <= 1.0 && a[1] + a[3] <= 1.0);
             for b in &rects[i + 1..] {
-                assert!(a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1]);
+                assert!(
+                    a[0] + a[2] <= b[0]
+                        || b[0] + b[2] <= a[0]
+                        || a[1] + a[3] <= b[1]
+                        || b[1] + b[3] <= a[1]
+                );
             }
         }
     }
@@ -810,7 +1037,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("taiko-rs-font-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Fonts")).unwrap();
-        let save = |name: &str| image::RgbaImage::from_pixel(20, 30, image::Rgba([255, 255, 255, 255])).save(dir.join(name)).unwrap();
+        let save = |name: &str| {
+            image::RgbaImage::from_pixel(20, 30, image::Rgba([255, 255, 255, 255]))
+                .save(dir.join(name))
+                .unwrap()
+        };
         std::fs::write(dir.join("skin.ini"), "\u{feff}[General]\nVersion: 2.0\n[Fonts]\nScorePrefix: Fonts\\Score\nScoreOverlap: 3 // comment\nComboPrefix: combo\n").unwrap();
         for d in 0..10 {
             save(&format!("Fonts/score-{d}.png"));
@@ -823,7 +1054,10 @@ mod tests {
         save("taiko-drum-inner.png");
         let atlas = atlas_of(&dir);
         std::fs::remove_dir_all(&dir).unwrap();
-        assert!(atlas.sprites[Sprite::Score7 as usize].is_some() && atlas.sprites[Sprite::ScorePercent as usize].is_some());
+        assert!(
+            atlas.sprites[Sprite::Score7 as usize].is_some()
+                && atlas.sprites[Sprite::ScorePercent as usize].is_some()
+        );
         assert!(atlas.sprites[Sprite::ScoreDot as usize].is_none());
         assert!(atlas.sprites[Sprite::Combo0 as usize].is_none());
         assert_eq!(atlas.layout.score_overlap, 3.0);
@@ -836,13 +1070,23 @@ mod tests {
     fn part_sources_round_trip_through_the_config() {
         // By default the notes follow the skin and the interface doesn't.
         let mut s = Sources::default();
-        assert_eq!((s.get(Part::Rolls), s.get(Part::Lane)), (&Source::Main, &Source::BuiltIn));
+        assert_eq!(
+            (s.get(Part::Rolls), s.get(Part::Lane)),
+            (&Source::Main, &Source::BuiltIn)
+        );
         assert!(s.to_config().is_empty());
         s.set(Part::Lane, Source::Main);
         s.set(Part::Drum, Source::Skin("Some = Skin".into()));
         s.set(Part::Hitsounds, Source::BuiltIn);
         let lines = s.to_config();
-        assert_eq!(lines, ["lane = <main>", "drum = Some = Skin", "hitsounds = <built-in>"]);
+        assert_eq!(
+            lines,
+            [
+                "lane = <main>",
+                "drum = Some = Skin",
+                "hitsounds = <built-in>"
+            ]
+        );
         let mut back = Sources::default();
         for l in &lines {
             back.parse(l);

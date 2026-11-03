@@ -5,7 +5,7 @@
 
 use winit::window::CursorIcon;
 
-use crate::render::{accent, rgba, Canvas, VIRTUAL_HEIGHT};
+use crate::render::{Canvas, VIRTUAL_HEIGHT, accent, rgba};
 
 /// Smallest area, as a fraction of the screen in each direction.
 const MIN_SIZE: f32 = 0.2;
@@ -22,7 +22,12 @@ pub struct Area {
 }
 
 impl Area {
-    pub const FULL: Area = Area { x: 0.0, y: 0.0, w: 1.0, h: 1.0 };
+    pub const FULL: Area = Area {
+        x: 0.0,
+        y: 0.0,
+        w: 1.0,
+        h: 1.0,
+    };
 
     pub fn is_full(&self) -> bool {
         self.w >= 0.999 && self.h >= 0.999
@@ -51,7 +56,12 @@ impl Area {
         if self.is_full() {
             tr!("full screen", "全画面", "весь экран").into()
         } else {
-            let (w, h, x, y) = (self.w * 100.0, self.h * 100.0, self.x * 100.0, self.y * 100.0);
+            let (w, h, x, y) = (
+                self.w * 100.0,
+                self.h * 100.0,
+                self.x * 100.0,
+                self.y * 100.0,
+            );
             tr!("{w:.0}% x {h:.0}% at {x:.0}%, {y:.0}%", "{w:.0}% x {h:.0}% 位置 {x:.0}%, {y:.0}%", "{w:.0}% x {h:.0}% в {x:.0}%, {y:.0}%";)
         }
     }
@@ -64,7 +74,13 @@ impl Area {
         let min = (MIN_SIZE / self.w).max(MIN_SIZE / self.h);
         let f = factor.clamp(min.min(1.0), max.max(1.0));
         let (w, h) = (self.w * f, self.h * f);
-        Area { x: cx - w / 2.0, y: cy - h / 2.0, w, h }.clamped()
+        Area {
+            x: cx - w / 2.0,
+            y: cy - h / 2.0,
+            w,
+            h,
+        }
+        .clamped()
     }
 }
 
@@ -72,14 +88,24 @@ impl Area {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Grip {
     Move,
-    Resize { left: bool, right: bool, top: bool, bottom: bool },
+    Resize {
+        left: bool,
+        right: bool,
+        top: bool,
+        bottom: bool,
+    },
 }
 
 impl Grip {
     pub fn cursor(&self) -> CursorIcon {
         match *self {
             Grip::Move => CursorIcon::Move,
-            Grip::Resize { left, right, top, bottom } => match (left || right, top || bottom) {
+            Grip::Resize {
+                left,
+                right,
+                top,
+                bottom,
+            } => match (left || right, top || bottom) {
                 (true, true) if (left && top) || (right && bottom) => CursorIcon::NwseResize,
                 (true, true) => CursorIcon::NeswResize,
                 (true, false) => CursorIcon::EwResize,
@@ -103,7 +129,12 @@ pub fn hit(area: Area, px: f64, py: f64, screen_w: f64, screen_h: f64) -> Option
     let top = (py - y0).abs() <= GRAB_PX;
     let bottom = (py - y1).abs() <= GRAB_PX && !top;
     if left || right || top || bottom {
-        Some(Grip::Resize { left, right, top, bottom })
+        Some(Grip::Resize {
+            left,
+            right,
+            top,
+            bottom,
+        })
     } else if px > x0 && px < x1 && py > y0 && py < y1 {
         Some(Grip::Move)
     } else {
@@ -119,7 +150,12 @@ pub fn drag(from: Area, grip: Grip, dx: f32, dy: f32) -> Area {
             a.x += dx;
             a.y += dy;
         }
-        Grip::Resize { left, right, top, bottom } => {
+        Grip::Resize {
+            left,
+            right,
+            top,
+            bottom,
+        } => {
             // Move the grabbed edges, but never past the opposite edge minus the minimum size
             // or off screen, so the far edge stays put like a real window.
             let (r, b) = (from.x + from.w, from.y + from.h);
@@ -165,38 +201,51 @@ pub fn snap(a: Area, grip: Grip, tol_x: f32, tol_y: f32) -> (Area, Vec<Guide>) {
     }
     match grip {
         Grip::Move => {
-            let xs = [(a.x, 0.0), (a.x, 0.5), (a.x + a.w, 0.5), (a.x + a.w, 1.0), (a.x + a.w / 2.0, 0.5)];
+            let xs = [
+                (a.x, 0.0),
+                (a.x, 0.5),
+                (a.x + a.w, 0.5),
+                (a.x + a.w, 1.0),
+                (a.x + a.w / 2.0, 0.5),
+            ];
             if let Some((d, line)) = best(&xs, tol_x) {
                 a.x += d;
                 guides.push(Guide::Vertical(line));
             }
-            let ys = [(a.y, 0.0), (a.y, 0.5), (a.y + a.h, 0.5), (a.y + a.h, 1.0), (a.y + a.h / 2.0, 0.5)];
+            let ys = [
+                (a.y, 0.0),
+                (a.y, 0.5),
+                (a.y + a.h, 0.5),
+                (a.y + a.h, 1.0),
+                (a.y + a.h / 2.0, 0.5),
+            ];
             if let Some((d, line)) = best(&ys, tol_y) {
                 a.y += d;
                 guides.push(Guide::Horizontal(line));
             }
         }
-        Grip::Resize { left, right, top, bottom } => {
+        Grip::Resize {
+            left,
+            right,
+            top,
+            bottom,
+        } => {
             let (r, b) = (a.x + a.w, a.y + a.h);
-            if left
-                && let Some((d, line)) = best(&[(a.x, 0.0), (a.x, 0.5)], tol_x) {
+            if left && let Some((d, line)) = best(&[(a.x, 0.0), (a.x, 0.5)], tol_x) {
                 a.x += d;
                 a.w = r - a.x;
                 guides.push(Guide::Vertical(line));
             }
-            if right
-                && let Some((d, line)) = best(&[(r, 0.5), (r, 1.0)], tol_x) {
+            if right && let Some((d, line)) = best(&[(r, 0.5), (r, 1.0)], tol_x) {
                 a.w += d;
                 guides.push(Guide::Vertical(line));
             }
-            if top
-                && let Some((d, line)) = best(&[(a.y, 0.0), (a.y, 0.5)], tol_y) {
+            if top && let Some((d, line)) = best(&[(a.y, 0.0), (a.y, 0.5)], tol_y) {
                 a.y += d;
                 a.h = b - a.y;
                 guides.push(Guide::Horizontal(line));
             }
-            if bottom
-                && let Some((d, line)) = best(&[(b, 0.5), (b, 1.0)], tol_y) {
+            if bottom && let Some((d, line)) = best(&[(b, 0.5), (b, 1.0)], tol_y) {
                 a.h += d;
                 guides.push(Guide::Horizontal(line));
             }
@@ -208,8 +257,20 @@ pub fn snap(a: Area, grip: Grip, tol_x: f32, tol_y: f32) -> (Area, Vec<Guide>) {
 pub fn draw_guides(c: &mut Canvas, guides: &[Guide]) {
     for g in guides {
         match *g {
-            Guide::Vertical(x) => c.rect(x * c.width - 0.6, 0.0, 1.2, VIRTUAL_HEIGHT, rgba(0x4fc3f7, 0.85)),
-            Guide::Horizontal(y) => c.rect(0.0, y * VIRTUAL_HEIGHT - 0.6, c.width, 1.2, rgba(0x4fc3f7, 0.85)),
+            Guide::Vertical(x) => c.rect(
+                x * c.width - 0.6,
+                0.0,
+                1.2,
+                VIRTUAL_HEIGHT,
+                rgba(0x4fc3f7, 0.85),
+            ),
+            Guide::Horizontal(y) => c.rect(
+                0.0,
+                y * VIRTUAL_HEIGHT - 0.6,
+                c.width,
+                1.2,
+                rgba(0x4fc3f7, 0.85),
+            ),
         }
     }
 }
@@ -218,15 +279,36 @@ pub fn draw_guides(c: &mut Canvas, guides: &[Guide]) {
 /// those that fit in a `screen_w` x `screen_h` window, smallest first.
 pub fn presets(monitor_modes: &[(u32, u32)], screen_w: u32, screen_h: u32) -> Vec<(u32, u32)> {
     const COMMON: [(u32, u32); 18] = [
-        (640, 480), (800, 600), (1024, 576), (1024, 768), (1152, 864), (1280, 720), (1280, 800), (1280, 960),
-        (1280, 1024), (1366, 768), (1440, 900), (1600, 900), (1600, 1200), (1680, 1050), (1920, 1080),
-        (1920, 1200), (2560, 1080), (2560, 1440),
+        (640, 480),
+        (800, 600),
+        (1024, 576),
+        (1024, 768),
+        (1152, 864),
+        (1280, 720),
+        (1280, 800),
+        (1280, 960),
+        (1280, 1024),
+        (1366, 768),
+        (1440, 900),
+        (1600, 900),
+        (1600, 1200),
+        (1680, 1050),
+        (1920, 1080),
+        (1920, 1200),
+        (2560, 1080),
+        (2560, 1440),
     ];
     let mut out: Vec<(u32, u32)> = monitor_modes
         .iter()
         .chain(COMMON.iter())
         .copied()
-        .filter(|&(w, h)| w >= 320 && h >= 240 && w <= screen_w && h <= screen_h && !(w == screen_w && h == screen_h))
+        .filter(|&(w, h)| {
+            w >= 320
+                && h >= 240
+                && w <= screen_w
+                && h <= screen_h
+                && !(w == screen_w && h == screen_h)
+        })
         .collect();
     out.sort_by_key(|&(w, h)| (w * h, w));
     out.dedup();
@@ -236,13 +318,27 @@ pub fn presets(monitor_modes: &[(u32, u32)], screen_w: u32, screen_h: u32) -> Ve
 /// Aspect-ratio name for a resolution ("16:9", "4:3", ...), or "Other".
 pub fn aspect_name(w: u32, h: u32) -> &'static str {
     let r = w as f32 / h.max(1) as f32;
-    const NAMES: [(&str, f32); 6] = [("16:9", 16.0 / 9.0), ("16:10", 1.6), ("4:3", 4.0 / 3.0), ("5:4", 1.25), ("3:2", 1.5), ("21:9", 2.37)];
-    NAMES.iter().find(|(_, a)| (r - a).abs() < if *a > 2.0 { 0.06 } else { 0.02 }).map(|(n, _)| *n).unwrap_or("Other")
+    const NAMES: [(&str, f32); 6] = [
+        ("16:9", 16.0 / 9.0),
+        ("16:10", 1.6),
+        ("4:3", 4.0 / 3.0),
+        ("5:4", 1.25),
+        ("3:2", 1.5),
+        ("21:9", 2.37),
+    ];
+    NAMES
+        .iter()
+        .find(|(_, a)| (r - a).abs() < if *a > 2.0 { 0.06 } else { 0.02 })
+        .map(|(n, _)| *n)
+        .unwrap_or("Other")
 }
 
 /// Presets grouped by aspect ratio like a display-settings list: the screen's own ratio first,
 /// then the usual order, largest resolution first within each group.
-pub fn group_presets(presets: &[(u32, u32)], screen: (u32, u32)) -> Vec<(&'static str, Vec<(u32, u32)>)> {
+pub fn group_presets(
+    presets: &[(u32, u32)],
+    screen: (u32, u32),
+) -> Vec<(&'static str, Vec<(u32, u32)>)> {
     const ORDER: [&str; 7] = ["16:9", "16:10", "4:3", "5:4", "3:2", "21:9", "Other"];
     let native = aspect_name(screen.0, screen.1);
     let mut names: Vec<&str> = vec![native];
@@ -250,7 +346,11 @@ pub fn group_presets(presets: &[(u32, u32)], screen: (u32, u32)) -> Vec<(&'stati
     names
         .into_iter()
         .filter_map(|name| {
-            let mut list: Vec<(u32, u32)> = presets.iter().copied().filter(|&(w, h)| aspect_name(w, h) == name).collect();
+            let mut list: Vec<(u32, u32)> = presets
+                .iter()
+                .copied()
+                .filter(|&(w, h)| aspect_name(w, h) == name)
+                .collect();
             list.sort_by_key(|&(w, h)| std::cmp::Reverse((w * h, w)));
             (!list.is_empty()).then_some((name, list))
         })
@@ -259,9 +359,15 @@ pub fn group_presets(presets: &[(u32, u32)], screen: (u32, u32)) -> Vec<(&'stati
 
 /// A playfield size typed or saved as `1280x720` (also `1280 720`, `1280*720`), within sane limits.
 pub fn parse_size(s: &str) -> Option<(u32, u32)> {
-    let mut parts = s.split(|c: char| c == 'x' || c == 'X' || c == '*' || c.is_whitespace()).filter(|p| !p.is_empty());
-    let (w, h) = (parts.next()?.parse::<u32>().ok()?, parts.next()?.parse::<u32>().ok()?);
-    (parts.next().is_none() && (320..=7680).contains(&w) && (240..=4320).contains(&h)).then_some((w, h))
+    let mut parts = s
+        .split(|c: char| c == 'x' || c == 'X' || c == '*' || c.is_whitespace())
+        .filter(|p| !p.is_empty());
+    let (w, h) = (
+        parts.next()?.parse::<u32>().ok()?,
+        parts.next()?.parse::<u32>().ok()?,
+    );
+    (parts.next().is_none() && (320..=7680).contains(&w) && (240..=4320).contains(&h))
+        .then_some((w, h))
 }
 
 /// Where a game of `size` pixels goes on a black `screen`: `[x, y, w, h]` in pixels. `pos` moves it
@@ -271,18 +377,29 @@ pub fn letterbox(screen: (u32, u32), size: (u32, u32), pos: (f32, f32)) -> Optio
     if screen.0 == 0 || screen.1 == 0 {
         return None;
     }
-    let (w, h) = (size.0.clamp(320.min(screen.0), screen.0), size.1.clamp(240.min(screen.1), screen.1));
+    let (w, h) = (
+        size.0.clamp(320.min(screen.0), screen.0),
+        size.1.clamp(240.min(screen.1), screen.1),
+    );
     if (w, h) == screen {
         return None;
     }
-    let at = |room: u32, pos: f32| (room as f32 * (0.5 + pos.clamp(-100.0, 100.0) / 200.0)).round() as u32;
+    let at = |room: u32, pos: f32| {
+        (room as f32 * (0.5 + pos.clamp(-100.0, 100.0) / 200.0)).round() as u32
+    };
     Some([at(screen.0 - w, pos.0), at(screen.1 - h, pos.1), w, h])
 }
 
 /// A centred area the size of a `w` x `h` window on a `screen_w` x `screen_h` screen.
 pub fn preset_area(w: u32, h: u32, screen_w: f32, screen_h: f32) -> Area {
     let (fw, fh) = (w as f32 / screen_w.max(1.0), h as f32 / screen_h.max(1.0));
-    Area { x: (1.0 - fw) / 2.0, y: (1.0 - fh) / 2.0, w: fw, h: fh }.clamped()
+    Area {
+        x: (1.0 - fw) / 2.0,
+        y: (1.0 - fh) / 2.0,
+        w: fw,
+        h: fh,
+    }
+    .clamped()
 }
 
 /// Starts drawing into `area`: darkens the rest of the screen and switches the canvas to the
@@ -292,20 +409,42 @@ pub fn preset_area(w: u32, h: u32, screen_w: f32, screen_h: f32) -> Area {
 pub fn begin(c: &mut Canvas, area: Area, see_through: bool, black: bool) -> (usize, f32) {
     let full = c.width;
     // `black`: the dim and the area behind the playfield are black, not the interface's greys.
-    let (outside, inside) = if black { (0x000000, 0x000000) } else { (0x08080b, 0x121219) };
+    let (outside, inside) = if black {
+        (0x000000, 0x000000)
+    } else {
+        (0x08080b, 0x121219)
+    };
     if !area.is_full() {
-        c.rect(0.0, 0.0, full, VIRTUAL_HEIGHT, rgba(outside, if see_through { 0.85 } else { 1.0 }));
+        c.rect(
+            0.0,
+            0.0,
+            full,
+            VIRTUAL_HEIGHT,
+            rgba(outside, if see_through { 0.85 } else { 1.0 }),
+        );
     }
     let start = c.shapes.len();
     c.width = full * area.w / area.h;
-    c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(inside, if see_through { 0.0 } else { 1.0 }));
+    c.rect(
+        0.0,
+        0.0,
+        c.width,
+        VIRTUAL_HEIGHT,
+        rgba(inside, if see_through { 0.0 } else { 1.0 }),
+    );
     (start, full)
 }
 
 /// Maps everything drawn since `begin` into the area and restores full-screen drawing. Returns
 /// the shape range to clip to the area.
 pub fn end(c: &mut Canvas, area: Area, start: usize, full: f32) -> std::ops::Range<usize> {
-    c.transform_since(start, [0.0, 0.0], area.h, area.x * full, area.y * VIRTUAL_HEIGHT);
+    c.transform_since(
+        start,
+        [0.0, 0.0],
+        area.h,
+        area.x * full,
+        area.y * VIRTUAL_HEIGHT,
+    );
     c.width = full;
     start..c.shapes.len()
 }
@@ -317,7 +456,14 @@ pub fn draw_frame(c: &mut Canvas, area: Area, strong: bool) {
     let a = if strong { 0.9 } else { 0.45 };
     c.round_rect([x, y], [w, h], 3.0, rgba(0, 0.0), rgba(accent(), a), 1.5);
     for (hx, hy) in [(x, y), (x + w, y), (x, y + h), (x + w, y + h)] {
-        c.round_rect([hx - 4.0, hy - 4.0], [8.0, 8.0], 2.0, rgba(accent(), a), rgba(0xffffff, a), 1.0);
+        c.round_rect(
+            [hx - 4.0, hy - 4.0],
+            [8.0, 8.0],
+            2.0,
+            rgba(accent(), a),
+            rgba(0xffffff, a),
+            1.0,
+        );
     }
 }
 
@@ -328,14 +474,43 @@ mod tests {
     #[test]
     fn letterbox_centres_the_game_moves_it_and_stays_on_the_screen() {
         let screen = (1920, 1080);
-        assert_eq!(letterbox(screen, (1280, 720), (0.0, 0.0)), Some([320, 180, 1280, 720]));
-        assert_eq!(letterbox(screen, (1280, 720), (-100.0, 100.0)), Some([0, 360, 1280, 720]));
-        assert_eq!(letterbox(screen, (1280, 720), (500.0, -500.0)), Some([640, 0, 1280, 720]), "held to the screen");
-        assert_eq!(letterbox(screen, (1920, 1080), (0.0, 0.0)), None, "nothing to put around it");
-        assert_eq!(letterbox(screen, (3840, 2160), (0.0, 0.0)), None, "too big: all of the screen");
-        assert_eq!(letterbox(screen, (3840, 720), (0.0, 0.0)), Some([0, 180, 1920, 720]), "bars one way only");
-        assert_eq!(letterbox(screen, (1, 1), (0.0, 0.0)), Some([800, 420, 320, 240]));
-        assert_eq!(letterbox((0, 0), (1280, 720), (0.0, 0.0)), None, "a window with no size yet");
+        assert_eq!(
+            letterbox(screen, (1280, 720), (0.0, 0.0)),
+            Some([320, 180, 1280, 720])
+        );
+        assert_eq!(
+            letterbox(screen, (1280, 720), (-100.0, 100.0)),
+            Some([0, 360, 1280, 720])
+        );
+        assert_eq!(
+            letterbox(screen, (1280, 720), (500.0, -500.0)),
+            Some([640, 0, 1280, 720]),
+            "held to the screen"
+        );
+        assert_eq!(
+            letterbox(screen, (1920, 1080), (0.0, 0.0)),
+            None,
+            "nothing to put around it"
+        );
+        assert_eq!(
+            letterbox(screen, (3840, 2160), (0.0, 0.0)),
+            None,
+            "too big: all of the screen"
+        );
+        assert_eq!(
+            letterbox(screen, (3840, 720), (0.0, 0.0)),
+            Some([0, 180, 1920, 720]),
+            "bars one way only"
+        );
+        assert_eq!(
+            letterbox(screen, (1, 1), (0.0, 0.0)),
+            Some([800, 420, 320, 240])
+        );
+        assert_eq!(
+            letterbox((0, 0), (1280, 720), (0.0, 0.0)),
+            None,
+            "a window with no size yet"
+        );
     }
 
     const W: f64 = 1920.0;
@@ -343,22 +518,71 @@ mod tests {
 
     #[test]
     fn grabs_edges_corners_and_inside() {
-        let a = Area { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
+        let a = Area {
+            x: 0.25,
+            y: 0.25,
+            w: 0.5,
+            h: 0.5,
+        };
         assert_eq!(hit(a, 960.0, 540.0, W, H), Some(Grip::Move));
-        assert_eq!(hit(a, 480.0, 540.0, W, H), Some(Grip::Resize { left: true, right: false, top: false, bottom: false }));
-        assert_eq!(hit(a, 1440.0, 810.0, W, H), Some(Grip::Resize { left: false, right: true, top: false, bottom: true }));
+        assert_eq!(
+            hit(a, 480.0, 540.0, W, H),
+            Some(Grip::Resize {
+                left: true,
+                right: false,
+                top: false,
+                bottom: false
+            })
+        );
+        assert_eq!(
+            hit(a, 1440.0, 810.0, W, H),
+            Some(Grip::Resize {
+                left: false,
+                right: true,
+                top: false,
+                bottom: true
+            })
+        );
         assert_eq!(hit(a, 100.0, 100.0, W, H), None);
-        assert_eq!(hit(a, 1440.0, 810.0, W, H).unwrap().cursor(), CursorIcon::NwseResize);
+        assert_eq!(
+            hit(a, 1440.0, 810.0, W, H).unwrap().cursor(),
+            CursorIcon::NwseResize
+        );
     }
 
     #[test]
     fn resizing_keeps_the_opposite_edge_and_limits() {
-        let a = Area { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
+        let a = Area {
+            x: 0.25,
+            y: 0.25,
+            w: 0.5,
+            h: 0.5,
+        };
         // Drag the left edge right: right edge stays at 0.75.
-        let b = drag(a, Grip::Resize { left: true, right: false, top: false, bottom: false }, 0.1, 0.0);
+        let b = drag(
+            a,
+            Grip::Resize {
+                left: true,
+                right: false,
+                top: false,
+                bottom: false,
+            },
+            0.1,
+            0.0,
+        );
         assert!((b.x - 0.35).abs() < 1e-6 && (b.x + b.w - 0.75).abs() < 1e-6);
         // Can't shrink below the minimum, can't grow off screen.
-        let c = drag(a, Grip::Resize { left: false, right: true, top: false, bottom: true }, -0.9, 0.9);
+        let c = drag(
+            a,
+            Grip::Resize {
+                left: false,
+                right: true,
+                top: false,
+                bottom: true,
+            },
+            -0.9,
+            0.9,
+        );
         assert!((c.w - MIN_SIZE).abs() < 1e-6);
         assert!((c.y + c.h - 1.0).abs() < 1e-6);
         // Moving stops at the screen edge.
@@ -370,16 +594,41 @@ mod tests {
     #[test]
     fn snaps_to_centre_and_edges() {
         // Area centre 0.003 left of the screen centre: moving snaps it onto 0.5.
-        let a = Area { x: 0.247, y: 0.1, w: 0.5, h: 0.5 };
+        let a = Area {
+            x: 0.247,
+            y: 0.1,
+            w: 0.5,
+            h: 0.5,
+        };
         let (s, g) = snap(a, Grip::Move, 0.01, 0.01);
         assert!((s.x + s.w / 2.0 - 0.5).abs() < 1e-6);
         assert!(g.contains(&Guide::Vertical(0.5)));
         // Far from any line: untouched.
-        let b = Area { x: 0.1, y: 0.2, w: 0.3, h: 0.3 };
+        let b = Area {
+            x: 0.1,
+            y: 0.2,
+            w: 0.3,
+            h: 0.3,
+        };
         assert_eq!(snap(b, Grip::Move, 0.01, 0.01).0, b);
         // Resizing the right edge near the screen edge snaps it to 1.0, left edge unchanged.
-        let c = Area { x: 0.3, y: 0.3, w: 0.695, h: 0.4 };
-        let (s, _) = snap(c, Grip::Resize { left: false, right: true, top: false, bottom: false }, 0.01, 0.01);
+        let c = Area {
+            x: 0.3,
+            y: 0.3,
+            w: 0.695,
+            h: 0.4,
+        };
+        let (s, _) = snap(
+            c,
+            Grip::Resize {
+                left: false,
+                right: true,
+                top: false,
+                bottom: false,
+            },
+            0.01,
+            0.01,
+        );
         assert!((s.x - 0.3).abs() < 1e-6 && (s.x + s.w - 1.0).abs() < 1e-6);
     }
 
@@ -401,7 +650,10 @@ mod tests {
         let names: Vec<&str> = g.iter().map(|(n, _)| *n).collect();
         assert!(names.contains(&"16:9") && names.contains(&"4:3") && names.contains(&"5:4"));
         for (_, list) in &g {
-            assert!(list.windows(2).all(|w| w[0].0 * w[0].1 >= w[1].0 * w[1].1), "largest first");
+            assert!(
+                list.windows(2).all(|w| w[0].0 * w[0].1 >= w[1].0 * w[1].1),
+                "largest first"
+            );
         }
         assert_eq!(aspect_name(1366, 768), "16:9");
         assert_eq!(aspect_name(2560, 1080), "21:9");
@@ -421,7 +673,12 @@ mod tests {
 
     #[test]
     fn wheel_scales_about_the_centre() {
-        let a = Area { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
+        let a = Area {
+            x: 0.25,
+            y: 0.25,
+            w: 0.5,
+            h: 0.5,
+        };
         let b = a.scaled(0.5);
         assert!((b.w - 0.25).abs() < 1e-6 && (b.x - 0.375).abs() < 1e-6);
         assert_eq!(Area::FULL.scaled(1.5), Area::FULL);

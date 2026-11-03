@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::game::{DON, KAT};
 use crate::menu::pixel_ring;
-use crate::render::{self, approach, pixel_size, rgba, snap_to_grid, Canvas, VIRTUAL_HEIGHT};
+use crate::render::{self, Canvas, VIRTUAL_HEIGHT, approach, pixel_size, rgba, snap_to_grid};
 
 pub const MUSIC: usize = 0;
 pub const MASTER: usize = 1;
@@ -77,7 +77,8 @@ fn panel(width: f32) -> [f32; 2] {
 
 /// The note at `x, y` on the lane at `[px, py]`.
 fn note_in(px: f32, py: f32, x: f32, y: f32) -> Option<usize> {
-    (y >= py && y <= py + PANEL_H && x >= px + 8.0 && x < px + 8.0 + CELL * NOTES as f32).then(|| (((x - px - 8.0) / CELL) as usize).min(NOTES - 1))
+    (y >= py && y <= py + PANEL_H && x >= px + 8.0 && x < px + 8.0 + CELL * NOTES as f32)
+        .then(|| (((x - px - 8.0) / CELL) as usize).min(NOTES - 1))
 }
 
 pub struct Overlay {
@@ -101,11 +102,21 @@ pub struct Overlay {
 
 impl Overlay {
     pub fn new() -> Overlay {
-        Overlay { selected: MASTER, hovering: false, touched: None, opened: None, clock: 0.0, hit: [f32::MIN; NOTES], shown: [f32::NAN; NOTES], word: None }
+        Overlay {
+            selected: MASTER,
+            hovering: false,
+            touched: None,
+            opened: None,
+            clock: 0.0,
+            hit: [f32::MIN; NOTES],
+            shown: [f32::NAN; NOTES],
+            word: None,
+        }
     }
 
     pub fn visible(&self, now: Instant) -> bool {
-        self.touched.is_some_and(|t| now.saturating_duration_since(t) < SHOWN)
+        self.touched
+            .is_some_and(|t| now.saturating_duration_since(t) < SHOWN)
     }
 
     /// Brings the lane up, or keeps it up.
@@ -189,11 +200,19 @@ impl Overlay {
         let Some(touched) = self.touched else { return };
         self.clock += c.dt_ms;
         let [px, py] = panel(c.width);
-        let left = (SHOWN.as_secs_f32() - now.saturating_duration_since(touched).as_secs_f32()).max(0.0);
+        let left =
+            (SHOWN.as_secs_f32() - now.saturating_duration_since(touched).as_secs_f32()).max(0.0);
         let a = (left / FADE_S).min(1.0);
         let slide = (1.0 - self.opened.map_or(1.0, |t| render::progress(t, SLIDE_MS))) * 40.0;
         let px = px + slide;
-        c.round_rect([px, py], [PANEL_W, PANEL_H], 8.0, rgba(0x101018, 0.92 * a), rgba(0x3a3a4e, a), 1.0);
+        c.round_rect(
+            [px, py],
+            [PANEL_W, PANEL_H],
+            8.0,
+            rgba(0x101018, 0.92 * a),
+            rgba(0x3a3a4e, a),
+            1.0,
+        );
         self.draw_lane(c, px, py, a);
         for note in 0..NOTES {
             self.draw_cell(c, cfg, note, px + 8.0 + CELL * (note as f32 + 0.5), py, a);
@@ -203,7 +222,11 @@ impl Overlay {
             if k < 1.0 {
                 let cx = px + 8.0 + CELL * (note as f32 + 0.5);
                 // MAX rises; MUTE is a miss: red, and it drops.
-                let (col, y) = if word == MUTE { (MISS_RED, py - 26.0 + k * 12.0) } else { (GOLD, py - 14.0 - k * 14.0) };
+                let (col, y) = if word == MUTE {
+                    (MISS_RED, py - 26.0 + k * 12.0)
+                } else {
+                    (GOLD, py - 14.0 - k * 14.0)
+                };
                 c.text_centered(cx, y, 12.0, rgba(col, a * (1.0 - k * k)), word);
             }
         }
@@ -216,7 +239,11 @@ impl Overlay {
         c.rect(px + 1.0, top, PANEL_W - 2.0, h, rgba(0x15151d, a));
         c.rect(px + 1.0, top - 1.0, PANEL_W - 2.0, 1.0, rgba(0x3a3a4e, a));
         c.rect(px + 1.0, top + h, PANEL_W - 2.0, 1.0, rgba(0x3a3a4e, a));
-        let run = if render::animations() { self.clock * 0.02 % GAP } else { 0.0 };
+        let run = if render::animations() {
+            self.clock * 0.02 % GAP
+        } else {
+            0.0
+        };
         let mut x = px + GAP - run;
         while x < px + PANEL_W - 2.0 {
             c.rect(x, py + NOTE_Y - 4.0, 2.0, 8.0, rgba(0xffffff, 0.12 * a));
@@ -234,23 +261,56 @@ impl Overlay {
         approach(shown, value, c.dt_ms, 45.0);
         let fill = *shown;
         let since = self.clock - self.hit[note];
-        let fade = |ms: f32| if render::animations() { (1.0 - since / ms).clamp(0.0, 1.0) } else { 0.0 };
+        let fade = |ms: f32| {
+            if render::animations() {
+                (1.0 - since / ms).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
         let cy = py + NOTE_Y;
         let r = NOTE_R + if picked { 2.0 } else { -2.0 } + fade(BURST_MS) * 2.0;
         let label = if picked { 0xffffff } else { 0x8a8aa0 };
         let size = Canvas::fit_size(7.0, 5.0, CELL - 6.0, name(note));
-        c.text_centered(cx, py + 7.0 + (7.0 - size) / 2.0, size, rgba(label, a), name(note));
+        c.text_centered(
+            cx,
+            py + 7.0 + (7.0 - size) / 2.0,
+            size,
+            rgba(label, a),
+            name(note),
+        );
         let px = pixel_size(1.5);
         if fade(BURST_MS) > 0.0 {
             let k = 1.0 - fade(BURST_MS);
-            pixel_ring(c, [cx, cy], r + 2.0 + k * 16.0, px * 2.0, 0, px, rgba(colour(note), a * (1.0 - k)));
+            pixel_ring(
+                c,
+                [cx, cy],
+                r + 2.0 + k * 16.0,
+                px * 2.0,
+                0,
+                px,
+                rgba(colour(note), a * (1.0 - k)),
+            );
         }
-        let look = Look { col: colour(note), fill, glitch: fade(GLITCH_MS), slosh: fade(SLOSH_MS), clock: self.clock, a };
+        let look = Look {
+            col: colour(note),
+            fill,
+            glitch: fade(GLITCH_MS),
+            slosh: fade(SLOSH_MS),
+            clock: self.clock,
+            a,
+        };
         draw_note(c, cx, cy, r, &look);
         if picked {
             pixel_ring(c, [cx, cy], r + 4.0, px, 0, px, rgba(0xffffff, 0.75 * a));
         }
-        c.text_centered(cx, py + 82.0, 8.0, rgba(if picked { 0xffffff } else { 0xc8c8d8 }, a), &format!("{:.0}%", value * 100.0));
+        c.text_centered(
+            cx,
+            py + 82.0,
+            8.0,
+            rgba(if picked { 0xffffff } else { 0xc8c8d8 }, a),
+            &format!("{:.0}%", value * 100.0),
+        );
     }
 }
 
@@ -295,8 +355,15 @@ fn draw_note(c: &mut Canvas, cx: f32, cy: f32, r: f32, look: &Look) {
             continue;
         }
         let reach = (outer * outer - dy * dy).sqrt().ceil() as i32;
-        let shift = if look.glitch > 0.05 { glitched(row, look.clock) } else { 0 };
-        let (left, right) = (cx + (-reach + shift) as f32 * px, cx + (reach + shift) as f32 * px);
+        let shift = if look.glitch > 0.05 {
+            glitched(row, look.clock)
+        } else {
+            0
+        };
+        let (left, right) = (
+            cx + (-reach + shift) as f32 * px,
+            cx + (reach + shift) as f32 * px,
+        );
         let y = cy + row as f32 * px;
         if shift != 0 {
             let edge = shift.unsigned_abs() as f32 * px * 2.0;
@@ -325,7 +392,13 @@ fn draw_note(c: &mut Canvas, cx: f32, cy: f32, r: f32, look: &Look) {
             match (run, colour) {
                 (Some((_, was)), Some(now)) if was == now => {}
                 (Some((from, was)), _) => {
-                    c.rect(cx + (from + shift) as f32 * px, y, (column - from) as f32 * px, px, rgba(was, a));
+                    c.rect(
+                        cx + (from + shift) as f32 * px,
+                        y,
+                        (column - from) as f32 * px,
+                        px,
+                        rgba(was, a),
+                    );
                     run = colour.map(|now| (column, now));
                 }
                 (None, Some(now)) => run = Some((column, now)),
