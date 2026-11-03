@@ -38,7 +38,8 @@ const CLIPS: [Clip; 6] = [
 ];
 
 /// Files served under /clips/ and /site/ (`web.rs`).
-pub const STATIC_FILES: [(&str, &[u8]); 18] = [
+pub const STATIC_FILES: [(&str, &[u8]); 19] = [
+    ("site/badge-200.png", include_bytes!("../site/badge-200.png")),
     ("clips/multiverse.mp4", include_bytes!("../site/clips/multiverse.mp4")),
     ("clips/multiverse.jpg", include_bytes!("../site/clips/multiverse.jpg")),
     ("clips/loop.mp4", include_bytes!("../site/clips/loop.mp4")),
@@ -117,13 +118,16 @@ pub struct Roles {
     pub own: bool,
     pub viewer_admin: bool,
     pub banned: bool,
+    /// In the "200" group: a badge of its own, and they may delete their own plays and reset
+    /// their own account.
+    pub two_hundred: bool,
     /// Their code for `>verify` on Discord (their own page, nominators only).
     pub verify_code: Option<String>,
 }
 
 fn role_badges(r: &Roles) -> String {
     let badge = |label: &str, colour: &str, what: &str| format!("<span class=badge style=\"--c:{colour}\" title=\"{what}\">{label}</span>");
-    if r.banned {
+    let role = if r.banned {
         badge("BANNED", "#8a8a9a", "banned: can't log in, and their plays are off the boards")
     } else if r.admin {
         badge("ADMIN", "#9b59ff", "taiko.rs admin: makes loved nominators, and loves maps")
@@ -131,7 +135,13 @@ fn role_badges(r: &Roles) -> String {
         badge("LOVED", "#ff66aa", "loved nominator: loves graveyard maps so they give pp here")
     } else {
         String::new()
-    }
+    };
+    let group = if r.two_hundred && !r.banned {
+        "<img class=badge-img src=\"/site/badge-200.png\" width=100 height=32 alt=\"200\" title=\"200: may delete their own plays and reset their own account\">"
+    } else {
+        ""
+    };
+    role + group
 }
 
 /// The profile's tools for whoever may use them: their picture and Discord code (their own
@@ -151,6 +161,13 @@ fn profile_tools(p: &Profile, r: &Roles) -> String {
             crate::avatars::MAX_BYTES / 1024 / 1024
         ));
     }
+    if r.own && r.two_hundred && !r.banned {
+        parts.push(format!(
+            "<div class=tool><b>200</b><form method=post action=\"/reset-account\">{SURE}<button class=\"btn small\">reset my account</button></form>\
+             <span class=dim>Deletes all your plays and play time, and the medals they earned. It can't be undone. \
+             To delete one play, open it and use \"delete this play\".</span></div>"
+        ));
+    }
     if let Some(code) = &r.verify_code {
         parts.push(format!(
             "<div class=tool><b>DISCORD</b><span>To love maps from Discord, send the taiko.rs bot <code>&gt;verify {}</code> (it works once, within 30 minutes).</span></div>",
@@ -164,6 +181,8 @@ fn profile_tools(p: &Profile, r: &Roles) -> String {
             let (on, label) = if r.nominator { ("0", "remove loved nominator") } else { ("1", "make loved nominator") };
             format!("<form method=post action=\"/u/{}/nominator\"><input type=hidden name=on value={on}><button class=\"btn small\">{label}</button></form>", esc(&p.name))
         };
+        let (on, label) = if r.two_hundred { ("0", "remove from 200") } else { ("1", "add to 200") };
+        let nominator = format!("{nominator}<form method=post action=\"/u/{}/200\"><input type=hidden name=on value={on}><button class=\"btn small\">{label}</button></form>", esc(&p.name));
         let remove = if crate::avatars::version(&p.name.to_ascii_lowercase()).is_some() {
             format!("<form method=post action=\"/u/{}/avatar/remove\"><button class=\"btn small\">remove picture</button></form>", esc(&p.name))
         } else {
@@ -1052,7 +1071,8 @@ fn play_row(s: &OnlineScore, weighted: Option<usize>, show_score: bool) -> Strin
 /// the `taiko-rs://` link the game registers. `watch`: from a "Watch replay" button, so the
 /// page opens the game itself straight away (`site/watch.js`).
 /// `admin`: the viewer is an admin, and this play's pp as sent and as set by an admin (if).
-pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Option<(Option<f64>, Option<f64>)>, notice: Option<&str>) -> String {
+/// `own_delete`: it's the viewer's own play, and they're in the "200" group.
+pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Option<(Option<f64>, Option<f64>)>, own_delete: bool, notice: Option<&str>) -> String {
     let (song, version) = split_map(&s.map);
     let (artist, title) = split_song(song);
     let head = format!(
@@ -1105,7 +1125,16 @@ pub fn score_page(s: &OnlineScore, place: Option<u32>, watch: bool, admin: Optio
             )
         })
         .unwrap_or_default();
-    format!("{head}<div class=page>{notice}{top}{watch_panel}{admin}</div><script src=\"/site/watch.js\" defer></script>")
+    let own = if own_delete {
+        format!(
+            "<section class=\"panel tools\"><div class=tool><b>200</b><form method=post action=\"/s/{}/delete\">{SURE}<button class=\"btn small\">delete this play</button></form>\
+             <span class=dim>It goes from your profile and the boards for good.</span></div></section>",
+            s.id
+        )
+    } else {
+        String::new()
+    };
+    format!("{head}<div class=page>{notice}{top}{watch_panel}{admin}{own}</div><script src=\"/site/watch.js\" defer></script>")
 }
 
 pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
@@ -1657,6 +1686,7 @@ tr.p1 .place{color:var(--gold)}tr.p2 .place{color:#d8d8e8}tr.p3 .place{color:#d9
 .head{margin-top:-100px;position:relative;z-index:1;display:flex;align-items:flex-end;gap:32px;flex-wrap:wrap;padding:22px 24px}
 .who{display:flex;align-items:flex-end;gap:22px;min-width:0}.who h1{font-size:48px;line-height:56px;text-shadow:-2px 0 var(--don),2px 0 var(--katl)}.id{min-width:0}
 .name-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.badge-img{display:inline-block;height:32px;width:auto;image-rendering:auto;filter:drop-shadow(3px 3px 0 rgba(0,0,0,.45));cursor:default}
 .badge{display:inline-block;padding:2px 10px;background:var(--c);color:var(--white);font-size:24px;line-height:28px;letter-spacing:2px;box-shadow:3px 3px 0 color-mix(in srgb,var(--c) 45%,#000),-2px 0 0 var(--katl);cursor:default}
 .status{color:var(--dim)}.status:before{content:"";display:inline-block;width:8px;height:8px;background:currentColor;margin-right:8px;vertical-align:2px}.status.on{color:var(--green)}
 .ranks{margin-left:auto;display:flex;gap:36px;align-items:flex-end;flex-wrap:wrap}.bigstat span{display:block;color:var(--dim)}.bigstat b{font-size:48px;line-height:48px;color:var(--white)}.bigstat b.pp{color:var(--acc)}
@@ -1756,7 +1786,7 @@ mod tests {
     #[test]
     fn only_admins_get_the_moderation_forms() {
         let p = Profile { name: "Ryuji".into(), ..Default::default() };
-        let roles = |viewer_admin, banned, admin| Roles { admin, nominator: false, own: false, viewer_admin, banned, verify_code: None };
+        let roles = |viewer_admin, banned, admin| Roles { admin, nominator: false, own: false, viewer_admin, banned, two_hundred: false, verify_code: None };
         assert!(profile_tools(&p, &roles(false, false, false)).is_empty());
         let tools = profile_tools(&p, &roles(true, false, false));
         assert!(tools.contains("/u/Ryuji/rename") && tools.contains("/u/Ryuji/ban") && tools.contains("value=1") && tools.contains("type=checkbox"));
@@ -1765,6 +1795,21 @@ mod tests {
         let claude = Profile { name: "claude".into(), ..Default::default() };
         assert!(!profile_tools(&claude, &roles(true, false, false)).contains("/ban"));
         assert!(role_badges(&roles(false, true, false)).contains("BANNED"));
+    }
+
+    #[test]
+    fn the_200_group_gets_its_badge_and_resets_only_on_its_own_page() {
+        let p = Profile { name: "semfi".into(), ..Default::default() };
+        let roles = |own, two_hundred, viewer_admin| Roles { admin: false, nominator: false, own, viewer_admin, banned: false, two_hundred, verify_code: None };
+        assert!(role_badges(&roles(false, true, false)).contains("/site/badge-200.png"));
+        assert!(!role_badges(&roles(false, false, false)).contains("badge-200"));
+        assert!(profile_tools(&p, &roles(true, true, false)).contains("/reset-account"));
+        assert!(!profile_tools(&p, &roles(false, true, false)).contains("/reset-account"), "not on someone else's page");
+        assert!(!profile_tools(&p, &roles(true, false, false)).contains("/reset-account"), "not outside the group");
+        assert!(profile_tools(&p, &roles(false, false, true)).contains("/u/semfi/200"));
+        let s = OnlineScore { id: 5, ..Default::default() };
+        assert!(score_page(&s, None, false, None, true, None).contains("/s/5/delete"));
+        assert!(!score_page(&s, None, false, None, false, None).contains("/s/5/delete"));
     }
 
     #[test]

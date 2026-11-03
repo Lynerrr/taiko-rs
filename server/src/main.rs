@@ -85,6 +85,10 @@ struct User {
     /// Can't log in, and their plays are off the boards; admins give and take it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     banned: bool,
+    /// In the "200" group: a badge, and they may delete their own plays and reset their own
+    /// account (`State::reset_own`); admins give and take it.
+    #[serde(default, rename = "200", skip_serializing_if = "std::ops::Not::not")]
+    two_hundred: bool,
     /// Where codes for resetting the password go (lowercase; accounts from before emails have
     /// none until linked).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -527,7 +531,7 @@ impl State {
         let mut save = !accounts.users.contains_key("claude");
         if save {
             let hash = hash_password(&new_token()).expect("argon2");
-            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None, muted_until: None });
+            accounts.users.insert("claude".into(), User { name: "claude".into(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, two_hundred: false, email: None, muted_until: None });
         }
         // And its friends, both ways.
         for &friend in CLAUDE_FRIENDS {
@@ -935,7 +939,7 @@ fn create_account(state: &State, ip: IpAddr, name: &str, password: Option<&str>,
         return Reply::Error("that name is taken".into());
     }
     let has_email = verified.is_some();
-    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: verified, muted_until: None });
+    a.users.insert(key.clone(), User { name: name.to_string(), hash, created: now_secs(), friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, two_hundred: false, email: verified, muted_until: None });
     let token = state.new_session(&mut a, &key);
     state.save();
     drop(a);
@@ -1210,6 +1214,51 @@ impl State {
         self.save();
         println!("{shown} {} loved nominator (by {by})", if on { "made" } else { "no longer" });
         Ok(if on { format!("{shown} is a loved nominator now") } else { format!("{shown} isn't a loved nominator any more") })
+    }
+
+    /// Whether `key` is in the "200" group (and not banned).
+    fn is_two_hundred(&self, key: &str) -> bool {
+        self.accounts.lock().unwrap().users.get(key).is_some_and(|u| u.two_hundred && !u.banned)
+    }
+
+    /// Admin `by` (lowercased) puts `name` in the "200" group, or takes them out.
+    fn set_two_hundred(&self, by: &str, name: &str, on: bool) -> Result<String, String> {
+        if !is_admin(by) {
+            return Err("only admins can do that".into());
+        }
+        let key = name.trim().to_ascii_lowercase();
+        let mut a = self.accounts.lock().unwrap();
+        let user = a.users.get_mut(&key).ok_or("there's no player by that name")?;
+        user.two_hundred = on;
+        let shown = user.name.clone();
+        drop(a);
+        self.save();
+        println!("{shown} {} the 200 group (by {by})", if on { "put in" } else { "taken out of" });
+        Ok(if on { format!("{shown} is in the 200 group now") } else { format!("{shown} isn't in the 200 group any more") })
+    }
+
+    /// `key` deletes play `id` of their own: admins any play, the "200" group only their own.
+    fn delete_play(&self, key: &str, id: u64) -> Result<String, String> {
+        let may_own = self.is_two_hundred(key);
+        let mut scores = self.scores.lock().unwrap();
+        let owner = scores.owner(id).ok_or("that score isn't on the server")?;
+        if !is_admin(key) && !(owner == key && may_own) {
+            return Err("only admins can do that".into());
+        }
+        let player = scores.remove(id)?;
+        println!("score {id} by {player} deleted by {key}");
+        Ok(player)
+    }
+
+    /// A "200" player wipes their own plays and play time (only their own account: `key` is
+    /// whoever is logged in). How many plays went.
+    fn reset_own(&self, key: &str) -> Result<usize, String> {
+        if !self.is_two_hundred(key) {
+            return Err("only the 200 group can reset their account".into());
+        }
+        let n = self.scores.lock().unwrap().reset(key)?;
+        println!("{key} reset their account ({n} plays)");
+        Ok(n)
     }
 
     /// Nominator `by` (lowercased) loves map set `set` here, or takes it back: plays on it give
@@ -1938,7 +1987,7 @@ mod tests {
     use super::*;
 
     fn user(name: &str) -> User {
-        User { name: name.into(), hash: String::new(), created: 0, friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, email: None, muted_until: None }
+        User { name: name.into(), hash: String::new(), created: 0, friends: Vec::new(), requests: Vec::new(), nominator: false, banned: false, two_hundred: false, email: None, muted_until: None }
     }
 
     #[test]
@@ -2032,6 +2081,44 @@ mod tests {
 
     fn lines(rx: &mpsc::Receiver<Line>) -> Vec<String> {
         rx.try_iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn the_200_group_deletes_and_resets_only_its_own_plays() {
+        let state = test_state("200");
+        {
+            let mut a = state.accounts.lock().unwrap();
+            for n in ["semfi", "other"] {
+                a.users.insert(n.into(), user(n));
+            }
+        }
+        let add = |who: &str, map: u64| {
+            let mut scores = state.scores.lock().unwrap();
+            scores.submit(who, who, scores::tests::play(map, 500, 100.0), 1).unwrap();
+            scores.plays_of(who).iter().map(|s| s.id).max().unwrap()
+        };
+        let (mine, mine2, theirs) = (add("semfi", 1), add("semfi", 2), add("other", 1));
+        let err = |r: Result<String, String>| r.unwrap_err();
+        // Not in the group yet: nothing.
+        assert!(err(state.delete_play("semfi", mine)).contains("only admins"));
+        assert!(state.reset_own("semfi").unwrap_err().contains("200"));
+        assert!(err(state.set_two_hundred("other", "semfi", true)).contains("only admins"));
+        state.set_two_hundred("auneu", "semfi", true).unwrap();
+        assert!(state.is_two_hundred("semfi") && !state.is_two_hundred("other"));
+        // Someone else's play stays; their own goes.
+        assert!(err(state.delete_play("semfi", theirs)).contains("only admins"));
+        assert!(err(state.delete_play("other", mine)).contains("only admins"));
+        assert_eq!(state.delete_play("semfi", mine).unwrap(), "semfi");
+        assert!(state.scores.lock().unwrap().score(mine).is_none());
+        // The reset takes the rest of theirs, and nobody else's.
+        assert_eq!(state.reset_own("semfi").unwrap(), 1);
+        let scores = state.scores.lock().unwrap();
+        assert!(scores.score(mine2).is_none() && scores.score(theirs).is_some());
+        drop(scores);
+        // Admins still delete anyone's; a ban takes the group's rights away.
+        assert_eq!(state.delete_play("auneu", theirs).unwrap(), "other");
+        state.accounts.lock().unwrap().users.get_mut("semfi").unwrap().banned = true;
+        assert!(!state.is_two_hundred("semfi") && state.reset_own("semfi").is_err());
     }
 
     #[test]

@@ -466,6 +466,31 @@ impl Scores {
         Ok(gone.score.player)
     }
 
+    /// Whose play `id` is (their lowercased key).
+    pub fn owner(&self, id: u64) -> Option<&str> {
+        self.stored(id).map(|s| s.player.as_str())
+    }
+
+    /// Wipes `player`'s plays and play time, as if they had never played: their medals from
+    /// playing go too. How many plays went.
+    pub fn reset(&mut self, player: &str) -> Result<usize, String> {
+        let ids: Vec<u64> = self.stored_of(player).iter().map(|s| s.id).collect();
+        let before = self.removed.clone();
+        self.removed.extend(&ids);
+        if let Some(Err(e)) = self.removed_file.as_ref().map(|f| save_json(f, &self.removed)) {
+            self.removed = before;
+            return Err(e);
+        }
+        self.all.retain(|s| s.player != player);
+        if self.tallies.remove(player).is_some() {
+            self.save_tallies();
+        }
+        self.reindex();
+        let rivals = self.rivals();
+        self.medals.revoke(player, &[], &rivals, 0, crate::now_secs());
+        Ok(ids.len())
+    }
+
     /// `from`'s plays and play time are `to`'s from now on (`name`: as written).
     pub fn rename(&mut self, from: &str, to: &str, name: &str) -> Result<(), String> {
         self.renames.push(Rename { from: from.to_string(), to: to.to_string(), name: name.to_string(), before: self.next_id });
@@ -888,10 +913,10 @@ fn stats_of(plays: &[&Stored]) -> (Stats, f64) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn play(map: u64, score: u64, pp: f64) -> ScoreSubmit {
+    pub(crate) fn play(map: u64, score: u64, pp: f64) -> ScoreSubmit {
         ScoreSubmit {
             map: crate::net::MapInfo { hash: map, artist: "A".into(), title: "T".into(), version: "Oni".into(), rate: 1.0, from: None, set_id: None, mods: vec!["HD".into()], multiverse: None, shapeshift: None, seed: None },
             score,
@@ -995,6 +1020,26 @@ mod tests {
         assert_eq!(ranks.iter().map(|r| (r.name.as_str(), r.plays, r.rank)).collect::<Vec<_>>(), [("A", 3, 1), ("B", 1, 2)]);
         assert_eq!(s.map(7).map(|m| (m.name, m.plays, m.players)), Some(("A - T [Oni]".into(), 3, 2)));
         assert_eq!((p.stats.ranked_score, p.stats.total_score, p.firsts.len()), (500 + 100, 500 + 400 + 100, 1));
+    }
+
+    #[test]
+    fn a_reset_wipes_only_that_players_plays_and_time() {
+        let mut s = Scores::load(None);
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        s.submit("a", "A", play(8, 400, 50.0), 2).unwrap();
+        s.submit("b", "B", play(7, 900, 200.0), 3).unwrap();
+        s.played("a", 60_000).unwrap();
+        s.played("b", 30_000).unwrap();
+        let b_time = s.tally("b").ms;
+        assert!(b_time >= 30_000);
+        assert_eq!(s.reset("a").unwrap(), 2);
+        assert!(s.plays_of("a").is_empty() && s.profile("a", "A", 0).pp == 0.0);
+        assert_eq!(s.tally("a").ms, 0);
+        assert_eq!(s.plays_of("b").len(), 1);
+        assert_eq!(s.tally("b").ms, b_time);
+        assert_eq!(s.rankings(10).iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["B"]);
+        assert_eq!(s.map_scores(7).len(), 1);
+        assert_eq!(s.reset("a").unwrap(), 0, "nothing left");
     }
 
     #[test]
