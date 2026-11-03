@@ -425,6 +425,8 @@ pub struct Game {
     focus_switches: Vec<FocusSwitch>,
     /// Shapeshift: its setup and the shape of each section (index into `SHAPESHIFT`).
     shapeshift: shapeshift::Config,
+    /// Tact: how often notes move.
+    tact: crate::tact::Step,
     shape_order: Vec<u8>,
     /// Multiverse's universes when the play brought its own (a lobby host's); None: the
     /// player's, as they set them up.
@@ -1761,6 +1763,7 @@ impl Game {
             next_scare: 0,
             focus_switches,
             shapeshift,
+            tact: crate::tact::get(),
             shape_order,
             universes: None,
             zone: None,
@@ -2733,6 +2736,23 @@ impl Game {
         }
     }
 
+    /// Tact: the map time notes are drawn at for map time `t`: the start of its step, with a
+    /// slight hop into it (`tact::shown_time`).
+    fn tact_time(&self, t: f64) -> f64 {
+        let bars = &self.map.barlines;
+        crate::tact::shown_time(t, |x| {
+            let cp = beatmap::control_point_at(&self.map.control_points, x);
+            let bar = bar_at(bars, x, cp.beat_length * 4.0);
+            crate::tact::step_start(
+                self.tact,
+                x,
+                bar,
+                |i| bars.get(i).map_or(x, |b| b.time),
+                (cp.beat_origin, cp.beat_length),
+            )
+        })
+    }
+
     /// The warp (see `Scroll::warp`) of Drop, Lag Spike and Moonwalk at map time `t`.
     fn extra_warp(&self, t: f64, cp: &beatmap::ControlPoint) -> f64 {
         let mods = self.mods;
@@ -3219,7 +3239,13 @@ impl Game {
                 RADAR_BEATS.0
             } as f64;
 
-        let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp);
+        // Tact: the notes stand where they'd be at the start of the step `vt` is in.
+        let st = if mods.has(Mod::Tact) {
+            self.tact_time(vt)
+        } else {
+            vt
+        };
+        let warp = beat_warp(mods, cp, st) + self.extra_warp(st, cp);
         // The lane's shape, and how fast notes go along it (see `lane_stretch`).
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w);
         // Where it's played before the whole-playfield moves (x0, y0, x1, y1): from the screen's
@@ -3246,7 +3272,7 @@ impl Game {
         };
         let portal = self.portal_at(vt, lane_len);
         let scroll = Scroll {
-            t: vt,
+            t: st,
             speed: osu_speed_scale(w)
                 * scroll_speed
                 * uni.speed()

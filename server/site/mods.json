@@ -189,6 +189,11 @@
         "acronym": "RL",
         "description": "Every 4 bars a random speed (0.5x-2x); a marker shows where it changes.",
         "name": "Roulette"
+      },
+      {
+        "acronym": "TC",
+        "description": "Notes stand still and hop to their next place every bar (C: how often).",
+        "name": "Tact"
       }
     ],
     "title": "SCROLL"

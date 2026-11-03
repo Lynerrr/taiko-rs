@@ -73,6 +73,7 @@ mod social;
 mod splash;
 mod stars;
 mod style;
+mod tact;
 mod tls;
 mod ui;
 mod update;
@@ -447,6 +448,7 @@ struct State {
     universe_setup: Option<multiverse::Setup>,
     shapeshift_setup: Option<shapeshift::Setup>,
     random_setup: Option<String>,
+    tact_setup: Option<tact::Setup>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
     leaderboard: Vec<PathBuf>,
     /// The leaderboard's rows scrolled past, for which map and tab (a new one starts at the
@@ -7420,6 +7422,7 @@ impl State {
                                 | H::UniversePresetDelete(_)
                                 | H::ShapeshiftCell(..)
                                 | H::ShapeshiftMove(_)
+                                | H::TactCell(_)
                                 | H::CustomTab(_)
                                 | H::Key(_)
                         )
@@ -9003,6 +9006,7 @@ impl State {
         self.universe_setup =
             (m == mods::Mod::Multiverse).then(|| multiverse::Setup::new(game::FIRST_FOCUS, 0));
         self.shapeshift_setup = (m == mods::Mod::Shapeshift).then(shapeshift::Setup::default);
+        self.tact_setup = (m == mods::Mod::Tact).then(|| tact::Setup::new(self.cfg.tact));
     }
 
     /// The mod customization's open tab.
@@ -9011,10 +9015,10 @@ impl State {
             Some(mods::Mod::Random)
         } else if self.universe_setup.is_some() {
             Some(mods::Mod::Multiverse)
+        } else if self.shapeshift_setup.is_some() {
+            Some(mods::Mod::Shapeshift)
         } else {
-            self.shapeshift_setup
-                .is_some()
-                .then_some(mods::Mod::Shapeshift)
+            self.tact_setup.is_some().then_some(mods::Mod::Tact)
         }
     }
 
@@ -9090,7 +9094,22 @@ impl State {
             } else if setup.key(code, self.modifiers_shift, &mut self.cfg.shapeshift) {
                 self.shapeshift_changed();
             }
+        } else if let Some(setup) = &mut self.tact_setup {
+            if matches!(
+                code,
+                KeyCode::Escape | KeyCode::F1 | KeyCode::Backspace | KeyCode::Tab
+            ) {
+                self.tact_setup = None;
+            } else if let Some(step) = setup.key(code) {
+                self.tact_changed(step);
+            }
         }
+    }
+
+    fn tact_changed(&mut self, step: usize) {
+        self.cfg.tact = step.min(tact::STEPS.len() - 1);
+        tact::set(self.cfg.tact);
+        self.cfg.save();
     }
 
     fn shapeshift_changed(&mut self) {
@@ -13447,6 +13466,9 @@ impl State {
             if let Some(setup) = &self.shapeshift_setup {
                 setup.draw_panel(canvas, &self.cfg.shapeshift, game::rail_outline);
             }
+            if let Some(setup) = &self.tact_setup {
+                setup.draw_panel(canvas, self.cfg.tact);
+            }
             if let Some(tab) = self.customization_tab() {
                 ui::draw_customization_tabs(canvas, &mods::customizable(self.cfg.mods), tab);
             }
@@ -14707,6 +14729,10 @@ impl State {
                 {
                     self.shapeshift_changed();
                 }
+            }
+            Hit::TactCell(col) => {
+                self.tact_setup = Some(tact::Setup::new(col));
+                self.tact_changed(col);
             }
             Hit::CustomTab(i) => {
                 if let Some(&m) = mods::customizable(self.cfg.mods).get(i) {
@@ -16039,6 +16065,7 @@ impl State {
             universe_setup: None,
             shapeshift_setup: None,
             random_setup: None,
+            tact_setup: None,
             leaderboard: Vec::new(),
             board_scroll: 0,
             board_for: (0, false),
@@ -16654,6 +16681,7 @@ fn run(
     library::set_songs_folder(cfg.songs_folder.clone());
     multiverse::set(cfg.universes);
     shapeshift::set(cfg.shapeshift);
+    tact::set(cfg.tact);
     multiverse::set_note_colours(cfg.note_colours);
     let inputs = if args.is_empty() {
         song_inputs(&cfg)

@@ -596,10 +596,16 @@ fn tiles(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32) {
             ),
         ),
     );
+    // Autoplay and Relax never count; Tact isn't in the server's collection (yet).
     for (row, (_, colour, mods)) in crate::mods::GROUPS.iter().enumerate() {
         for (col, m) in mods
             .iter()
-            .filter(|m| !matches!(m, crate::mods::Mod::Autoplay | crate::mods::Mod::Relax))
+            .filter(|m| {
+                !matches!(
+                    m,
+                    crate::mods::Mod::Autoplay | crate::mods::Mod::Relax | crate::mods::Mod::Tact
+                )
+            })
             .enumerate()
         {
             let (tx, ty) = (
@@ -1407,7 +1413,14 @@ mod tests {
             .iter()
             .map(|g| {
                 g.2.iter()
-                    .filter(|m| !matches!(m, crate::mods::Mod::Autoplay | crate::mods::Mod::Relax))
+                    .filter(|m| {
+                        !matches!(
+                            m,
+                            crate::mods::Mod::Autoplay
+                                | crate::mods::Mod::Relax
+                                | crate::mods::Mod::Tact
+                        )
+                    })
                     .count()
             })
             .sum();

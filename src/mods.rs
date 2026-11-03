@@ -121,6 +121,7 @@ pub enum Mod {
     Drop,
     Gearbox,
     Roulette,
+    Tact,
     // SV experiments.
     AntiSv,
     HyperSv,
@@ -171,7 +172,7 @@ pub enum Mod {
 
 use Mod::*;
 
-pub const ALL: [Mod; 76] = [
+pub const ALL: [Mod; 77] = [
     Easy,
     NoFail,
     HalfTime,
@@ -248,6 +249,8 @@ pub const ALL: [Mod; 76] = [
     Crumble,
     Portal,
     Multiverse,
+    // Added later: a mod's place in this list is its bit (`Mod::bit`), so new ones go last.
+    Tact,
 ];
 
 /// Mod select columns: (title, accent colour, mods).
@@ -291,7 +294,7 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
         "SCROLL",
         0xFFD34D,
         &[
-            Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette,
+            Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette, Tact,
         ],
     ),
     (
@@ -328,7 +331,7 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
 ];
 
 /// The mods with settings of their own, in the order of the mod customization's tabs.
-const CUSTOMIZABLE: [Mod; 3] = [Mod::Random, Mod::Multiverse, Mod::Shapeshift];
+const CUSTOMIZABLE: [Mod; 4] = [Mod::Random, Mod::Multiverse, Mod::Shapeshift, Mod::Tact];
 
 /// The tabs of the mod customization: the mods with settings that are on (only those show).
 pub fn customizable(mods: Mods) -> Vec<Mod> {
@@ -386,6 +389,7 @@ impl Mod {
             Drop => "DR",
             Gearbox => "GB",
             Roulette => "RL",
+            Tact => "TC",
             AntiSv => "AS",
             HyperSv => "HS",
             Even => "EV",
@@ -467,6 +471,7 @@ impl Mod {
             Drop => "Drop",
             Gearbox => "Gearbox",
             Roulette => "Roulette",
+            Tact => "Tact",
             AntiSv => "Anti-SV",
             HyperSv => "Hyper SV",
             Even => "Even",
@@ -548,6 +553,7 @@ impl Mod {
             Drop => "Notes freeze two beats before every kiai, then slam in 1.4x faster.",
             Gearbox => "Every beat of a bar shifts up a gear (+15%); the next bar starts over.",
             Roulette => "Every 4 bars a random speed (0.5x-2x); a marker shows where it changes.",
+            Tact => "Notes stand still and hop to their next place every bar (C: how often).",
             AntiSv => "The map's speed changes are turned upside down: 2x becomes 0.5x.",
             HyperSv => "The map's speed changes are exaggerated: 1.5x becomes 2.25x.",
             Even => "Notes are evenly spaced: bursts fly in fast, slow parts crawl. Play by ear.",
@@ -635,7 +641,7 @@ impl Mod {
             // Hard to read or to play: notes that lie about where or when they'll arrive.
             SvChaos | Even => 1.08,
             Sudden | Blink | Decoy | Liar | Radar | Echo | Alternate | WindUp | Stutter
-            | Roulette | HyperSv | Split | Leapfrog | LagSpike | Moonwalk => 1.06,
+            | Roulette | HyperSv | Split | Leapfrog | LagSpike | Moonwalk | Tact => 1.06,
             Spiral | Shapeshift | Spin | Portal => 1.06,
             // Noticeably harder.
             GreatOrNothing | Random | Accel | Brake | Pulse | Crescendo | Drop | Gearbox
@@ -669,8 +675,10 @@ impl Mod {
             AllBig => &[NoFinishers],
             Accel => &[Brake],
             Brake => &[Accel],
-            Pulse => &[Stutter],
-            Stutter => &[Pulse],
+            // They all move notes in steps with the beat: one at a time.
+            Pulse => &[Stutter, Tact],
+            Stutter => &[Pulse, Tact],
+            Tact => &[Pulse, Stutter],
             Hidden => &[Sudden, Memory, Radar],
             Sudden => &[Hidden, Memory, Radar],
             Memory => &[Hidden, Sudden, Radar],
@@ -740,7 +748,7 @@ impl Mod {
             HardRock | Hidden | Sudden | Blink | Decoy | Radar | Echo | Random | Alternate
             | WindUp => 2,
             Stutter | SvChaos | Roulette | HyperSv | Even | Split | Leapfrog | Panic | LagSpike
-            | Moonwalk => 2,
+            | Moonwalk | Tact => 2,
             Spiral | Shapeshift | Spin | FlipFlop | Portal | Multiverse => 2,
             _ => 1,
         })

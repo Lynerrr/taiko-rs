@@ -314,6 +314,8 @@ pub struct Config {
     pub shapeshift: crate::shapeshift::Config,
     /// Random colouring, shared by retries and saved between sessions.
     pub random_seed: u64,
+    /// Tact: how often notes move (index into `tact::STEPS`).
+    pub tact: usize,
     /// Mods marked as favourites in the mod select (shown in a row of their own).
     pub favourite_mods: crate::mods::Mods,
     /// Note colours without Multiverse.
@@ -429,6 +431,7 @@ impl Default for Config {
             universe_presets: Vec::new(),
             shapeshift: Default::default(),
             random_seed: crate::fresh_seed(),
+            tact: crate::tact::DEFAULT,
             favourite_mods: crate::mods::Mods::NONE,
             note_colours: crate::multiverse::Colours::CLASSIC,
             video: Default::default(),
@@ -1060,6 +1063,7 @@ impl Config {
                 "note_colours" => cfg.note_colours = crate::multiverse::Colours::parse(v),
                 "random_seed" => cfg.random_seed = v.parse().unwrap_or(cfg.random_seed),
                 "shapeshift" => cfg.shapeshift = crate::shapeshift::Config::parse(v),
+                "tact" => cfg.tact = crate::tact::parse(v),
                 "favourite_mods" => cfg.favourite_mods = crate::mods::Mods::parse_set(v),
                 k if k.starts_with("video_") => {
                     cfg.video.parse(k, v);
@@ -1317,6 +1321,10 @@ impl Config {
         out.push_str(&format!(
             "# Shapeshift: bars per shape (4/8/16/32), bars to morph (0.5/1/2/4), order shuffle/fixed, shapes in order (- = left out)\nshapeshift = {}\n",
             self.shapeshift.format()
+        ));
+        out.push_str(&format!(
+            "# Tact: how often notes move (2bars, 1bar, 1/2bar, 1beat, 1/2beat, 1/4beat)\ntact = {}\n",
+            crate::tact::format(self.tact)
         ));
         out.push_str(&format!(
             "# favourite mods (right-click or F in the mod select), e.g. HD,HR\nfavourite_mods = {}\n",
