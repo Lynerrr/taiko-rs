@@ -1727,6 +1727,7 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         shapeshift,
         seed: None,
         defense: None,
+        stats: None,
         hash: e.hash(),
         artist: e.meta.artist.clone(),
         title: e.meta.title.clone(),
@@ -7701,6 +7702,25 @@ impl State {
         };
     }
 
+    /// A library map's numbers for a lobby (stars, length and BPM -1 while the background work
+    /// hasn't reached it).
+    fn map_stats(&self, entry: usize) -> Option<Box<net::MapStats>> {
+        let e = self.library.get(entry)?;
+        let info = self
+            .select
+            .info
+            .as_ref()
+            .and_then(|i| i.lock().unwrap().get(entry).copied().flatten());
+        Some(Box::new(net::MapStats {
+            stars: info.map_or(-1.0, |i| i.stars),
+            length_ms: info.map_or(-1.0, |i| i.length_ms),
+            bpm: info.map_or(-1.0, |i| i.bpm),
+            od: e.meta.od as f32,
+            hp: e.meta.hp as f32,
+            creator: e.meta.creator.clone(),
+        }))
+    }
+
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
         if let (Some(s), Some(g)) = (self.mp.as_ref().filter(|s| s.mapguessr), &mut self.guessr) {
@@ -7716,6 +7736,7 @@ impl State {
             return;
         }
         let mut info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
+        info.stats = self.map_stats(entry);
         info.seed = lobby_seed(Some(self.cfg.random_seed));
         // Defense stays on (with its rules) from one map to the next.
         info.defense = self
@@ -7789,6 +7810,43 @@ impl State {
                     self.guessr_key(code);
                     return;
                 }
+                // The host typing a new password (K): it takes the keys until Enter or Esc.
+                if let Some(typed) = &mut s.edit_password {
+                    match code {
+                        KeyCode::Enter | KeyCode::NumpadEnter => {
+                            let password = Some(typed.clone()).filter(|p| !p.is_empty());
+                            s.edit_password = None;
+                            let text = if password.is_some() {
+                                tr!(
+                                    "the lobby has a password now",
+                                    "ロビーにパスワードを設定しました",
+                                    "у лобби теперь есть пароль"
+                                )
+                            } else {
+                                tr!(
+                                    "the lobby is open to all",
+                                    "ロビーは誰でも入れます",
+                                    "лобби открыто для всех"
+                                )
+                            };
+                            s.client.send(net::ClientMsg::SetPassword(password));
+                            self.toast(text.into());
+                        }
+                        KeyCode::Escape => s.edit_password = None,
+                        KeyCode::Backspace => {
+                            typed.pop();
+                        }
+                        _ => {
+                            for ch in text.unwrap_or("").chars() {
+                                if net::drawable_char(ch) && ch != ' ' && typed.chars().count() < 32
+                                {
+                                    typed.push(ch);
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
                 match code {
                     KeyCode::Space | KeyCode::KeyR if s.me().is_some_and(|p| p.spectator) => {
                         self.toast("you're spectating: S to play instead".into());
@@ -7823,31 +7881,87 @@ impl State {
                         self.toast(text);
                     }
                     KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
-                    // Defense: C steps the team's lives (and off), V how long each turn is.
-                    KeyCode::KeyC | KeyCode::KeyV if s.is_host() && !s.in_match => {
+                    // Defense: C turns it on or off, 1-5 step its rules.
+                    KeyCode::KeyC
+                    | KeyCode::Digit1
+                    | KeyCode::Digit2
+                    | KeyCode::Digit3
+                    | KeyCode::Digit4
+                    | KeyCode::Digit5
+                        if s.is_host() && !s.in_match =>
+                    {
                         let Some(mut m) = s.map.clone() else {
                             self.toast("pick a map first (M)".into());
                             return;
                         };
-                        m.defense = match (code, m.defense) {
-                            (KeyCode::KeyC, d) => net::Defense::next_lives(d),
-                            (_, Some(d)) => Some(d.next_bars()),
-                            (_, None) => Some(net::Defense::DEFAULT),
+                        let option = match code {
+                            KeyCode::Digit1 => Some(net::DefenseOption::Lives),
+                            KeyCode::Digit2 => Some(net::DefenseOption::Bars),
+                            KeyCode::Digit3 => Some(net::DefenseOption::TagIns),
+                            KeyCode::Digit4 => Some(net::DefenseOption::Shop),
+                            KeyCode::Digit5 => Some(net::DefenseOption::Maze),
+                            _ => None,
                         };
-                        let text = match m.defense {
-                            Some(d) => {
-                                let (lives, bars) = (d.lives, d.bars);
-                                tr!("Defense: {lives} lives, turns of {bars} bars", "ディフェンス: ライフ{lives}、{bars}小節で交代", "Оборона: {lives} жизней, ход по {bars} тактов";)
+                        let text = match (option, m.defense) {
+                            (None, Some(_)) => {
+                                m.defense = None;
+                                tr!(
+                                    "Defense off: an ordinary match",
+                                    "ディフェンス オフ",
+                                    "Оборона выключена: обычный матч"
+                                )
+                                .to_string()
                             }
-                            None => tr!(
-                                "Defense off: an ordinary match",
-                                "ディフェンス オフ",
-                                "Оборона выключена: обычный матч"
-                            )
-                            .to_string(),
+                            (None, None) => {
+                                m.defense = Some(net::Defense::DEFAULT);
+                                tr!(
+                                    "Defense co-op on: 1-5 change its rules",
+                                    "ディフェンス協力 オン: 1-5でルール変更",
+                                    "Оборона включена: 1-5 меняют правила"
+                                )
+                                .to_string()
+                            }
+                            (Some(o), Some(d)) => {
+                                let d = o.step(d);
+                                m.defense = Some(d);
+                                format!("{}: {}", o.name(), o.value(&d))
+                            }
+                            (Some(_), None) => {
+                                self.toast(
+                                    tr!(
+                                        "turn Defense on first (C)",
+                                        "先にディフェンスをオン (C)",
+                                        "сначала включи Оборону (C)"
+                                    )
+                                    .into(),
+                                );
+                                return;
+                            }
                         };
                         s.client.send(net::ClientMsg::SelectMap(m));
                         self.toast(text);
+                    }
+                    // The room: K types a new password, L steps how many players it takes.
+                    KeyCode::KeyK if s.is_host() && !s.in_match => {
+                        s.edit_password = Some(String::new())
+                    }
+                    KeyCode::KeyL if s.is_host() && !s.in_match => {
+                        let list = net::RoomSettings::SLOTS;
+                        let at = list
+                            .iter()
+                            .position(|&n| n == s.slots)
+                            .unwrap_or(list.len() - 1);
+                        // Never below who's in it already.
+                        let next = list
+                            .iter()
+                            .cycle()
+                            .skip(at + 1)
+                            .take(list.len())
+                            .copied()
+                            .find(|&n| n as usize >= s.players.len())
+                            .unwrap_or(s.slots);
+                        s.client.send(net::ClientMsg::SetSlots(next));
+                        self.toast(tr!("the lobby takes {next} players", "ロビーの定員: {next}人", "лобби на {next} игроков";));
                     }
                     KeyCode::F1 => self.open_mod_select(),
                     KeyCode::KeyS
@@ -8107,10 +8221,21 @@ impl State {
                 self.mp_menu.cursor = self.mp_menu.cursor.min(rows - 1).saturating_sub(1)
             }
             KeyCode::ArrowDown => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
-            // Between the columns: online (left), direct play (right).
+            // The new lobby's steppers step; elsewhere the arrows go between the lobbies
+            // (left) and the new lobby (right).
+            KeyCode::ArrowLeft | KeyCode::ArrowRight if row == Row::NewMode => {
+                self.mp_menu.new_guessr = !self.mp_menu.new_guessr
+            }
+            KeyCode::ArrowLeft | KeyCode::ArrowRight if row == Row::NewSlots => self
+                .mp_menu
+                .step_slots(if code == KeyCode::ArrowLeft { -1 } else { 1 }),
             KeyCode::ArrowLeft => self.mp_menu.cursor = 0,
-            KeyCode::ArrowRight => self.mp_menu.select(Row::Name),
+            KeyCode::ArrowRight => self.mp_menu.select(Row::NewMode),
             KeyCode::F5 => self.mp_menu.refresh(&server),
+            KeyCode::Escape if self.mp_menu.joining.is_some() => {
+                self.mp_menu.joining = None;
+                self.mp_menu.cursor = 0;
+            }
             KeyCode::Escape if self.mp_menu.form != multiplayer::Form::Main => {
                 self.mp_menu.open(multiplayer::Form::Main);
                 self.mp_status.clear();
@@ -8130,12 +8255,11 @@ impl State {
                     Row::Code => {
                         self.mp_menu.code.pop();
                     }
-                    Row::Name => {
-                        self.cfg.mp_name.pop();
+                    Row::NewPassword => {
+                        self.mp_menu.new_password.pop();
                     }
-                    Row::Port => self.cfg.mp_port /= 10,
-                    Row::Address => {
-                        self.cfg.mp_address.pop();
+                    Row::JoinPassword => {
+                        self.mp_menu.join_password.pop();
                     }
                     _ => {}
                 }
@@ -8145,7 +8269,6 @@ impl State {
                 if self.mp_connecting.is_some() {
                     return;
                 }
-                let name = self.cfg.mp_name.clone();
                 let token = self.cfg.online_token.clone();
                 let account = self.mp_menu.account.clone().unwrap_or_default();
                 use multiplayer::{CodeFor, Form};
@@ -8365,8 +8488,14 @@ impl State {
                             .account_call(&server, online::Request::Logout { token });
                         self.sign_out("logged out");
                     }
-                    Row::HostOnline | Row::HostGuessr => {
-                        let mapguessr = row == Row::HostGuessr;
+                    Row::NewMode => menu.new_guessr = !menu.new_guessr,
+                    Row::NewSlots => menu.step_slots(1),
+                    Row::NewPassword => {
+                        self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1)
+                    }
+                    Row::HostOnline => {
+                        let mapguessr = menu.new_guessr;
+                        let settings = menu.new_settings();
                         self.mp_status = if mapguessr {
                             "opening a mapguessr lobby..."
                         } else {
@@ -8377,38 +8506,67 @@ impl State {
                             token,
                             title: String::new(),
                             mapguessr,
-                            settings: net::RoomSettings::default(),
+                            settings,
                         };
                         self.mp_connecting =
                             Some(multiplayer::start_online(server, request, account, None));
                     }
                     Row::Lobby(k) => {
-                        let Some(room) = self.mp_menu.rooms.get(k).cloned() else {
+                        let Some(room) = menu.rooms.get(k).cloned() else {
                             return;
                         };
+                        if room.players >= room.slots {
+                            self.mp_status = tr!(
+                                "that lobby is full",
+                                "そのロビーは満員です",
+                                "это лобби заполнено"
+                            )
+                            .into();
+                        } else if room.locked {
+                            // Its password first.
+                            menu.joining = Some(room);
+                            menu.join_password.clear();
+                            menu.cursor = 0;
+                            self.mp_status.clear();
+                        } else {
+                            self.mp_status = format!("joining {}...", room.title);
+                            let request = online::Request::JoinRoom {
+                                token,
+                                room: room.id,
+                            };
+                            self.mp_connecting =
+                                Some(multiplayer::start_online(server, request, account, None));
+                        }
+                    }
+                    Row::CancelJoin => {
+                        menu.joining = None;
+                        menu.cursor = 0;
+                    }
+                    Row::JoinPassword | Row::JoinLocked => {
+                        let Some(room) = menu.joining.clone() else {
+                            return;
+                        };
+                        if menu.join_password.is_empty() {
+                            self.mp_status = tr!(
+                                "type the lobby's password",
+                                "ロビーのパスワードを入力",
+                                "введи пароль лобби"
+                            )
+                            .into();
+                            menu.select(Row::JoinPassword);
+                            return;
+                        }
+                        let password = Some(std::mem::take(&mut menu.join_password));
+                        menu.joining = None;
+                        menu.cursor = 0;
                         self.mp_status = format!("joining {}...", room.title);
                         let request = online::Request::JoinRoom {
                             token,
                             room: room.id,
                         };
-                        self.mp_connecting =
-                            Some(multiplayer::start_online(server, request, account, None));
-                    }
-                    Row::HostDirect => {
-                        self.mp_status = format!("opening room on port {}...", self.cfg.mp_port);
-                        self.mp_connecting =
-                            Some(multiplayer::start_host(self.cfg.mp_port, name, false));
-                    }
-                    Row::JoinDirect if self.cfg.mp_address.trim().is_empty() => {
-                        self.mp_status = "type the host's address first".into()
-                    }
-                    Row::JoinDirect => {
-                        self.mp_status = format!("connecting to {}...", self.cfg.mp_address);
-                        self.mp_connecting =
-                            Some(multiplayer::start_join(self.cfg.mp_address.clone(), name));
-                    }
-                    Row::Name | Row::Port | Row::Address => {
-                        self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1)
+                        self.mp_connecting = Some(multiplayer::start_online(
+                            server, request, account, password,
+                        ));
                     }
                 }
                 self.cfg.save();
@@ -8429,19 +8587,15 @@ impl State {
                         Row::Code if self.mp_menu.code.len() < 6 && ch.is_ascii_digit() => {
                             self.mp_menu.code.push(ch)
                         }
-                        Row::Name if self.cfg.mp_name.chars().count() < 20 => {
-                            self.cfg.mp_name.push(ch)
+                        Row::NewPassword
+                            if self.mp_menu.new_password.chars().count() < 32 && ch != ' ' =>
+                        {
+                            self.mp_menu.new_password.push(ch)
                         }
-                        Row::Port => {
-                            if let Some(d) = ch.to_digit(10) {
-                                let p = self.cfg.mp_port as u32 * 10 + d;
-                                if p <= u16::MAX as u32 {
-                                    self.cfg.mp_port = p as u16;
-                                }
-                            }
-                        }
-                        Row::Address if self.cfg.mp_address.len() < 64 && ch != ' ' => {
-                            self.cfg.mp_address.push(ch)
+                        Row::JoinPassword
+                            if self.mp_menu.join_password.chars().count() < 32 && ch != ' ' =>
+                        {
+                            self.mp_menu.join_password.push(ch)
                         }
                         _ => {}
                     }
@@ -12813,6 +12967,8 @@ impl State {
                                     shapeshift: None,
                                     seed: (replay.seed != 0).then_some(replay.seed),
                                     defense: None,
+
+                                    stats: None,
                                 },
                                 score: replay.score,
                                 accuracy: replay.accuracy,
@@ -12980,9 +13136,6 @@ impl State {
                 multiplayer::draw_menu(
                     canvas,
                     &self.mp_menu,
-                    &self.cfg.mp_name,
-                    self.cfg.mp_port,
-                    &self.cfg.mp_address,
                     &self.cfg.online_server,
                     &self.mp_status,
                     self.mp_connecting.is_some(),
@@ -14785,6 +14938,18 @@ impl State {
                         social::NoteAction::Watch(name) => self.watch(name),
                         social::NoteAction::None => {}
                     }
+                }
+            }
+            Hit::Kick(id) => {
+                if let Some(s) = &self.mp {
+                    s.client.send(net::ClientMsg::Kick(id));
+                    let name = s
+                        .players
+                        .iter()
+                        .find(|p| p.id == id)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    self.toast(tr!("{name} is out of the lobby", "{name} をロビーから外しました", "{name} убран из лобби";));
                 }
             }
             Hit::GiveHost(id) => {

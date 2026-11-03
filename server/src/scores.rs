@@ -1166,6 +1166,8 @@ mod tests {
                 shapeshift: None,
                 seed: None,
                 defense: None,
+
+                stats: None,
             },
             score,
             accuracy: 0.95,

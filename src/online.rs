@@ -956,6 +956,9 @@ pub struct RoomInfo {
     pub locked: bool,
     #[serde(default = "sixteen")]
     pub slots: u32,
+    /// Its map is played as Defense (co-op).
+    #[serde(default)]
+    pub defense: bool,
 }
 
 fn sixteen() -> u32 {

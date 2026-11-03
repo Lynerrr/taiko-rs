@@ -40,6 +40,8 @@ pub struct Session {
     /// The lobby needs a password, and how many players it takes.
     pub locked: bool,
     pub slots: u32,
+    /// Host: a new password being typed in the lobby (K).
+    pub edit_password: Option<String>,
     /// In a match: we asked to skip the intro, and how many players have (of how many).
     pub skip_asked: bool,
     pub skip_votes: Option<(u32, u32)>,
@@ -69,6 +71,7 @@ impl Session {
             team: None,
             locked: false,
             slots: net::RoomSettings::MAX_SLOTS,
+            edit_password: None,
             skip_asked: false,
             skip_votes: None,
         }
@@ -92,29 +95,21 @@ impl Session {
 
 pub type Connecting = Receiver<Result<Session, String>>;
 
-/// Opens a room (`mapguessr`: one playing mapguessr) and joins it ourselves, on a background
-/// thread so the UI never stalls.
+/// Opens a room on a port of this machine and joins it ourselves (`mapguessr`: one playing
+/// mapguessr): the layout tests' lobbies (the menu only opens them on the server now).
+#[cfg(test)]
 pub fn start_host(port: u16, name: String, mapguessr: bool) -> Connecting {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let result = (|| {
             let server = net::host(port, mapguessr)?;
-            let token = Some(server.token);
-            let client = Client::connect(&format!("127.0.0.1:{port}"), &name, token)
-                .or_else(|_| Client::connect(&format!("[::1]:{port}"), &name, token))?;
-            let label = format!("hosting on port {}", server.port);
-            Ok(Session::new(client, Some(server), label))
+            let client = Client::connect(&format!("127.0.0.1:{port}"), &name, Some(server.token))?;
+            Ok(Session::new(
+                client,
+                Some(server),
+                format!("hosting on port {}", port),
+            ))
         })();
-        let _ = tx.send(result);
-    });
-    rx
-}
-
-pub fn start_join(address: String, name: String) -> Connecting {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let result = Client::connect(&address, &name, None)
-            .map(|c| Session::new(c, None, format!("connected to {address}")));
         let _ = tx.send(result);
     });
     rx
@@ -196,8 +191,8 @@ pub fn final_from(stats: &Stats, quit: bool) -> Final {
 // ---------------------------------------------------------------------------------------------
 // Host / join menu
 
-/// The multiplayer menu's rows, top to bottom: the online column (an account, then lobbies on
-/// the server), then direct play (host on your own port / join by address) as the fallback.
+/// The multiplayer menu's rows, top to bottom: an account (its forms), then once logged in the
+/// server's lobbies and a new lobby's settings, or the password of a locked lobby being joined.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Row {
     User,
@@ -220,15 +215,18 @@ pub enum Row {
     LinkEmail,
     /// Out of a form, back to logging in (or the lobbies).
     Back,
+    /// Opens a lobby with the settings above it (mode, password, slots).
     HostOnline,
-    HostGuessr,
+    /// The new lobby: a match or mapguessr, its password (empty: open to all), how many it takes.
+    NewMode,
+    NewPassword,
+    NewSlots,
     Lobby(usize),
     LogOut,
-    Name,
-    Port,
-    HostDirect,
-    Address,
-    JoinDirect,
+    /// Joining a locked lobby: its password, then join or not.
+    JoinPassword,
+    JoinLocked,
+    CancelJoin,
 }
 
 impl Row {
@@ -240,9 +238,8 @@ impl Row {
                 | Row::Password
                 | Row::Email
                 | Row::Code
-                | Row::Name
-                | Row::Port
-                | Row::Address
+                | Row::NewPassword
+                | Row::JoinPassword
         )
     }
 }
@@ -292,10 +289,46 @@ pub struct Menu {
     pub last_refresh: Option<Instant>,
     /// The saved session was loaded from the config (and is being checked).
     pub session_loaded: bool,
+    /// The lobby to open: mapguessr (or a match), its password, and how many players it takes
+    /// (0: the most).
+    pub new_guessr: bool,
+    pub new_password: String,
+    pub new_slots: u32,
+    /// A locked lobby being joined, and the password typed for it.
+    pub joining: Option<online::RoomInfo>,
+    pub join_password: String,
 }
 
-/// Lobbies shown at once (the list scrolls with the cursor).
-const LOBBY_ROWS: usize = 5;
+impl Menu {
+    /// The new lobby's player limit.
+    pub fn slots(&self) -> u32 {
+        if self.new_slots == 0 {
+            net::RoomSettings::MAX_SLOTS
+        } else {
+            self.new_slots
+        }
+    }
+
+    /// The new lobby's player limit stepped `dir` along the choices.
+    pub fn step_slots(&mut self, dir: i32) {
+        let list = net::RoomSettings::SLOTS;
+        let at = list
+            .iter()
+            .position(|&n| n == self.slots())
+            .unwrap_or(list.len() - 1) as i32;
+        self.new_slots = list[(at + dir).clamp(0, list.len() as i32 - 1) as usize];
+    }
+
+    /// The new lobby's settings, to open it with.
+    pub fn new_settings(&self) -> net::RoomSettings {
+        let password = Some(self.new_password.clone()).filter(|p| !p.is_empty());
+        net::RoomSettings {
+            password,
+            slots: self.slots(),
+        }
+        .clean()
+    }
+}
 
 impl Menu {
     pub fn rows(&self) -> Vec<Row> {
@@ -325,10 +358,17 @@ impl Menu {
                 }
                 rows.extend([Row::Register, Row::Back]);
             }
+            (true, _) if self.joining.is_some() => {
+                rows.extend([Row::JoinPassword, Row::JoinLocked, Row::CancelJoin])
+            }
             (true, _) => {
-                rows.push(Row::HostOnline);
-                rows.push(Row::HostGuessr);
                 rows.extend((0..self.rooms.len()).map(Row::Lobby));
+                rows.extend([
+                    Row::NewMode,
+                    Row::NewPassword,
+                    Row::NewSlots,
+                    Row::HostOnline,
+                ]);
                 rows.extend([Row::LogOut, Row::ChangePassword]);
                 if self.has_email == Some(false) {
                     rows.push(Row::LinkEmail);
@@ -342,13 +382,6 @@ impl Menu {
                 Row::Forgot,
             ]),
         }
-        rows.extend([
-            Row::Name,
-            Row::Port,
-            Row::HostDirect,
-            Row::Address,
-            Row::JoinDirect,
-        ]);
         rows
     }
 
@@ -472,14 +505,14 @@ impl Menu {
             ],
             Form::Main => [
                 tr!(
-                    "An account is only needed for online lobbies.",
-                    "アカウントはオンラインロビーにだけ必要です。",
-                    "Аккаунт нужен только для онлайн-лобби."
+                    "An account plays online: lobbies, friends, leaderboards.",
+                    "アカウントでオンライン: ロビー・フレンド・ランキング。",
+                    "С аккаунтом играешь онлайн: лобби, друзья, рейтинги."
                 ),
                 tr!(
-                    "Direct play on the right works without one.",
-                    "右のダイレクト対戦はなしで遊べます。",
-                    "Прямая игра справа работает и без него."
+                    "No account yet? CREATE ACCOUNT takes a minute.",
+                    "まだない? 「アカウント作成」はすぐです。",
+                    "Нет аккаунта? РЕГИСТРАЦИЯ займёт минуту."
                 ),
             ],
         }
@@ -564,120 +597,181 @@ fn server_label(server: &str) -> &str {
         .unwrap_or(server)
 }
 
+/// What a menu row shows: a text field (label left, its value or a placeholder right, a caret
+/// when selected), a stepper (label left, `< value >` right) or an action (its label centred).
+enum RowLook<'a> {
+    Field(&'a str, bool),
+    Stepper(&'a str),
+    Action,
+}
+
+/// One row of the multiplayer menu, `h` tall.
 #[allow(clippy::too_many_arguments)]
-pub fn draw_menu(
+fn menu_row(
     c: &mut Canvas,
-    menu: &Menu,
-    name: &str,
-    port: u16,
-    address: &str,
-    server: &str,
-    status: &str,
-    busy: bool,
+    sel: bool,
+    i: usize,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    label: &str,
+    look: RowLook,
 ) {
+    let bg = if sel {
+        0x34344a
+    } else if c.hovered(x, y, w, h) {
+        0x262634
+    } else {
+        0x1d1d27
+    };
+    c.round_rect([x, y], [w, h], 7.0, rgba(bg, 1.0), rgba(0x2a2a38, 1.0), 1.0);
+    if sel {
+        crate::style::selector(c, "multiplayer", [x - 3.0, y - 3.0, w + 6.0, h + 6.0]);
+    }
+    c.hit(x, y, w, h, Hit::MpRow(i));
+    let ty = y + h / 2.0 - 4.5;
+    match look {
+        RowLook::Field(value, placeholder) => {
+            c.text(x + 12.0, ty, 9.0, rgba(0x9a9ab0, 1.0), label);
+            // The value keeps clear of the label: a long one shows its end (where you type).
+            let room = w - 34.0 - Canvas::text_width(9.0, label);
+            let shown = if sel {
+                format!("{value}_")
+            } else {
+                value.to_string()
+            };
+            let shown = if placeholder {
+                Canvas::fit(9.0, room, &shown)
+            } else {
+                Canvas::fit_end(9.0, room, &shown)
+            };
+            let colour = if placeholder && !sel {
+                0x55556a
+            } else {
+                0xffffff
+            };
+            c.text_right(x + w - 12.0, ty, 9.0, rgba(colour, 1.0), &shown);
+        }
+        RowLook::Stepper(value) => {
+            c.text(x + 12.0, ty, 9.0, rgba(0x9a9ab0, 1.0), label);
+            let arrows = if sel { 0xffffff } else { 0x55556a };
+            let vw = Canvas::text_width(9.0, value);
+            c.text_right(x + w - 12.0, ty, 9.0, rgba(arrows, 1.0), ">");
+            c.text_right(x + w - 26.0, ty, 9.0, rgba(0xffffff, 1.0), value);
+            c.text_right(x + w - 34.0 - vw, ty, 9.0, rgba(arrows, 1.0), "<");
+        }
+        RowLook::Action => {
+            let size = Canvas::fit_size(11.0, 7.0, w - 16.0, label);
+            c.text_centered(
+                x + w / 2.0,
+                y + h / 2.0 - size / 2.0,
+                size,
+                rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0),
+                label,
+            );
+        }
+    }
+}
+
+/// A card of the menu, the song select's look: dark, a thin border.
+fn card(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32) {
+    c.round_rect(
+        [x, y],
+        [w, h],
+        8.0,
+        rgba(0x15151d, 0.86),
+        rgba(0x2a2a38, 1.0),
+        1.0,
+    );
+}
+
+/// A small padlock (a locked lobby), `size` tall at (x, y).
+fn padlock(c: &mut Canvas, x: f32, y: f32, size: f32, colour: u32) {
+    let k = size / 10.0;
+    c.ring(
+        x + 4.5 * k,
+        y + 4.0 * k,
+        2.8 * k,
+        rgba(colour, 1.0),
+        1.4 * k,
+    );
+    c.round_rect(
+        [x, y + 4.0 * k],
+        [9.0 * k, 6.0 * k],
+        1.5 * k,
+        rgba(colour, 1.0),
+        rgba(0, 0.0),
+        0.0,
+    );
+}
+
+/// The multiplayer menu. Logged out, the account's card (log in, or a form to make one, get a
+/// lost password back...). Logged in, the server's lobbies on the left (a padlock on the ones
+/// with a password, how full they are) and the account and a new lobby's settings on the
+/// right; joining a locked lobby asks for its password first.
+pub fn draw_menu(c: &mut Canvas, menu: &Menu, server: &str, status: &str, busy: bool) {
     let w = c.width;
-    crate::settings::tab_bar(c, 2, "");
-    let gap = 20.0;
-    let col = ((w - 48.0 - gap) / 2.0).min(380.0);
-    let left = w / 2.0 - gap / 2.0 - col;
-    let right = w / 2.0 + gap / 2.0;
+    let state = match &menu.online {
+        Some(Ok(())) => tr!("online", "オンライン", "онлайн"),
+        Some(Err(_)) => tr!("no connection", "接続なし", "нет связи"),
+        None => tr!("connecting...", "接続中...", "подключение..."),
+    };
+    crate::settings::tab_bar(c, 2, &format!("{}   {state}", server_label(server)));
     let rows = menu.rows();
     let cursor = menu.cursor.min(rows.len() - 1);
-
-    // One row: a text field (label left, value right) or an action (centred).
-    let row = |c: &mut Canvas,
-               i: usize,
-               x: f32,
-               y: f32,
-               h: f32,
-               label: &str,
-               value: Option<(&str, bool)>| {
-        let sel = i == cursor;
-        let bg = if sel {
-            0x34344a
-        } else if c.hovered(x, y, col, h) {
-            0x262634
-        } else {
-            0x1d1d27
-        };
-        c.round_rect(
-            [x, y],
-            [col, h],
-            7.0,
-            rgba(bg, 1.0),
-            rgba(0x2a2a38, 1.0),
-            1.0,
-        );
-        if sel {
-            crate::style::selector(c, "multiplayer", [x - 3.0, y - 3.0, col + 6.0, h + 6.0]);
-        }
-        c.hit(x, y, col, h, Hit::MpRow(i));
-        match value {
-            Some((v, placeholder)) => {
-                c.text(x + 14.0, y + h / 2.0 - 4.5, 9.0, rgba(0x9a9ab0, 1.0), label);
-                // The value keeps clear of the label: a long one shows its end (where you type).
-                let room = col - 38.0 - Canvas::text_width(9.0, label);
-                let shown = if sel { format!("{v}_") } else { v.to_string() };
-                let shown = if placeholder {
-                    Canvas::fit(9.0, room, &shown)
-                } else {
-                    Canvas::fit_end(9.0, room, &shown)
-                };
-                let colour = if placeholder && !sel {
-                    0x55556a
-                } else {
-                    0xffffff
-                };
-                c.text_right(
-                    x + col - 14.0,
-                    y + h / 2.0 - 4.5,
-                    9.0,
-                    rgba(colour, 1.0),
-                    &shown,
-                );
-            }
-            None => {
-                let size = Canvas::fit_size(11.0, 7.0, col - 16.0, label);
-                c.text_centered(
-                    x + col / 2.0,
-                    y + h / 2.0 - size / 2.0,
-                    size,
-                    rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0),
-                    label,
-                );
-            }
-        }
-    };
-
-    // Online.
-    c.text(left, 62.0, 9.0, rgba(accent(), 1.0), "ONLINE");
-    let (state, colour) = match &menu.online {
-        Some(Ok(())) => (tr!("online", "オンライン", "онлайн"), 0x86E05A),
-        Some(Err(_)) => (tr!("no connection", "接続なし", "нет связи"), 0xFF4B4B),
-        None => (
-            tr!("connecting...", "接続中...", "подключение..."),
-            0x8a8aa0,
-        ),
-    };
-    let room = col - Canvas::text_width(9.0, "ONLINE") - 12.0;
-    c.text_right(
-        left + col,
-        62.0,
-        8.0,
-        rgba(colour, 1.0),
-        &Canvas::fit(8.0, room, &format!("{}  {state}", server_label(server))),
-    );
-    let mut y = 80.0;
-    if let Some(title) = menu.title() {
-        c.text(left, y, 8.0, rgba(0xc8c8d8, 1.0), title);
-        y += 14.0;
+    let in_lobbies = menu.account.is_some() && menu.form == Form::Main;
+    match (in_lobbies, &menu.joining) {
+        (true, Some(room)) => draw_join_prompt(c, menu, room, &rows, cursor),
+        (true, None) => draw_lobbies(c, menu, &rows, cursor),
+        (false, _) => draw_account(c, menu, &rows, cursor),
     }
-    // A form's steps under it, in two lines.
+
+    let room = w - 48.0;
+    let msg = if busy { "connecting..." } else { status };
+    let size = Canvas::fit_size(9.0, 6.5, room, msg);
+    c.text_centered(
+        w / 2.0,
+        440.0 + (9.0 - size) / 2.0,
+        size,
+        rgba(0xFFD34D, 1.0),
+        &Canvas::fit(size, room, msg),
+    );
+    let hints = match (in_lobbies, menu.joining.is_some()) {
+        (true, true) => "type the password   Enter join   Esc cancel",
+        (true, false) => {
+            "Up/Down select   Left/Right lobbies or new lobby   Enter join / change   F5 refresh   Tab or Esc back"
+        }
+        _ => "Up/Down select   type to edit   Enter   Tab or Esc back",
+    };
+    c.text_centered(
+        w / 2.0,
+        462.0,
+        8.0,
+        rgba(0x55556a, 1.0),
+        &Canvas::fit_hints(8.0, room, hints),
+    );
+}
+
+/// Logged out (or in one of the account's forms): its card, in the middle.
+fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
+    let w = c.width;
+    let col = (w - 48.0).min(420.0);
+    let x = (w - col) / 2.0;
+    let (top, bottom) = (52.0, 428.0);
+    card(c, x - 14.0, top, col + 28.0, bottom - top);
+    let heading = menu.title().unwrap_or(tr!(
+        "ONLINE ACCOUNT",
+        "オンラインアカウント",
+        "ОНЛАЙН-АККАУНТ"
+    ));
+    c.text(x, top + 12.0, 9.0, rgba(accent(), 1.0), heading);
+    let mut y = top + 32.0;
     let steps = |c: &mut Canvas, y: f32| {
         for (k, line) in menu.steps().iter().enumerate() {
             let size = Canvas::fit_size(7.0, 6.0, col, line);
             c.text_centered(
-                left + col / 2.0,
+                x + col / 2.0,
                 y + 4.0 + 14.0 * k as f32,
                 size,
                 rgba(0x8a8aa0, 1.0),
@@ -685,6 +779,166 @@ pub fn draw_menu(
             );
         }
     };
+    for (i, r) in rows.iter().enumerate() {
+        let sel = i == cursor;
+        let label = menu.field_label(*r).unwrap_or("");
+        let field = |value: &str, hint: &'static str| -> (String, bool) {
+            if value.is_empty() {
+                (hint.to_string(), true)
+            } else {
+                (value.to_string(), false)
+            }
+        };
+        match *r {
+            Row::User => {
+                let hint = if menu.form == Form::Register {
+                    online::NAME_RULES
+                } else {
+                    ""
+                };
+                let (v, ph) = field(&menu.user, hint);
+                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
+                y += 38.0;
+            }
+            Row::Password => {
+                let stars = "*".repeat(menu.password.chars().count());
+                let hint = if menu.form == Form::Main {
+                    ""
+                } else {
+                    tr!("6 characters or more", "6文字以上", "от 6 символов")
+                };
+                let (v, ph) = field(&stars, hint);
+                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
+                y += 38.0;
+            }
+            Row::Email => {
+                let hint = if menu.form == Form::Register {
+                    tr!("the code comes here", "コードの送り先", "сюда придёт код")
+                } else {
+                    tr!("your email", "あなたのメール", "твоя почта")
+                };
+                let (v, ph) = field(&menu.email, hint);
+                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
+                y += 38.0;
+            }
+            Row::Code => {
+                let (v, ph) = field(&menu.code, tr!("6 digits", "6桁", "6 цифр"));
+                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
+                y += 38.0;
+            }
+            Row::LogIn => {
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    x,
+                    y,
+                    col,
+                    30.0,
+                    tr!("LOG IN", "ログイン", "ВОЙТИ"),
+                    RowLook::Action,
+                );
+                y += 38.0;
+            }
+            // On the login form, the ways to its other forms, side by side.
+            Row::Register if menu.form == Form::Main => {
+                let half = (col - 8.0) / 2.0;
+                half_row(
+                    c,
+                    sel,
+                    i,
+                    x,
+                    y,
+                    half,
+                    tr!("CREATE ACCOUNT", "アカウント作成", "РЕГИСТРАЦИЯ"),
+                );
+                half_row(
+                    c,
+                    i + 1 == cursor,
+                    i + 1,
+                    x + half + 8.0,
+                    y,
+                    half,
+                    tr!("FORGOT PASSWORD?", "パスワードを忘れた?", "ЗАБЫЛ ПАРОЛЬ?"),
+                );
+                y += 34.0;
+                steps(c, y);
+                y += 34.0;
+            }
+            Row::Forgot if menu.form == Form::Main => {}
+            Row::Register => {
+                let label = if menu.code_for == Some(CodeFor::Register) {
+                    tr!("CREATE ACCOUNT", "アカウント作成", "СОЗДАТЬ АККАУНТ")
+                } else {
+                    tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД")
+                };
+                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Action);
+                y += 38.0;
+            }
+            Row::Forgot => {
+                let label = if menu.code_for == Some(CodeFor::Reset) {
+                    tr!("SET PASSWORD", "設定", "СОХРАНИТЬ")
+                } else {
+                    tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД")
+                };
+                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Action);
+                y += 38.0;
+            }
+            Row::LinkEmail => {
+                let label = if menu.code_for == Some(CodeFor::Link) {
+                    tr!("LINK", "登録", "ПРИВЯЗАТЬ")
+                } else {
+                    tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД")
+                };
+                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Action);
+                y += 38.0;
+            }
+            Row::Back => {
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    x,
+                    y,
+                    col,
+                    24.0,
+                    tr!("BACK", "戻る", "НАЗАД"),
+                    RowLook::Action,
+                );
+                y += 32.0;
+                steps(c, y);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Logged in: the lobbies (left), the account and a new lobby (right).
+fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
+    let w = c.width;
+    let (top, bottom) = (52.0, 428.0);
+    let lx = 24.0;
+    let lw = ((w - 64.0) * 0.6).max(280.0);
+    let rx = lx + lw + 16.0;
+    let rw = w - 24.0 - rx;
+
+    // The lobbies.
+    card(c, lx, top, lw, bottom - top);
+    c.text(
+        lx + 14.0,
+        top + 12.0,
+        9.0,
+        rgba(accent(), 1.0),
+        tr!("LOBBIES", "ロビー", "ЛОББИ"),
+    );
+    let count = menu.rooms.len();
+    c.text_right(
+        lx + lw - 14.0,
+        top + 13.0,
+        7.0,
+        rgba(0x6f6f86, 1.0),
+        &tr!("{count} open   F5 refresh", "{count}件   F5 更新", "открыто: {count}   F5 обновить";),
+    );
     let lobby_rows: Vec<(usize, usize)> = rows
         .iter()
         .enumerate()
@@ -696,324 +950,152 @@ pub fn draw_menu(
             }
         })
         .collect();
-    // The visible window of lobbies follows the cursor.
+    const ROW_H: f32 = 40.0;
+    let list_top = top + 32.0;
+    let shown = ((bottom - list_top - 6.0) / ROW_H).floor().max(1.0) as usize;
     let first = lobby_rows
         .iter()
         .position(|(i, _)| *i == cursor)
-        .map(|p| p.saturating_sub(LOBBY_ROWS - 1))
+        .map(|p| p.saturating_sub(shown - 1))
         .unwrap_or(0);
+    if lobby_rows.is_empty() {
+        let msg = match &menu.online {
+            Some(Err(e)) => e.clone(),
+            _ => tr!(
+                "Nobody is hosting right now: open a lobby on the right.",
+                "今はロビーがありません: 右で作ろう。",
+                "Сейчас никто не хостит: создай лобби справа."
+            )
+            .to_string(),
+        };
+        c.text_centered(
+            lx + lw / 2.0,
+            list_top + 60.0,
+            8.0,
+            rgba(0x6f6f86, 1.0),
+            &Canvas::fit(8.0, lw - 28.0, &msg),
+        );
+    }
+    for (n, &(i, k)) in lobby_rows.iter().enumerate().skip(first).take(shown) {
+        let Some(r) = menu.rooms.get(k) else { continue };
+        let (x, y, rw_) = (lx + 8.0, list_top + (n - first) as f32 * ROW_H, lw - 16.0);
+        let sel = i == cursor;
+        let bg = if sel {
+            0x34344a
+        } else if c.hovered(x, y, rw_, ROW_H - 4.0) {
+            0x262634
+        } else {
+            0x1d1d27
+        };
+        c.round_rect(
+            [x, y],
+            [rw_, ROW_H - 4.0],
+            7.0,
+            rgba(bg, 1.0),
+            rgba(0x2a2a38, 1.0),
+            1.0,
+        );
+        if sel {
+            crate::style::selector(c, "multiplayer", [x - 3.0, y - 3.0, rw_ + 6.0, ROW_H + 2.0]);
+        }
+        c.hit(x, y, rw_, ROW_H - 4.0, Hit::MpRow(i));
+        // Right: how full it is, and whether a match is on.
+        let full = r.players >= r.slots;
+        let players = format!("{}/{}", r.players, r.slots);
+        c.text_right(
+            x + rw_ - 12.0,
+            y + 7.0,
+            9.0,
+            rgba(if full { 0xFF4B4B } else { 0xffffff }, 1.0),
+            &players,
+        );
+        let (state, colour) = if r.in_match {
+            (tr!("in a match", "対戦中", "идёт матч"), 0x438EAD)
+        } else {
+            (tr!("open", "待機中", "ждут"), 0x86E05A)
+        };
+        c.text_right(x + rw_ - 12.0, y + 21.0, 7.0, rgba(colour, 1.0), state);
+        let right = Canvas::text_width(9.0, &players).max(Canvas::text_width(7.0, state)) + 24.0;
+        // Left: the padlock, the title, then the host, the mode and the map.
+        let mut tx = x + 12.0;
+        if r.locked {
+            padlock(c, tx, y + 6.0, 10.0, 0xFFD34D);
+            tx += 14.0;
+        }
+        c.text(
+            tx,
+            y + 7.0,
+            9.0,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(9.0, x + rw_ - right - tx, &r.title),
+        );
+        let mut info = format!("{} {}", tr!("host", "ホスト", "хост"), r.host);
+        if r.mapguessr {
+            info.push_str("   MAPGUESSR");
+        }
+        if r.defense {
+            info.push_str(tr!(
+                "   DEFENSE co-op",
+                "   ディフェンス協力",
+                "   ОБОРОНА кооп"
+            ));
+        }
+        if let Some(m) = &r.map {
+            info.push_str("   ");
+            info.push_str(m);
+        }
+        c.text(
+            x + 12.0,
+            y + 22.0,
+            6.5,
+            rgba(0x8a8aa0, 1.0),
+            &Canvas::fit(6.5, rw_ - right - 12.0, &info),
+        );
+    }
+    if lobby_rows.len() > shown {
+        let more = lobby_rows.len() - shown;
+        c.text_centered(
+            lx + lw / 2.0,
+            bottom - 12.0,
+            6.5,
+            rgba(0x6f6f86, 1.0),
+            &tr!("{more} more (Up/Down)", "あと{more}件 (上下)", "ещё {more} (вверх/вниз)";),
+        );
+    }
+
+    // The account.
+    let has_link = rows.contains(&Row::LinkEmail);
+    let account_h = if has_link { 108.0 } else { 80.0 };
+    card(c, rx, top, rw, account_h);
+    c.text(
+        rx + 14.0,
+        top + 12.0,
+        9.0,
+        rgba(accent(), 1.0),
+        tr!("ACCOUNT", "アカウント", "АККАУНТ"),
+    );
+    let who = menu.account.as_deref().unwrap_or("");
+    c.text(
+        rx + 14.0,
+        top + 27.0,
+        8.0,
+        rgba(0xc8c8d8, 1.0),
+        &Canvas::fit(
+            8.0,
+            rw - 28.0,
+            &tr!("logged in as {who}", "{who} でログイン中", "ты вошёл как {who}";),
+        ),
+    );
+    let half = (rw - 28.0 - 8.0) / 2.0;
+    let mut y = top + 44.0;
     for (i, r) in rows.iter().enumerate() {
-        let label = menu.field_label(*r).unwrap_or("");
         match *r {
-            Row::User => {
-                let hint = if menu.form == Form::Register {
-                    online::NAME_RULES
-                } else {
-                    ""
-                };
-                row(
-                    c,
-                    i,
-                    left,
-                    y,
-                    30.0,
-                    label,
-                    Some(if menu.user.is_empty() {
-                        (hint, true)
-                    } else {
-                        (&menu.user, false)
-                    }),
-                );
-                y += 38.0;
-            }
-            Row::Password => {
-                let stars = "*".repeat(menu.password.chars().count());
-                let hint = if menu.form == Form::Main {
-                    ""
-                } else {
-                    tr!("6 characters or more", "6文字以上", "от 6 символов")
-                };
-                row(
-                    c,
-                    i,
-                    left,
-                    y,
-                    30.0,
-                    label,
-                    Some(if stars.is_empty() {
-                        (hint, true)
-                    } else {
-                        (&stars, false)
-                    }),
-                );
-                y += 38.0;
-            }
-            Row::Email => {
-                let hint = if menu.form == Form::Register {
-                    tr!("the code comes here", "コードの送り先", "сюда придёт код")
-                } else {
-                    tr!("your email", "あなたのメール", "твоя почта")
-                };
-                row(
-                    c,
-                    i,
-                    left,
-                    y,
-                    30.0,
-                    label,
-                    Some(if menu.email.is_empty() {
-                        (hint, true)
-                    } else {
-                        (&menu.email, false)
-                    }),
-                );
-                y += 38.0;
-            }
-            Row::Code => {
-                row(
-                    c,
-                    i,
-                    left,
-                    y,
-                    30.0,
-                    label,
-                    Some(if menu.code.is_empty() {
-                        (tr!("6 digits", "6桁", "6 цифр"), true)
-                    } else {
-                        (&menu.code, false)
-                    }),
-                );
-                y += 38.0;
-            }
-            Row::LogIn => {
-                row(
-                    c,
-                    i,
-                    left,
-                    y,
-                    30.0,
-                    tr!("LOG IN", "ログイン", "ВОЙТИ"),
-                    None,
-                );
-                y += 38.0;
-            }
-            // On the login form, the ways to its other forms, side by side.
-            Row::Register if menu.form == Form::Main => {
-                let half = (col - 8.0) / 2.0;
-                half_row(
-                    c,
-                    i == cursor,
-                    i,
-                    left,
-                    y,
-                    half,
-                    tr!("CREATE ACCOUNT", "アカウント作成", "РЕГИСТРАЦИЯ"),
-                );
-                half_row(
-                    c,
-                    i + 1 == cursor,
-                    i + 1,
-                    left + half + 8.0,
-                    y,
-                    half,
-                    tr!("FORGOT PASSWORD?", "パスワードを忘れた?", "ЗАБЫЛ ПАРОЛЬ?"),
-                );
-                y += 30.0;
-                steps(c, y);
-                y += 30.0;
-            }
-            Row::Forgot if menu.form == Form::Main => {}
-            Row::Register => {
-                let label = if menu.code_for == Some(CodeFor::Register) {
-                    tr!("CREATE ACCOUNT", "アカウント作成", "СОЗДАТЬ АККАУНТ")
-                } else {
-                    tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД")
-                };
-                row(c, i, left, y, 30.0, label, None);
-                y += 38.0;
-            }
-            Row::Forgot => {
-                let label = if menu.code_for == Some(CodeFor::Reset) {
-                    tr!("SET PASSWORD", "設定", "СОХРАНИТЬ")
-                } else {
-                    tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД")
-                };
-                row(c, i, left, y, 30.0, label, None);
-                y += 38.0;
-            }
-            Row::LinkEmail if menu.form == Form::Link => {
-                let label = if menu.code_for == Some(CodeFor::Link) {
-                    tr!("LINK", "登録", "ПРИВЯЗАТЬ")
-                } else {
-                    tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД")
-                };
-                row(c, i, left, y, 30.0, label, None);
-                y += 38.0;
-            }
-            Row::Back => {
-                row(c, i, left, y, 24.0, tr!("BACK", "戻る", "НАЗАД"), None);
-                y += 32.0;
-                steps(c, y);
-            }
-            Row::HostOnline => {
-                let who = menu.account.as_deref().unwrap_or("");
-                c.text(
-                    left,
-                    y - 2.0,
-                    8.0,
-                    rgba(0x9a9ab0, 1.0),
-                    &Canvas::fit(
-                        8.0,
-                        col,
-                        &tr!("logged in as {who}", "{who} でログイン中", "ты вошёл как {who}";),
-                    ),
-                );
-                y += 12.0;
-                if menu.has_email == Some(false) {
-                    let line = tr!(
-                        "no email yet: link one to reset a lost password",
-                        "メール未登録: 登録するとパスワードを再設定できます",
-                        "почта не привязана: без неё забытый пароль не вернуть"
-                    );
-                    let size = Canvas::fit_size(7.0, 6.0, col, line);
-                    c.text(
-                        left,
-                        y - 2.0,
-                        size,
-                        rgba(0xFFD34D, 1.0),
-                        &Canvas::fit(size, col, line),
-                    );
-                    y += 11.0;
-                }
-                row(c, i, left, y, 30.0, "HOST AN ONLINE LOBBY", None);
-                y += 36.0;
-            }
-            Row::HostGuessr => {
-                row(c, i, left, y, 30.0, "HOST A MAPGUESSR LOBBY", None);
-                y += 42.0;
-                c.text(
-                    left,
-                    y,
-                    8.0,
-                    rgba(accent(), 1.0),
-                    &format!("LOBBIES ({})", menu.rooms.len()),
-                );
-                y += 14.0;
-                if menu.rooms.is_empty() {
-                    let msg = match &menu.online {
-                        Some(Err(e)) => format!(
-                            "{e}. {}",
-                            tr!(
-                                "Direct play on the right still works",
-                                "右のダイレクト対戦は使えます",
-                                "прямая игра справа работает"
-                            )
-                        ),
-                        _ => "nobody is hosting right now".into(),
-                    };
-                    c.text(
-                        left + 4.0,
-                        y + 4.0,
-                        7.0,
-                        rgba(0x6f6f86, 1.0),
-                        &Canvas::fit(7.0, col - 8.0, &msg),
-                    );
-                    y += 22.0;
-                }
-            }
-            Row::Lobby(k) => {
-                let shown = lobby_rows
-                    .iter()
-                    .position(|(j, _)| *j == i)
-                    .is_some_and(|p| p >= first && p < first + LOBBY_ROWS);
-                if !shown {
-                    continue;
-                }
-                let Some(r) = menu.rooms.get(k) else { continue };
-                let sel = i == cursor;
-                let bg = if sel {
-                    0x34344a
-                } else if c.hovered(left, y, col, 32.0) {
-                    0x262634
-                } else {
-                    0x1d1d27
-                };
-                c.round_rect(
-                    [left, y],
-                    [col, 32.0],
-                    7.0,
-                    rgba(bg, 1.0),
-                    rgba(0x2a2a38, 1.0),
-                    1.0,
-                );
-                if sel {
-                    crate::style::selector(
-                        c,
-                        "multiplayer",
-                        [left - 3.0, y - 3.0, col + 6.0, 38.0],
-                    );
-                }
-                c.hit(left, y, col, 32.0, Hit::MpRow(i));
-                let state = if r.in_match {
-                    "in a match"
-                } else {
-                    "in the lobby"
-                };
-                c.text(
-                    left + 12.0,
-                    y + 6.0,
-                    9.0,
-                    rgba(0xffffff, 1.0),
-                    &Canvas::fit(9.0, col - 32.0 - Canvas::text_width(8.0, state), &r.title),
-                );
-                let players = format!(
-                    "{} player{}",
-                    r.players,
-                    if r.players == 1 { "" } else { "s" }
-                );
-                c.text_right(
-                    left + col - 12.0,
-                    y + 6.0,
-                    8.0,
-                    rgba(if r.in_match { 0x438EAD } else { 0x86E05A }, 1.0),
-                    state,
-                );
-                let mut info = format!("host {}   {players}", r.host);
-                if r.mapguessr {
-                    info = format!("MAPGUESSR   {info}");
-                }
-                if let Some(m) = &r.map {
-                    info.push_str("   ");
-                    info.push_str(m);
-                }
-                c.text(
-                    left + 12.0,
-                    y + 20.0,
-                    6.5,
-                    rgba(0x8a8aa0, 1.0),
-                    &Canvas::fit(6.5, col - 24.0, &info),
-                );
-                y += 36.0;
-            }
             Row::LogOut => {
-                if lobby_rows.len() > LOBBY_ROWS {
-                    c.text_centered(
-                        left + col / 2.0,
-                        y,
-                        7.0,
-                        rgba(0x6f6f86, 1.0),
-                        &format!("{} more (Up/Down)", lobby_rows.len() - LOBBY_ROWS),
-                    );
-                    y += 12.0;
-                }
-                y += 4.0;
-                // Beside it, changing the password; under them, linking an email.
-                let half = (col - 8.0) / 2.0;
                 half_row(
                     c,
                     i == cursor,
                     i,
-                    left,
+                    rx + 14.0,
                     y,
                     half,
                     tr!("LOG OUT", "ログアウト", "ВЫЙТИ"),
@@ -1022,110 +1104,220 @@ pub fn draw_menu(
                     c,
                     i + 1 == cursor,
                     i + 1,
-                    left + half + 8.0,
+                    rx + 22.0 + half,
                     y,
                     half,
                     tr!("CHANGE PASSWORD", "パスワード変更", "СМЕНИТЬ ПАРОЛЬ"),
                 );
                 y += 30.0;
             }
-            Row::LinkEmail => row(
-                c,
-                i,
-                left,
-                y,
-                24.0,
-                tr!("LINK AN EMAIL", "メールを登録", "ПРИВЯЗАТЬ ПОЧТУ"),
-                None,
-            ),
+            Row::LinkEmail => {
+                half_row(
+                    c,
+                    i == cursor,
+                    i,
+                    rx + 14.0,
+                    y,
+                    rw - 28.0,
+                    tr!("LINK AN EMAIL", "メールを登録", "ПРИВЯЗАТЬ ПОЧТУ"),
+                );
+            }
             _ => {}
         }
     }
 
-    // Direct play.
-    c.text(right, 62.0, 9.0, rgba(accent(), 1.0), "DIRECT (P2P)");
-    let room = col - Canvas::text_width(9.0, "DIRECT (P2P)") - 12.0;
-    let note = "no account or server needed";
-    let size = Canvas::fit_size(8.0, 6.0, room, note);
-    c.text_right(
-        right + col,
-        62.0 + (8.0 - size) / 2.0,
+    // A new lobby.
+    let ny = top + account_h + 12.0;
+    card(c, rx, ny, rw, bottom - ny);
+    c.text(
+        rx + 14.0,
+        ny + 12.0,
+        9.0,
+        rgba(accent(), 1.0),
+        tr!("NEW LOBBY", "ロビーを作る", "НОВОЕ ЛОББИ"),
+    );
+    let (fx, fw) = (rx + 14.0, rw - 28.0);
+    let mut y = ny + 32.0;
+    for (i, r) in rows.iter().enumerate() {
+        let sel = i == cursor;
+        match *r {
+            Row::NewMode => {
+                let mode = if menu.new_guessr {
+                    "Mapguessr"
+                } else {
+                    tr!("Match", "対戦", "Матч")
+                };
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    fx,
+                    y,
+                    fw,
+                    28.0,
+                    tr!("Mode", "モード", "Режим"),
+                    RowLook::Stepper(mode),
+                );
+                y += 34.0;
+            }
+            Row::NewPassword => {
+                let stars = "*".repeat(menu.new_password.chars().count());
+                let (v, ph) = if stars.is_empty() {
+                    (
+                        tr!("none: open to all", "なし: 誰でも", "нет: для всех").to_string(),
+                        true,
+                    )
+                } else {
+                    (stars, false)
+                };
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    fx,
+                    y,
+                    fw,
+                    28.0,
+                    tr!("Password", "パスワード", "Пароль"),
+                    RowLook::Field(&v, ph),
+                );
+                y += 34.0;
+            }
+            Row::NewSlots => {
+                let slots = menu.slots().to_string();
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    fx,
+                    y,
+                    fw,
+                    28.0,
+                    tr!("Players", "人数", "Игроков"),
+                    RowLook::Stepper(&slots),
+                );
+                y += 38.0;
+            }
+            Row::HostOnline => {
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    fx,
+                    y,
+                    fw,
+                    32.0,
+                    tr!("OPEN LOBBY", "ロビーを開く", "ОТКРЫТЬ ЛОББИ"),
+                    RowLook::Action,
+                );
+                y += 40.0;
+            }
+            _ => {}
+        }
+    }
+    let note = if menu.new_guessr {
+        tr!(
+            "Mapguessr: guess the song from a few seconds of it.",
+            "マップ当て: 数秒で曲を当てよう。",
+            "Угадайка: узнай песню по паре секунд."
+        )
+    } else {
+        tr!(
+            "The host picks the maps; the rest can download them.",
+            "曲はホストが選び、他の人はダウンロードできます。",
+            "Карты выбирает хост, остальные могут их скачать."
+        )
+    };
+    let size = Canvas::fit_size(7.0, 6.0, fw, note);
+    c.text_centered(
+        rx + rw / 2.0,
+        y,
         size,
         rgba(0x6f6f86, 1.0),
-        &Canvas::fit(size, room, note),
+        &Canvas::fit(size, fw, note),
     );
-    let mut y = 80.0;
+}
+
+/// Joining a locked lobby: its password, over the darkened menu.
+fn draw_join_prompt(
+    c: &mut Canvas,
+    menu: &Menu,
+    room: &online::RoomInfo,
+    rows: &[Row],
+    cursor: usize,
+) {
+    let w = c.width;
+    let cw = (w - 48.0).min(380.0);
+    let (x, y) = ((w - cw) / 2.0, 120.0);
+    card(c, x, y, cw, 176.0);
+    padlock(c, x + 16.0, y + 13.0, 11.0, 0xFFD34D);
+    c.text(
+        x + 34.0,
+        y + 14.0,
+        9.0,
+        rgba(accent(), 1.0),
+        &Canvas::fit(9.0, cw - 50.0, &room.title),
+    );
+    let info = format!(
+        "{} {}   {}/{}",
+        tr!("host", "ホスト", "хост"),
+        room.host,
+        room.players,
+        room.slots
+    );
+    c.text(
+        x + 16.0,
+        y + 32.0,
+        7.0,
+        rgba(0x8a8aa0, 1.0),
+        &Canvas::fit(7.0, cw - 32.0, &info),
+    );
+    c.text(
+        x + 16.0,
+        y + 48.0,
+        8.0,
+        rgba(0xc8c8d8, 1.0),
+        tr!(
+            "This lobby needs a password.",
+            "このロビーはパスワードが必要です。",
+            "В это лобби нужен пароль."
+        ),
+    );
+    let (fx, fw) = (x + 16.0, cw - 32.0);
+    let half = (fw - 8.0) / 2.0;
     for (i, r) in rows.iter().enumerate() {
+        let sel = i == cursor;
         match *r {
-            Row::Name => row(c, i, right, y, 30.0, "Your name", Some((name, false))),
-            Row::Port => row(
-                c,
-                i,
-                right,
-                y,
-                30.0,
-                "Host on port",
-                Some((&port.to_string(), false)),
-            ),
-            Row::HostDirect => row(c, i, right, y, 30.0, "HOST A GAME", None),
-            Row::Address => {
-                y += 10.0;
-                row(
+            Row::JoinPassword => {
+                let stars = "*".repeat(menu.join_password.chars().count());
+                let ph = stars.is_empty();
+                menu_row(
                     c,
+                    sel,
                     i,
-                    right,
-                    y,
+                    fx,
+                    y + 66.0,
+                    fw,
                     30.0,
-                    "Join address",
-                    Some(if address.is_empty() {
-                        ("ip or ip:port", true)
-                    } else {
-                        (address, false)
-                    }),
+                    tr!("Password", "パスワード", "Пароль"),
+                    RowLook::Field(&stars, ph),
                 );
             }
-            Row::JoinDirect => row(c, i, right, y, 30.0, "JOIN GAME", None),
-            _ => continue,
+            Row::JoinLocked => {
+                half_row(c, sel, i, fx, y + 108.0, half, tr!("JOIN", "参加", "ВОЙТИ"))
+            }
+            Row::CancelJoin => half_row(
+                c,
+                sel,
+                i,
+                fx + half + 8.0,
+                y + 108.0,
+                half,
+                tr!("CANCEL", "キャンセル", "ОТМЕНА"),
+            ),
+            _ => {}
         }
-        y += 38.0;
     }
-    for (k, line) in [
-        "Hosting: friends join with your public IP and",
-        "this port (it must be reachable).",
-    ]
-    .iter()
-    .enumerate()
-    {
-        let size = Canvas::fit_size(7.0, 6.0, col, line);
-        c.text_centered(
-            right + col / 2.0,
-            y + 4.0 + 12.0 * k as f32,
-            size,
-            rgba(0x6f6f86, 1.0),
-            &Canvas::fit(size, col, line),
-        );
-    }
-
-    let msg = if busy { "connecting..." } else { status };
-    let room = w - 48.0;
-    let size = Canvas::fit_size(9.0, 6.5, room, msg);
-    c.text_centered(
-        w / 2.0,
-        432.0 + (9.0 - size) / 2.0,
-        size,
-        rgba(0xFFD34D, 1.0),
-        &Canvas::fit(size, room, msg),
-    );
-    let note = "Everyone needs the same map in their Songs folder (or gets it from the host).";
-    let size = Canvas::fit_size(8.0, 6.5, room, note);
-    c.text_centered(
-        w / 2.0,
-        450.0,
-        size,
-        rgba(0x8a8aa0, 1.0),
-        &Canvas::fit(size, room, note),
-    );
-    c.text_centered(w / 2.0, 464.0, 8.0, rgba(0x55556a, 1.0), &Canvas::fit_hints(8.0, room, "Up/Down select   Left/Right column   type to edit   Enter   F5 refresh   Tab or Esc back"));
 }
 
 /// An action row narrower than a column (two side by side), 24 tall.
@@ -1155,7 +1347,7 @@ fn half_row(c: &mut Canvas, sel: bool, i: usize, x: f32, y: f32, w: f32, label: 
         y + 12.0 - size / 2.0,
         size,
         rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0),
-        label,
+        &Canvas::fit(size, w - 12.0, label),
     );
 }
 
@@ -1175,161 +1367,396 @@ fn status_text(p: &PlayerInfo, map_chosen: bool) -> (&'static str, u32) {
     }
 }
 
+/// The lobby. Left, the map the host picked (song select's look: title, artist, mapper, the
+/// difficulty with its stars, length, BPM, OD and HP at the match rate) and the players (two
+/// columns, up to 16; the host can hand the role over or take a player out). Right, the room's
+/// settings (password, players, rate, Defense and its rules: the host's to change, a click or
+/// a key each) and the chat. Under them, what can be done.
 /// `download`: progress of fetching the lobby map, when it's being downloaded.
 pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<String>) {
     let w = c.width;
     let right = format!("{}   ping {:.0} ms", s.label, s.client.rtt_ms);
     crate::settings::tab_bar(c, 2, &right);
-    let col = (w - 48.0).min(640.0);
-    let x0 = (w - col) / 2.0;
+    let (top, bottom) = (52.0, 418.0);
+    let lx = 24.0;
+    let lw = ((w - 64.0) * 0.6).max(300.0);
+    let rx = lx + lw + 16.0;
+    let rw = w - 24.0 - rx;
+    let host = s.is_host() && !s.in_match;
 
+    // The map.
+    let map_h = 102.0;
     let can_preview = s.map.is_some() && have_map;
-    let hover = can_preview && c.hovered(x0, 62.0, col, 46.0);
+    let hover = can_preview && c.hovered(lx, top, lw, map_h);
     c.round_rect(
-        [x0, 62.0],
-        [col, 46.0],
+        [lx, top],
+        [lw, map_h],
         8.0,
-        rgba(if hover { 0x262634 } else { 0x1d1d27 }, 1.0),
-        rgba(0x3a3a4e, 1.0),
+        rgba(if hover { 0x1c1c27 } else { 0x15151d }, 0.86),
+        rgba(0x2a2a38, 1.0),
         1.0,
     );
     if can_preview {
-        c.hit(x0, 62.0, col, 46.0, Hit::Key(KeyCode::KeyP));
-        c.text_right(
-            x0 + col - 14.0,
-            70.0,
-            7.0,
-            rgba(0x6f6f86, 1.0),
-            "click to preview",
-        );
+        c.hit(lx, top, lw, map_h, Hit::Key(KeyCode::KeyP));
     }
-    c.text(x0 + 14.0, 70.0, 8.0, rgba(accent(), 1.0), "MAP");
-    let note_room = col - 38.0 - Canvas::text_width(8.0, "MAP");
+    let (ix, iw) = (lx + 14.0, lw - 28.0);
     match &s.map {
         Some(m) => {
+            let stats = m.stats.as_ref();
+            let stars = stats.and_then(|st| (st.stars >= 0.0).then_some(st.stars));
+            let pill = crate::stars::draw_pill(c, lx + lw - 14.0, top + 12.0, 9.0, stars);
             c.text(
-                x0 + 14.0,
-                86.0,
-                10.0,
+                ix,
+                top + 11.0,
+                11.0,
                 rgba(0xffffff, 1.0),
-                &Canvas::fit(10.0, col - 28.0, &m.label()),
+                &Canvas::fit(11.0, iw - pill - 10.0, &m.title),
             );
-            if let Some(d) = &download {
-                c.text_right(
-                    x0 + col - 14.0,
-                    70.0,
-                    8.0,
-                    rgba(0xFFD34D, 1.0),
-                    &Canvas::fit(8.0, note_room, d),
-                );
-            } else if !have_map {
-                c.text_right(
-                    x0 + col - 14.0,
-                    70.0,
-                    8.0,
-                    rgba(0xFF4B4B, 1.0),
-                    &Canvas::fit(
-                        8.0,
-                        note_room,
-                        "not in your Songs folder - D: get it from the host",
-                    ),
-                );
+            c.text(
+                ix,
+                top + 28.0,
+                8.0,
+                rgba(0xc8c8d8, 1.0),
+                &Canvas::fit(8.0, iw, &m.artist),
+            );
+            let mapper = stats.map_or(String::new(), |st| format!("   mapped by {}", st.creator));
+            c.text(
+                ix,
+                top + 42.0,
+                8.0,
+                rgba(accent(), 1.0),
+                &Canvas::fit(8.0, iw, &format!("[{}]{mapper}", m.version)),
+            );
+            // At the match rate.
+            let rate = m.rate.max(0.01) as f32;
+            let mut line = Vec::new();
+            if let Some(st) = stats {
+                if st.length_ms >= 0.0 {
+                    let secs = (st.length_ms / rate / 1000.0).round() as u32;
+                    line.push(format!("Length {}:{:02}", secs / 60, secs % 60));
+                }
+                if st.bpm > 0.0 {
+                    line.push(format!("BPM {:.0}", st.bpm * rate));
+                }
+                line.push(format!("OD {:.1}", st.od));
+                line.push(format!("HP {:.1}", st.hp));
             }
+            if (m.rate - 1.0).abs() > 1e-6 {
+                line.push(format!("{:.2}x", m.rate));
+            }
+            c.text(
+                ix,
+                top + 58.0,
+                8.0,
+                rgba(0xffffff, 1.0),
+                &Canvas::fit(8.0, iw, &line.join("    ")),
+            );
+            // Mods and where it starts.
+            let mut extra = Vec::new();
+            if !m.mods.is_empty() {
+                extra.push(format!("+{}", m.mods.concat()));
+            }
+            if let Some(t) = m.from {
+                let (min, sec) = ((t / 1000.0) as u64 / 60, (t / 1000.0) as u64 % 60);
+                extra.push(tr!("from {min}:{sec:02}", "{min}:{sec:02}から", "с {min}:{sec:02}";));
+            }
+            if m.defense.is_some() {
+                extra.push(tr!("DEFENSE co-op", "ディフェンス協力", "ОБОРОНА кооп").to_string());
+            }
+            c.text(
+                ix,
+                top + 73.0,
+                7.0,
+                rgba(0x9a9ab0, 1.0),
+                &Canvas::fit(7.0, iw, &extra.join("    ")),
+            );
+            // How it is for us: being fetched, missing, or there to preview.
+            let (note, colour) = match (&download, have_map) {
+                (Some(d), _) => (d.clone(), 0xFFD34D),
+                (None, false) => (
+                    tr!(
+                        "not in your Songs folder - D: from the host   M: the mirrors",
+                        "Songsにありません - D: ホストから   M: ミラーから",
+                        "нет в папке Songs - D: от хоста   M: с зеркал"
+                    )
+                    .to_string(),
+                    0xFF4B4B,
+                ),
+                (None, true) => (
+                    tr!(
+                        "click to preview (P)",
+                        "クリックでプレビュー (P)",
+                        "клик: превью (P)"
+                    )
+                    .to_string(),
+                    0x6f6f86,
+                ),
+            };
+            c.text(
+                ix,
+                top + 87.0,
+                7.0,
+                rgba(colour, 1.0),
+                &Canvas::fit(7.0, iw, &note),
+            );
         }
         None => {
             let t = if s.is_host() {
-                "Press M to pick a map"
+                tr!(
+                    "Press M to pick a map",
+                    "Mで曲を選ぶ",
+                    "Нажми M, чтобы выбрать карту"
+                )
             } else {
-                "Waiting for the host to pick a map"
+                tr!(
+                    "Waiting for the host to pick a map",
+                    "ホストの選曲待ち",
+                    "Ждём, пока хост выберет карту"
+                )
             };
-            c.text(x0 + 14.0, 86.0, 10.0, rgba(0x8a8aa0, 1.0), t);
+            c.text_centered(
+                lx + lw / 2.0,
+                top + map_h / 2.0 - 5.0,
+                10.0,
+                rgba(0x8a8aa0, 1.0),
+                t,
+            );
         }
     }
 
-    let my_id = s.client.id;
-    c.text(
-        x0,
-        122.0,
+    // The players, in two columns.
+    let py = top + map_h + 8.0;
+    let ph = bottom - py;
+    c.round_rect(
+        [lx, py],
+        [lw, ph],
         8.0,
-        rgba(accent(), 1.0),
-        &format!("PLAYERS ({})", s.players.len()),
+        rgba(0x15151d, 0.86),
+        rgba(0x2a2a38, 1.0),
+        1.0,
     );
-    for (i, p) in s.players.iter().enumerate().take(10) {
-        let y = 136.0 + i as f32 * 26.0;
+    let (count, slots) = (s.players.len(), s.slots);
+    c.text(
+        ix,
+        py + 10.0,
+        9.0,
+        rgba(accent(), 1.0),
+        &tr!("PLAYERS  {count}/{slots}", "プレイヤー  {count}/{slots}", "ИГРОКИ  {count}/{slots}";),
+    );
+    let my_id = s.client.id;
+    let cell_w = (iw - 8.0) / 2.0;
+    let cell_h = 26.0;
+    let per_col = (((ph - 32.0) / (cell_h + 4.0)).floor() as usize).max(1);
+    for (i, p) in s.players.iter().enumerate().take(per_col * 2) {
+        let (x, y) = (
+            ix + (i / per_col) as f32 * (cell_w + 8.0),
+            py + 28.0 + (i % per_col) as f32 * (cell_h + 4.0),
+        );
         let me = Some(p.id) == my_id;
         c.round_rect(
-            [x0, y],
-            [col, 22.0],
+            [x, y],
+            [cell_w, cell_h],
             6.0,
             rgba(if me { 0x2b2b3d } else { 0x1d1d27 }, 1.0),
             rgba(0x2a2a38, 1.0),
             1.0,
         );
-        // The name gets what the status (and the host's "make host" button) leave.
-        let mut name_end = x0 + col - 110.0;
-        if s.is_host() && !me && !s.in_match {
-            // Hand the host role over.
-            let label = "make host";
-            let bw = Canvas::text_width(7.0, label) + 14.0;
-            name_end -= bw;
-            c.button(
-                name_end,
-                y + 4.0,
-                bw,
-                14.0,
-                label,
-                7.0,
-                Hit::GiveHost(p.id),
-                false,
-            );
+        // Right: the host's buttons (hand the role over, take them out), or the status.
+        let mut name_end = x + cell_w - 8.0;
+        if host && !me {
+            for (label, hit) in [("kick", Hit::Kick(p.id)), ("host", Hit::GiveHost(p.id))] {
+                let bw = Canvas::text_width(6.5, label) + 10.0;
+                name_end -= bw;
+                c.button(name_end, y + 6.0, bw, 14.0, label, 6.5, hit, false);
+                name_end -= 4.0;
+            }
+        } else {
+            let (st, colour) = status_text(p, s.map.is_some());
+            c.text_right(name_end, y + 5.0, 7.0, rgba(colour, 1.0), st);
+            name_end -= Canvas::text_width(7.0, st) + 8.0;
         }
         let mut name = p.name.clone();
         if p.host {
-            name.push_str("  (host)");
-        }
-        if me {
-            name.push_str("  (you)");
-        }
-        if !p.mods.is_empty() {
-            name.push_str(&format!("  +{}", p.mods.concat()));
+            name.push_str(tr!("  (host)", "  (ホスト)", "  (хост)"));
         }
         c.text(
-            x0 + 12.0,
-            y + 7.0,
-            9.0,
+            x + 8.0,
+            y + 5.0,
+            8.0,
             rgba(0xffffff, 1.0),
-            &Canvas::fit(9.0, name_end - 8.0 - (x0 + 12.0), &name),
+            &Canvas::fit(8.0, name_end - x - 12.0, &name),
         );
-        let (st, color) = status_text(p, s.map.is_some());
-        c.text_right(x0 + col - 12.0, y + 7.0, 9.0, rgba(color, 1.0), st);
+        let mods = if p.mods.is_empty() {
+            String::new()
+        } else {
+            format!("+{}", p.mods.concat())
+        };
+        let under = if host && !me {
+            let (st, _) = status_text(p, s.map.is_some());
+            format!("{st}   {mods}")
+        } else {
+            mods
+        };
+        c.text(
+            x + 8.0,
+            y + 16.0,
+            6.0,
+            rgba(0x8a8aa0, 1.0),
+            &Canvas::fit(6.0, name_end - x - 12.0, &under),
+        );
     }
 
-    // The latest lobby chat (F9 to write).
-    if !s.chat.is_empty() && s.players.len() <= 8 {
-        let top = 136.0 + s.players.len().min(10) as f32 * 26.0 + 10.0;
-        let lines = ((428.0 - top) / 11.0).max(0.0) as usize;
-        c.text(
-            x0,
-            top,
-            7.0,
-            rgba(0x4fb4ff, 1.0),
-            "LOBBY CHAT  (F9 to write)",
+    // The room's settings.
+    let defense = s.map.as_ref().and_then(|m| m.defense);
+    let mut settings: Vec<(String, String, Option<KeyCode>)> = Vec::new();
+    let password = match &s.edit_password {
+        Some(typed) => format!("{typed}_"),
+        None if s.locked => tr!("set", "あり", "есть").to_string(),
+        None => tr!("none: open to all", "なし: 誰でも", "нет: для всех").to_string(),
+    };
+    settings.push((
+        tr!("Password", "パスワード", "Пароль").into(),
+        password,
+        Some(KeyCode::KeyK),
+    ));
+    settings.push((
+        tr!("Players", "人数", "Игроков").into(),
+        s.slots.to_string(),
+        Some(KeyCode::KeyL),
+    ));
+    if let Some(m) = &s.map {
+        settings.push((
+            tr!("Match rate", "速度", "Скорость").into(),
+            format!("{:.2}x", m.rate),
+            Some(KeyCode::BracketRight),
+        ));
+    }
+    let mode = if defense.is_some() {
+        tr!("Defense co-op", "ディフェンス協力", "Оборона (кооп)")
+    } else {
+        tr!("Match", "対戦", "Матч")
+    };
+    settings.push((
+        tr!("Mode", "モード", "Режим").into(),
+        mode.into(),
+        Some(KeyCode::KeyC),
+    ));
+    if let Some(d) = defense {
+        let keys = [
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit5,
+        ];
+        for (o, key) in net::DefenseOption::ALL.into_iter().zip(keys) {
+            settings.push((format!("  {}", o.name()), o.value(&d), Some(key)));
+        }
+    }
+    let row_h = 18.0;
+    let room_h = 30.0 + settings.len() as f32 * row_h + 8.0;
+    c.round_rect(
+        [rx, top],
+        [rw, room_h],
+        8.0,
+        rgba(0x15151d, 0.86),
+        rgba(0x2a2a38, 1.0),
+        1.0,
+    );
+    c.text(
+        rx + 14.0,
+        top + 10.0,
+        9.0,
+        rgba(accent(), 1.0),
+        tr!("ROOM", "ルーム", "КОМНАТА"),
+    );
+    if s.locked {
+        padlock(c, rx + rw - 24.0, top + 9.0, 10.0, 0xFFD34D);
+    }
+    let key_name = |k: KeyCode| match k {
+        KeyCode::KeyK => "K",
+        KeyCode::KeyL => "L",
+        KeyCode::KeyC => "C",
+        KeyCode::BracketRight => "[ ]",
+        KeyCode::Digit1 => "1",
+        KeyCode::Digit2 => "2",
+        KeyCode::Digit3 => "3",
+        KeyCode::Digit4 => "4",
+        _ => "5",
+    };
+    for (k, (label, value, key)) in settings.iter().enumerate() {
+        let y = top + 28.0 + k as f32 * row_h;
+        let (x, w2) = (rx + 8.0, rw - 16.0);
+        let editing = k == 0 && s.edit_password.is_some();
+        if host {
+            let hovered = c.hovered(x, y, w2, row_h - 2.0);
+            if hovered || editing {
+                c.round_rect(
+                    [x, y],
+                    [w2, row_h - 2.0],
+                    5.0,
+                    rgba(0x262634, 1.0),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+            }
+            if let Some(key) = key {
+                c.hit(x, y, w2, row_h - 2.0, Hit::Key(*key));
+                c.text(x + 6.0, y + 4.0, 6.5, rgba(0x55556a, 1.0), key_name(*key));
+            }
+        }
+        c.text(x + 30.0, y + 4.0, 7.5, rgba(0x9a9ab0, 1.0), label);
+        let label_w = Canvas::text_width(7.5, label);
+        c.text_right(
+            x + w2 - 6.0,
+            y + 4.0,
+            7.5,
+            rgba(if editing { 0xFFD34D } else { 0xffffff }, 1.0),
+            &Canvas::fit(7.5, w2 - 46.0 - label_w, value),
         );
+    }
+
+    // The chat.
+    let cy = top + room_h + 8.0;
+    let ch = bottom - cy;
+    if ch > 30.0 {
+        c.round_rect(
+            [rx, cy],
+            [rw, ch],
+            8.0,
+            rgba(0x15151d, 0.86),
+            rgba(0x2a2a38, 1.0),
+            1.0,
+        );
+        c.text(
+            rx + 14.0,
+            cy + 10.0,
+            8.0,
+            rgba(0x4fb4ff, 1.0),
+            tr!(
+                "CHAT  (F9 to write)",
+                "チャット  (F9で書く)",
+                "ЧАТ  (F9 — написать)"
+            ),
+        );
+        let lines = ((ch - 30.0) / 11.0).max(0.0) as usize;
         for (k, (from, text)) in s
             .chat
             .iter()
-            .skip(s.chat.len().saturating_sub(lines.saturating_sub(1)))
+            .skip(s.chat.len().saturating_sub(lines))
             .enumerate()
         {
             c.text(
-                x0 + 4.0,
-                top + 12.0 + k as f32 * 11.0,
+                rx + 14.0,
+                cy + 26.0 + k as f32 * 11.0,
                 6.5,
                 rgba(0xdedeea, 1.0),
-                &Canvas::fit(6.5, col - 8.0, &format!("{from}: {text}")),
+                &Canvas::fit(6.5, rw - 28.0, &format!("{from}: {text}")),
             );
         }
     }
+
+    // What can be done, under it all.
     let ready = s.players.iter().filter(|p| p.ready && p.has_map).count();
     let me_ready = s.me().is_some_and(|p| p.ready);
     let me_spectator = s.me().is_some_and(|p| p.spectator);
@@ -1347,7 +1774,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
     if s.in_match {
         c.text_centered(
             w / 2.0,
-            428.0,
+            426.0,
             8.0,
             rgba(0x9a9ab0, 1.0),
             &Canvas::fit(
@@ -1386,21 +1813,13 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
                     false,
                 ),
                 (&start_label, Hit::Key(KeyCode::Enter), true),
-                (
-                    if s.owns_room() {
-                        "Close room  (Esc)"
-                    } else {
-                        "Leave  (Esc)"
-                    },
-                    Hit::Key(KeyCode::Escape),
-                    false,
-                ),
+                ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false),
             ],
         );
-        let hint = if me_spectator {
-            "you'll watch the match   S: play instead   [ ] match rate   C defense (V turn length)   F1 mods   Tab songs"
+        let hint = if s.edit_password.is_some() {
+            "type the new password   Enter save (empty: none)   Esc cancel"
         } else {
-            "S: spectate instead   [ ] match rate   C defense co-op (V turn length)   F1 mods (speed: for all)   Tab songs"
+            "S spectate   [ ] rate   C defense (1-5 its rules)   K password   L players   F1 mods   Tab songs"
         };
         c.text_centered(
             w / 2.0,
@@ -1456,32 +1875,32 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             .iter()
             .filter_map(|p| p.result.as_ref().map(|f| (p, f)))
             .collect();
-        if let Some(top) = finished.iter().map(|(_, f)| f.score).max() {
+        if let Some(top_score) = finished.iter().map(|(_, f)| f.score).max() {
             let winners: Vec<&str> = finished
                 .iter()
-                .filter(|(_, f)| f.score == top)
+                .filter(|(_, f)| f.score == top_score)
                 .map(|(p, _)| p.name.as_str())
                 .collect();
             let acc = finished
                 .iter()
-                .find(|(_, f)| f.score == top)
+                .find(|(_, f)| f.score == top_score)
                 .map(|(_, f)| f.accuracy * 100.0)
                 .unwrap_or(0.0);
             let text = if winners.len() > 1 {
                 format!(
-                    "Last match: tie between {} at {top:08}",
+                    "Last match: tie between {} at {top_score:08}",
                     winners.join(" & ")
                 )
             } else {
                 format!(
-                    "Last match winner: {} with {top:08} ({acc:.2}%)",
+                    "Last match winner: {} with {top_score:08} ({acc:.2}%)",
                     winners[0]
                 )
             };
-            let size = Canvas::fit_size(9.0, 7.0, w - 48.0, &text);
+            let size = Canvas::fit_size(8.0, 6.5, w - 48.0, &text);
             c.text_centered(
                 w / 2.0,
-                428.0 + (9.0 - size) / 2.0,
+                424.0 + (8.0 - size) / 2.0,
                 size,
                 rgba(0xFFD34D, 1.0),
                 &Canvas::fit(size, w - 48.0, &text),

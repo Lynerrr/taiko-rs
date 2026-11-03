@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL: u32 = 7;
+#[cfg_attr(not(test), allow(dead_code))]
 pub const DEFAULT_PORT: u16 = 7777;
 /// Countdown between everyone having loaded and the song starting.
 const START_LEAD_MS: f64 = 3000.0;
@@ -95,6 +96,23 @@ pub struct MapInfo {
     /// every note one of them lets through costs the team a life. None: an ordinary match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub defense: Option<Defense>,
+    /// What the host's game knows about the map (stars, length...), so players without it see
+    /// them too. None: an older host, or one still working them out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<Box<MapStats>>,
+}
+
+/// A lobby map's numbers, as the host's game has them: taiko stars and length and BPM at 1.0x
+/// (the match rate changes the last two), OD, HP and who mapped it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MapStats {
+    pub stars: f32,
+    pub length_ms: f32,
+    pub bpm: f32,
+    pub od: f32,
+    pub hp: f32,
+    #[serde(default)]
+    pub creator: String,
 }
 
 /// Defense's rules, picked by the host: the team's lives, how many bars each turn lasts, how
@@ -220,34 +238,6 @@ impl Defense {
         shop: true,
         maze: true,
     };
-
-    /// The rules after `lives` steps on: off after the last.
-    pub fn next_lives(rules: Option<Defense>) -> Option<Defense> {
-        match rules {
-            None => Some(Defense {
-                lives: Defense::LIVES[0],
-                ..Defense::DEFAULT
-            }),
-            Some(d) => {
-                let i = Defense::LIVES.iter().position(|&l| l == d.lives)?;
-                Defense::LIVES
-                    .get(i + 1)
-                    .map(|&lives| Defense { lives, ..d })
-            }
-        }
-    }
-
-    /// The next turn length, round to the first.
-    pub fn next_bars(self) -> Defense {
-        let i = Defense::BARS
-            .iter()
-            .position(|&b| b == self.bars)
-            .map_or(0, |i| (i + 1) % Defense::BARS.len());
-        Defense {
-            bars: Defense::BARS[i],
-            ..self
-        }
-    }
 }
 
 /// Defense: what the team can buy with its gold (keys 1-5 in a match).
@@ -650,8 +640,10 @@ pub enum ClientMsg {
     },
     /// Defense: something we did in the match (a purchase is only passed on if the team can pay).
     Defense(DefenseAct),
-    /// Host: the lobby's password (None: open to all) and how many players it takes.
-    RoomSettings(RoomSettings),
+    /// Host: the lobby's password (None: open to all), and how many players it takes. Apart, so
+    /// a host handed the role (who never knew the password) can change the one without the other.
+    SetPassword(Option<String>),
+    SetSlots(u32),
     /// Host: take a player out of the lobby (they can't come back to it).
     Kick(u32),
 }
@@ -1007,6 +999,7 @@ fn clean_name(name: &str) -> String {
 // Host side
 
 /// A running room. Dropping it closes the room and disconnects everyone.
+#[cfg_attr(not(test), allow(dead_code))]
 pub struct Server {
     stop: Arc<AtomicBool>,
     pub token: u64,
@@ -1031,6 +1024,7 @@ enum Event {
 }
 
 /// `mapguessr`: the room plays mapguessr instead of matches.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
     // Listen on IPv6 and IPv4. On Linux the `::` socket is dual-stack, so the IPv4 bind just
     // fails as "in use"; on Windows `::` is IPv6-only and both are needed, or IPv4 friends
@@ -1131,6 +1125,9 @@ pub struct Summary {
     pub locked: bool,
     #[allow(dead_code)] // read by the online server (server/)
     pub slots: u32,
+    /// Its map is played as Defense (co-op).
+    #[allow(dead_code)] // read by the online server (server/)
+    pub defense: bool,
 }
 
 /// A room run by the online server: connections are handed to it after their own handshake
@@ -1469,9 +1466,24 @@ fn room_loop(
                         }
                         continue;
                     }
-                    ClientMsg::RoomSettings(new) => {
+                    ClientMsg::SetPassword(password) => {
                         if is_host {
-                            settings = new.clean();
+                            settings = RoomSettings {
+                                password,
+                                ..settings.clone()
+                            }
+                            .clean();
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    ClientMsg::SetSlots(slots) => {
+                        if is_host {
+                            settings = RoomSettings {
+                                slots,
+                                ..settings.clone()
+                            }
+                            .clean();
                             dirty = true;
                         }
                         continue;
@@ -2104,6 +2116,7 @@ fn room_loop(
                 s.in_match = in_match;
                 s.locked = settings.password.is_some();
                 s.slots = settings.slots;
+                s.defense = map.as_ref().is_some_and(|m| m.defense.is_some());
             }
             dirty = false;
             last_broadcast = Instant::now();
@@ -2135,6 +2148,7 @@ impl Drop for Client {
 }
 
 /// Accepts `host`, `host:port`, `[v6]:port`; the port defaults to 7777.
+#[cfg_attr(not(test), allow(dead_code))]
 fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
     let addr = addr.trim();
     let with_port = if addr.parse::<std::net::SocketAddr>().is_ok() {
@@ -2157,11 +2171,13 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
 }
 
 impl Client {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn connect(addr: &str, name: &str, host_token: Option<u64>) -> Result<Client, String> {
         Client::connect_with(addr, name, host_token, None)
     }
 
     /// `connect`, giving the lobby's password.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn connect_with(
         addr: &str,
         name: &str,
@@ -2639,20 +2655,16 @@ mod tests {
 
     #[test]
     fn defense_rules_step_round_and_old_lobby_maps_still_parse() {
-        // C: 10, 25, 50, 100 lives, then off; V: 4, 8, 16 bars round again.
-        let mut rules = None;
-        let mut seen = Vec::new();
-        for _ in 0..5 {
-            rules = Defense::next_lives(rules);
-            seen.push(rules.map(|d| d.lives));
-        }
-        assert_eq!(seen, [Some(10), Some(25), Some(50), Some(100), None]);
-        let bars: Vec<u32> = std::iter::successors(Some(Defense::DEFAULT), |d| Some(d.next_bars()))
-            .skip(1)
-            .take(3)
-            .map(|d| d.bars)
-            .collect();
-        assert_eq!(bars, [16, 32, 4]);
+        // 1: 25 lives on to 50, 100, 10 and round; 2: 8 bars on to 16, 32, 4.
+        let steps = |o: DefenseOption, f: fn(&Defense) -> u32| -> Vec<u32> {
+            std::iter::successors(Some(Defense::DEFAULT), |&d| Some(o.step(d)))
+                .skip(1)
+                .take(4)
+                .map(|d| f(&d))
+                .collect()
+        };
+        assert_eq!(steps(DefenseOption::Lives, |d| d.lives), [50, 100, 10, 25]);
+        assert_eq!(steps(DefenseOption::Bars, |d| d.bars), [16, 32, 4, 8]);
         // Rules from before the newer options get their defaults.
         let d: Defense = serde_json::from_str(r#"{"lives":10,"bars":4}"#).unwrap();
         assert_eq!((d.tag_ins, d.shop, d.maze), (2, true, true));
@@ -2706,6 +2718,8 @@ mod tests {
             shapeshift: None,
             seed: None,
             defense: None,
+
+            stats: None,
         }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
@@ -2733,6 +2747,8 @@ mod tests {
             shapeshift: Some("every=4".into()),
             seed: None,
             defense: None,
+
+            stats: None,
         };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
@@ -2810,6 +2826,7 @@ mod tests {
                 bars: 4,
                 ..Defense::DEFAULT
             }),
+            stats: None,
         };
         a.send(ClientMsg::SelectMap(map));
         thread::sleep(Duration::from_millis(100));
@@ -2908,6 +2925,8 @@ mod tests {
             shapeshift: None,
             seed: None,
             defense: None,
+
+            stats: None,
         };
         a.send(ClientMsg::SelectMap(map));
         thread::sleep(Duration::from_millis(100));
@@ -2957,12 +2976,17 @@ mod tests {
         let addr = format!("127.0.0.1:{}", server.port);
         let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
         wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        a.send(ClientMsg::RoomSettings(RoomSettings {
-            password: Some("  hunter2 ".into()),
-            slots: 2,
-        }));
+        a.send(ClientMsg::SetPassword(Some("  hunter2 ".into())));
+        a.send(ClientMsg::SetSlots(2));
         let ServerMsg::Room { locked, slots, .. } = wait_for(&mut a, |m| {
-            matches!(m, ServerMsg::Room { locked: true, .. })
+            matches!(
+                m,
+                ServerMsg::Room {
+                    locked: true,
+                    slots: 2,
+                    ..
+                }
+            )
         }) else {
             unreachable!()
         };

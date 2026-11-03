@@ -2643,6 +2643,8 @@ pub enum Hit {
     BoardTab(bool),
     /// Lobby: give the host role to this player.
     GiveHost(u32),
+    /// Lobby host: takes this player (id) out of the lobby.
+    Kick(u32),
     /// The friends overlay: its chip, its panel (swallows clicks), a tab, a row, a row's button, and a
     /// notification card.
     SocialToggle,

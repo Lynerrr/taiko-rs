@@ -1969,6 +1969,8 @@ mod tests {
                 shapeshift: None,
                 seed: None,
                 defense: None,
+
+                stats: None,
             },
             score: 1_000_000,
             accuracy: 0.98,

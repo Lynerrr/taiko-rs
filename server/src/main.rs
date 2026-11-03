@@ -904,6 +904,7 @@ impl State {
                     mapguessr: s.mapguessr,
                     locked: s.locked,
                     slots: s.slots,
+                    defense: s.defense,
                 })
             })
             .collect();
