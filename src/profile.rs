@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver};
 use winit::keyboard::KeyCode;
 
 use crate::online::{self, OnlineScore, Profile};
-use crate::render::{accent, rgba, Canvas, Hit};
+use crate::render::{Canvas, Hit, accent, rgba};
 
 pub enum State {
     Loading(Receiver<Result<Profile, String>>),
@@ -24,15 +24,27 @@ impl View {
         let (tx, rx) = mpsc::channel();
         let who = name.clone();
         std::thread::spawn(move || {
-            let result = online::call(&server, online::Request::Profile { name: who }).and_then(|r| match r {
-                online::Reply::Profile(p) => Ok(*p),
-                _ => Err(crate::lang::odd_reply()),
-            });
+            let result = online::call(&server, online::Request::Profile { name: who }).and_then(
+                |r| match r {
+                    online::Reply::Profile(p) => Ok(*p),
+                    _ => Err(crate::lang::odd_reply()),
+                },
+            );
             // Servers from before profiles don't know the request.
-            let no_profiles = || tr!("the server doesn't have profiles yet", "このサーバーにはまだプロフィールがありません", "на сервере ещё нет профилей").to_string();
+            let no_profiles = || {
+                tr!(
+                    "the server doesn't have profiles yet",
+                    "このサーバーにはまだプロフィールがありません",
+                    "на сервере ещё нет профилей"
+                )
+                .to_string()
+            };
             let _ = tx.send(result.map_err(|e| if e == "bad request" { no_profiles() } else { e }));
         });
-        View { name, state: State::Loading(rx) }
+        View {
+            name,
+            state: State::Loading(rx),
+        }
     }
 
     pub fn poll(&mut self) {
@@ -41,7 +53,16 @@ impl View {
                 Ok(Ok(p)) => self.state = State::Loaded(Box::new(p)),
                 Ok(Err(e)) => self.state = State::Failed(e),
                 Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => self.state = State::Failed(tr!("lost the connection", "接続が切れました", "соединение потеряно").into()),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.state = State::Failed(
+                        tr!(
+                            "lost the connection",
+                            "接続が切れました",
+                            "соединение потеряно"
+                        )
+                        .into(),
+                    )
+                }
             }
         }
     }
@@ -50,27 +71,83 @@ impl View {
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.72));
         let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
-        c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
+        c.round_rect(
+            [px, py],
+            [pw, ph],
+            10.0,
+            rgba(0x15151d, 0.98),
+            rgba(accent(), 0.8),
+            1.5,
+        );
         let (by, bw) = (py + ph - 26.0, 56.0);
-        c.button(px + pw - bw - 12.0, by, bw, 16.0, tr!("Back", "戻る", "Назад"), 7.0, Hit::Key(KeyCode::Escape), true);
+        c.button(
+            px + pw - bw - 12.0,
+            by,
+            bw,
+            16.0,
+            tr!("Back", "戻る", "Назад"),
+            7.0,
+            Hit::Key(KeyCode::Escape),
+            true,
+        );
         if matches!(self.state, State::Loaded(_)) {
-            c.button(px + pw - bw * 2.0 - 18.0, by, bw, 16.0, tr!("Medals", "メダル", "Медали"), 7.0, Hit::Key(KeyCode::KeyM), false);
+            c.button(
+                px + pw - bw * 2.0 - 18.0,
+                by,
+                bw,
+                16.0,
+                tr!("Medals", "メダル", "Медали"),
+                7.0,
+                Hit::Key(KeyCode::KeyM),
+                false,
+            );
         }
         let p = match &self.state {
             State::Loading(_) => {
-                c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), &Canvas::fit(14.0, pw - 32.0, &self.name));
-                c.text_centered(px + pw / 2.0, py + ph / 2.0, 9.0, rgba(0xc8c8d8, 1.0), tr!("loading the profile...", "プロフィールを読み込み中...", "загрузка профиля..."));
+                c.text(
+                    px + 16.0,
+                    py + 12.0,
+                    14.0,
+                    rgba(0xffffff, 1.0),
+                    &Canvas::fit(14.0, pw - 32.0, &self.name),
+                );
+                c.text_centered(
+                    px + pw / 2.0,
+                    py + ph / 2.0,
+                    9.0,
+                    rgba(0xc8c8d8, 1.0),
+                    tr!(
+                        "loading the profile...",
+                        "プロフィールを読み込み中...",
+                        "загрузка профиля..."
+                    ),
+                );
                 return;
             }
             State::Failed(e) => {
-                c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), &Canvas::fit(14.0, pw - 32.0, &self.name));
-                c.text_centered(px + pw / 2.0, py + ph / 2.0, 9.0, rgba(0xFF4B4B, 1.0), &Canvas::fit(9.0, pw - 32.0, e));
+                c.text(
+                    px + 16.0,
+                    py + 12.0,
+                    14.0,
+                    rgba(0xffffff, 1.0),
+                    &Canvas::fit(14.0, pw - 32.0, &self.name),
+                );
+                c.text_centered(
+                    px + pw / 2.0,
+                    py + ph / 2.0,
+                    9.0,
+                    rgba(0xFF4B4B, 1.0),
+                    &Canvas::fit(9.0, pw - 32.0, e),
+                );
                 return;
             }
             State::Loaded(p) => p,
         };
         // Header: name, then rank, pp, plays and when they joined on the right.
-        let rank = p.rank.map(|r| format!("#{r}")).unwrap_or_else(|| tr!("unranked", "ランクなし", "без ранга").into());
+        let rank = p
+            .rank
+            .map(|r| format!("#{r}"))
+            .unwrap_or_else(|| tr!("unranked", "ランクなし", "без ранга").into());
         let hours = p.play_ms as f64 / 3_600_000.0;
         let minutes = hours * 60.0;
         let time = if hours >= 1.0 {
@@ -91,8 +168,20 @@ impl View {
         // Their picture, left of the name and the medals line.
         c.avatar(&p.name, px + 30.0, py + 25.0, 14.0, accent(), 1.0);
         let hx = px + 30.0;
-        c.text(hx + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), &Canvas::fit(14.0, pw - 30.0 - stats_w - 48.0, &p.name));
-        c.text_right(px + pw - 16.0, py + 16.0, 8.0, rgba(0xff8ad8, 1.0), &Canvas::fit(8.0, stats_w, &stats));
+        c.text(
+            hx + 16.0,
+            py + 12.0,
+            14.0,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(14.0, pw - 30.0 - stats_w - 48.0, &p.name),
+        );
+        c.text_right(
+            px + pw - 16.0,
+            py + 16.0,
+            8.0,
+            rgba(0xff8ad8, 1.0),
+            &Canvas::fit(8.0, stats_w, &stats),
+        );
         // Their medals: how many, their dan and their rarest.
         let (earned, total) = (p.medals.earned, p.medals.total);
         let mut line = tr!("MEDALS  {earned} of {total}", "メダル  {total}個中{earned}個", "МЕДАЛИ  {earned} из {total}";);
@@ -100,7 +189,13 @@ impl View {
             line += "   ";
             line += online::said(dan);
         }
-        c.text(hx + 16.0, py + 31.0, 7.0, rgba(0xFFD34D, 1.0), &Canvas::fit(7.0, pw * 0.5 - 30.0, &line));
+        c.text(
+            hx + 16.0,
+            py + 31.0,
+            7.0,
+            rgba(0xFFD34D, 1.0),
+            &Canvas::fit(7.0, pw * 0.5 - 30.0, &line),
+        );
         for (i, m) in p.medals.rarest.iter().enumerate() {
             crate::medals::small_badge(c, px + pw - 22.0 - i as f32 * 24.0, py + 35.0, m);
         }
@@ -109,8 +204,24 @@ impl View {
         let top = py + 54.0;
         let bottom = by - 6.0;
         let lists = [
-            (tr!("BEST PERFORMANCE", "ベストパフォーマンス", "ЛУЧШИЕ РЕЗУЛЬТАТЫ"), &p.top, tr!("no pp plays yet", "ppのプレイはまだありません", "пока нет игр с pp")),
-            (tr!("RECENT PLAYS", "最近のプレイ", "ПОСЛЕДНИЕ ИГРЫ"), &p.recent, tr!("no plays yet", "プレイはまだありません", "пока нет игр")),
+            (
+                tr!(
+                    "BEST PERFORMANCE",
+                    "ベストパフォーマンス",
+                    "ЛУЧШИЕ РЕЗУЛЬТАТЫ"
+                ),
+                &p.top,
+                tr!(
+                    "no pp plays yet",
+                    "ppのプレイはまだありません",
+                    "пока нет игр с pp"
+                ),
+            ),
+            (
+                tr!("RECENT PLAYS", "最近のプレイ", "ПОСЛЕДНИЕ ИГРЫ"),
+                &p.recent,
+                tr!("no plays yet", "プレイはまだありません", "пока нет игр"),
+            ),
         ];
         for (k, (title, rows, empty)) in lists.into_iter().enumerate() {
             let x = px + 16.0 + k as f32 * (col_w + 16.0);
@@ -131,20 +242,54 @@ fn score_rows(c: &mut Canvas, rows: &[OnlineScore], x: f32, top: f32, w: f32, bo
         if y + ROW - 3.0 > bottom {
             break;
         }
-        c.round_rect([x, y], [w, ROW - 3.0], 5.0, rgba(0x1d1d27, 1.0), rgba(0x2a2a38, 1.0), 1.0);
-        let pp = r.pp.map(|p| format!("{p:.0}pp")).unwrap_or_else(|| "-".into());
+        c.round_rect(
+            [x, y],
+            [w, ROW - 3.0],
+            5.0,
+            rgba(0x1d1d27, 1.0),
+            rgba(0x2a2a38, 1.0),
+            1.0,
+        );
+        let pp =
+            r.pp.map(|p| format!("{p:.0}pp"))
+                .unwrap_or_else(|| "-".into());
         let pp_w = Canvas::text_width(8.0, &pp);
         c.text_right(x + w - 8.0, y + 7.0, 8.0, rgba(0xff8ad8, 1.0), &pp);
         let room = w - pp_w - 22.0;
-        c.text(x + 8.0, y + 3.5, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, room, &r.map));
-        let rate = if (r.rate - 1.0).abs() > 1e-6 { format!("  {:.2}x", r.rate) } else { String::new() };
-        let mods = if r.mods.is_empty() { String::new() } else { format!("  +{}", r.mods.concat()) };
-        let (acc, combo, miss, age) = (r.accuracy * 100.0, r.max_combo, r.miss, crate::scores::age(r.date));
+        c.text(
+            x + 8.0,
+            y + 3.5,
+            7.0,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(7.0, room, &r.map),
+        );
+        let rate = if (r.rate - 1.0).abs() > 1e-6 {
+            format!("  {:.2}x", r.rate)
+        } else {
+            String::new()
+        };
+        let mods = if r.mods.is_empty() {
+            String::new()
+        } else {
+            format!("  +{}", r.mods.concat())
+        };
+        let (acc, combo, miss, age) = (
+            r.accuracy * 100.0,
+            r.max_combo,
+            r.miss,
+            crate::scores::age(r.date),
+        );
         let line = tr!(
             "{acc:.2}%  {combo}x  {miss} miss{mods}{rate}  {age}",
             "{acc:.2}%  {combo}x  ミス{miss}{mods}{rate}  {age}",
             "{acc:.2}%  {combo}x  {miss} мимо{mods}{rate}  {age}";
         );
-        c.text(x + 8.0, y + 13.5, 6.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(6.0, room, &line));
+        c.text(
+            x + 8.0,
+            y + 13.5,
+            6.0,
+            rgba(0x9a9ab0, 1.0),
+            &Canvas::fit(6.0, room, &line),
+        );
     }
 }

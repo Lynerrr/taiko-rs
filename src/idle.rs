@@ -5,7 +5,7 @@
 use std::time::{Duration, Instant};
 
 use crate::player;
-use crate::render::{rgba, Canvas};
+use crate::render::{Canvas, rgba};
 
 /// The choices for how long until it shows (minutes; 0 is never).
 pub const MINUTES: [u32; 5] = [0, 1, 2, 5, 10];
@@ -49,8 +49,19 @@ pub struct Idle {
 
 impl Idle {
     pub fn new(now: Instant) -> Idle {
-        let after_override = std::env::var("TAIKO_IDLE_MS").ok().and_then(|v| v.trim().parse().ok()).map(Duration::from_millis);
-        Idle { last_input: now, shown: 0.0, angle: 0.0, swallow_left: false, swallow_right: false, spectrum: player::Spectrum::default(), after_override }
+        let after_override = std::env::var("TAIKO_IDLE_MS")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .map(Duration::from_millis);
+        Idle {
+            last_input: now,
+            shown: 0.0,
+            angle: 0.0,
+            swallow_left: false,
+            swallow_right: false,
+            spectrum: player::Spectrum::default(),
+            after_override,
+        }
     }
 
     /// Something was pressed or moved. True when the idle screen was showing: that input only
@@ -66,10 +77,17 @@ impl Idle {
         if !allowed {
             self.last_input = now;
         }
-        let after = self.after_override.or((minutes > 0).then(|| Duration::from_secs(minutes as u64 * 60)));
-        let want = allowed && after.is_some_and(|a| now.saturating_duration_since(self.last_input) >= a);
+        let after = self
+            .after_override
+            .or((minutes > 0).then(|| Duration::from_secs(minutes as u64 * 60)));
+        let want =
+            allowed && after.is_some_and(|a| now.saturating_duration_since(self.last_input) >= a);
         let step = dt_ms.max(0.0) / if want { FADE_IN_MS } else { FADE_OUT_MS };
-        self.shown = if want { (self.shown + step).min(1.0) } else { (self.shown - step).max(0.0) };
+        self.shown = if want {
+            (self.shown + step).min(1.0)
+        } else {
+            (self.shown - step).max(0.0)
+        };
         if self.shown > 0.0 {
             self.angle += SPIN * dt_ms / 1000.0;
         }
@@ -115,8 +133,20 @@ impl Idle {
             let y = DISC_Y + DISC_R + player::RAYS_REACH + 12.0;
             let room = c.width - 64.0;
             let size = Canvas::fit_size(14.0, 9.0, room, title);
-            c.text_centered(x, y, size, rgba(0xffffff, 0.9 * grow), &Canvas::fit(size, room, title));
-            c.text_centered(x, y + size + 10.0, 9.0, rgba(0xb0b0c8, 0.8 * grow), &Canvas::fit(9.0, room, artist));
+            c.text_centered(
+                x,
+                y,
+                size,
+                rgba(0xffffff, 0.9 * grow),
+                &Canvas::fit(size, room, title),
+            );
+            c.text_centered(
+                x,
+                y + size + 10.0,
+                9.0,
+                rgba(0xb0b0c8, 0.8 * grow),
+                &Canvas::fit(9.0, room, artist),
+            );
         }
     }
 }
@@ -130,20 +160,29 @@ mod tests {
         let t0 = Instant::now();
         let mut idle = Idle::new(t0);
         idle.after_override = None;
-        assert_eq!(idle.update(t0 + Duration::from_secs(59), 16.0, true, 1), 0.0);
+        assert_eq!(
+            idle.update(t0 + Duration::from_secs(59), 16.0, true, 1),
+            0.0
+        );
         let mut now = t0 + Duration::from_secs(61);
         for _ in 0..200 {
             now += Duration::from_millis(16);
             idle.update(now, 16.0, true, 1);
         }
         assert_eq!(idle.amount(), 1.0);
-        assert!(idle.input(now), "the input that wakes it is reported as waking it");
+        assert!(
+            idle.input(now),
+            "the input that wakes it is reported as waking it"
+        );
         for _ in 0..40 {
             now += Duration::from_millis(16);
             idle.update(now, 16.0, true, 1);
         }
         assert_eq!(idle.amount(), 0.0);
-        assert!(!idle.input(now), "input while it's gone does what it always does");
+        assert!(
+            !idle.input(now),
+            "input while it's gone does what it always does"
+        );
     }
 
     #[test]
@@ -153,8 +192,15 @@ mod tests {
         idle.after_override = None;
         let late = t0 + Duration::from_secs(3600);
         assert_eq!(idle.update(late, 5000.0, true, 0), 0.0, "0 minutes is off");
-        assert_eq!(idle.update(late, 5000.0, false, 1), 0.0, "not on this screen");
+        assert_eq!(
+            idle.update(late, 5000.0, false, 1),
+            0.0,
+            "not on this screen"
+        );
         // Being kept from it (in a song) starts the wait over.
-        assert_eq!(idle.update(late + Duration::from_secs(30), 5000.0, true, 1), 0.0);
+        assert_eq!(
+            idle.update(late + Duration::from_secs(30), 5000.0, true, 1),
+            0.0
+        );
     }
 }

@@ -15,7 +15,11 @@ const LONGEST_NOTE_MS: f64 = 3_600_000.0;
 /// A roll's or swell's length, as one that can be played: none when it works out to nothing
 /// sensible (NaN from a NaN slider velocity), at most `LONGEST_NOTE_MS`.
 fn playable_length(ms: f64) -> f64 {
-    if ms.is_finite() { ms.clamp(0.0, LONGEST_NOTE_MS) } else { 0.0 }
+    if ms.is_finite() {
+        ms.clamp(0.0, LONGEST_NOTE_MS)
+    } else {
+        0.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,9 +238,18 @@ pub fn load(path: &Path) -> Result<Beatmap, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (meta, body) = parse_sections(&text, false);
     if !meta.is_playable() {
-        return Err(format!("unsupported mode {} (only osu!standard converts and taiko)", meta.mode));
+        return Err(format!(
+            "unsupported mode {} (only osu!standard converts and taiko)",
+            meta.mode
+        ));
     }
-    let mut map = Beatmap { meta, notes: Vec::new(), barlines: Vec::new(), control_points: Vec::new(), first_velocity: 0.0 };
+    let mut map = Beatmap {
+        meta,
+        notes: Vec::new(),
+        barlines: Vec::new(),
+        control_points: Vec::new(),
+        first_velocity: 0.0,
+    };
     convert(&mut map, body);
     if map.notes.is_empty() {
         return Err("beatmap has no hit objects".into());
@@ -250,7 +263,11 @@ impl Beatmap {
     /// (`playable_length` cut them to the longest), or more notes than any real map. Its preview
     /// took the whole client down to 1 fps (osu!team's FM Synthesis Experiment).
     pub fn too_wild_to_preview(&self) -> bool {
-        self.notes.len() > 100_000 || self.notes.iter().any(|n| n.end_time - n.time >= LONGEST_NOTE_MS || n.fake_len >= LONGEST_NOTE_MS)
+        self.notes.len() > 100_000
+            || self
+                .notes
+                .iter()
+                .any(|n| n.end_time - n.time >= LONGEST_NOTE_MS || n.fake_len >= LONGEST_NOTE_MS)
     }
 
     /// Moves every map time (notes, barlines, timing) `ms` later. Audio positions (the preview
@@ -276,15 +293,28 @@ struct Body<'a> {
 }
 
 fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
-    let mut meta = Meta { slider_multiplier: 1.4, slider_tick_rate: 1.0, od: 5.0, hp: 5.0, format_version: 14, ..Default::default() };
-    let mut body = Body { timing: Vec::new(), objects: Vec::new() };
+    let mut meta = Meta {
+        slider_multiplier: 1.4,
+        slider_tick_rate: 1.0,
+        od: 5.0,
+        hp: 5.0,
+        format_version: 14,
+        ..Default::default()
+    };
+    let mut body = Body {
+        timing: Vec::new(),
+        objects: Vec::new(),
+    };
     let mut section = "";
     let mut od_seen = false;
     let mut hp = 5.0;
     for (i, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         if i == 0 {
-            if let Some(v) = trimmed.trim_start_matches('\u{feff}').strip_prefix("osu file format v") {
+            if let Some(v) = trimmed
+                .trim_start_matches('\u{feff}')
+                .strip_prefix("osu file format v")
+            {
                 meta.format_version = v.trim().parse().unwrap_or(14);
             }
             continue;
@@ -294,7 +324,9 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
         }
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             section = &trimmed[1..trimmed.len() - 1];
-            if header_only && (section == "Events" || section == "TimingPoints" || section == "HitObjects") {
+            if header_only
+                && (section == "Events" || section == "TimingPoints" || section == "HitObjects")
+            {
                 break;
             }
             continue;
@@ -316,8 +348,12 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
                 Some(("Creator", v)) => meta.creator = v.to_owned(),
                 Some(("Version", v)) => meta.version = v.to_owned(),
                 Some(("Tags", v)) => meta.genres = crate::genres::of(v),
-                Some(("BeatmapSetID", v)) => meta.set_id = v.trim().parse().ok().filter(|&id: &u32| id > 0),
-                Some(("BeatmapID", v)) => meta.beatmap_id = v.trim().parse().ok().filter(|&id: &u32| id > 0),
+                Some(("BeatmapSetID", v)) => {
+                    meta.set_id = v.trim().parse().ok().filter(|&id: &u32| id > 0)
+                }
+                Some(("BeatmapID", v)) => {
+                    meta.beatmap_id = v.trim().parse().ok().filter(|&id: &u32| id > 0)
+                }
                 _ => {}
             },
             "Difficulty" => match kv(trimmed) {
@@ -332,16 +368,30 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
             },
             "TimingPoints" => {
                 let mut f = trimmed.split(',');
-                let (Some(time), Some(beat_length)) = (num::<f64>(f.next()), num::<f64>(f.next())) else { continue };
+                let (Some(time), Some(beat_length)) = (num::<f64>(f.next()), num::<f64>(f.next()))
+                else {
+                    continue;
+                };
                 let meter = num::<u32>(f.next()).filter(|&m| m > 0).unwrap_or(4);
                 let _sample_set = f.next();
                 let _sample_index = f.next();
                 // Very old maps have no volume (full); osu!'s editor goes no lower than 5%.
-                let volume = num::<f32>(f.next()).map(|v| (v / 100.0).clamp(0.05, 1.0)).unwrap_or(1.0);
+                let volume = num::<f32>(f.next())
+                    .map(|v| (v / 100.0).clamp(0.05, 1.0))
+                    .unwrap_or(1.0);
                 // Old formats have no uninherited field: a negative beat length marks an SV point.
-                let uninherited = num::<i32>(f.next()).map(|v| v != 0).unwrap_or(beat_length >= 0.0);
+                let uninherited = num::<i32>(f.next())
+                    .map(|v| v != 0)
+                    .unwrap_or(beat_length >= 0.0);
                 let effects = num::<u32>(f.next()).unwrap_or(0);
-                body.timing.push(RawTimingPoint { time, beat_length, meter, uninherited, effects, volume });
+                body.timing.push(RawTimingPoint {
+                    time,
+                    beat_length,
+                    meter,
+                    uninherited,
+                    effects,
+                    volume,
+                });
             }
             "HitObjects" => body.objects.push(trimmed),
             _ => {}
@@ -375,14 +425,28 @@ fn build_control_points(raw: &mut [RawTimingPoint]) -> Vec<ControlPoint> {
         } else {
             sv = 1.0;
         }
-        let cp = ControlPoint { time: p.time, beat_origin, beat_length, sv, kiai: p.effects & 1 != 0, volume: p.volume };
+        let cp = ControlPoint {
+            time: p.time,
+            beat_origin,
+            beat_length,
+            sv,
+            kiai: p.effects & 1 != 0,
+            volume: p.volume,
+        };
         match out.last_mut() {
             Some(last) if last.time == p.time => *last = cp,
             _ => out.push(cp),
         }
     }
     if out.is_empty() {
-        out.push(ControlPoint { time: 0.0, beat_origin: 0.0, beat_length: 500.0, sv: 1.0, kiai: false, volume: 1.0 });
+        out.push(ControlPoint {
+            time: 0.0,
+            beat_origin: 0.0,
+            beat_length: 500.0,
+            sv: 1.0,
+            kiai: false,
+            volume: 1.0,
+        });
     }
     out
 }
@@ -394,7 +458,11 @@ pub fn control_point_at(points: &[ControlPoint], time: f64) -> &ControlPoint {
 
 fn convert(map: &mut Beatmap, mut body: Body) {
     // osu! shifts every timestamp of pre-v5 maps by 24ms.
-    let version_offset = if map.meta.format_version < 5 { 24.0 } else { 0.0 };
+    let version_offset = if map.meta.format_version < 5 {
+        24.0
+    } else {
+        0.0
+    };
     for p in &mut body.timing {
         p.time += version_offset;
     }
@@ -404,7 +472,8 @@ fn convert(map: &mut Beatmap, mut body: Body) {
     let sm = meta.slider_multiplier * TAIKO_VELOCITY_MULTIPLIER;
     let tick_rate = meta.slider_tick_rate;
     let scroll = scroll_table(&body.timing, sm);
-    let velocity_at = |t: f64| scroll[scroll.partition_point(|&(at, _)| at <= t).saturating_sub(1)].1;
+    let velocity_at =
+        |t: f64| scroll[scroll.partition_point(|&(at, _)| at <= t).saturating_sub(1)].1;
     let swell_hit_multiplier = difficulty_range(meta.od, 3.0, 5.0, 7.5) * 1.65;
 
     let mut notes = Vec::with_capacity(body.objects.len());
@@ -416,7 +485,9 @@ fn convert(map: &mut Beatmap, mut body: Body) {
         if f.len() < 5 {
             continue;
         }
-        let Ok(time) = f[2].trim().parse::<f64>() else { continue };
+        let Ok(time) = f[2].trim().parse::<f64>() else {
+            continue;
+        };
         let time = time + version_offset;
         let ty: u32 = f[3].trim().parse().unwrap_or(1);
         let sound: u32 = f[4].trim().parse().unwrap_or(0);
@@ -439,12 +510,23 @@ fn convert(map: &mut Beatmap, mut body: Body) {
             // The duration a negative length works out to, made positive: osu! still draws that
             // much body ahead of the head (taiko_arranger's gameplay preview, `_draw_fake_slider`).
             // Not floored: the canonical -0.0001 is a fraction of a ms and stays just a head.
-            let fake_len = if raw_length < 0.0 { playable_length(-raw_length * TAIKO_VELOCITY_MULTIPLIER * spans as f64 / taiko_velocity * sv_beat_length) } else { 0.0 };
+            let fake_len = if raw_length < 0.0 {
+                playable_length(
+                    -raw_length * TAIKO_VELOCITY_MULTIPLIER * spans as f64 / taiko_velocity
+                        * sv_beat_length,
+                )
+            } else {
+                0.0
+            };
 
             let mut split = None;
             if !native {
                 let osu_velocity = taiko_velocity * (1000.0 / sv_beat_length);
-                let bl = if meta.format_version >= 8 { cp.beat_length } else { sv_beat_length };
+                let bl = if meta.format_version >= 8 {
+                    cp.beat_length
+                } else {
+                    sv_beat_length
+                };
                 let tick_spacing = (bl / tick_rate).min(duration / spans as f64);
                 if tick_spacing > 0.0 && distance / osu_velocity * 1000.0 < 2.0 * bl {
                     split = Some(tick_spacing);
@@ -469,7 +551,13 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                 // 1/4 (1/3 at tick rate 3); twice as dense at 125 BPM or slower, half above 250.
                 let roll_tick_rate = if tick_rate == 3.0 { 3.0 } else { 4.0 };
                 let bpm = 60_000.0 / cp.beat_length;
-                let roll_tick_rate = if bpm <= 125.0 { roll_tick_rate * 2.0 } else if bpm > 250.0 { roll_tick_rate / 2.0 } else { roll_tick_rate };
+                let roll_tick_rate = if bpm <= 125.0 {
+                    roll_tick_rate * 2.0
+                } else if bpm > 250.0 {
+                    roll_tick_rate / 2.0
+                } else {
+                    roll_tick_rate
+                };
                 notes.push(Note {
                     time,
                     end_time: time + duration,
@@ -487,7 +575,12 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                 });
             }
         } else if ty & 8 != 0 {
-            let end = f.get(5).and_then(|e| e.trim().parse::<f64>().ok()).map(|e| e + version_offset).unwrap_or(time).max(time);
+            let end = f
+                .get(5)
+                .and_then(|e| e.trim().parse::<f64>().ok())
+                .map(|e| e + version_offset)
+                .unwrap_or(time)
+                .max(time);
             let end = time + playable_length(end - time);
             let required = ((end - time) / 1000.0 * swell_hit_multiplier).max(1.0) as u32;
             notes.push(Note {
@@ -511,7 +604,11 @@ fn convert(map: &mut Beatmap, mut body: Body) {
     notes.sort_by(|a, b| a.time.total_cmp(&b.time));
     for t in nan_sliders {
         let before = notes.partition_point(|n| n.time < t);
-        if let Some(n) = notes[..before].iter_mut().rev().find(|n| matches!(n.kind, Kind::Don | Kind::Kat)) {
+        if let Some(n) = notes[..before]
+            .iter_mut()
+            .rev()
+            .find(|n| matches!(n.kind, Kind::Don | Kind::Kat))
+        {
             n.unhittable = true;
         }
     }
@@ -541,10 +638,31 @@ pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
         ..Default::default()
     };
     let velocity = meta.slider_multiplier * TAIKO_VELOCITY_MULTIPLIER * 100.0 / beat_ms;
-    let notes = (first_beat..beats).map(|b| hit(b as f64 * beat_ms, 0, velocity)).collect();
-    let barlines = (0..beats).step_by(4).map(|b| Barline { time: b as f64 * beat_ms, velocity }).collect();
-    let control_points = vec![ControlPoint { time: 0.0, beat_origin: 0.0, beat_length: beat_ms, sv: 1.0, kiai: false, volume: 1.0 }];
-    Beatmap { meta, notes, barlines, control_points, first_velocity: velocity }
+    let notes = (first_beat..beats)
+        .map(|b| hit(b as f64 * beat_ms, 0, velocity))
+        .collect();
+    let barlines = (0..beats)
+        .step_by(4)
+        .map(|b| Barline {
+            time: b as f64 * beat_ms,
+            velocity,
+        })
+        .collect();
+    let control_points = vec![ControlPoint {
+        time: 0.0,
+        beat_origin: 0.0,
+        beat_length: beat_ms,
+        sv: 1.0,
+        kiai: false,
+        volume: 1.0,
+    }];
+    Beatmap {
+        meta,
+        notes,
+        barlines,
+        control_points,
+        first_velocity: velocity,
+    }
 }
 
 fn hit(time: f64, sound: u32, velocity: f64) -> Note {
@@ -570,7 +688,10 @@ fn hit(time: f64, sound: u32, velocity: f64) -> Note {
 /// (barline notes, hidden notes) depend on going far past the limits gameplay timing is clamped
 /// to. A green line on a red line's ms wins over the red line's 1x reset. `raw` sorted by time.
 fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
-    let mut beat = raw.iter().find(|p| p.uninherited && p.beat_length > 0.0).map_or(500.0, |p| p.beat_length);
+    let mut beat = raw
+        .iter()
+        .find(|p| p.uninherited && p.beat_length > 0.0)
+        .map_or(500.0, |p| p.beat_length);
     let mut out = Vec::new();
     for group in raw.chunk_by(|a, b| a.time == b.time) {
         let mut sv = 1.0;
@@ -579,10 +700,17 @@ fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
                 beat = p.beat_length;
             }
         }
-        if let Some(p) = group.iter().rev().find(|p| !p.uninherited && p.beat_length < 0.0) {
+        if let Some(p) = group
+            .iter()
+            .rev()
+            .find(|p| !p.uninherited && p.beat_length < 0.0)
+        {
             sv = -100.0 / p.beat_length;
         }
-        out.push((group[0].time, sm * 100.0 * f64::max(sv, 0.01) / beat.max(1e-4)));
+        out.push((
+            group[0].time,
+            sm * 100.0 * f64::max(sv, 0.01) / beat.max(1e-4),
+        ));
     }
     if out.is_empty() {
         out.push((0.0, sm * 100.0 / beat));
@@ -593,8 +721,15 @@ fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
 /// One barline at every red line (unless it omits its first) and every measure after it, up to
 /// the next red line. A section whose measure is under a millisecond (a gimmick line) gives only
 /// its first: the rest would scroll by too fast to see.
-fn build_barlines(raw: &[RawTimingPoint], end: f64, velocity_at: &dyn Fn(f64) -> f64) -> Vec<Barline> {
-    let timing: Vec<&RawTimingPoint> = raw.iter().filter(|p| p.uninherited && p.beat_length > 0.0).collect();
+fn build_barlines(
+    raw: &[RawTimingPoint],
+    end: f64,
+    velocity_at: &dyn Fn(f64) -> f64,
+) -> Vec<Barline> {
+    let timing: Vec<&RawTimingPoint> = raw
+        .iter()
+        .filter(|p| p.uninherited && p.beat_length > 0.0)
+        .collect();
     let mut out = Vec::new();
     for (i, p) in timing.iter().enumerate() {
         let until = timing.get(i + 1).map(|n| n.time).unwrap_or(end + 1.0);
@@ -607,7 +742,10 @@ fn build_barlines(raw: &[RawTimingPoint], end: f64, velocity_at: &dyn Fn(f64) ->
                 break;
             }
             if !(first && p.effects & 8 != 0) {
-                out.push(Barline { time: t, velocity: velocity_at(t) });
+                out.push(Barline {
+                    time: t,
+                    velocity: velocity_at(t),
+                });
             }
             if step < 1.0 {
                 break;
@@ -649,7 +787,13 @@ SliderTickRate:1
 
     pub(crate) fn parse(text: &str) -> Beatmap {
         let (meta, body) = parse_sections(text, false);
-        let mut map = Beatmap { meta, notes: Vec::new(), barlines: Vec::new(), control_points: Vec::new(), first_velocity: 0.0 };
+        let mut map = Beatmap {
+            meta,
+            notes: Vec::new(),
+            barlines: Vec::new(),
+            control_points: Vec::new(),
+            first_velocity: 0.0,
+        };
         convert(&mut map, body);
         map
     }
@@ -666,11 +810,16 @@ SliderTickRate:1
         for (a, b) in file.notes.iter().zip(&raw.notes) {
             assert_eq!(a.time, b.time + OSU_TIMING_MS);
         }
-        assert_eq!(file.control_points[0].beat_origin, raw.control_points[0].beat_origin + OSU_TIMING_MS);
+        assert_eq!(
+            file.control_points[0].beat_origin,
+            raw.control_points[0].beat_origin + OSU_TIMING_MS
+        );
         assert_eq!(file.barlines[0].time, raw.barlines[0].time + OSU_TIMING_MS);
         // Beat phase is unchanged at the shifted note times.
         let (cf, cr) = (&file.control_points[0], &raw.control_points[0]);
-        assert!((cf.beat_phase(file.notes[1].time) - cr.beat_phase(raw.notes[1].time)).abs() < 1e-9);
+        assert!(
+            (cf.beat_phase(file.notes[1].time) - cr.beat_phase(raw.notes[1].time)).abs() < 1e-9
+        );
     }
 
     #[test]
@@ -681,21 +830,35 @@ SliderTickRate:1
         let map = parse(text);
         assert!(!map.notes.is_empty());
         for n in &map.notes {
-            assert!(n.end_time.is_finite() && n.end_time - n.time <= LONGEST_NOTE_MS, "{n:?}");
+            assert!(
+                n.end_time.is_finite() && n.end_time - n.time <= LONGEST_NOTE_MS,
+                "{n:?}"
+            );
             assert!(n.fake_len.is_finite());
         }
         // What picking it in song select does: its difficulty graph and a game to preview.
         let graph = crate::difficulty::analyze(&map);
         assert!(graph.peaks.len() <= 1_000_000);
-        assert!(map.too_wild_to_preview(), "song select shows it no playfield");
+        assert!(
+            map.too_wild_to_preview(),
+            "song select shows it no playfield"
+        );
         assert!(!parse(MAP).too_wild_to_preview());
-        let _ = crate::game::Game::new(map, std::sync::Arc::new(crate::audio::Track { samples: Vec::new(), rate: 1.0 }), None);
+        let _ = crate::game::Game::new(
+            map,
+            std::sync::Arc::new(crate::audio::Track {
+                samples: Vec::new(),
+                rate: 1.0,
+            }),
+            None,
+        );
     }
 
     #[test]
     fn converts_standard_objects() {
         let map = parse(MAP);
-        let kinds: Vec<(f64, Kind, bool)> = map.notes.iter().map(|n| (n.time, n.kind, n.big)).collect();
+        let kinds: Vec<(f64, Kind, bool)> =
+            map.notes.iter().map(|n| (n.time, n.kind, n.big)).collect();
         // Circles: plain = don, whistle = kat, clap+finish = big kat.
         assert_eq!(kinds[0], (1000.0, Kind::Don, false));
         assert_eq!(kinds[1], (1500.0, Kind::Kat, false));
@@ -704,14 +867,28 @@ SliderTickRate:1
         assert_eq!(kinds[3].1, Kind::Don);
         assert_eq!(kinds[3].0, 2500.0);
         // 70px is a quarter beat-length at 1.4 SM: too short for a roll, so it splits into hits 250ms apart.
-        assert_eq!(map.notes.iter().filter(|n| n.time >= 2500.0 && n.time < 3000.0).count(), 2);
+        assert_eq!(
+            map.notes
+                .iter()
+                .filter(|n| n.time >= 2500.0 && n.time < 3000.0)
+                .count(),
+            2
+        );
         // The long slider under 2x SV becomes a drumroll: 560*2 px / (140 px/beat * 2 SV) = 4 beats = 2000ms.
-        let roll = map.notes.iter().find(|n| n.kind == Kind::Roll).expect("drumroll");
+        let roll = map
+            .notes
+            .iter()
+            .find(|n| n.kind == Kind::Roll)
+            .expect("drumroll");
         assert_eq!(roll.time, 5000.0);
         assert_eq!(roll.end_time, 7000.0);
         // 120 BPM: 1/8 ticks.
         assert_eq!(roll.tick_spacing, 62.5);
-        let swell = map.notes.iter().find(|n| n.kind == Kind::Swell).expect("swell");
+        let swell = map
+            .notes
+            .iter()
+            .find(|n| n.kind == Kind::Swell)
+            .expect("swell");
         assert_eq!(swell.end_time, 11000.0);
         // OD5: 5 * 1.65 hits per second over 2 seconds.
         assert_eq!(swell.required_hits, 16);
@@ -723,27 +900,47 @@ SliderTickRate:1
     fn a_nan_slider_is_nothing_and_takes_the_note_before_it() {
         // A don at 1000, a kat at 1500, a NaN slider at 1499: the note before it is the don,
         // however close the kat is.
-        let map = parse("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0\n142,139,1499,2,0,B|403:151|269:178,1,NaN\n256,192,1500,1,2\n");
-        let kinds: Vec<_> = map.notes.iter().map(|n| (n.time, n.kind, n.unhittable)).collect();
-        assert_eq!(kinds, [(1000.0, Kind::Don, true), (1500.0, Kind::Kat, false)]);
+        let map = parse(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0\n142,139,1499,2,0,B|403:151|269:178,1,NaN\n256,192,1500,1,2\n",
+        );
+        let kinds: Vec<_> = map
+            .notes
+            .iter()
+            .map(|n| (n.time, n.kind, n.unhittable))
+            .collect();
+        assert_eq!(
+            kinds,
+            [(1000.0, Kind::Don, true), (1500.0, Kind::Kat, false)]
+        );
     }
 
     #[test]
     fn a_pop_up_fake_slider_keeps_its_written_length() {
         // senpai, notice me! [w] at 189607: a 1 ms red line under the slider, 387 ms after it.
-        let map = parse("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.8\n\n[TimingPoints]\n0,387.096774193548,4,1,0,90,1,0\n1000,1,4,1,0,90,1,8\n1001,387.096774193548,4,1,0,90,1,8\n\n[HitObjects]\n166,117,1000,2,4,L|181:87,1,-300\n166,117,1000,2,0,L|181:87,1,-450\n");
+        let map = parse(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.8\n\n[TimingPoints]\n0,387.096774193548,4,1,0,90,1,0\n1000,1,4,1,0,90,1,8\n1001,387.096774193548,4,1,0,90,1,8\n\n[HitObjects]\n166,117,1000,2,4,L|181:87,1,-300\n166,117,1000,2,0,L|181:87,1,-450\n",
+        );
         let px: Vec<f64> = map.notes.iter().map(|n| n.fake_length).collect();
         assert!(px == [300.0, 450.0], "{px:?}");
-        assert!(map.notes.iter().all(|n| !n.fake_fades && n.velocity > 100.0));
+        assert!(
+            map.notes
+                .iter()
+                .all(|n| !n.fake_fades && n.velocity > 100.0)
+        );
     }
 
     #[test]
     fn a_barline_note_draws_its_bars_and_hides_its_note() {
         // taiko_arranger's barline note: a gimmick red line on the note (omitting its own bar),
         // restores either side that each draw one bar, 1 ms from the next red line.
-        let map = parse("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n999,500,4,1,0,100,1,0\n1000,0.000000001,4,1,0,100,1,8\n1001,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0\n256,192,1001,1,0\n256,192,4000,1,0\n");
+        let map = parse(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n999,500,4,1,0,100,1,0\n1000,0.000000001,4,1,0,100,1,8\n1001,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0\n256,192,1001,1,0\n256,192,4000,1,0\n",
+        );
         let bars: Vec<f64> = map.barlines.iter().map(|b| b.time).collect();
-        assert!(bars.contains(&999.0) && bars.contains(&1001.0) && !bars.contains(&1000.0), "{bars:?}");
+        assert!(
+            bars.contains(&999.0) && bars.contains(&1001.0) && !bars.contains(&1000.0),
+            "{bars:?}"
+        );
         // The bars scroll at the chart's speed, the note in the gimmick section far too fast to see.
         let normal = map.notes[1].velocity;
         assert!(map.barlines.iter().all(|b| b.velocity == normal));
@@ -754,8 +951,14 @@ SliderTickRate:1
 
     #[test]
     fn a_negative_length_slider_draws_a_body_but_plays_as_a_bare_head() {
-        let map = parse("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,2,0,L|356:192,1,-70\n256,192,2000,2,0,L|356:192,1,-0.0001\n256,192,3000,2,0,L|356:192,1,70\n256,192,4000,2,0,L|356:192,1,-300\n");
-        let rolls: Vec<(f64, f64)> = map.notes.iter().map(|n| (n.end_time - n.time, n.fake_len)).collect();
+        let map = parse(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,2,0,L|356:192,1,-70\n256,192,2000,2,0,L|356:192,1,-0.0001\n256,192,3000,2,0,L|356:192,1,70\n256,192,4000,2,0,L|356:192,1,-300\n",
+        );
+        let rolls: Vec<(f64, f64)> = map
+            .notes
+            .iter()
+            .map(|n| (n.end_time - n.time, n.fake_len))
+            .collect();
         // Only one whose cap can't land before its head fades at the drum; the rest vanish.
         let fades: Vec<bool> = map.notes.iter().map(|n| n.fake_fades).collect();
         assert_eq!(fades, [false, true, false, false]);
@@ -771,8 +974,14 @@ SliderTickRate:1
     #[test]
     fn sliders_written_under_0_1_long_are_tiny() {
         let lengths = ["0.1", "-0.1", "0.001", "-0.001", "0.11", "-0.11", "-50"];
-        let objects: String = lengths.iter().enumerate().map(|(i, l)| format!("256,192,{},2,0,L|356:192,1,{l}\n", 1000 * (i + 1))).collect();
-        let map = parse(&format!("osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n{objects}"));
+        let objects: String = lengths
+            .iter()
+            .enumerate()
+            .map(|(i, l)| format!("256,192,{},2,0,L|356:192,1,{l}\n", 1000 * (i + 1)))
+            .collect();
+        let map = parse(&format!(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n{objects}"
+        ));
         let tiny: Vec<bool> = map.notes.iter().map(|n| n.tiny).collect();
         assert_eq!(tiny, [true, true, true, true, false, true, true]);
     }
@@ -787,7 +996,9 @@ SliderTickRate:1
     #[test]
     fn old_format_negative_beat_length_is_an_sv_change() {
         // v4-era timing points: no uninherited flag, inherited points marked by negative beat length.
-        let map = parse("osu file format v4\n[Difficulty]\nSliderMultiplier:1.4\n[TimingPoints]\n0,500,4,1,0,100\n2000,-50,4,1,0,100\n[HitObjects]\n256,192,1000,1,0\n256,192,3000,1,0\n");
+        let map = parse(
+            "osu file format v4\n[Difficulty]\nSliderMultiplier:1.4\n[TimingPoints]\n0,500,4,1,0,100\n2000,-50,4,1,0,100\n[HitObjects]\n256,192,1000,1,0\n256,192,3000,1,0\n",
+        );
         assert_eq!(map.notes.len(), 2);
         assert!((map.notes[1].velocity / map.notes[0].velocity - 2.0).abs() < 1e-9);
         // Pre-v5 maps are shifted by 24 ms, like osu! does.
@@ -797,18 +1008,23 @@ SliderTickRate:1
     #[test]
     fn timing_points_carry_the_hitsound_volume() {
         // Red line at 70%, green lines at 40% and (an editor-impossible) 0%, which osu! floors at 5%.
-        let map = parse("osu file format v14\n[TimingPoints]\n0,500,4,1,0,70,1,0\n1000,-100,4,1,0,40,0,0\n2000,-100,4,1,0,0,0,0\n[HitObjects]\n256,192,500,1,0\n");
+        let map = parse(
+            "osu file format v14\n[TimingPoints]\n0,500,4,1,0,70,1,0\n1000,-100,4,1,0,40,0,0\n2000,-100,4,1,0,0,0,0\n[HitObjects]\n256,192,500,1,0\n",
+        );
         let at = |t| control_point_at(&map.control_points, t).volume;
         assert_eq!((at(500.0), at(1500.0), at(2500.0)), (0.7, 0.4, 0.05));
         // No volume field at all (very old maps): full volume.
-        let old = parse("osu file format v3\n[TimingPoints]\n0,500\n[HitObjects]\n256,192,500,1,0\n");
+        let old =
+            parse("osu file format v3\n[TimingPoints]\n0,500\n[HitObjects]\n256,192,500,1,0\n");
         assert_eq!(control_point_at(&old.control_points, 600.0).volume, 1.0);
     }
 
     #[test]
     fn beats_count_from_the_red_line_not_green_ones() {
         // Green lines mid-beat keep the beat; a new red line restarts it.
-        let map = parse("osu file format v14\n[TimingPoints]\n100,500,4,1,0,100,1,0\n1230,-50,4,1,0,100,0,0\n3000,400,4,1,0,100,1,0\n3170,-80,4,1,0,100,0,0\n[HitObjects]\n256,192,500,1,0\n");
+        let map = parse(
+            "osu file format v14\n[TimingPoints]\n100,500,4,1,0,100,1,0\n1230,-50,4,1,0,100,0,0\n3000,400,4,1,0,100,1,0\n3170,-80,4,1,0,100,0,0\n[HitObjects]\n256,192,500,1,0\n",
+        );
         let phase = |t| control_point_at(&map.control_points, t).beat_phase(t);
         assert!((phase(1350.0) - 0.5).abs() < 1e-9);
         assert!((phase(3300.0) - 0.75).abs() < 1e-9);
@@ -816,7 +1032,9 @@ SliderTickRate:1
 
     #[test]
     fn short_spinner_line_does_not_panic() {
-        let map = parse("osu file format v14\n[TimingPoints]\n0,500,4,1,0,100,1,0\n[HitObjects]\n256,192,1000,8,0\n256,192,2000,1,0\n");
+        let map = parse(
+            "osu file format v14\n[TimingPoints]\n0,500,4,1,0,100,1,0\n[HitObjects]\n256,192,1000,8,0\n256,192,2000,1,0\n",
+        );
         assert_eq!(map.notes.len(), 2);
         assert_eq!(map.notes[0].kind, Kind::Swell);
     }

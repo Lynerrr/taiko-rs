@@ -26,7 +26,14 @@ pub fn get() -> Option<String> {
     if let Some(text) = with_board(|b| b.get_text().ok()) {
         return Some(text);
     }
-    tool(&[("wl-paste", &["--no-newline"]), ("xclip", &["-o", "-selection", "clipboard"]), ("xsel", &["-ob"])], None)
+    tool(
+        &[
+            ("wl-paste", &["--no-newline"]),
+            ("xclip", &["-o", "-selection", "clipboard"]),
+            ("xsel", &["-ob"]),
+        ],
+        None,
+    )
 }
 
 /// Puts `text` on the clipboard; false if there's none to put it on.
@@ -35,25 +42,50 @@ pub fn set(text: &str) -> bool {
     if with_board(|b| b.set_text(text).ok()).is_some() {
         return true;
     }
-    tool(&[("wl-copy", &[]), ("xclip", &["-selection", "clipboard"]), ("xsel", &["-ib"])], Some(text.as_bytes())).is_some()
+    tool(
+        &[
+            ("wl-copy", &[]),
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["-ib"]),
+        ],
+        Some(text.as_bytes()),
+    )
+    .is_some()
 }
 
 /// Puts a `w` x `h` RGB picture on the clipboard; false if there's none to put it on.
 pub fn set_image(w: u32, h: u32, rgb: &[u8]) -> bool {
     #[cfg(not(target_os = "android"))]
     {
-        let rgba: Vec<u8> = rgb.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
-        let image = arboard::ImageData { width: w as usize, height: h as usize, bytes: rgba.into() };
+        let rgba: Vec<u8> = rgb
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect();
+        let image = arboard::ImageData {
+            width: w as usize,
+            height: h as usize,
+            bytes: rgba.into(),
+        };
         if with_board(|b| b.set_image(image).ok()).is_some() {
             return true;
         }
     }
     let mut png = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new(&mut png);
-    if image::ImageEncoder::write_image(encoder, rgb, w, h, image::ExtendedColorType::Rgb8).is_err() {
+    if image::ImageEncoder::write_image(encoder, rgb, w, h, image::ExtendedColorType::Rgb8).is_err()
+    {
         return false;
     }
-    tool(&[("wl-copy", &["--type", "image/png"]), ("xclip", &["-selection", "clipboard", "-t", "image/png"])], Some(&png)).is_some()
+    tool(
+        &[
+            ("wl-copy", &["--type", "image/png"]),
+            ("xclip", &["-selection", "clipboard", "-t", "image/png"]),
+        ],
+        Some(&png),
+    )
+    .is_some()
 }
 
 /// The first of the clipboard tools that works (Linux only): reading its output, or writing
@@ -68,7 +100,9 @@ fn tool(tries: &[(&str, &[&str])], input: Option<&[u8]>) -> Option<String> {
             let mut c = Command::new(cmd);
             c.args(*args).stderr(Stdio::null());
             if let Some(text) = input {
-                let Ok(mut child) = c.stdin(Stdio::piped()).stdout(Stdio::null()).spawn() else { continue };
+                let Ok(mut child) = c.stdin(Stdio::piped()).stdout(Stdio::null()).spawn() else {
+                    continue;
+                };
                 if let Some(mut stdin) = child.stdin.take() {
                     let _ = stdin.write_all(text);
                 }
@@ -87,7 +121,15 @@ fn tool(tries: &[(&str, &[&str])], input: Option<&[u8]>) -> Option<String> {
 
 /// Text pasted into a one-line field: its first line, without control characters.
 pub fn one_line(text: &str) -> String {
-    text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().filter(|c| !c.is_control()).take(1000).collect::<String>().trim().to_string()
+    text.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(1000)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 #[cfg(test)]

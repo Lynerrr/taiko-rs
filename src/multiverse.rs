@@ -8,7 +8,7 @@ use std::sync::RwLock;
 use winit::keyboard::KeyCode;
 
 use crate::mods::{Mod, Mods};
-use crate::render::{accent, rgba, Canvas, Hit};
+use crate::render::{Canvas, Hit, accent, rgba};
 
 /// How many universes (playfields) there are.
 pub const COUNT: usize = 8;
@@ -61,7 +61,10 @@ pub struct Colours {
 }
 
 impl Colours {
-    pub const CLASSIC: Colours = Colours { palette: 0, custom: [crate::game::DON, crate::game::KAT] };
+    pub const CLASSIC: Colours = Colours {
+        palette: 0,
+        custom: [crate::game::DON, crate::game::KAT],
+    };
 
     pub fn don(self) -> u32 {
         PALETTES.get(self.palette).map_or(self.custom[0], |p| p.1)
@@ -83,17 +86,27 @@ impl Colours {
     /// Dons and kats alike, out of focus: grey with a hint of the colours (but not which is
     /// which).
     pub fn idle(self) -> u32 {
-        if self.palette == 0 { GREY } else { crate::game::mix(GREY, crate::game::mix(self.don(), self.kat(), 0.5), 0.35) }
+        if self.palette == 0 {
+            GREY
+        } else {
+            crate::game::mix(GREY, crate::game::mix(self.don(), self.kat(), 0.5), 0.35)
+        }
     }
 
     /// The next (`dir` 1) or previous palette; the player's own come after the last.
     pub fn step(self, dir: i32) -> Colours {
-        Colours { palette: (self.palette as i32 + dir).rem_euclid(CUSTOM as i32 + 1) as usize, ..self }
+        Colours {
+            palette: (self.palette as i32 + dir).rem_euclid(CUSTOM as i32 + 1) as usize,
+            ..self
+        }
     }
 
     /// The player's own colours, picked.
     pub fn own(don: u32, kat: u32) -> Colours {
-        Colours { palette: CUSTOM, custom: [don, kat] }
+        Colours {
+            palette: CUSTOM,
+            custom: [don, kat],
+        }
     }
 
     /// "neon", "custom #ff4020/#40a0ff", or a palette and the own colours kept behind it.
@@ -101,7 +114,12 @@ impl Colours {
         if self.palette != CUSTOM && self.custom == Colours::CLASSIC.custom {
             return self.name().to_string();
         }
-        format!("{} #{:06x}/#{:06x}", self.name(), self.custom[0], self.custom[1])
+        format!(
+            "{} #{:06x}/#{:06x}",
+            self.name(),
+            self.custom[0],
+            self.custom[1]
+        )
     }
 
     /// Takes one word of `format`'s form; false if it isn't about colours.
@@ -131,12 +149,17 @@ impl Colours {
 /// A colour typed as "#ff4020" or "ff4020".
 pub fn parse_hex(s: &str) -> Option<u32> {
     let h = s.trim().trim_start_matches('#');
-    (h.len() == 6).then(|| u32::from_str_radix(h, 16).ok()).flatten()
+    (h.len() == 6)
+        .then(|| u32::from_str_radix(h, 16).ok())
+        .flatten()
 }
 
 /// Two colours, don then kat: "#ff4020 #40a0ff", "ff4020/40a0ff", "ff4020, 40a0ff"...
 pub fn parse_pair(s: &str) -> Option<[u32; 2]> {
-    let parts: Vec<&str> = s.split(|c: char| c.is_whitespace() || c == '/' || c == ',').filter(|p| !p.is_empty()).collect();
+    let parts: Vec<&str> = s
+        .split(|c: char| c.is_whitespace() || c == '/' || c == ',')
+        .filter(|p| !p.is_empty())
+        .collect();
     match parts[..] {
         [don, kat] => Some([parse_hex(don)?, parse_hex(kat)?]),
         _ => None,
@@ -153,7 +176,13 @@ pub enum Shape {
 }
 
 impl Shape {
-    pub const ALL: [Shape; 5] = [Shape::Round, Shape::Square, Shape::Diamond, Shape::Ring, Shape::Pill];
+    pub const ALL: [Shape; 5] = [
+        Shape::Round,
+        Shape::Square,
+        Shape::Diamond,
+        Shape::Ring,
+        Shape::Pill,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -183,7 +212,18 @@ const NORMAL_SPEED: usize = 2;
 
 /// The mods a universe can have: those that only change how notes are drawn and move, worked
 /// out as each playfield is drawn (nothing about them is set up when the play starts).
-pub const MODS: [Mod; 10] = [Mod::Hidden, Mod::Sudden, Mod::Blink, Mod::Snake, Mod::Party, Mod::Wave, Mod::Accel, Mod::Brake, Mod::Pulse, Mod::Stutter];
+pub const MODS: [Mod; 10] = [
+    Mod::Hidden,
+    Mod::Sudden,
+    Mod::Blink,
+    Mod::Snake,
+    Mod::Party,
+    Mod::Wave,
+    Mod::Accel,
+    Mod::Brake,
+    Mod::Pulse,
+    Mod::Stutter,
+];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Universe {
@@ -195,7 +235,12 @@ pub struct Universe {
 
 impl Universe {
     /// The usual playfield (and every playfield without Multiverse, in the player's colours).
-    pub const CLASSIC: Universe = Universe { colours: Colours::CLASSIC, shape: Shape::Round, speed: NORMAL_SPEED, mods: Mods::NONE };
+    pub const CLASSIC: Universe = Universe {
+        colours: Colours::CLASSIC,
+        shape: Shape::Round,
+        speed: NORMAL_SPEED,
+        mods: Mods::NONE,
+    };
 
     pub fn don(&self) -> u32 {
         self.colours.don()
@@ -215,8 +260,17 @@ impl Universe {
 
     /// "neon diamond 1.25x HD,SK" (the config's form; own colours as "custom #rrggbb/#rrggbb").
     fn format(&self) -> String {
-        let mods = if self.mods.is_empty() { "-".to_string() } else { self.mods.list().join(",") };
-        format!("{} {} {}x {mods}", self.colours.format(), self.shape.name(), SPEEDS[self.speed])
+        let mods = if self.mods.is_empty() {
+            "-".to_string()
+        } else {
+            self.mods.list().join(",")
+        };
+        format!(
+            "{} {} {}x {mods}",
+            self.colours.format(),
+            self.shape.name(),
+            SPEEDS[self.speed]
+        )
     }
 
     /// Reads `format`'s form; what isn't understood stays as in `base`.
@@ -226,10 +280,16 @@ impl Universe {
             if u.colours.read(word) {
                 continue;
             }
-            if let Some(&shape) = Shape::ALL.iter().find(|s| s.name().eq_ignore_ascii_case(word)) {
+            if let Some(&shape) = Shape::ALL
+                .iter()
+                .find(|s| s.name().eq_ignore_ascii_case(word))
+            {
                 u.shape = shape;
             } else if let Some(speed) = word.strip_suffix('x').and_then(|v| v.parse::<f64>().ok()) {
-                u.speed = SPEEDS.iter().position(|&s| (s - speed).abs() < 1e-6).unwrap_or(u.speed);
+                u.speed = SPEEDS
+                    .iter()
+                    .position(|&s| (s - speed).abs() < 1e-6)
+                    .unwrap_or(u.speed);
             } else if word == "-" {
                 u.mods = Mods::NONE;
             } else {
@@ -253,7 +313,10 @@ fn only_universe_mods(mods: Mods) -> Mods {
 /// with the focus first is the usual playfield.
 pub fn defaults() -> [Universe; COUNT] {
     let u = |palette, shape, speed, mods: &str| Universe {
-        colours: Colours { palette, ..Colours::CLASSIC },
+        colours: Colours {
+            palette,
+            ..Colours::CLASSIC
+        },
         shape,
         speed,
         mods: only_universe_mods(Mods::parse(mods)),
@@ -293,20 +356,39 @@ pub fn shuffle(seed: u64, first_focus: usize) -> [Universe; COUNT] {
         let palette = palettes.remove(next(palettes.len()));
         let shape = Shape::ALL[next(Shape::ALL.len())];
         let speed = next(SPEEDS.len());
-        let mods = if next(2) == 0 { Mods::NONE } else { Mods::parse(MODS[next(MODS.len())].acronym()) };
-        Universe { colours: Colours { palette, ..Colours::CLASSIC }, shape, speed, mods }
+        let mods = if next(2) == 0 {
+            Mods::NONE
+        } else {
+            Mods::parse(MODS[next(MODS.len())].acronym())
+        };
+        Universe {
+            colours: Colours {
+                palette,
+                ..Colours::CLASSIC
+            },
+            shape,
+            speed,
+            mods,
+        }
     })
 }
 
 /// The universes as the config keeps them: `; ` between them.
 pub fn format(all: &[Universe; COUNT]) -> String {
-    all.iter().map(Universe::format).collect::<Vec<_>>().join("; ")
+    all.iter()
+        .map(Universe::format)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 pub fn parse(s: &str) -> [Universe; COUNT] {
     let parts: Vec<&str> = s.split(';').collect();
     let base = defaults();
-    std::array::from_fn(|i| parts.get(i).map_or(base[i], |p| Universe::parse(p, base[i])))
+    std::array::from_fn(|i| {
+        parts
+            .get(i)
+            .map_or(base[i], |p| Universe::parse(p, base[i]))
+    })
 }
 
 /// A setup of all the universes saved under a name by the player.
@@ -325,19 +407,40 @@ impl Preset {
     pub fn parse(s: &str) -> Option<Preset> {
         let (name, rest) = s.split_once(':')?;
         let name = clean_name(name);
-        (!name.is_empty()).then(|| Preset { name, universes: parse(rest) })
+        (!name.is_empty()).then(|| Preset {
+            name,
+            universes: parse(rest),
+        })
     }
 }
 
 /// A preset name as typed, without what the config uses to separate things.
 fn clean_name(s: &str) -> String {
-    s.chars().filter(|c| !c.is_control() && !matches!(c, ':' | ';')).collect::<String>().trim().chars().take(24).collect()
+    s.chars()
+        .filter(|c| !c.is_control() && !matches!(c, ':' | ';'))
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(24)
+        .collect()
 }
 
 /// Every preset in the order the setup lists them: the built-in ones, then the player's.
 fn presets(own: &[Preset]) -> Vec<(String, [Universe; COUNT])> {
-    let builtin = [(tr!("defaults", "初期設定", "исходные").to_string(), defaults()), (tr!("classic", "クラシック", "классика").to_string(), classic())];
-    builtin.into_iter().chain(own.iter().map(|p| (p.name.clone(), p.universes))).collect()
+    let builtin = [
+        (
+            tr!("defaults", "初期設定", "исходные").to_string(),
+            defaults(),
+        ),
+        (
+            tr!("classic", "クラシック", "классика").to_string(),
+            classic(),
+        ),
+    ];
+    builtin
+        .into_iter()
+        .chain(own.iter().map(|p| (p.name.clone(), p.universes)))
+        .collect()
 }
 const BUILTIN_PRESETS: usize = 2;
 
@@ -383,17 +486,38 @@ pub fn note(c: &mut Canvas, shape: Shape, x: f32, y: f32, r: f32, col: u32, a: f
     let (fill, white) = (rgba(col, a), rgba(0xffffff, a));
     match shape {
         Shape::Round => {
-            c.circle(x, y, r + 2.0, rgba(0x000000, 0.35 * a), rgba(0x000000, 0.0), 0.0);
+            c.circle(
+                x,
+                y,
+                r + 2.0,
+                rgba(0x000000, 0.35 * a),
+                rgba(0x000000, 0.0),
+                0.0,
+            );
             c.circle(x, y, r, fill, white, r * 0.1);
         }
         Shape::Square => {
             let h = r * 0.9;
-            c.round_rect([x - h, y - h], [2.0 * h, 2.0 * h], r * 0.28, fill, white, r * 0.1);
+            c.round_rect(
+                [x - h, y - h],
+                [2.0 * h, 2.0 * h],
+                r * 0.28,
+                fill,
+                white,
+                r * 0.1,
+            );
         }
         Shape::Diamond => {
             let first = c.shapes.len();
             let h = r * 0.82;
-            c.round_rect([x - h, y - h], [2.0 * h, 2.0 * h], r * 0.18, fill, white, r * 0.1);
+            c.round_rect(
+                [x - h, y - h],
+                [2.0 * h, 2.0 * h],
+                r * 0.18,
+                fill,
+                white,
+                r * 0.1,
+            );
             c.rotate_since(first, [x, y], std::f32::consts::FRAC_PI_4, 1.0, [x, y]);
         }
         Shape::Ring => {
@@ -401,7 +525,14 @@ pub fn note(c: &mut Canvas, shape: Shape, x: f32, y: f32, r: f32, col: u32, a: f
             c.ring(x, y, r * 0.62, rgba(0xffffff, 0.8 * a), r * 0.07);
         }
         Shape::Pill => {
-            c.capsule([x - r * 0.45, x + r * 0.45], y, r * 0.78, fill, white, r * 0.1);
+            c.capsule(
+                [x - r * 0.45, x + r * 0.45],
+                y,
+                r * 0.78,
+                fill,
+                white,
+                r * 0.1,
+            );
         }
     }
 }
@@ -440,7 +571,11 @@ pub enum Action {
 
 impl Setup {
     pub fn new(row: usize, col: usize) -> Setup {
-        Setup { row, col, ..Default::default() }
+        Setup {
+            row,
+            col,
+            ..Default::default()
+        }
     }
 
     /// Changes the setting at `row`, `col`: the next (`dir` 1) or previous (-1) colours, shape or
@@ -450,7 +585,12 @@ impl Setup {
         let step = |i: usize, n: usize| (i as i32 + dir).rem_euclid(n as i32) as usize;
         match col {
             0 => u.colours = u.colours.step(dir),
-            1 => u.shape = Shape::ALL[step(Shape::ALL.iter().position(|&s| s == u.shape).unwrap_or(0), Shape::ALL.len())],
+            1 => {
+                u.shape = Shape::ALL[step(
+                    Shape::ALL.iter().position(|&s| s == u.shape).unwrap_or(0),
+                    Shape::ALL.len(),
+                )]
+            }
             2 => u.speed = step(u.speed, SPEEDS.len()),
             c => u.mods.toggle(MODS[(c - 3).min(MODS.len() - 1)]),
         }
@@ -500,8 +640,14 @@ impl Setup {
                     self.bad = true;
                     return Action::None;
                 }
-                let preset = Preset { name, universes: *all };
-                match own.iter_mut().find(|p| p.name.eq_ignore_ascii_case(&preset.name)) {
+                let preset = Preset {
+                    name,
+                    universes: *all,
+                };
+                match own
+                    .iter_mut()
+                    .find(|p| p.name.eq_ignore_ascii_case(&preset.name))
+                {
                     Some(p) => *p = preset,
                     None => own.push(preset),
                 }
@@ -512,7 +658,15 @@ impl Setup {
         Action::Changed
     }
 
-    pub fn key(&mut self, code: KeyCode, text: Option<&str>, shift: bool, all: &mut [Universe; COUNT], own: &mut Vec<Preset>, first_focus: usize) -> Action {
+    pub fn key(
+        &mut self,
+        code: KeyCode,
+        text: Option<&str>,
+        shift: bool,
+        all: &mut [Universe; COUNT],
+        own: &mut Vec<Preset>,
+        first_focus: usize,
+    ) -> Action {
         self.bad = false;
         if let Some(Typing::Colours(s) | Typing::Name(s)) = &mut self.typing {
             match code {
@@ -544,16 +698,23 @@ impl Setup {
             KeyCode::KeyE => {
                 let c = all[self.row].colours;
                 self.col = 0;
-                self.typing = Some(Typing::Colours(format!("#{:06x} #{:06x}", c.don(), c.kat())));
+                self.typing = Some(Typing::Colours(format!(
+                    "#{:06x} #{:06x}",
+                    c.don(),
+                    c.kat()
+                )));
             }
             KeyCode::KeyS => {
-                let name = Self::current(all, own).filter(|&i| i >= BUILTIN_PRESETS).map(|i| own[i - BUILTIN_PRESETS].name.clone());
+                let name = Self::current(all, own)
+                    .filter(|&i| i >= BUILTIN_PRESETS)
+                    .map(|i| own[i - BUILTIN_PRESETS].name.clone());
                 self.typing = Some(Typing::Name(name.unwrap_or_default()));
             }
             KeyCode::BracketLeft | KeyCode::BracketRight => {
                 let n = presets(own).len() as i32;
                 let step = if code == KeyCode::BracketRight { 1 } else { -1 };
-                let at = Self::current(all, own).map_or(if step > 0 { -1 } else { 0 }, |i| i as i32);
+                let at =
+                    Self::current(all, own).map_or(if step > 0 { -1 } else { 0 }, |i| i as i32);
                 return Self::load(all, own, (at + step).rem_euclid(n) as usize);
             }
             KeyCode::Delete => {
@@ -562,7 +723,9 @@ impl Setup {
                 }
             }
             KeyCode::KeyR => {
-                let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as u64);
                 *all = shuffle(seed, first_focus);
                 return Action::Changed;
             }
@@ -574,25 +737,52 @@ impl Setup {
                 *all = defaults();
                 return Action::Changed;
             }
-            KeyCode::Escape | KeyCode::KeyM | KeyCode::F1 | KeyCode::Backspace | KeyCode::Tab => return Action::Close,
+            KeyCode::Escape | KeyCode::KeyM | KeyCode::F1 | KeyCode::Backspace | KeyCode::Tab => {
+                return Action::Close;
+            }
             _ => {}
         }
         Action::None
     }
 
     /// Draws the setup over the mod select. `first_focus`: the universe the focus starts on.
-    pub fn draw(&self, c: &mut Canvas, all: &[Universe; COUNT], own: &[Preset], first_focus: usize) {
+    pub fn draw(
+        &self,
+        c: &mut Canvas,
+        all: &[Universe; COUNT],
+        own: &[Preset],
+        first_focus: usize,
+    ) {
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.6));
         let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
-        c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.99), rgba(0xff5fa2, 0.9), 1.5);
-        let title_w = c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "MULTIVERSE");
+        c.round_rect(
+            [px, py],
+            [pw, ph],
+            10.0,
+            rgba(0x15151d, 0.99),
+            rgba(0xff5fa2, 0.9),
+            1.5,
+        );
+        let title_w = c.text(
+            px + 16.0,
+            py + 12.0,
+            12.0,
+            rgba(0xffffff, 1.0),
+            "MULTIVERSE",
+        );
         let hint = tr!(
             "arrows choose   Space change (Shift back)   E own colours   S save preset   [ ] presets   R shuffle   Esc back",
             "矢印 選択   Space 変更 (Shiftで戻す)   E 自分の色   S プリセット保存   [ ] プリセット   R シャッフル   Esc 戻る",
             "стрелки выбор   Space менять (Shift назад)   E свои цвета   S сохранить   [ ] пресеты   R перемешать   Esc назад"
         );
-        c.text(px + 26.0 + title_w, py + 16.0, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit(6.0, pw - title_w - 42.0, hint));
+        c.text(
+            px + 26.0 + title_w,
+            py + 16.0,
+            6.0,
+            rgba(0x6f6f86, 1.0),
+            &Canvas::fit(6.0, pw - title_w - 42.0, hint),
+        );
 
         // Columns: number and its notes, colours, shape, speed, the mod chips.
         let (num_w, look_w, shape_w, speed_w) = (70.0, 72.0, 62.0, 46.0);
@@ -606,7 +796,12 @@ impl Setup {
             c => (chips_x + (c - 3) as f32 * chip_w, chip_w),
         };
         let head_y = py + 36.0;
-        for (col, name) in [(0, tr!("COLOURS", "色", "ЦВЕТА")), (1, tr!("SHAPE", "形", "ФОРМА")), (2, tr!("SPEED", "速度", "СКОРОСТЬ")), (3, tr!("MODS", "MOD", "МОДЫ"))] {
+        for (col, name) in [
+            (0, tr!("COLOURS", "色", "ЦВЕТА")),
+            (1, tr!("SHAPE", "形", "ФОРМА")),
+            (2, tr!("SPEED", "速度", "СКОРОСТЬ")),
+            (3, tr!("MODS", "MOD", "МОДЫ")),
+        ] {
             c.text(col_x(col).0 + 4.0, head_y, 6.0, rgba(0x8a8aa0, 1.0), name);
         }
         const ROW: f32 = 36.0;
@@ -614,8 +809,19 @@ impl Setup {
         for (i, u) in all.iter().enumerate() {
             let y = head_y + 12.0 + i as f32 * ROW;
             let (h, mid) = (ROW - 5.0, y + (ROW - 5.0) / 2.0);
-            c.round_rect([x0, y], [px + pw - 12.0 - x0, h], 6.0, rgba(if i == self.row { 0x23232f } else { 0x1b1b24 }, 1.0), rgba(0x2a2a38, 1.0), 1.0);
-            let label = if i == first_focus { format!("{}*", i + 1) } else { (i + 1).to_string() };
+            c.round_rect(
+                [x0, y],
+                [px + pw - 12.0 - x0, h],
+                6.0,
+                rgba(if i == self.row { 0x23232f } else { 0x1b1b24 }, 1.0),
+                rgba(0x2a2a38, 1.0),
+                1.0,
+            );
+            let label = if i == first_focus {
+                format!("{}*", i + 1)
+            } else {
+                (i + 1).to_string()
+            };
             c.text(x0 + 8.0, mid - 4.0, 8.0, rgba(0xc8c8d8, 1.0), &label);
             note(c, u.shape, x0 + 36.0, mid, 9.5, u.don(), 1.0);
             note(c, u.shape, x0 + 58.0, mid, 9.5, u.kat(), 1.0);
@@ -627,9 +833,28 @@ impl Setup {
                     hovered = Some(col);
                 }
                 let on = col >= 3 && u.mods.has(MODS[col - 3]);
-                let fill = if on { 0x6b2a4c } else if selected { 0x34344a } else { 0x1d1d27 };
-                let border = if selected { accent() } else if on { 0xff5fa2 } else { 0x2a2a38 };
-                c.round_rect([cx, y + 3.0], [cw, h - 6.0], 4.0, rgba(fill, 1.0), rgba(border, 1.0), if selected { 1.5 } else { 1.0 });
+                let fill = if on {
+                    0x6b2a4c
+                } else if selected {
+                    0x34344a
+                } else {
+                    0x1d1d27
+                };
+                let border = if selected {
+                    accent()
+                } else if on {
+                    0xff5fa2
+                } else {
+                    0x2a2a38
+                };
+                c.round_rect(
+                    [cx, y + 3.0],
+                    [cw, h - 6.0],
+                    4.0,
+                    rgba(fill, 1.0),
+                    rgba(border, 1.0),
+                    if selected { 1.5 } else { 1.0 },
+                );
                 let text = match col {
                     0 => u.colours.label().to_string(),
                     1 => u.shape.label().to_string(),
@@ -637,7 +862,13 @@ impl Setup {
                     c => MODS[c - 3].acronym().to_string(),
                 };
                 let col_text = if col >= 3 && !on { 0x6f6f86 } else { 0xffffff };
-                c.text_centered(cx + cw / 2.0, mid - 3.5, 7.0, rgba(col_text, 1.0), &Canvas::fit(7.0, cw - 4.0, &text));
+                c.text_centered(
+                    cx + cw / 2.0,
+                    mid - 3.5,
+                    7.0,
+                    rgba(col_text, 1.0),
+                    &Canvas::fit(7.0, cw - 4.0, &text),
+                );
                 c.hit(cx, y + 3.0, cw, h - 6.0, Hit::UniverseCell(i, col));
             }
         }
@@ -683,16 +914,58 @@ impl Setup {
             }
         };
         let col = if self.bad { 0xFF4B4B } else { col };
-        c.text(px + 16.0, line_y, 7.0, rgba(col, 1.0), &Canvas::fit_end(7.0, pw - 32.0, &line));
+        c.text(
+            px + 16.0,
+            line_y,
+            7.0,
+            rgba(col, 1.0),
+            &Canvas::fit_end(7.0, pw - 32.0, &line),
+        );
 
         // Presets: the built-in ones and the player's, the one the universes are now lit; the
         // player's have an x to delete them.
         let (by, bh, bw) = (py + ph - 26.0, 16.0, 56.0);
-        c.button(px + pw - bw - 12.0, by, bw, bh, tr!("Back", "戻る", "Назад"), 7.0, Hit::Key(KeyCode::Escape), true);
-        c.button(px + pw - 2.0 * bw - 18.0, by, bw, bh, tr!("Shuffle", "シャッフル", "Смешать"), 7.0, Hit::Key(KeyCode::KeyR), false);
-        c.button(px + pw - 3.0 * bw - 24.0, by, bw, bh, tr!("+ Save", "+ 保存", "+ Сохр."), 7.0, Hit::Key(KeyCode::KeyS), false);
+        c.button(
+            px + pw - bw - 12.0,
+            by,
+            bw,
+            bh,
+            tr!("Back", "戻る", "Назад"),
+            7.0,
+            Hit::Key(KeyCode::Escape),
+            true,
+        );
+        c.button(
+            px + pw - 2.0 * bw - 18.0,
+            by,
+            bw,
+            bh,
+            tr!("Shuffle", "シャッフル", "Смешать"),
+            7.0,
+            Hit::Key(KeyCode::KeyR),
+            false,
+        );
+        c.button(
+            px + pw - 3.0 * bw - 24.0,
+            by,
+            bw,
+            bh,
+            tr!("+ Save", "+ 保存", "+ Сохр."),
+            7.0,
+            Hit::Key(KeyCode::KeyS),
+            false,
+        );
         let room_end = px + pw - 3.0 * bw - 32.0;
-        let mut x = px + 16.0 + c.text(px + 16.0, by + 5.0, 6.0, rgba(0x8a8aa0, 1.0), tr!("PRESETS", "プリセット", "ПРЕСЕТЫ")) + 8.0;
+        let mut x = px
+            + 16.0
+            + c.text(
+                px + 16.0,
+                by + 5.0,
+                6.0,
+                rgba(0x8a8aa0, 1.0),
+                tr!("PRESETS", "プリセット", "ПРЕСЕТЫ"),
+            )
+            + 8.0;
         let current = Self::current(all, own);
         let list = presets(own);
         for (i, (name, _)) in list.iter().enumerate() {
@@ -700,13 +973,38 @@ impl Setup {
             let name_w = Canvas::text_width(7.0, name).min(90.0);
             let cw = name_w + 14.0 + if mine { 12.0 } else { 0.0 };
             if x + cw > room_end {
-                c.text(x, by + 4.5, 7.0, rgba(0x8a8aa0, 1.0), &format!("+{}", list.len() - i));
+                c.text(
+                    x,
+                    by + 4.5,
+                    7.0,
+                    rgba(0x8a8aa0, 1.0),
+                    &format!("+{}", list.len() - i),
+                );
                 break;
             }
             let on = current == Some(i);
-            c.round_rect([x, by], [cw, bh], 4.0, rgba(if on { 0x6b2a4c } else { 0x1d1d27 }, 1.0), rgba(if on { 0xff5fa2 } else { 0x3a3a4e }, 1.0), 1.0);
-            c.text(x + 7.0, by + 4.5, 7.0, rgba(0xffffff, 1.0), &Canvas::fit(7.0, name_w, name));
-            c.hit(x, by, cw - if mine { 12.0 } else { 0.0 }, bh, Hit::UniversePreset(i));
+            c.round_rect(
+                [x, by],
+                [cw, bh],
+                4.0,
+                rgba(if on { 0x6b2a4c } else { 0x1d1d27 }, 1.0),
+                rgba(if on { 0xff5fa2 } else { 0x3a3a4e }, 1.0),
+                1.0,
+            );
+            c.text(
+                x + 7.0,
+                by + 4.5,
+                7.0,
+                rgba(0xffffff, 1.0),
+                &Canvas::fit(7.0, name_w, name),
+            );
+            c.hit(
+                x,
+                by,
+                cw - if mine { 12.0 } else { 0.0 },
+                bh,
+                Hit::UniversePreset(i),
+            );
             if mine {
                 c.text(x + cw - 11.0, by + 4.5, 7.0, rgba(0x8a8aa0, 1.0), "x");
                 c.hit(x + cw - 13.0, by, 13.0, bh, Hit::UniversePresetDelete(i));
@@ -722,11 +1020,17 @@ mod tests {
 
     #[test]
     fn pinned_note_colours_hold_while_another_thread_sets_them() {
-        let mine = Colours { palette: 0, custom: [0x112233, 0x445566] };
+        let mine = Colours {
+            palette: 0,
+            custom: [0x112233, 0x445566],
+        };
         pin_note_colours_for_this_thread(Some(mine));
         std::thread::spawn(|| {
             for i in 0..1000 {
-                set_note_colours(Colours { palette: 0, custom: [i, i] });
+                set_note_colours(Colours {
+                    palette: 0,
+                    custom: [i, i],
+                });
             }
         })
         .join()
@@ -744,7 +1048,12 @@ mod tests {
             0.2126 * ch(16) + 0.7152 * ch(8) + 0.0722 * ch(0)
         };
         for (name, don, kat) in PALETTES {
-            assert!(brightness(don) + 20.0 < brightness(kat), "{name}: don {} kat {}", brightness(don), brightness(kat));
+            assert!(
+                brightness(don) + 20.0 < brightness(kat),
+                "{name}: don {} kat {}",
+                brightness(don),
+                brightness(kat)
+            );
         }
     }
 
@@ -753,24 +1062,48 @@ mod tests {
         let mut own = defaults();
         own[2].colours = Colours::own(0x123456, 0xabcdef);
         // A palette picked with own colours kept behind it.
-        own[3].colours = Colours { palette: 1, custom: [0x111111, 0xeeeeee] };
+        own[3].colours = Colours {
+            palette: 1,
+            custom: [0x111111, 0xeeeeee],
+        };
         for all in [defaults(), classic(), shuffle(12345, 4), own] {
             assert_eq!(parse(&format(&all)), all);
         }
         // Missing or garbled universes fall back to the defaults; a mod a universe can't have
         // is left out.
         let all = parse("neon square 1.5x HD,HR; ???");
-        assert_eq!(all[0], Universe { colours: Colours { palette: 1, ..Colours::CLASSIC }, shape: Shape::Square, speed: 4, mods: Mods::parse("HD") });
+        assert_eq!(
+            all[0],
+            Universe {
+                colours: Colours {
+                    palette: 1,
+                    ..Colours::CLASSIC
+                },
+                shape: Shape::Square,
+                speed: 4,
+                mods: Mods::parse("HD")
+            }
+        );
         assert_eq!(all[1], defaults()[1]);
         assert_eq!(all[7], defaults()[7]);
     }
 
     #[test]
     fn note_colours_and_presets_round_trip_through_the_config() {
-        for c in [Colours::CLASSIC, Colours { palette: 3, ..Colours::CLASSIC }, Colours::own(0xff0000, 0x00ff00)] {
+        for c in [
+            Colours::CLASSIC,
+            Colours {
+                palette: 3,
+                ..Colours::CLASSIC
+            },
+            Colours::own(0xff0000, 0x00ff00),
+        ] {
             assert_eq!(Colours::parse(&c.format()), c);
         }
-        let p = Preset { name: "my chaos".into(), universes: shuffle(9, 4) };
+        let p = Preset {
+            name: "my chaos".into(),
+            universes: shuffle(9, 4),
+        };
         assert_eq!(Preset::parse(&p.format()), Some(p));
         assert_eq!(Preset::parse(": neon"), None);
     }
@@ -789,7 +1122,12 @@ mod tests {
         for seed in 0..50 {
             let all = shuffle(seed, 4);
             assert_eq!(all[4], Universe::CLASSIC);
-            let mut palettes: Vec<usize> = all.iter().enumerate().filter(|(i, _)| *i != 4).map(|(_, u)| u.colours.palette).collect();
+            let mut palettes: Vec<usize> = all
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != 4)
+                .map(|(_, u)| u.colours.palette)
+                .collect();
             palettes.dedup();
             assert_eq!(palettes.len(), COUNT - 1);
             assert!(all.iter().all(|u| u.mods.iter().all(|m| MODS.contains(&m))));
@@ -814,15 +1152,19 @@ mod tests {
     #[test]
     fn presets_save_load_cycle_and_delete() {
         let (mut all, mut own, mut s) = (defaults(), Vec::new(), Setup::new(0, 0));
-        let typed = |s: &mut Setup, all: &mut [Universe; COUNT], own: &mut Vec<Preset>, text: &str| {
-            s.key(KeyCode::KeyA, Some(text), false, all, own, 4);
-            s.key(KeyCode::Enter, None, false, all, own, 4)
-        };
+        let typed =
+            |s: &mut Setup, all: &mut [Universe; COUNT], own: &mut Vec<Preset>, text: &str| {
+                s.key(KeyCode::KeyA, Some(text), false, all, own, 4);
+                s.key(KeyCode::Enter, None, false, all, own, 4)
+            };
         // Own colours for universe 1, then saved as a preset.
         s.key(KeyCode::KeyE, None, false, &mut all, &mut own, 4);
         assert_eq!(s.typing, Some(Typing::Colours("#ff3fb4 #2fe0ff".into())));
         s.typing = Some(Typing::Colours(String::new()));
-        assert_eq!(typed(&mut s, &mut all, &mut own, "#102030 #a0b0c0"), Action::Changed);
+        assert_eq!(
+            typed(&mut s, &mut all, &mut own, "#102030 #a0b0c0"),
+            Action::Changed
+        );
         assert_eq!(all[0].colours, Colours::own(0x102030, 0xa0b0c0));
         s.key(KeyCode::KeyS, None, false, &mut all, &mut own, 4);
         assert_eq!(typed(&mut s, &mut all, &mut own, "mine"), Action::Changed);

@@ -5,7 +5,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 /// A media key.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(not(any(target_os = "linux", windows)), expect(dead_code, reason = "the media control backend is only implemented on Linux and Windows"))]
+#[cfg_attr(
+    not(any(target_os = "linux", windows)),
+    expect(
+        dead_code,
+        reason = "the media control backend is only implemented on Linux and Windows"
+    )
+)]
 pub enum Key {
     Toggle,
     Play,
@@ -14,7 +20,13 @@ pub enum Key {
     Prev,
 }
 
-#[cfg_attr(not(any(target_os = "linux", windows)), expect(dead_code, reason = "the stub backend drains messages without using their payloads"))]
+#[cfg_attr(
+    not(any(target_os = "linux", windows)),
+    expect(
+        dead_code,
+        reason = "the stub backend drains messages without using their payloads"
+    )
+)]
 enum Message {
     Song { title: String, artist: String },
     Playing(bool),
@@ -50,7 +62,9 @@ impl Media {
 
 #[cfg(any(target_os = "linux", windows))]
 fn run(window: Option<usize>, rx: Receiver<Message>, keys: Sender<Key>) {
-    use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
+    use souvlaki::{
+        MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig,
+    };
 
     let hwnd = window.map(|w| w as *mut std::ffi::c_void);
     #[cfg(not(windows))]
@@ -66,7 +80,11 @@ fn run(window: Option<usize>, rx: Receiver<Message>, keys: Sender<Key>) {
         return;
     }
     let name = format!("taiko_rs.instance{}", std::process::id());
-    let config = PlatformConfig { dbus_name: &name, display_name: "taiko.rs", hwnd };
+    let config = PlatformConfig {
+        dbus_name: &name,
+        display_name: "taiko.rs",
+        hwnd,
+    };
     let mut controls = match MediaControls::new(config) {
         Ok(c) => c,
         Err(e) => {
@@ -91,9 +109,17 @@ fn run(window: Option<usize>, rx: Receiver<Message>, keys: Sender<Key>) {
     }
     for message in rx {
         let done = match message {
-            Message::Song { title, artist } => controls.set_metadata(MediaMetadata { title: Some(&title), artist: Some(&artist), ..Default::default() }),
-            Message::Playing(true) => controls.set_playback(MediaPlayback::Playing { progress: None }),
-            Message::Playing(false) => controls.set_playback(MediaPlayback::Paused { progress: None }),
+            Message::Song { title, artist } => controls.set_metadata(MediaMetadata {
+                title: Some(&title),
+                artist: Some(&artist),
+                ..Default::default()
+            }),
+            Message::Playing(true) => {
+                controls.set_playback(MediaPlayback::Playing { progress: None })
+            }
+            Message::Playing(false) => {
+                controls.set_playback(MediaPlayback::Paused { progress: None })
+            }
             Message::Stopped => controls.set_playback(MediaPlayback::Stopped),
         };
         if let Err(e) = done {

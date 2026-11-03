@@ -98,17 +98,34 @@ fn the_player_opens_from_the_menu_and_closes_with_it() {
     s.player.as_mut().unwrap().move_pitch(3);
     assert!((s.player.as_ref().unwrap().pitch() - 2f64.powf(0.25)).abs() < 1e-9);
     key(&mut s, KeyCode::BracketLeft);
-    assert_eq!(s.player.as_ref().unwrap().semitones, 2, "[ takes the pitch down");
-    s.player.as_mut().unwrap().toggle_speed(player::Speed::Nightcore);
-    assert_eq!(s.preview_rate(), (1.5, false), "the player's own speed, not the game's");
+    assert_eq!(
+        s.player.as_ref().unwrap().semitones,
+        2,
+        "[ takes the pitch down"
+    );
+    s.player
+        .as_mut()
+        .unwrap()
+        .toggle_speed(player::Speed::Nightcore);
+    assert_eq!(
+        s.preview_rate(),
+        (1.5, false),
+        "the player's own speed, not the game's"
+    );
     assert_eq!(s.cfg.rate, 1.0);
-    s.player.as_mut().unwrap().toggle_speed(player::Speed::Nightcore);
+    s.player
+        .as_mut()
+        .unwrap()
+        .toggle_speed(player::Speed::Nightcore);
     key(&mut s, KeyCode::Space);
     assert!(s.music_paused, "Space pauses in the player");
     key(&mut s, KeyCode::KeyF);
     assert!(!s.music_paused, "so does a don key");
     key(&mut s, KeyCode::Escape);
-    assert!(s.player.is_none() && s.on_menu(), "Esc goes back to the menu");
+    assert!(
+        s.player.is_none() && s.on_menu(),
+        "Esc goes back to the menu"
+    );
     assert!(!s.quit_asked);
 
     // Leaving the menu closes it and the music carries on.
@@ -134,7 +151,10 @@ fn the_menus_song_gives_way_to_the_next_when_it_ends() {
     assert_ne!(second, first, "the next song");
     assert!(s.preview.from_top, "from its start");
     s.music_step(1);
-    assert!(!s.preview.from_top, "a song picked by hand plays from its preview point");
+    assert!(
+        !s.preview.from_top,
+        "a song picked by hand plays from its preview point"
+    );
     let second = s.select.selected();
     // In song select, it just goes round as it always has.
     s.main_menu = None;
@@ -146,12 +166,25 @@ fn the_menus_song_gives_way_to_the_next_when_it_ends() {
 #[test]
 fn applying_the_offset_suggestion_has_no_key_until_given_one() {
     use keys::{Bindings, Chord, Hotkey, Place, Resolved};
-    let (o, shift_o) = (Chord::plain(KeyCode::KeyO), Chord { shift: true, ..Chord::plain(KeyCode::KeyO) });
+    let (o, shift_o) = (
+        Chord::plain(KeyCode::KeyO),
+        Chord {
+            shift: true,
+            ..Chord::plain(KeyCode::KeyO)
+        },
+    );
     let mut b = Bindings::default();
     assert_eq!(b.get(Hotkey::ApplyOffset), None);
-    assert_eq!(b.resolve(o, Place::Play), Resolved::Nothing, "O does nothing in a song");
+    assert_eq!(
+        b.resolve(o, Place::Play),
+        Resolved::Nothing,
+        "O does nothing in a song"
+    );
     assert_eq!(b.resolve(o, Place::Paused), Resolved::Nothing);
-    assert!(!b.config_lines().contains("apply_offset"), "nothing to write down");
+    assert!(
+        !b.config_lines().contains("apply_offset"),
+        "nothing to write down"
+    );
     // Given a key, it comes back through the config, O or any other.
     b.set(Hotkey::ApplyOffset, Some(o));
     assert_eq!(b.resolve(o, Place::Play), Resolved::Same);
@@ -167,7 +200,11 @@ fn applying_the_offset_suggestion_has_no_key_until_given_one() {
     s.apply_live_offset();
     assert_eq!((s.cfg.offset_ms, s.map_offsets.len()), before);
     assert!(s.toast.is_none());
-    assert_eq!(s.cfg.hotkeys.resolve(shift_o, Place::Play), Resolved::Same, "why the check is in the handler");
+    assert_eq!(
+        s.cfg.hotkeys.resolve(shift_o, Place::Play),
+        Resolved::Same,
+        "why the check is in the handler"
+    );
 }
 
 #[test]
@@ -217,7 +254,10 @@ fn the_guide_turns_its_pages_and_takes_the_keys() {
 
 #[test]
 fn the_guide_counts_as_seen_once_closed_and_old_configs_havent_seen_it() {
-    assert!(!Config::default().guide_seen, "a config without the line: not seen");
+    assert!(
+        !Config::default().guide_seen,
+        "a config without the line: not seen"
+    );
     let mut s = layout_tests::state();
     s.guide_read[guide::OFFSET_PAGE] = true;
     s.guide = Some(2);
@@ -229,7 +269,9 @@ fn the_guide_counts_as_seen_once_closed_and_old_configs_havent_seen_it() {
 
 /// As if the page has been up for `ms`.
 fn guide_up_for(s: &mut State, ms: u64) {
-    s.guide_shown = s.guide.map(|p| (p, Instant::now() - Duration::from_millis(ms)));
+    s.guide_shown = s
+        .guide
+        .map(|p| (p, Instant::now() - Duration::from_millis(ms)));
     s.tick_guide();
 }
 
@@ -249,14 +291,22 @@ fn a_new_player_cant_leave_the_guide_without_reading_it() {
 
     guide_up_for(&mut s, 5000);
     key(&mut s, KeyCode::Escape);
-    assert_eq!(s.guide, Some(guide::OFFSET_PAGE), "skipping still shows the offset");
+    assert_eq!(
+        s.guide,
+        Some(guide::OFFSET_PAGE),
+        "skipping still shows the offset"
+    );
     s.tick_guide();
     key(&mut s, KeyCode::Escape);
     assert_eq!(s.guide, Some(guide::OFFSET_PAGE), "and it waits too");
     key(&mut s, KeyCode::ArrowLeft);
     assert_eq!(s.guide, Some(0), "going back is free");
     key(&mut s, KeyCode::Enter);
-    assert_eq!(s.guide, Some(guide::OFFSET_PAGE), "a page already read doesn't wait again");
+    assert_eq!(
+        s.guide,
+        Some(guide::OFFSET_PAGE),
+        "a page already read doesn't wait again"
+    );
 
     guide_up_for(&mut s, 5000);
     key(&mut s, KeyCode::Escape);
@@ -300,7 +350,11 @@ fn the_guide_rebinds_the_drum_like_settings_do() {
     key(&mut s, KeyCode::ShiftLeft);
     assert_eq!(s.guide_binding, Some(1), "a modifier isn't a drum key");
     key(&mut s, KeyCode::Escape);
-    assert_eq!((s.cfg.keys, s.guide_binding, s.guide), (d, None, Some(0)), "Esc keeps the key, and the guide");
+    assert_eq!(
+        (s.cfg.keys, s.guide_binding, s.guide),
+        (d, None, Some(0)),
+        "Esc keeps the key, and the guide"
+    );
     s.guide_action(guide::Action::Bind(1));
     key(&mut s, KeyCode::KeyG);
     assert_eq!(s.cfg.keys[1], KeyCode::KeyG);
@@ -330,15 +384,31 @@ fn calibrating_from_the_guide_comes_back_to_it() {
     assert!(matches!(s.scene, Scene::Calibrate { .. }));
     assert_eq!(s.guide, None, "not over the calibration");
     // Its results, as they really end: out the way the player leaves them.
-    let estimate = calibrate::Estimate { hits: 40, error_ms: 3.0, ur: 90.0, margin_ms: 2.0, suggested_offset: 12.0 };
-    let Scene::Calibrate { back, .. } = std::mem::replace(&mut s.scene, Scene::Select) else { unreachable!() };
-    s.scene = Scene::CalibrateDone { estimate, back, vsync: false };
+    let estimate = calibrate::Estimate {
+        hits: 40,
+        error_ms: 3.0,
+        ur: 90.0,
+        margin_ms: 2.0,
+        suggested_offset: 12.0,
+    };
+    let Scene::Calibrate { back, .. } = std::mem::replace(&mut s.scene, Scene::Select) else {
+        unreachable!()
+    };
+    s.scene = Scene::CalibrateDone {
+        estimate,
+        back,
+        vsync: false,
+    };
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert_eq!(s.guide, None, "not over its results either");
     s.leave_calibration(true);
     assert_eq!(s.cfg.offset_ms, 12.0);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    assert_eq!(s.guide, Some(guide::OFFSET_PAGE + 1), "back on the next page");
+    assert_eq!(
+        s.guide,
+        Some(guide::OFFSET_PAGE + 1),
+        "back on the next page"
+    );
 }
 
 #[test]
@@ -426,7 +496,13 @@ fn songs_folder_is_saved_scanned_and_found_inside_an_install() {
     assert!(s.scan.is_some());
     assert_eq!(library::song_dirs(), vec![install.join("Songs")]);
     assert!(s.set_songs_folder(Some(install.join("missing"))).is_err());
-    assert!(s.apply_typed(Item::SongsFolder, &format!("\"{}\"", install.join("Songs").display())).is_ok());
+    assert!(
+        s.apply_typed(
+            Item::SongsFolder,
+            &format!("\"{}\"", install.join("Songs").display())
+        )
+        .is_ok()
+    );
     // Back to looking for osu! where it usually is.
     s.set_songs_folder(None).unwrap();
     assert_eq!(s.cfg.songs_folder, None);
@@ -436,12 +512,21 @@ fn songs_folder_is_saved_scanned_and_found_inside_an_install() {
 #[test]
 fn typed_note_colours_become_your_own_keeping_the_other() {
     let mut s = layout_tests::state();
-    s.cfg.note_colours = multiverse::Colours { palette: 1, ..multiverse::Colours::CLASSIC };
+    s.cfg.note_colours = multiverse::Colours {
+        palette: 1,
+        ..multiverse::Colours::CLASSIC
+    };
     s.apply_typed(Item::KatColour, "#a0b0c0").unwrap();
     // Neon's don stays; the kat is the typed one.
-    assert_eq!(s.cfg.note_colours, multiverse::Colours::own(multiverse::PALETTES[1].1, 0xa0b0c0));
+    assert_eq!(
+        s.cfg.note_colours,
+        multiverse::Colours::own(multiverse::PALETTES[1].1, 0xa0b0c0)
+    );
     s.apply_typed(Item::DonColour, "102030").unwrap();
-    assert_eq!((s.cfg.note_colours.don(), s.cfg.note_colours.kat()), (0x102030, 0xa0b0c0));
+    assert_eq!(
+        (s.cfg.note_colours.don(), s.cfg.note_colours.kat()),
+        (0x102030, 0xa0b0c0)
+    );
     assert!(s.apply_typed(Item::DonColour, "red").is_err());
 }
 
@@ -480,9 +565,14 @@ fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
     s.cfg.offset_ms = 12.0;
     s.cfg.vsync_tune_ms = 3.0;
     s.start_calibration_as(true);
-    assert!(matches!(s.scene, Scene::Calibrate { vsync: true, .. }), "not calibrating by sight");
+    assert!(
+        matches!(s.scene, Scene::Calibrate { vsync: true, .. }),
+        "not calibrating by sight"
+    );
     assert_eq!(s.wanted_present(), PresentChoice::Fifo);
-    let Scene::Calibrate { game, .. } = &mut s.scene else { unreachable!() };
+    let Scene::Calibrate { game, .. } = &mut s.scene else {
+        unreachable!()
+    };
     // Hit 8 ms late by sight on average: the frames show 8 ms later than the fine tune assumes.
     game.stats.errors = vec![8.0; 20];
     s.finish_calibration();
@@ -494,17 +584,31 @@ fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
 fn calibrating_by_ear_shows_no_notes_and_nothing_about_the_hits() {
     let mut s = layout_tests::state();
     s.start_calibration_as(false);
-    let Scene::Calibrate { game, .. } = &mut s.scene else { unreachable!() };
-    assert!(game.mute_hits, "your own hitsounds would be something to sync to");
+    let Scene::Calibrate { game, .. } = &mut s.scene else {
+        unreachable!()
+    };
+    assert!(
+        game.mute_hits,
+        "your own hitsounds would be something to sync to"
+    );
     // 20 hits, all 37 ms early, well into the song.
     game.stats.errors = vec![-37.0; 20];
     game.time = game.map.notes[10].time;
-    let mut c = Canvas { audit: true, ..Canvas::default() };
+    let mut c = Canvas {
+        audit: true,
+        ..Canvas::default()
+    };
     calibrate::draw_by_ear(&mut c, game);
     let texts: Vec<&str> = c.texts.iter().map(|(_, t)| t.as_str()).collect();
     assert!(!texts.is_empty());
     for t in &texts {
-        assert!(!t.contains("37") && !t.contains("early") && !t.contains("late") && !t.contains("suggest"), "{t:?} tells how the hits went");
+        assert!(
+            !t.contains("37")
+                && !t.contains("early")
+                && !t.contains("late")
+                && !t.contains("suggest"),
+            "{t:?} tells how the hits went"
+        );
     }
 }
 
@@ -512,13 +616,22 @@ fn calibrating_by_ear_shows_no_notes_and_nothing_about_the_hits() {
 fn calibrating_takes_any_drum_key() {
     let mut s = layout_tests::state();
     s.start_calibration_as(false);
-    let Scene::Calibrate { game, .. } = &s.scene else { unreachable!() };
+    let Scene::Calibrate { game, .. } = &s.scene else {
+        unreachable!()
+    };
     // No audio here: the clock runs on from where it started, so a press this far ahead lands on
     // the first note.
     let ahead = (game.map.notes[0].time - game.time) / 1000.0;
     let rim = s.cfg.keys[0];
-    s.calibration_key(rim, false, Instant::now() + Duration::from_secs_f64(ahead), None);
-    let Scene::Calibrate { game, .. } = &s.scene else { unreachable!() };
+    s.calibration_key(
+        rim,
+        false,
+        Instant::now() + Duration::from_secs_f64(ahead),
+        None,
+    );
+    let Scene::Calibrate { game, .. } = &s.scene else {
+        unreachable!()
+    };
     assert_eq!(game.stats.errors.len(), 1, "a rim key missed the don");
 }
 
@@ -535,7 +648,10 @@ fn moving_the_game_data_runs_in_the_background_then_switches_folders() {
     s.cfg.data_folder = Some(old.clone());
     // A drive or any folder: the data gets a taiko-rs folder of its own there.
     s.move_data_to(Some(root.join("drive"))).unwrap();
-    assert!(s.move_data_to(Some(root.join("elsewhere"))).is_err(), "one move at a time");
+    assert!(
+        s.move_data_to(Some(root.join("elsewhere"))).is_err(),
+        "one move at a time"
+    );
     let start = Instant::now();
     while s.data_move.is_some() && start.elapsed() < Duration::from_secs(10) {
         s.poll_data_move();
@@ -543,7 +659,10 @@ fn moving_the_game_data_runs_in_the_background_then_switches_folders() {
     let new = root.join("drive/taiko-rs");
     assert_eq!(s.cfg.data_folder, Some(new.clone()));
     assert_eq!(config::data_dir(), Some(new.clone()));
-    assert_eq!(std::fs::read_to_string(new.join("replays/1.json")).unwrap(), "replay");
+    assert_eq!(
+        std::fs::read_to_string(new.join("replays/1.json")).unwrap(),
+        "replay"
+    );
     assert!(!old.join("replays").exists());
     config::set_data_folder(None);
     let _ = std::fs::remove_dir_all(&root);
@@ -558,7 +677,11 @@ fn window_sizes_fit_the_screen_and_step_within_the_aspect_ratio() {
     // The screen's aspect ratio first, largest first in each, all with room for a title bar.
     assert_eq!(layout::aspect_name(sizes[0].0, sizes[0].1), "16:9");
     let groups = layout::group_presets(&sizes, (1920, 1080));
-    assert!(groups.iter().all(|(_, l)| l.windows(2).all(|w| w[0].0 * w[0].1 >= w[1].0 * w[1].1)));
+    assert!(
+        groups
+            .iter()
+            .all(|(_, l)| l.windows(2).all(|w| w[0].0 * w[0].1 >= w[1].0 * w[1].1))
+    );
     assert!(sizes.iter().all(|&(w, h)| w <= 1920 && h <= 1020));
     // 1280x720 steps to 16:9 sizes.
     (s.window_w, s.window_h) = (1280.0, 720.0);
@@ -579,7 +702,18 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.play_when_scanned = false;
     let map = beatmap::calibration_map(500.0, 4, 64);
-    s.scene = Scene::Play { game: Box::new(Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None)), entry: 0, from: None };
+    s.scene = Scene::Play {
+        game: Box::new(Game::new(
+            map,
+            Arc::new(Track {
+                samples: Vec::new(),
+                rate: 1.0,
+            }),
+            None,
+        )),
+        entry: 0,
+        from: None,
+    };
     let info = s.cfg.show_map_info;
     s.modifiers_shift = true;
     s.key(KeyCode::Tab, false, None, Instant::now(), None);
@@ -589,9 +723,14 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
     assert!(s.cfg.interface_hidden, "plain Tab isn't the interface key");
     assert_ne!(s.cfg.show_map_info, info);
     // What's hidden reaches the game drawn.
-    let mut c = Canvas { width: 853.3, ..Default::default() };
+    let mut c = Canvas {
+        width: 853.3,
+        ..Default::default()
+    };
     s.build_frame(&mut c, Instant::now(), 853.3);
-    let Scene::Play { game, .. } = &s.scene else { panic!() };
+    let Scene::Play { game, .. } = &s.scene else {
+        panic!()
+    };
     assert_eq!(game.hidden, hud::Parts::DEFAULT_HIDES);
 }
 
@@ -613,7 +752,18 @@ fn ctrl_c_copies_what_is_typed_or_picked_and_paste_goes_only_where_text_does() {
     // Not into a song (V could be a drum).
     s.settings_ui.editing = None;
     let map = beatmap::calibration_map(500.0, 4, 64);
-    s.scene = Scene::Play { game: Box::new(Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None)), entry: 0, from: None };
+    s.scene = Scene::Play {
+        game: Box::new(Game::new(
+            map,
+            Arc::new(Track {
+                samples: Vec::new(),
+                rate: 1.0,
+            }),
+            None,
+        )),
+        entry: 0,
+        from: None,
+    };
     assert!(!s.takes_text());
 }
 
@@ -633,7 +783,10 @@ fn ctrl_backspace_clears_the_search() {
 fn ticking_interface_parts_keeps_the_list_open() {
     let mut s = layout_tests::state();
     s.open_choices(Item::InterfaceHides);
-    let k = hud::Part::ALL.iter().position(|&p| p == hud::Part::HitAnimation).unwrap();
+    let k = hud::Part::ALL
+        .iter()
+        .position(|&p| p == hud::Part::HitAnimation)
+        .unwrap();
     s.pick_choice(k);
     assert!(!s.cfg.interface_hides.has(hud::Part::HitAnimation));
     assert_eq!(s.settings_ui.choices.as_ref().map(|c| c.cursor), Some(k));
@@ -650,10 +803,17 @@ fn star_ratings_arriving_dont_change_the_song_thats_playing() {
         let hardest = s.select.selected_set()[0];
         assert_ne!(hardest, entered);
         let audio = s.library[entered].meta.audio_file.clone();
-        s.library[hardest].meta.audio_file = if other_audio { format!("other {audio}") } else { audio };
+        s.library[hardest].meta.audio_file = if other_audio {
+            format!("other {audio}")
+        } else {
+            audio
+        };
         let stars = |i: usize| Some(if i == hardest { 5.0 } else { i as f32 / 100.0 });
         s.select.sort_selected_set(&s.library, &stars);
-        assert_eq!(s.select.selected(), Some(if stays { entered } else { hardest }));
+        assert_eq!(
+            s.select.selected(),
+            Some(if stays { entered } else { hardest })
+        );
     }
 }
 
@@ -671,8 +831,19 @@ fn an_old_map_without_ids_in_its_file_goes_by_its_folders_set() {
     s.set_status_tx.send((210, Some("ranked".into()))).unwrap();
     s.poll_set_status(Instant::now());
     assert_eq!(s.map_status(0).map(|x| x.0), Some("RANKED"));
-    assert_eq!(s.select.status.get(&s.library[0].path), Some(&search::RANKED));
-    assert_eq!(map_gives_pp(&s.library[0], &s.set_status, &s.db_status, &s.select.server_loved), Some(true));
+    assert_eq!(
+        s.select.status.get(&s.library[0].path),
+        Some(&search::RANKED)
+    );
+    assert_eq!(
+        map_gives_pp(
+            &s.library[0],
+            &s.set_status,
+            &s.db_status,
+            &s.select.server_loved
+        ),
+        Some(true)
+    );
 }
 
 #[test]
@@ -701,12 +872,25 @@ fn scroll_speed_changes_between_songs_only() {
     assert!(faster > start, "song select changes it");
     // In a song (and its pause menu's settings) it stays, and the play keeps its own.
     let map = beatmap::calibration_map(500.0, 4, 64);
-    let mut game = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+    let mut game = Game::new(
+        map,
+        Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        }),
+        None,
+    );
     game.scroll_speed = faster;
-    s.scene = Scene::Play { game: Box::new(game), entry: 0, from: None };
+    s.scene = Scene::Play {
+        game: Box::new(game),
+        entry: 0,
+        from: None,
+    };
     s.key(KeyCode::F3, false, None, now, None);
     assert_eq!(s.cfg.scroll_speed, faster);
-    s.scene = Scene::Settings { prev: Box::new(std::mem::replace(&mut s.scene, Scene::Select)) };
+    s.scene = Scene::Settings {
+        prev: Box::new(std::mem::replace(&mut s.scene, Scene::Select)),
+    };
     s.adjust_setting(settings::Item::ScrollSpeed, -1, None);
     assert_eq!(s.cfg.scroll_speed, faster);
     assert!(s.apply_typed(settings::Item::ScrollSpeed, "0.5").is_err());
@@ -721,7 +905,15 @@ fn sets_loved_on_the_server_count_as_loved() {
     s.set_status.insert(2275915, Some("graveyard".into()));
     s.select.server_loved.insert(2275915);
     assert_eq!(s.map_status(0).map(|x| x.0), Some("LOVED HERE"));
-    assert_eq!(map_gives_pp(&s.library[0], &s.set_status, &s.db_status, &s.select.server_loved), Some(true));
+    assert_eq!(
+        map_gives_pp(
+            &s.library[0],
+            &s.set_status,
+            &s.db_status,
+            &s.select.server_loved
+        ),
+        Some(true)
+    );
     // The search's status=l finds it.
     s.select.filter = "status=l".into();
     s.select.refilter(&s.library);
@@ -729,10 +921,25 @@ fn sets_loved_on_the_server_count_as_loved() {
     // Only nominators get the menu item, and it says which way.
     s.select.filter.clear();
     s.select.refilter(&s.library);
-    s.select.menu = Some(ui::SongMenu { row: 0, header: false, x: 0.0, y: 0.0 });
-    assert!(!s.select.menu_items(&s.library).iter().any(|(_, a)| matches!(a, ui::MenuAction::Love(..))));
+    s.select.menu = Some(ui::SongMenu {
+        row: 0,
+        header: false,
+        x: 0.0,
+        y: 0.0,
+    });
+    assert!(
+        !s.select
+            .menu_items(&s.library)
+            .iter()
+            .any(|(_, a)| matches!(a, ui::MenuAction::Love(..)))
+    );
     s.select.nominator = true;
-    assert!(s.select.menu_items(&s.library).iter().any(|(l, a)| l == "Unlove on taiko.rs" && *a == ui::MenuAction::Love(2275915, false)));
+    assert!(
+        s.select
+            .menu_items(&s.library)
+            .iter()
+            .any(|(l, a)| l == "Unlove on taiko.rs" && *a == ui::MenuAction::Love(2275915, false))
+    );
 }
 
 #[test]
@@ -741,9 +948,22 @@ fn hotkeys_can_be_moved_and_removed() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     let now = Instant::now();
     // Pause on P: Esc no longer pauses, P does.
-    s.cfg.hotkeys.set(keys::Hotkey::Pause, Some(keys::Chord::plain(KeyCode::KeyP)));
+    s.cfg
+        .hotkeys
+        .set(keys::Hotkey::Pause, Some(keys::Chord::plain(KeyCode::KeyP)));
     let map = beatmap::calibration_map(500.0, 4, 64);
-    s.scene = Scene::Play { game: Box::new(Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None)), entry: 0, from: None };
+    s.scene = Scene::Play {
+        game: Box::new(Game::new(
+            map,
+            Arc::new(Track {
+                samples: Vec::new(),
+                rate: 1.0,
+            }),
+            None,
+        )),
+        entry: 0,
+        from: None,
+    };
     s.key(KeyCode::Escape, false, None, now, None);
     assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused.is_none()));
     s.key(KeyCode::KeyP, false, None, now, None);
@@ -761,13 +981,24 @@ fn hotkeys_can_be_moved_and_removed() {
     s.open_settings();
     let h = keys::Hotkey::ScrollSlower;
     let i = keys::Hotkey::ALL.iter().position(|&k| k == h).unwrap();
-    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::Hotkey(i)).unwrap();
+    s.settings_ui.cursor = settings::ITEMS
+        .iter()
+        .position(|(_, it)| *it == Item::Hotkey(i))
+        .unwrap();
     s.key(KeyCode::Enter, false, None, now, None);
     s.modifiers_ctrl = true;
     s.key(KeyCode::ControlLeft, false, None, now, None);
     s.key(KeyCode::KeyK, false, None, now, None);
     s.modifiers_ctrl = false;
-    assert_eq!(s.cfg.hotkeys.get(h), Some(keys::Chord { key: KeyCode::KeyK, ctrl: true, shift: false, alt: false }));
+    assert_eq!(
+        s.cfg.hotkeys.get(h),
+        Some(keys::Chord {
+            key: KeyCode::KeyK,
+            ctrl: true,
+            shift: false,
+            alt: false
+        })
+    );
     s.key(KeyCode::Enter, false, None, now, None);
     s.key(KeyCode::Delete, false, None, now, None);
     assert_eq!(s.cfg.hotkeys.get(h), None);
@@ -775,7 +1006,10 @@ fn hotkeys_can_be_moved_and_removed() {
     assert_eq!(s.cfg.hotkeys.get(h), Some(h.default()));
 
     // A drum key can be taken away too.
-    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::Key(0)).unwrap();
+    s.settings_ui.cursor = settings::ITEMS
+        .iter()
+        .position(|(_, it)| *it == Item::Key(0))
+        .unwrap();
     s.key(KeyCode::Enter, false, None, now, None);
     s.key(KeyCode::Delete, false, None, now, None);
     assert_eq!(s.cfg.keys[0], config::NO_KEY);
@@ -788,10 +1022,17 @@ fn krokodil_koban_mode_is_only_for_krokodil_koban() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.open_settings();
-    let row = settings::ITEMS.iter().position(|(_, it)| *it == Item::KrokodilKoban).unwrap();
+    let row = settings::ITEMS
+        .iter()
+        .position(|(_, it)| *it == Item::KrokodilKoban)
+        .unwrap();
     s.settings_ui.cursor = row - 1;
     s.settings_ui.move_cursor(1);
-    assert_ne!(s.settings_ui.item(), Item::KrokodilKoban, "skipped for anyone else");
+    assert_ne!(
+        s.settings_ui.item(),
+        Item::KrokodilKoban,
+        "skipped for anyone else"
+    );
     s.mp_menu.account = Some("Krokodil_Koban".into());
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(s.settings_ui.krokodil);
@@ -821,7 +1062,11 @@ fn the_friends_overlay_closes_on_a_click_outside_it_and_slides_away() {
     // Drawn while closing, but takes no clicks.
     let mut c = Canvas::default();
     s.build_frame(&mut c, Instant::now(), 853.3);
-    assert!(!s.hits.iter().any(|h| matches!(h.hit, render::Hit::SocialPanel)));
+    assert!(
+        !s.hits
+            .iter()
+            .any(|h| matches!(h.hit, render::Hit::SocialPanel))
+    );
 }
 
 /// Song select with 40 scores on the selected map (the window is 1920x1080: 2.25 px per unit).
@@ -832,7 +1077,13 @@ fn select_with_scores() -> State {
     s.scene = Scene::Select;
     // A short title, so the panel's height is up to its preview (a long one wraps, and its
     // details alone fill the panel).
-    let short = s.library.iter().find(|e| e.meta.title.len() < 12).expect("a short title").path.clone();
+    let short = s
+        .library
+        .iter()
+        .find(|e| e.meta.title.len() < 12)
+        .expect("a short title")
+        .path
+        .clone();
     s.select.select_path(&s.library, &short);
     let hash = s.library[s.select.selected().unwrap()].hash();
     s.scores = (0..40)
@@ -866,17 +1117,30 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     // The song list's edge, dragged right, then far past its limit.
     let lw = Select::list_width(w, s.cfg.song_list_share);
     point(&mut s, 24.0 + lw + 6.0, 240.0);
-    assert_eq!(s.hit_at(24.0 + lw + 6.0, 240.0), Some(render::Hit::SplitList));
+    assert_eq!(
+        s.hit_at(24.0 + lw + 6.0, 240.0),
+        Some(render::Hit::SplitList)
+    );
     // Only its grip in the middle, not the whole edge.
-    assert_ne!(s.hit_at(24.0 + lw + 6.0, 120.0), Some(render::Hit::SplitList));
+    assert_ne!(
+        s.hit_at(24.0 + lw + 6.0, 120.0),
+        Some(render::Hit::SplitList)
+    );
     s.mouse_button(true, None);
     point(&mut s, 24.0 + lw + 6.0 + 40.0, 240.0);
-    assert!((s.cfg.song_list_share - (ui::LIST_SHARE.2 + 40.0 / w)).abs() < 0.002, "{}", s.cfg.song_list_share);
+    assert!(
+        (s.cfg.song_list_share - (ui::LIST_SHARE.2 + 40.0 / w)).abs() < 0.002,
+        "{}",
+        s.cfg.song_list_share
+    );
     point(&mut s, w, 240.0);
     s.mouse_button(false, None);
     assert!(s.split_drag.is_none());
     let widest = Select::list_width(w, s.cfg.song_list_share);
-    assert!(s.cfg.song_list_share <= ui::LIST_SHARE.1 && w - 24.0 - widest - 12.0 - 24.0 >= 219.9, "the panel keeps its room: {widest}");
+    assert!(
+        s.cfg.song_list_share <= ui::LIST_SHARE.1 && w - 24.0 - widest - 12.0 - 24.0 >= 219.9,
+        "the panel keeps its room: {widest}"
+    );
     // And far left: the list keeps its room too.
     frame(&mut s);
     point(&mut s, 24.0 + widest + 6.0, 240.0);
@@ -884,7 +1148,10 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     point(&mut s, 0.0, 240.0);
     s.mouse_button(false, None);
     let narrowest = Select::list_width(w, s.cfg.song_list_share);
-    assert!(s.cfg.song_list_share >= ui::LIST_SHARE.0 && narrowest >= 259.9, "{narrowest}");
+    assert!(
+        s.cfg.song_list_share >= ui::LIST_SHARE.0 && narrowest >= 259.9,
+        "{narrowest}"
+    );
 
     // A double click on it puts it back.
     frame(&mut s);
@@ -910,16 +1177,33 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     s.mouse_button(false, None);
     assert_eq!(s.cfg.song_preview_size, preview::PREVIEW_SIZE.0);
     frame(&mut s);
-    assert!(s.preview.panel_bottom < edge - 4.0, "{} vs {edge}", s.preview.panel_bottom);
-    assert!(s.leaderboard.len() > rows_before, "{} rows, {rows_before} before", s.leaderboard.len());
+    assert!(
+        s.preview.panel_bottom < edge - 4.0,
+        "{} vs {edge}",
+        s.preview.panel_bottom
+    );
+    assert!(
+        s.leaderboard.len() > rows_before,
+        "{} rows, {rows_before} before",
+        s.leaderboard.len()
+    );
 
     // Settings > Library puts the whole layout back.
     s.cfg.song_list_share = ui::LIST_SHARE.1;
     s.open_settings();
-    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::SongSelectLayout).unwrap();
-    assert!(s.setting_value(Item::SongSelectLayout).starts_with("custom"));
+    s.settings_ui.cursor = settings::ITEMS
+        .iter()
+        .position(|(_, it)| *it == Item::SongSelectLayout)
+        .unwrap();
+    assert!(
+        s.setting_value(Item::SongSelectLayout)
+            .starts_with("custom")
+    );
     s.key(KeyCode::Enter, false, None, Instant::now(), None);
-    assert_eq!((s.cfg.song_list_share, s.cfg.song_preview_size), (ui::LIST_SHARE.2, preview::PREVIEW_SIZE.1));
+    assert_eq!(
+        (s.cfg.song_list_share, s.cfg.song_preview_size),
+        (ui::LIST_SHARE.2, preview::PREVIEW_SIZE.1)
+    );
     assert_eq!(s.setting_value(Item::SongSelectLayout), "default");
 }
 
@@ -955,9 +1239,20 @@ fn the_leaderboard_scrolls_with_the_wheel() {
 #[test]
 fn the_results_scroll_down_to_the_pp_and_back() {
     let mut s = select_with_scores();
-    let mut r = ui::Results::new("map".into(), game::Stats { great: 10, ..Default::default() }, game::Windows::new(5.0));
+    let mut r = ui::Results::new(
+        "map".into(),
+        game::Stats {
+            great: 10,
+            ..Default::default()
+        },
+        game::Windows::new(5.0),
+    );
     r.no_pp = Some("no pp here");
-    s.scene = Scene::Results { results: r, entry: 0, from: None };
+    s.scene = Scene::Results {
+        results: r,
+        entry: 0,
+        from: None,
+    };
     let scroll = |s: &State| match &s.scene {
         Scene::Results { results, .. } => results.scroll_to,
         _ => panic!("left the results"),
@@ -978,7 +1273,12 @@ fn the_results_scroll_down_to_the_pp_and_back() {
     s.click(render::Hit::Key(KeyCode::PageDown), None);
     assert_eq!(scroll(&s), ui::RESULTS_SCROLL);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    assert!(s.hits.iter().any(|h| h.hit == render::Hit::Key(KeyCode::PageUp)), "and back up");
+    assert!(
+        s.hits
+            .iter()
+            .any(|h| h.hit == render::Hit::Key(KeyCode::PageUp)),
+        "and back up"
+    );
 }
 
 #[test]
@@ -1009,7 +1309,13 @@ fn type_key(s: &mut State, code: KeyCode, text: &str) {
 #[test]
 fn typing_in_the_settings_searches_and_escape_clears_before_it_leaves() {
     let mut s = settings_screen();
-    for (code, text) in [(KeyCode::KeyM, "m"), (KeyCode::KeyU, "u"), (KeyCode::KeyS, "s"), (KeyCode::KeyI, "i"), (KeyCode::KeyC, "c")] {
+    for (code, text) in [
+        (KeyCode::KeyM, "m"),
+        (KeyCode::KeyU, "u"),
+        (KeyCode::KeyS, "s"),
+        (KeyCode::KeyI, "i"),
+        (KeyCode::KeyC, "c"),
+    ] {
         type_key(&mut s, code, text);
     }
     assert_eq!(s.settings_ui.search, "music");
@@ -1029,14 +1335,21 @@ fn typing_in_the_settings_searches_and_escape_clears_before_it_leaves() {
 #[test]
 fn space_and_punctuation_keep_their_jobs_until_something_is_typed() {
     let mut s = settings_screen();
-    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::HalfResolution).unwrap();
+    s.settings_ui.cursor = settings::ITEMS
+        .iter()
+        .position(|(_, it)| *it == Item::HalfResolution)
+        .unwrap();
     let was = s.cfg.half_resolution;
     type_key(&mut s, KeyCode::Space, " ");
     assert_ne!(s.cfg.half_resolution, was, "space works the row");
     assert!(s.settings_ui.search.is_empty());
     type_key(&mut s, KeyCode::Minus, "-");
     assert!(s.settings_ui.search.is_empty());
-    assert_eq!(s.hotkey_place(KeyCode::Minus), Some(keys::Place::Other), "the offset's hotkey still works");
+    assert_eq!(
+        s.hotkey_place(KeyCode::Minus),
+        Some(keys::Place::Other),
+        "the offset's hotkey still works"
+    );
     type_key(&mut s, KeyCode::KeyF, "f");
     type_key(&mut s, KeyCode::Space, " ");
     assert_eq!(s.settings_ui.search, "f ");
@@ -1046,7 +1359,10 @@ fn space_and_punctuation_keep_their_jobs_until_something_is_typed() {
 #[test]
 fn the_wheel_scrolls_the_settings_and_stays_in_the_section() {
     let mut s = settings_screen();
-    s.settings_ui.cursor = settings::ITEMS.iter().position(|(_, it)| *it == Item::Key(0)).unwrap();
+    s.settings_ui.cursor = settings::ITEMS
+        .iter()
+        .position(|(_, it)| *it == Item::Key(0))
+        .unwrap();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     let (cursor, section) = (s.settings_ui.cursor, s.settings_ui.section());
     s.wheel(-1000);
@@ -1054,39 +1370,68 @@ fn the_wheel_scrolls_the_settings_and_stays_in_the_section() {
     assert_eq!(s.settings_ui.cursor, cursor);
     assert_eq!(s.settings_ui.section(), section);
     // Down to the last rows, which are now there to click.
-    let last = settings::ITEMS.iter().rposition(|(sec, _)| *sec == settings::ITEMS[cursor].0).unwrap();
-    assert!(s.hits.iter().any(|h| h.hit == render::Hit::SettingRow(last)));
+    let last = settings::ITEMS
+        .iter()
+        .rposition(|(sec, _)| *sec == settings::ITEMS[cursor].0)
+        .unwrap();
+    assert!(
+        s.hits
+            .iter()
+            .any(|h| h.hit == render::Hit::SettingRow(last))
+    );
 }
 
 #[test]
 fn one_click_works_a_row_and_every_hotkey_has_one() {
     let mut s = settings_screen();
-    let row = settings::ITEMS.iter().position(|(_, it)| *it == Item::LegacyMenu).unwrap();
+    let row = settings::ITEMS
+        .iter()
+        .position(|(_, it)| *it == Item::LegacyMenu)
+        .unwrap();
     let was = s.cfg.main_menu;
     s.click(render::Hit::SettingRow(row), None);
     assert_ne!(s.cfg.main_menu, was);
     for i in 0..keys::Hotkey::ALL.len() {
-        assert!(settings::ITEMS.iter().any(|(_, it)| *it == Item::Hotkey(i)), "{:?}", keys::Hotkey::ALL[i]);
+        assert!(
+            settings::ITEMS.iter().any(|(_, it)| *it == Item::Hotkey(i)),
+            "{:?}",
+            keys::Hotkey::ALL[i]
+        );
     }
     for (section, _) in settings::ITEMS {
-        assert!(settings::SECTIONS.iter().any(|(name, _)| *name == section), "{section}");
+        assert!(
+            settings::SECTIONS.iter().any(|(name, _)| *name == section),
+            "{section}"
+        );
     }
 }
 
 #[test]
 fn a_volume_is_dragged_along_its_bar_and_saved_on_letting_go() {
     let mut s = settings_screen();
-    let row = settings::ITEMS.iter().position(|(_, it)| *it == Item::MusicVolume).unwrap();
+    let row = settings::ITEMS
+        .iter()
+        .position(|(_, it)| *it == Item::MusicVolume)
+        .unwrap();
     s.settings_ui.cursor = row;
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    let bar = s.hits.iter().find(|h| h.hit == render::Hit::SettingLevel(row)).expect("a bar").rect;
+    let bar = s
+        .hits
+        .iter()
+        .find(|h| h.hit == render::Hit::SettingLevel(row))
+        .expect("a bar")
+        .rect;
     let y = bar[1] + bar[3] / 2.0;
     point(&mut s, bar[0] + 5.0, y);
     s.click(render::Hit::SettingLevel(row), None);
     assert_eq!(s.cfg.music_volume, 0.0);
     point(&mut s, bar[0] + bar[2] / 2.0, y);
     s.mouse_moved(s.mouse.0, s.mouse.1);
-    assert!((s.cfg.music_volume - 0.5).abs() < 0.02, "{}", s.cfg.music_volume);
+    assert!(
+        (s.cfg.music_volume - 0.5).abs() < 0.02,
+        "{}",
+        s.cfg.music_volume
+    );
     s.mouse_button(false, None);
     assert_eq!(s.settings_level, None);
 }
@@ -1120,7 +1465,9 @@ fn alt_wheel_turns_the_note_under_the_pointer_and_the_lane_then_needs_no_alt() {
 
 #[test]
 fn alt_up_and_down_turn_the_volume_picked_with_alt_left_and_right() {
-    let press = |s: &mut State, code: KeyCode, repeat: bool| s.key_inner(code, repeat, None, Instant::now(), None);
+    let press = |s: &mut State, code: KeyCode, repeat: bool| {
+        s.key_inner(code, repeat, None, Instant::now(), None)
+    };
     for scene in [Scene::Select, Scene::Download] {
         let mut s = settings_screen();
         s.scene = scene;
@@ -1168,14 +1515,29 @@ fn the_tabs_only_come_back_with_the_legacy_menu() {
     s.scene = Scene::Select;
     s.main_menu = None;
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    let tab = |s: &State| s.hits.iter().any(|h| matches!(h.hit, render::Hit::Tab(i) if h.rect[1] < 50.0 && i < 4));
+    let tab = |s: &State| {
+        s.hits
+            .iter()
+            .any(|h| matches!(h.hit, render::Hit::Tab(i) if h.rect[1] < 50.0 && i < 4))
+    };
     assert!(!tab(&s), "no tabs on top");
     assert!(s.hits.iter().any(|h| h.hit == render::Hit::ToMenu));
-    assert!(s.hits.iter().any(|h| h.hit == render::Hit::Tab(3)), "download along the bottom");
+    assert!(
+        s.hits.iter().any(|h| h.hit == render::Hit::Tab(3)),
+        "download along the bottom"
+    );
     s.click(render::Hit::ToMenu, None);
     assert!(s.on_menu());
 
-    s.click(render::Hit::SettingRow(settings::ITEMS.iter().position(|(_, it)| *it == Item::LegacyMenu).unwrap()), None);
+    s.click(
+        render::Hit::SettingRow(
+            settings::ITEMS
+                .iter()
+                .position(|(_, it)| *it == Item::LegacyMenu)
+                .unwrap(),
+        ),
+        None,
+    );
     assert!(!s.cfg.main_menu);
     assert!(s.main_menu.is_none(), "the menu goes at once");
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
@@ -1187,7 +1549,11 @@ fn the_tabs_only_come_back_with_the_legacy_menu() {
 fn the_back_button_of_a_screen_does_what_esc_does() {
     let mut s = settings_screen();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    assert!(s.hits.iter().any(|h| h.hit == render::Hit::Key(KeyCode::Escape)));
+    assert!(
+        s.hits
+            .iter()
+            .any(|h| h.hit == render::Hit::Key(KeyCode::Escape))
+    );
     s.click(render::Hit::Key(KeyCode::Escape), None);
     assert!(matches!(s.scene, Scene::Select));
 }
@@ -1197,10 +1563,17 @@ fn letterbox_lists_what_the_monitor_reports_custom_ones_too() {
     let mut s = settings_screen();
     s.monitor_size = (2560, 1440);
     s.monitor_modes = vec![(2560, 1440), (1337, 777), (1920, 1080)];
-    assert!(s.letterbox_sizes().contains(&(1337, 777)), "a size only the driver knows");
+    assert!(
+        s.letterbox_sizes().contains(&(1337, 777)),
+        "a size only the driver knows"
+    );
     s.open_choices(Item::LetterboxSize);
     let list = s.settings_ui.choices.take().unwrap();
-    let at = list.names.iter().position(|n| n.starts_with("1337 x 777")).expect("listed");
+    let at = list
+        .names
+        .iter()
+        .position(|n| n.starts_with("1337 x 777"))
+        .expect("listed");
     s.open_choices(Item::LetterboxSize);
     s.pick_choice(at);
     assert_eq!(s.cfg.letterbox_size, (1337, 777));
@@ -1220,13 +1593,25 @@ fn with_letterbox_the_game_is_its_own_size_and_the_pointer_lands_on_it() {
     s.cfg.letterbox = true;
     s.cfg.letterbox_size = (1280, 720);
     assert_eq!(s.sync_letterbox(), Some([320, 180, 1280, 720]));
-    assert_eq!((s.window_w, s.window_h), (1280.0, 720.0), "all of the game goes by this");
+    assert_eq!(
+        (s.window_w, s.window_h),
+        (1280.0, 720.0),
+        "all of the game goes by this"
+    );
     assert_eq!(s.to_game(320.0, 180.0), (0.0, 0.0), "the game's corner");
-    assert_eq!(s.to_game(100.0, 100.0), (-220.0, -80.0), "a bar: off the game, so nothing's there");
+    assert_eq!(
+        s.to_game(100.0, 100.0),
+        (-220.0, -80.0),
+        "a bar: off the game, so nothing's there"
+    );
     let (x, y) = s.to_game(320.0 + 640.0, 180.0 + 360.0);
     s.mouse_moved(x, y);
     let (vx, vy) = s.mouse_virtual();
-    assert!((vx - render::VIRTUAL_HEIGHT * 640.0 / 720.0).abs() < 0.01 && (vy - render::VIRTUAL_HEIGHT / 2.0).abs() < 0.01, "the middle of the game: {vx}, {vy}");
+    assert!(
+        (vx - render::VIRTUAL_HEIGHT * 640.0 / 720.0).abs() < 0.01
+            && (vy - render::VIRTUAL_HEIGHT / 2.0).abs() < 0.01,
+        "the middle of the game: {vx}, {vy}"
+    );
     assert_eq!(s.setting_value(Item::WindowSize), "fullscreen (1920x1080)");
     // Moved towards a corner.
     s.cfg.letterbox_pos = (100.0, -100.0);
@@ -1240,11 +1625,19 @@ fn with_letterbox_the_game_is_its_own_size_and_the_pointer_lands_on_it() {
 
 #[test]
 fn letterbox_settings_survive_a_restart() {
-    let cfg = Config { letterbox: true, letterbox_size: (1337, 777), letterbox_pos: (-25.0, 40.0), ..Config::default() };
+    let cfg = Config {
+        letterbox: true,
+        letterbox_size: (1337, 777),
+        letterbox_pos: (-25.0, 40.0),
+        ..Config::default()
+    };
     let text = cfg.to_text();
     let back = Config::parse_text(&text);
     assert!(back.letterbox);
-    assert_eq!((back.letterbox_size, back.letterbox_pos), ((1337, 777), (-25.0, 40.0)));
+    assert_eq!(
+        (back.letterbox_size, back.letterbox_pos),
+        ((1337, 777), (-25.0, 40.0))
+    );
 }
 
 fn dd(s: &State) -> &settings::Dropdown {
@@ -1263,7 +1656,10 @@ fn the_preset_list_scrolls_by_wheel_and_scroll_bar_never_by_pointing() {
     s.open_dropdown();
     frame(&mut s);
     let max = dd(&s).max_scroll();
-    assert!(max > 0.0 && dd(&s).bar().is_some(), "more sizes than fit, so it scrolls: {max}");
+    assert!(
+        max > 0.0 && dd(&s).bar().is_some(),
+        "more sizes than fit, so it scrolls: {max}"
+    );
     // Pointing at the rows nearest the bottom edge picks them and the list stays put.
     let at = dd(&s).scroll();
     for _ in 0..5 {
@@ -1286,7 +1682,10 @@ fn the_preset_list_scrolls_by_wheel_and_scroll_bar_never_by_pointing() {
     let [bx, by, bw, bh] = dd(&s).bar().unwrap();
     point(&mut s, bx + bw / 2.0, by + bh - 1.0);
     s.mouse_button(true, None);
-    assert!(s.settings_ui.dropdown.is_some(), "a press on the bar doesn't close the list");
+    assert!(
+        s.settings_ui.dropdown.is_some(),
+        "a press on the bar doesn't close the list"
+    );
     assert_eq!(dd(&s).scroll(), max);
     point(&mut s, bx + bw / 2.0, by - 50.0);
     assert_eq!(dd(&s).scroll(), 0.0);
@@ -1300,7 +1699,11 @@ fn the_preset_list_scrolls_by_wheel_and_scroll_bar_never_by_pointing() {
 }
 
 fn frame_off(s: &mut State) -> Option<f32> {
-    s.build_frame(&mut Canvas::default(), Instant::now() + Duration::from_secs(60), 853.3);
+    s.build_frame(
+        &mut Canvas::default(),
+        Instant::now() + Duration::from_secs(60),
+        853.3,
+    );
     s.screen_fade
 }
 
@@ -1347,14 +1750,23 @@ fn pointing_at_a_main_menu_note_selects_it() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(s.on_menu());
     // Along the panel's middle, the first spot on Medals.
-    let medals = menu::ITEMS.iter().position(|&i| i == menu::Item::Medals).unwrap();
+    let medals = menu::ITEMS
+        .iter()
+        .position(|&i| i == menu::Item::Medals)
+        .unwrap();
     let y = 240.0 - 30.0;
-    let x = (0..853).map(|x| x as f32).find(|&x| s.hit_at(x, y) == Some(render::Hit::MenuItem(medals))).expect("a note there");
+    let x = (0..853)
+        .map(|x| x as f32)
+        .find(|&x| s.hit_at(x, y) == Some(render::Hit::MenuItem(medals)))
+        .expect("a note there");
     point(&mut s, x + 20.0, y);
     assert_eq!(s.main_menu.as_ref().unwrap().current(), menu::Item::Medals);
     // The keys move on from it, and a pointer left where it is doesn't take it back.
     s.menu_step(1);
     let (mx, my) = s.mouse;
     s.mouse_moved(mx, my);
-    assert_eq!(s.main_menu.as_ref().unwrap().current(), menu::ITEMS[medals + 1]);
+    assert_eq!(
+        s.main_menu.as_ref().unwrap().current(),
+        menu::ITEMS[medals + 1]
+    );
 }

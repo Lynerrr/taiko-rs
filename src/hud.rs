@@ -44,14 +44,26 @@ impl Part {
             Part::Score => tr!("Score", "スコア", "Счёт"),
             Part::Accuracy => tr!("Accuracy", "精度", "Точность"),
             Part::Pp => tr!("pp counter", "ppカウンター", "Счётчик pp"),
-            Part::Combo => tr!("Combo (on the drum)", "コンボ (太鼓の上)", "Комбо (на барабане)"),
+            Part::Combo => tr!(
+                "Combo (on the drum)",
+                "コンボ (太鼓の上)",
+                "Комбо (на барабане)"
+            ),
             Part::Progress => tr!("Progress bar", "進行バー", "Полоса прогресса"),
             Part::Health => tr!("Health bar", "ゲージ", "Полоса здоровья"),
             Part::Mods => tr!("Mods", "Mod", "Моды"),
             Part::HitError => tr!("Hit error bar", "判定ズレのバー", "Полоса ошибок попаданий"),
-            Part::OffsetHint => tr!("Offset suggestion", "オフセットの提案", "Подсказка смещения"),
+            Part::OffsetHint => tr!(
+                "Offset suggestion",
+                "オフセットの提案",
+                "Подсказка смещения"
+            ),
             Part::Judgements => "GREAT / OK / MISS",
-            Part::HitAnimation => tr!("Note hit animation", "ノーツを叩いた時の動き", "Анимация удара по ноте"),
+            Part::HitAnimation => tr!(
+                "Note hit animation",
+                "ノーツを叩いた時の動き",
+                "Анимация удара по ноте"
+            ),
             Part::Scoreboard => tr!("Match scoreboard", "対戦のスコアボード", "Таблица матча"),
             Part::Spectators => tr!("Spectators", "観戦者", "Зрители"),
         }
@@ -108,14 +120,26 @@ impl Parts {
 
     /// "score,accuracy,..." (empty: none).
     pub fn format(self) -> String {
-        Part::ALL.iter().filter(|&&p| self.has(p)).map(|p| p.key()).collect::<Vec<_>>().join(",")
+        Part::ALL
+            .iter()
+            .filter(|&&p| self.has(p))
+            .map(|p| p.key())
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     /// The config's line: `format`, and the parts that came later and aren't hidden, marked with
     /// `!`, so that `parse_saved` can tell those from a part the line is older than.
     pub fn format_saved(self) -> String {
-        let shown = NEWER.iter().filter(|&&p| !self.has(p)).map(|p| format!("!{}", p.key()));
-        std::iter::once(self.format()).filter(|s| !s.is_empty()).chain(shown).collect::<Vec<_>>().join(",")
+        let shown = NEWER
+            .iter()
+            .filter(|&&p| !self.has(p))
+            .map(|p| format!("!{}", p.key()));
+        std::iter::once(self.format())
+            .filter(|s| !s.is_empty())
+            .chain(shown)
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     /// The config's line: saved before parts that came later (the pp counter, the scoreboard, the
@@ -123,8 +147,15 @@ impl Parts {
     /// that's what the toggle hides to begin with.
     pub fn parse_saved(s: &str) -> Parts {
         let mut parts = Parts::parse(s);
-        let saved = |p: Part| s.split(',').map(str::trim).any(|k| k.strip_prefix('!').unwrap_or(k) == p.key());
-        if Part::ALL.iter().all(|&p| p == Part::Judgements || parts.has(p) || (NEWER.contains(&p) && !saved(p))) {
+        let saved = |p: Part| {
+            s.split(',')
+                .map(str::trim)
+                .any(|k| k.strip_prefix('!').unwrap_or(k) == p.key())
+        };
+        if Part::ALL
+            .iter()
+            .all(|&p| p == Part::Judgements || parts.has(p) || (NEWER.contains(&p) && !saved(p)))
+        {
             for &p in NEWER.iter().filter(|&&p| !saved(p)) {
                 parts.0 |= p.bit();
             }
@@ -154,7 +185,10 @@ mod tests {
         assert_eq!(Parts::parse_saved(&format!("{old},pp")), Parts::ALL);
         let some = Parts::parse_saved("score,pp");
         assert!(some.has(Part::Score) && !some.has(Part::Scoreboard) && some.len() == 2);
-        assert_eq!(Parts::parse_saved(&Parts::DEFAULT_HIDES.format()), Parts::DEFAULT_HIDES);
+        assert_eq!(
+            Parts::parse_saved(&Parts::DEFAULT_HIDES.format()),
+            Parts::DEFAULT_HIDES
+        );
         // The old default, which leaves the judgements out, takes in the newer parts too.
         let default = "score,accuracy,pp,combo,progress,health,mods,hit_error,offset_hint,hit_animation,scoreboard";
         assert_eq!(Parts::parse_saved(default), Parts::DEFAULT_HIDES);

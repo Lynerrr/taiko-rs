@@ -79,9 +79,19 @@ fn roll(seed: &mut u64) -> u64 {
 impl Playlist {
     /// Every song of `library`, by name, on the one `entry` belongs to.
     pub fn new(library: &[Entry], entry: Option<usize>) -> Playlist {
-        let audio = |e: &Entry| e.path.parent().unwrap_or(std::path::Path::new(".")).join(&e.meta.audio_file);
+        let audio = |e: &Entry| {
+            e.path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join(&e.meta.audio_file)
+        };
         let key = |e: &Entry| {
-            let folder = e.path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let folder = e
+                .path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             format!("{folder}/{}", e.meta.audio_file)
         };
         let mut tracks: Vec<Track> = library
@@ -89,10 +99,22 @@ impl Playlist {
             .enumerate()
             .map(|(i, e)| {
                 let label = format!("{} - {}", e.meta.artist, e.meta.title);
-                Track { entry: i, find: label.to_lowercase(), label, audio: audio(e), key: key(e), genres: e.meta.genres }
+                Track {
+                    entry: i,
+                    find: label.to_lowercase(),
+                    label,
+                    audio: audio(e),
+                    key: key(e),
+                    genres: e.meta.genres,
+                }
             })
             .collect();
-        tracks.sort_by(|a, b| a.find.cmp(&b.find).then(a.audio.cmp(&b.audio)).then(a.entry.cmp(&b.entry)));
+        tracks.sort_by(|a, b| {
+            a.find
+                .cmp(&b.find)
+                .then(a.audio.cmp(&b.audio))
+                .then(a.entry.cmp(&b.entry))
+        });
         tracks.dedup_by(|a, b| {
             let same = a.audio == b.audio;
             if same {
@@ -100,19 +122,39 @@ impl Playlist {
             }
             same
         });
-        let now = entry.and_then(|i| library.get(i)).map(audio).and_then(|path| tracks.iter().position(|t| t.audio == path)).unwrap_or(0);
+        let now = entry
+            .and_then(|i| library.get(i))
+            .map(audio)
+            .and_then(|path| tracks.iter().position(|t| t.audio == path))
+            .unwrap_or(0);
         let all: Vec<usize> = (0..tracks.len()).collect();
         let favourites = load_favourites();
-        Playlist { tracks, shown: all.clone(), filter: String::new(), folder: Folder::All, favourites, scope: all, queue: VecDeque::new(), repeat: Repeat::All, now, history: Vec::new(), shuffled: None }
+        Playlist {
+            tracks,
+            shown: all.clone(),
+            filter: String::new(),
+            folder: Folder::All,
+            favourites,
+            scope: all,
+            queue: VecDeque::new(),
+            repeat: Repeat::All,
+            now,
+            history: Vec::new(),
+            shuffled: None,
+        }
     }
 
     pub fn is_favourite(&self, track: usize) -> bool {
-        self.tracks.get(track).is_some_and(|t| self.favourites.contains(&t.key))
+        self.tracks
+            .get(track)
+            .is_some_and(|t| self.favourites.contains(&t.key))
     }
 
     /// How many tracks a folder holds.
     pub fn count(&self, folder: Folder) -> usize {
-        (0..self.tracks.len()).filter(|&i| self.holds(folder, i)).count()
+        (0..self.tracks.len())
+            .filter(|&i| self.holds(folder, i))
+            .count()
     }
 
     fn holds(&self, folder: Folder, track: usize) -> bool {
@@ -127,9 +169,15 @@ impl Playlist {
     /// The folders worth showing: everything, the favourites, then the genres there are songs of,
     /// biggest first, and what's left.
     pub fn folders(&self) -> Vec<(Folder, usize)> {
-        let mut genres: Vec<(Folder, usize)> = (0..crate::genres::GENRES.len()).map(|i| (Folder::Genre(i), self.count(Folder::Genre(i)))).filter(|f| f.1 > 0).collect();
+        let mut genres: Vec<(Folder, usize)> = (0..crate::genres::GENRES.len())
+            .map(|i| (Folder::Genre(i), self.count(Folder::Genre(i))))
+            .filter(|f| f.1 > 0)
+            .collect();
         genres.sort_by_key(|f| std::cmp::Reverse(f.1));
-        let mut all = vec![(Folder::All, self.tracks.len()), (Folder::Favourites, self.count(Folder::Favourites))];
+        let mut all = vec![
+            (Folder::All, self.tracks.len()),
+            (Folder::Favourites, self.count(Folder::Favourites)),
+        ];
         all.extend(genres);
         let other = self.count(Folder::Other);
         if other > 0 {
@@ -145,7 +193,9 @@ impl Playlist {
     }
 
     fn refresh(&mut self, seed: u64) {
-        self.scope = (0..self.tracks.len()).filter(|&i| self.holds(self.folder, i)).collect();
+        self.scope = (0..self.tracks.len())
+            .filter(|&i| self.holds(self.folder, i))
+            .collect();
         self.set_filter(self.filter.clone());
         if self.shuffled.take().is_some() {
             self.toggle_shuffle(seed);
@@ -153,7 +203,9 @@ impl Playlist {
     }
 
     pub fn toggle_favourite(&mut self, track: usize, seed: u64) {
-        let Some(key) = self.tracks.get(track).map(|t| t.key.clone()) else { return };
+        let Some(key) = self.tracks.get(track).map(|t| t.key.clone()) else {
+            return;
+        };
         if !self.favourites.remove(&key) {
             self.favourites.insert(key);
         }
@@ -179,8 +231,17 @@ impl Playlist {
     }
 
     pub fn set_filter(&mut self, filter: String) {
-        let words: Vec<String> = filter.to_lowercase().split_whitespace().map(str::to_string).collect();
-        self.shown = self.scope.iter().copied().filter(|&i| words.iter().all(|w| self.tracks[i].find.contains(w))).collect();
+        let words: Vec<String> = filter
+            .to_lowercase()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        self.shown = self
+            .scope
+            .iter()
+            .copied()
+            .filter(|&i| words.iter().all(|w| self.tracks[i].find.contains(w)))
+            .collect();
         self.filter = filter;
     }
 
@@ -192,7 +253,8 @@ impl Playlist {
         self.history.push(self.now);
         self.now = i;
         if let Some((order, at)) = &mut self.shuffled
-            && let Some(pos) = order.iter().position(|&t| t == i) {
+            && let Some(pos) = order.iter().position(|&t| t == i)
+        {
             *at = pos;
         }
     }
@@ -218,11 +280,22 @@ impl Playlist {
         let next = if let Some(queued) = self.queue.pop_front() {
             Some(queued)
         } else if let Some((order, at)) = &self.shuffled {
-            order.get(at + 1).copied().or(order.first().copied().filter(|_| self.repeat != Repeat::Off))
+            order.get(at + 1).copied().or(order
+                .first()
+                .copied()
+                .filter(|_| self.repeat != Repeat::Off))
         } else {
             // From a song outside the folder, its first.
-            let after = self.scope.iter().position(|&t| t == self.now).map_or(0, |pos| pos + 1);
-            self.scope.get(after).copied().or(self.scope.first().copied().filter(|_| self.repeat != Repeat::Off))
+            let after = self
+                .scope
+                .iter()
+                .position(|&t| t == self.now)
+                .map_or(0, |pos| pos + 1);
+            self.scope.get(after).copied().or(self
+                .scope
+                .first()
+                .copied()
+                .filter(|_| self.repeat != Repeat::Off))
         };
         let Some(next) = next else { return false };
         self.play(next);
@@ -235,7 +308,12 @@ impl Playlist {
             Some((order, at)) => order.get(at.checked_sub(1)?).copied(),
             None => {
                 let pos = self.scope.iter().position(|&t| t == self.now).unwrap_or(0);
-                self.scope.get(pos.checked_sub(1).unwrap_or(self.scope.len().checked_sub(1)?)).copied()
+                self.scope
+                    .get(
+                        pos.checked_sub(1)
+                            .unwrap_or(self.scope.len().checked_sub(1)?),
+                    )
+                    .copied()
             }
         });
         if let Some(i) = previous {
@@ -254,12 +332,22 @@ fn load_favourites() -> HashSet<String> {
     #[cfg(test)]
     return HashSet::new();
     #[cfg(not(test))]
-    favourites_file().and_then(|p| std::fs::read_to_string(p).ok()).map(|t| t.lines().filter(|l| !l.is_empty()).map(str::to_string).collect()).unwrap_or_default()
+    favourites_file()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| {
+            t.lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Keeps the favourites, sorted, so the file only changes by what changed.
 pub fn save_favourites(favourites: &HashSet<String>) {
-    let Some(path) = favourites_file() else { return };
+    let Some(path) = favourites_file() else {
+        return;
+    };
     let mut lines: Vec<&str> = favourites.iter().map(String::as_str).collect();
     lines.sort_unstable();
     let tmp = path.with_extension("partial");
@@ -274,9 +362,30 @@ mod tests {
     use std::path::Path;
 
     fn list(songs: usize) -> Playlist {
-        let tracks = (0..songs).map(|i| Track { entry: i, label: format!("song {i}"), find: format!("song {i}"), audio: Path::new("a").join(i.to_string()), key: format!("set/{i}"), genres: 0 }).collect();
+        let tracks = (0..songs)
+            .map(|i| Track {
+                entry: i,
+                label: format!("song {i}"),
+                find: format!("song {i}"),
+                audio: Path::new("a").join(i.to_string()),
+                key: format!("set/{i}"),
+                genres: 0,
+            })
+            .collect();
         let all: Vec<usize> = (0..songs).collect();
-        Playlist { tracks, shown: all.clone(), filter: String::new(), folder: Folder::All, favourites: HashSet::new(), scope: all, queue: VecDeque::new(), repeat: Repeat::All, now: 0, history: Vec::new(), shuffled: None }
+        Playlist {
+            tracks,
+            shown: all.clone(),
+            filter: String::new(),
+            folder: Folder::All,
+            favourites: HashSet::new(),
+            scope: all,
+            queue: VecDeque::new(),
+            repeat: Repeat::All,
+            now: 0,
+            history: Vec::new(),
+            shuffled: None,
+        }
     }
 
     #[test]
@@ -320,7 +429,10 @@ mod tests {
             heard.push(l.now());
         }
         assert_eq!(heard[0], 7);
-        assert_ne!(heard[1..].iter().copied().take(10).collect::<Vec<_>>(), (8..18).collect::<Vec<_>>());
+        assert_ne!(
+            heard[1..].iter().copied().take(10).collect::<Vec<_>>(),
+            (8..18).collect::<Vec<_>>()
+        );
         heard.sort_unstable();
         assert_eq!(heard, (0..50).collect::<Vec<_>>());
         l.repeat = Repeat::Off;
@@ -382,6 +494,15 @@ mod tests {
             l.tracks[t].genres = 0b100;
         }
         let folders = l.folders();
-        assert_eq!(folders, [(Folder::All, 5), (Folder::Favourites, 0), (Folder::Genre(2), 3), (Folder::Genre(0), 1), (Folder::Other, 1)]);
+        assert_eq!(
+            folders,
+            [
+                (Folder::All, 5),
+                (Folder::Favourites, 0),
+                (Folder::Genre(2), 3),
+                (Folder::Genre(0), 1),
+                (Folder::Other, 1)
+            ]
+        );
     }
 }

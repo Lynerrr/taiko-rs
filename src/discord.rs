@@ -91,7 +91,9 @@ impl Presence {
                 }
                 let Some(c) = &mut conn else { continue };
                 // Discord allows about 5 updates per 20 s.
-                if shown.as_ref() != Some(&want) && last_send.is_none_or(|t| t.elapsed() >= Duration::from_secs(3)) {
+                if shown.as_ref() != Some(&want)
+                    && last_send.is_none_or(|t| t.elapsed() >= Duration::from_secs(3))
+                {
                     last_send = Some(Instant::now());
                     if c.set(want.as_ref()).is_ok() {
                         shown = Some(want.clone());
@@ -110,7 +112,10 @@ impl Presence {
 }
 
 pub fn unix_now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(unix)]
@@ -128,10 +133,21 @@ fn socket_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
     #[cfg(unix)]
     {
-        let mut dirs: Vec<PathBuf> = ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"].iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
+        let mut dirs: Vec<PathBuf> = ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"]
+            .iter()
+            .filter_map(std::env::var_os)
+            .map(PathBuf::from)
+            .collect();
         dirs.push(PathBuf::from("/tmp"));
         for d in dirs {
-            for sub in ["", "app/com.discordapp.Discord", "app/com.discordapp.DiscordCanary", "snap.discord", "app/dev.vencord.Vesktop", ".flatpak/dev.vencord.Vesktop/xdg-run"] {
+            for sub in [
+                "",
+                "app/com.discordapp.Discord",
+                "app/com.discordapp.DiscordCanary",
+                "snap.discord",
+                "app/dev.vencord.Vesktop",
+                ".flatpak/dev.vencord.Vesktop/xdg-run",
+            ] {
                 for i in 0..10 {
                     out.push(d.join(sub).join(format!("discord-ipc-{i}")));
                 }
@@ -151,13 +167,20 @@ impl Conn {
             #[cfg(unix)]
             let s = Stream::connect(&path).ok();
             #[cfg(windows)]
-            let s = std::fs::OpenOptions::new().read(true).write(true).open(&path).ok();
+            let s = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .ok();
             let Some(s) = s else { continue };
             #[cfg(unix)]
             let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
             let mut c = Conn { s, nonce: 0 };
             let hello = serde_json::json!({ "v": 1, "client_id": app_id });
-            if c.send(0, &hello).is_ok() && c.recv().is_ok_and(|(op, body)| op == 1 && body.contains("READY")) {
+            if c.send(0, &hello).is_ok()
+                && c.recv()
+                    .is_ok_and(|(op, body)| op == 1 && body.contains("READY"))
+            {
                 return Some(c);
             }
         }
@@ -256,23 +279,42 @@ mod tests {
             let (op, hello) = c.recv().unwrap();
             assert_eq!(op, 0);
             assert!(hello.contains("\"client_id\":\"123\""));
-            c.send(1, &serde_json::json!({ "cmd": "DISPATCH", "evt": "READY" })).unwrap();
+            c.send(1, &serde_json::json!({ "cmd": "DISPATCH", "evt": "READY" }))
+                .unwrap();
             let (_, set) = c.recv().unwrap();
-            c.send(1, &serde_json::json!({ "cmd": "SET_ACTIVITY", "evt": null })).unwrap();
+            c.send(
+                1,
+                &serde_json::json!({ "cmd": "SET_ACTIVITY", "evt": null }),
+            )
+            .unwrap();
             // Leaving: the status cleared, then a goodbye (opcode 2, which `recv` reports).
             let (_, cleared) = c.recv().unwrap();
-            c.send(1, &serde_json::json!({ "cmd": "SET_ACTIVITY", "evt": null })).unwrap();
+            c.send(
+                1,
+                &serde_json::json!({ "cmd": "SET_ACTIVITY", "evt": null }),
+            )
+            .unwrap();
             (set, cleared, c.recv().is_err())
         });
         let s = Stream::connect(&path).unwrap();
         let mut c = Conn { s, nonce: 0 };
-        c.send(0, &serde_json::json!({ "v": 1, "client_id": "123" })).unwrap();
+        c.send(0, &serde_json::json!({ "v": 1, "client_id": "123" }))
+            .unwrap();
         assert!(c.recv().unwrap().1.contains("READY"));
-        c.set(Some(&Activity { details: "Artist - Title [Oni]".into(), state: "Playing".into(), start: 5 })).unwrap();
+        c.set(Some(&Activity {
+            details: "Artist - Title [Oni]".into(),
+            state: "Playing".into(),
+            start: 5,
+        }))
+        .unwrap();
         c.set(None).unwrap();
         c.close();
         let (set, cleared, goodbye) = server.join().unwrap();
-        assert!(set.contains("SET_ACTIVITY") && set.contains("Artist - Title [Oni]") && set.contains("\"start\":5"));
+        assert!(
+            set.contains("SET_ACTIVITY")
+                && set.contains("Artist - Title [Oni]")
+                && set.contains("\"start\":5")
+        );
         assert!(cleared.contains("\"activity\":null"), "{cleared}");
         assert!(goodbye);
         let _ = std::fs::remove_dir_all(&dir);

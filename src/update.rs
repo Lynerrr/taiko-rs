@@ -79,7 +79,11 @@ pub enum Status {
     Checking,
     UpToDate,
     /// A newer build (or the other channel's): its commit, the archive's URL and size.
-    Available { commit: String, url: String, size: u64 },
+    Available {
+        commit: String,
+        url: String,
+        size: u64,
+    },
     Downloading,
     /// Swapped in: restart into it.
     Installed,
@@ -151,7 +155,8 @@ impl Updater {
     /// its badge).
     pub fn check_every(&self, every: Duration) {
         let found = matches!(self.status(), Status::Available { .. });
-        if cfg!(target_os = "android") || found || self.last_check.lock().unwrap().elapsed() < every {
+        if cfg!(target_os = "android") || found || self.last_check.lock().unwrap().elapsed() < every
+        {
             return;
         }
         self.check();
@@ -159,7 +164,10 @@ impl Updater {
 
     pub fn check(&self) {
         let Some(build) = BUILD else { return };
-        if matches!(self.status(), Status::Checking | Status::Downloading | Status::Installed) {
+        if matches!(
+            self.status(),
+            Status::Checking | Status::Downloading | Status::Installed
+        ) {
             return;
         }
         *self.last_check.lock().unwrap() = std::time::Instant::now();
@@ -168,7 +176,11 @@ impl Updater {
         let channel = self.channel();
         std::thread::spawn(move || {
             let result = release(channel).map(|(commit, url, size)| {
-                if commit == build && channel == BUILD_CHANNEL { Status::UpToDate } else { Status::Available { commit, url, size } }
+                if commit == build && channel == BUILD_CHANNEL {
+                    Status::UpToDate
+                } else {
+                    Status::Available { commit, url, size }
+                }
             });
             let mut status = status.lock().unwrap();
             // The channel was switched meanwhile: that check reports instead.
@@ -185,7 +197,9 @@ impl Updater {
     /// Downloads and swaps in the available build. Status goes to `Installed` (then call
     /// `restart`) or `Failed`.
     pub fn install(&self) {
-        let Status::Available { url, size, .. } = self.status() else { return };
+        let Status::Available { url, size, .. } = self.status() else {
+            return;
+        };
         *self.status.lock().unwrap() = Status::Downloading;
         self.done.store(0, Ordering::Relaxed);
         self.total.store(size, Ordering::Relaxed);
@@ -207,7 +221,12 @@ impl Updater {
 /// running file as deleted.
 fn exe_path() -> Result<PathBuf, String> {
     static EXE: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
-    EXE.get_or_init(|| std::env::current_exe().and_then(|p| p.canonicalize()).map_err(|e| format!("where am I: {e}"))).clone()
+    EXE.get_or_init(|| {
+        std::env::current_exe()
+            .and_then(|p| p.canonicalize())
+            .map_err(|e| format!("where am I: {e}"))
+    })
+    .clone()
 }
 
 fn sibling(exe: &Path, suffix: &str) -> PathBuf {
@@ -228,18 +247,27 @@ pub fn cleanup() {
 /// Starts the (new) binary with the same arguments. The caller then quits.
 pub fn restart() -> Result<(), String> {
     let exe = exe_path()?;
-    std::process::Command::new(&exe).args(std::env::args_os().skip(1)).spawn().map_err(|e| format!("restart: {e}"))?;
+    std::process::Command::new(&exe)
+        .args(std::env::args_os().skip(1))
+        .spawn()
+        .map_err(|e| format!("restart: {e}"))?;
     Ok(())
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder().timeout_connect(Some(Duration::from_secs(10))).build().into()
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .build()
+        .into()
 }
 
 /// A GitHub API call about the repository (`path` after `repos/<repo>/`): the JSON it returns.
 pub fn api_get(path: &str) -> Result<String, String> {
     let url = format!("https://api.github.com/repos/{REPO}/{path}");
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(15))).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .build()
+        .into();
     agent
         .get(&url)
         .header("User-Agent", USER_AGENT)
@@ -264,8 +292,14 @@ fn release(channel: Channel) -> Result<(String, String, u64), String> {
         target_commitish: String,
         assets: Vec<Asset>,
     }
-    let url = format!("https://api.github.com/repos/{REPO}/releases/tags/{}", channel.tag());
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(15))).build().into();
+    let url = format!(
+        "https://api.github.com/repos/{REPO}/releases/tags/{}",
+        channel.tag()
+    );
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .build()
+        .into();
     let text = agent
         .get(&url)
         .header("User-Agent", USER_AGENT)
@@ -276,8 +310,16 @@ fn release(channel: Channel) -> Result<(String, String, u64), String> {
         .read_to_string()
         .map_err(|e| e.to_string())?;
     let release: Release = serde_json::from_str(&text).map_err(|e| format!("release: {e}"))?;
-    let asset = release.assets.into_iter().find(|a| a.name == ASSET).ok_or_else(|| format!("no {ASSET} in the {} release", channel.name()))?;
-    Ok((release.target_commitish, asset.browser_download_url, asset.size))
+    let asset = release
+        .assets
+        .into_iter()
+        .find(|a| a.name == ASSET)
+        .ok_or_else(|| format!("no {ASSET} in the {} release", channel.name()))?;
+    Ok((
+        release.target_commitish,
+        asset.browser_download_url,
+        asset.size,
+    ))
 }
 
 fn install(url: &str, done: &AtomicU64, total: &AtomicU64) -> Result<(), String> {
@@ -299,7 +341,11 @@ fn install(url: &str, done: &AtomicU64, total: &AtomicU64) -> Result<(), String>
 }
 
 fn fetch(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<(), String> {
-    let mut response = agent().get(url).header("User-Agent", USER_AGENT).call().map_err(|e| e.to_string())?;
+    let mut response = agent()
+        .get(url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .map_err(|e| e.to_string())?;
     let body = response.body_mut();
     if let Some(len) = body.content_length() {
         total.store(len, Ordering::Relaxed);
@@ -323,7 +369,9 @@ fn fetch(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<
 fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-    let mut entry = zip.by_name("taiko-rs.exe").map_err(|e| format!("taiko-rs.exe: {e}"))?;
+    let mut entry = zip
+        .by_name("taiko-rs.exe")
+        .map_err(|e| format!("taiko-rs.exe: {e}"))?;
     let mut out = Vec::new();
     entry.read_to_end(&mut out).map_err(|e| e.to_string())?;
     Ok(out)
@@ -334,7 +382,9 @@ fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
 fn unpack(archive: &Path) -> Result<Vec<u8>, String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut tar = Vec::new();
-    flate2::read::GzDecoder::new(file).read_to_end(&mut tar).map_err(|e| format!("gzip: {e}"))?;
+    flate2::read::GzDecoder::new(file)
+        .read_to_end(&mut tar)
+        .map_err(|e| format!("gzip: {e}"))?;
     tar_file(&tar, ARCHIVED_BINARY).ok_or_else(|| format!("{ARCHIVED_BINARY} not in the archive"))
 }
 
@@ -349,11 +399,16 @@ fn tar_file(tar: &[u8], wanted: &str) -> Option<Vec<u8>> {
         }
         let field = |range: std::ops::Range<usize>| {
             let raw = &header[range];
-            String::from_utf8_lossy(&raw[..raw.iter().position(|&b| b == 0).unwrap_or(raw.len())]).into_owned()
+            String::from_utf8_lossy(&raw[..raw.iter().position(|&b| b == 0).unwrap_or(raw.len())])
+                .into_owned()
         };
         let name = field(0..100);
         let prefix = field(345..500);
-        let path = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+        let path = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}/{name}")
+        };
         let size = u64::from_str_radix(field(124..136).trim(), 8).ok()? as usize;
         let data = at + 512;
         if path.trim_start_matches("./") == wanted && matches!(header[156], b'0' | 0) {
@@ -369,7 +424,8 @@ fn write_executable(path: &Path, bytes: &[u8]) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -411,7 +467,10 @@ mod tests {
         tar.extend(header("taiko-rs/taiko-rs", 5, b'0'));
         tar.extend(b"\x7fELF!");
         tar.resize(tar.len().div_ceil(512) * 512 + 1024, 0);
-        assert_eq!(super::tar_file(&tar, "taiko-rs/taiko-rs").as_deref(), Some(&b"\x7fELF!"[..]));
+        assert_eq!(
+            super::tar_file(&tar, "taiko-rs/taiko-rs").as_deref(),
+            Some(&b"\x7fELF!"[..])
+        );
         assert_eq!(super::tar_file(&tar, "taiko-rs/missing"), None);
     }
 }

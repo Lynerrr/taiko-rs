@@ -54,8 +54,13 @@ pub fn setup(app: &AndroidApp) {
     if let Err(e) = register_natives(app) {
         eprintln!("on-screen keyboard unavailable: {e}");
     }
-    let internal = app.internal_data_path().unwrap_or_else(|| PathBuf::from("/data/local/tmp"));
-    let data = app.external_data_path().filter(|p| std::fs::create_dir_all(p).is_ok()).unwrap_or_else(|| internal.clone());
+    let internal = app
+        .internal_data_path()
+        .unwrap_or_else(|| PathBuf::from("/data/local/tmp"));
+    let data = app
+        .external_data_path()
+        .filter(|p| std::fs::create_dir_all(p).is_ok())
+        .unwrap_or_else(|| internal.clone());
     let cache = internal.join("cache");
     let tmp = internal.join("tmp");
     for dir in [&cache, &tmp, &data.join("taiko-rs").join("Songs")] {
@@ -80,12 +85,19 @@ pub fn set_proxy(proxy: EventLoopProxy<UserEvent>) {
 
 /// Shows or hides the on-screen keyboard.
 pub fn keyboard(show: bool) {
-    let Some(app) = APP.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+    let Some(app) = APP.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+        return;
+    };
     let called = JavaVM::singleton().and_then(|vm| {
         vm.attach_current_thread(|env| -> jni::errors::Result<()> {
             // SAFETY: a global reference to the activity, valid while it runs.
             let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
-            env.call_method(&activity, jni_str!("keyboard"), jni_sig!("(Z)V"), &[JValue::Bool(show)])?;
+            env.call_method(
+                &activity,
+                jni_str!("keyboard"),
+                jni_sig!("(Z)V"),
+                &[JValue::Bool(show)],
+            )?;
             Ok(())
         })
     });
@@ -104,8 +116,16 @@ fn register_natives(app: &AndroidApp) -> jni::errors::Result<()> {
         // `this`, then the arguments).
         let methods = unsafe {
             [
-                NativeMethod::from_raw_parts(jni_str!("typed"), jni_str!("(Ljava/lang/String;I)V"), typed as *mut _),
-                NativeMethod::from_raw_parts(jni_str!("keyboardShown"), jni_str!("(Z)V"), keyboard_shown as *mut _),
+                NativeMethod::from_raw_parts(
+                    jni_str!("typed"),
+                    jni_str!("(Ljava/lang/String;I)V"),
+                    typed as *mut _,
+                ),
+                NativeMethod::from_raw_parts(
+                    jni_str!("keyboardShown"),
+                    jni_str!("(Z)V"),
+                    keyboard_shown as *mut _,
+                ),
             ]
         };
         unsafe { env.register_native_methods(&class, &methods) }
@@ -113,14 +133,25 @@ fn register_natives(app: &AndroidApp) -> jni::errors::Result<()> {
 }
 
 /// `TaikoActivity.typed(text, keyCode)`: text typed on the keyboard, or (text null) a key.
-extern "system" fn typed<'local>(mut env: EnvUnowned<'local>, _this: JObject<'local>, text: JString<'local>, key: jint) {
+extern "system" fn typed<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    text: JString<'local>,
+    key: jint,
+) {
     env.with_env(|env| -> jni::errors::Result<()> {
         let typed = if text.is_null() {
-            let Some(code) = android_key(key) else { return Ok(()) };
+            let Some(code) = android_key(key) else {
+                return Ok(());
+            };
             Typed::Key(code)
         } else {
             let text = text.try_to_string(env)?;
-            Typed::Keys(text.chars().map(|ch| (key_for(ch), ch.to_string())).collect())
+            Typed::Keys(
+                text.chars()
+                    .map(|ch| (key_for(ch), ch.to_string()))
+                    .collect(),
+            )
         };
         send(typed);
         Ok(())
@@ -129,7 +160,11 @@ extern "system" fn typed<'local>(mut env: EnvUnowned<'local>, _this: JObject<'lo
 }
 
 /// `TaikoActivity.keyboardShown(shown)`.
-extern "system" fn keyboard_shown<'local>(mut env: EnvUnowned<'local>, _this: JObject<'local>, shown: jboolean) {
+extern "system" fn keyboard_shown<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    shown: jboolean,
+) {
     env.with_env(|_| -> jni::errors::Result<()> {
         send(Typed::Shown(shown));
         Ok(())
@@ -169,10 +204,12 @@ fn android_key(code: jint) -> Option<KeyCode> {
 pub fn key_for(ch: char) -> KeyCode {
     use KeyCode::*;
     const LETTERS: [KeyCode; 26] = [
-        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV,
-        KeyW, KeyX, KeyY, KeyZ,
+        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
+        KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
     ];
-    const DIGITS: [KeyCode; 10] = [Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9];
+    const DIGITS: [KeyCode; 10] = [
+        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    ];
     match ch {
         'a'..='z' => LETTERS[ch as usize - 'a' as usize],
         'A'..='Z' => LETTERS[ch as usize - 'A' as usize],
@@ -219,7 +256,9 @@ fn import_dir() -> Option<PathBuf> {
 /// Archives waiting in the import folder, with their names. Each is renamed to `.importing`
 /// so it is only taken once; the import removes it when done.
 pub fn take_imports() -> Vec<(PathBuf, String)> {
-    let Some(entries) = import_dir().and_then(|d| std::fs::read_dir(d).ok()) else { return Vec::new() };
+    let Some(entries) = import_dir().and_then(|d| std::fs::read_dir(d).ok()) else {
+        return Vec::new();
+    };
     entries
         .flatten()
         .filter_map(|e| {
@@ -237,7 +276,9 @@ pub fn take_imports() -> Vec<(PathBuf, String)> {
 
 /// Puts back imports a previous run took but didn't finish (the game was closed meanwhile).
 fn requeue_unfinished_imports() {
-    let Some(entries) = import_dir().and_then(|d| std::fs::read_dir(d).ok()) else { return };
+    let Some(entries) = import_dir().and_then(|d| std::fs::read_dir(d).ok()) else {
+        return;
+    };
     for path in entries.flatten().map(|e| e.path()) {
         if let Some(name) = path.to_str().and_then(|p| p.strip_suffix(".importing")) {
             let _ = std::fs::rename(&path, name);
@@ -251,7 +292,11 @@ fn forward_stderr_to_logcat() {
     use std::os::fd::FromRawFd;
 
     unsafe extern "C" {
-        fn __android_log_write(prio: i32, tag: *const std::ffi::c_char, text: *const std::ffi::c_char) -> i32;
+        fn __android_log_write(
+            prio: i32,
+            tag: *const std::ffi::c_char,
+            text: *const std::ffi::c_char,
+        ) -> i32;
     }
     const ANDROID_LOG_INFO: i32 = 4;
 
@@ -267,13 +312,15 @@ fn forward_stderr_to_logcat() {
         libc::close(fds[1]);
     }
     let read = unsafe { std::fs::File::from_raw_fd(fds[0]) };
-    let _ = std::thread::Builder::new().name("logcat".into()).spawn(move || {
-        let tag = c"taiko-rs";
-        for line in BufReader::new(read).lines().map_while(Result::ok) {
-            if let Ok(text) = std::ffi::CString::new(line) {
-                // SAFETY: both strings are NUL-terminated and outlive the call.
-                unsafe { __android_log_write(ANDROID_LOG_INFO, tag.as_ptr(), text.as_ptr()) };
+    let _ = std::thread::Builder::new()
+        .name("logcat".into())
+        .spawn(move || {
+            let tag = c"taiko-rs";
+            for line in BufReader::new(read).lines().map_while(Result::ok) {
+                if let Ok(text) = std::ffi::CString::new(line) {
+                    // SAFETY: both strings are NUL-terminated and outlive the call.
+                    unsafe { __android_log_write(ANDROID_LOG_INFO, tag.as_ptr(), text.as_ptr()) };
+                }
             }
-        }
-    });
+        });
 }

@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver};
 
 use winit::keyboard::KeyCode;
 
-use crate::render::{accent, rgba, Canvas, Hit};
+use crate::render::{Canvas, Hit, accent, rgba};
 
 /// One change: when and its player-facing notes (including legacy history).
 #[derive(Clone, Debug, PartialEq)]
@@ -56,22 +56,39 @@ impl View {
 
     /// The latest changes in this build (or its channel's, for a local build).
     pub fn recent(after_update: bool) -> View {
-        let at = crate::update::BUILD.unwrap_or(crate::update::BUILD_CHANNEL.branch()).to_string();
-        View::fetch(after_update, move || commits(&format!("commits?sha={at}&per_page=40")))
+        let at = crate::update::BUILD
+            .unwrap_or(crate::update::BUILD_CHANNEL.branch())
+            .to_string();
+        View::fetch(after_update, move || {
+            commits(&format!("commits?sha={at}&per_page=40"))
+        })
     }
 
-    fn fetch(after_update: bool, get: impl FnOnce() -> Result<Vec<Change>, String> + Send + 'static) -> View {
+    fn fetch(
+        after_update: bool,
+        get: impl FnOnce() -> Result<Vec<Change>, String> + Send + 'static,
+    ) -> View {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(get());
         });
-        View { after_update, state: State::Loading(rx), scroll: 0, shown: Default::default() }
+        View {
+            after_update,
+            state: State::Loading(rx),
+            scroll: 0,
+            shown: Default::default(),
+        }
     }
 
     /// Already loaded with `changes` (for tests).
     #[cfg(test)]
     pub fn loaded(changes: Vec<Change>) -> View {
-        View { after_update: true, state: State::Loaded(changes), scroll: 0, shown: Default::default() }
+        View {
+            after_update: true,
+            state: State::Loaded(changes),
+            scroll: 0,
+            shown: Default::default(),
+        }
     }
 
     pub fn poll(&mut self) {
@@ -80,7 +97,16 @@ impl View {
                 Ok(Ok(changes)) => self.state = State::Loaded(changes),
                 Ok(Err(e)) => self.state = State::Failed(e),
                 Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => self.state = State::Failed(tr!("couldn't get the changes", "変更点を取得できませんでした", "не удалось получить изменения").into()),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.state = State::Failed(
+                        tr!(
+                            "couldn't get the changes",
+                            "変更点を取得できませんでした",
+                            "не удалось получить изменения"
+                        )
+                        .into(),
+                    )
+                }
             }
         }
     }
@@ -90,7 +116,9 @@ impl View {
         let (fits, all) = self.shown.get();
         let page = fits.saturating_sub(2).max(1) as i32;
         let step = match code {
-            KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter => return true,
+            KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter => {
+                return true;
+            }
             KeyCode::ArrowUp => -1,
             KeyCode::ArrowDown => 1,
             KeyCode::PageUp => -page,
@@ -105,7 +133,8 @@ impl View {
 
     pub fn scroll_by(&mut self, lines: i32) {
         let (fits, all) = self.shown.get();
-        self.scroll = (self.scroll as i32 + lines).clamp(0, all.saturating_sub(fits) as i32) as usize;
+        self.scroll =
+            (self.scroll as i32 + lines).clamp(0, all.saturating_sub(fits) as i32) as usize;
     }
 
     pub fn draw(&self, c: &mut Canvas) {
@@ -115,28 +144,97 @@ impl View {
         c.hit(0.0, 0.0, w, 480.0, Hit::Overlay);
         let pw = (w - 32.0).min(640.0);
         let (px, py, ph) = ((w - pw) / 2.0, 36.0, 420.0);
-        c.round_rect([px, py], [pw, ph], 10.0, rgba(0x15151d, 0.98), rgba(accent(), 0.8), 1.5);
-        c.text(px + 16.0, py + 12.0, 14.0, rgba(0xffffff, 1.0), tr!("What's new", "更新内容", "Что нового"));
+        c.round_rect(
+            [px, py],
+            [pw, ph],
+            10.0,
+            rgba(0x15151d, 0.98),
+            rgba(accent(), 0.8),
+            1.5,
+        );
+        c.text(
+            px + 16.0,
+            py + 12.0,
+            14.0,
+            rgba(0xffffff, 1.0),
+            tr!("What's new", "更新内容", "Что нового"),
+        );
         let about = match (self.after_update, crate::update::BUILD) {
-            (true, Some(b)) => tr!("updated to {}", "{}に更新しました", "обновлено до {}"; crate::update::short(b)),
-            (false, Some(b)) => tr!("this build: {}", "このビルド: {}", "эта сборка: {}"; crate::update::short(b)),
-            (_, None) => tr!("a local build: the latest changes", "ローカルビルド: 最新の変更", "локальная сборка: последние изменения").into(),
+            (true, Some(b)) => {
+                tr!("updated to {}", "{}に更新しました", "обновлено до {}"; crate::update::short(b))
+            }
+            (false, Some(b)) => {
+                tr!("this build: {}", "このビルド: {}", "эта сборка: {}"; crate::update::short(b))
+            }
+            (_, None) => tr!(
+                "a local build: the latest changes",
+                "ローカルビルド: 最新の変更",
+                "локальная сборка: последние изменения"
+            )
+            .into(),
         };
-        c.text_right(px + pw - 16.0, py + 16.0, 7.0, rgba(0x8a8aa0, 1.0), &Canvas::fit(7.0, pw - 180.0, &about));
+        c.text_right(
+            px + pw - 16.0,
+            py + 16.0,
+            7.0,
+            rgba(0x8a8aa0, 1.0),
+            &Canvas::fit(7.0, pw - 180.0, &about),
+        );
         let (by, bw) = (py + ph - 26.0, 64.0);
-        c.button(px + pw - bw - 12.0, by, bw, 16.0, tr!("Close", "閉じる", "Закрыть"), 7.0, Hit::Key(KeyCode::Escape), true);
-        c.text(px + 16.0, by + 4.5, 6.0, rgba(0x6f6f86, 1.0), tr!("Up/Down, wheel: scroll   Esc: close", "上下、ホイール: スクロール   Esc: 閉じる", "Вверх/вниз, колесо: прокрутка   Esc: закрыть"));
+        c.button(
+            px + pw - bw - 12.0,
+            by,
+            bw,
+            16.0,
+            tr!("Close", "閉じる", "Закрыть"),
+            7.0,
+            Hit::Key(KeyCode::Escape),
+            true,
+        );
+        c.text(
+            px + 16.0,
+            by + 4.5,
+            6.0,
+            rgba(0x6f6f86, 1.0),
+            tr!(
+                "Up/Down, wheel: scroll   Esc: close",
+                "上下、ホイール: スクロール   Esc: 閉じる",
+                "Вверх/вниз, колесо: прокрутка   Esc: закрыть"
+            ),
+        );
         let changes = match &self.state {
             State::Loading(_) => {
-                c.text_centered(px + pw / 2.0, py + ph / 2.0, 9.0, rgba(0xc8c8d8, 1.0), tr!("getting the changes...", "変更点を取得中...", "получаем изменения..."));
+                c.text_centered(
+                    px + pw / 2.0,
+                    py + ph / 2.0,
+                    9.0,
+                    rgba(0xc8c8d8, 1.0),
+                    tr!(
+                        "getting the changes...",
+                        "変更点を取得中...",
+                        "получаем изменения..."
+                    ),
+                );
                 return;
             }
             State::Failed(e) => {
-                c.text_centered(px + pw / 2.0, py + ph / 2.0, 9.0, rgba(0xFF4B4B, 1.0), &Canvas::fit(9.0, pw - 32.0, e));
+                c.text_centered(
+                    px + pw / 2.0,
+                    py + ph / 2.0,
+                    9.0,
+                    rgba(0xFF4B4B, 1.0),
+                    &Canvas::fit(9.0, pw - 32.0, e),
+                );
                 return;
             }
             State::Loaded(changes) if changes.is_empty() => {
-                c.text_centered(px + pw / 2.0, py + ph / 2.0, 9.0, rgba(0xc8c8d8, 1.0), tr!("nothing new", "新しいものはありません", "ничего нового"));
+                c.text_centered(
+                    px + pw / 2.0,
+                    py + ph / 2.0,
+                    9.0,
+                    rgba(0xc8c8d8, 1.0),
+                    tr!("nothing new", "新しいものはありません", "ничего нового"),
+                );
                 return;
             }
             State::Loaded(changes) => changes,
@@ -154,7 +252,13 @@ impl View {
                     c.text(px + 22.0 + dw, y - 1.0, 8.0, rgba(0xffffff, 1.0), title);
                 }
                 Line::Title(text) => {
-                    c.text(px + 22.0 + Canvas::text_width(6.0, "0000-00-00"), y - 1.0, 8.0, rgba(0xffffff, 1.0), text);
+                    c.text(
+                        px + 22.0 + Canvas::text_width(6.0, "0000-00-00"),
+                        y - 1.0,
+                        8.0,
+                        rgba(0xffffff, 1.0),
+                        text,
+                    );
                 }
                 Line::Point(first, text) => {
                     let x = px + 30.0 + Canvas::text_width(6.0, "0000-00-00");
@@ -168,9 +272,23 @@ impl View {
         if lines.len() > fits {
             let (bar_h, all) = (fits as f32 * line_h, lines.len() as f32);
             let x = px + pw - 10.0;
-            c.round_rect([x, top], [3.0, bar_h], 1.5, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+            c.round_rect(
+                [x, top],
+                [3.0, bar_h],
+                1.5,
+                rgba(0x2a2a38, 1.0),
+                rgba(0, 0.0),
+                0.0,
+            );
             let len = (fits as f32 / all * bar_h).max(12.0);
-            c.round_rect([x, top + scroll as f32 / all * bar_h], [3.0, len], 1.5, rgba(accent(), 0.9), rgba(0, 0.0), 0.0);
+            c.round_rect(
+                [x, top + scroll as f32 / all * bar_h],
+                [3.0, len],
+                1.5,
+                rgba(accent(), 0.9),
+                rgba(0, 0.0),
+                0.0,
+            );
         }
     }
 }
@@ -187,15 +305,23 @@ enum Line {
 /// The changes as lines that fit `width`.
 fn layout(changes: &[Change], width: f32) -> Vec<Line> {
     let indent = Canvas::text_width(6.0, "0000-00-00") + 14.0;
-    let chars = |size: f32, room: f32| ((room / Canvas::text_width(size, "M")).floor() as usize).max(8);
+    let chars =
+        |size: f32, room: f32| ((room / Canvas::text_width(size, "M")).floor() as usize).max(8);
     let mut out = Vec::new();
     for ch in changes {
         let title = crate::social::wrap(&ch.title, chars(8.0, width - indent + 8.0));
         for (k, t) in title.into_iter().enumerate() {
-            out.push(if k == 0 { Line::Head(ch.date.clone(), t) } else { Line::Title(t) });
+            out.push(if k == 0 {
+                Line::Head(ch.date.clone(), t)
+            } else {
+                Line::Title(t)
+            });
         }
         for p in &ch.points {
-            for (k, t) in crate::social::wrap(p, chars(7.0, width - indent - 8.0)).into_iter().enumerate() {
+            for (k, t) in crate::social::wrap(p, chars(7.0, width - indent - 8.0))
+                .into_iter()
+                .enumerate()
+            {
                 out.push(Line::Point(k == 0, t));
             }
         }
@@ -225,13 +351,18 @@ fn commits(path: &str) -> Result<Vec<Change>, String> {
     let text = crate::update::api_get(path)?;
     let mut items: Vec<Item> = if path.starts_with("compare/") {
         // Oldest first there.
-        let mut c = serde_json::from_str::<Compare>(&text).map_err(|e| format!("changes: {e}"))?.commits;
+        let mut c = serde_json::from_str::<Compare>(&text)
+            .map_err(|e| format!("changes: {e}"))?
+            .commits;
         c.reverse();
         c
     } else {
         serde_json::from_str(&text).map_err(|e| format!("changes: {e}"))?
     };
-    Ok(items.drain(..).filter_map(|i| parse(&i.commit.message, &i.commit.author.date)).collect())
+    Ok(items
+        .drain(..)
+        .filter_map(|i| parse(&i.commit.message, &i.commit.author.date))
+        .collect())
 }
 
 /// A commit as a change, with explicit notes for Conventional Commits and legacy fallback.
@@ -255,10 +386,34 @@ mod tests {
         assert_eq!(c.title, "See your live pp while playing.");
         assert_eq!(c.date, "2026-10-26");
         assert_eq!(c.points, ["The song keeps playing on the results screen."]);
-        assert!(parse("fix(lint): fix warnings\n\n* Fixed lint errors", "2026-10-26").is_none());
-        assert!(parse("Merge remote-tracking branch 'origin/x'\n\nChangelog: An update", "2026-10-26").is_none());
-        assert!(parse("chore(server): update internals\n\nChangelog: skip\n", "2026-10-26").is_none());
-        assert!(parse("feat(mods): add Krokodil_Koban mode\n\nChangelog: A private mode", "2026-10-26").is_none());
+        assert!(
+            parse(
+                "fix(lint): fix warnings\n\n* Fixed lint errors",
+                "2026-10-26"
+            )
+            .is_none()
+        );
+        assert!(
+            parse(
+                "Merge remote-tracking branch 'origin/x'\n\nChangelog: An update",
+                "2026-10-26"
+            )
+            .is_none()
+        );
+        assert!(
+            parse(
+                "chore(server): update internals\n\nChangelog: skip\n",
+                "2026-10-26"
+            )
+            .is_none()
+        );
+        assert!(
+            parse(
+                "feat(mods): add Krokodil_Koban mode\n\nChangelog: A private mode",
+                "2026-10-26"
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -266,7 +421,10 @@ mod tests {
         let title = "Windows: the offset no longer drifts the longer the game stays open.";
         let change = parse(&format!("{title}\n\n- Hits stay aligned\n  throughout long sessions\n\nCo-Authored-By: Someone <x@y>"), "2026-10-26T01:02:03Z").unwrap();
         assert_eq!(change.title, title);
-        assert_eq!(change.points, ["Hits stay aligned throughout long sessions"]);
+        assert_eq!(
+            change.points,
+            ["Hits stay aligned throughout long sessions"]
+        );
         assert_eq!(change.date, "2026-10-26");
         assert!(parse("chore(x): y\n\n* Fixed lint errors", "2026-10-26").is_none());
     }
@@ -279,11 +437,17 @@ mod tests {
         let mut pending = Some(view);
         assert!(poll_automatic(&mut pending).is_none());
         assert!(pending.is_some());
-        let change = parse("fix(audio): align hitsounds\n\nChangelog: Hitsounds stay in sync.", "2026-10-26").unwrap();
+        let change = parse(
+            "fix(audio): align hitsounds\n\nChangelog: Hitsounds stay in sync.",
+            "2026-10-26",
+        )
+        .unwrap();
         tx.send(Ok(vec![change.clone()])).unwrap();
         let shown = poll_automatic(&mut pending).unwrap();
         assert!(pending.is_none());
-        let State::Loaded(changes) = shown.state else { panic!("notes should be loaded") };
+        let State::Loaded(changes) = shown.state else {
+            panic!("notes should be loaded")
+        };
         assert_eq!(changes, [change]);
     }
 
@@ -309,7 +473,11 @@ mod tests {
 
     #[test]
     fn long_changes_wrap_to_the_panel() {
-        let ch = Change { date: "2026-10-26".into(), title: "word ".repeat(60), points: vec!["point ".repeat(40)] };
+        let ch = Change {
+            date: "2026-10-26".into(),
+            title: "word ".repeat(60),
+            points: vec!["point ".repeat(40)],
+        };
         let lines = layout(&[ch], 400.0);
         assert!(lines.len() > 4);
         assert!(matches!(lines[0], Line::Head(..)));

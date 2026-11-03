@@ -28,7 +28,13 @@ pub enum Style {
 }
 
 impl Style {
-    pub const ALL: [Style; 5] = [Style::FullAlt, Style::SemiAlt, Style::SingleTap, Style::Roll, Style::Ddkk];
+    pub const ALL: [Style; 5] = [
+        Style::FullAlt,
+        Style::SemiAlt,
+        Style::SingleTap,
+        Style::Roll,
+        Style::Ddkk,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -52,7 +58,9 @@ impl Style {
     }
 
     pub fn parse(s: &str) -> Option<Style> {
-        Style::ALL.into_iter().find(|st| st.key().eq_ignore_ascii_case(s))
+        Style::ALL
+            .into_iter()
+            .find(|st| st.key().eq_ignore_ascii_case(s))
     }
 
     pub fn step(self, dir: i32) -> Style {
@@ -74,7 +82,11 @@ pub struct Settings {
 impl Default for Settings {
     /// kddk full alt, as taiko_arranger starts (owner, 2026-10-10).
     fn default() -> Self {
-        Settings { style: Style::FullAlt, binding: 0, left_handed: false }
+        Settings {
+            style: Style::FullAlt,
+            binding: 0,
+            left_handed: false,
+        }
     }
 }
 
@@ -90,7 +102,8 @@ const RIGHT_KAT: usize = 3;
 
 /// A hash of the note's own time rather than a random draw, so every play is the same.
 fn semi_resets(time: f64) -> bool {
-    ((time as i64 as i128 * 2654435761).rem_euclid(1 << 32) as f64) < SEMI_RESET_SHARE * (1u64 << 32) as f64
+    ((time as i64 as i128 * 2654435761).rem_euclid(1 << 32) as f64)
+        < SEMI_RESET_SHARE * (1u64 << 32) as f64
 }
 
 /// Notes (time, kat, big) split where they're half a beat or more apart (a hair under counts:
@@ -120,7 +133,12 @@ fn run_lengths(colours: &[bool]) -> Vec<usize> {
 }
 
 /// 0 = dominant hand, 1 = the other, per note.
-fn kddk_hands(notes: &[(f64, bool, bool)], groups: &[std::ops::Range<usize>], style: Style, beat: f64) -> Vec<u8> {
+fn kddk_hands(
+    notes: &[(f64, bool, bool)],
+    groups: &[std::ops::Range<usize>],
+    style: Style,
+    beat: f64,
+) -> Vec<u8> {
     let mut hands: Vec<u8> = Vec::with_capacity(notes.len());
     let mut previous: Option<f64> = None;
     for g in groups {
@@ -128,7 +146,9 @@ fn kddk_hands(notes: &[(f64, bool, bool)], groups: &[std::ops::Range<usize>], st
         let after_break = previous.is_none_or(|p| group[0].0 - p >= 4.0 * beat);
         let restart = match style {
             Style::FullAlt => after_break,
-            Style::SemiAlt => after_break || group.len() >= SEMI_RESET_LENGTH || semi_resets(group[0].0),
+            Style::SemiAlt => {
+                after_break || group.len() >= SEMI_RESET_LENGTH || semi_resets(group[0].0)
+            }
             _ => true,
         };
         let mut hand = match hands.last() {
@@ -139,7 +159,10 @@ fn kddk_hands(notes: &[(f64, bool, bool)], groups: &[std::ops::Range<usize>], st
         let runs = run_lengths(&colours);
         for i in 0..group.len() {
             if i > 0 {
-                let rolls = style == Style::Roll && colours[i] != colours[i - 1] && runs[i - 1] >= 2 && runs[i] % 2 == 1;
+                let rolls = style == Style::Roll
+                    && colours[i] != colours[i - 1]
+                    && runs[i - 1] >= 2
+                    && runs[i] % 2 == 1;
                 if !rolls {
                     hand = 1 - hand;
                 }
@@ -168,16 +191,27 @@ pub fn note_keys(notes: &[(f64, bool, bool)], beat: f64, s: Settings) -> Vec<Vec
             let mut step = 0;
             for i in g.clone() {
                 let (_, kat, big) = notes[i];
-                step = if i > g.start && kat == notes[i - 1].1 { step + 1 } else { 0 };
+                step = if i > g.start && kat == notes[i - 1].1 {
+                    step + 1
+                } else {
+                    0
+                };
                 let pair = cycle(kat);
-                let mut halves = if big { pair.to_vec() } else { vec![pair[step % 2]] };
+                let mut halves = if big {
+                    pair.to_vec()
+                } else {
+                    vec![pair[step % 2]]
+                };
                 halves.sort();
                 out.push(halves.into_iter().map(|h| h - 1).collect());
             }
         }
         return out;
     }
-    let keys: Vec<usize> = BINDINGS[s.binding.min(BINDINGS.len() - 1)].bytes().map(|b| (b - b'0') as usize).collect();
+    let keys: Vec<usize> = BINDINGS[s.binding.min(BINDINGS.len() - 1)]
+        .bytes()
+        .map(|b| (b - b'0') as usize)
+        .collect();
     let hands = kddk_hands(notes, &groups, s.style, beat);
     notes
         .iter()
@@ -200,7 +234,11 @@ pub fn note_keys(notes: &[(f64, bool, bool)], beat: f64, s: Settings) -> Vec<Vec
 /// A drumroll's `k`th tick: dons alternating from the dominant hand, as osu!'s autoplay plays one.
 pub fn roll_key(k: usize, left_handed: bool) -> usize {
     // Halves 3 then 2 (right-handed), 2 then 3 (left).
-    if k.is_multiple_of(2) != left_handed { RIGHT_DON } else { LEFT_DON }
+    if k.is_multiple_of(2) != left_handed {
+        RIGHT_DON
+    } else {
+        LEFT_DON
+    }
 }
 
 #[cfg(test)]
@@ -213,13 +251,31 @@ mod tests {
             .chars()
             .enumerate()
             .filter(|(_, c)| *c != ' ')
-            .map(|(i, c)| (i as f64 * 125.0, c.eq_ignore_ascii_case(&'k'), c.is_uppercase()))
+            .map(|(i, c)| {
+                (
+                    i as f64 * 125.0,
+                    c.eq_ignore_ascii_case(&'k'),
+                    c.is_uppercase(),
+                )
+            })
             .collect();
-        note_keys(&notes, 500.0, Settings { style, binding, left_handed: left })
-            .iter()
-            .map(|k| k.iter().map(|h| (b'1' + *h as u8) as char).collect::<String>())
-            .collect::<Vec<_>>()
-            .join("")
+        note_keys(
+            &notes,
+            500.0,
+            Settings {
+                style,
+                binding,
+                left_handed: left,
+            },
+        )
+        .iter()
+        .map(|k| {
+            k.iter()
+                .map(|h| (b'1' + *h as u8) as char)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("")
     }
 
     #[test]
@@ -240,8 +296,14 @@ mod tests {
 
     #[test]
     fn rolls_alternate_from_the_dominant_hand() {
-        assert_eq!((roll_key(0, false), roll_key(1, false)), (RIGHT_DON, LEFT_DON));
-        assert_eq!((roll_key(0, true), roll_key(1, true)), (LEFT_DON, RIGHT_DON));
+        assert_eq!(
+            (roll_key(0, false), roll_key(1, false)),
+            (RIGHT_DON, LEFT_DON)
+        );
+        assert_eq!(
+            (roll_key(0, true), roll_key(1, true)),
+            (LEFT_DON, RIGHT_DON)
+        );
     }
 
     #[test]
