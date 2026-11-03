@@ -37,6 +37,9 @@ pub struct Session {
     pub common: Option<u32>,
     /// Defense: the team's lives, gold, shield and towers, as the room keeps them.
     pub team: Option<net::TeamState>,
+    /// In a match: we asked to skip the intro, and how many players have (of how many).
+    pub skip_asked: bool,
+    pub skip_votes: Option<(u32, u32)>,
 }
 
 impl Session {
@@ -61,6 +64,8 @@ impl Session {
             mapguessr: false,
             common: None,
             team: None,
+            skip_asked: false,
+            skip_votes: None,
         }
     }
 
@@ -1522,6 +1527,36 @@ pub fn draw_waiting(
 }
 
 /// Live standings drawn over the playfield.
+/// During the intro: how many players have asked to skip it (it's skipped once all of them
+/// have), or that Space asks.
+pub fn draw_skip_votes(c: &mut Canvas, s: &Session) {
+    let text = match (s.skip_asked, s.skip_votes) {
+        (_, Some((votes, of))) => tr!(
+            "SKIP {votes}/{of}  waiting for everyone",
+            "スキップ {votes}/{of}  全員待ち",
+            "ПРОПУСК {votes}/{of}  ждём всех";
+        ),
+        (true, None) => tr!("SKIP asked", "スキップ要求済み", "ПРОПУСК запрошен").to_string(),
+        (false, None) => tr!(
+            "Space: ask to skip (everyone must)",
+            "Space: スキップ (全員必要)",
+            "Space: попросить пропуск (нужны все)"
+        )
+        .to_string(),
+    };
+    let (w, y) = (c.width, 392.0);
+    let tw = Canvas::text_width(8.0, &text) + 20.0;
+    c.round_rect(
+        [w / 2.0 - tw / 2.0, y - 5.0],
+        [tw, 18.0],
+        6.0,
+        rgba(0x000000, 0.55),
+        rgba(accent(), 0.8),
+        1.0,
+    );
+    c.text_centered(w / 2.0, y, 8.0, rgba(0xffffff, 1.0), &text);
+}
+
 pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
     let y0 = 282.0;
     let my_id = s.client.id;

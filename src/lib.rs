@@ -7941,21 +7941,23 @@ impl State {
                         .into(),
                     );
                 }
+                // Asks the room to skip the intro: it's skipped once every player has asked.
                 KeyCode::Space => {
-                    if game.skip(self.audio.as_ref(), self.play_offset)
-                        && let Some(s) = &self.mp
+                    if game.can_skip()
+                        && let Some(s) = &mut self.mp
+                        && !s.skip_asked
                     {
+                        s.skip_asked = true;
                         s.client.send(net::ClientMsg::Skipped);
                     }
                 }
-                // Defense: 1-5 buy for the team, T takes the turn over, F spots camo notes.
+                // Defense: 1-5 buy for the team, T takes the turn over.
                 KeyCode::Digit1
                 | KeyCode::Digit2
                 | KeyCode::Digit3
                 | KeyCode::Digit4
                 | KeyCode::Digit5
                 | KeyCode::KeyT
-                | KeyCode::KeyF
                     if game.defense.is_some() =>
                 {
                     let t = game.time;
@@ -7968,7 +7970,7 @@ impl State {
                         _ => None,
                     };
                     let team = game.team_state().unwrap_or_default();
-                    let (can_tag, can_spot) = (game.can_tag_in(t), game.can_spot(t));
+                    let can_tag = game.can_tag_in(t);
                     let act = match (item, code) {
                         (Some(item), _) if team.gold < item.price(&team) => {
                             self.toast(format!(
@@ -7992,7 +7994,6 @@ impl State {
                             );
                             None
                         }
-                        (None, _) if can_spot => Some(net::DefenseAct::Spot { at: t }),
                         (None, _) => None,
                     };
                     if let (Some(act), Some(s)) = (act, &self.mp) {
@@ -10845,6 +10846,19 @@ impl State {
                 }
                 _ => {}
             },
+            ServerMsg::SkipVotes { votes, of } => {
+                if let Some(s) = &mut self.mp {
+                    s.skip_votes = Some((votes, of));
+                }
+            }
+            ServerMsg::SkipNow => {
+                if let Some(s) = &mut self.mp {
+                    s.skip_votes = None;
+                }
+                if let Scene::MpPlay { game, .. } = &mut self.scene {
+                    game.skip(self.audio.as_ref(), self.play_offset);
+                }
+            }
             ServerMsg::MapFile(part) => self.receive_map_part(part),
             ServerMsg::Results(r) => {
                 if let Some(s) = &mut self.mp {
@@ -13045,6 +13059,8 @@ impl State {
                     game.record = true;
                     if let Some(s) = &mut self.mp {
                         s.inputs_sent = 0;
+                        s.skip_asked = false;
+                        s.skip_votes = None;
                     }
                     next = Some(Scene::MpPlay {
                         game: Box::new(game),
@@ -13088,6 +13104,10 @@ impl State {
                     },
                 );
                 game.draw_hud(canvas);
+                // The intro is skipped once every player asks: how many have.
+                if let Some(s) = mp.as_ref().filter(|_| game.can_skip()) {
+                    multiplayer::draw_skip_votes(canvas, s);
+                }
                 if let Some(s) = mp
                     .as_ref()
                     .filter(|_| self.cfg.mp_scoreboard && !hidden.has(hud::Part::Scoreboard))

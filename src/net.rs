@@ -235,10 +235,6 @@ pub enum DefenseAct {
     TagIn {
         at: f64,
     },
-    /// Off turn: shows the hidden (camo) notes coming up to the player whose turn it is.
-    Spot {
-        at: f64,
-    },
 }
 
 /// Defense: the team's lives, gold, shield and towers, as the room keeps them.
@@ -546,6 +542,15 @@ pub enum ServerMsg {
     Skipped {
         from: u32,
     },
+    /// To the players: how many of them have asked to skip the intro (Space), of how many still
+    /// playing. The intro is only skipped once they all have.
+    SkipVotes {
+        votes: u32,
+        of: u32,
+    },
+    /// To the players: everyone asked; skip the intro now (all at once, so nobody's song runs
+    /// ahead of the rest).
+    SkipNow,
     /// Lobby chat (also the recent lines, to someone who just joined).
     Chat {
         from: String,
@@ -1151,6 +1156,8 @@ fn room_loop(
     let mut match_inputs: std::collections::HashMap<u32, (Vec<(f64, u8)>, bool)> =
         std::collections::HashMap::new();
     let mut match_skips: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // Whether the intro skip went out to the players this match (once every player asked).
+    let mut skip_sent = false;
     // Defense: the team's lives and gold in the match (kept after it for the results).
     let mut team: Option<TeamRun> = None;
     // Recent lobby chat (name, line) for whoever joins, and each player's last lines (flood limit).
@@ -1299,6 +1306,18 @@ fn room_loop(
                         {
                             for s in players.iter().filter(|p| p.spectating) {
                                 let _ = s.tx.send(ServerMsg::Skipped { from: id });
+                            }
+                            let playing = || {
+                                players
+                                    .iter()
+                                    .filter(|p| p.in_match && p.info.status == Status::Playing)
+                            };
+                            let of = playing().count() as u32;
+                            let votes = playing()
+                                .filter(|p| match_skips.contains(&p.info.id))
+                                .count() as u32;
+                            for p in playing() {
+                                let _ = p.tx.send(ServerMsg::SkipVotes { votes, of });
                             }
                         }
                         continue;
@@ -1603,6 +1622,7 @@ fn room_loop(
                 match_map = map.clone();
                 match_inputs.clear();
                 match_skips.clear();
+                skip_sent = false;
                 team = match_map.as_ref().and_then(|m| m.defense).map(TeamRun::new);
                 let mut started = false;
                 for p in players.iter_mut().filter(|p| p.in_match) {
@@ -1646,6 +1666,19 @@ fn room_loop(
             && let Some(t) = &mut team
         {
             t.update(players.iter().filter(|p| p.in_match).map(|p| &p.info));
+        }
+        // Every player still playing asked to skip the intro: skip it for all of them at once.
+        if phase == Phase::Playing && !skip_sent && !match_skips.is_empty() {
+            let mut playing = players
+                .iter()
+                .filter(|p| p.in_match && p.info.status == Status::Playing)
+                .peekable();
+            if playing.peek().is_some() && playing.all(|p| match_skips.contains(&p.info.id)) {
+                skip_sent = true;
+                for p in players.iter().filter(|p| p.in_match) {
+                    let _ = p.tx.send(ServerMsg::SkipNow);
+                }
+            }
         }
         // Everyone still in the match has finished (or left): publish results, back to the lobby.
         if phase == Phase::Playing
@@ -2472,7 +2505,7 @@ mod tests {
         }));
         // (Another connection: after a moment, so the room surely takes it second.)
         thread::sleep(Duration::from_millis(100));
-        b.send(ClientMsg::Defense(DefenseAct::Spot { at: 2100.0 }));
+        b.send(ClientMsg::Defense(DefenseAct::TagIn { at: 2100.0 }));
         for c in [&mut a, &mut b] {
             let ServerMsg::Defense { act, .. } =
                 wait_for(c, |m| matches!(m, ServerMsg::Defense { .. }))
@@ -2492,7 +2525,7 @@ mod tests {
             else {
                 unreachable!()
             };
-            assert_eq!(act, DefenseAct::Spot { at: 2100.0 });
+            assert_eq!(act, DefenseAct::TagIn { at: 2100.0 });
         }
         let ServerMsg::Room { team, .. } = wait_for(
             &mut b,
@@ -2511,5 +2544,69 @@ mod tests {
                 heals: 0
             })
         );
+    }
+
+    #[test]
+    fn the_intro_is_only_skipped_once_every_player_asks() {
+        let server = host(0, false).unwrap();
+        let addr = format!("127.0.0.1:{}", server.port);
+        let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
+        wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
+        let mut b = Client::connect(&addr, "bob", None).unwrap();
+        wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
+        let map = MapInfo {
+            hash: 6,
+            artist: "a".into(),
+            title: "t".into(),
+            version: "v".into(),
+            rate: 1.0,
+            from: None,
+            set_id: None,
+            mods: Vec::new(),
+            multiverse: None,
+            shapeshift: None,
+            seed: None,
+            defense: None,
+        };
+        a.send(ClientMsg::SelectMap(map));
+        thread::sleep(Duration::from_millis(100));
+        for c in [&a, &b] {
+            c.send(ClientMsg::HasMap(true));
+            c.send(ClientMsg::Ready(true));
+        }
+        thread::sleep(Duration::from_millis(100));
+        a.send(ClientMsg::StartMatch);
+        for c in [&mut a, &mut b] {
+            wait_for(c, |m| matches!(m, ServerMsg::Prepare(_)));
+            c.send(ClientMsg::Loaded(true));
+        }
+        for c in [&mut a, &mut b] {
+            wait_for(c, |m| matches!(m, ServerMsg::Start { .. }));
+        }
+        // Alice asks: both hear it's 1 of 2, and nobody skips yet.
+        a.send(ClientMsg::Skipped);
+        for c in [&mut a, &mut b] {
+            let vote = wait_for(c, |m| {
+                matches!(m, ServerMsg::SkipVotes { .. } | ServerMsg::SkipNow)
+            });
+            assert!(
+                matches!(vote, ServerMsg::SkipVotes { votes: 1, of: 2 }),
+                "{vote:?}"
+            );
+        }
+        // Asking twice changes nothing; Bob asking skips it for both.
+        a.send(ClientMsg::Skipped);
+        thread::sleep(Duration::from_millis(100));
+        b.send(ClientMsg::Skipped);
+        for c in [&mut a, &mut b] {
+            let vote = wait_for(c, |m| {
+                matches!(m, ServerMsg::SkipVotes { .. } | ServerMsg::SkipNow)
+            });
+            assert!(
+                matches!(vote, ServerMsg::SkipVotes { votes: 2, of: 2 }),
+                "{vote:?}"
+            );
+            wait_for(c, |m| matches!(m, ServerMsg::SkipNow));
+        }
     }
 }
