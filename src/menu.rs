@@ -48,7 +48,7 @@ const GROW: f32 = 0.4;
 /// the background: this faint.
 const SONG_BIG_R: f32 = 44.0;
 const SONG_NOTE_R: f32 = SONG_BIG_R * crate::game::NOTE_R / crate::game::BIG_R;
-const SONG_ALPHA: f32 = 0.3;
+const SONG_ALPHA: f32 = 0.18;
 /// How far apart 1/4 notes are, in small notes' widths: the scroll speed follows the song's
 /// As in a song at osu!'s default slider multiplier: 1.4 x 1.4 x 100 osu!px a beat (the game's
 /// units are osu!px), here in proportion to the panel's notes.
