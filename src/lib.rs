@@ -8615,7 +8615,7 @@ impl State {
                 if let Some(p) = &mut self.player {
                     let now = Instant::now();
                     let engine = self.audio.as_ref();
-                    let sounding = !paused && self.preview.sounding(engine, now, &mut p.samples);
+                    let sounding = !paused && self.preview.sounding(engine, now, &mut p.spectrum.samples);
                     let hint = tr!("{a} {b} song   {d} {e} pause   L love   Tab folders", "{a} {b} 曲   {d} {e} ポーズ   L お気に入り   Tab フォルダ", "{a} {b} трек   {d} {e} пауза   L любимое   Tab папки";);
                     let volume = self.cfg.music_volume;
                     let frame = player::Frame {
@@ -9454,6 +9454,12 @@ impl State {
         }
         self.draw_update(canvas);
         // Over everything so far (the top bar's buttons too); a dialog or a drop goes on top.
+        // The idle screen's rays hear what the menu or player plays.
+        if self.idle.amount() > 0.0 {
+            let engine = self.audio.as_ref();
+            let sounding = !self.music_paused && self.preview.sounding(engine, now, &mut self.idle.spectrum.samples);
+            self.idle.spectrum.update(canvas.dt_ms, sounding, engine.map_or(48_000, |a| a.rate));
+        }
         let song = self.idle_song();
         self.idle.draw(canvas, self.preview.has_background, song.as_ref().map(|(t, a)| (t.as_str(), a.as_str())));
         self.draw_drag_hover(canvas, now);

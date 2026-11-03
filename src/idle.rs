@@ -14,9 +14,10 @@ const FADE_IN_MS: f32 = 1600.0;
 const FADE_OUT_MS: f32 = 300.0;
 /// How much darker the background gets, at most.
 pub const DARKEN: f32 = 0.55;
-/// The disc's radius on the idle screen, and where its centre is.
-const DISC_R: f32 = 120.0;
-const DISC_Y: f32 = 214.0;
+/// The disc's radius on the idle screen, and where its centre is (the rays reach
+/// `player::RAYS_REACH` further, the song's name under them).
+const DISC_R: f32 = 100.0;
+const DISC_Y: f32 = 196.0;
 /// How fast it turns (radians a second), a little slower than the player's.
 const SPIN: f32 = 0.4;
 
@@ -40,6 +41,8 @@ pub struct Idle {
     /// A press woke it: its release is swallowed too.
     pub swallow_left: bool,
     pub swallow_right: bool,
+    /// The music's spectrum around the disc, fed by the caller while it shows.
+    pub spectrum: player::Spectrum,
     /// `TAIKO_IDLE_MS` (tests): the wait in ms, whatever the setting says.
     after_override: Option<Duration>,
 }
@@ -47,7 +50,7 @@ pub struct Idle {
 impl Idle {
     pub fn new(now: Instant) -> Idle {
         let after_override = std::env::var("TAIKO_IDLE_MS").ok().and_then(|v| v.trim().parse().ok()).map(Duration::from_millis);
-        Idle { last_input: now, shown: 0.0, angle: 0.0, swallow_left: false, swallow_right: false, after_override }
+        Idle { last_input: now, shown: 0.0, angle: 0.0, swallow_left: false, swallow_right: false, spectrum: player::Spectrum::default(), after_override }
     }
 
     /// Something was pressed or moved. True when the idle screen was showing: that input only
@@ -103,12 +106,13 @@ impl Idle {
         if grow <= 0.0 {
             return;
         }
+        self.spectrum.draw_rays(c, x, DISC_Y, r, grow);
         player::draw_disc_sized(c, x, DISC_Y, r, self.angle, pictured, grow);
         if pictured {
             c.disc = Some([x, DISC_Y, r * (player::DISC_RIM + 0.02), self.angle]);
         }
         if let Some((title, artist)) = song {
-            let y = DISC_Y + DISC_R + 26.0;
+            let y = DISC_Y + DISC_R + player::RAYS_REACH + 12.0;
             let room = c.width - 64.0;
             let size = Canvas::fit_size(14.0, 9.0, room, title);
             c.text_centered(x, y, size, rgba(0xffffff, 0.9 * grow), &Canvas::fit(size, room, title));
