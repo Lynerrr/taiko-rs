@@ -33,7 +33,7 @@ use crate::mods::{Mod, Mods, Speed};
 use crate::hud::Part;
 use crate::multiverse::{self, Shape as NoteShape, Universe};
 use crate::medals::{SPLIT_CYAN, SPLIT_RED, TEAR_CYAN, TEAR_RED};
-use crate::net::{DefenseAct, DefenseItem, TeamState, TOWER_SHOTS};
+use crate::net::{DefenseAct, DefenseItem, TeamState, TOWER_BARS};
 use crate::shapeshift;
 use crate::render::{accent, progress, rgba, Canvas, Font, Hit, Shape, Sprite, VIRTUAL_HEIGHT};
 
@@ -745,17 +745,21 @@ pub struct DefenseRun {
     spotted: Vec<(f64, f64)>,
     /// Map times slows were bought at.
     slows: Vec<f64>,
-    /// What the team did lately: (map time, who, what).
-    pub feed: Vec<(f64, usize, String)>,
+    /// What the team did lately: (map time, who, what, what it does).
+    pub feed: Vec<(f64, usize, String, String)>,
     /// When the team last lost a life (map time).
     lost_at: f64,
 }
 
-/// Defense: a tower on a corner of the maze (`s` along the lane, on the inside of the turn).
+/// Defense: a tower on a corner of the maze near the drum (`s` along the lane, in the middle of
+/// the turn), shooting down every note of one colour due between `from` and `to`.
 struct Tower {
     s: f32,
     side: f32,
     who: usize,
+    kat: bool,
+    from: f64,
+    to: f64,
     /// The notes it takes.
     notes: Vec<usize>,
 }
@@ -773,23 +777,30 @@ fn glitch_hash(a: u32, b: u32, k: u32) -> f32 {
 /// How long a glitch from something the team did (or a life lost) lasts.
 const GLITCH_MS: f64 = 260.0;
 
-/// Defense: the maze's corners towers go on, one after another (the far ones first: they see
-/// the notes coming longest).
-const TOWER_CORNERS: [usize; 6] = [12, 10, 8, 6, 4, 2];
-/// Defense: a tower takes notes due this long after it's bought, so they're still out on the
-/// lane before it.
+/// Defense: the maze corners the towers stand on, near the drum so the player on turn (zoomed
+/// in) sees them shoot: a don tower at the first corner, a kat tower a turn further out.
+const DON_TOWER_CORNER: usize = 0;
+const KAT_TOWER_CORNER: usize = 3;
+/// Defense: a tower starts shooting at the first barline this long after it's bought, so the
+/// notes it takes are still out on the lane before it.
 const TOWER_LEAD_MS: f64 = 1500.0;
+/// Defense: the player on turn sees the drum end of the maze this big (the overview's
+/// `RailShape::zoom` the rest of the time), with the drum this far down.
+const FOCUS_ZOOM: f32 = 0.9;
+const FOCUS_DROP: f32 = 50.0;
+/// Defense: how long a banner saying what the team just did stays up.
+const CALLOUT_MS: f64 = 3200.0;
 /// Defense: a tag-in takes over from the first barline this long after it (if that's still in
 /// the turn), so the player before isn't cut off in the middle of a note.
 const TAG_LEAD_MS: f64 = 1000.0;
 /// Defense: how far ahead spotting shows camo notes, how long a slow lasts (the lane fades to
 /// half speed and back over `SLOW_FADE_MS` at each end), the share of notes that are camo and
-/// the part of the lane (from the drum) where a camo note shows anyway.
+/// how near the drum (along the lane) a camo note shows anyway.
 const SPOT_MS: f64 = 4000.0;
 const SLOW_MS: f64 = 6000.0;
 const SLOW_FADE_MS: f64 = 400.0;
 const CAMO_SHARE: f64 = 0.16;
-const CAMO_NEAR: f32 = 0.35;
+const CAMO_NEAR: f32 = 320.0;
 
 /// Maze: corner `k`'s middle, along the lane.
 fn maze_corner_s(k: usize) -> f32 {
@@ -1817,16 +1828,11 @@ impl Game {
         self.defense_turn_at(t).is_some_and(|(_, wait)| wait != 0) && self.defense.as_ref().is_some_and(|d| !d.spotted.iter().any(|&(_, end)| end > t + 1000.0))
     }
 
-    /// Defense: the team's gold, as the room last told us.
-    pub fn team_gold(&self) -> Option<u32> {
-        self.defense.as_ref().map(|d| d.state.map_or(0, |s| s.gold))
-    }
-
     /// Defense: something player `from` did, from the room (in the order it took them).
     pub fn defense_act(&mut self, from: u32, act: DefenseAct) {
         let Some(who) = self.defense.as_ref().and_then(|d| d.team.iter().position(|p| p.0 == from)) else { return };
         let bars = self.defense.as_ref().map_or(1, |d| d.bars.max(1) as usize);
-        let (at, what) = match act {
+        let (at, what, about) = match act {
             DefenseAct::Buy { item, at } => {
                 match item {
                     DefenseItem::Slow => {
@@ -1834,30 +1840,33 @@ impl Game {
                             d.slows.push(at);
                         }
                     }
-                    DefenseItem::Tower => {
+                    DefenseItem::DonTower | DefenseItem::KatTower => {
+                        let kat = item == DefenseItem::KatTower;
+                        // `TOWER_BARS` bars from the first barline after the lead.
+                        let bars = &self.map.barlines;
+                        let first = bars.partition_point(|b| b.time < at + TOWER_LEAD_MS);
+                        let from = bars.get(first).map_or(f64::INFINITY, |b| b.time);
+                        let to = bars.get(first + TOWER_BARS).map_or(f64::INFINITY, |b| b.time);
                         let notes = &self.map.notes;
                         let Some(d) = &mut self.defense else { return };
-                        if let Some(&corner) = TOWER_CORNERS.get(d.towers.len()) {
-                            let k = d.towers.len() as u8;
-                            let mut taken = Vec::new();
-                            for (i, n) in notes.iter().enumerate() {
-                                if taken.len() == TOWER_SHOTS as usize {
-                                    break;
-                                }
-                                if matches!(n.kind, Kind::Don | Kind::Kat) && !d.map_unhittable[i] && d.shot[i].is_none() && n.time >= at + TOWER_LEAD_MS {
-                                    d.shot[i] = Some(k);
-                                    taken.push(i);
-                                }
+                        let k = d.towers.len() as u8;
+                        let mut taken = Vec::new();
+                        for (i, n) in notes.iter().enumerate() {
+                            let colour = if kat { Kind::Kat } else { Kind::Don };
+                            if n.kind == colour && (from..to).contains(&n.time) && !d.map_unhittable[i] && d.shot[i].is_none() {
+                                d.shot[i] = Some(k);
+                                taken.push(i);
                             }
-                            // At the middle of the turn: in the gap it goes round.
-                            let side = -MAZE[corner].1 * MAZE_R;
-                            d.towers.push(Tower { s: maze_corner_s(corner), side, who, notes: taken });
                         }
+                        // In the middle of the turn: in the gap the lane goes round.
+                        let corner = if kat { KAT_TOWER_CORNER } else { DON_TOWER_CORNER };
+                        let side = -MAZE[corner].1 * MAZE_R;
+                        d.towers.push(Tower { s: maze_corner_s(corner), side, who, kat, from, to, notes: taken });
                         self.refresh_defense();
                     }
                     DefenseItem::Shield | DefenseItem::Heal => {}
                 }
-                (at, item.name().to_string())
+                (at, item.name().to_string(), item.about().to_string())
             }
             DefenseAct::TagIn { at } => {
                 let (bar, from_bar) = (self.bar_at(at), self.bar_at(at + TAG_LEAD_MS) + 1);
@@ -1868,21 +1877,44 @@ impl Game {
                 }
                 d.tags.push((turn, from_bar, who));
                 self.refresh_defense();
-                (at, tr!("tagged in", "交代", "перехватил ход").to_string())
+                (at, tr!("tagged in", "交代", "перехватил ход").to_string(), tr!("took over the rest of this turn", "このターンの残りを引き継いだ", "забрал остаток этого хода").to_string())
             }
             DefenseAct::Spot { at } => {
                 if let Some(d) = &mut self.defense {
                     d.spotted.push((at, at + SPOT_MS));
                 }
-                (at, tr!("spotted", "発見", "заметил").to_string())
+                (at, tr!("spotted", "発見", "заметил").to_string(), tr!("the camo notes coming show all the way for 4 seconds", "4秒間迷彩ノーツが全部見える", "4 секунды камо-ноты видны целиком").to_string())
             }
         };
         if let Some(d) = &mut self.defense {
-            d.feed.push((at, who, what));
+            d.feed.push((at, who, what, about));
             if d.feed.len() > 4 {
                 d.feed.remove(0);
             }
         }
+    }
+
+    /// Defense: how far the camera is zoomed in on the drum at map time `t`: all the way on our
+    /// turn, easing in over the second half of the bar before it and out over the first half
+    /// of the bar after.
+    fn defense_focus(&self, t: f64) -> f32 {
+        let Some(d) = &self.defense else { return 0.0 };
+        let bar = self.bar_at(t);
+        let mine = |b: usize| self.turn_of_bar(b) == d.me;
+        if mine(bar) {
+            return 1.0;
+        }
+        let bars = &self.map.barlines;
+        let (Some(start), Some(next)) = (bars.get(bar), bars.get(bar + 1)) else { return 0.0 };
+        let u = ((t - start.time) / (next.time - start.time).max(1.0)).clamp(0.0, 1.0);
+        let out = if bar > 0 && mine(bar - 1) { 1.0 - smooth(0.0, 0.5, u) } else { 0.0 };
+        let into = if mine(bar + 1) { smooth(0.5, 1.0, u) } else { 0.0 };
+        out.max(into) as f32
+    }
+
+    /// Defense: the room's latest numbers for the team (all zero before the first).
+    pub fn team_state(&self) -> Option<TeamState> {
+        self.defense.as_ref().map(|d| d.state.unwrap_or(TeamState { lives: d.lives, max: d.lives, ..TeamState::default() }))
     }
 
     /// Defense: the slows' speed factor at map time `t` (1, or down to a half).
@@ -2754,7 +2786,14 @@ impl Game {
     fn rail_at(&self, t: f64, w: f32) -> (Option<Rail>, f32, f32, f32) {
         let mods = self.mods;
         if let Some(shape) = RailShape::of(mods) {
-            return (Some(Rail::build(|s| shape.bend(s), shape.length(w))), shape.length(w), shape.drop(), shape.zoom(w));
+            let (mut drop, mut zoom) = (shape.drop(), shape.zoom(w));
+            // Defense: the player on turn sees the drum end of the maze up close.
+            let f = self.defense_focus(t);
+            if f > 0.0 {
+                drop += (FOCUS_DROP - drop) * f;
+                zoom += (FOCUS_ZOOM.max(zoom) - zoom) * f;
+            }
+            return (Some(Rail::build(|s| shape.bend(s), shape.length(w))), shape.length(w), drop, zoom);
         }
         if !mods.has(Mod::Shapeshift) {
             let len = if mods.has(Mod::Mania) {
@@ -3419,9 +3458,16 @@ impl Game {
             let bucket = (vt / 40.0).floor() as u32;
             for (k, tw) in d.towers.iter().enumerate() {
                 let (x, y, _, size) = place(tw.s, tw.side);
+                // Built: it glitches in over a few steps; done: it crumbles out over a second.
+                let since = (vt - (tw.from - TOWER_LEAD_MS)) as f32;
+                let left = (1.0 - ((vt - tw.to) / 1000.0) as f32).clamp(0.0, 1.0);
+                if since < 0.0 || left <= 0.0 {
+                    continue;
+                }
                 let col = team_colour(tw.who);
-                let busy = tw.notes.iter().any(|&i| self.map.notes[i].time > vt);
-                let a = if busy { 1.0 } else { 0.4 };
+                let shoots = if tw.kat { KAT } else { DON };
+                let busy = vt < tw.to;
+                let a = (since / 200.0).min(1.0) * if busy { 1.0 } else { 0.5 * left };
                 // How hard it's firing: one of its notes just went past it.
                 let fire = tw.notes.iter().map(|&i| note_s(i)).filter(|&s| s <= tw.s && s > tw.s - 45.0).map(|s| 1.0 - (tw.s - s) / 45.0).fold(0.0, f32::max);
                 let h = |j: u32| glitch_hash(k as u32, bucket, j);
@@ -3439,7 +3485,7 @@ impl Game {
                 for j in 0..4u32 {
                     if h(10 + j) > 0.25 - 0.25 * fire {
                         let (ox, oy) = ((j % 2) as f32, (j / 2) as f32);
-                        c.rect(x - px + ox * px + jit, y - px + oy * px, px - 0.6, px - 0.6, rgba(col, a));
+                        c.rect(x - px + ox * px + jit, y - px + oy * px, px - 0.6, px - 0.6, rgba(shoots, a));
                     }
                 }
                 // Firing: torn slices sticking out of it.
@@ -3543,7 +3589,7 @@ impl Game {
                                 // slipping about, so we can spot them.
                                 if d.camo[i] && judged.is_none() {
                                     let spotted = d.spotted.iter().any(|&(a, b)| (a..=b).contains(&n.time));
-                                    let near = CAMO_NEAR * lane_len;
+                                    let near = CAMO_NEAR.min(lane_len);
                                     if theirs.is_none() && !spotted {
                                         if s > near {
                                             continue;
@@ -4064,7 +4110,7 @@ impl Game {
             }
         }
         // The team just did something: tears run across the screen in the logo's colours.
-        if let Some(&(at, who, _)) = d.feed.last().filter(|e| (0.0..GLITCH_MS).contains(&(t - e.0))) {
+        if let Some(&(at, who, _, _)) = d.feed.last().filter(|e| (0.0..GLITCH_MS).contains(&(t - e.0))) {
             let k = 1.0 - ((t - at) / GLITCH_MS) as f32;
             for j in 0..5u32 {
                 let ty = glitch_hash(j, bucket, 70) * VIRTUAL_HEIGHT;
@@ -4106,31 +4152,65 @@ impl Game {
         };
         c.text_right(x0 + pw - 10.0, y0 + 18.0, 7.0, rgba(col, 1.0), &turn_text);
 
+        // What the team just did, and what it does, in a banner under the lives.
+        let callout = d.feed.last().filter(|e| (0.0..CALLOUT_MS).contains(&(t - e.0))).map(|(at, who, what, about)| {
+            let name = d.team.get(*who).map_or("?", |p| p.1.as_str());
+            (*at, format!("{name}: {what} - {about}"), team_colour(*who))
+        });
+        let callout = callout.or_else(|| self.camo_warning(t));
+        if let Some((at, text, col)) = callout {
+            let k = (1.0 - ((t - at) / CALLOUT_MS) as f32 * 0.6).clamp(0.0, 1.0).min(((t - at) / 80.0) as f32);
+            let text = Canvas::fit(7.5, w - 60.0, &text);
+            let tw = Canvas::text_width(7.5, &text) + 24.0;
+            let jit = if glitch_hash(2, bucket, 90) < 0.15 { (glitch_hash(3, bucket, 91) - 0.5) * 6.0 } else { 0.0 };
+            let (bx, by) = (w / 2.0 - tw / 2.0 + jit, 48.0);
+            c.rect(bx - 2.0, by, tw, 18.0, rgba(SPLIT_RED, 0.35 * k));
+            c.rect(bx + 2.0, by, tw, 18.0, rgba(SPLIT_CYAN, 0.35 * k));
+            c.rect(bx, by, tw, 18.0, rgba(0x0b0b10, 0.92 * k));
+            c.rect(bx, by + 16.5, tw, 1.5, rgba(col, k));
+            c.text_centered(w / 2.0 + jit, by + 5.0, 7.5, rgba(WHITE, k), &text);
+        }
+
         // The team panel, left under the drum.
-        let (x, mut y) = (10.0, 266.0);
-        c.round_rect([x - 4.0, y - 4.0], [192.0, 84.0], 6.0, rgba(0x14141c, 0.8), rgba(0, 0.0), 0.0);
-        let (gold, towers) = (st.gold, st.towers);
+        let (x, mut y) = (10.0, 296.0);
+        c.round_rect([x - 4.0, y - 4.0], [192.0, 96.0], 6.0, rgba(0x14141c, 0.8), rgba(0, 0.0), 0.0);
+        let gold = st.gold;
         c.text(x, y, 7.0, rgba(0xFFD34D, 1.0), &tr!("GOLD {gold}", "ゴールド {gold}", "ЗОЛОТО {gold}";));
-        let max = crate::net::MAX_TOWERS;
-        c.text_right(x + 184.0, y, 6.5, rgba(0x9a9ab0, 1.0), &tr!("towers {towers}/{max}", "タワー {towers}/{max}", "башни {towers}/{max}";));
+        c.text_right(x + 184.0, y, 6.5, rgba(0x9a9ab0, 1.0), tr!("a GREAT = 1 gold", "GREAT = 1ゴールド", "GREAT = 1 золото"));
         y += 12.0;
         for (k, item) in DefenseItem::ALL.into_iter().enumerate() {
             let (cx, cy) = (x + (k % 2) as f32 * 94.0, y + (k / 2) as f32 * 11.0);
-            let can = st.gold >= item.price();
-            c.text(cx, cy, 6.5, rgba(if can { WHITE } else { 0x55556a }, 1.0), &format!("{} {} {}", k + 1, item.name(), item.price()));
+            let price = item.price(&st);
+            let can = st.gold >= price;
+            c.text(cx, cy, 6.5, rgba(if can { WHITE } else { 0x55556a }, 1.0), &Canvas::fit(6.5, 90.0, &format!("{} {} {price}", k + 1, item.name())));
         }
-        y += 23.0;
+        y += 34.0;
         let off_turn = wait != 0;
         let tag = if self.can_tag_in(t) { WHITE } else { 0x55556a };
         c.text(x, y, 6.5, rgba(tag, 1.0), tr!("T tag in", "T 交代", "T перехват"));
         c.text(x + 94.0, y, 6.5, rgba(if off_turn { WHITE } else { 0x55556a }, 1.0), tr!("F spot camo", "F 迷彩発見", "F найти камо"));
         y += 12.0;
-        for (at, who, what) in d.feed.iter().rev().filter(|e| t - e.0 < 5000.0).take(2) {
+        for (at, who, what, _) in d.feed.iter().rev().filter(|e| t - e.0 < 5000.0).take(2) {
             let name = d.team.get(*who).map_or("?", |p| p.1.as_str());
             let fade = (1.0 - ((t - at) / 5000.0) as f32).clamp(0.0, 1.0);
             c.text(x, y, 6.5, rgba(team_colour(*who), fade), &Canvas::fit(6.5, 184.0, &format!("{name}: {what}")));
             y += 10.0;
         }
+    }
+
+    /// Defense: the first few camo notes come with a word on what they are: to the player they're
+    /// hidden from, and to the rest, who can spot them. (When it went up, text, colour.)
+    fn camo_warning(&self, t: f64) -> Option<(f64, String, u32)> {
+        let d = self.defense.as_ref()?;
+        let (i, n) = self.map.notes.iter().enumerate().filter(|(i, _)| d.camo[*i]).take(3).find(|(_, n)| (n.time - 3500.0..n.time - 800.0).contains(&t))?;
+        let owner = d.owner[i] as usize;
+        let text = if owner == d.me {
+            tr!("CAMO notes coming: hidden until they're near the drum - a teammate can reveal them", "迷彩ノーツ接近: ドラムの近くまで見えない - 仲間が見せてくれる", "Идут КАМО-ноты: невидимы до самого барабана - тиммейт может их показать").to_string()
+        } else {
+            let name = d.team.get(owner).map_or("?", |p| p.1.as_str());
+            tr!("{name} can't see the CAMO notes (red/cyan ghosts): press F to reveal them", "{name}には迷彩ノーツ(赤青の影)が見えない: Fで見せよう", "{name} не видит КАМО-ноты (красно-синие призраки): жми F, чтобы показать";)
+        };
+        Some((n.time - 3500.0, text, SPLIT_CYAN))
     }
 
     /// Score, accuracy, progress, hit error meter, offset advice, skip hint and the pause menu (with
@@ -5735,17 +5815,24 @@ mod tests {
                 crate::debug::write_png(&dir.join("scare.png"), w, h, &rgb).unwrap();
             }
         }
-        // Defense: a team of three on the Maze, with a teammate's turn coming in behind ours.
-        let mut g = kiai_game("MZ");
-        g.set_defense(vec![(1, "auneu".into()), (2, "you".into()), (3, "quass".into())], 1, 25, 1);
-        // Two towers up, quass spotting for us, a slow, and auneu taking a turn over.
-        g.defense_act(1, DefenseAct::Buy { item: DefenseItem::Tower, at: 0.0 });
-        g.defense_act(3, DefenseAct::Buy { item: DefenseItem::Tower, at: 2000.0 });
-        g.defense_act(3, DefenseAct::Spot { at: 2600.0 });
-        g.defense_act(2, DefenseAct::Buy { item: DefenseItem::Slow, at: 3000.0 });
-        g.set_team(TeamState { lives: 21, max: 25, gold: 75, shield: 3, towers: 2 });
+        // Defense: a team of three on the Maze, 2-bar turns, ours second (4-8 s), on dons and
+        // kats in turn. auneu's don tower shoots through our turn, quass spots for us and builds
+        // a kat tower after it; we slow the lane.
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        for (k, n) in map.notes.iter_mut().enumerate() {
+            if k % 2 == 1 {
+                n.kind = Kind::Kat;
+            }
+        }
+        let mut g = Game::with_mods(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None, Mods::parse("MZ"));
+        g.set_defense(vec![(1, "auneu".into()), (2, "you".into()), (3, "quass".into())], 1, 10, 2);
+        g.defense_act(1, DefenseAct::Buy { item: DefenseItem::DonTower, at: 2000.0 });
+        g.defense_act(2, DefenseAct::Buy { item: DefenseItem::Slow, at: 5000.0 });
+        g.defense_act(3, DefenseAct::Spot { at: 5500.0 });
+        g.defense_act(3, DefenseAct::Buy { item: DefenseItem::KatTower, at: 9000.0 });
+        g.set_team(TeamState { lives: 9, max: 10, gold: 75, shield: 3, towers: 2, heals: 0 });
         let mut c = Canvas::default();
-        for t in [1500.0, 2500.0, 3500.0, 4200.0] {
+        for t in [3200.0, 4700.0, 6500.0, 11_200.0] {
             g.set_time(t - 400.0);
             g.press_at(1, t - 400.0, None);
             g.time = t;
@@ -5855,24 +5942,37 @@ mod tests {
     }
 
     #[test]
-    fn a_tower_takes_the_next_notes_for_whoever_they_are_and_ours_count_as_greats() {
+    fn a_don_tower_shoots_every_don_for_four_bars_and_ours_count_as_greats() {
         let mut g = defense_game(2);
-        // Bought at 6.6 s: it takes the six notes due from 8.1 s, 8.5 s to 11 s, all ours.
-        g.defense_act(1, DefenseAct::Buy { item: DefenseItem::Tower, at: 6600.0 });
+        // Bought at 6.6 s: from the first barline 1.5 s on (10 s) for 4 bars, every don: notes
+        // 20-35, ours up to bar 8 (16 s), p0's after.
+        g.defense_act(1, DefenseAct::Buy { item: DefenseItem::DonTower, at: 6600.0 });
         let d = g.defense.as_ref().unwrap();
         let taken: Vec<usize> = (0..64).filter(|&i| d.shot[i].is_some()).collect();
-        assert_eq!(taken, [17, 18, 19, 20, 21, 22]);
-        // They don't take our presses: the press at 8.5 s finds nothing, the tower hits it.
-        g.press_at(1, 8500.0, None);
-        g.expire(11_000.0);
-        assert!((17..=22).all(|i| g.state[i].judged == Some(Judge::Great)));
-        assert_eq!((g.stats.great, g.stats.miss), (6, 1), "note 16 went by unpressed");
-        // A second tower takes the six after those.
-        g.defense_act(2, DefenseAct::Buy { item: DefenseItem::Tower, at: 6600.0 });
-        assert_eq!(g.defense.as_ref().unwrap().shot[23], Some(1));
+        assert_eq!(taken, (20..36).collect::<Vec<_>>());
+        // They don't take our presses; the tower hits ours on time.
+        g.press_at(1, 10_000.0, None);
+        g.expire(18_000.0);
+        assert!((20..32).all(|i| g.state[i].judged == Some(Judge::Great)));
+        assert_eq!((g.stats.great, g.stats.miss), (12, 4), "16-19 went by unpressed");
+        // The map has no kats: a kat tower shoots nothing (but stands).
+        g.defense_act(2, DefenseAct::Buy { item: DefenseItem::KatTower, at: 20_000.0 });
+        assert!(g.defense.as_ref().unwrap().towers[1].notes.is_empty());
         // From someone not in the team: nothing.
-        g.defense_act(99, DefenseAct::Buy { item: DefenseItem::Tower, at: 0.0 });
+        g.defense_act(99, DefenseAct::Buy { item: DefenseItem::DonTower, at: 0.0 });
         assert_eq!(g.defense.as_ref().unwrap().towers.len(), 2);
+    }
+
+    #[test]
+    fn the_camera_zooms_in_on_our_turn_and_back_out() {
+        // Us second of two, 4-bar turns: bars 4-7 (8-16 s) are ours.
+        let g = defense_game(2);
+        let f = |t: f64| g.defense_focus(t);
+        assert_eq!((f(1000.0), f(6500.0)), (0.0, 0.0));
+        assert_eq!(f(7500.0), 0.5, "half way in over the second half of the bar before");
+        assert_eq!((f(8000.0), f(12_000.0), f(15_900.0)), (1.0, 1.0, 1.0));
+        assert_eq!(f(16_500.0), 0.5, "and out over the first half of the one after");
+        assert_eq!(f(17_000.0), 0.0);
     }
 
     #[test]

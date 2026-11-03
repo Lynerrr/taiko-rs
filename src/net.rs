@@ -124,7 +124,7 @@ impl Defense {
     }
 }
 
-/// Defense: what the team can buy with its gold (keys 1-4 in a match).
+/// Defense: what the team can buy with its gold (keys 1-5 in a match).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DefenseItem {
     /// The lane crawls at half speed for a while (the notes still land on time).
@@ -133,19 +133,26 @@ pub enum DefenseItem {
     Shield,
     /// A life back.
     Heal,
-    /// A tower on a corner of the maze, that takes the next `TOWER_SHOTS` notes for the team.
-    Tower,
+    /// A tower by the drum that shoots down every don for `TOWER_BARS` bars (they count as hit).
+    DonTower,
+    /// The same for every kat.
+    KatTower,
 }
 
 impl DefenseItem {
-    pub const ALL: [DefenseItem; 4] = [DefenseItem::Slow, DefenseItem::Shield, DefenseItem::Heal, DefenseItem::Tower];
+    pub const ALL: [DefenseItem; 5] = [DefenseItem::Slow, DefenseItem::Shield, DefenseItem::Heal, DefenseItem::DonTower, DefenseItem::KatTower];
 
-    pub fn price(self) -> u32 {
+    /// What it costs the team now. A life (and so a shield) is worth more the fewer the team
+    /// started with, and every heal costs more than the one before: with 10 lives a heal is 200
+    /// gold, then 320, 510...; with 50 it starts at 40.
+    pub fn price(self, team: &TeamState) -> u32 {
+        let scale = 25.0 / team.max.max(1) as f64;
+        let to5 = |g: f64| ((g / 5.0).round() * 5.0).max(5.0) as u32;
         match self {
             DefenseItem::Slow => 40,
-            DefenseItem::Shield => 60,
-            DefenseItem::Heal => 80,
-            DefenseItem::Tower => 100,
+            DefenseItem::Shield => to5((60.0 * scale).max(15.0)),
+            DefenseItem::Heal => to5(80.0 * scale * 1.6f64.powi(team.heals as i32)),
+            DefenseItem::DonTower | DefenseItem::KatTower => 90,
         }
     }
 
@@ -154,15 +161,26 @@ impl DefenseItem {
             DefenseItem::Slow => tr!("Slow", "スロー", "Замедление"),
             DefenseItem::Shield => tr!("Shield", "シールド", "Щит"),
             DefenseItem::Heal => tr!("Heal", "回復", "Лечение"),
-            DefenseItem::Tower => tr!("Tower", "タワー", "Башня"),
+            DefenseItem::DonTower => tr!("Don tower", "ドンタワー", "Башня дон"),
+            DefenseItem::KatTower => tr!("Kat tower", "カツタワー", "Башня кат"),
+        }
+    }
+
+    /// What it does, for the banner when someone buys it.
+    pub fn about(self) -> &'static str {
+        match self {
+            DefenseItem::Slow => tr!("the lane crawls at half speed for 6 seconds", "6秒間レーンが半分の速さに", "6 секунд дорожка ползёт вдвое медленнее"),
+            DefenseItem::Shield => tr!("the next 3 notes that get through cost no lives", "次に抜けた3ノーツはライフが減らない", "следующие 3 прорыва не отнимут жизни"),
+            DefenseItem::Heal => tr!("one life back (every heal costs more)", "ライフ1回復 (回復するたび高くなる)", "одна жизнь назад (каждое лечение дороже)"),
+            DefenseItem::DonTower => tr!("every red don for 4 bars is shot down: just hit the kats", "4小節の間ドンを全部撃ち落とす: カツだけ叩こう", "4 такта сбивает все красные доны: бей только каты"),
+            DefenseItem::KatTower => tr!("every blue kat for 4 bars is shot down: just hit the dons", "4小節の間カツを全部撃ち落とす: ドンだけ叩こう", "4 такта сбивает все синие каты: бей только доны"),
         }
     }
 }
 
-/// Defense: notes a shield takes, a tower's shots, and the most towers a team can have.
+/// Defense: notes a shield takes, and the bars a tower shoots for.
 pub const SHIELD_CHARGES: u32 = 3;
-pub const TOWER_SHOTS: u32 = 6;
-pub const MAX_TOWERS: u32 = 6;
+pub const TOWER_BARS: usize = 4;
 
 /// Defense: something a player did in the match, which every player's game then applies the
 /// same way. `at` is the map time it was done at (on the doer's clock).
@@ -183,6 +201,9 @@ pub struct TeamState {
     pub gold: u32,
     pub shield: u32,
     pub towers: u32,
+    /// Heals bought (each costs more).
+    #[serde(default)]
+    pub heals: u32,
 }
 
 /// Defense, in the room: the team's state and what it has paid for so far.
@@ -216,27 +237,25 @@ impl TeamRun {
         self.state.gold = greats.saturating_sub(self.spent);
     }
 
-    /// Pays for `item` if the team can (alive, the gold, room for it): whether it did.
+    /// Pays for `item` if the team can (alive, the gold, a life to win back): whether it did.
     fn buy(&mut self, item: DefenseItem) -> bool {
+        let price = item.price(&self.state);
         let s = &mut self.state;
-        let can = s.lives > 0
-            && s.gold >= item.price()
-            && match item {
-                DefenseItem::Heal => s.lives < s.max,
-                DefenseItem::Tower => s.towers < MAX_TOWERS,
-                _ => true,
-            };
+        let can = s.lives > 0 && s.gold >= price && (item != DefenseItem::Heal || s.lives < s.max);
         if !can {
             return false;
         }
         match item {
             DefenseItem::Shield => s.shield += SHIELD_CHARGES,
-            DefenseItem::Heal => s.lives += 1,
-            DefenseItem::Tower => s.towers += 1,
+            DefenseItem::Heal => {
+                s.lives += 1;
+                s.heals += 1;
+            }
+            DefenseItem::DonTower | DefenseItem::KatTower => s.towers += 1,
             DefenseItem::Slow => {}
         }
-        s.gold -= item.price();
-        self.spent += item.price();
+        s.gold -= price;
+        self.spent += price;
         true
     }
 }
@@ -1633,27 +1652,33 @@ mod tests {
             maps: None,
             mods: Vec::new(),
         };
-        let mut t = TeamRun::new(Defense { lives: 5, bars: 8 });
-        t.update([player(100, 0), player(30, 1)].iter());
-        assert_eq!((t.state.gold, t.state.lives), (130, 4));
+        // 10 lives: a life is dear (a heal 200, a shield 150).
+        let mut t = TeamRun::new(Defense { lives: 10, bars: 8 });
+        t.update([player(250, 0), player(50, 1)].iter());
+        assert_eq!((t.state.gold, t.state.lives), (300, 9));
+        assert_eq!((DefenseItem::Heal.price(&t.state), DefenseItem::Shield.price(&t.state)), (200, 150));
         assert!(t.buy(DefenseItem::Heal));
-        assert_eq!((t.state.gold, t.state.lives), (50, 5));
+        assert_eq!((t.state.gold, t.state.lives, t.state.heals), (100, 10, 1));
+        assert_eq!(DefenseItem::Heal.price(&t.state), 320, "every heal costs more");
         assert!(!t.buy(DefenseItem::Heal), "full again");
-        assert!(!t.buy(DefenseItem::Shield), "50 gold of 60");
-        // Ten more greats: it can.
-        t.update([player(110, 0), player(30, 1)].iter());
+        assert!(!t.buy(DefenseItem::Shield), "100 gold of 150");
+        // A hundred more greats: it can.
+        t.update([player(350, 0), player(50, 1)].iter());
         assert!(t.buy(DefenseItem::Shield));
-        assert_eq!((t.state.gold, t.state.shield), (0, 3));
+        assert_eq!((t.state.gold, t.state.shield), (50, 3));
         // Four more through: the shield takes three, one costs a life.
-        t.update([player(110, 3), player(30, 2)].iter());
-        assert_eq!((t.state.shield, t.state.lives), (0, 4));
-        assert!(!t.buy(DefenseItem::Tower), "no gold left");
-        // More greats pay for towers, up to the most a team can have.
-        t.update([player(2000, 3), player(30, 2)].iter());
-        for _ in 0..MAX_TOWERS {
-            assert!(t.buy(DefenseItem::Tower));
-        }
-        assert!(!t.buy(DefenseItem::Tower));
+        t.update([player(350, 3), player(50, 2)].iter());
+        assert_eq!((t.state.shield, t.state.lives), (0, 9));
+        assert!(!t.buy(DefenseItem::DonTower), "50 gold of 90");
+        // More greats pay for towers of both kinds.
+        t.update([player(2000, 3), player(50, 2)].iter());
+        assert!(t.buy(DefenseItem::DonTower) && t.buy(DefenseItem::KatTower));
+        assert_eq!(t.state.towers, 2);
+        // With more lives to start with, lives are cheap.
+        let lots = TeamState { max: 50, ..TeamState::default() };
+        assert_eq!((DefenseItem::Heal.price(&lots), DefenseItem::Shield.price(&lots)), (40, 30));
+        let most = TeamState { max: 100, ..TeamState::default() };
+        assert_eq!((DefenseItem::Heal.price(&most), DefenseItem::Shield.price(&most)), (20, 15));
         // Wiped out: nothing more to buy.
         t.update([player(2000, 30), player(30, 2)].iter());
         assert_eq!(t.state.lives, 0);
@@ -1753,21 +1778,21 @@ mod tests {
             wait_for(c, |m| matches!(m, ServerMsg::Start { .. }));
         }
         // No gold yet: the tower is turned down. Then 120 GREATs pay for it.
-        a.send(ClientMsg::Defense(DefenseAct::Buy { item: DefenseItem::Tower, at: 1000.0 }));
+        a.send(ClientMsg::Defense(DefenseAct::Buy { item: DefenseItem::DonTower, at: 1000.0 }));
         thread::sleep(Duration::from_millis(100));
         b.send(ClientMsg::Live(Live { great: 120, ..Live::default() }));
         thread::sleep(Duration::from_millis(100));
-        a.send(ClientMsg::Defense(DefenseAct::Buy { item: DefenseItem::Tower, at: 2000.0 }));
+        a.send(ClientMsg::Defense(DefenseAct::Buy { item: DefenseItem::DonTower, at: 2000.0 }));
         // (Another connection: after a moment, so the room surely takes it second.)
         thread::sleep(Duration::from_millis(100));
         b.send(ClientMsg::Defense(DefenseAct::Spot { at: 2100.0 }));
         for c in [&mut a, &mut b] {
             let ServerMsg::Defense { act, .. } = wait_for(c, |m| matches!(m, ServerMsg::Defense { .. })) else { unreachable!() };
-            assert_eq!(act, DefenseAct::Buy { item: DefenseItem::Tower, at: 2000.0 }, "the first one never went out");
+            assert_eq!(act, DefenseAct::Buy { item: DefenseItem::DonTower, at: 2000.0 }, "the first one never went out");
             let ServerMsg::Defense { act, .. } = wait_for(c, |m| matches!(m, ServerMsg::Defense { .. })) else { unreachable!() };
             assert_eq!(act, DefenseAct::Spot { at: 2100.0 });
         }
         let ServerMsg::Room { team, .. } = wait_for(&mut b, |m| matches!(m, ServerMsg::Room { team: Some(t), .. } if t.towers == 1)) else { unreachable!() };
-        assert_eq!(team, Some(TeamState { lives: 10, max: 10, gold: 20, shield: 0, towers: 1 }));
+        assert_eq!(team, Some(TeamState { lives: 10, max: 10, gold: 30, shield: 0, towers: 1, heals: 0 }));
     }
 }

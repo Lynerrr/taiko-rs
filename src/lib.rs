@@ -5699,20 +5699,26 @@ impl State {
                         s.client.send(net::ClientMsg::Skipped);
                     }
                 }
-                // Defense: 1-4 buy for the team, T takes the turn over, F spots camo notes.
-                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 | KeyCode::KeyT | KeyCode::KeyF if game.defense.is_some() => {
+                // Defense: 1-5 buy for the team, T takes the turn over, F spots camo notes.
+                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 | KeyCode::Digit5 | KeyCode::KeyT | KeyCode::KeyF if game.defense.is_some() => {
                     let t = game.time;
                     let item = match code {
                         KeyCode::Digit1 => Some(net::DefenseItem::Slow),
                         KeyCode::Digit2 => Some(net::DefenseItem::Shield),
                         KeyCode::Digit3 => Some(net::DefenseItem::Heal),
-                        KeyCode::Digit4 => Some(net::DefenseItem::Tower),
+                        KeyCode::Digit4 => Some(net::DefenseItem::DonTower),
+                        KeyCode::Digit5 => Some(net::DefenseItem::KatTower),
                         _ => None,
                     };
-                    let (gold, can_tag, can_spot) = (game.team_gold().unwrap_or(0), game.can_tag_in(t), game.can_spot(t));
+                    let team = game.team_state().unwrap_or_default();
+                    let (can_tag, can_spot) = (game.can_tag_in(t), game.can_spot(t));
                     let act = match (item, code) {
-                        (Some(item), _) if gold < item.price() => {
-                            self.toast(format!("{}: {} gold, the team has {gold}", item.name(), item.price()));
+                        (Some(item), _) if team.gold < item.price(&team) => {
+                            self.toast(format!("{}: {} gold, the team has {}", item.name(), item.price(&team), team.gold));
+                            None
+                        }
+                        (Some(net::DefenseItem::Heal), _) if team.lives >= team.max => {
+                            self.toast("the team has all its lives".into());
                             None
                         }
                         (Some(item), _) => Some(net::DefenseAct::Buy { item, at: t }),
