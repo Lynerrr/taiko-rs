@@ -10290,11 +10290,10 @@ impl State {
     }
 }
 
-/// The graphics APIs to draw with, from the `graphics_api` setting. "auto" is wgpu's choice
-/// (Vulkan first) except on Windows where Vulkan is known to fall over: Intel's Vulkan driver
-/// (igvk64.dll) crashed on a UHD 630 right after the window came up, a white flash and gone, where
-/// DX12 works. So DX12 there when every graphics card is Intel's; and after a start that never
-/// got going (`gpu_start`) the setting itself becomes "dx12".
+/// The graphics APIs to draw with, from the `graphics_api` setting. "auto" is DX12 on Windows
+/// (whatever the card: Vulkan drivers there have crashed on start, Intel's igvk64.dll on a UHD
+/// 630 among them) unless no card has it, and wgpu's choice (Vulkan first) elsewhere. After a
+/// Windows start that never got going (`gpu_start`) the setting itself becomes "vulkan".
 pub fn graphics_backends(api: &str) -> wgpu::Backends {
     match api {
         "vulkan" => wgpu::Backends::VULKAN,
@@ -10309,16 +10308,11 @@ pub fn graphics_backends(api: &str) -> wgpu::Backends {
 fn auto_backends() -> wgpu::Backends {
     // DXGI lists the cards without touching their Vulkan drivers.
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::DX12, ..wgpu::InstanceDescriptor::new_without_display_handle() });
-    let cards: Vec<wgpu::AdapterInfo> = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12))
-        .iter()
-        .map(|a| a.get_info())
-        .filter(|i| i.device_type != wgpu::DeviceType::Cpu)
-        .collect();
-    const INTEL: u32 = 0x8086;
-    if !cards.is_empty() && cards.iter().all(|i| i.vendor == INTEL) {
-        eprintln!("graphics: only Intel graphics ({}): DX12", cards[0].name);
+    let cards = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12)).iter().filter(|a| a.get_info().device_type != wgpu::DeviceType::Cpu).count();
+    if cards > 0 {
         return wgpu::Backends::DX12;
     }
+    eprintln!("graphics: no DX12 graphics card: wgpu's choice");
     wgpu::Backends::all()
 }
 
@@ -11023,12 +11017,12 @@ impl ApplicationHandler<UserEvent> for App {
         }
         #[cfg_attr(not(windows), allow(unused_mut))]
         let mut api = lock(&self.state).cfg.graphics_api.clone();
-        // The last start crashed in the graphics driver: DX12 from now on (kept, or every other
+        // The last start crashed in the graphics driver: Vulkan from now on (kept, or every other
         // start would crash again).
         #[cfg(windows)]
         if api == "auto" && gpu_start::failed_last_time() {
-            eprintln!("graphics: the last start never got going: DX12 from now on (graphics_api in config.txt)");
-            api = "dx12".into();
+            eprintln!("graphics: the last start never got going: Vulkan from now on (graphics_api in config.txt)");
+            api = "vulkan".into();
             let mut s = lock(&self.state);
             s.cfg.graphics_api = api.clone();
             s.cfg.save();
