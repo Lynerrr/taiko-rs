@@ -145,6 +145,7 @@ pub enum Mod {
     Elbow,
     Shapeshift,
     Snake,
+    Maze,
     // Playfield moves.
     Mirror,
     Tilt,
@@ -162,12 +163,12 @@ pub enum Mod {
 
 use Mod::*;
 
-pub const ALL: [Mod; 76] = [
+pub const ALL: [Mod; 77] = [
     Easy, NoFail, HalfTime, Daycore, Half, NoFinishers, HardRock, SuddenDeath, Perfect, DoubleTime, Nightcore, Hidden,
     Flashlight, Precise, GreatOrNothing, Relax, Autoplay, Swap, Random, ConstantSpeed, Alternate, WindUp, WindDown, AllBig,
     Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette, AntiSv, HyperSv, Even, Split, Swing,
     Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed, Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy,
-    Party, Overtime, Liar, Radar, Echo, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop,
+    Party, Overtime, Liar, Radar, Echo, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Maze, Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop,
     Crossfire, Shatter, Cracked, Crumble, Portal, Multiverse,
 ];
 
@@ -179,7 +180,7 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
     ("SCROLL", 0xFFD34D, &[Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette]),
     ("SV LAB", 0xFF8A3D, &[AntiSv, HyperSv, Even, Split, Swing, Leapfrog, Panic, Mercy, LagSpike, Moonwalk, SnapSpeed]),
     ("VISUAL", 0xc77dff, &[Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Party, Overtime, Liar, Radar, Echo]),
-    ("RAILS", 0x5ee6c8, &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Snake, Crossfire]),
+    ("RAILS", 0x5ee6c8, &[Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Snake, Crossfire]),
     ("PLAYFIELD", 0xff5fa2, &[Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal, Multiverse]),
 ];
 
@@ -268,6 +269,7 @@ impl Mod {
             Elbow => "EB",
             Shapeshift => "SS",
             Snake => "SK",
+            Maze => "MZ",
             Mirror => "MR",
             Tilt => "TL",
             Spin => "SN",
@@ -349,6 +351,7 @@ impl Mod {
             Elbow => "Elbow",
             Shapeshift => "Shapeshift",
             Snake => "Snake",
+            Maze => "Maze",
             Mirror => "Mirror",
             Tilt => "Tilt",
             Spin => "Spin",
@@ -430,6 +433,7 @@ impl Mod {
             Elbow => "Notes fall from the top and turn into the lane at a corner.",
             Shapeshift => "Every few bars the lane bends into another rails shape (C: how often, which order).",
             Snake => "Streams slither along the lane, triplets the other way; 1/1 notes fly straight.",
+            Maze => "The lane winds round corner after corner across the whole screen to the drum.",
             Mirror => "The lane is flipped: notes come from the left.",
             Tilt => "The lane rocks from side to side with the beat.",
             Spin => "The lane moves to the middle and turns full circle every 24 seconds.",
@@ -461,7 +465,7 @@ impl Mod {
             // Hard to read or to play: notes that lie about where or when they'll arrive.
             SvChaos | Even => 1.08,
             Sudden | Blink | Decoy | Liar | Radar | Echo | Alternate | WindUp | Stutter | Roulette | HyperSv | Split | Leapfrog | LagSpike | Moonwalk => 1.06,
-            Spiral | Shapeshift | Spin | Portal => 1.06,
+            Spiral | Maze | Shapeshift | Spin | Portal => 1.06,
             // Noticeably harder.
             GreatOrNothing | Random | Accel | Brake | Pulse | Crescendo | Drop | Gearbox | AntiSv | Swing | Panic | SnapSpeed => 1.04,
             UTurn | Loop | Snake | FlipFlop | Crossfire | Shatter | Crumble => 1.04,
@@ -502,7 +506,7 @@ impl Mod {
             Radar => &[Hidden, Sudden, Memory, Flashlight, Spotlight, Blackout, Multiverse],
             // Echo's bar sits under the lane: nothing may move the lane over it. Colorless does
             // its grey already, and Multiverse's colours are what the windows go by.
-            Echo => &[Colorless, Multiverse, Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift],
+            Echo => &[Colorless, Multiverse, Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift],
             // The map's own speeds are what these bend, so they don't mix with each other or
             // with one speed for everything.
             ConstantSpeed => &[AntiSv, HyperSv],
@@ -510,12 +514,12 @@ impl Mod {
             HyperSv => &[AntiSv, ConstantSpeed],
             Panic => &[Mercy],
             Mercy => &[Panic],
-            Spin => &[Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Crossfire, Echo],
-            Mania => &[Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Crossfire, Echo],
-            Zigzag | UTurn | Spiral | Loop | Elbow | Shapeshift => &[Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Mania, Spin, Multiverse, Crossfire, Echo],
+            Spin => &[Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Multiverse, Crossfire, Echo],
+            Mania => &[Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Multiverse, Crossfire, Echo],
+            Zigzag | UTurn | Spiral | Loop | Elbow | Maze | Shapeshift => &[Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Mania, Spin, Multiverse, Crossfire, Echo],
             // The drum in the middle, a lane each way: nothing else may move the drum, bend the
             // lane or break it into pieces.
-            Crossfire => &[Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Multiverse, Shatter, Cracked, Crumble, Portal],
+            Crossfire => &[Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Multiverse, Shatter, Cracked, Crumble, Portal],
             Shatter | Portal => &[Crossfire],
             // Its playfields are small windows side by side: nothing may move them off their
             // spots, light only one of them or take its colours away.
@@ -523,7 +527,7 @@ impl Mod {
             Colorless => &[Multiverse, Echo],
             Blackout => &[Multiverse, Radar],
             Multiverse => &[
-                Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Shapeshift, Colorless, Flashlight, Spotlight, Blackout, Crossfire, Radar, Echo,
+                Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Colorless, Flashlight, Spotlight, Blackout, Crossfire, Radar, Echo,
             ],
             Cracked => &[Crumble, Crossfire],
             Crumble => &[Cracked, Crossfire],
@@ -543,7 +547,7 @@ impl Mod {
             DoubleTime | Nightcore | Flashlight | Spotlight | Colorless => 3,
             HardRock | Hidden | Sudden | Blink | Decoy | Radar | Echo | Random | Alternate | WindUp => 2,
             Stutter | SvChaos | Roulette | HyperSv | Even | Split | Leapfrog | Panic | LagSpike | Moonwalk => 2,
-            Spiral | Shapeshift | Spin | FlipFlop | Portal | Multiverse => 2,
+            Spiral | Maze | Shapeshift | Spin | FlipFlop | Portal | Multiverse => 2,
             _ => 1,
         })
     }

@@ -87,6 +87,158 @@ pub struct MapInfo {
     /// map from before seeds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
+    /// Defense: the room plays the map together. The players take turns every `bars` bars, and
+    /// every note one of them lets through costs the team a life. None: an ordinary match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defense: Option<Defense>,
+}
+
+/// Defense's rules, picked by the host: the team's lives and how many bars each turn lasts.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Defense {
+    pub lives: u32,
+    pub bars: u32,
+}
+
+impl Defense {
+    /// The lives the host steps through (C in the lobby), and the turn lengths (V).
+    pub const LIVES: [u32; 4] = [10, 25, 50, 100];
+    pub const BARS: [u32; 3] = [4, 8, 16];
+    pub const DEFAULT: Defense = Defense { lives: 25, bars: 8 };
+
+    /// The rules after `lives` steps on: off after the last.
+    pub fn next_lives(rules: Option<Defense>) -> Option<Defense> {
+        match rules {
+            None => Some(Defense { lives: Defense::LIVES[0], ..Defense::DEFAULT }),
+            Some(d) => {
+                let i = Defense::LIVES.iter().position(|&l| l == d.lives)?;
+                Defense::LIVES.get(i + 1).map(|&lives| Defense { lives, ..d })
+            }
+        }
+    }
+
+    /// The next turn length, round to the first.
+    pub fn next_bars(self) -> Defense {
+        let i = Defense::BARS.iter().position(|&b| b == self.bars).map_or(0, |i| (i + 1) % Defense::BARS.len());
+        Defense { bars: Defense::BARS[i], ..self }
+    }
+}
+
+/// Defense: what the team can buy with its gold (keys 1-4 in a match).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefenseItem {
+    /// The lane crawls at half speed for a while (the notes still land on time).
+    Slow,
+    /// The next `SHIELD_CHARGES` notes to get through cost no lives.
+    Shield,
+    /// A life back.
+    Heal,
+    /// A tower on a corner of the maze, that takes the next `TOWER_SHOTS` notes for the team.
+    Tower,
+}
+
+impl DefenseItem {
+    pub const ALL: [DefenseItem; 4] = [DefenseItem::Slow, DefenseItem::Shield, DefenseItem::Heal, DefenseItem::Tower];
+
+    pub fn price(self) -> u32 {
+        match self {
+            DefenseItem::Slow => 40,
+            DefenseItem::Shield => 60,
+            DefenseItem::Heal => 80,
+            DefenseItem::Tower => 100,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DefenseItem::Slow => tr!("Slow", "スロー", "Замедление"),
+            DefenseItem::Shield => tr!("Shield", "シールド", "Щит"),
+            DefenseItem::Heal => tr!("Heal", "回復", "Лечение"),
+            DefenseItem::Tower => tr!("Tower", "タワー", "Башня"),
+        }
+    }
+}
+
+/// Defense: notes a shield takes, a tower's shots, and the most towers a team can have.
+pub const SHIELD_CHARGES: u32 = 3;
+pub const TOWER_SHOTS: u32 = 6;
+pub const MAX_TOWERS: u32 = 6;
+
+/// Defense: something a player did in the match, which every player's game then applies the
+/// same way. `at` is the map time it was done at (on the doer's clock).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub enum DefenseAct {
+    Buy { item: DefenseItem, at: f64 },
+    /// Takes over the rest of the turn being played, from the next barline.
+    TagIn { at: f64 },
+    /// Off turn: shows the hidden (camo) notes coming up to the player whose turn it is.
+    Spot { at: f64 },
+}
+
+/// Defense: the team's lives, gold, shield and towers, as the room keeps them.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TeamState {
+    pub lives: u32,
+    pub max: u32,
+    pub gold: u32,
+    pub shield: u32,
+    pub towers: u32,
+}
+
+/// Defense, in the room: the team's state and what it has paid for so far.
+struct TeamRun {
+    state: TeamState,
+    spent: u32,
+    misses: u32,
+}
+
+impl TeamRun {
+    fn new(d: Defense) -> TeamRun {
+        TeamRun { state: TeamState { lives: d.lives, max: d.lives, ..TeamState::default() }, spent: 0, misses: 0 }
+    }
+
+    /// Catches up with the team's GREATs (gold) and misses (notes through: the shield takes
+    /// them first, then they cost lives). A player who quit keeps what they had.
+    fn update<'a>(&mut self, team: impl Iterator<Item = &'a PlayerInfo>) {
+        let (mut greats, mut misses) = (0u32, 0u32);
+        for p in team {
+            let (g, m) = p.result.as_ref().filter(|r| !r.quit).map_or((p.live.great, p.live.miss), |r| (r.great, r.miss));
+            greats += g;
+            misses += m;
+        }
+        if misses > self.misses {
+            let through = misses - self.misses;
+            let blocked = through.min(self.state.shield);
+            self.state.shield -= blocked;
+            self.state.lives = self.state.lives.saturating_sub(through - blocked);
+            self.misses = misses;
+        }
+        self.state.gold = greats.saturating_sub(self.spent);
+    }
+
+    /// Pays for `item` if the team can (alive, the gold, room for it): whether it did.
+    fn buy(&mut self, item: DefenseItem) -> bool {
+        let s = &mut self.state;
+        let can = s.lives > 0
+            && s.gold >= item.price()
+            && match item {
+                DefenseItem::Heal => s.lives < s.max,
+                DefenseItem::Tower => s.towers < MAX_TOWERS,
+                _ => true,
+            };
+        if !can {
+            return false;
+        }
+        match item {
+            DefenseItem::Shield => s.shield += SHIELD_CHARGES,
+            DefenseItem::Heal => s.lives += 1,
+            DefenseItem::Tower => s.towers += 1,
+            DefenseItem::Slow => {}
+        }
+        s.gold -= item.price();
+        self.spent += item.price();
+        true
+    }
 }
 
 fn one() -> f64 {
@@ -104,7 +256,14 @@ impl MapInfo {
             })
             .unwrap_or_default();
         let mods = if self.mods.is_empty() { String::new() } else { format!("  +{}", self.mods.concat()) };
-        format!("{} - {} [{}]{rate}{mods}{from}", self.artist, self.title, self.version)
+        let defense = self
+            .defense
+            .map(|d| {
+                let (lives, bars) = (d.lives, d.bars);
+                tr!("  DEFENSE {lives} lives, {bars} bars a turn", "  ディフェンス ライフ{lives} {bars}小節交代", "  ОБОРОНА {lives} жизней, ход {bars} тактов";)
+            })
+            .unwrap_or_default();
+        format!("{} - {} [{}]{rate}{mods}{from}{defense}", self.artist, self.title, self.version)
     }
 }
 
@@ -115,6 +274,9 @@ pub struct Live {
     pub accuracy: f64,
     pub miss: u32,
     pub progress: f64,
+    /// GREATs so far (Defense pays the team a gold for each).
+    #[serde(default)]
+    pub great: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -204,6 +366,8 @@ pub enum ClientMsg {
     StartGuessr { rounds: u32 },
     /// Mapguessr: it's this map (any difficulty of the song counts: `song` is its song key).
     Guess { hash: u64, song: u64 },
+    /// Defense: something we did in the match (a purchase is only passed on if the team can pay).
+    Defense(DefenseAct),
 }
 
 /// A piece of a map set archive sent from the host's Songs folder. `data` is base64; the
@@ -235,6 +399,9 @@ pub enum ServerMsg {
         mapguessr: bool,
         #[serde(default)]
         common: Option<u32>,
+        /// Defense: the team's state in the match (and after it, until the next).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        team: Option<TeamState>,
     },
     Prepare(MapInfo),
     /// Start the song at this server time (ms).
@@ -260,6 +427,9 @@ pub enum ServerMsg {
     /// Mapguessr: the round is over and it was `hash`; who got it and the points each got.
     /// `last`: the game ends with it.
     GuessReveal { hash: u64, got: Vec<(u32, u32)>, last: bool },
+    /// Defense: what player `from` did, to everyone in the match and watching it, in the order
+    /// the room took it.
+    Defense { from: u32, act: DefenseAct },
     /// Synthesised locally when the connection drops.
     Disconnected(String),
 }
@@ -696,6 +866,8 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
     let mut start_at: Option<f64> = None;
     let mut match_inputs: std::collections::HashMap<u32, (Vec<(f64, u8)>, bool)> = std::collections::HashMap::new();
     let mut match_skips: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // Defense: the team's lives and gold in the match (kept after it for the results).
+    let mut team: Option<TeamRun> = None;
     // Recent lobby chat (name, line) for whoever joins, and each player's last lines (flood limit).
     let mut chat: std::collections::VecDeque<(String, String)> = std::collections::VecDeque::new();
     let mut chat_times: std::collections::HashMap<u32, std::collections::VecDeque<Instant>> = std::collections::HashMap::new();
@@ -785,6 +957,25 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                                 q.info.host = q.info.id == to;
                             }
                             dirty = true;
+                        }
+                        continue;
+                    }
+                    ClientMsg::Defense(act) => {
+                        let playing = phase == Phase::Playing && players.iter().any(|p| p.info.id == id && p.in_match);
+                        if let (true, Some(t)) = (playing, &mut team) {
+                            // Their latest numbers first, so the gold is up to date.
+                            t.update(players.iter().filter(|p| p.in_match).map(|p| &p.info));
+                            let paid = match act {
+                                DefenseAct::Buy { item, .. } => t.buy(item),
+                                _ => true,
+                            };
+                            if paid {
+                                let msg = ServerMsg::Defense { from: id, act };
+                                for q in players.iter().filter(|q| q.in_match || q.spectating) {
+                                    let _ = q.tx.send(msg.clone());
+                                }
+                                dirty = true;
+                            }
                         }
                         continue;
                     }
@@ -1016,6 +1207,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                 match_map = map.clone();
                 match_inputs.clear();
                 match_skips.clear();
+                team = match_map.as_ref().and_then(|m| m.defense).map(TeamRun::new);
                 let mut started = false;
                 for p in players.iter_mut().filter(|p| p.in_match) {
                     if p.loaded == Some(true) {
@@ -1038,6 +1230,10 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                 }
                 dirty = true;
             }
+        }
+        if phase == Phase::Playing
+            && let Some(t) = &mut team {
+            t.update(players.iter().filter(|p| p.in_match).map(|p| &p.info));
         }
         // Everyone still in the match has finished (or left): publish results, back to the lobby.
         if phase == Phase::Playing && players.iter().filter(|p| p.in_match).all(|p| p.info.status == Status::Finished) {
@@ -1124,6 +1320,7 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
                 in_match,
                 mapguessr,
                 common,
+                team: team.as_ref().map(|t| t.state),
             };
             for p in players.iter().filter(|p| p.hello) {
                 let _ = p.tx.send(room.clone());
@@ -1419,6 +1616,72 @@ mod tests {
     }
 
     #[test]
+    fn the_room_pays_for_defense_from_greats_and_shields_take_misses_first() {
+        let player = |great: u32, miss: u32| PlayerInfo {
+            id: 1,
+            name: String::new(),
+            host: false,
+            ready: false,
+            has_map: true,
+            status: Status::Playing,
+            live: Live { great, miss, ..Live::default() },
+            result: None,
+            spectator: false,
+            points: 0,
+            guessed: false,
+            tries: 0,
+            maps: None,
+            mods: Vec::new(),
+        };
+        let mut t = TeamRun::new(Defense { lives: 5, bars: 8 });
+        t.update([player(100, 0), player(30, 1)].iter());
+        assert_eq!((t.state.gold, t.state.lives), (130, 4));
+        assert!(t.buy(DefenseItem::Heal));
+        assert_eq!((t.state.gold, t.state.lives), (50, 5));
+        assert!(!t.buy(DefenseItem::Heal), "full again");
+        assert!(!t.buy(DefenseItem::Shield), "50 gold of 60");
+        // Ten more greats: it can.
+        t.update([player(110, 0), player(30, 1)].iter());
+        assert!(t.buy(DefenseItem::Shield));
+        assert_eq!((t.state.gold, t.state.shield), (0, 3));
+        // Four more through: the shield takes three, one costs a life.
+        t.update([player(110, 3), player(30, 2)].iter());
+        assert_eq!((t.state.shield, t.state.lives), (0, 4));
+        assert!(!t.buy(DefenseItem::Tower), "no gold left");
+        // More greats pay for towers, up to the most a team can have.
+        t.update([player(2000, 3), player(30, 2)].iter());
+        for _ in 0..MAX_TOWERS {
+            assert!(t.buy(DefenseItem::Tower));
+        }
+        assert!(!t.buy(DefenseItem::Tower));
+        // Wiped out: nothing more to buy.
+        t.update([player(2000, 30), player(30, 2)].iter());
+        assert_eq!(t.state.lives, 0);
+        assert!(!t.buy(DefenseItem::Slow));
+    }
+
+    #[test]
+    fn defense_rules_step_round_and_old_lobby_maps_still_parse() {
+        // C: 10, 25, 50, 100 lives, then off; V: 4, 8, 16 bars round again.
+        let mut rules = None;
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            rules = Defense::next_lives(rules);
+            seen.push(rules.map(|d| d.lives));
+        }
+        assert_eq!(seen, [Some(10), Some(25), Some(50), Some(100), None]);
+        let bars: Vec<u32> = std::iter::successors(Some(Defense::DEFAULT), |d| Some(d.next_bars())).skip(1).take(3).map(|d| d.bars).collect();
+        assert_eq!(bars, [16, 4, 8]);
+        // A room on an older build leaves it out; it's an ordinary match then.
+        let old = r#"{"hash":1,"artist":"a","title":"t","version":"v","rate":1.0}"#;
+        assert_eq!(serde_json::from_str::<MapInfo>(old).unwrap().defense, None);
+        let mut m: MapInfo = serde_json::from_str(old).unwrap();
+        m.defense = Some(Defense { lives: 50, bars: 4 });
+        let back: MapInfo = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.defense, m.defense);
+    }
+
+    #[test]
     fn full_match_over_localhost() {
         let server = host(0, false).unwrap();
         let port = server.port;
@@ -1428,7 +1691,7 @@ mod tests {
         wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
         let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
         wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None, seed: None }));
+        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None, seed: None, defense: None }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
         a.send(ClientMsg::HasMap(false));
@@ -1437,7 +1700,7 @@ mod tests {
         assert!(players.iter().any(|p| p.name == "alice" && p.host));
         assert!(players.iter().any(|p| p.name == "bob" && !p.host));
 
-        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9), mods: vec!["HD".into()], multiverse: None, shapeshift: Some("every=4".into()), seed: None };
+        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9), mods: vec!["HD".into()], multiverse: None, shapeshift: Some("every=4".into()), seed: None, defense: None };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
         for c in [&a, &b] {
@@ -1463,5 +1726,48 @@ mod tests {
         let ServerMsg::Results(r) = wait_for(&mut a, |m| matches!(m, ServerMsg::Results(_))) else { unreachable!() };
         assert_eq!(r.len(), 2);
         assert!(r.iter().any(|p| p.name == "bob" && p.result.as_ref().unwrap().score == 1200));
+    }
+
+    #[test]
+    fn defense_actions_reach_the_whole_team_and_only_what_it_can_pay_for() {
+        let server = host(0, false).unwrap();
+        let addr = format!("127.0.0.1:{}", server.port);
+        let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
+        wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
+        let mut b = Client::connect(&addr, "bob", None).unwrap();
+        wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
+        let map = MapInfo { hash: 5, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None, seed: None, defense: Some(Defense { lives: 10, bars: 4 }) };
+        a.send(ClientMsg::SelectMap(map));
+        thread::sleep(Duration::from_millis(100));
+        for c in [&a, &b] {
+            c.send(ClientMsg::HasMap(true));
+            c.send(ClientMsg::Ready(true));
+        }
+        thread::sleep(Duration::from_millis(100));
+        a.send(ClientMsg::StartMatch);
+        for c in [&mut a, &mut b] {
+            wait_for(c, |m| matches!(m, ServerMsg::Prepare(m) if m.defense.is_some()));
+            c.send(ClientMsg::Loaded(true));
+        }
+        for c in [&mut a, &mut b] {
+            wait_for(c, |m| matches!(m, ServerMsg::Start { .. }));
+        }
+        // No gold yet: the tower is turned down. Then 120 GREATs pay for it.
+        a.send(ClientMsg::Defense(DefenseAct::Buy { item: DefenseItem::Tower, at: 1000.0 }));
+        thread::sleep(Duration::from_millis(100));
+        b.send(ClientMsg::Live(Live { great: 120, ..Live::default() }));
+        thread::sleep(Duration::from_millis(100));
+        a.send(ClientMsg::Defense(DefenseAct::Buy { item: DefenseItem::Tower, at: 2000.0 }));
+        // (Another connection: after a moment, so the room surely takes it second.)
+        thread::sleep(Duration::from_millis(100));
+        b.send(ClientMsg::Defense(DefenseAct::Spot { at: 2100.0 }));
+        for c in [&mut a, &mut b] {
+            let ServerMsg::Defense { act, .. } = wait_for(c, |m| matches!(m, ServerMsg::Defense { .. })) else { unreachable!() };
+            assert_eq!(act, DefenseAct::Buy { item: DefenseItem::Tower, at: 2000.0 }, "the first one never went out");
+            let ServerMsg::Defense { act, .. } = wait_for(c, |m| matches!(m, ServerMsg::Defense { .. })) else { unreachable!() };
+            assert_eq!(act, DefenseAct::Spot { at: 2100.0 });
+        }
+        let ServerMsg::Room { team, .. } = wait_for(&mut b, |m| matches!(m, ServerMsg::Room { team: Some(t), .. } if t.towers == 1)) else { unreachable!() };
+        assert_eq!(team, Some(TeamState { lives: 10, max: 10, gold: 20, shield: 0, towers: 1 }));
     }
 }

@@ -35,6 +35,8 @@ pub struct Session {
     /// The room plays mapguessr; how many maps every player has (None: a list is missing).
     pub mapguessr: bool,
     pub common: Option<u32>,
+    /// Defense: the team's lives, gold, shield and towers, as the room keeps them.
+    pub team: Option<net::TeamState>,
 }
 
 impl Session {
@@ -58,6 +60,7 @@ impl Session {
             online_room: None,
             mapguessr: false,
             common: None,
+            team: None,
         }
     }
 
@@ -108,7 +111,32 @@ pub fn start_join(address: String, name: String) -> Connecting {
 
 pub fn live_from(game: &Game) -> Live {
     let s = &game.stats;
-    Live { score: s.score, combo: s.combo, accuracy: s.accuracy(), miss: s.miss, progress: game.progress() }
+    Live { score: s.score, combo: s.combo, accuracy: s.accuracy(), miss: s.miss, progress: game.progress(), great: s.great }
+}
+
+/// Defense: the team for the match starting (everyone playing it, by id so every player has
+/// it in the same order) with their names, and which of them we are.
+pub fn defense_team(s: &Session) -> (Vec<(u32, String)>, usize) {
+    let mut team: Vec<(u32, String)> = s.players.iter().filter(|p| p.status != Status::Lobby && !p.spectator).map(|p| (p.id, p.name.clone())).collect();
+    if let Some(id) = s.client.id
+        && !team.iter().any(|p| p.0 == id) {
+        team.push((id, s.me().map_or_else(String::new, |p| p.name.clone())));
+    }
+    team.sort_by_key(|p| p.0);
+    let me = s.client.id.and_then(|id| team.iter().position(|p| p.0 == id)).unwrap_or(0);
+    (team, me)
+}
+
+/// Defense, after the match: how the team did (the room's lives, else from everyone's misses).
+fn defense_verdict(defense: net::Defense, team: Option<net::TeamState>, rows: &[PlayerInfo]) -> (String, u32) {
+    let leaked: u32 = rows.iter().map(|p| p.result.as_ref().map_or(p.live.miss, |r| r.miss)).sum();
+    let lives = team.map_or(defense.lives, |t| t.max);
+    let left = team.map_or(lives.saturating_sub(leaked), |t| t.lives);
+    if left == 0 {
+        (tr!("THE TEAM FELL  ({leaked} notes got through)", "チーム敗北  ({leaked}ノーツ突破)", "КОМАНДА ПАЛА  (прорвалось {leaked})";), 0xEB452C)
+    } else {
+        (tr!("DEFENDED  ({left}/{lives} lives left)", "防衛成功  (ライフ {left}/{lives})", "ОБОРОНА УСТОЯЛА  ({left}/{lives} жизней)";), 0x86E05A)
+    }
 }
 
 pub fn final_from(stats: &Stats, quit: bool) -> Final {
@@ -740,7 +768,11 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             (&start_label, Hit::Key(KeyCode::Enter), true),
             (if s.owns_room() { "Close room  (Esc)" } else { "Leave  (Esc)" }, Hit::Key(KeyCode::Escape), false),
         ]);
-        let hint = if me_spectator { "you'll watch the match   S: play instead   [ ] match rate   F1 mods   Tab songs" } else { "S: spectate instead   [ ] match rate   F1 mods (speed: for all)   Tab songs" };
+        let hint = if me_spectator {
+            "you'll watch the match   S: play instead   [ ] match rate   C defense (V turn length)   F1 mods   Tab songs"
+        } else {
+            "S: spectate instead   [ ] match rate   C defense co-op (V turn length)   F1 mods (speed: for all)   Tab songs"
+        };
         c.text_centered(w / 2.0, 466.0, 7.0, rgba(0x6f6f86, 1.0), &Canvas::fit_hints(7.0, w - 48.0, hint));
     } else {
         let missing = s.map.is_some() && !have_map;
@@ -845,15 +877,20 @@ pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
 pub fn draw_results(c: &mut Canvas, s: &Session) {
     let w = c.width;
     let final_results = s.results.as_ref();
-    let title = if final_results.is_some() { "MATCH RESULTS" } else { "waiting for other players to finish..." };
-    c.text_centered(w / 2.0, 50.0, 14.0, rgba(0xffffff, 1.0), title);
-    if let Some(m) = &s.map {
-        c.text_centered(w / 2.0, 76.0, 9.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(9.0, w - 48.0, &m.label()));
-    }
     let mut rows: Vec<PlayerInfo> = match final_results {
         Some(r) => r.clone(),
         None => s.players.iter().filter(|p| p.status != Status::Lobby).cloned().collect(),
     };
+    let defense = s.map.as_ref().and_then(|m| m.defense);
+    let (title, title_col) = match (final_results, defense) {
+        (Some(_), Some(d)) => defense_verdict(d, s.team, &rows),
+        (Some(_), None) => ("MATCH RESULTS".to_string(), 0xffffff),
+        (None, _) => ("waiting for other players to finish...".to_string(), 0xffffff),
+    };
+    c.text_centered(w / 2.0, 50.0, 14.0, rgba(title_col, 1.0), &title);
+    if let Some(m) = &s.map {
+        c.text_centered(w / 2.0, 76.0, 9.0, rgba(0x9a9ab0, 1.0), &Canvas::fit(9.0, w - 48.0, &m.label()));
+    }
     let score = |p: &PlayerInfo| p.result.as_ref().map(|r| r.score).unwrap_or(p.live.score);
     rows.sort_by_key(|p| std::cmp::Reverse(score(p)));
     let col = (w - 48.0).min(700.0);

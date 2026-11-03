@@ -127,8 +127,9 @@ fn session(mapguessr: bool) -> multiplayer::Session {
         multiverse: None,
         shapeshift: None,
         seed: None,
+        defense: None,
     });
-    let live = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
+    let live = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5, great: 1234 };
     let result = net::Final { score: 1_234_567, accuracy: 0.9876, max_combo: 1290, great: 1234, ok: 56, miss: 7, ur: 123.4, quit: false };
     s.players = (0..8)
         .map(|i| net::PlayerInfo {
@@ -755,7 +756,7 @@ fn assert_every_screen_fits() {
     check_draw("spectators", &mut out, |c| social::draw_spectators(c, &["Ryuji", "a_sixteen_letter", "x", "y", "z", "u", "v", "w", "q", "r"]));
 
     let room = session(false);
-    let player = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
+    let player = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5, great: 1234 };
     check_draw("lobby", &mut out, |c| multiplayer::draw_lobby(c, &room, false, Some("downloading the map: 45% of 12.3 MB".into())));
     check_draw("match waiting", &mut out, |c| multiplayer::draw_waiting(c, &room, None, false, Instant::now()));
     check_draw("match scoreboard", &mut out, |c| multiplayer::draw_scoreboard(c, &room, &player));

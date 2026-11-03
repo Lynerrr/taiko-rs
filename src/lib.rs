@@ -1203,6 +1203,7 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         multiverse,
         shapeshift,
         seed: None,
+        defense: None,
         hash: e.hash(),
         artist: e.meta.artist.clone(),
         title: e.meta.title.clone(),
@@ -5530,6 +5531,8 @@ impl State {
         }
         let mut info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
         info.seed = lobby_seed(None);
+        // Defense stays on (with its rules) from one map to the next.
+        info.defense = self.mp.as_ref().and_then(|s| s.map.as_ref()).and_then(|m| m.defense);
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
@@ -5607,6 +5610,27 @@ impl State {
                         self.toast(text);
                     }
                     KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
+                    // Defense: C steps the team's lives (and off), V how long each turn is.
+                    KeyCode::KeyC | KeyCode::KeyV if s.is_host() && !s.in_match => {
+                        let Some(mut m) = s.map.clone() else {
+                            self.toast("pick a map first (M)".into());
+                            return;
+                        };
+                        m.defense = match (code, m.defense) {
+                            (KeyCode::KeyC, d) => net::Defense::next_lives(d),
+                            (_, Some(d)) => Some(d.next_bars()),
+                            (_, None) => Some(net::Defense::DEFAULT),
+                        };
+                        let text = match m.defense {
+                            Some(d) => {
+                                let (lives, bars) = (d.lives, d.bars);
+                                tr!("Defense: {lives} lives, turns of {bars} bars", "ディフェンス: ライフ{lives}、{bars}小節で交代", "Оборона: {lives} жизней, ход по {bars} тактов";)
+                            }
+                            None => tr!("Defense off: an ordinary match", "ディフェンス オフ", "Оборона выключена: обычный матч").to_string(),
+                        };
+                        s.client.send(net::ClientMsg::SelectMap(m));
+                        self.toast(text);
+                    }
                     KeyCode::F1 => self.open_mod_select(),
                     KeyCode::KeyS if s.in_match && s.me().is_some_and(|p| p.status == net::Status::Lobby) => {
                         if s.have_map {
@@ -5673,6 +5697,35 @@ impl State {
                     if game.skip(self.audio.as_ref(), self.play_offset)
                         && let Some(s) = &self.mp {
                         s.client.send(net::ClientMsg::Skipped);
+                    }
+                }
+                // Defense: 1-4 buy for the team, T takes the turn over, F spots camo notes.
+                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 | KeyCode::KeyT | KeyCode::KeyF if game.defense.is_some() => {
+                    let t = game.time;
+                    let item = match code {
+                        KeyCode::Digit1 => Some(net::DefenseItem::Slow),
+                        KeyCode::Digit2 => Some(net::DefenseItem::Shield),
+                        KeyCode::Digit3 => Some(net::DefenseItem::Heal),
+                        KeyCode::Digit4 => Some(net::DefenseItem::Tower),
+                        _ => None,
+                    };
+                    let (gold, can_tag, can_spot) = (game.team_gold().unwrap_or(0), game.can_tag_in(t), game.can_spot(t));
+                    let act = match (item, code) {
+                        (Some(item), _) if gold < item.price() => {
+                            self.toast(format!("{}: {} gold, the team has {gold}", item.name(), item.price()));
+                            None
+                        }
+                        (Some(item), _) => Some(net::DefenseAct::Buy { item, at: t }),
+                        (None, KeyCode::KeyT) if can_tag => Some(net::DefenseAct::TagIn { at: t }),
+                        (None, KeyCode::KeyT) => {
+                            self.toast("can't take this turn over (yours, already taken, or ending)".into());
+                            None
+                        }
+                        (None, _) if can_spot => Some(net::DefenseAct::Spot { at: t }),
+                        (None, _) => None,
+                    };
+                    if let (Some(act), Some(s)) = (act, &self.mp) {
+                        s.client.send(net::ClientMsg::Defense(act));
                     }
                 }
                 KeyCode::Escape => {
@@ -7631,9 +7684,10 @@ impl State {
     fn handle_server_msg(&mut self, msg: net::ServerMsg) {
         use net::ServerMsg;
         match msg {
-            ServerMsg::Room { players, map, in_match, mapguessr, common } => {
+            ServerMsg::Room { players, map, in_match, mapguessr, common, team } => {
                 let library = &self.library;
                 let Some(s) = &mut self.mp else { return };
+                s.team = team;
                 let game_over = s.in_match && !in_match;
                 s.players = players;
                 // The room learns our own mods (on joining, and if it has others).
@@ -7752,6 +7806,15 @@ impl State {
                     }
                 }
             }
+            ServerMsg::Defense { from, act } => match &mut self.scene {
+                Scene::MpPlay { game, .. } => game.defense_act(from, act),
+                Scene::Spectate(v) => {
+                    for (_, g) in v.games.iter_mut() {
+                        g.defense_act(from, act);
+                    }
+                }
+                _ => {}
+            },
             ServerMsg::MapFile(part) => self.receive_map_part(part),
             ServerMsg::Results(r) => {
                 if let Some(s) = &mut self.mp {
@@ -9026,6 +9089,7 @@ impl State {
                                     multiverse: None,
                                     shapeshift: None,
                                     seed: (replay.seed != 0).then_some(replay.seed),
+                                    defense: None,
                                 },
                                 score: replay.score,
                                 accuracy: replay.accuracy,
@@ -9172,7 +9236,17 @@ impl State {
                 if start.is_some_and(|at| now >= at)
                     && let Some((map, track)) = loaded.take() {
                     let seed = self.mp.as_ref().and_then(|s| s.map.as_ref()).and_then(|m| m.seed).unwrap_or(0);
-                    let mut game = Game::with_seed(map, track, self.audio.as_ref(), self.pending_mods, seed);
+                    let defense = self.mp.as_ref().and_then(|s| s.map.as_ref()).and_then(|m| m.defense);
+                    // Defense is played on the Maze, whatever else bent the lane.
+                    let mut mods = self.pending_mods;
+                    if defense.is_some() && !mods.has(mods::Mod::Maze) {
+                        mods.toggle(mods::Mod::Maze);
+                    }
+                    let mut game = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
+                    if let (Some(d), Some(s)) = (defense, &self.mp) {
+                        let (team, me) = multiplayer::defense_team(s);
+                        game.set_defense(team, me, d.lives, d.bars);
+                    }
                     game.scroll_speed = self.cfg.scroll_speed;
                     if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
                         game.live_pp = pp::Live::start(self.library[i].path.clone(), game.rate, self.pending_mods, game.scroll_speed, game.seed, Default::default());
@@ -9205,6 +9279,9 @@ impl State {
                 game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
+                if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
+                    game.set_team(team);
+                }
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
                 draw_game_area(canvas, &self.cfg, &mut self.frame_clip, &self.grip, &self.hover, self.bg_brightness > 0.0, |c| {
@@ -9265,8 +9342,20 @@ impl State {
                     for (k, (id, name)) in v.players.iter().enumerate() {
                         // The lobby's speed mods, and the player's own others.
                         let own = self.mp.as_ref().and_then(|s| s.players.iter().find(|p| p.id == *id)).map(|p| Mods::from_list(&p.mods).free()).unwrap_or(Mods::NONE);
-                        let mut g = Game::with_seed(map.clone(), track.clone(), None, v.mods.shared().plus(own), v.map.seed.unwrap_or(0));
+                        let mut mods = v.mods.shared().plus(own);
+                        if v.map.defense.is_some() && !mods.has(mods::Mod::Maze) {
+                            mods.toggle(mods::Mod::Maze);
+                        }
+                        let mut g = Game::with_seed(map.clone(), track.clone(), None, mods, v.map.seed.unwrap_or(0));
                         use_mod_settings(&mut g, &v.map);
+                        // Defense: each player's game takes only their turns' notes, as theirs did
+                        // (the team in the order the players have it: by id).
+                        if let Some(d) = v.map.defense {
+                            let mut team = v.players.clone();
+                            team.sort_by_key(|p| p.0);
+                            let me = team.iter().position(|p| p.0 == *id).unwrap_or(0);
+                            g.set_defense(team, me, d.lives, d.bars);
+                        }
                         if let Some(t) = v.from {
                             g.skip_to(t);
                         }
@@ -9289,6 +9378,12 @@ impl State {
                     g.kiai_effects = self.cfg.kiai_effects;
                     g.hidden = hidden;
                     g.update(now, self.audio.as_ref(), self.play_offset);
+                }
+                // Defense: the team's lives and gold, as the room has them.
+                if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
+                    for (_, g) in v.games.iter_mut() {
+                        g.set_team(team);
+                    }
                 }
                 match v.focus {
                     Some(k) if k < v.games.len() => {

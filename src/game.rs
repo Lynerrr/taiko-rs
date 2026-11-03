@@ -32,6 +32,8 @@ use crate::clock::GameClock;
 use crate::mods::{Mod, Mods, Speed};
 use crate::hud::Part;
 use crate::multiverse::{self, Shape as NoteShape, Universe};
+use crate::medals::{SPLIT_CYAN, SPLIT_RED, TEAR_CYAN, TEAR_RED};
+use crate::net::{DefenseAct, DefenseItem, TeamState, TOWER_SHOTS};
 use crate::shapeshift;
 use crate::render::{accent, progress, rgba, Canvas, Font, Hit, Shape, Sprite, VIRTUAL_HEIGHT};
 
@@ -382,6 +384,8 @@ pub struct Game {
     pub rate: f64,
     /// Map time ↔ song time: `rate` throughout, or ramping from it (Wind Up / Down).
     speed: Speed,
+    /// Defense: our turns at the notes and the team's lives (None: playing alone).
+    pub defense: Option<DefenseRun>,
     pub mods: Mods,
     score_mult: f64,
     /// HP (0-1), like osu!lazer's taiko: starts empty, hits fill it, misses drain it, and the
@@ -713,6 +717,93 @@ impl Rail {
     }
 }
 
+/// Defense (a co-op lobby match): the team takes turns at the map's notes, `bars` bars each,
+/// and every note one of them lets through costs the team one of its `lives`. What the team
+/// does in the match (towers, slows, tag-ins, spotting) comes from the room in the same order
+/// for everyone, and picks its notes by map time alone, so every player's game agrees.
+pub struct DefenseRun {
+    /// The team in turn order: (player id, name).
+    pub team: Vec<(u32, String)>,
+    /// Which of them we are.
+    pub me: usize,
+    pub lives: u32,
+    bars: u32,
+    /// Whose turn each note is (into `team`).
+    owner: Vec<u8>,
+    /// Notes the map itself leaves unhittable (before a NaN slider): nobody's.
+    map_unhittable: Vec<bool>,
+    /// The room's numbers for the team (None until they first come).
+    pub state: Option<TeamState>,
+    /// Turns someone else took over: (turn, from bar, who).
+    tags: Vec<(usize, usize, usize)>,
+    towers: Vec<Tower>,
+    /// Per note: the tower that takes it.
+    shot: Vec<Option<u8>>,
+    /// Per note: camo, hidden from whoever's turn it is until it's near (or spotted).
+    camo: Vec<bool>,
+    /// Spotted: camo notes due between these map times show all the way.
+    spotted: Vec<(f64, f64)>,
+    /// Map times slows were bought at.
+    slows: Vec<f64>,
+    /// What the team did lately: (map time, who, what).
+    pub feed: Vec<(f64, usize, String)>,
+    /// When the team last lost a life (map time).
+    lost_at: f64,
+}
+
+/// Defense: a tower on a corner of the maze (`s` along the lane, on the inside of the turn).
+struct Tower {
+    s: f32,
+    side: f32,
+    who: usize,
+    /// The notes it takes.
+    notes: Vec<usize>,
+}
+
+/// Defense's glitches: a steady pseudo-random 0-1 for `a`, `b`, `k` (the medal screens' way:
+/// time goes in 40 ms steps, so things jump rather than slide).
+fn glitch_hash(a: u32, b: u32, k: u32) -> f32 {
+    let mut h = a.wrapping_mul(0x9E37_79B1) ^ b.wrapping_mul(0x85EB_CA77) ^ k.wrapping_mul(0xC2B2_AE3D);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2C1B_3C6D);
+    h ^= h >> 12;
+    (h & 0xFFFF) as f32 / 65535.0
+}
+
+/// How long a glitch from something the team did (or a life lost) lasts.
+const GLITCH_MS: f64 = 260.0;
+
+/// Defense: the maze's corners towers go on, one after another (the far ones first: they see
+/// the notes coming longest).
+const TOWER_CORNERS: [usize; 6] = [12, 10, 8, 6, 4, 2];
+/// Defense: a tower takes notes due this long after it's bought, so they're still out on the
+/// lane before it.
+const TOWER_LEAD_MS: f64 = 1500.0;
+/// Defense: a tag-in takes over from the first barline this long after it (if that's still in
+/// the turn), so the player before isn't cut off in the middle of a note.
+const TAG_LEAD_MS: f64 = 1000.0;
+/// Defense: how far ahead spotting shows camo notes, how long a slow lasts (the lane fades to
+/// half speed and back over `SLOW_FADE_MS` at each end), the share of notes that are camo and
+/// the part of the lane (from the drum) where a camo note shows anyway.
+const SPOT_MS: f64 = 4000.0;
+const SLOW_MS: f64 = 6000.0;
+const SLOW_FADE_MS: f64 = 400.0;
+const CAMO_SHARE: f64 = 0.16;
+const CAMO_NEAR: f32 = 0.35;
+
+/// Maze: corner `k`'s middle, along the lane.
+fn maze_corner_s(k: usize) -> f32 {
+    let arc = std::f32::consts::PI / 2.0 * MAZE_R;
+    (0..k).map(|j| maze_straight(j) + arc).sum::<f32>() + maze_straight(k) + arc / 2.0
+}
+
+/// Defense: the team's colours, in turn order.
+pub const TEAM_COLOURS: [u32; 8] = [0x4fb4ff, 0xFFD34D, 0xc77dff, 0x86E05A, 0xff5fa2, 0xFF8A3D, 0x5ee6c8, 0xEB452C];
+
+pub fn team_colour(k: usize) -> u32 {
+    TEAM_COLOURS[k % TEAM_COLOURS.len()]
+}
+
 /// The lane shapes of the rails mods.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum RailShape {
@@ -722,6 +813,37 @@ enum RailShape {
     Spiral,
     Loop,
     Elbow,
+    Maze,
+}
+
+/// Maze: the lane runs along a grid of `MAZE_CELL` squares, turning a quarter at each step of
+/// `MAZE` (cells straight on, then +1 left / -1 right) round a corner of radius `MAZE_R`, and
+/// leaves `MAZE_EXIT` off the right of the screen. From the drum: right, up, along the top, down
+/// and back under the drum, along the bottom, then up and down through the columns on the right
+/// (below the top row there: the score, accuracy and HP are over it) and out at the bottom.
+const MAZE_CELL: f32 = 160.0;
+const MAZE_R: f32 = 80.0;
+const MAZE: [(f32, f32); 14] = [
+    (2.0, 1.0),
+    (2.0, -1.0),
+    (2.0, -1.0),
+    (3.0, -1.0),
+    (3.0, 1.0),
+    (1.0, 1.0),
+    (4.0, 1.0),
+    (4.0, -1.0),
+    (1.0, -1.0),
+    (3.0, 1.0),
+    (1.0, 1.0),
+    (2.0, -1.0),
+    (1.0, -1.0),
+    (3.0, 1.0),
+];
+const MAZE_EXIT: f32 = 500.0;
+
+/// Maze: the straight before each corner of `MAZE` (the corners take `MAZE_R` off each end).
+fn maze_straight(k: usize) -> f32 {
+    MAZE[k].0 * MAZE_CELL - if k == 0 { MAZE_R } else { 2.0 * MAZE_R }
 }
 
 /// Loop: how far from the hit target it starts, its radius, and the angle the lane into it comes
@@ -749,7 +871,7 @@ pub fn rail_outline(k: usize) -> Vec<(f32, f32)> {
 
 impl RailShape {
     fn of(mods: Mods) -> Option<RailShape> {
-        [(Mod::Zigzag, RailShape::Zigzag), (Mod::UTurn, RailShape::UTurn), (Mod::Spiral, RailShape::Spiral), (Mod::Loop, RailShape::Loop), (Mod::Elbow, RailShape::Elbow)]
+        [(Mod::Zigzag, RailShape::Zigzag), (Mod::UTurn, RailShape::UTurn), (Mod::Spiral, RailShape::Spiral), (Mod::Loop, RailShape::Loop), (Mod::Elbow, RailShape::Elbow), (Mod::Maze, RailShape::Maze)]
             .into_iter()
             .find(|&(m, _)| mods.has(m))
             .map(|(_, shape)| shape)
@@ -781,6 +903,24 @@ impl RailShape {
             // the drum at that angle, not along it (notes a second apart side by side).
             RailShape::Loop => turn(LOOP_AT, LOOP_TURN * LOOP_R, LOOP_TURN),
             RailShape::Elbow => turn(220.0, PI * 40.0, PI / 2.0),
+            // The average over the `RAIL_STEP` round `s` (what `Rail::build` turns by), so each
+            // corner turns exactly a quarter: a dozen of them a little off and the far end of
+            // the maze would wander tens of units out of place.
+            RailShape::Maze => {
+                let arc = PI / 2.0 * MAZE_R;
+                let (lo, hi) = (s - RAIL_STEP / 2.0, s + RAIL_STEP / 2.0);
+                let mut at = 0.0;
+                let mut turned = 0.0;
+                for (k, &(_, side)) in MAZE.iter().enumerate() {
+                    at += maze_straight(k);
+                    if at >= hi {
+                        break;
+                    }
+                    turned += side * (hi.min(at + arc) - lo.max(at)).max(0.0);
+                    at += arc;
+                }
+                turned / (RAIL_STEP * MAZE_R)
+            }
         }
     }
 
@@ -796,6 +936,7 @@ impl RailShape {
             // On out of the bottom right of the screen.
             RailShape::Loop => LOOP_AT + LOOP_TURN * LOOP_R + 500.0,
             RailShape::Elbow => 220.0 + PI * 40.0 + 300.0,
+            RailShape::Maze => (0..MAZE.len()).map(maze_straight).sum::<f32>() + MAZE.len() as f32 * PI / 2.0 * MAZE_R + MAZE_EXIT,
         }
     }
 
@@ -808,6 +949,8 @@ impl RailShape {
             RailShape::Spiral => 105.0,
             RailShape::Loop => 135.0,
             RailShape::Elbow => 200.0,
+            // The drum half way down: the maze reaches as far above it as below.
+            RailShape::Maze => 65.0,
         }
     }
 
@@ -821,8 +964,15 @@ impl RailShape {
             RailShape::Spiral => 660.0,
             RailShape::Loop => HIT_X + LOOP_AT + LOOP_R + LANE_H / 2.0,
             RailShape::Elbow => 520.0,
+            RailShape::Maze => HIT_X + 8.0 * MAZE_CELL + LANE_H / 2.0,
         };
-        let tall: f32 = if self == RailShape::Spiral { 0.85 } else { 1.0 };
+        // Two and a half cells above the drum and below it, between the HUD at the top and the
+        // hit error meter.
+        let tall: f32 = match self {
+            RailShape::Spiral => 0.85,
+            RailShape::Maze => 0.48,
+            _ => 1.0,
+        };
         tall.min((w - 8.0 - HIT_X) / (right - HIT_X)).max(0.3)
     }
 }
@@ -1535,6 +1685,7 @@ impl Game {
             shape_order,
             universes: None,
             zone: None,
+            defense: None,
         }
     }
 
@@ -1554,6 +1705,191 @@ impl Game {
             self.shapeshift = s;
             self.shape_order = shape_order(&self.map, self.mods, s);
         }
+    }
+
+    /// Plays this map as one of a Defense team (`team` in turn order, we're `me`): the notes of
+    /// the others' turns pass by without taking our presses or counting as our misses, and the
+    /// team's lives (the room's), not HP, decide whether it fails.
+    pub fn set_defense(&mut self, team: Vec<(u32, String)>, me: usize, lives: u32, bars: u32) {
+        let n = self.map.notes.len();
+        let map_unhittable = self.map.notes.iter().map(|n| n.unhittable).collect();
+        let first_turn = self.map.barlines.get(bars.max(1) as usize).map_or(f64::INFINITY, |b| b.time);
+        let camo = self.map.notes.iter().map(|n| matches!(n.kind, Kind::Don | Kind::Kat) && n.time >= first_turn && hash01(n.time * 1.37 + 11.0) < CAMO_SHARE).collect();
+        self.hp_exempt = true;
+        self.defense = Some(DefenseRun {
+            team,
+            me,
+            lives,
+            bars,
+            owner: vec![0; n],
+            map_unhittable,
+            state: None,
+            tags: Vec::new(),
+            towers: Vec::new(),
+            shot: vec![None; n],
+            camo,
+            spotted: Vec::new(),
+            slows: Vec::new(),
+            feed: Vec::new(),
+            lost_at: f64::NEG_INFINITY,
+        });
+        self.refresh_defense();
+    }
+
+    /// Defense: whose turn bar `bar` is (a tag-in's, or the next in line).
+    fn turn_of_bar(&self, bar: usize) -> usize {
+        let Some(d) = &self.defense else { return 0 };
+        let bars = d.bars.max(1) as usize;
+        let turn = bar / bars;
+        d.tags.iter().find(|&&(t, from, _)| t == turn && bar >= from).map_or(turn % d.team.len().max(1), |t| t.2)
+    }
+
+    /// The bar map time `t` is in (0 before the first barline; a note on a barline is the new
+    /// bar's).
+    fn bar_at(&self, t: f64) -> usize {
+        self.map.barlines.partition_point(|b| b.time <= t + 1.0).saturating_sub(1)
+    }
+
+    /// Defense: works out every note's owner again, and which ones take our presses: our own,
+    /// unless a tower takes them.
+    fn refresh_defense(&mut self) {
+        let owners: Vec<u8> = self.map.notes.iter().map(|n| self.turn_of_bar(self.bar_at(n.time)) as u8).collect();
+        let Some(d) = &mut self.defense else { return };
+        d.owner = owners;
+        for (i, n) in self.map.notes.iter_mut().enumerate() {
+            if matches!(n.kind, Kind::Don | Kind::Kat) {
+                n.unhittable = d.map_unhittable[i] || d.owner[i] as usize != d.me || d.shot[i].is_some();
+            }
+        }
+        self.score_basis = None;
+    }
+
+    /// Defense: whether note `i` is ours to hit (always, playing alone).
+    fn mine(&self, i: usize) -> bool {
+        self.defense.as_ref().is_none_or(|d| d.owner[i] as usize == d.me)
+    }
+
+    /// Defense: a tower takes our note `i`, still to be judged: it counts as a GREAT for us.
+    fn tower_takes(&self, i: usize) -> bool {
+        self.defense.as_ref().is_some_and(|d| d.shot[i].is_some() && d.owner[i] as usize == d.me) && self.state[i].judged.is_none()
+    }
+
+    /// Defense: the room's latest numbers for the team; it fails once its lives are gone.
+    pub fn set_team(&mut self, state: TeamState) {
+        let Some(d) = &mut self.defense else { return };
+        if d.state.is_some_and(|old| state.lives < old.lives) {
+            d.lost_at = self.time;
+        }
+        d.state = Some(state);
+        if state.lives == 0 {
+            self.fail(self.time);
+        }
+    }
+
+    /// Defense: the team's lives left.
+    pub fn lives_left(&self) -> Option<u32> {
+        self.defense.as_ref().map(|d| d.state.map_or(d.lives, |s| s.lives))
+    }
+
+    /// Defense: whose turn it is at map time `t` (into the team), and how many bars until ours
+    /// next starts (0: it's ours now; past the end of the map, the bars left in it).
+    pub fn defense_turn_at(&self, t: f64) -> Option<(usize, usize)> {
+        let d = self.defense.as_ref()?;
+        let bar = self.bar_at(t);
+        let turn = self.turn_of_bar(bar);
+        let reach = 2 * d.bars.max(1) as usize * d.team.len().max(1);
+        let wait = (0..reach).find(|&k| self.turn_of_bar(bar + k) == d.me).unwrap_or(reach);
+        Some((turn, wait))
+    }
+
+    /// Defense: we can take the turn being played at `t` over (it's someone else's, nobody took
+    /// it over yet, and it has a barline left to start from).
+    pub fn can_tag_in(&self, t: f64) -> bool {
+        let Some(d) = &self.defense else { return false };
+        let bars = d.bars.max(1) as usize;
+        let (bar, from) = (self.bar_at(t), self.bar_at(t + TAG_LEAD_MS) + 1);
+        self.turn_of_bar(bar) != d.me && from / bars == bar / bars && from < self.map.barlines.len() && !d.tags.iter().any(|g| g.0 == bar / bars)
+    }
+
+    /// Defense: we can spot at `t`: it's someone else's turn, and no spotting still shows the
+    /// notes coming up.
+    pub fn can_spot(&self, t: f64) -> bool {
+        self.defense_turn_at(t).is_some_and(|(_, wait)| wait != 0) && self.defense.as_ref().is_some_and(|d| !d.spotted.iter().any(|&(_, end)| end > t + 1000.0))
+    }
+
+    /// Defense: the team's gold, as the room last told us.
+    pub fn team_gold(&self) -> Option<u32> {
+        self.defense.as_ref().map(|d| d.state.map_or(0, |s| s.gold))
+    }
+
+    /// Defense: something player `from` did, from the room (in the order it took them).
+    pub fn defense_act(&mut self, from: u32, act: DefenseAct) {
+        let Some(who) = self.defense.as_ref().and_then(|d| d.team.iter().position(|p| p.0 == from)) else { return };
+        let bars = self.defense.as_ref().map_or(1, |d| d.bars.max(1) as usize);
+        let (at, what) = match act {
+            DefenseAct::Buy { item, at } => {
+                match item {
+                    DefenseItem::Slow => {
+                        if let Some(d) = &mut self.defense {
+                            d.slows.push(at);
+                        }
+                    }
+                    DefenseItem::Tower => {
+                        let notes = &self.map.notes;
+                        let Some(d) = &mut self.defense else { return };
+                        if let Some(&corner) = TOWER_CORNERS.get(d.towers.len()) {
+                            let k = d.towers.len() as u8;
+                            let mut taken = Vec::new();
+                            for (i, n) in notes.iter().enumerate() {
+                                if taken.len() == TOWER_SHOTS as usize {
+                                    break;
+                                }
+                                if matches!(n.kind, Kind::Don | Kind::Kat) && !d.map_unhittable[i] && d.shot[i].is_none() && n.time >= at + TOWER_LEAD_MS {
+                                    d.shot[i] = Some(k);
+                                    taken.push(i);
+                                }
+                            }
+                            // At the middle of the turn: in the gap it goes round.
+                            let side = -MAZE[corner].1 * MAZE_R;
+                            d.towers.push(Tower { s: maze_corner_s(corner), side, who, notes: taken });
+                        }
+                        self.refresh_defense();
+                    }
+                    DefenseItem::Shield | DefenseItem::Heal => {}
+                }
+                (at, item.name().to_string())
+            }
+            DefenseAct::TagIn { at } => {
+                let (bar, from_bar) = (self.bar_at(at), self.bar_at(at + TAG_LEAD_MS) + 1);
+                let Some(d) = &mut self.defense else { return };
+                let turn = bar / bars;
+                if from_bar / bars != turn || d.tags.iter().any(|g| g.0 == turn) {
+                    return;
+                }
+                d.tags.push((turn, from_bar, who));
+                self.refresh_defense();
+                (at, tr!("tagged in", "交代", "перехватил ход").to_string())
+            }
+            DefenseAct::Spot { at } => {
+                if let Some(d) = &mut self.defense {
+                    d.spotted.push((at, at + SPOT_MS));
+                }
+                (at, tr!("spotted", "発見", "заметил").to_string())
+            }
+        };
+        if let Some(d) = &mut self.defense {
+            d.feed.push((at, who, what));
+            if d.feed.len() > 4 {
+                d.feed.remove(0);
+            }
+        }
+    }
+
+    /// Defense: the slows' speed factor at map time `t` (1, or down to a half).
+    fn slow_factor(&self, t: f64) -> f64 {
+        let Some(d) = &self.defense else { return 1.0 };
+        let k = d.slows.iter().map(|&at| ((t - at).min(at + SLOW_MS - t) / SLOW_FADE_MS).clamp(0.0, 1.0)).fold(0.0, f64::max);
+        1.0 - 0.5 * k
     }
 
     /// Song (track) ms at map ms `m`, before the offset.
@@ -1952,6 +2288,12 @@ impl Game {
             if n.time > t {
                 break;
             }
+            // A tower takes it for us: a GREAT, on time.
+            if self.tower_takes(i) {
+                let at = n.time;
+                self.apply(i, Judge::Great, at, None);
+                continue;
+            }
             let st = &mut self.state[i];
             match n.kind {
                 // One before a NaN slider is never judged, not even a miss (owner, 2026-10-28).
@@ -2348,7 +2690,7 @@ impl Game {
             if n.time - slack > t {
                 return None;
             }
-            if n.kind == kind && !self.state[i].finished && t <= n.end_time + slack {
+            if n.kind == kind && !self.state[i].finished && t <= n.end_time + slack && self.mine(i) {
                 return Some(i);
             }
         }
@@ -2763,7 +3105,7 @@ impl Game {
             lane: lane_len as f64,
             mods,
             warp,
-            live: self.miss_factor(t),
+            live: self.miss_factor(t) * self.slow_factor(t),
         };
         // Distance along the lane of something at map time `time` scrolling at `vel`.
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
@@ -3070,6 +3412,62 @@ impl Game {
             }
         }
 
+        // Defense: the towers beside the maze, glitched pixel blocks in their builder's colour:
+        // red and cyan copies slip out from under them, the core flickers, and a shot tears
+        // them apart for a moment. Dim once their notes are gone by.
+        if let Some(d) = &self.defense {
+            let bucket = (vt / 40.0).floor() as u32;
+            for (k, tw) in d.towers.iter().enumerate() {
+                let (x, y, _, size) = place(tw.s, tw.side);
+                let col = team_colour(tw.who);
+                let busy = tw.notes.iter().any(|&i| self.map.notes[i].time > vt);
+                let a = if busy { 1.0 } else { 0.4 };
+                // How hard it's firing: one of its notes just went past it.
+                let fire = tw.notes.iter().map(|&i| note_s(i)).filter(|&s| s <= tw.s && s > tw.s - 45.0).map(|s| 1.0 - (tw.s - s) / 45.0).fold(0.0, f32::max);
+                let h = |j: u32| glitch_hash(k as u32, bucket, j);
+                let jit = if h(1) < 0.2 + 0.7 * fire { (h(2) - 0.5) * (3.0 + 8.0 * fire) * size } else { 0.0 };
+                let (r, slip) = (20.0 * size, (2.0 + 7.0 * fire + if h(3) < 0.1 { 3.0 } else { 0.0 }) * size);
+                let (bx, by, bw) = (x - r + jit, y - r, 2.0 * r);
+                c.rect(bx - slip, by, bw, bw, rgba(SPLIT_RED, 0.5 * a));
+                c.rect(bx + slip, by, bw, bw, rgba(SPLIT_CYAN, 0.5 * a));
+                c.rect(bx, by, bw, bw, rgba(0x0b0b10, 0.95 * a));
+                for (ex, ey, ew, eh) in [(bx, by, bw, 1.5), (bx, by + bw - 1.5, bw, 1.5), (bx, by, 1.5, bw), (bx + bw - 1.5, by, 1.5, bw)] {
+                    c.rect(ex, ey, ew, eh, rgba(col, a));
+                }
+                // A 2x2 core of pixels, some of them out each step (all on while it fires).
+                let px = 8.0 * size;
+                for j in 0..4u32 {
+                    if h(10 + j) > 0.25 - 0.25 * fire {
+                        let (ox, oy) = ((j % 2) as f32, (j / 2) as f32);
+                        c.rect(x - px + ox * px + jit, y - px + oy * px, px - 0.6, px - 0.6, rgba(col, a));
+                    }
+                }
+                // Firing: torn slices sticking out of it.
+                if fire > 0.0 {
+                    for j in 0..3u32 {
+                        let ty = by + h(20 + j) * bw;
+                        let reach = (6.0 + 14.0 * h(24 + j)) * fire * size;
+                        c.rect(bx - reach, ty, bw + 2.0 * reach, 1.5 * size, rgba(if j % 2 == 0 { TEAR_RED } else { TEAR_CYAN }, fire));
+                    }
+                }
+            }
+            // The shield: a broken cyan ring round the drum, a segment out here and there.
+            if let Some(st) = d.state.filter(|st| st.shield > 0) {
+                let (x, y, _, size) = place(0.0, 0.0);
+                let ring = (BIG_R + 9.0) * size;
+                let bright = (0.45 + 0.15 * st.shield as f32).min(1.0);
+                for j in 0..16u32 {
+                    if glitch_hash(j, bucket, 40) < 0.12 {
+                        continue;
+                    }
+                    let ang = j as f32 * std::f32::consts::TAU / 16.0;
+                    let off = if glitch_hash(j, bucket, 41) < 0.1 { 3.0 * size } else { 0.0 };
+                    let (sx, sy) = (x + ang.cos() * (ring + off), y + ang.sin() * (ring + off));
+                    c.rect(sx - 2.5 * size, sy - 2.5 * size, 5.0 * size, 5.0 * size, rgba(SPLIT_CYAN, bright));
+                }
+            }
+        }
+
         // Notes, back to front so earlier notes sit on top. A window's leave it under the drum.
         // Hit ones fly out of the drum over its panel, so they're drawn after it.
         let mut flying: Vec<(f32, bool, u32)> = Vec::new();
@@ -3097,6 +3495,7 @@ impl Game {
                     match st.judged {
                         // Hit: the note flies up out of the drum (unless the interface toggle hides it).
                         Some(Judge::Great | Judge::Ok) if self.hidden.has(Part::HitAnimation) => {}
+                        Some(Judge::Great) if self.defense.as_ref().is_some_and(|d| d.shot[i].is_some()) => {}
                         Some(Judge::Great | Judge::Ok) => {
                             let p = ((t - st.judged_at) / HIT_ANIM_MS).clamp(0.0, 1.0) as f32;
                             if p < 1.0 {
@@ -3105,10 +3504,71 @@ impl Game {
                         }
                         judged => {
                             let s = note_s(i);
+                            // Defense: a teammate's note, faint with a ring in their colour, gone
+                            // once it's past the drum.
+                            let theirs = self.defense.as_ref().filter(|d| d.owner[i] as usize != d.me).map(|d| team_colour(d.owner[i] as usize));
+                            if theirs.is_some() && s < 0.0 {
+                                continue;
+                            }
+                            if let Some(d) = &self.defense {
+                                // Taken by a tower: gone past it, with a shot and a burst just after.
+                                let bucket = (vt / 40.0).floor() as u32;
+                                if let Some(tw) = d.shot[i].and_then(|k| d.towers.get(k as usize))
+                                    && s <= tw.s {
+                                    // Shot: a stepped pixel beam from the tower, and the note
+                                    // breaks into pixels flying apart.
+                                    let k = (tw.s - s) / 45.0;
+                                    if k < 1.0 {
+                                        let (x, y, _, size) = place(s, 0.0);
+                                        let (tx, ty, _, _) = place(tw.s, tw.side);
+                                        let fade = 1.0 - k;
+                                        for j in 0..7u32 {
+                                            let u = j as f32 / 6.0;
+                                            let wob = (glitch_hash(i as u32, bucket, j) - 0.5) * 6.0 * size;
+                                            let pc = [SPLIT_RED, SPLIT_CYAN, team_colour(tw.who)][j as usize % 3];
+                                            c.rect(tx + (x - tx) * u - 1.5 * size, ty + (y - ty) * u - 1.5 * size + wob, 3.0 * size, 3.0 * size, rgba(pc, fade));
+                                        }
+                                        for j in 0..10u32 {
+                                            let ang = glitch_hash(i as u32, j, 50) * std::f32::consts::TAU;
+                                            let dist = (r * 0.4 + (8.0 + 26.0 * glitch_hash(i as u32, j, 51)) * k) * size;
+                                            let pc = [col, SPLIT_RED, SPLIT_CYAN, WHITE][j as usize % 4];
+                                            let px = (2.0 + 3.0 * glitch_hash(i as u32, j, 52)) * fade * size;
+                                            c.rect(x + ang.cos() * dist - px / 2.0, y + ang.sin() * dist - px / 2.0, px, px, rgba(pc, fade));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                // Camo: ours stays hidden until it's near (unless spotted), and
+                                // flickers in there; the others' show as red and cyan ghosts
+                                // slipping about, so we can spot them.
+                                if d.camo[i] && judged.is_none() {
+                                    let spotted = d.spotted.iter().any(|&(a, b)| (a..=b).contains(&n.time));
+                                    let near = CAMO_NEAR * lane_len;
+                                    if theirs.is_none() && !spotted {
+                                        if s > near {
+                                            continue;
+                                        }
+                                        if s > near - 50.0 && glitch_hash(i as u32, bucket, 60) < 0.5 {
+                                            continue;
+                                        }
+                                    }
+                                    if (theirs.is_some() || (!spotted && s > near - 50.0)) && on_lane(s, r) {
+                                        let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
+                                        let slip = (2.0 + 4.0 * glitch_hash(i as u32, bucket, 61)) * size;
+                                        let dy = (glitch_hash(i as u32, bucket, 62) - 0.5) * 3.0 * size;
+                                        c.ring(x - slip, y + dy, (r + 3.0) * size, rgba(SPLIT_RED, 0.75), 1.5);
+                                        c.ring(x + slip, y - dy, (r + 3.0) * size, rgba(SPLIT_CYAN, 0.75), 1.5);
+                                    }
+                                }
+                            }
                             if on_lane(s, r) {
                                 let a = if judged.is_some() { 0.4 } else { note_alpha(s) * radar_lit(s, n.time, n.velocity) };
                                 if a > 0.01 {
-                                    draw_hit(c, s, n, i, self.flows[i], col, a);
+                                    draw_hit(c, s, n, i, self.flows[i], col, if theirs.is_some() { 0.3 * a } else { a });
+                                    if let Some(ring) = theirs {
+                                        let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
+                                        c.ring(x, y, (r + 2.0) * size, rgba(ring, 0.8 * a), 2.0);
+                                    }
                                 }
                                 // Radar: a note the beam just passed flashes and pings.
                                 let ping = radar_age(s, radar_u(n.time, n.velocity), lane_len, sweep).filter(|&age| radar && judged.is_none() && s > RADAR_NEAR && age < 0.35);
@@ -3586,6 +4046,93 @@ impl Game {
         if self.visual_offset == 0.0 { self.time } else { self.speed.map(self.raw_time - self.offset + self.visual_offset) }
     }
 
+    /// Defense: the team's lives (a bar that empties) and shield, whose turn it is and when ours
+    /// is; under the drum the gold, the shop (keys 1-4), tag-in and spotting, and what the team
+    /// did lately.
+    fn draw_defense(&self, c: &mut Canvas, t: f64, w: f32) {
+        let (Some(d), Some(left), Some((turn, wait))) = (&self.defense, self.lives_left(), self.defense_turn_at(t)) else { return };
+        let st = d.state.unwrap_or_default();
+        let bucket = (t / 40.0).floor() as u32;
+        // Slowed: CRT scanlines over the screen, rolling in steps.
+        let slow = (1.0 - self.slow_factor(t)) as f32 * 2.0;
+        if slow > 0.0 {
+            let roll = (bucket % 4) as f32;
+            let mut ly = roll;
+            while ly < VIRTUAL_HEIGHT {
+                c.rect(0.0, ly, w, 1.0, rgba(SPLIT_CYAN, 0.07 * slow));
+                ly += 4.0;
+            }
+        }
+        // The team just did something: tears run across the screen in the logo's colours.
+        if let Some(&(at, who, _)) = d.feed.last().filter(|e| (0.0..GLITCH_MS).contains(&(t - e.0))) {
+            let k = 1.0 - ((t - at) / GLITCH_MS) as f32;
+            for j in 0..5u32 {
+                let ty = glitch_hash(j, bucket, 70) * VIRTUAL_HEIGHT;
+                let th = 1.0 + 5.0 * glitch_hash(j, bucket, 71);
+                let tx = (glitch_hash(j, bucket, 72) - 0.5) * 60.0;
+                let col = [TEAR_RED, TEAR_CYAN, team_colour(who)][j as usize % 3];
+                c.rect(tx, ty, w, th, rgba(col, 0.55 * k));
+            }
+        }
+        // A life lost: the panel shakes and slips red and cyan for a moment.
+        let hurt = (1.0 - ((t - d.lost_at) / GLITCH_MS) as f32).clamp(0.0, 1.0);
+        let shake = if hurt > 0.0 { (glitch_hash(1, bucket, 80) - 0.5) * 10.0 * hurt } else { 0.0 };
+        let (pw, x0, y0) = (220.0, w / 2.0 - 110.0 + shake, 8.0);
+        if hurt > 0.0 {
+            let slip = 3.0 + 4.0 * hurt;
+            c.round_rect([x0 - slip, y0], [pw, 34.0], 8.0, rgba(SPLIT_RED, 0.45 * hurt), rgba(0, 0.0), 0.0);
+            c.round_rect([x0 + slip, y0], [pw, 34.0], 8.0, rgba(SPLIT_CYAN, 0.45 * hurt), rgba(0, 0.0), 0.0);
+        }
+        c.round_rect([x0, y0], [pw, 34.0], 8.0, rgba(0x14141c, 0.85), rgba(team_colour(d.me), 0.9), 1.0);
+        let k = left as f32 / d.lives.max(1) as f32;
+        let fill = if k > 0.5 { 0x86E05A } else if k > 0.2 { 0xFFD34D } else { 0xEB452C };
+        c.round_rect([x0 + 10.0, y0 + 7.0], [pw - 20.0, 6.0], 3.0, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+        if left > 0 {
+            c.round_rect([x0 + 10.0, y0 + 7.0], [(pw - 20.0) * k.min(1.0), 6.0], 3.0, rgba(fill, 1.0), rgba(0, 0.0), 0.0);
+        }
+        let lives = d.lives;
+        let mut text = tr!("LIVES {left}/{lives}", "ライフ {left}/{lives}", "ЖИЗНИ {left}/{lives}";);
+        if st.shield > 0 {
+            let shield = st.shield;
+            text.push_str(&tr!("  +{shield} shield", "  +{shield}シールド", "  +{shield} щит";));
+        }
+        c.text(x0 + 10.0, y0 + 18.0, 7.0, rgba(fill, 1.0), &text);
+        let (turn_text, col) = if wait == 0 {
+            (tr!("YOUR TURN", "あなたの番", "ТВОЙ ХОД").to_string(), team_colour(d.me))
+        } else {
+            let name = d.team.get(turn).map_or("?", |p| p.1.as_str());
+            let name = Canvas::fit(7.0, 80.0, name);
+            (tr!("{name}  (you in {wait})", "{name}  (あと{wait}小節)", "{name}  (ты через {wait})";), team_colour(turn))
+        };
+        c.text_right(x0 + pw - 10.0, y0 + 18.0, 7.0, rgba(col, 1.0), &turn_text);
+
+        // The team panel, left under the drum.
+        let (x, mut y) = (10.0, 266.0);
+        c.round_rect([x - 4.0, y - 4.0], [192.0, 84.0], 6.0, rgba(0x14141c, 0.8), rgba(0, 0.0), 0.0);
+        let (gold, towers) = (st.gold, st.towers);
+        c.text(x, y, 7.0, rgba(0xFFD34D, 1.0), &tr!("GOLD {gold}", "ゴールド {gold}", "ЗОЛОТО {gold}";));
+        let max = crate::net::MAX_TOWERS;
+        c.text_right(x + 184.0, y, 6.5, rgba(0x9a9ab0, 1.0), &tr!("towers {towers}/{max}", "タワー {towers}/{max}", "башни {towers}/{max}";));
+        y += 12.0;
+        for (k, item) in DefenseItem::ALL.into_iter().enumerate() {
+            let (cx, cy) = (x + (k % 2) as f32 * 94.0, y + (k / 2) as f32 * 11.0);
+            let can = st.gold >= item.price();
+            c.text(cx, cy, 6.5, rgba(if can { WHITE } else { 0x55556a }, 1.0), &format!("{} {} {}", k + 1, item.name(), item.price()));
+        }
+        y += 23.0;
+        let off_turn = wait != 0;
+        let tag = if self.can_tag_in(t) { WHITE } else { 0x55556a };
+        c.text(x, y, 6.5, rgba(tag, 1.0), tr!("T tag in", "T 交代", "T перехват"));
+        c.text(x + 94.0, y, 6.5, rgba(if off_turn { WHITE } else { 0x55556a }, 1.0), tr!("F spot camo", "F 迷彩発見", "F найти камо"));
+        y += 12.0;
+        for (at, who, what) in d.feed.iter().rev().filter(|e| t - e.0 < 5000.0).take(2) {
+            let name = d.team.get(*who).map_or("?", |p| p.1.as_str());
+            let fade = (1.0 - ((t - at) / 5000.0) as f32).clamp(0.0, 1.0);
+            c.text(x, y, 6.5, rgba(team_colour(*who), fade), &Canvas::fit(6.5, 184.0, &format!("{name}: {what}")));
+            y += 10.0;
+        }
+    }
+
     /// Score, accuracy, progress, hit error meter, offset advice, skip hint and the pause menu (with
     /// the map's name), at fixed screen positions: resizing the playfield area never moves them.
     pub fn draw_hud(&self, c: &mut Canvas) {
@@ -3596,6 +4143,8 @@ impl Game {
             c.round_rect([w / 2.0 - tw / 2.0 - 12.0, 14.0], [tw + 24.0, 20.0], 10.0, rgba(0x173049, 0.9), rgba(0x4fb4ff, 1.0), 1.0);
             c.text_centered(w / 2.0, 19.5, 9.0, rgba(WHITE, 1.0), text);
         }
+
+        self.draw_defense(c, t, w);
 
         let shown = |p: Part| !self.hidden.has(p);
         // Score / accuracy.
@@ -3629,8 +4178,9 @@ impl Game {
         if shown(Part::Progress) {
             c.rect(0.0, 0.0, w * self.progress() as f32, 3.0, rgba(WHITE, 0.45));
         }
-        // HP: has to be at least half full at the end (the mark), like osu!taiko.
-        if self.show_hp && shown(Part::Health) {
+        // HP: has to be at least half full at the end (the mark), like osu!taiko. Defense goes
+        // by the team's lives instead (its panel).
+        if self.show_hp && shown(Part::Health) && self.defense.is_none() {
             // Under the score, accuracy and mods (the top-left corner is the FPS overlay's).
             let (hx, hy) = (hp_bar_x(w), HP_BAR_Y);
             let hw = w - 18.0 - hx;
@@ -5185,10 +5735,30 @@ mod tests {
                 crate::debug::write_png(&dir.join("scare.png"), w, h, &rgb).unwrap();
             }
         }
+        // Defense: a team of three on the Maze, with a teammate's turn coming in behind ours.
+        let mut g = kiai_game("MZ");
+        g.set_defense(vec![(1, "auneu".into()), (2, "you".into()), (3, "quass".into())], 1, 25, 1);
+        // Two towers up, quass spotting for us, a slow, and auneu taking a turn over.
+        g.defense_act(1, DefenseAct::Buy { item: DefenseItem::Tower, at: 0.0 });
+        g.defense_act(3, DefenseAct::Buy { item: DefenseItem::Tower, at: 2000.0 });
+        g.defense_act(3, DefenseAct::Spot { at: 2600.0 });
+        g.defense_act(2, DefenseAct::Buy { item: DefenseItem::Slow, at: 3000.0 });
+        g.set_team(TeamState { lives: 21, max: 25, gold: 75, shield: 3, towers: 2 });
+        let mut c = Canvas::default();
+        for t in [1500.0, 2500.0, 3500.0, 4200.0] {
+            g.set_time(t - 400.0);
+            g.press_at(1, t - 400.0, None);
+            g.time = t;
+            c.clear(853.3);
+            g.draw_playfield(&mut c, 1.0);
+            g.draw_hud(&mut c);
+            let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
+            crate::debug::write_png(&dir.join(format!("defense-{t}.png")), w, h, &rgb).unwrap();
+        }
     }
     #[test]
     fn rails_leave_the_hit_target_heading_right_and_never_jump() {
-        for shape in [RailShape::Zigzag, RailShape::UTurn, RailShape::Spiral, RailShape::Loop, RailShape::Elbow] {
+        for shape in [RailShape::Zigzag, RailShape::UTurn, RailShape::Spiral, RailShape::Loop, RailShape::Elbow, RailShape::Maze] {
             let len = shape.length(853.3);
             let rail = Rail::build(|s| shape.bend(s), len);
             assert_eq!(rail.at(0.0), (HIT_X, LANE_Y, 0.0));
@@ -5202,6 +5772,146 @@ mod tests {
                 prev = p;
             }
         }
+    }
+
+    #[test]
+    fn the_maze_fits_between_the_hud_and_the_meter_and_never_runs_alongside_itself() {
+        let shape = RailShape::Maze;
+        for w in [853.3, 640.0] {
+            let (len, zoom, drop) = (shape.length(w), shape.zoom(w), shape.drop());
+            let rail = Rail::build(|s| shape.bend(s), len);
+            let at = |s: f32, side: f32| {
+                let (x, y, a) = rail.at(s);
+                let (x, y) = (x - a.sin() * side, y - a.cos() * side);
+                (HIT_X + zoom * (x - HIT_X), LANE_Y + drop + zoom * (y - LANE_Y))
+            };
+            // Up to the corner where it heads off the right of the screen.
+            let body = len - MAZE_EXIT - std::f32::consts::PI / 2.0 * MAZE_R;
+            let mut s = 0.0;
+            while s < body {
+                for side in [-LANE_H / 2.0, 0.0, LANE_H / 2.0] {
+                    let (x, y) = at(s, side);
+                    assert!(x < w - 4.0, "{w}: off the right at {s} ({x}, {y})");
+                    // Under the Defense panel (to 42), over the hit error meter (from 415).
+                    assert!((42.0..415.0).contains(&y), "{w}: at {s} ({x}, {y})");
+                    if w > 800.0 {
+                        // Clear of the score, accuracy and HP in the top right.
+                        let hud = x > hp_bar_x(w) - 4.0 && y < HP_BAR_Y + 8.0;
+                        assert!(!hud, "under the score at {s} ({x}, {y})");
+                    }
+                }
+                s += 2.0;
+            }
+            // Bits of the lane far apart along it are at least a lane and a gap apart on screen.
+            let pts: Vec<(f32, f32, f32)> = (0..(body / 8.0) as usize).map(|k| k as f32 * 8.0).map(|s| (s, rail.at(s).0, rail.at(s).1)).collect();
+            for (k, a) in pts.iter().enumerate() {
+                for b in &pts[k + 1..] {
+                    if b.0 - a.0 > 2.0 * MAZE_CELL {
+                        let d = (a.1 - b.1).hypot(a.2 - b.2);
+                        assert!(d >= LANE_H + 20.0, "{} and {} are {d} apart", a.0, b.0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn defense_takes_turns_by_bars_and_fails_the_team_when_the_lives_run_out() {
+        // A don every 500 ms, a bar every 2 s: with 4-bar turns, notes 0-15 are the first
+        // player's and 16-31 ours.
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        g.set_defense(vec![(3, "a".into()), (7, "b".into())], 1, 5, 4);
+        assert_eq!(g.defense_turn_at(0.0), Some((0, 4)));
+        assert_eq!(g.defense_turn_at(2500.0), Some((0, 3)));
+        assert_eq!(g.defense_turn_at(8000.0), Some((1, 0)));
+        assert_eq!(g.defense_turn_at(16000.0), Some((0, 4)));
+        // Their notes take none of our presses and aren't our misses.
+        g.press_at(1, 0.0, None);
+        g.expire(7900.0);
+        assert_eq!((g.state[0].judged, g.stats.miss), (None, 0));
+        g.press_at(1, 8000.0, None);
+        assert_eq!(g.state[16].judged, Some(Judge::Great));
+        // Two of ours get through: misses, which the room turns into lives.
+        g.expire(9000.0 + g.windows.ok + 1.0);
+        assert_eq!(g.stats.miss, 2);
+        // HP isn't what fails it: the team's lives are, as the room counts them.
+        assert!(!g.failed());
+        g.set_team(TeamState { lives: 1, max: 5, ..TeamState::default() });
+        assert_eq!(g.lives_left(), Some(1));
+        assert!(!g.failed_early());
+        g.set_team(TeamState { lives: 0, max: 5, ..TeamState::default() });
+        assert!(g.failed_early());
+    }
+
+    /// A Defense game of the calibration map (a don every 500 ms, a bar every 2 s), 4-bar turns,
+    /// with us second of `team`.
+    fn defense_game(team: usize) -> Game {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        let team = (0..team as u32).map(|k| (k + 1, format!("p{k}"))).collect();
+        g.set_defense(team, 1, 25, 4);
+        g
+    }
+
+    #[test]
+    fn a_tower_takes_the_next_notes_for_whoever_they_are_and_ours_count_as_greats() {
+        let mut g = defense_game(2);
+        // Bought at 6.6 s: it takes the six notes due from 8.1 s, 8.5 s to 11 s, all ours.
+        g.defense_act(1, DefenseAct::Buy { item: DefenseItem::Tower, at: 6600.0 });
+        let d = g.defense.as_ref().unwrap();
+        let taken: Vec<usize> = (0..64).filter(|&i| d.shot[i].is_some()).collect();
+        assert_eq!(taken, [17, 18, 19, 20, 21, 22]);
+        // They don't take our presses: the press at 8.5 s finds nothing, the tower hits it.
+        g.press_at(1, 8500.0, None);
+        g.expire(11_000.0);
+        assert!((17..=22).all(|i| g.state[i].judged == Some(Judge::Great)));
+        assert_eq!((g.stats.great, g.stats.miss), (6, 1), "note 16 went by unpressed");
+        // A second tower takes the six after those.
+        g.defense_act(2, DefenseAct::Buy { item: DefenseItem::Tower, at: 6600.0 });
+        assert_eq!(g.defense.as_ref().unwrap().shot[23], Some(1));
+        // From someone not in the team: nothing.
+        g.defense_act(99, DefenseAct::Buy { item: DefenseItem::Tower, at: 0.0 });
+        assert_eq!(g.defense.as_ref().unwrap().towers.len(), 2);
+    }
+
+    #[test]
+    fn a_tag_in_takes_the_rest_of_the_turn_from_the_next_barline_once() {
+        // Three players: the turns go p0 (bars 0-3), us (4-7), p2 (8-11).
+        let mut g = defense_game(3);
+        assert_eq!(g.defense_turn_at(500.0), Some((0, 4)));
+        assert!(g.can_tag_in(500.0));
+        assert!(!g.can_tag_in(8500.0), "our own turn");
+        assert!(!g.can_tag_in(7500.0), "no barline left in the turn");
+        // At 0.5 s: from bar 1 (2 s, the first barline over a second on) to the end of the turn.
+        g.defense_act(2, DefenseAct::TagIn { at: 500.0 });
+        // Ours now: the rest of p0's turn and our own after it.
+        assert!(g.map.notes.iter().all(|n| n.unhittable == !(n.time >= 2000.0 && n.time < 16_000.0)));
+        assert_eq!(g.defense_turn_at(500.0), Some((0, 1)), "ours from the next bar");
+        assert_eq!(g.defense_turn_at(2500.0), Some((1, 0)));
+        // p2 can't take it from us now: one tag-in a turn.
+        g.defense_act(3, DefenseAct::TagIn { at: 600.0 });
+        assert_eq!(g.defense.as_ref().unwrap().tags.len(), 1);
+        assert!(!g.can_tag_in(700.0));
+    }
+
+    #[test]
+    fn slows_halve_the_lane_and_camo_notes_are_some_after_the_first_turn() {
+        let mut g = defense_game(2);
+        assert_eq!(g.slow_factor(3000.0), 1.0);
+        g.defense_act(2, DefenseAct::Buy { item: DefenseItem::Slow, at: 2000.0 });
+        assert_eq!(g.slow_factor(1900.0), 1.0);
+        assert_eq!(g.slow_factor(2200.0), 0.75);
+        assert_eq!(g.slow_factor(5000.0), 0.5);
+        assert_eq!(g.slow_factor(2000.0 + SLOW_MS + 1.0), 1.0);
+        let d = g.defense.as_ref().unwrap();
+        let camo: Vec<usize> = (0..64).filter(|&i| d.camo[i]).collect();
+        assert!(camo.iter().all(|&i| i >= 16), "none in the first turn");
+        assert!((3..=20).contains(&camo.len()), "{camo:?}");
+        // Spotting: someone else's turn, and not while a spot still shows what's coming.
+        assert!(g.can_spot(500.0) && !g.can_spot(8500.0));
+        g.defense_act(1, DefenseAct::Spot { at: 500.0 });
+        assert!(!g.can_spot(600.0) && g.can_spot(4000.0));
     }
 
     #[test]
