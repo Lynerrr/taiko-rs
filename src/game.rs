@@ -751,6 +751,7 @@ enum RailShape {
     Spiral,
     Loop,
     Elbow,
+    Meadow,
 }
 
 /// Loop: how far from the hit target it starts, its radius, and the angle the lane into it comes
@@ -761,17 +762,48 @@ const LOOP_R: f32 = 110.0;
 const LOOP_EXIT: f32 = 0.6;
 const LOOP_TURN: f32 = std::f32::consts::TAU - LOOP_EXIT;
 
+/// Meadow: square-cornered runs that cross back over themselves, as a straight run then a
+/// quarter turn (1 left, -1 right, 0 none) each. Traced from a tower-defence track, with the first
+/// run long enough that the loops below the lane clear the drum. Both loops' holes are the same
+/// size (runs 2 and 4, 1 and 5 alike), and the lanes stacked under the drum's have the same gaps
+/// between them (but for the corners' 2.6-unit rounding: runs are whole steps).
+const MEADOW: [(f32, f32); 12] = [
+    (516.0, 1.0),
+    (68.0, 1.0),
+    (96.0, 1.0),
+    (424.0, -1.0),
+    (96.0, -1.0),
+    (68.0, -1.0),
+    (528.0, 1.0),
+    (76.0, -1.0),
+    (20.0, -1.0),
+    (220.0, -1.0),
+    (288.0, 1.0),
+    (212.0, 0.0),
+];
+/// Meadow: how long each corner is. A whole number of `RAIL_STEP`s, like every run, so each turns
+/// exactly a quarter (the rail samples its curvature a step at a time) and the runs stay square.
+/// Its radius, about 71, is over half the lane, or the inside of a corner would fold over.
+const MEADOW_TURN: f32 = 28.0 * RAIL_STEP;
+/// Meadow: how far right it reaches (lane edge included), how much it shrinks besides to fit the
+/// screen's height (clear of the hit error meter but for the lane out), and how far down the
+/// playfield moves.
+const MEADOW_RIGHT: f32 = 1163.0;
+const MEADOW_TALL: f32 = 0.53;
+const MEADOW_DROP: f32 = 28.0;
+
 /// Most ticks one roll keeps (`NoteState::ticks`).
 const MAX_ROLL_TICKS: usize = 360_000;
 
 /// Shapeshift's shapes, by the index `shapeshift::SHAPES` names them with.
-const SHAPESHIFT: [RailShape; 6] = [
+const SHAPESHIFT: [RailShape; 7] = [
     RailShape::Zigzag,
     RailShape::UTurn,
     RailShape::Spiral,
     RailShape::Loop,
     RailShape::Elbow,
     RailShape::Straight,
+    RailShape::Meadow,
 ];
 
 /// Shapeshift shape `k`'s lane on a 16:9 screen, as points along its middle (for the setup's
@@ -843,6 +875,17 @@ impl RailShape {
             // the drum at that angle, not along it (notes a second apart side by side).
             RailShape::Loop => turn(LOOP_AT, LOOP_TURN * LOOP_R, LOOP_TURN),
             RailShape::Elbow => turn(220.0, PI * 40.0, PI / 2.0),
+            RailShape::Meadow => {
+                let mut at = 0.0;
+                for (run, dir) in MEADOW {
+                    at += run;
+                    if (at..at + MEADOW_TURN).contains(&s) {
+                        return dir * PI / 2.0 / MEADOW_TURN;
+                    }
+                    at += MEADOW_TURN;
+                }
+                0.0
+            }
         }
     }
 
@@ -858,6 +901,14 @@ impl RailShape {
             // On out of the bottom right of the screen.
             RailShape::Loop => LOOP_AT + LOOP_TURN * LOOP_R + 500.0,
             RailShape::Elbow => 220.0 + PI * 40.0 + 300.0,
+            // Out of the bottom of the screen.
+            RailShape::Meadow => {
+                MEADOW
+                    .iter()
+                    .map(|&(run, _)| run + MEADOW_TURN)
+                    .sum::<f32>()
+                    - MEADOW_TURN
+            }
         }
     }
 
@@ -870,6 +921,7 @@ impl RailShape {
             RailShape::Spiral => 105.0,
             RailShape::Loop => 135.0,
             RailShape::Elbow => 200.0,
+            RailShape::Meadow => MEADOW_DROP,
         }
     }
 
@@ -883,8 +935,13 @@ impl RailShape {
             RailShape::Spiral => 660.0,
             RailShape::Loop => HIT_X + LOOP_AT + LOOP_R + LANE_H / 2.0,
             RailShape::Elbow => 520.0,
+            RailShape::Meadow => MEADOW_RIGHT,
         };
-        let tall: f32 = if self == RailShape::Spiral { 0.85 } else { 1.0 };
+        let tall: f32 = match self {
+            RailShape::Spiral => 0.85,
+            RailShape::Meadow => MEADOW_TALL,
+            _ => 1.0,
+        };
         tall.min((w - 8.0 - HIT_X) / (right - HIT_X)).max(0.3)
     }
 }
@@ -2819,10 +2876,11 @@ impl Game {
         let bars = &self.map.barlines;
         let (every, morph) = (self.shapeshift.bars(), self.shapeshift.morph_bars());
         let shape = |section: usize| {
-            SHAPESHIFT[self
-                .shape_order
+            self.shape_order
                 .get(section)
-                .map_or(SHAPESHIFT.len() - 1, |&k| k as usize % SHAPESHIFT.len())]
+                .map_or(RailShape::Straight, |&k| {
+                    SHAPESHIFT[k as usize % SHAPESHIFT.len()]
+                })
         };
         let (from, to, u) = match bar_at(bars, t, 2000.0) {
             None => (RailShape::Straight, RailShape::Straight, 1.0),
@@ -7187,6 +7245,7 @@ mod tests {
             RailShape::Spiral,
             RailShape::Loop,
             RailShape::Elbow,
+            RailShape::Meadow,
         ] {
             let len = shape.length(853.3);
             let rail = Rail::build(|s| shape.bend(s), len);
@@ -7240,6 +7299,53 @@ mod tests {
             // The lane into the loop comes up across the straight, not along it.
             let after = rail.at(LOOP_AT + LOOP_TURN * LOOP_R + 10.0).2;
             assert!((after - LOOP_TURN).abs() < 0.05, "{w}: heading {after}");
+        }
+    }
+
+    #[test]
+    fn the_meadow_turns_square_corners_and_fits_on_screen() {
+        use std::f32::consts::FRAC_PI_2;
+        let shape = RailShape::Meadow;
+        let (len, zoom, drop) = (shape.length(853.3), shape.zoom(853.3), shape.drop());
+        let rail = Rail::build(|s| shape.bend(s), len);
+        // Every run is square to the screen: the heading a whole number of quarter turns.
+        let mut at = 0.0;
+        for (run, _) in MEADOW {
+            let a = rail.at(at + run / 2.0).2 / FRAC_PI_2;
+            assert!(
+                (a - a.round()).abs() < 1e-3,
+                "run at {at}: heading {a} quarters"
+            );
+            at += run + MEADOW_TURN;
+        }
+        // Out of the bottom of the screen.
+        assert!((rail.at(len).2 + FRAC_PI_2).abs() < 1e-3);
+        // Both loops' holes are alike, and so are the gaps between the three stacked lanes.
+        let run = |i: usize| MEADOW[i].0;
+        assert_eq!((run(2), run(1)), (run(4), run(5)));
+        let corner = 2.0 * MEADOW_TURN / FRAC_PI_2;
+        let (middle, bottom) = (run(3) - run(1) - run(5) - corner, run(9) - run(7));
+        assert!(
+            (middle - bottom).abs() < 2.0,
+            "gaps {middle} and {bottom} apart"
+        );
+        // All but the lane out is on screen and clear of the hit error meter (ticks up to 419).
+        let out = len - MEADOW[MEADOW.len() - 1].0;
+        let mut s = 0.0;
+        while s < out {
+            let (x, y, a) = rail.at(s);
+            for side in [-62.0, 62.0] {
+                let (x, y) = (x - a.sin() * side, y - a.cos() * side);
+                let (x, y) = (
+                    HIT_X + zoom * (x - HIT_X),
+                    LANE_Y + drop + zoom * (y - LANE_Y),
+                );
+                assert!(
+                    x > 0.0 && x < 853.3 && y > 4.0 && y < 419.0,
+                    "at {s}: ({x}, {y})"
+                );
+            }
+            s += 2.0;
         }
     }
 

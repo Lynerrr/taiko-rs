@@ -15,10 +15,13 @@ pub fn shape_name(i: usize) -> &'static str {
         2 => tr!("Spiral", "らせん", "Спираль"),
         3 => tr!("Loop", "ループ", "Петля"),
         4 => tr!("Elbow", "L字", "Колено"),
+        6 => tr!("Meadow", "草原", "Луг"),
         _ => tr!("Straight", "まっすぐ", "Прямая"),
     }
 }
-const KEYS: [&str; 6] = ["zigzag", "uturn", "spiral", "loop", "elbow", "straight"];
+const KEYS: [&str; 7] = [
+    "zigzag", "uturn", "spiral", "loop", "elbow", "straight", "meadow",
+];
 /// Bars each shape lasts.
 pub const EVERY: [usize; 4] = [4, 8, 16, 32];
 /// Bars the morph into the next shape takes (at most half the shape's bars).
@@ -41,7 +44,7 @@ pub struct Config {
     /// Each map its own order of the shapes, else the order of `shapes`.
     pub shuffle: bool,
     /// The shapes (index into `SHAPES`) in the order they come, each on or off.
-    pub shapes: [(u8, bool); 6],
+    pub shapes: [(u8, bool); 7],
 }
 
 impl Default for Config {
@@ -57,6 +60,7 @@ impl Default for Config {
                 (3, true),
                 (4, true),
                 (5, true),
+                (6, true),
             ],
         }
     }
@@ -162,10 +166,11 @@ impl Config {
                             shapes.push((k as u8, on));
                         }
                     }
-                    // Any left out go at the end, on.
+                    // Any left out go at the end, off: a setup saved (or a lobby host's sent) before
+                    // a shape was added plays as it did.
                     for k in 0..KEYS.len() as u8 {
                         if !shapes.iter().any(|s| s.0 == k) {
-                            shapes.push((k, true));
+                            shapes.push((k, false));
                         }
                     }
                     c.shapes.copy_from_slice(&shapes);
@@ -196,6 +201,7 @@ static CURRENT: RwLock<Config> = RwLock::new(Config {
         (3, true),
         (4, true),
         (5, true),
+        (6, true),
     ],
 });
 
@@ -551,10 +557,16 @@ mod tests {
         c.shapes[1].1 = false;
         assert_eq!(Config::parse(&c.format()), c);
         assert_eq!(Config::parse(""), Config::default());
-        // Unknown words and shapes are skipped; missing shapes come back at the end.
+        // Unknown words and shapes are skipped; missing shapes come back at the end, off.
         let p = Config::parse("every=7 shapes=loop,-blob,-zigzag");
         assert_eq!(p.every, Config::default().every);
-        assert_eq!(p.shapes[..3], [(3, true), (0, false), (1, true)]);
+        assert_eq!(p.shapes[..3], [(3, true), (0, false), (1, false)]);
+        let old = Config::parse("shapes=zigzag,uturn,spiral,loop,elbow,straight");
+        assert_eq!(
+            old.shapes[6],
+            (6, false),
+            "a setup from before Meadow plays without it"
+        );
     }
 
     #[test]
@@ -565,9 +577,9 @@ mod tests {
         assert_ne!(a, c.sequence(40, 2));
         assert!(a.windows(2).all(|p| p[0] != p[1]), "{a:?}");
         // Every shape comes once per round.
-        let mut round: Vec<u8> = a[..6].to_vec();
+        let mut round: Vec<u8> = a[..7].to_vec();
         round.sort();
-        assert_eq!(round, [0, 1, 2, 3, 4, 5]);
+        assert_eq!(round, [0, 1, 2, 3, 4, 5, 6]);
         // In order: the player's order, without the shapes left out.
         let mut fixed = Config {
             shuffle: false,
@@ -575,7 +587,7 @@ mod tests {
         };
         fixed.shapes.swap(0, 5);
         fixed.shapes[2].1 = false;
-        assert_eq!(fixed.sequence(7, 9), [5, 1, 3, 4, 0, 5, 1]);
+        assert_eq!(fixed.sequence(7, 9), [5, 1, 3, 4, 0, 6, 5]);
         // Only one shape on: it stays.
         let mut one = c;
         for s in one.shapes.iter_mut().skip(1) {
