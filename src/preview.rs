@@ -510,7 +510,9 @@ impl Preview {
     /// that pulse with the music.
     pub fn beat(&self) -> Option<(f64, f64)> {
         let (_, map, _, _) = self.map.as_ref().filter(|_| self.audio_active)?;
-        beat_at(&map.control_points, self.last_time)
+        // Only a beat that is one: NaN timing points (osu!team's FM Synthesis Experiment), or
+        // no preview clock yet, made every selector and the menu's notes draw as black boxes.
+        beat_at(&map.control_points, self.last_time).filter(|&(into, len)| into.is_finite() && len.is_finite() && len > 0.0)
     }
 
     /// Where the music is in map time, while `entry`'s song plays.

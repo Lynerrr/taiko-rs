@@ -30,7 +30,8 @@ pub fn set_beat(phase: Option<f32>, kiai: bool) {
 
 /// The beat's light at `phase` (0 on the beat to 1), none without one.
 fn pulse_at(phase: Option<f32>) -> f32 {
-    phase.map_or(0.0, |p| (1.0 - p.clamp(0.0, 1.0)).powi(3))
+    // NaN would pass through clamp into every colour lit by the beat (drawn black).
+    phase.filter(|p| p.is_finite()).map_or(0.0, |p| (1.0 - p.clamp(0.0, 1.0)).powi(3))
 }
 
 pub fn pulse() -> f32 {
@@ -231,6 +232,13 @@ pub fn title(c: &mut Canvas, x: f32, y: f32, size: f32, col: u32, text: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_beat_that_isnt_a_number_lights_nothing() {
+        assert_eq!(pulse_at(Some(f32::NAN)), 0.0);
+        assert_eq!(pulse_at(Some(f32::INFINITY)), 0.0);
+        assert_eq!(pulse_at(Some(0.0)), 1.0);
+    }
 
     #[test]
     fn the_selector_slides_to_its_target_and_jumps_from_far() {
