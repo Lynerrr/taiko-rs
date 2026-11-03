@@ -87,6 +87,41 @@ pub struct MapInfo {
     /// map from before seeds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
+    /// Defense: the room plays the map together. The players take turns every `bars` bars, and
+    /// every note one of them lets through costs the team a life. None: an ordinary match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defense: Option<Defense>,
+}
+
+/// Defense's rules, picked by the host: the team's lives and how many bars each turn lasts.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Defense {
+    pub lives: u32,
+    pub bars: u32,
+}
+
+impl Defense {
+    /// The lives the host steps through (C in the lobby), and the turn lengths (V).
+    pub const LIVES: [u32; 4] = [10, 25, 50, 100];
+    pub const BARS: [u32; 3] = [4, 8, 16];
+    pub const DEFAULT: Defense = Defense { lives: 25, bars: 8 };
+
+    /// The rules after `lives` steps on: off after the last.
+    pub fn next_lives(rules: Option<Defense>) -> Option<Defense> {
+        match rules {
+            None => Some(Defense { lives: Defense::LIVES[0], ..Defense::DEFAULT }),
+            Some(d) => {
+                let i = Defense::LIVES.iter().position(|&l| l == d.lives)?;
+                Defense::LIVES.get(i + 1).map(|&lives| Defense { lives, ..d })
+            }
+        }
+    }
+
+    /// The next turn length, round to the first.
+    pub fn next_bars(self) -> Defense {
+        let i = Defense::BARS.iter().position(|&b| b == self.bars).map_or(0, |i| (i + 1) % Defense::BARS.len());
+        Defense { bars: Defense::BARS[i], ..self }
+    }
 }
 
 fn one() -> f64 {
@@ -104,7 +139,14 @@ impl MapInfo {
             })
             .unwrap_or_default();
         let mods = if self.mods.is_empty() { String::new() } else { format!("  +{}", self.mods.concat()) };
-        format!("{} - {} [{}]{rate}{mods}{from}", self.artist, self.title, self.version)
+        let defense = self
+            .defense
+            .map(|d| {
+                let (lives, bars) = (d.lives, d.bars);
+                tr!("  DEFENSE {lives} lives, {bars} bars a turn", "  ディフェンス ライフ{lives} {bars}小節交代", "  ОБОРОНА {lives} жизней, ход {bars} тактов";)
+            })
+            .unwrap_or_default();
+        format!("{} - {} [{}]{rate}{mods}{from}{defense}", self.artist, self.title, self.version)
     }
 }
 
@@ -1419,6 +1461,27 @@ mod tests {
     }
 
     #[test]
+    fn defense_rules_step_round_and_old_lobby_maps_still_parse() {
+        // C: 10, 25, 50, 100 lives, then off; V: 4, 8, 16 bars round again.
+        let mut rules = None;
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            rules = Defense::next_lives(rules);
+            seen.push(rules.map(|d| d.lives));
+        }
+        assert_eq!(seen, [Some(10), Some(25), Some(50), Some(100), None]);
+        let bars: Vec<u32> = std::iter::successors(Some(Defense::DEFAULT), |d| Some(d.next_bars())).skip(1).take(3).map(|d| d.bars).collect();
+        assert_eq!(bars, [16, 4, 8]);
+        // A room on an older build leaves it out; it's an ordinary match then.
+        let old = r#"{"hash":1,"artist":"a","title":"t","version":"v","rate":1.0}"#;
+        assert_eq!(serde_json::from_str::<MapInfo>(old).unwrap().defense, None);
+        let mut m: MapInfo = serde_json::from_str(old).unwrap();
+        m.defense = Some(Defense { lives: 50, bars: 4 });
+        let back: MapInfo = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.defense, m.defense);
+    }
+
+    #[test]
     fn full_match_over_localhost() {
         let server = host(0, false).unwrap();
         let port = server.port;
@@ -1428,7 +1491,7 @@ mod tests {
         wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
         let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
         wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
-        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None, seed: None }));
+        b.send(ClientMsg::SelectMap(MapInfo { hash: 7, artist: String::new(), title: String::new(), version: String::new(), rate: 1.0, from: None, set_id: None, mods: Vec::new(), multiverse: None, shapeshift: None, seed: None, defense: None }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
         a.send(ClientMsg::HasMap(false));
@@ -1437,7 +1500,7 @@ mod tests {
         assert!(players.iter().any(|p| p.name == "alice" && p.host));
         assert!(players.iter().any(|p| p.name == "bob" && !p.host));
 
-        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9), mods: vec!["HD".into()], multiverse: None, shapeshift: Some("every=4".into()), seed: None };
+        let map = MapInfo { hash: 42, artist: "a".into(), title: "t".into(), version: "v".into(), rate: 1.5, from: Some(30_000.0), set_id: Some(9), mods: vec!["HD".into()], multiverse: None, shapeshift: Some("every=4".into()), seed: None, defense: None };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
         for c in [&a, &b] {

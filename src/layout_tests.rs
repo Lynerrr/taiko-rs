@@ -127,6 +127,7 @@ fn session(mapguessr: bool) -> multiplayer::Session {
         multiverse: None,
         shapeshift: None,
         seed: None,
+        defense: None,
     });
     let live = net::Live { score: 1_234_567, combo: 1234, accuracy: 0.9876, miss: 12, progress: 0.5 };
     let result = net::Final { score: 1_234_567, accuracy: 0.9876, max_combo: 1290, great: 1234, ok: 56, miss: 7, ur: 123.4, quit: false };

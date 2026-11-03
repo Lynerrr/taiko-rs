@@ -347,6 +347,8 @@ pub struct Game {
     pub rate: f64,
     /// Map time ↔ song time: `rate` throughout, or ramping from it (Wind Up / Down).
     speed: Speed,
+    /// Defense: our turns at the notes and the team's lives (None: playing alone).
+    pub defense: Option<DefenseRun>,
     pub mods: Mods,
     score_mult: f64,
     /// HP (0-1), like osu!lazer's taiko: starts empty, hits fill it, misses drain it, and the
@@ -678,6 +680,36 @@ impl Rail {
     }
 }
 
+/// Defense (a co-op lobby match): the team takes turns at the map's notes, `bars` bars each,
+/// and every note one of them lets through costs the team one of its `lives`.
+pub struct DefenseRun {
+    /// The team in turn order: (player id, name).
+    pub team: Vec<(u32, String)>,
+    /// Which of them we are.
+    pub me: usize,
+    pub lives: u32,
+    bars: u32,
+    /// Whose turn each note is (into `team`).
+    owner: Vec<u8>,
+    /// Notes the rest of the team let through, as the room last told us.
+    others_leaked: u32,
+}
+
+/// Defense: the team's colours, in turn order.
+pub const TEAM_COLOURS: [u32; 8] = [0x4fb4ff, 0xFFD34D, 0xc77dff, 0x86E05A, 0xff5fa2, 0xFF8A3D, 0x5ee6c8, 0xEB452C];
+
+pub fn team_colour(k: usize) -> u32 {
+    TEAM_COLOURS[k % TEAM_COLOURS.len()]
+}
+
+/// Defense: the bar map time `t` is in (0 before the first barline), and which turn that is
+/// for a team of `team` taking `bars` bars each.
+fn defense_turn(barlines: &[beatmap::Barline], t: f64, bars: u32, team: usize) -> (usize, usize) {
+    // A note on a barline is the new bar's.
+    let bar = barlines.partition_point(|b| b.time <= t + 1.0).saturating_sub(1);
+    (bar, (bar / bars.max(1) as usize) % team.max(1))
+}
+
 /// The lane shapes of the rails mods.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum RailShape {
@@ -687,6 +719,37 @@ enum RailShape {
     Spiral,
     Loop,
     Elbow,
+    Maze,
+}
+
+/// Maze: the lane runs along a grid of `MAZE_CELL` squares, turning a quarter at each step of
+/// `MAZE` (cells straight on, then +1 left / -1 right) round a corner of radius `MAZE_R`, and
+/// leaves `MAZE_EXIT` off the right of the screen. From the drum: right, up, along the top, down
+/// and back under the drum, along the bottom, then up and down through the columns on the right
+/// (below the top row there: the score, accuracy and HP are over it) and out at the bottom.
+const MAZE_CELL: f32 = 160.0;
+const MAZE_R: f32 = 80.0;
+const MAZE: [(f32, f32); 14] = [
+    (2.0, 1.0),
+    (2.0, -1.0),
+    (2.0, -1.0),
+    (3.0, -1.0),
+    (3.0, 1.0),
+    (1.0, 1.0),
+    (4.0, 1.0),
+    (4.0, -1.0),
+    (1.0, -1.0),
+    (3.0, 1.0),
+    (1.0, 1.0),
+    (2.0, -1.0),
+    (1.0, -1.0),
+    (3.0, 1.0),
+];
+const MAZE_EXIT: f32 = 500.0;
+
+/// Maze: the straight before each corner of `MAZE` (the corners take `MAZE_R` off each end).
+fn maze_straight(k: usize) -> f32 {
+    MAZE[k].0 * MAZE_CELL - if k == 0 { MAZE_R } else { 2.0 * MAZE_R }
 }
 
 /// Loop: how far from the hit target it starts, its radius, and the angle the lane into it comes
@@ -714,7 +777,7 @@ pub fn rail_outline(k: usize) -> Vec<(f32, f32)> {
 
 impl RailShape {
     fn of(mods: Mods) -> Option<RailShape> {
-        [(Mod::Zigzag, RailShape::Zigzag), (Mod::UTurn, RailShape::UTurn), (Mod::Spiral, RailShape::Spiral), (Mod::Loop, RailShape::Loop), (Mod::Elbow, RailShape::Elbow)]
+        [(Mod::Zigzag, RailShape::Zigzag), (Mod::UTurn, RailShape::UTurn), (Mod::Spiral, RailShape::Spiral), (Mod::Loop, RailShape::Loop), (Mod::Elbow, RailShape::Elbow), (Mod::Maze, RailShape::Maze)]
             .into_iter()
             .find(|&(m, _)| mods.has(m))
             .map(|(_, shape)| shape)
@@ -746,6 +809,24 @@ impl RailShape {
             // the drum at that angle, not along it (notes a second apart side by side).
             RailShape::Loop => turn(LOOP_AT, LOOP_TURN * LOOP_R, LOOP_TURN),
             RailShape::Elbow => turn(220.0, PI * 40.0, PI / 2.0),
+            // The average over the `RAIL_STEP` round `s` (what `Rail::build` turns by), so each
+            // corner turns exactly a quarter: a dozen of them a little off and the far end of
+            // the maze would wander tens of units out of place.
+            RailShape::Maze => {
+                let arc = PI / 2.0 * MAZE_R;
+                let (lo, hi) = (s - RAIL_STEP / 2.0, s + RAIL_STEP / 2.0);
+                let mut at = 0.0;
+                let mut turned = 0.0;
+                for (k, &(_, side)) in MAZE.iter().enumerate() {
+                    at += maze_straight(k);
+                    if at >= hi {
+                        break;
+                    }
+                    turned += side * (hi.min(at + arc) - lo.max(at)).max(0.0);
+                    at += arc;
+                }
+                turned / (RAIL_STEP * MAZE_R)
+            }
         }
     }
 
@@ -761,6 +842,7 @@ impl RailShape {
             // On out of the bottom right of the screen.
             RailShape::Loop => LOOP_AT + LOOP_TURN * LOOP_R + 500.0,
             RailShape::Elbow => 220.0 + PI * 40.0 + 300.0,
+            RailShape::Maze => (0..MAZE.len()).map(maze_straight).sum::<f32>() + MAZE.len() as f32 * PI / 2.0 * MAZE_R + MAZE_EXIT,
         }
     }
 
@@ -773,6 +855,8 @@ impl RailShape {
             RailShape::Spiral => 105.0,
             RailShape::Loop => 135.0,
             RailShape::Elbow => 200.0,
+            // The drum half way down: the maze reaches as far above it as below.
+            RailShape::Maze => 65.0,
         }
     }
 
@@ -786,8 +870,15 @@ impl RailShape {
             RailShape::Spiral => 660.0,
             RailShape::Loop => HIT_X + LOOP_AT + LOOP_R + LANE_H / 2.0,
             RailShape::Elbow => 520.0,
+            RailShape::Maze => HIT_X + 8.0 * MAZE_CELL + LANE_H / 2.0,
         };
-        let tall: f32 = if self == RailShape::Spiral { 0.85 } else { 1.0 };
+        // Two and a half cells above the drum and below it, between the HUD at the top and the
+        // hit error meter.
+        let tall: f32 = match self {
+            RailShape::Spiral => 0.85,
+            RailShape::Maze => 0.48,
+            _ => 1.0,
+        };
         tall.min((w - 8.0 - HIT_X) / (right - HIT_X)).max(0.3)
     }
 }
@@ -1499,6 +1590,7 @@ impl Game {
             shape_order,
             universes: None,
             zone: None,
+            defense: None,
         }
     }
 
@@ -1518,6 +1610,56 @@ impl Game {
             self.shapeshift = s;
             self.shape_order = shape_order(&self.map, self.mods, s);
         }
+    }
+
+    /// Plays this map as one of a Defense team (`team` in turn order, we're `me`): the notes of
+    /// the others' turns pass by without taking our presses or counting as our misses, and the
+    /// team's misses together, not HP, decide whether it fails.
+    pub fn set_defense(&mut self, team: Vec<(u32, String)>, me: usize, lives: u32, bars: u32) {
+        let owner: Vec<u8> = self.map.notes.iter().map(|n| defense_turn(&self.map.barlines, n.time, bars, team.len()).1 as u8).collect();
+        for (n, &o) in self.map.notes.iter_mut().zip(&owner) {
+            if o as usize != me && matches!(n.kind, Kind::Don | Kind::Kat) {
+                n.unhittable = true;
+            }
+        }
+        self.score_basis = None;
+        self.hp_exempt = true;
+        self.defense = Some(DefenseRun { team, me, lives, bars, owner, others_leaked: 0 });
+    }
+
+    /// Defense: whether note `i` is ours to hit (always, playing alone).
+    fn mine(&self, i: usize) -> bool {
+        self.defense.as_ref().is_none_or(|d| d.owner[i] as usize == d.me)
+    }
+
+    /// Defense: the notes the rest of the team has let through so far; the team fails when they
+    /// and ours use its lives up.
+    pub fn set_team_leaks(&mut self, others: u32) {
+        let Some(d) = &mut self.defense else { return };
+        d.others_leaked = others;
+        if self.lives_left() == Some(0) {
+            self.fail(self.time);
+        }
+    }
+
+    /// Defense: the team's lives left.
+    pub fn lives_left(&self) -> Option<u32> {
+        self.defense.as_ref().map(|d| d.lives.saturating_sub(d.others_leaked + self.stats.miss))
+    }
+
+    /// Defense: whose turn it is at map time `t` (into the team), and how many bars until ours
+    /// next starts (0: it's ours now).
+    pub fn defense_turn_at(&self, t: f64) -> Option<(usize, usize)> {
+        let d = self.defense.as_ref()?;
+        let n = d.team.len().max(1);
+        let bars = d.bars.max(1) as usize;
+        let (bar, turn) = defense_turn(&self.map.barlines, t, d.bars, n);
+        if turn == d.me {
+            return Some((turn, 0));
+        }
+        // Turns until ours, less the bars of this one already played.
+        let ahead = (d.me + n - turn) % n;
+        Some((turn, ahead * bars - bar % bars))
     }
 
     /// Song (track) ms at map ms `m`, before the offset.
@@ -2308,7 +2450,7 @@ impl Game {
             if n.time - slack > t {
                 return None;
             }
-            if n.kind == kind && !self.state[i].finished && t <= n.end_time + slack {
+            if n.kind == kind && !self.state[i].finished && t <= n.end_time + slack && self.mine(i) {
                 return Some(i);
             }
         }
@@ -3065,10 +3207,20 @@ impl Game {
                         }
                         judged => {
                             let s = note_s(i);
+                            // Defense: a teammate's note, faint with a ring in their colour, gone
+                            // once it's past the drum.
+                            let theirs = self.defense.as_ref().filter(|d| d.owner[i] as usize != d.me).map(|d| team_colour(d.owner[i] as usize));
+                            if theirs.is_some() && s < 0.0 {
+                                continue;
+                            }
                             if on_lane(s, r) {
                                 let a = if judged.is_some() { 0.4 } else { note_alpha(s) * radar_lit(s, n.time, n.velocity) };
                                 if a > 0.01 {
-                                    draw_hit(c, s, n, i, self.flows[i], col, a);
+                                    draw_hit(c, s, n, i, self.flows[i], col, if theirs.is_some() { 0.3 * a } else { a });
+                                    if let Some(ring) = theirs {
+                                        let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
+                                        c.ring(x, y, (r + 2.0) * size, rgba(ring, 0.8 * a), 2.0);
+                                    }
                                 }
                                 // Radar: a note the beam just passed flashes and pings.
                                 let ping = radar_age(s, radar_u(n.time, n.velocity), lane_len, sweep).filter(|&age| radar && judged.is_none() && s > RADAR_NEAR && age < 0.35);
@@ -3546,6 +3698,29 @@ impl Game {
         if self.visual_offset == 0.0 { self.time } else { self.speed.map(self.raw_time - self.offset + self.visual_offset) }
     }
 
+    /// Defense: the team's lives (a bar that empties), whose turn it is, and when ours is.
+    fn draw_defense(&self, c: &mut Canvas, t: f64, w: f32) {
+        let (Some(d), Some(left), Some((turn, wait))) = (&self.defense, self.lives_left(), self.defense_turn_at(t)) else { return };
+        let (pw, x0, y0) = (220.0, w / 2.0 - 110.0, 8.0);
+        c.round_rect([x0, y0], [pw, 34.0], 8.0, rgba(0x14141c, 0.85), rgba(team_colour(d.me), 0.9), 1.0);
+        let k = left as f32 / d.lives.max(1) as f32;
+        let fill = if k > 0.5 { 0x86E05A } else if k > 0.2 { 0xFFD34D } else { 0xEB452C };
+        c.round_rect([x0 + 10.0, y0 + 7.0], [pw - 20.0, 6.0], 3.0, rgba(0x2a2a38, 1.0), rgba(0, 0.0), 0.0);
+        if left > 0 {
+            c.round_rect([x0 + 10.0, y0 + 7.0], [(pw - 20.0) * k, 6.0], 3.0, rgba(fill, 1.0), rgba(0, 0.0), 0.0);
+        }
+        let lives = d.lives;
+        c.text(x0 + 10.0, y0 + 18.0, 7.0, rgba(fill, 1.0), &tr!("LIVES {left}/{lives}", "ライフ {left}/{lives}", "ЖИЗНИ {left}/{lives}";));
+        let (text, col) = if wait == 0 {
+            (tr!("YOUR TURN", "あなたの番", "ТВОЙ ХОД").to_string(), team_colour(d.me))
+        } else {
+            let name = d.team.get(turn).map_or("?", |p| p.1.as_str());
+            let name = Canvas::fit(7.0, 90.0, name);
+            (tr!("{name}  (you in {wait})", "{name}  (あと{wait}小節)", "{name}  (ты через {wait})";), team_colour(turn))
+        };
+        c.text_right(x0 + pw - 10.0, y0 + 18.0, 7.0, rgba(col, 1.0), &text);
+    }
+
     /// Score, accuracy, progress, hit error meter, offset advice, skip hint and the pause menu (with
     /// the map's name), at fixed screen positions: resizing the playfield area never moves them.
     pub fn draw_hud(&self, c: &mut Canvas) {
@@ -3556,6 +3731,8 @@ impl Game {
             c.round_rect([w / 2.0 - tw / 2.0 - 12.0, 14.0], [tw + 24.0, 20.0], 10.0, rgba(0x173049, 0.9), rgba(0x4fb4ff, 1.0), 1.0);
             c.text_centered(w / 2.0, 19.5, 9.0, rgba(WHITE, 1.0), text);
         }
+
+        self.draw_defense(c, t, w);
 
         let shown = |p: Part| !self.hidden.has(p);
         // Score / accuracy.
@@ -3589,8 +3766,9 @@ impl Game {
         if shown(Part::Progress) {
             c.rect(0.0, 0.0, w * self.progress() as f32, 3.0, rgba(WHITE, 0.45));
         }
-        // HP: has to be at least half full at the end (the mark), like osu!taiko.
-        if self.show_hp && shown(Part::Health) {
+        // HP: has to be at least half full at the end (the mark), like osu!taiko. Defense goes
+        // by the team's lives instead (its panel).
+        if self.show_hp && shown(Part::Health) && self.defense.is_none() {
             // Under the score, accuracy and mods (the top-left corner is the FPS overlay's).
             let (hx, hy) = (hp_bar_x(w), HP_BAR_Y);
             let hw = w - 18.0 - hx;
@@ -5145,10 +5323,25 @@ mod tests {
                 crate::debug::write_png(&dir.join("scare.png"), w, h, &rgb).unwrap();
             }
         }
+        // Defense: a team of three on the Maze, with a teammate's turn coming in behind ours.
+        let mut g = kiai_game("MZ");
+        g.set_defense(vec![(1, "auneu".into()), (2, "you".into()), (3, "quass".into())], 1, 25, 1);
+        let mut c = Canvas::default();
+        for t in [1500.0, 2500.0, 3500.0] {
+            g.set_time(t - 400.0);
+            g.press_at(1, t - 400.0, None);
+            g.time = t;
+            g.set_team_leaks(4);
+            c.clear(853.3);
+            g.draw_playfield(&mut c, 1.0);
+            g.draw_hud(&mut c);
+            let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
+            crate::debug::write_png(&dir.join(format!("defense-{t}.png")), w, h, &rgb).unwrap();
+        }
     }
     #[test]
     fn rails_leave_the_hit_target_heading_right_and_never_jump() {
-        for shape in [RailShape::Zigzag, RailShape::UTurn, RailShape::Spiral, RailShape::Loop, RailShape::Elbow] {
+        for shape in [RailShape::Zigzag, RailShape::UTurn, RailShape::Spiral, RailShape::Loop, RailShape::Elbow, RailShape::Maze] {
             let len = shape.length(853.3);
             let rail = Rail::build(|s| shape.bend(s), len);
             assert_eq!(rail.at(0.0), (HIT_X, LANE_Y, 0.0));
@@ -5162,6 +5355,77 @@ mod tests {
                 prev = p;
             }
         }
+    }
+
+    #[test]
+    fn the_maze_fits_between_the_hud_and_the_meter_and_never_runs_alongside_itself() {
+        let shape = RailShape::Maze;
+        for w in [853.3, 640.0] {
+            let (len, zoom, drop) = (shape.length(w), shape.zoom(w), shape.drop());
+            let rail = Rail::build(|s| shape.bend(s), len);
+            let at = |s: f32, side: f32| {
+                let (x, y, a) = rail.at(s);
+                let (x, y) = (x - a.sin() * side, y - a.cos() * side);
+                (HIT_X + zoom * (x - HIT_X), LANE_Y + drop + zoom * (y - LANE_Y))
+            };
+            // Up to the corner where it heads off the right of the screen.
+            let body = len - MAZE_EXIT - std::f32::consts::PI / 2.0 * MAZE_R;
+            let mut s = 0.0;
+            while s < body {
+                for side in [-LANE_H / 2.0, 0.0, LANE_H / 2.0] {
+                    let (x, y) = at(s, side);
+                    assert!(x < w - 4.0, "{w}: off the right at {s} ({x}, {y})");
+                    // Under the Defense panel (to 42), over the hit error meter (from 415).
+                    assert!((42.0..415.0).contains(&y), "{w}: at {s} ({x}, {y})");
+                    if w > 800.0 {
+                        // Clear of the score, accuracy and HP in the top right.
+                        let hud = x > hp_bar_x(w) - 4.0 && y < HP_BAR_Y + 8.0;
+                        assert!(!hud, "under the score at {s} ({x}, {y})");
+                    }
+                }
+                s += 2.0;
+            }
+            // Bits of the lane far apart along it are at least a lane and a gap apart on screen.
+            let pts: Vec<(f32, f32, f32)> = (0..(body / 8.0) as usize).map(|k| k as f32 * 8.0).map(|s| (s, rail.at(s).0, rail.at(s).1)).collect();
+            for (k, a) in pts.iter().enumerate() {
+                for b in &pts[k + 1..] {
+                    if b.0 - a.0 > 2.0 * MAZE_CELL {
+                        let d = (a.1 - b.1).hypot(a.2 - b.2);
+                        assert!(d >= LANE_H + 20.0, "{} and {} are {d} apart", a.0, b.0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn defense_takes_turns_by_bars_and_fails_the_team_when_the_lives_run_out() {
+        // A don every 500 ms, a bar every 2 s: with 4-bar turns, notes 0-15 are the first
+        // player's and 16-31 ours.
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let mut g = Game::new(map, Arc::new(Track { samples: Vec::new(), rate: 1.0 }), None);
+        g.set_defense(vec![(3, "a".into()), (7, "b".into())], 1, 5, 4);
+        assert_eq!(g.defense_turn_at(0.0), Some((0, 4)));
+        assert_eq!(g.defense_turn_at(2500.0), Some((0, 3)));
+        assert_eq!(g.defense_turn_at(8000.0), Some((1, 0)));
+        assert_eq!(g.defense_turn_at(16000.0), Some((0, 4)));
+        // Their notes take none of our presses and aren't our misses.
+        g.press_at(1, 0.0, None);
+        g.expire(7900.0);
+        assert_eq!((g.state[0].judged, g.stats.miss), (None, 0));
+        g.press_at(1, 8000.0, None);
+        assert_eq!(g.state[16].judged, Some(Judge::Great));
+        // Two of ours get through.
+        g.expire(9000.0 + g.windows.ok + 1.0);
+        assert_eq!((g.stats.miss, g.lives_left()), (2, Some(3)));
+        // HP isn't what fails it: the team's lives are.
+        assert!(!g.failed());
+        g.set_team_leaks(2);
+        assert_eq!(g.lives_left(), Some(1));
+        assert!(!g.failed_early());
+        g.set_team_leaks(3);
+        assert_eq!(g.lives_left(), Some(0));
+        assert!(g.failed_early());
     }
 
     #[test]

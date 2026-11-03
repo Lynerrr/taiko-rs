@@ -349,6 +349,11 @@
         "name": "Elbow"
       },
       {
+        "acronym": "MZ",
+        "description": "The lane winds round corner after corner across the whole screen to the drum.",
+        "name": "Maze"
+      },
+      {
         "acronym": "SS",
         "description": "Every few bars the lane bends into another rails shape (C: how often, which order).",
         "name": "Shapeshift"

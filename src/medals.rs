@@ -325,6 +325,12 @@ fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f3
     }
 }
 
+/// Whether a mod has a tile in the collection: the server's list (`medal_list::GROUPS`), which
+/// leaves out the ones that play for you and Maze (newer than its medals).
+fn in_collection(m: &crate::mods::Mod) -> bool {
+    !matches!(m, crate::mods::Mod::Autoplay | crate::mods::Mod::Relax | crate::mods::Mod::Maze)
+}
+
 /// The mod collection: a tile per mod, by mod select column, lit once it's in.
 fn tiles(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32) {
     let have = v.collection.len();
@@ -332,7 +338,7 @@ fn tiles(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32) {
     c.text(x, top, 7.0, rgba(0xFFD34D, 1.0), &tr!("COLLECTION  {have} of {size}", "コレクション  {size}個中{have}個", "КОЛЛЕКЦИЯ  {have} из {size}";));
     c.text_right(x + w, top, 6.0, rgba(0x6f6f86, 1.0), &Canvas::fit(6.0, w * 0.6, tr!("3★+, 80%+, up to 3 mods, no NF", "★3以上・精度80%以上・3モードまで・NFなし", "3★+, 80%+, до 3 модов, без NF")));
     for (row, (_, colour, mods)) in crate::mods::GROUPS.iter().enumerate() {
-        for (col, m) in mods.iter().filter(|m| !matches!(m, crate::mods::Mod::Autoplay | crate::mods::Mod::Relax)).enumerate() {
+        for (col, m) in mods.iter().filter(|m| in_collection(m)).enumerate() {
             let (tx, ty) = (x + col as f32 * (TILE_W + 2.0), top + 12.0 + row as f32 * (TILE_H + 1.0));
             let acronym = m.acronym();
             let lit = v.collection.iter().any(|a| a == acronym);
@@ -854,7 +860,7 @@ mod tests {
 
     #[test]
     fn the_collection_shows_every_mod_it_can_hold() {
-        let n: usize = crate::mods::GROUPS.iter().map(|g| g.2.iter().filter(|m| !matches!(m, crate::mods::Mod::Autoplay | crate::mods::Mod::Relax)).count()).sum();
+        let n: usize = crate::mods::GROUPS.iter().map(|g| g.2.iter().filter(|m| in_collection(m)).count()).sum();
         assert_eq!(n, 74);
     }
 }
