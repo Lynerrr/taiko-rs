@@ -222,6 +222,8 @@ pub struct Config {
     pub autoplay: crate::autoplay::Settings,
     /// GREAT hits without their flash and label (only OKs and misses show).
     pub hide_great: bool,
+    /// The lane and the drum's panel drawn pure black.
+    pub black_lane: bool,
     /// The coloured flash on the hit target as notes are hit.
     pub hit_flash: bool,
     /// The interface's accent colour (`render::ACCENTS`, or any other).
@@ -399,6 +401,7 @@ impl Default for Config {
             kiai_effects: true,
             autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
+            black_lane: false,
             hit_flash: true,
             accent: crate::render::DEFAULT_ACCENT,
             discord_presence: true,
@@ -964,6 +967,7 @@ impl Config {
                 }
                 "autoplay_left_handed" => cfg.autoplay.left_handed = v == "true",
                 "hide_great" => cfg.hide_great = v != "false",
+                "black_lane" => cfg.black_lane = v == "true",
                 "hit_flash" => cfg.hit_flash = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
                 "discord_presence" => cfg.discord_presence = v != "false",
@@ -1144,6 +1148,8 @@ impl Config {
              kiai_effects = {}\n\
              # GREAT hits without their flash and label (only OKs and misses show)\n\
              hide_great = {}\n\
+             # the lane and the drum's panel pure black\n\
+             black_lane = {}\n\
              # the coloured flash on the hit target as notes are hit\n\
              hit_flash = {}\n\
              show_offset_hint = {}\n\
@@ -1202,6 +1208,7 @@ impl Config {
             self.sort,
             self.kiai_effects,
             self.hide_great,
+            self.black_lane,
             self.hit_flash,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,

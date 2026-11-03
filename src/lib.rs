@@ -3599,6 +3599,7 @@ impl State {
             Item::WheelResize => on(c.wheel_resizes_playfield),
             Item::BackgroundDimBlack => on(c.bg_dim_black),
             Item::KiaiEffects => on(c.kiai_effects),
+            Item::BlackLane => on(c.black_lane),
             Item::HideGreat => on(c.hide_great),
             Item::HitFlash => on(c.hit_flash),
             Item::DiscordPresence => on(c.discord_presence),
@@ -3926,6 +3927,7 @@ impl State {
             }
             Item::BackgroundDimBlack => self.cfg.bg_dim_black = !self.cfg.bg_dim_black,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
+            Item::BlackLane => self.cfg.black_lane = !self.cfg.black_lane,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::HitFlash => self.cfg.hit_flash = !self.cfg.hit_flash,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
@@ -11899,6 +11901,7 @@ impl State {
         render::set_accent(self.cfg.accent);
         game::set_hide_great(self.cfg.hide_great);
         game::set_hit_flash(self.cfg.hit_flash);
+        game::set_black_lane(self.cfg.black_lane);
         // Screen changes fade in.
         let kind = std::mem::discriminant(&self.scene);
         if self.scene_kind != Some(kind) {

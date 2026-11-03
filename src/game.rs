@@ -7,6 +7,7 @@ use std::time::Instant;
 
 static HIDE_GREAT: AtomicBool = AtomicBool::new(true);
 static HIT_FLASH: AtomicBool = AtomicBool::new(true);
+static BLACK_LANE: AtomicBool = AtomicBool::new(false);
 
 /// GREAT hits without their splash (no flash on the hit target, no "GREAT"), like osu! skins
 /// with an empty taiko-hit300: only OKs and misses stand out (Settings -> Playfield).
@@ -18,6 +19,16 @@ pub fn set_hide_great(on: bool) {
 /// light it up either.
 pub fn set_hit_flash(on: bool) {
     HIT_FLASH.store(on, Ordering::Relaxed);
+}
+
+/// The lane the notes scroll on, and the drum's panel beside it, drawn pure black (Settings ->
+/// View): no kiai or Party tint, no skin's lane picture.
+pub fn set_black_lane(on: bool) {
+    BLACK_LANE.store(on, Ordering::Relaxed);
+}
+
+fn black_lane() -> bool {
+    BLACK_LANE.load(Ordering::Relaxed)
 }
 
 /// Whether `j` gets its flash and label.
@@ -3493,6 +3504,10 @@ impl Game {
             edge_col = rgba(col, 0.9);
             skin_lane_tint = tint(skin_lane_tint, col, 0.15 + 0.25 * pulse);
         }
+        let black = black_lane();
+        if black {
+            lane_col = rgba(0x000000, 1.0);
+        }
         if geo.bent() {
             // In short pieces along the way: edges first, so the lane's inside covers their joins.
             const PIECE: f32 = 8.0;
@@ -3534,7 +3549,7 @@ impl Game {
             let (lane_x, lane_w) = if turns { (-w, 3.0 * w) } else { (0.0, w) };
             let glow = if kiai { 0.75 + 0.25 * pulse } else { 0.0 };
             // Radar's lane is its own dark one.
-            if radar || !skin_lane(c, lane_x, lane_w, skin_lane_tint, glow) {
+            if black || radar || !skin_lane(c, lane_x, lane_w, skin_lane_tint, glow) {
                 draw_lane(c, lane_x, lane_w, lane_col, edge_col);
             }
         }
@@ -5202,6 +5217,7 @@ fn draw_drum(c: &mut Canvas, flash: [f32; 4], don: u32, kat: u32) -> f32 {
     // hit target), as tall as the lane.
     let k = LANE_PX / 128.0;
     let panel = c.sprite_size(Sprite::DrumPanel);
+    let panel = panel.filter(|_| !black_lane());
     let skinned_panel = panel.is_some();
     if let Some([pw, _]) = panel {
         let hw = pw * LANE_PX / 2.0;
@@ -5214,7 +5230,8 @@ fn draw_drum(c: &mut Canvas, flash: [f32; 4], don: u32, kat: u32) -> f32 {
             rgba(WHITE, 1.0),
         );
     } else {
-        c.rect(0.0, lane_top, PANEL_W, LANE_H, rgba(0x191921, 1.0));
+        let fill = if black_lane() { 0x000000 } else { 0x191921 };
+        c.rect(0.0, lane_top, PANEL_W, LANE_H, rgba(fill, 1.0));
     }
     if c.sprite_size(Sprite::DrumInner).is_some() || c.sprite_size(Sprite::DrumOuter).is_some() {
         // Where each half's top-left goes (SD px into the panel): skins from before version 2.1
