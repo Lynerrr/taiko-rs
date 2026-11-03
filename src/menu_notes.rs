@@ -39,9 +39,6 @@ const ROUTES: [Route; 3] = [
 
 /// How far past the end of its route a note carries on, fading (of the route's length).
 const PAST: f32 = 0.05;
-/// Where the menu's text is: the routes fade across it.
-const TEXT_TOP: f32 = 255.0;
-const TEXT_BOTTOM: f32 = 395.0;
 /// How long the notes take to come in with a new song (ms).
 const FADE_IN_MS: f32 = 900.0;
 
@@ -205,11 +202,9 @@ pub fn draw(c: &mut Canvas, view: &View, clock: f32, kiai: f32, kick: f32, shift
             let along = ((note.time - view.time) / ms) as f32;
             let [x, y] = route_point(route, along, secs, width, swell);
             let ends = ((along + PAST) / PAST).min((1.0 - along) * 8.0).clamp(0.0, 1.0);
-            // Over the menu's text they all but go.
-            let clear = if (TEXT_TOP..TEXT_BOTTOM).contains(&y) { ((x - 300.0) / 180.0).clamp(0.2, 1.0) } else { 1.0 };
             let col = if note.kat { universe.kat() } else { universe.don() };
             let r = route.r * if note.big { 1.45 } else { 1.0 } + kick * 1.5;
-            multiverse::note(c, universe.shape, x, y, r, col, route.alpha * bright * ends * clear);
+            multiverse::note(c, universe.shape, x, y, r, col, route.alpha * bright * ends);
         }
     }
 }
