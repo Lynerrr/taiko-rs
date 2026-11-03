@@ -235,6 +235,8 @@ pub struct Config {
     pub main_menu: bool,
     /// The song's notes drift behind the main menu.
     pub menu_notes: bool,
+    /// How much the song's notes on the main menu's lane are dimmed, 0 (as they are) to 1 (gone).
+    pub menu_notes_dim: f32,
     /// The first steps guide has been seen through. A config from before it says nothing, so
     /// players already playing get it once too.
     pub guide_seen: bool,
@@ -358,6 +360,7 @@ impl Default for Config {
             splash: true,
             main_menu: true,
             menu_notes: true,
+            menu_notes_dim: 0.0,
             guide_seen: false,
             check_updates: true,
             resume_delay_ms: 1000.0,
@@ -727,6 +730,7 @@ impl Config {
                 "splash" => cfg.splash = v != "false",
                 "main_menu" => cfg.main_menu = v != "false",
                 "menu_notes" => cfg.menu_notes = v != "false",
+                "menu_notes_dim" => cfg.menu_notes_dim = v.parse::<f32>().unwrap_or(0.0).clamp(0.0, 1.0),
                 "guide_seen" => cfg.guide_seen = v == "true",
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
@@ -880,6 +884,8 @@ impl Config {
              splash = {}\n\
              main_menu = {}\n\
              menu_notes = {}\n\
+             # dims the song's notes on the main menu's lane, 0 (none) to 1 (hidden)\n\
+             menu_notes_dim = {:.2}\n\
              guide_seen = {}\n\
              check_updates = {}\n\
              # countdown before play continues after pausing (ms)\n\
@@ -928,6 +934,7 @@ impl Config {
             self.splash,
             self.main_menu,
             self.menu_notes,
+            self.menu_notes_dim,
             self.guide_seen,
             self.check_updates,
             self.resume_delay_ms,

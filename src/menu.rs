@@ -349,6 +349,8 @@ pub struct Frame<'a> {
     pub kiai: bool,
     /// The song's notes for the background.
     pub ghosts: Option<crate::menu_notes::View<'a>>,
+    /// How much the song's notes on the lane are dimmed (the player's setting, 0 to 1).
+    pub lane_dim: f32,
     pub song: Option<&'a str>,
     pub maps: usize,
     pub paused: bool,
@@ -510,7 +512,7 @@ impl Menu {
         crate::settings::brand(c);
         self.draw_flashes(c);
         self.draw_panel(c);
-        self.play_song(c, f.ghosts.as_ref(), f.beat.map(|b| b.1));
+        self.play_song(c, f.ghosts.map(|g| g.dimmed(f.lane_dim)).as_ref(), f.beat.map(|b| b.1));
         self.draw_lane(c);
         self.draw_drum(c);
         self.draw_burst(c);
@@ -1019,7 +1021,7 @@ mod tests {
     /// A frame of the menu on a 16:9 screen, `ms` after the last.
     fn frame(m: &mut Menu, ms: f32) -> Canvas {
         let mut c = Canvas { width: 853.3, dt_ms: ms, ..Default::default() };
-        let f = Frame { beat: None, kiai: false, ghosts: None, song: None, maps: 0, paused: false };
+        let f = Frame { beat: None, kiai: false, ghosts: None, lane_dim: 0.0, song: None, maps: 0, paused: false };
         m.draw(&mut c, &f);
         c
     }

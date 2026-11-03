@@ -2527,6 +2527,7 @@ impl State {
             Item::MusicVolume => Control::Level(c.music_volume),
             Item::FxVolume => Control::Level(c.fx_volume),
             Item::BackgroundDim => Control::Level(c.bg_dim),
+            Item::MenuNotesDim => Control::Level(c.menu_notes_dim),
             Item::DonColour => Control::Swatch(c.note_colours.don()),
             Item::KatColour => Control::Swatch(c.note_colours.kat()),
             Item::Accent | Item::AccentHue => Control::Swatch(c.accent),
@@ -2544,6 +2545,7 @@ impl State {
             Item::MusicVolume => self.cfg.music_volume = level,
             Item::FxVolume => self.cfg.fx_volume = level,
             Item::BackgroundDim => self.cfg.bg_dim = level,
+            Item::MenuNotesDim => self.cfg.menu_notes_dim = level,
             _ => {}
         }
         self.apply_volume();
@@ -2763,6 +2765,7 @@ impl State {
             Item::PlayfieldArea => c.playfield_area.describe(),
             Item::PlayfieldPreset => self.current_preset().map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| tr!("custom", "カスタム", "свой").into()),
             Item::BackgroundDim => format!("{:.0}%", c.bg_dim * 100.0),
+            Item::MenuNotesDim => format!("{:.0}%", c.menu_notes_dim * 100.0),
             Item::PlayfieldReset => tr!("Enter to reset", "Enterで元に戻す", "Enter — сбросить").into(),
             Item::Rate => format!("{:.2}x", c.rate),
             Item::RateKeepPitch => on(c.rate_keep_pitch),
@@ -2967,6 +2970,7 @@ impl State {
                 return;
             }
             Item::BackgroundDim => self.cfg.bg_dim = (((self.cfg.bg_dim + 0.05 * dir as f32) * 20.0).round() / 20.0).clamp(0.0, 1.0),
+            Item::MenuNotesDim => self.cfg.menu_notes_dim = (((self.cfg.menu_notes_dim + 0.05 * dir as f32) * 20.0).round() / 20.0).clamp(0.0, 1.0),
             Item::Rate => {
                 let step = 0.05 * if self.modifiers_shift { 5.0 } else { 1.0 };
                 self.cfg.rate = (((self.cfg.rate + step * d) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
@@ -3277,6 +3281,7 @@ impl State {
             Item::MusicVolume => format!("{:.0}", c.music_volume * 100.0),
             Item::FxVolume => format!("{:.0}", c.fx_volume * 100.0),
             Item::BackgroundDim => format!("{:.0}", c.bg_dim * 100.0),
+            Item::MenuNotesDim => format!("{:.0}", c.menu_notes_dim * 100.0),
             Item::FpsCap => c.fps_cap.to_string(),
             Item::AccentHue => format!("#{:06x}", c.accent),
             Item::DonColour => format!("#{:06x}", c.note_colours.don()),
@@ -3341,6 +3346,7 @@ impl State {
             Item::MusicVolume => c.music_volume = percent()?,
             Item::FxVolume => c.fx_volume = percent()?,
             Item::BackgroundDim => c.bg_dim = percent()?,
+            Item::MenuNotesDim => c.menu_notes_dim = percent()?,
             Item::FpsCap => {
                 let fps = number()?.round();
                 c.fps_cap = if fps <= 0.0 { 0 } else { fps.clamp(30.0, 10000.0) as u32 };
@@ -8554,7 +8560,7 @@ impl State {
                     let kiai = self.cfg.kiai_effects && !paused && self.preview.kiai();
                     let shows = self.cfg.menu_notes && render::animations();
                     let ghosts = self.preview.map_time(self.menu_notes.entry()).filter(|_| shows).and_then(|t| self.menu_notes.view(t));
-                    let frame = menu::Frame { beat: self.preview.beat(), kiai, ghosts, song: song.as_deref(), maps: self.library.len(), paused };
+                    let frame = menu::Frame { beat: self.preview.beat(), kiai, ghosts, lane_dim: self.cfg.menu_notes_dim, song: song.as_deref(), maps: self.library.len(), paused };
                     m.draw(canvas, &frame);
                 }
             }

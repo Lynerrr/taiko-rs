@@ -147,6 +147,7 @@ impl Notes {
 }
 
 /// What the background draws in a frame.
+#[derive(Clone, Copy)]
 pub struct View<'a> {
     notes: &'a [Ghost],
     time: f64,
@@ -158,6 +159,12 @@ impl<'a> View<'a> {
     #[cfg(test)]
     pub fn of(notes: &'a [Ghost], time: f64) -> View<'a> {
         View { notes, time, fade: 1.0 }
+    }
+
+    /// The same notes `dim` (0 to 1) fainter: the lane's, as the player dims them.
+    pub fn dimmed(mut self, dim: f32) -> Self {
+        self.fade *= 1.0 - dim.clamp(0.0, 1.0);
+        self
     }
 
     /// The song's position (map ms).
