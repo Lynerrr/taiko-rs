@@ -3990,6 +3990,10 @@ mod tests {
 
     #[test]
     fn block_culling_preserves_the_original_draw_for_every_mod() {
+        // The accent and the note colours are process-wide, and other tests (building frames from
+        // their own configs) set them while these draws are compared.
+        crate::render::pin_accent_for_this_thread(Some(crate::render::DEFAULT_ACCENT));
+        multiverse::pin_note_colours_for_this_thread(Some(multiverse::Colours::CLASSIC));
         crate::render::set_animations(false);
         crate::render::set_frame_time(Some(Instant::now()));
         let mut map = beatmap::calibration_map(500.0, 0, 64);

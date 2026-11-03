@@ -2029,7 +2029,24 @@ pub fn set_accent(hex: u32) {
 
 /// The interface's accent: borders of what's selected, headings, sliders.
 pub fn accent() -> u32 {
+    #[cfg(test)]
+    if let Some(pinned) = PINNED_ACCENT.with(std::cell::Cell::get) {
+        return pinned;
+    }
     ACCENT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PINNED_ACCENT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Tests: this thread sees `hex` as the accent whatever `set_accent` does meanwhile. The accent
+/// is process-wide (the window thread reads it too), and tests building frames in parallel set
+/// it from their own configs, so a test comparing draws pins it first.
+#[cfg(test)]
+pub fn pin_accent_for_this_thread(hex: Option<u32>) {
+    PINNED_ACCENT.with(|p| p.set(hex));
 }
 
 /// `default` with the default accent; with another, that accent mixed `t` of the way to `toward`
@@ -2572,6 +2589,22 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pinned_accent_holds_while_another_thread_sets_it() {
+        super::pin_accent_for_this_thread(Some(0x123456));
+        let other = std::thread::spawn(|| {
+            for i in 0..1000 {
+                super::set_accent(i);
+            }
+            super::accent()
+        });
+        let seen = other.join().unwrap();
+        assert_eq!(super::accent(), 0x123456, "the pin holds on this thread");
+        assert_ne!(seen, 0x123456, "other threads see what's set");
+        super::pin_accent_for_this_thread(None);
+        super::set_accent(super::DEFAULT_ACCENT);
+    }
+
     #[test]
     fn a_present_mode_the_renderer_lacks_falls_back_like_the_renderer_does() {
         use super::PresentChoice::*;
