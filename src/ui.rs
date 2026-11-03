@@ -295,7 +295,13 @@ fn status_heading(code: u8) -> (&'static str, u32) {
         _ => ("Status not known yet", 0x8a8aa0),
     }
 }
-const LIST_BOTTOM: f32 = 440.0;
+/// The legacy layout's list runs down to its hint line.
+const LIST_BOTTOM_LEGACY: f32 = 440.0;
+/// Its frame (4 below) ends where the map panel's column does (436), leaving the button
+/// row a band of its own between the panels and the status line.
+const LIST_BOTTOM: f32 = 432.0;
+/// The button row under the panels: 6 below them, 4 above the status line.
+const BUTTONS_Y: f32 = 442.0;
 
 pub enum SelectAction {
     None,
@@ -783,6 +789,10 @@ impl Select {
         if self.legacy { LIST_TOP_LEGACY } else { LIST_TOP }
     }
 
+    fn list_bottom(&self) -> f32 {
+        if self.legacy { LIST_BOTTOM_LEGACY } else { LIST_BOTTOM }
+    }
+
     /// The wheel: moves the list `notches` on, the selection staying where it is.
     pub fn scroll_by(&mut self, notches: i32, library: &[Entry]) {
         let max = self.scroll_max;
@@ -1201,7 +1211,7 @@ impl Select {
     /// is where the list is, all of it, closed headings too. The thumb stays under the pointer.
     pub fn scroll_to(&mut self, y: f32, library: &[Entry]) {
         let top = self.list_top();
-        let (track, thumb) = (LIST_BOTTOM - top, self.thumb);
+        let (track, thumb) = (self.list_bottom() - top, self.thumb);
         let frac = ((y - top - thumb / 2.0) / (track - thumb).max(1.0)).clamp(0.0, 1.0);
         let max = self.scroll_max;
         self.free(library, SCRUB_TAU).goal = frac * max;
@@ -1380,7 +1390,7 @@ impl Select {
             Diff(usize),
         }
         let _ = dt_ms;
-        let (top, bottom) = (self.list_top(), LIST_BOTTOM);
+        let (top, bottom) = (self.list_top(), self.list_bottom());
         let view = bottom - top;
         // Where everything ends up: the selected song open, the others closed.
         let open_start = self.group_of.get(self.cursor).map(|&g| groups[g].start);
@@ -1668,7 +1678,7 @@ impl Select {
             let (download, settings, online) = (tr!("Download", "ダウンロード", "Загрузка"), tr!("Settings", "設定", "Настройки"), tr!("Multiplayer", "マルチ", "Мультиплеер"));
             let accent_mods = !self.mods_label.is_empty();
             c.button_row(
-                444.0,
+                BUTTONS_Y,
                 &[
                     (&mods[0], Hit::ModsButton, accent_mods),
                     (random, Hit::Key(KeyCode::F2), false),
