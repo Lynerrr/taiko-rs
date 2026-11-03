@@ -10357,7 +10357,67 @@ mod gpu_start {
             let _ = std::fs::remove_file(p);
         }
     }
+
+    /// The mark of a crash in an overlay or capture hook while drawing with Vulkan on "auto"
+    /// (`native_crashes`): the next start takes DX12.
+    const HOOK_FILE: &str = "vulkan-hook-crash";
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn hook_crashed() {
+        if let Some(d) = crate::config::data_dir() {
+            let _ = std::fs::write(d.join(HOOK_FILE), "a hook crashed the game drawing with Vulkan; the next start takes DX12\n");
+        }
+    }
+
+    /// Whether the last run ended that way (and forgets it).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn hook_crashed_last_time() -> bool {
+        crate::config::data_dir().is_some_and(|d| std::fs::remove_file(d.join(HOOK_FILE)).is_ok())
+    }
 }
+
+/// Programs that put their own code into the game's drawing (game capture, overlays) and
+/// sometimes crash there, as (module, what it is). OBS's game capture crashed a game drawing
+/// with Vulkan: graphics-hook64.dll, hooked into the present, made a D3D11 device for its shared
+/// texture and dxcore.dll read 0xffffffffffffffff.
+const DRAWING_HOOKS: [(&str, &str); 4] = [
+    ("graphics-hook64.dll", "OBS's game capture"),
+    ("gameoverlayrenderer64.dll", "the Steam overlay"),
+    ("discordhook64.dll", "the Discord overlay"),
+    ("rtsshooks64.dll", "RivaTuner (RTSS)"),
+];
+
+/// The first of `DRAWING_HOOKS` in a crash's `frames:` line.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drawing_hook(frames: &str) -> Option<(&'static str, &'static str)> {
+    let frames = frames.to_ascii_lowercase();
+    frames.split_whitespace().find_map(|f| DRAWING_HOOKS.iter().find(|(dll, _)| f.split('+').next() == Some(dll)).copied())
+}
+
+/// What the crash window says to do about a crash in `who`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drawing_hook_advice(who: &str, dll: &str, to_dx12: bool, vulkan: bool) -> String {
+    let mut out = format!("It crashed inside {who} ({dll}), which hooks into the game's drawing, not in the game's own code.");
+    if to_dx12 {
+        out.push_str(" The next start draws with DX12 instead of Vulkan, which usually gets along with it.");
+    } else if vulkan {
+        out.push_str(" Picking DX12 in Settings > Video > Renderer may avoid it.");
+    }
+    if dll == "graphics-hook64.dll" {
+        out.push_str(" If it happens again, capture the game in OBS with Window Capture instead of Game Capture.");
+    } else {
+        out.push_str(" If it happens again, turning that overlay off avoids it.");
+    }
+    out
+}
+
+/// Drawing with Vulkan because `graphics_api` is "auto": a crash in a hook then moves the next
+/// start to DX12.
+#[cfg_attr(not(windows), allow(dead_code))]
+static VULKAN_ON_AUTO: AtomicBool = AtomicBool::new(false);
+/// Drawing with Vulkan at all (for the crash window's advice).
+#[cfg_attr(not(windows), allow(dead_code))]
+static VULKAN: AtomicBool = AtomicBool::new(false);
 
 /// Rounds of asking the server about statuses it didn't have yet, and the wait between them.
 const STATUS_ROUNDS: usize = 60;
@@ -10973,6 +11033,16 @@ impl ApplicationHandler<UserEvent> for App {
             s.cfg.graphics_api = api.clone();
             s.cfg.save();
         }
+        // The last run crashed in an overlay or capture hook while drawing with Vulkan: the
+        // same, they get along with DX12 (and it would crash again).
+        #[cfg(windows)]
+        if gpu_start::hook_crashed_last_time() && api == "auto" {
+            eprintln!("graphics: the last run crashed in a hook into Vulkan's drawing: DX12 from now on (graphics_api in config.txt)");
+            api = "dx12".into();
+            let mut s = lock(&self.state);
+            s.cfg.graphics_api = api.clone();
+            s.cfg.save();
+        }
         let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(event_loop.owned_display_handle()));
         desc.backends = graphics_backends(&api);
         // WGPU_BACKEND still has the last word.
@@ -11011,6 +11081,8 @@ impl ApplicationHandler<UserEvent> for App {
             s.refresh_status();
             eprintln!("renderer: {}, present: {}, refresh {refresh_hz:.2} Hz", renderer.adapter_name, renderer.present.name());
             let _ = CRASH_CONTEXT.set(format!("renderer: {}, present: {}, setting graphics_api = {}", renderer.adapter_name, renderer.present.name(), s.cfg.graphics_api));
+            VULKAN.store(renderer.backend == wgpu::Backend::Vulkan, Ordering::Relaxed);
+            VULKAN_ON_AUTO.store(renderer.backend == wgpu::Backend::Vulkan && s.cfg.graphics_api == "auto", Ordering::Relaxed);
             // What it could do, not what was asked: OpenGL on Linux has only vsync, and that
             // mustn't become the setting (it stayed vsync after going back to Vulkan).
             s.present = renderer.present;
@@ -11585,7 +11657,16 @@ mod native_crashes {
             text.push_str(&format!("{op} 0x{:x}\n", record.information[1]));
         }
         text.push_str(&super::crash_context());
-        text.push_str(&frames());
+        let frames = frames();
+        text.push_str(&frames);
+        let hook = super::drawing_hook(&frames);
+        if let Some((dll, who)) = hook {
+            text.push_str(&format!("in a hook: {who} ({dll})\n"));
+        }
+        let to_dx12 = hook.is_some() && super::VULKAN_ON_AUTO.load(std::sync::atomic::Ordering::Relaxed);
+        if to_dx12 {
+            super::gpu_start::hook_crashed();
+        }
         // What the game printed last: the screen, the audio device, the map...
         if let Ok(log) = std::fs::read_to_string(dir.join("game.log")) {
             let lines: Vec<&str> = log.lines().collect();
@@ -11600,7 +11681,10 @@ mod native_crashes {
         }
         let _ = std::fs::write(dir.join(super::CRASH_REPORT), &text);
         let words = super::crash_box_words("The next start offers to copy the crash log: paste it in #bugs on the taiko.rs Discord, so it can be fixed.");
-        super::crash_box(&format!("taiko.rs crashed.\n\n{words}\n\n{} 0x{:08X}", what(record.code), record.code));
+        let advice = hook
+            .map(|(dll, who)| format!("{}\n\n", super::drawing_hook_advice(who, dll, to_dx12, super::VULKAN.load(std::sync::atomic::Ordering::Relaxed))))
+            .unwrap_or_default();
+        super::crash_box(&format!("taiko.rs crashed.\n\n{advice}{words}\n\n{} 0x{:08X}", what(record.code), record.code));
         // Windows' own handling goes on (its error report, and the end of the process).
         CONTINUE_SEARCH
     }
@@ -11788,5 +11872,28 @@ fn info(path: &std::path::Path) {
     match audio::decode(&audio_path, 48000) {
         Ok(track) => println!("  audio {:.1} s decoded in {:.0} ms", track.frames() as f64 / 48000.0, t.elapsed().as_secs_f64() * 1000.0),
         Err(e) => println!("  audio error: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod drawing_hook_tests {
+    use super::*;
+
+    #[test]
+    fn finds_obs_game_capture_in_the_frames() {
+        let frames = "frames: taiko-rs.exe+0x7b154f KERNELBASE.dll+0x10f4e3 dxcore.dll+0x26d72 d3d11.dll+0xd2f7 graphics-hook64.dll+0x9b45 taiko-rs.exe+0xa1ee83";
+        assert_eq!(drawing_hook(frames), Some(("graphics-hook64.dll", "OBS's game capture")));
+        assert_eq!(drawing_hook("frames: GameOverlayRenderer64.dll+0x10 taiko-rs.exe+0x1").map(|h| h.1), Some("the Steam overlay"));
+        assert_eq!(drawing_hook("frames: taiko-rs.exe+0x1 nvoglv64.dll+0x2"), None);
+        assert_eq!(drawing_hook("frames: not-graphics-hook64.dll+0x2"), None);
+    }
+
+    #[test]
+    fn advice_says_what_happens_next() {
+        let a = drawing_hook_advice("OBS's game capture", "graphics-hook64.dll", true, true);
+        assert!(a.contains("DX12 instead of Vulkan") && a.contains("Window Capture"));
+        let b = drawing_hook_advice("the Steam overlay", "gameoverlayrenderer64.dll", false, true);
+        assert!(b.contains("Settings > Video > Renderer") && b.contains("overlay off"));
+        assert!(!drawing_hook_advice("the Steam overlay", "gameoverlayrenderer64.dll", false, false).contains("DX12"));
     }
 }

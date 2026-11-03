@@ -327,6 +327,8 @@ pub struct Renderer {
     pub bg_brightness: f32,
     pub present: PresentChoice,
     pub adapter_name: String,
+    /// The graphics API it draws with.
+    pub backend: wgpu::Backend,
     /// 2: draw at half the screen's resolution, then scale up exactly 2x (crisp pixels, a
     /// quarter of the work); 1: full resolution.
     pub pixel_scale: u32,
@@ -1081,6 +1083,7 @@ impl Renderer {
             bg_brightness: 0.0,
             present,
             adapter_name,
+            backend: adapter.get_info().backend,
             pixel_scale: 1,
             letterbox: None,
             reconfigure: false,
