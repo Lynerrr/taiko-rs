@@ -775,6 +775,8 @@ fn assert_every_screen_fits() {
             map: Some(entry(0, 0, true).label()),
             in_match: i % 2 == 0,
             mapguessr: false,
+            locked: i % 3 == 0,
+            slots: 16,
         })
         .collect();
     check(&mut s, "multiplayer menu no email", &mut out);
@@ -955,6 +957,8 @@ fn assert_every_screen_fits() {
             map: Some(entry(0, 0, true).label()),
             in_match: true,
             mapguessr: false,
+            locked: true,
+            slots: 8,
         }],
         log: (0..10)
             .map(|i| format!("12:{i:02} auneu muted {LONG_NAME}{i} for 30 minutes"))

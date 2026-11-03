@@ -44,7 +44,7 @@ use crate::hud::Part;
 use crate::medals::{SPLIT_CYAN, SPLIT_RED, TEAR_CYAN, TEAR_RED};
 use crate::mods::{Mod, Mods, Speed};
 use crate::multiverse::{self, Shape as NoteShape, Universe};
-use crate::net::{DefenseAct, DefenseItem, TOWER_BARS, TeamState};
+use crate::net::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
 use crate::render::{Canvas, Font, Hit, Shape, Sprite, VIRTUAL_HEIGHT, accent, progress, rgba};
 use crate::shapeshift;
 
@@ -757,6 +757,8 @@ pub struct DefenseRun {
     pub me: usize,
     pub lives: u32,
     bars: u32,
+    /// The host's rules (tag-ins each, the shop...).
+    pub rules: Defense,
     /// Whose turn each note is (into `team`).
     owner: Vec<u8>,
     /// Notes the map itself leaves unhittable (before a NaN slider): nobody's.
@@ -806,7 +808,8 @@ const GLITCH_MS: f64 = 260.0;
 /// Defense: where the towers stand: beside the Maze's long straight into the drum (this far
 /// out along it), a don tower above the lane and a kat tower below, where the player on turn
 /// (zoomed in) sees them shoot.
-const TOWER_S: f32 = 420.0;
+const DON_TOWER_S: f32 = 250.0;
+const KAT_TOWER_S: f32 = 470.0;
 const TOWER_SIDE: f32 = LANE_H / 2.0 + 24.0;
 /// Defense: a tower starts shooting at the first barline this long after it's bought, so the
 /// notes it takes are still out on the lane before it.
@@ -2010,7 +2013,8 @@ impl Game {
     /// Plays this map as one of a Defense team (`team` in turn order, we're `me`): the notes of
     /// the others' turns pass by without taking our presses or counting as our misses, and the
     /// team's lives (the room's), not HP, decide whether it fails.
-    pub fn set_defense(&mut self, team: Vec<(u32, String)>, me: usize, lives: u32, bars: u32) {
+    pub fn set_defense(&mut self, team: Vec<(u32, String)>, me: usize, rules: Defense) {
+        let (lives, bars) = (rules.lives, rules.bars);
         let n = self.map.notes.len();
         let map_unhittable = self.map.notes.iter().map(|n| n.unhittable).collect();
         self.hp_exempt = true;
@@ -2019,6 +2023,7 @@ impl Game {
             me,
             lives,
             bars,
+            rules,
             owner: vec![0; n],
             map_unhittable,
             state: None,
@@ -2129,6 +2134,15 @@ impl Game {
             && from / bars == bar / bars
             && from < self.map.barlines.len()
             && !d.tags.iter().any(|g| g.0 == bar / bars)
+            && self.tag_ins_left() > 0
+    }
+
+    /// Defense: the turns we may still take over this map.
+    pub fn tag_ins_left(&self) -> u32 {
+        self.defense.as_ref().map_or(0, |d| {
+            let used = d.tags.iter().filter(|g| g.2 == d.me).count() as u32;
+            d.rules.tag_ins.saturating_sub(used)
+        })
     }
 
     /// Defense: something player `from` did, from the room (in the order it took them).
@@ -2176,7 +2190,7 @@ impl Game {
                         // Beside the straight into the drum: dons above, kats below.
                         let side = if kat { TOWER_SIDE } else { -TOWER_SIDE };
                         d.towers.push(Tower {
-                            s: TOWER_S,
+                            s: if kat { KAT_TOWER_S } else { DON_TOWER_S },
                             side,
                             who,
                             kat,
@@ -2194,7 +2208,11 @@ impl Game {
                 let (bar, from_bar) = (self.bar_at(at), self.bar_at(at + TAG_LEAD_MS) + 1);
                 let Some(d) = &mut self.defense else { return };
                 let turn = bar / bars;
-                if from_bar / bars != turn || d.tags.iter().any(|g| g.0 == turn) {
+                let used = d.tags.iter().filter(|g| g.2 == who).count();
+                if from_bar / bars != turn
+                    || d.tags.iter().any(|g| g.0 == turn)
+                    || used >= d.rules.tag_ins as usize
+                {
                     return;
                 }
                 d.tags.push((turn, from_bar, who));
@@ -5347,7 +5365,24 @@ impl Game {
             tr!("a GREAT = 1 gold", "GREAT = 1ゴールド", "GREAT = 1 золото"),
         );
         y += 12.0;
-        for (k, item) in DefenseItem::ALL.into_iter().enumerate() {
+        if !d.rules.shop {
+            c.text(
+                x,
+                y,
+                6.5,
+                rgba(0x55556a, 1.0),
+                tr!(
+                    "the host turned the shop off",
+                    "ホストがショップをオフにした",
+                    "хост выключил магазин"
+                ),
+            );
+        }
+        for (k, item) in DefenseItem::ALL
+            .into_iter()
+            .enumerate()
+            .filter(|_| d.rules.shop)
+        {
             let (cx, cy) = (x + (k % 2) as f32 * 94.0, y + (k / 2) as f32 * 11.0);
             let price = item.price(&st);
             let can = st.gold >= price;
@@ -5361,12 +5396,13 @@ impl Game {
         }
         y += 34.0;
         let tag = if self.can_tag_in(t) { WHITE } else { 0x55556a };
+        let left = self.tag_ins_left();
         c.text(
             x,
             y,
             6.5,
             rgba(tag, 1.0),
-            tr!("T tag in", "T 交代", "T перехват"),
+            &tr!("T tag in ({left} left)", "T 交代 (残り{left})", "T перехват (осталось {left})";),
         );
         y += 12.0;
         for (at, who, what, _) in d.feed.iter().rev().filter(|e| t - e.0 < 5000.0).take(2) {
@@ -8074,8 +8110,11 @@ mod tests {
         g.set_defense(
             vec![(1, "auneu".into()), (2, "you".into()), (3, "quass".into())],
             1,
-            10,
-            2,
+            Defense {
+                lives: 10,
+                bars: 2,
+                ..Defense::DEFAULT
+            },
         );
         g.defense_act(
             1,
@@ -8220,7 +8259,15 @@ mod tests {
             }),
             None,
         );
-        g.set_defense(vec![(3, "a".into()), (7, "b".into())], 1, 5, 4);
+        g.set_defense(
+            vec![(3, "a".into()), (7, "b".into())],
+            1,
+            Defense {
+                lives: 5,
+                bars: 4,
+                ..Defense::DEFAULT
+            },
+        );
         assert_eq!(g.defense_turn_at(0.0), Some((0, 4)));
         assert_eq!(g.defense_turn_at(2500.0), Some((0, 3)));
         assert_eq!(g.defense_turn_at(8000.0), Some((1, 0)));
@@ -8264,7 +8311,15 @@ mod tests {
             None,
         );
         let team = (0..team as u32).map(|k| (k + 1, format!("p{k}"))).collect();
-        g.set_defense(team, 1, 25, 4);
+        g.set_defense(
+            team,
+            1,
+            Defense {
+                lives: 25,
+                bars: 4,
+                ..Defense::DEFAULT
+            },
+        );
         g
     }
 
@@ -8330,6 +8385,67 @@ mod tests {
             "and out over the first half of the one after"
         );
         assert_eq!(f(17_000.0), 0.0);
+    }
+
+    #[test]
+    fn tag_ins_run_out_for_the_map() {
+        // Three players, 4-bar turns, one tag-in each: p2 takes over p0's first turn, but not
+        // its next one (bars 12-15).
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let mut g = Game::new(
+            map,
+            Arc::new(Track {
+                samples: Vec::new(),
+                rate: 1.0,
+            }),
+            None,
+        );
+        let team = (0..3u32).map(|k| (k + 1, format!("p{k}"))).collect();
+        g.set_defense(
+            team,
+            1,
+            Defense {
+                bars: 4,
+                tag_ins: 1,
+                ..Defense::DEFAULT
+            },
+        );
+        g.defense_act(3, DefenseAct::TagIn { at: 500.0 });
+        g.defense_act(3, DefenseAct::TagIn { at: 24_500.0 });
+        assert_eq!(
+            g.defense.as_ref().unwrap().tags.len(),
+            1,
+            "p2 has none left"
+        );
+        // Ours: one, then none.
+        assert_eq!(g.tag_ins_left(), 1);
+        assert!(g.can_tag_in(24_500.0));
+        g.defense_act(2, DefenseAct::TagIn { at: 24_500.0 });
+        assert_eq!(g.tag_ins_left(), 0);
+        assert!(!g.can_tag_in(48_500.0));
+        // With none allowed, nobody tags in at all.
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let mut g = Game::new(
+            map,
+            Arc::new(Track {
+                samples: Vec::new(),
+                rate: 1.0,
+            }),
+            None,
+        );
+        let team = (0..2u32).map(|k| (k + 1, format!("p{k}"))).collect();
+        g.set_defense(
+            team,
+            1,
+            Defense {
+                bars: 4,
+                tag_ins: 0,
+                ..Defense::DEFAULT
+            },
+        );
+        assert!(!g.can_tag_in(500.0));
+        g.defense_act(1, DefenseAct::TagIn { at: 8500.0 });
+        assert!(g.defense.as_ref().unwrap().tags.is_empty());
     }
 
     #[test]

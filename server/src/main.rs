@@ -902,6 +902,8 @@ impl State {
                     map: s.map,
                     in_match: s.in_match,
                     mapguessr: s.mapguessr,
+                    locked: s.locked,
+                    slots: s.slots,
                 })
             })
             .collect();
@@ -977,6 +979,7 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             token,
             title,
             mapguessr,
+            settings,
         } => {
             let Some(name) = state.user(&token) else {
                 return reply(&mut reader, Reply::Error("log in to host a lobby".into()));
@@ -990,7 +993,7 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             }
             let id = state.next_room.fetch_add(1, Ordering::Relaxed);
             let title = online::clean_title(&title, &name, mapguessr);
-            let room = net::open_room(mapguessr);
+            let room = net::open_room(mapguessr, settings);
             let host_token = room.token;
             println!("lobby {id} \"{title}\" opened by {name} ({ip})");
             reply(
@@ -1149,6 +1152,11 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             let Some(l) = lobbies.get(&room) else {
                 return reply(&mut reader, Reply::Error("that lobby is gone".into()));
             };
+            // (The room checks the password, and again for a free slot, as the player says hello.)
+            let s = l.room.summary.lock().unwrap().clone();
+            if s.players >= s.slots {
+                return reply(&mut reader, Reply::Error("the lobby is full".into()));
+            }
             reply(
                 &mut reader,
                 Reply::Joined {

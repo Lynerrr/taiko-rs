@@ -37,6 +37,9 @@ pub struct Session {
     pub common: Option<u32>,
     /// Defense: the team's lives, gold, shield and towers, as the room keeps them.
     pub team: Option<net::TeamState>,
+    /// The lobby needs a password, and how many players it takes.
+    pub locked: bool,
+    pub slots: u32,
     /// In a match: we asked to skip the intro, and how many players have (of how many).
     pub skip_asked: bool,
     pub skip_votes: Option<(u32, u32)>,
@@ -64,6 +67,8 @@ impl Session {
             mapguessr: false,
             common: None,
             team: None,
+            locked: false,
+            slots: net::RoomSettings::MAX_SLOTS,
             skip_asked: false,
             skip_votes: None,
         }
@@ -521,7 +526,13 @@ impl Menu {
 }
 
 /// Creates or joins a lobby on the online server; the connection then becomes the room's.
-pub fn start_online(server: String, request: online::Request, name: String) -> Connecting {
+/// Opens or joins a lobby on the online server; `password` is the lobby's, when it has one.
+pub fn start_online(
+    server: String,
+    request: online::Request,
+    name: String,
+    password: Option<String>,
+) -> Connecting {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let result = (|| match online::exchange(&server, request)? {
@@ -533,7 +544,7 @@ pub fn start_online(server: String, request: online::Request, name: String) -> C
                 },
                 reader,
             ) => {
-                let client = Client::over(reader, &name, host_token)?;
+                let client = Client::over(reader, &name, host_token, password)?;
                 let mut s = Session::new(client, None, format!("online: {title}"));
                 s.online_room = Some(room);
                 Ok(s)

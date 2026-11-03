@@ -7971,7 +7971,12 @@ impl State {
                     };
                     let team = game.team_state().unwrap_or_default();
                     let can_tag = game.can_tag_in(t);
+                    let shop = game.defense.as_ref().is_some_and(|d| d.rules.shop);
                     let act = match (item, code) {
+                        (Some(_), _) if !shop => {
+                            self.toast("the host turned the shop off".into());
+                            None
+                        }
                         (Some(item), _) if team.gold < item.price(&team) => {
                             self.toast(format!(
                                 "{}: {} gold, the team has {}",
@@ -8372,9 +8377,10 @@ impl State {
                             token,
                             title: String::new(),
                             mapguessr,
+                            settings: net::RoomSettings::default(),
                         };
                         self.mp_connecting =
-                            Some(multiplayer::start_online(server, request, account));
+                            Some(multiplayer::start_online(server, request, account, None));
                     }
                     Row::Lobby(k) => {
                         let Some(room) = self.mp_menu.rooms.get(k).cloned() else {
@@ -8386,7 +8392,7 @@ impl State {
                             room: room.id,
                         };
                         self.mp_connecting =
-                            Some(multiplayer::start_online(server, request, account));
+                            Some(multiplayer::start_online(server, request, account, None));
                     }
                     Row::HostDirect => {
                         self.mp_status = format!("opening room on port {}...", self.cfg.mp_port);
@@ -10085,6 +10091,7 @@ impl State {
             self.cfg.online_server.clone(),
             request,
             account,
+            None,
         ));
     }
 
@@ -10700,10 +10707,14 @@ impl State {
                 mapguessr,
                 common,
                 team,
+                locked,
+                slots,
             } => {
                 let library = &self.library;
                 let Some(s) = &mut self.mp else { return };
                 s.team = team;
+                s.locked = locked;
+                s.slots = slots;
                 let game_over = s.in_match && !in_match;
                 s.players = players;
                 // The room learns our own mods (on joining, and if it has others).
@@ -13031,13 +13042,13 @@ impl State {
                         .and_then(|m| m.defense);
                     // Defense is played on the Maze, whatever else bent the lane.
                     let mut mods = self.pending_mods;
-                    if defense.is_some() && !mods.has(mods::Mod::Maze) {
+                    if defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
                         mods.toggle(mods::Mod::Maze);
                     }
                     let mut game = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
                     if let (Some(d), Some(s)) = (defense, &self.mp) {
                         let (team, me) = multiplayer::defense_team(s);
-                        game.set_defense(team, me, d.lives, d.bars);
+                        game.set_defense(team, me, d);
                     }
                     game.scroll_speed = self.cfg.scroll_speed;
                     if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
@@ -13183,7 +13194,7 @@ impl State {
                             .map(|p| Mods::from_list(&p.mods).free())
                             .unwrap_or(Mods::NONE);
                         let mut mods = v.mods.shared().plus(own);
-                        if v.map.defense.is_some() && !mods.has(mods::Mod::Maze) {
+                        if v.map.defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
                             mods.toggle(mods::Mod::Maze);
                         }
                         let mut g = Game::with_seed(
@@ -13200,7 +13211,7 @@ impl State {
                             let mut team = v.players.clone();
                             team.sort_by_key(|p| p.0);
                             let me = team.iter().position(|p| p.0 == *id).unwrap_or(0);
-                            g.set_defense(team, me, d.lives, d.bars);
+                            g.set_defense(team, me, d);
                         }
                         if let Some(t) = v.from {
                             g.skip_to(t);
