@@ -79,6 +79,7 @@ pub enum Item {
     LegacyMenu,
     /// The song's notes behind the main menu.
     MenuNotes,
+    MenuNotesDim,
     /// The game smaller than the screen, black around it: on or off, its size, and where it sits.
     Letterbox,
     LetterboxSize,
@@ -110,7 +111,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 122] = [
+pub const ITEMS: [(&str, Item); 123] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -228,6 +229,7 @@ pub const ITEMS: [(&str, Item); 122] = [
     ("SYSTEM", Item::Splash),
     ("SYSTEM", Item::LegacyMenu),
     ("SYSTEM", Item::MenuNotes),
+    ("SYSTEM", Item::MenuNotesDim),
     ("SYSTEM", Item::Guide),
     ("SYSTEM", Item::UpdateChannel),
     ("SYSTEM", Item::Update),
@@ -418,6 +420,7 @@ impl Item {
             Item::LetterboxX => tr!("Letterbox position: sideways", "レターボックスの位置: 横", "Положение: по горизонтали"),
             Item::LetterboxY => tr!("Letterbox position: up and down", "レターボックスの位置: 縦", "Положение: по вертикали"),
             Item::MenuNotes => tr!("Notes behind the main menu", "メインメニューの背景のノーツ", "Ноты за главным меню"),
+            Item::MenuNotesDim => tr!("Menu lane notes dim", "メニューのレーンのノーツの暗さ", "Затемнение нот на дорожке меню"),
             Item::ResetMapOffsets => tr!("Reset map offsets", "譜面のオフセットをリセット", "Сбросить оффсеты карт"),
             Item::Guide => tr!("First steps guide", "はじめてのガイド", "Первые шаги"),
             Item::UpdateChannel => tr!("Build channel", "ビルドのチャンネル", "Канал сборок"),
@@ -453,6 +456,7 @@ impl Item {
             | Item::MusicVolume
             | Item::FxVolume
             | Item::BackgroundDim
+            | Item::MenuNotesDim
             | Item::FpsCap
             | Item::AccentHue
             | Item::VsyncTune
@@ -820,6 +824,11 @@ impl Item {
                 "The old layout: straight to song select with tabs along the top, no main menu, and Esc asks to quit.",
                 "旧レイアウト: メインメニューなしですぐ選曲画面になり、上にタブが並び、Escは終了を確認します。",
                 "Старый вид: сразу выбор песни с вкладками сверху, без главного меню, Esc спрашивает о выходе."
+            ),
+            Item::MenuNotesDim => tr!(
+                "How faint the song's notes are on the main menu's lane. 100% hides them. The notes drifting behind the menu stay as they are.",
+                "メインメニューのレーンを流れる曲のノーツの薄さ。100%で見えなくなります。背景を流れるノーツは変わりません。",
+                "Насколько бледны ноты песни на дорожке главного меню. 100% прячет их. Ноты за меню не меняются."
             ),
             Item::MenuNotes => tr!(
                 "The playing song's notes drift along routes behind the main menu, one for each Multiverse universe.",

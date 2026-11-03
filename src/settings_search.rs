@@ -52,6 +52,7 @@ fn words(item: Item) -> &'static str {
         Item::Update | Item::UpdateChannel | Item::CheckUpdates | Item::Changelog => "version release dev latest версия релиз новое",
         Item::Splash | Item::Guide => "intro startup tutorial заставка запуск обучение",
         Item::LegacyMenu => "old classic tabs main menu старый классика вкладки главное меню",
+        Item::MenuNotesDim => "lane notes faint dark menu дорожка ноты бледнее меню",
         Item::MenuNotes => "background multiverse route фон мультиверс маршрут",
         Item::Interface | Item::InterfaceHides | Item::InterfaceKey => "hud ui hide скрыть худ",
         Item::AutoplayStyle | Item::AutoplayBinding | Item::AutoplayLeftHanded => "auto bot кдд авто бот",
