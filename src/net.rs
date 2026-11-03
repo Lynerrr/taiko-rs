@@ -443,6 +443,8 @@ enum Event {
     Joined(u32, Sender<ServerMsg>, Option<String>),
     Msg(u32, ClientMsg),
     Left(u32),
+    /// An admin takes the player called this out of the room.
+    Kick(String),
 }
 
 /// `mapguessr`: the room plays mapguessr instead of matches.
@@ -578,6 +580,11 @@ impl Room {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         spawn_connection(reader, id, self.events.clone(), name, keep);
     }
+
+    /// Takes the player called `name` (any case) out of the room, telling them why.
+    pub fn kick(&self, name: &str) {
+        let _ = self.events.send(Event::Kick(name.to_string()));
+    }
 }
 
 fn spawn_connection<K: Send + 'static>(mut reader: BufReader<TcpStream>, id: u32, events: Sender<Event>, name: Option<String>, keep: K) {
@@ -700,7 +707,19 @@ fn room_loop(rx: Receiver<Event>, stop: Arc<AtomicBool>, token: u64, summary: Op
     let mut common_dirty = false;
 
     while !stop.load(Ordering::Relaxed) {
-        match rx.recv_timeout(Duration::from_millis(50)) {
+        let event = match rx.recv_timeout(Duration::from_millis(50)) {
+            // A kick is the player leaving, after a word to them (their link closes with it).
+            Ok(Event::Kick(name)) => match players.iter().find(|p| p.info.name.eq_ignore_ascii_case(&name) || p.forced_name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&name))) {
+                Some(p) => {
+                    let _ = p.tx.send(ServerMsg::Chat { from: "taiko.rs".into(), text: "an admin took you out of this lobby".into() });
+                    Ok(Event::Left(p.info.id))
+                }
+                None => Err(RecvTimeoutError::Timeout),
+            },
+            other => other,
+        };
+        match event {
+            Ok(Event::Kick(_)) => {}
             Ok(Event::Joined(id, tx, forced_name)) => {
                 players.push(Player {
                     forced_name,

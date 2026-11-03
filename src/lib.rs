@@ -7,6 +7,7 @@ mod lang;
 #[cfg(target_os = "android")]
 mod android;
 mod audio;
+mod admin;
 mod autoplay;
 mod avatars;
 mod beatmap;
@@ -407,6 +408,8 @@ struct State {
     sprites_upload: Option<Arc<render::Atlas>>,
     /// Profile pictures: fetched as they're drawn, uploaded by the render thread.
     avatars: avatars::Avatars,
+    /// The account logged in is an admin (the server says so; it checks every admin action).
+    admin: bool,
     skin_loader: Option<skin::Loader>,
     skin_key: Option<(skin::Key, std::sync::Weak<render::Atlas>)>,
     /// The playing map's folder when it carries skin images (they're in the loaded skin), and
@@ -5997,6 +6000,7 @@ impl State {
     fn sign_out(&mut self, why: &str) {
         self.social = social::Social::default();
         self.select.nominator = false;
+        self.admin = false;
         self.mp_menu.account = None;
         self.mp_menu.has_email = None;
         self.mp_menu.form = multiplayer::Form::Main;
@@ -6102,8 +6106,9 @@ impl State {
                 Ok(result) => {
                     menu.account_request = None;
                     match result {
-                        Ok(online::Reply::Account { name, token, nominator, email }) => {
+                        Ok(online::Reply::Account { name, token, nominator, admin, email }) => {
                             self.select.nominator = nominator;
+                            self.admin = admin;
                             self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name) || self.cfg.online_token != token;
                             menu.account = Some(name.clone());
@@ -6960,6 +6965,7 @@ impl State {
         let talking = self.social.in_conversation(in_lobby);
         match code {
             KeyCode::Escape if talking => self.social.close_conversation(),
+            KeyCode::Escape if self.social.tab == social::Tab::Admin && self.social.info.is_some() => self.social.info = None,
             KeyCode::Escape => self.social.close(),
             KeyCode::Tab => self.social.cycle_tab(self.modifiers_shift),
             KeyCode::PageUp => self.social.wheel(5, in_lobby),
@@ -6973,6 +6979,7 @@ impl State {
             }
             KeyCode::Delete if self.social.input.is_empty() && !talking => match row {
                 Row::Request(_) => self.social_action(social::Action::Decline),
+                Row::AdminRoom(_) => self.social_action(social::Action::CloseRoom),
                 Row::Friend(k) => {
                     if let (Some(f), Some(c)) = (self.social.friends.get(k), &self.social.conn) {
                         c.send(online::Up::RemoveFriend(f.name.clone()));
@@ -6984,6 +6991,19 @@ impl State {
             KeyCode::KeyW if self.modifiers_ctrl => self.social_action(social::Action::Watch),
             KeyCode::KeyP if self.modifiers_ctrl => self.social_action(social::Action::Profile),
             KeyCode::KeyJ if self.modifiers_ctrl => self.social_action(social::Action::Join),
+            KeyCode::KeyK if self.modifiers_ctrl && self.admin => self.social_action(social::Action::Kick),
+            KeyCode::KeyM if self.modifiers_ctrl && self.admin => self.social_action(social::Action::Mute),
+            KeyCode::KeyL if self.modifiers_ctrl && self.admin => self.social_action(social::Action::Lookup),
+            // An admin's /command, from any chat box (or the admin tab's).
+            KeyCode::Enter | KeyCode::NumpadEnter if self.admin && admin::is_command(&self.social.input) && matches!(row, Row::AdminInput | Row::Friend(_) | Row::Lobby | Row::Global) => {
+                let text = std::mem::take(&mut self.social.input);
+                self.admin_command(text.trim());
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter if row == Row::AdminInput => {
+                if !self.social.input.trim().is_empty() {
+                    self.toast("admin commands start with / (/help lists them)".into());
+                }
+            }
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 let mut text = self.social.input.trim().to_string();
                 // `/np` in a chat: the map on screen, with its osu! link (a link others can click).
@@ -7108,24 +7128,80 @@ impl State {
                     self.watch(f.name);
                 }
             }
+            (Row::AdminPlayer(k), action) => {
+                let Some(p) = self.social.overview.as_ref().and_then(|o| o.players.get(k)).cloned() else { return };
+                let muted = p.muted_until.is_some_and(|t| t > discord::unix_now());
+                match action {
+                    Action::Watch => self.watch(p.name),
+                    Action::Profile => self.open_profile(p.name),
+                    Action::Kick => self.admin_op(online::AdminOp::Kick { name: p.name }),
+                    Action::Mute => self.admin_op(online::AdminOp::Mute { name: p.name, minutes: if muted { 0 } else { 30 } }),
+                    Action::Lookup => self.admin_op(online::AdminOp::Lookup { name: p.name }),
+                    _ => {}
+                }
+            }
+            (Row::AdminRoom(k), action) => {
+                let Some(r) = self.social.overview.as_ref().and_then(|o| o.rooms.get(k)).cloned() else { return };
+                match action {
+                    Action::Join => self.join_room(r.id, r.title),
+                    Action::CloseRoom => self.admin_op(online::AdminOp::CloseRoom { room: r.id }),
+                    _ => {}
+                }
+            }
+            // Admins watch any solo play from the players tab too.
+            (Row::Player(k), Action::Watch) if self.admin => {
+                if let Some(p) = self.social.players.as_ref().and_then(|v| v.get(k)).cloned() {
+                    self.watch(p.name);
+                }
+            }
             (Row::Friend(k), Action::Join) => {
                 let Some(f) = self.social.friends.get(k).cloned() else { return };
                 let Some(online::Activity::Lobby { room: Some(room), title }) = f.activity else {
                     self.toast(format!("{} isn't in an online lobby", f.name));
                     return;
                 };
-                if self.mp.is_some() || self.mp_connecting.is_some() {
-                    self.toast("leave your lobby first".into());
-                    return;
-                }
-                self.social.close();
-                self.mp_status = format!("joining {title}...");
-                self.scene = Scene::MpMenu;
-                let request = online::Request::JoinRoom { token: self.cfg.online_token.clone(), room };
-                let account = self.mp_menu.account.clone().unwrap_or_default();
-                self.mp_connecting = Some(multiplayer::start_online(self.cfg.online_server.clone(), request, account));
+                self.join_room(room, title);
             }
             _ => {}
+        }
+    }
+
+    /// Joins online lobby `room` (from a friend's row, or an admin's list).
+    fn join_room(&mut self, room: u32, title: String) {
+        if self.mp.is_some() || self.mp_connecting.is_some() {
+            self.toast("leave your lobby first".into());
+            return;
+        }
+        self.social.close();
+        self.mp_status = format!("joining {title}...");
+        self.scene = Scene::MpMenu;
+        let request = online::Request::JoinRoom { token: self.cfg.online_token.clone(), room };
+        let account = self.mp_menu.account.clone().unwrap_or_default();
+        self.mp_connecting = Some(multiplayer::start_online(self.cfg.online_server.clone(), request, account));
+    }
+
+    /// Sends an admin action (the server answers with a notice).
+    fn admin_op(&mut self, op: online::AdminOp) {
+        match self.social.conn.as_ref().filter(|_| self.social.connected) {
+            Some(c) => {
+                c.send(online::Up::Admin(op));
+                // What it changed shows in the next overview, soon.
+                self.social.overview_asked = None;
+            }
+            None => self.toast("not connected to the server".into()),
+        }
+    }
+
+    /// An admin's typed /command.
+    fn admin_command(&mut self, text: &str) {
+        match admin::parse(text) {
+            Ok(admin::Command::Op(op)) => self.admin_op(op),
+            Ok(admin::Command::Watch(name)) => self.watch(name),
+            Ok(admin::Command::Help) => {
+                self.social.set_tab(social::Tab::Admin);
+                self.social.info = Some(("admin commands".into(), admin::HELP.split(" /").map(|c| if c.starts_with('/') { c.to_string() } else { format!("/{c}") }).collect()));
+            }
+            Err(e) => self.toast(e),
         }
     }
 
@@ -7224,6 +7300,17 @@ impl State {
                 self.social.sent_activity = Some(a);
             }
         }
+        self.social.admin = self.admin;
+        if !self.admin && self.social.tab == social::Tab::Admin {
+            self.social.set_tab(social::Tab::Friends);
+        }
+        // The admin tab keeps its overview fresh while it's open.
+        if self.admin && self.social.open && self.social.tab == social::Tab::Admin && self.social.connected
+            && self.social.overview_asked.is_none_or(|t| t.elapsed() > Duration::from_secs(3))
+            && let Some(c) = &self.social.conn {
+            c.send(online::Up::Admin(online::AdminOp::Overview));
+            self.social.overview_asked = Some(Instant::now());
+        }
         let hold = !self.overlay_allowed();
         self.social.expire_notes(hold);
         if self.social.open && self.social.row(self.mp.is_some()) == social::Row::Lobby && self.social.in_conversation(self.mp.is_some())
@@ -7291,6 +7378,33 @@ impl State {
                 }
             }
             Down::Notice(text) => self.social.notify("taiko.rs", text, 0x9a9ab0, NoteAction::None),
+            Down::GlobalChatDeleted { from, at } => self.social.delete_global(&from, at),
+            Down::AdminOverview(o) => self.social.set_overview(*o, self.mp.is_some()),
+            Down::AdminLookup(l) => {
+                let now = discord::unix_now();
+                let mut lines = vec![format!(
+                    "{}  joined {} ago  {} plays  {}",
+                    if l.online { "online" } else { "offline" },
+                    admin::span(now.saturating_sub(l.created)),
+                    l.plays,
+                    if l.has_email { "email linked" } else { "no email" }
+                )];
+                let mut marks = Vec::new();
+                if l.banned {
+                    marks.push("BANNED".to_string());
+                }
+                if l.nominator {
+                    marks.push("loved nominator".to_string());
+                }
+                if let Some(t) = l.muted_until.filter(|&t| t > now) {
+                    marks.push(format!("muted for {}", admin::span(t - now)));
+                }
+                if !marks.is_empty() {
+                    lines.push(marks.join("  "));
+                }
+                lines.push(if l.alts.is_empty() { "no other accounts from the same places".into() } else { format!("same places as: {}", l.alts.join(", ")) });
+                self.social.info = Some((l.name.clone(), lines));
+            }
             Down::Players { count, players } => {
                 self.social.set_players(count as usize, players, self.mp.is_some());
             }
@@ -10229,6 +10343,11 @@ impl State {
                 }
             }
             Hit::SocialBack => self.social.close_conversation(),
+            Hit::SocialDeleteChat(i) => {
+                if let Some(l) = self.social.global.get(i).cloned() {
+                    self.admin_op(online::AdminOp::DeleteGlobal { from: l.from, at: l.at });
+                }
+            }
             Hit::SocialAction(i, action) => {
                 self.social.cursor = i;
                 self.social_action(action);
@@ -11319,6 +11438,7 @@ impl State {
         let avatars = avatars::Avatars::new((cfg.online_server == online::DEFAULT_SERVER).then(|| online::WEBSITE.to_string()));
         State {
             avatars,
+            admin: false,
             crash,
             crash_sent,
             cfg,

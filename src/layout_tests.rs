@@ -600,6 +600,41 @@ fn assert_every_screen_fits() {
     s.social.global_unread = 12;
     s.social.input = "a message being typed that is longer than the input box can show".into();
     check(&mut s, "global chat", &mut out);
+    // An admin's tab: who's on, the lobbies and the log, then a lookup over them.
+    s.admin = true;
+    s.social.admin = true;
+    s.social.input.clear();
+    let playing = online::Activity::Playing { map: entry(0, 0, true).label() };
+    s.social.overview = Some(online::AdminOverview {
+        uptime_secs: 3 * 86400 + 5 * 3600,
+        accounts: 1543,
+        sessions: 2210,
+        players: (0..5)
+            .map(|i| online::AdminPlayer {
+                name: format!("{LONG_NAME}{i}"),
+                activity: Some(if i % 3 == 0 { playing.clone() } else { online::Activity::Menus }),
+                connections: if i == 1 { 2 } else { 1 },
+                watching: None,
+                muted_until: (i == 2).then(|| crate::discord::unix_now() + 20 * 60),
+            })
+            .collect(),
+        rooms: vec![online::RoomInfo { id: 12, title: "A lobby with a very long title, yes".into(), host: LONG_NAME.into(), players: 8, map: Some(entry(0, 0, true).label()), in_match: true, mapguessr: false }],
+        log: (0..10).map(|i| format!("12:{i:02} auneu muted {LONG_NAME}{i} for 30 minutes")).collect(),
+    });
+    s.social.set_tab(social::Tab::Admin);
+    s.social.cursor = 1;
+    check(&mut s, "admin", &mut out);
+    s.social.info = Some((LONG_NAME.into(), vec!["online  joined 120d 4h ago  345 plays  email linked".into(), "BANNED  loved nominator  muted for 20m".into(), format!("same places as: {LONG_NAME}1, {LONG_NAME}2, {LONG_NAME}3")]));
+    s.social.cursor = 0;
+    s.social.input = "/mute FriendWithAVeryLongName 2h and a command longer than the box".into();
+    check(&mut s, "admin info", &mut out);
+    s.social.info = None;
+    s.social.input.clear();
+    s.social.set_tab(social::Tab::Chat);
+    s.social.cursor = 0;
+    check(&mut s, "global chat admin", &mut out);
+    s.admin = false;
+    s.social.admin = false;
     s.social.tab = social::Tab::Friends;
     s.social.input.clear();
     s.social.open = false;
