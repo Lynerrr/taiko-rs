@@ -2636,10 +2636,8 @@ pub enum Hit {
     Changelog,
     /// The account badge: the website profile (or logging in).
     Account,
-    /// Song select's dividers: between the song list and the panel, and between the panel and
-    /// the leaderboard (dragged).
+    /// Song select's divider between the song list and the panel (dragged).
     SplitList,
-    SplitPreview,
     Overlay,
     /// The leaderboard's tabs: local (false) or online (true).
     BoardTab(bool),

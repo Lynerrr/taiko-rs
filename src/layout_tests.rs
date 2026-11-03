@@ -1082,13 +1082,13 @@ fn assert_every_screen_fits() {
     s.scene = Scene::Select;
     check(&mut s, "select logged in", &mut out);
     s.scene = Scene::Results {
-        results: results(false),
+        results: Box::new(results(false)),
         entry: 0,
         from: None,
     };
     check(&mut s, "results", &mut out);
     s.scene = Scene::Results {
-        results: results(true),
+        results: Box::new(results(true)),
         entry: 0,
         from: None,
     };
@@ -1102,7 +1102,7 @@ fn assert_every_screen_fits() {
     });
     opened.replay_error = Some("that replay isn't on the server".into());
     s.scene = Scene::Results {
-        results: opened,
+        results: Box::new(opened),
         entry: 0,
         from: None,
     };
@@ -1112,7 +1112,7 @@ fn assert_every_screen_fits() {
         let mut r = results(failed);
         (r.scroll, r.scroll_to) = (ui::RESULTS_SCROLL, ui::RESULTS_SCROLL);
         s.scene = Scene::Results {
-            results: r,
+            results: Box::new(r),
             entry: 0,
             from: None,
         };

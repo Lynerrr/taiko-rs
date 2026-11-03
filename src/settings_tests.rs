@@ -1116,18 +1116,25 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     let frame = |s: &mut State| s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     // The song list's edge, dragged right, then far past its limit.
     let lw = Select::list_width(w, s.cfg.song_list_share);
-    point(&mut s, 24.0 + lw + 6.0, 240.0);
+    // Its grip sits in the middle of the gap between the list's box (to 28 + lw) and the panel
+    // (from 36 + lw).
+    point(&mut s, 24.0 + lw + 8.0, 240.0);
     assert_eq!(
-        s.hit_at(24.0 + lw + 6.0, 240.0),
+        s.hit_at(24.0 + lw + 8.0, 240.0),
         Some(render::Hit::SplitList)
+    );
+    assert_ne!(
+        s.hit_at(24.0 + lw + 3.0, 240.0),
+        Some(render::Hit::SplitList),
+        "not on the list's box"
     );
     // Only its grip in the middle, not the whole edge.
     assert_ne!(
-        s.hit_at(24.0 + lw + 6.0, 120.0),
+        s.hit_at(24.0 + lw + 8.0, 120.0),
         Some(render::Hit::SplitList)
     );
     s.mouse_button(true, None);
-    point(&mut s, 24.0 + lw + 6.0 + 40.0, 240.0);
+    point(&mut s, 24.0 + lw + 8.0 + 40.0, 240.0);
     assert!(
         (s.cfg.song_list_share - (ui::LIST_SHARE.2 + 40.0 / w)).abs() < 0.002,
         "{}",
@@ -1143,7 +1150,7 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     );
     // And far left: the list keeps its room too.
     frame(&mut s);
-    point(&mut s, 24.0 + widest + 6.0, 240.0);
+    point(&mut s, 24.0 + widest + 8.0, 240.0);
     s.mouse_button(true, None);
     point(&mut s, 0.0, 240.0);
     s.mouse_button(false, None);
@@ -1155,38 +1162,22 @@ fn song_select_dividers_drag_within_limits_and_reset() {
 
     // A double click on it puts it back.
     frame(&mut s);
-    point(&mut s, 24.0 + narrowest + 6.0, 240.0);
+    point(&mut s, 24.0 + narrowest + 8.0, 240.0);
     for _ in 0..2 {
         s.mouse_button(true, None);
         s.mouse_button(false, None);
     }
     assert_eq!(s.cfg.song_list_share, ui::LIST_SHARE.2);
 
-    // The panel's bottom edge, dragged up: the preview shrinks (no smaller than its limit) and
-    // more of the leaderboard shows.
+    // The panel's bottom edge isn't dragged any more: nothing to grab there, and the preview is
+    // at full size whatever an older config says.
+    s.cfg.song_preview_size = preview::PREVIEW_SIZE.0;
     frame(&mut s);
-    let rows_before = s.leaderboard.len();
     let edge = s.preview.panel_bottom + 4.0;
     let left = 24.0 + Select::list_width(w, s.cfg.song_list_share) + 12.0;
     let mid = (left + w - 24.0) / 2.0;
-    assert_ne!(s.hit_at(left + 20.0, edge), Some(render::Hit::SplitPreview));
-    point(&mut s, mid, edge);
-    assert_eq!(s.hit_at(mid, edge), Some(render::Hit::SplitPreview));
-    s.mouse_button(true, None);
-    point(&mut s, mid, edge - 1000.0);
-    s.mouse_button(false, None);
-    assert_eq!(s.cfg.song_preview_size, preview::PREVIEW_SIZE.0);
-    frame(&mut s);
-    assert!(
-        s.preview.panel_bottom < edge - 4.0,
-        "{} vs {edge}",
-        s.preview.panel_bottom
-    );
-    assert!(
-        s.leaderboard.len() > rows_before,
-        "{} rows, {rows_before} before",
-        s.leaderboard.len()
-    );
+    assert_eq!(s.hit_at(mid, edge), None);
+    assert_eq!(s.preview.size, preview::PREVIEW_SIZE.1);
 
     // Settings > Library puts the whole layout back.
     s.cfg.song_list_share = ui::LIST_SHARE.1;
@@ -1249,7 +1240,7 @@ fn the_results_scroll_down_to_the_pp_and_back() {
     );
     r.no_pp = Some("no pp here");
     s.scene = Scene::Results {
-        results: r,
+        results: Box::new(r),
         entry: 0,
         from: None,
     };

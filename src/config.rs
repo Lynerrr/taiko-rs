@@ -222,6 +222,8 @@ pub struct Config {
     pub autoplay: crate::autoplay::Settings,
     /// GREAT hits without their flash and label (only OKs and misses show).
     pub hide_great: bool,
+    /// The lane and the drum's panel drawn pure black.
+    pub black_lane: bool,
     /// The coloured flash on the hit target as notes are hit.
     pub hit_flash: bool,
     /// The interface's accent colour (`render::ACCENTS`, or any other).
@@ -312,6 +314,8 @@ pub struct Config {
     pub universe_presets: Vec<crate::multiverse::Preset>,
     /// Shapeshift: how often the lane changes shape, how long the morph takes, the order.
     pub shapeshift: crate::shapeshift::Config,
+    /// Random colouring, shared by retries and saved between sessions.
+    pub random_seed: u64,
     /// Mods marked as favourites in the mod select (shown in a row of their own).
     pub favourite_mods: crate::mods::Mods,
     /// Note colours without Multiverse.
@@ -397,6 +401,7 @@ impl Default for Config {
             kiai_effects: true,
             autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
+            black_lane: false,
             hit_flash: true,
             accent: crate::render::DEFAULT_ACCENT,
             discord_presence: true,
@@ -426,6 +431,7 @@ impl Default for Config {
             universes: crate::multiverse::defaults(),
             universe_presets: Vec::new(),
             shapeshift: Default::default(),
+            random_seed: crate::fresh_seed(),
             favourite_mods: crate::mods::Mods::NONE,
             note_colours: crate::multiverse::Colours::CLASSIC,
             video: Default::default(),
@@ -961,6 +967,7 @@ impl Config {
                 }
                 "autoplay_left_handed" => cfg.autoplay.left_handed = v == "true",
                 "hide_great" => cfg.hide_great = v != "false",
+                "black_lane" => cfg.black_lane = v == "true",
                 "hit_flash" => cfg.hit_flash = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
                 "discord_presence" => cfg.discord_presence = v != "false",
@@ -1055,6 +1062,7 @@ impl Config {
                     .universe_presets
                     .extend(crate::multiverse::Preset::parse(v)),
                 "note_colours" => cfg.note_colours = crate::multiverse::Colours::parse(v),
+                "random_seed" => cfg.random_seed = v.parse().unwrap_or(cfg.random_seed),
                 "shapeshift" => cfg.shapeshift = crate::shapeshift::Config::parse(v),
                 "favourite_mods" => cfg.favourite_mods = crate::mods::Mods::parse_set(v),
                 k if k.starts_with("video_") => {
@@ -1140,6 +1148,8 @@ impl Config {
              kiai_effects = {}\n\
              # GREAT hits without their flash and label (only OKs and misses show)\n\
              hide_great = {}\n\
+             # the lane and the drum's panel pure black\n\
+             black_lane = {}\n\
              # the coloured flash on the hit target as notes are hit\n\
              hit_flash = {}\n\
              show_offset_hint = {}\n\
@@ -1198,6 +1208,7 @@ impl Config {
             self.sort,
             self.kiai_effects,
             self.hide_great,
+            self.black_lane,
             self.hit_flash,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,
@@ -1289,7 +1300,7 @@ impl Config {
             interface_key_name(self.interface_key)
         ));
         out.push_str(&format!(
-            "# song select: the song list's share of the width, and the autoplay preview's size (drag the edges between them)\nsong_list_share = {:.3}\nsong_preview_size = {:.3}\n",
+            "# song select: the song list's share of the width (drag the edge beside it); the preview's size is no longer used\nsong_list_share = {:.3}\nsong_preview_size = {:.3}\n",
             self.song_list_share, self.song_preview_size
         ));
         out.push_str(&self.hotkeys.config_lines());
@@ -1306,6 +1317,10 @@ impl Config {
         for p in &self.universe_presets {
             out.push_str(&format!("multiverse_preset = {}\n", p.format()));
         }
+        out.push_str(&format!(
+            "# Random: repeatable note colours (C in the mod select)\nrandom_seed = {}\n",
+            self.random_seed
+        ));
         out.push_str(&format!(
             "# Shapeshift: bars per shape (4/8/16/32), bars to morph (0.5/1/2/4), order shuffle/fixed, shapes in order (- = left out)\nshapeshift = {}\n",
             self.shapeshift.format()
@@ -1482,6 +1497,17 @@ mod tests {
             "hotkey.apply_offset = none\nsongs = /a\nmultiverse_preset = x: y\nskin_part = a = b\n",
         );
         assert_eq!(out, "keys = A, S, K, L\n");
+    }
+
+    #[test]
+    fn random_seeds_round_trip_including_legacy_and_maximum() {
+        for seed in [0, 42, u64::MAX] {
+            let cfg = Config::parse_text(&format!("random_seed = {seed}\n"));
+            assert_eq!(cfg.random_seed, seed);
+            assert_eq!(Config::parse_text(&cfg.to_text()).random_seed, seed);
+        }
+        let cfg = Config::parse_text("random_seed = 42\nrandom_seed = invalid\n");
+        assert_eq!(cfg.random_seed, 42);
     }
 
     #[test]

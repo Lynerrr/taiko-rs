@@ -77,8 +77,7 @@ fn index(files: Vec<PathBuf>) -> (HashMap<u64, PathBuf>, HashMap<String, PathBuf
     (by_hash, by_label)
 }
 
-/// The play on the map at `path` as it counts now. Random's colouring isn't in scores.jsonl: the
-/// one from before seeds stands in for it.
+/// The play on the map at `path` as it counts now, using its saved Random colouring.
 fn recalculate(s: &OnlineScore, path: &Path) -> Option<Recalculated> {
     let mods = Mods::from_list(&s.mods);
     let scroll_speed = s.scroll_speed.unwrap_or(1.0);
@@ -91,13 +90,20 @@ fn recalculate(s: &OnlineScore, path: &Path) -> Option<Recalculated> {
         rate: s.rate,
         mods,
         scroll_speed,
-        seed: 0,
+        seed: s.seed.unwrap_or(0),
         half,
     };
     let pp = crate::pp::play_pp(path, &play)?;
     Some(Recalculated {
         pp,
-        stars: crate::stars::star_rating_played(path, s.rate, mods, scroll_speed, 0, half),
+        stars: crate::stars::star_rating_played(
+            path,
+            s.rate,
+            mods,
+            scroll_speed,
+            s.seed.unwrap_or(0),
+            half,
+        ),
     })
 }
 

@@ -99,6 +99,7 @@ fn a_local_score_gets_its_stats_and_pp_from_its_replay() {
         stats: Some((stats, game::Windows::new(6.0))),
         breakdown: Some(b),
         replay: None,
+        seed: Some(42),
     })
     .unwrap();
     results.job = Some(rx);
@@ -106,6 +107,7 @@ fn a_local_score_gets_its_stats_and_pp_from_its_replay() {
     assert!(!results.partial && results.job.is_none());
     assert_eq!(results.stats.errors.len(), 400);
     assert_eq!(results.pp, Some(b.pp));
+    assert_eq!(results.seed, Some(42));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

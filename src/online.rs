@@ -275,6 +275,9 @@ pub struct OnlineScore {
     pub miss: u32,
     pub rate: f64,
     pub mods: Vec<String>,
+    /// Random colouring; absent in scores from before seed metadata.
+    #[serde(default)]
+    pub seed: Option<u64>,
     pub pp: Option<f64>,
     pub date: u64,
     #[serde(default)]

@@ -43,3 +43,16 @@
 - Use squash merge to integrate a branch as one commit; do not create merge commits.
 - Write the squash commit message in English using Conventional Commits.
 - If updating a rebased remote branch requires a force push, use `--force-with-lease`.
+
+## Required validation before completion
+
+- Before finishing any task, run lint and formatting checks for the affected crates.
+- Fix all lint errors, warnings, and formatting failures, then rerun the checks.
+- The work is not complete until both lint and formatting checks pass.
+
+## Feature branches and protected integration
+
+- Start every new feature in a new dedicated branch before making implementation changes.
+- Never commit or push code directly to `worktree-taiko-client`.
+- Integrate changes into `worktree-taiko-client` only through a pull request after the required CI checks pass.
+- Requests to bypass this workflow do not waive the branch, pull request, or validation requirements.

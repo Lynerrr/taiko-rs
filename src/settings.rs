@@ -47,6 +47,7 @@ pub enum Item {
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
+    BlackLane,
     HideGreat,
     ChatFilter,
     MessageSound,
@@ -112,7 +113,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 124] = [
+pub const ITEMS: [(&str, Item); 125] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -139,6 +140,7 @@ pub const ITEMS: [(&str, Item); 124] = [
     ("VIEW", Item::BackgroundDim),
     ("VIEW", Item::BackgroundDimBlack),
     ("VIEW", Item::KiaiEffects),
+    ("VIEW", Item::BlackLane),
     ("INPUT", Item::Key(0)),
     ("INPUT", Item::Key(1)),
     ("INPUT", Item::Key(2)),
@@ -501,6 +503,7 @@ impl Item {
                 "Колесо меняет размер поля"
             ),
             Item::KiaiEffects => tr!("Kiai effects", "キアイの演出", "Эффекты киай"),
+            Item::BlackLane => tr!("Black lane", "黒いレーン", "Чёрная дорожка"),
             Item::HideGreat => tr!(
                 "Hide GREAT splash",
                 "GREATの表示を隠す",
@@ -693,6 +696,7 @@ impl Item {
             | Item::BackgroundDimBlack
             | Item::Interface
             | Item::KiaiEffects
+            | Item::BlackLane
             | Item::AutoplayLeftHanded
             | Item::HideGreat
             | Item::HitFlash
@@ -890,6 +894,11 @@ impl Item {
                 "リプレイ、スコア、動画、ダウンロードした譜面、スキン、キャッシュ。Enter: 別のフォルダやドライブへ移動。",
                 "Повторы, рекорды, видео, скачанные карты, скины и кэш. Enter: перенести в другую папку или на диск."
             ),
+            Item::BlackLane => tr!(
+                "The lane the notes scroll on, and the drum's panel, are pure black: no kiai tint, no skin's lane picture.",
+                "ノーツが流れるレーンと太鼓のパネルを真っ黒に。キアイの色もスキンのレーン画像もなし。",
+                "Дорожка, по которой едут ноты, и панель барабана полностью чёрные: без подсветки киай и картинки дорожки из скина."
+            ),
             Item::KiaiEffects => tr!(
                 "During kiai time, tint the lane and pulse the hit target with the beat. The main menu joins in too.",
                 "キアイタイム中、レーンに色を付け、判定枠を拍に合わせて脈打たせます。メインメニューも盛り上がります。",
@@ -1083,9 +1092,9 @@ impl Item {
                 "Автоигра начинает с левой руки, а не с правой."
             ),
             Item::SongSelectLayout => tr!(
-                "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
-                "曲リスト、譜面パネル、ランキングの間の境目をドラッグ。Enter: 初期設定に戻す。",
-                "Тяните границы между списком песен, панелью карты и таблицей рекордов. Enter: по умолчанию."
+                "Drag the edge between the song list and the map panel. Enter: back to the default.",
+                "曲リストと譜面パネルの間の境目をドラッグ。Enter: 初期設定に戻す。",
+                "Тяните границу между списком песен и панелью карты. Enter: по умолчанию."
             ),
             Item::Changelog => tr!(
                 "Enter: the latest changes. They also show by themselves after an update.",
