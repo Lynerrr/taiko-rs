@@ -100,6 +100,7 @@ pub enum Item {
     Fullscreen,
     WindowSize,
     DiscordPresence,
+    IdleScreen,
     /// After a crash, the next start sends its report in (`Config::send_crash_reports`).
     CrashReports,
     Skin,
@@ -111,7 +112,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 123] = [
+pub const ITEMS: [(&str, Item); 124] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -227,6 +228,7 @@ pub const ITEMS: [(&str, Item); 123] = [
     ("ONLINE", Item::KrokodilKoban),
     ("SYSTEM", Item::Language),
     ("SYSTEM", Item::Splash),
+    ("SYSTEM", Item::IdleScreen),
     ("SYSTEM", Item::LegacyMenu),
     ("SYSTEM", Item::MenuNotes),
     ("SYSTEM", Item::MenuNotesDim),
@@ -431,6 +433,7 @@ impl Item {
             Item::Fullscreen => tr!("Fullscreen", "フルスクリーン", "Полный экран"),
             Item::WindowSize => tr!("Window size", "ウィンドウのサイズ", "Размер окна"),
             Item::DiscordPresence => tr!("Discord status", "Discordのステータス", "Статус в Discord"),
+            Item::IdleScreen => tr!("Idle screen", "待機画面", "Экран бездействия"),
             Item::CrashReports => tr!("Send crash reports", "クラッシュレポートを送る", "Отправлять отчёты о вылетах"),
             Item::Skin => tr!("Skin", "スキン", "Скин"),
             Item::SkinParts => tr!("Skin parts", "スキンのパーツ", "Части скина"),
@@ -467,6 +470,7 @@ impl Item {
             Item::PlayfieldPreset
             | Item::TouchLayout
             | Item::Screenshots
+            | Item::IdleScreen
             | Item::Language
             | Item::AudioBuffer
             | Item::PresentMode
@@ -892,6 +896,11 @@ impl Item {
                 "After a crash, the next start sends its report to the developers: the build, the system, the graphics card and where it crashed. No account or folder names.",
                 "クラッシュしたら、次の起動時にレポートを開発者に送ります: ビルド、システム、グラフィックカード、落ちた場所。アカウント名やフォルダ名は含みません。",
                 "После вылета следующий запуск отправит отчёт разработчикам: сборку, систему, видеокарту и место вылета. Без имени аккаунта и папок."
+            ),
+            Item::IdleScreen => tr!(
+                "After this long without a key, click or move, menus fade away and the song's disc turns over the blurred background. Anything brings them back.",
+                "この時間キー・クリック・マウス操作がないと、メニューが消えてぼかした背景の上で曲のディスクが回ります。何か操作すれば戻ります。",
+                "Если столько времени не нажимать клавиши и не двигать мышь, меню исчезает и диск песни крутится над размытым фоном. Любое действие всё вернёт."
             ),
             Item::DiscordPresence => tr!(
                 "Show the map you're playing, your lobby or who you spectate in your Discord status.",

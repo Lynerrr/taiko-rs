@@ -24,7 +24,7 @@ const FALL_MS: f32 = 140.0;
 const DISC_PIXELS: usize = 46;
 const DISC_R: f32 = 92.0;
 /// Where the rim starts, as a part of the radius.
-const DISC_RIM: f32 = 0.85;
+pub(crate) const DISC_RIM: f32 = 0.85;
 const DISC_Y: f32 = 196.0;
 /// How fast it turns (radians a second).
 const SPIN: f32 = 0.6;
@@ -156,9 +156,79 @@ pub struct Frame<'a> {
     pub volume: f32,
 }
 
-pub struct Player {
+/// The music's spectrum as rows of blocks out of a disc: the player's, and the idle screen's.
+pub struct Spectrum {
     /// The last `WINDOW` samples played, filled in by the caller.
     pub samples: Vec<f32>,
+    bands: [f32; BANDS],
+    re: Vec<f32>,
+    im: Vec<f32>,
+}
+
+impl Default for Spectrum {
+    fn default() -> Spectrum {
+        Spectrum { samples: vec![0.0; WINDOW], bands: [0.0; BANDS], re: vec![0.0; WINDOW], im: vec![0.0; WINDOW] }
+    }
+}
+
+impl Spectrum {
+    /// Takes in what `samples` holds now (`sounding`: they're what just played), the bands
+    /// falling back over `dt_ms` where it's quieter.
+    pub fn update(&mut self, dt_ms: f32, sounding: bool, rate: u32) {
+        let fall = (-dt_ms / FALL_MS).exp();
+        let heard = if sounding { self.analyse(rate) } else { [0.0; BANDS] };
+        for (band, new) in self.bands.iter_mut().zip(heard) {
+            *band = new.max(*band * fall);
+        }
+    }
+
+    fn analyse(&mut self, rate: u32) -> [f32; BANDS] {
+        for (i, (re, s)) in self.re.iter_mut().zip(&self.samples).enumerate() {
+            let hann = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / WINDOW as f32).cos();
+            *re = s * hann;
+        }
+        self.im.fill(0.0);
+        fft(&mut self.re, &mut self.im);
+        let per_bin = rate as f32 / WINDOW as f32;
+        let edge = |band: usize| LOWEST_HZ * (HIGHEST_HZ / LOWEST_HZ).powf(band as f32 / BANDS as f32) / per_bin;
+        let mut out = [0.0; BANDS];
+        for (band, v) in out.iter_mut().enumerate() {
+            let lo = edge(band) as usize;
+            let hi = (edge(band + 1) as usize).clamp(lo + 1, WINDOW / 2);
+            let peak = (lo..hi).map(|k| self.re[k].hypot(self.im[k])).fold(0.0, f32::max) * 4.0 / WINDOW as f32;
+            let db = 20.0 * (peak + 1e-6).log10() + TILT_DB * band as f32 / BANDS as f32;
+            *v = (1.0 - db / FLOOR_DB).clamp(0.0, 1.0);
+        }
+        out
+    }
+
+    /// The rays: rows of blocks out of a disc of radius `disc_r` at (`cx`, `cy`), the lows at
+    /// the top, mirrored left and right, at opacity `alpha`.
+    pub fn draw_rays(&self, c: &mut Canvas, cx: f32, cy: f32, disc_r: f32, alpha: f32) {
+        let (block, step) = (pixel_size(BLOCK), pixel_size(BLOCK_STEP));
+        for (band, &v) in self.bands.iter().enumerate() {
+            let blocks = (v * MAX_BLOCKS as f32).round() as usize;
+            let angle = std::f32::consts::PI * (band as f32 + 0.5) / BANDS as f32;
+            let (sin, cos) = angle.sin_cos();
+            for b in 0..blocks {
+                let r = disc_r + 7.0 + b as f32 * step;
+                let t = b as f32 / MAX_BLOCKS as f32;
+                let col = rgba(crate::menu::tint(crate::render::accent(), 0xffffff, t * t), alpha);
+                for side in [-1.0, 1.0] {
+                    let (x, y) = (snap_to_grid(cx + side * sin * r), snap_to_grid(cy - cos * r));
+                    c.rect(x - block / 2.0, y - block / 2.0, block, block, col);
+                }
+            }
+        }
+    }
+}
+
+/// How far the rays reach past the disc's edge at most.
+pub const RAYS_REACH: f32 = 7.0 + MAX_BLOCKS as f32 * BLOCK_STEP;
+
+pub struct Player {
+    /// The music's spectrum around the disc.
+    pub spectrum: Spectrum,
     pub list: Playlist,
     /// The library the list was made from, by size.
     pub library_len: usize,
@@ -178,9 +248,6 @@ pub struct Player {
     scroll: usize,
     followed: Option<usize>,
     angle: f32,
-    bands: [f32; BANDS],
-    re: Vec<f32>,
-    im: Vec<f32>,
     /// The position last known (paused, the audio clock has none).
     times: (f64, f64),
 }
@@ -221,7 +288,7 @@ fn fft(re: &mut [f32], im: &mut [f32]) {
 impl Player {
     pub fn new(library: &[Entry], entry: Option<usize>) -> Player {
         Player {
-            samples: vec![0.0; WINDOW],
+            spectrum: Spectrum::default(),
             list: Playlist::new(library, entry),
             library_len: library.len(),
             drag: None,
@@ -234,9 +301,6 @@ impl Player {
             scroll: 0,
             followed: None,
             angle: 0.0,
-            bands: [0.0; BANDS],
-            re: vec![0.0; WINDOW],
-            im: vec![0.0; WINDOW],
             times: (0.0, 0.0),
         }
     }
@@ -291,33 +355,9 @@ impl Player {
         self.followed = None;
     }
 
-    /// Each band's height (0..1) in the sound in `samples`.
-    fn spectrum(&mut self, rate: u32) -> [f32; BANDS] {
-        for (i, (re, s)) in self.re.iter_mut().zip(&self.samples).enumerate() {
-            let hann = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / WINDOW as f32).cos();
-            *re = s * hann;
-        }
-        self.im.fill(0.0);
-        fft(&mut self.re, &mut self.im);
-        let per_bin = rate as f32 / WINDOW as f32;
-        let edge = |band: usize| LOWEST_HZ * (HIGHEST_HZ / LOWEST_HZ).powf(band as f32 / BANDS as f32) / per_bin;
-        let mut out = [0.0; BANDS];
-        for (band, v) in out.iter_mut().enumerate() {
-            let lo = edge(band) as usize;
-            let hi = (edge(band + 1) as usize).clamp(lo + 1, WINDOW / 2);
-            let peak = (lo..hi).map(|k| self.re[k].hypot(self.im[k])).fold(0.0, f32::max) * 4.0 / WINDOW as f32;
-            let db = 20.0 * (peak + 1e-6).log10() + TILT_DB * band as f32 / BANDS as f32;
-            *v = (1.0 - db / FLOOR_DB).clamp(0.0, 1.0);
-        }
-        out
-    }
 
     pub fn draw(&mut self, c: &mut Canvas, f: &Frame) {
-        let fall = (-c.dt_ms / FALL_MS).exp();
-        let heard = if f.sounding { self.spectrum(f.rate) } else { [0.0; BANDS] };
-        for (band, new) in self.bands.iter_mut().zip(heard) {
-            *band = new.max(*band * fall);
-        }
+        self.spectrum.update(c.dt_ms, f.sounding, f.rate);
         if !f.paused {
             self.angle += SPIN * c.dt_ms / 1000.0;
         }
@@ -327,7 +367,7 @@ impl Player {
         let wide = c.width >= QUEUE_FROM;
         let (left, right) = (LIST_W + 20.0, c.width - if wide { QUEUE_W + 20.0 } else { 10.0 });
         let x = (left + right) / 2.0;
-        self.draw_rays(c, x);
+        self.spectrum.draw_rays(c, x, DISC_Y, DISC_R, 1.0);
         draw_disc(c, x, DISC_Y, self.angle, f.pictured);
         if f.pictured {
             // A hair past the rim's inside edge, smooth under its pixels.
@@ -518,24 +558,6 @@ impl Player {
         c.hit(x - 2.0, y, VOLUME_W + 4.0, H, Hit::PlayerVolume);
     }
 
-    /// The spectrum: rows of blocks out of the disc, the lows at the top, mirrored.
-    fn draw_rays(&self, c: &mut Canvas, cx: f32) {
-        let (block, step) = (pixel_size(BLOCK), pixel_size(BLOCK_STEP));
-        for (band, &v) in self.bands.iter().enumerate() {
-            let blocks = (v * MAX_BLOCKS as f32).round() as usize;
-            let angle = std::f32::consts::PI * (band as f32 + 0.5) / BANDS as f32;
-            let (sin, cos) = angle.sin_cos();
-            for b in 0..blocks {
-                let r = DISC_R + 7.0 + b as f32 * step;
-                let t = b as f32 / MAX_BLOCKS as f32;
-                let col = rgba(crate::menu::tint(crate::render::accent(), 0xffffff, t * t), 1.0);
-                for side in [-1.0, 1.0] {
-                    let (x, y) = (snap_to_grid(cx + side * sin * r), snap_to_grid(DISC_Y - cos * r));
-                    c.rect(x - block / 2.0, y - block / 2.0, block, block, col);
-                }
-            }
-        }
-    }
 
     /// The song's progress in blocks, with the times either side.
     fn draw_timeline(&mut self, c: &mut Canvas, cx: f32, room: f32) {
@@ -614,7 +636,12 @@ fn draw_folder_icon(c: &mut Canvas, x: f32, y: f32, px: f32, colour: u32) {
 /// The record's pixel parts, around the picture the renderer puts under them: a white rim like a
 /// note's and the spindle. Without a background, slices that show it turning fill it.
 fn draw_disc(c: &mut Canvas, x: f32, y: f32, angle: f32, pictured: bool) {
-    let px = pixel_size(DISC_R * 2.0 / DISC_PIXELS as f32);
+    draw_disc_sized(c, x, y, DISC_R, angle, pictured, 1.0);
+}
+
+/// The same record at radius `r` and opacity `alpha` (the idle screen's).
+pub(crate) fn draw_disc_sized(c: &mut Canvas, x: f32, y: f32, r: f32, angle: f32, pictured: bool, alpha: f32) {
+    let px = pixel_size(r * 2.0 / DISC_PIXELS as f32);
     let half = DISC_PIXELS as f32 / 2.0;
     let (left, top) = (snap_to_grid(x - half * px), snap_to_grid(y - half * px));
     for row in 0..DISC_PIXELS {
@@ -641,7 +668,7 @@ fn draw_disc(c: &mut Canvas, x: f32, y: f32, angle: f32, pictured: bool) {
                 Some((_, was)) if was == colour => {}
                 _ => {
                     if let Some((from, was)) = run.filter(|r| r.1 != 0) {
-                        c.rect(left + from as f32 * px, top + row as f32 * px, (col - from) as f32 * px, px, rgba(was, 1.0));
+                        c.rect(left + from as f32 * px, top + row as f32 * px, (col - from) as f32 * px, px, rgba(was, alpha));
                     }
                     run = Some((col, colour));
                 }
@@ -659,18 +686,18 @@ fn slice_at(angle: f32) -> u32 {
 mod tests {
     use super::*;
 
-    fn tone(hz: f32, rate: u32) -> Player {
-        let mut p = Player::new(&[], None);
-        for (i, s) in p.samples.iter_mut().enumerate() {
+    fn tone(hz: f32, rate: u32) -> Spectrum {
+        let mut sp = Spectrum::default();
+        for (i, s) in sp.samples.iter_mut().enumerate() {
             *s = (std::f32::consts::TAU * hz * i as f32 / rate as f32).sin() * 0.5;
         }
-        p
+        sp
     }
 
     #[test]
     fn a_tone_lights_up_its_own_band() {
         for hz in [200.0, 1000.0, 8000.0] {
-            let bands = tone(hz, 48_000).spectrum(48_000);
+            let bands = tone(hz, 48_000).analyse(48_000);
             let loudest = (0..BANDS).max_by(|&a, &b| bands[a].total_cmp(&bands[b])).unwrap();
             let expected = (hz / LOWEST_HZ).ln() / (HIGHEST_HZ / LOWEST_HZ).ln() * BANDS as f32;
             assert!((loudest as f32 - expected).abs() <= 3.0, "{hz} Hz in band {loudest}, not {expected}");
@@ -680,7 +707,20 @@ mod tests {
 
     #[test]
     fn silence_shows_nothing() {
-        assert!(Player::new(&[], None).spectrum(48_000).iter().all(|&v| v == 0.0));
+        assert!(Spectrum::default().analyse(48_000).iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn the_bands_fall_back_in_silence() {
+        let mut sp = tone(1000.0, 48_000);
+        sp.update(16.0, true, 48_000);
+        let lit = sp.bands.iter().copied().fold(0.0, f32::max);
+        assert!(lit > 0.8);
+        sp.update(100.0, false, 48_000);
+        let after = sp.bands.iter().copied().fold(0.0, f32::max);
+        assert!(after < lit && after > 0.0, "falls, not drops: {lit} then {after}");
+        sp.update(1000.0, false, 48_000);
+        assert!(sp.bands.iter().all(|&v| v < 0.01), "a second of silence and it's gone");
     }
 
     #[test]
