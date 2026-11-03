@@ -35,6 +35,8 @@ pub struct Session {
     /// The room plays mapguessr; how many maps every player has (None: a list is missing).
     pub mapguessr: bool,
     pub common: Option<u32>,
+    /// Defense: the team's lives, gold, shield and towers, as the room keeps them.
+    pub team: Option<net::TeamState>,
 }
 
 impl Session {
@@ -58,6 +60,7 @@ impl Session {
             online_room: None,
             mapguessr: false,
             common: None,
+            team: None,
         }
     }
 
@@ -108,7 +111,7 @@ pub fn start_join(address: String, name: String) -> Connecting {
 
 pub fn live_from(game: &Game) -> Live {
     let s = &game.stats;
-    Live { score: s.score, combo: s.combo, accuracy: s.accuracy(), miss: s.miss, progress: game.progress() }
+    Live { score: s.score, combo: s.combo, accuracy: s.accuracy(), miss: s.miss, progress: game.progress(), great: s.great }
 }
 
 /// Defense: the team for the match starting (everyone playing it, by id so every player has
@@ -124,23 +127,11 @@ pub fn defense_team(s: &Session) -> (Vec<(u32, String)>, usize) {
     (team, me)
 }
 
-/// Defense: the notes the rest of the team has let through (their misses: each only ever
-/// misses their own turns' notes).
-pub fn team_leaks(s: &Session, game: &Game) -> u32 {
-    let Some(d) = &game.defense else { return 0 };
-    let me = s.client.id;
-    s.players
-        .iter()
-        .filter(|p| Some(p.id) != me && d.team.iter().any(|t| t.0 == p.id))
-        .map(|p| p.result.as_ref().map_or(p.live.miss, |r| r.miss))
-        .sum()
-}
-
-/// Defense, after the match: how the team did, from everyone's misses.
-fn defense_verdict(defense: net::Defense, rows: &[PlayerInfo]) -> (String, u32) {
+/// Defense, after the match: how the team did (the room's lives, else from everyone's misses).
+fn defense_verdict(defense: net::Defense, team: Option<net::TeamState>, rows: &[PlayerInfo]) -> (String, u32) {
     let leaked: u32 = rows.iter().map(|p| p.result.as_ref().map_or(p.live.miss, |r| r.miss)).sum();
-    let lives = defense.lives;
-    let left = lives.saturating_sub(leaked);
+    let lives = team.map_or(defense.lives, |t| t.max);
+    let left = team.map_or(lives.saturating_sub(leaked), |t| t.lives);
     if left == 0 {
         (tr!("THE TEAM FELL  ({leaked} notes got through)", "チーム敗北  ({leaked}ノーツ突破)", "КОМАНДА ПАЛА  (прорвалось {leaked})";), 0xEB452C)
     } else {
@@ -892,7 +883,7 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
     };
     let defense = s.map.as_ref().and_then(|m| m.defense);
     let (title, title_col) = match (final_results, defense) {
-        (Some(_), Some(d)) => defense_verdict(d, &rows),
+        (Some(_), Some(d)) => defense_verdict(d, s.team, &rows),
         (Some(_), None) => ("MATCH RESULTS".to_string(), 0xffffff),
         (None, _) => ("waiting for other players to finish...".to_string(), 0xffffff),
     };

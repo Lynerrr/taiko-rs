@@ -26,10 +26,10 @@ pub const SHOWN_AT_ONCE: usize = 3;
 const LAND_MS: f32 = crate::medal_sound::LAND * 1000.0;
 const LEAVE_MS: f32 = 320.0;
 /// The logo's glitch colours, for tears, and the brighter ones the splash splits the picture into.
-const TEAR_RED: u32 = 0x9f2137;
-const TEAR_CYAN: u32 = 0x2a9fb5;
-const SPLIT_RED: u32 = 0xff2a4a;
-const SPLIT_CYAN: u32 = 0x2ad4ff;
+pub(crate) const TEAR_RED: u32 = 0x9f2137;
+pub(crate) const TEAR_CYAN: u32 = 0x2a9fb5;
+pub(crate) const SPLIT_RED: u32 = 0xff2a4a;
+pub(crate) const SPLIT_CYAN: u32 = 0x2ad4ff;
 /// Before this it can't be skipped: a key still held from the play shouldn't throw it away.
 const SKIP_AFTER_MS: f32 = 450.0;
 

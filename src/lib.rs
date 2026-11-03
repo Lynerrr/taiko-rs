@@ -5689,6 +5689,35 @@ impl State {
                         s.client.send(net::ClientMsg::Skipped);
                     }
                 }
+                // Defense: 1-4 buy for the team, T takes the turn over, F spots camo notes.
+                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4 | KeyCode::KeyT | KeyCode::KeyF if game.defense.is_some() => {
+                    let t = game.time;
+                    let item = match code {
+                        KeyCode::Digit1 => Some(net::DefenseItem::Slow),
+                        KeyCode::Digit2 => Some(net::DefenseItem::Shield),
+                        KeyCode::Digit3 => Some(net::DefenseItem::Heal),
+                        KeyCode::Digit4 => Some(net::DefenseItem::Tower),
+                        _ => None,
+                    };
+                    let (gold, can_tag, can_spot) = (game.team_gold().unwrap_or(0), game.can_tag_in(t), game.can_spot(t));
+                    let act = match (item, code) {
+                        (Some(item), _) if gold < item.price() => {
+                            self.toast(format!("{}: {} gold, the team has {gold}", item.name(), item.price()));
+                            None
+                        }
+                        (Some(item), _) => Some(net::DefenseAct::Buy { item, at: t }),
+                        (None, KeyCode::KeyT) if can_tag => Some(net::DefenseAct::TagIn { at: t }),
+                        (None, KeyCode::KeyT) => {
+                            self.toast("can't take this turn over (yours, already taken, or ending)".into());
+                            None
+                        }
+                        (None, _) if can_spot => Some(net::DefenseAct::Spot { at: t }),
+                        (None, _) => None,
+                    };
+                    if let (Some(act), Some(s)) = (act, &self.mp) {
+                        s.client.send(net::ClientMsg::Defense(act));
+                    }
+                }
                 KeyCode::Escape => {
                     // No pausing in a match; a second Esc forfeits.
                     if quit_armed.is_some_and(|t| t.elapsed() < Duration::from_millis(1500)) {
@@ -7645,9 +7674,10 @@ impl State {
     fn handle_server_msg(&mut self, msg: net::ServerMsg) {
         use net::ServerMsg;
         match msg {
-            ServerMsg::Room { players, map, in_match, mapguessr, common } => {
+            ServerMsg::Room { players, map, in_match, mapguessr, common, team } => {
                 let library = &self.library;
                 let Some(s) = &mut self.mp else { return };
+                s.team = team;
                 let game_over = s.in_match && !in_match;
                 s.players = players;
                 // The room learns our own mods (on joining, and if it has others).
@@ -7766,6 +7796,15 @@ impl State {
                     }
                 }
             }
+            ServerMsg::Defense { from, act } => match &mut self.scene {
+                Scene::MpPlay { game, .. } => game.defense_act(from, act),
+                Scene::Spectate(v) => {
+                    for (_, g) in v.games.iter_mut() {
+                        g.defense_act(from, act);
+                    }
+                }
+                _ => {}
+            },
             ServerMsg::MapFile(part) => self.receive_map_part(part),
             ServerMsg::Results(r) => {
                 if let Some(s) = &mut self.mp {
@@ -9230,8 +9269,8 @@ impl State {
                 game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
-                if let Some(s) = &self.mp {
-                    game.set_team_leaks(multiplayer::team_leaks(s, game));
+                if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
+                    game.set_team(team);
                 }
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
@@ -9330,11 +9369,11 @@ impl State {
                     g.hidden = hidden;
                     g.update(now, self.audio.as_ref(), self.play_offset);
                 }
-                // Defense: each game's lives go by the whole team's misses.
-                let misses: u32 = v.games.iter().map(|(_, g)| g.stats.miss).sum();
-                for (_, g) in v.games.iter_mut() {
-                    let others = misses - g.stats.miss;
-                    g.set_team_leaks(others);
+                // Defense: the team's lives and gold, as the room has them.
+                if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
+                    for (_, g) in v.games.iter_mut() {
+                        g.set_team(team);
+                    }
                 }
                 match v.focus {
                     Some(k) if k < v.games.len() => {
