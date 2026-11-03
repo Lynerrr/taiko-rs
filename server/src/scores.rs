@@ -668,6 +668,7 @@ impl Scores {
                     .map(|a| online::clean_text(a, 4))
                     .take(40)
                     .collect(),
+                seed: m.seed,
                 pp: play.pp,
                 date: now,
                 great: play.great,
@@ -790,6 +791,7 @@ impl Scores {
                 miss: 0,
                 rate: 1.0,
                 mods,
+                seed: None,
                 pp: Some(pp),
                 date: now,
                 great: notes,
@@ -1182,6 +1184,24 @@ mod tests {
             timing: None,
             rolls: None,
         }
+    }
+
+    #[test]
+    fn random_seed_is_kept_with_the_score_and_replay() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-seed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut scores = Scores::load(Some(dir.clone()));
+        let mut sent = play(7, 500, 100.0);
+        sent.map.mods = vec!["RD".into()];
+        sent.map.seed = Some(u64::MAX);
+        scores.submit("a", "A", sent, 1).unwrap();
+        assert_eq!(scores.score(1).unwrap().seed, Some(u64::MAX));
+        let loaded = Scores::load(Some(dir.clone()));
+        assert_eq!(loaded.score(1).unwrap().seed, Some(u64::MAX));
+        let replay: online::OnlineReplay =
+            serde_json::from_slice(&std::fs::read(dir.join("replays/1.json")).unwrap()).unwrap();
+        assert_eq!(replay.map.seed, Some(u64::MAX));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

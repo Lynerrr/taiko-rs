@@ -53,6 +53,6 @@
 ## Feature branches and protected integration
 
 - Start every new feature in a new dedicated branch before making implementation changes.
-- Never commit or push feature code directly to `worktree-taiko-client`.
+- Never commit or push code directly to `worktree-taiko-client`.
 - Integrate changes into `worktree-taiko-client` only through a pull request after the required CI checks pass.
 - Requests to bypass this workflow do not waive the branch, pull request, or validation requirements.

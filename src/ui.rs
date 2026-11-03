@@ -2299,6 +2299,7 @@ pub fn draw_mod_select(
     mods: crate::mods::Mods,
     favourites: crate::mods::Mods,
     cursor: usize,
+    seed: u64,
 ) {
     use crate::mods::{ALL, GROUPS};
     const GOLD: u32 = 0xffd34d;
@@ -2318,7 +2319,7 @@ pub fn draw_mod_select(
     let rank = if mods.unranked() { "  (not saved)" } else { "" };
     let score = format!("score x{mult:.2}{rank}");
     c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &score);
-    let hint = "arrows + Space toggle   F / right-click favourite   R shuffles   Backspace clears   C customize (Multiverse, Shapeshift)   F1 / Esc closes";
+    let hint = "arrows + Space toggle   F / right-click favourite   R shuffles   Backspace clears   C customize (Random, Multiverse, Shapeshift)   F1 / Esc closes";
     let room = pw - 70.0 - 16.0 - Canvas::text_width(8.0, &score) - 16.0;
     c.text(
         px + 70.0,
@@ -2346,6 +2347,8 @@ pub fn draw_mod_select(
             let y = py + 52.0 + r as f32 * row_h;
             let i = ALL.iter().position(|&x| x == m).unwrap_or(0);
             let on = mods.has(m);
+            let incompatible = mods.incompatible(m);
+            let accent = if incompatible { &0x555560 } else { accent };
             let h = row_h - 4.0;
             let hover = c.hovered(x, y, col_w - 6.0, h);
             if hover {
@@ -2400,7 +2403,16 @@ pub fn draw_mod_select(
                 x + 31.0,
                 y + h / 2.0 - 3.0,
                 6.0,
-                rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0),
+                rgba(
+                    if on {
+                        0xffffff
+                    } else if incompatible {
+                        0x626270
+                    } else {
+                        0x9a9ab0
+                    },
+                    1.0,
+                ),
                 &name,
             );
             c.hit(x, y, col_w - 6.0, h, Hit::ModToggle(i));
@@ -2430,6 +2442,7 @@ pub fn draw_mod_select(
             .find(|g| g.2.contains(&m))
             .map_or(0x9a9ab0, |g| g.1);
         let on = mods.has(m);
+        let col = if mods.incompatible(m) { 0x555560 } else { col };
         let text = format!("{} {}", m.acronym(), m.name());
         let cw = Canvas::text_width(6.0, &text) + 14.0;
         if fx + cw > px + pw - 16.0 {
@@ -2462,7 +2475,16 @@ pub fn draw_mod_select(
             fx + 7.0,
             fav_y + 5.0,
             6.0,
-            rgba(if on { 0x15151d } else { 0xc8c8d8 }, 1.0),
+            rgba(
+                if on {
+                    0x15151d
+                } else if mods.incompatible(m) {
+                    0x626270
+                } else {
+                    0xc8c8d8
+                },
+                1.0,
+            ),
             &text,
         );
         c.hit(fx, fav_y, cw, 16.0, Hit::ModToggle(i));
@@ -2478,13 +2500,20 @@ pub fn draw_mod_select(
         rgba(0xffffff, 1.0),
         &format!("{} ({})", shown.name(), shown.acronym()),
     );
-    c.text(
-        px + 16.0,
-        dy + 13.0,
-        7.0,
-        rgba(0x9a9ab0, 1.0),
-        shown.description(),
-    );
+    let description = if mods.incompatible(shown) {
+        let removed = mods
+            .iter()
+            .filter(|&m| crate::mods::Mods::parse_set(shown.acronym()).incompatible(m))
+            .map(|m| m.acronym())
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("Selecting this mod switches off: {removed}")
+    } else if shown == crate::mods::Mod::Random {
+        format!("Seed: {seed}   C: customize seed")
+    } else {
+        shown.description().to_string()
+    };
+    c.text(px + 16.0, dy + 13.0, 7.0, rgba(0x9a9ab0, 1.0), &description);
     let bw = 60.0;
     let active = if mods.is_empty() {
         "none".to_string()
@@ -2820,6 +2849,7 @@ impl Select {
 /// replay played through), the pp breakdown, and an online score's replay.
 #[derive(Default)]
 pub struct Detail {
+    pub seed: Option<u64>,
     pub stats: Option<(Stats, Windows)>,
     pub breakdown: Option<crate::pp::Breakdown>,
     pub replay: Option<Result<std::path::PathBuf, String>>,
@@ -2881,6 +2911,7 @@ pub struct Results {
     /// The mods played with, and the speed when it isn't theirs (DT / HT show as mods).
     pub mods: crate::mods::Mods,
     pub rate: Option<f64>,
+    pub seed: Option<u64>,
 }
 
 /// How far down the results scroll: the pp start a screen below them.
@@ -2914,6 +2945,7 @@ impl Results {
             scroll_to: 0.0,
             mods: crate::mods::Mods::NONE,
             rate: None,
+            seed: None,
         }
     }
 
@@ -2929,6 +2961,9 @@ impl Results {
             }
         };
         self.job = None;
+        if let Some(seed) = d.seed {
+            self.seed = Some(seed);
+        }
         if let Some((st, windows)) = d.stats {
             // The counts stay the leaderboard's; the replay adds what it doesn't keep.
             let s = &mut self.stats;
@@ -2997,6 +3032,17 @@ impl Results {
             c.text_centered(cx, 80.0 + (70.0 - size) / 2.0, size, rgba(col, pop), grade);
         }
         self.draw_mods(c, cx, 44.0);
+        if self.mods.has(crate::mods::Mod::Random)
+            && let Some(seed) = self.seed
+        {
+            c.text_centered(
+                cx,
+                66.0,
+                7.0,
+                rgba(0x9a9ab0, 1.0),
+                &format!("Random seed: {seed}"),
+            );
+        }
         c.text_centered(
             cx,
             170.0,

@@ -277,8 +277,8 @@ impl NoteBlock {
 }
 
 pub struct Game {
-    /// Random's colouring of the notes: a new one each play, kept with the replay so it plays
-    /// back the same; 0 is the one per map from before seeds.
+    /// Random's configured colouring, kept with the replay so it plays back the same;
+    /// 0 is the one per map from before seeds.
     pub seed: u64,
     /// Which notes Half took off.
     pub half: crate::mods::HalfRule,

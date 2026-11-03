@@ -312,6 +312,8 @@ pub struct Config {
     pub universe_presets: Vec<crate::multiverse::Preset>,
     /// Shapeshift: how often the lane changes shape, how long the morph takes, the order.
     pub shapeshift: crate::shapeshift::Config,
+    /// Random colouring, shared by retries and saved between sessions.
+    pub random_seed: u64,
     /// Mods marked as favourites in the mod select (shown in a row of their own).
     pub favourite_mods: crate::mods::Mods,
     /// Note colours without Multiverse.
@@ -426,6 +428,7 @@ impl Default for Config {
             universes: crate::multiverse::defaults(),
             universe_presets: Vec::new(),
             shapeshift: Default::default(),
+            random_seed: crate::fresh_seed(),
             favourite_mods: crate::mods::Mods::NONE,
             note_colours: crate::multiverse::Colours::CLASSIC,
             video: Default::default(),
@@ -1055,6 +1058,7 @@ impl Config {
                     .universe_presets
                     .extend(crate::multiverse::Preset::parse(v)),
                 "note_colours" => cfg.note_colours = crate::multiverse::Colours::parse(v),
+                "random_seed" => cfg.random_seed = v.parse().unwrap_or(cfg.random_seed),
                 "shapeshift" => cfg.shapeshift = crate::shapeshift::Config::parse(v),
                 "favourite_mods" => cfg.favourite_mods = crate::mods::Mods::parse_set(v),
                 k if k.starts_with("video_") => {
@@ -1307,6 +1311,10 @@ impl Config {
             out.push_str(&format!("multiverse_preset = {}\n", p.format()));
         }
         out.push_str(&format!(
+            "# Random: repeatable note colours (C in the mod select)\nrandom_seed = {}\n",
+            self.random_seed
+        ));
+        out.push_str(&format!(
             "# Shapeshift: bars per shape (4/8/16/32), bars to morph (0.5/1/2/4), order shuffle/fixed, shapes in order (- = left out)\nshapeshift = {}\n",
             self.shapeshift.format()
         ));
@@ -1482,6 +1490,17 @@ mod tests {
             "hotkey.apply_offset = none\nsongs = /a\nmultiverse_preset = x: y\nskin_part = a = b\n",
         );
         assert_eq!(out, "keys = A, S, K, L\n");
+    }
+
+    #[test]
+    fn random_seeds_round_trip_including_legacy_and_maximum() {
+        for seed in [0, 42, u64::MAX] {
+            let cfg = Config::parse_text(&format!("random_seed = {seed}\n"));
+            assert_eq!(cfg.random_seed, seed);
+            assert_eq!(Config::parse_text(&cfg.to_text()).random_seed, seed);
+        }
+        let cfg = Config::parse_text("random_seed = 42\nrandom_seed = invalid\n");
+        assert_eq!(cfg.random_seed, 42);
     }
 
     #[test]

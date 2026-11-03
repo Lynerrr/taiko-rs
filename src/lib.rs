@@ -446,6 +446,7 @@ struct State {
     /// most one is open).
     universe_setup: Option<multiverse::Setup>,
     shapeshift_setup: Option<shapeshift::Setup>,
+    random_setup: Option<String>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
     leaderboard: Vec<PathBuf>,
     /// The leaderboard's rows scrolled past, for which map and tab (a new one starts at the
@@ -1258,6 +1259,12 @@ fn results_job(
             }
             (None, None) => None,
         };
+        if let Some(r) = &replay {
+            d.seed = Some(r.seed);
+            if r.seed != play.seed {
+                d.breakdown = pp::breakdown(&path, &r.pp_play());
+            }
+        }
         d.stats = replay.and_then(|r| scores::simulate(&path, &r));
         let _ = tx.send(d);
     });
@@ -2460,6 +2467,7 @@ impl State {
             game::Windows::new(e.meta.od),
         );
         results.set_mods(mods, r.rate);
+        results.seed = Some(r.seed);
         results.replay = Some(file.to_path_buf());
         results.partial = true;
         results.pp = self
@@ -2664,6 +2672,7 @@ impl State {
             game::Windows::new(e.meta.od),
         );
         results.set_mods(mods, score.rate);
+        results.seed = score.seed;
         results.partial = true;
         results.pp = score.pp;
         results.no_pp = mods.unranked().then_some(tr!(
@@ -2684,7 +2693,7 @@ impl State {
             rate: score.rate,
             mods,
             scroll_speed: score.scroll_speed.unwrap_or(1.0),
-            seed: 0,
+            seed: score.seed.unwrap_or(0),
             half: mods::HalfRule::of_pp_version(score.pp_version),
         };
         let online = (self.cfg.online_server.clone(), score, e.label());
@@ -7704,7 +7713,7 @@ impl State {
             return;
         }
         let mut info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
-        info.seed = lobby_seed(None);
+        info.seed = lobby_seed(Some(self.cfg.random_seed));
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
@@ -7798,7 +7807,7 @@ impl State {
                             m.rate = rate;
                             m.mods = mods.list();
                             (m.multiverse, m.shapeshift) = mod_settings(mods);
-                            m.seed = lobby_seed(m.seed);
+                            m.seed = lobby_seed(Some(self.cfg.random_seed));
                             s.client.send(net::ClientMsg::SelectMap(m));
                         }
                         let text = format!("match rate {rate:.2}x");
@@ -8935,7 +8944,7 @@ impl State {
             // Only the speed's: everyone picks their other mods themselves.
             m.mods = mods.shared().list();
             (m.multiverse, m.shapeshift) = mod_settings(mods);
-            m.seed = lobby_seed(m.seed);
+            m.seed = lobby_seed(Some(self.cfg.random_seed));
             if Some(&m) != s.map.as_ref() {
                 s.client.send(net::ClientMsg::SelectMap(m));
             }
@@ -8967,9 +8976,9 @@ impl State {
             KeyCode::KeyF => self.toggle_favourite(mods::ALL[cur]),
             KeyCode::KeyC | KeyCode::KeyM => match mods::customizable(self.cfg.mods).first() {
                 Some(&m) => self.open_customization(m),
-                None => {
-                    self.toast("switch on Multiverse or Shapeshift to customize it".to_string())
-                }
+                None => self.toast(
+                    "switch on Random, Multiverse or Shapeshift to customize it".to_string(),
+                ),
             },
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
@@ -8983,6 +8992,14 @@ impl State {
 
     /// Opens the mod customization on mod `m`'s tab.
     fn open_customization(&mut self, m: mods::Mod) {
+        if m == mods::Mod::Random
+            && matches!(self.scene, Scene::Lobby)
+            && self.mp.as_ref().is_some_and(|s| !s.is_host())
+        {
+            self.toast("The host picks the Random seed for this lobby".into());
+            return;
+        }
+        self.random_setup = (m == mods::Mod::Random).then(|| self.cfg.random_seed.to_string());
         self.universe_setup =
             (m == mods::Mod::Multiverse).then(|| multiverse::Setup::new(game::FIRST_FOCUS, 0));
         self.shapeshift_setup = (m == mods::Mod::Shapeshift).then(shapeshift::Setup::default);
@@ -8990,7 +9007,9 @@ impl State {
 
     /// The mod customization's open tab.
     fn customization_tab(&self) -> Option<mods::Mod> {
-        if self.universe_setup.is_some() {
+        if self.random_setup.is_some() {
+            Some(mods::Mod::Random)
+        } else if self.universe_setup.is_some() {
             Some(mods::Mod::Multiverse)
         } else {
             self.shapeshift_setup
@@ -9002,10 +9021,11 @@ impl State {
     /// Keys in the mod customization: Tab goes to the next tab (closes it with only one), the
     /// rest go to the open one.
     fn customization_key(&mut self, code: KeyCode, text: Option<&str>, repeat: bool) {
-        let typing = self
-            .universe_setup
-            .as_ref()
-            .is_some_and(|s| s.typing.is_some());
+        let typing = self.random_setup.is_some()
+            || self
+                .universe_setup
+                .as_ref()
+                .is_some_and(|s| s.typing.is_some());
         let tabs = mods::customizable(self.cfg.mods);
         if code == KeyCode::Tab && !typing && tabs.len() > 1 {
             let at = tabs
@@ -9022,7 +9042,36 @@ impl State {
         if repeat && !typing && !arrows {
             return;
         }
-        if let Some(setup) = &mut self.universe_setup {
+        if let Some(input) = &mut self.random_setup {
+            match code {
+                KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.random_setup = None,
+                KeyCode::Enter | KeyCode::NumpadEnter => {
+                    if let Ok(seed) = input.parse::<u64>() {
+                        self.cfg.random_seed = seed;
+                        self.cfg.save();
+                        self.random_setup = None;
+                        self.update_lobby_map();
+                    } else {
+                        self.toast("Enter a seed from 0 to 18446744073709551615".into());
+                    }
+                }
+                KeyCode::KeyR => *input = fresh_seed().to_string(),
+                KeyCode::Backspace => {
+                    input.pop();
+                }
+                KeyCode::Delete => input.clear(),
+                KeyCode::KeyA if self.modifiers_ctrl => input.clear(),
+                _ => {
+                    if let Some(text) = text {
+                        input.extend(
+                            text.chars()
+                                .filter(char::is_ascii_digit)
+                                .take(20usize.saturating_sub(input.len())),
+                        );
+                    }
+                }
+            }
+        } else if let Some(setup) = &mut self.universe_setup {
             let action = setup.key(
                 code,
                 text,
@@ -9070,6 +9119,7 @@ impl State {
         self.social.open
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
+            || self.random_setup.is_some()
             || self
                 .universe_setup
                 .as_ref()
@@ -9096,6 +9146,7 @@ impl State {
                 .dropdown
                 .as_ref()
                 .is_some_and(|d| d.editing.is_some())
+            || self.random_setup.is_some()
             || self
                 .universe_setup
                 .as_ref()
@@ -9298,6 +9349,14 @@ impl State {
 
     /// What Ctrl+C copies here: the text being typed, else the map or set picked.
     fn copy_text(&self) -> Option<String> {
+        if let Some(seed) = &self.random_setup {
+            return Some(seed.clone());
+        }
+        if let Scene::Results { results, .. } = &self.scene
+            && results.mods.has(mods::Mod::Random)
+        {
+            return results.seed.map(|s| s.to_string());
+        }
         if let Some(e) = &self.settings_ui.editing {
             return Some(e.text.clone()).filter(|t| !t.is_empty());
         }
@@ -12397,10 +12456,10 @@ impl State {
                 match rx.try_recv() {
                     Ok(Ok((map, track))) => {
                         let mods = std::mem::take(&mut self.pending_mods);
-                        // Random: the replay's colouring, else a new one each play.
+                        // Random: the replay's colouring, otherwise the configured repeatable seed.
                         let seed = match &self.pending_replay {
                             Some(r) => r.seed,
-                            None if mods.has(mods::Mod::Random) => fresh_seed(),
+                            None if mods.has(mods::Mod::Random) => self.cfg.random_seed,
                             None => 0,
                         };
                         let half = self
@@ -12533,6 +12592,7 @@ impl State {
                     }
                     let mut results = Results::new(title, game.stats.clone(), game.windows);
                     results.set_mods(game.mods, game.rate);
+                    results.seed = Some(game.seed);
                     results.watched = game.replay_of.clone();
                     results.failed = failed;
                     // The song plays on under the results (not after a fail that stopped it),
@@ -13312,7 +13372,69 @@ impl State {
             self.readout_rect = None;
         }
         if let Some(cur) = self.mod_select {
-            ui::draw_mod_select(canvas, self.shown_mods(), self.cfg.favourite_mods, cur);
+            let seed = if matches!(self.scene, Scene::Lobby) {
+                self.mp
+                    .as_ref()
+                    .and_then(|s| s.map.as_ref())
+                    .and_then(|m| m.seed)
+                    .unwrap_or(self.cfg.random_seed)
+            } else {
+                self.cfg.random_seed
+            };
+            ui::draw_mod_select(
+                canvas,
+                self.shown_mods(),
+                self.cfg.favourite_mods,
+                cur,
+                seed,
+            );
+            if let Some(input) = &self.random_setup {
+                canvas.hits.clear();
+                let w = canvas.width;
+                canvas.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.85));
+                canvas.text_centered(w / 2.0, 160.0, 14.0, rgba(0xffffff, 1.0), "Random seed");
+                canvas.text_centered(
+                    w / 2.0,
+                    200.0,
+                    12.0,
+                    rgba(0xffffff, 1.0),
+                    &format!("{input}_"),
+                );
+                canvas.text_centered(
+                    w / 2.0,
+                    234.0,
+                    7.0,
+                    rgba(0x9a9ab0, 1.0),
+                    "Same map + same seed = same colours. Retries keep the seed.",
+                );
+                canvas.text_centered(
+                    w / 2.0,
+                    250.0,
+                    7.0,
+                    rgba(0x9a9ab0, 1.0),
+                    "Delete clears   R new seed   Ctrl+C / Ctrl+V copy / paste",
+                );
+                canvas.button(
+                    w / 2.0 - 100.0,
+                    280.0,
+                    90.0,
+                    24.0,
+                    "Apply",
+                    9.0,
+                    render::Hit::Key(KeyCode::Enter),
+                    true,
+                );
+                canvas.button(
+                    w / 2.0 + 10.0,
+                    280.0,
+                    90.0,
+                    24.0,
+                    "Cancel",
+                    9.0,
+                    render::Hit::Key(KeyCode::Escape),
+                    false,
+                );
+            }
             if let Some(setup) = &self.universe_setup {
                 setup.draw(
                     canvas,
@@ -15915,6 +16037,7 @@ impl State {
             mod_select: None,
             universe_setup: None,
             shapeshift_setup: None,
+            random_setup: None,
             leaderboard: Vec::new(),
             board_scroll: 0,
             board_for: (0, false),

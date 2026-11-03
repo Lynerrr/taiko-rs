@@ -328,7 +328,7 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
 ];
 
 /// The mods with settings of their own, in the order of the mod customization's tabs.
-const CUSTOMIZABLE: [Mod; 2] = [Mod::Multiverse, Mod::Shapeshift];
+const CUSTOMIZABLE: [Mod; 3] = [Mod::Random, Mod::Multiverse, Mod::Shapeshift];
 
 /// The tabs of the mod customization: the mods with settings that are on (only those show).
 pub fn customizable(mods: Mods) -> Vec<Mod> {
@@ -830,6 +830,11 @@ impl Mods {
         ALL.into_iter().filter(move |&m| self.has(m))
     }
 
+    /// Whether selecting `m` would switch off an active mod. Active mods stay highlighted.
+    pub fn incompatible(self, m: Mod) -> bool {
+        !self.has(m) && m.conflicts().iter().any(|&c| self.has(c))
+    }
+
     /// Turns `m` on (switching off what it conflicts with) or off.
     pub fn toggle(&mut self, m: Mod) {
         if self.has(m) {
@@ -1265,6 +1270,30 @@ mod tests {
                 m.name()
             );
         }
+    }
+
+    #[test]
+    fn incompatible_hints_match_what_toggling_removes() {
+        for active in ALL {
+            let selected = Mods::NONE.flip(active);
+            assert!(!selected.incompatible(active));
+            for candidate in ALL {
+                if candidate == active {
+                    continue;
+                }
+                let mut next = selected;
+                next.toggle(candidate);
+                assert_eq!(
+                    selected.incompatible(candidate),
+                    !next.has(active),
+                    "{} -> {}",
+                    active.acronym(),
+                    candidate.acronym()
+                );
+                assert!(next.has(candidate));
+            }
+        }
+        assert_eq!(customizable(Mods::parse("RD")), [Mod::Random]);
     }
 
     #[test]
