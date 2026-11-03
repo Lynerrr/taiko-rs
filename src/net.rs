@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL: u32 = 7;
+#[cfg_attr(not(test), allow(dead_code))]
 pub const DEFAULT_PORT: u16 = 7777;
 /// Countdown between everyone having loaded and the song starting.
 const START_LEAD_MS: f64 = 3000.0;
@@ -95,48 +96,148 @@ pub struct MapInfo {
     /// every note one of them lets through costs the team a life. None: an ordinary match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub defense: Option<Defense>,
+    /// What the host's game knows about the map (stars, length...), so players without it see
+    /// them too. None: an older host, or one still working them out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<Box<MapStats>>,
 }
 
-/// Defense's rules, picked by the host: the team's lives and how many bars each turn lasts.
+/// A lobby map's numbers, as the host's game has them: taiko stars and length and BPM at 1.0x
+/// (the match rate changes the last two), OD, HP and who mapped it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MapStats {
+    pub stars: f32,
+    pub length_ms: f32,
+    pub bpm: f32,
+    pub od: f32,
+    pub hp: f32,
+    #[serde(default)]
+    pub creator: String,
+}
+
+/// Defense's rules, picked by the host: the team's lives, how many bars each turn lasts, how
+/// many turns each player may take over in a map, whether the team can buy things, and
+/// whether it plays on the Maze (or each player's own lane).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Defense {
     pub lives: u32,
     pub bars: u32,
+    #[serde(default = "two")]
+    pub tag_ins: u32,
+    #[serde(default = "yes")]
+    pub shop: bool,
+    #[serde(default = "yes")]
+    pub maze: bool,
+}
+
+fn two() -> u32 {
+    2
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Defense: the rules the host can change in the lobby, in the settings panel's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefenseOption {
+    Lives,
+    Bars,
+    TagIns,
+    Shop,
+    Maze,
+}
+
+impl DefenseOption {
+    pub const ALL: [DefenseOption; 5] = [
+        DefenseOption::Lives,
+        DefenseOption::Bars,
+        DefenseOption::TagIns,
+        DefenseOption::Shop,
+        DefenseOption::Maze,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DefenseOption::Lives => tr!("Team lives", "チームのライフ", "Жизни команды"),
+            DefenseOption::Bars => tr!("Turn length", "交代の長さ", "Длина хода"),
+            DefenseOption::TagIns => tr!(
+                "Tag-ins per player",
+                "1人あたりの交代割込み",
+                "Перехватов на игрока"
+            ),
+            DefenseOption::Shop => tr!(
+                "Shop (gold, towers...)",
+                "ショップ (ゴールド・タワー)",
+                "Магазин (золото, башни...)"
+            ),
+            DefenseOption::Maze => tr!("Maze lane", "迷路レーン", "Дорожка-лабиринт"),
+        }
+    }
+
+    pub fn value(self, d: &Defense) -> String {
+        let on = |b: bool| {
+            if b {
+                tr!("on", "オン", "вкл")
+            } else {
+                tr!("off", "オフ", "выкл")
+            }
+            .to_string()
+        };
+        match self {
+            DefenseOption::Lives => d.lives.to_string(),
+            DefenseOption::Bars => {
+                let bars = d.bars;
+                tr!("{bars} bars", "{bars}小節", "{bars} тактов";)
+            }
+            DefenseOption::TagIns if d.tag_ins == 0 => on(false),
+            DefenseOption::TagIns => d.tag_ins.to_string(),
+            DefenseOption::Shop => on(d.shop),
+            DefenseOption::Maze => on(d.maze),
+        }
+    }
+
+    /// The rules with this one stepped on to its next value (round to the first).
+    pub fn step(self, d: Defense) -> Defense {
+        let next = |list: &[u32], v: u32| {
+            let i = list
+                .iter()
+                .position(|&x| x == v)
+                .map_or(0, |i| (i + 1) % list.len());
+            list[i]
+        };
+        match self {
+            DefenseOption::Lives => Defense {
+                lives: next(&Defense::LIVES, d.lives),
+                ..d
+            },
+            DefenseOption::Bars => Defense {
+                bars: next(&Defense::BARS, d.bars),
+                ..d
+            },
+            DefenseOption::TagIns => Defense {
+                tag_ins: next(&Defense::TAG_INS, d.tag_ins),
+                ..d
+            },
+            DefenseOption::Shop => Defense { shop: !d.shop, ..d },
+            DefenseOption::Maze => Defense { maze: !d.maze, ..d },
+        }
+    }
 }
 
 impl Defense {
-    /// The lives the host steps through (C in the lobby), and the turn lengths (V).
+    /// The lives the host steps through (C in the lobby), the turn lengths (V) and the tag-ins
+    /// each player has per map (0: none).
     pub const LIVES: [u32; 4] = [10, 25, 50, 100];
-    pub const BARS: [u32; 3] = [4, 8, 16];
-    pub const DEFAULT: Defense = Defense { lives: 25, bars: 8 };
-
-    /// The rules after `lives` steps on: off after the last.
-    pub fn next_lives(rules: Option<Defense>) -> Option<Defense> {
-        match rules {
-            None => Some(Defense {
-                lives: Defense::LIVES[0],
-                ..Defense::DEFAULT
-            }),
-            Some(d) => {
-                let i = Defense::LIVES.iter().position(|&l| l == d.lives)?;
-                Defense::LIVES
-                    .get(i + 1)
-                    .map(|&lives| Defense { lives, ..d })
-            }
-        }
-    }
-
-    /// The next turn length, round to the first.
-    pub fn next_bars(self) -> Defense {
-        let i = Defense::BARS
-            .iter()
-            .position(|&b| b == self.bars)
-            .map_or(0, |i| (i + 1) % Defense::BARS.len());
-        Defense {
-            bars: Defense::BARS[i],
-            ..self
-        }
-    }
+    pub const BARS: [u32; 4] = [4, 8, 16, 32];
+    pub const TAG_INS: [u32; 5] = [0, 1, 2, 3, 5];
+    pub const DEFAULT: Defense = Defense {
+        lives: 25,
+        bars: 8,
+        tag_ins: 2,
+        shop: true,
+        maze: true,
+    };
 }
 
 /// Defense: what the team can buy with its gold (keys 1-5 in a match).
@@ -252,14 +353,18 @@ pub struct TeamState {
 
 /// Defense, in the room: the team's state and what it has paid for so far.
 struct TeamRun {
+    rules: Defense,
     state: TeamState,
     spent: u32,
     misses: u32,
+    /// Tag-ins each player has used this map.
+    tag_ins: std::collections::HashMap<u32, u32>,
 }
 
 impl TeamRun {
     fn new(d: Defense) -> TeamRun {
         TeamRun {
+            rules: d,
             state: TeamState {
                 lives: d.lives,
                 max: d.lives,
@@ -267,7 +372,18 @@ impl TeamRun {
             },
             spent: 0,
             misses: 0,
+            tag_ins: std::collections::HashMap::new(),
         }
+    }
+
+    /// Player `id` takes a turn over, if they have a tag-in left this map: whether they did.
+    fn tag_in(&mut self, id: u32) -> bool {
+        let used = self.tag_ins.entry(id).or_default();
+        if *used >= self.rules.tag_ins {
+            return false;
+        }
+        *used += 1;
+        true
     }
 
     /// Catches up with the team's GREATs (gold) and misses (notes through: the shield takes
@@ -313,6 +429,53 @@ impl TeamRun {
         s.gold -= price;
         self.spent += price;
         true
+    }
+}
+
+/// A lobby's settings, the host's to change: a password to join it (None: open to all) and how
+/// many players it takes (spectators included).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RoomSettings {
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default = "sixteen")]
+    pub slots: u32,
+}
+
+/// The players a lobby can take: `RoomSettings::SLOTS` lists the choices.
+fn sixteen() -> u32 {
+    16
+}
+
+impl Default for RoomSettings {
+    fn default() -> RoomSettings {
+        RoomSettings {
+            password: None,
+            slots: sixteen(),
+        }
+    }
+}
+
+impl RoomSettings {
+    pub const SLOTS: [u32; 7] = [2, 4, 6, 8, 10, 12, 16];
+    pub const MAX_SLOTS: u32 = 16;
+
+    /// As the room keeps it: a password of what the font draws, at most 32 characters (empty:
+    /// none), and between 2 and `MAX_SLOTS` players.
+    pub fn clean(self) -> RoomSettings {
+        let password = self
+            .password
+            .map(|p| {
+                p.chars()
+                    .filter(|c| drawable_char(*c) && *c != ' ')
+                    .take(32)
+                    .collect::<String>()
+            })
+            .filter(|p| !p.is_empty());
+        RoomSettings {
+            password,
+            slots: self.slots.clamp(2, RoomSettings::MAX_SLOTS),
+        }
     }
 }
 
@@ -420,6 +583,9 @@ pub enum ClientMsg {
         name: String,
         protocol: u32,
         host_token: Option<u64>,
+        /// The lobby's password, when it has one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
     },
     Ping {
         t: f64,
@@ -474,6 +640,12 @@ pub enum ClientMsg {
     },
     /// Defense: something we did in the match (a purchase is only passed on if the team can pay).
     Defense(DefenseAct),
+    /// Host: the lobby's password (None: open to all), and how many players it takes. Apart, so
+    /// a host handed the role (who never knew the password) can change the one without the other.
+    SetPassword(Option<String>),
+    SetSlots(u32),
+    /// Host: take a player out of the lobby (they can't come back to it).
+    Kick(u32),
 }
 
 /// A piece of a map set archive sent from the host's Songs folder. `data` is base64; the
@@ -513,6 +685,11 @@ pub enum ServerMsg {
         /// Defense: the team's state in the match (and after it, until the next).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         team: Option<TeamState>,
+        /// The lobby needs a password to join, and how many players it takes.
+        #[serde(default)]
+        locked: bool,
+        #[serde(default = "sixteen")]
+        slots: u32,
     },
     Prepare(MapInfo),
     /// Start the song at this server time (ms).
@@ -822,6 +999,7 @@ fn clean_name(name: &str) -> String {
 // Host side
 
 /// A running room. Dropping it closes the room and disconnects everyone.
+#[cfg_attr(not(test), allow(dead_code))]
 pub struct Server {
     stop: Arc<AtomicBool>,
     pub token: u64,
@@ -846,6 +1024,7 @@ enum Event {
 }
 
 /// `mapguessr`: the room plays mapguessr instead of matches.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
     // Listen on IPv6 and IPv4. On Linux the `::` socket is dual-stack, so the IPv4 bind just
     // fails as "in use"; on Windows `::` is IPv6-only and both are needed, or IPv4 friends
@@ -908,7 +1087,7 @@ pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
         let stop = stop.clone();
         thread::Builder::new()
             .name("mp-room".into())
-            .spawn(move || room_loop(rx, stop, token, None, mapguessr))
+            .spawn(move || room_loop(rx, stop, token, None, mapguessr, RoomSettings::default()))
             .map_err(|e| e.to_string())?;
     }
     Ok(Server { stop, token, port })
@@ -941,6 +1120,14 @@ pub struct Summary {
     pub in_match: bool,
     #[allow(dead_code)] // read by the online server (server/)
     pub mapguessr: bool,
+    /// It needs a password, and how many players it takes.
+    #[allow(dead_code)] // read by the online server (server/)
+    pub locked: bool,
+    #[allow(dead_code)] // read by the online server (server/)
+    pub slots: u32,
+    /// Its map is played as Defense (co-op).
+    #[allow(dead_code)] // read by the online server (server/)
+    pub defense: bool,
 }
 
 /// A room run by the online server: connections are handed to it after their own handshake
@@ -973,17 +1160,20 @@ pub fn on_match(hook: MatchHook) {
 }
 
 #[allow(dead_code)] // used by the online server (server/)
-pub fn open_room(mapguessr: bool) -> Room {
+pub fn open_room(mapguessr: bool, settings: RoomSettings) -> Room {
     let stop = Arc::new(AtomicBool::new(false));
     let token = new_token();
+    let settings = settings.clean();
     let summary = Arc::new(Mutex::new(Summary {
         mapguessr,
+        locked: settings.password.is_some(),
+        slots: settings.slots,
         ..Summary::default()
     }));
     let (events, rx) = mpsc::channel();
     {
         let (stop, summary) = (stop.clone(), summary.clone());
-        thread::spawn(move || room_loop(rx, stop, token, Some(summary), mapguessr));
+        thread::spawn(move || room_loop(rx, stop, token, Some(summary), mapguessr, settings));
     }
     Room {
         events,
@@ -1130,6 +1320,14 @@ enum Phase {
     Playing,
 }
 
+/// Players who've joined the lobby (said hello), not counting `id`.
+fn others_in(players: &[Player], id: u32) -> u32 {
+    players
+        .iter()
+        .filter(|p| p.hello && p.info.id != id)
+        .count() as u32
+}
+
 /// `summary`: kept up to date for the online server's lobby list. `mapguessr`: the room plays
 /// mapguessr (see `GuessGame`) instead of matches.
 fn room_loop(
@@ -1138,7 +1336,11 @@ fn room_loop(
     token: u64,
     summary: Option<Arc<Mutex<Summary>>>,
     mapguessr: bool,
+    settings: RoomSettings,
 ) {
+    let mut settings = settings.clean();
+    // Names the host took out of the lobby (lowercase): they can't come back.
+    let mut kicked: std::collections::HashSet<String> = std::collections::HashSet::new();
     let epoch = Instant::now();
     let now_ms = || epoch.elapsed().as_secs_f64() * 1000.0;
     let mut players: Vec<Player> = Vec::new();
@@ -1264,6 +1466,56 @@ fn room_loop(
                         }
                         continue;
                     }
+                    ClientMsg::SetPassword(password) => {
+                        if is_host {
+                            settings = RoomSettings {
+                                password,
+                                ..settings.clone()
+                            }
+                            .clean();
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    ClientMsg::SetSlots(slots) => {
+                        if is_host {
+                            settings = RoomSettings {
+                                slots,
+                                ..settings.clone()
+                            }
+                            .clean();
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    ClientMsg::Kick(who) => {
+                        let target = players.iter().find(|q| q.info.id == who && !q.info.host);
+                        if let (true, Some(q)) = (is_host, target) {
+                            let _ = q.tx.send(ServerMsg::Rejected(
+                                tr!(
+                                    "the host took you out of this lobby",
+                                    "このロビーからホストに外されました",
+                                    "хост убрал тебя из этого лобби"
+                                )
+                                .to_string(),
+                            ));
+                            kicked.insert(q.info.name.to_lowercase());
+                            let text =
+                                format!("{} was taken out of the lobby by the host", q.info.name);
+                            players.retain(|q| q.info.id != who);
+                            chat_times.remove(&who);
+                            libraries.remove(&who);
+                            common_dirty = true;
+                            for q in players.iter().filter(|q| q.hello) {
+                                let _ = q.tx.send(ServerMsg::Chat {
+                                    from: "taiko.rs".into(),
+                                    text: text.clone(),
+                                });
+                            }
+                            dirty = true;
+                        }
+                        continue;
+                    }
                     ClientMsg::Defense(act) => {
                         let playing = phase == Phase::Playing
                             && players.iter().any(|p| p.info.id == id && p.in_match);
@@ -1271,8 +1523,8 @@ fn room_loop(
                             // Their latest numbers first, so the gold is up to date.
                             t.update(players.iter().filter(|p| p.in_match).map(|p| &p.info));
                             let paid = match act {
-                                DefenseAct::Buy { item, .. } => t.buy(item),
-                                _ => true,
+                                DefenseAct::Buy { item, .. } => t.rules.shop && t.buy(item),
+                                DefenseAct::TagIn { .. } => t.tag_in(id),
                             };
                             if paid {
                                 let msg = ServerMsg::Defense { from: id, act };
@@ -1493,6 +1745,7 @@ fn room_loop(
                         name,
                         protocol,
                         host_token,
+                        password,
                     } => {
                         // Only the client holding the room's token becomes host, however fast
                         // anyone else connects.
@@ -1509,6 +1762,45 @@ fn room_loop(
                             continue;
                         }
                         p.info.name = p.forced_name.clone().unwrap_or_else(|| clean_name(&name));
+                        // Everyone but the host: not taken out before, the password, a free slot.
+                        let (lower, joined_as_host) = (p.info.name.to_lowercase(), p.info.host);
+                        if !joined_as_host {
+                            let why = if kicked.contains(&lower) {
+                                Some(tr!(
+                                    "the host took you out of this lobby",
+                                    "このロビーからホストに外されました",
+                                    "хост убрал тебя из этого лобби"
+                                ))
+                            } else if settings.password.is_some() && password != settings.password {
+                                Some(if password.is_none() {
+                                    tr!(
+                                        "this lobby needs a password",
+                                        "このロビーはパスワードが必要です",
+                                        "в это лобби нужен пароль"
+                                    )
+                                } else {
+                                    tr!("wrong password", "パスワードが違います", "неверный пароль")
+                                })
+                            } else if others_in(&players, id) >= settings.slots {
+                                Some(tr!(
+                                    "the lobby is full",
+                                    "ロビーは満員です",
+                                    "лобби заполнено"
+                                ))
+                            } else {
+                                None
+                            };
+                            if let Some(why) = why {
+                                if let Some(p) = players.iter().find(|p| p.info.id == id) {
+                                    let _ = p.tx.send(ServerMsg::Rejected(why.to_string()));
+                                }
+                                players.retain(|p| p.info.id != id);
+                                continue;
+                            }
+                        }
+                        let Some(p) = players.iter_mut().find(|p| p.info.id == id) else {
+                            continue;
+                        };
                         p.hello = true;
                         common_dirty = true;
                         let _ = p.tx.send(ServerMsg::Welcome { id });
@@ -1806,6 +2098,8 @@ fn room_loop(
                 mapguessr,
                 common,
                 team: team.as_ref().map(|t| t.state),
+                locked: settings.password.is_some(),
+                slots: settings.slots,
             };
             for p in players.iter().filter(|p| p.hello) {
                 let _ = p.tx.send(room.clone());
@@ -1820,6 +2114,9 @@ fn room_loop(
                     .unwrap_or_default();
                 s.map = map.as_ref().map(MapInfo::label);
                 s.in_match = in_match;
+                s.locked = settings.password.is_some();
+                s.slots = settings.slots;
+                s.defense = map.as_ref().is_some_and(|m| m.defense.is_some());
             }
             dirty = false;
             last_broadcast = Instant::now();
@@ -1851,6 +2148,7 @@ impl Drop for Client {
 }
 
 /// Accepts `host`, `host:port`, `[v6]:port`; the port defaults to 7777.
+#[cfg_attr(not(test), allow(dead_code))]
 fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
     let addr = addr.trim();
     let with_port = if addr.parse::<std::net::SocketAddr>().is_ok() {
@@ -1873,10 +2171,22 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
 }
 
 impl Client {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn connect(addr: &str, name: &str, host_token: Option<u64>) -> Result<Client, String> {
+        Client::connect_with(addr, name, host_token, None)
+    }
+
+    /// `connect`, giving the lobby's password.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn connect_with(
+        addr: &str,
+        name: &str,
+        host_token: Option<u64>,
+        password: Option<String>,
+    ) -> Result<Client, String> {
         let sa = resolve(addr)?;
         let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(5)).map_err(|e| tr!("can't connect to {sa}: {e}", "{sa}に接続できません: {e}", "не удаётся подключиться к {sa}: {e}";))?;
-        Client::over(BufReader::new(stream), name, host_token)
+        Client::over(BufReader::new(stream), name, host_token, password)
     }
 
     /// The room protocol over a connection that's already open (the online server's, after
@@ -1885,6 +2195,7 @@ impl Client {
         reader: BufReader<TcpStream>,
         name: &str,
         host_token: Option<u64>,
+        password: Option<String>,
     ) -> Result<Client, String> {
         // Timeouts are per handle on Windows: clear the request ones on the reader's own handle
         // too, not just the clone, or a quiet lobby drops after 10 s there.
@@ -1943,6 +2254,7 @@ impl Client {
             name: name.to_string(),
             protocol: PROTOCOL,
             host_token,
+            password,
         });
         Ok(Client {
             tx,
@@ -2239,6 +2551,22 @@ mod tests {
     }
 
     #[test]
+    fn the_room_counts_each_players_tag_ins_for_the_map() {
+        let mut t = TeamRun::new(Defense {
+            tag_ins: 2,
+            ..Defense::DEFAULT
+        });
+        assert!(t.tag_in(1) && t.tag_in(1));
+        assert!(!t.tag_in(1), "player 1 has used both");
+        assert!(t.tag_in(2), "player 2 has their own");
+        let mut none = TeamRun::new(Defense {
+            tag_ins: 0,
+            ..Defense::DEFAULT
+        });
+        assert!(!none.tag_in(1));
+    }
+
+    #[test]
     fn the_room_pays_for_defense_from_greats_and_shields_take_misses_first() {
         let player = |great: u32, miss: u32| PlayerInfo {
             id: 1,
@@ -2261,7 +2589,11 @@ mod tests {
             mods: Vec::new(),
         };
         // 10 lives: a life is dear (a heal 200, a shield 150).
-        let mut t = TeamRun::new(Defense { lives: 10, bars: 8 });
+        let mut t = TeamRun::new(Defense {
+            lives: 10,
+            bars: 8,
+            ..Defense::DEFAULT
+        });
         t.update([player(250, 0), player(50, 1)].iter());
         assert_eq!((t.state.gold, t.state.lives), (300, 9));
         assert_eq!(
@@ -2323,25 +2655,42 @@ mod tests {
 
     #[test]
     fn defense_rules_step_round_and_old_lobby_maps_still_parse() {
-        // C: 10, 25, 50, 100 lives, then off; V: 4, 8, 16 bars round again.
-        let mut rules = None;
-        let mut seen = Vec::new();
-        for _ in 0..5 {
-            rules = Defense::next_lives(rules);
-            seen.push(rules.map(|d| d.lives));
-        }
-        assert_eq!(seen, [Some(10), Some(25), Some(50), Some(100), None]);
-        let bars: Vec<u32> = std::iter::successors(Some(Defense::DEFAULT), |d| Some(d.next_bars()))
-            .skip(1)
-            .take(3)
-            .map(|d| d.bars)
-            .collect();
-        assert_eq!(bars, [16, 4, 8]);
+        // 1: 25 lives on to 50, 100, 10 and round; 2: 8 bars on to 16, 32, 4.
+        let steps = |o: DefenseOption, f: fn(&Defense) -> u32| -> Vec<u32> {
+            std::iter::successors(Some(Defense::DEFAULT), |&d| Some(o.step(d)))
+                .skip(1)
+                .take(4)
+                .map(|d| f(&d))
+                .collect()
+        };
+        assert_eq!(steps(DefenseOption::Lives, |d| d.lives), [50, 100, 10, 25]);
+        assert_eq!(steps(DefenseOption::Bars, |d| d.bars), [16, 32, 4, 8]);
+        // Rules from before the newer options get their defaults.
+        let d: Defense = serde_json::from_str(r#"{"lives":10,"bars":4}"#).unwrap();
+        assert_eq!((d.tag_ins, d.shop, d.maze), (2, true, true));
+        // Each option in the settings panel steps round its values.
+        let tag_ins: Vec<u32> =
+            std::iter::successors(Some(d), |&d| Some(DefenseOption::TagIns.step(d)))
+                .skip(1)
+                .take(5)
+                .map(|d| d.tag_ins)
+                .collect();
+        assert_eq!(tag_ins, [3, 5, 0, 1, 2]);
+        let off = DefenseOption::Shop.step(DefenseOption::Maze.step(d));
+        assert_eq!((off.shop, off.maze), (false, false));
+        assert_eq!(
+            DefenseOption::TagIns.value(&Defense { tag_ins: 0, ..d }),
+            "off"
+        );
         // A room on an older build leaves it out; it's an ordinary match then.
         let old = r#"{"hash":1,"artist":"a","title":"t","version":"v","rate":1.0}"#;
         assert_eq!(serde_json::from_str::<MapInfo>(old).unwrap().defense, None);
         let mut m: MapInfo = serde_json::from_str(old).unwrap();
-        m.defense = Some(Defense { lives: 50, bars: 4 });
+        m.defense = Some(Defense {
+            lives: 50,
+            bars: 4,
+            ..Defense::DEFAULT
+        });
         let back: MapInfo = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
         assert_eq!(back.defense, m.defense);
     }
@@ -2369,6 +2718,8 @@ mod tests {
             shapeshift: None,
             seed: None,
             defense: None,
+
+            stats: None,
         }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
@@ -2396,6 +2747,8 @@ mod tests {
             shapeshift: Some("every=4".into()),
             seed: None,
             defense: None,
+
+            stats: None,
         };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
@@ -2468,7 +2821,12 @@ mod tests {
             multiverse: None,
             shapeshift: None,
             seed: None,
-            defense: Some(Defense { lives: 10, bars: 4 }),
+            defense: Some(Defense {
+                lives: 10,
+                bars: 4,
+                ..Defense::DEFAULT
+            }),
+            stats: None,
         };
         a.send(ClientMsg::SelectMap(map));
         thread::sleep(Duration::from_millis(100));
@@ -2567,6 +2925,8 @@ mod tests {
             shapeshift: None,
             seed: None,
             defense: None,
+
+            stats: None,
         };
         a.send(ClientMsg::SelectMap(map));
         thread::sleep(Duration::from_millis(100));
@@ -2608,5 +2968,76 @@ mod tests {
             );
             wait_for(c, |m| matches!(m, ServerMsg::SkipNow));
         }
+    }
+
+    #[test]
+    fn a_locked_lobby_takes_the_password_its_slots_and_no_kicked_players() {
+        let server = host(0, false).unwrap();
+        let addr = format!("127.0.0.1:{}", server.port);
+        let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
+        wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
+        a.send(ClientMsg::SetPassword(Some("  hunter2 ".into())));
+        a.send(ClientMsg::SetSlots(2));
+        let ServerMsg::Room { locked, slots, .. } = wait_for(&mut a, |m| {
+            matches!(
+                m,
+                ServerMsg::Room {
+                    locked: true,
+                    slots: 2,
+                    ..
+                }
+            )
+        }) else {
+            unreachable!()
+        };
+        assert_eq!((locked, slots), (true, 2));
+        let rejected = |name: &str, password: Option<&str>| {
+            let mut c =
+                Client::connect_with(&addr, name, None, password.map(String::from)).unwrap();
+            match wait_for(&mut c, |m| {
+                matches!(m, ServerMsg::Welcome { .. } | ServerMsg::Rejected(_))
+            }) {
+                ServerMsg::Rejected(why) => Some(why),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            rejected("bob", None).as_deref(),
+            Some("this lobby needs a password")
+        );
+        assert_eq!(
+            rejected("bob", Some("hunter3")).as_deref(),
+            Some("wrong password")
+        );
+        // The right one (spaces trimmed off it) gets in, and fills the lobby.
+        let mut b = Client::connect_with(&addr, "bob", None, Some("hunter2".into())).unwrap();
+        wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
+        assert_eq!(
+            rejected("carol", Some("hunter2")).as_deref(),
+            Some("the lobby is full")
+        );
+        // The host takes Bob out: he's told, and can't come back.
+        let bob = b.id.or_else(|| {
+            let ServerMsg::Room { players, .. } = wait_for(
+                &mut a,
+                |m| matches!(m, ServerMsg::Room { players, .. } if players.len() == 2),
+            ) else {
+                unreachable!()
+            };
+            players.iter().find(|p| p.name == "bob").map(|p| p.id)
+        });
+        a.send(ClientMsg::Kick(bob.unwrap()));
+        assert!(matches!(
+            wait_for(&mut b, |m| matches!(m, ServerMsg::Rejected(_))),
+            ServerMsg::Rejected(why) if why == "the host took you out of this lobby"
+        ));
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            rejected("bob", Some("hunter2")).as_deref(),
+            Some("the host took you out of this lobby")
+        );
+        // A player can't kick, and the slot Bob left is free again.
+        let mut c = Client::connect_with(&addr, "carol", None, Some("hunter2".into())).unwrap();
+        wait_for(&mut c, |m| matches!(m, ServerMsg::Welcome { .. }));
     }
 }

@@ -75,6 +75,9 @@ pub enum Request {
         title: String,
         #[serde(default)]
         mapguessr: bool,
+        /// Its password (None: open to all) and how many players it takes.
+        #[serde(default)]
+        settings: crate::net::RoomSettings,
     },
     JoinRoom {
         token: String,
@@ -948,6 +951,18 @@ pub struct RoomInfo {
     pub in_match: bool,
     #[serde(default)]
     pub mapguessr: bool,
+    /// It needs a password, and how many players it takes.
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default = "sixteen")]
+    pub slots: u32,
+    /// Its map is played as Defense (co-op).
+    #[serde(default)]
+    pub defense: bool,
+}
+
+fn sixteen() -> u32 {
+    16
 }
 
 pub const NAME_RULES: &str = "3-16 letters, digits, _ or -";
