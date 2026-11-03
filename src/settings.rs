@@ -872,9 +872,9 @@ impl Item {
                 "Автоигра начинает с левой руки, а не с правой."
             ),
             Item::SongSelectLayout => tr!(
-                "Drag the edges between the song list, the map panel and the leaderboard. Enter: back to the default.",
-                "曲リスト、譜面パネル、ランキングの間の境目をドラッグ。Enter: 初期設定に戻す。",
-                "Тяните границы между списком песен, панелью карты и таблицей рекордов. Enter: по умолчанию."
+                "Drag the edge between the song list and the map panel. Enter: back to the default.",
+                "曲リストと譜面パネルの間の境目をドラッグ。Enter: 初期設定に戻す。",
+                "Тяните границу между списком песен и панелью карты. Enter: по умолчанию."
             ),
             Item::Changelog => tr!(
                 "Enter: the latest changes. They also show by themselves after an update.",

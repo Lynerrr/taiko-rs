@@ -1723,21 +1723,17 @@ impl State {
         self.scene = Scene::Loading { rx, label, entry, from: None };
     }
 
-    /// Song select's layout as it comes: the list's share and the preview's size.
+    /// Song select's layout as it comes: the list's share.
     fn song_layout_is_default(&self) -> bool {
         let d = Config::default();
-        (self.cfg.song_list_share - d.song_list_share).abs() < 1e-4 && (self.cfg.song_preview_size - d.song_preview_size).abs() < 1e-4
+        (self.cfg.song_list_share - d.song_list_share).abs() < 1e-4
     }
 
-    /// Puts song select's divider `which` (both: None) back where it was at first.
-    fn reset_song_layout(&mut self, which: Option<render::Hit>) {
+    /// Puts song select's layout back where it was at first.
+    fn reset_song_layout(&mut self) {
         let d = Config::default();
-        if which != Some(render::Hit::SplitPreview) {
-            self.cfg.song_list_share = d.song_list_share;
-        }
-        if which != Some(render::Hit::SplitList) {
-            self.cfg.song_preview_size = d.song_preview_size;
-        }
+        self.cfg.song_list_share = d.song_list_share;
+        self.cfg.song_preview_size = d.song_preview_size;
         self.cfg.save();
     }
 
@@ -4133,7 +4129,7 @@ impl State {
                 Err(e) => self.toast(e),
             },
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SongSelectLayout => {
-                self.reset_song_layout(None);
+                self.reset_song_layout();
                 self.toast(tr!("song select: the usual layout", "選曲画面: いつものレイアウト", "выбор песни: обычный макет").into());
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Changelog => self.changelog = Some(changelog::View::recent(false)),
@@ -5029,27 +5025,21 @@ impl State {
             }
             self.right_scroll = false;
         }
-        if let Some((h, from, start)) = self.split_drag {
+        if let Some((_, from, start)) = self.split_drag {
             if !matches!(self.scene, Scene::Select) {
                 self.split_drag = None;
             } else {
-                let (vx, vy) = self.mouse_virtual();
+                let (vx, _) = self.mouse_virtual();
                 let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
                 // A drag, not the first click of a double click.
-                if (if h == render::Hit::SplitList { vx } else { vy } - from).abs() > 3.0 {
+                if (vx - from).abs() > 3.0 {
                     self.split_click = None;
                 }
-                if h == render::Hit::SplitList {
-                    // Kept where the list's width still follows it.
-                    if let Some((min, max)) = Select::share_range(width) {
-                        self.cfg.song_list_share = (start + (vx - from) / width).clamp(min, max);
-                    }
-                    return CursorIcon::EwResize;
+                // Kept where the list's width still follows it.
+                if let Some((min, max)) = Select::share_range(width) {
+                    self.cfg.song_list_share = (start + (vx - from) / width).clamp(min, max);
                 }
-                let (min, max) = preview::PREVIEW_SIZE;
-                let max = self.preview.size_cap.clamp(min, max);
-                self.cfg.song_preview_size = (start + (vy - from) / self.preview.size_unit.max(1.0)).clamp(min, max);
-                return CursorIcon::NsResize;
+                return CursorIcon::EwResize;
             }
         }
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
@@ -5109,7 +5099,6 @@ impl State {
             self.hover = None;
             return match hit {
                 render::Hit::SplitList => CursorIcon::EwResize,
-                render::Hit::SplitPreview => CursorIcon::NsResize,
                 _ => CursorIcon::Pointer,
             };
         }
@@ -5440,19 +5429,15 @@ impl State {
                 self.select.menu = None;
                 return;
             }
-            if let (Scene::Select, Some(h @ (render::Hit::SplitList | render::Hit::SplitPreview))) = (&self.scene, hit) {
+            if let (Scene::Select, Some(h @ render::Hit::SplitList)) = (&self.scene, hit) {
                 // Twice in quick succession: back to the usual size.
                 let now = Instant::now();
                 if self.split_click.take().is_some_and(|(last, at)| last == h && now.duration_since(at) < Duration::from_millis(400)) {
-                    self.reset_song_layout(Some(h));
+                    self.reset_song_layout();
                     return;
                 }
                 self.split_click = Some((h, now));
-                let (from, start) = match h {
-                    render::Hit::SplitList => (vx, self.cfg.song_list_share),
-                    _ => (vy, self.preview.size_shown),
-                };
-                self.split_drag = Some((h, from, start));
+                self.split_drag = Some((h, vx, self.cfg.song_list_share));
                 return;
             }
             // A row acts on release, unless the press turns into dragging the list.
@@ -8779,7 +8764,8 @@ impl State {
                 let x = 24.0 + lw + 12.0;
                 let pw = canvas.width - x - 24.0;
                 self.board_rect = None;
-                self.preview.size = self.cfg.song_preview_size;
+                // Always at full size (no longer dragged smaller).
+                self.preview.size = preview::PREVIEW_SIZE.1;
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
                 self.preview.potential = match self.select.selected() {
                     Some(i) => self.potentials.get(&self.library[i].path, rate, self.cfg.mods, self.cfg.scroll_speed),
@@ -8822,14 +8808,11 @@ impl State {
                                 draw_leaderboard(canvas, x, top, pw, &rows, self.board_scroll, all.len());
                             }
                         }
-                        // The panel's bottom edge: dragged up, the preview shrinks and the
-                        // leaderboard gets more rows.
-                        let dragging = matches!(self.split_drag, Some((render::Hit::SplitPreview, ..)));
-                        draw_divider(canvas, [x, self.preview.panel_bottom + 1.0, pw, 6.0], false, dragging, render::Hit::SplitPreview);
                     }
-                    // The song list's right edge.
+                    // The song list's right edge: the gap between the list's box (`ui`, ending
+                    // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
                     let dragging = matches!(self.split_drag, Some((render::Hit::SplitList, ..)));
-                    draw_divider(canvas, [24.0 + lw + 2.0, 54.0, 8.0, 382.0], true, dragging, render::Hit::SplitList);
+                    draw_divider(canvas, [24.0 + lw + 4.0, 54.0, 8.0, 382.0], true, dragging, render::Hit::SplitList);
                 }
                 let guessing = self.mp.as_ref().is_some_and(|s| s.mapguessr);
                 if let Some(g) = self.guessr.as_mut().filter(|_| self.picking_lobby_map && guessing) {
@@ -9081,7 +9064,7 @@ impl State {
                 let installed = self.installed_sets.take().unwrap_or_default();
                 let dir = self.songs_dir.display().to_string();
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
-                self.preview.size = self.cfg.song_preview_size;
+                self.preview.size = preview::PREVIEW_SIZE.1;
                 self.browse.draw(canvas, &self.downloads, &installed, &dir, lw);
                 self.installed_sets = Some(installed);
                 // The selected set's preview, like song select's.
@@ -10401,7 +10384,7 @@ impl State {
             },
             Hit::Overlay => {}
             // Dragged (`mouse_button`).
-            Hit::SplitList | Hit::SplitPreview => {}
+            Hit::SplitList => {}
             Hit::ScoreVideo(k) => {
                 if let Some(file) = self.leaderboard.get(k).cloned() {
                     self.open_video_editor(&file);
