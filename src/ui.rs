@@ -1025,6 +1025,11 @@ impl Select {
         }
     }
 
+    /// Width of the preview panel beside a song list of `share` (past the margins and the gap).
+    pub fn panel_width(screen_w: f32, share: f32) -> f32 {
+        screen_w - 24.0 - Self::list_width(screen_w, share) - 12.0 - 24.0
+    }
+
     /// The shares of a `screen_w` wide screen the song list can take: within `LIST_SHARE`, and
     /// leaving the list and the panel (past the margins and the gap between them) their least.
     /// None when the screen is too narrow for both.
