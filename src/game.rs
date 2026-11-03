@@ -2736,8 +2736,8 @@ impl Game {
         }
     }
 
-    /// Tact: the map time notes are drawn at for map time `t`: the start of its step, with a
-    /// slight hop into it (`tact::shown_time`).
+    /// Tact: the map time notes are drawn at for map time `t`: a crawl through its step, then a
+    /// rush to the step's end (`tact::shown_time`).
     fn tact_time(&self, t: f64) -> f64 {
         let bars = &self.map.barlines;
         crate::tact::shown_time(t, |x| {
@@ -3239,7 +3239,7 @@ impl Game {
                 RADAR_BEATS.0
             } as f64;
 
-        // Tact: the notes stand where they'd be at the start of the step `vt` is in.
+        // Tact: the notes crawl through each step, then rush to where they'd be at its end.
         let st = if mods.has(Mod::Tact) {
             self.tact_time(vt)
         } else {

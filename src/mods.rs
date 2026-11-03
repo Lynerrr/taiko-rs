@@ -553,7 +553,7 @@ impl Mod {
             Drop => "Notes freeze two beats before every kiai, then slam in 1.4x faster.",
             Gearbox => "Every beat of a bar shifts up a gear (+15%); the next bar starts over.",
             Roulette => "Every 4 bars a random speed (0.5x-2x); a marker shows where it changes.",
-            Tact => "Notes stand still and hop to their next place every bar (C: how often).",
+            Tact => "Notes crawl through each bar, then rush to where they belong (C: how often).",
             AntiSv => "The map's speed changes are turned upside down: 2x becomes 0.5x.",
             HyperSv => "The map's speed changes are exaggerated: 1.5x becomes 2.25x.",
             Even => "Notes are evenly spaced: bursts fly in fast, slow parts crawl. Play by ear.",

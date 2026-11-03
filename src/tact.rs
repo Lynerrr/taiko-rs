@@ -1,6 +1,6 @@
-//! Tact's setup: how often the notes move. With Tact they don't glide along the lane; they
-//! stand where they'd be at the start of each step (a bar by default) and jump to the next
-//! place when it comes. Judging is untouched: only where notes are drawn changes.
+//! Tact's setup: the length of a step (a bar by default). With Tact the notes don't scroll
+//! evenly: over each step they crawl slowly, then rush to where they'd be at its end, so the
+//! lane moves in surges with the music. Judging is untouched: only where notes are drawn changes.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -95,32 +95,41 @@ pub fn step_start(
     start.min(t)
 }
 
-/// How long a hop to the next place takes (ms), at most: a short one takes a third of its step.
-const HOP_MS: f64 = 90.0;
-/// How far past its new place a hop carries before it settles (of the hop): slight.
-const OVERSHOOT: f64 = 0.6;
+/// How much of a step the notes cover at an even crawl; the rest comes in a rush at its end.
+const CRAWL: f64 = 0.25;
+/// How sharp the rush at a step's end is: higher keeps them slower for longer, then faster.
+const RUSH: i32 = 8;
 
-/// The map time the notes are drawn at for map time `t`: the start of its step, reached by a
-/// short hop from the start of the one before, which carries a little past and settles.
-/// `start(x)` is `step_start` for map time `x`. Never after `t`.
+/// The map time the notes are drawn at for map time `t`. Over each step they go from where they'd
+/// be at its start to where they'd be at its end: a slow crawl most of the way, then a sharp rush
+/// that lands them exactly there as the next step begins, so they never jump. `start(x)` is
+/// `step_start` for map time `x`. Never after `t`.
 pub fn shown_time(t: f64, start: impl Fn(f64) -> f64) -> f64 {
     let now = start(t);
-    let before = start(now - 1.0);
-    let len = now - before;
+    // The step's end: the first time that starts another one (found by halving).
+    let mut hi = now + 1.0;
+    while start(hi) <= now {
+        if hi - now > 120_000.0 {
+            return now;
+        }
+        hi = now + (hi - now) * 2.0;
+    }
+    let mut lo = t.max(now);
+    while hi - lo > 1e-3 {
+        let mid = (lo + hi) / 2.0;
+        if start(mid) <= now {
+            lo = mid
+        } else {
+            hi = mid
+        }
+    }
+    let len = hi - now;
     if len <= 0.0 {
-        return now;
+        return t;
     }
-    let p = ((t - now) / HOP_MS.min(len / 3.0)).clamp(0.0, 1.0);
-    if p >= 1.0 {
-        return now;
-    }
-    if p <= 0.0 {
-        return before.min(t);
-    }
-    // Ease out with a slight overshoot ("back" easing).
-    let q = p - 1.0;
-    let eased = 1.0 + (OVERSHOOT + 1.0) * q * q * q + OVERSHOOT * q * q;
-    (before + len * eased).min(t)
+    let p = ((t - now) / len).clamp(0.0, 1.0);
+    let eased = CRAWL * p + (1.0 - CRAWL) * p.powi(RUSH);
+    (now + len * eased).min(t)
 }
 
 /// The Tact setup (a tab of the mod customization): one row of steps.
@@ -228,9 +237,9 @@ impl Setup {
             c.hit(cx, y, cw, h, Hit::TactCell(col));
         }
         let about = tr!(
-            "Notes don't glide: they stand where they'd be at the start of each step and jump to the next place when it comes. A shorter step moves them more often. Hits are judged as usual.",
-            "ノーツは滑らかに流れず、各ステップの始まりの位置に止まり、次のステップで次の位置へ跳びます。短いほど頻繁に動きます。判定はいつも通り。",
-            "Ноты не плывут: они стоят там, где были бы в начале каждого шага, и прыгают дальше, когда он приходит. Чем короче шаг, тем чаще они двигаются. Попадания судятся как обычно."
+            "Each step the notes crawl forward slowly, then rush the rest of the way at its end, landing where they'd be as the next step starts. A shorter step rushes more often. Hits are judged as usual.",
+            "各ステップでノーツはゆっくり進み、終わりに一気に残りを進んで、次のステップの始まりの位置に着きます。短いほど頻繁に加速します。判定はいつも通り。",
+            "На каждом шаге ноты медленно ползут, а в конце рывком проходят остаток и оказываются там, где должны быть в начале следующего шага. Чем короче шаг, тем чаще рывки. Попадания судятся как обычно."
         );
         let mut ty = y + h + 18.0;
         let chars = ((pw - 32.0) / Canvas::char_width(7.0)).max(10.0) as usize;
@@ -312,29 +321,33 @@ mod tests {
     }
 
     #[test]
-    fn a_hop_starts_from_the_last_place_carries_slightly_past_and_settles() {
+    fn notes_crawl_through_a_step_then_rush_to_its_end_without_jumping() {
         let shown = |step: Step, t: f64| shown_time(t, |x| at(step, x));
         let bar = Step::Bars(1);
-        // Right on the barline: still where the last bar put them.
-        assert_eq!(shown(bar, 3000.0), 1000.0);
-        // Partway: on the way, never ahead of the real time.
-        let mid = shown(bar, 3030.0);
-        assert!(mid > 1000.0 && mid <= 3030.0, "{mid}");
-        // A slight overshoot, at most a few percent of the hop.
-        let peak = (0..=90)
-            .map(|ms| shown(bar, 3000.0 + ms as f64))
-            .fold(f64::MIN, f64::max);
-        assert!(peak > 3000.0 && peak < 3000.0 + 0.1 * 2000.0, "{peak}");
-        // Settled once the hop is over, until the next barline.
-        assert_eq!(shown(bar, 3090.0), 3000.0);
-        assert_eq!(shown(bar, 4999.0), 3000.0);
-        // A short step hops faster: a third of a 125 ms quarter beat.
-        assert_eq!(shown(Step::OfBeat(0.25), 1625.0 + 42.0), 1625.0);
+        // A step's start: where the notes would be then.
+        assert_eq!(shown(bar, 3000.0), 3000.0);
+        // Halfway: still crawling, well behind the real time.
+        let half = shown(bar, 4000.0);
+        assert!(half > 3000.0 && half < 3000.0 + 0.2 * 2000.0, "{half}");
+        // Nearly at the end: the rush has them close to it.
+        let late = shown(bar, 4980.0);
+        assert!(late > 3000.0 + 0.9 * 2000.0 && late <= 4980.0, "{late}");
+        // They always move forward, never ahead of the real time, and the next step takes
+        // over from where the last one ended (no jump).
         for (_, step) in STEPS {
-            let mut t = 0.0;
+            let mut last = f64::NEG_INFINITY;
+            let mut t = 1000.0;
             while t < 12_000.0 {
-                assert!(shown(step, t) <= t, "{step:?} at {t}");
-                t += 3.0;
+                let s = shown(step, t);
+                assert!(s <= t + 1e-9, "{step:?} at {t}: {s}");
+                assert!(s >= last - 1e-9, "{step:?} at {t}: {s} after {last}");
+                // At most the rush's top speed (6.25x) per ms: no jump.
+                assert!(
+                    last == f64::NEG_INFINITY || s - last < 7.0,
+                    "{step:?} jumps at {t}: {last} -> {s}"
+                );
+                last = s;
+                t += 1.0;
             }
         }
     }

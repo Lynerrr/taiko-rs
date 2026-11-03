@@ -192,7 +192,7 @@
       },
       {
         "acronym": "TC",
-        "description": "Notes stand still and hop to their next place every bar (C: how often).",
+        "description": "Notes crawl through each bar, then rush to where they belong (C: how often).",
         "name": "Tact"
       }
     ],
