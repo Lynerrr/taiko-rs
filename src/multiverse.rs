@@ -359,7 +359,23 @@ pub fn set_note_colours(colours: Colours) {
 }
 
 pub fn note_colours() -> Colours {
+    #[cfg(test)]
+    if let Some(pinned) = PINNED_NOTE_COLOURS.with(std::cell::Cell::get) {
+        return pinned;
+    }
     *NOTE_COLOURS.read().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+thread_local! {
+    static PINNED_NOTE_COLOURS: std::cell::Cell<Option<Colours>> = const { std::cell::Cell::new(None) };
+}
+
+/// Tests: this thread sees `colours` as the note colours whatever `set_note_colours` does
+/// meanwhile (tests building frames in parallel set them from their own configs).
+#[cfg(test)]
+pub fn pin_note_colours_for_this_thread(colours: Option<Colours>) {
+    PINNED_NOTE_COLOURS.with(|p| p.set(colours));
 }
 
 /// A don or kat `r` across in `shape`. Round is the usual note (skins draw their own).
@@ -703,6 +719,22 @@ impl Setup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinned_note_colours_hold_while_another_thread_sets_them() {
+        let mine = Colours { palette: 0, custom: [0x112233, 0x445566] };
+        pin_note_colours_for_this_thread(Some(mine));
+        std::thread::spawn(|| {
+            for i in 0..1000 {
+                set_note_colours(Colours { palette: 0, custom: [i, i] });
+            }
+        })
+        .join()
+        .unwrap();
+        assert_eq!(note_colours(), mine);
+        pin_note_colours_for_this_thread(None);
+        set_note_colours(Colours::CLASSIC);
+    }
 
     #[test]
     fn dons_are_darker_than_kats_in_every_palette() {
