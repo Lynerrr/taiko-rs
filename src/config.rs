@@ -1012,7 +1012,7 @@ impl Config {
             interface_key_name(self.interface_key)
         ));
         out.push_str(&format!(
-            "# song select: the song list's share of the width, and the autoplay preview's size (drag the edges between them)\nsong_list_share = {:.3}\nsong_preview_size = {:.3}\n",
+            "# song select: the song list's share of the width (drag the edge beside it); the preview's size is no longer used\nsong_list_share = {:.3}\nsong_preview_size = {:.3}\n",
             self.song_list_share, self.song_preview_size
         ));
         out.push_str(&self.hotkeys.config_lines());
