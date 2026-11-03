@@ -7,6 +7,16 @@ use std::path::Path;
 
 /// osu! applies this to SliderMultiplier for every taiko map (`LEGACY_TAIKO_VELOCITY_MULTIPLIER`).
 const TAIKO_VELOCITY_MULTIPLIER: f64 = 1.4;
+/// The longest a roll or a swell lasts. Gimmick maps write sliders trillions of pixels long
+/// (osu!team's FM Synthesis Experiment, set 2608578): a roll that long ended past anything a
+/// number of sections or ticks can be counted to, and the game crashed on picking the map.
+const LONGEST_NOTE_MS: f64 = 3_600_000.0;
+
+/// A roll's or swell's length, as one that can be played: none when it works out to nothing
+/// sensible (NaN from a NaN slider velocity), at most `LONGEST_NOTE_MS`.
+fn playable_length(ms: f64) -> f64 {
+    if ms.is_finite() { ms.clamp(0.0, LONGEST_NOTE_MS) } else { 0.0 }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -236,6 +246,13 @@ pub fn load(path: &Path) -> Result<Beatmap, String> {
 }
 
 impl Beatmap {
+    /// A map song select shows no playfield preview of: rolls or swells it made endless
+    /// (`playable_length` cut them to the longest), or more notes than any real map. Its preview
+    /// took the whole client down to 1 fps (osu!team's FM Synthesis Experiment).
+    pub fn too_wild_to_preview(&self) -> bool {
+        self.notes.len() > 100_000 || self.notes.iter().any(|n| n.end_time - n.time >= LONGEST_NOTE_MS || n.fake_len >= LONGEST_NOTE_MS)
+    }
+
     /// Moves every map time (notes, barlines, timing) `ms` later. Audio positions (the preview
     /// point) and durations stay.
     pub fn shift(&mut self, ms: f64) {
@@ -418,11 +435,11 @@ fn convert(map: &mut Beatmap, mut body: Body) {
             let distance = length * TAIKO_VELOCITY_MULTIPLIER * spans as f64;
             let sv_beat_length = cp.beat_length / cp.sv;
             let taiko_velocity = 100.0 * sm;
-            let duration = (distance / taiko_velocity * sv_beat_length).floor();
+            let duration = playable_length((distance / taiko_velocity * sv_beat_length).floor());
             // The duration a negative length works out to, made positive: osu! still draws that
             // much body ahead of the head (taiko_arranger's gameplay preview, `_draw_fake_slider`).
             // Not floored: the canonical -0.0001 is a fraction of a ms and stays just a head.
-            let fake_len = if raw_length < 0.0 { -raw_length * TAIKO_VELOCITY_MULTIPLIER * spans as f64 / taiko_velocity * sv_beat_length } else { 0.0 };
+            let fake_len = if raw_length < 0.0 { playable_length(-raw_length * TAIKO_VELOCITY_MULTIPLIER * spans as f64 / taiko_velocity * sv_beat_length) } else { 0.0 };
 
             let mut split = None;
             if !native {
@@ -471,6 +488,7 @@ fn convert(map: &mut Beatmap, mut body: Body) {
             }
         } else if ty & 8 != 0 {
             let end = f.get(5).and_then(|e| e.trim().parse::<f64>().ok()).map(|e| e + version_offset).unwrap_or(time).max(time);
+            let end = time + playable_length(end - time);
             let required = ((end - time) / 1000.0 * swell_hit_multiplier).max(1.0) as u32;
             notes.push(Note {
                 time,
@@ -653,6 +671,25 @@ SliderTickRate:1
         // Beat phase is unchanged at the shifted note times.
         let (cf, cr) = (&file.control_points[0], &raw.control_points[0]);
         assert!((cf.beat_phase(file.notes[1].time) - cr.beat_phase(raw.notes[1].time)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_slider_trillions_of_pixels_long_is_a_roll_that_can_be_played() {
+        // Like osu!team's FM Synthesis Experiment (set 2608578): NaN slider velocities and
+        // sliders 3.6e12 px long, which crashed the game on picking the map.
+        let text = "osu file format v14\n\n[General]\nAudioFilename: audio.mp3\nMode: 0\n\n[Difficulty]\nOverallDifficulty:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n0,NaN,4,1,0,100,0,0\n2000,-0.0001,4,1,0,100,0,0\n\n[HitObjects]\n256,192,1000,2,0,L|31457196:20,1,3617087291392\n256,192,3000,2,0,L|31457196:20,1,3617087291392\n256,192,5000,12,0,1e300,0:0:0:0:\n";
+        let map = parse(text);
+        assert!(!map.notes.is_empty());
+        for n in &map.notes {
+            assert!(n.end_time.is_finite() && n.end_time - n.time <= LONGEST_NOTE_MS, "{n:?}");
+            assert!(n.fake_len.is_finite());
+        }
+        // What picking it in song select does: its difficulty graph and a game to preview.
+        let graph = crate::difficulty::analyze(&map);
+        assert!(graph.peaks.len() <= 1_000_000);
+        assert!(map.too_wild_to_preview(), "song select shows it no playfield");
+        assert!(!parse(MAP).too_wild_to_preview());
+        let _ = crate::game::Game::new(map, std::sync::Arc::new(crate::audio::Track { samples: Vec::new(), rate: 1.0 }), None);
     }
 
     #[test]

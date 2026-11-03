@@ -697,6 +697,9 @@ const LOOP_R: f32 = 110.0;
 const LOOP_EXIT: f32 = 0.6;
 const LOOP_TURN: f32 = std::f32::consts::TAU - LOOP_EXIT;
 
+/// Most ticks one roll keeps (`NoteState::ticks`).
+const MAX_ROLL_TICKS: usize = 360_000;
+
 /// Shapeshift's shapes, by the index `shapeshift::SHAPES` names them with.
 const SHAPESHIFT: [RailShape; 6] = [RailShape::Zigzag, RailShape::UTurn, RailShape::Spiral, RailShape::Loop, RailShape::Elbow, RailShape::Straight];
 
@@ -1348,7 +1351,9 @@ impl Game {
             .map(|n| NoteState {
                 // A fake slider has none (taiko_arranger's `drumroll_tick_times`).
                 ticks: if n.kind == Kind::Roll && n.tick_spacing > 0.0 && !n.tiny {
-                    vec![false; ((n.end_time - n.time) / n.tick_spacing + 0.5).floor() as usize + 1]
+                    // At most a tick every 10 ms of the longest roll: a tick spacing of next to
+                    // nothing (a tiny beat length) mustn't ask for more than can be counted.
+                    vec![false; (((n.end_time - n.time) / n.tick_spacing + 0.5).floor() as usize).min(MAX_ROLL_TICKS) + 1]
                 } else {
                     Vec::new()
                 },

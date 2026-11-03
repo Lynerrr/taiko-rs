@@ -336,7 +336,8 @@ impl Preview {
                 if let Some(curve) = curve {
                     graph.use_curve(curve);
                 }
-                self.game = Some(new_preview_game(&map, self.requested_rate.0));
+                // The details and the music, but no playfield for a map gone wild.
+                self.game = (!map.too_wild_to_preview()).then(|| new_preview_game(&map, self.requested_rate.0));
                 self.last_time = f64::NEG_INFINITY;
                 self.map = Some((i, map, details, graph));
             }
@@ -414,7 +415,9 @@ impl Preview {
             // the notes in between aren't lost.
             let arrived = engine.position_ms(now).is_some_and(|p| (p * speed - target).abs() < 150.0 * speed);
             if arrived {
-                if let Some((_, map, _, _)) = &self.map {
+                if let Some((_, map, _, _)) = &self.map
+                    && !map.too_wild_to_preview()
+                {
                     let mut fresh = new_preview_game(map, speed);
                     fresh.skip_to(target - 50.0);
                     fresh.update(now, Some(engine), offset);
@@ -507,7 +510,9 @@ impl Preview {
     /// that pulse with the music.
     pub fn beat(&self) -> Option<(f64, f64)> {
         let (_, map, _, _) = self.map.as_ref().filter(|_| self.audio_active)?;
-        beat_at(&map.control_points, self.last_time)
+        // Only a beat that is one: NaN timing points (osu!team's FM Synthesis Experiment), or
+        // no preview clock yet, made every selector and the menu's notes draw as black boxes.
+        beat_at(&map.control_points, self.last_time).filter(|&(into, len)| into.is_finite() && len.is_finite() && len > 0.0)
     }
 
     /// Where the music is in map time, while `entry`'s song plays.
