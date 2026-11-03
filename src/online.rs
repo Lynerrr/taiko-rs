@@ -626,6 +626,85 @@ pub enum Up {
     Ping,
     /// A line in the global chat (everyone online sees it).
     GlobalChat(String),
+    /// What an admin does from the game; anyone else is refused. The outcome comes back as a
+    /// `Down::Notice`, or for questions as `Down::AdminOverview` / `Down::AdminLookup`.
+    Admin(AdminOp),
+}
+
+/// An admin's tools on the social connection (`Up::Admin`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum AdminOp {
+    /// Bans `name` (logged out everywhere, off the boards), or lets them back.
+    Ban { name: String, on: bool },
+    Rename { name: String, new: String },
+    /// Makes `name` a loved nominator, or not any more.
+    Nominator { name: String, on: bool },
+    /// Takes `name`'s profile picture off.
+    RemoveAvatar { name: String },
+    /// Disconnects `name` (every connection), and keeps them out for a couple of minutes.
+    Kick { name: String },
+    /// Keeps `name` out of the global chat for `minutes` (0: lets them back).
+    Mute { name: String, minutes: u32 },
+    /// A message to everyone online: a card, and a line in the global chat.
+    Announce(String),
+    /// Takes a global chat line down (by who said it and when).
+    DeleteGlobal { from: String, at: u64 },
+    /// Takes every global chat line of `name` down.
+    PurgeGlobal { name: String },
+    /// Who's on, what they're doing and the lobbies (`Down::AdminOverview`).
+    Overview,
+    /// An account and the others that log in from the same places (`Down::AdminLookup`).
+    Lookup { name: String },
+    /// Deletes a play from the boards, by its `OnlineScore::id`.
+    DeletePlay { id: u64 },
+    /// Sets a play's pp (None: back to what it was sent with).
+    SetPp { id: u64, pp: Option<f64> },
+    /// Takes `name` out of lobby `room`.
+    KickFromRoom { room: u32, name: String },
+    /// Closes lobby `room` (everyone in it is dropped).
+    CloseRoom { room: u32 },
+}
+
+/// Someone online, as an admin sees them.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct AdminPlayer {
+    pub name: String,
+    /// What they're really doing (an admin watching someone shows as in the menus to others).
+    pub activity: Option<Activity>,
+    pub connections: u32,
+    /// Whose solo play they're watching.
+    pub watching: Option<String>,
+    /// Unix seconds their global chat mute lasts until.
+    pub muted_until: Option<u64>,
+}
+
+/// The server right now, for admins (`AdminOp::Overview`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct AdminOverview {
+    pub uptime_secs: u64,
+    pub accounts: u32,
+    pub sessions: u32,
+    pub players: Vec<AdminPlayer>,
+    pub rooms: Vec<RoomInfo>,
+    /// The latest admin actions, newest last ("12:30 auneu banned troll").
+    pub log: Vec<String>,
+}
+
+/// One account, for admins (`AdminOp::Lookup`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct AdminLookup {
+    pub name: String,
+    /// Unix seconds.
+    pub created: u64,
+    pub banned: bool,
+    pub nominator: bool,
+    pub has_email: bool,
+    pub muted_until: Option<u64>,
+    pub online: bool,
+    /// Plays on the boards.
+    pub plays: u32,
+    /// Other accounts seen at one of the same addresses (the addresses themselves aren't sent).
+    pub alts: Vec<String>,
 }
 
 /// Server -> game on the social connection.
@@ -651,6 +730,12 @@ pub enum Down {
     /// Medals earned away from a play.
     Medals(Vec<MedalNote>),
     GlobalChat(ChatLine),
+    /// A global chat line was taken down by an admin: drop it.
+    GlobalChatDeleted { from: String, at: u64 },
+    /// For admins: the answer to `AdminOp::Overview`.
+    AdminOverview(Box<AdminOverview>),
+    /// For admins: the answer to `AdminOp::Lookup`.
+    AdminLookup(Box<AdminLookup>),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -662,6 +747,9 @@ pub enum Reply {
         token: String,
         #[serde(default)]
         nominator: bool,
+        /// An admin: the game shows its admin tools (the server checks every one anyway).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        admin: bool,
         /// Whether the account has an email (None: a server from before emails).
         #[serde(default)]
         email: Option<bool>,

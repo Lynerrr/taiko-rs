@@ -18,10 +18,12 @@ pub enum Tab {
     Players,
     /// The global chat.
     Chat,
+    /// Admins only: who's on, the lobbies, and the admin commands.
+    Admin,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 3] = [Tab::Friends, Tab::Players, Tab::Chat];
+    pub const ALL: [Tab; 4] = [Tab::Friends, Tab::Players, Tab::Chat, Tab::Admin];
 
     fn index(self) -> usize {
         Tab::ALL.iter().position(|t| *t == self).unwrap_or(0)
@@ -32,6 +34,7 @@ impl Tab {
             Tab::Friends => "FRIENDS",
             Tab::Players => "PLAYERS",
             Tab::Chat => "CHAT",
+            Tab::Admin => "ADMIN",
         }
     }
 }
@@ -51,6 +54,11 @@ pub enum Row {
     Player(usize),
     /// The global chat (the chat tab's only row).
     Global,
+    /// The admin tab's command box.
+    AdminInput,
+    /// An index into the admin overview's players, and its lobbies.
+    AdminPlayer(usize),
+    AdminRoom(usize),
 }
 
 /// Buttons on rows.
@@ -66,6 +74,11 @@ pub enum Action {
     Chat,
     /// Shows the player's profile.
     Profile,
+    /// Admins: disconnect, mute for 30 minutes, look up, close a lobby.
+    Kick,
+    Mute,
+    Lookup,
+    CloseRoom,
 }
 
 /// Where a player in the online list stands with us.
@@ -139,7 +152,7 @@ pub struct Social {
     /// The selected row of the shown tab.
     pub cursor: usize,
     /// The other tabs' cursors, by `Tab::index`.
-    tab_cursors: [usize; 3],
+    tab_cursors: [usize; 4],
     /// What's typed: a friend's name on the add row, the filter on the players tab, else a message.
     pub input: String,
     /// Chat lines scrolled back from the newest, and the most that can be (set when drawn).
@@ -147,6 +160,13 @@ pub struct Social {
     chat_scroll_max: Cell<usize>,
     /// The activity last sent to the server.
     pub sent_activity: Option<Activity>,
+    /// The account is an admin: the ADMIN tab and the admin commands.
+    pub admin: bool,
+    /// The server as the last overview had it, and when that was asked for.
+    pub overview: Option<online::AdminOverview>,
+    pub overview_asked: Option<Instant>,
+    /// What the admin tab shows over its list (a lookup, the commands): a title and lines.
+    pub info: Option<(String, Vec<String>)>,
 }
 
 /// The most spectators listed by name during a play.
@@ -284,6 +304,13 @@ impl Social {
                 rows
             }
             Tab::Chat => vec![Row::Global],
+            Tab::Admin => {
+                let o = self.overview.as_ref();
+                let mut rows = vec![Row::AdminInput];
+                rows.extend((0..o.map_or(0, |o| o.players.len())).map(Row::AdminPlayer));
+                rows.extend((0..o.map_or(0, |o| o.rooms.len())).map(Row::AdminRoom));
+                rows
+            }
         }
     }
 
@@ -299,18 +326,52 @@ impl Social {
         self.chat_scroll = 0;
     }
 
+    /// The tabs shown: the admin one for admins only.
+    pub fn tabs(&self) -> &'static [Tab] {
+        if self.admin { &Tab::ALL } else { &Tab::ALL[..3] }
+    }
+
     /// The next (or previous) tab.
     pub fn cycle_tab(&mut self, back: bool) {
-        let n = Tab::ALL.len();
-        let i = (self.tab.index() + if back { n - 1 } else { 1 }) % n;
-        self.set_tab(Tab::ALL[i]);
+        let tabs = self.tabs();
+        let n = tabs.len();
+        let at = tabs.iter().position(|t| *t == self.tab).unwrap_or(0);
+        let i = (at + if back { n - 1 } else { 1 }) % n;
+        self.set_tab(tabs[i]);
+    }
+
+    /// A new overview from the server, keeping the selected player or lobby selected.
+    pub fn set_overview(&mut self, o: online::AdminOverview, in_lobby: bool) {
+        let picked = match self.row(in_lobby) {
+            Row::AdminPlayer(i) => self.overview.as_ref().and_then(|o| o.players.get(i)).map(|p| (true, key(&p.name))),
+            Row::AdminRoom(i) => self.overview.as_ref().and_then(|o| o.rooms.get(i)).map(|r| (false, r.id.to_string())),
+            _ => None,
+        };
+        self.overview = Some(o);
+        let rows = self.rows(in_lobby);
+        let o = self.overview.as_ref();
+        let at = picked.and_then(|(player, k)| {
+            rows.iter().position(|r| match *r {
+                Row::AdminPlayer(i) if player => o.and_then(|o| o.players.get(i)).is_some_and(|p| key(&p.name) == k),
+                Row::AdminRoom(i) if !player => o.and_then(|o| o.rooms.get(i)).is_some_and(|r| r.id.to_string() == k),
+                _ => false,
+            })
+        });
+        if self.tab == Tab::Admin {
+            self.cursor = at.unwrap_or(self.cursor.min(rows.len() - 1));
+        }
+    }
+
+    /// A global chat line an admin took down goes away here too.
+    pub fn delete_global(&mut self, from: &str, at: u64) {
+        self.global.retain(|l| !(l.from == from && l.at == at));
     }
 
     /// Mouse wheel over the overlay: scrolls the chat when one is shown, else the list.
     pub fn wheel(&mut self, notches: i32, in_lobby: bool) {
         let over_chat = match self.tab {
             Tab::Friends => self.viewing,
-            Tab::Players => false,
+            Tab::Players | Tab::Admin => false,
             Tab::Chat => true,
         };
         if over_chat {
@@ -587,30 +648,35 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
         footer(c, "F9 or Esc close");
         return;
     }
-    // The tabs, and how many are online in the corner.
+    // The tabs, and how many are online in the corner: smaller and closer together when they
+    // don't fit (an admin's four, text grown on a phone).
+    let unread = |tab: Tab| match tab {
+        Tab::Friends => s.unread_total() + s.requests.len() + lobby_unread,
+        Tab::Players | Tab::Admin => 0,
+        Tab::Chat => s.global_unread,
+    };
+    let tabs = s.tabs();
+    let row_w = |size: f32, gap: f32| tabs.iter().map(|&t| Canvas::text_width(size, t.label()) + if unread(t) > 0 { badge_width(unread(t)) + 3.0 } else { 0.0 }).sum::<f32>() + gap * (tabs.len() - 1) as f32;
+    let (size, gap) = [(8.0, 16.0), (8.0, 10.0), (7.0, 8.0), (6.0, 6.0)].into_iter().find(|&(size, gap)| row_w(size, gap) <= PANEL_W - 24.0).unwrap_or((6.0, 4.0));
     let mut tx = x + 12.0;
-    for tab in Tab::ALL {
+    for &tab in tabs {
         let label = tab.label();
-        let tw = Canvas::text_width(8.0, label);
+        let tw = Canvas::text_width(size, label);
         let sel = tab == s.tab;
-        let hover = c.hovered(tx - 5.0, y + 2.0, tw + 10.0, HEADER_H - 2.0);
-        c.text(tx, y + 9.5, 8.0, rgba(if sel { 0xffffff } else if hover { 0xdedeea } else { 0x7a7a92 }, a), label);
+        let hover = c.hovered(tx - gap / 3.0, y + 2.0, tw + gap * 2.0 / 3.0, HEADER_H - 2.0);
+        c.text(tx, y + 13.5 - Canvas::text_height(size) / 2.0, size, rgba(if sel { 0xffffff } else if hover { 0xdedeea } else { 0x7a7a92 }, a), label);
         if sel {
             c.round_rect([tx - 1.0, y + HEADER_H - 2.5], [tw + 2.0, 2.5], 1.0, rgba(accent(), a), rgba(0, 0.0), 0.0);
         }
-        let unread = match tab {
-            Tab::Friends => s.unread_total() + s.requests.len() + lobby_unread,
-            Tab::Players => 0,
-            Tab::Chat => s.global_unread,
-        };
-        let bw = badge_after(c, tx + tw + 3.0, y + 13.0, unread, a);
-        c.hit(tx - 5.0, y + 2.0, tw + 10.0 + bw, HEADER_H - 2.0, Hit::SocialTab(tab));
-        tx += tw + 16.0 + bw;
+        let n = unread(tab);
+        let bw = if n > 0 { badge_after(c, tx + tw + 3.0, y + 13.0, n, a) + 3.0 } else { 0.0 };
+        c.hit(tx - gap / 3.0, y + 2.0, tw + gap * 2.0 / 3.0 + bw, HEADER_H - 2.0, Hit::SocialTab(tab));
+        tx += tw + gap + bw;
     }
     if s.connected && s.players.is_some() {
         let right = x + PANEL_W - 12.0;
         // What fits after the tabs (and their badges): "1234 online", "1234" or nothing.
-        let room = right - (tx - 16.0 + 14.0) - 10.0;
+        let room = right - (tx - gap + 14.0) - 10.0;
         let label = [format!("{} online", s.online_total), s.online_total.to_string()].into_iter().find(|l| Canvas::text_width(7.0, l) <= room);
         if let Some(label) = label {
             c.text_right(right, y + 10.5, 7.0, rgba(SOFT_TEXT, a), &label);
@@ -669,7 +735,7 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
             if lines.is_empty() {
                 c.text_centered(x + PANEL_W / 2.0, top + 10.0, 7.0, rgba(DIM_TEXT, a), "no messages yet: say hi");
             }
-            chat_lines(c, s, &lines, inner, top, input_y, width, now, a);
+            chat_lines(c, s, &lines, inner, top, input_y, width, now, false, a);
             message_box(c, s, inner, iw, input_y, "type a message, Enter to send", a);
             footer(c, "Esc back  Enter send  PgUp/PgDn scroll  Ctrl+W watch  Ctrl+P profile");
         }
@@ -705,9 +771,50 @@ pub fn draw(c: &mut Canvas, s: &Social, logged_in: bool, lobby: Option<&[(String
                 let note = if s.players.is_some() { "nobody has said anything yet: say hi" } else { "this server has no global chat yet" };
                 c.text_centered(x + PANEL_W / 2.0, list_top + 10.0, 7.0, rgba(DIM_TEXT, a), note);
             }
-            chat_lines(c, s, &lines, inner, list_top, input_y, width, now, a);
-            message_box(c, s, inner, iw, input_y, "message everyone online, Enter to send", a);
+            chat_lines(c, s, &lines, inner, list_top, input_y, width, now, s.admin, a);
+            message_box(c, s, inner, iw, input_y, if s.admin { "message everyone, or an admin /command" } else { "message everyone online, Enter to send" }, a);
             footer(c, "Enter send  wheel or PgUp/PgDn scroll  /np share a map");
+        }
+        Tab::Admin => {
+            let mut top = list_top;
+            // The server at a glance.
+            let stats = match &s.overview {
+                Some(o) => format!("up {}   {} online   {} accounts   {} sessions   {} lobbies", crate::admin::span(o.uptime_secs), o.players.len(), o.accounts, o.sessions, o.rooms.len()),
+                None => "asking the server...".into(),
+            };
+            c.text(inner + 3.0, top, 6.5, rgba(SOFT_TEXT, a), &Canvas::fit(6.5, iw - 6.0, &stats));
+            top += Canvas::text_height(6.5) + 6.0;
+            // A lookup, or the commands, over the list.
+            if let Some((title, lines)) = &s.info {
+                let lh = Canvas::text_height(6.5) + 3.0;
+                let shown: Vec<String> = lines.iter().flat_map(|l| wrap(l, banner_width())).take(10).collect();
+                let h = Canvas::text_height(7.0) + 9.0 + shown.len() as f32 * lh;
+                c.round_rect([inner, top], [iw, h], 5.0, rgba(HEADER_BG, a), rgba(accent(), 0.6 * a), 1.0);
+                c.text(inner + 7.0, top + 4.0, 7.0, rgba(accent(), a), &Canvas::fit(7.0, iw - 60.0, title));
+                c.text_right(inner + iw - 7.0, top + 4.5, 6.0, rgba(DIM_TEXT, a), "Esc hides");
+                for (k, l) in shown.iter().enumerate() {
+                    c.text(inner + 7.0, top + Canvas::text_height(7.0) + 7.0 + k as f32 * lh, 6.5, rgba(0xdedeea, a), l);
+                }
+                top += h + 6.0;
+            }
+            let ry = draw_rows(c, s, &rows, cursor, inner, iw, top, bottom - 4.0, lobby_unread, a);
+            // The latest admin actions under the list, as many as fit (newest first).
+            if let Some(o) = s.overview.as_ref().filter(|o| !o.log.is_empty()) {
+                let lh = Canvas::text_height(6.0) + 3.0;
+                let fit = ((bottom - 4.0 - ry - 4.0 - HEADING_H) / lh).floor().max(0.0) as usize;
+                if fit > 0 {
+                    section(c, inner, iw, ry + 4.0, "LOG", o.log.len(), a);
+                    for (k, l) in o.log.iter().rev().take(fit).enumerate() {
+                        c.text(inner + 3.0, ry + 4.0 + HEADING_H + k as f32 * lh, 6.0, rgba(DIM_TEXT, a), &Canvas::fit(6.0, iw - 6.0, l));
+                    }
+                }
+            }
+            let hints = match selected {
+                Row::AdminPlayer(_) => "Ctrl+W watch  Ctrl+M mute  Ctrl+K kick  Ctrl+L look up  Ctrl+P profile",
+                Row::AdminRoom(_) => "Ctrl+J join  Del close the lobby  Up/Down",
+                _ => "type a /command, Enter runs it  /help  Up/Down",
+            };
+            footer(c, hints);
         }
     }
 }
@@ -727,6 +834,8 @@ fn heading(s: &Social, rows: &[Row], i: usize) -> Option<(&'static str, usize)> 
     let part = |r: &Row| match *r {
         Row::Request(_) => Some(0),
         Row::Friend(k) => Some(if s.friends.get(k).is_some_and(|f| f.activity.is_some()) { 1 } else { 2 }),
+        Row::AdminPlayer(_) => Some(3),
+        Row::AdminRoom(_) => Some(4),
         _ => None,
     };
     let this = part(&rows[i])?;
@@ -734,7 +843,7 @@ fn heading(s: &Social, rows: &[Row], i: usize) -> Option<(&'static str, usize)> 
         return None;
     }
     let n = rows.iter().filter(|r| part(r) == Some(this)).count();
-    Some((["REQUESTS", "ONLINE", "OFFLINE"][this], n))
+    Some((["REQUESTS", "ONLINE", "OFFLINE", "ONLINE", "LOBBIES"][this], n))
 }
 
 const HEADING_H: f32 = 13.0;
@@ -743,7 +852,7 @@ const HEADING_H: f32 = 13.0;
 #[allow(clippy::too_many_arguments)]
 fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32, iw: f32, top: f32, bottom: f32, lobby_unread: usize, a: f32) -> f32 {
     let height = |i: usize| {
-        let base = if matches!(rows[i], Row::Friend(_) | Row::Player(_)) { 30.0 } else { 24.0 };
+        let base = if matches!(rows[i], Row::Friend(_) | Row::Player(_) | Row::AdminPlayer(_) | Row::AdminRoom(_)) { 30.0 } else { 24.0 };
         base + if heading(s, rows, i).is_some() { HEADING_H } else { 0.0 }
     };
     let mut first = 0;
@@ -849,6 +958,49 @@ fn draw_rows(c: &mut Canvas, s: &Social, rows: &[Row], cursor: usize, inner: f32
                 c.text(inner + 31.0, ry + 5.0, 8.0, rgba(0xffffff, a), &Canvas::fit(8.0, bx - inner - 34.0, &p.name));
                 c.text(inner + 31.0, ry + 16.0, 6.5, rgba(SOFT_TEXT, a), &Canvas::fit(6.5, bx - inner - 34.0, &p.activity.describe()));
             }
+            Row::AdminInput => {
+                let text = if sel || !s.input.is_empty() { format!("admin: {}{}", s.input, if sel { "_" } else { "" }) } else { "admin: type a command (/help lists them)".into() };
+                c.text(inner + 9.0, ty, 7.0, rgba(if sel || !s.input.is_empty() { 0xffffff } else { SOFT_TEXT }, a), &Canvas::fit_end(7.0, iw - 18.0, &text));
+            }
+            Row::AdminPlayer(k) => {
+                let Some(p) = s.overview.as_ref().and_then(|o| o.players.get(k)) else { continue };
+                face(c, &p.name, inner + 15.0, ry + bh / 2.0, 9.0, p.activity.as_ref(), bg, a);
+                let now = crate::discord::unix_now();
+                let muted = p.muted_until.filter(|&t| t > now);
+                let mut bx = inner + iw - 5.0;
+                if active {
+                    bx = button(c, bx, by, "kick", Hit::SocialAction(i, Action::Kick), a) - 4.0;
+                    bx = button(c, bx, by, if muted.is_some() { "unmute" } else { "mute" }, Hit::SocialAction(i, Action::Mute), a) - 4.0;
+                    bx = button(c, bx, by, "info", Hit::SocialAction(i, Action::Lookup), a) - 4.0;
+                    if matches!(p.activity, Some(Activity::Playing { .. })) {
+                        bx = button(c, bx, by, "watch", Hit::SocialAction(i, Action::Watch), a) - 4.0;
+                    }
+                } else if let Some(t) = muted {
+                    bx = tag(c, bx, by, &format!("muted {}", crate::admin::span(t - now)), a) - 4.0;
+                }
+                let name = if p.connections > 1 { format!("{}  x{}", p.name, p.connections) } else { p.name.clone() };
+                let what = p.activity.as_ref().map(Activity::describe).unwrap_or_default();
+                c.text(inner + 31.0, ry + 5.0, 8.0, rgba(0xffffff, a), &Canvas::fit(8.0, bx - inner - 34.0, &name));
+                c.text(inner + 31.0, ry + 16.0, 6.5, rgba(SOFT_TEXT, a), &Canvas::fit(6.5, bx - inner - 34.0, &what));
+            }
+            Row::AdminRoom(k) => {
+                let Some(r) = s.overview.as_ref().and_then(|o| o.rooms.get(k)) else { continue };
+                c.round_rect([inner + 6.0, ry + bh / 2.0 - 9.0], [18.0, 18.0], 5.0, rgba(0x4fb4ff, 0.25 * a), rgba(0x4fb4ff, a), 1.0);
+                c.text_centered(inner + 15.0, ry + bh / 2.0 - 3.0, 6.0, rgba(0x4fb4ff, a), &r.id.to_string());
+                let mut bx = inner + iw - 5.0;
+                if active {
+                    bx = button(c, bx, by, "close", Hit::SocialAction(i, Action::CloseRoom), a) - 4.0;
+                    bx = button(c, bx, by, "join", Hit::SocialAction(i, Action::Join), a) - 4.0;
+                }
+                let state = match (&r.map, r.in_match) {
+                    (Some(m), true) => format!("playing {m}"),
+                    (Some(m), false) => m.clone(),
+                    (None, _) => "no map yet".into(),
+                };
+                let what = format!("{}  {} in it  {state}", r.host, r.players);
+                c.text(inner + 31.0, ry + 5.0, 8.0, rgba(0xffffff, a), &Canvas::fit(8.0, bx - inner - 34.0, &r.title));
+                c.text(inner + 31.0, ry + 16.0, 6.5, rgba(SOFT_TEXT, a), &Canvas::fit(6.5, bx - inner - 34.0, &what));
+            }
             Row::Global => {}
         }
         ry += rh;
@@ -899,6 +1051,8 @@ struct ChatRow {
     kind: ChatKind,
     /// Space above it: messages from someone else start apart.
     gap: f32,
+    /// Which of the lines it's (part of).
+    entry: usize,
 }
 
 impl ChatRow {
@@ -921,12 +1075,12 @@ const GROUP_SECS: u64 = 5 * 60;
 fn chat_rows(lines: &[ChatEntry], width: usize, banner: usize) -> Vec<ChatRow> {
     let mut rows: Vec<ChatRow> = Vec::new();
     let mut last: Option<&ChatEntry> = None;
-    for line in lines {
+    for (entry, line) in lines.iter().enumerate() {
         let gap = if rows.is_empty() { 0.0 } else { 5.0 };
         if let Some(colour) = line.banner {
             let text = wrap(&line.text, banner);
             let n = text.len();
-            rows.extend(text.into_iter().enumerate().map(|(k, text)| ChatRow { text, colour, kind: ChatKind::Banner { ends: k + 1 == n }, gap: if k == 0 { gap } else { 0.0 } }));
+            rows.extend(text.into_iter().enumerate().map(|(k, text)| ChatRow { text, colour, kind: ChatKind::Banner { ends: k + 1 == n }, gap: if k == 0 { gap } else { 0.0 }, entry }));
             last = None;
             continue;
         }
@@ -936,14 +1090,14 @@ fn chat_rows(lines: &[ChatEntry], width: usize, banner: usize) -> Vec<ChatRow> {
         });
         let mut gap = if same { 1.0 } else { gap };
         if !same {
-            rows.push(ChatRow { text: line.from.clone(), colour: name_colour(&line.from, line.mine), kind: ChatKind::Name { at: line.at }, gap });
+            rows.push(ChatRow { text: line.from.clone(), colour: name_colour(&line.from, line.mine), kind: ChatKind::Name { at: line.at }, gap, entry });
             gap = 1.0;
         }
         // Lines naming a map set (`/np`) are links, in blue.
         let set = map_set_in(&line.text);
         let colour = if set.is_some() { 0x66ccff } else { 0xdedeea };
         for (k, text) in wrap(&line.text, width).into_iter().enumerate() {
-            rows.push(ChatRow { text, colour, kind: ChatKind::Text { set, mention: line.mention }, gap: if k == 0 { gap } else { 0.0 } });
+            rows.push(ChatRow { text, colour, kind: ChatKind::Text { set, mention: line.mention }, gap: if k == 0 { gap } else { 0.0 }, entry });
         }
         last = Some(line);
     }
@@ -951,9 +1105,10 @@ fn chat_rows(lines: &[ChatEntry], width: usize, banner: usize) -> Vec<ChatRow> {
 }
 
 /// Chat rows between `top` and the message box at `input_y`: newest at the bottom, as many as
-/// fit, scrolled back by `s.chat_scroll` rows.
+/// fit, scrolled back by `s.chat_scroll` rows. `deletable`: an admin can take lines down (a
+/// button on the one under the pointer).
 #[allow(clippy::too_many_arguments)]
-fn chat_lines(c: &mut Canvas, s: &Social, lines: &[ChatEntry], inner: f32, top: f32, input_y: f32, width: usize, now: u64, a: f32) {
+fn chat_lines(c: &mut Canvas, s: &Social, lines: &[ChatEntry], inner: f32, top: f32, input_y: f32, width: usize, now: u64, deletable: bool, a: f32) {
     let rows = chat_rows(lines, width, banner_width());
     let room = input_y - 6.0 - top;
     // How many of the newest rows fit, ending at `end`.
@@ -1011,6 +1166,9 @@ fn chat_lines(c: &mut Canvas, s: &Social, lines: &[ChatEntry], inner: f32, top: 
                 c.rect(inner, ly - 1.5, 2.0, bh, rgba(row.colour, a));
                 c.text(inner + 7.0, ly, 6.5, rgba(row.colour, a), &row.text);
             }
+        }
+        if deletable && c.hovered(inner, ly - 1.0, iw, h) {
+            button(c, inner + iw, ly + (h - 12.0) / 2.0 - 1.0, "delete", Hit::SocialDeleteChat(row.entry), a);
         }
         ly += h;
     }
