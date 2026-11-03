@@ -429,6 +429,8 @@ fn assert_every_screen_fits() {
     s.settings_ui.clear_search();
     s.volume.touch(Instant::now());
     check(&mut s, "volume lane", &mut out);
+    // Gone again: on a slow runner (macOS CI) it was still up screens later, over their buttons.
+    s.volume = crate::volume::Overlay::new();
     let was = s.mapinfo.take();
     let mut info = mapinfo::MapInfo::spawn(vec![(0, PathBuf::from("/nonexistent/a.osu"), 0, 0)], 1, true);
     info.started -= Duration::from_secs(60);

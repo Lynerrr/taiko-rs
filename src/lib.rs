@@ -5884,6 +5884,35 @@ impl State {
         self.toast(tr!("restart taiko.rs to switch the renderer", "レンダラーの切り替えはtaiko.rsの再起動後", "рендер сменится после перезапуска taiko.rs").into());
     }
 
+    /// What's on screen, and the map, for a crash report (`CRASH_SCENE`).
+    fn note_scene_for_crashes(&self) {
+        let screen = match &self.scene {
+            Scene::Select if self.on_menu() => "main menu",
+            Scene::Select => "song select",
+            Scene::Loading { .. } => "loading a map",
+            Scene::Play { game, .. } => if game.replay.is_some() { "watching a replay" } else { "playing" },
+            Scene::Results { .. } => "results",
+            Scene::Settings { .. } => "settings",
+            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => "calibration",
+            Scene::LayoutEdit { .. } => "layout editor",
+            Scene::Preview { .. } => "map preview",
+            Scene::Download => "downloads",
+            Scene::MpMenu => "multiplayer menu",
+            Scene::Lobby => "lobby",
+            Scene::MpWait { .. } | Scene::MpPlay { .. } => "multiplayer match",
+            Scene::MpResults => "multiplayer results",
+            Scene::Spectate(_) => "spectating",
+            Scene::Watch(_) => "watching a friend",
+            Scene::VideoEdit(_) => "video editor",
+        };
+        let map = self.offset_entry().and_then(|i| self.library.get(i)).map(|e| format!(", map {} [{}] by {}", e.meta.title, e.meta.version, e.meta.creator)).unwrap_or_default();
+        let mods = self.cfg.mods.label();
+        let mods = if mods.is_empty() { String::new() } else { format!(", mods {mods}") };
+        if let Ok(mut s) = CRASH_SCENE.lock() {
+            *s = format!("screen: {screen}{map}{mods}");
+        }
+    }
+
     /// Forgets the saved online login.
     fn sign_out(&mut self, why: &str) {
         self.social = social::Social::default();
@@ -8250,6 +8279,7 @@ impl State {
         if self.scene_kind != Some(kind) {
             self.scene_kind = Some(kind);
             self.scene_since = now;
+            self.note_scene_for_crashes();
         }
         self.frame_clip = None;
         #[cfg(target_os = "android")]
@@ -11386,6 +11416,10 @@ fn log_crashes() {
             std::backtrace::Backtrace::force_capture(),
             crash_context(),
         );
+        // A release build's backtrace has no names on Windows: where each frame is, for
+        // finding them with that build's .pdb (docs/ci.md).
+        #[cfg(windows)]
+        let text = format!("{text}{}", native_crashes::frames());
         if let Some(dir) = config::data_dir() {
             let _ = std::fs::create_dir_all(&dir);
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
@@ -11493,6 +11527,26 @@ mod native_crashes {
         }
     }
 
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut *mut c_void, hash: *mut u32) -> u16;
+    }
+
+    /// This thread's stack as `frames: taiko-rs.exe+0x1a2b3c ...` (the module and offset of
+    /// each return address): files and lines with the build's .pdb (docs/ci.md).
+    pub fn frames() -> String {
+        let mut frames = [std::ptr::null_mut::<c_void>(); 62];
+        // SAFETY: the buffer holds the 62 frames asked for.
+        let n = unsafe { RtlCaptureStackBackTrace(1, frames.len() as u32, frames.as_mut_ptr(), std::ptr::null_mut()) } as usize;
+        let mut out = String::from("frames:");
+        for f in &frames[..n.min(frames.len())] {
+            out.push(' ');
+            out.push_str(&module_of(*f));
+        }
+        out.push('\n');
+        out
+    }
+
     /// The DLL or exe `address` is in, and how far into it.
     fn module_of(address: *const c_void) -> String {
         let mut module = std::ptr::null_mut();
@@ -11531,6 +11585,7 @@ mod native_crashes {
             text.push_str(&format!("{op} 0x{:x}\n", record.information[1]));
         }
         text.push_str(&super::crash_context());
+        text.push_str(&frames());
         // What the game printed last: the screen, the audio device, the map...
         if let Ok(log) = std::fs::read_to_string(dir.join("game.log")) {
             let lines: Vec<&str> = log.lines().collect();
@@ -11576,8 +11631,19 @@ static SEND_CRASH_REPORTS: AtomicBool = AtomicBool::new(true);
 /// graphics have started.
 static CRASH_CONTEXT: OnceLock<String> = OnceLock::new();
 
+/// The screen (and map and mods) when it crashed: set as screens change, never under the
+/// state's lock (the crashing thread may hold that one).
+static CRASH_SCENE: Mutex<String> = Mutex::new(String::new());
+
 fn crash_context() -> String {
-    CRASH_CONTEXT.get().map(|c| format!("{c}\n")).unwrap_or_default()
+    let mut out = CRASH_CONTEXT.get().map(|c| format!("{c}\n")).unwrap_or_default();
+    if let Ok(scene) = CRASH_SCENE.try_lock()
+        && !scene.is_empty()
+    {
+        out.push_str(&scene);
+        out.push('\n');
+    }
+    out
 }
 
 /// The crash window's words on what happens to the report: `otherwise` is how to send it in

@@ -31,8 +31,12 @@ jobs:
       - name: Test
         run: cargo test --profile ci-test --locked --lib
 
+      # Line tables in a .pdb beside the exe (not shipped): crash reports give each frame as
+      # taiko-rs.exe+offset, and that build's .pdb turns them into files and lines (docs/ci.md).
       - name: Build
         run: cargo build --release --locked
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
 
       - name: Package
         shell: pwsh
@@ -70,6 +74,15 @@ jobs:
           path: |
             taiko-rs-windows-x64.zip
             taiko-rs-windows-x64-setup.exe
+
+      # Kept with the run, found by the build's commit, for crash reports.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-pdb
+          path: |
+            target/release/taiko-rs.exe
+            target/release/taiko_rs.pdb
+          retention-days: 90
 
   linux:
     # The oldest runner whose PipeWire headers the pipewire crate builds against (22.04's 0.3.48
