@@ -670,7 +670,9 @@ struct State {
     presence: Option<discord::Activity>,
     presence_at: Option<Instant>,
     /// Background library scan: result channel and files-read counter.
-    scan: Option<(Receiver<Vec<Entry>>, Arc<AtomicUsize>)>,
+    scan: Option<(Receiver<Scanned>, Arc<AtomicUsize>)>,
+    /// The list is up from the cache, and the scan is checking it against the disk.
+    scan_checking: bool,
     /// The Songs folder dialog while it is open: the folder picked (None = cancelled), or why
     /// there is no dialog.
     folder_pick: Option<Receiver<Result<Option<PathBuf>, String>>>,
@@ -1923,9 +1925,16 @@ fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
     inputs
 }
 
+/// What a library scan hands over: the list from the cache straight away, if there's one, then the
+/// list as it is on disk.
+enum Scanned {
+    Cached(Vec<Entry>),
+    Done(Vec<Entry>),
+}
+
 /// Scans `inputs` on a background thread so the window appears at once, even with a huge
 /// library.
-fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Vec<Entry>>, Arc<AtomicUsize>) {
+fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Scanned>, Arc<AtomicUsize>) {
     let found = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = mpsc::channel();
     let counter = found.clone();
@@ -1933,13 +1942,16 @@ fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Vec<Entry>>, Arc<AtomicUsize>) 
         .name("library".into())
         .spawn(move || {
             let started = Instant::now();
-            let library = library::scan(&inputs, &counter);
+            let early = tx.clone();
+            let library = library::scan(&inputs, &counter, &mut |cached| {
+                let _ = early.send(Scanned::Cached(cached));
+            });
             eprintln!(
                 "scanned {} files in {:.0} ms",
                 counter.load(Ordering::Relaxed),
                 started.elapsed().as_secs_f64() * 1000.0
             );
-            let _ = tx.send(library);
+            let _ = tx.send(Scanned::Done(library));
         })
         .expect("spawn library scan");
     (rx, found)
@@ -5144,6 +5156,7 @@ impl State {
             .into(),
         });
         self.scan = Some(start_scan(inputs));
+        self.scan_checking = false;
         self.select.scanning = Some(0);
         Ok(())
     }
@@ -9211,13 +9224,86 @@ impl State {
         let Some((rx, found)) = &self.scan else {
             return;
         };
-        self.select.scanning = Some(found.load(Ordering::Relaxed));
-        let library = match rx.try_recv() {
-            Ok(library) => library,
+        if !self.scan_checking {
+            self.select.scanning = Some(found.load(Ordering::Relaxed));
+        }
+        let scanned = match rx.try_recv() {
+            Ok(scanned) => scanned,
             Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => Vec::new(),
+            Err(mpsc::TryRecvError::Disconnected) if self.scan_checking => {
+                self.scan = None;
+                self.scan_checking = false;
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => Scanned::Done(Vec::new()),
         };
-        self.scan = None;
+        match scanned {
+            Scanned::Cached(library) => {
+                self.use_library(library, None);
+                self.scan_checking = true;
+            }
+            Scanned::Done(library) if self.scan_checking => {
+                self.scan = None;
+                self.scan_checking = false;
+                self.check_library(library);
+            }
+            Scanned::Done(library) => {
+                self.scan = None;
+                self.use_library(library, None);
+            }
+        }
+    }
+
+    /// The scan's list against the one up from the cache: what's new joins the end and what's
+    /// changed takes its place, so the indices handed out stay good. What's gone takes the list
+    /// being rebuilt, which waits for a next launch if anything could be holding on to one.
+    fn check_library(&mut self, checked: Vec<Entry>) {
+        let index: std::collections::HashMap<PathBuf, usize> = self
+            .library
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.path.clone(), i))
+            .collect();
+        let gone = {
+            let there: std::collections::HashSet<&Path> =
+                checked.iter().map(|e| e.path.as_path()).collect();
+            self.library
+                .iter()
+                .any(|e| !there.contains(e.path.as_path()))
+        };
+        if gone && matches!(self.scene, Scene::Select) && self.mp.is_none() {
+            let selected = self
+                .select
+                .selected()
+                .and_then(|i| self.library.get(i))
+                .map(|e| e.path.clone());
+            self.use_library(checked, selected);
+            return;
+        }
+        let mut fresh = Vec::new();
+        let mut changed = false;
+        for entry in checked {
+            match index.get(&entry.path) {
+                Some(&i) => {
+                    let old = &self.library[i];
+                    if old.size != entry.size || old.modified != entry.modified {
+                        self.library[i] = entry;
+                        changed = true;
+                    }
+                }
+                None => fresh.push(entry),
+            }
+        }
+        if !fresh.is_empty() {
+            self.append_maps(fresh);
+        } else if changed {
+            self.select.refilter(&self.library);
+        }
+        self.find_lobby_map();
+    }
+
+    /// `library` in place of the list, on `selected` if that's still there, else a random song.
+    fn use_library(&mut self, library: Vec<Entry>, selected: Option<PathBuf>) {
         self.stars.clear();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
@@ -9259,7 +9345,9 @@ impl State {
         self.select.refilter(&self.library);
         // Start on a random song rather than the first one every time (not before a map given on
         // the command line, nor in scripted runs, whose screenshots expect the first song).
-        if !self.play_when_scanned && self.input_script.is_none() && self.shots.is_none() {
+        if let Some(path) = &selected {
+            self.select.select_path(&self.library, path);
+        } else if !self.play_when_scanned && self.input_script.is_none() && self.shots.is_none() {
             self.select.random(&self.library);
         }
         // Tests: TAIKO_OPEN_VIDEO=<replay file> opens the video editor for it.
@@ -9274,9 +9362,14 @@ impl State {
             self.play_when_scanned = false;
             self.start_loading(0);
         }
-        // A lobby map may have been announced before our library was ready.
+        self.find_lobby_map();
+    }
+
+    /// A lobby map may have been announced before our library was ready.
+    fn find_lobby_map(&mut self) {
         if let Some(s) = &mut self.mp
             && let Some(m) = &s.map
+            && !s.have_map
         {
             s.map_entry = find_map(&self.library, m);
             s.have_map = s.map_entry.is_some();
@@ -15174,7 +15267,7 @@ impl State {
     /// place (indices stay valid), ones it no longer has leave the list, new ones join it.
     fn add_updated(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
         let mut fresh: std::collections::HashMap<PathBuf, Entry> =
-            library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0))
+            library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0), &mut |_| {})
                 .into_iter()
                 .map(|e| (e.path.clone(), e))
                 .collect();
@@ -15228,10 +15321,11 @@ impl State {
             .filter(|e| e.path.starts_with(folder))
             .map(|e| e.path.clone())
             .collect();
-        let fresh: Vec<Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0))
-            .into_iter()
-            .filter(|e| !known.contains(&e.path))
-            .collect();
+        let fresh: Vec<Entry> =
+            library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0), &mut |_| {})
+                .into_iter()
+                .filter(|e| !known.contains(&e.path))
+                .collect();
         // Nothing new (unpacked over the same files): the set that's there is what was added.
         let maps = if fresh.is_empty() {
             main_maps(self.library.iter().filter(|e| e.path.starts_with(folder)))
@@ -16862,7 +16956,7 @@ impl State {
         splash: Option<splash::Splash>,
         songs_dir: PathBuf,
         song_dirs: Vec<PathBuf>,
-        scan: Option<(Receiver<Vec<Entry>>, Arc<AtomicUsize>)>,
+        scan: Option<(Receiver<Scanned>, Arc<AtomicUsize>)>,
         play_when_scanned: bool,
         auto: bool,
     ) -> State {
@@ -17071,6 +17165,7 @@ impl State {
             presence: None,
             presence_at: None,
             scan,
+            scan_checking: false,
             folder_pick: None,
             folder_pick_for: Item::SongsFolder,
             data_move: None,

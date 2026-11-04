@@ -25,7 +25,7 @@ impl Entry {
         Self::from_parts(path, meta, size, modified)
     }
 
-    fn from_parts(path: PathBuf, meta: Meta, size: u64, modified: u64) -> Entry {
+    pub(crate) fn from_parts(path: PathBuf, meta: Meta, size: u64, modified: u64) -> Entry {
         let text = crate::search::Text::new(
             &meta,
             &format!("{} - {} [{}]", meta.artist, meta.title, meta.version),
@@ -394,12 +394,66 @@ fn library_cache() -> PathBuf {
     cache_dir().join("library-v2.json")
 }
 
-fn load_cache(path: &Path) -> std::collections::HashMap<PathBuf, CachedFolder> {
-    let folders: Vec<CachedFolder> = std::fs::read(path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
-    folders.into_iter().map(|f| (f.dir.clone(), f)).collect()
+/// How the cache could be read, for the scan's log.
+#[derive(Debug, PartialEq, Eq)]
+enum CacheState {
+    Missing,
+    Read,
+    /// Part of it could be read: how many folders couldn't, and why the file as a whole couldn't.
+    Damaged(usize, String),
+    Unreadable(String),
+}
+
+/// What a folder is known by in the cache: on Windows, the same folder may be spelled in another
+/// case another time (a drive letter, osu!'s install from the registry), which isn't another folder.
+fn folder_key(p: &Path) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(p.to_string_lossy().to_lowercase())
+    } else {
+        p.to_path_buf()
+    }
+}
+
+fn load_cache(path: &Path) -> (std::collections::HashMap<PathBuf, CachedFolder>, CacheState) {
+    let Ok(bytes) = std::fs::read(path) else {
+        return (Default::default(), CacheState::Missing);
+    };
+    let (folders, state) = match serde_json::from_slice::<Vec<CachedFolder>>(&bytes) {
+        Ok(folders) => (folders, CacheState::Read),
+        Err(e) => match serde_json::from_slice::<Vec<serde_json::Value>>(&bytes) {
+            // One folder gone wrong doesn't cost all the others being read again.
+            Ok(values) => {
+                let total = values.len();
+                let folders: Vec<CachedFolder> = values
+                    .into_iter()
+                    .filter_map(|v| serde_json::from_value(v).ok())
+                    .collect();
+                let lost = total - folders.len();
+                (folders, CacheState::Damaged(lost, e.to_string()))
+            }
+            Err(_) => (Vec::new(), CacheState::Unreadable(e.to_string())),
+        },
+    };
+    let folders = folders
+        .into_iter()
+        .map(|f| (folder_key(&f.dir), f))
+        .collect();
+    (folders, state)
+}
+
+/// The last lines of the scan's log: enough to compare a slow launch with a quick one.
+const SCAN_LOG_LINES: usize = 60;
+
+/// Adds a line to `library-scan.log`, by the cache: what each scan found and how long its steps
+/// took. Release builds have no console, and this is what tells a slow disk from a cache not used.
+fn log_scan(cache_path: &Path, line: &str) {
+    let log = cache_path.with_file_name("library-scan.log");
+    let old = std::fs::read_to_string(&log).unwrap_or_default();
+    let mut lines: Vec<&str> = old.lines().collect();
+    let extra = (lines.len() + 1).saturating_sub(SCAN_LOG_LINES);
+    lines.drain(..extra);
+    lines.push(line);
+    let _ = std::fs::write(&log, lines.join("\n") + "\n");
 }
 
 fn save_cache(path: &Path, folders: Vec<CachedFolder>) {
@@ -421,8 +475,15 @@ fn save_cache(path: &Path, folders: Vec<CachedFolder>) {
 /// in it moves it.
 // ponytail: a .osu rewritten in place (same name) doesn't move its folder's time, so its new
 // header shows after the folder next changes or the cache file is deleted.
-pub fn scan(inputs: &[PathBuf], found: &AtomicUsize) -> Vec<Entry> {
-    scan_cached(inputs, found, &library_cache())
+///
+/// `early` gets the list as the cache has it before anything is looked at on disk, which can take a
+/// minute on a cold hard drive; what's returned is the list as it really is.
+pub fn scan(
+    inputs: &[PathBuf],
+    found: &AtomicUsize,
+    early: &mut dyn FnMut(Vec<Entry>),
+) -> Vec<Entry> {
+    scan_cached(inputs, found, &library_cache(), early)
 }
 
 /// Where `p` really is: the same folder reached two ways (a link, another case on Windows) is
@@ -436,7 +497,13 @@ fn place(p: &Path) -> PathBuf {
     }
 }
 
-fn scan_cached(inputs: &[PathBuf], found: &AtomicUsize, cache_path: &Path) -> Vec<Entry> {
+fn scan_cached(
+    inputs: &[PathBuf],
+    found: &AtomicUsize,
+    cache_path: &Path,
+    early: &mut dyn FnMut(Vec<Entry>),
+) -> Vec<Entry> {
+    let started = std::time::Instant::now();
     // A folder named twice (osu!'s install found both where it usually is and where the registry
     // says, in another case; a `songs =` line repeating it) is scanned once: twice listed every
     // map in it twice.
@@ -447,7 +514,22 @@ fn scan_cached(inputs: &[PathBuf], found: &AtomicUsize, cache_path: &Path) -> Ve
         .cloned()
         .collect();
     let inputs = inputs.as_slice();
-    let mut cache = load_cache(cache_path);
+    let (mut cache, cache_state) = load_cache(cache_path);
+    let cached_folders = cache.len();
+    let keys: Vec<PathBuf> = inputs.iter().map(|i| folder_key(i)).collect();
+    // A folder of what's being scanned: the rest stay cached, but aren't ours to show or drop.
+    let scanned = |dir: &Path| dir.parent().is_some_and(|p| keys.contains(&folder_key(p)));
+    let loaded_ms = started.elapsed().as_millis();
+    let cached: Vec<CachedMap> = cache
+        .values()
+        .filter(|f| scanned(&f.dir))
+        .flat_map(|f| f.maps.iter().cloned())
+        .collect();
+    if !cached.is_empty() {
+        early(entries_of(cached));
+    }
+    let shown_ms = started.elapsed().as_millis();
+    let (mut moved, mut unseen) = (0usize, 0usize);
     let mut kept: Vec<CachedFolder> = Vec::new();
     // Files to read, with the set folder (index into `walked`) they are cached under, if any.
     let mut files: Vec<(Option<usize>, PathBuf)> = Vec::new();
@@ -481,12 +563,18 @@ fn scan_cached(inputs: &[PathBuf], found: &AtomicUsize, cache_path: &Path) -> Ve
                             .and_then(|m| m.modified().ok())
                             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                             .map_or(0, |d| d.as_nanos());
-                        match cache.remove(&p) {
+                        let was = cache.remove(&folder_key(&p));
+                        match was {
                             Some(f) if f.modified == modified && modified != 0 => {
                                 found.fetch_add(f.maps.len(), Ordering::Relaxed);
                                 kept.push(f);
                             }
-                            _ => {
+                            was => {
+                                if was.is_some() {
+                                    moved += 1;
+                                } else {
+                                    unseen += 1;
+                                }
                                 let mut found = Vec::new();
                                 collect_osu(&p, 1, &mut found);
                                 files.extend(found.into_iter().map(|f| (Some(walked.len()), f)));
@@ -508,6 +596,7 @@ fn scan_cached(inputs: &[PathBuf], found: &AtomicUsize, cache_path: &Path) -> Ve
     }
     files.sort_by(|a, b| a.1.cmp(&b.1));
     files.dedup_by(|a, b| a.1 == b.1);
+    let walked_ms = started.elapsed().as_millis();
 
     let read = |(dir, path): &(Option<usize>, PathBuf)| -> Option<(Option<usize>, CachedMap)> {
         // One malformed map must not take the whole scan down with it.
@@ -558,13 +647,29 @@ fn scan_cached(inputs: &[PathBuf], found: &AtomicUsize, cache_path: &Path) -> Ve
         }
         maps.push(map);
     }
+    let read_ms = started.elapsed().as_millis();
     // Folders of other scans (another Songs folder, a single map) stay cached; ones gone from
     // a folder just scanned are dropped.
-    let scanned = |dir: &Path| dir.parent().is_some_and(|p| inputs.iter().any(|i| i == p));
+    let unchanged = kept.len();
+    let gone = cache.values().filter(|f| scanned(&f.dir)).count();
     kept.extend(fresh);
     kept.extend(cache.into_values().filter(|f| !scanned(&f.dir)));
     save_cache(cache_path, kept);
+    let files_read = files.len();
+    let entries = entries_of(maps);
+    log_scan(
+        cache_path,
+        &format!(
+            "cache {cache_state:?}: {cached_folders} folders; {unchanged} unchanged, {moved} changed, {unseen} not in it, {gone} gone; {files_read} files read, {} maps | ms: load {loaded_ms}, list up {shown_ms}, folders checked {walked_ms}, files read {read_ms}, done {}",
+            entries.len(),
+            started.elapsed().as_millis(),
+        ),
+    );
+    entries
+}
 
+/// The playable maps of `maps`, in the list's order, each difficulty once.
+fn entries_of(maps: Vec<CachedMap>) -> Vec<Entry> {
     let mut entries: Vec<Entry> = maps
         .into_iter()
         .filter(|m| m.meta.is_playable())
@@ -704,7 +809,7 @@ mod tests {
         let scan = || {
             let found = AtomicUsize::new(0);
             let mut v: Vec<(String, String)> =
-                scan_cached(std::slice::from_ref(&songs), &found, &cache)
+                scan_cached(std::slice::from_ref(&songs), &found, &cache, &mut |_| {})
                     .into_iter()
                     .map(|e| (e.meta.title, e.meta.version))
                     .collect();
@@ -755,6 +860,7 @@ mod tests {
             &[songs.clone(), songs.join(".")],
             &found,
             &root.join("library.json"),
+            &mut |_| {},
         );
         let mut versions: Vec<String> = scanned.into_iter().map(|e| e.meta.version).collect();
         versions.sort();
@@ -783,5 +889,147 @@ mod tests {
         // Any other folder is scanned as it is.
         assert_eq!(picked_songs(&root.join("Maps")), root.join("Maps"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A folder to scan, with a cache beside it. `name` keeps tests apart.
+    fn songs_folder(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("taiko-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let songs = root.join("Songs");
+        std::fs::create_dir_all(&songs).unwrap();
+        let cache = root.join("library-v2.json");
+        (root, songs, cache)
+    }
+
+    fn add_map(songs: &Path, set: &str, od: &str) {
+        let dir = songs.join(set);
+        std::fs::create_dir_all(&dir).unwrap();
+        let osu = format!(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Metadata]\nTitle:{set}\nVersion:Oni\n\n[Difficulty]\nOverallDifficulty:{od}\n"
+        );
+        std::fs::write(dir.join("oni.osu"), osu).unwrap();
+    }
+
+    fn quiet_scan(songs: &Path, cache: &Path) -> (Vec<Entry>, String) {
+        let found = AtomicUsize::new(0);
+        let entries = scan_cached(
+            std::slice::from_ref(&songs.to_path_buf()),
+            &found,
+            cache,
+            &mut |_| {},
+        );
+        let log = std::fs::read_to_string(cache.with_file_name("library-scan.log")).unwrap();
+        (entries, log.lines().last().unwrap().to_string())
+    }
+
+    #[test]
+    fn a_map_with_a_number_json_cant_hold_leaves_the_cache_working() {
+        let (root, songs, cache) = songs_folder("nan");
+        add_map(&songs, "1 good", "5");
+        for (i, bad) in ["nan", "inf", "-inf", "1e999"].iter().enumerate() {
+            add_map(&songs, &format!("{} bad", i + 2), bad);
+        }
+        let (first, _) = quiet_scan(&songs, &cache);
+        assert_eq!(first.len(), 5);
+        assert!(first.iter().all(|e| e.meta.od.is_finite()));
+        let (again, log) = quiet_scan(&songs, &cache);
+        assert_eq!(again.len(), 5);
+        assert!(log.contains("cache Read"), "{log}");
+        assert!(
+            log.contains("5 unchanged") && log.contains("0 files read"),
+            "{log}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_cache_from_before_that_only_loses_the_folders_it_cant_read() {
+        let (root, songs, cache) = songs_folder("damaged");
+        add_map(&songs, "1 good", "5");
+        add_map(&songs, "2 good", "5");
+        add_map(&songs, "3 bad", "5");
+        quiet_scan(&songs, &cache);
+        // What a map of `nan` used to leave in the cache.
+        let text = std::fs::read_to_string(&cache).unwrap();
+        let (bad, _) = text
+            .match_indices("\"od\":5.0")
+            .find(|(at, _)| {
+                text[..*at]
+                    .rfind("\"dir\"")
+                    .is_some_and(|d| text[d..*at].contains("3 bad"))
+            })
+            .unwrap();
+        let mut broken = text.clone();
+        broken.replace_range(bad..bad + 8, "\"od\":null");
+        std::fs::write(&cache, broken).unwrap();
+        let (entries, log) = quiet_scan(&songs, &cache);
+        assert_eq!(entries.len(), 3);
+        assert!(log.contains("Damaged(1"), "{log}");
+        assert!(
+            log.contains("2 unchanged") && log.contains("1 files read"),
+            "{log}"
+        );
+        // And it's whole again.
+        assert!(quiet_scan(&songs, &cache).1.contains("cache Read"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_cache_thats_garbage_is_said_to_be_and_read_again() {
+        let (root, songs, cache) = songs_folder("garbage");
+        add_map(&songs, "1 good", "5");
+        std::fs::write(&cache, "not json").unwrap();
+        let (entries, log) = quiet_scan(&songs, &cache);
+        assert_eq!(entries.len(), 1);
+        assert!(
+            log.contains("Unreadable") && log.contains("1 not in it"),
+            "{log}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_cached_list_comes_before_the_disk_is_looked_at() {
+        let (root, songs, cache) = songs_folder("early");
+        add_map(&songs, "1 a", "5");
+        add_map(&songs, "2 b", "5");
+        quiet_scan(&songs, &cache);
+        // What's on disk has moved on since; the early list doesn't know yet, the last one does.
+        add_map(&songs, "3 new", "5");
+        std::fs::remove_dir_all(songs.join("1 a")).unwrap();
+        let mut early = Vec::new();
+        let found = AtomicUsize::new(0);
+        let last = scan_cached(std::slice::from_ref(&songs), &found, &cache, &mut |e| {
+            early.push(e.len());
+        });
+        assert_eq!(early, [2]);
+        assert_eq!(last.len(), 2);
+        assert!(last.iter().any(|e| e.meta.title == "3 new"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn nothing_cached_means_nothing_early() {
+        let (root, songs, cache) = songs_folder("first");
+        add_map(&songs, "1 a", "5");
+        let mut calls = 0;
+        let found = AtomicUsize::new(0);
+        scan_cached(std::slice::from_ref(&songs), &found, &cache, &mut |_| {
+            calls += 1
+        });
+        assert_eq!(calls, 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_scan_log_keeps_to_its_length() {
+        let (root, songs, cache) = songs_folder("log");
+        add_map(&songs, "1 a", "5");
+        for _ in 0..SCAN_LOG_LINES + 5 {
+            log_scan(&cache, "a line");
+        }
+        let log = std::fs::read_to_string(cache.with_file_name("library-scan.log")).unwrap();
+        assert_eq!(log.lines().count(), SCAN_LOG_LINES);
+        let _ = (songs, std::fs::remove_dir_all(&root));
     }
 }
