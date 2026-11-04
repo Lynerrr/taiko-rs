@@ -17,11 +17,16 @@ pub struct Track {
     /// Playback rate the samples were prepared for (1.0 = original speed). One second of this
     /// track covers `rate` seconds of the beatmap.
     pub rate: f64,
+    /// A long song isn't in `samples`: it's played as it's decoded.
+    pub stream: Option<Arc<crate::stream::Stream>>,
 }
 
 impl Track {
     pub fn frames(&self) -> usize {
-        self.samples.len() / 2
+        match &self.stream {
+            Some(s) => s.frames(),
+            None => self.samples.len() / 2,
+        }
     }
 }
 
@@ -416,6 +421,8 @@ struct Mixer {
     frame: i64,
     epoch: u64,
     paused: bool,
+    /// A stream's next frames, read once a callback.
+    streamed: Vec<f32>,
     voices: Vec<Voice>,
     sounds: Arc<Sounds>,
     limiter: Limiter,
@@ -444,6 +451,7 @@ impl Mixer {
             frame: 0,
             epoch: 0,
             paused: false,
+            streamed: vec![0.0; 1 << 16],
             voices: Vec::with_capacity(64),
             sounds,
             limiter: Limiter::new(rate),
@@ -517,16 +525,44 @@ impl Mixer {
         let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed));
         let fx_vol = f32::from_bits(self.volume[1].load(Ordering::Relaxed));
         let ch = self.channels;
+        // A stream's frames for this callback. Where they run out inside the song, the position
+        // holds, so that the music comes back still on the notes.
+        let stream = self.track.as_ref().and_then(|t| t.stream.as_ref());
+        let mut streamed = 0;
+        if let Some(s) = stream {
+            let at = self.frame - self.base;
+            s.want(at);
+            if !self.paused {
+                let n = (out.len() / ch.max(1) * 2).min(self.streamed.len());
+                streamed = s.read(at.max(0), &mut self.streamed[..n]);
+                if at >= 0 && streamed == 0 && (at as usize) < s.frames() {
+                    s.stalls.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+        let mut read = 0;
         for frame in out.chunks_mut(ch) {
             let (mut l, mut r) = (0.0f32, 0.0f32);
             if let Some(track) = self.track.as_ref().filter(|_| !self.paused) {
                 let at = self.frame - self.base;
-                if at >= 0 && (at as usize) < track.frames() {
-                    let i = at as usize * 2;
-                    l = track.samples[i] * music_vol;
-                    r = track.samples[i + 1] * music_vol;
+                if let Some(s) = &track.stream {
+                    let in_song = at >= 0 && (at as usize) < s.frames();
+                    if read < streamed && in_song {
+                        l = self.streamed[read * 2] * music_vol;
+                        r = self.streamed[read * 2 + 1] * music_vol;
+                        read += 1;
+                        self.frame += 1;
+                    } else if !in_song {
+                        self.frame += 1;
+                    }
+                } else {
+                    if at >= 0 && (at as usize) < track.frames() {
+                        let i = at as usize * 2;
+                        l = track.samples[i] * music_vol;
+                        r = track.samples[i + 1] * music_vol;
+                    }
+                    self.frame += 1;
                 }
-                self.frame += 1;
             }
             for v in &mut self.voices {
                 let buf = &self.sounds[v.sound as usize];
@@ -733,12 +769,14 @@ mod tests {
         let input = Track {
             samples: sine(440.0, 4.0, sr),
             rate: 1.0,
+            stream: None,
         };
         for rate in [0.75, 1.5, 2.0] {
             let out = change_rate(
                 Track {
                     samples: input.samples.clone(),
                     rate: 1.0,
+                    stream: None,
                 },
                 sr,
                 rate,
@@ -1010,12 +1048,14 @@ mod tests {
         let track = Arc::new(Track {
             samples: vec![1.0; 8],
             rate: 1.0,
+            stream: None,
         });
         let at = track.samples.as_ptr();
         assert_eq!(owned(track).samples.as_ptr(), at);
         let shared = Arc::new(Track {
             samples: vec![1.0; 8],
             rate: 1.0,
+            stream: None,
         });
         let copy = owned(shared.clone());
         assert_ne!(copy.samples.as_ptr(), shared.samples.as_ptr());
@@ -1092,6 +1132,7 @@ mod tests {
             let track = Track {
                 samples: input.samples.clone(),
                 rate: 1.0,
+                stream: None,
             };
             let out = change_rate(track, sr, rate, true);
             let ms = |t: f64| (t / 1000.0 * sr as f64) as usize;
@@ -1125,6 +1166,7 @@ mod tests {
                 Track {
                     samples: input.samples.clone(),
                     rate: 1.0,
+                    stream: None,
                 },
                 sr,
                 rate,
@@ -1171,6 +1213,7 @@ mod tests {
                 Track {
                     samples: input.samples.clone(),
                     rate: 1.0,
+                    stream: None,
                 },
                 sr,
                 &speed,
@@ -1203,6 +1246,7 @@ mod tests {
             Track {
                 samples: sine(440.0, 2.0, sr),
                 rate: 1.0,
+                stream: None,
             },
             sr,
             1.5,
@@ -1401,7 +1445,11 @@ pub fn metronome(rate: u32, beat_ms: f64, beats: u32, tail_ms: f64) -> Track {
             frame[1] += v;
         }
     }
-    Track { samples, rate: 1.0 }
+    Track {
+        samples,
+        rate: 1.0,
+        stream: None,
+    }
 }
 
 /// What a job gives back when it's called off.
@@ -1441,6 +1489,7 @@ pub fn owned(track: Arc<Track>) -> Track {
     Arc::try_unwrap(track).unwrap_or_else(|t| Track {
         samples: t.samples.clone(),
         rate: t.rate,
+        stream: None,
     })
 }
 
@@ -1652,6 +1701,18 @@ impl Reader {
         })
     }
 
+    /// How long the file is (ms), going through its packets without decoding them.
+    pub fn length_ms(&mut self) -> f64 {
+        let Some(tb) = self.time_base else { return 0.0 };
+        let mut ticks = 0i128;
+        while let Ok(Some(packet)) = self.format.next_packet() {
+            if packet.track_id == self.track_id {
+                ticks += packet.dur.get() as i128;
+            }
+        }
+        ticks as f64 * f64::from(tb.numer.get()) / f64::from(tb.denom.get()) * 1000.0
+    }
+
     /// To (or just before) `from_ms`. The first sample's frame is worked out from what comes next.
     pub fn seek(&mut self, from_ms: f64) -> Result<(), String> {
         use symphonia::core::formats::{SeekMode, SeekTo};
@@ -1728,7 +1789,7 @@ impl Reader {
     }
 }
 
-fn decode_source(
+pub(crate) fn decode_source(
     source: Box<dyn symphonia::core::io::MediaSource>,
     ext: Option<&str>,
     rate: u32,
@@ -1763,6 +1824,7 @@ fn decode_source(
             Track {
                 samples: stereo.into_samples(),
                 rate: 1.0,
+                stream: None,
             },
             src_start,
         ));
@@ -1771,7 +1833,14 @@ fn decode_source(
     let ratio = src_rate as f64 / rate as f64;
     let first = (src_start as f64 / ratio).ceil() as i64;
     let samples = stereo.resampled(ratio, first as f64 * ratio - src_start as f64);
-    Ok((Track { samples, rate: 1.0 }, first))
+    Ok((
+        Track {
+            samples,
+            rate: 1.0,
+            stream: None,
+        },
+        first,
+    ))
 }
 
 /// Speeds a track up (`rate` > 1) or slows it down. With `keep_pitch` the music is time-stretched
@@ -1796,7 +1865,11 @@ fn rate_changed(track: &Track, sample_rate: u32, rate: f64, keep_pitch: bool) ->
     } else {
         resample_ratio(&track.samples, rate)
     };
-    Track { samples, rate }
+    Track {
+        samples,
+        rate,
+        stream: None,
+    }
 }
 
 /// `change_rate` with the pitch moved `shift` times further on top, the speed staying: resampling
@@ -1820,6 +1893,7 @@ pub fn shifted(track: Track, sample_rate: u32, rate: f64, keep_pitch: bool, shif
             (frames as f64 / stretch) as usize,
         ),
         rate,
+        stream: None,
     }
 }
 
@@ -1847,16 +1921,17 @@ pub fn change_speed(
     Track {
         samples,
         rate: speed.r0,
+        stream: None,
     }
 }
 
 /// The stretch's search works on a mono copy decimated this many times, refined at full rate.
-const DEC: usize = 4;
+pub(crate) const DEC: usize = 4;
 /// How much of each grain's error from `nominal` the search leans against (see `Grains::lean`).
 const LEAN: f64 = 0.15;
 
 /// `input` as the stretch's search wants it: frame pairs averaged to mono, `DEC` frames to a value.
-fn coarse_of(input: &[f32]) -> Vec<f32> {
+pub(crate) fn coarse_of(input: &[f32]) -> Vec<f32> {
     input
         .chunks(2 * DEC)
         .map(|c| {
@@ -2126,7 +2201,7 @@ fn resample_by(input: &[f32], frames_out: usize, pos: impl Fn(usize) -> f64) -> 
 
 /// Catmull-Rom between `p1` and `p2`.
 #[inline]
-fn cubic(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
+pub(crate) fn cubic(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
     p1 + 0.5
         * t
         * (p2 - p0 + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0)))

@@ -52,6 +52,7 @@ fn game(notes: usize, slow: bool, mods: &str) -> Game {
         Arc::new(audio::Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         }),
         None,
         Mods::parse(mods),
@@ -297,6 +298,7 @@ fn game_preparation_and_expiry() {
         let track = Arc::new(audio::Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mut samples = Vec::new();
         for _ in 0..21 {

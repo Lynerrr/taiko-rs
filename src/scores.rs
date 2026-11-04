@@ -261,6 +261,7 @@ pub fn simulate(map_path: &Path, r: &Replay) -> Option<(crate::game::Stats, crat
     let track = std::sync::Arc::new(crate::audio::Track {
         samples: Vec::new(),
         rate: r.rate,
+        stream: None,
     });
     let mut g = crate::video::replay_game(&map, &track, r);
     // Frame by frame, as it was played.

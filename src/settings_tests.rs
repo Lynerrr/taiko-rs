@@ -439,6 +439,7 @@ fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
     let track = Arc::new(Track {
         samples: Vec::new(),
         rate: 1.0,
+        stream: None,
     });
     v.game = Some(Box::new(Game::new(map, track, None)));
     v.clock = (30_000.0, Instant::now(), false);
@@ -505,6 +506,7 @@ fn a_spectator_sees_the_last_seconds_before_the_results() {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         Box::new(Game::new(map, track, None))
     };
@@ -1095,6 +1097,7 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         )),
@@ -1145,6 +1148,7 @@ fn ctrl_c_copies_what_is_typed_or_picked_and_paste_goes_only_where_text_does() {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         )),
@@ -1264,6 +1268,7 @@ fn scroll_speed_changes_between_songs_only() {
         Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         }),
         None,
     );
@@ -1345,6 +1350,7 @@ fn hotkeys_can_be_moved_and_removed() {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         )),
