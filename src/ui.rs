@@ -3206,7 +3206,7 @@ impl Results {
         c.round_rect(
             [x0, cy],
             [cw, ch],
-            ch / 2.0,
+            5.0,
             rgba(if hover { 0x2b1f2a } else { 0x1d1d27 }, 0.95 * a),
             rgba(pink, if hover { a } else { 0.75 * a }),
             1.5,

@@ -845,7 +845,7 @@ impl Player {
         let pitch_w = Canvas::text_width(7.0, &pitch) + 10.0;
         const MOD_W: f32 = 24.0;
         const VOLUME_W: f32 = 62.0;
-        const GAP: f32 = 4.0;
+        const GAP: f32 = 6.0;
         let total = play_w + GAP * 2.0 + (MOD_W + GAP) * 4.0 + pitch_w + GAP * 2.0 + VOLUME_W;
         let mut x = cx - total / 2.0;
         c.button(

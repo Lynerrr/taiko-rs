@@ -851,9 +851,9 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
             label,
         );
         c.hit(tx, y - 1.5, tw, h, render::Hit::BoardTab(on));
-        tx += tw + 4.0;
+        tx += tw + 6.0;
     }
-    tx - x - 4.0
+    tx - x - 6.0
 }
 
 /// The server's scores for the selected map: each player's best (`board` None while loading).
@@ -5124,9 +5124,9 @@ impl State {
             let label = tr!("what's new", "更新内容", "что нового");
             let w = Canvas::text_width(7.0, label) + 14.0;
             let x = c.width - 8.0 - badge - w;
-            let hover = c.hovered(x, 3.0, w, 14.0);
+            let hover = c.hovered(x, 2.0, w, 14.0);
             c.round_rect(
-                [x, 3.0],
+                [x, 2.0],
                 [w, 14.0],
                 4.0,
                 rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95),
@@ -5135,12 +5135,12 @@ impl State {
             );
             c.text(
                 x + 7.0,
-                6.5,
+                5.5,
                 7.0,
                 rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0),
                 label,
             );
-            c.hit(x, 3.0, w, 14.0, render::Hit::Changelog);
+            c.hit(x, 2.0, w, 14.0, render::Hit::Changelog);
             // Who's logged in and their pp, left of it: their profile on the website.
             let (name, rest) = match (&self.mp_menu.account, self.me) {
                 (Some(name), Some((pp, rank))) => (
@@ -5164,9 +5164,9 @@ impl State {
             };
             let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0 + pic;
             let ax = x - 6.0 - aw;
-            let hover = c.hovered(ax, 3.0, aw, 14.0);
+            let hover = c.hovered(ax, 2.0, aw, 14.0);
             c.round_rect(
-                [ax, 3.0],
+                [ax, 2.0],
                 [aw, 14.0],
                 4.0,
                 rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95),
@@ -5181,11 +5181,11 @@ impl State {
                 1.0,
             );
             if pic > 0.0 {
-                c.avatar(&name, ax + 9.0, 10.0, 4.5, accent(), 1.0);
+                c.avatar(&name, ax + 9.0, 9.0, 4.5, accent(), 1.0);
             }
-            let nw = c.text(ax + 7.0 + pic, 6.5, 7.0, rgba(0xffffff, 1.0), &name);
-            c.text(ax + 7.0 + pic + nw, 6.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
-            c.hit(ax, 3.0, aw, 14.0, render::Hit::Account);
+            let nw = c.text(ax + 7.0 + pic, 5.5, 7.0, rgba(0xffffff, 1.0), &name);
+            c.text(ax + 7.0 + pic + nw, 5.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
+            c.hit(ax, 2.0, aw, 14.0, render::Hit::Account);
         }
         let text = match self.updater.status() {
             update::Status::Available { commit, .. } => update_badge(&commit),
@@ -5207,17 +5207,17 @@ impl State {
         }
         let w = Canvas::text_width(7.0, &text) + 14.0;
         let x = c.width - 8.0 - w;
-        let hover = c.hovered(x, 3.0, w, 14.0);
+        let hover = c.hovered(x, 2.0, w, 14.0);
         c.round_rect(
-            [x, 3.0],
+            [x, 2.0],
             [w, 14.0],
             4.0,
             rgba(if hover { 0x2f8f4a } else { 0x1f6b36 }, 0.95),
             rgba(0x86E05A, 1.0),
             1.0,
         );
-        c.text(x + 7.0, 6.5, 7.0, rgba(0xffffff, 1.0), &text);
-        c.hit(x, 3.0, w, 14.0, render::Hit::Update);
+        c.text(x + 7.0, 5.5, 7.0, rgba(0xffffff, 1.0), &text);
+        c.hit(x, 2.0, w, 14.0, render::Hit::Update);
     }
 
     /// Loads the configured skin: its note images go to the renderer, its hitsounds to the audio
@@ -7774,6 +7774,50 @@ impl State {
         self.scene = Scene::Lobby;
     }
 
+    /// T or a click on the chat line: the keys go to a message until Enter or Esc.
+    fn focus_lobby_chat(&mut self) {
+        if let Some(s) = self.mp.as_mut().filter(|s| !s.mapguessr) {
+            s.chat_input.get_or_insert_with(String::new);
+            s.chat_caret = s.chat_input.as_ref().map_or(0, |t| t.chars().count());
+        }
+    }
+
+    /// A key while a lobby chat line is being typed.
+    fn lobby_chat_key(&mut self, code: KeyCode, text: Option<&str>) {
+        let Some(s) = self.mp.as_mut() else {
+            return;
+        };
+        let Some(typed) = s.chat_input.as_mut() else {
+            return;
+        };
+        match code {
+            KeyCode::Escape => s.chat_input = None,
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let mut line = typed.trim().to_string();
+                s.chat_input = None;
+                s.chat_caret = 0;
+                // `/np`: the map on screen, with its osu! link.
+                if line.eq_ignore_ascii_case("/np") {
+                    match self.now_playing() {
+                        Some(np) => line = np,
+                        None => {
+                            self.toast("no map to share: pick one first".into());
+                            return;
+                        }
+                    }
+                }
+                if !line.is_empty()
+                    && let Some(s) = &self.mp
+                {
+                    s.client.send(net::ClientMsg::Chat(line));
+                }
+            }
+            KeyCode::Backspace => settings::caret_backspace(typed, &mut s.chat_caret),
+            _ if settings::caret_nav(typed, &mut s.chat_caret, code) => {}
+            _ => settings::caret_insert(typed, &mut s.chat_caret, text.unwrap_or(""), 200),
+        }
+    }
+
     fn leave_room(&mut self, why: &str) {
         self.stop_audio();
         self.mp = None;
@@ -7818,6 +7862,30 @@ impl State {
             );
             if !(function_key && !repeat && self.handle_global_key(code, window)) {
                 self.mp_menu_key(code, text);
+            }
+            return;
+        }
+        // A chat line being typed in the lobby takes the keys (function keys still work).
+        if matches!(self.scene, Scene::Lobby)
+            && self.mp.as_ref().is_some_and(|s| s.chat_input.is_some())
+        {
+            let function_key = matches!(
+                code,
+                KeyCode::F1
+                    | KeyCode::F2
+                    | KeyCode::F3
+                    | KeyCode::F4
+                    | KeyCode::F5
+                    | KeyCode::F6
+                    | KeyCode::F7
+                    | KeyCode::F8
+                    | KeyCode::F9
+                    | KeyCode::F10
+                    | KeyCode::F11
+                    | KeyCode::F12
+            );
+            if !(function_key && !repeat && self.handle_global_key(code, window)) {
+                self.lobby_chat_key(code, text);
             }
             return;
         }
@@ -7904,6 +7972,7 @@ impl State {
                         let text = format!("match rate {rate:.2}x");
                         self.toast(text);
                     }
+                    KeyCode::KeyT => self.focus_lobby_chat(),
                     KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
                     // Defense: C turns it on or off, 1-5 step its rules.
                     KeyCode::KeyC
@@ -9445,7 +9514,7 @@ impl State {
     fn is_text_field(&self, hit: render::Hit) -> bool {
         use render::Hit;
         match hit {
-            Hit::TextField | Hit::SettingsSearch => true,
+            Hit::TextField | Hit::SettingsSearch | Hit::LobbyChat => true,
             Hit::MpRow(i) => {
                 matches!(self.scene, Scene::MpMenu)
                     && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action())
@@ -9575,6 +9644,12 @@ impl State {
                 )),
                 _ => None,
             };
+        }
+        if let (Scene::Lobby, Some(typed)) = (
+            &self.scene,
+            self.mp.as_ref().and_then(|s| s.chat_input.as_ref()),
+        ) {
+            return Some(("Chat".into(), typed.clone()));
         }
         // The host typing a new lobby password (K).
         if let (Scene::Lobby, Some(typed)) = (
@@ -14843,7 +14918,14 @@ impl State {
         if self.crash_shown() && !matches!(hit, Hit::Key(KeyCode::KeyC | KeyCode::Escape)) {
             return;
         }
+        // Any click but the chat line itself puts the chat line away.
+        if hit != Hit::LobbyChat
+            && let Some(s) = self.mp.as_mut()
+        {
+            s.chat_input = None;
+        }
         match hit {
+            Hit::LobbyChat => self.focus_lobby_chat(),
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),

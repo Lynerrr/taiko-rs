@@ -2141,7 +2141,7 @@ fn button(c: &mut Canvas, right: f32, y: f32, label: &str, hit: Hit, a: f32) -> 
     c.round_rect(
         [x, y],
         [w, 12.0],
-        6.0,
+        3.5,
         rgba(if hover { accent() } else { 0x2a2a3c }, a),
         rgba(if hover { accent() } else { 0x3e3e54 }, a),
         1.0,
@@ -2272,7 +2272,7 @@ pub fn draw_chip(c: &mut Canvas, s: &Social, lobby_unread: usize) {
     c.round_rect(
         [x, y],
         [w, 13.0],
-        6.0,
+        3.5,
         rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.85),
         rgba(0x3a3a4e, 1.0),
         1.0,
