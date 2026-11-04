@@ -14,6 +14,8 @@
 //!   /loved            the maps loved here (they give pp)
 //!   /a/<name>         a player's profile picture
 //!   /avatar           POST (a form with a file): set your picture; /avatar/remove takes it off
+//!   /shot             POST (a JPEG, the game's token as a bearer): a chat screenshot; its id back
+//!   /shot/<id>        a chat screenshot
 //!   /u/<name>/avatar  POST: an admin sets (or with /remove takes off) someone else's picture
 //!   /love/<set>       POST: a loved nominator loves a map set here (on=0: takes it back)
 //!   /u/<name>/nominator  POST: an admin makes them a loved nominator (on=0: not any more)
@@ -303,10 +305,14 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     // A picture upload may be bigger than a form.
     let upload = method == "POST"
         && (path == "/avatar" || (path.starts_with("/u/") && path.ends_with("/avatar")));
+    // A chat screenshot comes from the game: the file is the body, the token its bearer.
+    let shot = method == "POST" && path == "/shot";
     // Claude's answers too (a long one in Cyrillic is ~6 bytes a letter).
     let claude = bearer.as_deref().is_some_and(crate::discord::claude_key);
     let mailer = bearer.as_deref().is_some_and(crate::mail::mailer_key);
-    let max_body = if upload {
+    let max_body = if shot {
+        crate::shots::MAX_BYTES
+    } else if upload {
         crate::avatars::MAX_BYTES + MAX_FORM
     } else if claude {
         MAX_CLAUDE_FORM
@@ -315,7 +321,7 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     };
     let mut body = Vec::new();
     if method == "POST" && length <= max_body {
-        if upload || claude {
+        if upload || claude || shot {
             reader.get_mut().set_limit(max_body as u64);
         }
         body.resize(length, 0);
@@ -323,15 +329,23 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
             return;
         }
     }
-    let viewer = token.as_deref().and_then(|t| state.user(t));
+    let viewer = token
+        .as_deref()
+        .or(bearer.as_deref().filter(|_| shot))
+        .and_then(|t| state.user(t));
     let file = upload
         .then(|| crate::avatars::multipart_file(&content_type, &body, "avatar").map(<[u8]>::to_vec))
-        .flatten();
+        .flatten()
+        .or_else(|| shot.then(|| body.clone()));
     let req = Req {
         method,
         path,
         query,
-        form: if upload { HashMap::new() } else { form(&body) },
+        form: if upload || shot {
+            HashMap::new()
+        } else {
+            form(&body)
+        },
         upload: file,
         os: Os::of(&agent),
         ip,
@@ -886,6 +900,10 @@ fn route(state: &State, req: &Req) -> Reply {
             sets.sort_by_key(|r| std::cmp::Reverse(r.loved.at));
             req.page(200, "Loved here", "loved", pages::loved(&sets))
         }
+        ["shot", id] => match crate::shots::load(id) {
+            Some(bytes) => Reply::new(200, "image/jpeg", Cow::Owned(bytes)),
+            None => Reply::text(404, "no such screenshot"),
+        },
         ["a", name] => match crate::avatars::load(&name.to_ascii_lowercase()) {
             Some((kind, bytes)) => Reply {
                 cache: "public, max-age=86400",
@@ -981,6 +999,20 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             Reply {
                 cookie: Some(String::new()),
                 ..Reply::see_other("/".into())
+            }
+        }
+        ["shot"] => {
+            let Some(name) = &req.viewer else {
+                return Reply::text(403, "log in to send screenshots");
+            };
+            let key = name.to_ascii_lowercase();
+            if state.is_banned(&key) {
+                return Reply::text(403, "you can't send screenshots");
+            }
+            let file = req.upload.as_deref().unwrap_or_default();
+            match crate::shots::save(&key, file, crate::now_secs()) {
+                Ok(id) => Reply::text(200, &id),
+                Err(e) => Reply::text(400, &e),
             }
         }
         ["avatar"] => {

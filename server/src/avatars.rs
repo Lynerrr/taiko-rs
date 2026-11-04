@@ -74,7 +74,7 @@ pub fn kind(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// Width and height, from the picture's header.
-fn size(bytes: &[u8]) -> Option<(u32, u32)> {
+pub fn size(bytes: &[u8]) -> Option<(u32, u32)> {
     let be16 = |at: usize| Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?) as u32);
     let le16 = |at: usize| Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?) as u32);
     let be32 = |at: usize| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
