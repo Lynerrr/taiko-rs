@@ -143,6 +143,8 @@ pub struct Social {
     pub global_unread: usize,
     pub open: bool,
     pub opened_at: Option<Instant>,
+    /// There's a screenshot to send.
+    pub shot_ready: bool,
     /// Where the tab is now (see `glide_tab`).
     tab_y: Option<f32>,
     /// When it last closed (it slides away).
@@ -1908,6 +1910,8 @@ enum ChatKind {
         set: Option<u32>,
         mention: bool,
     },
+    /// A screenshot: click to see it.
+    Shot(u128),
     /// A row of the server's line on its banner; `ends`: its last.
     Banner { ends: bool },
 }
@@ -1931,6 +1935,7 @@ impl ChatRow {
             + match self.kind {
                 ChatKind::Name { .. } => Canvas::text_height(CHAT_SIZE) + 3.0,
                 ChatKind::Text { .. } => Canvas::text_height(CHAT_SIZE) + 2.5,
+                ChatKind::Shot(_) => Canvas::text_height(CHAT_SIZE) + 8.0,
                 ChatKind::Banner { ends } => {
                     Canvas::text_height(6.5) + if ends { 3.5 } else { 2.5 }
                 }
@@ -1978,6 +1983,17 @@ fn chat_rows(lines: &[ChatEntry], width: usize, banner: usize) -> Vec<ChatRow> {
                 entry,
             });
             gap = 1.0;
+        }
+        if let Some(id) = crate::shots::shot_in(&line.text) {
+            rows.push(ChatRow {
+                text: tr!("Screenshot", "スクリーンショット", "Скриншот").into(),
+                colour: 0x66ccff,
+                kind: ChatKind::Shot(id),
+                gap,
+                entry,
+            });
+            last = Some(line);
+            continue;
         }
         // Lines naming a map set (`/np`) are links, in blue.
         let set = map_set_in(&line.text);
@@ -2079,6 +2095,27 @@ fn chat_lines(
                     c.hit(inner, ly - 1.0, iw, h, Hit::ChatMap(set));
                 }
             }
+            ChatKind::Shot(id) => {
+                let x = inner + 3.0 + MESSAGE_INDENT;
+                let hint = tr!("click to view", "クリックで表示", "нажмите, чтобы открыть");
+                let w =
+                    Canvas::text_width(CHAT_SIZE, &row.text) + Canvas::text_width(6.0, hint) + 20.0;
+                let w = w.min(inner + iw - x);
+                let hover = c.hovered(x, ly - 1.0, w, h);
+                let fill = if hover { 0x2b2b3d } else { ROW_BG };
+                c.round_rect(
+                    [x, ly - 1.0],
+                    [w, h - 1.0],
+                    3.0,
+                    rgba(fill, a),
+                    rgba(row.colour, 0.7 * a),
+                    1.0,
+                );
+                c.text(x + 6.0, ly + 2.0, CHAT_SIZE, rgba(row.colour, a), &row.text);
+                let tx = x + 12.0 + Canvas::text_width(CHAT_SIZE, &row.text);
+                c.text(tx, ly + 3.0, 6.0, rgba(SOFT_TEXT, a), hint);
+                c.hit(x, ly - 1.0, w, h - 1.0, Hit::ChatShot(id));
+            }
             ChatKind::Banner { ends } => {
                 let bh = if ends { h - 1.0 } else { h };
                 c.rect(inner, ly - 1.5, iw, bh, rgba(row.colour, 0.16 * a));
@@ -2151,6 +2188,11 @@ fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hi
         &shown,
     );
     c.hit(inner, input_y, iw, 18.0, Hit::TextField);
+    // The last F12's, on its way to whoever this is with.
+    if s.shot_ready && !typing {
+        let label = tr!("Send screenshot", "スクショを送信", "Отправить скриншот");
+        button(c, inner + iw - 3.0, input_y + 3.0, label, Hit::SendShot, a);
+    }
 }
 
 /// A label shaped like a button but inert, ending at `right`; returns its left edge.
@@ -2342,6 +2384,30 @@ fn draw_tab(c: &mut Canvas, s: &Social, right: f32, middle: f32, lobby_unread: u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_screenshots_link_in_the_chat_is_a_row_to_click() {
+        let id = 0xabc_u128;
+        let url = crate::shots::shot_url(id);
+        let entry = |text: &str| ChatEntry {
+            from: "bob".into(),
+            text: text.into(),
+            at: None,
+            mine: false,
+            banner: None,
+            mention: false,
+        };
+        let rows = chat_rows(&[entry(&url), entry("hi")], 40, 40);
+        assert!(rows.iter().any(|r| r.kind == ChatKind::Shot(id)));
+        assert!(
+            !rows.iter().any(|r| r.text.contains("/shot/")),
+            "no raw link"
+        );
+        assert!(
+            rows.iter().any(|r| r.text == "hi"),
+            "what follows is as ever"
+        );
+    }
 
     /// The tab's hit area with the overlay `open` or not, on a screen 853 wide.
     fn tab_rect(s: &Social, open: bool) -> [f32; 4] {

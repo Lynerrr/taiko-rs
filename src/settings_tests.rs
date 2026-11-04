@@ -390,6 +390,46 @@ fn a_songs_menu_likes_it() {
 }
 
 #[test]
+fn a_screenshot_opens_over_everything_and_any_click_or_key_closes_it() {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.shot_view = Some(ShotView { rx: None });
+    let mut c = Canvas::default();
+    s.build_frame(&mut c, Instant::now(), 853.3);
+    assert!(s.hits.is_empty(), "nothing behind it can be clicked");
+    assert!(s.frame_clip.is_none());
+    s.mouse_button(true, None);
+    assert!(s.shot_view.is_none());
+
+    s.shot_view = Some(ShotView { rx: None });
+    s.key_inner(
+        winit::keyboard::KeyCode::Escape,
+        false,
+        None,
+        Instant::now(),
+        None,
+    );
+    assert!(s.shot_view.is_none());
+    assert!(matches!(s.scene, Scene::Select), "the key only closed it");
+}
+
+#[test]
+fn a_screenshot_needs_taking_and_logging_in_to_send() {
+    let mut s = layout_tests::state();
+    s.send_shot(social::Row::Global);
+    assert!(s.shot_upload.is_none(), "not logged in");
+    s.cfg.online_server = online::DEFAULT_SERVER.into();
+    s.cfg.online_token = "t".into();
+    s.send_shot(social::Row::Global);
+    assert!(s.shot_upload.is_none(), "nothing taken yet");
+    s.last_shot = Some(Arc::new((1, 1, vec![0, 0, 0])));
+    s.send_shot(social::Row::AddFriend);
+    assert!(s.shot_upload.is_none(), "not a chat");
+}
+
+#[test]
 fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);

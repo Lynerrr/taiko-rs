@@ -270,6 +270,16 @@ impl Preview {
         self.audio.as_ref().filter(same).map(|s| s.track.clone())
     }
 
+    /// Puts `image` up in place of the background, until `forget_background`.
+    pub fn show_image(&mut self, image: Image) {
+        self.bg_upload = Some(Some(image));
+    }
+
+    /// The next background asked for is read again, whatever was up.
+    pub fn forget_background(&mut self) {
+        self.bg_path = None;
+    }
+
     /// Makes sure the background shown is `e`'s (e.g. a multiplayer map picked by the host).
     pub fn show_background_for(&mut self, e: &Entry) {
         let path = background_path(e);

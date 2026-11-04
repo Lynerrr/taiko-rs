@@ -997,6 +997,17 @@ fn assert_every_screen_fits() {
     s.social.global_unread = 12;
     s.social.input = "a message being typed that is longer than the input box can show".into();
     check(&mut s, "global chat", &mut out);
+    // A screenshot in it, and one ready to send.
+    let (typed, line_text) = (
+        std::mem::take(&mut s.social.input),
+        s.social.global[36].text.clone(),
+    );
+    s.social.global[36].text = shots::shot_url(7);
+    s.social.shot_ready = true;
+    check(&mut s, "global chat, screenshot", &mut out);
+    s.social.shot_ready = false;
+    s.social.global[36].text = line_text;
+    s.social.input = typed;
     // An admin's tab: who's on, the lobbies and the log, then a lookup over them.
     s.admin = true;
     s.social.admin = true;
