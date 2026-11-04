@@ -7354,6 +7354,10 @@ mod tests {
             });
             let mut optimized = Game::with_seed(map.clone(), track.clone(), None, mods, 42);
             let mut reference = Game::with_seed(map.clone(), track, None, mods, 42);
+            // Multiverse's universes are process-wide too: its own for each, not whatever
+            // another test has just set.
+            optimized.universes = Some(multiverse::classic());
+            reference.universes = Some(multiverse::classic());
             // One special block disables the new bounds, reproducing the original scan.
             reference.note_blocks = vec![NoteBlock {
                 range: 0..reference.map.notes.len(),
