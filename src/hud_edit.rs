@@ -14,11 +14,17 @@ use crate::settings;
 const PANEL_W: f32 = 190.0;
 const ROW_H: f32 = 14.0;
 /// Preset rows the panel shows at once.
-const PRESET_ROWS: usize = 6;
+const PRESET_ROWS: usize = 5;
 /// How close (virtual units) a dragged part has to come to catch on a line.
 const SNAP: f32 = 5.0;
 const UNDO_STEPS: usize = 64;
 const NAME_MAX: usize = 24;
+/// The colours a part's text can have.
+const COLOURS: [u32; 11] = [
+    0xffffff, 0xc8c8d8, 0x6f6f86, 0xeb452c, 0xff9a3c, 0xffd34d, 0x86e05a, 0x4fc3f7, 0x5a7dff,
+    0xc77dff, 0xff8ad8,
+];
+const SWATCH: f32 = 11.0;
 const SNAP_COLOUR: u32 = 0x4fc3f7;
 /// Between the panel's buttons.
 const GAP: f32 = 4.0;
@@ -40,6 +46,11 @@ pub enum Button {
     ResetAll,
     SwapSide,
     Done,
+    /// The hit counter's options.
+    CounterGreat,
+    CounterOk,
+    CounterMiss,
+    CounterTitles,
 }
 
 /// What a key or button leaves for the game to do.
@@ -201,7 +212,7 @@ impl Editor {
     pub fn wheel(&mut self, x: f32, y: f32, notches: i32, cfg: &mut Config) -> bool {
         let inside = |r: [f32; 4]| x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3];
         if !self.panel_hidden && inside(self.presets_rect) {
-            let last = self.preset_count(cfg).saturating_sub(PRESET_ROWS);
+            let last = self.preset_count(cfg).saturating_sub(self.preset_rows());
             let by = self.preset_scroll as i32 - notches;
             self.preset_scroll = by.clamp(0, last as i32) as usize;
             return true;
@@ -260,8 +271,27 @@ impl Editor {
         cfg.save();
     }
 
+    fn toggle_counter(&mut self, cfg: &mut Config, option: fn(&mut hud::Counter) -> &mut bool) {
+        self.remember(cfg);
+        let on = option(&mut cfg.hud.counter);
+        *on = !*on;
+        cfg.save();
+    }
+
+    /// The selected part's text in `colour` (None: its own).
+    pub fn set_colour(&mut self, colour: Option<u32>, cfg: &mut Config) {
+        self.remember(cfg);
+        cfg.hud.set_colour(self.part(), colour);
+        cfg.save();
+    }
+
     pub fn select(&mut self, index: usize) {
         self.selected = index;
+    }
+
+    /// Preset rows showing: the hit counter's options take one.
+    fn preset_rows(&self) -> usize {
+        PRESET_ROWS - usize::from(self.part() == Part::Counts)
     }
 
     fn preset_count(&self, cfg: &Config) -> usize {
@@ -418,6 +448,10 @@ impl Editor {
                 self.preset = None;
                 cfg.save();
             }
+            Button::CounterGreat => self.toggle_counter(cfg, |c| &mut c.great),
+            Button::CounterOk => self.toggle_counter(cfg, |c| &mut c.ok),
+            Button::CounterMiss => self.toggle_counter(cfg, |c| &mut c.miss),
+            Button::CounterTitles => self.toggle_counter(cfg, |c| &mut c.titles),
             Button::SwapSide => self.panel_left = !self.panel_left,
             Button::Done => return Outcome::Close,
         }
@@ -686,7 +720,32 @@ impl Editor {
                 moved,
                 Button::ResetPart,
             );
-            y += 19.0;
+            y += 13.0 + GAP;
+            if self.part().has_text() {
+                self.draw_swatches(c, cfg, ix, y);
+            } else {
+                let none = tr!("no text to colour", "文字なし", "нет текста");
+                c.text(ix, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), none);
+            }
+            y += SWATCH + 5.0;
+            if self.part() == Part::Counts {
+                let on = cfg.hud.counter;
+                let titles = tr!("Titles", "題名", "Подписи");
+                let w = (iw - 3.0 * GAP) / 4.0;
+                for (i, (label, on, b)) in [
+                    ("300", on.great, Button::CounterGreat),
+                    ("100", on.ok, Button::CounterOk),
+                    ("MISS", on.miss, Button::CounterMiss),
+                    (titles, on.titles, Button::CounterTitles),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let x = ix + i as f32 * (w + GAP);
+                    switch(c, [x, y, w, 13.0], label, on, b);
+                }
+                y += 13.0 + GAP;
+            }
         }
 
         c.text(
@@ -697,10 +756,11 @@ impl Editor {
             tr!("PRESETS", "プリセット", "ПРЕСЕТЫ"),
         );
         y += 11.0;
-        self.presets_rect = [ix, y, iw, PRESET_ROWS as f32 * ROW_H];
+        let rows = self.preset_rows();
+        self.presets_rect = [ix, y, iw, rows as f32 * ROW_H];
         let count = self.preset_count(cfg);
-        self.preset_scroll = self.preset_scroll.min(count.saturating_sub(PRESET_ROWS));
-        for row in 0..PRESET_ROWS {
+        self.preset_scroll = self.preset_scroll.min(count.saturating_sub(rows));
+        for row in 0..rows {
             let i = self.preset_scroll + row;
             let ry = y + row as f32 * ROW_H;
             let Some((name, layout)) = self.preset_at(i, cfg) else {
@@ -727,7 +787,7 @@ impl Editor {
             let name = Canvas::fit(7.5, iw - 4.0, &name);
             c.text(ix + 3.0, ry + 3.0, 7.5, rgba(colour, 1.0), &name);
         }
-        y += PRESET_ROWS as f32 * ROW_H + 3.0;
+        y += rows as f32 * ROW_H + 3.0;
 
         let third = (iw - 2.0 * GAP) / 3.0;
         let half = (iw - GAP) / 2.0;
@@ -802,11 +862,47 @@ impl Editor {
         );
     }
 
+    /// The selected part's text colours in a row from `x`: its own, marked with a line, then
+    /// the rest.
+    fn draw_swatches(&self, c: &mut Canvas, cfg: &Config, x: f32, y: f32) {
+        let now = cfg.hud.colour(self.part());
+        let step = SWATCH + GAP - 0.5;
+        let choices = std::iter::once(None).chain(COLOURS.into_iter().map(Some));
+        for (i, colour) in choices.enumerate() {
+            let sx = x + i as f32 * step;
+            let edge = if now == colour {
+                0xffffff
+            } else if c.hovered(sx, y, SWATCH, SWATCH) {
+                0xc8c8d8
+            } else {
+                0x3a3a4e
+            };
+            c.round_rect(
+                [sx, y],
+                [SWATCH, SWATCH],
+                2.0,
+                rgba(colour.unwrap_or(0x15151d), 1.0),
+                rgba(edge, 1.0),
+                1.0,
+            );
+            if colour.is_none() {
+                c.rect(
+                    sx + 2.0,
+                    y + SWATCH / 2.0 - 0.5,
+                    SWATCH - 4.0,
+                    1.0,
+                    rgba(0xc8c8d8, 1.0),
+                );
+            }
+            c.hit(sx, y, SWATCH, SWATCH, Hit::HudColour(colour));
+        }
+    }
+
     fn draw_help(&self, c: &mut Canvas) {
         let help = tr!(
-            "Drag: snaps and attaches (Shift: free).  Wheel: size.  Arrows: nudge.  H: show.  P: panel",
-            "ドラッグ: 吸着して取り付け (Shift: 自由)。ホイール: サイズ。矢印: 微調整。H: 表示。P: パネル",
-            "Тяните: прилипает и крепится (Shift: свободно). Колесо: размер. Стрелки: сдвиг. H: показать. P: панель"
+            "Drag: attaches to the lane (Shift: free).  Wheel: size.  Arrows: nudge.  H: show.  P: panel",
+            "ドラッグ: レーンに取り付け (Shift: 自由)。ホイール: サイズ。矢印: 微調整。H: 表示。P: パネル",
+            "Тяните: крепится к дорожке (Shift: свободно). Колесо: размер. Стрелки: сдвиг. H: показать. P: панель"
         );
         let panel = if self.panel_hidden {
             0.0
@@ -827,6 +923,36 @@ impl Editor {
         let text = Canvas::fit(size, room - 6.0, help);
         c.text_centered(x + room / 2.0, 465.0, size, rgba(0xc8c8d8, 1.0), &text);
     }
+}
+
+/// A button that's lit while its option is `on`.
+fn switch(c: &mut Canvas, [x, y, w, h]: [f32; 4], label: &str, on: bool, b: Button) {
+    let edge = if c.hovered(x, y, w, h) {
+        0xffffff
+    } else {
+        accent()
+    };
+    c.round_rect(
+        [x, y],
+        [w, h],
+        3.0,
+        rgba(
+            if on { accent() } else { 0x1d1d28 },
+            if on { 0.55 } else { 1.0 },
+        ),
+        rgba(if on { edge } else { 0x4a4a60 }, 1.0),
+        1.0,
+    );
+    let colour = if on { 0xffffff } else { 0x8a8aa0 };
+    let text = Canvas::fit(7.0, w - 4.0, label);
+    c.text_centered(
+        x + w / 2.0,
+        y + (h - 7.0) / 2.0,
+        7.0,
+        rgba(colour, 1.0),
+        &text,
+    );
+    c.hit(x, y, w, h, Hit::HudButton(b));
 }
 
 fn button(c: &mut Canvas, [x, y, w, h]: [f32; 4], label: &str, on: bool, b: Button) {
@@ -900,7 +1026,7 @@ mod tests {
         assert!(ed.guides.is_empty());
         let place = cfg.hud.place(Part::Score).unwrap();
         assert_eq!(place.y.target, hud::Target::Lane);
-        assert_eq!(place.x.target, hud::Target::Playfield);
+        assert_eq!(place.x.target, hud::Target::Lane);
 
         let before = g.part_box(&c, Part::Score).2;
         cfg.playfield_area = Area {
@@ -913,6 +1039,116 @@ mod tests {
         let after = ed.boxes[index(Part::Score)].unwrap().at;
         assert!((after.w - before.w / 2.0).abs() < 0.1);
         assert!(((after.x + after.w / 2.0) - 853.3 / 2.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn a_parts_text_takes_the_colour_picked_and_undo_brings_its_own_back() {
+        let (mut ed, mut cfg, mut g, mut c) = setup();
+        let picked = rgba(COLOURS[3], 1.0);
+        let has_it = |c: &Canvas, x: [f32; 2]| {
+            c.shapes
+                .iter()
+                .any(|s| s.fill == picked && s.center[0] >= x[0] && s.center[0] <= x[1])
+        };
+        frame(&mut ed, &cfg, &mut g, &mut c);
+        let b = ed.boxes[index(Part::Score)].unwrap().at;
+        let span = [b.x, b.x + b.w];
+        assert!(!has_it(&c, span));
+        ed.select(index(Part::Score));
+        ed.set_colour(Some(COLOURS[3]), &mut cfg);
+        frame(&mut ed, &cfg, &mut g, &mut c);
+        assert!(has_it(&c, span));
+        ed.press_button(Button::Undo, &mut cfg);
+        assert_eq!(cfg.hud.colour(Part::Score), None);
+    }
+
+    #[test]
+    fn the_colours_only_show_for_parts_with_text() {
+        let (mut ed, mut cfg, mut g, mut c) = setup();
+        let swatches = |c: &Canvas| {
+            c.hits
+                .iter()
+                .filter(|h| matches!(h.hit, Hit::HudColour(_)))
+                .count()
+        };
+        frame(&mut ed, &cfg, &mut g, &mut c);
+        assert_eq!(swatches(&c), COLOURS.len() + 1);
+        ed.select(index(Part::HitError));
+        frame(&mut ed, &cfg, &mut g, &mut c);
+        assert_eq!(swatches(&c), 0);
+        let _ = &mut cfg;
+    }
+
+    /// What the counter draws with `set` done to a fresh layout: its texts and their colours.
+    fn counter_texts(set: impl Fn(&mut hud::Counter)) -> Vec<(String, [f32; 4])> {
+        let mut g = Game::hud_sample();
+        let mut l = Layout::default();
+        l.off = hud::Parts::NONE;
+        set(&mut l.counter);
+        g.hud = l;
+        g.hidden = {
+            let mut hidden = hud::Parts::ALL;
+            hidden.toggle(Part::Counts);
+            hidden
+        };
+        let mut c = Canvas {
+            audit: true,
+            ..Default::default()
+        };
+        c.clear(853.3);
+        g.draw_parts(&mut c);
+        c.texts
+            .iter()
+            .map(|(r, t)| (t.clone(), c.shapes[r.start].fill))
+            .collect()
+    }
+
+    #[test]
+    fn the_hit_counter_shows_what_it_was_told_to() {
+        let texts = |set: fn(&mut hud::Counter)| -> Vec<String> {
+            counter_texts(set).into_iter().map(|t| t.0).collect()
+        };
+        assert_eq!(texts(|_| {}), ["300", "812", "100", "37", "MISS", "4"]);
+        assert_eq!(texts(|c| c.ok = false), ["300", "812", "MISS", "4"]);
+        assert_eq!(texts(|c| c.titles = false), ["812", "37", "4"]);
+        let only_miss = |c: &mut hud::Counter| (c.great, c.ok, c.titles) = (false, false, false);
+        assert_eq!(texts(only_miss), ["4"]);
+    }
+
+    #[test]
+    fn without_titles_each_count_has_its_judgements_colour() {
+        use crate::game::Judge;
+        let counts = counter_texts(|c| c.titles = false);
+        let colours: Vec<_> = counts.iter().map(|t| t.1).collect();
+        let expected = [Judge::Great, Judge::Ok, Judge::Miss].map(|j| rgba(j.color(), 1.0));
+        assert_eq!(colours, expected);
+    }
+
+    #[test]
+    fn every_preset_can_be_scrolled_to_with_the_hit_counter_selected() {
+        let (mut ed, mut cfg, mut g, mut c) = setup();
+        ed.select(index(Part::Counts));
+        frame(&mut ed, &cfg, &mut g, &mut c);
+        let [x, y, ..] = ed.presets_rect;
+        ed.wheel(x + 1.0, y + 1.0, -5, &mut cfg);
+        frame(&mut ed, &cfg, &mut g, &mut c);
+        let last = ed.preset_count(&cfg) - 1;
+        assert!(c.hits.iter().any(|h| h.hit == Hit::HudPreset(last)));
+    }
+
+    #[test]
+    fn the_counters_box_fits_what_it_shows() {
+        let (mut ed, mut cfg, mut g, mut c) = setup();
+        cfg.hud.off.toggle(Part::Counts);
+        frame(&mut ed, &cfg, &mut g, &mut c);
+        let wide = ed.boxes[index(Part::Counts)].unwrap().at.w;
+        ed.press_button(Button::CounterTitles, &mut cfg);
+        ed.press_button(Button::CounterOk, &mut cfg);
+        frame(&mut ed, &cfg, &mut g, &mut c);
+        assert!(ed.boxes[index(Part::Counts)].unwrap().at.w < wide / 2.0);
+        ed.press_button(Button::Undo, &mut cfg);
+        ed.press_button(Button::Undo, &mut cfg);
+        assert_eq!(cfg.hud.counter, hud::Counter::default());
     }
 
     #[test]

@@ -111,7 +111,7 @@ pub enum Judge {
 }
 
 impl Judge {
-    fn color(self) -> u32 {
+    pub(crate) fn color(self) -> u32 {
         match self {
             Judge::Great => 0xFFD34D,
             Judge::Ok => 0x86E05A,
@@ -4972,12 +4972,13 @@ impl Game {
                     drum_x,
                     combo_y(skin_size),
                     skin_size,
-                    rgba(WHITE, 1.0),
+                    rgba(self.hud.colour(Part::Combo).unwrap_or(WHITE), 1.0),
                     Upright::Number(Font::Combo, s),
                 ));
             } else {
                 let size = if s.len() > 3 { 12.0 } else { 16.0 };
                 let col = if crossfire { 0xe8e8f0 } else { 0x1d1d26 };
+                let col = self.hud.colour(Part::Combo).unwrap_or(col);
                 texts.push((drum_x, combo_y(size), size, rgba(col, 1.0), s));
             }
         }
@@ -5010,7 +5011,7 @@ impl Game {
                         HIT_X,
                         LANE_Y - h / 2.0 - age * 0.02,
                         h,
-                        rgba(WHITE, a),
+                        rgba(self.hud.colour(Part::Judgements).unwrap_or(WHITE), a),
                         Upright::Image(sprite),
                     ));
                 } else {
@@ -5018,7 +5019,7 @@ impl Game {
                         HIT_X,
                         lane_top - 30.0 - age * 0.02,
                         15.0,
-                        rgba(j.color(), a),
+                        rgba(self.hud.colour(Part::Judgements).unwrap_or(j.color()), a),
                         j.label().to_string(),
                     ));
                 }
@@ -5990,7 +5991,12 @@ impl Game {
             Part::Combo => [56.0, 24.0],
             Part::Judgements => [80.0, 22.0],
             Part::Ur => [Canvas::text_width(UR_SIZE, "UR 999.99"), 12.0],
-            Part::Counts => [3.0 * count_cell() + 2.0 * COUNT_GAP, 10.0],
+            Part::Counts => {
+                let on = self.hud.counter;
+                let n = [on.great, on.ok, on.miss].iter().filter(|&&c| c).count() as f32;
+                let cells = n * count_cell(on.titles) + (n - 1.0).max(0.0) * COUNT_GAP;
+                [cells.max(COUNT_GAP * 2.0), 10.0]
+            }
             Part::Scoreboard => [300.0, 138.0],
             Part::Spectators => [140.0, 92.0],
             Part::HitAnimation => [0.0, 0.0],
@@ -6054,18 +6060,19 @@ impl Game {
         let shown = |p: Part| !self.hidden.has(p);
         // Over the lane unless moved: the playfield draws those itself.
         let off_the_lane = |p: Part| self.hud_sample || self.hud.place(p).is_some();
+        let chosen = |p: Part| self.hud.colour(p);
 
         // Defense is a team's: one player's score says nothing, the team panel does.
         if shown(Part::Score) && self.defense.is_none() {
             let s = format!("{:08}", self.stats.score);
             self.in_place(c, Part::Score, |c, [w, _], align| {
-                score_number(c, w, align, 24.0, WHITE, &s);
+                score_number(c, w, align, 24.0, (WHITE, chosen(Part::Score)), &s);
             });
         }
         if shown(Part::Accuracy) {
             let s = self.accuracy_text();
             self.in_place(c, Part::Accuracy, |c, [w, _], align| {
-                score_number(c, w, align, 14.0, 0xc8c8d8, &s);
+                score_number(c, w, align, 14.0, (0xc8c8d8, chosen(Part::Accuracy)), &s);
             });
         }
         if let Some(pp) = self
@@ -6073,13 +6080,14 @@ impl Game {
             .filter(|_| shown(Part::Pp) && self.defense.is_none())
         {
             let s = format!("{pp:.0}pp");
+            let pink = chosen(Part::Pp).unwrap_or(0xff8ad8);
             self.in_place(c, Part::Pp, |c, [w, _], align| {
                 let nw = c.number_width(Font::Score, 14.0, &s);
                 let x = (w - nw.unwrap_or_else(|| Canvas::text_width(14.0, &s))) * align;
                 if nw.is_some() {
-                    c.number(Font::Score, x, 0.0, 14.0, rgba(0xff8ad8, 1.0), &s);
+                    c.number(Font::Score, x, 0.0, 14.0, rgba(pink, 1.0), &s);
                 } else {
-                    c.text(x, 0.0, 14.0, rgba(0xff8ad8, 1.0), &s);
+                    c.text(x, 0.0, 14.0, rgba(pink, 1.0), &s);
                 }
             });
         }
@@ -6102,7 +6110,8 @@ impl Game {
             let label = self.mods_text();
             self.in_place(c, Part::Mods, |c, [w, _], align| {
                 let x = (w - Canvas::text_width(9.0, &label)) * align;
-                c.text(x, 0.0, 9.0, rgba(0xc8c8d8, 0.9), &label);
+                let col = chosen(Part::Mods).unwrap_or(0xc8c8d8);
+                c.text(x, 0.0, 9.0, rgba(col, 0.9), &label);
             });
         }
         if shown(Part::HitError) {
@@ -6126,6 +6135,7 @@ impl Game {
             };
             if let Some((text, colour)) = hint {
                 self.in_place(c, Part::OffsetHint, |c, [w, _], _| {
+                    let colour = chosen(Part::OffsetHint).map_or(colour, |col| rgba(col, 1.0));
                     c.text_centered(w / 2.0, 0.0, 8.0, colour, &text);
                 });
             }
@@ -6134,22 +6144,35 @@ impl Game {
             let s = format!("UR {:.2}", self.stats.unstable_rate());
             self.in_place(c, Part::Ur, |c, [w, _], align| {
                 let x = (w - Canvas::text_width(UR_SIZE, &s)) * align;
-                c.text(x, 0.0, UR_SIZE, rgba(0xc8c8d8, 1.0), &s);
+                let col = chosen(Part::Ur).unwrap_or(0xc8c8d8);
+                c.text(x, 0.0, UR_SIZE, rgba(col, 1.0), &s);
             });
         }
         if shown(Part::Counts) {
-            let s = &self.stats;
+            let st = &self.stats;
+            let picked = chosen(Part::Counts);
+            let on = self.hud.counter;
+            let titles = on.titles;
             let cells = [
-                ("300", s.great, Judge::Great),
-                ("100", s.ok, Judge::Ok),
-                ("MISS", s.miss, Judge::Miss),
+                (on.great, "300", st.great, Judge::Great),
+                (on.ok, "100", st.ok, Judge::Ok),
+                (on.miss, "MISS", st.miss, Judge::Miss),
             ];
             self.in_place(c, Part::Counts, |c, _, _| {
-                for (i, (label, n, j)) in cells.into_iter().enumerate() {
-                    let x = i as f32 * (count_cell() + COUNT_GAP);
-                    c.text(x, 0.0, COUNT_SIZE, rgba(j.color(), 1.0), label);
-                    let at = x + Canvas::text_width(COUNT_SIZE, label) + COUNT_SPACE;
-                    c.text(at, 0.0, COUNT_SIZE, rgba(WHITE, 1.0), &n.to_string());
+                let shown = cells.into_iter().filter(|cell| cell.0);
+                for (i, (_, label, n, j)) in shown.enumerate() {
+                    let x = i as f32 * (count_cell(titles) + COUNT_GAP);
+                    let col = picked.unwrap_or(j.color());
+                    let n = n.to_string();
+                    if titles {
+                        c.text(x, 0.0, COUNT_SIZE, rgba(col, 1.0), label);
+                        let at = x + Canvas::text_width(COUNT_SIZE, label) + COUNT_SPACE;
+                        let count = rgba(picked.unwrap_or(WHITE), 1.0);
+                        c.text(at, 0.0, COUNT_SIZE, count, &n);
+                    } else {
+                        // The colour is all that says which it is.
+                        c.text(x, 0.0, COUNT_SIZE, rgba(col, 1.0), &n);
+                    }
                 }
             });
         }
@@ -6161,14 +6184,19 @@ impl Game {
                     Some(nw) => {
                         let y = (h - skin_size) / 2.0;
                         let x = (w - nw) / 2.0;
-                        c.number(Font::Combo, x, y, skin_size, rgba(WHITE, 1.0), &s);
+                        let tint = chosen(Part::Combo).unwrap_or(WHITE);
+                        c.number(Font::Combo, x, y, skin_size, rgba(tint, 1.0), &s);
                     }
                     None => {
                         let size = if s.len() > 3 { 12.0 } else { 16.0 };
                         let y = (h - size) / 2.0;
                         // Dark on the drum, where the stand-in play shows it.
                         let on_drum = self.hud.place(Part::Combo).is_none();
-                        let col = if on_drum { 0x1d1d26 } else { 0xe8e8f0 };
+                        let col = chosen(Part::Combo).unwrap_or(if on_drum {
+                            0x1d1d26
+                        } else {
+                            0xe8e8f0
+                        });
                         c.text_centered(w / 2.0, y, size, rgba(col, 1.0), &s);
                     }
                 }
@@ -6196,9 +6224,11 @@ impl Game {
                         // Fitted to the box, as tall as it can be.
                         let hh = h / 2.0;
                         let hw = hh * sw / sh.max(0.001);
-                        c.sprite_box(sprite, w / 2.0, hh, hw, hh, rgba(WHITE, a));
+                        let tint = chosen(Part::Judgements).unwrap_or(WHITE);
+                        c.sprite_box(sprite, w / 2.0, hh, hw, hh, rgba(tint, a));
                     } else {
-                        c.text_centered(w / 2.0, 3.0, 15.0, rgba(j.color(), a), j.label());
+                        let col = chosen(Part::Judgements).unwrap_or(j.color());
+                        c.text_centered(w / 2.0, 3.0, 15.0, rgba(col, a), j.label());
                     }
                 });
             }
@@ -6424,9 +6454,10 @@ const COUNT_SIZE: f32 = 9.0;
 const COUNT_GAP: f32 = 10.0;
 const COUNT_SPACE: f32 = 4.0;
 
-/// One cell of the hit counter: its label and count.
-fn count_cell() -> f32 {
-    Canvas::text_width(COUNT_SIZE, "MISS") + COUNT_SPACE + Canvas::text_width(COUNT_SIZE, "9999")
+/// One cell of the hit counter: its count, after its title if it has one.
+fn count_cell(titles: bool) -> f32 {
+    let title = Canvas::text_width(COUNT_SIZE, "MISS") + COUNT_SPACE;
+    Canvas::text_width(COUNT_SIZE, "9999") + if titles { title } else { 0.0 }
 }
 
 /// How wide `s` comes out in the score's font.
@@ -6436,10 +6467,25 @@ fn score_width(c: &Canvas, size: f32, s: &str) -> f32 {
 }
 
 /// `s` in the skin's score font if it has one, lined up by `align` in a box `w` wide.
-fn score_number(c: &mut Canvas, w: f32, align: f32, size: f32, col: u32, s: &str) {
+/// `chosen`: the player's colour, which tints the skin's digits too.
+fn score_number(
+    c: &mut Canvas,
+    w: f32,
+    align: f32,
+    size: f32,
+    (col, chosen): (u32, Option<u32>),
+    s: &str,
+) {
     let x = (w - score_width(c, size, s)) * align;
-    if !c.number(Font::Score, x, 0.0, size, rgba(WHITE, 1.0), s) {
-        c.text(x, 0.0, size, rgba(col, 1.0), s);
+    if !c.number(
+        Font::Score,
+        x,
+        0.0,
+        size,
+        rgba(chosen.unwrap_or(WHITE), 1.0),
+        s,
+    ) {
+        c.text(x, 0.0, size, rgba(chosen.unwrap_or(col), 1.0), s);
     }
 }
 

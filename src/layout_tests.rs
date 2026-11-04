@@ -731,6 +731,15 @@ fn assert_every_screen_fits() {
     s.scene = Scene::Select;
     s.open_hud_editor();
     check(&mut s, "interface editor", &mut out);
+    if let Some(ed) = &mut s.hud_edit {
+        ed.select(
+            hud::Part::PLACED
+                .iter()
+                .position(|&p| p == hud::Part::Counts)
+                .unwrap(),
+        );
+    }
+    check(&mut s, "interface editor, hit counter", &mut out);
     s.close_hud_editor();
     s.scene = Scene::Select;
     s.start_calibration();

@@ -2550,6 +2550,8 @@ pub enum Hit {
     HudToggle(usize),
     HudPreset(usize),
     HudButton(crate::hud_edit::Button),
+    /// A colour for the selected part's text (None: its own).
+    HudColour(Option<u32>),
     /// Top bar tab: 0 songs, 1 settings, 2 multiplayer.
     Tab(usize),
     /// A note of the main menu (index into `menu::ITEMS`).
