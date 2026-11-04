@@ -570,6 +570,31 @@ fn applying_the_offset_suggestion_has_no_key_until_given_one() {
 }
 
 #[test]
+fn a_maps_offset_goes_by_with_its_song_and_the_global_one_doesnt() {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.cfg.mods = Mods::NONE;
+    s.cfg.offset_ms = -25.0;
+    let entry = s.select.selected().expect("a map");
+    s.set_map_offset(entry, 30.0);
+
+    s.cfg.rate = 1.0;
+    s.refresh_play_offset();
+    assert_eq!(s.play_offset, 5.0);
+    // At 1.5x the song's 30 ms pass in 20: the machine's 25 stay 25.
+    s.cfg.rate = 1.5;
+    s.refresh_play_offset();
+    assert_eq!(s.play_offset, -5.0);
+    // Double Time goes by its own rate.
+    s.cfg.rate = 1.0;
+    s.cfg.mods = Mods::parse("DT");
+    s.refresh_play_offset();
+    assert_eq!(s.play_offset, -5.0);
+}
+
+#[test]
 fn map_offsets_reset_only_on_the_second_press() {
     let _folders = FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
     let mut s = layout_tests::state();

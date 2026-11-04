@@ -998,6 +998,43 @@ mod tests {
         }
     }
 
+    /// Music under the beats, for the stretch's search to lock on to: where the beats themselves
+    /// are too sparse to show it walking off its notes.
+    #[test]
+    fn keep_pitch_stays_on_the_beat_at_rates_close_to_1x() {
+        let sr = 48000;
+        let mut input = metronome(sr, 500.0, 40, 1000.0);
+        for (i, v) in input.samples.chunks_mut(2).enumerate() {
+            let tone = 0.15 * (i as f32 * std::f32::consts::TAU * 196.0 / sr as f32).sin();
+            v[0] += tone;
+            v[1] += tone;
+        }
+        for rate in [0.9, 0.95, 1.05, 1.1] {
+            let track = Track {
+                samples: input.samples.clone(),
+                rate: 1.0,
+            };
+            let out = change_rate(track, sr, rate, true);
+            let ms = |t: f64| (t / 1000.0 * sr as f64) as usize;
+            let (mut sum, mut n) = (0.0, 0);
+            for b in 4..36 {
+                let expected = (1000.0 + b as f64 * 500.0) / rate;
+                let (from, to) = (ms(expected - 40.0), ms(expected + 60.0));
+                let at = |i: usize| out.samples[i * 2].abs();
+                let peak = (from..to).map(at).fold(0.0, f32::max);
+                if let Some(onset) = (from..to).find(|&i| at(i) >= peak * 0.7) {
+                    sum += onset as f64 / sr as f64 * 1000.0 - expected;
+                    n += 1;
+                }
+            }
+            let mean = sum / f64::from(n);
+            assert!(
+                mean.abs() < 3.5,
+                "rate {rate}: beats {mean:+.1} ms off on average"
+            );
+        }
+    }
+
     #[test]
     fn keep_pitch_keeps_beats_on_time() {
         // Clicks every 500 ms: after stretching, each must start where its time / rate says,
@@ -1591,12 +1628,21 @@ fn time_stretch(
         .collect();
     // Alignment is searched on a 4x-decimated mono copy (then refined at full rate) to stay fast.
     const DEC: usize = 4;
+    // How much of each grain's error from `nominal` the search leans against (see `lean`).
+    const LEAN: f64 = 0.15;
     let mono: Vec<f32> = (0..frames)
         .map(|i| 0.5 * (input[2 * i] + input[2 * i + 1]))
         .collect();
     let coarse: Vec<f32> = mono
         .chunks(DEC)
         .map(|c| c.iter().sum::<f32>() / c.len() as f32)
+        .collect();
+    // Running energy of the coarse copy, to judge a candidate by its likeness and not its loudness.
+    let energy: Vec<f64> = std::iter::once(0.0)
+        .chain(coarse.iter().scan(0.0f64, |sum, v| {
+            *sum += f64::from(*v) * f64::from(*v);
+            Some(*sum)
+        }))
         .collect();
     let corr = |sig: &[f32], a: usize, b: usize, len: usize, step: usize| -> f32 {
         let mut s = 0.0f32;
@@ -1623,6 +1669,7 @@ fn time_stretch(
             .filter(move |&c| c >= lo && c <= hi)
     };
     let mut prev: Option<usize> = None;
+    let mut lean = 0.0f64;
     let mut k = 0usize;
     loop {
         let nominal = (in_of((k * hop_out) as f64 + half) - half).max(0.0) as usize;
@@ -1636,16 +1683,22 @@ fn time_stretch(
                 // Where the previous grain would naturally continue; find the candidate around
                 // `nominal` whose start looks most like it.
                 let target = p + hop_out;
-                let lo = nominal.saturating_sub(search);
-                let hi = nominal + search;
+                // The search leans against where grains have been landing (see `lean`).
+                let centre = (nominal as f64 + lean).max(0.0) as usize;
+                let lo = centre.saturating_sub(search);
+                let hi = centre + search;
                 let ov = hop_out;
                 let (mut best, mut best_c) = (nominal, f32::MIN);
-                for cand in around(nominal / DEC, lo / DEC, hi / DEC) {
+                let len = ov / DEC;
+                let at = target / DEC;
+                let loud = |i: usize| (energy[i + len] - energy[i]).max(1e-12);
+                for cand in around(centre / DEC, lo / DEC, hi / DEC) {
                     if (target + ov) / DEC < coarse.len() && (cand * DEC + ov) / DEC < coarse.len()
                     {
-                        let c = corr(&coarse, target / DEC, cand, ov / DEC, 1);
-                        if c > best_c {
-                            best_c = c;
+                        let like =
+                            corr(&coarse, at, cand, len, 1) / (loud(at) * loud(cand)).sqrt() as f32;
+                        if like > best_c {
+                            best_c = like;
                             best = cand * DEC;
                         }
                     }
@@ -1672,6 +1725,12 @@ fn time_stretch(
             out[(out_pos + i) * 2 + 1] += input[(chosen + i) * 2 + 1] * wgt;
             norm[out_pos + i] += wgt;
         }
+        // Near 1x the continuation sits just behind `nominal` every time, so grains picked by
+        // likeness alone walk to the edge of the search and stay there, up to 8 ms off the notes.
+        // Leaning the search against that keeps every grain free to fit, and them on time on
+        // average, at any rate.
+        lean =
+            (lean - LEAN * (chosen as f64 - nominal as f64)).clamp(-(search as f64), search as f64);
         prev = Some(chosen);
         k += 1;
     }
