@@ -2121,6 +2121,12 @@ impl State {
         let (rate, keep_pitch) = mods.speed(rate, self.cfg.rate_keep_pitch);
         let cached = self.cached_track(entry, rate, keep_pitch);
         self.pending_mods = mods;
+        if cached.is_none()
+            && self.preview.release_long_music()
+            && let Some(a) = &self.audio
+        {
+            a.stop();
+        }
         self.spawn_loader(entry, rate, keep_pitch, mods, cached)
     }
 
@@ -3009,10 +3015,7 @@ impl State {
                             audio::with_rate(track, rate, speed.r0, keep_pitch)
                         } else {
                             Arc::new(audio::change_speed(
-                                Track {
-                                    samples: track.samples.clone(),
-                                    rate: track.rate,
-                                },
+                                audio::owned(track),
                                 rate,
                                 &speed,
                                 keep_pitch,
