@@ -15,8 +15,33 @@ use crate::render::{Canvas, rgba};
 const SECTION_MS: f64 = 400.0;
 
 pub(crate) fn load(path: &Path) -> Option<Beatmap> {
-    let map = Beatmap::from_path(path).ok()?;
+    let mut map = Beatmap::from_path(path).ok()?;
+    drop_tiny_sliders(&mut map);
     calculable(&map).then_some(map)
+}
+
+/// The longest a slider can be written and still be a tiny one (`beatmap::Note::tiny`).
+const TINY_SLIDER_LENGTH: f64 = 0.1;
+
+/// Takes out the sliders written under 0.1 long (negative ones included, which rosu-pp reads
+/// as no length): fake sliders, a gimmick map staple. In the game they're tiny rolls, with
+/// nothing to hit, but rosu-pp counts each as an object of its own, a ms or so after the note
+/// under it, and the strain of those gaps rated Kyoufuu All Back [Taiko All Back] (set
+/// 1973536: 703 notes, 1,198 fake sliders) 9.92 stars instead of 4.29, 16.26 at 2x.
+fn drop_tiny_sliders(map: &mut Beatmap) {
+    use rosu_pp::model::hit_object::HitObjectKind;
+    let tiny = |kind: &HitObjectKind| matches!(kind, HitObjectKind::Slider(s) if s.expected_dist.is_none_or(|d| d <= TINY_SLIDER_LENGTH));
+    if !map.hit_objects.iter().any(|h| tiny(&h.kind)) {
+        return;
+    }
+    let objects = std::mem::take(&mut map.hit_objects);
+    let sounds = std::mem::take(&mut map.hit_sounds);
+    for (object, sound) in objects.into_iter().zip(sounds) {
+        if !tiny(&object.kind) {
+            map.hit_objects.push(object);
+            map.hit_sounds.push(sound);
+        }
+    }
 }
 
 /// Taiko maps up to this many objects are rated. rosu-pp turns away those over 30,000 as too
@@ -425,6 +450,52 @@ mod tests {
             osu.push_str(&format!("256,192,{t},1,0,0:0:0:0:\n"));
         }
         osu.parse().unwrap()
+    }
+
+    #[test]
+    fn fake_sliders_dont_rate_a_map_up() {
+        let osu = |extra: &dyn Fn(u32) -> String| {
+            let mut text = String::from(
+                "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nHPDrainRate:5\nCircleSize:5\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n0,333.333,4,1,0,100,1,0\n\n[HitObjects]\n",
+            );
+            for k in 0..400 {
+                let t = 1000 + k * 111;
+                text.push_str(&format!(
+                    "256,192,{t},1,{},0:0:0:0:\n",
+                    if k % 3 == 0 { 2 } else { 0 }
+                ));
+                text.push_str(&extra(t));
+            }
+            text
+        };
+        let stars = |text: String| {
+            let path = std::env::temp_dir().join(format!(
+                "taiko-rs-fake-sliders-{}-{}.osu",
+                std::process::id(),
+                text.len()
+            ));
+            std::fs::write(&path, text).unwrap();
+            let stars = star_rating(&path, 1.0).unwrap();
+            let _ = std::fs::remove_file(&path);
+            stars
+        };
+        let plain = stars(osu(&|_| String::new()));
+        // A fake slider a ms after every note, written negative, zero and 0.05 long.
+        for length in ["-1", "0", "0.05", "-0.0001"] {
+            let faked = stars(osu(&|t| {
+                format!("256,320,{},6,4,L|256:384,1,{length}\n", t + 1)
+            }));
+            assert_eq!(faked, plain, "length {length}");
+        }
+        // A real (short) roll is still there for the calculator.
+        let rolls = stars(osu(&|t| {
+            if t % 2 == 0 {
+                format!("256,320,{},2,0,L|256:384,1,10\n", t + 50)
+            } else {
+                String::new()
+            }
+        }));
+        assert_ne!(rolls, plain);
     }
 
     #[test]
