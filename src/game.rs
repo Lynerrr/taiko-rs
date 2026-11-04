@@ -397,6 +397,16 @@ pub struct Game {
     pub hud_area: crate::layout::Area,
     /// A stand-in play for the interface editor: every part shows, with made-up numbers.
     hud_sample: bool,
+    /// Where mods have the lane this frame, for the parts attached to it.
+    field_boxes: Option<hud::FieldBoxes>,
+    /// The lane's middle on the screen, in the playfield's units, while mods bend or move it, and
+    /// how far its edges are from that.
+    lane_path: Vec<(f32, f32)>,
+    lane_half: f32,
+    /// When `field_boxes` last moved, to ease it.
+    field_at: f64,
+    /// Parts mods have moved off their places: their top and when it was worked out.
+    settled: std::cell::Cell<[Option<(f32, f64)>; Part::ALL.len()]>,
     /// Display latency to make up for (real ms): the lane is drawn as it will be this much later,
     /// when the frame reaches the screen. Judging stays on the audio clock.
     pub visual_offset: f64,
@@ -1993,6 +2003,11 @@ impl Game {
             hud: crate::hud::Layout::default(),
             hud_area: crate::layout::Area::FULL,
             hud_sample: false,
+            field_boxes: None,
+            lane_path: Vec::new(),
+            lane_half: 0.0,
+            field_at: 0.0,
+            settled: std::cell::Cell::new([None; Part::ALL.len()]),
             visual_offset: 0.0,
             mash: Mash::Nearest,
             scoring: Scoring::Standard,
@@ -3765,6 +3780,27 @@ impl Game {
             }
         }
         self.zone = (zone.1 > 0.0).then(|| zone.0.map(|v| v / zone.1));
+        // Multiverse: on the playfield in focus, as big as it is.
+        self.lane_path.clear();
+        let focus = self.zone.map(|z| {
+            let (_, band_h) = lane_band();
+            let k = z[3] / band_h;
+            let mid = z[1] + z[3] / 2.0;
+            let (lane_y, lane_h) = (mid - LANE_H * k / 2.0, LANE_H * k);
+            hud::FieldBoxes {
+                lane: [z[0], lane_y, z[2], lane_h],
+                drum: [z[0], lane_y, PANEL_W * k, lane_h],
+                hit: [
+                    z[0] + (HIT_X - NOTE_R) * k,
+                    mid - NOTE_R * k,
+                    2.0 * NOTE_R * k,
+                    2.0 * NOTE_R * k,
+                ],
+            }
+        });
+        if let Some(boxes) = focus {
+            self.ease_field_boxes(boxes, self.time);
+        }
         // The sparks: from the drum in focus to the drum of the one it's heading for.
         let to = (0..FIELD_COUNT).find(|&f| looks[f].aim > 0.0);
         let from = (0..FIELD_COUNT)
@@ -5093,6 +5129,26 @@ impl Game {
             zoom *= 0.85;
             dest = [w / 2.0, 290.0];
         }
+        // What's attached to the lane goes where it is, but only by what holds still: not swaying,
+        // tilting or spinning with it, which would have the numbers shake about or fly round.
+        let mania = mods.has(Mod::Mania);
+        let (boxes, path, half) = field_boxes(&FieldView {
+            w,
+            rail: geo.rail.as_ref(),
+            lane_len,
+            flip: &flip_x,
+            pivot,
+            turned: if mania { -PI / 2.0 } else { 0.0 },
+            zoom: rail_zoom * if mania { 0.85 } else { 1.0 },
+            dest: [dest[0], dest[1] + rail_drop],
+            whole_width: crossfire,
+            spinning: mods.has(Mod::Spin),
+        });
+        self.ease_field_boxes(boxes, t);
+        // A lane that's where it always is has nothing to go by.
+        let plain = geo.rail.is_none() && !mania && !crossfire;
+        self.lane_path = if plain { Vec::new() } else { path };
+        self.lane_half = half;
         let dest = [dest[0] + dx, dest[1] + dy];
         if angle != 0.0 || zoom != 1.0 || dest != pivot {
             c.rotate_since(start_shape, pivot, angle, zoom, dest);
@@ -5813,6 +5869,107 @@ impl Game {
         })
     }
 
+    /// `boxes` at map time `t`, eased from where they were.
+    fn ease_field_boxes(&mut self, boxes: hud::FieldBoxes, t: f64) {
+        let k = ease_step(t - self.field_at);
+        let mix = |a: [f32; 4], b: [f32; 4]| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * k);
+        self.field_boxes = Some(self.field_boxes.map_or(boxes, |o| hud::FieldBoxes {
+            lane: mix(o.lane, boxes.lane),
+            drum: mix(o.drum, boxes.drum),
+            hit: mix(o.hit, boxes.hit),
+        }));
+        self.field_at = t;
+    }
+
+    /// The lane's top and bottom on the screen in the columns from `x0` to `x1`, if it's there.
+    fn lane_column(&self, x0: f32, x1: f32, c: &Canvas) -> Option<(f32, f32)> {
+        let area = self.hud_area;
+        let (k, ox, oy) = (area.h, area.x * c.width, area.y * VIRTUAL_HEIGHT);
+        let half = self.lane_half * k;
+        let (mut top, mut bottom) = (f32::MAX, f32::MIN);
+        for &(x, y) in &self.lane_path {
+            let (x, y) = (ox + x * k, oy + y * k);
+            if x + half >= x0 && x - half <= x1 {
+                (top, bottom) = (top.min(y - half), bottom.max(y + half));
+            }
+        }
+        (top <= bottom).then_some((top.max(0.0), bottom.min(VIRTUAL_HEIGHT)))
+    }
+
+    /// While mods bend or move the lane: what's attached to it goes by the lane right there, and
+    /// what that puts on top of another part gives way, towards the middle of the screen.
+    fn settle_parts(&self, c: &Canvas) {
+        let mut settled = [None; Part::ALL.len()];
+        let now = self.time;
+        if !self.lane_path.is_empty() {
+            let drawn = |p: Part| {
+                !self.hidden.has(p)
+                    && (self.hud.place(p).is_some()
+                        || !matches!(
+                            p,
+                            Part::Combo | Part::Judgements | Part::Scoreboard | Part::Spectators
+                        ))
+            };
+            let frames = self.frames(c);
+            // Each with where it'd be, for what stands close together there on purpose.
+            let mut boxes: Vec<(Part, hud::Placed, bool, hud::Placed)> = Vec::new();
+            for part in Part::PLACED.into_iter().filter(|&p| drawn(p)) {
+                let (place, _, mut b) = self.part_box(c, part);
+                let home = b;
+                let a = place.y;
+                let column = (a.target == hud::Target::Lane)
+                    .then(|| self.lane_column(b.x, b.x + b.w, c))
+                    .flatten();
+                if let Some((top, bottom)) = column {
+                    let line = top + a.at * (bottom - top);
+                    let y = line + a.off * frames.follow(&place) - a.pivot * b.h;
+                    b.y = y.clamp(0.0, (VIRTUAL_HEIGHT - b.h).max(0.0));
+                }
+                boxes.push((part, b, a.target == hud::Target::Lane, home));
+            }
+            boxes.sort_by(|a, b| a.1.y.total_cmp(&b.1.y));
+            let touching = |a: &hud::Placed, b: &hud::Placed| {
+                a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+            };
+            let middle = VIRTUAL_HEIGHT / 2.0;
+            // The top half downwards, then the bottom half upwards.
+            for i in 0..boxes.len() {
+                if !boxes[i].2 || boxes[i].1.y + boxes[i].1.h / 2.0 >= middle {
+                    continue;
+                }
+                for j in 0..i {
+                    let other = boxes[j].1;
+                    if touching(&boxes[i].1, &other) && !touching(&boxes[i].3, &boxes[j].3) {
+                        boxes[i].1.y = other.y + other.h + 2.0;
+                    }
+                }
+            }
+            for i in (0..boxes.len()).rev() {
+                if !boxes[i].2 || boxes[i].1.y + boxes[i].1.h / 2.0 < middle {
+                    continue;
+                }
+                for j in (i + 1..boxes.len()).rev() {
+                    let other = boxes[j].1;
+                    if touching(&boxes[i].1, &other) && !touching(&boxes[i].3, &boxes[j].3) {
+                        boxes[i].1.y = other.y - boxes[i].1.h - 2.0;
+                    }
+                }
+            }
+            let before = self.settled.get();
+            for (part, b, ..) in boxes.into_iter().filter(|b| b.2) {
+                let i = hud::Layout::index(part);
+                let y = before[i].map_or(b.y, |(y, at)| y + (b.y - y) * ease_step(now - at));
+                settled[i] = Some((y, now));
+            }
+        }
+        self.settled.set(settled);
+    }
+
+    /// Where the parts can be attached to now.
+    fn frames(&self, c: &Canvas) -> hud::Frames {
+        hud::Frames::new(c.width, self.hud_area).with_field(self.hud_area, self.field_boxes)
+    }
+
     /// How big a part at `place` is in its own units.
     fn part_size(&self, c: &Canvas, part: Part, place: &hud::Place) -> [f32; 2] {
         match part {
@@ -5821,7 +5978,7 @@ impl Game {
             Part::Pp => [score_width(c, 14.0, "9999pp"), 16.0],
             // As long as what it's on.
             Part::Progress => {
-                let f = hud::Frames::new(c.width, self.hud_area);
+                let f = self.frames(c);
                 [f.rect(place.x.target)[2] / f.follow(place), 3.0]
             }
             Part::Health => {
@@ -5844,7 +6001,7 @@ impl Game {
     pub fn part_box(&self, c: &Canvas, part: Part) -> (hud::Place, [f32; 2], hud::Placed) {
         let place = self.part_place(c, part);
         let size = self.part_size(c, part, &place);
-        let frames = hud::Frames::new(c.width, self.hud_area);
+        let frames = self.frames(c);
         let moved = self.hud.place(part).is_some();
         (place, size, frames.resolve(&place, size, moved))
     }
@@ -5853,9 +6010,10 @@ impl Game {
     /// text lines up in it (0 left, 1 right), and puts it in its place.
     fn in_place(&self, c: &mut Canvas, part: Part, f: impl FnOnce(&mut Canvas, [f32; 2], f32)) {
         let (place, size, b) = self.part_box(c, part);
+        let y = self.settled_top(part).unwrap_or(b.y);
         let start = c.shapes.len();
         f(c, size, place.x.pivot);
-        c.transform_since(start, [0.0, 0.0], b.k, b.x, b.y);
+        c.transform_since(start, [0.0, 0.0], b.k, b.x, y);
     }
 
     /// Puts what `f` draws from `from`, a part drawn somewhere of its own, in its place.
@@ -5867,9 +6025,14 @@ impl Game {
         f: impl FnOnce(&mut Canvas),
     ) {
         let (_, _, b) = self.part_box(c, part);
+        let y = self.settled_top(part).unwrap_or(b.y);
         let start = c.shapes.len();
         f(c);
-        c.transform_since(start, from, b.k, b.x - from[0], b.y - from[1]);
+        c.transform_since(start, from, b.k, b.x - from[0], y - from[1]);
+    }
+
+    fn settled_top(&self, part: Part) -> Option<f32> {
+        self.settled.get()[hud::Layout::index(part)].map(|(y, _)| y)
     }
 
     fn accuracy_text(&self) -> String {
@@ -5886,6 +6049,7 @@ impl Game {
 
     /// Everything the player can place.
     pub fn draw_parts(&self, c: &mut Canvas) {
+        self.settle_parts(c);
         let t = self.time;
         let shown = |p: Part| !self.hidden.has(p);
         // Over the lane unless moved: the playfield draws those itself.
@@ -6439,6 +6603,107 @@ fn turned_box(rect: [f32; 4], pivot: [f32; 2], angle: f32, scale: f32, dest: [f3
     [x0, y0, x1 - x0, y1 - y0]
 }
 
+/// How the playfield stands this frame, for `field_boxes`.
+struct FieldView<'a> {
+    w: f32,
+    rail: Option<&'a Rail>,
+    lane_len: f32,
+    /// Where mirroring takes an x.
+    flip: &'a dyn Fn(f32) -> f32,
+    pivot: [f32; 2],
+    turned: f32,
+    zoom: f32,
+    dest: [f32; 2],
+    /// The lane runs both ways from the drum.
+    whole_width: bool,
+    /// It goes all the way round `dest`.
+    spinning: bool,
+}
+
+/// Where the lane, the drum and the hit point are, the lane going by what of it is on the screen;
+/// the points along it there, and how far its edges are from them.
+fn field_boxes(v: &FieldView) -> (hud::FieldBoxes, Vec<(f32, f32)>, f32) {
+    let (sin, cos) = v.turned.sin_cos();
+    let place = |x: f32, y: f32| {
+        let (dx, dy) = (
+            ((v.flip)(x) - v.pivot[0]) * v.zoom,
+            (y - v.pivot[1]) * v.zoom,
+        );
+        (
+            v.dest[0] + dx * cos - dy * sin,
+            v.dest[1] + dx * sin + dy * cos,
+        )
+    };
+    let half = LANE_H / 2.0 * v.zoom;
+    let (w, h) = (v.w, VIRTUAL_HEIGHT);
+    let mut lane = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    let mut path = Vec::new();
+    let mut take = |(x, y): (f32, f32)| {
+        if x > -half && x < w + half && y > -half && y < h + half {
+            path.push((x, y));
+            lane = [
+                lane[0].min(x - half),
+                lane[1].min(y - half),
+                lane[2].max(x + half),
+                lane[3].max(y + half),
+            ];
+        }
+    };
+    take(place(0.0, LANE_Y));
+    take(place(HIT_X, LANE_Y));
+    match v.rail {
+        Some(r) => r
+            .pts
+            .iter()
+            .step_by(4)
+            .for_each(|&(x, y, _)| take(place(x, y))),
+        None => {
+            let steps = (v.lane_len / 16.0).ceil() as usize;
+            for i in 0..=steps {
+                take(place(HIT_X + (i as f32 * 16.0).min(v.lane_len), LANE_Y));
+            }
+        }
+    }
+    if v.whole_width {
+        (lane[0], lane[2]) = (0.0, w);
+    }
+    if v.spinning {
+        let r = v.lane_len * v.zoom;
+        lane = [v.dest[0] - r, v.dest[1] - r, v.dest[0] + r, v.dest[1] + r];
+    }
+    let [x0, y0, x1, y1] = lane;
+    let (x0, y0, x1, y1) = (x0.max(0.0), y0.max(0.0), x1.min(w), y1.min(h));
+    let boxed = |x: f32, y: f32, hw: f32, hh: f32| {
+        let (a, b) = (place(x - hw, y - hh), place(x + hw, y + hh));
+        [
+            a.0.min(b.0),
+            a.1.min(b.1),
+            (a.0 - b.0).abs(),
+            (a.1 - b.1).abs(),
+        ]
+    };
+    let boxes = hud::FieldBoxes {
+        lane: [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)],
+        drum: boxed(PANEL_W / 2.0, LANE_Y, PANEL_W / 2.0, LANE_H / 2.0),
+        hit: boxed(HIT_X, LANE_Y, NOTE_R, NOTE_R),
+    };
+    (boxes, if v.spinning { Vec::new() } else { path }, half)
+}
+
+/// How long (ms) parts take to catch up with a lane that's moved: bits of a bending lane come on
+/// and off the screen all at once, which they shouldn't jump with.
+const HUD_EASE_MS: f64 = 140.0;
+
+/// How far along to where it's going something eased gets in `dt` ms. A step back in time or a long
+/// way forward is a seek: it goes straight there.
+fn ease_step(dt: f64) -> f32 {
+    if dt <= 0.0 || dt > 1000.0 {
+        1.0
+    } else {
+        (1.0 - (-dt / HUD_EASE_MS).exp()) as f32
+    }
+}
+
 /// The lane alone (top, height), for a preview it fills.
 pub fn lane_only() -> (f32, f32) {
     (LANE_Y - LANE_H / 2.0, LANE_H)
@@ -6747,6 +7012,178 @@ mod tests {
     /// The left end of the HP bar, which ends 18 from the right.
     fn hp_bar_x(w: f32) -> f32 {
         w - 18.0 - (w * 0.25).min(180.0)
+    }
+
+    /// A game with `m` on, drawn at map time `t`: where a part under the lane comes out, and the
+    /// lane's box.
+    fn part_under_the_lane(m: Option<Mod>, t: f64) -> (hud::Placed, [f32; 4]) {
+        let mods = m.map_or(Mods::NONE, |m| Mods::parse(m.acronym()));
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mut g = Game::with_seed(map, track, None, mods, 42);
+        g.hidden = hud::Parts::NONE;
+        g.time = t;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        g.draw_parts(&mut c);
+        let lane = g.frames(&c).rect(hud::Target::Lane);
+        let mut part = g.part_box(&c, Part::Counts).2;
+        part.y = g.settled_top(Part::Counts).unwrap_or(part.y);
+        (part, lane)
+    }
+
+    #[test]
+    fn without_mods_the_parts_on_the_lane_stay_where_the_lane_always_is() {
+        let (_, lane) = part_under_the_lane(None, 3000.0);
+        let plain = hud::Frames::new(853.3, crate::layout::Area::FULL);
+        for (a, b) in lane.iter().zip(plain.rect(hud::Target::Lane)) {
+            assert!((a - b).abs() < 0.01, "{lane:?}");
+        }
+    }
+
+    #[test]
+    fn a_part_under_a_bent_lane_goes_by_the_lane_right_above_it() {
+        // The left of these lanes runs straight: the counter on it stays just under it.
+        let straight = part_under_the_lane(None, 3000.0).0;
+        let drop = RailShape::Loop.drop();
+        let (part, _) = part_under_the_lane(Some(Mod::Loop), 3000.0);
+        assert!(
+            (part.y - straight.y - drop).abs() < 1.0,
+            "{part:?} from {straight:?}"
+        );
+    }
+
+    #[test]
+    fn parts_pushed_against_the_edge_by_a_lane_give_way_to_each_other() {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mods = Mods::parse(Mod::Loop.acronym());
+        let mut g = Game::with_seed(map, track, None, mods, 42);
+        let lane = hud::builtin_presets()
+            .into_iter()
+            .find(|p| {
+                p.1.place(Part::Score)
+                    .is_some_and(|s| s.y.target == hud::Target::Lane)
+            })
+            .expect("the lane preset");
+        g.hud = lane.1;
+        g.hidden = lane.1.off;
+        g.live_pp_value = Some(100.0);
+        g.time = 3000.0;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        g.draw_parts(&mut c);
+        let at = |p: Part| {
+            let mut b = g.part_box(&c, p).2;
+            b.y = g.settled_top(p).unwrap_or(b.y);
+            b
+        };
+        let parts = [Part::Score, Part::Accuracy, Part::Ur, Part::Mods];
+        for (i, &p) in parts.iter().enumerate() {
+            let (a, y0) = (at(p), at(p).y);
+            for &q in &parts[i + 1..] {
+                let b = at(q);
+                let apart = a.x + a.w <= b.x + 0.5
+                    || b.x + b.w <= a.x + 0.5
+                    || y0 + a.h <= b.y + 0.5
+                    || b.y + b.h <= y0 + 0.5;
+                assert!(apart, "{p:?} {a:?} on {q:?} {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn parts_side_by_side_on_a_lane_that_only_moved_stay_side_by_side() {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mods = Mods::parse(Mod::Zigzag.acronym());
+        let mut g = Game::with_seed(map, track, None, mods, 42);
+        let (_, lane) = hud::builtin_presets().swap_remove(3);
+        g.hud = lane;
+        g.hidden = lane.off;
+        g.live_pp_value = Some(100.0);
+        g.time = 3000.0;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        g.draw_parts(&mut c);
+        let top = |p| g.settled_top(p).unwrap();
+        assert!(
+            (top(Part::Pp) + 16.0 - top(Part::Accuracy) - 16.0).abs() < 40.0,
+            "pp {} accuracy {}",
+            top(Part::Pp),
+            top(Part::Accuracy)
+        );
+    }
+
+    #[test]
+    fn an_upright_lane_is_tall_and_narrow() {
+        let (_, lane) = part_under_the_lane(Some(Mod::Mania), 3000.0);
+        assert!(lane[3] > lane[2], "{lane:?}");
+    }
+
+    #[test]
+    fn what_shakes_the_playfield_leaves_the_parts_still() {
+        for m in [Mod::Party, Mod::Tilt, Mod::Spin, Mod::BarrelRoll] {
+            let a = part_under_the_lane(Some(m), 3000.0).0;
+            let b = part_under_the_lane(Some(m), 3777.0).0;
+            assert_eq!((a.x, a.y), (b.x, b.y), "{m:?}");
+        }
+    }
+
+    #[test]
+    fn the_parts_on_the_lane_find_the_playfield_in_focus() {
+        let (part, lane) = part_under_the_lane(Some(Mod::Multiverse), 3000.0);
+        assert!(lane[2] > 0.0 && lane[3] > 0.0, "{lane:?}");
+        assert!(part.y >= lane[1], "{part:?} in {lane:?}");
+    }
+
+    #[test]
+    fn a_morphing_lane_carries_the_parts_along_without_a_jump() {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mods = Mods::parse(Mod::Shapeshift.acronym());
+        let mut g = Game::with_seed(map, track, None, mods, 42);
+        let setup = "every=4 order=fixed shapes=spiral,loop,elbow,-zigzag,-uturn,-straight";
+        g.use_mod_settings(None, Some(shapeshift::Config::parse(setup)));
+        let (mut c, mut last, mut moved) = (Canvas::default(), None, 0.0f32);
+        let (mut worst, mut at) = (0.0f32, 0.0);
+        for i in 0..4000 {
+            g.time = 2000.0 + i as f64 * 16.0;
+            c.clear(853.3);
+            g.draw_playfield(&mut c, 1.0);
+            g.draw_parts(&mut c);
+            let mut lane = g.frames(&c).rect(hud::Target::Lane);
+            lane[1] = g.settled_top(Part::Counts).unwrap_or(lane[1]);
+            if let Some(before) = last {
+                let step = lane
+                    .iter()
+                    .zip::<[f32; 4]>(before)
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0, f32::max);
+                moved += step;
+                if step > worst {
+                    (worst, at) = (step, g.time);
+                }
+            }
+            last = Some(lane);
+        }
+        assert!(moved > 50.0, "the lane's box went with the shapes: {moved}");
+        assert!(worst < 40.0, "jumped {worst} at {at}");
     }
 
     #[test]
