@@ -10246,6 +10246,30 @@ impl State {
         !self.in_song() || matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_))
     }
 
+    /// Where the friends tab goes on this screen, if it shows: not over a play, or over anything
+    /// that takes up the whole screen (F9 still opens the panel there).
+    fn social_tab_middle(&self) -> Option<f32> {
+        let covered = self.in_song()
+            || self.player.is_some()
+            || self.mod_select.is_some()
+            || self.random_setup.is_some()
+            || self.universe_setup.is_some()
+            || self.select.menu.is_some()
+            || matches!(
+                self.scene,
+                Scene::Settings { .. }
+                    | Scene::LayoutEdit { .. }
+                    | Scene::HudEdit { .. }
+                    | Scene::Preview { .. }
+            );
+        let middle = if self.on_menu() {
+            social::TAB_MENU_MIDDLE
+        } else {
+            social::TAB_MIDDLE
+        };
+        (!covered).then_some(middle)
+    }
+
     fn open_social(&mut self) {
         if !self.social.open {
             self.social.open = true;
@@ -14333,19 +14357,35 @@ impl State {
             };
             // The screen behind darkens, but not a play being watched.
             let dim = !self.in_song();
+            let animate = self.cfg.animations;
+            let tab = self
+                .social_tab_middle()
+                .filter(|_| logged_in)
+                .map(|to| self.social.glide_tab(to, canvas.dt_ms, animate));
             if self.social.open {
-                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread, dim);
-            } else if let Some(p) = self.social.closing() {
-                let (start, hits) = (canvas.shapes.len(), canvas.hits.len());
-                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread, dim);
+                social::draw(
+                    canvas,
+                    &self.social,
+                    logged_in,
+                    lobby,
+                    lobby_unread,
+                    dim,
+                    tab,
+                );
+            } else if self.social.closing().is_some() {
+                let hits = canvas.hits.len();
+                social::draw(
+                    canvas,
+                    &self.social,
+                    logged_in,
+                    lobby,
+                    lobby_unread,
+                    dim,
+                    tab,
+                );
                 canvas.hits.truncate(hits);
-                canvas.transform_since(start, [0.0, 0.0], 1.0, p * 30.0, 0.0);
-                for sh in &mut canvas.shapes[start..] {
-                    sh.fill[3] *= 1.0 - p;
-                    sh.border[3] *= 1.0 - p;
-                }
-            } else if logged_in && !self.in_song() && self.player.is_none() {
-                social::draw_chip(canvas, &self.social, lobby_unread);
+            } else if let Some(middle) = tab {
+                social::draw_chip(canvas, &self.social, middle, lobby_unread);
             }
             social::draw_notes(canvas, &self.social);
         }

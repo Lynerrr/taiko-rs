@@ -570,6 +570,71 @@ fn gap_y_of(a: &[f32; 4], b: &[f32; 4]) -> f32 {
     a[1].max(b[1]) - a[3].min(b[3])
 }
 
+/// What the friends tab on the edge of the screen covers, or what comes down on it: anything drawn
+/// before it there but what fills the whole screen. Riding on the open panel, it's over the screen
+/// on purpose.
+/// `hits`: the frame's (a built frame hands them over to the state). None: the tab isn't there.
+#[cfg(test)]
+pub fn edge_tab_problems(
+    c: &crate::render::Canvas,
+    hits: &[crate::render::HitBox],
+) -> Option<Vec<String>> {
+    use crate::render::Hit;
+    let tab = hits.iter().find(|h| h.hit == Hit::SocialToggle)?;
+    if hits.iter().any(|h| h.hit == Hit::SocialPanel) {
+        return Some(Vec::new());
+    }
+    let [x, y, w, h] = tab.rect;
+    // Its own box is the last one drawn from its corner: all that's before that is the screen's.
+    let own = c.boxes.iter().rev().copied().find(|&b| {
+        let sh = &c.shapes[b];
+        b < tab.shape
+            && (sh.center[0] - sh.half[0] - x).abs() < 1.0
+            && (sh.center[1] - sh.half[1] - y).abs() < 1.0
+    });
+    let Some(own) = own else {
+        return Some(vec!["the tab has no box of its own".into()]);
+    };
+    let in_text = |i: usize| {
+        c.texts
+            .iter()
+            .find(|(r, _)| r.contains(&i))
+            .map_or("a shape", |(_, s)| s.as_str())
+    };
+    let mut seen = Vec::new();
+    for (i, sh) in c.shapes[..own].iter().enumerate() {
+        let (hw, hh) = (sh.half[0].abs(), sh.half[1].abs());
+        let visible = sh.fill[3] >= 0.1 || sh.border[3] >= 0.1;
+        let background =
+            hw * 2.0 >= c.width - 1.0 && hh * 2.0 >= crate::render::VIRTUAL_HEIGHT - 1.0;
+        let across = (sh.center[0] + hw).min(x + w) - (sh.center[0] - hw).max(x);
+        let down = (sh.center[1] + hh).min(y + h) - (sh.center[1] - hh).max(y);
+        if visible && !background && across > 0.5 && down > 0.5 {
+            let what = if in_text(i) == "a shape" {
+                format!(
+                    "a shape at {:.0},{:.0} {:.0}x{:.0} fill {:.2} edge {:.2}",
+                    sh.center[0] - hw,
+                    sh.center[1] - hh,
+                    hw * 2.0,
+                    hh * 2.0,
+                    sh.fill[3],
+                    sh.border[3]
+                )
+            } else {
+                in_text(i).to_string()
+            };
+            if !seen.contains(&what) {
+                seen.push(what);
+            }
+        }
+    }
+    Some(
+        seen.into_iter()
+            .map(|what| format!("the friends tab {x:.0},{y:.0} {w:.0}x{h:.0} covers: {what}"))
+            .collect(),
+    )
+}
+
 /// Buttons (a clickable rect with a rounded box of the same size) that touch each other, and
 /// buttons rounded into pills. Lists of rows (same x and width, no border) are left alone, and so
 /// are round icon buttons (as wide as tall).
@@ -644,19 +709,26 @@ fn button_problems(c: &crate::render::Canvas) -> Vec<String> {
         }
         buttons.push(([hx, hy, hx + hw, hy + hh], h.hit, bordered));
     }
+    // The friends panel floats over whatever screen is behind it.
+    let panel = c
+        .hits
+        .iter()
+        .find(|h| h.hit == crate::render::Hit::SocialPanel)
+        .map(|h| {
+            let [x, y, w, hh] = h.rect;
+            [x, y, x + w, y + hh]
+        });
+    let on_panel = |r: &[f32; 4]| {
+        panel.is_some_and(|p| {
+            r[0] >= p[0] - 0.5 && r[1] >= p[1] - 0.5 && r[2] <= p[2] + 0.5 && r[3] <= p[3] + 0.5
+        })
+    };
     for (i, (a, ha, ba)) in buttons.iter().enumerate() {
         for (b, hb, bb) in &buttons[i + 1..] {
             if ha == hb {
                 continue;
             }
-            // The friends panel floats over whatever screen is behind it.
-            let overlay = |h: &crate::render::Hit| {
-                matches!(
-                    h,
-                    crate::render::Hit::SocialRow(_) | crate::render::Hit::SocialPanel
-                )
-            };
-            if overlay(ha) != overlay(hb) {
+            if on_panel(a) != on_panel(b) {
                 continue;
             }
             // Rows of a list: same x and width, one above the other.

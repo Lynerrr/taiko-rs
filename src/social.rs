@@ -143,6 +143,8 @@ pub struct Social {
     pub global_unread: usize,
     pub open: bool,
     pub opened_at: Option<Instant>,
+    /// Where the tab is now (see `glide_tab`).
+    tab_y: Option<f32>,
     /// When it last closed (it slides away).
     pub closed_at: Option<Instant>,
     pub tab: Tab,
@@ -257,9 +259,35 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 /// How long the overlay takes to slide in or out (ms).
-pub const SLIDE_MS: f32 = 160.0;
+pub const SLIDE_MS: f32 = 240.0;
+/// How far the panel and the tab run on past the edge that cuts them off, to hide their corners.
+const EDGE_BLEED: f32 = 12.0;
+/// The tab on the right edge of the screen that pulls the overlay out, and rides on it.
+const TAB_W: f32 = 17.0;
+pub const TAB_MIDDLE: f32 = 240.0;
+/// The main menu's panel reaches the sides at that height: under it.
+pub const TAB_MENU_MIDDLE: f32 = 352.0;
+const TAB_TEXT: f32 = 6.5;
+/// The tab's key's row, and the room at its ends.
+const TAB_KEY_ROW: f32 = 14.0;
+const TAB_PAD: f32 = 6.0;
+/// How long (ms) the tab takes to get most of the way to a new height.
+const TAB_GLIDE_MS: f32 = 90.0;
 
 impl Social {
+    /// The tab's height `dt_ms` on, gliding to `middle` when another screen wants it elsewhere.
+    pub fn glide_tab(&mut self, middle: f32, dt_ms: f32, animate: bool) -> f32 {
+        let y = match self.tab_y {
+            Some(y) if animate => {
+                let y = y + (middle - y) * (1.0 - (-dt_ms / TAB_GLIDE_MS).exp());
+                if (y - middle).abs() < 0.25 { middle } else { y }
+            }
+            _ => middle,
+        };
+        self.tab_y = Some(y);
+        y
+    }
+
     /// Closes the overlay; it slides away (`closing`).
     pub fn close(&mut self) {
         if self.open {
@@ -746,29 +774,37 @@ pub fn draw(
     lobby: Option<&[(String, String)]>,
     lobby_unread: usize,
     dim: bool,
+    tab: Option<f32>,
 ) {
-    let slide = s
-        .opened_at
-        .map(|t| crate::render::progress(t, SLIDE_MS))
-        .unwrap_or(1.0);
-    let x = c.width - PANEL_W - 6.0 + (1.0 - slide) * 30.0;
-    let [_, y, _, h] = panel_rect(c.width);
-    let a = slide;
+    // It slides out of the edge of the screen, and back in there.
+    let slide = match s.closing() {
+        Some(p) => 1.0 - p,
+        None => s
+            .opened_at
+            .map(|t| crate::render::progress(t, SLIDE_MS))
+            .unwrap_or(1.0),
+    };
+    let [left, y, _, h] = panel_rect(c.width);
+    let x = left + (1.0 - slide) * PANEL_W;
+    let a = 1.0;
     if dim {
         c.rect(
             -40.0,
             -40.0,
             c.width + 80.0,
             560.0,
-            rgba(0x000000, 0.32 * a),
+            rgba(0x000000, 0.32 * slide),
         );
+    }
+    if let Some(middle) = tab {
+        draw_tab(c, s, x, middle, lobby_unread);
     }
     // A soft shadow on the left, then the panel and its header strip.
     for (i, alpha) in [0.10, 0.07, 0.04].into_iter().enumerate() {
         let d = 2.0 * (i + 1) as f32;
         c.round_rect(
             [x - d, y - d + 2.0],
-            [PANEL_W + 2.0 * d, h + 2.0 * d],
+            [PANEL_W + EDGE_BLEED + 2.0 * d, h + 2.0 * d],
             8.0 + d,
             rgba(0x000000, alpha * a),
             rgba(0, 0.0),
@@ -777,7 +813,7 @@ pub fn draw(
     }
     c.round_rect(
         [x, y],
-        [PANEL_W, h],
+        [PANEL_W + EDGE_BLEED, h],
         8.0,
         rgba(PANEL_BG, 0.97 * a),
         rgba(0x34344a, a),
@@ -785,7 +821,7 @@ pub fn draw(
     );
     c.round_rect(
         [x + 1.0, y + 1.0],
-        [PANEL_W - 2.0, HEADER_H],
+        [PANEL_W + EDGE_BLEED, HEADER_H],
         7.0,
         rgba(HEADER_BG, a),
         rgba(0, 0.0),
@@ -794,14 +830,14 @@ pub fn draw(
     c.rect(
         x + 1.0,
         y + HEADER_H - 6.0,
-        PANEL_W - 2.0,
+        PANEL_W + EDGE_BLEED,
         7.0,
         rgba(HEADER_BG, a),
     );
     c.rect(
         x + 1.0,
         y + HEADER_H + 1.0,
-        PANEL_W - 2.0,
+        PANEL_W + EDGE_BLEED,
         1.0,
         rgba(LINE, a),
     );
@@ -2197,15 +2233,16 @@ fn badge(c: &mut Canvas, cx: f32, cy: f32, n: usize, a: f32) {
     badge_after(c, cx - badge_width(n) / 2.0, cy, n, a);
 }
 
-/// The notification cards, stacked under the chip (newest on top); clicking one acts on it.
+/// The notification cards, stacked at the top right (newest on top); clicking one acts on it.
 pub fn draw_notes(c: &mut Canvas, s: &Social) {
     let w = 210.0;
-    // Beside the overlay when it's open, else under the chip.
-    let x = if s.open {
-        panel_rect(c.width)[0] - w - 8.0
+    // Clear of the tab, which rides on the overlay when it's open.
+    let right = if s.open {
+        panel_rect(c.width)[0]
     } else {
-        c.width - w - 8.0
+        c.width
     };
+    let x = right - TAB_W - w - 8.0;
     let mut y = if s.open { 30.0 } else { 58.0 };
     for (i, n) in s.notes.iter().enumerate().rev() {
         let age = n.at.elapsed().as_secs_f32();
@@ -2245,16 +2282,23 @@ pub fn draw_notes(c: &mut Canvas, s: &Social) {
 
 /// The overlay panel's rectangle (for clicks): x, y, w, h.
 pub fn panel_rect(width: f32) -> [f32; 4] {
-    [width - PANEL_W - 6.0, 24.0, PANEL_W, 480.0 - 30.0]
+    [width - PANEL_W, 24.0, PANEL_W, 480.0 - 30.0]
 }
 
-/// The chip that opens the overlay (menus, when logged in): unread messages and requests.
-pub fn draw_chip(c: &mut Canvas, s: &Social, lobby_unread: usize) {
+/// The tab that opens the overlay (menus, when logged in), at the edge of the screen.
+pub fn draw_chip(c: &mut Canvas, s: &Social, middle: f32, lobby_unread: usize) {
+    draw_tab(c, s, c.width, middle, lobby_unread);
+}
+
+/// The tab with its right side at `right` and its middle at `middle`, with unread messages and
+/// requests on it: its key upright at the top, and who's online reading up it below that. It's
+/// drawn past `right`, for the panel or the screen's edge to cut it off.
+fn draw_tab(c: &mut Canvas, s: &Social, right: f32, middle: f32, lobby_unread: usize) {
     let unread = s.unread_total() + lobby_unread + s.requests.len();
     let label = if s.connected {
-        format!("friends {}  F9", s.online_count())
+        format!("friends {}", s.online_count())
     } else {
-        "friends  F9".into()
+        "friends".into()
     };
     // Everyone online first, after a green dot (once the server says).
     let online = s
@@ -2264,44 +2308,85 @@ pub fn draw_chip(c: &mut Canvas, s: &Social, lobby_unread: usize) {
         .map(|_| format!("{} online   ", s.online_total));
     let online_w = online
         .as_deref()
-        .map_or(0.0, |t| Canvas::text_width(6.5, t) + 9.0);
-    let w = Canvas::text_width(6.5, &label) + 14.0 + online_w;
-    // Just under the tab bar's right-hand text.
-    let (x, y) = (c.width - w - 8.0, 41.0);
-    let hover = c.hovered(x, y, w, 13.0);
+        .map_or(0.0, |t| Canvas::text_width(TAB_TEXT, t) + 9.0);
+    let reading = Canvas::text_width(TAB_TEXT, &label) + online_w;
+    let len = TAB_PAD + TAB_KEY_ROW + reading + TAB_PAD;
+    let (x, y) = (right - TAB_W, middle - len / 2.0);
+    let hover = c.hovered(x, y, TAB_W, len);
     c.round_rect(
         [x, y],
-        [w, 13.0],
-        3.5,
-        rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.85),
+        [TAB_W + EDGE_BLEED, len],
+        6.0,
+        rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.92),
         rgba(0x3a3a4e, 1.0),
         1.0,
     );
+    let cx = x + TAB_W / 2.0;
+    let colour = rgba(0xc8c8d8, 1.0);
+    c.text_centered(cx, y + TAB_PAD, TAB_TEXT, colour, "F9");
+    // Laid out along a line from (0, 0), then stood up to read from the bottom.
+    let start = c.shapes.len();
+    let mut along = 0.0;
     if let Some(online) = &online {
-        c.circle(
-            x + 10.0,
-            y + 6.5,
-            2.5,
-            rgba(GREEN, 1.0),
-            rgba(0x000000, 0.0),
-            0.0,
-        );
-        c.text(x + 16.0, y + 3.5, 6.5, rgba(0xc8c8d8, 1.0), online);
+        c.circle(2.5, 0.0, 2.5, rgba(GREEN, 1.0), rgba(0x000000, 0.0), 0.0);
+        c.text(9.0, -TAB_TEXT / 2.0, TAB_TEXT, colour, online);
+        along = online_w;
     }
-    c.text(
-        x + 7.0 + online_w,
-        y + 3.5,
-        6.5,
-        rgba(0xc8c8d8, 1.0),
-        &label,
-    );
-    c.hit(x, y, w, 13.0, Hit::SocialToggle);
-    badge(c, x, y + 1.0, unread, 1.0);
+    c.text(along, -TAB_TEXT / 2.0, TAB_TEXT, colour, &label);
+    let dest = [cx, y + len - TAB_PAD];
+    c.rotate_since(start, [0.0, 0.0], -std::f32::consts::FRAC_PI_2, 1.0, dest);
+    c.hit(x, y, TAB_W, len, Hit::SocialToggle);
+    badge(c, x + 3.0, y + 1.0, unread, 1.0);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tab's hit area with the overlay `open` or not, on a screen 853 wide.
+    fn tab_rect(s: &Social, open: bool) -> [f32; 4] {
+        let mut c = Canvas::default();
+        c.clear(853.0);
+        if open {
+            draw(&mut c, s, true, None, 0, true, Some(TAB_MIDDLE));
+        } else {
+            draw_chip(&mut c, s, TAB_MIDDLE, 0);
+        }
+        c.hits
+            .iter()
+            .find(|h| h.hit == Hit::SocialToggle)
+            .expect("the tab can be clicked")
+            .rect
+    }
+
+    #[test]
+    fn the_tab_glides_to_a_new_height_and_doesnt_overshoot() {
+        let mut s = Social::default();
+        assert_eq!(s.glide_tab(TAB_MENU_MIDDLE, 16.0, true), TAB_MENU_MIDDLE);
+        let mut y = TAB_MENU_MIDDLE;
+        let step = s.glide_tab(TAB_MIDDLE, 16.0, true);
+        assert!(step < y && step > TAB_MIDDLE, "on its way: {step}");
+        for _ in 0..200 {
+            let next = s.glide_tab(TAB_MIDDLE, 16.0, true);
+            assert!(next <= y && next >= TAB_MIDDLE);
+            y = next;
+        }
+        assert_eq!(y, TAB_MIDDLE);
+        // Without animations, it's just there.
+        assert_eq!(s.glide_tab(TAB_MENU_MIDDLE, 16.0, false), TAB_MENU_MIDDLE);
+    }
+
+    #[test]
+    fn the_tab_stands_on_the_edge_and_rides_on_the_open_panel() {
+        crate::render::set_animations(false);
+        let mut s = Social::default();
+        let [x, _, w, h] = tab_rect(&s, false);
+        assert_eq!(x + w, 853.0, "against the edge of the screen");
+        assert!(h > w, "taller than it's wide");
+        s.open = true;
+        let [x, _, w, _] = tab_rect(&s, true);
+        assert_eq!(x + w, panel_rect(853.0)[0], "on the panel's left side");
+    }
 
     #[test]
     fn the_server_speaks_on_a_banner_in_the_medals_colour() {
