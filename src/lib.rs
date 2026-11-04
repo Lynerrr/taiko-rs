@@ -1545,6 +1545,11 @@ fn profile_url(name: &str) -> String {
     format!("{}/u/{name}", online::WEBSITE)
 }
 
+/// A map's page on the website, by its hash.
+fn map_url(hash: u64) -> String {
+    format!("{}/m/{hash:x}", online::WEBSITE)
+}
+
 fn open_url(url: &str) -> bool {
     if cfg!(target_os = "android") {
         return false;
@@ -9178,28 +9183,12 @@ impl State {
             .then_some(g.played_ms)
     }
 
-    /// The selected map's page: here if it has scores here, else on osu!.
+    /// The selected map's page on the website.
     fn open_map_website(&mut self) {
         let Some(i) = self.select.selected() else {
             return;
         };
-        let hash = self.library[i].hash();
-        let scored = matches!(self.online_board(hash), Some(Ok(rows)) if !rows.is_empty());
-        let url = match self.library[i].set_id() {
-            _ if scored => format!("{}/m/{hash:x}", online::WEBSITE),
-            Some(set) => format!("https://osu.ppy.sh/beatmapsets/{set}"),
-            None => {
-                self.toast(
-                    tr!(
-                        "this map has no page on a website",
-                        "この譜面のページはありません",
-                        "у этой карты нет страницы на сайте"
-                    )
-                    .into(),
-                );
-                return;
-            }
-        };
+        let url = map_url(self.library[i].hash());
         if !open_url(&url) {
             self.toast(url);
         }
@@ -16491,7 +16480,7 @@ const STATUS_ROUND_SECS: u64 = 45;
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
 /// How long the quick retry key is held for the map to restart (ms).
-const RETRY_HOLD_MS: f64 = 500.0;
+const RETRY_HOLD_MS: f64 = 250.0;
 
 /// The capture name of an F12 screenshot (scripted runs name theirs).
 const SCREENSHOT: &str = "screenshot";
