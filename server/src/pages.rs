@@ -1331,9 +1331,14 @@ pub fn profile(
             .iter()
             .map(|(m, n)| {
                 let (song, version) = split_map(&m.name);
+                // A map nobody has a score on has no page here.
+                let link = match m.set_id {
+                    _ if m.plays > 0 => format!(" href=\"/m/{:x}\"", m.hash),
+                    Some(set) => format!(" href=\"https://osu.ppy.sh/beatmapsets/{set}\""),
+                    None => String::new(),
+                };
                 format!(
-                    "<a class=mini href=\"/m/{:x}\"{}><span class=art></span><span class=mini-info><b>{}</b><span class=dim>{}</span></span><span class=times>{n}x</span></a>",
-                    m.hash,
+                    "<a class=mini{link}{}><span class=art></span><span class=mini-info><b>{}</b><span class=dim>{}</span></span><span class=times>{n}x</span></a>",
                     cover_style(m.set_id, m.hash, "list@2x"),
                     esc(song),
                     esc(version)

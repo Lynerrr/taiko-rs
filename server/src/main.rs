@@ -1098,7 +1098,7 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             Ok(()) => Reply::Counted,
             Err(e) => Reply::Error(e),
         },
-        Request::Played { token, ms } => {
+        Request::Played { token, ms, map } => {
             let Some(name) = state.user(&token) else {
                 return reply(
                     &mut reader,
@@ -1109,7 +1109,7 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
                 .scores
                 .lock()
                 .unwrap()
-                .played(&name.to_ascii_lowercase(), ms)
+                .played(&name.to_ascii_lowercase(), ms, map)
             {
                 Ok(()) => Reply::Counted,
                 Err(e) => Reply::Error(e),

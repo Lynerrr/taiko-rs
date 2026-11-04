@@ -30,6 +30,8 @@ fn words(item: Item) -> &'static str {
             "latency lag input delay задержка лаг"
         }
         Item::AudioBuffer => "latency lag crackle stutter wasapi задержка лаг треск заикание",
+        Item::DrumMenus => "navigate controller keys tab song select menu барабан меню навигация",
+        Item::UnfocusedVolume => "quiet alt tab focus background window lower тихо фон окно",
         Item::MasterVolume | Item::MusicVolume | Item::FxVolume => {
             "sound loud quiet mute audio звук громко тихо мьют音"
         }

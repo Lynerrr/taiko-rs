@@ -159,6 +159,8 @@ pub struct Config {
     /// Scales both volumes below (Alt + mouse wheel anywhere).
     pub master_volume: f32,
     pub music_volume: f32,
+    /// How much of the volume is left while another window has focus (1: all of it).
+    pub unfocused_volume: f32,
     pub fx_volume: f32,
     /// Present mode during songs.
     pub present: PresentChoice,
@@ -228,6 +230,8 @@ pub struct Config {
     pub hide_great: bool,
     /// The lane and the drum's panel drawn pure black.
     pub black_lane: bool,
+    /// The drum keys move through song select and the pause menu (`drum_nav`).
+    pub drum_menus: bool,
     /// The coloured flash on the hit target as notes are hit.
     pub hit_flash: bool,
     /// The interface's accent colour (`render::ACCENTS`, or any other).
@@ -354,6 +358,7 @@ impl Default for Config {
             scroll_speed: 1.0,
             master_volume: 1.0,
             music_volume: 0.7,
+            unfocused_volume: 0.35,
             fx_volume: 1.0,
             present: PresentChoice::Immediate,
             half_resolution: cfg!(target_os = "android"),
@@ -410,6 +415,7 @@ impl Default for Config {
             autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
             black_lane: false,
+            drum_menus: false,
             hit_flash: true,
             accent: crate::render::DEFAULT_ACCENT,
             discord_presence: true,
@@ -917,6 +923,12 @@ impl Config {
                 "master_volume" => {
                     cfg.master_volume = v.parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0)
                 }
+                "unfocused_volume" => {
+                    cfg.unfocused_volume = v
+                        .parse::<f32>()
+                        .unwrap_or(cfg.unfocused_volume)
+                        .clamp(0.0, 1.0)
+                }
                 "music_volume" => {
                     cfg.music_volume = v.parse::<f32>().unwrap_or(cfg.music_volume).clamp(0.0, 1.0)
                 }
@@ -977,6 +989,7 @@ impl Config {
                 "autoplay_left_handed" => cfg.autoplay.left_handed = v == "true",
                 "hide_great" => cfg.hide_great = v != "false",
                 "black_lane" => cfg.black_lane = v == "true",
+                "drum_menus" => cfg.drum_menus = v == "true",
                 "hit_flash" => cfg.hit_flash = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
                 "discord_presence" => cfg.discord_presence = v != "false",
@@ -1122,6 +1135,7 @@ impl Config {
              scroll_speed_osu = true\n\
              master_volume = {:.2}\n\
              music_volume = {:.2}\n\
+             unfocused_volume = {:.2}\n\
              fx_volume = {:.2}\n\
              # mailbox | immediate | vsync\n\
              present_mode = {}\n\
@@ -1162,6 +1176,8 @@ impl Config {
              hide_great = {}\n\
              # the lane and the drum's panel pure black\n\
              black_lane = {}\n\
+             # the drum keys move through song select and the pause menu\n\
+             drum_menus = {}\n\
              # the coloured flash on the hit target as notes are hit\n\
              hit_flash = {}\n\
              show_offset_hint = {}\n\
@@ -1195,6 +1211,7 @@ impl Config {
             self.scroll_speed,
             self.master_volume,
             self.music_volume,
+            self.unfocused_volume,
             self.fx_volume,
             self.present.name(),
             self.menu_vsync,
@@ -1221,6 +1238,7 @@ impl Config {
             self.kiai_effects,
             self.hide_great,
             self.black_lane,
+            self.drum_menus,
             self.hit_flash,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,

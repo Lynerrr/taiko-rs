@@ -24,6 +24,7 @@ mod debug;
 mod difficulty;
 mod discord;
 mod download;
+mod drum_nav;
 mod font;
 mod game;
 mod genres;
@@ -590,8 +591,20 @@ struct State {
     loved_call: Option<LovedCall>,
     loved_asked: bool,
     /// The live play going on (its time played so far), until it's sent to the leaderboards or
-    /// left some other way: then it's counted on the server as played (`Request::Played`).
-    playing: Option<f64>,
+    /// left some other way: then it's counted on the server as played (`Request::Played`), with
+    /// the map it was on.
+    playing: Option<(f64, Option<online::PlayedMap>)>,
+    /// Time in songs since the game started (ms), pauses left out.
+    session_play_ms: f64,
+    /// The key last pressed, as it is on the keyboard (a rebound one arrives as its default),
+    /// and when.
+    last_key: (KeyCode, Instant),
+    /// The quick retry key being held in a song: which key, and since when.
+    retry_hold: Option<(KeyCode, Instant)>,
+    /// Song select's selector with the drum in menus (`drum_nav`), and the button rows it
+    /// moves along, as drawn last.
+    select_zone: drum_nav::Zone,
+    select_rows: drum_nav::Rows,
     /// The selected set and since when: asked about once the selection rests.
     status_wait: Option<(u32, Instant)>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
@@ -901,8 +914,18 @@ fn draw_spectate_all(
     }
 }
 
-/// The leaderboard's LOCAL / ONLINE tabs; returns how wide they are.
-fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
+fn score_video_label() -> &'static str {
+    tr!("video", "動画", "видео")
+}
+
+/// How wide a leaderboard row's video button is.
+fn score_video_width() -> f32 {
+    Canvas::text_width(6.0, score_video_label()) + 12.0
+}
+
+/// The leaderboard's LOCAL / ONLINE tabs, and the map's website while that keeps clear of the
+/// rows' video buttons under it (ending at `right`); returns how wide they are.
+fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, right: f32) -> f32 {
     let mut tx = x;
     for (label, on) in [
         (tr!("LOCAL", "ローカル", "ЛОКАЛЬНО"), false),
@@ -932,7 +955,23 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
         c.hit(tx, y - 1.5, tw, h, render::Hit::BoardTab(on));
         tx += tw + 6.0;
     }
-    tx - x - 6.0
+    let label = tr!("WEBSITE", "ウェブ", "САЙТ");
+    let tw = Canvas::text_width(7.0, label) + 10.0;
+    let h = Canvas::text_height(7.0) + 3.0;
+    if tx + tw + 4.0 > right - score_video_width() {
+        return tx - x - 6.0;
+    }
+    c.round_rect(
+        [tx, y - 1.5],
+        [tw, h],
+        3.0,
+        rgba(0x1d1d27, 1.0),
+        rgba(0x3a3a4e, 1.0),
+        1.0,
+    );
+    c.text(tx + 5.0, y + 1.5, 7.0, rgba(0x8a8aa0, 1.0), label);
+    c.hit(tx, y - 1.5, tw, h, render::Hit::BoardWebsite);
+    tx + tw - x
 }
 
 /// The server's scores for the selected map: each player's best (`board` None while loading).
@@ -945,7 +984,7 @@ fn draw_online_leaderboard(
     fits: usize,
     first: usize,
 ) {
-    let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true);
+    let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true, x + w);
     let at = x + 4.0 + tabs_w + 10.0;
     let note = match board {
         None => Some(tr!("loading...", "読み込み中...", "загрузка...").to_string()),
@@ -1066,7 +1105,7 @@ fn draw_leaderboard(
     first: usize,
     total: usize,
 ) {
-    let label_w = board_tabs(c, x + 4.0, y + 1.0, false);
+    let label_w = board_tabs(c, x + 4.0, y + 1.0, false, x + w);
     if rows.is_empty() {
         let at = x + 4.0 + label_w + 14.0;
         let none = tr!(
@@ -1127,8 +1166,8 @@ fn draw_leaderboard(
             r.max_combo
         );
         // The video button sits on top of the row (drawn after it, so it wins the click).
-        let video = tr!("video", "動画", "видео");
-        let bw = Canvas::text_width(6.0, video) + 12.0;
+        let video = score_video_label();
+        let bw = score_video_width();
         let bx = x + w - bw - 3.0;
         // Room goes to the score first, then the player and age on the right, then rate and mods.
         let room = bx - 6.0 - (x + 8.0);
@@ -2980,9 +3019,20 @@ impl State {
 
     fn apply_volume(&self) {
         if let Some(a) = &self.audio {
-            let (music, fx) = self.cfg.volumes();
+            let (music, fx) = self.heard_volumes();
             a.set_volume(music, fx);
         }
+    }
+
+    /// Music and hitsound volume as played now: lower while another window has focus.
+    fn heard_volumes(&self) -> (f32, f32) {
+        let (music, fx) = self.cfg.volumes();
+        let left = if self.focused {
+            1.0
+        } else {
+            self.cfg.unfocused_volume
+        };
+        (music * left, fx * left)
     }
 
     /// Android: the app went to the background (or came back). The music holds meanwhile; a
@@ -3636,6 +3686,7 @@ impl State {
             Item::FxVolume => Control::Level(c.fx_volume),
             Item::BackgroundDim => Control::Level(c.bg_dim),
             Item::MenuNotesDim => Control::Level(c.menu_notes_dim),
+            Item::UnfocusedVolume => Control::Level(c.unfocused_volume),
             Item::DonColour => Control::Swatch(c.note_colours.don()),
             Item::KatColour => Control::Swatch(c.note_colours.kat()),
             Item::Accent | Item::AccentHue => Control::Swatch(c.accent),
@@ -3656,6 +3707,7 @@ impl State {
             Item::FxVolume => self.cfg.fx_volume = level,
             Item::BackgroundDim => self.cfg.bg_dim = level,
             Item::MenuNotesDim => self.cfg.menu_notes_dim = level,
+            Item::UnfocusedVolume => self.cfg.unfocused_volume = level,
             _ => {}
         }
         self.apply_volume();
@@ -3746,6 +3798,7 @@ impl State {
             Item::BackgroundDimBlack => on(c.bg_dim_black),
             Item::KiaiEffects => on(c.kiai_effects),
             Item::BlackLane => on(c.black_lane),
+            Item::DrumMenus => on(c.drum_menus),
             Item::HideGreat => on(c.hide_great),
             Item::HitFlash => on(c.hit_flash),
             Item::DiscordPresence => on(c.discord_presence),
@@ -3974,6 +4027,7 @@ impl State {
                 .unwrap_or_else(|| tr!("custom", "カスタム", "свой").into()),
             Item::BackgroundDim => format!("{:.0}%", c.bg_dim * 100.0),
             Item::MenuNotesDim => format!("{:.0}%", c.menu_notes_dim * 100.0),
+            Item::UnfocusedVolume => format!("{:.0}%", c.unfocused_volume * 100.0),
             Item::PlayfieldReset => {
                 tr!("Enter to reset", "Enterで元に戻す", "Enter — сбросить").into()
             }
@@ -4085,6 +4139,10 @@ impl State {
             Item::BackgroundDimBlack => self.cfg.bg_dim_black = !self.cfg.bg_dim_black,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::BlackLane => self.cfg.black_lane = !self.cfg.black_lane,
+            Item::DrumMenus => {
+                self.cfg.drum_menus = !self.cfg.drum_menus;
+                self.select_zone = drum_nav::Zone::List;
+            }
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::HitFlash => self.cfg.hit_flash = !self.cfg.hit_flash,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
@@ -4268,6 +4326,11 @@ impl State {
             Item::BackgroundDim => {
                 self.cfg.bg_dim =
                     (((self.cfg.bg_dim + 0.05 * dir as f32) * 20.0).round() / 20.0).clamp(0.0, 1.0)
+            }
+            Item::UnfocusedVolume => {
+                self.cfg.unfocused_volume =
+                    (((self.cfg.unfocused_volume + 0.05 * dir as f32) * 20.0).round() / 20.0)
+                        .clamp(0.0, 1.0)
             }
             Item::MenuNotesDim => {
                 self.cfg.menu_notes_dim =
@@ -4812,6 +4875,7 @@ impl State {
             Item::FxVolume => format!("{:.0}", c.fx_volume * 100.0),
             Item::BackgroundDim => format!("{:.0}", c.bg_dim * 100.0),
             Item::MenuNotesDim => format!("{:.0}", c.menu_notes_dim * 100.0),
+            Item::UnfocusedVolume => format!("{:.0}", c.unfocused_volume * 100.0),
             Item::FpsCap => c.fps_cap.to_string(),
             Item::AccentHue => format!("#{:06x}", c.accent),
             Item::DonColour => format!("#{:06x}", c.note_colours.don()),
@@ -4913,6 +4977,7 @@ impl State {
             Item::FxVolume => c.fx_volume = percent()?,
             Item::BackgroundDim => c.bg_dim = percent()?,
             Item::MenuNotesDim => c.menu_notes_dim = percent()?,
+            Item::UnfocusedVolume => c.unfocused_volume = percent()?,
             Item::FpsCap => {
                 let fps = number()?.round();
                 c.fps_cap = if fps <= 0.0 {
@@ -6452,9 +6517,43 @@ impl State {
         }
     }
 
+    /// The quick retry key went down: the map restarts if it's still held in `RETRY_HOLD_MS`.
+    fn hold_retry(&mut self) {
+        self.retry_hold.get_or_insert(self.last_key);
+    }
+
+    /// A key came up.
+    pub(crate) fn key_released(&mut self, code: KeyCode) {
+        if self.retry_hold.is_some_and(|(key, _)| key == code) {
+            self.retry_hold = None;
+        }
+    }
+
+    /// How far through the quick retry hold it is, 0 to 1.
+    fn retry_progress(&self, now: Instant) -> Option<f32> {
+        let (_, at) = self.retry_hold?;
+        let held = now.saturating_duration_since(at).as_secs_f64() * 1000.0;
+        Some((held / RETRY_HOLD_MS).min(1.0) as f32)
+    }
+
+    /// Restarts the map once the quick retry key has been held long enough.
+    fn poll_retry(&mut self, now: Instant) {
+        if !matches!(self.scene, Scene::Play { .. }) {
+            self.retry_hold = None;
+        }
+        if self.retry_progress(now).is_some_and(|t| t >= 1.0) {
+            self.retry_hold = None;
+            self.restart_map();
+        }
+    }
+
     fn pause_key(&mut self, code: KeyCode) {
         if code == KeyCode::KeyO {
             self.apply_live_offset();
+            return;
+        }
+        if code == KeyCode::Backquote {
+            self.hold_retry();
             return;
         }
         if code == KeyCode::KeyR && self.modifiers_ctrl {
@@ -9079,15 +9178,71 @@ impl State {
             .then_some(g.played_ms)
     }
 
+    /// The selected map's page: here if it has scores here, else on osu!.
+    fn open_map_website(&mut self) {
+        let Some(i) = self.select.selected() else {
+            return;
+        };
+        let hash = self.library[i].hash();
+        let scored = matches!(self.online_board(hash), Some(Ok(rows)) if !rows.is_empty());
+        let url = match self.library[i].set_id() {
+            _ if scored => format!("{}/m/{hash:x}", online::WEBSITE),
+            Some(set) => format!("https://osu.ppy.sh/beatmapsets/{set}"),
+            None => {
+                self.toast(
+                    tr!(
+                        "this map has no page on a website",
+                        "この譜面のページはありません",
+                        "у этой карты нет страницы на сайте"
+                    )
+                    .into(),
+                );
+                return;
+            }
+        };
+        if !open_url(&url) {
+            self.toast(url);
+        }
+    }
+
+    /// The map of the live play, as the server is told it.
+    fn live_map(&self) -> Option<online::PlayedMap> {
+        fn entry_of(scene: &Scene) -> Option<usize> {
+            match scene {
+                Scene::Play { entry, .. } => Some(*entry),
+                Scene::Settings { prev } => entry_of(prev),
+                _ => None,
+            }
+        }
+        if let Some(e) = entry_of(&self.scene).and_then(|i| self.library.get(i)) {
+            return Some(online::PlayedMap {
+                hash: e.hash(),
+                name: e.label(),
+                set_id: e.set_id(),
+            });
+        }
+        let map = self.mp.as_ref()?.map.as_ref()?;
+        Some(online::PlayedMap {
+            hash: map.hash,
+            name: format!("{} - {} [{}]", map.artist, map.title, map.version),
+            set_id: map.set_id,
+        })
+    }
+
     /// Follows the live play; once it's gone without going to the leaderboards (failed, quit,
     /// restarted, from a start point, a lobby match), tells the server it was played, for the
     /// profile's play count and play time.
     fn track_play(&mut self) {
         if let Some(ms) = self.live_play_ms() {
-            self.playing = Some(ms);
+            let (before, map) = match self.playing.take() {
+                Some(playing) => playing,
+                None => (0.0, self.live_map()),
+            };
+            self.session_play_ms += (ms - before).max(0.0);
+            self.playing = Some((ms, map));
             return;
         }
-        let Some(ms) = self.playing.take() else {
+        let Some((ms, map)) = self.playing.take() else {
             return;
         };
         // A start that's left at once isn't a play.
@@ -9104,6 +9259,7 @@ impl State {
                 online::Request::Played {
                     token,
                     ms: ms as u64,
+                    map,
                 },
             ) {
                 eprintln!("counting the play: {e}");
@@ -12140,6 +12296,16 @@ impl State {
             }
             return;
         }
+        self.last_key = (code, at);
+        if self.select_zone_key(code, window) {
+            return;
+        }
+        if let Some(mapped) = self.drum_menu_key(code) {
+            if !repeat {
+                self.key(mapped, false, None, at, window);
+            }
+            return;
+        }
         let pressed = keys::Chord {
             key: code,
             ctrl: self.modifiers_ctrl,
@@ -12171,6 +12337,79 @@ impl State {
                 ) = held;
             }
         }
+    }
+
+    /// Song select with nothing over it.
+    fn select_open(&self) -> bool {
+        matches!(self.scene, Scene::Select)
+            && !self.on_menu()
+            && self.mod_select.is_none()
+            && self.select.picker.is_none()
+            && self.customization_tab().is_none()
+            && !self.social.open
+            && self.profile.is_none()
+            && self.medals.is_none()
+    }
+
+    /// What a drum key does in a menu with `Config::drum_menus`, as the key that does the same.
+    fn drum_menu_key(&self, code: KeyCode) -> Option<KeyCode> {
+        if !self.cfg.drum_menus || self.modifiers_ctrl || self.modifiers_alt {
+            return None;
+        }
+        let drum = self.cfg.keys.iter().position(|&k| k == code)?;
+        let paused = matches!(&self.scene, Scene::Play { game, .. }
+            if game.paused.is_some() && game.resuming.is_none());
+        let place = if self.select_open() && !self.select.searching {
+            drum_nav::Place::Select(self.select_zone)
+        } else if self.mod_select.is_some() || (paused && !self.social.open) {
+            drum_nav::Place::Menu
+        } else {
+            return None;
+        };
+        Some(drum_nav::key_of(drum, place))
+    }
+
+    /// Song select's rows of buttons with `Config::drum_menus`: Tab moves between them and the
+    /// list. True if `code` was theirs.
+    fn select_zone_key(&mut self, code: KeyCode, window: Option<&Window>) -> bool {
+        if !self.cfg.drum_menus || !self.select_open() || self.picking_lobby_map {
+            return false;
+        }
+        if code == KeyCode::Tab {
+            self.select.searching = false;
+            self.select_zone = self
+                .select_zone
+                .tabbed(&self.select_rows, self.modifiers_shift);
+            return true;
+        }
+        if self.select.searching {
+            if matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) {
+                self.select_zone = drum_nav::Zone::List;
+            }
+            return false;
+        }
+        let drum_nav::Zone::Row { bottom, at } = self.select_zone else {
+            return false;
+        };
+        match code {
+            KeyCode::ArrowLeft => self.select_zone = self.select_zone.moved(&self.select_rows, -1),
+            KeyCode::ArrowRight => self.select_zone = self.select_zone.moved(&self.select_rows, 1),
+            KeyCode::Escape => self.select_zone = drum_nav::Zone::List,
+            KeyCode::Enter | KeyCode::NumpadEnter => match self.select_rows.get(bottom, at) {
+                Some(render::Hit::TextField) => self.select.searching = true,
+                Some(hit) => {
+                    self.select_zone = drum_nav::Zone::List;
+                    self.click(hit, window);
+                }
+                None => self.select_zone = drum_nav::Zone::List,
+            },
+            KeyCode::ArrowUp | KeyCode::ArrowDown => {
+                self.select_zone = drum_nav::Zone::List;
+                return false;
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Where hotkeys are pressed now, or None where every key is taken as it is: something being
@@ -12824,17 +13063,14 @@ impl State {
             | Scene::Spectate(_)
             | Scene::Watch(_)
             | Scene::VideoEdit(_) => {}
-            Scene::Play { game, entry, from } => match code {
+            Scene::Play { game, .. } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
                 KeyCode::Space => {
                     game.skip(self.audio.as_ref(), self.play_offset);
                 }
-                KeyCode::Backquote => {
-                    let (e, f) = (*entry, *from);
-                    self.start_loading_from(e, f);
-                }
+                KeyCode::Backquote => self.hold_retry(),
                 KeyCode::KeyR if self.modifiers_ctrl => self.restart_map(),
                 _ => {}
             },
@@ -13052,6 +13288,7 @@ impl State {
         }
         self.poll_multiplayer();
         self.track_play();
+        self.poll_retry(now);
         if self.cfg.check_updates {
             self.updater.check_every(UPDATE_CHECK_EVERY);
         }
@@ -13325,6 +13562,10 @@ impl State {
                         song: song.as_deref(),
                         maps: self.library.len(),
                         paused,
+                        session: (
+                            now.saturating_duration_since(self.started).as_secs_f64(),
+                            self.session_play_ms / 1000.0,
+                        ),
                     };
                     m.draw(canvas, &frame);
                 }
@@ -13497,6 +13738,11 @@ impl State {
                     );
                 }
                 self.select.draw_popups(canvas, &self.library);
+                if self.cfg.drum_menus {
+                    self.select_rows = drum_nav::Rows::of(canvas);
+                    self.select_zone = self.select_zone.within(&self.select_rows);
+                    drum_nav::draw(canvas, self.select_zone, &self.select_rows);
+                }
             }
             Scene::Loading {
                 rx,
@@ -14720,6 +14966,10 @@ impl State {
             draw_analysis(canvas, done, total);
         }
         // Not during a song, where a pointer left there would hold it over the notes for good.
+        // Holding quick retry: the screen goes dark on the way to the restart.
+        if let Some(t) = self.retry_progress(now) {
+            canvas.rect(0.0, 0.0, canvas.width, 480.0, rgba(0x000000, t * 0.95));
+        }
         if !self.in_song() {
             self.volume.hold(now);
         }
@@ -15928,6 +16178,7 @@ impl State {
                 }
             }
             Hit::BoardTab(online) => self.board_online = online,
+            Hit::BoardWebsite => self.open_map_website(),
             Hit::Changelog => self.changelog = Some(changelog::View::recent(false)),
             Hit::Account => match self.mp_menu.account.clone() {
                 Some(name) => self.open_profile(name),
@@ -16239,6 +16490,8 @@ const STATUS_ROUND_SECS: u64 = 45;
 
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
+/// How long the quick retry key is held for the map to restart (ms).
+const RETRY_HOLD_MS: f64 = 500.0;
 
 /// The capture name of an F12 screenshot (scripted runs name theirs).
 const SCREENSHOT: &str = "screenshot";
@@ -16752,6 +17005,12 @@ impl App {
             } => {
                 // Timestamp before anything else, including taking the lock.
                 let at = Instant::now();
+                if event.state == ElementState::Released
+                    && let PhysicalKey::Code(code) = event.physical_key
+                {
+                    lock(&self.state).key_released(code);
+                    return;
+                }
                 // Synthetic presses are keys already held when the window gets focus (the Tab of
                 // an Alt+Tab back into the game): not real presses.
                 if event.state != ElementState::Pressed || is_synthetic {
@@ -16808,6 +17067,7 @@ impl App {
                 let mut s = lock(&self.state);
                 s.focused = true;
                 s.focus_seen = true;
+                s.apply_volume();
             }
             WindowEvent::ModifiersChanged(m) => {
                 let mut s = lock(&self.state);
@@ -16872,6 +17132,9 @@ impl App {
                 let mut guard = lock(&self.state);
                 let s = &mut *guard;
                 s.focused = false;
+                s.apply_volume();
+                // The release may happen in another window.
+                s.retry_hold = None;
                 // The release may happen in another window.
                 s.right_scroll = false;
                 // Alt is released in the other window; don't keep it "held" here.
@@ -17333,6 +17596,11 @@ impl State {
             pp_backfill: None,
             pp_backfill_started: false,
             submits: Vec::new(),
+            session_play_ms: 0.0,
+            last_key: (KeyCode::Escape, Instant::now()),
+            retry_hold: None,
+            select_zone: drum_nav::Zone::List,
+            select_rows: drum_nav::Rows::default(),
             me: None,
             me_for: String::new(),
             me_fetch: None,
