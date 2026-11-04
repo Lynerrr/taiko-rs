@@ -2575,6 +2575,9 @@ pub enum Hit {
     PlayerRow(usize),
     /// Its heart on a song, the folders button, and a folder (index into `Playlist::folders`).
     PlayerFavourite(usize),
+    /// A screenshot in the chat (`shots::shot_in`), and the button that sends one.
+    ChatShot(u128),
+    SendShot,
     /// Song select's heart on the song it's showing.
     SelectLike,
     PlayerFolders,

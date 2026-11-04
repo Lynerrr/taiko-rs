@@ -70,6 +70,7 @@ mod settings_search;
 #[cfg(test)]
 mod settings_tests;
 mod shapeshift;
+mod shots;
 mod skin;
 mod social;
 mod splash;
@@ -714,6 +715,12 @@ struct State {
     /// dragging along it last seeked.
     replay_bar: Option<[f32; 4]>,
     replay_scrub: Option<Instant>,
+    /// The last F12's picture: width, height and RGB, for `/shot`.
+    last_shot: Option<Arc<(u32, u32, Vec<u8>)>>,
+    /// A screenshot on its way to the server, and who it's for.
+    shot_upload: Option<(Receiver<Result<u128, String>>, ShotTo)>,
+    /// A screenshot being looked at, over everything.
+    shot_view: Option<ShotView>,
     /// Last time the pointer moved (gameplay hides it after a second of stillness).
     mouse_moved_at: Instant,
     /// Snap guides to draw while dragging the playfield area.
@@ -1928,6 +1935,18 @@ fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
     let mut inputs = library::song_dirs();
     inputs.extend(cfg.songs.iter().cloned());
     inputs
+}
+
+/// Who a screenshot is being sent to.
+enum ShotTo {
+    Friend(String),
+    Lobby,
+    Global,
+}
+
+/// A chat screenshot opened: being fetched until `rx` has gone.
+struct ShotView {
+    rx: Option<Receiver<Result<shots::Pixels, String>>>,
 }
 
 /// What a library scan hands over: the list from the cache straight away, if there's one, then the
@@ -7512,6 +7531,12 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
+        if self.shot_view.is_some() {
+            if pressed {
+                self.close_shot();
+            }
+            return;
+        }
         if pressed {
             if self.idle.input(Instant::now()) {
                 self.idle.swallow_left = true;
@@ -10480,6 +10505,13 @@ impl State {
             }
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 let mut text = self.social.input.trim().to_string();
+                if text.eq_ignore_ascii_case("/shot")
+                    && matches!(row, Row::Friend(_) | Row::Lobby | Row::Global)
+                {
+                    self.social.input.clear();
+                    self.send_shot(row);
+                    return;
+                }
                 // `/np` in a chat: the map on screen, with its osu! link (a link others can click).
                 if text.eq_ignore_ascii_case("/np")
                     && matches!(row, Row::Friend(_) | Row::Lobby | Row::Global)
@@ -10759,6 +10791,153 @@ impl State {
             }
             Err(e) => self.toast(e),
         }
+    }
+
+    /// Sends the last F12's picture to the chat on `row`, on a thread.
+    fn send_shot(&mut self, row: social::Row) {
+        use social::Row;
+        let to = match row {
+            Row::Friend(k) => match self.social.friends.get(k) {
+                Some(f) => ShotTo::Friend(f.name.clone()),
+                None => return,
+            },
+            Row::Lobby => ShotTo::Lobby,
+            Row::Global => ShotTo::Global,
+            _ => return,
+        };
+        if self.cfg.online_server != online::DEFAULT_SERVER || self.cfg.online_token.is_empty() {
+            self.toast("log in to send screenshots".into());
+            return;
+        }
+        if self.shot_upload.is_some() {
+            self.toast("one's on its way already".into());
+            return;
+        }
+        let Some(shot) = self.last_shot.clone() else {
+            self.toast("take one with F12 first".into());
+            return;
+        };
+        let token = self.cfg.online_token.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let sent = shots::shot_jpeg(shot.0, shot.1, shot.2.clone())
+                .and_then(|jpeg| shots::upload_shot(&token, jpeg));
+            let _ = tx.send(sent);
+        });
+        self.shot_upload = Some((rx, to));
+        self.toast("sending the screenshot...".into());
+    }
+
+    /// A screenshot uploaded goes in its chat; one opened goes up on the screen.
+    fn poll_shots(&mut self) {
+        if let Some((rx, _)) = &self.shot_upload {
+            match rx.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.shot_upload = None,
+                Ok(result) => {
+                    let to = self.shot_upload.take().map(|u| u.1);
+                    match (result, to) {
+                        (Ok(id), Some(to)) => self.post_shot(id, to),
+                        (Err(e), _) => self.toast(format!("couldn't send it: {e}")),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let got = self
+            .shot_view
+            .as_ref()
+            .and_then(|v| v.rx.as_ref())
+            .and_then(|rx| rx.try_recv().ok());
+        match got {
+            Some(Ok((w, h, rgba))) => {
+                self.preview
+                    .show_image(render::BgImage::from_rgba(w, h, &rgba));
+                if let Some(v) = &mut self.shot_view {
+                    v.rx = None;
+                }
+            }
+            Some(Err(e)) => {
+                self.shot_view = None;
+                self.toast(format!("couldn't open it: {e}"));
+            }
+            None => {}
+        }
+    }
+
+    fn post_shot(&mut self, id: u128, to: ShotTo) {
+        let text = shots::shot_url(id);
+        match to {
+            ShotTo::Lobby => {
+                if let Some(s) = &self.mp {
+                    s.client.send(net::ClientMsg::Chat(text));
+                }
+            }
+            ShotTo::Friend(to) => {
+                if let Some(c) = &self.social.conn {
+                    c.send(online::Up::Chat { to, text });
+                }
+            }
+            ShotTo::Global => {
+                if let Some(c) = self.social.conn.as_ref().filter(|_| self.social.connected) {
+                    c.send(online::Up::GlobalChat(text));
+                    self.social.chat_scroll = 0;
+                }
+            }
+        }
+    }
+
+    /// Opens a chat screenshot over everything. Not over a play being watched: its background
+    /// is in use.
+    fn open_shot(&mut self, id: u128) {
+        if self.in_song() {
+            self.toast("open it once this play is over".into());
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(shots::fetch_shot(id));
+        });
+        self.shot_view = Some(ShotView { rx: Some(rx) });
+    }
+
+    /// Back from a screenshot, the background as it was.
+    fn close_shot(&mut self) {
+        self.shot_view = None;
+        self.preview.forget_background();
+        if let Some(e) = self.preview_target().and_then(|i| self.library.get(i)) {
+            self.preview.show_background_for(e);
+        }
+    }
+
+    /// The screenshot open, alone on the screen: nothing else of the frame is left.
+    fn draw_shot_view(&mut self, canvas: &mut Canvas) {
+        let Some(view) = &self.shot_view else { return };
+        let loading = view.rx.is_some();
+        let w = canvas.width;
+        canvas.clear(w);
+        self.frame_clip = None;
+        self.bg_brightness = 1.0;
+        if loading {
+            canvas.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 1.0));
+            let text = tr!("loading...", "読み込み中...", "загрузка...");
+            canvas.text_centered(w / 2.0, 234.0, 9.0, rgba(0xc8c8d8, 1.0), text);
+        }
+        let hint = tr!(
+            "click or any key to close",
+            "クリックかキーで閉じる",
+            "клик или клавиша: закрыть"
+        );
+        let hw = Canvas::text_width(7.0, hint) + 12.0;
+        canvas.round_rect(
+            [w / 2.0 - hw / 2.0, 462.0],
+            [hw, 13.0],
+            3.0,
+            rgba(0x000000, 0.6),
+            rgba(0, 0.0),
+            0.0,
+        );
+        canvas.text_centered(w / 2.0, 465.0, 7.0, rgba(0xc8c8d8, 1.0), hint);
     }
 
     fn open_profile(&mut self, name: String) {
@@ -11995,6 +12174,12 @@ impl State {
         at: Instant,
         window: Option<&Window>,
     ) {
+        if self.shot_view.is_some() {
+            if !repeat {
+                self.close_shot();
+            }
+            return;
+        }
         if self.quit_asked {
             if !repeat {
                 self.quit_key(code);
@@ -14631,6 +14816,7 @@ impl State {
                 self.splash = None;
             }
         }
+        self.draw_shot_view(canvas);
         std::mem::swap(&mut self.hits, &mut canvas.hits);
         capture
     }
@@ -15062,6 +15248,7 @@ impl State {
     }
 
     fn poll_downloads(&mut self) {
+        self.poll_shots();
         self.auto_fetch_lobby_map();
         self.poll_me();
         self.poll_pp_backfill();
@@ -15600,6 +15787,11 @@ impl State {
             }
             Hit::SocialToggle => self.toggle_social(),
             Hit::ChatMap(set) => self.open_chat_map(set),
+            Hit::ChatShot(id) => self.open_shot(id),
+            Hit::SendShot => {
+                let row = self.social.row(self.mp.is_some());
+                self.send_shot(row);
+            }
             // Tapped: brings up the on-screen keyboard (`keyboard_tap`); the keys type there anyway.
             Hit::SocialPanel | Hit::TextField => {}
             Hit::SocialTab(tab) => {
@@ -16013,6 +16205,11 @@ const SCREENSHOT: &str = "screenshot";
 /// a moment), and says where it went.
 fn save_screenshot(state: &Arc<Mutex<State>>, w: u32, h: u32, rgb: Vec<u8>) {
     let state = state.clone();
+    {
+        let mut s = lock(&state);
+        s.last_shot = Some(Arc::new((w, h, rgb.clone())));
+        s.social.shot_ready = true;
+    }
     std::thread::spawn(move || {
         let to = lock(&state).cfg.screenshot_to;
         let copied = to.clipboard() && clipboard::set_image(w, h, &rgb);
@@ -17198,6 +17395,9 @@ impl State {
             presence_at: None,
             scan,
             scan_checking: false,
+            last_shot: None,
+            shot_upload: None,
+            shot_view: None,
             folder_pick: None,
             folder_pick_for: Item::SongsFolder,
             data_move: None,

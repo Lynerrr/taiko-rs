@@ -38,6 +38,7 @@ mod online;
 mod osustatus;
 mod pages;
 mod scores;
+mod shots;
 #[path = "../../src/tls.rs"]
 mod tls;
 mod web;
@@ -2654,6 +2655,7 @@ fn main() {
     osustatus::init(data.clone());
     loved::init(data.clone());
     avatars::init(data.clone());
+    shots::init(data.clone());
     mail::init(data.clone());
     crashes::init(data.clone());
     let (state, wake) = State::load(data.join("accounts.json"));
