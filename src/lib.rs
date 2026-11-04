@@ -6319,14 +6319,16 @@ impl State {
             // to the global offset.
             Some(h) if self.modifiers_shift => {
                 let was = self.cfg.offset_ms;
-                self.cfg.offset_ms = h.estimate.suggested_offset - self.map_offset(Some(entry));
+                self.cfg.offset_ms =
+                    h.estimate.suggested_offset - self.map_offset(Some(entry)) / self.song_rate();
                 self.cfg.save();
                 self.refresh_play_offset();
                 self.toast(tr!("offset {:+.0} ms for all maps (was {was:+.0})", "全譜面のオフセット {:+.0} ms (前は{was:+.0})", "смещение {:+.0} мс для всех карт (было {was:+.0})"; self.cfg.offset_ms));
             }
             Some(h) => {
                 let was = self.map_offset(Some(entry));
-                let map = h.estimate.suggested_offset - self.cfg.offset_ms;
+                // The suggestion is real ms; a map's offset is song ms.
+                let map = (h.estimate.suggested_offset - self.cfg.offset_ms) * self.song_rate();
                 self.set_map_offset(entry, map);
                 self.toast(tr!("this map: offset {map:+.0} ms (was {was:+.0})", "この譜面: オフセット {map:+.0} ms (前は{was:+.0})", "эта карта: смещение {map:+.0} мс (было {was:+.0})";));
             }
@@ -6389,10 +6391,25 @@ impl State {
         self.refresh_play_offset();
     }
 
+    /// How fast the song goes by: the play's, else what one would be now.
+    fn song_rate(&self) -> f64 {
+        let rate = match &self.scene {
+            Scene::Play { game, .. } | Scene::MpPlay { game, .. } => game.speed().r0,
+            _ => self
+                .cfg
+                .mods
+                .rate_override()
+                .map_or(self.cfg.rate, |(rate, _)| rate),
+        };
+        rate.max(0.01)
+    }
+
     fn refresh_play_offset(&mut self) {
         let was = self.play_offset;
         let offset = self.map_offset(self.offset_entry());
-        self.play_offset = self.cfg.offset_ms + offset;
+        // As osu! has them: the global offset is about this machine, so real ms at any rate; a
+        // map's is about its song, so it goes by as the song does.
+        self.play_offset = self.cfg.offset_ms + offset / self.song_rate();
         if self.play_offset != was {
             audiolog::line(&format!(
                 "offset total={} global={}",
