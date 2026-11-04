@@ -577,11 +577,14 @@ fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f3
 }
 
 /// Whether a mod has a tile in the collection: the server's list (`medal_list::GROUPS`), which
-/// leaves out the ones that play for you and Maze (newer than its medals).
+/// leaves out the ones that play for you, Maze and Tact (newer than its medals).
 fn in_collection(m: &crate::mods::Mod) -> bool {
     !matches!(
         m,
-        crate::mods::Mod::Autoplay | crate::mods::Mod::Relax | crate::mods::Mod::Maze
+        crate::mods::Mod::Autoplay
+            | crate::mods::Mod::Relax
+            | crate::mods::Mod::Maze
+            | crate::mods::Mod::Tact
     )
 }
 
@@ -605,6 +608,7 @@ fn tiles(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32) {
             ),
         ),
     );
+    // Autoplay and Relax never count; Tact isn't in the server's collection (yet).
     for (row, (_, colour, mods)) in crate::mods::GROUPS.iter().enumerate() {
         for (col, m) in mods.iter().filter(|m| in_collection(m)).enumerate() {
             let (tx, ty) = (

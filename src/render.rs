@@ -2611,6 +2611,8 @@ pub enum Hit {
     /// Shapeshift setup: a choice (row, column) / move the selected shape earlier or later.
     ShapeshiftCell(usize, usize),
     ShapeshiftMove(i32),
+    /// Tact setup: a step (index into `tact::STEPS`).
+    TactCell(usize),
     /// Mod customization: a tab (index into the customizable mods that are on).
     CustomTab(usize),
     /// Multiverse setup: load a preset / delete one of the player's.

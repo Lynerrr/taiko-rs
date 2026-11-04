@@ -480,6 +480,8 @@ pub struct Game {
     focus_switches: Vec<FocusSwitch>,
     /// Shapeshift: its setup and the shape of each section (index into `SHAPESHIFT`).
     shapeshift: shapeshift::Config,
+    /// Tact: how often notes move.
+    tact: crate::tact::Step,
     shape_order: Vec<u8>,
     /// Multiverse's universes when the play brought its own (a lobby host's); None: the
     /// player's, as they set them up.
@@ -2022,6 +2024,7 @@ impl Game {
             next_scare: 0,
             focus_switches,
             shapeshift,
+            tact: crate::tact::get(),
             shape_order,
             universes: None,
             zone: None,
@@ -3301,6 +3304,23 @@ impl Game {
         }
     }
 
+    /// Tact: the map time notes are drawn at for map time `t`: a crawl through its step, then a
+    /// rush to the step's end (`tact::shown_time`).
+    fn tact_time(&self, t: f64) -> f64 {
+        let bars = &self.map.barlines;
+        crate::tact::shown_time(t, |x| {
+            let cp = beatmap::control_point_at(&self.map.control_points, x);
+            let bar = bar_at(bars, x, cp.beat_length * 4.0);
+            crate::tact::step_start(
+                self.tact,
+                x,
+                bar,
+                |i| bars.get(i).map_or(x, |b| b.time),
+                (cp.beat_origin, cp.beat_length),
+            )
+        })
+    }
+
     /// The warp (see `Scroll::warp`) of Drop, Lag Spike and Moonwalk at map time `t`.
     fn extra_warp(&self, t: f64, cp: &beatmap::ControlPoint) -> f64 {
         let mods = self.mods;
@@ -3795,7 +3815,15 @@ impl Game {
                 RADAR_BEATS.0
             } as f64;
 
-        let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp);
+        // Tact: far off, the notes crawl through each step, then rush to where they'd be at its
+        // end. Like Pulse's and Stutter's, the shift fades out on the way in (`Scroll::x`), so
+        // every note is in the hit circle on time.
+        let tact = if mods.has(Mod::Tact) {
+            self.tact_time(vt) - vt
+        } else {
+            0.0
+        };
+        let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp) + tact;
         // The lane's shape, and how fast notes go along it (see `lane_stretch`).
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w);
         // Where it's played before the whole-playfield moves (x0, y0, x1, y1): from the screen's
@@ -6684,6 +6712,36 @@ mod tests {
         g.press_time(l, 500.0, None);
         g.set_time(9000.0);
         assert_eq!((g.stats.great, g.stats.miss), (1, 3));
+    }
+
+    #[test]
+    fn tact_notes_are_in_the_hit_circle_on_time_and_never_go_back() {
+        let mods = Mods::parse("TC");
+        // Bars of 2000 ms from 0 on.
+        let start = |x: f64| (x / 2000.0).floor() * 2000.0;
+        for note in [2500.0, 3999.0, 4000.0, 7321.0] {
+            let mut last = f32::INFINITY;
+            let mut t = note - 3000.0;
+            while t <= note {
+                let warp = crate::tact::shown_time(t, start) - t;
+                let s = Scroll {
+                    t,
+                    speed: osu_speed_scale(640.0 + HIT_X),
+                    lane: 640.0,
+                    mods,
+                    warp,
+                    live: 1.0,
+                };
+                let x = s.x(note, 0.5);
+                assert!(x <= last + 1e-3, "note {note} at {t}: {last} -> {x}");
+                last = x;
+                t += 1.0;
+            }
+            assert!(
+                (last - HIT_X).abs() < 1e-3,
+                "note {note} is at {last}, not the drum, on time"
+            );
+        }
     }
 
     #[test]
