@@ -601,6 +601,11 @@ struct State {
     last_key: (KeyCode, Instant),
     /// The quick retry key being held in a song: which key, and since when.
     retry_hold: Option<(KeyCode, Instant)>,
+    /// How fast the replay being watched is going against how it was played, what's asked for
+    /// (the music takes a moment), and that music on its way.
+    replay_speed: f64,
+    replay_speed_wanted: f64,
+    replay_speed_rx: Option<Receiver<ReplayMusic>>,
     /// Song select's selector with the drum in menus (`drum_nav`), and the button rows it
     /// moves along, as drawn last.
     select_zone: drum_nav::Zone,
@@ -790,29 +795,67 @@ fn fmt_time(ms: f64) -> String {
     format!("{}:{:02}", s / 60, s % 60)
 }
 
+/// A pause button's label, `held` or going.
+fn pause_label(held: bool) -> &'static str {
+    if held {
+        tr!("Play", "再生", "Играть")
+    } else {
+        tr!("Pause", "ポーズ", "Пауза")
+    }
+}
+
+/// A pause button's width: the same with either label, so nothing moves when it's pressed.
+fn pause_width() -> f32 {
+    Canvas::text_width(7.0, pause_label(true)).max(Canvas::text_width(7.0, pause_label(false)))
+        + 12.0
+}
+
 /// Replays: a timeline along the bottom of the screen to click or drag through. Returns the
 /// bar's rect (virtual units) for `replay_seek_at`.
-fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool) -> [f32; 4] {
+fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool, speed: f64) -> [f32; 4] {
     let w = c.width;
     let (start, end) = game.span();
     let label = format!("{} / {}", fmt_time(game.time), fmt_time(end));
+    let y = 456.0;
+    // Its buttons, then the time and the timeline.
+    let mut left = 18.0;
+    for (text, bw, hit) in [
+        (pause_label(game.held), pause_width(), KeyCode::Space),
+        ("-", 20.0, KeyCode::ArrowDown),
+        ("+", 20.0, KeyCode::ArrowUp),
+    ] {
+        c.button(
+            left,
+            y - 8.0,
+            bw,
+            16.0,
+            text,
+            7.0,
+            render::Hit::Key(hit),
+            false,
+        );
+        left += bw + 4.0;
+    }
+    let shown = format!("{speed:.2}x");
+    c.text(left + 2.0, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &shown);
+    left += Canvas::text_width(7.0, "0.00x") + 12.0;
     // Sized for the longest label so the bar doesn't twitch as the time changes.
     let lw = Canvas::text_width(7.0, &format!("{} / {}", fmt_time(end), fmt_time(end)));
-    let (x, y, bw) = (18.0 + lw + 10.0, 456.0, w - 18.0 - (18.0 + lw + 10.0));
+    let (x, bw) = (left + lw + 10.0, w - 18.0 - (left + lw + 10.0));
     let rect = [x, y - 7.0, bw, 14.0];
     let hover = active || c.hovered(rect[0] - 6.0, rect[1], rect[2] + 12.0, rect[3]);
     let f = ((game.time - start) / (end - start).max(1.0)).clamp(0.0, 1.0) as f32;
     let th = if hover { 4.0 } else { 2.0 };
-    c.text(18.0, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &label);
+    c.text(left, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &label);
     c.text(
         x,
         y + 9.0,
         6.0,
         rgba(0x6f6f86, 1.0),
         tr!(
-            "Left/Right or drag: seek",
-            "左右かドラッグ: シーク",
-            "Влево/вправо или тяните: перемотка"
+            "Left/Right or drag: seek   Space: pause   Up/Down: speed",
+            "左右かドラッグ: シーク   Space: ポーズ   上下: 速度",
+            "Влево/вправо или тяните: перемотка   Пробел: пауза   Вверх/вниз: скорость"
         ),
     );
     c.rect(x, y - th / 2.0, bw, th, rgba(0x2a2a38, 1.0));
@@ -2996,6 +3039,7 @@ impl State {
             return;
         }
         match code {
+            KeyCode::Space => self.toggle_preview_held(),
             KeyCode::Escape | KeyCode::Backspace => self.close_preview(),
             KeyCode::Enter | KeyCode::NumpadEnter if self.modifiers_ctrl => self.close_preview(),
             KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -6522,6 +6566,92 @@ impl State {
         }
     }
 
+    /// One step faster or slower through the replay being watched.
+    fn step_replay_speed(&mut self, by: i32) {
+        let Scene::Play { game, .. } = &self.scene else {
+            return;
+        };
+        if !game.has_constant_speed() {
+            self.toast(
+                tr!(
+                    "this replay's speed changes by itself",
+                    "このリプレイの速度は変更できません",
+                    "скорость этого повтора меняется сама"
+                )
+                .into(),
+            );
+            return;
+        }
+        let at = REPLAY_SPEEDS
+            .iter()
+            .position(|&s| s >= self.replay_speed_wanted)
+            .unwrap_or(REPLAY_SPEEDS.len() - 1) as i32;
+        let next = (at + by).clamp(0, REPLAY_SPEEDS.len() as i32 - 1);
+        self.replay_speed_wanted = REPLAY_SPEEDS[next as usize];
+    }
+
+    /// Makes the replay's music at the speed asked for, one at a time however fast it's asked,
+    /// and plays on with it when it's ready.
+    fn poll_replay_speed(&mut self) {
+        let Scene::Play { game, entry, .. } = &mut self.scene else {
+            self.replay_speed = 1.0;
+            self.replay_speed_wanted = 1.0;
+            self.replay_speed_rx = None;
+            return;
+        };
+        if let Some(rx) = &self.replay_speed_rx {
+            match rx.try_recv() {
+                Ok(Ok((track, speed))) => {
+                    let rate = game.rate * speed;
+                    game.change_speed(track, rate, self.audio.as_ref(), self.play_offset);
+                    self.replay_speed = speed;
+                    self.replay_speed_rx = None;
+                }
+                Ok(Err(e)) => {
+                    self.replay_speed_wanted = self.replay_speed;
+                    self.replay_speed_rx = None;
+                    self.status = format!("failed to change the speed: {e}");
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.replay_speed_rx = None,
+            }
+            return;
+        }
+        if self.replay_speed_wanted == self.replay_speed {
+            return;
+        }
+        let Some(sample_rate) = self.audio.as_ref().map(|a| a.rate) else {
+            return;
+        };
+        let speed = self.replay_speed_wanted;
+        let rate = game.rate * speed;
+        let keep_pitch = game.mods.speed(1.0, self.cfg.rate_keep_pitch).1;
+        let path = preview::audio_path(&self.library[*entry]);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let constant = mods::Speed::constant(rate);
+            let track = stream::open(&path, sample_rate, constant, keep_pitch).and_then(|t| {
+                t.map_or_else(
+                    || {
+                        audio::decode_shared(&path, sample_rate)
+                            .map(|t| audio::with_rate(t, sample_rate, rate, keep_pitch))
+                    },
+                    Ok,
+                )
+            });
+            let _ = tx.send(track.map(|t| (t, speed)));
+        });
+        self.replay_speed_rx = Some(rx);
+    }
+
+    /// Pauses the fullscreen preview, or sets it going again.
+    fn toggle_preview_held(&mut self) {
+        self.preview.held = !self.preview.held;
+        if let Some(a) = &self.audio {
+            a.set_paused(self.preview.held);
+        }
+    }
+
     /// The quick retry key went down: the map restarts if it's still held in `RETRY_HOLD_MS`.
     fn hold_retry(&mut self) {
         self.retry_hold.get_or_insert(self.last_key);
@@ -7784,6 +7914,15 @@ impl State {
                     self.click(hit, window);
                 }
             }
+            return;
+        }
+        // A replay's buttons: nothing else in a song is clicked.
+        if pressed
+            && self.replay_bar.is_some()
+            && let (vx, vy) = self.mouse_virtual()
+            && let Some(hit @ render::Hit::Key(_)) = self.hit_at(vx, vy)
+        {
+            self.click(hit, window);
             return;
         }
         if pressed && self.settings_ui.dropdown.is_none() && self.replay_seek_to_pointer(false) {
@@ -12887,6 +13026,10 @@ impl State {
                 }
                 return;
             }
+            if game.replay.is_some() && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown) {
+                self.step_replay_speed(if code == KeyCode::ArrowUp { 1 } else { -1 });
+                return;
+            }
             if game.replay.is_some() && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
                 let step = if self.modifiers_shift {
                     15_000.0
@@ -13056,6 +13199,7 @@ impl State {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
+                KeyCode::Space if game.replay.is_some() => game.toggle_held(self.audio.as_ref()),
                 KeyCode::Space => {
                     game.skip(self.audio.as_ref(), self.play_offset);
                 }
@@ -13278,6 +13422,11 @@ impl State {
         self.poll_multiplayer();
         self.track_play();
         self.poll_retry(now);
+        self.poll_replay_speed();
+        // Paused in the fullscreen preview, and left it.
+        if self.preview.held && !matches!(self.scene, Scene::Preview { .. }) {
+            self.toggle_preview_held();
+        }
         if self.cfg.check_updates {
             self.updater.check_every(UPDATE_CHECK_EVERY);
         }
@@ -13877,8 +14026,12 @@ impl State {
                     });
                 }
                 if game.replay.is_some() && game.paused.is_none() {
-                    self.replay_bar =
-                        Some(draw_replay_bar(canvas, game, self.replay_scrub.is_some()));
+                    self.replay_bar = Some(draw_replay_bar(
+                        canvas,
+                        game,
+                        self.replay_scrub.is_some(),
+                        self.replay_speed_wanted,
+                    ));
                 }
                 if let Some(plan) = &mut self.shots
                     && plan.times.last().is_some_and(|&t| game.time >= t)
@@ -14156,6 +14309,16 @@ impl State {
                             e,
                             [x + 12.0, y + 10.0, w - 24.0, 34.0],
                             button,
+                        );
+                        canvas.button(
+                            x + 12.0,
+                            y + 54.0,
+                            pause_width(),
+                            16.0,
+                            pause_label(self.preview.held),
+                            7.0,
+                            render::Hit::Key(KeyCode::Space),
+                            false,
                         );
                     }
                     None => next = Some(*std::mem::replace(back, Box::new(Scene::Select))),
@@ -16481,6 +16644,10 @@ const STATUS_ROUND_SECS: u64 = 45;
 const UNFOCUSED_FPS: u32 = 30;
 /// How long the quick retry key is held for the map to restart (ms).
 const RETRY_HOLD_MS: f64 = 250.0;
+/// A replay's music made at another speed, and that speed.
+type ReplayMusic = Result<(Arc<Track>, f64), String>;
+/// The speeds a replay can be watched at, against how it was played.
+const REPLAY_SPEEDS: [f64; 7] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
 /// The capture name of an F12 screenshot (scripted runs name theirs).
 const SCREENSHOT: &str = "screenshot";
@@ -17588,6 +17755,9 @@ impl State {
             session_play_ms: 0.0,
             last_key: (KeyCode::Escape, Instant::now()),
             retry_hold: None,
+            replay_speed: 1.0,
+            replay_speed_wanted: 1.0,
+            replay_speed_rx: None,
             select_zone: drum_nav::Zone::List,
             select_rows: drum_nav::Rows::default(),
             me: None,
