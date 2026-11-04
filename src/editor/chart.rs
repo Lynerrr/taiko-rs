@@ -451,7 +451,9 @@ impl HitObject {
     }
 
     /// Where it ends: a roll by its length at the slider velocity `sv` and beat length
-    /// `beat_length` in force (the same arithmetic the game converts with), a swell by its end.
+    /// `beat_length` in force, a swell by its end. The roll's arithmetic is the game's: the beat
+    /// length and velocity are clamped to what gameplay timing allows, and the duration is whole
+    /// milliseconds.
     pub fn end_time(&self, slider_multiplier: f64, beat_length: f64, sv: f64) -> f64 {
         match self.taiko() {
             Taiko::Swell => self.spinner_end().unwrap_or(self.time).max(self.time),
@@ -461,11 +463,36 @@ impl HitObject {
                     .filter(|l| l.is_finite())
                     .unwrap_or(0.0)
                     .max(0.0);
-                let per_beat = slider_multiplier * 100.0 * sv.max(0.01);
-                self.time + len * self.slides() as f64 / per_beat * beat_length
+                let per_beat = slider_multiplier * 100.0 * sv.clamp(0.1, 10.0);
+                let beat = beat_length.clamp(6.0, 60_000.0);
+                self.time + (len * self.slides() as f64 / per_beat * beat).floor()
             }
             _ => self.time,
         }
+    }
+
+    /// The written length that makes a roll last `ms` at the slider velocity and beat length
+    /// given (the inverse of `end_time`, rounded up so the whole-millisecond floor lands on `ms`).
+    pub fn length_for(
+        ms: f64,
+        slides: i32,
+        slider_multiplier: f64,
+        beat_length: f64,
+        sv: f64,
+    ) -> f64 {
+        let per_beat = slider_multiplier * 100.0 * sv.clamp(0.1, 10.0);
+        let beat = beat_length.clamp(6.0, 60_000.0);
+        (ms.max(0.0) * per_beat / beat / slides.max(1) as f64 * 10_000.0).ceil() / 10_000.0
+    }
+
+    /// The same object `delta` ms later (a swell's end moves with it).
+    pub fn shifted(&self, delta: f64) -> HitObject {
+        let mut o = self.clone();
+        o.time += delta;
+        if let Some(end) = self.spinner_end() {
+            o.set_spinner_end(end + delta);
+        }
+        o
     }
 }
 
