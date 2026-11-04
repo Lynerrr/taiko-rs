@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL: u32 = 7;
+#[cfg_attr(not(test), allow(dead_code))]
 pub const DEFAULT_PORT: u16 = 7777;
 /// Countdown between everyone having loaded and the song starting.
 const START_LEAD_MS: f64 = 3000.0;
@@ -91,6 +92,391 @@ pub struct MapInfo {
     /// map from before seeds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
+    /// Defense: the room plays the map together. The players take turns every `bars` bars, and
+    /// every note one of them lets through costs the team a life. None: an ordinary match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defense: Option<Defense>,
+    /// What the host's game knows about the map (stars, length...), so players without it see
+    /// them too. None: an older host, or one still working them out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<Box<MapStats>>,
+}
+
+/// A lobby map's numbers, as the host's game has them: taiko stars and length and BPM at 1.0x
+/// (the match rate changes the last two), OD, HP and who mapped it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MapStats {
+    pub stars: f32,
+    pub length_ms: f32,
+    pub bpm: f32,
+    pub od: f32,
+    pub hp: f32,
+    #[serde(default)]
+    pub creator: String,
+}
+
+/// Defense's rules, picked by the host: the team's lives, how many bars each turn lasts, how
+/// many turns each player may take over in a map, whether the team can buy things, and
+/// whether it plays on the Maze (or each player's own lane).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Defense {
+    pub lives: u32,
+    pub bars: u32,
+    #[serde(default = "two")]
+    pub tag_ins: u32,
+    #[serde(default = "yes")]
+    pub shop: bool,
+    #[serde(default = "yes")]
+    pub maze: bool,
+}
+
+fn two() -> u32 {
+    2
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Defense: the rules the host can change in the lobby, in the settings panel's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefenseOption {
+    Lives,
+    Bars,
+    TagIns,
+    Shop,
+    Maze,
+}
+
+impl DefenseOption {
+    pub const ALL: [DefenseOption; 5] = [
+        DefenseOption::Lives,
+        DefenseOption::Bars,
+        DefenseOption::TagIns,
+        DefenseOption::Shop,
+        DefenseOption::Maze,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DefenseOption::Lives => tr!("Team lives", "チームのライフ", "Жизни команды"),
+            DefenseOption::Bars => tr!("Turn length", "交代の長さ", "Длина хода"),
+            DefenseOption::TagIns => tr!(
+                "Tag-ins per player",
+                "1人あたりの交代割込み",
+                "Перехватов на игрока"
+            ),
+            DefenseOption::Shop => tr!(
+                "Shop (gold, towers...)",
+                "ショップ (ゴールド・タワー)",
+                "Магазин (золото, башни...)"
+            ),
+            DefenseOption::Maze => tr!("Maze lane", "迷路レーン", "Дорожка-лабиринт"),
+        }
+    }
+
+    pub fn value(self, d: &Defense) -> String {
+        let on = |b: bool| {
+            if b {
+                tr!("on", "オン", "вкл")
+            } else {
+                tr!("off", "オフ", "выкл")
+            }
+            .to_string()
+        };
+        match self {
+            DefenseOption::Lives => d.lives.to_string(),
+            DefenseOption::Bars => {
+                let bars = d.bars;
+                tr!("{bars} bars", "{bars}小節", "{bars} тактов";)
+            }
+            DefenseOption::TagIns if d.tag_ins == 0 => on(false),
+            DefenseOption::TagIns => d.tag_ins.to_string(),
+            DefenseOption::Shop => on(d.shop),
+            DefenseOption::Maze => on(d.maze),
+        }
+    }
+
+    /// The rules with this one stepped on to its next value (round to the first).
+    pub fn step(self, d: Defense) -> Defense {
+        let next = |list: &[u32], v: u32| {
+            let i = list
+                .iter()
+                .position(|&x| x == v)
+                .map_or(0, |i| (i + 1) % list.len());
+            list[i]
+        };
+        match self {
+            DefenseOption::Lives => Defense {
+                lives: next(&Defense::LIVES, d.lives),
+                ..d
+            },
+            DefenseOption::Bars => Defense {
+                bars: next(&Defense::BARS, d.bars),
+                ..d
+            },
+            DefenseOption::TagIns => Defense {
+                tag_ins: next(&Defense::TAG_INS, d.tag_ins),
+                ..d
+            },
+            DefenseOption::Shop => Defense { shop: !d.shop, ..d },
+            DefenseOption::Maze => Defense { maze: !d.maze, ..d },
+        }
+    }
+}
+
+impl Defense {
+    /// The lives the host steps through (C in the lobby), the turn lengths (V) and the tag-ins
+    /// each player has per map (0: none).
+    pub const LIVES: [u32; 4] = [10, 25, 50, 100];
+    pub const BARS: [u32; 4] = [4, 8, 16, 32];
+    pub const TAG_INS: [u32; 5] = [0, 1, 2, 3, 5];
+    pub const DEFAULT: Defense = Defense {
+        lives: 25,
+        bars: 8,
+        tag_ins: 2,
+        shop: true,
+        maze: true,
+    };
+}
+
+/// Defense: what the team can buy with its gold (keys 1-5 in a match).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefenseItem {
+    /// The lane crawls at half speed for a while (the notes still land on time).
+    Slow,
+    /// The next `SHIELD_CHARGES` notes to get through cost no lives.
+    Shield,
+    /// A life back.
+    Heal,
+    /// A tower by the drum that shoots down every don for `TOWER_BARS` bars (they count as hit).
+    DonTower,
+    /// The same for every kat.
+    KatTower,
+}
+
+impl DefenseItem {
+    pub const ALL: [DefenseItem; 5] = [
+        DefenseItem::Slow,
+        DefenseItem::Shield,
+        DefenseItem::Heal,
+        DefenseItem::DonTower,
+        DefenseItem::KatTower,
+    ];
+
+    /// What it costs the team now. A life (and so a shield) is worth more the fewer the team
+    /// started with, and every heal costs more than the one before: with 10 lives a heal is 200
+    /// gold, then 320, 510...; with 50 it starts at 40.
+    pub fn price(self, team: &TeamState) -> u32 {
+        let scale = 25.0 / team.max.max(1) as f64;
+        let to5 = |g: f64| ((g / 5.0).round() * 5.0).max(5.0) as u32;
+        match self {
+            DefenseItem::Slow => 40,
+            DefenseItem::Shield => to5((60.0 * scale).max(15.0)),
+            DefenseItem::Heal => to5(80.0 * scale * 1.6f64.powi(team.heals as i32)),
+            DefenseItem::DonTower | DefenseItem::KatTower => 90,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DefenseItem::Slow => tr!("Slow", "スロー", "Замедление"),
+            DefenseItem::Shield => tr!("Shield", "シールド", "Щит"),
+            DefenseItem::Heal => tr!("Heal", "回復", "Лечение"),
+            DefenseItem::DonTower => tr!("Don tower", "ドンタワー", "Башня дон"),
+            DefenseItem::KatTower => tr!("Kat tower", "カツタワー", "Башня кат"),
+        }
+    }
+
+    /// What it does, for the banner when someone buys it.
+    pub fn about(self) -> &'static str {
+        match self {
+            DefenseItem::Slow => tr!(
+                "the lane crawls at half speed for 6 seconds",
+                "6秒間レーンが半分の速さに",
+                "6 секунд дорожка ползёт вдвое медленнее"
+            ),
+            DefenseItem::Shield => tr!(
+                "the next 3 notes that get through cost no lives",
+                "次に抜けた3ノーツはライフが減らない",
+                "следующие 3 прорыва не отнимут жизни"
+            ),
+            DefenseItem::Heal => tr!(
+                "one life back (every heal costs more)",
+                "ライフ1回復 (回復するたび高くなる)",
+                "одна жизнь назад (каждое лечение дороже)"
+            ),
+            DefenseItem::DonTower => tr!(
+                "every red don for 4 bars is shot down: just hit the kats",
+                "4小節の間ドンを全部撃ち落とす: カツだけ叩こう",
+                "4 такта сбивает все красные доны: бей только каты"
+            ),
+            DefenseItem::KatTower => tr!(
+                "every blue kat for 4 bars is shot down: just hit the dons",
+                "4小節の間カツを全部撃ち落とす: ドンだけ叩こう",
+                "4 такта сбивает все синие каты: бей только доны"
+            ),
+        }
+    }
+}
+
+/// Defense: notes a shield takes, and the bars a tower shoots for.
+pub const SHIELD_CHARGES: u32 = 3;
+pub const TOWER_BARS: usize = 4;
+
+/// Defense: something a player did in the match, which every player's game then applies the
+/// same way. `at` is the map time it was done at (on the doer's clock).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub enum DefenseAct {
+    Buy {
+        item: DefenseItem,
+        at: f64,
+    },
+    /// Takes over the rest of the turn being played, from the next barline.
+    TagIn {
+        at: f64,
+    },
+}
+
+/// Defense: the team's lives, gold, shield and towers, as the room keeps them.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TeamState {
+    pub lives: u32,
+    pub max: u32,
+    pub gold: u32,
+    pub shield: u32,
+    pub towers: u32,
+    /// Heals bought (each costs more).
+    #[serde(default)]
+    pub heals: u32,
+}
+
+/// Defense, in the room: the team's state and what it has paid for so far.
+struct TeamRun {
+    rules: Defense,
+    state: TeamState,
+    spent: u32,
+    misses: u32,
+    /// Tag-ins each player has used this map.
+    tag_ins: std::collections::HashMap<u32, u32>,
+}
+
+impl TeamRun {
+    fn new(d: Defense) -> TeamRun {
+        TeamRun {
+            rules: d,
+            state: TeamState {
+                lives: d.lives,
+                max: d.lives,
+                ..TeamState::default()
+            },
+            spent: 0,
+            misses: 0,
+            tag_ins: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Player `id` takes a turn over, if they have a tag-in left this map: whether they did.
+    fn tag_in(&mut self, id: u32) -> bool {
+        let used = self.tag_ins.entry(id).or_default();
+        if *used >= self.rules.tag_ins {
+            return false;
+        }
+        *used += 1;
+        true
+    }
+
+    /// Catches up with the team's GREATs (gold) and misses (notes through: the shield takes
+    /// them first, then they cost lives). A player who quit keeps what they had.
+    fn update<'a>(&mut self, team: impl Iterator<Item = &'a PlayerInfo>) {
+        let (mut greats, mut misses) = (0u32, 0u32);
+        for p in team {
+            let (g, m) = p
+                .result
+                .as_ref()
+                .filter(|r| !r.quit)
+                .map_or((p.live.great, p.live.miss), |r| (r.great, r.miss));
+            greats += g;
+            misses += m;
+        }
+        if misses > self.misses {
+            let through = misses - self.misses;
+            let blocked = through.min(self.state.shield);
+            self.state.shield -= blocked;
+            self.state.lives = self.state.lives.saturating_sub(through - blocked);
+            self.misses = misses;
+        }
+        self.state.gold = greats.saturating_sub(self.spent);
+    }
+
+    /// Pays for `item` if the team can (alive, the gold, a life to win back): whether it did.
+    fn buy(&mut self, item: DefenseItem) -> bool {
+        let price = item.price(&self.state);
+        let s = &mut self.state;
+        let can = s.lives > 0 && s.gold >= price && (item != DefenseItem::Heal || s.lives < s.max);
+        if !can {
+            return false;
+        }
+        match item {
+            DefenseItem::Shield => s.shield += SHIELD_CHARGES,
+            DefenseItem::Heal => {
+                s.lives += 1;
+                s.heals += 1;
+            }
+            DefenseItem::DonTower | DefenseItem::KatTower => s.towers += 1,
+            DefenseItem::Slow => {}
+        }
+        s.gold -= price;
+        self.spent += price;
+        true
+    }
+}
+
+/// A lobby's settings, the host's to change: a password to join it (None: open to all) and how
+/// many players it takes (spectators included).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RoomSettings {
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default = "sixteen")]
+    pub slots: u32,
+}
+
+/// The players a lobby can take: `RoomSettings::SLOTS` lists the choices.
+fn sixteen() -> u32 {
+    16
+}
+
+impl Default for RoomSettings {
+    fn default() -> RoomSettings {
+        RoomSettings {
+            password: None,
+            slots: sixteen(),
+        }
+    }
+}
+
+impl RoomSettings {
+    pub const SLOTS: [u32; 7] = [2, 4, 6, 8, 10, 12, 16];
+    pub const MAX_SLOTS: u32 = 16;
+
+    /// As the room keeps it: a password of what the font draws, at most 32 characters (empty:
+    /// none), and between 2 and `MAX_SLOTS` players.
+    pub fn clean(self) -> RoomSettings {
+        let password = self
+            .password
+            .map(|p| {
+                p.chars()
+                    .filter(|c| drawable_char(*c) && *c != ' ')
+                    .take(32)
+                    .collect::<String>()
+            })
+            .filter(|p| !p.is_empty());
+        RoomSettings {
+            password,
+            slots: self.slots.clamp(2, RoomSettings::MAX_SLOTS),
+        }
+    }
 }
 
 fn one() -> f64 {
@@ -116,8 +502,15 @@ impl MapInfo {
         } else {
             format!("  +{}", self.mods.concat())
         };
+        let defense = self
+            .defense
+            .map(|d| {
+                let (lives, bars) = (d.lives, d.bars);
+                tr!("  DEFENSE {lives} lives, {bars} bars a turn", "  ディフェンス ライフ{lives} {bars}小節交代", "  ОБОРОНА {lives} жизней, ход {bars} тактов";)
+            })
+            .unwrap_or_default();
         format!(
-            "{} - {} [{}]{rate}{mods}{from}",
+            "{} - {} [{}]{rate}{mods}{from}{defense}",
             self.artist, self.title, self.version
         )
     }
@@ -130,6 +523,9 @@ pub struct Live {
     pub accuracy: f64,
     pub miss: u32,
     pub progress: f64,
+    /// GREATs so far (Defense pays the team a gold for each).
+    #[serde(default)]
+    pub great: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -187,6 +583,9 @@ pub enum ClientMsg {
         name: String,
         protocol: u32,
         host_token: Option<u64>,
+        /// The lobby's password, when it has one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
     },
     Ping {
         t: f64,
@@ -239,6 +638,14 @@ pub enum ClientMsg {
         hash: u64,
         song: u64,
     },
+    /// Defense: something we did in the match (a purchase is only passed on if the team can pay).
+    Defense(DefenseAct),
+    /// Host: the lobby's password (None: open to all), and how many players it takes. Apart, so
+    /// a host handed the role (who never knew the password) can change the one without the other.
+    SetPassword(Option<String>),
+    SetSlots(u32),
+    /// Host: take a player out of the lobby (they can't come back to it).
+    Kick(u32),
 }
 
 /// A piece of a map set archive sent from the host's Songs folder. `data` is base64; the
@@ -275,6 +682,14 @@ pub enum ServerMsg {
         mapguessr: bool,
         #[serde(default)]
         common: Option<u32>,
+        /// Defense: the team's state in the match (and after it, until the next).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        team: Option<TeamState>,
+        /// The lobby needs a password to join, and how many players it takes.
+        #[serde(default)]
+        locked: bool,
+        #[serde(default = "sixteen")]
+        slots: u32,
     },
     Prepare(MapInfo),
     /// Start the song at this server time (ms).
@@ -304,6 +719,15 @@ pub enum ServerMsg {
     Skipped {
         from: u32,
     },
+    /// To the players: how many of them have asked to skip the intro (Space), of how many still
+    /// playing. The intro is only skipped once they all have.
+    SkipVotes {
+        votes: u32,
+        of: u32,
+    },
+    /// To the players: everyone asked; skip the intro now (all at once, so nobody's song runs
+    /// ahead of the rest).
+    SkipNow,
     /// Lobby chat (also the recent lines, to someone who just joined).
     Chat {
         from: String,
@@ -328,6 +752,12 @@ pub enum ServerMsg {
         hash: u64,
         got: Vec<(u32, u32)>,
         last: bool,
+    },
+    /// Defense: what player `from` did, to everyone in the match and watching it, in the order
+    /// the room took it.
+    Defense {
+        from: u32,
+        act: DefenseAct,
     },
     /// Synthesised locally when the connection drops.
     Disconnected(String),
@@ -569,6 +999,7 @@ fn clean_name(name: &str) -> String {
 // Host side
 
 /// A running room. Dropping it closes the room and disconnects everyone.
+#[cfg_attr(not(test), allow(dead_code))]
 pub struct Server {
     stop: Arc<AtomicBool>,
     pub token: u64,
@@ -593,6 +1024,7 @@ enum Event {
 }
 
 /// `mapguessr`: the room plays mapguessr instead of matches.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
     // Listen on IPv6 and IPv4. On Linux the `::` socket is dual-stack, so the IPv4 bind just
     // fails as "in use"; on Windows `::` is IPv6-only and both are needed, or IPv4 friends
@@ -655,7 +1087,7 @@ pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
         let stop = stop.clone();
         thread::Builder::new()
             .name("mp-room".into())
-            .spawn(move || room_loop(rx, stop, token, None, mapguessr))
+            .spawn(move || room_loop(rx, stop, token, None, mapguessr, RoomSettings::default()))
             .map_err(|e| e.to_string())?;
     }
     Ok(Server { stop, token, port })
@@ -688,6 +1120,14 @@ pub struct Summary {
     pub in_match: bool,
     #[allow(dead_code)] // read by the online server (server/)
     pub mapguessr: bool,
+    /// It needs a password, and how many players it takes.
+    #[allow(dead_code)] // read by the online server (server/)
+    pub locked: bool,
+    #[allow(dead_code)] // read by the online server (server/)
+    pub slots: u32,
+    /// Its map is played as Defense (co-op).
+    #[allow(dead_code)] // read by the online server (server/)
+    pub defense: bool,
 }
 
 /// A room run by the online server: connections are handed to it after their own handshake
@@ -720,17 +1160,20 @@ pub fn on_match(hook: MatchHook) {
 }
 
 #[allow(dead_code)] // used by the online server (server/)
-pub fn open_room(mapguessr: bool) -> Room {
+pub fn open_room(mapguessr: bool, settings: RoomSettings) -> Room {
     let stop = Arc::new(AtomicBool::new(false));
     let token = new_token();
+    let settings = settings.clean();
     let summary = Arc::new(Mutex::new(Summary {
         mapguessr,
+        locked: settings.password.is_some(),
+        slots: settings.slots,
         ..Summary::default()
     }));
     let (events, rx) = mpsc::channel();
     {
         let (stop, summary) = (stop.clone(), summary.clone());
-        thread::spawn(move || room_loop(rx, stop, token, Some(summary), mapguessr));
+        thread::spawn(move || room_loop(rx, stop, token, Some(summary), mapguessr, settings));
     }
     Room {
         events,
@@ -877,6 +1320,14 @@ enum Phase {
     Playing,
 }
 
+/// Players who've joined the lobby (said hello), not counting `id`.
+fn others_in(players: &[Player], id: u32) -> u32 {
+    players
+        .iter()
+        .filter(|p| p.hello && p.info.id != id)
+        .count() as u32
+}
+
 /// `summary`: kept up to date for the online server's lobby list. `mapguessr`: the room plays
 /// mapguessr (see `GuessGame`) instead of matches.
 fn room_loop(
@@ -885,7 +1336,11 @@ fn room_loop(
     token: u64,
     summary: Option<Arc<Mutex<Summary>>>,
     mapguessr: bool,
+    settings: RoomSettings,
 ) {
+    let mut settings = settings.clean();
+    // Names the host took out of the lobby (lowercase): they can't come back.
+    let mut kicked: std::collections::HashSet<String> = std::collections::HashSet::new();
     let epoch = Instant::now();
     let now_ms = || epoch.elapsed().as_secs_f64() * 1000.0;
     let mut players: Vec<Player> = Vec::new();
@@ -903,6 +1358,10 @@ fn room_loop(
     let mut match_inputs: std::collections::HashMap<u32, (Vec<(f64, u8)>, bool)> =
         std::collections::HashMap::new();
     let mut match_skips: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    // Whether the intro skip went out to the players this match (once every player asked).
+    let mut skip_sent = false;
+    // Defense: the team's lives and gold in the match (kept after it for the results).
+    let mut team: Option<TeamRun> = None;
     // Recent lobby chat (name, line) for whoever joins, and each player's last lines (flood limit).
     let mut chat: std::collections::VecDeque<(String, String)> = std::collections::VecDeque::new();
     let mut chat_times: std::collections::HashMap<u32, std::collections::VecDeque<Instant>> =
@@ -1007,6 +1466,76 @@ fn room_loop(
                         }
                         continue;
                     }
+                    ClientMsg::SetPassword(password) => {
+                        if is_host {
+                            settings = RoomSettings {
+                                password,
+                                ..settings.clone()
+                            }
+                            .clean();
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    ClientMsg::SetSlots(slots) => {
+                        if is_host {
+                            settings = RoomSettings {
+                                slots,
+                                ..settings.clone()
+                            }
+                            .clean();
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    ClientMsg::Kick(who) => {
+                        let target = players.iter().find(|q| q.info.id == who && !q.info.host);
+                        if let (true, Some(q)) = (is_host, target) {
+                            let _ = q.tx.send(ServerMsg::Rejected(
+                                tr!(
+                                    "the host took you out of this lobby",
+                                    "このロビーからホストに外されました",
+                                    "хост убрал тебя из этого лобби"
+                                )
+                                .to_string(),
+                            ));
+                            kicked.insert(q.info.name.to_lowercase());
+                            let text =
+                                format!("{} was taken out of the lobby by the host", q.info.name);
+                            players.retain(|q| q.info.id != who);
+                            chat_times.remove(&who);
+                            libraries.remove(&who);
+                            common_dirty = true;
+                            for q in players.iter().filter(|q| q.hello) {
+                                let _ = q.tx.send(ServerMsg::Chat {
+                                    from: "taiko.rs".into(),
+                                    text: text.clone(),
+                                });
+                            }
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    ClientMsg::Defense(act) => {
+                        let playing = phase == Phase::Playing
+                            && players.iter().any(|p| p.info.id == id && p.in_match);
+                        if let (true, Some(t)) = (playing, &mut team) {
+                            // Their latest numbers first, so the gold is up to date.
+                            t.update(players.iter().filter(|p| p.in_match).map(|p| &p.info));
+                            let paid = match act {
+                                DefenseAct::Buy { item, .. } => t.rules.shop && t.buy(item),
+                                DefenseAct::TagIn { .. } => t.tag_in(id),
+                            };
+                            if paid {
+                                let msg = ServerMsg::Defense { from: id, act };
+                                for q in players.iter().filter(|q| q.in_match || q.spectating) {
+                                    let _ = q.tx.send(msg.clone());
+                                }
+                                dirty = true;
+                            }
+                        }
+                        continue;
+                    }
                     ClientMsg::Inputs { inputs, anti_mash } => {
                         if players.iter().any(|p| p.info.id == id && p.in_match) {
                             let log = match_inputs.entry(id).or_default();
@@ -1029,6 +1558,18 @@ fn room_loop(
                         {
                             for s in players.iter().filter(|p| p.spectating) {
                                 let _ = s.tx.send(ServerMsg::Skipped { from: id });
+                            }
+                            let playing = || {
+                                players
+                                    .iter()
+                                    .filter(|p| p.in_match && p.info.status == Status::Playing)
+                            };
+                            let of = playing().count() as u32;
+                            let votes = playing()
+                                .filter(|p| match_skips.contains(&p.info.id))
+                                .count() as u32;
+                            for p in playing() {
+                                let _ = p.tx.send(ServerMsg::SkipVotes { votes, of });
                             }
                         }
                         continue;
@@ -1204,6 +1745,7 @@ fn room_loop(
                         name,
                         protocol,
                         host_token,
+                        password,
                     } => {
                         // Only the client holding the room's token becomes host, however fast
                         // anyone else connects.
@@ -1220,6 +1762,45 @@ fn room_loop(
                             continue;
                         }
                         p.info.name = p.forced_name.clone().unwrap_or_else(|| clean_name(&name));
+                        // Everyone but the host: not taken out before, the password, a free slot.
+                        let (lower, joined_as_host) = (p.info.name.to_lowercase(), p.info.host);
+                        if !joined_as_host {
+                            let why = if kicked.contains(&lower) {
+                                Some(tr!(
+                                    "the host took you out of this lobby",
+                                    "このロビーからホストに外されました",
+                                    "хост убрал тебя из этого лобби"
+                                ))
+                            } else if settings.password.is_some() && password != settings.password {
+                                Some(if password.is_none() {
+                                    tr!(
+                                        "this lobby needs a password",
+                                        "このロビーはパスワードが必要です",
+                                        "в это лобби нужен пароль"
+                                    )
+                                } else {
+                                    tr!("wrong password", "パスワードが違います", "неверный пароль")
+                                })
+                            } else if others_in(&players, id) >= settings.slots {
+                                Some(tr!(
+                                    "the lobby is full",
+                                    "ロビーは満員です",
+                                    "лобби заполнено"
+                                ))
+                            } else {
+                                None
+                            };
+                            if let Some(why) = why {
+                                if let Some(p) = players.iter().find(|p| p.info.id == id) {
+                                    let _ = p.tx.send(ServerMsg::Rejected(why.to_string()));
+                                }
+                                players.retain(|p| p.info.id != id);
+                                continue;
+                            }
+                        }
+                        let Some(p) = players.iter_mut().find(|p| p.info.id == id) else {
+                            continue;
+                        };
                         p.hello = true;
                         common_dirty = true;
                         let _ = p.tx.send(ServerMsg::Welcome { id });
@@ -1333,6 +1914,8 @@ fn room_loop(
                 match_map = map.clone();
                 match_inputs.clear();
                 match_skips.clear();
+                skip_sent = false;
+                team = match_map.as_ref().and_then(|m| m.defense).map(TeamRun::new);
                 let mut started = false;
                 for p in players.iter_mut().filter(|p| p.in_match) {
                     if p.loaded == Some(true) {
@@ -1369,6 +1952,24 @@ fn room_loop(
                     }
                 }
                 dirty = true;
+            }
+        }
+        if phase == Phase::Playing
+            && let Some(t) = &mut team
+        {
+            t.update(players.iter().filter(|p| p.in_match).map(|p| &p.info));
+        }
+        // Every player still playing asked to skip the intro: skip it for all of them at once.
+        if phase == Phase::Playing && !skip_sent && !match_skips.is_empty() {
+            let mut playing = players
+                .iter()
+                .filter(|p| p.in_match && p.info.status == Status::Playing)
+                .peekable();
+            if playing.peek().is_some() && playing.all(|p| match_skips.contains(&p.info.id)) {
+                skip_sent = true;
+                for p in players.iter().filter(|p| p.in_match) {
+                    let _ = p.tx.send(ServerMsg::SkipNow);
+                }
             }
         }
         // Everyone still in the match has finished (or left): publish results, back to the lobby.
@@ -1496,6 +2097,9 @@ fn room_loop(
                 in_match,
                 mapguessr,
                 common,
+                team: team.as_ref().map(|t| t.state),
+                locked: settings.password.is_some(),
+                slots: settings.slots,
             };
             for p in players.iter().filter(|p| p.hello) {
                 let _ = p.tx.send(room.clone());
@@ -1510,6 +2114,9 @@ fn room_loop(
                     .unwrap_or_default();
                 s.map = map.as_ref().map(MapInfo::label);
                 s.in_match = in_match;
+                s.locked = settings.password.is_some();
+                s.slots = settings.slots;
+                s.defense = map.as_ref().is_some_and(|m| m.defense.is_some());
             }
             dirty = false;
             last_broadcast = Instant::now();
@@ -1541,6 +2148,7 @@ impl Drop for Client {
 }
 
 /// Accepts `host`, `host:port`, `[v6]:port`; the port defaults to 7777.
+#[cfg_attr(not(test), allow(dead_code))]
 fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
     let addr = addr.trim();
     let with_port = if addr.parse::<std::net::SocketAddr>().is_ok() {
@@ -1563,10 +2171,22 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
 }
 
 impl Client {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn connect(addr: &str, name: &str, host_token: Option<u64>) -> Result<Client, String> {
+        Client::connect_with(addr, name, host_token, None)
+    }
+
+    /// `connect`, giving the lobby's password.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn connect_with(
+        addr: &str,
+        name: &str,
+        host_token: Option<u64>,
+        password: Option<String>,
+    ) -> Result<Client, String> {
         let sa = resolve(addr)?;
         let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(5)).map_err(|e| tr!("can't connect to {sa}: {e}", "{sa}に接続できません: {e}", "не удаётся подключиться к {sa}: {e}";))?;
-        Client::over(BufReader::new(stream), name, host_token)
+        Client::over(BufReader::new(stream), name, host_token, password)
     }
 
     /// The room protocol over a connection that's already open (the online server's, after
@@ -1575,6 +2195,7 @@ impl Client {
         reader: BufReader<TcpStream>,
         name: &str,
         host_token: Option<u64>,
+        password: Option<String>,
     ) -> Result<Client, String> {
         // Timeouts are per handle on Windows: clear the request ones on the reader's own handle
         // too, not just the clone, or a quiet lobby drops after 10 s there.
@@ -1633,6 +2254,7 @@ impl Client {
             name: name.to_string(),
             protocol: PROTOCOL,
             host_token,
+            password,
         });
         Ok(Client {
             tx,
@@ -1929,6 +2551,151 @@ mod tests {
     }
 
     #[test]
+    fn the_room_counts_each_players_tag_ins_for_the_map() {
+        let mut t = TeamRun::new(Defense {
+            tag_ins: 2,
+            ..Defense::DEFAULT
+        });
+        assert!(t.tag_in(1) && t.tag_in(1));
+        assert!(!t.tag_in(1), "player 1 has used both");
+        assert!(t.tag_in(2), "player 2 has their own");
+        let mut none = TeamRun::new(Defense {
+            tag_ins: 0,
+            ..Defense::DEFAULT
+        });
+        assert!(!none.tag_in(1));
+    }
+
+    #[test]
+    fn the_room_pays_for_defense_from_greats_and_shields_take_misses_first() {
+        let player = |great: u32, miss: u32| PlayerInfo {
+            id: 1,
+            name: String::new(),
+            host: false,
+            ready: false,
+            has_map: true,
+            status: Status::Playing,
+            live: Live {
+                great,
+                miss,
+                ..Live::default()
+            },
+            result: None,
+            spectator: false,
+            points: 0,
+            guessed: false,
+            tries: 0,
+            maps: None,
+            mods: Vec::new(),
+        };
+        // 10 lives: a life is dear (a heal 200, a shield 150).
+        let mut t = TeamRun::new(Defense {
+            lives: 10,
+            bars: 8,
+            ..Defense::DEFAULT
+        });
+        t.update([player(250, 0), player(50, 1)].iter());
+        assert_eq!((t.state.gold, t.state.lives), (300, 9));
+        assert_eq!(
+            (
+                DefenseItem::Heal.price(&t.state),
+                DefenseItem::Shield.price(&t.state)
+            ),
+            (200, 150)
+        );
+        assert!(t.buy(DefenseItem::Heal));
+        assert_eq!((t.state.gold, t.state.lives, t.state.heals), (100, 10, 1));
+        assert_eq!(
+            DefenseItem::Heal.price(&t.state),
+            320,
+            "every heal costs more"
+        );
+        assert!(!t.buy(DefenseItem::Heal), "full again");
+        assert!(!t.buy(DefenseItem::Shield), "100 gold of 150");
+        // A hundred more greats: it can.
+        t.update([player(350, 0), player(50, 1)].iter());
+        assert!(t.buy(DefenseItem::Shield));
+        assert_eq!((t.state.gold, t.state.shield), (50, 3));
+        // Four more through: the shield takes three, one costs a life.
+        t.update([player(350, 3), player(50, 2)].iter());
+        assert_eq!((t.state.shield, t.state.lives), (0, 9));
+        assert!(!t.buy(DefenseItem::DonTower), "50 gold of 90");
+        // More greats pay for towers of both kinds.
+        t.update([player(2000, 3), player(50, 2)].iter());
+        assert!(t.buy(DefenseItem::DonTower) && t.buy(DefenseItem::KatTower));
+        assert_eq!(t.state.towers, 2);
+        // With more lives to start with, lives are cheap.
+        let lots = TeamState {
+            max: 50,
+            ..TeamState::default()
+        };
+        assert_eq!(
+            (
+                DefenseItem::Heal.price(&lots),
+                DefenseItem::Shield.price(&lots)
+            ),
+            (40, 30)
+        );
+        let most = TeamState {
+            max: 100,
+            ..TeamState::default()
+        };
+        assert_eq!(
+            (
+                DefenseItem::Heal.price(&most),
+                DefenseItem::Shield.price(&most)
+            ),
+            (20, 15)
+        );
+        // Wiped out: nothing more to buy.
+        t.update([player(2000, 30), player(30, 2)].iter());
+        assert_eq!(t.state.lives, 0);
+        assert!(!t.buy(DefenseItem::Slow));
+    }
+
+    #[test]
+    fn defense_rules_step_round_and_old_lobby_maps_still_parse() {
+        // 1: 25 lives on to 50, 100, 10 and round; 2: 8 bars on to 16, 32, 4.
+        let steps = |o: DefenseOption, f: fn(&Defense) -> u32| -> Vec<u32> {
+            std::iter::successors(Some(Defense::DEFAULT), |&d| Some(o.step(d)))
+                .skip(1)
+                .take(4)
+                .map(|d| f(&d))
+                .collect()
+        };
+        assert_eq!(steps(DefenseOption::Lives, |d| d.lives), [50, 100, 10, 25]);
+        assert_eq!(steps(DefenseOption::Bars, |d| d.bars), [16, 32, 4, 8]);
+        // Rules from before the newer options get their defaults.
+        let d: Defense = serde_json::from_str(r#"{"lives":10,"bars":4}"#).unwrap();
+        assert_eq!((d.tag_ins, d.shop, d.maze), (2, true, true));
+        // Each option in the settings panel steps round its values.
+        let tag_ins: Vec<u32> =
+            std::iter::successors(Some(d), |&d| Some(DefenseOption::TagIns.step(d)))
+                .skip(1)
+                .take(5)
+                .map(|d| d.tag_ins)
+                .collect();
+        assert_eq!(tag_ins, [3, 5, 0, 1, 2]);
+        let off = DefenseOption::Shop.step(DefenseOption::Maze.step(d));
+        assert_eq!((off.shop, off.maze), (false, false));
+        assert_eq!(
+            DefenseOption::TagIns.value(&Defense { tag_ins: 0, ..d }),
+            "off"
+        );
+        // A room on an older build leaves it out; it's an ordinary match then.
+        let old = r#"{"hash":1,"artist":"a","title":"t","version":"v","rate":1.0}"#;
+        assert_eq!(serde_json::from_str::<MapInfo>(old).unwrap().defense, None);
+        let mut m: MapInfo = serde_json::from_str(old).unwrap();
+        m.defense = Some(Defense {
+            lives: 50,
+            bars: 4,
+            ..Defense::DEFAULT
+        });
+        let back: MapInfo = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.defense, m.defense);
+    }
+
+    #[test]
     fn full_match_over_localhost() {
         let server = host(0, false).unwrap();
         let port = server.port;
@@ -1950,6 +2717,9 @@ mod tests {
             multiverse: None,
             shapeshift: None,
             seed: None,
+            defense: None,
+
+            stats: None,
         }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
@@ -1976,6 +2746,9 @@ mod tests {
             multiverse: None,
             shapeshift: Some("every=4".into()),
             seed: None,
+            defense: None,
+
+            stats: None,
         };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
@@ -2026,5 +2799,245 @@ mod tests {
             r.iter()
                 .any(|p| p.name == "bob" && p.result.as_ref().unwrap().score == 1200)
         );
+    }
+
+    #[test]
+    fn defense_actions_reach_the_whole_team_and_only_what_it_can_pay_for() {
+        let server = host(0, false).unwrap();
+        let addr = format!("127.0.0.1:{}", server.port);
+        let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
+        wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
+        let mut b = Client::connect(&addr, "bob", None).unwrap();
+        wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
+        let map = MapInfo {
+            hash: 5,
+            artist: "a".into(),
+            title: "t".into(),
+            version: "v".into(),
+            rate: 1.0,
+            from: None,
+            set_id: None,
+            mods: Vec::new(),
+            multiverse: None,
+            shapeshift: None,
+            seed: None,
+            defense: Some(Defense {
+                lives: 10,
+                bars: 4,
+                ..Defense::DEFAULT
+            }),
+            stats: None,
+        };
+        a.send(ClientMsg::SelectMap(map));
+        thread::sleep(Duration::from_millis(100));
+        for c in [&a, &b] {
+            c.send(ClientMsg::HasMap(true));
+            c.send(ClientMsg::Ready(true));
+        }
+        thread::sleep(Duration::from_millis(100));
+        a.send(ClientMsg::StartMatch);
+        for c in [&mut a, &mut b] {
+            wait_for(
+                c,
+                |m| matches!(m, ServerMsg::Prepare(m) if m.defense.is_some()),
+            );
+            c.send(ClientMsg::Loaded(true));
+        }
+        for c in [&mut a, &mut b] {
+            wait_for(c, |m| matches!(m, ServerMsg::Start { .. }));
+        }
+        // No gold yet: the tower is turned down. Then 120 GREATs pay for it.
+        a.send(ClientMsg::Defense(DefenseAct::Buy {
+            item: DefenseItem::DonTower,
+            at: 1000.0,
+        }));
+        thread::sleep(Duration::from_millis(100));
+        b.send(ClientMsg::Live(Live {
+            great: 120,
+            ..Live::default()
+        }));
+        thread::sleep(Duration::from_millis(100));
+        a.send(ClientMsg::Defense(DefenseAct::Buy {
+            item: DefenseItem::DonTower,
+            at: 2000.0,
+        }));
+        // (Another connection: after a moment, so the room surely takes it second.)
+        thread::sleep(Duration::from_millis(100));
+        b.send(ClientMsg::Defense(DefenseAct::TagIn { at: 2100.0 }));
+        for c in [&mut a, &mut b] {
+            let ServerMsg::Defense { act, .. } =
+                wait_for(c, |m| matches!(m, ServerMsg::Defense { .. }))
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                act,
+                DefenseAct::Buy {
+                    item: DefenseItem::DonTower,
+                    at: 2000.0
+                },
+                "the first one never went out"
+            );
+            let ServerMsg::Defense { act, .. } =
+                wait_for(c, |m| matches!(m, ServerMsg::Defense { .. }))
+            else {
+                unreachable!()
+            };
+            assert_eq!(act, DefenseAct::TagIn { at: 2100.0 });
+        }
+        let ServerMsg::Room { team, .. } = wait_for(
+            &mut b,
+            |m| matches!(m, ServerMsg::Room { team: Some(t), .. } if t.towers == 1),
+        ) else {
+            unreachable!()
+        };
+        assert_eq!(
+            team,
+            Some(TeamState {
+                lives: 10,
+                max: 10,
+                gold: 30,
+                shield: 0,
+                towers: 1,
+                heals: 0
+            })
+        );
+    }
+
+    #[test]
+    fn the_intro_is_only_skipped_once_every_player_asks() {
+        let server = host(0, false).unwrap();
+        let addr = format!("127.0.0.1:{}", server.port);
+        let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
+        wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
+        let mut b = Client::connect(&addr, "bob", None).unwrap();
+        wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
+        let map = MapInfo {
+            hash: 6,
+            artist: "a".into(),
+            title: "t".into(),
+            version: "v".into(),
+            rate: 1.0,
+            from: None,
+            set_id: None,
+            mods: Vec::new(),
+            multiverse: None,
+            shapeshift: None,
+            seed: None,
+            defense: None,
+
+            stats: None,
+        };
+        a.send(ClientMsg::SelectMap(map));
+        thread::sleep(Duration::from_millis(100));
+        for c in [&a, &b] {
+            c.send(ClientMsg::HasMap(true));
+            c.send(ClientMsg::Ready(true));
+        }
+        thread::sleep(Duration::from_millis(100));
+        a.send(ClientMsg::StartMatch);
+        for c in [&mut a, &mut b] {
+            wait_for(c, |m| matches!(m, ServerMsg::Prepare(_)));
+            c.send(ClientMsg::Loaded(true));
+        }
+        for c in [&mut a, &mut b] {
+            wait_for(c, |m| matches!(m, ServerMsg::Start { .. }));
+        }
+        // Alice asks: both hear it's 1 of 2, and nobody skips yet.
+        a.send(ClientMsg::Skipped);
+        for c in [&mut a, &mut b] {
+            let vote = wait_for(c, |m| {
+                matches!(m, ServerMsg::SkipVotes { .. } | ServerMsg::SkipNow)
+            });
+            assert!(
+                matches!(vote, ServerMsg::SkipVotes { votes: 1, of: 2 }),
+                "{vote:?}"
+            );
+        }
+        // Asking twice changes nothing; Bob asking skips it for both.
+        a.send(ClientMsg::Skipped);
+        thread::sleep(Duration::from_millis(100));
+        b.send(ClientMsg::Skipped);
+        for c in [&mut a, &mut b] {
+            let vote = wait_for(c, |m| {
+                matches!(m, ServerMsg::SkipVotes { .. } | ServerMsg::SkipNow)
+            });
+            assert!(
+                matches!(vote, ServerMsg::SkipVotes { votes: 2, of: 2 }),
+                "{vote:?}"
+            );
+            wait_for(c, |m| matches!(m, ServerMsg::SkipNow));
+        }
+    }
+
+    #[test]
+    fn a_locked_lobby_takes_the_password_its_slots_and_no_kicked_players() {
+        let server = host(0, false).unwrap();
+        let addr = format!("127.0.0.1:{}", server.port);
+        let mut a = Client::connect(&addr, "alice", Some(server.token)).unwrap();
+        wait_for(&mut a, |m| matches!(m, ServerMsg::Welcome { .. }));
+        a.send(ClientMsg::SetPassword(Some("  hunter2 ".into())));
+        a.send(ClientMsg::SetSlots(2));
+        let ServerMsg::Room { locked, slots, .. } = wait_for(&mut a, |m| {
+            matches!(
+                m,
+                ServerMsg::Room {
+                    locked: true,
+                    slots: 2,
+                    ..
+                }
+            )
+        }) else {
+            unreachable!()
+        };
+        assert_eq!((locked, slots), (true, 2));
+        let rejected = |name: &str, password: Option<&str>| {
+            let mut c =
+                Client::connect_with(&addr, name, None, password.map(String::from)).unwrap();
+            match wait_for(&mut c, |m| {
+                matches!(m, ServerMsg::Welcome { .. } | ServerMsg::Rejected(_))
+            }) {
+                ServerMsg::Rejected(why) => Some(why),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            rejected("bob", None).as_deref(),
+            Some("this lobby needs a password")
+        );
+        assert_eq!(
+            rejected("bob", Some("hunter3")).as_deref(),
+            Some("wrong password")
+        );
+        // The right one (spaces trimmed off it) gets in, and fills the lobby.
+        let mut b = Client::connect_with(&addr, "bob", None, Some("hunter2".into())).unwrap();
+        wait_for(&mut b, |m| matches!(m, ServerMsg::Welcome { .. }));
+        assert_eq!(
+            rejected("carol", Some("hunter2")).as_deref(),
+            Some("the lobby is full")
+        );
+        // The host takes Bob out: he's told, and can't come back.
+        let bob = b.id.or_else(|| {
+            let ServerMsg::Room { players, .. } = wait_for(
+                &mut a,
+                |m| matches!(m, ServerMsg::Room { players, .. } if players.len() == 2),
+            ) else {
+                unreachable!()
+            };
+            players.iter().find(|p| p.name == "bob").map(|p| p.id)
+        });
+        a.send(ClientMsg::Kick(bob.unwrap()));
+        assert!(matches!(
+            wait_for(&mut b, |m| matches!(m, ServerMsg::Rejected(_))),
+            ServerMsg::Rejected(why) if why == "the host took you out of this lobby"
+        ));
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            rejected("bob", Some("hunter2")).as_deref(),
+            Some("the host took you out of this lobby")
+        );
+        // A player can't kick, and the slot Bob left is free again.
+        let mut c = Client::connect_with(&addr, "carol", None, Some("hunter2".into())).unwrap();
+        wait_for(&mut c, |m| matches!(m, ServerMsg::Welcome { .. }));
     }
 }

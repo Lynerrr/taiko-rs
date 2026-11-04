@@ -1726,6 +1726,8 @@ fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         multiverse,
         shapeshift,
         seed: None,
+        defense: None,
+        stats: None,
         hash: e.hash(),
         artist: e.meta.artist.clone(),
         title: e.meta.title.clone(),
@@ -7700,6 +7702,25 @@ impl State {
         };
     }
 
+    /// A library map's numbers for a lobby (stars, length and BPM -1 while the background work
+    /// hasn't reached it).
+    fn map_stats(&self, entry: usize) -> Option<Box<net::MapStats>> {
+        let e = self.library.get(entry)?;
+        let info = self
+            .select
+            .info
+            .as_ref()
+            .and_then(|i| i.lock().unwrap().get(entry).copied().flatten());
+        Some(Box::new(net::MapStats {
+            stars: info.map_or(-1.0, |i| i.stars),
+            length_ms: info.map_or(-1.0, |i| i.length_ms),
+            bpm: info.map_or(-1.0, |i| i.bpm),
+            od: e.meta.od as f32,
+            hp: e.meta.hp as f32,
+            creator: e.meta.creator.clone(),
+        }))
+    }
+
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
         if let (Some(s), Some(g)) = (self.mp.as_ref().filter(|s| s.mapguessr), &mut self.guessr) {
@@ -7715,7 +7736,14 @@ impl State {
             return;
         }
         let mut info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
+        info.stats = self.map_stats(entry);
         info.seed = lobby_seed(Some(self.cfg.random_seed));
+        // Defense stays on (with its rules) from one map to the next.
+        info.defense = self
+            .mp
+            .as_ref()
+            .and_then(|s| s.map.as_ref())
+            .and_then(|m| m.defense);
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
@@ -7782,6 +7810,43 @@ impl State {
                     self.guessr_key(code);
                     return;
                 }
+                // The host typing a new password (K): it takes the keys until Enter or Esc.
+                if let Some(typed) = &mut s.edit_password {
+                    match code {
+                        KeyCode::Enter | KeyCode::NumpadEnter => {
+                            let password = Some(typed.clone()).filter(|p| !p.is_empty());
+                            s.edit_password = None;
+                            let text = if password.is_some() {
+                                tr!(
+                                    "the lobby has a password now",
+                                    "ロビーにパスワードを設定しました",
+                                    "у лобби теперь есть пароль"
+                                )
+                            } else {
+                                tr!(
+                                    "the lobby is open to all",
+                                    "ロビーは誰でも入れます",
+                                    "лобби открыто для всех"
+                                )
+                            };
+                            s.client.send(net::ClientMsg::SetPassword(password));
+                            self.toast(text.into());
+                        }
+                        KeyCode::Escape => s.edit_password = None,
+                        KeyCode::Backspace => {
+                            typed.pop();
+                        }
+                        _ => {
+                            for ch in text.unwrap_or("").chars() {
+                                if net::drawable_char(ch) && ch != ' ' && typed.chars().count() < 32
+                                {
+                                    typed.push(ch);
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
                 match code {
                     KeyCode::Space | KeyCode::KeyR if s.me().is_some_and(|p| p.spectator) => {
                         self.toast("you're spectating: S to play instead".into());
@@ -7816,6 +7881,88 @@ impl State {
                         self.toast(text);
                     }
                     KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
+                    // Defense: C turns it on or off, 1-5 step its rules.
+                    KeyCode::KeyC
+                    | KeyCode::Digit1
+                    | KeyCode::Digit2
+                    | KeyCode::Digit3
+                    | KeyCode::Digit4
+                    | KeyCode::Digit5
+                        if s.is_host() && !s.in_match =>
+                    {
+                        let Some(mut m) = s.map.clone() else {
+                            self.toast("pick a map first (M)".into());
+                            return;
+                        };
+                        let option = match code {
+                            KeyCode::Digit1 => Some(net::DefenseOption::Lives),
+                            KeyCode::Digit2 => Some(net::DefenseOption::Bars),
+                            KeyCode::Digit3 => Some(net::DefenseOption::TagIns),
+                            KeyCode::Digit4 => Some(net::DefenseOption::Shop),
+                            KeyCode::Digit5 => Some(net::DefenseOption::Maze),
+                            _ => None,
+                        };
+                        let text = match (option, m.defense) {
+                            (None, Some(_)) => {
+                                m.defense = None;
+                                tr!(
+                                    "Defense off: an ordinary match",
+                                    "ディフェンス オフ",
+                                    "Оборона выключена: обычный матч"
+                                )
+                                .to_string()
+                            }
+                            (None, None) => {
+                                m.defense = Some(net::Defense::DEFAULT);
+                                tr!(
+                                    "Defense co-op on: 1-5 change its rules",
+                                    "ディフェンス協力 オン: 1-5でルール変更",
+                                    "Оборона включена: 1-5 меняют правила"
+                                )
+                                .to_string()
+                            }
+                            (Some(o), Some(d)) => {
+                                let d = o.step(d);
+                                m.defense = Some(d);
+                                format!("{}: {}", o.name(), o.value(&d))
+                            }
+                            (Some(_), None) => {
+                                self.toast(
+                                    tr!(
+                                        "turn Defense on first (C)",
+                                        "先にディフェンスをオン (C)",
+                                        "сначала включи Оборону (C)"
+                                    )
+                                    .into(),
+                                );
+                                return;
+                            }
+                        };
+                        s.client.send(net::ClientMsg::SelectMap(m));
+                        self.toast(text);
+                    }
+                    // The room: K types a new password, L steps how many players it takes.
+                    KeyCode::KeyK if s.is_host() && !s.in_match => {
+                        s.edit_password = Some(String::new())
+                    }
+                    KeyCode::KeyL if s.is_host() && !s.in_match => {
+                        let list = net::RoomSettings::SLOTS;
+                        let at = list
+                            .iter()
+                            .position(|&n| n == s.slots)
+                            .unwrap_or(list.len() - 1);
+                        // Never below who's in it already.
+                        let next = list
+                            .iter()
+                            .cycle()
+                            .skip(at + 1)
+                            .take(list.len())
+                            .copied()
+                            .find(|&n| n as usize >= s.players.len())
+                            .unwrap_or(s.slots);
+                        s.client.send(net::ClientMsg::SetSlots(next));
+                        self.toast(tr!("the lobby takes {next} players", "ロビーの定員: {next}人", "лобби на {next} игроков";));
+                    }
                     KeyCode::F1 => self.open_mod_select(),
                     KeyCode::KeyS
                         if s.in_match && s.me().is_some_and(|p| p.status == net::Status::Lobby) =>
@@ -7908,11 +8055,68 @@ impl State {
                         .into(),
                     );
                 }
+                // Asks the room to skip the intro: it's skipped once every player has asked.
                 KeyCode::Space => {
-                    if game.skip(self.audio.as_ref(), self.play_offset)
-                        && let Some(s) = &self.mp
+                    if game.can_skip()
+                        && let Some(s) = &mut self.mp
+                        && !s.skip_asked
                     {
+                        s.skip_asked = true;
                         s.client.send(net::ClientMsg::Skipped);
+                    }
+                }
+                // Defense: 1-5 buy for the team, T takes the turn over.
+                KeyCode::Digit1
+                | KeyCode::Digit2
+                | KeyCode::Digit3
+                | KeyCode::Digit4
+                | KeyCode::Digit5
+                | KeyCode::KeyT
+                    if game.defense.is_some() =>
+                {
+                    let t = game.time;
+                    let item = match code {
+                        KeyCode::Digit1 => Some(net::DefenseItem::Slow),
+                        KeyCode::Digit2 => Some(net::DefenseItem::Shield),
+                        KeyCode::Digit3 => Some(net::DefenseItem::Heal),
+                        KeyCode::Digit4 => Some(net::DefenseItem::DonTower),
+                        KeyCode::Digit5 => Some(net::DefenseItem::KatTower),
+                        _ => None,
+                    };
+                    let team = game.team_state().unwrap_or_default();
+                    let can_tag = game.can_tag_in(t);
+                    let shop = game.defense.as_ref().is_some_and(|d| d.rules.shop);
+                    let act = match (item, code) {
+                        (Some(_), _) if !shop => {
+                            self.toast("the host turned the shop off".into());
+                            None
+                        }
+                        (Some(item), _) if team.gold < item.price(&team) => {
+                            self.toast(format!(
+                                "{}: {} gold, the team has {}",
+                                item.name(),
+                                item.price(&team),
+                                team.gold
+                            ));
+                            None
+                        }
+                        (Some(net::DefenseItem::Heal), _) if team.lives >= team.max => {
+                            self.toast("the team has all its lives".into());
+                            None
+                        }
+                        (Some(item), _) => Some(net::DefenseAct::Buy { item, at: t }),
+                        (None, KeyCode::KeyT) if can_tag => Some(net::DefenseAct::TagIn { at: t }),
+                        (None, KeyCode::KeyT) => {
+                            self.toast(
+                                "can't take this turn over (yours, already taken, or ending)"
+                                    .into(),
+                            );
+                            None
+                        }
+                        (None, _) => None,
+                    };
+                    if let (Some(act), Some(s)) = (act, &self.mp) {
+                        s.client.send(net::ClientMsg::Defense(act));
                     }
                 }
                 KeyCode::Escape => {
@@ -8017,10 +8221,21 @@ impl State {
                 self.mp_menu.cursor = self.mp_menu.cursor.min(rows - 1).saturating_sub(1)
             }
             KeyCode::ArrowDown => self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1),
-            // Between the columns: online (left), direct play (right).
+            // The new lobby's steppers step; elsewhere the arrows go between the lobbies
+            // (left) and the new lobby (right).
+            KeyCode::ArrowLeft | KeyCode::ArrowRight if row == Row::NewMode => {
+                self.mp_menu.new_guessr = !self.mp_menu.new_guessr
+            }
+            KeyCode::ArrowLeft | KeyCode::ArrowRight if row == Row::NewSlots => self
+                .mp_menu
+                .step_slots(if code == KeyCode::ArrowLeft { -1 } else { 1 }),
             KeyCode::ArrowLeft => self.mp_menu.cursor = 0,
-            KeyCode::ArrowRight => self.mp_menu.select(Row::Name),
+            KeyCode::ArrowRight => self.mp_menu.select(Row::NewMode),
             KeyCode::F5 => self.mp_menu.refresh(&server),
+            KeyCode::Escape if self.mp_menu.joining.is_some() => {
+                self.mp_menu.joining = None;
+                self.mp_menu.cursor = 0;
+            }
             KeyCode::Escape if self.mp_menu.form != multiplayer::Form::Main => {
                 self.mp_menu.open(multiplayer::Form::Main);
                 self.mp_status.clear();
@@ -8040,12 +8255,11 @@ impl State {
                     Row::Code => {
                         self.mp_menu.code.pop();
                     }
-                    Row::Name => {
-                        self.cfg.mp_name.pop();
+                    Row::NewPassword => {
+                        self.mp_menu.new_password.pop();
                     }
-                    Row::Port => self.cfg.mp_port /= 10,
-                    Row::Address => {
-                        self.cfg.mp_address.pop();
+                    Row::JoinPassword => {
+                        self.mp_menu.join_password.pop();
                     }
                     _ => {}
                 }
@@ -8055,7 +8269,6 @@ impl State {
                 if self.mp_connecting.is_some() {
                     return;
                 }
-                let name = self.cfg.mp_name.clone();
                 let token = self.cfg.online_token.clone();
                 let account = self.mp_menu.account.clone().unwrap_or_default();
                 use multiplayer::{CodeFor, Form};
@@ -8275,8 +8488,14 @@ impl State {
                             .account_call(&server, online::Request::Logout { token });
                         self.sign_out("logged out");
                     }
-                    Row::HostOnline | Row::HostGuessr => {
-                        let mapguessr = row == Row::HostGuessr;
+                    Row::NewMode => menu.new_guessr = !menu.new_guessr,
+                    Row::NewSlots => menu.step_slots(1),
+                    Row::NewPassword => {
+                        self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1)
+                    }
+                    Row::HostOnline => {
+                        let mapguessr = menu.new_guessr;
+                        let settings = menu.new_settings();
                         self.mp_status = if mapguessr {
                             "opening a mapguessr lobby..."
                         } else {
@@ -8287,37 +8506,67 @@ impl State {
                             token,
                             title: String::new(),
                             mapguessr,
+                            settings,
                         };
                         self.mp_connecting =
-                            Some(multiplayer::start_online(server, request, account));
+                            Some(multiplayer::start_online(server, request, account, None));
                     }
                     Row::Lobby(k) => {
-                        let Some(room) = self.mp_menu.rooms.get(k).cloned() else {
+                        let Some(room) = menu.rooms.get(k).cloned() else {
                             return;
                         };
+                        if room.players >= room.slots {
+                            self.mp_status = tr!(
+                                "that lobby is full",
+                                "そのロビーは満員です",
+                                "это лобби заполнено"
+                            )
+                            .into();
+                        } else if room.locked {
+                            // Its password first.
+                            menu.joining = Some(room);
+                            menu.join_password.clear();
+                            menu.cursor = 0;
+                            self.mp_status.clear();
+                        } else {
+                            self.mp_status = format!("joining {}...", room.title);
+                            let request = online::Request::JoinRoom {
+                                token,
+                                room: room.id,
+                            };
+                            self.mp_connecting =
+                                Some(multiplayer::start_online(server, request, account, None));
+                        }
+                    }
+                    Row::CancelJoin => {
+                        menu.joining = None;
+                        menu.cursor = 0;
+                    }
+                    Row::JoinPassword | Row::JoinLocked => {
+                        let Some(room) = menu.joining.clone() else {
+                            return;
+                        };
+                        if menu.join_password.is_empty() {
+                            self.mp_status = tr!(
+                                "type the lobby's password",
+                                "ロビーのパスワードを入力",
+                                "введи пароль лобби"
+                            )
+                            .into();
+                            menu.select(Row::JoinPassword);
+                            return;
+                        }
+                        let password = Some(std::mem::take(&mut menu.join_password));
+                        menu.joining = None;
+                        menu.cursor = 0;
                         self.mp_status = format!("joining {}...", room.title);
                         let request = online::Request::JoinRoom {
                             token,
                             room: room.id,
                         };
-                        self.mp_connecting =
-                            Some(multiplayer::start_online(server, request, account));
-                    }
-                    Row::HostDirect => {
-                        self.mp_status = format!("opening room on port {}...", self.cfg.mp_port);
-                        self.mp_connecting =
-                            Some(multiplayer::start_host(self.cfg.mp_port, name, false));
-                    }
-                    Row::JoinDirect if self.cfg.mp_address.trim().is_empty() => {
-                        self.mp_status = "type the host's address first".into()
-                    }
-                    Row::JoinDirect => {
-                        self.mp_status = format!("connecting to {}...", self.cfg.mp_address);
-                        self.mp_connecting =
-                            Some(multiplayer::start_join(self.cfg.mp_address.clone(), name));
-                    }
-                    Row::Name | Row::Port | Row::Address => {
-                        self.mp_menu.cursor = (self.mp_menu.cursor + 1).min(rows - 1)
+                        self.mp_connecting = Some(multiplayer::start_online(
+                            server, request, account, password,
+                        ));
                     }
                 }
                 self.cfg.save();
@@ -8338,19 +8587,15 @@ impl State {
                         Row::Code if self.mp_menu.code.len() < 6 && ch.is_ascii_digit() => {
                             self.mp_menu.code.push(ch)
                         }
-                        Row::Name if self.cfg.mp_name.chars().count() < 20 => {
-                            self.cfg.mp_name.push(ch)
+                        Row::NewPassword
+                            if self.mp_menu.new_password.chars().count() < 32 && ch != ' ' =>
+                        {
+                            self.mp_menu.new_password.push(ch)
                         }
-                        Row::Port => {
-                            if let Some(d) = ch.to_digit(10) {
-                                let p = self.cfg.mp_port as u32 * 10 + d;
-                                if p <= u16::MAX as u32 {
-                                    self.cfg.mp_port = p as u16;
-                                }
-                            }
-                        }
-                        Row::Address if self.cfg.mp_address.len() < 64 && ch != ' ' => {
-                            self.cfg.mp_address.push(ch)
+                        Row::JoinPassword
+                            if self.mp_menu.join_password.chars().count() < 32 && ch != ' ' =>
+                        {
+                            self.mp_menu.join_password.push(ch)
                         }
                         _ => {}
                     }
@@ -9280,11 +9525,23 @@ impl State {
                     self.mp_menu.field_label(r).unwrap_or_default().into(),
                     self.mp_menu.code.clone(),
                 )),
-                Row::Name => Some(("Your name".into(), self.cfg.mp_name.clone())),
-                Row::Port => Some(("Host on port".into(), self.cfg.mp_port.to_string())),
-                Row::Address => Some(("Join address".into(), self.cfg.mp_address.clone())),
+                Row::NewPassword => Some((
+                    "Lobby password".into(),
+                    "*".repeat(self.mp_menu.new_password.chars().count()),
+                )),
+                Row::JoinPassword => Some((
+                    "Lobby password".into(),
+                    "*".repeat(self.mp_menu.join_password.chars().count()),
+                )),
                 _ => None,
             };
+        }
+        // The host typing a new lobby password (K).
+        if let (Scene::Lobby, Some(typed)) = (
+            &self.scene,
+            self.mp.as_ref().and_then(|s| s.edit_password.as_ref()),
+        ) {
+            return Some(("New lobby password".into(), typed.clone()));
         }
         None
     }
@@ -10000,6 +10257,7 @@ impl State {
             self.cfg.online_server.clone(),
             request,
             account,
+            None,
         ));
     }
 
@@ -10614,9 +10872,15 @@ impl State {
                 in_match,
                 mapguessr,
                 common,
+                team,
+                locked,
+                slots,
             } => {
                 let library = &self.library;
                 let Some(s) = &mut self.mp else { return };
+                s.team = team;
+                s.locked = locked;
+                s.slots = slots;
                 let game_over = s.in_match && !in_match;
                 s.players = players;
                 // The room learns our own mods (on joining, and if it has others).
@@ -10748,6 +11012,28 @@ impl State {
                                 .extend_from_slice(&inputs);
                         }
                     }
+                }
+            }
+            ServerMsg::Defense { from, act } => match &mut self.scene {
+                Scene::MpPlay { game, .. } => game.defense_act(from, act),
+                Scene::Spectate(v) => {
+                    for (_, g) in v.games.iter_mut() {
+                        g.defense_act(from, act);
+                    }
+                }
+                _ => {}
+            },
+            ServerMsg::SkipVotes { votes, of } => {
+                if let Some(s) = &mut self.mp {
+                    s.skip_votes = Some((votes, of));
+                }
+            }
+            ServerMsg::SkipNow => {
+                if let Some(s) = &mut self.mp {
+                    s.skip_votes = None;
+                }
+                if let Scene::MpPlay { game, .. } = &mut self.scene {
+                    game.skip(self.audio.as_ref(), self.play_offset);
                 }
             }
             ServerMsg::MapFile(part) => self.receive_map_part(part),
@@ -12692,6 +12978,9 @@ impl State {
                                     multiverse: None,
                                     shapeshift: None,
                                     seed: (replay.seed != 0).then_some(replay.seed),
+                                    defense: None,
+
+                                    stats: None,
                                 },
                                 score: replay.score,
                                 accuracy: replay.accuracy,
@@ -12859,9 +13148,6 @@ impl State {
                 multiplayer::draw_menu(
                     canvas,
                     &self.mp_menu,
-                    &self.cfg.mp_name,
-                    self.cfg.mp_port,
-                    &self.cfg.mp_address,
                     &self.cfg.online_server,
                     &self.mp_status,
                     self.mp_connecting.is_some(),
@@ -12914,8 +13200,21 @@ impl State {
                         .and_then(|s| s.map.as_ref())
                         .and_then(|m| m.seed)
                         .unwrap_or(0);
-                    let mut game =
-                        Game::with_seed(map, track, self.audio.as_ref(), self.pending_mods, seed);
+                    let defense = self
+                        .mp
+                        .as_ref()
+                        .and_then(|s| s.map.as_ref())
+                        .and_then(|m| m.defense);
+                    // Defense is played on the Maze, whatever else bent the lane.
+                    let mut mods = self.pending_mods;
+                    if defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
+                        mods.toggle(mods::Mod::Maze);
+                    }
+                    let mut game = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
+                    if let (Some(d), Some(s)) = (defense, &self.mp) {
+                        let (team, me) = multiplayer::defense_team(s);
+                        game.set_defense(team, me, d);
+                    }
                     game.scroll_speed = self.cfg.scroll_speed;
                     if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
                         game.live_pp = pp::Live::start(
@@ -12936,6 +13235,8 @@ impl State {
                     game.record = true;
                     if let Some(s) = &mut self.mp {
                         s.inputs_sent = 0;
+                        s.skip_asked = false;
+                        s.skip_votes = None;
                     }
                     next = Some(Scene::MpPlay {
                         game: Box::new(game),
@@ -12962,6 +13263,9 @@ impl State {
                 game.hidden = hidden;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
+                if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
+                    game.set_team(team);
+                }
                 let live = multiplayer::live_from(game);
                 let mp = &self.mp;
                 draw_game_area(
@@ -12976,6 +13280,10 @@ impl State {
                     },
                 );
                 game.draw_hud(canvas);
+                // The intro is skipped once every player asks: how many have.
+                if let Some(s) = mp.as_ref().filter(|_| game.can_skip()) {
+                    multiplayer::draw_skip_votes(canvas, s);
+                }
                 if let Some(s) = mp
                     .as_ref()
                     .filter(|_| self.cfg.mp_scoreboard && !hidden.has(hud::Part::Scoreboard))
@@ -13050,14 +13358,26 @@ impl State {
                             .and_then(|s| s.players.iter().find(|p| p.id == *id))
                             .map(|p| Mods::from_list(&p.mods).free())
                             .unwrap_or(Mods::NONE);
+                        let mut mods = v.mods.shared().plus(own);
+                        if v.map.defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
+                            mods.toggle(mods::Mod::Maze);
+                        }
                         let mut g = Game::with_seed(
                             map.clone(),
                             track.clone(),
                             None,
-                            v.mods.shared().plus(own),
+                            mods,
                             v.map.seed.unwrap_or(0),
                         );
                         use_mod_settings(&mut g, &v.map);
+                        // Defense: each player's game takes only their turns' notes, as theirs did
+                        // (the team in the order the players have it: by id).
+                        if let Some(d) = v.map.defense {
+                            let mut team = v.players.clone();
+                            team.sort_by_key(|p| p.0);
+                            let me = team.iter().position(|p| p.0 == *id).unwrap_or(0);
+                            g.set_defense(team, me, d);
+                        }
                         if let Some(t) = v.from {
                             g.skip_to(t);
                         }
@@ -13090,6 +13410,12 @@ impl State {
                     g.kiai_effects = self.cfg.kiai_effects;
                     g.hidden = hidden;
                     g.update(now, self.audio.as_ref(), self.play_offset);
+                }
+                // Defense: the team's lives and gold, as the room has them.
+                if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
+                    for (_, g) in v.games.iter_mut() {
+                        g.set_team(team);
+                    }
                 }
                 match v.focus {
                     Some(k) if k < v.games.len() => {
@@ -14624,6 +14950,18 @@ impl State {
                         social::NoteAction::Watch(name) => self.watch(name),
                         social::NoteAction::None => {}
                     }
+                }
+            }
+            Hit::Kick(id) => {
+                if let Some(s) = &self.mp {
+                    s.client.send(net::ClientMsg::Kick(id));
+                    let name = s
+                        .players
+                        .iter()
+                        .find(|p| p.id == id)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    self.toast(tr!("{name} is out of the lobby", "{name} をロビーから外しました", "{name} убран из лобби";));
                 }
             }
             Hit::GiveHost(id) => {

@@ -142,6 +142,9 @@ fn an_online_score_fetches_its_replay() {
             multiverse: None,
             shapeshift: None,
             seed: None,
+            defense: None,
+
+            stats: None,
         };
         let reply = online::Reply::Replay(Box::new(online::OnlineReplay {
             version: 2,

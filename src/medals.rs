@@ -28,10 +28,10 @@ pub const SHOWN_AT_ONCE: usize = 3;
 const LAND_MS: f32 = crate::medal_sound::LAND * 1000.0;
 const LEAVE_MS: f32 = 320.0;
 /// The logo's glitch colours, for tears, and the brighter ones the splash splits the picture into.
-const TEAR_RED: u32 = 0x9f2137;
-const TEAR_CYAN: u32 = 0x2a9fb5;
-const SPLIT_RED: u32 = 0xff2a4a;
-const SPLIT_CYAN: u32 = 0x2ad4ff;
+pub(crate) const TEAR_RED: u32 = 0x9f2137;
+pub(crate) const TEAR_CYAN: u32 = 0x2a9fb5;
+pub(crate) const SPLIT_RED: u32 = 0xff2a4a;
+pub(crate) const SPLIT_CYAN: u32 = 0x2ad4ff;
 /// Before this it can't be skipped: a key still held from the play shouldn't throw it away.
 const SKIP_AFTER_MS: f32 = 450.0;
 
@@ -576,6 +576,15 @@ fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f3
     }
 }
 
+/// Whether a mod has a tile in the collection: the server's list (`medal_list::GROUPS`), which
+/// leaves out the ones that play for you and Maze (newer than its medals).
+fn in_collection(m: &crate::mods::Mod) -> bool {
+    !matches!(
+        m,
+        crate::mods::Mod::Autoplay | crate::mods::Mod::Relax | crate::mods::Mod::Maze
+    )
+}
+
 /// The mod collection: a tile per mod, by mod select column, lit once it's in.
 fn tiles(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32) {
     let have = v.collection.len();
@@ -597,11 +606,7 @@ fn tiles(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32) {
         ),
     );
     for (row, (_, colour, mods)) in crate::mods::GROUPS.iter().enumerate() {
-        for (col, m) in mods
-            .iter()
-            .filter(|m| !matches!(m, crate::mods::Mod::Autoplay | crate::mods::Mod::Relax))
-            .enumerate()
-        {
+        for (col, m) in mods.iter().filter(|m| in_collection(m)).enumerate() {
             let (tx, ty) = (
                 x + col as f32 * (TILE_W + 2.0),
                 top + 12.0 + row as f32 * (TILE_H + 1.0),
@@ -1405,11 +1410,7 @@ mod tests {
     fn the_collection_shows_every_mod_it_can_hold() {
         let n: usize = crate::mods::GROUPS
             .iter()
-            .map(|g| {
-                g.2.iter()
-                    .filter(|m| !matches!(m, crate::mods::Mod::Autoplay | crate::mods::Mod::Relax))
-                    .count()
-            })
+            .map(|g| g.2.iter().filter(|m| in_collection(m)).count())
             .sum();
         assert_eq!(n, 74);
     }

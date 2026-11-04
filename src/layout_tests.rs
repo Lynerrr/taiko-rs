@@ -177,13 +177,26 @@ fn session(mapguessr: bool) -> multiplayer::Session {
         multiverse: None,
         shapeshift: None,
         seed: None,
+        defense: Some(net::Defense::DEFAULT),
+        stats: Some(Box::new(net::MapStats {
+            stars: 12.34,
+            length_ms: 754_000.0,
+            bpm: 222.0,
+            od: 10.0,
+            hp: 10.0,
+            creator: LONG_NAME.into(),
+        })),
     });
+    // A full lobby with a password.
+    s.locked = true;
+    s.slots = 16;
     let live = net::Live {
         score: 1_234_567,
         combo: 1234,
         accuracy: 0.9876,
         miss: 12,
         progress: 0.5,
+        great: 1234,
     };
     let result = net::Final {
         score: 1_234_567,
@@ -195,7 +208,7 @@ fn session(mapguessr: bool) -> multiplayer::Session {
         ur: 123.4,
         quit: false,
     };
-    s.players = (0..8)
+    s.players = (0..16)
         .map(|i| net::PlayerInfo {
             id: i,
             name: format!("{LONG_NAME}{i}"),
@@ -773,9 +786,25 @@ fn assert_every_screen_fits() {
             map: Some(entry(0, 0, true).label()),
             in_match: i % 2 == 0,
             mapguessr: false,
+            locked: i % 3 == 0,
+            slots: 16,
+            defense: i % 2 == 1,
         })
         .collect();
     check(&mut s, "multiplayer menu no email", &mut out);
+    // A new lobby with a password and 6 players, a mapguessr one, and a locked lobby's prompt.
+    s.mp_menu.new_password = "hunter2hunter2hunter2hunter2".into();
+    s.mp_menu.new_slots = 6;
+    s.mp_menu.select(multiplayer::Row::NewPassword);
+    check(&mut s, "multiplayer menu new lobby", &mut out);
+    s.mp_menu.new_guessr = true;
+    check(&mut s, "multiplayer menu new mapguessr lobby", &mut out);
+    s.mp_menu.joining = s.mp_menu.rooms.first().cloned();
+    s.mp_menu.join_password = "secret".into();
+    s.mp_menu.cursor = 0;
+    check(&mut s, "multiplayer menu join locked", &mut out);
+    s.mp_menu.joining = None;
+    s.mp_menu.new_guessr = false;
     s.mp_menu.open(multiplayer::Form::Link);
     s.mp_menu.code_for = Some(multiplayer::CodeFor::Link);
     check(&mut s, "multiplayer menu linking", &mut out);
@@ -953,6 +982,9 @@ fn assert_every_screen_fits() {
             map: Some(entry(0, 0, true).label()),
             in_match: true,
             mapguessr: false,
+            locked: true,
+            slots: 8,
+            defense: true,
         }],
         log: (0..10)
             .map(|i| format!("12:{i:02} auneu muted {LONG_NAME}{i} for 30 minutes"))
@@ -1194,6 +1226,7 @@ fn assert_every_screen_fits() {
         accuracy: 0.9876,
         miss: 12,
         progress: 0.5,
+        great: 1234,
     };
     check_draw("lobby", &mut out, |c| {
         multiplayer::draw_lobby(
