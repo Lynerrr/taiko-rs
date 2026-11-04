@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -178,6 +179,8 @@ pub struct Preview {
     pub size_shown: f32,
     pub size_cap: f32,
     audio: Option<Song>,
+    /// Calls off the music being prepared.
+    music_job: Option<Arc<AtomicBool>>,
     audio_active: bool,
 }
 
@@ -256,6 +259,30 @@ impl Preview {
     /// Something else (gameplay, calibration) took over the audio engine.
     pub fn invalidate_audio(&mut self) {
         self.audio_active = false;
+    }
+
+    /// Stops preparing the music of a song that isn't wanted any more.
+    fn call_off_music(&mut self) {
+        if let Some(job) = self.music_job.take() {
+            job.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Lets go of the preview's music if it's long, for a play that needs its own copy of the song:
+    /// that's gigabytes each. It's prepared again when the preview next comes up. True if it did.
+    pub fn release_long_music(&mut self) -> bool {
+        const LONG_FRAMES: usize = 48_000 * 60 * 10;
+        let long = self
+            .audio
+            .as_ref()
+            .is_some_and(|s| s.track.frames() > LONG_FRAMES);
+        if long {
+            self.call_off_music();
+            self.audio_rx = None;
+            self.audio = None;
+            self.requested = None;
+        }
+        long
     }
 
     /// The decoded song, for reuse when that map is played at the same speed.
@@ -395,7 +422,12 @@ impl Preview {
                         n.to_string_lossy()
                             .starts_with(crate::download::CLIP_PREFIX)
                     });
+                    self.call_off_music();
+                    let called_off = Arc::new(AtomicBool::new(false));
+                    self.music_job = Some(called_off.clone());
+                    let wanted_now = called_off.clone();
                     std::thread::spawn(move || {
+                        audio::while_wanted(called_off);
                         if is_clip {
                             // A download preview: ~10 s of music from the preview point, placed there.
                             let clip = audio::decode(&song, sr).ok().map(|t| {
@@ -428,23 +460,23 @@ impl Preview {
                                 }
                             }
                         }
+                        // The whole song can take gigabytes: one at a time, and not for a song
+                        // the selection has moved on from.
+                        let Some(_alone) = audio::prepare_alone() else {
+                            return;
+                        };
                         let track = audio::decode_shared(&song, sr).ok().map(|t| {
                             let track = if shift == 1.0 {
                                 audio::with_rate(t, sr, speed, keep_pitch)
                             } else {
-                                Arc::new(audio::shifted(
-                                    Track {
-                                        samples: t.samples.clone(),
-                                        rate: t.rate,
-                                    },
-                                    sr,
-                                    speed,
-                                    keep_pitch,
-                                    shift,
-                                ))
+                                let t = audio::owned(t);
+                                Arc::new(audio::shifted(t, sr, speed, keep_pitch, shift))
                             };
                             (track, 0, true)
                         });
+                        if wanted_now.load(Ordering::Relaxed) {
+                            return;
+                        }
                         let _ = tx.send((song, track));
                     });
                     self.audio_rx = Some(rx);
