@@ -2192,11 +2192,11 @@ fn quick_retry_needs_the_key_held_and_works_while_paused() {
         let at = Instant::now();
         s.key(KeyCode::Backquote, false, None, at, None);
         assert!(!restarted(&s), "a press alone doesn't restart");
-        s.poll_retry(at + Duration::from_millis(499));
+        s.poll_retry(at + Duration::from_millis(249));
         assert!(!restarted(&s), "not before it's been held");
-        let halfway = s.retry_progress(at + Duration::from_millis(250)).unwrap();
+        let halfway = s.retry_progress(at + Duration::from_millis(125)).unwrap();
         assert!((halfway - 0.5).abs() < 0.01, "{halfway}");
-        s.poll_retry(at + Duration::from_millis(500));
+        s.poll_retry(at + Duration::from_millis(250));
         assert!(restarted(&s), "paused: {paused}");
     }
 }
@@ -2224,10 +2224,10 @@ fn a_held_key_repeating_doesnt_start_the_hold_over() {
         KeyCode::Backquote,
         true,
         None,
-        at + Duration::from_millis(400),
+        at + Duration::from_millis(200),
         None,
     );
-    s.poll_retry(at + Duration::from_millis(500));
+    s.poll_retry(at + Duration::from_millis(250));
     assert!(restarted(&s));
 }
 
@@ -2367,4 +2367,9 @@ fn time_in_songs_adds_up_over_plays_and_the_play_knows_its_map() {
     }
     next.track_play();
     assert_eq!(next.session_play_ms, 3000.0);
+}
+
+#[test]
+fn the_website_button_goes_to_the_site_whatever_the_map() {
+    assert_eq!(map_url(0x1f3a), "https://rstaiko.auneu.space/m/1f3a");
 }
