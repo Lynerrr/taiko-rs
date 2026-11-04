@@ -891,7 +891,13 @@ fn process_output(
         let len = byte_count / stream.sample_format.sample_size();
         let mut data = Data::from_parts(data, len, stream.sample_format);
         let sample_rate = stream.config.sample_rate;
-        let timestamp = output_timestamp(stream, sample_rate, clock_frequency, *frames_written)?;
+        let timestamp = output_timestamp(
+            stream,
+            sample_rate,
+            clock_frequency,
+            *frames_written,
+            frames_available,
+        )?;
         let info = OutputCallbackInfo { timestamp };
         data_callback(&mut data, &info);
 
@@ -971,6 +977,7 @@ fn output_timestamp(
     sample_rate: SampleRate,
     clock_frequency: u64,
     frames_written: u64,
+    frames_available: FrameCount,
 ) -> Result<OutputStreamTimestamp, Error> {
     let (callback, position) = clock_position(stream)?;
     // `buffered` is the amount of audio we've already submitted that has not yet been consumed by
@@ -986,5 +993,35 @@ fn output_timestamp(
     // speakers. Adding the stream latency on top counted it twice: callers thought each sample
     // played ~10-30 ms later than it did.
     let playback = callback + buffered;
+    // taiko-rs patch: for the game's audio log.
+    let now = performance_counter();
+    crate::taiko_clock::record(crate::taiko_clock::Reading {
+        clock_frequency,
+        max_frames: stream.max_frames_in_buffer,
+        period_frames: stream.period_frames,
+        stream_latency: stream.stream_latency,
+        position,
+        frames_written,
+        padding: stream.max_frames_in_buffer - frames_available,
+        buffered,
+        age: now.duration_since(callback),
+        now,
+    });
     Ok(OutputStreamTimestamp { callback, playback })
+}
+
+/// taiko-rs patch: the performance counter now, on the clock `GetPosition` stamps its readings by.
+fn performance_counter() -> StreamInstant {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn QueryPerformanceCounter(count: *mut i64) -> i32;
+        fn QueryPerformanceFrequency(frequency: *mut i64) -> i32;
+    }
+    let (mut count, mut frequency) = (0i64, 0i64);
+    unsafe {
+        QueryPerformanceCounter(&mut count);
+        QueryPerformanceFrequency(&mut frequency);
+    }
+    let nanos = count as u128 * 1_000_000_000 / frequency.max(1) as u128;
+    StreamInstant::new((nanos / 1_000_000_000) as u64, (nanos % 1_000_000_000) as u32)
 }

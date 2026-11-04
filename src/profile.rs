@@ -90,6 +90,17 @@ impl View {
             Hit::Key(KeyCode::Escape),
             true,
         );
+        let browser_w = 84.0;
+        c.button(
+            px + pw - bw * 2.0 - browser_w - 24.0,
+            by,
+            browser_w,
+            16.0,
+            tr!("Open in browser", "ブラウザで開く", "В браузере"),
+            7.0,
+            Hit::Key(KeyCode::KeyB),
+            false,
+        );
         if matches!(self.state, State::Loaded(_)) {
             c.button(
                 px + pw - bw * 2.0 - 18.0,

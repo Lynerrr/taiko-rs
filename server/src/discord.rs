@@ -1949,6 +1949,7 @@ mod tests {
                         requests: Vec::new(),
                         nominator: false,
                         banned: false,
+                        two_hundred: false,
                         email: None,
                         muted_until: None,
                     },

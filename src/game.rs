@@ -40,7 +40,7 @@ use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
-use crate::hud::Part;
+use crate::hud::{self, Part};
 use crate::medals::{SPLIT_CYAN, SPLIT_RED, TEAR_CYAN, TEAR_RED};
 use crate::mods::{Mod, Mods, Speed};
 use crate::multiverse::{self, Shape as NoteShape, Universe};
@@ -52,7 +52,8 @@ use crate::shapeshift;
 pub const PANEL_W: f32 = 112.5;
 /// Centre of the hit target: x = 160 of osu!'s 480-tall gamefield, as in stable and lazer.
 pub const HIT_X: f32 = 160.0;
-pub const LANE_Y: f32 = 160.0;
+/// Centre of the lane: where osu! stable has it, a little above the middle of the screen.
+pub const LANE_Y: f32 = 196.0;
 pub const LANE_H: f32 = 118.0;
 pub const NOTE_R: f32 = 31.0;
 pub const BIG_R: f32 = 46.0;
@@ -110,7 +111,7 @@ pub enum Judge {
 }
 
 impl Judge {
-    fn color(self) -> u32 {
+    pub(crate) fn color(self) -> u32 {
         match self {
             Judge::Great => 0xFFD34D,
             Judge::Ok => 0x86E05A,
@@ -178,6 +179,43 @@ impl Stats {
         let var =
             self.errors.iter().map(|e| (e - mean).powi(2)).sum::<f64>() / self.errors.len() as f64;
         var.sqrt() * 10.0
+    }
+}
+
+impl Drop for Game {
+    /// The audio log's line for a play, however it ended: the offset it really wanted, overall and
+    /// by thirds of the hits (a clock drifting mid-song shows as thirds that differ).
+    fn drop(&mut self) {
+        let s = &self.stats;
+        if self.replay.is_some() || s.errors.len() < 30 {
+            return;
+        }
+        // An error e under offset o would have been e + o under no offset at all.
+        let wanted: Vec<f64> = s
+            .errors
+            .iter()
+            .zip(&s.error_offsets)
+            .map(|(e, o)| e + o)
+            .collect();
+        let robust = |part: &[f64]| calibrate::estimate(part, 0.0).map_or(f64::NAN, |e| e.error_ms);
+        let third = |k: usize| robust(&wanted[k * wanted.len() / 3..(k + 1) * wanted.len() / 3]);
+        let (sum, frames, most) = self.clock_vs_audio;
+        crate::audiolog::line(&format!(
+            "end {} - {} [{}] hits={} mean_error={:.1} wanted={:.1} thirds={:.1}/{:.1}/{:.1} ur={:.0} played_s={:.0} clock_vs_audio={:.3}/{:.1}",
+            self.map.meta.artist,
+            self.map.meta.title,
+            self.map.meta.version,
+            wanted.len(),
+            s.mean_error(),
+            robust(&wanted),
+            third(0),
+            third(1),
+            third(2),
+            s.unstable_rate(),
+            self.played_ms / 1000.0,
+            sum / frames.max(1) as f64,
+            most,
+        ));
     }
 }
 
@@ -322,6 +360,9 @@ pub struct Game {
     visible: Vec<usize>,
     /// Raw audio position seen by the last update, for diagnostics.
     pub last_audio_ms: Option<f64>,
+    /// Over the frames with an audio position: how far the clock was from it (sum, frames, most
+    /// either way).
+    clock_vs_audio: (f64, u64, f64),
     pub raw_time: f64,
     /// How autoplay hits (Settings → Gameplay), and the keys that gives each note (by note index,
     /// empty for all but dons and kats), worked out once for those settings.
@@ -351,6 +392,21 @@ pub struct Game {
     pub kiai_effects: bool,
     /// Interface parts hidden (the interface toggle).
     pub hidden: crate::hud::Parts,
+    /// Where the interface's parts go, and the playfield area they may be attached to.
+    pub hud: crate::hud::Layout,
+    pub hud_area: crate::layout::Area,
+    /// A stand-in play for the interface editor: every part shows, with made-up numbers.
+    hud_sample: bool,
+    /// Where mods have the lane this frame, for the parts attached to it.
+    field_boxes: Option<hud::FieldBoxes>,
+    /// The lane's middle on the screen, in the playfield's units, while mods bend or move it, and
+    /// how far its edges are from that.
+    lane_path: Vec<(f32, f32)>,
+    lane_half: f32,
+    /// When `field_boxes` last moved, to ease it.
+    field_at: f64,
+    /// Parts mods have moved off their places: their top and when it was worked out.
+    settled: std::cell::Cell<[Option<(f32, f64)>; Part::ALL.len()]>,
     /// Display latency to make up for (real ms): the lane is drawn as it will be this much later,
     /// when the frame reaches the screen. Judging stays on the audio clock.
     pub visual_offset: f64,
@@ -440,6 +496,8 @@ pub struct Game {
     focus_switches: Vec<FocusSwitch>,
     /// Shapeshift: its setup and the shape of each section (index into `SHAPESHIFT`).
     shapeshift: shapeshift::Config,
+    /// Tact: how often notes move.
+    tact: crate::tact::Step,
     shape_order: Vec<u8>,
     /// Multiverse's universes when the play brought its own (a lobby host's); None: the
     /// player's, as they set them up.
@@ -914,6 +972,9 @@ const MEADOW_RIGHT: f32 = 1163.0;
 const MEADOW_TALL: f32 = 0.53;
 const MEADOW_DROP: f32 = 28.0;
 
+/// The bent shapes are laid out from a lane at 160: this takes them back up there from `LANE_Y`.
+const RAIL_LIFT: f32 = LANE_Y - 160.0;
+
 /// Most ticks one roll keeps (`NoteState::ticks`).
 const MAX_ROLL_TICKS: usize = 360_000;
 
@@ -1062,14 +1123,14 @@ impl RailShape {
     fn drop(self) -> f32 {
         match self {
             RailShape::Straight => 0.0,
-            RailShape::Zigzag => 35.0,
-            RailShape::UTurn => 150.0,
-            RailShape::Spiral => 105.0,
-            RailShape::Loop => 135.0,
-            RailShape::Elbow => 200.0,
+            RailShape::Zigzag => 35.0 - RAIL_LIFT,
+            RailShape::UTurn => 150.0 - RAIL_LIFT,
+            RailShape::Spiral => 105.0 - RAIL_LIFT,
+            RailShape::Loop => 135.0 - RAIL_LIFT,
+            RailShape::Elbow => 200.0 - RAIL_LIFT,
             // The drum half way down: the maze reaches as far above it as below.
-            RailShape::Maze => 65.0,
-            RailShape::Meadow => MEADOW_DROP,
+            RailShape::Maze => 65.0 - RAIL_LIFT,
+            RailShape::Meadow => MEADOW_DROP - RAIL_LIFT,
         }
     }
 
@@ -1923,6 +1984,7 @@ impl Game {
             main_beat,
             visible: Vec::new(),
             last_audio_ms: None,
+            clock_vs_audio: (0.0, 0, 0.0),
             raw_time: track_start,
             autoplay_style: crate::autoplay::Settings::default(),
             auto_plan: None,
@@ -1937,7 +1999,15 @@ impl Game {
             show_offset_hint: false,
             offset_key: None,
             kiai_effects: true,
-            hidden: crate::hud::Parts::NONE,
+            hidden: crate::hud::Layout::default().off,
+            hud: crate::hud::Layout::default(),
+            hud_area: crate::layout::Area::FULL,
+            hud_sample: false,
+            field_boxes: None,
+            lane_path: Vec::new(),
+            lane_half: 0.0,
+            field_at: 0.0,
+            settled: std::cell::Cell::new([None; Part::ALL.len()]),
             visual_offset: 0.0,
             mash: Mash::Nearest,
             scoring: Scoring::Standard,
@@ -1981,6 +2051,7 @@ impl Game {
             next_scare: 0,
             focus_switches,
             shapeshift,
+            tact: crate::tact::get(),
             shape_order,
             universes: None,
             zone: None,
@@ -2145,6 +2216,22 @@ impl Game {
         })
     }
 
+    /// Defense: the map time a tower bought at `at` stops shooting at (it starts at the first
+    /// barline `TOWER_LEAD_MS` on and runs `TOWER_BARS` bars; infinity when the map runs out).
+    pub fn tower_until(&self, at: f64) -> f64 {
+        let bars = &self.map.barlines;
+        let first = bars.partition_point(|b| b.time < at + TOWER_LEAD_MS);
+        bars.get(first + TOWER_BARS)
+            .map_or(f64::INFINITY, |b| b.time)
+    }
+
+    /// Defense: a tower is up (building or shooting) at map time `t`.
+    pub fn tower_active(&self, t: f64) -> bool {
+        self.defense
+            .as_ref()
+            .is_some_and(|d| d.towers.iter().any(|tw| t < tw.to))
+    }
+
     /// Defense: something player `from` did, from the room (in the order it took them).
     pub fn defense_act(&mut self, from: u32, act: DefenseAct) {
         let Some(who) = self
@@ -2156,7 +2243,7 @@ impl Game {
         };
         let bars = self.defense.as_ref().map_or(1, |d| d.bars.max(1) as usize);
         let (at, what, about) = match act {
-            DefenseAct::Buy { item, at } => {
+            DefenseAct::Buy { item, at, .. } => {
                 match item {
                     DefenseItem::Slow => {
                         if let Some(d) = &mut self.defense {
@@ -2169,9 +2256,7 @@ impl Game {
                         let bars = &self.map.barlines;
                         let first = bars.partition_point(|b| b.time < at + TOWER_LEAD_MS);
                         let from = bars.get(first).map_or(f64::INFINITY, |b| b.time);
-                        let to = bars
-                            .get(first + TOWER_BARS)
-                            .map_or(f64::INFINITY, |b| b.time);
+                        let to = self.tower_until(at);
                         let notes = &self.map.notes;
                         let Some(d) = &mut self.defense else { return };
                         let k = d.towers.len() as u8;
@@ -2379,6 +2464,14 @@ impl Game {
         let audio_ms = audio.and_then(|a| a.position_ms(now));
         let raw = self.clock.update(now, audio_ms);
         self.last_audio_ms = audio_ms;
+        if let Some(a) = audio_ms {
+            let off = raw - a;
+            self.clock_vs_audio = (
+                self.clock_vs_audio.0 + off,
+                self.clock_vs_audio.1 + 1,
+                self.clock_vs_audio.2.max(off.abs()),
+            );
+        }
         self.raw_time = raw;
         self.time = self.speed.map(raw - offset);
         // Failed: the lane keeps scrolling under the FAILED sign, but nothing more is judged.
@@ -3238,6 +3331,23 @@ impl Game {
         }
     }
 
+    /// Tact: the map time notes are drawn at for map time `t`: a crawl through its step, then a
+    /// rush to the step's end (`tact::shown_time`).
+    fn tact_time(&self, t: f64) -> f64 {
+        let bars = &self.map.barlines;
+        crate::tact::shown_time(t, |x| {
+            let cp = beatmap::control_point_at(&self.map.control_points, x);
+            let bar = bar_at(bars, x, cp.beat_length * 4.0);
+            crate::tact::step_start(
+                self.tact,
+                x,
+                bar,
+                |i| bars.get(i).map_or(x, |b| b.time),
+                (cp.beat_origin, cp.beat_length),
+            )
+        })
+    }
+
     /// The warp (see `Scroll::warp`) of Drop, Lag Spike and Moonwalk at map time `t`.
     fn extra_warp(&self, t: f64, cp: &beatmap::ControlPoint) -> f64 {
         let mods = self.mods;
@@ -3670,6 +3780,27 @@ impl Game {
             }
         }
         self.zone = (zone.1 > 0.0).then(|| zone.0.map(|v| v / zone.1));
+        // Multiverse: on the playfield in focus, as big as it is.
+        self.lane_path.clear();
+        let focus = self.zone.map(|z| {
+            let (_, band_h) = lane_band();
+            let k = z[3] / band_h;
+            let mid = z[1] + z[3] / 2.0;
+            let (lane_y, lane_h) = (mid - LANE_H * k / 2.0, LANE_H * k);
+            hud::FieldBoxes {
+                lane: [z[0], lane_y, z[2], lane_h],
+                drum: [z[0], lane_y, PANEL_W * k, lane_h],
+                hit: [
+                    z[0] + (HIT_X - NOTE_R) * k,
+                    mid - NOTE_R * k,
+                    2.0 * NOTE_R * k,
+                    2.0 * NOTE_R * k,
+                ],
+            }
+        });
+        if let Some(boxes) = focus {
+            self.ease_field_boxes(boxes, self.time);
+        }
         // The sparks: from the drum in focus to the drum of the one it's heading for.
         let to = (0..FIELD_COUNT).find(|&f| looks[f].aim > 0.0);
         let from = (0..FIELD_COUNT)
@@ -3732,7 +3863,15 @@ impl Game {
                 RADAR_BEATS.0
             } as f64;
 
-        let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp);
+        // Tact: far off, the notes crawl through each step, then rush to where they'd be at its
+        // end. Like Pulse's and Stutter's, the shift fades out on the way in (`Scroll::x`), so
+        // every note is in the hit circle on time.
+        let tact = if mods.has(Mod::Tact) {
+            self.tact_time(vt) - vt
+        } else {
+            0.0
+        };
+        let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp) + tact;
         // The lane's shape, and how fast notes go along it (see `lane_stretch`).
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w);
         // Where it's played before the whole-playfield moves (x0, y0, x1, y1): from the screen's
@@ -4821,7 +4960,11 @@ impl Game {
                 c.circle(HIT_X, y, r, rgba(col, 1.0 - p), rgba(WHITE, 1.0 - p), 3.0);
             }
         }
-        if self.stats.combo >= 2 && !self.hidden.has(Part::Combo) {
+        // Moved off the drum, it's drawn with the rest of the interface.
+        if self.stats.combo >= 2
+            && !self.hidden.has(Part::Combo)
+            && self.hud.place(Part::Combo).is_none()
+        {
             let s = self.stats.combo.to_string();
             let skin_size = if s.len() > 3 { 17.0 } else { 22.0 };
             if c.number_width(Font::Combo, skin_size, &s).is_some() {
@@ -4829,21 +4972,23 @@ impl Game {
                     drum_x,
                     combo_y(skin_size),
                     skin_size,
-                    rgba(WHITE, 1.0),
+                    rgba(self.hud.colour(Part::Combo).unwrap_or(WHITE), 1.0),
                     Upright::Number(Font::Combo, s),
                 ));
             } else {
                 let size = if s.len() > 3 { 12.0 } else { 16.0 };
                 let col = if crossfire { 0xe8e8f0 } else { 0x1d1d26 };
+                let col = self.hud.colour(Part::Combo).unwrap_or(col);
                 texts.push((drum_x, combo_y(size), size, rgba(col, 1.0), s));
             }
         }
 
         // Judgement text.
-        if let Some((j, at)) = self
-            .last_judge
-            .filter(|&(j, _)| splashes(j) && !self.hidden.has(Part::Judgements))
-        {
+        if let Some((j, at)) = self.last_judge.filter(|&(j, _)| {
+            splashes(j)
+                && !self.hidden.has(Part::Judgements)
+                && self.hud.place(Part::Judgements).is_none()
+        }) {
             let age = (t - at) as f32;
             if age < 450.0 {
                 let a = (1.0 - age / 450.0).min(1.0);
@@ -4866,7 +5011,7 @@ impl Game {
                         HIT_X,
                         LANE_Y - h / 2.0 - age * 0.02,
                         h,
-                        rgba(WHITE, a),
+                        rgba(self.hud.colour(Part::Judgements).unwrap_or(WHITE), a),
                         Upright::Image(sprite),
                     ));
                 } else {
@@ -4874,7 +5019,7 @@ impl Game {
                         HIT_X,
                         lane_top - 30.0 - age * 0.02,
                         15.0,
-                        rgba(j.color(), a),
+                        rgba(self.hud.colour(Part::Judgements).unwrap_or(j.color()), a),
                         j.label().to_string(),
                     ));
                 }
@@ -4985,6 +5130,26 @@ impl Game {
             zoom *= 0.85;
             dest = [w / 2.0, 290.0];
         }
+        // What's attached to the lane goes where it is, but only by what holds still: not swaying,
+        // tilting or spinning with it, which would have the numbers shake about or fly round.
+        let mania = mods.has(Mod::Mania);
+        let (boxes, path, half) = field_boxes(&FieldView {
+            w,
+            rail: geo.rail.as_ref(),
+            lane_len,
+            flip: &flip_x,
+            pivot,
+            turned: if mania { -PI / 2.0 } else { 0.0 },
+            zoom: rail_zoom * if mania { 0.85 } else { 1.0 },
+            dest: [dest[0], dest[1] + rail_drop],
+            whole_width: crossfire,
+            spinning: mods.has(Mod::Spin),
+        });
+        self.ease_field_boxes(boxes, t);
+        // A lane that's where it always is has nothing to go by.
+        let plain = geo.rail.is_none() && !mania && !crossfire;
+        self.lane_path = if plain { Vec::new() } else { path };
+        self.lane_half = half;
         let dest = [dest[0] + dx, dest[1] + dy];
         if angle != 0.0 || zoom != 1.0 || dest != pivot {
             c.rotate_since(start_shape, pivot, angle, zoom, dest);
@@ -5234,12 +5399,12 @@ impl Game {
         } else {
             0.0
         };
-        let (pw, x0, y0) = (220.0, w / 2.0 - 110.0 + shake, 8.0);
+        let (pw, ph, x0, y0) = (260.0, 46.0, w / 2.0 - 130.0 + shake, 8.0);
         if hurt > 0.0 {
             let slip = 3.0 + 4.0 * hurt;
             c.round_rect(
                 [x0 - slip, y0],
-                [pw, 34.0],
+                [pw, ph],
                 8.0,
                 rgba(SPLIT_RED, 0.45 * hurt),
                 rgba(0, 0.0),
@@ -5247,7 +5412,7 @@ impl Game {
             );
             c.round_rect(
                 [x0 + slip, y0],
-                [pw, 34.0],
+                [pw, ph],
                 8.0,
                 rgba(SPLIT_CYAN, 0.45 * hurt),
                 rgba(0, 0.0),
@@ -5256,7 +5421,7 @@ impl Game {
         }
         c.round_rect(
             [x0, y0],
-            [pw, 34.0],
+            [pw, ph],
             8.0,
             rgba(0x14141c, 0.85),
             rgba(team_colour(d.me), 0.9),
@@ -5288,14 +5453,25 @@ impl Game {
                 0.0,
             );
         }
+        // Row 1: the lives left, the shield on the right. Row 2: whose turn it is.
         let lives = d.lives;
-        let mut text =
-            tr!("LIVES {left}/{lives}", "ライフ {left}/{lives}", "ЖИЗНИ {left}/{lives}";);
+        c.text(
+            x0 + 10.0,
+            y0 + 18.0,
+            7.0,
+            rgba(fill, 1.0),
+            &tr!("LIVES {left}/{lives}", "ライフ {left}/{lives}", "ЖИЗНИ {left}/{lives}";),
+        );
         if st.shield > 0 {
             let shield = st.shield;
-            text.push_str(&tr!("  +{shield} shield", "  +{shield}シールド", "  +{shield} щит";));
+            c.text_right(
+                x0 + pw - 10.0,
+                y0 + 18.0,
+                7.0,
+                rgba(SPLIT_CYAN, 1.0),
+                &tr!("+{shield} shield", "+{shield}シールド", "+{shield} щит";),
+            );
         }
-        c.text(x0 + 10.0, y0 + 18.0, 7.0, rgba(fill, 1.0), &text);
         let (turn_text, col) = if wait == 0 {
             (
                 tr!("YOUR TURN", "あなたの番", "ТВОЙ ХОД").to_string(),
@@ -5303,13 +5479,19 @@ impl Game {
             )
         } else {
             let name = d.team.get(turn).map_or("?", |p| p.1.as_str());
-            let name = Canvas::fit(7.0, 80.0, name);
+            let name = Canvas::fit(7.0, 110.0, name);
             (
                 tr!("{name}  (you in {wait})", "{name}  (あと{wait}小節)", "{name}  (ты через {wait})";),
                 team_colour(turn),
             )
         };
-        c.text_right(x0 + pw - 10.0, y0 + 18.0, 7.0, rgba(col, 1.0), &turn_text);
+        c.text_centered(
+            x0 + pw / 2.0,
+            y0 + 31.0,
+            7.0,
+            rgba(col, 1.0),
+            &Canvas::fit(7.0, pw - 20.0, &turn_text),
+        );
 
         // What the team just did, and what it does, in a banner under the lives.
         let callout = d
@@ -5331,7 +5513,7 @@ impl Game {
             } else {
                 0.0
             };
-            let (bx, by) = (w / 2.0 - tw / 2.0 + jit, 48.0);
+            let (bx, by) = (w / 2.0 - tw / 2.0 + jit, 60.0);
             c.rect(bx - 2.0, by, tw, 18.0, rgba(SPLIT_RED, 0.35 * k));
             c.rect(bx + 2.0, by, tw, 18.0, rgba(SPLIT_CYAN, 0.35 * k));
             c.rect(bx, by, tw, 18.0, rgba(0x0b0b10, 0.92 * k));
@@ -5339,8 +5521,8 @@ impl Game {
             c.text_centered(w / 2.0 + jit, by + 5.0, 7.5, rgba(WHITE, k), &text);
         }
 
-        // The team panel, left under the drum.
-        let (x, mut y) = (10.0, 296.0);
+        // The team panel, right under the drum (the scoreboard has the left).
+        let (x, mut y) = (w - 198.0, 296.0);
         c.round_rect(
             [x - 4.0, y - 4.0],
             [192.0, 96.0],
@@ -5385,7 +5567,8 @@ impl Game {
         {
             let (cx, cy) = (x + (k % 2) as f32 * 94.0, y + (k / 2) as f32 * 11.0);
             let price = item.price(&st);
-            let can = st.gold >= price;
+            let tower = matches!(item, DefenseItem::DonTower | DefenseItem::KatTower);
+            let can = st.gold >= price && !(tower && self.tower_active(t));
             c.text(
                 cx,
                 cy,
@@ -5419,252 +5602,29 @@ impl Game {
         }
     }
 
-    /// Score, accuracy, progress, hit error meter, offset advice, skip hint and the pause menu (with
-    /// the map's name), at fixed screen positions: resizing the playfield area never moves them.
+    /// The interface's parts where the player put them (see `hud`), then the skip hint and the
+    /// pause menu (with the map's name), which stay at fixed screen positions.
     pub fn draw_hud(&self, c: &mut Canvas) {
         let t = self.time;
         let w = c.width;
         if let Some(text) = &self.banner {
             let tw = Canvas::text_width(9.0, text);
+            // Defense has its lives panel up there: the banner goes under it.
+            let by = if self.defense.is_some() { 90.0 } else { 14.0 };
             c.round_rect(
-                [w / 2.0 - tw / 2.0 - 12.0, 14.0],
+                [w / 2.0 - tw / 2.0 - 12.0, by],
                 [tw + 24.0, 20.0],
                 10.0,
                 rgba(0x173049, 0.9),
                 rgba(0x4fb4ff, 1.0),
                 1.0,
             );
-            c.text_centered(w / 2.0, 19.5, 9.0, rgba(WHITE, 1.0), text);
+            c.text_centered(w / 2.0, by + 5.5, 9.0, rgba(WHITE, 1.0), text);
         }
 
         self.draw_defense(c, t, w);
 
-        let shown = |p: Part| !self.hidden.has(p);
-        // Score / accuracy.
-        // In the skin's score font if it has one.
-        let number = |c: &mut Canvas, y: f32, size: f32, col: u32, s: &str| match c.number_width(
-            Font::Score,
-            size,
-            s,
-        ) {
-            Some(nw) => {
-                c.number(Font::Score, w - 18.0 - nw, y, size, rgba(WHITE, 1.0), s);
-            }
-            None => c.text_right(w - 18.0, y, size, rgba(col, 1.0), s),
-        };
-        if shown(Part::Score) {
-            number(c, 18.0, 24.0, WHITE, &format!("{:08}", self.stats.score));
-        }
-        let acc = format!("{:.2}%", self.stats.accuracy() * 100.0);
-        if shown(Part::Accuracy) {
-            number(c, 50.0, 14.0, 0xc8c8d8, &acc);
-        }
-        // The pp counter, on the accuracy's line, left of it.
-        if let Some(pp) = self.live_pp_value.filter(|_| shown(Part::Pp)) {
-            let acc_w = if shown(Part::Accuracy) {
-                c.number_width(Font::Score, 14.0, &acc)
-                    .unwrap_or_else(|| Canvas::text_width(14.0, &acc))
-                    + 14.0
-            } else {
-                0.0
-            };
-            let text = format!("{pp:.0}pp");
-            let right = w - 18.0 - acc_w;
-            match c.number_width(Font::Score, 14.0, &text) {
-                Some(nw) => {
-                    c.number(
-                        Font::Score,
-                        right - nw,
-                        50.0,
-                        14.0,
-                        rgba(0xff8ad8, 1.0),
-                        &text,
-                    );
-                }
-                None => c.text_right(right, 50.0, 14.0, rgba(0xff8ad8, 1.0), &text),
-            }
-        }
-        // Progress bar.
-        if shown(Part::Progress) {
-            c.rect(0.0, 0.0, w * self.progress() as f32, 3.0, rgba(WHITE, 0.45));
-        }
-        // HP: has to be at least half full at the end (the mark), like osu!taiko. Defense goes
-        // by the team's lives instead (its panel).
-        if self.show_hp && shown(Part::Health) && self.defense.is_none() {
-            // Under the score, accuracy and mods (the top-left corner is the FPS overlay's).
-            let (hx, hy) = (hp_bar_x(w), HP_BAR_Y);
-            let hw = w - 18.0 - hx;
-            let hp = self.hp as f32;
-            if let (Some([bw, bh]), Some([fw, fh])) = (
-                c.sprite_size(Sprite::HealthBg),
-                c.sprite_size(Sprite::HealthFill),
-            ) {
-                // The skin's bar where osu! has it, in the top left at its own size (some are a
-                // frame round the whole screen); the fill on it 5, 16 px in, cut off at the HP.
-                let k = HUD_PX * 128.0;
-                let (bg_w, bg_h) = (bw * k, bh * k);
-                c.sprite_box(
-                    Sprite::HealthBg,
-                    bg_w / 2.0,
-                    bg_h / 2.0,
-                    bg_w / 2.0,
-                    bg_h / 2.0,
-                    rgba(WHITE, 1.0),
-                );
-                let (fx, fy, fill_w, fill_h) = (5.0 * HUD_PX, 16.0 * HUD_PX, fw * k, fh * k);
-                let start = c.shapes.len();
-                c.sprite_box(
-                    Sprite::HealthFill,
-                    fx + fill_w / 2.0,
-                    fy + fill_h / 2.0,
-                    fill_w / 2.0,
-                    fill_h / 2.0,
-                    rgba(WHITE, 1.0),
-                );
-                c.clip_since(start, fx, fy, fill_w * hp, fill_h);
-                c.rect(
-                    fx + fill_w / 2.0 - 0.75,
-                    fy - 2.0,
-                    1.5,
-                    fill_h + 4.0,
-                    rgba(WHITE, 0.8),
-                );
-            } else {
-                c.round_rect(
-                    [hx, hy],
-                    [hw, 8.0],
-                    3.0,
-                    rgba(0x15151d, 0.85),
-                    rgba(0x3a3a4e, 1.0),
-                    1.0,
-                );
-                let fill = if hp >= 0.5 { 0xFFD34D } else { 0xEB452C };
-                if hp > 0.0 {
-                    c.round_rect(
-                        [hx + 1.0, hy + 1.0],
-                        [(hw - 2.0) * hp, 6.0],
-                        2.5,
-                        rgba(fill, 0.95),
-                        rgba(0, 0.0),
-                        0.0,
-                    );
-                }
-                c.rect(hx + hw / 2.0 - 0.75, hy - 2.0, 1.5, 12.0, rgba(WHITE, 0.8));
-            }
-        }
-        if !self.mods.is_empty() && shown(Part::Mods) {
-            let label = self
-                .mods
-                .iter()
-                .map(|m| m.acronym())
-                .collect::<Vec<_>>()
-                .join(" ");
-            c.text_right(w - 18.0, 72.0, 9.0, rgba(0xc8c8d8, 0.9), &label);
-        }
-
-        // Hit error meter.
-        let cx = w / 2.0;
-        let my = 430.0;
-        if shown(Part::HitError) {
-            let scale = 150.0 / self.windows.miss as f32;
-            let wnd = |ms: f64| ms as f32 * scale;
-            c.round_rect(
-                [cx - wnd(self.windows.miss), my - 3.0],
-                [wnd(self.windows.miss) * 2.0, 6.0],
-                3.0,
-                rgba(Judge::Miss.color(), 0.25),
-                rgba(0, 0.0),
-                0.0,
-            );
-            c.round_rect(
-                [cx - wnd(self.windows.ok), my - 3.0],
-                [wnd(self.windows.ok) * 2.0, 6.0],
-                3.0,
-                rgba(Judge::Ok.color(), 0.4),
-                rgba(0, 0.0),
-                0.0,
-            );
-            c.round_rect(
-                [cx - wnd(self.windows.great), my - 3.0],
-                [wnd(self.windows.great) * 2.0, 6.0],
-                3.0,
-                rgba(Judge::Great.color(), 0.6),
-                rgba(0, 0.0),
-                0.0,
-            );
-            for &(err, at, j) in &self.recent_errors {
-                let age = (t - at) as f32;
-                if age < 4000.0 {
-                    let a = 1.0 - age / 4000.0;
-                    c.rect(
-                        cx + err as f32 * scale - 1.0,
-                        my - 11.0,
-                        2.0,
-                        22.0,
-                        rgba(j.color(), a),
-                    );
-                }
-            }
-            if !self.recent_errors.is_empty() {
-                let n = self.recent_errors.len().min(20);
-                let mean = self
-                    .recent_errors
-                    .iter()
-                    .rev()
-                    .take(n)
-                    .map(|e| e.0)
-                    .sum::<f64>()
-                    / n as f64;
-                c.circle(
-                    cx + mean as f32 * scale,
-                    my - 18.0,
-                    3.5,
-                    rgba(WHITE, 0.9),
-                    rgba(WHITE, 0.0),
-                    0.0,
-                );
-            }
-            c.rect(cx - 1.0, my - 14.0, 2.0, 28.0, rgba(WHITE, 0.9));
-        }
-        if self.show_offset_hint
-            && shown(Part::OffsetHint)
-            && let Some(h) = self.offset_suggestion(self.offset)
-        {
-            let e = &h.estimate;
-            let (hits, needed) = (e.hits, h.needed);
-            let building = if hits < needed {
-                tr!("  confidence {hits}/{needed}", "  信頼度 {hits}/{needed}", "  надёжность {hits}/{needed}";)
-            } else {
-                String::new()
-            };
-            let ur = e.ur;
-            let hits_ru = crate::lang::ru_plural(hits, ["удар", "удара", "ударов"]);
-            let stats = tr!("UR {ur:.0}, {hits} hits", "UR {ur:.0}、{hits}回", "UR {ur:.0}, {hits} {hits_ru}";);
-            let (error, margin, suggested) = (e.error_ms.abs(), e.margin_ms, e.suggested_offset);
-            if h.significant {
-                let dir = if e.error_ms > 0.0 {
-                    tr!("late", "遅い", "поздно")
-                } else {
-                    tr!("early", "早い", "рано")
-                };
-                let apply = self.offset_key.as_ref().map_or(String::new(), |k| tr!("  |  {k}: this map  Shift+{k}: all", "  |  {k}: この譜面  Shift+{k}: 全体", "  |  {k}: эта карта  Shift+{k}: все";));
-                let text = tr!(
-                    "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms{apply}{building}",
-                    "{error:.1} ±{margin:.1} ms {dir} ({stats})  |  提案オフセット {suggested:+.0} ms{apply}{building}",
-                    "{error:.1} +-{margin:.1} мс {dir} ({stats})  |  смещение {suggested:+.0} мс{apply}{building}";
-                );
-                c.text_centered(cx, my + 20.0, 8.0, rgba(0xFFD34D, 0.95), &text);
-            } else {
-                let error = e.error_ms;
-                let text = tr!(
-                    "offset looks good: {error:+.1} +-{margin:.1} ms ({stats}){building}",
-                    "オフセットは良好: {error:+.1} ±{margin:.1} ms ({stats}){building}",
-                    "смещение в порядке: {error:+.1} +-{margin:.1} мс ({stats}){building}";
-                );
-                c.text_centered(cx, my + 20.0, 8.0, rgba(0x86E05A, 0.9), &text);
-            }
-        }
-
+        self.draw_parts(c);
         // Overtime: he's here, over everything but the pause menu.
         if let Some(&at) = self
             .scares
@@ -5859,14 +5819,682 @@ impl Game {
             );
         }
     }
+
+    /// The part's place: where the player put it, or else where it goes to begin with.
+    fn part_place(&self, c: &Canvas, part: Part) -> hud::Place {
+        use hud::{Place, Target, axis, on_screen};
+        self.hud.place(part).unwrap_or_else(|| match part {
+            Part::Score => Place::new(on_screen(1.0, -18.0), on_screen(0.0, 18.0)),
+            Part::Accuracy => Place::new(on_screen(1.0, -18.0), on_screen(0.0, 50.0)),
+            // On the accuracy's line, left of it.
+            Part::Pp => {
+                let accuracy_here =
+                    !self.hidden.has(Part::Accuracy) && self.hud.place(Part::Accuracy).is_none();
+                let acc_w = if accuracy_here {
+                    score_width(c, 14.0, &self.accuracy_text()) + 14.0
+                } else {
+                    0.0
+                };
+                Place::new(on_screen(1.0, -18.0 - acc_w), on_screen(0.0, 50.0))
+            }
+            Part::Progress => Place::new(on_screen(0.0, 0.0), on_screen(0.0, 0.0)),
+            // The skin's bar where osu! has it, in the top left at its own size (some are a frame
+            // round the whole screen). Ours is under the score, accuracy and mods (the top-left
+            // corner is the FPS overlay's).
+            Part::Health if skin_health(c).is_some() => {
+                Place::new(on_screen(0.0, 0.0), on_screen(0.0, 0.0))
+            }
+            Part::Health => Place::new(on_screen(1.0, -18.0), on_screen(0.0, HP_BAR_Y)),
+            Part::Mods => Place::new(on_screen(1.0, -18.0), on_screen(0.0, 72.0)),
+            Part::HitError => Place::new(on_screen(0.5, 0.0), on_screen(0.0, 408.0)),
+            Part::OffsetHint => Place::new(on_screen(0.5, 0.0), on_screen(0.0, 450.0)),
+            Part::Combo => Place::new(
+                axis(Target::Drum, 0.5, 0.5, 0.0),
+                axis(Target::Drum, 0.5, 0.5, 0.0),
+            ),
+            Part::Judgements => Place::new(
+                axis(Target::HitPoint, 0.5, 0.5, 0.0),
+                axis(Target::Lane, 0.0, 1.0, -8.0),
+            ),
+            Part::Ur => Place::new(
+                axis(Target::Lane, 1.0, 1.0, -8.0),
+                axis(Target::Lane, 1.0, 0.0, 8.0),
+            ),
+            Part::Counts => Place::new(
+                axis(Target::Lane, 0.0, 0.0, 8.0),
+                axis(Target::Lane, 1.0, 0.0, 8.0),
+            ),
+            Part::Scoreboard | Part::Spectators | Part::HitAnimation => {
+                Place::new(on_screen(0.0, 12.0), on_screen(0.0, 276.0))
+            }
+        })
+    }
+
+    /// `boxes` at map time `t`, eased from where they were.
+    fn ease_field_boxes(&mut self, boxes: hud::FieldBoxes, t: f64) {
+        let k = ease_step(t - self.field_at);
+        let mix = |a: [f32; 4], b: [f32; 4]| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * k);
+        self.field_boxes = Some(self.field_boxes.map_or(boxes, |o| hud::FieldBoxes {
+            lane: mix(o.lane, boxes.lane),
+            drum: mix(o.drum, boxes.drum),
+            hit: mix(o.hit, boxes.hit),
+        }));
+        self.field_at = t;
+    }
+
+    /// The lane's top and bottom on the screen in the columns from `x0` to `x1`, if it's there.
+    fn lane_column(&self, x0: f32, x1: f32, c: &Canvas) -> Option<(f32, f32)> {
+        let area = self.hud_area;
+        let (k, ox, oy) = (area.h, area.x * c.width, area.y * VIRTUAL_HEIGHT);
+        let half = self.lane_half * k;
+        let (mut top, mut bottom) = (f32::MAX, f32::MIN);
+        for &(x, y) in &self.lane_path {
+            let (x, y) = (ox + x * k, oy + y * k);
+            if x + half >= x0 && x - half <= x1 {
+                (top, bottom) = (top.min(y - half), bottom.max(y + half));
+            }
+        }
+        (top <= bottom).then_some((top.max(0.0), bottom.min(VIRTUAL_HEIGHT)))
+    }
+
+    /// While mods bend or move the lane: what's attached to it goes by the lane right there, and
+    /// what that puts on top of another part gives way, towards the middle of the screen.
+    fn settle_parts(&self, c: &Canvas) {
+        let mut settled = [None; Part::ALL.len()];
+        let now = self.time;
+        if !self.lane_path.is_empty() {
+            let drawn = |p: Part| {
+                !self.hidden.has(p)
+                    && (self.hud.place(p).is_some()
+                        || !matches!(
+                            p,
+                            Part::Combo | Part::Judgements | Part::Scoreboard | Part::Spectators
+                        ))
+            };
+            let frames = self.frames(c);
+            // Each with where it'd be, for what stands close together there on purpose.
+            let mut boxes: Vec<(Part, hud::Placed, bool, hud::Placed)> = Vec::new();
+            for part in Part::PLACED.into_iter().filter(|&p| drawn(p)) {
+                let (place, _, mut b) = self.part_box(c, part);
+                let home = b;
+                let a = place.y;
+                let column = (a.target == hud::Target::Lane)
+                    .then(|| self.lane_column(b.x, b.x + b.w, c))
+                    .flatten();
+                if let Some((top, bottom)) = column {
+                    let line = top + a.at * (bottom - top);
+                    let y = line + a.off * frames.follow(&place) - a.pivot * b.h;
+                    b.y = y.clamp(0.0, (VIRTUAL_HEIGHT - b.h).max(0.0));
+                }
+                boxes.push((part, b, a.target == hud::Target::Lane, home));
+            }
+            boxes.sort_by(|a, b| a.1.y.total_cmp(&b.1.y));
+            let touching = |a: &hud::Placed, b: &hud::Placed| {
+                a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+            };
+            let middle = VIRTUAL_HEIGHT / 2.0;
+            // The top half downwards, then the bottom half upwards.
+            for i in 0..boxes.len() {
+                if !boxes[i].2 || boxes[i].1.y + boxes[i].1.h / 2.0 >= middle {
+                    continue;
+                }
+                for j in 0..i {
+                    let other = boxes[j].1;
+                    if touching(&boxes[i].1, &other) && !touching(&boxes[i].3, &boxes[j].3) {
+                        boxes[i].1.y = other.y + other.h + 2.0;
+                    }
+                }
+            }
+            for i in (0..boxes.len()).rev() {
+                if !boxes[i].2 || boxes[i].1.y + boxes[i].1.h / 2.0 < middle {
+                    continue;
+                }
+                for j in (i + 1..boxes.len()).rev() {
+                    let other = boxes[j].1;
+                    if touching(&boxes[i].1, &other) && !touching(&boxes[i].3, &boxes[j].3) {
+                        boxes[i].1.y = other.y - boxes[i].1.h - 2.0;
+                    }
+                }
+            }
+            let before = self.settled.get();
+            for (part, b, ..) in boxes.into_iter().filter(|b| b.2) {
+                let i = hud::Layout::index(part);
+                let y = before[i].map_or(b.y, |(y, at)| y + (b.y - y) * ease_step(now - at));
+                settled[i] = Some((y, now));
+            }
+        }
+        self.settled.set(settled);
+    }
+
+    /// Where the parts can be attached to now.
+    fn frames(&self, c: &Canvas) -> hud::Frames {
+        hud::Frames::new(c.width, self.hud_area).with_field(self.hud_area, self.field_boxes)
+    }
+
+    /// How big a part at `place` is in its own units.
+    fn part_size(&self, c: &Canvas, part: Part, place: &hud::Place) -> [f32; 2] {
+        match part {
+            Part::Score => [score_width(c, 24.0, "00000000"), 28.0],
+            Part::Accuracy => [score_width(c, 14.0, "100.00%"), 16.0],
+            Part::Pp => [score_width(c, 14.0, "9999pp"), 16.0],
+            // As long as what it's on.
+            Part::Progress => {
+                let f = self.frames(c);
+                [f.rect(place.x.target)[2] / f.follow(place), 3.0]
+            }
+            Part::Health => {
+                skin_health(c).map_or([(c.width * 0.25).min(180.0), 8.0], |[bg, _]| [bg[0], bg[1]])
+            }
+            Part::Mods => [Canvas::text_width(9.0, &self.mods_text()).max(40.0), 10.0],
+            Part::HitError => [300.0, 44.0],
+            Part::OffsetHint => [420.0, 10.0],
+            Part::Combo => [56.0, 24.0],
+            Part::Judgements => [80.0, 22.0],
+            Part::Ur => [Canvas::text_width(UR_SIZE, "UR 999.99"), 12.0],
+            Part::Counts => {
+                let on = self.hud.counter;
+                let n = [on.great, on.ok, on.miss].iter().filter(|&&c| c).count() as f32;
+                let cells = n * count_cell(on.titles) + (n - 1.0).max(0.0) * COUNT_GAP;
+                [cells.max(COUNT_GAP * 2.0), 10.0]
+            }
+            Part::Scoreboard => [300.0, 138.0],
+            Part::Spectators => [140.0, 92.0],
+            Part::HitAnimation => [0.0, 0.0],
+        }
+    }
+
+    /// A part's place, size in its own units and box on the screen.
+    pub fn part_box(&self, c: &Canvas, part: Part) -> (hud::Place, [f32; 2], hud::Placed) {
+        let place = self.part_place(c, part);
+        let size = self.part_size(c, part, &place);
+        let frames = self.frames(c);
+        let moved = self.hud.place(part).is_some();
+        (place, size, frames.resolve(&place, size, moved))
+    }
+
+    /// Draws a part with `f` in its own box from (0, 0), which also gets the box's size and how
+    /// text lines up in it (0 left, 1 right), and puts it in its place.
+    fn in_place(&self, c: &mut Canvas, part: Part, f: impl FnOnce(&mut Canvas, [f32; 2], f32)) {
+        let (place, size, b) = self.part_box(c, part);
+        let y = self.settled_top(part).unwrap_or(b.y);
+        let start = c.shapes.len();
+        f(c, size, place.x.pivot);
+        c.transform_since(start, [0.0, 0.0], b.k, b.x, y);
+    }
+
+    /// Puts what `f` draws from `from`, a part drawn somewhere of its own, in its place.
+    pub fn placed_from(
+        &self,
+        c: &mut Canvas,
+        part: Part,
+        from: [f32; 2],
+        f: impl FnOnce(&mut Canvas),
+    ) {
+        let (_, _, b) = self.part_box(c, part);
+        let y = self.settled_top(part).unwrap_or(b.y);
+        let start = c.shapes.len();
+        f(c);
+        c.transform_since(start, from, b.k, b.x - from[0], y - from[1]);
+    }
+
+    fn settled_top(&self, part: Part) -> Option<f32> {
+        self.settled.get()[hud::Layout::index(part)].map(|(y, _)| y)
+    }
+
+    fn accuracy_text(&self) -> String {
+        format!("{:.2}%", self.stats.accuracy() * 100.0)
+    }
+
+    fn mods_text(&self) -> String {
+        self.mods
+            .iter()
+            .map(|m| m.acronym())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Everything the player can place.
+    pub fn draw_parts(&self, c: &mut Canvas) {
+        self.settle_parts(c);
+        let t = self.time;
+        let shown = |p: Part| !self.hidden.has(p);
+        // Over the lane unless moved: the playfield draws those itself.
+        let off_the_lane = |p: Part| self.hud_sample || self.hud.place(p).is_some();
+        let chosen = |p: Part| self.hud.colour(p);
+
+        // Defense is a team's: one player's score says nothing, the team panel does.
+        if shown(Part::Score) && self.defense.is_none() {
+            let s = format!("{:08}", self.stats.score);
+            self.in_place(c, Part::Score, |c, [w, _], align| {
+                score_number(c, w, align, 24.0, (WHITE, chosen(Part::Score)), &s);
+            });
+        }
+        if shown(Part::Accuracy) {
+            let s = self.accuracy_text();
+            self.in_place(c, Part::Accuracy, |c, [w, _], align| {
+                score_number(c, w, align, 14.0, (0xc8c8d8, chosen(Part::Accuracy)), &s);
+            });
+        }
+        if let Some(pp) = self
+            .live_pp_value
+            .filter(|_| shown(Part::Pp) && self.defense.is_none())
+        {
+            let s = format!("{pp:.0}pp");
+            let pink = chosen(Part::Pp).unwrap_or(0xff8ad8);
+            self.in_place(c, Part::Pp, |c, [w, _], align| {
+                let nw = c.number_width(Font::Score, 14.0, &s);
+                let x = (w - nw.unwrap_or_else(|| Canvas::text_width(14.0, &s))) * align;
+                if nw.is_some() {
+                    c.number(Font::Score, x, 0.0, 14.0, rgba(pink, 1.0), &s);
+                } else {
+                    c.text(x, 0.0, 14.0, rgba(pink, 1.0), &s);
+                }
+            });
+        }
+        if shown(Part::Progress) {
+            let done = if self.hud_sample {
+                0.4
+            } else {
+                self.progress() as f32
+            };
+            self.in_place(c, Part::Progress, |c, [w, h], _| {
+                c.rect(0.0, 0.0, w * done, h, rgba(WHITE, 0.45));
+            });
+        }
+        // HP: has to be at least half full at the end (the mark), like osu!taiko. Defense goes
+        // by the team's lives instead (its panel).
+        if self.show_hp && shown(Part::Health) && self.defense.is_none() {
+            self.in_place(c, Part::Health, |c, [hw, _], _| self.draw_health(c, hw));
+        }
+        if !self.mods.is_empty() && shown(Part::Mods) {
+            let label = self.mods_text();
+            self.in_place(c, Part::Mods, |c, [w, _], align| {
+                let x = (w - Canvas::text_width(9.0, &label)) * align;
+                let col = chosen(Part::Mods).unwrap_or(0xc8c8d8);
+                c.text(x, 0.0, 9.0, rgba(col, 0.9), &label);
+            });
+        }
+        if shown(Part::HitError) {
+            self.in_place(c, Part::HitError, |c, [w, h], _| {
+                self.draw_hit_error(c, t, w / 2.0, h / 2.0);
+            });
+        }
+        if shown(Part::OffsetHint) {
+            let hint = if self.hud_sample {
+                Some((
+                    tr!(
+                        "offset looks good: +1.2 +-3.4 ms (UR 95, 120 hits)",
+                        "オフセットは良好: +1.2 ±3.4 ms (UR 95、120回)",
+                        "смещение в порядке: +1.2 +-3.4 мс (UR 95, 120 ударов)"
+                    )
+                    .to_string(),
+                    rgba(0x86E05A, 0.9),
+                ))
+            } else {
+                self.offset_hint_text()
+            };
+            if let Some((text, colour)) = hint {
+                self.in_place(c, Part::OffsetHint, |c, [w, _], _| {
+                    let colour = chosen(Part::OffsetHint).map_or(colour, |col| rgba(col, 1.0));
+                    c.text_centered(w / 2.0, 0.0, 8.0, colour, &text);
+                });
+            }
+        }
+        if shown(Part::Ur) {
+            let s = format!("UR {:.2}", self.stats.unstable_rate());
+            self.in_place(c, Part::Ur, |c, [w, _], align| {
+                let x = (w - Canvas::text_width(UR_SIZE, &s)) * align;
+                let col = chosen(Part::Ur).unwrap_or(0xc8c8d8);
+                c.text(x, 0.0, UR_SIZE, rgba(col, 1.0), &s);
+            });
+        }
+        if shown(Part::Counts) {
+            let st = &self.stats;
+            let picked = chosen(Part::Counts);
+            let on = self.hud.counter;
+            let titles = on.titles;
+            let cells = [
+                (on.great, "300", st.great, Judge::Great),
+                (on.ok, "100", st.ok, Judge::Ok),
+                (on.miss, "MISS", st.miss, Judge::Miss),
+            ];
+            self.in_place(c, Part::Counts, |c, _, _| {
+                let shown = cells.into_iter().filter(|cell| cell.0);
+                for (i, (_, label, n, j)) in shown.enumerate() {
+                    let x = i as f32 * (count_cell(titles) + COUNT_GAP);
+                    let col = picked.unwrap_or(j.color());
+                    let n = n.to_string();
+                    if titles {
+                        c.text(x, 0.0, COUNT_SIZE, rgba(col, 1.0), label);
+                        let at = x + Canvas::text_width(COUNT_SIZE, label) + COUNT_SPACE;
+                        let count = rgba(picked.unwrap_or(WHITE), 1.0);
+                        c.text(at, 0.0, COUNT_SIZE, count, &n);
+                    } else {
+                        // The colour is all that says which it is.
+                        c.text(x, 0.0, COUNT_SIZE, rgba(col, 1.0), &n);
+                    }
+                }
+            });
+        }
+        if shown(Part::Combo) && off_the_lane(Part::Combo) && self.stats.combo >= 2 {
+            let s = self.stats.combo.to_string();
+            self.in_place(c, Part::Combo, |c, [w, h], _| {
+                let skin_size = if s.len() > 3 { 17.0 } else { 22.0 };
+                match c.number_width(Font::Combo, skin_size, &s) {
+                    Some(nw) => {
+                        let y = (h - skin_size) / 2.0;
+                        let x = (w - nw) / 2.0;
+                        let tint = chosen(Part::Combo).unwrap_or(WHITE);
+                        c.number(Font::Combo, x, y, skin_size, rgba(tint, 1.0), &s);
+                    }
+                    None => {
+                        let size = if s.len() > 3 { 12.0 } else { 16.0 };
+                        let y = (h - size) / 2.0;
+                        // Dark on the drum, where the stand-in play shows it.
+                        let on_drum = self.hud.place(Part::Combo).is_none();
+                        let col = chosen(Part::Combo).unwrap_or(if on_drum {
+                            0x1d1d26
+                        } else {
+                            0xe8e8f0
+                        });
+                        c.text_centered(w / 2.0, y, size, rgba(col, 1.0), &s);
+                    }
+                }
+            });
+        }
+        if shown(Part::Judgements) && off_the_lane(Part::Judgements) {
+            let judged = if self.hud_sample {
+                Some((Judge::Great, 1.0))
+            } else {
+                self.last_judge
+                    .filter(|&(j, _)| splashes(j))
+                    .and_then(|(j, at)| {
+                        let age = (t - at) as f32;
+                        (age < 450.0).then(|| (j, (1.0 - age / 450.0).min(1.0)))
+                    })
+            };
+            if let Some((j, a)) = judged {
+                self.in_place(c, Part::Judgements, |c, [w, h], _| {
+                    let sprite = match j {
+                        Judge::Great => Sprite::JudgeGreat,
+                        Judge::Ok => Sprite::JudgeOk,
+                        Judge::Miss => Sprite::JudgeMiss,
+                    };
+                    if let Some([sw, sh]) = c.sprite_size(sprite) {
+                        // Fitted to the box, as tall as it can be.
+                        let hh = h / 2.0;
+                        let hw = hh * sw / sh.max(0.001);
+                        let tint = chosen(Part::Judgements).unwrap_or(WHITE);
+                        c.sprite_box(sprite, w / 2.0, hh, hw, hh, rgba(tint, a));
+                    } else {
+                        let col = chosen(Part::Judgements).unwrap_or(j.color());
+                        c.text_centered(w / 2.0, 3.0, 15.0, rgba(col, a), j.label());
+                    }
+                });
+            }
+        }
+    }
+
+    /// Stand-ins for the parts only a match or friends watching show. They start out in the same
+    /// spot, and never appear together in a play: their names are kept apart here.
+    pub fn draw_stand_ins(&self, c: &mut Canvas) {
+        for (part, y) in [(Part::Scoreboard, 124.0), (Part::Spectators, 6.0)] {
+            if !self.hidden.has(part) {
+                self.in_place(c, part, |c, [w, h], _| {
+                    c.round_rect(
+                        [0.0, 0.0],
+                        [w, h],
+                        6.0,
+                        rgba(0x000000, 0.45),
+                        rgba(0, 0.0),
+                        0.0,
+                    );
+                    let label = Canvas::fit(8.0, w - 12.0, part.label());
+                    c.text(6.0, y, 8.0, rgba(0xc8c8d8, 1.0), &label);
+                });
+            }
+        }
+    }
+
+    /// The health bar in its own box, `hw` wide.
+    fn draw_health(&self, c: &mut Canvas, hw: f32) {
+        let hp = self.hp as f32;
+        if let Some([[bg_w, bg_h], [fill_w, fill_h]]) = skin_health(c) {
+            // The fill on it 5, 16 px in, cut off at the HP.
+            c.sprite_box(
+                Sprite::HealthBg,
+                bg_w / 2.0,
+                bg_h / 2.0,
+                bg_w / 2.0,
+                bg_h / 2.0,
+                rgba(WHITE, 1.0),
+            );
+            let (fx, fy) = (5.0 * HUD_PX, 16.0 * HUD_PX);
+            let start = c.shapes.len();
+            c.sprite_box(
+                Sprite::HealthFill,
+                fx + fill_w / 2.0,
+                fy + fill_h / 2.0,
+                fill_w / 2.0,
+                fill_h / 2.0,
+                rgba(WHITE, 1.0),
+            );
+            c.clip_since(start, fx, fy, fill_w * hp, fill_h);
+            c.rect(
+                fx + fill_w / 2.0 - 0.75,
+                fy - 2.0,
+                1.5,
+                fill_h + 4.0,
+                rgba(WHITE, 0.8),
+            );
+        } else {
+            c.round_rect(
+                [0.0, 0.0],
+                [hw, 8.0],
+                3.0,
+                rgba(0x15151d, 0.85),
+                rgba(0x3a3a4e, 1.0),
+                1.0,
+            );
+            let fill = if hp >= 0.5 { 0xFFD34D } else { 0xEB452C };
+            if hp > 0.0 {
+                c.round_rect(
+                    [1.0, 1.0],
+                    [(hw - 2.0) * hp, 6.0],
+                    2.5,
+                    rgba(fill, 0.95),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+            }
+            c.rect(hw / 2.0 - 0.75, -2.0, 1.5, 12.0, rgba(WHITE, 0.8));
+        }
+    }
+
+    /// The hit error meter around (`cx`, `my`).
+    fn draw_hit_error(&self, c: &mut Canvas, t: f64, cx: f32, my: f32) {
+        let scale = 150.0 / self.windows.miss as f32;
+        let wnd = |ms: f64| ms as f32 * scale;
+        c.round_rect(
+            [cx - wnd(self.windows.miss), my - 3.0],
+            [wnd(self.windows.miss) * 2.0, 6.0],
+            3.0,
+            rgba(Judge::Miss.color(), 0.25),
+            rgba(0, 0.0),
+            0.0,
+        );
+        c.round_rect(
+            [cx - wnd(self.windows.ok), my - 3.0],
+            [wnd(self.windows.ok) * 2.0, 6.0],
+            3.0,
+            rgba(Judge::Ok.color(), 0.4),
+            rgba(0, 0.0),
+            0.0,
+        );
+        c.round_rect(
+            [cx - wnd(self.windows.great), my - 3.0],
+            [wnd(self.windows.great) * 2.0, 6.0],
+            3.0,
+            rgba(Judge::Great.color(), 0.6),
+            rgba(0, 0.0),
+            0.0,
+        );
+        for &(err, at, j) in &self.recent_errors {
+            let age = (t - at) as f32;
+            if age < 4000.0 {
+                let a = 1.0 - age / 4000.0;
+                c.rect(
+                    cx + err as f32 * scale - 1.0,
+                    my - 11.0,
+                    2.0,
+                    22.0,
+                    rgba(j.color(), a),
+                );
+            }
+        }
+        if !self.recent_errors.is_empty() {
+            let n = self.recent_errors.len().min(20);
+            let mean = self
+                .recent_errors
+                .iter()
+                .rev()
+                .take(n)
+                .map(|e| e.0)
+                .sum::<f64>()
+                / n as f64;
+            c.circle(
+                cx + mean as f32 * scale,
+                my - 18.0,
+                3.5,
+                rgba(WHITE, 0.9),
+                rgba(WHITE, 0.0),
+                0.0,
+            );
+        }
+        c.rect(cx - 1.0, my - 14.0, 2.0, 28.0, rgba(WHITE, 0.9));
+    }
+
+    /// The offset advice's line and colour, once it has something to say.
+    fn offset_hint_text(&self) -> Option<(String, [f32; 4])> {
+        if !self.show_offset_hint {
+            return None;
+        }
+        let h = self.offset_suggestion(self.offset)?;
+        let e = &h.estimate;
+        let (hits, needed) = (e.hits, h.needed);
+        let building = if hits < needed {
+            tr!("  confidence {hits}/{needed}", "  信頼度 {hits}/{needed}", "  надёжность {hits}/{needed}";)
+        } else {
+            String::new()
+        };
+        let ur = e.ur;
+        let hits_ru = crate::lang::ru_plural(hits, ["удар", "удара", "ударов"]);
+        let stats =
+            tr!("UR {ur:.0}, {hits} hits", "UR {ur:.0}、{hits}回", "UR {ur:.0}, {hits} {hits_ru}";);
+        let (error, margin, suggested) = (e.error_ms.abs(), e.margin_ms, e.suggested_offset);
+        if h.significant {
+            let dir = if e.error_ms > 0.0 {
+                tr!("late", "遅い", "поздно")
+            } else {
+                tr!("early", "早い", "рано")
+            };
+            let apply = self.offset_key.as_ref().map_or(String::new(), |k| tr!("  |  {k}: this map  Shift+{k}: all", "  |  {k}: この譜面  Shift+{k}: 全体", "  |  {k}: эта карта  Shift+{k}: все";));
+            let text = tr!(
+                "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms{apply}{building}",
+                "{error:.1} ±{margin:.1} ms {dir} ({stats})  |  提案オフセット {suggested:+.0} ms{apply}{building}",
+                "{error:.1} +-{margin:.1} мс {dir} ({stats})  |  смещение {suggested:+.0} мс{apply}{building}";
+            );
+            Some((text, rgba(0xFFD34D, 0.95)))
+        } else {
+            let error = e.error_ms;
+            let text = tr!(
+                "offset looks good: {error:+.1} +-{margin:.1} ms ({stats}){building}",
+                "オフセットは良好: {error:+.1} ±{margin:.1} ms ({stats}){building}",
+                "смещение в порядке: {error:+.1} +-{margin:.1} мс ({stats}){building}";
+            );
+            Some((text, rgba(0x86E05A, 0.9)))
+        }
+    }
+
+    /// A made-up play for the interface editor to show the parts with.
+    pub fn hud_sample() -> Game {
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let mut g = Game::with_mods(map, track, None, Mods::parse("HD"));
+        g.hud_sample = true;
+        g.stats.score = 1_234_560;
+        (g.stats.great, g.stats.ok, g.stats.miss) = (812, 37, 4);
+        g.stats.combo = 321;
+        g.stats.errors = (0..20).map(|i| (i % 7) as f64 * 5.0 - 15.0).collect();
+        g.live_pp_value = Some(312.0);
+        g.hp = 0.8;
+        g.show_hp = true;
+        g.recent_errors = g
+            .stats
+            .errors
+            .iter()
+            .map(|&e| (e, g.time, Judge::Great))
+            .collect();
+        g
+    }
 }
 
 /// Overtime's animatronic bear lunging at the screen, `p` (0-1) of the way through, shaking
 /// with map time `t`. Drawn from shapes, centred on a canvas `c.width` wide.
-/// The HP bar's top and left end (it is 8 tall and ends 18 from the right).
+/// The HP bar's top.
 const HP_BAR_Y: f32 = 88.0;
-fn hp_bar_x(w: f32) -> f32 {
-    w - 18.0 - (w * 0.25).min(180.0)
+
+/// The UR counter's text size.
+const UR_SIZE: f32 = 11.0;
+/// The hit counter's text size and the room between its cells.
+const COUNT_SIZE: f32 = 9.0;
+const COUNT_GAP: f32 = 10.0;
+const COUNT_SPACE: f32 = 4.0;
+
+/// One cell of the hit counter: its count, after its title if it has one.
+fn count_cell(titles: bool) -> f32 {
+    let title = Canvas::text_width(COUNT_SIZE, "MISS") + COUNT_SPACE;
+    Canvas::text_width(COUNT_SIZE, "9999") + if titles { title } else { 0.0 }
+}
+
+/// How wide `s` comes out in the score's font.
+fn score_width(c: &Canvas, size: f32, s: &str) -> f32 {
+    c.number_width(Font::Score, size, s)
+        .unwrap_or_else(|| Canvas::text_width(size, s))
+}
+
+/// `s` in the skin's score font if it has one, lined up by `align` in a box `w` wide.
+/// `chosen`: the player's colour, which tints the skin's digits too.
+fn score_number(
+    c: &mut Canvas,
+    w: f32,
+    align: f32,
+    size: f32,
+    (col, chosen): (u32, Option<u32>),
+    s: &str,
+) {
+    let x = (w - score_width(c, size, s)) * align;
+    if !c.number(
+        Font::Score,
+        x,
+        0.0,
+        size,
+        rgba(chosen.unwrap_or(WHITE), 1.0),
+        s,
+    ) {
+        c.text(x, 0.0, size, rgba(chosen.unwrap_or(col), 1.0), s);
+    }
+}
+
+/// The sizes of the skin's health bar and its fill, if it has them.
+fn skin_health(c: &Canvas) -> Option<[[f32; 2]; 2]> {
+    let k = HUD_PX * 128.0;
+    let bg = c.sprite_size(Sprite::HealthBg)?;
+    let fill = c.sprite_size(Sprite::HealthFill)?;
+    Some([[bg[0] * k, bg[1] * k], [fill[0] * k, fill[1] * k]])
 }
 
 fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
@@ -6019,6 +6647,107 @@ fn turned_box(rect: [f32; 4], pivot: [f32; 2], angle: f32, scale: f32, dest: [f3
         .iter()
         .fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
     [x0, y0, x1 - x0, y1 - y0]
+}
+
+/// How the playfield stands this frame, for `field_boxes`.
+struct FieldView<'a> {
+    w: f32,
+    rail: Option<&'a Rail>,
+    lane_len: f32,
+    /// Where mirroring takes an x.
+    flip: &'a dyn Fn(f32) -> f32,
+    pivot: [f32; 2],
+    turned: f32,
+    zoom: f32,
+    dest: [f32; 2],
+    /// The lane runs both ways from the drum.
+    whole_width: bool,
+    /// It goes all the way round `dest`.
+    spinning: bool,
+}
+
+/// Where the lane, the drum and the hit point are, the lane going by what of it is on the screen;
+/// the points along it there, and how far its edges are from them.
+fn field_boxes(v: &FieldView) -> (hud::FieldBoxes, Vec<(f32, f32)>, f32) {
+    let (sin, cos) = v.turned.sin_cos();
+    let place = |x: f32, y: f32| {
+        let (dx, dy) = (
+            ((v.flip)(x) - v.pivot[0]) * v.zoom,
+            (y - v.pivot[1]) * v.zoom,
+        );
+        (
+            v.dest[0] + dx * cos - dy * sin,
+            v.dest[1] + dx * sin + dy * cos,
+        )
+    };
+    let half = LANE_H / 2.0 * v.zoom;
+    let (w, h) = (v.w, VIRTUAL_HEIGHT);
+    let mut lane = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    let mut path = Vec::new();
+    let mut take = |(x, y): (f32, f32)| {
+        if x > -half && x < w + half && y > -half && y < h + half {
+            path.push((x, y));
+            lane = [
+                lane[0].min(x - half),
+                lane[1].min(y - half),
+                lane[2].max(x + half),
+                lane[3].max(y + half),
+            ];
+        }
+    };
+    take(place(0.0, LANE_Y));
+    take(place(HIT_X, LANE_Y));
+    match v.rail {
+        Some(r) => r
+            .pts
+            .iter()
+            .step_by(4)
+            .for_each(|&(x, y, _)| take(place(x, y))),
+        None => {
+            let steps = (v.lane_len / 16.0).ceil() as usize;
+            for i in 0..=steps {
+                take(place(HIT_X + (i as f32 * 16.0).min(v.lane_len), LANE_Y));
+            }
+        }
+    }
+    if v.whole_width {
+        (lane[0], lane[2]) = (0.0, w);
+    }
+    if v.spinning {
+        let r = v.lane_len * v.zoom;
+        lane = [v.dest[0] - r, v.dest[1] - r, v.dest[0] + r, v.dest[1] + r];
+    }
+    let [x0, y0, x1, y1] = lane;
+    let (x0, y0, x1, y1) = (x0.max(0.0), y0.max(0.0), x1.min(w), y1.min(h));
+    let boxed = |x: f32, y: f32, hw: f32, hh: f32| {
+        let (a, b) = (place(x - hw, y - hh), place(x + hw, y + hh));
+        [
+            a.0.min(b.0),
+            a.1.min(b.1),
+            (a.0 - b.0).abs(),
+            (a.1 - b.1).abs(),
+        ]
+    };
+    let boxes = hud::FieldBoxes {
+        lane: [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)],
+        drum: boxed(PANEL_W / 2.0, LANE_Y, PANEL_W / 2.0, LANE_H / 2.0),
+        hit: boxed(HIT_X, LANE_Y, NOTE_R, NOTE_R),
+    };
+    (boxes, if v.spinning { Vec::new() } else { path }, half)
+}
+
+/// How long (ms) parts take to catch up with a lane that's moved: bits of a bending lane come on
+/// and off the screen all at once, which they shouldn't jump with.
+const HUD_EASE_MS: f64 = 140.0;
+
+/// How far along to where it's going something eased gets in `dt` ms. A step back in time or a long
+/// way forward is a seek: it goes straight there.
+fn ease_step(dt: f64) -> f32 {
+    if dt <= 0.0 || dt > 1000.0 {
+        1.0
+    } else {
+        (1.0 - (-dt / HUD_EASE_MS).exp()) as f32
+    }
 }
 
 /// The lane alone (top, height), for a preview it fills.
@@ -6322,16 +7051,186 @@ pub fn draw_preview(c: &mut Canvas) {
     );
 }
 
-/// The editor's stand-in score, where the real HUD goes: fixed on screen, whatever the area.
-pub fn draw_preview_hud(c: &mut Canvas) {
-    let w = c.width;
-    c.text_right(w - 18.0, 18.0, 24.0, rgba(WHITE, 1.0), "00000000");
-    c.text_right(w - 18.0, 50.0, 14.0, rgba(0xc8c8d8, 1.0), "100.00%");
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The left end of the HP bar, which ends 18 from the right.
+    fn hp_bar_x(w: f32) -> f32 {
+        w - 18.0 - (w * 0.25).min(180.0)
+    }
+
+    /// A game with `m` on, drawn at map time `t`: where a part under the lane comes out, and the
+    /// lane's box.
+    fn part_under_the_lane(m: Option<Mod>, t: f64) -> (hud::Placed, [f32; 4]) {
+        let mods = m.map_or(Mods::NONE, |m| Mods::parse(m.acronym()));
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mut g = Game::with_seed(map, track, None, mods, 42);
+        g.hidden = hud::Parts::NONE;
+        g.time = t;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        g.draw_parts(&mut c);
+        let lane = g.frames(&c).rect(hud::Target::Lane);
+        let mut part = g.part_box(&c, Part::Counts).2;
+        part.y = g.settled_top(Part::Counts).unwrap_or(part.y);
+        (part, lane)
+    }
+
+    #[test]
+    fn without_mods_the_parts_on_the_lane_stay_where_the_lane_always_is() {
+        let (_, lane) = part_under_the_lane(None, 3000.0);
+        let plain = hud::Frames::new(853.3, crate::layout::Area::FULL);
+        for (a, b) in lane.iter().zip(plain.rect(hud::Target::Lane)) {
+            assert!((a - b).abs() < 0.01, "{lane:?}");
+        }
+    }
+
+    #[test]
+    fn a_part_under_a_bent_lane_goes_by_the_lane_right_above_it() {
+        // The left of these lanes runs straight: the counter on it stays just under it.
+        let straight = part_under_the_lane(None, 3000.0).0;
+        let drop = RailShape::Loop.drop();
+        let (part, _) = part_under_the_lane(Some(Mod::Loop), 3000.0);
+        assert!(
+            (part.y - straight.y - drop).abs() < 1.0,
+            "{part:?} from {straight:?}"
+        );
+    }
+
+    #[test]
+    fn parts_pushed_against_the_edge_by_a_lane_give_way_to_each_other() {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mods = Mods::parse(Mod::Loop.acronym());
+        let mut g = Game::with_seed(map, track, None, mods, 42);
+        let lane = hud::builtin_presets()
+            .into_iter()
+            .find(|p| {
+                p.1.place(Part::Score)
+                    .is_some_and(|s| s.y.target == hud::Target::Lane)
+            })
+            .expect("the lane preset");
+        g.hud = lane.1;
+        g.hidden = lane.1.off;
+        g.live_pp_value = Some(100.0);
+        g.time = 3000.0;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        g.draw_parts(&mut c);
+        let at = |p: Part| {
+            let mut b = g.part_box(&c, p).2;
+            b.y = g.settled_top(p).unwrap_or(b.y);
+            b
+        };
+        let parts = [Part::Score, Part::Accuracy, Part::Ur, Part::Mods];
+        for (i, &p) in parts.iter().enumerate() {
+            let (a, y0) = (at(p), at(p).y);
+            for &q in &parts[i + 1..] {
+                let b = at(q);
+                let apart = a.x + a.w <= b.x + 0.5
+                    || b.x + b.w <= a.x + 0.5
+                    || y0 + a.h <= b.y + 0.5
+                    || b.y + b.h <= y0 + 0.5;
+                assert!(apart, "{p:?} {a:?} on {q:?} {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn parts_side_by_side_on_a_lane_that_only_moved_stay_side_by_side() {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mods = Mods::parse(Mod::Zigzag.acronym());
+        let mut g = Game::with_seed(map, track, None, mods, 42);
+        let (_, lane) = hud::builtin_presets().swap_remove(3);
+        g.hud = lane;
+        g.hidden = lane.off;
+        g.live_pp_value = Some(100.0);
+        g.time = 3000.0;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        g.draw_parts(&mut c);
+        let top = |p| g.settled_top(p).unwrap();
+        assert!(
+            (top(Part::Pp) + 16.0 - top(Part::Accuracy) - 16.0).abs() < 40.0,
+            "pp {} accuracy {}",
+            top(Part::Pp),
+            top(Part::Accuracy)
+        );
+    }
+
+    #[test]
+    fn an_upright_lane_is_tall_and_narrow() {
+        let (_, lane) = part_under_the_lane(Some(Mod::Mania), 3000.0);
+        assert!(lane[3] > lane[2], "{lane:?}");
+    }
+
+    #[test]
+    fn what_shakes_the_playfield_leaves_the_parts_still() {
+        for m in [Mod::Party, Mod::Tilt, Mod::Spin, Mod::BarrelRoll] {
+            let a = part_under_the_lane(Some(m), 3000.0).0;
+            let b = part_under_the_lane(Some(m), 3777.0).0;
+            assert_eq!((a.x, a.y), (b.x, b.y), "{m:?}");
+        }
+    }
+
+    #[test]
+    fn the_parts_on_the_lane_find_the_playfield_in_focus() {
+        let (part, lane) = part_under_the_lane(Some(Mod::Multiverse), 3000.0);
+        assert!(lane[2] > 0.0 && lane[3] > 0.0, "{lane:?}");
+        assert!(part.y >= lane[1], "{part:?} in {lane:?}");
+    }
+
+    #[test]
+    fn a_morphing_lane_carries_the_parts_along_without_a_jump() {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mods = Mods::parse(Mod::Shapeshift.acronym());
+        let mut g = Game::with_seed(map, track, None, mods, 42);
+        let setup = "every=4 order=fixed shapes=spiral,loop,elbow,-zigzag,-uturn,-straight";
+        g.use_mod_settings(None, Some(shapeshift::Config::parse(setup)));
+        let (mut c, mut last, mut moved) = (Canvas::default(), None, 0.0f32);
+        let (mut worst, mut at) = (0.0f32, 0.0);
+        for i in 0..4000 {
+            g.time = 2000.0 + i as f64 * 16.0;
+            c.clear(853.3);
+            g.draw_playfield(&mut c, 1.0);
+            g.draw_parts(&mut c);
+            let mut lane = g.frames(&c).rect(hud::Target::Lane);
+            lane[1] = g.settled_top(Part::Counts).unwrap_or(lane[1]);
+            if let Some(before) = last {
+                let step = lane
+                    .iter()
+                    .zip::<[f32; 4]>(before)
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0, f32::max);
+                moved += step;
+                if step > worst {
+                    (worst, at) = (step, g.time);
+                }
+            }
+            last = Some(lane);
+        }
+        assert!(moved > 50.0, "the lane's box went with the shapes: {moved}");
+        assert!(worst < 40.0, "jumped {worst} at {at}");
+    }
 
     #[test]
     fn block_culling_preserves_the_original_draw_for_every_mod() {
@@ -6601,6 +7500,36 @@ mod tests {
         g.press_time(l, 500.0, None);
         g.set_time(9000.0);
         assert_eq!((g.stats.great, g.stats.miss), (1, 3));
+    }
+
+    #[test]
+    fn tact_notes_are_in_the_hit_circle_on_time_and_never_go_back() {
+        let mods = Mods::parse("TC");
+        // Bars of 2000 ms from 0 on.
+        let start = |x: f64| (x / 2000.0).floor() * 2000.0;
+        for note in [2500.0, 3999.0, 4000.0, 7321.0] {
+            let mut last = f32::INFINITY;
+            let mut t = note - 3000.0;
+            while t <= note {
+                let warp = crate::tact::shown_time(t, start) - t;
+                let s = Scroll {
+                    t,
+                    speed: osu_speed_scale(640.0 + HIT_X),
+                    lane: 640.0,
+                    mods,
+                    warp,
+                    live: 1.0,
+                };
+                let x = s.x(note, 0.5);
+                assert!(x <= last + 1e-3, "note {note} at {t}: {last} -> {x}");
+                last = x;
+                t += 1.0;
+            }
+            assert!(
+                (last - HIT_X).abs() < 1e-3,
+                "note {note} is at {last}, not the drum, on time"
+            );
+        }
     }
 
     #[test]
@@ -7827,7 +8756,7 @@ mod tests {
         let mut g = kiai_game("SS");
         let own = g.shape_order.clone();
         g.use_mod_settings(None, None);
-        assert_eq!((g.universes, g.shape_order), (None, own));
+        assert_eq!((g.universes, g.shape_order.clone()), (None, own));
     }
 
     #[test]
@@ -8121,6 +9050,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::DonTower,
                 at: 2000.0,
+                until: 0.0,
             },
         );
         g.defense_act(
@@ -8128,6 +9058,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::Slow,
                 at: 5000.0,
+                until: 0.0,
             },
         );
         g.defense_act(
@@ -8135,6 +9066,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::KatTower,
                 at: 9000.0,
+                until: 0.0,
             },
         );
         g.set_team(TeamState {
@@ -8144,18 +9076,38 @@ mod tests {
             shield: 3,
             towers: 2,
             heals: 0,
+            shields: 0,
+            tower_buys: 2,
         });
+        g.banner = Some("WATCHING  -  quassbottle".into());
         let mut c = Canvas::default();
-        for t in [3200.0, 4700.0, 6500.0, 11_200.0] {
-            g.set_time(t - 400.0);
-            g.press_at(1, t - 400.0, None);
-            g.time = t;
-            c.clear(853.3);
-            g.draw_playfield(&mut c, 1.0);
-            g.draw_hud(&mut c);
-            let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
-            crate::debug::write_png(&dir.join(format!("defense-{t}.png")), w, h, &rgb).unwrap();
+        for lang in [crate::lang::Lang::En, crate::lang::Lang::Ru] {
+            crate::lang::set(lang);
+            for t in [3200.0, 4700.0, 6500.0, 11_200.0] {
+                g.set_time(t - 400.0);
+                g.press_at(1, t - 400.0, None);
+                g.time = t;
+                c.clear(853.3);
+                g.draw_playfield(&mut c, 1.0);
+                g.draw_hud(&mut c);
+                let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
+                let name = format!("defense-{}-{t}.png", lang.code());
+                crate::debug::write_png(&dir.join(name), w, h, &rgb).unwrap();
+                // The text of the HUD alone, audited: nothing off screen, cut off or over other text.
+                for width in [640.0, 853.3, 1100.0] {
+                    let mut a = Canvas {
+                        audit: true,
+                        ..Canvas::default()
+                    };
+                    a.clear(width);
+                    g.draw_hud(&mut a);
+                    for p in crate::debug::layout_problems(&a) {
+                        eprintln!("[defense {} {t} @{width}] {p}", lang.code());
+                    }
+                }
+            }
         }
+        crate::lang::set(crate::lang::Lang::En);
     }
     #[test]
     fn rails_leave_the_hit_target_heading_right_and_never_jump() {
@@ -8323,6 +9275,114 @@ mod tests {
         g
     }
 
+    /// A Defense team of two playing one mod: everyone gets the host's mods, so both games have
+    /// to agree on the notes and whose they are, and between them take every one.
+    fn defense_with(mods: Mods, me: usize) -> Game {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mut g = Game::with_seed(map, track, None, mods, 7);
+        g.set_defense(
+            vec![(1, "a".into()), (2, "b".into())],
+            me,
+            Defense {
+                lives: 25,
+                bars: 4,
+                ..Defense::DEFAULT
+            },
+        );
+        for act in [
+            DefenseAct::Buy {
+                item: DefenseItem::DonTower,
+                at: 1000.0,
+                until: 0.0,
+            },
+            DefenseAct::Buy {
+                item: DefenseItem::Slow,
+                at: 9000.0,
+                until: 0.0,
+            },
+        ] {
+            g.defense_act(2, act);
+        }
+        g.defense_act(1, DefenseAct::TagIn { at: 8500.0 });
+        g
+    }
+
+    #[test]
+    fn every_mod_a_defense_team_can_have_plays_the_same_notes_for_both_players() {
+        crate::render::pin_accent_for_this_thread(Some(crate::render::DEFAULT_ACCENT));
+        multiverse::pin_note_colours_for_this_thread(Some(multiverse::Colours::CLASSIC));
+        crate::render::set_animations(false);
+        crate::render::set_frame_time(Some(Instant::now()));
+        let mut bad: Vec<String> = Vec::new();
+        for m in crate::mods::ALL.into_iter().filter(|m| m.defense_ok()) {
+            let mods = Mods::parse(m.acronym());
+            let (mut a, mut b) = (defense_with(mods, 0), defense_with(mods, 1));
+            let same = a.map.notes.len() == b.map.notes.len()
+                && a.map
+                    .notes
+                    .iter()
+                    .zip(&b.map.notes)
+                    .all(|(x, y)| x.time == y.time && x.kind == y.kind);
+            if !same {
+                bad.push(format!("{}: the notes differ", m.acronym()));
+                continue;
+            }
+            let (da, db) = (a.defense.as_ref().unwrap(), b.defense.as_ref().unwrap());
+            if da.owner != db.owner {
+                bad.push(format!("{}: the turns differ", m.acronym()));
+            }
+            // Between them they take every note that can be hit, once.
+            for i in 0..a.map.notes.len() {
+                if !matches!(a.map.notes[i].kind, Kind::Don | Kind::Kat) || da.map_unhittable[i] {
+                    continue;
+                }
+                let (ha, hb) = (!a.map.notes[i].unhittable, !b.map.notes[i].unhittable);
+                let shot = da.shot[i].is_some();
+                if shot && (ha || hb) || !shot && ha == hb {
+                    bad.push(format!("{}: note {i} is taken by {ha} {hb}", m.acronym()));
+                    break;
+                }
+            }
+            // Autoplay them both through the map: nothing panics, nothing of theirs gets through.
+            for g in [&mut a, &mut b] {
+                let mut t = -2000.0;
+                while t < 34_000.0 {
+                    g.time = t;
+                    g.autoplay(None);
+                    g.expire(t);
+                    if (t as i64) % 4000 == 0 {
+                        let mut c = Canvas::default();
+                        c.clear(853.3);
+                        g.draw_playfield(&mut c, 1.0);
+                        g.draw_hud(&mut c);
+                    }
+                    t += 20.0;
+                }
+                if g.stats.miss > 0 {
+                    bad.push(format!(
+                        "{}: {} misses under autoplay",
+                        m.acronym(),
+                        g.stats.miss
+                    ));
+                    break;
+                }
+                if g.stats.great + g.stats.ok < 8 {
+                    bad.push(format!(
+                        "{}: only {} hits under autoplay",
+                        m.acronym(),
+                        g.stats.great + g.stats.ok
+                    ));
+                    break;
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+    }
+
     #[test]
     fn a_don_tower_shoots_every_don_for_four_bars_and_ours_count_as_greats() {
         let mut g = defense_game(2);
@@ -8333,8 +9393,14 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::DonTower,
                 at: 6600.0,
+                until: 0.0,
             },
         );
+        // One tower at a time: it stands from the purchase until its fourth bar is over.
+        let until = g.tower_until(6600.0);
+        assert_eq!(until, g.defense.as_ref().unwrap().towers[0].to);
+        assert!(g.tower_active(6600.0) && g.tower_active(until - 1.0));
+        assert!(!g.tower_active(until));
         let d = g.defense.as_ref().unwrap();
         let taken: Vec<usize> = (0..64).filter(|&i| d.shot[i].is_some()).collect();
         assert_eq!(taken, (20..36).collect::<Vec<_>>());
@@ -8353,6 +9419,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::KatTower,
                 at: 20_000.0,
+                until: 0.0,
             },
         );
         assert!(g.defense.as_ref().unwrap().towers[1].notes.is_empty());
@@ -8362,6 +9429,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::DonTower,
                 at: 0.0,
+                until: 0.0,
             },
         );
         assert_eq!(g.defense.as_ref().unwrap().towers.len(), 2);
@@ -8486,6 +9554,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::Slow,
                 at: 2000.0,
+                until: 0.0,
             },
         );
         assert_eq!(g.slow_factor(1900.0), 1.0);

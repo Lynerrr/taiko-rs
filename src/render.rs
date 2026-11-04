@@ -2543,6 +2543,15 @@ pub fn progress(since: std::time::Instant, ms: f32) -> f32 {
 pub enum Hit {
     /// A button that does what this key does.
     Key(winit::keyboard::KeyCode),
+    /// The interface editor: its panel (which only stops clicks), a part's row and its show /
+    /// hide box (indices into `hud::Part::PLACED`), a preset and a button.
+    HudPanel,
+    HudRow(usize),
+    HudToggle(usize),
+    HudPreset(usize),
+    HudButton(crate::hud_edit::Button),
+    /// A colour for the selected part's text (None: its own).
+    HudColour(Option<u32>),
     /// Top bar tab: 0 songs, 1 settings, 2 multiplayer.
     Tab(usize),
     /// A note of the main menu (index into `menu::ITEMS`).
@@ -2566,6 +2575,8 @@ pub enum Hit {
     PlayerRow(usize),
     /// Its heart on a song, the folders button, and a folder (index into `Playlist::folders`).
     PlayerFavourite(usize),
+    /// Song select's heart on the song it's showing.
+    SelectLike,
     PlayerFolders,
     PlayerFolder(usize),
     PlayerQueue(usize),
@@ -2611,6 +2622,8 @@ pub enum Hit {
     /// Shapeshift setup: a choice (row, column) / move the selected shape earlier or later.
     ShapeshiftCell(usize, usize),
     ShapeshiftMove(i32),
+    /// Tact setup: a step (index into `tact::STEPS`).
+    TactCell(usize),
     /// Mod customization: a tab (index into the customizable mods that are on).
     CustomTab(usize),
     /// Multiverse setup: load a preset / delete one of the player's.
@@ -2662,6 +2675,8 @@ pub enum Hit {
     /// A text field (a search box, the message box): on Android, tapping it brings up the
     /// on-screen keyboard.
     TextField,
+    /// The line to write on under the lobby's chat.
+    LobbyChat,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2669,7 +2684,7 @@ pub struct HitBox {
     pub rect: [f32; 4],
     pub hit: Hit,
     /// Shapes drawn before it, so a transform of later shapes (the playfield area) moves it too.
-    shape: usize,
+    pub(crate) shape: usize,
 }
 
 impl HitBox {
@@ -2948,7 +2963,16 @@ impl Canvas {
             (false, false) => (0x23232f, 0x3a3a4e),
             (false, true) => (0x34344a, 0x6a6a88),
         };
-        self.round_rect([x, y], [w, h], 6.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
+        // Small buttons get a small radius too: never a pill.
+        let radius = (h * 0.3).min(6.0);
+        self.round_rect(
+            [x, y],
+            [w, h],
+            radius,
+            rgba(bg, 1.0),
+            rgba(border, 1.0),
+            1.0,
+        );
         // A label too long for the button shrinks a little, then gets cut short.
         let room = w - 8.0;
         let size = Self::fit_size(size, size * 0.8, room, label);

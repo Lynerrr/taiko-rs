@@ -164,6 +164,328 @@ fn the_menus_song_gives_way_to_the_next_when_it_ends() {
 }
 
 #[test]
+fn one_end_of_the_menus_song_moves_on_once() {
+    let mut s = layout_tests::state();
+    let t0 = Instant::now();
+    s.build_frame(&mut Canvas::default(), t0, 853.3);
+    s.play_when_scanned = false;
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    let first = s.select.selected();
+    s.preview.song_ended();
+    s.build_frame(&mut Canvas::default(), t0, 853.3);
+    let second = s.select.selected();
+    assert_ne!(second, first);
+    for k in 1..=60u64 {
+        s.build_frame(
+            &mut Canvas::default(),
+            t0 + Duration::from_millis(50 * k),
+            853.3,
+        );
+        assert_eq!(
+            s.select.selected(),
+            second,
+            "still the next song after {k} frames"
+        );
+        assert!(!s.preview.take_finished(), "no second end after {k} frames");
+    }
+}
+
+/// A watched friend's play, as the server announces it.
+fn watched_play() -> online::SoloPlay {
+    online::SoloPlay {
+        map: net::MapInfo {
+            hash: 1,
+            artist: "artist".into(),
+            title: "title".into(),
+            version: "diff".into(),
+            rate: 1.0,
+            from: None,
+            set_id: None,
+            mods: Vec::new(),
+            multiverse: None,
+            shapeshift: None,
+            seed: None,
+            defense: None,
+            stats: None,
+        },
+        anti_mash: true,
+    }
+}
+
+/// A state with the list up from the cache and a scan checking it.
+fn checking_library() -> (State, Vec<std::path::PathBuf>) {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let paths: Vec<_> = s.library.iter().map(|e| e.path.clone()).collect();
+    assert!(paths.len() > 2, "the test library has maps");
+    (s, paths)
+}
+
+fn entry_at(path: &std::path::Path, size: u64) -> library::Entry {
+    let meta = beatmap::Meta {
+        title: "fresh".into(),
+        ..Default::default()
+    };
+    library::Entry::from_parts(path.to_path_buf(), meta, size, 7)
+}
+
+#[test]
+fn a_checked_list_adds_and_updates_without_moving_what_was_there() {
+    let (mut s, paths) = checking_library();
+    let mut checked: Vec<_> = paths.iter().map(|p| entry_at(p, 0)).collect();
+    for (e, old) in checked.iter_mut().zip(&s.library) {
+        (e.size, e.modified) = (old.size, old.modified);
+    }
+    let changed = entry_at(&paths[1], 999);
+    checked[1] = changed;
+    checked.push(entry_at(std::path::Path::new("/new/map.osu"), 1));
+    let titles: Vec<String> = s.library.iter().map(|e| e.meta.title.clone()).collect();
+    s.check_library(checked);
+    assert_eq!(
+        s.library.len(),
+        paths.len() + 1,
+        "the new map joined the end"
+    );
+    assert_eq!(
+        s.library[paths.len()].path,
+        std::path::Path::new("/new/map.osu")
+    );
+    for (i, p) in paths.iter().enumerate() {
+        assert_eq!(&s.library[i].path, p, "indices stay good");
+    }
+    assert_eq!(
+        s.library[1].meta.title, "fresh",
+        "the changed one is updated"
+    );
+    assert_eq!(
+        s.library[0].meta.title, titles[0],
+        "the rest aren't touched"
+    );
+}
+
+#[test]
+fn a_map_gone_from_disk_leaves_the_list_only_where_nothing_holds_an_index() {
+    let (mut s, paths) = checking_library();
+    let rest = |s: &State| -> Vec<library::Entry> {
+        s.library[1..]
+            .iter()
+            .map(|e| library::Entry::from_parts(e.path.clone(), e.meta.clone(), e.size, e.modified))
+            .collect()
+    };
+    let keep = paths[2].clone();
+    s.select.select_path(&s.library, &keep);
+    let selected = s.select.selected();
+    // Somewhere that may hold an index: it waits for the next launch.
+    s.scene = Scene::MpMenu;
+    let checked = rest(&s);
+    s.check_library(checked);
+    assert_eq!(s.library.len(), paths.len());
+    assert_eq!(s.select.selected(), selected);
+    // On song select: it goes, and the selection stays on its map.
+    s.scene = Scene::Select;
+    let checked = rest(&s);
+    s.check_library(checked);
+    assert_eq!(s.library.len(), paths.len() - 1);
+    let now = s.select.selected().map(|i| s.library[i].path.clone());
+    assert_eq!(now, Some(keep));
+}
+
+#[test]
+fn watching_a_play_of_a_map_being_downloaded_shows_how_far_along_it_is() {
+    use std::sync::atomic::AtomicU64;
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let play = watched_play();
+    let (_tx, rx) = std::sync::mpsc::channel();
+    s.downloads.push(download::Job {
+        set: download::SetInfo {
+            id: 0,
+            artist: play.map.artist.clone(),
+            title: play.map.title.clone(),
+            creator: String::new(),
+            status: String::new(),
+            diffs: Vec::new(),
+            play_count: 0,
+            favourite_count: 0,
+            rating: 0.0,
+            ranked_date: String::new(),
+        },
+        done: Arc::new(AtomicU64::new(25)),
+        total: Arc::new(AtomicU64::new(100)),
+        rx,
+        maps: Vec::new(),
+        update: false,
+    });
+    let mut v = WatchView::new("bob".into());
+    v.play = Some(play);
+    v.fetching = true;
+    s.scene = Scene::Watch(Box::new(v));
+    let mut c = Canvas {
+        audit: true,
+        ..Default::default()
+    };
+    s.build_frame(&mut c, Instant::now(), 853.3);
+    assert!(
+        c.texts.iter().any(|(_, t)| t == "downloading 25%"),
+        "{:?}",
+        c.texts.iter().map(|t| &t.1).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn the_account_button_opens_your_profile_in_the_game() {
+    let mut s = layout_tests::state();
+    s.mp_menu.account = Some("Player".into());
+    s.click(render::Hit::Account, None);
+    assert_eq!(s.profile.as_ref().map(|p| p.name.as_str()), Some("Player"));
+    // And the profile offers the website.
+    let mut c = Canvas::default();
+    s.build_frame(&mut c, Instant::now(), 853.3);
+    assert!(
+        s.hits
+            .iter()
+            .any(|h| h.hit == render::Hit::Key(winit::keyboard::KeyCode::KeyB))
+    );
+    assert!(profile_url("Player").ends_with("/u/Player"));
+}
+
+#[test]
+fn a_song_liked_on_song_select_is_a_favourite_for_the_player_too() {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let i = s.preview_target().expect("a song is showing");
+    assert!(!s.select.is_liked(&s.library[i]));
+    s.click(render::Hit::SelectLike, None);
+    assert!(s.select.is_liked(&s.library[i]));
+    assert!(
+        s.select
+            .favourites
+            .contains(&playlist::favourite_key(&s.library[i]))
+    );
+    s.click(render::Hit::SelectLike, None);
+    assert!(!s.select.is_liked(&s.library[i]));
+}
+
+#[test]
+fn a_songs_menu_likes_it() {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.select.menu = Some(ui::SongMenu {
+        row: s.select.cursor(),
+        header: true,
+        x: 100.0,
+        y: 100.0,
+    });
+    let i = s.select.menu_map().unwrap();
+    let items = s.select.menu_items(&s.library);
+    assert!(items[0].0.starts_with("Like") && items[0].1 == ui::MenuAction::Like);
+    s.click(render::Hit::SongMenu(0), None);
+    assert!(s.select.is_liked(&s.library[i]));
+    assert!(s.select.menu.is_none());
+}
+
+#[test]
+fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let mut v = WatchView::new("bob".into());
+    v.play = Some(watched_play());
+    let map = beatmap::calibration_map(500.0, 0, 64);
+    let track = Arc::new(Track {
+        samples: Vec::new(),
+        rate: 1.0,
+    });
+    v.game = Some(Box::new(Game::new(map, track, None)));
+    v.clock = (30_000.0, Instant::now(), false);
+    s.scene = Scene::Watch(Box::new(v));
+
+    // They stop: we're seconds behind them, so the view plays on rather than going blank.
+    s.social_down(online::Down::WatchEnd {
+        player: "bob".into(),
+    });
+    let Scene::Watch(v) = &mut s.scene else {
+        panic!("still watching")
+    };
+    assert!(
+        v.game.is_some() && v.ending.is_some(),
+        "the end is still to be watched"
+    );
+    // Their next play starts meanwhile: it waits its turn.
+    s.social_down(online::Down::WatchStart {
+        player: "bob".into(),
+        play: watched_play(),
+        t: 0.0,
+        paused: false,
+        inputs: Vec::new(),
+    });
+    let Scene::Watch(v) = &mut s.scene else {
+        panic!("still watching")
+    };
+    assert!(v.game.is_some() && v.next.is_some());
+    // Once the view has got to where they stopped it moves on to that play.
+    v.game.as_mut().unwrap().time = 30_000.0;
+    s.watch_tick();
+    let Scene::Watch(v) = &s.scene else {
+        panic!("still watching")
+    };
+    assert!(v.game.is_none() && v.play.is_some() && v.next.is_none() && v.ending.is_none());
+}
+
+#[test]
+fn a_spectator_sees_the_last_seconds_before_the_results() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let view = |games: Vec<(u32, Box<Game>)>| {
+        Scene::Spectate(Box::new(SpectateView {
+            rx: None,
+            loaded: None,
+            start: Instant::now(),
+            from: None,
+            rate: 1.0,
+            mods: Mods::NONE,
+            map: watched_play().map,
+            players: vec![(1, "a".into())],
+            games,
+            focus: Some(0),
+            pending: std::collections::HashMap::new(),
+            skipped: std::collections::HashSet::new(),
+            skip_done: false,
+            zones: Vec::new(),
+            zones_at: None,
+            ended: None,
+        }))
+    };
+    let game = || {
+        let map = beatmap::calibration_map(500.0, 0, 8);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        Box::new(Game::new(map, track, None))
+    };
+    s.mp = Some(layout_tests::session(false));
+    // Joined late, nothing on screen yet: straight to the results.
+    s.scene = view(Vec::new());
+    s.handle_server_msg(net::ServerMsg::Results(Vec::new()));
+    assert!(matches!(s.scene, Scene::MpResults));
+    // Watching: the room is over, but the view is `SPECTATE_DELAY` behind.
+    s.scene = view(vec![(1, game())]);
+    s.handle_server_msg(net::ServerMsg::Results(Vec::new()));
+    let Scene::Spectate(v) = &mut s.scene else {
+        panic!("the last seconds are still to be watched")
+    };
+    assert!(v.ended.is_some());
+    v.ended = Some(Instant::now() - SPECTATE_DELAY - Duration::from_millis(600));
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(matches!(s.scene, Scene::MpResults), "then the results");
+}
+
+#[test]
 fn applying_the_offset_suggestion_has_no_key_until_given_one() {
     use keys::{Bindings, Chord, Hotkey, Place, Resolved};
     let (o, shift_o) = (

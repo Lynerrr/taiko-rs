@@ -203,6 +203,7 @@ pub mod device_description;
 mod error;
 mod host;
 pub mod platform;
+pub mod taiko_clock;
 mod sample_format;
 mod timestamp;
 pub mod traits;

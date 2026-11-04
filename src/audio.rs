@@ -185,6 +185,23 @@ impl Engine {
             channels,
             config.buffer_size
         );
+        if crate::audiolog::start() {
+            let name = device
+                .description()
+                .map(|d| d.name().to_string())
+                .unwrap_or_default();
+            crate::audiolog::line(&format!("audio {description} device={name}"));
+            let stamp = Arc::downgrade(&stamp);
+            crate::audiolog::every(rate, move || {
+                let s = *stamp.upgrade()?.lock().ok()?;
+                Some(format!(
+                    "clock playing={} frame={} latency_ms={:.3}",
+                    u8::from(s.playing),
+                    s.frame,
+                    s.latency.as_secs_f64() * 1000.0
+                ))
+            });
+        }
         Ok(Engine {
             _stream: stream,
             tx,
@@ -545,6 +562,11 @@ impl Mixer {
         let sounds = &self.sounds;
         self.voices
             .retain(|v| v.pos < sounds[v.sound as usize].len());
+        if crate::audiolog::STALL.load(Ordering::Relaxed) != 0 {
+            std::thread::sleep(Duration::from_millis(
+                crate::audiolog::STALL.swap(0, Ordering::Relaxed) as u64,
+            ));
+        }
     }
 }
 

@@ -997,7 +997,7 @@ impl Menu {
                 c.round_rect(
                     [x - pw / 2.0, label_y - 4.0],
                     [pw, ph],
-                    ph / 2.0,
+                    (ph * 0.3).min(5.0),
                     rgba(tint(item.colour(), 0x000000, 0.25), 0.95),
                     rgba(0xffffff, 0.35),
                     1.0,

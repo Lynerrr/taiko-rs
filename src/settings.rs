@@ -9,6 +9,7 @@ use crate::render::{Canvas, Glide, Hit, accent, approach, rgba};
 pub enum Item {
     ScrollSpeed,
     PlayfieldArea,
+    InterfaceEditor,
     PlayfieldPreset,
     PlayfieldReset,
     Rate,
@@ -113,7 +114,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 125] = [
+pub const ITEMS: [(&str, Item); 126] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -133,6 +134,7 @@ pub const ITEMS: [(&str, Item); 125] = [
     ("GAMEPLAY", Item::AutoplayBinding),
     ("GAMEPLAY", Item::AutoplayLeftHanded),
     ("VIEW", Item::PlayfieldArea),
+    ("VIEW", Item::InterfaceEditor),
     ("VIEW", Item::PlayfieldPreset),
     ("VIEW", Item::PlayfieldReset),
     ("VIEW", Item::ShowPlayfieldSize),
@@ -400,6 +402,11 @@ impl Item {
                 "Playfield area",
                 "プレイフィールドの範囲",
                 "Область игрового поля"
+            ),
+            Item::InterfaceEditor => tr!(
+                "Interface editor",
+                "インターフェースエディター",
+                "Редактор интерфейса"
             ),
             Item::PlayfieldReset => tr!(
                 "Reset playfield area",
@@ -723,6 +730,7 @@ impl Item {
             | Item::CrashReports => Kind::Toggle,
             Item::Key(_) | Item::PresetKey(_) | Item::InterfaceKey | Item::Hotkey(_) => Kind::Key,
             Item::PlayfieldArea
+            | Item::InterfaceEditor
             | Item::PlayfieldReset
             | Item::ResetMapOffsets
             | Item::Guide
@@ -748,6 +756,11 @@ impl Item {
                 "Enter: edit where gameplay is drawn (drag, its edges, the wheel). In game: drag it about too.",
                 "Enter: プレイを描く範囲を編集 (ドラッグ、端、ホイール)。プレイ中もドラッグで動かせます。",
                 "Enter: где рисуется игра (тяните поле, его края, колесо). В игре его тоже можно тянуть."
+            ),
+            Item::InterfaceEditor => tr!(
+                "Enter: move every part of the interface, add the UR and hit counters, and keep layouts as presets.",
+                "Enter: インターフェースの各パーツを動かし、URと判定のカウンターを追加し、レイアウトをプリセットとして保存します。",
+                "Enter: двигайте любую часть интерфейса, добавляйте счётчики UR и попаданий, храните раскладки в пресетах."
             ),
             Item::PlayfieldReset => tr!(
                 "Enter: make gameplay fill the whole screen again.",

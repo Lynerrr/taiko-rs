@@ -15,6 +15,11 @@ thread_local! {
     static PHONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+thread_local! {
+    /// How many frames the friends tab was checked on: none would mean it was never looked at.
+    static TAB_SEEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn widths() -> &'static [f32] {
     if PHONE.with(std::cell::Cell::get) {
         &PHONE_WIDTHS
@@ -81,7 +86,7 @@ pub(crate) fn state() -> State {
     let library: Vec<Entry> = (0..12)
         .flat_map(|s| (0..3).map(move |d| entry(s, d, s % 2 == 0)))
         .collect();
-    tx.send(library).unwrap();
+    tx.send(Scanned::Done(library)).unwrap();
     let mut s = State::new(
         cfg,
         None,
@@ -121,6 +126,33 @@ fn check(s: &mut State, what: &str, out: &mut Vec<String>) {
             let name = format!("{}-{w:.0}.png", what.replace([' ', '/'], "_"));
             debug::write_png(&std::path::Path::new(&dir).join(name), iw, ih, &rgb).unwrap();
         }
+        // The friends tab shows once logged in, on every screen: logged in, nothing's under it.
+        let account = s.mp_menu.account.clone();
+        s.mp_menu.account = account.clone().or(Some("Player".into()));
+        // At its longest: connected, with everyone's count on it.
+        let (connected, players, total) = (
+            s.social.connected,
+            s.social.players.take(),
+            s.social.online_total,
+        );
+        s.social.connected = true;
+        s.social.players = Some(Vec::new());
+        s.social.online_total = 12_345;
+        let mut c = Canvas {
+            audit: true,
+            ..Default::default()
+        };
+        s.build_frame(&mut c, Instant::now() + Duration::from_millis(32), w);
+        s.mp_menu.account = account;
+        s.social.connected = connected;
+        s.social.players = players;
+        s.social.online_total = total;
+        if let Some(problems) = debug::edge_tab_problems(&c, &s.hits) {
+            TAB_SEEN.with(|n| n.set(n.get() + 1));
+            for p in problems {
+                out.push(format!("[{what} @{w:.0}] {p}"));
+            }
+        }
     }
 }
 
@@ -149,7 +181,7 @@ const LONG_NAME: &str = "FriendWithAVeryLongName";
 
 /// A room hosted on this machine (`mapguessr`: playing mapguessr), filled with long names (its
 /// lobby, match and result screens).
-fn session(mapguessr: bool) -> multiplayer::Session {
+pub(crate) fn session(mapguessr: bool) -> multiplayer::Session {
     // Another test can take the free port found here before the room listens on it: try again.
     let mut s = (0..10)
         .find_map(|_| {
@@ -197,6 +229,7 @@ fn session(mapguessr: bool) -> multiplayer::Session {
         miss: 12,
         progress: 0.5,
         great: 1234,
+        ok: 56,
     };
     let result = net::Final {
         score: 1_234_567,
@@ -236,6 +269,7 @@ fn session(mapguessr: bool) -> multiplayer::Session {
         })
         .collect();
     s.results = Some(s.players.clone());
+    s.contrib = (0..16).map(|i| (i, (99, 9))).collect();
     s.chat = (0..12)
         .map(|i| {
             (
@@ -694,6 +728,19 @@ fn assert_every_screen_fits() {
 
     s.open_layout_editor();
     check(&mut s, "layout editor", &mut out);
+    s.scene = Scene::Select;
+    s.open_hud_editor();
+    check(&mut s, "interface editor", &mut out);
+    if let Some(ed) = &mut s.hud_edit {
+        ed.select(
+            hud::Part::PLACED
+                .iter()
+                .position(|&p| p == hud::Part::Counts)
+                .unwrap(),
+        );
+    }
+    check(&mut s, "interface editor, hit counter", &mut out);
+    s.close_hud_editor();
     s.scene = Scene::Select;
     s.start_calibration();
     check(&mut s, "calibration", &mut out);
@@ -1227,13 +1274,22 @@ fn assert_every_screen_fits() {
         miss: 12,
         progress: 0.5,
         great: 1234,
+        ok: 56,
     };
     check_draw("lobby", &mut out, |c| {
         multiplayer::draw_lobby(
             c,
             &room,
             false,
-            Some("downloading the map: 45% of 12.3 MB".into()),
+            Some(("downloading the map: 45% of 12.3 MB".into(), Some(0.45))),
+        )
+    });
+    check_draw("lobby, asking the host", &mut out, |c| {
+        multiplayer::draw_lobby(
+            c,
+            &room,
+            false,
+            Some(("asking the host for the map...".into(), None)),
         )
     });
     check_draw("match waiting", &mut out, |c| {
@@ -1299,6 +1355,10 @@ fn assert_every_screen_fits() {
         eprintln!("{p}");
     }
     assert!(out.is_empty(), "{} layout problems", out.len());
+    assert!(
+        TAB_SEEN.with(std::cell::Cell::get) > 100,
+        "the friends tab was hardly ever on screen to be checked"
+    );
 }
 
 #[test]
@@ -1918,6 +1978,7 @@ fn a_guests_mod_select_shows_the_hosts_speed_mods_on() {
     // We're player 1; player 0 hosts.
     room.client.id = Some(1);
     room.map.as_mut().unwrap().mods = Mods::parse("DT,HD").list();
+    room.map.as_mut().unwrap().defense = None;
     s.mp = Some(room);
     s.scene = Scene::Lobby;
     s.cfg.mods = Mods::parse("FL");
@@ -1933,6 +1994,36 @@ fn a_guests_mod_select_shows_the_hosts_speed_mods_on() {
     // Not in a lobby (or as the host), the mod select shows just ours.
     s.scene = Scene::Select;
     assert_eq!(s.shown_mods(), s.cfg.mods);
+}
+
+#[test]
+fn in_defense_the_hosts_mods_are_everyones_and_a_guest_cant_change_them() {
+    let mut s = state();
+    let mut room = session(false);
+    room.client.id = Some(1);
+    {
+        let m = room.map.as_mut().unwrap();
+        m.defense = Some(net::Defense::DEFAULT);
+        // As the host's game sends them.
+        m.mods = Mods::parse("DT,HD,AT").lobby(m.defense).list();
+    }
+    s.mp = Some(room);
+    s.scene = Scene::Lobby;
+    s.cfg.mods = Mods::parse("FL");
+    let shown = s.shown_mods();
+    assert!(shown.has(mods::Mod::Hidden) && shown.has(mods::Mod::Maze));
+    assert!(
+        !shown.has(mods::Mod::Autoplay),
+        "a banned mod never gets to the team"
+    );
+    assert!(
+        !shown.has(mods::Mod::Flashlight),
+        "ours stay out of the team's match"
+    );
+    s.toggle_mod(mods::Mod::Flashlight);
+    assert_eq!(s.cfg.mods, Mods::parse("FL"), "a guest can't change them");
+    s.toggle_mod(mods::Mod::Hidden);
+    assert!(!s.cfg.mods.has(mods::Mod::Hidden));
 }
 
 #[test]
@@ -2166,4 +2257,140 @@ fn update_notes_open_when_ready_without_replacing_a_manual_view() {
     s.poll_changelog();
     assert!(s.pending_changelog.is_none());
     assert!(!s.changelog.as_ref().unwrap().after_update);
+}
+
+#[test]
+fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
+    let mut s = state();
+    let mut room = session(false);
+    room.client.id = Some(0);
+    s.mp = Some(room);
+    s.scene = Scene::Lobby;
+    let at = Instant::now();
+    let key = |s: &mut State, code, text: Option<&str>| s.key_inner(code, false, text, at, None);
+
+    key(&mut s, KeyCode::KeyT, Some("t"));
+    assert_eq!(s.mp.as_ref().unwrap().chat_input.as_deref(), Some(""));
+    // Space would toggle ready and digits would step Defense's rules.
+    key(&mut s, KeyCode::KeyH, Some("h"));
+    key(&mut s, KeyCode::Space, Some(" "));
+    key(&mut s, KeyCode::Digit1, Some("1"));
+    let mp = s.mp.as_ref().unwrap();
+    assert_eq!(mp.chat_input.as_deref(), Some("h 1"));
+    assert!(!mp.ready, "Space typed a space");
+
+    // Esc only puts the line away; the lobby stays.
+    key(&mut s, KeyCode::Escape, None);
+    assert!(s.mp.as_ref().unwrap().chat_input.is_none());
+    assert!(matches!(s.scene, Scene::Lobby));
+
+    // Enter sends and closes.
+    key(&mut s, KeyCode::KeyT, Some("t"));
+    key(&mut s, KeyCode::KeyO, Some("o"));
+    key(&mut s, KeyCode::Backspace, None);
+    key(&mut s, KeyCode::KeyK, Some("k"));
+    assert_eq!(s.mp.as_ref().unwrap().chat_input.as_deref(), Some("k"));
+    key(&mut s, KeyCode::Enter, None);
+    assert!(s.mp.as_ref().unwrap().chat_input.is_none());
+    assert!(
+        matches!(s.scene, Scene::Lobby),
+        "Enter didn't start a match"
+    );
+
+    // A click on the line focuses it; a click elsewhere puts it away.
+    s.click(render::Hit::LobbyChat, None);
+    assert!(s.mp.as_ref().unwrap().chat_input.is_some());
+    s.click(render::Hit::ListBack, None);
+    assert!(s.mp.as_ref().unwrap().chat_input.is_none());
+}
+
+#[test]
+fn the_audit_reports_touching_buttons_and_pills_but_not_spaced_ones() {
+    use crate::render::Hit;
+    let audit = |draw: &dyn Fn(&mut Canvas)| {
+        let mut c = Canvas {
+            audit: true,
+            ..Default::default()
+        };
+        c.clear(640.0);
+        c.mouse = (-1000.0, -1000.0);
+        draw(&mut c);
+        debug::layout_problems(&c)
+    };
+    let spaced = audit(&|c| {
+        c.button(
+            20.0,
+            100.0,
+            60.0,
+            20.0,
+            "One",
+            8.0,
+            Hit::Key(KeyCode::KeyA),
+            false,
+        );
+        c.button(
+            88.0,
+            100.0,
+            60.0,
+            20.0,
+            "Two",
+            8.0,
+            Hit::Key(KeyCode::KeyB),
+            false,
+        );
+    });
+    assert!(spaced.is_empty(), "{spaced:?}");
+    let touching = audit(&|c| {
+        c.button(
+            20.0,
+            100.0,
+            60.0,
+            20.0,
+            "One",
+            8.0,
+            Hit::Key(KeyCode::KeyA),
+            false,
+        );
+        c.button(
+            82.0,
+            100.0,
+            60.0,
+            20.0,
+            "Two",
+            8.0,
+            Hit::Key(KeyCode::KeyB),
+            false,
+        );
+    });
+    assert!(
+        touching.iter().any(|p| p.contains("buttons touch")),
+        "{touching:?}"
+    );
+    let pill = audit(&|c| {
+        c.round_rect(
+            [20.0, 100.0],
+            [60.0, 14.0],
+            7.0,
+            render::rgba(0x23232f, 1.0),
+            render::rgba(0x3a3a4e, 1.0),
+            1.0,
+        );
+        c.hit(20.0, 100.0, 60.0, 14.0, Hit::Key(KeyCode::KeyA));
+    });
+    assert!(pill.iter().any(|p| p.contains("pill")), "{pill:?}");
+    // Plain rows of a list sit one on another by design.
+    let rows = audit(&|c| {
+        for (k, y) in [100.0, 120.0].into_iter().enumerate() {
+            c.round_rect(
+                [20.0, y],
+                [200.0, 20.0],
+                4.0,
+                render::rgba(0x23232f, 1.0),
+                render::rgba(0, 0.0),
+                0.0,
+            );
+            c.hit(20.0, y, 200.0, 20.0, Hit::SongRow(k));
+        }
+    });
+    assert!(rows.is_empty(), "{rows:?}");
 }

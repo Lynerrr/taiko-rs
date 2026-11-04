@@ -299,7 +299,7 @@ fn a_score_link_opens_its_results_on_its_map() {
     let mut s = crate::layout_tests::state();
     s.cfg.online_server = server;
     let (tx, rx) = mpsc::channel();
-    tx.send(library).unwrap();
+    tx.send(Scanned::Done(library)).unwrap();
     s.scan = Some((rx, Arc::new(AtomicUsize::new(0))));
     // Song select, not straight into the first map (the test state's command-line map).
     s.play_when_scanned = false;

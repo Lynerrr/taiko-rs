@@ -181,6 +181,10 @@ pub struct Config {
     /// The interface during play is hidden (the toggle), and what that hides.
     pub interface_hidden: bool,
     pub interface_hides: crate::hud::Parts,
+    /// Where the interface's parts go, from the interface editor.
+    pub hud: crate::hud::Layout,
+    /// The player's own interface layouts.
+    pub hud_presets: Vec<(String, crate::hud::Layout)>,
     /// The interface toggle's key, with Shift or not.
     pub interface_key: (bool, KeyCode),
     /// 0 = uncapped. Only applies to mailbox/immediate; vsync paces itself.
@@ -316,6 +320,8 @@ pub struct Config {
     pub shapeshift: crate::shapeshift::Config,
     /// Random colouring, shared by retries and saved between sessions.
     pub random_seed: u64,
+    /// Tact: how often notes move (index into `tact::STEPS`).
+    pub tact: usize,
     /// Mods marked as favourites in the mod select (shown in a row of their own).
     pub favourite_mods: crate::mods::Mods,
     /// Note colours without Multiverse.
@@ -359,6 +365,8 @@ impl Default for Config {
             bg_dim_black: true,
             interface_hidden: false,
             interface_hides: crate::hud::Parts::DEFAULT_HIDES,
+            hud: crate::hud::Layout::default(),
+            hud_presets: Vec::new(),
             interface_key: (true, KeyCode::Tab),
             fps_cap: 0,
             calibration_bpm: 120.0,
@@ -432,6 +440,7 @@ impl Default for Config {
             universe_presets: Vec::new(),
             shapeshift: Default::default(),
             random_seed: crate::fresh_seed(),
+            tact: crate::tact::DEFAULT,
             favourite_mods: crate::mods::Mods::NONE,
             note_colours: crate::multiverse::Colours::CLASSIC,
             video: Default::default(),
@@ -1023,6 +1032,8 @@ impl Config {
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
                 "interface_hidden" => cfg.interface_hidden = v == "true",
                 "interface_hides" => cfg.interface_hides = crate::hud::Parts::parse_saved(v),
+                "hud_layout" => cfg.hud = crate::hud::Layout::parse(v).unwrap_or_default(),
+                "hud_preset" => cfg.hud_presets.extend(crate::hud::parse_preset(v)),
                 "interface_key" => {
                     let (shift, name) = match v.strip_prefix("Shift+") {
                         Some(rest) => (true, rest),
@@ -1064,6 +1075,7 @@ impl Config {
                 "note_colours" => cfg.note_colours = crate::multiverse::Colours::parse(v),
                 "random_seed" => cfg.random_seed = v.parse().unwrap_or(cfg.random_seed),
                 "shapeshift" => cfg.shapeshift = crate::shapeshift::Config::parse(v),
+                "tact" => cfg.tact = crate::tact::parse(v),
                 "favourite_mods" => cfg.favourite_mods = crate::mods::Mods::parse_set(v),
                 k if k.starts_with("video_") => {
                     cfg.video.parse(k, v);
@@ -1294,7 +1306,7 @@ impl Config {
         out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
         out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));
         out.push_str(&format!(
-            "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators; ! before one that came later: not hidden) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
+            "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators, ur, counts; ! before one that came later: not hidden) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
             self.interface_hidden,
             self.interface_hides.format_saved(),
             interface_key_name(self.interface_key)
@@ -1313,6 +1325,16 @@ impl Config {
             "# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (C in the mod select)\nmultiverse = {}\n",
             crate::multiverse::format(&self.universes)
         ));
+        out.push_str(&format!(
+            "# where the interface's parts go (the interface editor), and your own layouts, one per line: name: layout\nhud_layout = {}\n",
+            self.hud.format()
+        ));
+        for (name, layout) in &self.hud_presets {
+            out.push_str(&format!(
+                "hud_preset = {}\n",
+                crate::hud::format_preset(name, layout)
+            ));
+        }
         out.push_str("# your own Multiverse presets, one per line: name: universes as above\n");
         for p in &self.universe_presets {
             out.push_str(&format!("multiverse_preset = {}\n", p.format()));
@@ -1324,6 +1346,10 @@ impl Config {
         out.push_str(&format!(
             "# Shapeshift: bars per shape (4/8/16/32), bars to morph (0.5/1/2/4), order shuffle/fixed, shapes in order (- = left out)\nshapeshift = {}\n",
             self.shapeshift.format()
+        ));
+        out.push_str(&format!(
+            "# Tact: how often notes move (2bars, 1bar, 1/2bar, 1beat, 1/2beat, 1/4beat)\ntact = {}\n",
+            crate::tact::format(self.tact)
         ));
         out.push_str(&format!(
             "# favourite mods (right-click or F in the mod select), e.g. HD,HR\nfavourite_mods = {}\n",

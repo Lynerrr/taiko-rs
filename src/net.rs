@@ -265,16 +265,19 @@ impl DefenseItem {
     ];
 
     /// What it costs the team now. A life (and so a shield) is worth more the fewer the team
-    /// started with, and every heal costs more than the one before: with 10 lives a heal is 200
-    /// gold, then 320, 510...; with 50 it starts at 40.
+    /// started with, and every heal and shield costs more than the one before: with 10 lives a
+    /// heal is 200 gold, then 320, 510...; with 50 it starts at 40. Towers start at 120 and
+    /// cost half as much again each time.
     pub fn price(self, team: &TeamState) -> u32 {
         let scale = 25.0 / team.max.max(1) as f64;
         let to5 = |g: f64| ((g / 5.0).round() * 5.0).max(5.0) as u32;
         match self {
             DefenseItem::Slow => 40,
-            DefenseItem::Shield => to5((60.0 * scale).max(15.0)),
+            DefenseItem::Shield => to5((60.0 * scale).max(15.0) * 1.6f64.powi(team.shields as i32)),
             DefenseItem::Heal => to5(80.0 * scale * 1.6f64.powi(team.heals as i32)),
-            DefenseItem::DonTower | DefenseItem::KatTower => 90,
+            DefenseItem::DonTower | DefenseItem::KatTower => {
+                to5(120.0 * 1.5f64.powi(team.tower_buys as i32))
+            }
         }
     }
 
@@ -297,9 +300,9 @@ impl DefenseItem {
                 "6 секунд дорожка ползёт вдвое медленнее"
             ),
             DefenseItem::Shield => tr!(
-                "the next 3 notes that get through cost no lives",
-                "次に抜けた3ノーツはライフが減らない",
-                "следующие 3 прорыва не отнимут жизни"
+                "the next 3 notes that get through cost no lives (every shield costs more)",
+                "次に抜けた3ノーツはライフが減らない (買うたび高くなる)",
+                "следующие 3 прорыва не отнимут жизни (каждый щит дороже)"
             ),
             DefenseItem::Heal => tr!(
                 "one life back (every heal costs more)",
@@ -307,14 +310,14 @@ impl DefenseItem {
                 "одна жизнь назад (каждое лечение дороже)"
             ),
             DefenseItem::DonTower => tr!(
-                "every red don for 4 bars is shot down: just hit the kats",
-                "4小節の間ドンを全部撃ち落とす: カツだけ叩こう",
-                "4 такта сбивает все красные доны: бей только каты"
+                "every red don for 4 bars is shot down: just hit the kats (one tower at a time)",
+                "4小節の間ドンを全部撃ち落とす: カツだけ叩こう (タワーは同時に1つ)",
+                "4 такта сбивает все красные доны: бей только каты (только одна башня)"
             ),
             DefenseItem::KatTower => tr!(
-                "every blue kat for 4 bars is shot down: just hit the dons",
-                "4小節の間カツを全部撃ち落とす: ドンだけ叩こう",
-                "4 такта сбивает все синие каты: бей только доны"
+                "every blue kat for 4 bars is shot down: just hit the dons (one tower at a time)",
+                "4小節の間カツを全部撃ち落とす: ドンだけ叩こう (タワーは同時に1つ)",
+                "4 такта сбивает все синие каты: бей только доны (только одна башня)"
             ),
         }
     }
@@ -331,11 +334,13 @@ pub enum DefenseAct {
     Buy {
         item: DefenseItem,
         at: f64,
+        /// A tower: the map time it stops shooting at (the buyer's barlines); 0 for the rest.
+        /// The room keeps one tower up at a time by it.
+        #[serde(default)]
+        until: f64,
     },
     /// Takes over the rest of the turn being played, from the next barline.
-    TagIn {
-        at: f64,
-    },
+    TagIn { at: f64 },
 }
 
 /// Defense: the team's lives, gold, shield and towers, as the room keeps them.
@@ -349,6 +354,12 @@ pub struct TeamState {
     /// Heals bought (each costs more).
     #[serde(default)]
     pub heals: u32,
+    /// Shields bought (each costs more).
+    #[serde(default)]
+    pub shields: u32,
+    /// Towers bought (each costs more).
+    #[serde(default)]
+    pub tower_buys: u32,
 }
 
 /// Defense, in the room: the team's state and what it has paid for so far.
@@ -357,6 +368,8 @@ struct TeamRun {
     state: TeamState,
     spent: u32,
     misses: u32,
+    /// Map time the tower standing now stops shooting at: no other one until then.
+    tower_until: f64,
     /// Tag-ins each player has used this map.
     tag_ins: std::collections::HashMap<u32, u32>,
 }
@@ -372,6 +385,7 @@ impl TeamRun {
             },
             spent: 0,
             misses: 0,
+            tower_until: f64::NEG_INFINITY,
             tag_ins: std::collections::HashMap::new(),
         }
     }
@@ -409,21 +423,33 @@ impl TeamRun {
         self.state.gold = greats.saturating_sub(self.spent);
     }
 
-    /// Pays for `item` if the team can (alive, the gold, a life to win back): whether it did.
-    fn buy(&mut self, item: DefenseItem) -> bool {
+    /// Pays for `item`, bought at map time `at` (a tower shooting until `until`), if the team can
+    /// (alive, the gold, a life to win back, no other tower up): whether it did.
+    fn buy(&mut self, item: DefenseItem, at: f64, until: f64) -> bool {
         let price = item.price(&self.state);
+        let tower = matches!(item, DefenseItem::DonTower | DefenseItem::KatTower);
         let s = &mut self.state;
-        let can = s.lives > 0 && s.gold >= price && (item != DefenseItem::Heal || s.lives < s.max);
+        let can = s.lives > 0
+            && s.gold >= price
+            && (item != DefenseItem::Heal || s.lives < s.max)
+            && (!tower || at >= self.tower_until);
         if !can {
             return false;
         }
         match item {
-            DefenseItem::Shield => s.shield += SHIELD_CHARGES,
+            DefenseItem::Shield => {
+                s.shield += SHIELD_CHARGES;
+                s.shields += 1;
+            }
             DefenseItem::Heal => {
                 s.lives += 1;
                 s.heals += 1;
             }
-            DefenseItem::DonTower | DefenseItem::KatTower => s.towers += 1,
+            DefenseItem::DonTower | DefenseItem::KatTower => {
+                s.towers += 1;
+                s.tower_buys += 1;
+                self.tower_until = until;
+            }
             DefenseItem::Slow => {}
         }
         s.gold -= price;
@@ -526,6 +552,9 @@ pub struct Live {
     /// GREATs so far (Defense pays the team a gold for each).
     #[serde(default)]
     pub great: u32,
+    /// OKs so far.
+    #[serde(default)]
+    pub ok: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -1523,7 +1552,9 @@ fn room_loop(
                             // Their latest numbers first, so the gold is up to date.
                             t.update(players.iter().filter(|p| p.in_match).map(|p| &p.info));
                             let paid = match act {
-                                DefenseAct::Buy { item, .. } => t.rules.shop && t.buy(item),
+                                DefenseAct::Buy { item, at, until } => {
+                                    t.rules.shop && t.buy(item, at, until)
+                                }
                                 DefenseAct::TagIn { .. } => t.tag_in(id),
                             };
                             if paid {
@@ -2603,27 +2634,40 @@ mod tests {
             ),
             (200, 150)
         );
-        assert!(t.buy(DefenseItem::Heal));
+        assert!(t.buy(DefenseItem::Heal, 0.0, 0.0));
         assert_eq!((t.state.gold, t.state.lives, t.state.heals), (100, 10, 1));
         assert_eq!(
             DefenseItem::Heal.price(&t.state),
             320,
             "every heal costs more"
         );
-        assert!(!t.buy(DefenseItem::Heal), "full again");
-        assert!(!t.buy(DefenseItem::Shield), "100 gold of 150");
+        assert!(!t.buy(DefenseItem::Heal, 0.0, 0.0), "full again");
+        assert!(!t.buy(DefenseItem::Shield, 0.0, 0.0), "100 gold of 150");
         // A hundred more greats: it can.
         t.update([player(350, 0), player(50, 1)].iter());
-        assert!(t.buy(DefenseItem::Shield));
-        assert_eq!((t.state.gold, t.state.shield), (50, 3));
+        assert!(t.buy(DefenseItem::Shield, 0.0, 0.0));
+        assert_eq!((t.state.gold, t.state.shield, t.state.shields), (50, 3, 1));
+        assert_eq!(
+            DefenseItem::Shield.price(&t.state),
+            240,
+            "every shield costs more"
+        );
         // Four more through: the shield takes three, one costs a life.
         t.update([player(350, 3), player(50, 2)].iter());
         assert_eq!((t.state.shield, t.state.lives), (0, 9));
-        assert!(!t.buy(DefenseItem::DonTower), "50 gold of 90");
-        // More greats pay for towers of both kinds.
+        assert!(!t.buy(DefenseItem::DonTower, 0.0, 1000.0), "50 gold of 120");
+        // More greats pay for towers of both kinds, one at a time and dearer each time.
         t.update([player(2000, 3), player(50, 2)].iter());
-        assert!(t.buy(DefenseItem::DonTower) && t.buy(DefenseItem::KatTower));
-        assert_eq!(t.state.towers, 2);
+        assert_eq!(DefenseItem::DonTower.price(&t.state), 120);
+        assert!(t.buy(DefenseItem::DonTower, 0.0, 1000.0));
+        assert_eq!(DefenseItem::KatTower.price(&t.state), 180);
+        assert!(
+            !t.buy(DefenseItem::KatTower, 500.0, 1500.0),
+            "a tower is already up"
+        );
+        assert!(t.buy(DefenseItem::KatTower, 1000.0, 2000.0));
+        assert_eq!((t.state.towers, t.state.tower_buys), (2, 2));
+        assert_eq!(DefenseItem::DonTower.price(&t.state), 270);
         // With more lives to start with, lives are cheap.
         let lots = TeamState {
             max: 50,
@@ -2650,7 +2694,7 @@ mod tests {
         // Wiped out: nothing more to buy.
         t.update([player(2000, 30), player(30, 2)].iter());
         assert_eq!(t.state.lives, 0);
-        assert!(!t.buy(DefenseItem::Slow));
+        assert!(!t.buy(DefenseItem::Slow, 0.0, 0.0));
     }
 
     #[test]
@@ -2846,10 +2890,11 @@ mod tests {
         for c in [&mut a, &mut b] {
             wait_for(c, |m| matches!(m, ServerMsg::Start { .. }));
         }
-        // No gold yet: the tower is turned down. Then 120 GREATs pay for it.
+        // No gold yet: the tower is turned down. Then 120 GREATs pay for it (the first tower costs 120).
         a.send(ClientMsg::Defense(DefenseAct::Buy {
             item: DefenseItem::DonTower,
             at: 1000.0,
+            until: 5000.0,
         }));
         thread::sleep(Duration::from_millis(100));
         b.send(ClientMsg::Live(Live {
@@ -2860,6 +2905,7 @@ mod tests {
         a.send(ClientMsg::Defense(DefenseAct::Buy {
             item: DefenseItem::DonTower,
             at: 2000.0,
+            until: 6000.0,
         }));
         // (Another connection: after a moment, so the room surely takes it second.)
         thread::sleep(Duration::from_millis(100));
@@ -2874,7 +2920,8 @@ mod tests {
                 act,
                 DefenseAct::Buy {
                     item: DefenseItem::DonTower,
-                    at: 2000.0
+                    at: 2000.0,
+                    until: 6000.0
                 },
                 "the first one never went out"
             );
@@ -2896,10 +2943,12 @@ mod tests {
             Some(TeamState {
                 lives: 10,
                 max: 10,
-                gold: 30,
+                gold: 0,
                 shield: 0,
                 towers: 1,
-                heals: 0
+                heals: 0,
+                shields: 0,
+                tower_buys: 1
             })
         );
     }

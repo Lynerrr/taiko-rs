@@ -121,6 +121,8 @@ pub struct Select {
     pub hidden: Hidden,
     /// The right-click menu of a song list row.
     pub menu: Option<SongMenu>,
+    /// The songs liked (the music player's favourites).
+    pub favourites: std::collections::HashSet<String>,
     /// Sets checked for a newer version on osu! this session, by set ID.
     pub updates: std::collections::HashMap<u32, SetUpdate>,
     /// Difficulties an update took out of their set (renamed or dropped on osu!): not listed.
@@ -339,6 +341,7 @@ impl Select {
             picker: None,
             sorting: false,
             scanning: None,
+            favourites: crate::playlist::load_favourites(),
             picking_folder: false,
             rate_label: String::new(),
             mods_label: String::new(),
@@ -1320,6 +1323,21 @@ impl Select {
 
     /// The menu's items for its row: hide the difficulty (not on a song's own row), hide the song,
     /// and get the song's newest version from osu! (a set that has an ID).
+    pub fn is_liked(&self, e: &Entry) -> bool {
+        self.favourites.contains(&crate::playlist::favourite_key(e))
+    }
+
+    /// Likes the song of `e`, or not any more; true if it's liked now.
+    pub fn toggle_like(&mut self, e: &Entry) -> bool {
+        let key = crate::playlist::favourite_key(e);
+        let liked = !self.favourites.remove(&key);
+        if liked {
+            self.favourites.insert(key);
+        }
+        crate::playlist::save_favourites(&self.favourites);
+        liked
+    }
+
     pub fn menu_items(&self, library: &[Entry]) -> Vec<(String, MenuAction)> {
         let Some(m) = &self.menu else {
             return Vec::new();
@@ -1335,6 +1353,16 @@ impl Select {
             }
         };
         let mut items = Vec::new();
+        let title = &library[i].meta.title;
+        let liked = self.is_liked(&library[i]);
+        items.push((
+            fit(if liked {
+                format!("Unlike {title}")
+            } else {
+                format!("Like {title}")
+            }),
+            MenuAction::Like,
+        ));
         if !m.header {
             items.push((
                 fit(format!("Hide [{}]", library[i].meta.version)),
@@ -1391,7 +1419,7 @@ impl Select {
                     t.clone()
                 }
             }
-            MenuAction::Love(..) => return None,
+            MenuAction::Love(..) | MenuAction::Like => return None,
         };
         self.hidden.save();
         // The selection stays unless it was hidden: then another difficulty of that song, else
@@ -2692,6 +2720,8 @@ pub enum MenuAction {
     Love(u32, bool),
     /// Download the song's set again, its newest version (replacing its difficulties).
     UpdateSong,
+    /// Like the song, or not any more.
+    Like,
 }
 
 /// Whether osu! has a newer version of a set than the one here.
@@ -3206,7 +3236,7 @@ impl Results {
         c.round_rect(
             [x0, cy],
             [cw, ch],
-            ch / 2.0,
+            5.0,
             rgba(if hover { 0x2b1f2a } else { 0x1d1d27 }, 0.95 * a),
             rgba(pink, if hover { a } else { 0.75 * a }),
             1.5,

@@ -8,6 +8,7 @@ mod admin;
 #[cfg(target_os = "android")]
 mod android;
 mod audio;
+mod audiolog;
 mod autoplay;
 mod avatars;
 mod beatmap;
@@ -28,6 +29,7 @@ mod game;
 mod genres;
 mod guide;
 mod hud;
+mod hud_edit;
 mod idle;
 mod keys;
 mod layout;
@@ -73,6 +75,7 @@ mod social;
 mod splash;
 mod stars;
 mod style;
+mod tact;
 mod tls;
 mod ui;
 mod update;
@@ -147,6 +150,10 @@ enum Scene {
     LayoutEdit {
         back: Box<Scene>,
     },
+    /// The interface editor (see `State::hud_edit`), opened from settings.
+    HudEdit {
+        back: Box<Scene>,
+    },
     /// The autoplay preview over the whole screen (in the playfield area, which can be moved
     /// and resized here), with the timeline. `back`: song select or the multiplayer lobby.
     Preview {
@@ -218,6 +225,9 @@ struct SpectateView {
     /// was last drawn.
     zones: Vec<[f32; 4]>,
     zones_at: Option<Instant>,
+    /// The match is over (the results came); we're `SPECTATE_DELAY` behind, so the last seconds
+    /// are still to be watched.
+    ended: Option<Instant>,
 }
 
 impl SpectateView {
@@ -257,6 +267,19 @@ struct WatchView {
     held: bool,
     fetching: bool,
     looked: Option<Instant>,
+    /// They stopped playing: their map time at the end and when we heard (we're a little
+    /// behind them, so the last seconds are still to be watched before this one is over).
+    ending: Option<(f64, Instant)>,
+    /// Their next play, started while we were still watching the end of the last.
+    next: Option<WatchStart>,
+}
+
+/// A friend's play as the server announced it.
+struct WatchStart {
+    play: online::SoloPlay,
+    t: f64,
+    paused: bool,
+    inputs: Vec<(f64, u8)>,
 }
 
 impl WatchView {
@@ -272,7 +295,24 @@ impl WatchView {
             held: false,
             fetching: false,
             looked: None,
+            ending: None,
+            next: None,
         }
+    }
+
+    /// Starts watching `start`'s play (the map is looked for again).
+    fn begin(&mut self, start: WatchStart) {
+        self.play = Some(start.play);
+        self.inputs = start.inputs;
+        self.clock = (start.t, Instant::now(), start.paused);
+        self.game = None;
+        self.rx = None;
+        self.entry = None;
+        self.held = false;
+        self.fetching = false;
+        self.looked = None;
+        self.ending = None;
+        self.next = None;
     }
 
     /// Where the player is now (map time).
@@ -303,6 +343,27 @@ impl WatchView {
             .into(),
             (Some(_), Some(_)) => tr!("loading...", "読み込み中...", "загрузка...").into(),
         }
+    }
+}
+
+/// How far along the download of the set `m` is from is, if there's one (None inside: it's going,
+/// its size not known yet).
+fn map_download(downloads: &[download::Job], m: &net::MapInfo) -> Option<Option<f32>> {
+    downloads
+        .iter()
+        .find(|j| {
+            Some(j.set.id) == m.set_id || (j.set.title == m.title && j.set.artist == m.artist)
+        })
+        .map(download::Job::fraction)
+}
+
+fn download_text(done: Option<f32>) -> String {
+    match done {
+        Some(f) => {
+            let percent = f * 100.0;
+            tr!("downloading {percent:.0}%", "ダウンロード中 {percent:.0}%", "скачивание {percent:.0}%";)
+        }
+        None => tr!("downloading...", "ダウンロード中...", "скачивание...").into(),
     }
 }
 
@@ -407,6 +468,10 @@ struct State {
     host_transfer: Option<std::sync::mpsc::Sender<Option<Vec<u8>>>>,
     /// The lobby map was asked of the host: only then is what the host sends taken.
     host_map_asked: bool,
+    /// When the host was asked for it.
+    host_asked_at: Option<Instant>,
+    /// The lobby map last fetched by itself: each is tried once.
+    auto_fetched: Option<u64>,
     /// Local scores (index of saved replays).
     scores: Vec<scores::ScoreRow>,
     /// Working out the pp of scores saved before pp (started once, on the first frame).
@@ -447,6 +512,7 @@ struct State {
     universe_setup: Option<multiverse::Setup>,
     shapeshift_setup: Option<shapeshift::Setup>,
     random_setup: Option<String>,
+    tact_setup: Option<tact::Setup>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
     leaderboard: Vec<PathBuf>,
     /// The leaderboard's rows scrolled past, for which map and tab (a new one starts at the
@@ -604,7 +670,9 @@ struct State {
     presence: Option<discord::Activity>,
     presence_at: Option<Instant>,
     /// Background library scan: result channel and files-read counter.
-    scan: Option<(Receiver<Vec<Entry>>, Arc<AtomicUsize>)>,
+    scan: Option<(Receiver<Scanned>, Arc<AtomicUsize>)>,
+    /// The list is up from the cache, and the scan is checking it against the disk.
+    scan_checking: bool,
     /// The Songs folder dialog while it is open: the folder picked (None = cancelled), or why
     /// there is no dialog.
     folder_pick: Option<Receiver<Result<Option<PathBuf>, String>>>,
@@ -650,6 +718,10 @@ struct State {
     mouse_moved_at: Instant,
     /// Snap guides to draw while dragging the playfield area.
     guides: Vec<layout::Guide>,
+    /// The interface editor, while it's open.
+    hud_edit: Option<hud_edit::Editor>,
+    /// The made-up play the editors show the interface with.
+    hud_sample: Option<Box<game::Game>>,
     /// Playfield presets (resolutions that fit the window), filled when the window opens.
     resolutions: Vec<(u32, u32)>,
     monitor_modes: Vec<(u32, u32)>,
@@ -850,9 +922,9 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool) -> f32 {
             label,
         );
         c.hit(tx, y - 1.5, tw, h, render::Hit::BoardTab(on));
-        tx += tw + 4.0;
+        tx += tw + 6.0;
     }
-    tx - x - 4.0
+    tx - x - 6.0
 }
 
 /// The server's scores for the selected map: each player's best (`board` None while loading).
@@ -1421,6 +1493,11 @@ fn fetch_board(server: String, map: u64) -> Receiver<Result<Vec<online::OnlineSc
 }
 
 /// Opens a web page in the browser; false where that can't be done.
+/// Where a player's profile is on the website.
+fn profile_url(name: &str) -> String {
+    format!("{}/u/{name}", online::WEBSITE)
+}
+
 fn open_url(url: &str) -> bool {
     if cfg!(target_os = "android") {
         return false;
@@ -1853,9 +1930,16 @@ fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
     inputs
 }
 
+/// What a library scan hands over: the list from the cache straight away, if there's one, then the
+/// list as it is on disk.
+enum Scanned {
+    Cached(Vec<Entry>),
+    Done(Vec<Entry>),
+}
+
 /// Scans `inputs` on a background thread so the window appears at once, even with a huge
 /// library.
-fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Vec<Entry>>, Arc<AtomicUsize>) {
+fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Scanned>, Arc<AtomicUsize>) {
     let found = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = mpsc::channel();
     let counter = found.clone();
@@ -1863,13 +1947,16 @@ fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Vec<Entry>>, Arc<AtomicUsize>) 
         .name("library".into())
         .spawn(move || {
             let started = Instant::now();
-            let library = library::scan(&inputs, &counter);
+            let early = tx.clone();
+            let library = library::scan(&inputs, &counter, &mut |cached| {
+                let _ = early.send(Scanned::Cached(cached));
+            });
             eprintln!(
                 "scanned {} files in {:.0} ms",
                 counter.load(Ordering::Relaxed),
                 started.elapsed().as_secs_f64() * 1000.0
             );
-            let _ = tx.send(library);
+            let _ = tx.send(Scanned::Done(library));
         })
         .expect("spawn library scan");
     (rx, found)
@@ -2372,6 +2459,8 @@ impl State {
         ex.game.kiai_effects = kiai;
         let t = ex.game.speed().map(ex.view_time());
         ex.game.set_time(t);
+        ex.game.hud = self.cfg.hud;
+        ex.game.hidden = self.cfg.hud.off;
         c.clear(render::VIRTUAL_HEIGHT * w as f32 / h as f32);
         ex.game.draw_playfield(c, scroll);
         if ex.settings.hud {
@@ -2713,6 +2802,15 @@ impl State {
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
         let mut label = self.library[entry].label();
+        audiolog::line(&format!(
+            "play {label} audio={} global_offset={} map_offset={} visual_offset={} present={} fps_cap={}",
+            self.library[entry].meta.audio_file,
+            self.cfg.offset_ms,
+            self.map_offset(Some(entry)),
+            self.cfg.visual_offset_ms,
+            self.cfg.present.name(),
+            self.cfg.fps_cap
+        ));
         if let Some(t) = from {
             let at = fmt_time(t);
             label.push_str(&tr!("  (from {at})", "  ({at}から)", "  (с {at})";));
@@ -3221,6 +3319,7 @@ impl State {
         if let Some(p) = &mut self.player {
             p.list.toggle_favourite(track, fresh_seed());
             playlist::save_favourites(&p.list.favourites);
+            self.select.favourites = p.list.favourites.clone();
         }
     }
 
@@ -3813,6 +3912,17 @@ impl State {
                 tr!("{s:.2} s", "{s:.2}秒", "{s:.2} с";)
             }
             Item::PlayfieldArea => c.playfield_area.describe(),
+            Item::InterfaceEditor => {
+                let builtin = hud::builtin_presets();
+                let named = builtin
+                    .iter()
+                    .find(|p| p.1 == c.hud)
+                    .map(|p| p.0.to_string());
+                let own = c.hud_presets.iter().find(|p| p.1 == c.hud);
+                own.map(|p| p.0.clone())
+                    .or(named)
+                    .unwrap_or_else(|| tr!("custom", "カスタム", "своя").into())
+            }
             Item::PlayfieldPreset => self
                 .current_preset()
                 .map(|(w, h)| format!("{w}x{h}"))
@@ -4105,7 +4215,7 @@ impl State {
                 self.cfg.resume_delay_ms = (self.cfg.resume_delay_ms + 250.0 * d).clamp(0.0, 3000.0)
             }
             // Both act on Enter in `settings_key`.
-            Item::PlayfieldArea | Item::PlayfieldReset => return,
+            Item::PlayfieldArea | Item::InterfaceEditor | Item::PlayfieldReset => return,
             Item::PlayfieldPreset => {
                 self.cycle_preset(dir);
                 return;
@@ -5052,6 +5162,7 @@ impl State {
             .into(),
         });
         self.scan = Some(start_scan(inputs));
+        self.scan_checking = false;
         self.select.scanning = Some(0);
         Ok(())
     }
@@ -5114,9 +5225,9 @@ impl State {
             let label = tr!("what's new", "更新内容", "что нового");
             let w = Canvas::text_width(7.0, label) + 14.0;
             let x = c.width - 8.0 - badge - w;
-            let hover = c.hovered(x, 3.0, w, 14.0);
+            let hover = c.hovered(x, 2.0, w, 14.0);
             c.round_rect(
-                [x, 3.0],
+                [x, 2.0],
                 [w, 14.0],
                 4.0,
                 rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95),
@@ -5125,12 +5236,12 @@ impl State {
             );
             c.text(
                 x + 7.0,
-                6.5,
+                5.5,
                 7.0,
                 rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0),
                 label,
             );
-            c.hit(x, 3.0, w, 14.0, render::Hit::Changelog);
+            c.hit(x, 2.0, w, 14.0, render::Hit::Changelog);
             // Who's logged in and their pp, left of it: their profile on the website.
             let (name, rest) = match (&self.mp_menu.account, self.me) {
                 (Some(name), Some((pp, rank))) => (
@@ -5154,9 +5265,9 @@ impl State {
             };
             let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0 + pic;
             let ax = x - 6.0 - aw;
-            let hover = c.hovered(ax, 3.0, aw, 14.0);
+            let hover = c.hovered(ax, 2.0, aw, 14.0);
             c.round_rect(
-                [ax, 3.0],
+                [ax, 2.0],
                 [aw, 14.0],
                 4.0,
                 rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95),
@@ -5171,11 +5282,11 @@ impl State {
                 1.0,
             );
             if pic > 0.0 {
-                c.avatar(&name, ax + 9.0, 10.0, 4.5, accent(), 1.0);
+                c.avatar(&name, ax + 9.0, 9.0, 4.5, accent(), 1.0);
             }
-            let nw = c.text(ax + 7.0 + pic, 6.5, 7.0, rgba(0xffffff, 1.0), &name);
-            c.text(ax + 7.0 + pic + nw, 6.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
-            c.hit(ax, 3.0, aw, 14.0, render::Hit::Account);
+            let nw = c.text(ax + 7.0 + pic, 5.5, 7.0, rgba(0xffffff, 1.0), &name);
+            c.text(ax + 7.0 + pic + nw, 5.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
+            c.hit(ax, 2.0, aw, 14.0, render::Hit::Account);
         }
         let text = match self.updater.status() {
             update::Status::Available { commit, .. } => update_badge(&commit),
@@ -5197,17 +5308,17 @@ impl State {
         }
         let w = Canvas::text_width(7.0, &text) + 14.0;
         let x = c.width - 8.0 - w;
-        let hover = c.hovered(x, 3.0, w, 14.0);
+        let hover = c.hovered(x, 2.0, w, 14.0);
         c.round_rect(
-            [x, 3.0],
+            [x, 2.0],
             [w, 14.0],
             4.0,
             rgba(if hover { 0x2f8f4a } else { 0x1f6b36 }, 0.95),
             rgba(0x86E05A, 1.0),
             1.0,
         );
-        c.text(x + 7.0, 6.5, 7.0, rgba(0xffffff, 1.0), &text);
-        c.hit(x, 3.0, w, 14.0, render::Hit::Update);
+        c.text(x + 7.0, 5.5, 7.0, rgba(0xffffff, 1.0), &text);
+        c.hit(x, 2.0, w, 14.0, render::Hit::Update);
     }
 
     /// Loads the configured skin: its note images go to the renderer, its hitsounds to the audio
@@ -5664,7 +5775,7 @@ impl State {
                 .into(),
                 String::new(),
             ),
-            Scene::Settings { .. } | Scene::LayoutEdit { .. } => (
+            Scene::Settings { .. } | Scene::LayoutEdit { .. } | Scene::HudEdit { .. } => (
                 tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
                 String::new(),
             ),
@@ -5910,6 +6021,11 @@ impl State {
                 self.open_layout_editor()
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::InterfaceEditor =>
+            {
+                self.open_hud_editor()
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
                 if item == Item::PlayfieldPreset =>
             {
                 self.open_dropdown()
@@ -6053,7 +6169,14 @@ impl State {
         } else {
             self.cfg.offset_ms
         };
-        match calibrate::estimate(&game.stats.errors, current) {
+        let found = calibrate::estimate(&game.stats.errors, current);
+        if let Some(e) = &found {
+            audiolog::line(&format!(
+                "calibration vsync={vsync} hits={} error={:.1} margin={:.1} ur={:.0} suggested={} current={current}",
+                e.hits, e.error_ms, e.margin_ms, e.ur, e.suggested_offset
+            ));
+        }
+        match found {
             Some(estimate) if estimate.hits >= 4 => {
                 self.scene = Scene::CalibrateDone {
                     estimate,
@@ -6248,8 +6371,15 @@ impl State {
     }
 
     fn refresh_play_offset(&mut self) {
+        let was = self.play_offset;
         let offset = self.map_offset(self.offset_entry());
         self.play_offset = self.cfg.offset_ms + offset;
+        if self.play_offset != was {
+            audiolog::line(&format!(
+                "offset total={} global={}",
+                self.play_offset, self.cfg.offset_ms
+            ));
+        }
         self.preview.map_offset = offset;
     }
 
@@ -6479,8 +6609,42 @@ impl State {
                 | Scene::MpPlay { .. }
                 | Scene::Calibrate { .. }
                 | Scene::LayoutEdit { .. }
+                | Scene::HudEdit { .. }
                 | Scene::Preview { .. }
         )
+    }
+
+    fn open_hud_editor(&mut self) {
+        let back = std::mem::replace(&mut self.scene, Scene::Select);
+        self.hud_edit = Some(hud_edit::Editor::new(&self.cfg));
+        self.scene = Scene::HudEdit {
+            back: Box::new(back),
+        };
+    }
+
+    fn close_hud_editor(&mut self) {
+        self.cfg.save();
+        self.hud_edit = None;
+        self.hud_sample = None;
+        if let Scene::HudEdit { back } = std::mem::replace(&mut self.scene, Scene::Select) {
+            self.scene = *back;
+        }
+    }
+
+    fn hud_outcome(&mut self, outcome: hud_edit::Outcome) {
+        match outcome {
+            hud_edit::Outcome::Nothing => {}
+            hud_edit::Outcome::Toast(text) => self.toast(text),
+            hud_edit::Outcome::Close => self.close_hud_editor(),
+        }
+    }
+
+    fn hud_key(&mut self, code: KeyCode, text: Option<&str>) {
+        let mods = (self.modifiers_shift, self.modifiers_ctrl);
+        if let Some(ed) = &mut self.hud_edit {
+            let outcome = ed.key(code, text, mods, &mut self.cfg);
+            self.hud_outcome(outcome);
+        }
     }
 
     fn open_layout_editor(&mut self) {
@@ -6891,8 +7055,16 @@ impl State {
                 return;
             }
         }
+        let (vx, vy) = self.mouse_virtual();
+        if let Some(ed) = &mut self.hud_edit
+            && matches!(self.scene, Scene::HudEdit { .. })
+            && ed.wheel(vx, vy, notches, &mut self.cfg)
+        {
+            return;
+        }
         if self.area_editable()
-            && (self.cfg.wheel_resizes_playfield || matches!(self.scene, Scene::LayoutEdit { .. }))
+            && (self.cfg.wheel_resizes_playfield
+                || matches!(self.scene, Scene::LayoutEdit { .. } | Scene::HudEdit { .. }))
         {
             self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
             self.cfg.save();
@@ -7184,6 +7356,10 @@ impl State {
             self.hover = None;
             return CursorIcon::Pointer;
         }
+        if let Some(ed) = self.hud_edit.as_mut().filter(|ed| ed.dragging()) {
+            ed.drag_to(vx, vy, self.modifiers_shift, &mut self.cfg);
+            return CursorIcon::Move;
+        }
         if let Some((grip, (px, py), from)) = self.grip {
             let raw = layout::drag(from, grip, ((x - px) / sw) as f32, ((y - py) / sh) as f32);
             // Snap within 12 px of the screen's edges / centre lines; Shift places freely.
@@ -7424,6 +7600,7 @@ impl State {
                                 | H::UniversePresetDelete(_)
                                 | H::ShapeshiftCell(..)
                                 | H::ShapeshiftMove(_)
+                                | H::TactCell(_)
                                 | H::CustomTab(_)
                                 | H::Key(_)
                         )
@@ -7655,8 +7832,18 @@ impl State {
             if self.settings_ui.editing.take().is_some() {
                 return;
             }
+            if let Some(ed) = self.hud_edit.as_mut().filter(|ed| ed.naming()) {
+                ed.finish_naming(&mut self.cfg);
+            }
             if let Some(hit) = hit {
                 self.click(hit, window);
+                return;
+            }
+            let (vx, vy) = self.mouse_virtual();
+            if let Some(ed) = &mut self.hud_edit
+                && matches!(self.scene, Scene::HudEdit { .. })
+                && ed.press(vx, vy, &self.cfg)
+            {
                 return;
             }
             if self.area_editable() {
@@ -7667,6 +7854,11 @@ impl State {
                     self.grip = Some((g, self.mouse, self.cfg.playfield_area));
                 }
             }
+        } else if self
+            .hud_edit
+            .as_mut()
+            .is_some_and(|ed| ed.release(&self.cfg))
+        {
         } else if self.grip.take().is_some() {
             self.guides.clear();
             self.cfg.save();
@@ -7739,15 +7931,66 @@ impl State {
         info.stats = self.map_stats(entry);
         info.seed = lobby_seed(Some(self.cfg.random_seed));
         // Defense stays on (with its rules) from one map to the next.
-        info.defense = self
-            .mp
-            .as_ref()
-            .and_then(|s| s.map.as_ref())
-            .and_then(|m| m.defense);
+        info.defense = self.lobby_defense();
+        let lobby_mods = self.cfg.mods.lobby(info.defense);
+        info.mods = lobby_mods.list();
+        (info.multiverse, info.shapeshift) = mod_settings(lobby_mods);
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
         self.scene = Scene::Lobby;
+    }
+
+    /// The lobby's Defense rules, when the map picked is a Defense match.
+    fn lobby_defense(&self) -> Option<net::Defense> {
+        self.mp
+            .as_ref()
+            .and_then(|s| s.map.as_ref())
+            .and_then(|m| m.defense)
+    }
+
+    /// T or a click on the chat line: the keys go to a message until Enter or Esc.
+    fn focus_lobby_chat(&mut self) {
+        if let Some(s) = self.mp.as_mut().filter(|s| !s.mapguessr) {
+            s.chat_input.get_or_insert_with(String::new);
+            s.chat_caret = s.chat_input.as_ref().map_or(0, |t| t.chars().count());
+        }
+    }
+
+    /// A key while a lobby chat line is being typed.
+    fn lobby_chat_key(&mut self, code: KeyCode, text: Option<&str>) {
+        let Some(s) = self.mp.as_mut() else {
+            return;
+        };
+        let Some(typed) = s.chat_input.as_mut() else {
+            return;
+        };
+        match code {
+            KeyCode::Escape => s.chat_input = None,
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let mut line = typed.trim().to_string();
+                s.chat_input = None;
+                s.chat_caret = 0;
+                // `/np`: the map on screen, with its osu! link.
+                if line.eq_ignore_ascii_case("/np") {
+                    match self.now_playing() {
+                        Some(np) => line = np,
+                        None => {
+                            self.toast("no map to share: pick one first".into());
+                            return;
+                        }
+                    }
+                }
+                if !line.is_empty()
+                    && let Some(s) = &self.mp
+                {
+                    s.client.send(net::ClientMsg::Chat(line));
+                }
+            }
+            KeyCode::Backspace => settings::caret_backspace(typed, &mut s.chat_caret),
+            _ if settings::caret_nav(typed, &mut s.chat_caret, code) => {}
+            _ => settings::caret_insert(typed, &mut s.chat_caret, text.unwrap_or(""), 200),
+        }
     }
 
     fn leave_room(&mut self, why: &str) {
@@ -7794,6 +8037,30 @@ impl State {
             );
             if !(function_key && !repeat && self.handle_global_key(code, window)) {
                 self.mp_menu_key(code, text);
+            }
+            return;
+        }
+        // A chat line being typed in the lobby takes the keys (function keys still work).
+        if matches!(self.scene, Scene::Lobby)
+            && self.mp.as_ref().is_some_and(|s| s.chat_input.is_some())
+        {
+            let function_key = matches!(
+                code,
+                KeyCode::F1
+                    | KeyCode::F2
+                    | KeyCode::F3
+                    | KeyCode::F4
+                    | KeyCode::F5
+                    | KeyCode::F6
+                    | KeyCode::F7
+                    | KeyCode::F8
+                    | KeyCode::F9
+                    | KeyCode::F10
+                    | KeyCode::F11
+                    | KeyCode::F12
+            );
+            if !(function_key && !repeat && self.handle_global_key(code, window)) {
+                self.lobby_chat_key(code, text);
             }
             return;
         }
@@ -7868,9 +8135,9 @@ impl State {
                         self.cfg.rate = ((self.cfg.rate + step) * 100.0).round() / 100.0;
                         self.cfg.rate = self.cfg.rate.clamp(RATE_RANGE.0, RATE_RANGE.1);
                         self.cfg.save();
-                        let (rate, mods) =
-                            (self.cfg.mods.speed(self.cfg.rate, true).0, self.cfg.mods);
+                        let rate = self.cfg.mods.speed(self.cfg.rate, true).0;
                         if let Some(mut m) = s.map.clone() {
+                            let mods = self.cfg.mods.lobby(m.defense);
                             m.rate = rate;
                             m.mods = mods.list();
                             (m.multiverse, m.shapeshift) = mod_settings(mods);
@@ -7880,6 +8147,7 @@ impl State {
                         let text = format!("match rate {rate:.2}x");
                         self.toast(text);
                     }
+                    KeyCode::KeyT => self.focus_lobby_chat(),
                     KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
                     // Defense: C turns it on or off, 1-5 step its rules.
                     KeyCode::KeyC
@@ -7938,6 +8206,10 @@ impl State {
                                 return;
                             }
                         };
+                        // Defense takes the host's mods for everyone; an ordinary match, the speed's.
+                        let mods = self.cfg.mods.lobby(m.defense);
+                        m.mods = mods.list();
+                        (m.multiverse, m.shapeshift) = mod_settings(mods);
                         s.client.send(net::ClientMsg::SelectMap(m));
                         self.toast(text);
                     }
@@ -8003,6 +8275,7 @@ impl State {
                         if self.host_transfer.is_none() {
                             s.client.send(net::ClientMsg::RequestMap);
                             self.host_map_asked = true;
+                            self.host_asked_at = Some(Instant::now());
                             self.toast("getting the map from the host...".into());
                         }
                     }
@@ -8100,11 +8373,27 @@ impl State {
                             ));
                             None
                         }
+                        (Some(net::DefenseItem::DonTower | net::DefenseItem::KatTower), _)
+                            if game.tower_active(t) =>
+                        {
+                            self.toast("a tower is already up".into());
+                            None
+                        }
                         (Some(net::DefenseItem::Heal), _) if team.lives >= team.max => {
                             self.toast("the team has all its lives".into());
                             None
                         }
-                        (Some(item), _) => Some(net::DefenseAct::Buy { item, at: t }),
+                        (Some(item), _) => {
+                            let until = if matches!(
+                                item,
+                                net::DefenseItem::DonTower | net::DefenseItem::KatTower
+                            ) {
+                                game.tower_until(t).min(f64::MAX) // JSON has no infinity
+                            } else {
+                                0.0
+                            };
+                            Some(net::DefenseAct::Buy { item, at: t, until })
+                        }
                         (None, KeyCode::KeyT) if can_tag => Some(net::DefenseAct::TagIn { at: t }),
                         (None, KeyCode::KeyT) => {
                             self.toast(
@@ -8659,6 +8948,7 @@ impl State {
             Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => "calibration",
             Scene::LayoutEdit { .. } => "layout editor",
+            Scene::HudEdit { .. } => "interface editor",
             Scene::Preview { .. } => "map preview",
             Scene::Download => "downloads",
             Scene::MpMenu => "multiplayer menu",
@@ -8940,13 +9230,86 @@ impl State {
         let Some((rx, found)) = &self.scan else {
             return;
         };
-        self.select.scanning = Some(found.load(Ordering::Relaxed));
-        let library = match rx.try_recv() {
-            Ok(library) => library,
+        if !self.scan_checking {
+            self.select.scanning = Some(found.load(Ordering::Relaxed));
+        }
+        let scanned = match rx.try_recv() {
+            Ok(scanned) => scanned,
             Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => Vec::new(),
+            Err(mpsc::TryRecvError::Disconnected) if self.scan_checking => {
+                self.scan = None;
+                self.scan_checking = false;
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => Scanned::Done(Vec::new()),
         };
-        self.scan = None;
+        match scanned {
+            Scanned::Cached(library) => {
+                self.use_library(library, None);
+                self.scan_checking = true;
+            }
+            Scanned::Done(library) if self.scan_checking => {
+                self.scan = None;
+                self.scan_checking = false;
+                self.check_library(library);
+            }
+            Scanned::Done(library) => {
+                self.scan = None;
+                self.use_library(library, None);
+            }
+        }
+    }
+
+    /// The scan's list against the one up from the cache: what's new joins the end and what's
+    /// changed takes its place, so the indices handed out stay good. What's gone takes the list
+    /// being rebuilt, which waits for a next launch if anything could be holding on to one.
+    fn check_library(&mut self, checked: Vec<Entry>) {
+        let index: std::collections::HashMap<PathBuf, usize> = self
+            .library
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.path.clone(), i))
+            .collect();
+        let gone = {
+            let there: std::collections::HashSet<&Path> =
+                checked.iter().map(|e| e.path.as_path()).collect();
+            self.library
+                .iter()
+                .any(|e| !there.contains(e.path.as_path()))
+        };
+        if gone && matches!(self.scene, Scene::Select) && self.mp.is_none() {
+            let selected = self
+                .select
+                .selected()
+                .and_then(|i| self.library.get(i))
+                .map(|e| e.path.clone());
+            self.use_library(checked, selected);
+            return;
+        }
+        let mut fresh = Vec::new();
+        let mut changed = false;
+        for entry in checked {
+            match index.get(&entry.path) {
+                Some(&i) => {
+                    let old = &self.library[i];
+                    if old.size != entry.size || old.modified != entry.modified {
+                        self.library[i] = entry;
+                        changed = true;
+                    }
+                }
+                None => fresh.push(entry),
+            }
+        }
+        if !fresh.is_empty() {
+            self.append_maps(fresh);
+        } else if changed {
+            self.select.refilter(&self.library);
+        }
+        self.find_lobby_map();
+    }
+
+    /// `library` in place of the list, on `selected` if that's still there, else a random song.
+    fn use_library(&mut self, library: Vec<Entry>, selected: Option<PathBuf>) {
         self.stars.clear();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
@@ -8988,7 +9351,9 @@ impl State {
         self.select.refilter(&self.library);
         // Start on a random song rather than the first one every time (not before a map given on
         // the command line, nor in scripted runs, whose screenshots expect the first song).
-        if !self.play_when_scanned && self.input_script.is_none() && self.shots.is_none() {
+        if let Some(path) = &selected {
+            self.select.select_path(&self.library, path);
+        } else if !self.play_when_scanned && self.input_script.is_none() && self.shots.is_none() {
             self.select.random(&self.library);
         }
         // Tests: TAIKO_OPEN_VIDEO=<replay file> opens the video editor for it.
@@ -9003,9 +9368,14 @@ impl State {
             self.play_when_scanned = false;
             self.start_loading(0);
         }
-        // A lobby map may have been announced before our library was ready.
+        self.find_lobby_map();
+    }
+
+    /// A lobby map may have been announced before our library was ready.
+    fn find_lobby_map(&mut self) {
         if let Some(s) = &mut self.mp
             && let Some(m) = &s.map
+            && !s.have_map
         {
             s.map_entry = find_map(&self.library, m);
             s.have_map = s.map_entry.is_some();
@@ -9134,6 +9504,16 @@ impl State {
     /// everyone (which can't be switched here) on top of our own.
     fn shown_mods(&self) -> Mods {
         match &self.mp {
+            // In Defense the host's mods are everyone's.
+            Some(s)
+                if matches!(self.scene, Scene::Lobby)
+                    && s.map.as_ref().is_some_and(|m| m.defense.is_some()) =>
+            {
+                match s.map.as_ref().filter(|_| !s.is_host()) {
+                    Some(m) => Mods::from_list(&m.mods),
+                    None => self.cfg.mods.lobby(self.lobby_defense()),
+                }
+            }
             Some(s) if matches!(self.scene, Scene::Lobby) && !s.is_host() => {
                 let lobby = s
                     .map
@@ -9158,6 +9538,34 @@ impl State {
             ));
             return;
         }
+        // In Defense the host picks all of them, from the ones a team can have.
+        if matches!(self.scene, Scene::Lobby)
+            && let Some(s) = self.mp.as_ref().filter(|_| self.lobby_defense().is_some())
+        {
+            if !s.is_host() {
+                self.toast(
+                    tr!(
+                        "in Defense the host picks the mods",
+                        "ディフェンスではホストがMODを選ぶ",
+                        "в Обороне моды выбирает хост"
+                    )
+                    .into(),
+                );
+                return;
+            }
+            if !m.defense_ok() {
+                self.toast(format!(
+                    "{} {}",
+                    m.acronym(),
+                    tr!(
+                        "doesn't work in Defense",
+                        "はディフェンスでは使えない",
+                        "не работает в Обороне"
+                    )
+                ));
+                return;
+            }
+        }
         self.cfg.mods.toggle(m);
         self.mods_changed();
     }
@@ -9165,7 +9573,12 @@ impl State {
     /// Tells the room the mods we picked ourselves, if it doesn't have them.
     fn send_my_mods(&self) {
         let Some(s) = &self.mp else { return };
-        let mine = self.cfg.mods.free().list();
+        // Our own others don't play in Defense: the host's are the whole team's.
+        let mine = if self.lobby_defense().is_some() {
+            Vec::new()
+        } else {
+            self.cfg.mods.free().list()
+        };
         if s.me().is_some_and(|p| p.mods != mine) {
             s.client.send(net::ClientMsg::Mods(mine));
         }
@@ -9181,15 +9594,17 @@ impl State {
 
     /// As the lobby host: tells the room the match's rate, mods and mod settings as they are now.
     fn update_lobby_map(&self) {
-        let (rate, mods) = (self.play_speed().0, self.cfg.mods);
+        let rate = self.play_speed().0;
         if let Some(s) = &self.mp
             && s.is_host()
             && !s.in_match
             && let Some(mut m) = s.map.clone()
         {
             m.rate = rate;
-            // Only the speed's: everyone picks their other mods themselves.
-            m.mods = mods.shared().list();
+            // Only the speed's: everyone picks their other mods themselves. In Defense, all of
+            // the host's (a team plays one set of notes).
+            let mods = self.cfg.mods.lobby(m.defense);
+            m.mods = mods.list();
             (m.multiverse, m.shapeshift) = mod_settings(mods);
             m.seed = lobby_seed(Some(self.cfg.random_seed));
             if Some(&m) != s.map.as_ref() {
@@ -9250,6 +9665,7 @@ impl State {
         self.universe_setup =
             (m == mods::Mod::Multiverse).then(|| multiverse::Setup::new(game::FIRST_FOCUS, 0));
         self.shapeshift_setup = (m == mods::Mod::Shapeshift).then(shapeshift::Setup::default);
+        self.tact_setup = (m == mods::Mod::Tact).then(|| tact::Setup::new(self.cfg.tact));
     }
 
     /// The mod customization's open tab.
@@ -9258,10 +9674,10 @@ impl State {
             Some(mods::Mod::Random)
         } else if self.universe_setup.is_some() {
             Some(mods::Mod::Multiverse)
+        } else if self.shapeshift_setup.is_some() {
+            Some(mods::Mod::Shapeshift)
         } else {
-            self.shapeshift_setup
-                .is_some()
-                .then_some(mods::Mod::Shapeshift)
+            self.tact_setup.is_some().then_some(mods::Mod::Tact)
         }
     }
 
@@ -9337,7 +9753,22 @@ impl State {
             } else if setup.key(code, self.modifiers_shift, &mut self.cfg.shapeshift) {
                 self.shapeshift_changed();
             }
+        } else if let Some(setup) = &mut self.tact_setup {
+            if matches!(
+                code,
+                KeyCode::Escape | KeyCode::F1 | KeyCode::Backspace | KeyCode::Tab
+            ) {
+                self.tact_setup = None;
+            } else if let Some(step) = setup.key(code) {
+                self.tact_changed(step);
+            }
         }
+    }
+
+    fn tact_changed(&mut self, step: usize) {
+        self.cfg.tact = step.min(tact::STEPS.len() - 1);
+        tact::set(self.cfg.tact);
+        self.cfg.save();
     }
 
     fn shapeshift_changed(&mut self) {
@@ -9367,6 +9798,7 @@ impl State {
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.random_setup.is_some()
+            || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
             || self
                 .universe_setup
                 .as_ref()
@@ -9394,6 +9826,7 @@ impl State {
                 .as_ref()
                 .is_some_and(|d| d.editing.is_some())
             || self.random_setup.is_some()
+            || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
             || self
                 .universe_setup
                 .as_ref()
@@ -9405,7 +9838,7 @@ impl State {
     fn is_text_field(&self, hit: render::Hit) -> bool {
         use render::Hit;
         match hit {
-            Hit::TextField | Hit::SettingsSearch => true,
+            Hit::TextField | Hit::SettingsSearch | Hit::LobbyChat => true,
             Hit::MpRow(i) => {
                 matches!(self.scene, Scene::MpMenu)
                     && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action())
@@ -9535,6 +9968,12 @@ impl State {
                 )),
                 _ => None,
             };
+        }
+        if let (Scene::Lobby, Some(typed)) = (
+            &self.scene,
+            self.mp.as_ref().and_then(|s| s.chat_input.as_ref()),
+        ) {
+            return Some(("Chat".into(), typed.clone()));
         }
         // The host typing a new lobby password (K).
         if let (Scene::Lobby, Some(typed)) = (
@@ -9930,6 +10369,30 @@ impl State {
     /// someone else play (spectating a match, watching a friend), never over your own play.
     fn overlay_allowed(&self) -> bool {
         !self.in_song() || matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_))
+    }
+
+    /// Where the friends tab goes on this screen, if it shows: not over a play, or over anything
+    /// that takes up the whole screen (F9 still opens the panel there).
+    fn social_tab_middle(&self) -> Option<f32> {
+        let covered = self.in_song()
+            || self.player.is_some()
+            || self.mod_select.is_some()
+            || self.random_setup.is_some()
+            || self.universe_setup.is_some()
+            || self.select.menu.is_some()
+            || matches!(
+                self.scene,
+                Scene::Settings { .. }
+                    | Scene::LayoutEdit { .. }
+                    | Scene::HudEdit { .. }
+                    | Scene::Preview { .. }
+            );
+        let middle = if self.on_menu() {
+            social::TAB_MENU_MIDDLE
+        } else {
+            social::TAB_MIDDLE
+        };
+        (!covered).then_some(middle)
     }
 
     fn open_social(&mut self) {
@@ -10641,26 +11104,35 @@ impl State {
                 if let Scene::Watch(v) = &mut self.scene
                     && key(&v.player) == key(&player)
                 {
-                    v.play = Some(play);
-                    v.inputs = inputs;
-                    v.clock = (t, Instant::now(), paused);
-                    v.game = None;
-                    v.rx = None;
-                    v.entry = None;
-                    v.held = false;
-                    v.fetching = false;
-                    v.looked = None;
-                    if let Some(a) = &self.audio {
-                        a.stop();
+                    let start = WatchStart {
+                        play,
+                        t,
+                        paused,
+                        inputs,
+                    };
+                    if v.ending.is_some() && v.game.is_some() {
+                        // Finish the last play first.
+                        v.next = Some(start);
+                    } else {
+                        v.begin(start);
+                        if let Some(a) = &self.audio {
+                            a.stop();
+                        }
                     }
                 }
             }
             Down::WatchFrame { t, paused, inputs } => {
                 if let Scene::Watch(v) = &mut self.scene {
-                    v.clock = (t, Instant::now(), paused);
-                    match v.game.as_mut().and_then(|g| g.replay.as_mut()) {
-                        Some((list, _)) => list.extend_from_slice(&inputs),
-                        None => v.inputs.extend_from_slice(&inputs),
+                    if let Some(n) = &mut v.next {
+                        n.t = t;
+                        n.paused = paused;
+                        n.inputs.extend_from_slice(&inputs);
+                    } else if v.ending.is_none() {
+                        v.clock = (t, Instant::now(), paused);
+                        match v.game.as_mut().and_then(|g| g.replay.as_mut()) {
+                            Some((list, _)) => list.extend_from_slice(&inputs),
+                            None => v.inputs.extend_from_slice(&inputs),
+                        }
                     }
                 }
             }
@@ -10668,10 +11140,15 @@ impl State {
                 if let Scene::Watch(v) = &mut self.scene
                     && key(&v.player) == key(&player)
                 {
-                    let name = v.player.clone();
-                    **v = WatchView::new(name);
-                    if let Some(a) = &self.audio {
-                        a.stop();
+                    if v.game.is_some() && v.ending.is_none() {
+                        // Watch the rest of it: we're a couple of seconds behind.
+                        v.ending = Some((v.their_time(), Instant::now()));
+                    } else if v.game.is_none() {
+                        let name = v.player.clone();
+                        **v = WatchView::new(name);
+                        if let Some(a) = &self.audio {
+                            a.stop();
+                        }
                     }
                 }
             }
@@ -10811,9 +11288,23 @@ impl State {
             }
         }
         let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
-        let target = v.their_time() - WATCH_DELAY_MS * rate;
+        // Once they've stopped, play on to where they stopped.
+        let target = match v.ending {
+            Some((end, _)) => end,
+            None => v.their_time() - WATCH_DELAY_MS * rate,
+        };
+        let mut over = false;
         if let Some(g) = &mut v.game {
-            if !v.held && g.time > target + 250.0 {
+            if let Some((end, heard)) = v.ending {
+                // Their last note is on screen; or the view stalled / the map ended.
+                over = g.time >= end - 50.0
+                    || heard.elapsed()
+                        > Duration::from_millis((WATCH_DELAY_MS * 2.0 + 4000.0) as u64);
+                if v.held {
+                    g.resume(self.audio.as_ref());
+                    v.held = false;
+                }
+            } else if !v.held && g.time > target + 250.0 {
                 g.pause(self.audio.as_ref());
                 v.held = true;
             } else if v.held && target >= g.time {
@@ -10822,6 +11313,18 @@ impl State {
             } else if !v.held && g.time < target - 4000.0 * rate {
                 // Far behind (they skipped the intro, or we stalled): jump to them.
                 g.seek(target, self.audio.as_ref(), self.play_offset);
+            }
+        }
+        if over {
+            match v.next.take() {
+                Some(next) => v.begin(next),
+                None => {
+                    let name = v.player.clone();
+                    *v = WatchView::new(name);
+                }
+            }
+            if let Some(a) = &self.audio {
+                a.stop();
             }
         }
         self.scene = Scene::Watch(v);
@@ -10884,7 +11387,11 @@ impl State {
                 let game_over = s.in_match && !in_match;
                 s.players = players;
                 // The room learns our own mods (on joining, and if it has others).
-                let mine = self.cfg.mods.free().list();
+                let mine = if map.as_ref().is_some_and(|m| m.defense.is_some()) {
+                    Vec::new()
+                } else {
+                    self.cfg.mods.free().list()
+                };
                 if !mapguessr && s.me().is_some_and(|p| p.mods != mine) {
                     s.client.send(net::ClientMsg::Mods(mine));
                 }
@@ -10921,7 +11428,8 @@ impl State {
                 }
             }
             ServerMsg::Prepare(map) => {
-                let Some(s) = &self.mp else { return };
+                let Some(s) = &mut self.mp else { return };
+                s.contrib.clear();
                 // Not in a position to play (single-player song, calibration): sit this one out.
                 if matches!(
                     self.scene,
@@ -10935,10 +11443,14 @@ impl State {
                         self.stop_audio();
                         self.picking_lobby_map = false;
                         self.preview.show_background_for(&self.library[i]);
-                        // The host's speed mods, and our own others.
-                        let mods = Mods::from_list(&map.mods)
-                            .shared()
-                            .plus(self.cfg.mods.free());
+                        // The host's speed mods, and our own others; in Defense the host's all.
+                        let mods = if map.defense.is_some() {
+                            Mods::from_list(&map.mods)
+                        } else {
+                            Mods::from_list(&map.mods)
+                                .shared()
+                                .plus(self.cfg.mods.free())
+                        };
                         let rx = self.load_with(i, map.rate, mods);
                         self.scene = Scene::MpWait {
                             rx: Some(rx),
@@ -10959,7 +11471,8 @@ impl State {
             }
             ServerMsg::MapRequested { from } => self.send_map_to(from),
             ServerMsg::Spectate { map, at, players } => {
-                let Some(s) = &self.mp else { return };
+                let Some(s) = &mut self.mp else { return };
+                s.contrib.clear();
                 match find_map(&self.library, &map) {
                     Some(i) => {
                         let start = s.client.local_instant(at);
@@ -10983,6 +11496,7 @@ impl State {
                             skip_done: false,
                             zones: Vec::new(),
                             zones_at: None,
+                            ended: None,
                         }));
                     }
                     None => {
@@ -11014,15 +11528,24 @@ impl State {
                     }
                 }
             }
-            ServerMsg::Defense { from, act } => match &mut self.scene {
-                Scene::MpPlay { game, .. } => game.defense_act(from, act),
-                Scene::Spectate(v) => {
-                    for (_, g) in v.games.iter_mut() {
-                        g.defense_act(from, act);
+            ServerMsg::Defense { from, act } => {
+                if let Some(s) = &mut self.mp {
+                    let c = s.contrib.entry(from).or_default();
+                    match act {
+                        net::DefenseAct::Buy { .. } => c.0 += 1,
+                        net::DefenseAct::TagIn { .. } => c.1 += 1,
                     }
                 }
-                _ => {}
-            },
+                match &mut self.scene {
+                    Scene::MpPlay { game, .. } => game.defense_act(from, act),
+                    Scene::Spectate(v) => {
+                        for (_, g) in v.games.iter_mut() {
+                            g.defense_act(from, act);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             ServerMsg::SkipVotes { votes, of } => {
                 if let Some(s) = &mut self.mp {
                     s.skip_votes = Some((votes, of));
@@ -11041,9 +11564,14 @@ impl State {
                 if let Some(s) = &mut self.mp {
                     s.results = Some(r);
                 }
-                if matches!(self.scene, Scene::Spectate(_)) {
-                    self.stop_audio();
-                    self.scene = Scene::MpResults;
+                if let Scene::Spectate(v) = &mut self.scene {
+                    if v.games.is_empty() {
+                        self.stop_audio();
+                        self.scene = Scene::MpResults;
+                    } else {
+                        // Watch the rest of it: the view is `SPECTATE_DELAY` behind.
+                        v.ended.get_or_insert_with(Instant::now);
+                    }
                 }
             }
             ServerMsg::Rejected(why) | ServerMsg::Disconnected(why) => {
@@ -11608,6 +12136,13 @@ impl State {
             } else if code == KeyCode::KeyM {
                 let name = self.profile.take().map(|p| p.name);
                 self.open_medals(name);
+            } else if code == KeyCode::KeyB
+                && let Some(p) = &self.profile
+            {
+                let url = profile_url(&p.name);
+                if !open_url(&url) {
+                    self.toast(url);
+                }
             }
             return;
         }
@@ -11760,6 +12295,10 @@ impl State {
         }
         if matches!(self.scene, Scene::LayoutEdit { .. }) {
             self.layout_key(code);
+            return;
+        }
+        if matches!(self.scene, Scene::HudEdit { .. }) {
+            self.hud_key(code, text);
             return;
         }
         if matches!(self.scene, Scene::Preview { .. }) {
@@ -12046,6 +12585,7 @@ impl State {
             Scene::Calibrate { .. }
             | Scene::CalibrateDone { .. }
             | Scene::LayoutEdit { .. }
+            | Scene::HudEdit { .. }
             | Scene::Preview { .. }
             | Scene::Download => {}
             Scene::MpMenu
@@ -12156,11 +12696,13 @@ impl State {
         // until the frame is on screen.
         let visual_offset = self.cfg.visual_offset_ms + self.vsync_lead() + self.pace_shift_ms;
         // The interface toggle: what it hides, while it's off.
+        // The parts switched off in the interface editor are never there.
         let hidden = if self.cfg.interface_hidden {
             self.cfg.interface_hides
         } else {
             hud::Parts::NONE
-        };
+        }
+        .with(self.cfg.hud.off);
         let dt = now.duration_since(self.stats.last).as_secs_f64() * 1000.0;
         self.stats.last = now;
         self.stats.frames += 1;
@@ -12274,7 +12816,8 @@ impl State {
                 }
                 Scene::Calibrate { .. }
                 | Scene::CalibrateDone { .. }
-                | Scene::LayoutEdit { .. } => 0.0,
+                | Scene::LayoutEdit { .. }
+                | Scene::HudEdit { .. } => 0.0,
                 _ => 0.35,
             };
             self.bg_brightness *= 1.0 - idle::DARKEN * self.idle.amount();
@@ -12608,6 +13151,10 @@ impl State {
                     let status = self.select.selected().and_then(|i| self.map_status(i));
                     // No taller than leaves the leaderboard three rows (its tabs, rows and gaps).
                     let panel_h = 436.0 - 54.0 - 8.0 - (16.0 + 3.0 * 18.0 + 14.0);
+                    let liked = self
+                        .preview_target()
+                        .and_then(|i| self.library.get(i))
+                        .map(|e| self.select.is_liked(e));
                     if let Some(clip) = self.preview.draw_panel(
                         canvas,
                         &self.library,
@@ -12619,6 +13166,7 @@ impl State {
                         selected_stars,
                         Some(("Play from", "Shift+Enter")),
                         status,
+                        liked,
                     ) {
                         self.frame_clip = Some(clip);
                     }
@@ -12840,6 +13388,8 @@ impl State {
                     .map(keys::Chord::name);
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.hidden = hidden;
+                game.hud = self.cfg.hud;
+                game.hud_area = self.cfg.playfield_area;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
                 draw_game_area(
@@ -12858,7 +13408,10 @@ impl State {
                     && game.paused.is_none()
                     && !hidden.has(hud::Part::Spectators)
                 {
-                    social::draw_spectators(canvas, &self.social.spectators());
+                    let names = self.social.spectators();
+                    game.placed_from(canvas, hud::Part::Spectators, [12.0, 276.0], |c| {
+                        social::draw_spectators(c, &names);
+                    });
                 }
                 if game.replay.is_some() && game.paused.is_none() {
                     self.replay_bar =
@@ -13083,6 +13636,7 @@ impl State {
                         stars,
                         None,
                         None,
+                        None,
                     ) {
                         Some(clip) => self.frame_clip = Some(clip),
                         None if self.browse.shown.is_none() => {
@@ -13261,6 +13815,8 @@ impl State {
                     .map(keys::Chord::name);
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.hidden = hidden;
+                game.hud = self.cfg.hud;
+                game.hud_area = self.cfg.playfield_area;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
                 if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
@@ -13288,7 +13844,9 @@ impl State {
                     .as_ref()
                     .filter(|_| self.cfg.mp_scoreboard && !hidden.has(hud::Part::Scoreboard))
                 {
-                    multiplayer::draw_scoreboard(canvas, s, &live);
+                    game.placed_from(canvas, hud::Part::Scoreboard, [12.0, 276.0], |c| {
+                        multiplayer::draw_scoreboard(c, s, &live);
+                    });
                 }
                 if let Some(s) = &mut self.mp {
                     if s.last_live.elapsed() >= Duration::from_millis(100) {
@@ -13333,6 +13891,14 @@ impl State {
                         Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Lobby),
                     }
                 }
+                if v.ended
+                    .is_some_and(|t| now >= t + SPECTATE_DELAY + Duration::from_millis(500))
+                {
+                    if let Some(a) = &self.audio {
+                        a.stop();
+                    }
+                    next = Some(Scene::MpResults);
+                }
                 // Start once the map is ready and the delay has passed: the music where the
                 // players were SPECTATE_DELAY ago, every player's game snapping to it.
                 if v.games.is_empty()
@@ -13358,7 +13924,11 @@ impl State {
                             .and_then(|s| s.players.iter().find(|p| p.id == *id))
                             .map(|p| Mods::from_list(&p.mods).free())
                             .unwrap_or(Mods::NONE);
-                        let mut mods = v.mods.shared().plus(own);
+                        let mut mods = if v.map.defense.is_some() {
+                            v.mods
+                        } else {
+                            v.mods.shared().plus(own)
+                        };
                         if v.map.defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
                             mods.toggle(mods::Mod::Maze);
                         }
@@ -13409,6 +13979,8 @@ impl State {
                     g.mute_hits = v.focus.unwrap_or(0) != k;
                     g.kiai_effects = self.cfg.kiai_effects;
                     g.hidden = hidden;
+                    g.hud = self.cfg.hud;
+                    g.hud_area = self.cfg.playfield_area;
                     g.update(now, self.audio.as_ref(), self.play_offset);
                 }
                 // Defense: the team's lives and gold, as the room has them.
@@ -13463,6 +14035,10 @@ impl State {
                     Some(g) => {
                         g.kiai_effects = self.cfg.kiai_effects;
                         g.hidden = hidden;
+                        g.hud = self.cfg.hud;
+                        g.hud_area = self.cfg.playfield_area;
+                        g.hud = self.cfg.hud;
+                        g.hud_area = self.cfg.playfield_area;
                         g.update(now, self.audio.as_ref(), self.play_offset);
                         draw_game_area(
                             canvas,
@@ -13486,13 +14062,24 @@ impl State {
                             );
                         }
                     }
-                    None => canvas.text_centered(
-                        canvas.width / 2.0,
-                        220.0,
-                        12.0,
-                        rgba(0xffffff, 1.0),
-                        &v.status(),
-                    ),
+                    None => {
+                        // The map they're playing, on its way.
+                        let got = v
+                            .play
+                            .as_ref()
+                            .filter(|_| v.fetching && v.entry.is_none())
+                            .and_then(|p| map_download(&self.downloads, &p.map));
+                        let looking =
+                            v.fetching && v.entry.is_none() && self.lobby_lookup.is_some();
+                        let text = got.map_or_else(|| v.status(), download_text);
+                        let w = canvas.width;
+                        canvas.text_centered(w / 2.0, 220.0, 12.0, rgba(0xffffff, 1.0), &text);
+                        if got.is_some() || looking {
+                            let bw = (w - 48.0).min(300.0);
+                            let at = (w - bw) / 2.0;
+                            multiplayer::draw_fetch_bar(canvas, at, 240.0, bw, got.flatten());
+                        }
+                    }
                 }
                 canvas.text_centered(
                     canvas.width / 2.0,
@@ -13529,6 +14116,8 @@ impl State {
                 let progress = self.export.as_ref().map(|ex| ex.progress());
                 if let Some(g) = &mut ed.game {
                     g.kiai_effects = self.cfg.kiai_effects;
+                    g.hud = self.cfg.hud;
+                    g.hidden = self.cfg.hud.off;
                 }
                 ed.draw(
                     canvas,
@@ -13633,7 +14222,13 @@ impl State {
                     false,
                     game::draw_preview,
                 );
-                game::draw_preview_hud(canvas);
+                let sample = self
+                    .hud_sample
+                    .get_or_insert_with(|| Box::new(game::Game::hud_sample()));
+                sample.hud = self.cfg.hud;
+                sample.hud_area = self.cfg.playfield_area;
+                sample.hidden = self.cfg.hud.off;
+                sample.draw_parts(canvas);
                 let area = self.cfg.playfield_area;
                 layout::draw_frame(canvas, area, true);
                 let w = canvas.width;
@@ -13663,6 +14258,30 @@ impl State {
                     rgba(0x9a9ab0, 1.0),
                     &Canvas::fit(size, room, help),
                 );
+            }
+            Scene::HudEdit { .. } => {
+                draw_game_area(
+                    canvas,
+                    &self.cfg,
+                    &mut self.frame_clip,
+                    &self.grip,
+                    &self.hover,
+                    false,
+                    game::draw_preview,
+                );
+                let sample = self
+                    .hud_sample
+                    .get_or_insert_with(|| Box::new(game::Game::hud_sample()));
+                sample.hud = self.cfg.hud;
+                sample.hud_area = self.cfg.playfield_area;
+                sample.hidden = self.cfg.hud.off;
+                sample.draw_stand_ins(canvas);
+                sample.draw_parts(canvas);
+                layout::draw_frame(canvas, self.cfg.playfield_area, self.grip.is_some());
+                if let Some(ed) = &mut self.hud_edit {
+                    ed.draw(canvas, &self.cfg, sample);
+                    layout::draw_guides(canvas, &ed.guides);
+                }
             }
         }
         // A screen just opened comes up out of black, its background too.
@@ -13776,6 +14395,9 @@ impl State {
             if let Some(setup) = &self.shapeshift_setup {
                 setup.draw_panel(canvas, &self.cfg.shapeshift, game::rail_outline);
             }
+            if let Some(setup) = &self.tact_setup {
+                setup.draw_panel(canvas, self.cfg.tact);
+            }
             if let Some(tab) = self.customization_tab() {
                 ui::draw_customization_tabs(canvas, &mods::customizable(self.cfg.mods), tab);
             }
@@ -13884,19 +14506,35 @@ impl State {
             };
             // The screen behind darkens, but not a play being watched.
             let dim = !self.in_song();
+            let animate = self.cfg.animations;
+            let tab = self
+                .social_tab_middle()
+                .filter(|_| logged_in)
+                .map(|to| self.social.glide_tab(to, canvas.dt_ms, animate));
             if self.social.open {
-                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread, dim);
-            } else if let Some(p) = self.social.closing() {
-                let (start, hits) = (canvas.shapes.len(), canvas.hits.len());
-                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread, dim);
+                social::draw(
+                    canvas,
+                    &self.social,
+                    logged_in,
+                    lobby,
+                    lobby_unread,
+                    dim,
+                    tab,
+                );
+            } else if self.social.closing().is_some() {
+                let hits = canvas.hits.len();
+                social::draw(
+                    canvas,
+                    &self.social,
+                    logged_in,
+                    lobby,
+                    lobby_unread,
+                    dim,
+                    tab,
+                );
                 canvas.hits.truncate(hits);
-                canvas.transform_since(start, [0.0, 0.0], 1.0, p * 30.0, 0.0);
-                for sh in &mut canvas.shapes[start..] {
-                    sh.fill[3] *= 1.0 - p;
-                    sh.border[3] *= 1.0 - p;
-                }
-            } else if logged_in && !self.in_song() && self.player.is_none() {
-                social::draw_chip(canvas, &self.social, lobby_unread);
+            } else if let Some(middle) = tab {
+                social::draw_chip(canvas, &self.social, middle, lobby_unread);
             }
             social::draw_notes(canvas, &self.social);
         }
@@ -14220,19 +14858,53 @@ impl State {
         }
     }
 
-    /// The lobby map's download progress, for the lobby screen.
-    fn lobby_download_status(&self) -> Option<String> {
+    /// A lobby map we don't have comes by itself: from the host, who has it whatever it is, and
+    /// from the mirrors if that fails.
+    fn auto_fetch_lobby_map(&mut self) {
+        let missing = self
+            .mp
+            .as_ref()
+            .filter(|s| !s.is_host() && !s.have_map)
+            .and_then(|s| s.map.as_ref())
+            .map(|m| m.hash);
+        // Nothing's still being waited for once it's here, or we've left.
+        self.host_map_asked &= missing.is_some();
+        let busy = self.host_transfer.is_some() || self.lobby_download_status().is_some();
+        let waiting = self
+            .host_asked_at
+            .filter(|_| self.host_map_asked)
+            .map(|at| at.elapsed());
+        match multiplayer::next_fetch(missing, self.auto_fetched, busy, waiting) {
+            multiplayer::Fetch::Nothing => {}
+            multiplayer::Fetch::Tried(map) => self.auto_fetched = Some(map),
+            multiplayer::Fetch::AskHost(map) => {
+                self.auto_fetched = Some(map);
+                if let Some(s) = &self.mp {
+                    s.client.send(net::ClientMsg::RequestMap);
+                    self.host_map_asked = true;
+                    self.host_asked_at = Some(Instant::now());
+                }
+            }
+            multiplayer::Fetch::Mirrors => {
+                self.host_map_asked = false;
+                self.toast("the host isn't answering; trying the mirrors".into());
+                self.download_lobby_map();
+            }
+        }
+    }
+
+    /// The lobby map's download progress for the lobby screen: what's going on, and how much of
+    /// it is done once that's known.
+    fn lobby_download_status(&self) -> Option<(String, Option<f32>)> {
         if self.lobby_lookup.is_some() {
-            return Some("looking it up...".into());
+            return Some(("looking it up...".into(), None));
+        }
+        if self.host_map_asked {
+            return Some(("asking the host for the map...".into(), None));
         }
         let m = self.mp.as_ref()?.map.as_ref()?;
-        let job = self.downloads.iter().find(|j| {
-            Some(j.set.id) == m.set_id || (j.set.title == m.title && j.set.artist == m.artist)
-        })?;
-        Some(match job.fraction() {
-            Some(f) => format!("downloading {:.0}%", f * 100.0),
-            None => "downloading...".into(),
-        })
+        let done = map_download(&self.downloads, m)?;
+        Some((download_text(done), done))
     }
 
     /// Scores saved before pp get theirs worked out in the background, once, and the index is
@@ -14390,6 +15062,7 @@ impl State {
     }
 
     fn poll_downloads(&mut self) {
+        self.auto_fetch_lobby_map();
         self.poll_me();
         self.poll_pp_backfill();
         self.poll_online_scores();
@@ -14520,9 +15193,9 @@ impl State {
                 return;
             }
         }
-        // The set's difficulties here: beatmap ID and the MD5 osu! knows each version by.
+        // The set's difficulties here: beatmap ID, [Version] and the MD5 osu! knows each version by.
         let folder = self.library[entry].path.parent().map(|p| p.to_path_buf());
-        let maps: Vec<(Option<u32>, PathBuf)> = self
+        let maps: Vec<(Option<u32>, String, PathBuf)> = self
             .library
             .iter()
             .filter(|e| {
@@ -14530,26 +15203,31 @@ impl State {
                     && e.path.parent() == folder.as_deref()
                     && !self.select.gone.contains(&e.path)
             })
-            .map(|e| (e.meta.beatmap_id, e.path.clone()))
+            .map(|e| (e.meta.beatmap_id, e.meta.version.clone(), e.path.clone()))
             .collect();
         self.select.updates.insert(id, ui::SetUpdate::Checking);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = download::set_checksums(id).map(|online| {
-                let here: Vec<(Option<u32>, String, &PathBuf)> = maps
+                let here: Vec<(Option<u32>, String, String, &PathBuf)> = maps
                     .iter()
-                    .filter_map(|(bid, p)| {
-                        Some((*bid, download::md5_hex(&std::fs::read(p).ok()?), p))
+                    .filter_map(|(bid, version, p)| {
+                        Some((
+                            *bid,
+                            version.clone(),
+                            download::md5_hex(&std::fs::read(p).ok()?),
+                            p,
+                        ))
                     })
                     .collect();
-                let ids: Vec<(Option<u32>, String)> = here
+                let ids: Vec<(Option<u32>, String, String)> = here
                     .iter()
-                    .map(|(bid, md5, _)| (*bid, md5.clone()))
+                    .map(|(bid, version, md5, _)| (*bid, version.clone(), md5.clone()))
                     .collect();
                 let edited = here
                     .iter()
-                    .filter(|(_, md5, _)| !download::is_osus(md5, &online))
-                    .map(|(_, _, p)| (*p).clone())
+                    .filter(|(_, _, md5, _)| !download::is_osus(md5, &online))
+                    .map(|(_, _, _, p)| (*p).clone())
                     .collect();
                 (download::outdated(&ids, &online), edited)
             });
@@ -14559,7 +15237,7 @@ impl State {
     }
 
     /// Downloads the newest version of map `entry`'s set into its folder: the set's own
-    /// difficulties are replaced, home-made ones (no beatmap ID) stay.
+    /// difficulties are replaced; home-made ones and edited copies (rates) stay (`download::is_own`).
     fn update_set(&mut self, entry: usize) {
         let e = &self.library[entry];
         let (Some(id), Some(folder)) = (e.set_id(), e.path.parent().map(|p| p.to_path_buf()))
@@ -14570,7 +15248,8 @@ impl State {
         if self.downloads.iter().any(|j| j.set.id == id) {
             return;
         }
-        let replaced: Vec<PathBuf> = self
+        // Which of these are the set's own is asked of osu! on the download's thread.
+        let here: Vec<download::LocalDiff> = self
             .library
             .iter()
             .filter(|m| {
@@ -14579,7 +15258,11 @@ impl State {
                     && m.set_id() == Some(id)
                     && !self.select.gone.contains(&m.path)
             })
-            .map(|m| m.path.clone())
+            .map(|m| download::LocalDiff {
+                id: m.meta.beatmap_id,
+                version: m.meta.version.clone(),
+                path: m.path.clone(),
+            })
             .collect();
         let set = download::SetInfo {
             id,
@@ -14596,14 +15279,14 @@ impl State {
         self.toast(format!("updating {} - {}...", set.artist, set.title));
         self.select.updates.insert(id, ui::SetUpdate::Updating);
         self.downloads
-            .push(download::start_update(set, folder, replaced));
+            .push(download::start_update(set, folder, here));
     }
 
     /// A set downloaded again (see `update_set`): its difficulties in the library are read anew in
     /// place (indices stay valid), ones it no longer has leave the list, new ones join it.
     fn add_updated(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
         let mut fresh: std::collections::HashMap<PathBuf, Entry> =
-            library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0))
+            library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0), &mut |_| {})
                 .into_iter()
                 .map(|e| (e.path.clone(), e))
                 .collect();
@@ -14657,10 +15340,11 @@ impl State {
             .filter(|e| e.path.starts_with(folder))
             .map(|e| e.path.clone())
             .collect();
-        let fresh: Vec<Entry> = library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0))
-            .into_iter()
-            .filter(|e| !known.contains(&e.path))
-            .collect();
+        let fresh: Vec<Entry> =
+            library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0), &mut |_| {})
+                .into_iter()
+                .filter(|e| !known.contains(&e.path))
+                .collect();
         // Nothing new (unpacked over the same files): the set that's there is what was added.
         let maps = if fresh.is_empty() {
             main_maps(self.library.iter().filter(|e| e.path.starts_with(folder)))
@@ -14795,6 +15479,20 @@ impl State {
     }
 
     fn click(&mut self, hit: render::Hit, window: Option<&Window>) {
+        if let Some(ed) = &mut self.hud_edit {
+            match hit {
+                render::Hit::HudPanel => return,
+                render::Hit::HudRow(i) => return ed.select(i),
+                render::Hit::HudToggle(i) => return ed.toggle_part(i, &mut self.cfg),
+                render::Hit::HudPreset(i) => return ed.load_preset(i, &mut self.cfg),
+                render::Hit::HudColour(colour) => return ed.set_colour(colour, &mut self.cfg),
+                render::Hit::HudButton(b) => {
+                    let outcome = ed.press_button(b, &mut self.cfg);
+                    return self.hud_outcome(outcome);
+                }
+                _ => {}
+            }
+        }
         use render::Hit;
         // The exit question takes only its own buttons.
         if self.quit_asked && !matches!(hit, Hit::Key(KeyCode::KeyY | KeyCode::KeyN)) {
@@ -14803,7 +15501,20 @@ impl State {
         if self.crash_shown() && !matches!(hit, Hit::Key(KeyCode::KeyC | KeyCode::Escape)) {
             return;
         }
+        // Any click but the chat line itself puts the chat line away.
+        if hit != Hit::LobbyChat
+            && let Some(s) = self.mp.as_mut()
+        {
+            s.chat_input = None;
+        }
         match hit {
+            render::Hit::HudPanel
+            | render::Hit::HudRow(_)
+            | render::Hit::HudToggle(_)
+            | render::Hit::HudPreset(_)
+            | render::Hit::HudColour(_)
+            | render::Hit::HudButton(_) => {}
+            Hit::LobbyChat => self.focus_lobby_chat(),
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),
@@ -14838,6 +15549,11 @@ impl State {
             }
             Hit::PlayerRow(track) => self.music_play(track),
             Hit::PlayerFavourite(track) => self.music_favourite(track),
+            Hit::SelectLike => {
+                if let Some(e) = self.preview_target().and_then(|i| self.library.get(i)) {
+                    self.select.toggle_like(e);
+                }
+            }
             Hit::PlayerFolders => {
                 if let Some(p) = &mut self.player {
                     p.folders_open = !p.folders_open;
@@ -14979,12 +15695,7 @@ impl State {
             Hit::BoardTab(online) => self.board_online = online,
             Hit::Changelog => self.changelog = Some(changelog::View::recent(false)),
             Hit::Account => match self.mp_menu.account.clone() {
-                Some(name) => {
-                    let url = format!("{}/u/{name}", online::WEBSITE);
-                    if !open_url(&url) {
-                        self.toast(url);
-                    }
-                }
+                Some(name) => self.open_profile(name),
                 // Logging in is in the multiplayer tab.
                 None => self.goto_tab(2),
             },
@@ -15049,6 +15760,10 @@ impl State {
                     self.shapeshift_changed();
                 }
             }
+            Hit::TactCell(col) => {
+                self.tact_setup = Some(tact::Setup::new(col));
+                self.tact_changed(col);
+            }
             Hit::CustomTab(i) => {
                 if let Some(&m) = mods::customizable(self.cfg.mods).get(i) {
                     self.open_customization(m);
@@ -15080,6 +15795,17 @@ impl State {
                 } else if action == Some(ui::MenuAction::UpdateSong) {
                     if let Some(i) = self.select.menu_map() {
                         self.update_set(i);
+                    }
+                    self.select.menu = None;
+                } else if action == Some(ui::MenuAction::Like) {
+                    if let Some(e) = self.select.menu_map().and_then(|i| self.library.get(i)) {
+                        let title = e.meta.title.clone();
+                        let liked = self.select.toggle_like(e);
+                        self.toast(if liked {
+                            tr!("liked {title}", "{title}をお気に入りに追加", "в любимых: {title}";)
+                        } else {
+                            tr!("unliked {title}", "{title}をお気に入りから削除", "убрано из любимых: {title}";)
+                        });
                     }
                     self.select.menu = None;
                 } else if let Some(what) = action.and_then(|a| self.select.hide(a, &self.library)) {
@@ -16262,7 +16988,7 @@ impl State {
         splash: Option<splash::Splash>,
         songs_dir: PathBuf,
         song_dirs: Vec<PathBuf>,
-        scan: Option<(Receiver<Vec<Entry>>, Arc<AtomicUsize>)>,
+        scan: Option<(Receiver<Scanned>, Arc<AtomicUsize>)>,
         play_when_scanned: bool,
         auto: bool,
     ) -> State {
@@ -16361,6 +17087,8 @@ impl State {
             preview_remote: false,
             host_transfer: None,
             host_map_asked: false,
+            host_asked_at: None,
+            auto_fetched: None,
             scores: scores::load_index(),
             pp_backfill: None,
             pp_backfill_started: false,
@@ -16380,6 +17108,7 @@ impl State {
             universe_setup: None,
             shapeshift_setup: None,
             random_setup: None,
+            tact_setup: None,
             leaderboard: Vec::new(),
             board_scroll: 0,
             board_for: (0, false),
@@ -16468,6 +17197,7 @@ impl State {
             presence: None,
             presence_at: None,
             scan,
+            scan_checking: false,
             folder_pick: None,
             folder_pick_for: Item::SongsFolder,
             data_move: None,
@@ -16482,6 +17212,8 @@ impl State {
             letterbox: None,
             frame_clip: None,
             guides: Vec::new(),
+            hud_edit: None,
+            hud_sample: None,
             readout_rect: None,
             replay_bar: None,
             replay_scrub: None,
@@ -16995,6 +17727,7 @@ fn run(
     library::set_songs_folder(cfg.songs_folder.clone());
     multiverse::set(cfg.universes);
     shapeshift::set(cfg.shapeshift);
+    tact::set(cfg.tact);
     multiverse::set_note_colours(cfg.note_colours);
     let inputs = if args.is_empty() {
         song_inputs(&cfg)

@@ -30,6 +30,9 @@ pub struct Session {
     /// Lobby chat: (name, line), oldest first; and lines not seen yet.
     pub chat: Vec<(String, String)>,
     pub chat_unread: usize,
+    /// A chat line being typed in the lobby (T or a click on its line), and its caret.
+    pub chat_input: Option<String>,
+    pub chat_caret: usize,
     /// The lobby's id on the online server (friends can join it from their list).
     pub online_room: Option<u32>,
     /// The room plays mapguessr; how many maps every player has (None: a list is missing).
@@ -37,6 +40,8 @@ pub struct Session {
     pub common: Option<u32>,
     /// Defense: the team's lives, gold, shield and towers, as the room keeps them.
     pub team: Option<net::TeamState>,
+    /// Defense: what each player did for the team this match, as (shop buys, tag-ins).
+    pub contrib: std::collections::HashMap<u32, (u32, u32)>,
     /// The lobby needs a password, and how many players it takes.
     pub locked: bool,
     pub slots: u32,
@@ -65,10 +70,13 @@ impl Session {
             inputs_sent: 0,
             chat: Vec::new(),
             chat_unread: 0,
+            chat_input: None,
+            chat_caret: 0,
             online_room: None,
             mapguessr: false,
             common: None,
             team: None,
+            contrib: std::collections::HashMap::new(),
             locked: false,
             slots: net::RoomSettings::MAX_SLOTS,
             edit_password: None,
@@ -124,6 +132,7 @@ pub fn live_from(game: &Game) -> Live {
         miss: s.miss,
         progress: game.progress(),
         great: s.great,
+        ok: s.ok,
     }
 }
 
@@ -1372,8 +1381,78 @@ fn status_text(p: &PlayerInfo, map_chosen: bool) -> (&'static str, u32) {
 /// columns, up to 16; the host can hand the role over or take a player out). Right, the room's
 /// settings (password, players, rate, Defense and its rules: the host's to change, a click or
 /// a key each) and the chat. Under them, what can be done.
-/// `download`: progress of fetching the lobby map, when it's being downloaded.
-pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<String>) {
+/// The lobby map's progress bar: how much is `done`, or a block going to and fro until that's known.
+pub fn draw_fetch_bar(c: &mut Canvas, x: f32, y: f32, w: f32, done: Option<f32>) {
+    c.round_rect(
+        [x, y],
+        [w, 5.0],
+        2.5,
+        rgba(0x15151d, 1.0),
+        rgba(0x3a3a4e, 1.0),
+        1.0,
+    );
+    let (from, len) = match done {
+        Some(f) => (0.0, (w - 2.0) * f.clamp(0.0, 1.0)),
+        None => ((w - 2.0) * 0.75 * crate::style::pulse(), (w - 2.0) * 0.25),
+    };
+    if len > 0.5 {
+        c.round_rect(
+            [x + 1.0 + from, y + 1.0],
+            [len, 3.0],
+            1.5,
+            rgba(accent(), 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
+    }
+}
+
+/// How long the host gets to start sending the map before the mirrors are tried.
+pub const HOST_PATIENCE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// What to do about the lobby's map.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Fetch {
+    Nothing,
+    /// A download's already going for this map: it counts as tried.
+    Tried(u64),
+    AskHost(u64),
+    Mirrors,
+}
+
+/// The next step in getting a lobby map we don't have by ourselves. `missing`: its hash, if it's
+/// missing and someone else has it. `tried`: the map this was last done for: each is tried once, so
+/// one that can't be had doesn't go round and round (D and M still ask again). `busy`: something's
+/// on its way. `waiting`: how long the host's been asked for, with no answer yet.
+pub fn next_fetch(
+    missing: Option<u64>,
+    tried: Option<u64>,
+    busy: bool,
+    waiting: Option<std::time::Duration>,
+) -> Fetch {
+    let Some(map) = missing else {
+        return Fetch::Nothing;
+    };
+    if tried != Some(map) {
+        return if busy {
+            Fetch::Tried(map)
+        } else {
+            Fetch::AskHost(map)
+        };
+    }
+    match waiting {
+        Some(w) if w >= HOST_PATIENCE => Fetch::Mirrors,
+        _ => Fetch::Nothing,
+    }
+}
+
+/// `download`: what's happening with the lobby map while it's fetched, and how far along it is.
+pub fn draw_lobby(
+    c: &mut Canvas,
+    s: &Session,
+    have_map: bool,
+    download: Option<(String, Option<f32>)>,
+) {
     let w = c.width;
     let right = format!("{}   ping {:.0} ms", s.label, s.client.rtt_ms);
     crate::settings::tab_bar(c, 2, &right);
@@ -1472,7 +1551,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             );
             // How it is for us: being fetched, missing, or there to preview.
             let (note, colour) = match (&download, have_map) {
-                (Some(d), _) => (d.clone(), 0xFFD34D),
+                (Some((d, _)), _) => (d.clone(), 0xFFD34D),
                 (None, false) => (
                     tr!(
                         "not in your Songs folder - D: from the host   M: the mirrors",
@@ -1499,6 +1578,9 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
                 rgba(colour, 1.0),
                 &Canvas::fit(7.0, iw, &note),
             );
+            if let Some((_, done)) = &download {
+                draw_fetch_bar(c, ix, top + 95.0, iw, *done);
+            }
         }
         None => {
             let t = if s.is_host() {
@@ -1568,7 +1650,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
                 let bw = Canvas::text_width(6.5, label) + 10.0;
                 name_end -= bw;
                 c.button(name_end, y + 6.0, bw, 14.0, label, 6.5, hit, false);
-                name_end -= 4.0;
+                name_end -= 6.0;
             }
         } else {
             let (st, colour) = status_text(p, s.map.is_some());
@@ -1719,7 +1801,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
     // The chat.
     let cy = top + room_h + 8.0;
     let ch = bottom - cy;
-    if ch > 30.0 {
+    if ch > 44.0 {
         c.round_rect(
             [rx, cy],
             [rw, ch],
@@ -1733,13 +1815,55 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             cy + 10.0,
             8.0,
             rgba(0x4fb4ff, 1.0),
-            tr!(
-                "CHAT  (F9 to write)",
-                "チャット  (F9で書く)",
-                "ЧАТ  (F9 — написать)"
-            ),
+            tr!("CHAT", "チャット", "ЧАТ"),
         );
-        let lines = ((ch - 30.0) / 11.0).max(0.0) as usize;
+        // The line to write on, along the bottom of the box.
+        let (ix, iw, ih) = (rx + 8.0, rw - 16.0, 16.0);
+        let iy = cy + ch - ih - 6.0;
+        let focused = s.chat_input.is_some();
+        let hover = c.hovered(ix, iy, iw, ih);
+        c.round_rect(
+            [ix, iy],
+            [iw, ih],
+            4.0,
+            rgba(0x0e0e14, 0.9),
+            rgba(
+                if focused {
+                    crate::render::accent()
+                } else if hover {
+                    0x6a6a88
+                } else {
+                    0x2a2a38
+                },
+                1.0,
+            ),
+            1.0,
+        );
+        match &s.chat_input {
+            Some(typed) => {
+                let room = iw - 16.0;
+                let shown = Canvas::fit_end(7.0, room, typed);
+                c.text(ix + 8.0, iy + 4.5, 7.0, rgba(0xffffff, 1.0), &shown);
+                // The caret sits in the text when all of it fits, else at the end.
+                let at = if shown == *typed {
+                    crate::settings::caret_x(7.0, typed, s.chat_caret)
+                } else {
+                    Canvas::text_width(7.0, &shown)
+                };
+                c.rect(ix + 8.0 + at, iy + 3.0, 1.0, ih - 6.0, rgba(0xffffff, 1.0));
+            }
+            None => {
+                c.text(
+                    ix + 8.0,
+                    iy + 4.5,
+                    7.0,
+                    rgba(0x6f6f86, 1.0),
+                    tr!("T - write", "T - 書く", "T - написать"),
+                );
+            }
+        }
+        c.hit(ix, iy, iw, ih, Hit::LobbyChat);
+        let lines = ((ch - 30.0 - ih - 6.0) / 11.0).max(0.0) as usize;
         for (k, (from, text)) in s
             .chat
             .iter()
@@ -1816,10 +1940,12 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
                 ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false),
             ],
         );
-        let hint = if s.edit_password.is_some() {
+        let hint = if s.chat_input.is_some() {
+            "type a message   Enter send   Esc cancel"
+        } else if s.edit_password.is_some() {
             "type the new password   Enter save (empty: none)   Esc cancel"
         } else {
-            "S spectate   [ ] rate   C defense (1-5 its rules)   K password   L players   F1 mods   Tab songs"
+            "T chat   S spectate   [ ] rate   C defense (1-5 its rules)   K password   L players   F1 mods   Tab songs"
         };
         c.text_centered(
             w / 2.0,
@@ -1987,7 +2113,106 @@ pub fn draw_skip_votes(c: &mut Canvas, s: &Session) {
     c.text_centered(w / 2.0, y, 8.0, rgba(0xffffff, 1.0), &text);
 }
 
+/// Defense's column headings over `team_row`'s columns: notes held off, let through, accuracy,
+/// turns taken over, shop buys.
+fn team_columns() -> String {
+    format!(
+        "{:<12} {:>5} {:>4} {:>6} {:>4} {:>4}",
+        tr!("NAME", "名前", "ИМЯ"),
+        tr!("HIT", "命中", "БИТО"),
+        tr!("MISS", "ミス", "МИМО"),
+        tr!("ACC", "精度", "ТОЧН"),
+        tr!("TAGS", "交代", "ХОДЫ"),
+        tr!("BUYS", "購入", "КУПЛ"),
+    )
+}
+
+/// One player's row of Defense's board: what they did for the team, not a score.
+fn team_row(name: &str, hit: u32, miss: u32, accuracy: f64, contrib: (u32, u32)) -> String {
+    let name: String = name.chars().take(12).collect();
+    format!(
+        "{:<12} {:>5} {:>4} {:>5.1}% {:>4} {:>4}",
+        name,
+        hit,
+        miss,
+        accuracy * 100.0,
+        contrib.1,
+        contrib.0
+    )
+}
+
+/// Defense's board in a match (Tab): the team's lives, gold and shield, then each player's part
+/// in it. Everything is shared, so there are no scores to race.
+fn draw_team_board(c: &mut Canvas, s: &Session, defense: net::Defense, my_live: &Live) {
+    let team = s.team.unwrap_or(net::TeamState {
+        lives: defense.lives,
+        max: defense.lives,
+        ..net::TeamState::default()
+    });
+    let my_id = s.client.id;
+    let mut lines: Vec<(String, u32)> = Vec::new();
+    let (lives, max, gold, shield) = (team.lives, team.max, team.gold, team.shield);
+    lines.push((
+        tr!(
+            "TEAM  lives {lives}/{max}   gold {gold}   shield {shield}",
+            "チーム  ライフ {lives}/{max}   ゴールド {gold}   シールド {shield}",
+            "КОМАНДА  жизни {lives}/{max}   золото {gold}   щит {shield}";
+        ),
+        0xFFD34D,
+    ));
+    lines.push((team_columns(), 0x6f6f86));
+    let mut players: Vec<&PlayerInfo> = s
+        .players
+        .iter()
+        .filter(|p| p.status != Status::Lobby && !p.spectator)
+        .collect();
+    players.sort_by_key(|p| p.id);
+    for p in players {
+        let me = Some(p.id) == my_id;
+        // Our own row uses local numbers so it never lags behind the playfield.
+        let live = if me { my_live } else { &p.live };
+        let color = if me {
+            0xFFD34D
+        } else if p.result.as_ref().is_some_and(|r| r.quit) {
+            0x6f6f86
+        } else {
+            0xc8c8d8
+        };
+        let contrib = s.contrib.get(&p.id).copied().unwrap_or_default();
+        lines.push((
+            team_row(
+                &p.name,
+                live.great + live.ok,
+                live.miss,
+                live.accuracy,
+                contrib,
+            ),
+            color,
+        ));
+    }
+    let (x, y0, h) = (18.0, 282.0, 16.0);
+    let lines: Vec<(String, u32)> = lines.into_iter().take(10).collect();
+    let bw = lines
+        .iter()
+        .map(|(l, _)| Canvas::text_width(8.0, l) + 12.0)
+        .fold(300.0, f32::max);
+    c.round_rect(
+        [x - 6.0, y0 - 6.0],
+        [bw, lines.len() as f32 * h + 10.0],
+        6.0,
+        rgba(0x000000, 0.45),
+        rgba(0, 0.0),
+        0.0,
+    );
+    for (i, (line, color)) in lines.iter().enumerate() {
+        c.text(x, y0 + i as f32 * h, 8.0, rgba(*color, 1.0), line);
+    }
+}
+
 pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
+    if let Some(d) = s.map.as_ref().and_then(|m| m.defense) {
+        return draw_team_board(c, s, d, my_live);
+    }
     let y0 = 282.0;
     let my_id = s.client.id;
     let mut rows: Vec<(String, Live, bool, bool)> = s
@@ -2085,7 +2310,17 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
         );
     }
     let score = |p: &PlayerInfo| p.result.as_ref().map(|r| r.score).unwrap_or(p.live.score);
-    rows.sort_by_key(|p| std::cmp::Reverse(score(p)));
+    // Defense: the notes a player held off count, not a score.
+    let hit = |p: &PlayerInfo| {
+        p.result
+            .as_ref()
+            .map_or(p.live.great + p.live.ok, |r| r.great + r.ok)
+    };
+    if defense.is_some() {
+        rows.sort_by_key(|p| std::cmp::Reverse(hit(p)));
+    } else {
+        rows.sort_by_key(|p| std::cmp::Reverse(score(p)));
+    }
     let col = (w - 48.0).min(700.0);
     let x0 = (w - col) / 2.0;
     c.text(
@@ -2093,7 +2328,11 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
         102.0,
         8.0,
         rgba(0x6f6f86, 1.0),
-        "#  PLAYER            SCORE      ACC    COMBO  GREAT  OK  MISS    UR",
+        &if defense.is_some() {
+            format!("#  {}", team_columns())
+        } else {
+            "#  PLAYER            SCORE      ACC    COMBO  GREAT  OK  MISS    UR".to_string()
+        },
     );
     for (i, p) in rows.iter().enumerate().take(10) {
         let y = 118.0 + i as f32 * 28.0;
@@ -2112,34 +2351,49 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
             1.0,
         );
         let name: String = p.name.chars().take(14).collect();
-        let line = match &p.result {
-            Some(r) => format!(
-                "{}  {:<14} {:08} {:6.2}% {:>5}x {:>6} {:>3} {:>5} {:>5.0}{}",
+        let line = if defense.is_some() {
+            let (miss, accuracy) = p
+                .result
+                .as_ref()
+                .map_or((p.live.miss, p.live.accuracy), |r| (r.miss, r.accuracy));
+            let contrib = s.contrib.get(&p.id).copied().unwrap_or_default();
+            let quit = p.result.as_ref().is_some_and(|r| r.quit);
+            format!(
+                "{}  {}{}",
                 i + 1,
-                name,
-                r.score,
-                r.accuracy * 100.0,
-                r.max_combo,
-                r.great,
-                r.ok,
-                r.miss,
-                r.ur,
-                if r.quit {
-                    "  quit".to_string()
-                } else if p.mods.is_empty() {
-                    String::new()
-                } else {
-                    format!("  +{}", p.mods.concat())
-                }
-            ),
-            None => format!(
-                "{}  {:<14} {:08} {:6.2}%   playing ({:.0}%)",
-                i + 1,
-                name,
-                p.live.score,
-                p.live.accuracy * 100.0,
-                p.live.progress * 100.0
-            ),
+                team_row(&p.name, hit(p), miss, accuracy, contrib),
+                if quit { "  quit" } else { "" }
+            )
+        } else {
+            match &p.result {
+                Some(r) => format!(
+                    "{}  {:<14} {:08} {:6.2}% {:>5}x {:>6} {:>3} {:>5} {:>5.0}{}",
+                    i + 1,
+                    name,
+                    r.score,
+                    r.accuracy * 100.0,
+                    r.max_combo,
+                    r.great,
+                    r.ok,
+                    r.miss,
+                    r.ur,
+                    if r.quit {
+                        "  quit".to_string()
+                    } else if p.mods.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  +{}", p.mods.concat())
+                    }
+                ),
+                None => format!(
+                    "{}  {:<14} {:08} {:6.2}%   playing ({:.0}%)",
+                    i + 1,
+                    name,
+                    p.live.score,
+                    p.live.accuracy * 100.0,
+                    p.live.progress * 100.0
+                ),
+            }
         };
         c.text(
             x0 + 14.0,
@@ -2157,4 +2411,30 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
             final_results.is_some(),
         )],
     );
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_map_is_asked_for_once_and_falls_back_on_a_silent_host() {
+        use std::time::Duration;
+        let long = HOST_PATIENCE + Duration::from_secs(1);
+        assert_eq!(next_fetch(None, None, false, None), Fetch::Nothing);
+        assert_eq!(next_fetch(Some(1), None, false, None), Fetch::AskHost(1));
+        // The next map is asked for too, but the same one isn't again.
+        assert_eq!(next_fetch(Some(2), Some(1), false, None), Fetch::AskHost(2));
+        assert_eq!(next_fetch(Some(1), Some(1), false, None), Fetch::Nothing);
+        // Asked by hand already.
+        assert_eq!(next_fetch(Some(1), None, true, None), Fetch::Tried(1));
+        let soon = Some(Duration::from_secs(1));
+        assert_eq!(next_fetch(Some(1), Some(1), false, soon), Fetch::Nothing);
+        assert_eq!(
+            next_fetch(Some(1), Some(1), false, Some(long)),
+            Fetch::Mirrors
+        );
+        // Got it, or nothing to get.
+        assert_eq!(next_fetch(None, Some(1), false, Some(long)), Fetch::Nothing);
+    }
 }

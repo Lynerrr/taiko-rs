@@ -170,6 +170,15 @@ fn num<T: std::str::FromStr>(s: Option<&str>) -> Option<T> {
 
 /// Reads only the header sections (General/Metadata/Difficulty), stopping before events, timing
 /// and hit objects, so scanning a library of tens of thousands of maps reads a few KB per file.
+/// A number in a map's header, else `default`. `nan`, `inf` and `1e999` all parse, but mean nothing
+/// here, and a header holding one can't go through the library's cache (JSON has no such numbers).
+fn number(v: &str, default: f64) -> f64 {
+    v.parse()
+        .ok()
+        .filter(|n: &f64| n.is_finite())
+        .unwrap_or(default)
+}
+
 pub fn read_meta_file(path: &Path) -> Option<Meta> {
     use std::io::BufRead;
     let mut reader = std::io::BufReader::new(std::fs::File::open(path).ok()?);
@@ -334,8 +343,8 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
         match section {
             "General" => match kv(trimmed) {
                 Some(("AudioFilename", v)) => meta.audio_file = v.to_owned(),
-                Some(("AudioLeadIn", v)) => meta.audio_lead_in = v.parse().unwrap_or(0.0),
-                Some(("PreviewTime", v)) => meta.preview_time = v.parse().unwrap_or(-1.0),
+                Some(("AudioLeadIn", v)) => meta.audio_lead_in = number(v, 0.0),
+                Some(("PreviewTime", v)) => meta.preview_time = number(v, -1.0),
                 Some(("Mode", v)) => meta.mode = v.parse().unwrap_or(0),
                 _ => {}
             },
@@ -358,12 +367,12 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
             },
             "Difficulty" => match kv(trimmed) {
                 Some(("OverallDifficulty", v)) => {
-                    meta.od = v.parse().unwrap_or(5.0);
+                    meta.od = number(v, 5.0);
                     od_seen = true;
                 }
-                Some(("HPDrainRate", v)) => hp = v.parse().unwrap_or(5.0),
-                Some(("SliderMultiplier", v)) => meta.slider_multiplier = v.parse().unwrap_or(1.4),
-                Some(("SliderTickRate", v)) => meta.slider_tick_rate = v.parse().unwrap_or(1.0),
+                Some(("HPDrainRate", v)) => hp = number(v, 5.0),
+                Some(("SliderMultiplier", v)) => meta.slider_multiplier = number(v, 1.4),
+                Some(("SliderTickRate", v)) => meta.slider_tick_rate = number(v, 1.0),
                 _ => {}
             },
             "TimingPoints" => {
