@@ -498,10 +498,19 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     }
 }
 
-/// Downloads set `set` again into its folder `folder`, for the newer version osu! has. The
-/// difficulties in `replaced` (the set's own, as they were) make way for the new ones; anything
-/// else in the folder (a difficulty of your own) stays. If the download fails they're put back.
-pub fn start_update(set: SetInfo, folder: PathBuf, replaced: Vec<PathBuf>) -> Job {
+/// A difficulty in a set's folder, for an update: its beatmap ID, its [Version] and its file.
+pub struct LocalDiff {
+    pub id: Option<u32>,
+    pub version: String,
+    pub path: PathBuf,
+}
+
+/// Downloads set `set` again into its folder `folder`, for the newer version osu! has. Of
+/// `here` (the difficulties in the folder), only the set's own (`is_own`, asked of osu! first)
+/// make way for the new ones; everything else in the folder stays: a difficulty of your own,
+/// a copy with a rate baked in or OD changed, whatever IDs it carries. If the download fails
+/// they're put back.
+pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job {
     let (tx, rx) = mpsc::channel();
     let done = Arc::new(AtomicU64::new(0));
     let total = Arc::new(AtomicU64::new(0));
@@ -515,6 +524,15 @@ pub fn start_update(set: SetInfo, folder: PathBuf, replaced: Vec<PathBuf>) -> Jo
                 .ok_or("no set folder")?
                 .to_string_lossy()
                 .into_owned();
+            let online = set_checksums(id)?;
+            let replaced: Vec<PathBuf> = here
+                .into_iter()
+                .filter(|m| {
+                    std::fs::read(&m.path)
+                        .is_ok_and(|bytes| is_own(m.id, &m.version, &md5_hex(&bytes), &online))
+                })
+                .map(|m| m.path)
+                .collect();
             replacing(&replaced, || fetch(id, &name, songs, &d, &t))
         })();
         let _ = tx.send(result);
@@ -559,11 +577,22 @@ struct ApiChecksum {
     id: u32,
     #[serde(default)]
     checksum: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
 }
 
-/// The MD5 of each difficulty of set `id` as osu! has it now, by beatmap ID (from the first
-/// mirror that answers).
-pub fn set_checksums(id: u32) -> Result<std::collections::HashMap<u32, String>, String> {
+/// A difficulty of a set as osu! has it now.
+pub struct OnlineDiff {
+    pub md5: String,
+    /// Its [Version] (None: the mirror didn't say).
+    pub version: Option<String>,
+}
+
+pub type OnlineSet = std::collections::HashMap<u32, OnlineDiff>;
+
+/// Each difficulty of set `id` as osu! has it now, by beatmap ID (from the first mirror that
+/// answers).
+pub fn set_checksums(id: u32) -> Result<OnlineSet, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(10)))
         .build()
@@ -583,7 +612,15 @@ pub fn set_checksums(id: u32) -> Result<std::collections::HashMap<u32, String>, 
                 return Ok(set
                     .beatmaps
                     .into_iter()
-                    .filter_map(|b| Some((b.id, b.checksum?.to_ascii_lowercase())))
+                    .filter_map(|b| {
+                        Some((
+                            b.id,
+                            OnlineDiff {
+                                md5: b.checksum?.to_ascii_lowercase(),
+                                version: b.version,
+                            },
+                        ))
+                    })
                     .collect());
             }
             Ok(_) => errors.push(format!("{}: no such set", m.name)),
@@ -593,22 +630,31 @@ pub fn set_checksums(id: u32) -> Result<std::collections::HashMap<u32, String>, 
     Err(errors.join("; "))
 }
 
-/// Whether osu! has a newer version of a set than the difficulties here (beatmap ID and the
-/// `.osu`'s MD5 each): one of them changed or is gone from the set. Difficulties without an ID
-/// (home-made) don't count.
-pub fn outdated(
-    local: &[(Option<u32>, String)],
-    online: &std::collections::HashMap<u32, String>,
-) -> bool {
+/// Whether a difficulty here (beatmap ID, [Version], the `.osu`'s MD5) is one of the set's own,
+/// as osu! has it now or an older version of it: its file is osu!'s, or its ID is in the set
+/// under the same name. A copy edited here (a rate baked in, OD changed) keeps the original's
+/// IDs but not its name or file, so it isn't, and an update leaves it alone.
+pub fn is_own(id: Option<u32>, version: &str, md5: &str, online: &OnlineSet) -> bool {
+    is_osus(md5, online)
+        || id
+            .and_then(|id| online.get(&id))
+            .and_then(|d| d.version.as_deref())
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case(version.trim()))
+}
+
+/// Whether osu! has a newer version of a set than the difficulties here (beatmap ID, [Version]
+/// and the `.osu`'s MD5 each): one of the set's own changed. Home-made difficulties and edited
+/// copies (see `is_own`) don't count, or a set with rates of its own would always look old.
+pub fn outdated(local: &[(Option<u32>, String, String)], online: &OnlineSet) -> bool {
     local
         .iter()
-        .any(|(id, md5)| id.is_some_and(|id| online.get(&id) != Some(md5)))
+        .any(|(id, version, md5)| is_own(*id, version, md5, online) && !is_osus(md5, online))
 }
 
 /// Whether a `.osu` with this MD5 is one of the set's on osu! (any of its difficulties; an
 /// edited copy, OD changed or a rate baked in, isn't).
-pub fn is_osus(md5: &str, online: &std::collections::HashMap<u32, String>) -> bool {
-    online.values().any(|m| m == md5)
+pub fn is_osus(md5: &str, online: &OnlineSet) -> bool {
+    online.values().any(|d| d.md5 == md5)
 }
 
 /// MD5 (RFC 1321) of `data` in lowercase hex: how osu! tells versions of a difficulty apart.
@@ -1362,26 +1408,117 @@ mod tests {
         );
     }
 
+    fn online_set() -> OnlineSet {
+        let diff = |md5: &str, version: &str| OnlineDiff {
+            md5: md5.into(),
+            version: Some(version.into()),
+        };
+        [(1, diff("aa", "Oni")), (2, diff("bb", "Inner Oni"))].into()
+    }
+
     #[test]
-    fn a_set_is_outdated_when_a_difficulty_changed_or_left_it() {
-        let online: std::collections::HashMap<u32, String> =
-            [(1, "aa".to_string()), (2, "bb".to_string())].into();
-        let here = |v: &[(Option<u32>, &str)]| {
+    fn a_set_is_outdated_when_one_of_its_own_difficulties_changed() {
+        let online = online_set();
+        let here = |v: &[(Option<u32>, &str, &str)]| {
             v.iter()
-                .map(|(id, m)| (*id, m.to_string()))
+                .map(|(id, version, m)| (*id, version.to_string(), m.to_string()))
                 .collect::<Vec<_>>()
         };
         assert!(!outdated(
-            &here(&[(Some(1), "aa"), (Some(2), "bb"), (None, "home-made")]),
+            &here(&[
+                (Some(1), "Oni", "aa"),
+                (Some(2), "Inner Oni", "bb"),
+                (None, "mine", "home-made")
+            ]),
             &online
         ));
         // A new difficulty online alone doesn't make the ones here outdated.
-        assert!(!outdated(&here(&[(Some(1), "aa")]), &online));
+        assert!(!outdated(&here(&[(Some(1), "Oni", "aa")]), &online));
         assert!(outdated(
-            &here(&[(Some(1), "aa"), (Some(2), "old")]),
+            &here(&[(Some(1), "Oni", "aa"), (Some(2), "inner oni", "old")]),
             &online
         ));
-        assert!(outdated(&here(&[(Some(3), "cc")]), &online));
+        // Copies with a rate baked in keep the original's IDs: they aren't a newer version.
+        assert!(!outdated(
+            &here(&[
+                (Some(1), "Oni", "aa"),
+                (Some(1), "Oni 1.2x", "rated"),
+                (Some(2), "Inner Oni (OD8)", "od")
+            ]),
+            &online
+        ));
+        // Nor is a difficulty osu! no longer has (or never had) under that ID.
+        assert!(!outdated(&here(&[(Some(3), "Oni", "cc")]), &online));
+        // A mirror that doesn't name the difficulties: only files osu! has are the set's own.
+        let unnamed: OnlineSet = [(
+            1,
+            OnlineDiff {
+                md5: "aa".into(),
+                version: None,
+            },
+        )]
+        .into();
+        assert!(!outdated(&here(&[(Some(1), "Oni", "old")]), &unnamed));
+        assert!(is_own(Some(9), "anything", "aa", &unnamed));
+    }
+
+    /// The bug a player hit: updating a set took the copies of its difficulties with rates baked
+    /// in (they carry the original's IDs) along with the old difficulties.
+    #[test]
+    fn an_update_leaves_edited_copies_and_home_made_difficulties_alone() {
+        let dir = std::env::temp_dir().join(format!("taiko-rs-update-own-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let online = online_set();
+        let files = [
+            ("A - T [Oni].osu", Some(1), "Oni", "old version"),
+            ("A - T [Oni 1.2x].osu", Some(1), "Oni 1.2x", "rated"),
+            (
+                "A - T [Inner Oni (OD8)].osu",
+                Some(2),
+                "Inner Oni (OD8)",
+                "od changed",
+            ),
+            ("A - T [mine].osu", None, "mine", "home-made"),
+        ];
+        let mut here = Vec::new();
+        for (name, id, version, text) in files {
+            std::fs::write(dir.join(name), text).unwrap();
+            here.push(LocalDiff {
+                id,
+                version: version.into(),
+                path: dir.join(name),
+            });
+        }
+        let replaced: Vec<PathBuf> = here
+            .iter()
+            .filter(|m| {
+                is_own(
+                    m.id,
+                    &m.version,
+                    &md5_hex(&std::fs::read(&m.path).unwrap()),
+                    &online,
+                )
+            })
+            .map(|m| m.path.clone())
+            .collect();
+        assert_eq!(replaced, [dir.join("A - T [Oni].osu")]);
+        replacing(&replaced, || {
+            std::fs::write(dir.join("A - T [Oni].osu"), "new").map_err(|e| e.to_string())
+        })
+        .unwrap();
+        for (name, _, _, text) in &files[1..] {
+            assert_eq!(
+                std::fs::read_to_string(dir.join(name)).unwrap(),
+                *text,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join("A - T [Oni].osu")).unwrap(),
+            "new"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

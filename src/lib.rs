@@ -14635,9 +14635,9 @@ impl State {
                 return;
             }
         }
-        // The set's difficulties here: beatmap ID and the MD5 osu! knows each version by.
+        // The set's difficulties here: beatmap ID, [Version] and the MD5 osu! knows each version by.
         let folder = self.library[entry].path.parent().map(|p| p.to_path_buf());
-        let maps: Vec<(Option<u32>, PathBuf)> = self
+        let maps: Vec<(Option<u32>, String, PathBuf)> = self
             .library
             .iter()
             .filter(|e| {
@@ -14645,26 +14645,31 @@ impl State {
                     && e.path.parent() == folder.as_deref()
                     && !self.select.gone.contains(&e.path)
             })
-            .map(|e| (e.meta.beatmap_id, e.path.clone()))
+            .map(|e| (e.meta.beatmap_id, e.meta.version.clone(), e.path.clone()))
             .collect();
         self.select.updates.insert(id, ui::SetUpdate::Checking);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = download::set_checksums(id).map(|online| {
-                let here: Vec<(Option<u32>, String, &PathBuf)> = maps
+                let here: Vec<(Option<u32>, String, String, &PathBuf)> = maps
                     .iter()
-                    .filter_map(|(bid, p)| {
-                        Some((*bid, download::md5_hex(&std::fs::read(p).ok()?), p))
+                    .filter_map(|(bid, version, p)| {
+                        Some((
+                            *bid,
+                            version.clone(),
+                            download::md5_hex(&std::fs::read(p).ok()?),
+                            p,
+                        ))
                     })
                     .collect();
-                let ids: Vec<(Option<u32>, String)> = here
+                let ids: Vec<(Option<u32>, String, String)> = here
                     .iter()
-                    .map(|(bid, md5, _)| (*bid, md5.clone()))
+                    .map(|(bid, version, md5, _)| (*bid, version.clone(), md5.clone()))
                     .collect();
                 let edited = here
                     .iter()
-                    .filter(|(_, md5, _)| !download::is_osus(md5, &online))
-                    .map(|(_, _, p)| (*p).clone())
+                    .filter(|(_, _, md5, _)| !download::is_osus(md5, &online))
+                    .map(|(_, _, _, p)| (*p).clone())
                     .collect();
                 (download::outdated(&ids, &online), edited)
             });
@@ -14674,7 +14679,7 @@ impl State {
     }
 
     /// Downloads the newest version of map `entry`'s set into its folder: the set's own
-    /// difficulties are replaced, home-made ones (no beatmap ID) stay.
+    /// difficulties are replaced; home-made ones and edited copies (rates) stay (`download::is_own`).
     fn update_set(&mut self, entry: usize) {
         let e = &self.library[entry];
         let (Some(id), Some(folder)) = (e.set_id(), e.path.parent().map(|p| p.to_path_buf()))
@@ -14685,7 +14690,8 @@ impl State {
         if self.downloads.iter().any(|j| j.set.id == id) {
             return;
         }
-        let replaced: Vec<PathBuf> = self
+        // Which of these are the set's own is asked of osu! on the download's thread.
+        let here: Vec<download::LocalDiff> = self
             .library
             .iter()
             .filter(|m| {
@@ -14694,7 +14700,11 @@ impl State {
                     && m.set_id() == Some(id)
                     && !self.select.gone.contains(&m.path)
             })
-            .map(|m| m.path.clone())
+            .map(|m| download::LocalDiff {
+                id: m.meta.beatmap_id,
+                version: m.meta.version.clone(),
+                path: m.path.clone(),
+            })
             .collect();
         let set = download::SetInfo {
             id,
@@ -14711,7 +14721,7 @@ impl State {
         self.toast(format!("updating {} - {}...", set.artist, set.title));
         self.select.updates.insert(id, ui::SetUpdate::Updating);
         self.downloads
-            .push(download::start_update(set, folder, replaced));
+            .push(download::start_update(set, folder, here));
     }
 
     /// A set downloaded again (see `update_set`): its difficulties in the library are read anew in
