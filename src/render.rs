@@ -2543,6 +2543,13 @@ pub fn progress(since: std::time::Instant, ms: f32) -> f32 {
 pub enum Hit {
     /// A button that does what this key does.
     Key(winit::keyboard::KeyCode),
+    /// The interface editor: its panel (which only stops clicks), a part's row and its show /
+    /// hide box (indices into `hud::Part::PLACED`), a preset and a button.
+    HudPanel,
+    HudRow(usize),
+    HudToggle(usize),
+    HudPreset(usize),
+    HudButton(crate::hud_edit::Button),
     /// Top bar tab: 0 songs, 1 settings, 2 multiplayer.
     Tab(usize),
     /// A note of the main menu (index into `menu::ITEMS`).

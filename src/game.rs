@@ -40,7 +40,7 @@ use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
-use crate::hud::Part;
+use crate::hud::{self, Part};
 use crate::medals::{SPLIT_CYAN, SPLIT_RED, TEAR_CYAN, TEAR_RED};
 use crate::mods::{Mod, Mods, Speed};
 use crate::multiverse::{self, Shape as NoteShape, Universe};
@@ -52,7 +52,8 @@ use crate::shapeshift;
 pub const PANEL_W: f32 = 112.5;
 /// Centre of the hit target: x = 160 of osu!'s 480-tall gamefield, as in stable and lazer.
 pub const HIT_X: f32 = 160.0;
-pub const LANE_Y: f32 = 160.0;
+/// Centre of the lane: where osu! stable has it, a little above the middle of the screen.
+pub const LANE_Y: f32 = 196.0;
 pub const LANE_H: f32 = 118.0;
 pub const NOTE_R: f32 = 31.0;
 pub const BIG_R: f32 = 46.0;
@@ -391,6 +392,11 @@ pub struct Game {
     pub kiai_effects: bool,
     /// Interface parts hidden (the interface toggle).
     pub hidden: crate::hud::Parts,
+    /// Where the interface's parts go, and the playfield area they may be attached to.
+    pub hud: crate::hud::Layout,
+    pub hud_area: crate::layout::Area,
+    /// A stand-in play for the interface editor: every part shows, with made-up numbers.
+    hud_sample: bool,
     /// Display latency to make up for (real ms): the lane is drawn as it will be this much later,
     /// when the frame reaches the screen. Judging stays on the audio clock.
     pub visual_offset: f64,
@@ -956,6 +962,9 @@ const MEADOW_RIGHT: f32 = 1163.0;
 const MEADOW_TALL: f32 = 0.53;
 const MEADOW_DROP: f32 = 28.0;
 
+/// The bent shapes are laid out from a lane at 160: this takes them back up there from `LANE_Y`.
+const RAIL_LIFT: f32 = LANE_Y - 160.0;
+
 /// Most ticks one roll keeps (`NoteState::ticks`).
 const MAX_ROLL_TICKS: usize = 360_000;
 
@@ -1104,14 +1113,14 @@ impl RailShape {
     fn drop(self) -> f32 {
         match self {
             RailShape::Straight => 0.0,
-            RailShape::Zigzag => 35.0,
-            RailShape::UTurn => 150.0,
-            RailShape::Spiral => 105.0,
-            RailShape::Loop => 135.0,
-            RailShape::Elbow => 200.0,
+            RailShape::Zigzag => 35.0 - RAIL_LIFT,
+            RailShape::UTurn => 150.0 - RAIL_LIFT,
+            RailShape::Spiral => 105.0 - RAIL_LIFT,
+            RailShape::Loop => 135.0 - RAIL_LIFT,
+            RailShape::Elbow => 200.0 - RAIL_LIFT,
             // The drum half way down: the maze reaches as far above it as below.
-            RailShape::Maze => 65.0,
-            RailShape::Meadow => MEADOW_DROP,
+            RailShape::Maze => 65.0 - RAIL_LIFT,
+            RailShape::Meadow => MEADOW_DROP - RAIL_LIFT,
         }
     }
 
@@ -1980,7 +1989,10 @@ impl Game {
             show_offset_hint: false,
             offset_key: None,
             kiai_effects: true,
-            hidden: crate::hud::Parts::NONE,
+            hidden: crate::hud::Layout::default().off,
+            hud: crate::hud::Layout::default(),
+            hud_area: crate::layout::Area::FULL,
+            hud_sample: false,
             visual_offset: 0.0,
             mash: Mash::Nearest,
             scoring: Scoring::Standard,
@@ -4912,7 +4924,11 @@ impl Game {
                 c.circle(HIT_X, y, r, rgba(col, 1.0 - p), rgba(WHITE, 1.0 - p), 3.0);
             }
         }
-        if self.stats.combo >= 2 && !self.hidden.has(Part::Combo) {
+        // Moved off the drum, it's drawn with the rest of the interface.
+        if self.stats.combo >= 2
+            && !self.hidden.has(Part::Combo)
+            && self.hud.place(Part::Combo).is_none()
+        {
             let s = self.stats.combo.to_string();
             let skin_size = if s.len() > 3 { 17.0 } else { 22.0 };
             if c.number_width(Font::Combo, skin_size, &s).is_some() {
@@ -4931,10 +4947,11 @@ impl Game {
         }
 
         // Judgement text.
-        if let Some((j, at)) = self
-            .last_judge
-            .filter(|&(j, _)| splashes(j) && !self.hidden.has(Part::Judgements))
-        {
+        if let Some((j, at)) = self.last_judge.filter(|&(j, _)| {
+            splashes(j)
+                && !self.hidden.has(Part::Judgements)
+                && self.hud.place(Part::Judgements).is_none()
+        }) {
             let age = (t - at) as f32;
             if age < 450.0 {
                 let a = (1.0 - age / 450.0).min(1.0);
@@ -5528,8 +5545,8 @@ impl Game {
         }
     }
 
-    /// Score, accuracy, progress, hit error meter, offset advice, skip hint and the pause menu (with
-    /// the map's name), at fixed screen positions: resizing the playfield area never moves them.
+    /// The interface's parts where the player put them (see `hud`), then the skip hint and the
+    /// pause menu (with the map's name), which stay at fixed screen positions.
     pub fn draw_hud(&self, c: &mut Canvas) {
         let t = self.time;
         let w = c.width;
@@ -5550,231 +5567,7 @@ impl Game {
 
         self.draw_defense(c, t, w);
 
-        let shown = |p: Part| !self.hidden.has(p);
-        // Score / accuracy.
-        // In the skin's score font if it has one.
-        let number = |c: &mut Canvas, y: f32, size: f32, col: u32, s: &str| match c.number_width(
-            Font::Score,
-            size,
-            s,
-        ) {
-            Some(nw) => {
-                c.number(Font::Score, w - 18.0 - nw, y, size, rgba(WHITE, 1.0), s);
-            }
-            None => c.text_right(w - 18.0, y, size, rgba(col, 1.0), s),
-        };
-        if shown(Part::Score) {
-            number(c, 18.0, 24.0, WHITE, &format!("{:08}", self.stats.score));
-        }
-        let acc = format!("{:.2}%", self.stats.accuracy() * 100.0);
-        if shown(Part::Accuracy) {
-            number(c, 50.0, 14.0, 0xc8c8d8, &acc);
-        }
-        // The pp counter, on the accuracy's line, left of it.
-        if let Some(pp) = self.live_pp_value.filter(|_| shown(Part::Pp)) {
-            let acc_w = if shown(Part::Accuracy) {
-                c.number_width(Font::Score, 14.0, &acc)
-                    .unwrap_or_else(|| Canvas::text_width(14.0, &acc))
-                    + 14.0
-            } else {
-                0.0
-            };
-            let text = format!("{pp:.0}pp");
-            let right = w - 18.0 - acc_w;
-            match c.number_width(Font::Score, 14.0, &text) {
-                Some(nw) => {
-                    c.number(
-                        Font::Score,
-                        right - nw,
-                        50.0,
-                        14.0,
-                        rgba(0xff8ad8, 1.0),
-                        &text,
-                    );
-                }
-                None => c.text_right(right, 50.0, 14.0, rgba(0xff8ad8, 1.0), &text),
-            }
-        }
-        // Progress bar.
-        if shown(Part::Progress) {
-            c.rect(0.0, 0.0, w * self.progress() as f32, 3.0, rgba(WHITE, 0.45));
-        }
-        // HP: has to be at least half full at the end (the mark), like osu!taiko. Defense goes
-        // by the team's lives instead (its panel).
-        if self.show_hp && shown(Part::Health) && self.defense.is_none() {
-            // Under the score, accuracy and mods (the top-left corner is the FPS overlay's).
-            let (hx, hy) = (hp_bar_x(w), HP_BAR_Y);
-            let hw = w - 18.0 - hx;
-            let hp = self.hp as f32;
-            if let (Some([bw, bh]), Some([fw, fh])) = (
-                c.sprite_size(Sprite::HealthBg),
-                c.sprite_size(Sprite::HealthFill),
-            ) {
-                // The skin's bar where osu! has it, in the top left at its own size (some are a
-                // frame round the whole screen); the fill on it 5, 16 px in, cut off at the HP.
-                let k = HUD_PX * 128.0;
-                let (bg_w, bg_h) = (bw * k, bh * k);
-                c.sprite_box(
-                    Sprite::HealthBg,
-                    bg_w / 2.0,
-                    bg_h / 2.0,
-                    bg_w / 2.0,
-                    bg_h / 2.0,
-                    rgba(WHITE, 1.0),
-                );
-                let (fx, fy, fill_w, fill_h) = (5.0 * HUD_PX, 16.0 * HUD_PX, fw * k, fh * k);
-                let start = c.shapes.len();
-                c.sprite_box(
-                    Sprite::HealthFill,
-                    fx + fill_w / 2.0,
-                    fy + fill_h / 2.0,
-                    fill_w / 2.0,
-                    fill_h / 2.0,
-                    rgba(WHITE, 1.0),
-                );
-                c.clip_since(start, fx, fy, fill_w * hp, fill_h);
-                c.rect(
-                    fx + fill_w / 2.0 - 0.75,
-                    fy - 2.0,
-                    1.5,
-                    fill_h + 4.0,
-                    rgba(WHITE, 0.8),
-                );
-            } else {
-                c.round_rect(
-                    [hx, hy],
-                    [hw, 8.0],
-                    3.0,
-                    rgba(0x15151d, 0.85),
-                    rgba(0x3a3a4e, 1.0),
-                    1.0,
-                );
-                let fill = if hp >= 0.5 { 0xFFD34D } else { 0xEB452C };
-                if hp > 0.0 {
-                    c.round_rect(
-                        [hx + 1.0, hy + 1.0],
-                        [(hw - 2.0) * hp, 6.0],
-                        2.5,
-                        rgba(fill, 0.95),
-                        rgba(0, 0.0),
-                        0.0,
-                    );
-                }
-                c.rect(hx + hw / 2.0 - 0.75, hy - 2.0, 1.5, 12.0, rgba(WHITE, 0.8));
-            }
-        }
-        if !self.mods.is_empty() && shown(Part::Mods) {
-            let label = self
-                .mods
-                .iter()
-                .map(|m| m.acronym())
-                .collect::<Vec<_>>()
-                .join(" ");
-            c.text_right(w - 18.0, 72.0, 9.0, rgba(0xc8c8d8, 0.9), &label);
-        }
-
-        // Hit error meter.
-        let cx = w / 2.0;
-        let my = 430.0;
-        if shown(Part::HitError) {
-            let scale = 150.0 / self.windows.miss as f32;
-            let wnd = |ms: f64| ms as f32 * scale;
-            c.round_rect(
-                [cx - wnd(self.windows.miss), my - 3.0],
-                [wnd(self.windows.miss) * 2.0, 6.0],
-                3.0,
-                rgba(Judge::Miss.color(), 0.25),
-                rgba(0, 0.0),
-                0.0,
-            );
-            c.round_rect(
-                [cx - wnd(self.windows.ok), my - 3.0],
-                [wnd(self.windows.ok) * 2.0, 6.0],
-                3.0,
-                rgba(Judge::Ok.color(), 0.4),
-                rgba(0, 0.0),
-                0.0,
-            );
-            c.round_rect(
-                [cx - wnd(self.windows.great), my - 3.0],
-                [wnd(self.windows.great) * 2.0, 6.0],
-                3.0,
-                rgba(Judge::Great.color(), 0.6),
-                rgba(0, 0.0),
-                0.0,
-            );
-            for &(err, at, j) in &self.recent_errors {
-                let age = (t - at) as f32;
-                if age < 4000.0 {
-                    let a = 1.0 - age / 4000.0;
-                    c.rect(
-                        cx + err as f32 * scale - 1.0,
-                        my - 11.0,
-                        2.0,
-                        22.0,
-                        rgba(j.color(), a),
-                    );
-                }
-            }
-            if !self.recent_errors.is_empty() {
-                let n = self.recent_errors.len().min(20);
-                let mean = self
-                    .recent_errors
-                    .iter()
-                    .rev()
-                    .take(n)
-                    .map(|e| e.0)
-                    .sum::<f64>()
-                    / n as f64;
-                c.circle(
-                    cx + mean as f32 * scale,
-                    my - 18.0,
-                    3.5,
-                    rgba(WHITE, 0.9),
-                    rgba(WHITE, 0.0),
-                    0.0,
-                );
-            }
-            c.rect(cx - 1.0, my - 14.0, 2.0, 28.0, rgba(WHITE, 0.9));
-        }
-        if self.show_offset_hint
-            && shown(Part::OffsetHint)
-            && let Some(h) = self.offset_suggestion(self.offset)
-        {
-            let e = &h.estimate;
-            let (hits, needed) = (e.hits, h.needed);
-            let building = if hits < needed {
-                tr!("  confidence {hits}/{needed}", "  信頼度 {hits}/{needed}", "  надёжность {hits}/{needed}";)
-            } else {
-                String::new()
-            };
-            let ur = e.ur;
-            let hits_ru = crate::lang::ru_plural(hits, ["удар", "удара", "ударов"]);
-            let stats = tr!("UR {ur:.0}, {hits} hits", "UR {ur:.0}、{hits}回", "UR {ur:.0}, {hits} {hits_ru}";);
-            let (error, margin, suggested) = (e.error_ms.abs(), e.margin_ms, e.suggested_offset);
-            if h.significant {
-                let dir = if e.error_ms > 0.0 {
-                    tr!("late", "遅い", "поздно")
-                } else {
-                    tr!("early", "早い", "рано")
-                };
-                let apply = self.offset_key.as_ref().map_or(String::new(), |k| tr!("  |  {k}: this map  Shift+{k}: all", "  |  {k}: この譜面  Shift+{k}: 全体", "  |  {k}: эта карта  Shift+{k}: все";));
-                let text = tr!(
-                    "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms{apply}{building}",
-                    "{error:.1} ±{margin:.1} ms {dir} ({stats})  |  提案オフセット {suggested:+.0} ms{apply}{building}",
-                    "{error:.1} +-{margin:.1} мс {dir} ({stats})  |  смещение {suggested:+.0} мс{apply}{building}";
-                );
-                c.text_centered(cx, my + 20.0, 8.0, rgba(0xFFD34D, 0.95), &text);
-            } else {
-                let error = e.error_ms;
-                let text = tr!(
-                    "offset looks good: {error:+.1} +-{margin:.1} ms ({stats}){building}",
-                    "オフセットは良好: {error:+.1} ±{margin:.1} ms ({stats}){building}",
-                    "смещение в порядке: {error:+.1} +-{margin:.1} мс ({stats}){building}";
-                );
-                c.text_centered(cx, my + 20.0, 8.0, rgba(0x86E05A, 0.9), &text);
-            }
-        }
+        self.draw_parts(c);
 
         // Overtime: he's here, over everything but the pause menu.
         if let Some(&at) = self
@@ -5970,14 +5763,525 @@ impl Game {
             );
         }
     }
+
+    /// The part's place: where the player put it, or else where it goes to begin with.
+    fn part_place(&self, c: &Canvas, part: Part) -> hud::Place {
+        use hud::{Place, Target, axis, on_screen};
+        self.hud.place(part).unwrap_or_else(|| match part {
+            Part::Score => Place::new(on_screen(1.0, -18.0), on_screen(0.0, 18.0)),
+            Part::Accuracy => Place::new(on_screen(1.0, -18.0), on_screen(0.0, 50.0)),
+            // On the accuracy's line, left of it.
+            Part::Pp => {
+                let accuracy_here =
+                    !self.hidden.has(Part::Accuracy) && self.hud.place(Part::Accuracy).is_none();
+                let acc_w = if accuracy_here {
+                    score_width(c, 14.0, &self.accuracy_text()) + 14.0
+                } else {
+                    0.0
+                };
+                Place::new(on_screen(1.0, -18.0 - acc_w), on_screen(0.0, 50.0))
+            }
+            Part::Progress => Place::new(on_screen(0.0, 0.0), on_screen(0.0, 0.0)),
+            // The skin's bar where osu! has it, in the top left at its own size (some are a frame
+            // round the whole screen). Ours is under the score, accuracy and mods (the top-left
+            // corner is the FPS overlay's).
+            Part::Health if skin_health(c).is_some() => {
+                Place::new(on_screen(0.0, 0.0), on_screen(0.0, 0.0))
+            }
+            Part::Health => Place::new(on_screen(1.0, -18.0), on_screen(0.0, HP_BAR_Y)),
+            Part::Mods => Place::new(on_screen(1.0, -18.0), on_screen(0.0, 72.0)),
+            Part::HitError => Place::new(on_screen(0.5, 0.0), on_screen(0.0, 408.0)),
+            Part::OffsetHint => Place::new(on_screen(0.5, 0.0), on_screen(0.0, 450.0)),
+            Part::Combo => Place::new(
+                axis(Target::Drum, 0.5, 0.5, 0.0),
+                axis(Target::Drum, 0.5, 0.5, 0.0),
+            ),
+            Part::Judgements => Place::new(
+                axis(Target::HitPoint, 0.5, 0.5, 0.0),
+                axis(Target::Lane, 0.0, 1.0, -8.0),
+            ),
+            Part::Ur => Place::new(
+                axis(Target::Lane, 1.0, 1.0, -8.0),
+                axis(Target::Lane, 1.0, 0.0, 8.0),
+            ),
+            Part::Counts => Place::new(
+                axis(Target::Lane, 0.0, 0.0, 8.0),
+                axis(Target::Lane, 1.0, 0.0, 8.0),
+            ),
+            Part::Scoreboard | Part::Spectators | Part::HitAnimation => {
+                Place::new(on_screen(0.0, 12.0), on_screen(0.0, 276.0))
+            }
+        })
+    }
+
+    /// How big a part at `place` is in its own units.
+    fn part_size(&self, c: &Canvas, part: Part, place: &hud::Place) -> [f32; 2] {
+        match part {
+            Part::Score => [score_width(c, 24.0, "00000000"), 28.0],
+            Part::Accuracy => [score_width(c, 14.0, "100.00%"), 16.0],
+            Part::Pp => [score_width(c, 14.0, "9999pp"), 16.0],
+            // As long as what it's on.
+            Part::Progress => {
+                let f = hud::Frames::new(c.width, self.hud_area);
+                [f.rect(place.x.target)[2] / f.follow(place), 3.0]
+            }
+            Part::Health => {
+                skin_health(c).map_or([(c.width * 0.25).min(180.0), 8.0], |[bg, _]| [bg[0], bg[1]])
+            }
+            Part::Mods => [Canvas::text_width(9.0, &self.mods_text()).max(40.0), 10.0],
+            Part::HitError => [300.0, 44.0],
+            Part::OffsetHint => [420.0, 10.0],
+            Part::Combo => [56.0, 24.0],
+            Part::Judgements => [80.0, 22.0],
+            Part::Ur => [Canvas::text_width(UR_SIZE, "UR 999.99"), 12.0],
+            Part::Counts => [3.0 * count_cell() + 2.0 * COUNT_GAP, 10.0],
+            Part::Scoreboard => [300.0, 138.0],
+            Part::Spectators => [140.0, 92.0],
+            Part::HitAnimation => [0.0, 0.0],
+        }
+    }
+
+    /// A part's place, size in its own units and box on the screen.
+    pub fn part_box(&self, c: &Canvas, part: Part) -> (hud::Place, [f32; 2], hud::Placed) {
+        let place = self.part_place(c, part);
+        let size = self.part_size(c, part, &place);
+        let frames = hud::Frames::new(c.width, self.hud_area);
+        let moved = self.hud.place(part).is_some();
+        (place, size, frames.resolve(&place, size, moved))
+    }
+
+    /// Draws a part with `f` in its own box from (0, 0), which also gets the box's size and how
+    /// text lines up in it (0 left, 1 right), and puts it in its place.
+    fn in_place(&self, c: &mut Canvas, part: Part, f: impl FnOnce(&mut Canvas, [f32; 2], f32)) {
+        let (place, size, b) = self.part_box(c, part);
+        let start = c.shapes.len();
+        f(c, size, place.x.pivot);
+        c.transform_since(start, [0.0, 0.0], b.k, b.x, b.y);
+    }
+
+    /// Puts what `f` draws from `from`, a part drawn somewhere of its own, in its place.
+    pub fn placed_from(
+        &self,
+        c: &mut Canvas,
+        part: Part,
+        from: [f32; 2],
+        f: impl FnOnce(&mut Canvas),
+    ) {
+        let (_, _, b) = self.part_box(c, part);
+        let start = c.shapes.len();
+        f(c);
+        c.transform_since(start, from, b.k, b.x - from[0], b.y - from[1]);
+    }
+
+    fn accuracy_text(&self) -> String {
+        format!("{:.2}%", self.stats.accuracy() * 100.0)
+    }
+
+    fn mods_text(&self) -> String {
+        self.mods
+            .iter()
+            .map(|m| m.acronym())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Everything the player can place.
+    pub fn draw_parts(&self, c: &mut Canvas) {
+        let t = self.time;
+        let shown = |p: Part| !self.hidden.has(p);
+        // Over the lane unless moved: the playfield draws those itself.
+        let off_the_lane = |p: Part| self.hud_sample || self.hud.place(p).is_some();
+
+        if shown(Part::Score) {
+            let s = format!("{:08}", self.stats.score);
+            self.in_place(c, Part::Score, |c, [w, _], align| {
+                score_number(c, w, align, 24.0, WHITE, &s);
+            });
+        }
+        if shown(Part::Accuracy) {
+            let s = self.accuracy_text();
+            self.in_place(c, Part::Accuracy, |c, [w, _], align| {
+                score_number(c, w, align, 14.0, 0xc8c8d8, &s);
+            });
+        }
+        if let Some(pp) = self.live_pp_value.filter(|_| shown(Part::Pp)) {
+            let s = format!("{pp:.0}pp");
+            self.in_place(c, Part::Pp, |c, [w, _], align| {
+                let nw = c.number_width(Font::Score, 14.0, &s);
+                let x = (w - nw.unwrap_or_else(|| Canvas::text_width(14.0, &s))) * align;
+                if nw.is_some() {
+                    c.number(Font::Score, x, 0.0, 14.0, rgba(0xff8ad8, 1.0), &s);
+                } else {
+                    c.text(x, 0.0, 14.0, rgba(0xff8ad8, 1.0), &s);
+                }
+            });
+        }
+        if shown(Part::Progress) {
+            let done = if self.hud_sample {
+                0.4
+            } else {
+                self.progress() as f32
+            };
+            self.in_place(c, Part::Progress, |c, [w, h], _| {
+                c.rect(0.0, 0.0, w * done, h, rgba(WHITE, 0.45));
+            });
+        }
+        // HP: has to be at least half full at the end (the mark), like osu!taiko. Defense goes
+        // by the team's lives instead (its panel).
+        if self.show_hp && shown(Part::Health) && self.defense.is_none() {
+            self.in_place(c, Part::Health, |c, [hw, _], _| self.draw_health(c, hw));
+        }
+        if !self.mods.is_empty() && shown(Part::Mods) {
+            let label = self.mods_text();
+            self.in_place(c, Part::Mods, |c, [w, _], align| {
+                let x = (w - Canvas::text_width(9.0, &label)) * align;
+                c.text(x, 0.0, 9.0, rgba(0xc8c8d8, 0.9), &label);
+            });
+        }
+        if shown(Part::HitError) {
+            self.in_place(c, Part::HitError, |c, [w, h], _| {
+                self.draw_hit_error(c, t, w / 2.0, h / 2.0);
+            });
+        }
+        if shown(Part::OffsetHint) {
+            let hint = if self.hud_sample {
+                Some((
+                    tr!(
+                        "offset looks good: +1.2 +-3.4 ms (UR 95, 120 hits)",
+                        "オフセットは良好: +1.2 ±3.4 ms (UR 95、120回)",
+                        "смещение в порядке: +1.2 +-3.4 мс (UR 95, 120 ударов)"
+                    )
+                    .to_string(),
+                    rgba(0x86E05A, 0.9),
+                ))
+            } else {
+                self.offset_hint_text()
+            };
+            if let Some((text, colour)) = hint {
+                self.in_place(c, Part::OffsetHint, |c, [w, _], _| {
+                    c.text_centered(w / 2.0, 0.0, 8.0, colour, &text);
+                });
+            }
+        }
+        if shown(Part::Ur) {
+            let s = format!("UR {:.2}", self.stats.unstable_rate());
+            self.in_place(c, Part::Ur, |c, [w, _], align| {
+                let x = (w - Canvas::text_width(UR_SIZE, &s)) * align;
+                c.text(x, 0.0, UR_SIZE, rgba(0xc8c8d8, 1.0), &s);
+            });
+        }
+        if shown(Part::Counts) {
+            let s = &self.stats;
+            let cells = [
+                ("300", s.great, Judge::Great),
+                ("100", s.ok, Judge::Ok),
+                ("MISS", s.miss, Judge::Miss),
+            ];
+            self.in_place(c, Part::Counts, |c, _, _| {
+                for (i, (label, n, j)) in cells.into_iter().enumerate() {
+                    let x = i as f32 * (count_cell() + COUNT_GAP);
+                    c.text(x, 0.0, COUNT_SIZE, rgba(j.color(), 1.0), label);
+                    let at = x + Canvas::text_width(COUNT_SIZE, label) + COUNT_SPACE;
+                    c.text(at, 0.0, COUNT_SIZE, rgba(WHITE, 1.0), &n.to_string());
+                }
+            });
+        }
+        if shown(Part::Combo) && off_the_lane(Part::Combo) && self.stats.combo >= 2 {
+            let s = self.stats.combo.to_string();
+            self.in_place(c, Part::Combo, |c, [w, h], _| {
+                let skin_size = if s.len() > 3 { 17.0 } else { 22.0 };
+                match c.number_width(Font::Combo, skin_size, &s) {
+                    Some(nw) => {
+                        let y = (h - skin_size) / 2.0;
+                        let x = (w - nw) / 2.0;
+                        c.number(Font::Combo, x, y, skin_size, rgba(WHITE, 1.0), &s);
+                    }
+                    None => {
+                        let size = if s.len() > 3 { 12.0 } else { 16.0 };
+                        let y = (h - size) / 2.0;
+                        // Dark on the drum, where the stand-in play shows it.
+                        let on_drum = self.hud.place(Part::Combo).is_none();
+                        let col = if on_drum { 0x1d1d26 } else { 0xe8e8f0 };
+                        c.text_centered(w / 2.0, y, size, rgba(col, 1.0), &s);
+                    }
+                }
+            });
+        }
+        if shown(Part::Judgements) && off_the_lane(Part::Judgements) {
+            let judged = if self.hud_sample {
+                Some((Judge::Great, 1.0))
+            } else {
+                self.last_judge
+                    .filter(|&(j, _)| splashes(j))
+                    .and_then(|(j, at)| {
+                        let age = (t - at) as f32;
+                        (age < 450.0).then(|| (j, (1.0 - age / 450.0).min(1.0)))
+                    })
+            };
+            if let Some((j, a)) = judged {
+                self.in_place(c, Part::Judgements, |c, [w, h], _| {
+                    let sprite = match j {
+                        Judge::Great => Sprite::JudgeGreat,
+                        Judge::Ok => Sprite::JudgeOk,
+                        Judge::Miss => Sprite::JudgeMiss,
+                    };
+                    if let Some([sw, sh]) = c.sprite_size(sprite) {
+                        // Fitted to the box, as tall as it can be.
+                        let hh = h / 2.0;
+                        let hw = hh * sw / sh.max(0.001);
+                        c.sprite_box(sprite, w / 2.0, hh, hw, hh, rgba(WHITE, a));
+                    } else {
+                        c.text_centered(w / 2.0, 3.0, 15.0, rgba(j.color(), a), j.label());
+                    }
+                });
+            }
+        }
+    }
+
+    /// Stand-ins for the parts only a match or friends watching show. They start out in the same
+    /// spot, and never appear together in a play: their names are kept apart here.
+    pub fn draw_stand_ins(&self, c: &mut Canvas) {
+        for (part, y) in [(Part::Scoreboard, 124.0), (Part::Spectators, 6.0)] {
+            if !self.hidden.has(part) {
+                self.in_place(c, part, |c, [w, h], _| {
+                    c.round_rect(
+                        [0.0, 0.0],
+                        [w, h],
+                        6.0,
+                        rgba(0x000000, 0.45),
+                        rgba(0, 0.0),
+                        0.0,
+                    );
+                    let label = Canvas::fit(8.0, w - 12.0, part.label());
+                    c.text(6.0, y, 8.0, rgba(0xc8c8d8, 1.0), &label);
+                });
+            }
+        }
+    }
+
+    /// The health bar in its own box, `hw` wide.
+    fn draw_health(&self, c: &mut Canvas, hw: f32) {
+        let hp = self.hp as f32;
+        if let Some([[bg_w, bg_h], [fill_w, fill_h]]) = skin_health(c) {
+            // The fill on it 5, 16 px in, cut off at the HP.
+            c.sprite_box(
+                Sprite::HealthBg,
+                bg_w / 2.0,
+                bg_h / 2.0,
+                bg_w / 2.0,
+                bg_h / 2.0,
+                rgba(WHITE, 1.0),
+            );
+            let (fx, fy) = (5.0 * HUD_PX, 16.0 * HUD_PX);
+            let start = c.shapes.len();
+            c.sprite_box(
+                Sprite::HealthFill,
+                fx + fill_w / 2.0,
+                fy + fill_h / 2.0,
+                fill_w / 2.0,
+                fill_h / 2.0,
+                rgba(WHITE, 1.0),
+            );
+            c.clip_since(start, fx, fy, fill_w * hp, fill_h);
+            c.rect(
+                fx + fill_w / 2.0 - 0.75,
+                fy - 2.0,
+                1.5,
+                fill_h + 4.0,
+                rgba(WHITE, 0.8),
+            );
+        } else {
+            c.round_rect(
+                [0.0, 0.0],
+                [hw, 8.0],
+                3.0,
+                rgba(0x15151d, 0.85),
+                rgba(0x3a3a4e, 1.0),
+                1.0,
+            );
+            let fill = if hp >= 0.5 { 0xFFD34D } else { 0xEB452C };
+            if hp > 0.0 {
+                c.round_rect(
+                    [1.0, 1.0],
+                    [(hw - 2.0) * hp, 6.0],
+                    2.5,
+                    rgba(fill, 0.95),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+            }
+            c.rect(hw / 2.0 - 0.75, -2.0, 1.5, 12.0, rgba(WHITE, 0.8));
+        }
+    }
+
+    /// The hit error meter around (`cx`, `my`).
+    fn draw_hit_error(&self, c: &mut Canvas, t: f64, cx: f32, my: f32) {
+        let scale = 150.0 / self.windows.miss as f32;
+        let wnd = |ms: f64| ms as f32 * scale;
+        c.round_rect(
+            [cx - wnd(self.windows.miss), my - 3.0],
+            [wnd(self.windows.miss) * 2.0, 6.0],
+            3.0,
+            rgba(Judge::Miss.color(), 0.25),
+            rgba(0, 0.0),
+            0.0,
+        );
+        c.round_rect(
+            [cx - wnd(self.windows.ok), my - 3.0],
+            [wnd(self.windows.ok) * 2.0, 6.0],
+            3.0,
+            rgba(Judge::Ok.color(), 0.4),
+            rgba(0, 0.0),
+            0.0,
+        );
+        c.round_rect(
+            [cx - wnd(self.windows.great), my - 3.0],
+            [wnd(self.windows.great) * 2.0, 6.0],
+            3.0,
+            rgba(Judge::Great.color(), 0.6),
+            rgba(0, 0.0),
+            0.0,
+        );
+        for &(err, at, j) in &self.recent_errors {
+            let age = (t - at) as f32;
+            if age < 4000.0 {
+                let a = 1.0 - age / 4000.0;
+                c.rect(
+                    cx + err as f32 * scale - 1.0,
+                    my - 11.0,
+                    2.0,
+                    22.0,
+                    rgba(j.color(), a),
+                );
+            }
+        }
+        if !self.recent_errors.is_empty() {
+            let n = self.recent_errors.len().min(20);
+            let mean = self
+                .recent_errors
+                .iter()
+                .rev()
+                .take(n)
+                .map(|e| e.0)
+                .sum::<f64>()
+                / n as f64;
+            c.circle(
+                cx + mean as f32 * scale,
+                my - 18.0,
+                3.5,
+                rgba(WHITE, 0.9),
+                rgba(WHITE, 0.0),
+                0.0,
+            );
+        }
+        c.rect(cx - 1.0, my - 14.0, 2.0, 28.0, rgba(WHITE, 0.9));
+    }
+
+    /// The offset advice's line and colour, once it has something to say.
+    fn offset_hint_text(&self) -> Option<(String, [f32; 4])> {
+        if !self.show_offset_hint {
+            return None;
+        }
+        let h = self.offset_suggestion(self.offset)?;
+        let e = &h.estimate;
+        let (hits, needed) = (e.hits, h.needed);
+        let building = if hits < needed {
+            tr!("  confidence {hits}/{needed}", "  信頼度 {hits}/{needed}", "  надёжность {hits}/{needed}";)
+        } else {
+            String::new()
+        };
+        let ur = e.ur;
+        let hits_ru = crate::lang::ru_plural(hits, ["удар", "удара", "ударов"]);
+        let stats =
+            tr!("UR {ur:.0}, {hits} hits", "UR {ur:.0}、{hits}回", "UR {ur:.0}, {hits} {hits_ru}";);
+        let (error, margin, suggested) = (e.error_ms.abs(), e.margin_ms, e.suggested_offset);
+        if h.significant {
+            let dir = if e.error_ms > 0.0 {
+                tr!("late", "遅い", "поздно")
+            } else {
+                tr!("early", "早い", "рано")
+            };
+            let apply = self.offset_key.as_ref().map_or(String::new(), |k| tr!("  |  {k}: this map  Shift+{k}: all", "  |  {k}: この譜面  Shift+{k}: 全体", "  |  {k}: эта карта  Shift+{k}: все";));
+            let text = tr!(
+                "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms{apply}{building}",
+                "{error:.1} ±{margin:.1} ms {dir} ({stats})  |  提案オフセット {suggested:+.0} ms{apply}{building}",
+                "{error:.1} +-{margin:.1} мс {dir} ({stats})  |  смещение {suggested:+.0} мс{apply}{building}";
+            );
+            Some((text, rgba(0xFFD34D, 0.95)))
+        } else {
+            let error = e.error_ms;
+            let text = tr!(
+                "offset looks good: {error:+.1} +-{margin:.1} ms ({stats}){building}",
+                "オフセットは良好: {error:+.1} ±{margin:.1} ms ({stats}){building}",
+                "смещение в порядке: {error:+.1} +-{margin:.1} мс ({stats}){building}";
+            );
+            Some((text, rgba(0x86E05A, 0.9)))
+        }
+    }
+
+    /// A made-up play for the interface editor to show the parts with.
+    pub fn hud_sample() -> Game {
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let mut g = Game::with_mods(map, track, None, Mods::parse("HD"));
+        g.hud_sample = true;
+        g.stats.score = 1_234_560;
+        (g.stats.great, g.stats.ok, g.stats.miss) = (812, 37, 4);
+        g.stats.combo = 321;
+        g.stats.errors = (0..20).map(|i| (i % 7) as f64 * 5.0 - 15.0).collect();
+        g.live_pp_value = Some(312.0);
+        g.hp = 0.8;
+        g.show_hp = true;
+        g.recent_errors = g
+            .stats
+            .errors
+            .iter()
+            .map(|&e| (e, g.time, Judge::Great))
+            .collect();
+        g
+    }
 }
 
 /// Overtime's animatronic bear lunging at the screen, `p` (0-1) of the way through, shaking
 /// with map time `t`. Drawn from shapes, centred on a canvas `c.width` wide.
-/// The HP bar's top and left end (it is 8 tall and ends 18 from the right).
+/// The HP bar's top.
 const HP_BAR_Y: f32 = 88.0;
-fn hp_bar_x(w: f32) -> f32 {
-    w - 18.0 - (w * 0.25).min(180.0)
+
+/// The UR counter's text size.
+const UR_SIZE: f32 = 11.0;
+/// The hit counter's text size and the room between its cells.
+const COUNT_SIZE: f32 = 9.0;
+const COUNT_GAP: f32 = 10.0;
+const COUNT_SPACE: f32 = 4.0;
+
+/// One cell of the hit counter: its label and count.
+fn count_cell() -> f32 {
+    Canvas::text_width(COUNT_SIZE, "MISS") + COUNT_SPACE + Canvas::text_width(COUNT_SIZE, "9999")
+}
+
+/// How wide `s` comes out in the score's font.
+fn score_width(c: &Canvas, size: f32, s: &str) -> f32 {
+    c.number_width(Font::Score, size, s)
+        .unwrap_or_else(|| Canvas::text_width(size, s))
+}
+
+/// `s` in the skin's score font if it has one, lined up by `align` in a box `w` wide.
+fn score_number(c: &mut Canvas, w: f32, align: f32, size: f32, col: u32, s: &str) {
+    let x = (w - score_width(c, size, s)) * align;
+    if !c.number(Font::Score, x, 0.0, size, rgba(WHITE, 1.0), s) {
+        c.text(x, 0.0, size, rgba(col, 1.0), s);
+    }
+}
+
+/// The sizes of the skin's health bar and its fill, if it has them.
+fn skin_health(c: &Canvas) -> Option<[[f32; 2]; 2]> {
+    let k = HUD_PX * 128.0;
+    let bg = c.sprite_size(Sprite::HealthBg)?;
+    let fill = c.sprite_size(Sprite::HealthFill)?;
+    Some([[bg[0] * k, bg[1] * k], [fill[0] * k, fill[1] * k]])
 }
 
 fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
@@ -6433,16 +6737,14 @@ pub fn draw_preview(c: &mut Canvas) {
     );
 }
 
-/// The editor's stand-in score, where the real HUD goes: fixed on screen, whatever the area.
-pub fn draw_preview_hud(c: &mut Canvas) {
-    let w = c.width;
-    c.text_right(w - 18.0, 18.0, 24.0, rgba(WHITE, 1.0), "00000000");
-    c.text_right(w - 18.0, 50.0, 14.0, rgba(0xc8c8d8, 1.0), "100.00%");
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The left end of the HP bar, which ends 18 from the right.
+    fn hp_bar_x(w: f32) -> f32 {
+        w - 18.0 - (w * 0.25).min(180.0)
+    }
 
     #[test]
     fn block_culling_preserves_the_original_draw_for_every_mod() {

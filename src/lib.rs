@@ -29,6 +29,7 @@ mod game;
 mod genres;
 mod guide;
 mod hud;
+mod hud_edit;
 mod idle;
 mod keys;
 mod layout;
@@ -147,6 +148,10 @@ enum Scene {
     },
     /// Full-screen editor for the playfield area, opened from settings.
     LayoutEdit {
+        back: Box<Scene>,
+    },
+    /// The interface editor (see `State::hud_edit`), opened from settings.
+    HudEdit {
         back: Box<Scene>,
     },
     /// The autoplay preview over the whole screen (in the playfield area, which can be moved
@@ -653,6 +658,10 @@ struct State {
     mouse_moved_at: Instant,
     /// Snap guides to draw while dragging the playfield area.
     guides: Vec<layout::Guide>,
+    /// The interface editor, while it's open.
+    hud_edit: Option<hud_edit::Editor>,
+    /// The made-up play the editors show the interface with.
+    hud_sample: Option<Box<game::Game>>,
     /// Playfield presets (resolutions that fit the window), filled when the window opens.
     resolutions: Vec<(u32, u32)>,
     monitor_modes: Vec<(u32, u32)>,
@@ -2375,6 +2384,8 @@ impl State {
         ex.game.kiai_effects = kiai;
         let t = ex.game.speed().map(ex.view_time());
         ex.game.set_time(t);
+        ex.game.hud = self.cfg.hud;
+        ex.game.hidden = self.cfg.hud.off;
         c.clear(render::VIRTUAL_HEIGHT * w as f32 / h as f32);
         ex.game.draw_playfield(c, scroll);
         if ex.settings.hud {
@@ -3825,6 +3836,17 @@ impl State {
                 tr!("{s:.2} s", "{s:.2}秒", "{s:.2} с";)
             }
             Item::PlayfieldArea => c.playfield_area.describe(),
+            Item::InterfaceEditor => {
+                let builtin = hud::builtin_presets();
+                let named = builtin
+                    .iter()
+                    .find(|p| p.1 == c.hud)
+                    .map(|p| p.0.to_string());
+                let own = c.hud_presets.iter().find(|p| p.1 == c.hud);
+                own.map(|p| p.0.clone())
+                    .or(named)
+                    .unwrap_or_else(|| tr!("custom", "カスタム", "своя").into())
+            }
             Item::PlayfieldPreset => self
                 .current_preset()
                 .map(|(w, h)| format!("{w}x{h}"))
@@ -4117,7 +4139,7 @@ impl State {
                 self.cfg.resume_delay_ms = (self.cfg.resume_delay_ms + 250.0 * d).clamp(0.0, 3000.0)
             }
             // Both act on Enter in `settings_key`.
-            Item::PlayfieldArea | Item::PlayfieldReset => return,
+            Item::PlayfieldArea | Item::InterfaceEditor | Item::PlayfieldReset => return,
             Item::PlayfieldPreset => {
                 self.cycle_preset(dir);
                 return;
@@ -5676,7 +5698,7 @@ impl State {
                 .into(),
                 String::new(),
             ),
-            Scene::Settings { .. } | Scene::LayoutEdit { .. } => (
+            Scene::Settings { .. } | Scene::LayoutEdit { .. } | Scene::HudEdit { .. } => (
                 tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
                 String::new(),
             ),
@@ -5920,6 +5942,11 @@ impl State {
                 if item == Item::PlayfieldArea =>
             {
                 self.open_layout_editor()
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::InterfaceEditor =>
+            {
+                self.open_hud_editor()
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
                 if item == Item::PlayfieldPreset =>
@@ -6505,8 +6532,42 @@ impl State {
                 | Scene::MpPlay { .. }
                 | Scene::Calibrate { .. }
                 | Scene::LayoutEdit { .. }
+                | Scene::HudEdit { .. }
                 | Scene::Preview { .. }
         )
+    }
+
+    fn open_hud_editor(&mut self) {
+        let back = std::mem::replace(&mut self.scene, Scene::Select);
+        self.hud_edit = Some(hud_edit::Editor::new(&self.cfg));
+        self.scene = Scene::HudEdit {
+            back: Box::new(back),
+        };
+    }
+
+    fn close_hud_editor(&mut self) {
+        self.cfg.save();
+        self.hud_edit = None;
+        self.hud_sample = None;
+        if let Scene::HudEdit { back } = std::mem::replace(&mut self.scene, Scene::Select) {
+            self.scene = *back;
+        }
+    }
+
+    fn hud_outcome(&mut self, outcome: hud_edit::Outcome) {
+        match outcome {
+            hud_edit::Outcome::Nothing => {}
+            hud_edit::Outcome::Toast(text) => self.toast(text),
+            hud_edit::Outcome::Close => self.close_hud_editor(),
+        }
+    }
+
+    fn hud_key(&mut self, code: KeyCode, text: Option<&str>) {
+        let mods = (self.modifiers_shift, self.modifiers_ctrl);
+        if let Some(ed) = &mut self.hud_edit {
+            let outcome = ed.key(code, text, mods, &mut self.cfg);
+            self.hud_outcome(outcome);
+        }
     }
 
     fn open_layout_editor(&mut self) {
@@ -6917,8 +6978,16 @@ impl State {
                 return;
             }
         }
+        let (vx, vy) = self.mouse_virtual();
+        if let Some(ed) = &mut self.hud_edit
+            && matches!(self.scene, Scene::HudEdit { .. })
+            && ed.wheel(vx, vy, notches, &mut self.cfg)
+        {
+            return;
+        }
         if self.area_editable()
-            && (self.cfg.wheel_resizes_playfield || matches!(self.scene, Scene::LayoutEdit { .. }))
+            && (self.cfg.wheel_resizes_playfield
+                || matches!(self.scene, Scene::LayoutEdit { .. } | Scene::HudEdit { .. }))
         {
             self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
             self.cfg.save();
@@ -7209,6 +7278,10 @@ impl State {
         {
             self.hover = None;
             return CursorIcon::Pointer;
+        }
+        if let Some(ed) = self.hud_edit.as_mut().filter(|ed| ed.dragging()) {
+            ed.drag_to(vx, vy, self.modifiers_shift, &mut self.cfg);
+            return CursorIcon::Move;
         }
         if let Some((grip, (px, py), from)) = self.grip {
             let raw = layout::drag(from, grip, ((x - px) / sw) as f32, ((y - py) / sh) as f32);
@@ -7682,8 +7755,18 @@ impl State {
             if self.settings_ui.editing.take().is_some() {
                 return;
             }
+            if let Some(ed) = self.hud_edit.as_mut().filter(|ed| ed.naming()) {
+                ed.finish_naming(&mut self.cfg);
+            }
             if let Some(hit) = hit {
                 self.click(hit, window);
+                return;
+            }
+            let (vx, vy) = self.mouse_virtual();
+            if let Some(ed) = &mut self.hud_edit
+                && matches!(self.scene, Scene::HudEdit { .. })
+                && ed.press(vx, vy, &self.cfg)
+            {
                 return;
             }
             if self.area_editable() {
@@ -7694,6 +7777,11 @@ impl State {
                     self.grip = Some((g, self.mouse, self.cfg.playfield_area));
                 }
             }
+        } else if self
+            .hud_edit
+            .as_mut()
+            .is_some_and(|ed| ed.release(&self.cfg))
+        {
         } else if self.grip.take().is_some() {
             self.guides.clear();
             self.cfg.save();
@@ -8771,6 +8859,7 @@ impl State {
             Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => "calibration",
             Scene::LayoutEdit { .. } => "layout editor",
+            Scene::HudEdit { .. } => "interface editor",
             Scene::Preview { .. } => "map preview",
             Scene::Download => "downloads",
             Scene::MpMenu => "multiplayer menu",
@@ -9495,6 +9584,7 @@ impl State {
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.random_setup.is_some()
+            || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
             || self
                 .universe_setup
                 .as_ref()
@@ -9522,6 +9612,7 @@ impl State {
                 .as_ref()
                 .is_some_and(|d| d.editing.is_some())
             || self.random_setup.is_some()
+            || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
             || self
                 .universe_setup
                 .as_ref()
@@ -11896,6 +11987,10 @@ impl State {
             self.layout_key(code);
             return;
         }
+        if matches!(self.scene, Scene::HudEdit { .. }) {
+            self.hud_key(code, text);
+            return;
+        }
         if matches!(self.scene, Scene::Preview { .. }) {
             self.preview_key(code, repeat, window);
             return;
@@ -12180,6 +12275,7 @@ impl State {
             Scene::Calibrate { .. }
             | Scene::CalibrateDone { .. }
             | Scene::LayoutEdit { .. }
+            | Scene::HudEdit { .. }
             | Scene::Preview { .. }
             | Scene::Download => {}
             Scene::MpMenu
@@ -12290,11 +12386,13 @@ impl State {
         // until the frame is on screen.
         let visual_offset = self.cfg.visual_offset_ms + self.vsync_lead() + self.pace_shift_ms;
         // The interface toggle: what it hides, while it's off.
+        // The parts switched off in the interface editor are never there.
         let hidden = if self.cfg.interface_hidden {
             self.cfg.interface_hides
         } else {
             hud::Parts::NONE
-        };
+        }
+        .with(self.cfg.hud.off);
         let dt = now.duration_since(self.stats.last).as_secs_f64() * 1000.0;
         self.stats.last = now;
         self.stats.frames += 1;
@@ -12408,7 +12506,8 @@ impl State {
                 }
                 Scene::Calibrate { .. }
                 | Scene::CalibrateDone { .. }
-                | Scene::LayoutEdit { .. } => 0.0,
+                | Scene::LayoutEdit { .. }
+                | Scene::HudEdit { .. } => 0.0,
                 _ => 0.35,
             };
             self.bg_brightness *= 1.0 - idle::DARKEN * self.idle.amount();
@@ -12974,6 +13073,8 @@ impl State {
                     .map(keys::Chord::name);
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.hidden = hidden;
+                game.hud = self.cfg.hud;
+                game.hud_area = self.cfg.playfield_area;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
                 draw_game_area(
@@ -12992,7 +13093,10 @@ impl State {
                     && game.paused.is_none()
                     && !hidden.has(hud::Part::Spectators)
                 {
-                    social::draw_spectators(canvas, &self.social.spectators());
+                    let names = self.social.spectators();
+                    game.placed_from(canvas, hud::Part::Spectators, [12.0, 276.0], |c| {
+                        social::draw_spectators(c, &names);
+                    });
                 }
                 if game.replay.is_some() && game.paused.is_none() {
                     self.replay_bar =
@@ -13395,6 +13499,8 @@ impl State {
                     .map(keys::Chord::name);
                 game.kiai_effects = self.cfg.kiai_effects;
                 game.hidden = hidden;
+                game.hud = self.cfg.hud;
+                game.hud_area = self.cfg.playfield_area;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
                 if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
@@ -13422,7 +13528,9 @@ impl State {
                     .as_ref()
                     .filter(|_| self.cfg.mp_scoreboard && !hidden.has(hud::Part::Scoreboard))
                 {
-                    multiplayer::draw_scoreboard(canvas, s, &live);
+                    game.placed_from(canvas, hud::Part::Scoreboard, [12.0, 276.0], |c| {
+                        multiplayer::draw_scoreboard(c, s, &live);
+                    });
                 }
                 if let Some(s) = &mut self.mp {
                     if s.last_live.elapsed() >= Duration::from_millis(100) {
@@ -13543,6 +13651,8 @@ impl State {
                     g.mute_hits = v.focus.unwrap_or(0) != k;
                     g.kiai_effects = self.cfg.kiai_effects;
                     g.hidden = hidden;
+                    g.hud = self.cfg.hud;
+                    g.hud_area = self.cfg.playfield_area;
                     g.update(now, self.audio.as_ref(), self.play_offset);
                 }
                 // Defense: the team's lives and gold, as the room has them.
@@ -13597,6 +13707,10 @@ impl State {
                     Some(g) => {
                         g.kiai_effects = self.cfg.kiai_effects;
                         g.hidden = hidden;
+                        g.hud = self.cfg.hud;
+                        g.hud_area = self.cfg.playfield_area;
+                        g.hud = self.cfg.hud;
+                        g.hud_area = self.cfg.playfield_area;
                         g.update(now, self.audio.as_ref(), self.play_offset);
                         draw_game_area(
                             canvas,
@@ -13663,6 +13777,8 @@ impl State {
                 let progress = self.export.as_ref().map(|ex| ex.progress());
                 if let Some(g) = &mut ed.game {
                     g.kiai_effects = self.cfg.kiai_effects;
+                    g.hud = self.cfg.hud;
+                    g.hidden = self.cfg.hud.off;
                 }
                 ed.draw(
                     canvas,
@@ -13767,7 +13883,13 @@ impl State {
                     false,
                     game::draw_preview,
                 );
-                game::draw_preview_hud(canvas);
+                let sample = self
+                    .hud_sample
+                    .get_or_insert_with(|| Box::new(game::Game::hud_sample()));
+                sample.hud = self.cfg.hud;
+                sample.hud_area = self.cfg.playfield_area;
+                sample.hidden = self.cfg.hud.off;
+                sample.draw_parts(canvas);
                 let area = self.cfg.playfield_area;
                 layout::draw_frame(canvas, area, true);
                 let w = canvas.width;
@@ -13797,6 +13919,30 @@ impl State {
                     rgba(0x9a9ab0, 1.0),
                     &Canvas::fit(size, room, help),
                 );
+            }
+            Scene::HudEdit { .. } => {
+                draw_game_area(
+                    canvas,
+                    &self.cfg,
+                    &mut self.frame_clip,
+                    &self.grip,
+                    &self.hover,
+                    false,
+                    game::draw_preview,
+                );
+                let sample = self
+                    .hud_sample
+                    .get_or_insert_with(|| Box::new(game::Game::hud_sample()));
+                sample.hud = self.cfg.hud;
+                sample.hud_area = self.cfg.playfield_area;
+                sample.hidden = self.cfg.hud.off;
+                sample.draw_stand_ins(canvas);
+                sample.draw_parts(canvas);
+                layout::draw_frame(canvas, self.cfg.playfield_area, self.grip.is_some());
+                if let Some(ed) = &mut self.hud_edit {
+                    ed.draw(canvas, &self.cfg, sample);
+                    layout::draw_guides(canvas, &ed.guides);
+                }
             }
         }
         // A screen just opened comes up out of black, its background too.
@@ -14942,6 +15088,19 @@ impl State {
     }
 
     fn click(&mut self, hit: render::Hit, window: Option<&Window>) {
+        if let Some(ed) = &mut self.hud_edit {
+            match hit {
+                render::Hit::HudPanel => return,
+                render::Hit::HudRow(i) => return ed.select(i),
+                render::Hit::HudToggle(i) => return ed.toggle_part(i, &mut self.cfg),
+                render::Hit::HudPreset(i) => return ed.load_preset(i, &mut self.cfg),
+                render::Hit::HudButton(b) => {
+                    let outcome = ed.press_button(b, &mut self.cfg);
+                    return self.hud_outcome(outcome);
+                }
+                _ => {}
+            }
+        }
         use render::Hit;
         // The exit question takes only its own buttons.
         if self.quit_asked && !matches!(hit, Hit::Key(KeyCode::KeyY | KeyCode::KeyN)) {
@@ -14957,6 +15116,11 @@ impl State {
             s.chat_input = None;
         }
         match hit {
+            render::Hit::HudPanel
+            | render::Hit::HudRow(_)
+            | render::Hit::HudToggle(_)
+            | render::Hit::HudPreset(_)
+            | render::Hit::HudButton(_) => {}
             Hit::LobbyChat => self.focus_lobby_chat(),
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
@@ -16641,6 +16805,8 @@ impl State {
             letterbox: None,
             frame_clip: None,
             guides: Vec::new(),
+            hud_edit: None,
+            hud_sample: None,
             readout_rect: None,
             replay_bar: None,
             replay_scrub: None,

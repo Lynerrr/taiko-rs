@@ -89,6 +89,9 @@ fn words(item: Item) -> &'static str {
         Item::MenuNotesDim => "lane notes faint dark menu дорожка ноты бледнее меню",
         Item::MenuNotes => "background multiverse route фон мультиверс маршрут",
         Item::Interface | Item::InterfaceHides | Item::InterfaceKey => "hud ui hide скрыть худ",
+        Item::InterfaceEditor => {
+            "hud ui layout skin editor move ur unstable rate counter 300 100 miss редактор счётчик"
+        }
         Item::AutoplayStyle | Item::AutoplayBinding | Item::AutoplayLeftHanded => {
             "auto bot кдд авто бот"
         }
