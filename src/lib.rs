@@ -10254,6 +10254,7 @@ impl State {
             || self.mod_select.is_some()
             || self.random_setup.is_some()
             || self.universe_setup.is_some()
+            || self.select.menu.is_some()
             || matches!(
                 self.scene,
                 Scene::Settings { .. }
@@ -14356,7 +14357,11 @@ impl State {
             };
             // The screen behind darkens, but not a play being watched.
             let dim = !self.in_song();
-            let tab = self.social_tab_middle().filter(|_| logged_in);
+            let animate = self.cfg.animations;
+            let tab = self
+                .social_tab_middle()
+                .filter(|_| logged_in)
+                .map(|to| self.social.glide_tab(to, canvas.dt_ms, animate));
             if self.social.open {
                 social::draw(
                     canvas,

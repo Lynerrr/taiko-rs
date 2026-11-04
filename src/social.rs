@@ -143,6 +143,8 @@ pub struct Social {
     pub global_unread: usize,
     pub open: bool,
     pub opened_at: Option<Instant>,
+    /// Where the tab is now (see `glide_tab`).
+    tab_y: Option<f32>,
     /// When it last closed (it slides away).
     pub closed_at: Option<Instant>,
     pub tab: Tab,
@@ -261,16 +263,31 @@ pub const SLIDE_MS: f32 = 240.0;
 /// How far the panel and the tab run on past the edge that cuts them off, to hide their corners.
 const EDGE_BLEED: f32 = 12.0;
 /// The tab on the right edge of the screen that pulls the overlay out, and rides on it.
-const TAB_W: f32 = 22.0;
+const TAB_W: f32 = 17.0;
 pub const TAB_MIDDLE: f32 = 240.0;
 /// The main menu's panel reaches the sides at that height: under it.
-pub const TAB_MENU_MIDDLE: f32 = 360.0;
+pub const TAB_MENU_MIDDLE: f32 = 352.0;
 const TAB_TEXT: f32 = 6.5;
-/// A row of the tab's text, and the room at its ends.
-const TAB_ROW: f32 = 8.0;
+/// The tab's key's row, and the room at its ends.
+const TAB_KEY_ROW: f32 = 14.0;
 const TAB_PAD: f32 = 6.0;
+/// How long (ms) the tab takes to get most of the way to a new height.
+const TAB_GLIDE_MS: f32 = 90.0;
 
 impl Social {
+    /// The tab's height `dt_ms` on, gliding to `middle` when another screen wants it elsewhere.
+    pub fn glide_tab(&mut self, middle: f32, dt_ms: f32, animate: bool) -> f32 {
+        let y = match self.tab_y {
+            Some(y) if animate => {
+                let y = y + (middle - y) * (1.0 - (-dt_ms / TAB_GLIDE_MS).exp());
+                if (y - middle).abs() < 0.25 { middle } else { y }
+            }
+            _ => middle,
+        };
+        self.tab_y = Some(y);
+        y
+    }
+
     /// Closes the overlay; it slides away (`closing`).
     pub fn close(&mut self) {
         if self.open {
@@ -2273,54 +2290,27 @@ pub fn draw_chip(c: &mut Canvas, s: &Social, middle: f32, lobby_unread: usize) {
     draw_tab(c, s, c.width, middle, lobby_unread);
 }
 
-/// One row of the tab, top to bottom.
-enum TabRow {
-    Dot,
-    Text(String),
-    Gap,
-}
-
-impl TabRow {
-    fn height(&self) -> f32 {
-        match self {
-            TabRow::Dot => 9.0,
-            TabRow::Text(_) => TAB_ROW,
-            TabRow::Gap => 6.0,
-        }
-    }
-}
-
-/// `word`, a letter to a row.
-fn tab_letters(rows: &mut Vec<TabRow>, word: &str) {
-    rows.extend(word.chars().map(|l| TabRow::Text(l.to_string())));
-}
-
-/// What the tab says: who's online, friends and its key. Letters stack; a number and the key
-/// stay whole, each on a row of its own.
-fn tab_rows(s: &Social) -> Vec<TabRow> {
-    let mut rows = Vec::new();
-    // Everyone online first, after a green dot (once the server says).
-    if s.players.is_some() && s.connected {
-        rows.push(TabRow::Dot);
-        rows.push(TabRow::Text(s.online_total.to_string()));
-        tab_letters(&mut rows, "online");
-        rows.push(TabRow::Gap);
-    }
-    tab_letters(&mut rows, "friends");
-    if s.connected {
-        rows.push(TabRow::Text(s.online_count().to_string()));
-    }
-    rows.push(TabRow::Gap);
-    rows.push(TabRow::Text("F9".into()));
-    rows
-}
-
-/// The tab with its right side at `right` and its middle at `middle`, with unread messages and requests on it. It's drawn
-/// past `right`, for the panel or the screen's edge to cut it off.
+/// The tab with its right side at `right` and its middle at `middle`, with unread messages and
+/// requests on it: its key upright at the top, and who's online reading up it below that. It's
+/// drawn past `right`, for the panel or the screen's edge to cut it off.
 fn draw_tab(c: &mut Canvas, s: &Social, right: f32, middle: f32, lobby_unread: usize) {
     let unread = s.unread_total() + lobby_unread + s.requests.len();
-    let rows = tab_rows(s);
-    let len = rows.iter().map(TabRow::height).sum::<f32>() + 2.0 * TAB_PAD;
+    let label = if s.connected {
+        format!("friends {}", s.online_count())
+    } else {
+        "friends".into()
+    };
+    // Everyone online first, after a green dot (once the server says).
+    let online = s
+        .players
+        .as_ref()
+        .filter(|_| s.connected)
+        .map(|_| format!("{} online   ", s.online_total));
+    let online_w = online
+        .as_deref()
+        .map_or(0.0, |t| Canvas::text_width(TAB_TEXT, t) + 9.0);
+    let reading = Canvas::text_width(TAB_TEXT, &label) + online_w;
+    let len = TAB_PAD + TAB_KEY_ROW + reading + TAB_PAD;
     let (x, y) = (right - TAB_W, middle - len / 2.0);
     let hover = c.hovered(x, y, TAB_W, len);
     c.round_rect(
@@ -2332,27 +2322,19 @@ fn draw_tab(c: &mut Canvas, s: &Social, right: f32, middle: f32, lobby_unread: u
         1.0,
     );
     let cx = x + TAB_W / 2.0;
-    let mut ry = y + TAB_PAD;
-    for row in &rows {
-        match row {
-            TabRow::Dot => c.circle(
-                cx,
-                ry + 3.5,
-                2.5,
-                rgba(GREEN, 1.0),
-                rgba(0x000000, 0.0),
-                0.0,
-            ),
-            TabRow::Text(text) => {
-                // A long count comes out smaller rather than past the tab's sides.
-                let size = Canvas::fit_size(TAB_TEXT, 4.0, TAB_W - 2.0, text);
-                let top = ry + (TAB_ROW - size) / 2.0;
-                c.text_centered(cx, top, size, rgba(0xc8c8d8, 1.0), text);
-            }
-            TabRow::Gap => {}
-        }
-        ry += row.height();
+    let colour = rgba(0xc8c8d8, 1.0);
+    c.text_centered(cx, y + TAB_PAD, TAB_TEXT, colour, "F9");
+    // Laid out along a line from (0, 0), then stood up to read from the bottom.
+    let start = c.shapes.len();
+    let mut along = 0.0;
+    if let Some(online) = &online {
+        c.circle(2.5, 0.0, 2.5, rgba(GREEN, 1.0), rgba(0x000000, 0.0), 0.0);
+        c.text(9.0, -TAB_TEXT / 2.0, TAB_TEXT, colour, online);
+        along = online_w;
     }
+    c.text(along, -TAB_TEXT / 2.0, TAB_TEXT, colour, &label);
+    let dest = [cx, y + len - TAB_PAD];
+    c.rotate_since(start, [0.0, 0.0], -std::f32::consts::FRAC_PI_2, 1.0, dest);
     c.hit(x, y, TAB_W, len, Hit::SocialToggle);
     badge(c, x + 3.0, y + 1.0, unread, 1.0);
 }
@@ -2378,25 +2360,29 @@ mod tests {
     }
 
     #[test]
+    fn the_tab_glides_to_a_new_height_and_doesnt_overshoot() {
+        let mut s = Social::default();
+        assert_eq!(s.glide_tab(TAB_MENU_MIDDLE, 16.0, true), TAB_MENU_MIDDLE);
+        let mut y = TAB_MENU_MIDDLE;
+        let step = s.glide_tab(TAB_MIDDLE, 16.0, true);
+        assert!(step < y && step > TAB_MIDDLE, "on its way: {step}");
+        for _ in 0..200 {
+            let next = s.glide_tab(TAB_MIDDLE, 16.0, true);
+            assert!(next <= y && next >= TAB_MIDDLE);
+            y = next;
+        }
+        assert_eq!(y, TAB_MIDDLE);
+        // Without animations, it's just there.
+        assert_eq!(s.glide_tab(TAB_MENU_MIDDLE, 16.0, false), TAB_MENU_MIDDLE);
+    }
+
+    #[test]
     fn the_tab_stands_on_the_edge_and_rides_on_the_open_panel() {
         crate::render::set_animations(false);
         let mut s = Social::default();
         let [x, _, w, h] = tab_rect(&s, false);
         assert_eq!(x + w, 853.0, "against the edge of the screen");
         assert!(h > w, "taller than it's wide");
-        s.connected = true;
-        s.players = Some(Vec::new());
-        s.online_total = 123_456;
-        let rows = tab_rows(&s);
-        let row = |text: &str| {
-            rows.iter()
-                .any(|r| matches!(r, TabRow::Text(t) if t == text))
-        };
-        assert!(row("F9"), "the key stays on one row");
-        assert!(row("123456"), "so does a count");
-        assert!(row("o") && !row("online"), "words stack a letter to a row");
-        let size = Canvas::fit_size(TAB_TEXT, 4.0, TAB_W - 2.0, "123456");
-        assert!(Canvas::text_width(size, "123456") <= TAB_W);
         s.open = true;
         let [x, _, w, _] = tab_rect(&s, true);
         assert_eq!(x + w, panel_rect(853.0)[0], "on the panel's left side");

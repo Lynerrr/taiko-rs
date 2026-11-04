@@ -129,12 +129,24 @@ fn check(s: &mut State, what: &str, out: &mut Vec<String>) {
         // The friends tab shows once logged in, on every screen: logged in, nothing's under it.
         let account = s.mp_menu.account.clone();
         s.mp_menu.account = account.clone().or(Some("Player".into()));
+        // At its longest: connected, with everyone's count on it.
+        let (connected, players, total) = (
+            s.social.connected,
+            s.social.players.take(),
+            s.social.online_total,
+        );
+        s.social.connected = true;
+        s.social.players = Some(Vec::new());
+        s.social.online_total = 12_345;
         let mut c = Canvas {
             audit: true,
             ..Default::default()
         };
         s.build_frame(&mut c, Instant::now() + Duration::from_millis(32), w);
         s.mp_menu.account = account;
+        s.social.connected = connected;
+        s.social.players = players;
+        s.social.online_total = total;
         if let Some(problems) = debug::edge_tab_problems(&c, &s.hits) {
             TAB_SEEN.with(|n| n.set(n.get() + 1));
             for p in problems {
