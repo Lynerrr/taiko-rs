@@ -3,7 +3,7 @@
 //! "song frame N starts playing at instant T" and the game interpolates from that.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -943,6 +943,85 @@ mod tests {
         assert_eq!(frames(b"SIT4.50.0", [0, 0, 0]), whole);
     }
 
+    fn pieces_of(samples: &[f32]) -> Pieces {
+        let mut p = Pieces::default();
+        for [l, r] in samples.as_chunks::<2>().0 {
+            p.push(*l, *r);
+        }
+        p
+    }
+
+    /// Past a piece's end, where the reading crosses from one to the next.
+    fn long_samples() -> Vec<f32> {
+        (0..Pieces::SIZE * 2 + 5000)
+            .map(|i| ((i as f32) * 0.37).sin())
+            .collect()
+    }
+
+    #[test]
+    fn a_song_in_pieces_comes_out_as_it_went_in() {
+        let samples = long_samples();
+        assert_eq!(pieces_of(&samples).into_samples(), samples);
+        for keep in [samples.len() - 2, Pieces::SIZE, Pieces::SIZE + 2, 10, 0] {
+            let mut p = pieces_of(&samples);
+            p.truncate(keep);
+            assert_eq!(p.len, keep);
+            assert_eq!(p.into_samples(), samples[..keep]);
+        }
+    }
+
+    #[test]
+    fn resampling_in_pieces_is_resampling() {
+        let samples = long_samples();
+        for (ratio, phase) in [
+            (44100.0 / 48000.0, 0.0),
+            (48000.0 / 44100.0, 0.25),
+            (0.5, 0.0),
+        ] {
+            assert!(
+                pieces_of(&samples).resampled(ratio, phase)
+                    == resample_from(&samples, ratio, phase)
+            );
+        }
+    }
+
+    #[test]
+    fn stretching_stops_when_its_called_off() {
+        let track = metronome(48000, 500.0, 8, 0.0);
+        let called_off = Arc::new(AtomicBool::new(true));
+        let on_a_thread = {
+            let called_off = called_off.clone();
+            std::thread::spawn(move || {
+                while_wanted(called_off);
+                (
+                    change_rate(track, 48000, 1.25, true).samples.len(),
+                    prepare_alone().is_none(),
+                )
+            })
+        };
+        let (samples, turned_away) = on_a_thread.join().unwrap();
+        assert_eq!(samples, 0, "nothing worked out for nobody");
+        assert!(turned_away);
+        called_off.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn a_track_nobody_else_has_isnt_copied() {
+        let track = Arc::new(Track {
+            samples: vec![1.0; 8],
+            rate: 1.0,
+        });
+        let at = track.samples.as_ptr();
+        assert_eq!(owned(track).samples.as_ptr(), at);
+        let shared = Arc::new(Track {
+            samples: vec![1.0; 8],
+            rate: 1.0,
+        });
+        let copy = owned(shared.clone());
+        assert_ne!(copy.samples.as_ptr(), shared.samples.as_ptr());
+        assert_eq!(copy.samples, shared.samples);
+    }
+
     /// Real files (paths in TAIKO_TEST_AUDIO, one per line in that file): a part decoded after a
     /// seek must line up with the full decode. `cargo test -- --ignored --nocapture part_of_real`.
     #[test]
@@ -1325,6 +1404,118 @@ pub fn metronome(rate: u32, beat_ms: f64, beats: u32, tail_ms: f64) -> Track {
     Track { samples, rate: 1.0 }
 }
 
+/// What a job gives back when it's called off.
+const CANCELLED: &str = "cancelled";
+
+thread_local! {
+    /// Set on a thread preparing music nobody may want by the time it's done (`while_wanted`).
+    static CALLED_OFF: std::cell::RefCell<Option<Arc<AtomicBool>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Decoding and stretching on this thread stop when `flag` is set: a long song takes gigabytes
+/// and a good while, and a player scrolling past it shouldn't pay for that.
+pub fn while_wanted(flag: Arc<AtomicBool>) {
+    CALLED_OFF.with(|c| *c.borrow_mut() = Some(flag));
+}
+
+fn called_off() -> bool {
+    CALLED_OFF.with(|c| {
+        c.borrow()
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::Relaxed))
+    })
+}
+
+/// Only one song's music is prepared for a preview at a time: each can take gigabytes.
+static PREPARING: Mutex<()> = Mutex::new(());
+
+/// Holds the others back while a song's music is prepared. None: this job was called off waiting.
+pub fn prepare_alone() -> Option<std::sync::MutexGuard<'static, ()>> {
+    let turn = PREPARING.lock().unwrap_or_else(|e| e.into_inner());
+    (!called_off()).then_some(turn)
+}
+
+/// A track's samples to change: its own if nobody else has it, else a copy. A long song is
+/// gigabytes.
+pub fn owned(track: Arc<Track>) -> Track {
+    Arc::try_unwrap(track).unwrap_or_else(|t| Track {
+        samples: t.samples.clone(),
+        rate: t.rate,
+    })
+}
+
+/// Samples as they're decoded, in pieces: the pieces can go one by one once they've been read,
+/// where a single buffer would stay whole, next to its resampled copy, until the end. A long song
+/// is gigabytes, and growing one buffer would also take twice its size at the worst moment.
+#[derive(Default)]
+struct Pieces {
+    pieces: Vec<Vec<f32>>,
+    len: usize,
+}
+
+impl Pieces {
+    /// Samples to a piece: a whole number of frames, and a power of two to find them by.
+    const SHIFT: usize = 22;
+    const SIZE: usize = 1 << Self::SHIFT;
+
+    fn push(&mut self, l: f32, r: f32) {
+        if self.pieces.last().is_none_or(|p| p.len() >= Self::SIZE) {
+            self.pieces.push(Vec::with_capacity(Self::SIZE));
+        }
+        if let Some(piece) = self.pieces.last_mut() {
+            piece.push(l);
+            piece.push(r);
+        }
+        self.len += 2;
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.len = self.len.min(len);
+        let keep = self.len.div_ceil(Self::SIZE);
+        self.pieces.truncate(keep);
+        if let Some(last) = self.pieces.last_mut() {
+            last.truncate(self.len - (keep - 1) * Self::SIZE);
+        }
+    }
+
+    /// All the samples in one buffer, each piece going as it's moved.
+    fn into_samples(self) -> Vec<f32> {
+        let mut out = Vec::with_capacity(self.len);
+        for piece in self.pieces {
+            out.extend_from_slice(&piece);
+        }
+        out
+    }
+
+    /// `resample_from`, each piece going once it's behind the reading position.
+    fn resampled(mut self, ratio: f64, phase: f64) -> Vec<f32> {
+        let frames_in = self.len / 2;
+        let frames_out = ((frames_in as f64 - phase) / ratio).floor().max(0.0) as usize;
+        let mut out = Vec::with_capacity(frames_out * 2);
+        let mut gone = 0;
+        for n in 0..frames_out {
+            let pos = phase + n as f64 * ratio;
+            let i = pos.floor() as isize;
+            let t = (pos - i as f64) as f32;
+            // Frames are read from i - 1 on, from here on.
+            let reading = ((i - 1).max(0) as usize * 2) >> Self::SHIFT;
+            while gone < reading {
+                self.pieces[gone] = Vec::new();
+                gone += 1;
+            }
+            let pieces = &self.pieces;
+            let at = |i: isize, c: usize| -> f32 {
+                let at = i.clamp(0, frames_in as isize - 1) as usize * 2 + c;
+                pieces[at >> Self::SHIFT][at & (Self::SIZE - 1)]
+            };
+            for c in 0..2 {
+                out.push(cubic(t, at(i - 1, c), at(i, c), at(i + 1, c), at(i + 2, c)));
+            }
+        }
+        out
+    }
+}
+
 /// Decodes a whole audio file to interleaved stereo at `rate`.
 pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
     decode_part(path, rate, None).map(|(track, _)| track)
@@ -1356,6 +1547,10 @@ pub fn decode_shared(path: &Path, rate: u32) -> Result<Arc<Track>, String> {
             .unwrap()
             .retain(|(_, _, s)| !Arc::ptr_eq(s, &slot));
     }
+    // Whoever it was that was decoding it no longer wanted it. We do.
+    if !mine && result.as_ref().is_err_and(|e| e == CANCELLED) {
+        return decode_shared(path, rate);
+    }
     result
 }
 
@@ -1364,15 +1559,8 @@ pub fn with_rate(track: Arc<Track>, sample_rate: u32, rate: f64, keep_pitch: boo
     if (rate - 1.0).abs() < 1e-6 {
         return track;
     }
-    Arc::new(change_rate(
-        Track {
-            samples: track.samples.clone(),
-            rate: track.rate,
-        },
-        sample_rate,
-        rate,
-        keep_pitch,
-    ))
+    // Read where it is: a copy of a long song is gigabytes.
+    Arc::new(rate_changed(&track, sample_rate, rate, keep_pitch))
 }
 
 /// Decodes `len_ms` of audio starting at (or just before) `from_ms`, or the whole file with
@@ -1454,13 +1642,16 @@ fn decode_source(
     let mut src_rate = 0u32;
     // Source frame of the first decoded sample (0 for a full decode).
     let mut src_start: Option<i64> = part.is_none().then_some(0);
-    let mut stereo: Vec<f32> = Vec::new();
+    let mut stereo = Pieces::default();
     let mut packet_buf: Vec<f32> = Vec::new();
     // Frames to cut off the end of the song. Only the end: an OGG page whose position is a little
     // off has the reader cut the packet it ends on, mid-song. That's music, BASS plays it, and
     // everything after it would come that much early.
     let mut tail = 0;
     loop {
+        if called_off() {
+            return Err(CANCELLED.into());
+        }
         let mut packet = match format.next_packet() {
             Ok(Some(p)) => p,
             Ok(None) => break,
@@ -1507,23 +1698,22 @@ fn decode_source(
             } else {
                 (frame[0], frame[1])
             };
-            stereo.push(l);
-            stereo.push(r);
+            stereo.push(l, r);
         }
         if let Some((_, len_ms)) = part
-            && stereo.len() as f64 / 2.0 >= len_ms / 1000.0 * src_rate as f64
+            && stereo.len as f64 / 2.0 >= len_ms / 1000.0 * src_rate as f64
         {
             break;
         }
     }
-    stereo.truncate(stereo.len().saturating_sub(tail * 2));
-    let Some(src_start) = src_start.filter(|_| !stereo.is_empty() && src_rate != 0) else {
+    stereo.truncate(stereo.len.saturating_sub(tail * 2));
+    let Some(src_start) = src_start.filter(|_| stereo.len > 0 && src_rate != 0) else {
         return Err("audio file decoded to nothing".into());
     };
     if src_rate == rate {
         return Ok((
             Track {
-                samples: stereo,
+                samples: stereo.into_samples(),
                 rate: 1.0,
             },
             src_start,
@@ -1532,7 +1722,7 @@ fn decode_source(
     // Resample on the same grid as a full decode: output frame n reads source position n * ratio.
     let ratio = src_rate as f64 / rate as f64;
     let first = (src_start as f64 / ratio).ceil() as i64;
-    let samples = resample_from(&stereo, ratio, first as f64 * ratio - src_start as f64);
+    let samples = stereo.resampled(ratio, first as f64 * ratio - src_start as f64);
     Ok((Track { samples, rate: 1.0 }, first))
 }
 
@@ -1543,6 +1733,10 @@ pub fn change_rate(track: Track, sample_rate: u32, rate: f64, keep_pitch: bool) 
     if (rate - 1.0).abs() < 1e-6 || track.samples.is_empty() {
         return track;
     }
+    rate_changed(&track, sample_rate, rate, keep_pitch)
+}
+
+fn rate_changed(track: &Track, sample_rate: u32, rate: f64, keep_pitch: bool) -> Track {
     let samples = if keep_pitch {
         let frames = track.samples.len() / 2;
         time_stretch(
@@ -1630,33 +1824,38 @@ fn time_stretch(
     const DEC: usize = 4;
     // How much of each grain's error from `nominal` the search leans against (see `lean`).
     const LEAN: f64 = 0.15;
-    let mono: Vec<f32> = (0..frames)
-        .map(|i| 0.5 * (input[2 * i] + input[2 * i + 1]))
+    // (Nothing here is a full copy of the song: for a long one that's gigabytes each.)
+    let mono = |i: usize| 0.5 * (input[2 * i] + input[2 * i + 1]);
+    let coarse: Vec<f32> = input
+        .chunks(2 * DEC)
+        .map(|c| {
+            let n = c.len() / 2;
+            (0..n).map(|i| 0.5 * (c[2 * i] + c[2 * i + 1])).sum::<f32>() / n as f32
+        })
         .collect();
-    let coarse: Vec<f32> = mono
-        .chunks(DEC)
-        .map(|c| c.iter().sum::<f32>() / c.len() as f32)
-        .collect();
-    // Running energy of the coarse copy, to judge a candidate by its likeness and not its loudness.
-    let energy: Vec<f64> = std::iter::once(0.0)
-        .chain(coarse.iter().scan(0.0f64, |sum, v| {
-            *sum += f64::from(*v) * f64::from(*v);
-            Some(*sum)
-        }))
-        .collect();
-    let corr = |sig: &[f32], a: usize, b: usize, len: usize, step: usize| -> f32 {
+    // How alike two stretches of the coarse copy are, and the second one's energy.
+    let corr = |a: usize, b: usize, len: usize| -> (f32, f64) {
+        let (mut s, mut e) = (0.0f32, 0.0f64);
+        for i in 0..len {
+            let v = coarse[b + i];
+            s += coarse[a + i] * v;
+            e += f64::from(v) * f64::from(v);
+        }
+        (s, e)
+    };
+    // The same on the song itself, every other frame.
+    let fine_corr = |a: usize, b: usize, len: usize| -> f32 {
         let mut s = 0.0f32;
         let mut i = 0;
         while i < len {
-            s += sig[a + i] * sig[b + i];
-            i += step;
+            s += mono(a + i) * mono(b + i);
+            i += 2;
         }
         s
     };
 
     let out_frames = out_len + win;
     let mut out = vec![0.0f32; out_frames * 2];
-    let mut norm = vec![0.0f32; out_frames];
     // Grains are placed so their centres (where the Hann window weighs most) land exactly where
     // `in_of` says; anchoring their starts instead would play the music ~win/2 * (rate - 1)
     // late (about 7 ms at 1.5x), off its notes.
@@ -1672,6 +1871,9 @@ fn time_stretch(
     let mut lean = 0.0f64;
     let mut k = 0usize;
     loop {
+        if k.is_multiple_of(256) && called_off() {
+            return Vec::new();
+        }
         let nominal = (in_of((k * hop_out) as f64 + half) - half).max(0.0) as usize;
         let out_pos = k * hop_out;
         if nominal + win + search >= frames || out_pos + win > out_frames {
@@ -1691,12 +1893,12 @@ fn time_stretch(
                 let (mut best, mut best_c) = (nominal, f32::MIN);
                 let len = ov / DEC;
                 let at = target / DEC;
-                let loud = |i: usize| (energy[i + len] - energy[i]).max(1e-12);
+                let loud_at = corr(at, at, len).1.max(1e-12);
                 for cand in around(centre / DEC, lo / DEC, hi / DEC) {
                     if (target + ov) / DEC < coarse.len() && (cand * DEC + ov) / DEC < coarse.len()
                     {
-                        let like =
-                            corr(&coarse, at, cand, len, 1) / (loud(at) * loud(cand)).sqrt() as f32;
+                        let (dot, loud) = corr(at, cand, len);
+                        let like = dot / (loud_at * loud.max(1e-12)).sqrt() as f32;
                         if like > best_c {
                             best_c = like;
                             best = cand * DEC;
@@ -1710,7 +1912,7 @@ fn time_stretch(
                     fine_lo,
                     (best + DEC).min(frames - win - 1).max(fine_lo),
                 ) {
-                    let v = corr(&mono, target.min(frames - ov - 1), c, ov, 2);
+                    let v = fine_corr(target.min(frames - ov - 1), c, ov);
                     if v > fine_c {
                         fine_c = v;
                         fine = c;
@@ -1723,7 +1925,6 @@ fn time_stretch(
             let wgt = window[i];
             out[(out_pos + i) * 2] += input[(chosen + i) * 2] * wgt;
             out[(out_pos + i) * 2 + 1] += input[(chosen + i) * 2 + 1] * wgt;
-            norm[out_pos + i] += wgt;
         }
         // Near 1x the continuation sits just behind `nominal` every time, so grains picked by
         // likeness alone walk to the edge of the search and stay there, up to 8 ms off the notes.
@@ -1736,8 +1937,14 @@ fn time_stretch(
     }
     let used = (k * hop_out + hop_out).min(out_frames);
     out.truncate(used * 2);
-    for (i, n) in norm.iter().take(used).enumerate() {
-        if *n > 1e-3 {
+    // What the windows of the grains over each frame add up to (`win` is two hops: two at most).
+    for i in 0..used {
+        let last = (i / hop_out).min(k.saturating_sub(1));
+        let n: f32 = (last.saturating_sub(1)..=last)
+            .filter(|&g| g < k && g * hop_out <= i && i < g * hop_out + win)
+            .map(|g| window[i - g * hop_out])
+            .sum();
+        if n > 1e-3 {
             out[i * 2] /= n;
             out[i * 2 + 1] /= n;
         }
@@ -1772,15 +1979,16 @@ fn resample_by(input: &[f32], frames_out: usize, pos: impl Fn(usize) -> f64) -> 
         let i = pos.floor() as isize;
         let t = (pos - i as f64) as f32;
         for c in 0..2 {
-            let (p0, p1, p2, p3) = (at(i - 1, c), at(i, c), at(i + 1, c), at(i + 2, c));
-            let v = p1
-                + 0.5
-                    * t
-                    * (p2 - p0
-                        + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3
-                            + t * (3.0 * (p1 - p2) + p3 - p0)));
-            out.push(v);
+            out.push(cubic(t, at(i - 1, c), at(i, c), at(i + 1, c), at(i + 2, c)));
         }
     }
     out
+}
+
+/// Catmull-Rom between `p1` and `p2`.
+#[inline]
+fn cubic(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
+    p1 + 0.5
+        * t
+        * (p2 - p0 + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0)))
 }
