@@ -14333,18 +14333,30 @@ impl State {
             };
             // The screen behind darkens, but not a play being watched.
             let dim = !self.in_song();
+            let tab = logged_in && !self.in_song() && self.player.is_none();
             if self.social.open {
-                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread, dim);
-            } else if let Some(p) = self.social.closing() {
-                let (start, hits) = (canvas.shapes.len(), canvas.hits.len());
-                social::draw(canvas, &self.social, logged_in, lobby, lobby_unread, dim);
+                social::draw(
+                    canvas,
+                    &self.social,
+                    logged_in,
+                    lobby,
+                    lobby_unread,
+                    dim,
+                    tab,
+                );
+            } else if self.social.closing().is_some() {
+                let hits = canvas.hits.len();
+                social::draw(
+                    canvas,
+                    &self.social,
+                    logged_in,
+                    lobby,
+                    lobby_unread,
+                    dim,
+                    tab,
+                );
                 canvas.hits.truncate(hits);
-                canvas.transform_since(start, [0.0, 0.0], 1.0, p * 30.0, 0.0);
-                for sh in &mut canvas.shapes[start..] {
-                    sh.fill[3] *= 1.0 - p;
-                    sh.border[3] *= 1.0 - p;
-                }
-            } else if logged_in && !self.in_song() && self.player.is_none() {
+            } else if tab {
                 social::draw_chip(canvas, &self.social, lobby_unread);
             }
             social::draw_notes(canvas, &self.social);

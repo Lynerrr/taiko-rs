@@ -257,7 +257,13 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 /// How long the overlay takes to slide in or out (ms).
-pub const SLIDE_MS: f32 = 160.0;
+pub const SLIDE_MS: f32 = 240.0;
+/// How far the panel and the tab run on past the edge that cuts them off, to hide their corners.
+const EDGE_BLEED: f32 = 12.0;
+/// The tab on the right edge of the screen that pulls the overlay out, and rides on it.
+const TAB_W: f32 = 17.0;
+const TAB_MIDDLE: f32 = 240.0;
+const TAB_TEXT: f32 = 6.5;
 
 impl Social {
     /// Closes the overlay; it slides away (`closing`).
@@ -746,29 +752,37 @@ pub fn draw(
     lobby: Option<&[(String, String)]>,
     lobby_unread: usize,
     dim: bool,
+    tab: bool,
 ) {
-    let slide = s
-        .opened_at
-        .map(|t| crate::render::progress(t, SLIDE_MS))
-        .unwrap_or(1.0);
-    let x = c.width - PANEL_W - 6.0 + (1.0 - slide) * 30.0;
-    let [_, y, _, h] = panel_rect(c.width);
-    let a = slide;
+    // It slides out of the edge of the screen, and back in there.
+    let slide = match s.closing() {
+        Some(p) => 1.0 - p,
+        None => s
+            .opened_at
+            .map(|t| crate::render::progress(t, SLIDE_MS))
+            .unwrap_or(1.0),
+    };
+    let [left, y, _, h] = panel_rect(c.width);
+    let x = left + (1.0 - slide) * PANEL_W;
+    let a = 1.0;
     if dim {
         c.rect(
             -40.0,
             -40.0,
             c.width + 80.0,
             560.0,
-            rgba(0x000000, 0.32 * a),
+            rgba(0x000000, 0.32 * slide),
         );
+    }
+    if tab {
+        draw_tab(c, s, x, lobby_unread);
     }
     // A soft shadow on the left, then the panel and its header strip.
     for (i, alpha) in [0.10, 0.07, 0.04].into_iter().enumerate() {
         let d = 2.0 * (i + 1) as f32;
         c.round_rect(
             [x - d, y - d + 2.0],
-            [PANEL_W + 2.0 * d, h + 2.0 * d],
+            [PANEL_W + EDGE_BLEED + 2.0 * d, h + 2.0 * d],
             8.0 + d,
             rgba(0x000000, alpha * a),
             rgba(0, 0.0),
@@ -777,7 +791,7 @@ pub fn draw(
     }
     c.round_rect(
         [x, y],
-        [PANEL_W, h],
+        [PANEL_W + EDGE_BLEED, h],
         8.0,
         rgba(PANEL_BG, 0.97 * a),
         rgba(0x34344a, a),
@@ -785,7 +799,7 @@ pub fn draw(
     );
     c.round_rect(
         [x + 1.0, y + 1.0],
-        [PANEL_W - 2.0, HEADER_H],
+        [PANEL_W + EDGE_BLEED, HEADER_H],
         7.0,
         rgba(HEADER_BG, a),
         rgba(0, 0.0),
@@ -794,14 +808,14 @@ pub fn draw(
     c.rect(
         x + 1.0,
         y + HEADER_H - 6.0,
-        PANEL_W - 2.0,
+        PANEL_W + EDGE_BLEED,
         7.0,
         rgba(HEADER_BG, a),
     );
     c.rect(
         x + 1.0,
         y + HEADER_H + 1.0,
-        PANEL_W - 2.0,
+        PANEL_W + EDGE_BLEED,
         1.0,
         rgba(LINE, a),
     );
@@ -2197,15 +2211,16 @@ fn badge(c: &mut Canvas, cx: f32, cy: f32, n: usize, a: f32) {
     badge_after(c, cx - badge_width(n) / 2.0, cy, n, a);
 }
 
-/// The notification cards, stacked under the chip (newest on top); clicking one acts on it.
+/// The notification cards, stacked at the top right (newest on top); clicking one acts on it.
 pub fn draw_notes(c: &mut Canvas, s: &Social) {
     let w = 210.0;
-    // Beside the overlay when it's open, else under the chip.
-    let x = if s.open {
-        panel_rect(c.width)[0] - w - 8.0
+    // Clear of the tab, which rides on the overlay when it's open.
+    let right = if s.open {
+        panel_rect(c.width)[0]
     } else {
-        c.width - w - 8.0
+        c.width
     };
+    let x = right - TAB_W - w - 8.0;
     let mut y = if s.open { 30.0 } else { 58.0 };
     for (i, n) in s.notes.iter().enumerate().rev() {
         let age = n.at.elapsed().as_secs_f32();
@@ -2245,11 +2260,17 @@ pub fn draw_notes(c: &mut Canvas, s: &Social) {
 
 /// The overlay panel's rectangle (for clicks): x, y, w, h.
 pub fn panel_rect(width: f32) -> [f32; 4] {
-    [width - PANEL_W - 6.0, 24.0, PANEL_W, 480.0 - 30.0]
+    [width - PANEL_W, 24.0, PANEL_W, 480.0 - 30.0]
 }
 
-/// The chip that opens the overlay (menus, when logged in): unread messages and requests.
+/// The tab that opens the overlay (menus, when logged in), at the edge of the screen.
 pub fn draw_chip(c: &mut Canvas, s: &Social, lobby_unread: usize) {
+    draw_tab(c, s, c.width, lobby_unread);
+}
+
+/// The tab with its right side at `right`: unread messages and requests on it, and who's online
+/// reading up it. It's drawn past `right`, for the panel or the screen's edge to cut it off.
+fn draw_tab(c: &mut Canvas, s: &Social, right: f32, lobby_unread: usize) {
     let unread = s.unread_total() + lobby_unread + s.requests.len();
     let label = if s.connected {
         format!("friends {}  F9", s.online_count())
@@ -2264,44 +2285,70 @@ pub fn draw_chip(c: &mut Canvas, s: &Social, lobby_unread: usize) {
         .map(|_| format!("{} online   ", s.online_total));
     let online_w = online
         .as_deref()
-        .map_or(0.0, |t| Canvas::text_width(6.5, t) + 9.0);
-    let w = Canvas::text_width(6.5, &label) + 14.0 + online_w;
-    // Just under the tab bar's right-hand text.
-    let (x, y) = (c.width - w - 8.0, 41.0);
-    let hover = c.hovered(x, y, w, 13.0);
+        .map_or(0.0, |t| Canvas::text_width(TAB_TEXT, t) + 9.0);
+    let len = Canvas::text_width(TAB_TEXT, &label) + online_w + 22.0;
+    let (x, y) = (right - TAB_W, TAB_MIDDLE - len / 2.0);
+    let hover = c.hovered(x, y, TAB_W, len);
     c.round_rect(
         [x, y],
-        [w, 13.0],
-        3.5,
-        rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.85),
+        [TAB_W + EDGE_BLEED, len],
+        6.0,
+        rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.92),
         rgba(0x3a3a4e, 1.0),
         1.0,
     );
+    // Laid out along a line from (0, 0), then stood up to read from the bottom.
+    let start = c.shapes.len();
+    let mut along = 0.0;
     if let Some(online) = &online {
-        c.circle(
-            x + 10.0,
-            y + 6.5,
-            2.5,
-            rgba(GREEN, 1.0),
-            rgba(0x000000, 0.0),
-            0.0,
-        );
-        c.text(x + 16.0, y + 3.5, 6.5, rgba(0xc8c8d8, 1.0), online);
+        c.circle(2.5, 0.0, 2.5, rgba(GREEN, 1.0), rgba(0x000000, 0.0), 0.0);
+        c.text(9.0, -TAB_TEXT / 2.0, TAB_TEXT, rgba(0xc8c8d8, 1.0), online);
+        along = online_w;
     }
     c.text(
-        x + 7.0 + online_w,
-        y + 3.5,
-        6.5,
+        along,
+        -TAB_TEXT / 2.0,
+        TAB_TEXT,
         rgba(0xc8c8d8, 1.0),
         &label,
     );
-    c.hit(x, y, w, 13.0, Hit::SocialToggle);
-    badge(c, x, y + 1.0, unread, 1.0);
+    let dest = [x + TAB_W / 2.0, y + len - 11.0];
+    c.rotate_since(start, [0.0, 0.0], -std::f32::consts::FRAC_PI_2, 1.0, dest);
+    c.hit(x, y, TAB_W, len, Hit::SocialToggle);
+    badge(c, x + 3.0, y + 1.0, unread, 1.0);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tab's hit area with the overlay `open` or not, on a screen 853 wide.
+    fn tab_rect(s: &Social, open: bool) -> [f32; 4] {
+        let mut c = Canvas::default();
+        c.clear(853.0);
+        if open {
+            draw(&mut c, s, true, None, 0, true, true);
+        } else {
+            draw_chip(&mut c, s, 0);
+        }
+        c.hits
+            .iter()
+            .find(|h| h.hit == Hit::SocialToggle)
+            .expect("the tab can be clicked")
+            .rect
+    }
+
+    #[test]
+    fn the_tab_stands_on_the_edge_and_rides_on_the_open_panel() {
+        crate::render::set_animations(false);
+        let mut s = Social::default();
+        let [x, _, w, h] = tab_rect(&s, false);
+        assert_eq!(x + w, 853.0, "against the edge of the screen");
+        assert!(h > w, "taller than it's wide");
+        s.open = true;
+        let [x, _, w, _] = tab_rect(&s, true);
+        assert_eq!(x + w, panel_rect(853.0)[0], "on the panel's left side");
+    }
 
     #[test]
     fn the_server_speaks_on_a_banner_in_the_medals_colour() {

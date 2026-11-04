@@ -644,19 +644,26 @@ fn button_problems(c: &crate::render::Canvas) -> Vec<String> {
         }
         buttons.push(([hx, hy, hx + hw, hy + hh], h.hit, bordered));
     }
+    // The friends panel floats over whatever screen is behind it.
+    let panel = c
+        .hits
+        .iter()
+        .find(|h| h.hit == crate::render::Hit::SocialPanel)
+        .map(|h| {
+            let [x, y, w, hh] = h.rect;
+            [x, y, x + w, y + hh]
+        });
+    let on_panel = |r: &[f32; 4]| {
+        panel.is_some_and(|p| {
+            r[0] >= p[0] - 0.5 && r[1] >= p[1] - 0.5 && r[2] <= p[2] + 0.5 && r[3] <= p[3] + 0.5
+        })
+    };
     for (i, (a, ha, ba)) in buttons.iter().enumerate() {
         for (b, hb, bb) in &buttons[i + 1..] {
             if ha == hb {
                 continue;
             }
-            // The friends panel floats over whatever screen is behind it.
-            let overlay = |h: &crate::render::Hit| {
-                matches!(
-                    h,
-                    crate::render::Hit::SocialRow(_) | crate::render::Hit::SocialPanel
-                )
-            };
-            if overlay(ha) != overlay(hb) {
+            if on_panel(a) != on_panel(b) {
                 continue;
             }
             // Rows of a list: same x and width, one above the other.
