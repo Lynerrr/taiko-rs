@@ -5568,7 +5568,6 @@ impl Game {
         self.draw_defense(c, t, w);
 
         self.draw_parts(c);
-
         // Overtime: he's here, over everything but the pause menu.
         if let Some(&at) = self
             .scares
@@ -5892,7 +5891,8 @@ impl Game {
         // Over the lane unless moved: the playfield draws those itself.
         let off_the_lane = |p: Part| self.hud_sample || self.hud.place(p).is_some();
 
-        if shown(Part::Score) {
+        // Defense is a team's: one player's score says nothing, the team panel does.
+        if shown(Part::Score) && self.defense.is_none() {
             let s = format!("{:08}", self.stats.score);
             self.in_place(c, Part::Score, |c, [w, _], align| {
                 score_number(c, w, align, 24.0, WHITE, &s);
@@ -5904,7 +5904,10 @@ impl Game {
                 score_number(c, w, align, 14.0, 0xc8c8d8, &s);
             });
         }
-        if let Some(pp) = self.live_pp_value.filter(|_| shown(Part::Pp)) {
+        if let Some(pp) = self
+            .live_pp_value
+            .filter(|_| shown(Part::Pp) && self.defense.is_none())
+        {
             let s = format!("{pp:.0}pp");
             self.in_place(c, Part::Pp, |c, [w, _], align| {
                 let nw = c.number_width(Font::Score, 14.0, &s);
@@ -8787,6 +8790,114 @@ mod tests {
             },
         );
         g
+    }
+
+    /// A Defense team of two playing one mod: everyone gets the host's mods, so both games have
+    /// to agree on the notes and whose they are, and between them take every one.
+    fn defense_with(mods: Mods, me: usize) -> Game {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mut g = Game::with_seed(map, track, None, mods, 7);
+        g.set_defense(
+            vec![(1, "a".into()), (2, "b".into())],
+            me,
+            Defense {
+                lives: 25,
+                bars: 4,
+                ..Defense::DEFAULT
+            },
+        );
+        for act in [
+            DefenseAct::Buy {
+                item: DefenseItem::DonTower,
+                at: 1000.0,
+                until: 0.0,
+            },
+            DefenseAct::Buy {
+                item: DefenseItem::Slow,
+                at: 9000.0,
+                until: 0.0,
+            },
+        ] {
+            g.defense_act(2, act);
+        }
+        g.defense_act(1, DefenseAct::TagIn { at: 8500.0 });
+        g
+    }
+
+    #[test]
+    fn every_mod_a_defense_team_can_have_plays_the_same_notes_for_both_players() {
+        crate::render::pin_accent_for_this_thread(Some(crate::render::DEFAULT_ACCENT));
+        multiverse::pin_note_colours_for_this_thread(Some(multiverse::Colours::CLASSIC));
+        crate::render::set_animations(false);
+        crate::render::set_frame_time(Some(Instant::now()));
+        let mut bad: Vec<String> = Vec::new();
+        for m in crate::mods::ALL.into_iter().filter(|m| m.defense_ok()) {
+            let mods = Mods::parse(m.acronym());
+            let (mut a, mut b) = (defense_with(mods, 0), defense_with(mods, 1));
+            let same = a.map.notes.len() == b.map.notes.len()
+                && a.map
+                    .notes
+                    .iter()
+                    .zip(&b.map.notes)
+                    .all(|(x, y)| x.time == y.time && x.kind == y.kind);
+            if !same {
+                bad.push(format!("{}: the notes differ", m.acronym()));
+                continue;
+            }
+            let (da, db) = (a.defense.as_ref().unwrap(), b.defense.as_ref().unwrap());
+            if da.owner != db.owner {
+                bad.push(format!("{}: the turns differ", m.acronym()));
+            }
+            // Between them they take every note that can be hit, once.
+            for i in 0..a.map.notes.len() {
+                if !matches!(a.map.notes[i].kind, Kind::Don | Kind::Kat) || da.map_unhittable[i] {
+                    continue;
+                }
+                let (ha, hb) = (!a.map.notes[i].unhittable, !b.map.notes[i].unhittable);
+                let shot = da.shot[i].is_some();
+                if shot && (ha || hb) || !shot && ha == hb {
+                    bad.push(format!("{}: note {i} is taken by {ha} {hb}", m.acronym()));
+                    break;
+                }
+            }
+            // Autoplay them both through the map: nothing panics, nothing of theirs gets through.
+            for g in [&mut a, &mut b] {
+                let mut t = -2000.0;
+                while t < 34_000.0 {
+                    g.time = t;
+                    g.autoplay(None);
+                    g.expire(t);
+                    if (t as i64) % 4000 == 0 {
+                        let mut c = Canvas::default();
+                        c.clear(853.3);
+                        g.draw_playfield(&mut c, 1.0);
+                        g.draw_hud(&mut c);
+                    }
+                    t += 20.0;
+                }
+                if g.stats.miss > 0 {
+                    bad.push(format!(
+                        "{}: {} misses under autoplay",
+                        m.acronym(),
+                        g.stats.miss
+                    ));
+                    break;
+                }
+                if g.stats.great + g.stats.ok < 8 {
+                    bad.push(format!(
+                        "{}: only {} hits under autoplay",
+                        m.acronym(),
+                        g.stats.great + g.stats.ok
+                    ));
+                    break;
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
 
     #[test]

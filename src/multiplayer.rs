@@ -40,6 +40,8 @@ pub struct Session {
     pub common: Option<u32>,
     /// Defense: the team's lives, gold, shield and towers, as the room keeps them.
     pub team: Option<net::TeamState>,
+    /// Defense: what each player did for the team this match, as (shop buys, tag-ins).
+    pub contrib: std::collections::HashMap<u32, (u32, u32)>,
     /// The lobby needs a password, and how many players it takes.
     pub locked: bool,
     pub slots: u32,
@@ -74,6 +76,7 @@ impl Session {
             mapguessr: false,
             common: None,
             team: None,
+            contrib: std::collections::HashMap::new(),
             locked: false,
             slots: net::RoomSettings::MAX_SLOTS,
             edit_password: None,
@@ -129,6 +132,7 @@ pub fn live_from(game: &Game) -> Live {
         miss: s.miss,
         progress: game.progress(),
         great: s.great,
+        ok: s.ok,
     }
 }
 
@@ -2036,7 +2040,106 @@ pub fn draw_skip_votes(c: &mut Canvas, s: &Session) {
     c.text_centered(w / 2.0, y, 8.0, rgba(0xffffff, 1.0), &text);
 }
 
+/// Defense's column headings over `team_row`'s columns: notes held off, let through, accuracy,
+/// turns taken over, shop buys.
+fn team_columns() -> String {
+    format!(
+        "{:<12} {:>5} {:>4} {:>6} {:>4} {:>4}",
+        tr!("NAME", "名前", "ИМЯ"),
+        tr!("HIT", "命中", "БИТО"),
+        tr!("MISS", "ミス", "МИМО"),
+        tr!("ACC", "精度", "ТОЧН"),
+        tr!("TAGS", "交代", "ХОДЫ"),
+        tr!("BUYS", "購入", "КУПЛ"),
+    )
+}
+
+/// One player's row of Defense's board: what they did for the team, not a score.
+fn team_row(name: &str, hit: u32, miss: u32, accuracy: f64, contrib: (u32, u32)) -> String {
+    let name: String = name.chars().take(12).collect();
+    format!(
+        "{:<12} {:>5} {:>4} {:>5.1}% {:>4} {:>4}",
+        name,
+        hit,
+        miss,
+        accuracy * 100.0,
+        contrib.1,
+        contrib.0
+    )
+}
+
+/// Defense's board in a match (Tab): the team's lives, gold and shield, then each player's part
+/// in it. Everything is shared, so there are no scores to race.
+fn draw_team_board(c: &mut Canvas, s: &Session, defense: net::Defense, my_live: &Live) {
+    let team = s.team.unwrap_or(net::TeamState {
+        lives: defense.lives,
+        max: defense.lives,
+        ..net::TeamState::default()
+    });
+    let my_id = s.client.id;
+    let mut lines: Vec<(String, u32)> = Vec::new();
+    let (lives, max, gold, shield) = (team.lives, team.max, team.gold, team.shield);
+    lines.push((
+        tr!(
+            "TEAM  lives {lives}/{max}   gold {gold}   shield {shield}",
+            "チーム  ライフ {lives}/{max}   ゴールド {gold}   シールド {shield}",
+            "КОМАНДА  жизни {lives}/{max}   золото {gold}   щит {shield}";
+        ),
+        0xFFD34D,
+    ));
+    lines.push((team_columns(), 0x6f6f86));
+    let mut players: Vec<&PlayerInfo> = s
+        .players
+        .iter()
+        .filter(|p| p.status != Status::Lobby && !p.spectator)
+        .collect();
+    players.sort_by_key(|p| p.id);
+    for p in players {
+        let me = Some(p.id) == my_id;
+        // Our own row uses local numbers so it never lags behind the playfield.
+        let live = if me { my_live } else { &p.live };
+        let color = if me {
+            0xFFD34D
+        } else if p.result.as_ref().is_some_and(|r| r.quit) {
+            0x6f6f86
+        } else {
+            0xc8c8d8
+        };
+        let contrib = s.contrib.get(&p.id).copied().unwrap_or_default();
+        lines.push((
+            team_row(
+                &p.name,
+                live.great + live.ok,
+                live.miss,
+                live.accuracy,
+                contrib,
+            ),
+            color,
+        ));
+    }
+    let (x, y0, h) = (18.0, 282.0, 16.0);
+    let lines: Vec<(String, u32)> = lines.into_iter().take(10).collect();
+    let bw = lines
+        .iter()
+        .map(|(l, _)| Canvas::text_width(8.0, l) + 12.0)
+        .fold(300.0, f32::max);
+    c.round_rect(
+        [x - 6.0, y0 - 6.0],
+        [bw, lines.len() as f32 * h + 10.0],
+        6.0,
+        rgba(0x000000, 0.45),
+        rgba(0, 0.0),
+        0.0,
+    );
+    for (i, (line, color)) in lines.iter().enumerate() {
+        c.text(x, y0 + i as f32 * h, 8.0, rgba(*color, 1.0), line);
+    }
+}
+
 pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
+    if let Some(d) = s.map.as_ref().and_then(|m| m.defense) {
+        return draw_team_board(c, s, d, my_live);
+    }
     let y0 = 282.0;
     let my_id = s.client.id;
     let mut rows: Vec<(String, Live, bool, bool)> = s
@@ -2134,7 +2237,17 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
         );
     }
     let score = |p: &PlayerInfo| p.result.as_ref().map(|r| r.score).unwrap_or(p.live.score);
-    rows.sort_by_key(|p| std::cmp::Reverse(score(p)));
+    // Defense: the notes a player held off count, not a score.
+    let hit = |p: &PlayerInfo| {
+        p.result
+            .as_ref()
+            .map_or(p.live.great + p.live.ok, |r| r.great + r.ok)
+    };
+    if defense.is_some() {
+        rows.sort_by_key(|p| std::cmp::Reverse(hit(p)));
+    } else {
+        rows.sort_by_key(|p| std::cmp::Reverse(score(p)));
+    }
     let col = (w - 48.0).min(700.0);
     let x0 = (w - col) / 2.0;
     c.text(
@@ -2142,7 +2255,11 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
         102.0,
         8.0,
         rgba(0x6f6f86, 1.0),
-        "#  PLAYER            SCORE      ACC    COMBO  GREAT  OK  MISS    UR",
+        &if defense.is_some() {
+            format!("#  {}", team_columns())
+        } else {
+            "#  PLAYER            SCORE      ACC    COMBO  GREAT  OK  MISS    UR".to_string()
+        },
     );
     for (i, p) in rows.iter().enumerate().take(10) {
         let y = 118.0 + i as f32 * 28.0;
@@ -2161,34 +2278,49 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
             1.0,
         );
         let name: String = p.name.chars().take(14).collect();
-        let line = match &p.result {
-            Some(r) => format!(
-                "{}  {:<14} {:08} {:6.2}% {:>5}x {:>6} {:>3} {:>5} {:>5.0}{}",
+        let line = if defense.is_some() {
+            let (miss, accuracy) = p
+                .result
+                .as_ref()
+                .map_or((p.live.miss, p.live.accuracy), |r| (r.miss, r.accuracy));
+            let contrib = s.contrib.get(&p.id).copied().unwrap_or_default();
+            let quit = p.result.as_ref().is_some_and(|r| r.quit);
+            format!(
+                "{}  {}{}",
                 i + 1,
-                name,
-                r.score,
-                r.accuracy * 100.0,
-                r.max_combo,
-                r.great,
-                r.ok,
-                r.miss,
-                r.ur,
-                if r.quit {
-                    "  quit".to_string()
-                } else if p.mods.is_empty() {
-                    String::new()
-                } else {
-                    format!("  +{}", p.mods.concat())
-                }
-            ),
-            None => format!(
-                "{}  {:<14} {:08} {:6.2}%   playing ({:.0}%)",
-                i + 1,
-                name,
-                p.live.score,
-                p.live.accuracy * 100.0,
-                p.live.progress * 100.0
-            ),
+                team_row(&p.name, hit(p), miss, accuracy, contrib),
+                if quit { "  quit" } else { "" }
+            )
+        } else {
+            match &p.result {
+                Some(r) => format!(
+                    "{}  {:<14} {:08} {:6.2}% {:>5}x {:>6} {:>3} {:>5} {:>5.0}{}",
+                    i + 1,
+                    name,
+                    r.score,
+                    r.accuracy * 100.0,
+                    r.max_combo,
+                    r.great,
+                    r.ok,
+                    r.miss,
+                    r.ur,
+                    if r.quit {
+                        "  quit".to_string()
+                    } else if p.mods.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  +{}", p.mods.concat())
+                    }
+                ),
+                None => format!(
+                    "{}  {:<14} {:08} {:6.2}%   playing ({:.0}%)",
+                    i + 1,
+                    name,
+                    p.live.score,
+                    p.live.accuracy * 100.0,
+                    p.live.progress * 100.0
+                ),
+            }
         };
         c.text(
             x0 + 14.0,

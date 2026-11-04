@@ -157,6 +157,9 @@ pub struct Preview {
     /// In the player or the main menu, the song has played to its end.
     finished: bool,
     ended_at: Option<Instant>,
+    /// When the song now on was put on (a new one, or a replay): it can't be over just after, so
+    /// a stale position from the song before never counts as this one's end.
+    song_since: Option<Instant>,
     /// Passed on to the autoplay preview (the kiai effects setting, how autoplay hits).
     pub kiai_effects: bool,
     pub autoplay: crate::autoplay::Settings,
@@ -191,6 +194,14 @@ fn beat_at(points: &[crate::beatmap::ControlPoint], t: f64) -> Option<(f64, f64)
 
 /// How long the player waits at a song's end for the next to load before playing it again.
 const NEXT_SONG_WAIT: Duration = Duration::from_millis(1500);
+
+/// Whether a song put on at `since` has played long enough (a few seconds, or half of a short
+/// one) for its position to be taken as reaching its end: just after another song was on, the
+/// position still reported can be that one's.
+fn played_long_enough(since: Option<Instant>, now: Instant, end_ms: f64) -> bool {
+    let wait = Duration::from_millis((end_ms / 2.0).clamp(0.0, 3000.0) as u64);
+    since.is_none_or(|t| now.saturating_duration_since(t) >= wait)
+}
 
 /// How long a song is, in map ms: as decoded whole (`whole`), else as last known, else about what
 /// its notes span.
@@ -498,6 +509,7 @@ impl Preview {
                 engine.swap(track.clone(), base);
             } else {
                 self.audio_active = false;
+                self.song_since = Some(now);
             }
             if full {
                 self.known_length = Some((path.clone(), len_ms));
@@ -525,6 +537,7 @@ impl Preview {
             let end_ms = song.end_ms(engine.rate);
             // A seek past the quick part waits, silent, for the full song; it's not the end.
             let ended = self.audio_rx.is_none()
+                && played_long_enough(self.song_since, now, end_ms)
                 && engine.position_ms(now).is_some_and(|p| p > end_ms - 30.0);
             // There the next song takes over; if none does, this one goes round again.
             let next_coming = ended && (self.player || self.menu) && {
@@ -542,6 +555,7 @@ impl Preview {
                     .map(|t| t / song.rate)
                     .unwrap_or(if from_top { 0.0 } else { song.start });
                 engine.play_part(song.track.clone(), song.base, at);
+                self.song_since = Some(now);
                 self.audio_active = true;
                 self.ended_at = None;
                 self.pending_seek = None; // the music won't reach it now
@@ -1418,5 +1432,25 @@ mod lane_fit_tests {
         let (k, lane) = lane_fit(900.0, 380.0);
         assert_eq!(lane, SIXTEEN_NINE);
         assert!(k > lane_fit(380.0, 380.0).0);
+    }
+
+    #[test]
+    fn a_song_just_put_on_cant_be_over_by_the_last_ones_position() {
+        let now = Instant::now();
+        let t = |ms: u64| now - Duration::from_millis(ms);
+        assert!(
+            !played_long_enough(Some(t(900)), now, 180_000.0),
+            "under 3 s in"
+        );
+        assert!(played_long_enough(Some(t(3100)), now, 180_000.0));
+        assert!(
+            played_long_enough(None, now, 180_000.0),
+            "nothing put on: no wait"
+        );
+        assert!(
+            !played_long_enough(Some(t(900)), now, 4000.0),
+            "half of a short one"
+        );
+        assert!(played_long_enough(Some(t(2100)), now, 4000.0));
     }
 }

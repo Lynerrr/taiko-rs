@@ -819,7 +819,22 @@ impl Mod {
     pub fn shared(self) -> bool {
         SPEED.contains(&self)
     }
+
+    /// Whether it can be on in a Defense match. A team shares its lives and gold, so nothing
+    /// may play for a player, spare a player the misses or end one player's run alone.
+    pub fn defense_ok(self) -> bool {
+        !DEFENSE_BANNED.contains(&self)
+    }
 }
+
+/// Mods a Defense match can't have (see `Mod::defense_ok`).
+pub const DEFENSE_BANNED: [Mod; 5] = [
+    Mod::Autoplay,
+    Mod::Relax,
+    Mod::NoFail,
+    Mod::SuddenDeath,
+    Mod::Perfect,
+];
 
 impl Mods {
     pub const NONE: Mods = Mods(0);
@@ -832,6 +847,22 @@ impl Mods {
     /// The rest: each player's own in a lobby.
     pub fn free(self) -> Mods {
         Mods(self.0 & !self.shared().0)
+    }
+
+    /// What the host's mods make of the lobby's match: in an ordinary one just the speed's (the
+    /// others are each player's own), in Defense all of them but the ones a team can't have,
+    /// for everyone, so the whole team plays the same notes. With the Maze lane on, Maze is one
+    /// of them and any other rail it clashes with is dropped.
+    pub fn lobby(self, defense: Option<crate::net::Defense>) -> Mods {
+        let Some(d) = defense else {
+            return self.shared();
+        };
+        let banned = DEFENSE_BANNED.iter().fold(0, |bits, m| bits | m.bit());
+        let mut out = Mods(self.0 & !banned);
+        if d.maze && !out.has(Mod::Maze) {
+            out.toggle(Mod::Maze);
+        }
+        out
     }
 
     pub fn has(self, m: Mod) -> bool {
@@ -1413,5 +1444,32 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn a_lobby_plays_the_hosts_speed_and_in_defense_all_of_their_mods_but_banned_ones() {
+        use crate::net::Defense;
+        let host = Mods::parse("DT,HD,HR,AT,SD,ZZ");
+        assert_eq!(host.lobby(None), Mods::parse("DT"), "ordinary: the speed's");
+        let lane = host.lobby(Some(Defense::DEFAULT));
+        for m in [Mod::DoubleTime, Mod::Hidden, Mod::HardRock, Mod::Maze] {
+            assert!(lane.has(m), "{} stays", m.acronym());
+        }
+        for m in [Mod::Autoplay, Mod::SuddenDeath, Mod::Zigzag] {
+            assert!(
+                !lane.has(m),
+                "{} goes (a banned mod, or a rail Maze replaces)",
+                m.acronym()
+            );
+        }
+        let own = host.lobby(Some(Defense {
+            maze: false,
+            ..Defense::DEFAULT
+        }));
+        assert!(
+            own.has(Mod::Zigzag) && !own.has(Mod::Maze),
+            "without the Maze lane the rail stays"
+        );
+        assert!(DEFENSE_BANNED.iter().all(|m| !m.defense_ok()));
     }
 }

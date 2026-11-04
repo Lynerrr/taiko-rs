@@ -987,7 +987,7 @@ pub fn draw(
                         a,
                     ) - 4.0;
                     bx = match &f.activity {
-                        Some(Activity::Playing { .. }) => {
+                        Some(Activity::Playing { .. } | Activity::Menus) => {
                             button(
                                 c,
                                 bx,
@@ -1541,7 +1541,7 @@ fn draw_rows(
                         a,
                     ) - 4.0;
                     bx = match &f.activity {
-                        Some(Activity::Playing { .. }) => {
+                        Some(Activity::Playing { .. } | Activity::Menus) => {
                             button(c, bx, by, "watch", Hit::SocialAction(i, Action::Watch), a) - 4.0
                         }
                         Some(Activity::Lobby { room: Some(_), .. }) => {
@@ -1729,7 +1729,7 @@ fn draw_rows(
                         a,
                     ) - 4.0;
                     bx = button(c, bx, by, "info", Hit::SocialAction(i, Action::Lookup), a) - 4.0;
-                    if matches!(p.activity, Some(Activity::Playing { .. })) {
+                    if matches!(p.activity, Some(Activity::Playing { .. } | Activity::Menus)) {
                         bx = button(c, bx, by, "watch", Hit::SocialAction(i, Action::Watch), a)
                             - 4.0;
                     }
