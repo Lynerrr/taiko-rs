@@ -1365,6 +1365,16 @@ impl Select {
         ));
         if !m.header {
             items.push((
+                fit(format!("Edit [{}]", library[i].meta.version)),
+                MenuAction::Edit,
+            ));
+            items.push((
+                fit(format!("New difficulty from [{}]", library[i].meta.version)),
+                MenuAction::NewDifficulty,
+            ));
+        }
+        if !m.header {
+            items.push((
                 fit(format!("Hide [{}]", library[i].meta.version)),
                 MenuAction::HideDifficulty,
             ));
@@ -1419,7 +1429,10 @@ impl Select {
                     t.clone()
                 }
             }
-            MenuAction::Love(..) | MenuAction::Like => return None,
+            MenuAction::Love(..)
+            | MenuAction::Like
+            | MenuAction::Edit
+            | MenuAction::NewDifficulty => return None,
         };
         self.hidden.save();
         // The selection stays unless it was hidden: then another difficulty of that song, else
@@ -2722,6 +2735,10 @@ pub enum MenuAction {
     UpdateSong,
     /// Like the song, or not any more.
     Like,
+    /// Open the difficulty in the map editor.
+    Edit,
+    /// Start a new, empty difficulty from this one's timing and music.
+    NewDifficulty,
 }
 
 /// Whether osu! has a newer version of a set than the one here.

@@ -245,7 +245,13 @@ pub const OSU_TIMING_MS: f64 = 23.0;
 
 pub fn load(path: &Path) -> Result<Beatmap, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let (meta, body) = parse_sections(&text, false);
+    from_text(&text)
+}
+
+/// A map already in memory, converted exactly as `load` does (the editor's preview plays what the
+/// chart says right now).
+pub fn from_text(text: &str) -> Result<Beatmap, String> {
+    let (meta, body) = parse_sections(text, false);
     if !meta.is_playable() {
         return Err(format!(
             "unsupported mode {} (only osu!standard converts and taiko)",

@@ -183,6 +183,8 @@ enum Scene {
     Watch(Box<WatchView>),
     /// Turning a replay into a video: cut, crop, size, export.
     VideoEdit(Box<video::Editor>),
+    /// The map editor, editing one difficulty.
+    Editor(Box<editor::view::View>),
     MpResults,
 }
 
@@ -2214,6 +2216,93 @@ impl State {
         };
         self.last_video = None;
         self.scene = Scene::VideoEdit(Box::new(video::Editor::new(r, rx, self.cfg.video)));
+    }
+
+    /// Opens the map editor on library entry `entry`.
+    fn open_editor(&mut self, entry: usize) {
+        let path = self.library[entry].path.clone();
+        self.open_editor_at(path, entry);
+    }
+
+    fn open_editor_at(&mut self, path: PathBuf, entry: usize) {
+        match editor::view::View::open(path, entry) {
+            Ok(mut view) => {
+                self.stop_audio();
+                self.preview.show_background_for(&self.library[entry]);
+                let (rx, rate) = self.spawn_track_loader(entry, 1.0);
+                view.set_track_loader(rx, rate);
+                self.main_menu = None;
+                self.scene = Scene::Editor(Box::new(view));
+            }
+            Err(e) => self.toast(format!("can't open the map: {e}")),
+        }
+    }
+
+    /// A new, empty difficulty beside `entry`'s map (same timing, music and storyboard), opened.
+    fn new_difficulty(&mut self, entry: usize) {
+        let path = self.library[entry].path.clone();
+        match editor::new_difficulty(&path) {
+            Ok(new) => {
+                self.toast(format!(
+                    "made {}",
+                    new.file_name().and_then(|n| n.to_str()).unwrap_or("it")
+                ));
+                self.open_editor_at(new, entry);
+            }
+            Err(e) => self.toast(format!("can't make a difficulty: {e}")),
+        }
+    }
+
+    /// Decodes the music of `entry`'s map for the editor at `speed` (1.0 = normal), without
+    /// needing the map to have any notes. Returns the loader and the engine's sample rate.
+    fn spawn_track_loader(
+        &self,
+        entry: usize,
+        speed: f64,
+    ) -> (Receiver<editor::view::TrackResult>, f64) {
+        let path = self.library[entry].path.clone();
+        let rate = self.audio.as_ref().map(|a| a.rate);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let meta = beatmap::read_meta_file(&path).ok_or("can't read the map")?;
+                let audio_path = path.parent().unwrap_or(&path).join(&meta.audio_file);
+                match rate {
+                    Some(sr) => {
+                        let track = audio::decode_shared(&audio_path, sr)?;
+                        Ok(audio::with_rate(track, sr, speed, true))
+                    }
+                    None => Ok(Arc::new(Track {
+                        samples: Vec::new(),
+                        rate: 1.0,
+                    })),
+                }
+            })();
+            let _ = tx.send(result);
+        });
+        (rx, rate.map_or(48000.0, |r| r as f64))
+    }
+
+    fn editor_keys(&self) -> editor::view::Keys {
+        editor::view::Keys {
+            shift: self.modifiers_shift,
+            ctrl: self.modifiers_ctrl,
+            alt: self.modifiers_alt,
+        }
+    }
+
+    fn editor_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
+        let keys = self.editor_keys();
+        let Scene::Editor(view) = &mut self.scene else {
+            return;
+        };
+        match view.key(code, repeat, keys, self.audio.as_ref()) {
+            editor::view::KeyResult::Handled => {}
+            editor::view::KeyResult::Exit => self.show_select(),
+            editor::view::KeyResult::Pass => {
+                self.handle_global_key(code, window);
+            }
+        }
     }
 
     fn video_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
@@ -5752,6 +5841,10 @@ impl State {
                 )
                 .into(),
             ),
+            Scene::Editor(view) => (
+                tr!("Mapping", "マッピング中", "Делает карту").into(),
+                view.label(),
+            ),
             Scene::VideoEdit(ed) => (
                 tr!(
                     "Making a replay video",
@@ -7057,6 +7150,13 @@ impl State {
         if notches == 0 {
             return;
         }
+        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+            let keys = self.editor_keys();
+            if let Scene::Editor(view) = &mut self.scene {
+                view.wheel(notches, keys);
+            }
+            return;
+        }
         // Alt anywhere; with the pointer moved onto one of the volume's notes, also without Alt.
         if self.volume.hovering(Instant::now()) || self.modifiers_alt {
             self.turn_volume(notches);
@@ -7346,6 +7446,13 @@ impl State {
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
         let (vx, vy) = self.mouse_virtual();
         let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
+        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+            let keys = self.editor_keys();
+            if let Scene::Editor(view) = &mut self.scene {
+                view.mouse_move(vx, vy, keys);
+            }
+            return CursorIcon::Default;
+        }
         if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
             if ed.scrubbing {
                 let t = ed.time_at(vx);
@@ -7498,6 +7605,15 @@ impl State {
         } else if std::mem::take(&mut self.idle.swallow_right) {
             return;
         }
+        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+            if pressed {
+                let (vx, vy) = self.mouse_virtual();
+                if let Scene::Editor(view) = &mut self.scene {
+                    view.right_click(vx, vy);
+                }
+            }
+            return;
+        }
         if self.mod_select.is_some() {
             // Right-clicking a mod makes it a favourite (or not any more).
             if pressed && self.customization_tab().is_none() {
@@ -7574,6 +7690,18 @@ impl State {
                 .as_mut()
                 .is_some_and(Dropdown::release_bar)
         {
+            return;
+        }
+        if matches!(self.scene, Scene::Editor(_)) && !self.social.open && self.splash.is_none() {
+            let (vx, vy) = self.mouse_virtual();
+            let keys = self.editor_keys();
+            if let Scene::Editor(view) = &mut self.scene {
+                if pressed {
+                    view.mouse_down(vx, vy, keys, self.audio.as_ref());
+                } else {
+                    view.mouse_up(vx, vy, keys);
+                }
+            }
             return;
         }
         if pressed && self.splash.is_none() {
@@ -9004,6 +9132,7 @@ impl State {
             Scene::Spectate(_) => "spectating",
             Scene::Watch(_) => "watching a friend",
             Scene::VideoEdit(_) => "video editor",
+            Scene::Editor(_) => "map editor",
         };
         let map = self
             .offset_entry()
@@ -10354,6 +10483,7 @@ impl State {
                 | Scene::Spectate(_)
                 | Scene::Watch(_)
                 | Scene::VideoEdit(_)
+                | Scene::Editor(_)
         )
     }
 
@@ -12546,6 +12676,10 @@ impl State {
             }
             return;
         }
+        if matches!(self.scene, Scene::Editor(_)) {
+            self.editor_key(code, repeat, window);
+            return;
+        }
         if matches!(self.scene, Scene::VideoEdit(_)) {
             self.video_key(code, repeat, window);
             return;
@@ -12801,7 +12935,8 @@ impl State {
             | Scene::MpResults
             | Scene::Spectate(_)
             | Scene::Watch(_)
-            | Scene::VideoEdit(_) => {}
+            | Scene::VideoEdit(_)
+            | Scene::Editor(_) => {}
             Scene::Play { game, entry, from } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
@@ -13068,7 +13203,25 @@ impl State {
         let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
         let size_label = format!("Playfield {}", self.playfield_label());
         let mut finish_calibration = false;
+        let mut editor_reload: Option<(usize, f64)> = None;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
+        // `TAIKO_EDIT=<a .osu>`: opens the map editor on it once the library has loaded (for
+        // headless screenshots and tests, like `TAIKO_INPUT`).
+        if let Some(path) = std::env::var_os("TAIKO_EDIT")
+            && matches!(self.scene, Scene::Select)
+            && !self.library.is_empty()
+        {
+            static ONCE: AtomicBool = AtomicBool::new(false);
+            if !ONCE.swap(true, Ordering::Relaxed) {
+                let path = PathBuf::from(path);
+                let entry = self
+                    .library
+                    .iter()
+                    .position(|e| e.path == path)
+                    .unwrap_or(0);
+                self.open_editor_at(path, entry);
+            }
+        }
         if let Some(mut script) = self.input_script.take() {
             for action in script.due(elapsed) {
                 match action {
@@ -13172,6 +13325,7 @@ impl State {
                 | Scene::Preview { .. }
                 | Scene::Watch(_)
                 | Scene::VideoEdit(_)
+                | Scene::Editor(_)
         ) {
             self.main_menu = None;
         }
@@ -14295,6 +14449,13 @@ impl State {
                     "Esc: stop watching   F9: friends",
                 );
             }
+            Scene::Editor(view) => {
+                view.update(now, self.audio.as_ref());
+                if let Some(speed) = view.take_rate_request() {
+                    editor_reload = Some((view.entry, speed));
+                }
+                view.draw(canvas, self.cfg.scroll_speed, self.cfg.autoplay);
+            }
             Scene::VideoEdit(ed) => {
                 match ed.poll() {
                     Err(e) => {
@@ -14617,6 +14778,12 @@ impl State {
             let (saved, playfield) = (self.cfg.saved_presets.len(), self.playfield_size());
             if let Some(dd) = &mut self.settings_ui.dropdown {
                 dd.draw(canvas, &groups, saved, current, screen, playfield);
+            }
+        }
+        if let Some((entry, speed)) = editor_reload {
+            let (rx, rate) = self.spawn_track_loader(entry, speed);
+            if let Scene::Editor(view) = &mut self.scene {
+                view.set_track_loader(rx, rate);
             }
         }
         if finish_calibration {
@@ -16010,6 +16177,18 @@ impl State {
                         self.update_set(i);
                     }
                     self.select.menu = None;
+                } else if action == Some(ui::MenuAction::Edit) {
+                    let entry = self.select.menu_map();
+                    self.select.menu = None;
+                    if let Some(i) = entry {
+                        self.open_editor(i);
+                    }
+                } else if action == Some(ui::MenuAction::NewDifficulty) {
+                    let entry = self.select.menu_map();
+                    self.select.menu = None;
+                    if let Some(i) = entry {
+                        self.new_difficulty(i);
+                    }
                 } else if action == Some(ui::MenuAction::Like) {
                     if let Some(e) = self.select.menu_map().and_then(|i| self.library.get(i)) {
                         let title = e.meta.title.clone();
