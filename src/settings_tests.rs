@@ -213,6 +213,84 @@ fn watched_play() -> online::SoloPlay {
     }
 }
 
+/// A state with the list up from the cache and a scan checking it.
+fn checking_library() -> (State, Vec<std::path::PathBuf>) {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let paths: Vec<_> = s.library.iter().map(|e| e.path.clone()).collect();
+    assert!(paths.len() > 2, "the test library has maps");
+    (s, paths)
+}
+
+fn entry_at(path: &std::path::Path, size: u64) -> library::Entry {
+    let meta = beatmap::Meta {
+        title: "fresh".into(),
+        ..Default::default()
+    };
+    library::Entry::from_parts(path.to_path_buf(), meta, size, 7)
+}
+
+#[test]
+fn a_checked_list_adds_and_updates_without_moving_what_was_there() {
+    let (mut s, paths) = checking_library();
+    let mut checked: Vec<_> = paths.iter().map(|p| entry_at(p, 0)).collect();
+    for (e, old) in checked.iter_mut().zip(&s.library) {
+        (e.size, e.modified) = (old.size, old.modified);
+    }
+    let changed = entry_at(&paths[1], 999);
+    checked[1] = changed;
+    checked.push(entry_at(std::path::Path::new("/new/map.osu"), 1));
+    let titles: Vec<String> = s.library.iter().map(|e| e.meta.title.clone()).collect();
+    s.check_library(checked);
+    assert_eq!(
+        s.library.len(),
+        paths.len() + 1,
+        "the new map joined the end"
+    );
+    assert_eq!(
+        s.library[paths.len()].path,
+        std::path::Path::new("/new/map.osu")
+    );
+    for (i, p) in paths.iter().enumerate() {
+        assert_eq!(&s.library[i].path, p, "indices stay good");
+    }
+    assert_eq!(
+        s.library[1].meta.title, "fresh",
+        "the changed one is updated"
+    );
+    assert_eq!(
+        s.library[0].meta.title, titles[0],
+        "the rest aren't touched"
+    );
+}
+
+#[test]
+fn a_map_gone_from_disk_leaves_the_list_only_where_nothing_holds_an_index() {
+    let (mut s, paths) = checking_library();
+    let rest = |s: &State| -> Vec<library::Entry> {
+        s.library[1..]
+            .iter()
+            .map(|e| library::Entry::from_parts(e.path.clone(), e.meta.clone(), e.size, e.modified))
+            .collect()
+    };
+    let keep = paths[2].clone();
+    s.select.select_path(&s.library, &keep);
+    let selected = s.select.selected();
+    // Somewhere that may hold an index: it waits for the next launch.
+    s.scene = Scene::MpMenu;
+    let checked = rest(&s);
+    s.check_library(checked);
+    assert_eq!(s.library.len(), paths.len());
+    assert_eq!(s.select.selected(), selected);
+    // On song select: it goes, and the selection stays on its map.
+    s.scene = Scene::Select;
+    let checked = rest(&s);
+    s.check_library(checked);
+    assert_eq!(s.library.len(), paths.len() - 1);
+    let now = s.select.selected().map(|i| s.library[i].path.clone());
+    assert_eq!(now, Some(keep));
+}
+
 #[test]
 fn watching_a_play_of_a_map_being_downloaded_shows_how_far_along_it_is() {
     use std::sync::atomic::AtomicU64;

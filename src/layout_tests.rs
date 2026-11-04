@@ -86,7 +86,7 @@ pub(crate) fn state() -> State {
     let library: Vec<Entry> = (0..12)
         .flat_map(|s| (0..3).map(move |d| entry(s, d, s % 2 == 0)))
         .collect();
-    tx.send(library).unwrap();
+    tx.send(Scanned::Done(library)).unwrap();
     let mut s = State::new(
         cfg,
         None,
