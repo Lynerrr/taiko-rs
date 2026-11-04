@@ -20,7 +20,9 @@
 //!   /u/<name>/ban     POST: an admin bans them (on=0: lets them back)
 //!   /u/<name>/rename  POST (name): an admin gives them a new name
 //!   /s/<id>/pp        POST: an admin sets a play's pp (empty: back to what was sent)
-//!   /s/<id>/delete    POST: an admin deletes a play
+//!   /s/<id>/delete    POST: an admin deletes a play (the "200" group: a play of their own)
+//!   /reset-account    POST: the "200" group wipes their own plays and play time
+//!   /u/<name>/200     POST: an admin puts them in the "200" group (on=0: takes them out)
 //!   /login /logout    the website's session (the game's accounts)
 //!   /register         a new account, with a code mailed to its email
 //!   /reset            a new password, with a code mailed to the account's email
@@ -677,6 +679,7 @@ fn route(state: &State, req: &Req) -> Reply {
                     own,
                     viewer_admin: req.key().is_some_and(|me| crate::is_admin(&me)),
                     banned: state.is_banned(&key),
+                    two_hundred: state.is_two_hundred(&key),
                     // Their own page tells a nominator how to love maps from Discord.
                     verify_code: (own && nominator).then(|| state.verify_code(&key)),
                 };
@@ -846,6 +849,11 @@ fn route(state: &State, req: &Req) -> Reply {
                         .key()
                         .filter(|me| crate::is_admin(me))
                         .and_then(|_| state.scores.lock().unwrap().pp_of(score.id));
+                    // The "200" group may delete their own plays.
+                    let own_delete = admin.is_none()
+                        && req.key().is_some_and(|me| {
+                            me == score.player.to_ascii_lowercase() && state.is_two_hundred(&me)
+                        });
                     let notice = req.arg("msg");
                     req.page_with(
                         200,
@@ -857,6 +865,7 @@ fn route(state: &State, req: &Req) -> Reply {
                             place,
                             req.arg("watch").is_some(),
                             admin,
+                            own_delete,
                             notice.as_deref(),
                         ),
                     )
@@ -1067,23 +1076,40 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
             let Ok(id) = id.parse::<u64>() else {
                 return req.not_found("That is not a score link");
             };
-            if !crate::is_admin(&key) {
-                return Reply::see_other(format!(
-                    "/s/{id}?msg={}",
-                    encode("only admins can do that")
-                ));
-            }
-            let removed = state.scores.lock().unwrap().remove(id);
-            match removed {
-                Ok(player) => {
-                    println!("score {id} by {player} deleted by {key}");
-                    Reply::see_other(format!(
-                        "/u/{player}?msg={}",
-                        encode(&format!("Score {id} is deleted"))
-                    ))
-                }
+            match state.delete_play(&key, id) {
+                Ok(player) => Reply::see_other(format!(
+                    "/u/{player}?msg={}",
+                    encode(&format!("Score {id} is deleted"))
+                )),
                 Err(e) => Reply::see_other(format!("/s/{id}?msg={}", encode(&e))),
             }
+        }
+        // Only ever the account logged in: no name in the address can point it elsewhere.
+        ["reset-account"] => {
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let msg = match state.reset_own(&key) {
+                Ok(n) => format!(
+                    "Your account is reset: {n} play{} deleted",
+                    if n == 1 { "" } else { "s" }
+                ),
+                Err(e) => e,
+            };
+            Reply::see_other(format!(
+                "/u/{}?msg={}",
+                state.display_name(&key),
+                encode(&msg)
+            ))
+        }
+        ["u", name, "200"] => {
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let msg = state
+                .set_two_hundred(&key, name, req.field("on") != "0")
+                .unwrap_or_else(|e| e);
+            Reply::see_other(format!("/u/{}?msg={}", encode(name), encode(&msg)))
         }
         ["u", name, "ban"] => {
             let Some(key) = req.key() else {
