@@ -346,6 +346,27 @@ impl WatchView {
     }
 }
 
+/// How far along the download of the set `m` is from is, if there's one (None inside: it's going,
+/// its size not known yet).
+fn map_download(downloads: &[download::Job], m: &net::MapInfo) -> Option<Option<f32>> {
+    downloads
+        .iter()
+        .find(|j| {
+            Some(j.set.id) == m.set_id || (j.set.title == m.title && j.set.artist == m.artist)
+        })
+        .map(download::Job::fraction)
+}
+
+fn download_text(done: Option<f32>) -> String {
+    match done {
+        Some(f) => {
+            let percent = f * 100.0;
+            tr!("downloading {percent:.0}%", "ダウンロード中 {percent:.0}%", "скачивание {percent:.0}%";)
+        }
+        None => tr!("downloading...", "ダウンロード中...", "скачивание...").into(),
+    }
+}
+
 struct Toast {
     text: String,
     until: Instant,
@@ -13929,13 +13950,24 @@ impl State {
                             );
                         }
                     }
-                    None => canvas.text_centered(
-                        canvas.width / 2.0,
-                        220.0,
-                        12.0,
-                        rgba(0xffffff, 1.0),
-                        &v.status(),
-                    ),
+                    None => {
+                        // The map they're playing, on its way.
+                        let got = v
+                            .play
+                            .as_ref()
+                            .filter(|_| v.fetching && v.entry.is_none())
+                            .and_then(|p| map_download(&self.downloads, &p.map));
+                        let looking =
+                            v.fetching && v.entry.is_none() && self.lobby_lookup.is_some();
+                        let text = got.map_or_else(|| v.status(), download_text);
+                        let w = canvas.width;
+                        canvas.text_centered(w / 2.0, 220.0, 12.0, rgba(0xffffff, 1.0), &text);
+                        if got.is_some() || looking {
+                            let bw = (w - 48.0).min(300.0);
+                            let at = (w - bw) / 2.0;
+                            multiplayer::draw_fetch_bar(canvas, at, 240.0, bw, got.flatten());
+                        }
+                    }
                 }
                 canvas.text_centered(
                     canvas.width / 2.0,
@@ -14759,17 +14791,8 @@ impl State {
             return Some(("asking the host for the map...".into(), None));
         }
         let m = self.mp.as_ref()?.map.as_ref()?;
-        let job = self.downloads.iter().find(|j| {
-            Some(j.set.id) == m.set_id || (j.set.title == m.title && j.set.artist == m.artist)
-        })?;
-        let done = job.fraction();
-        Some((
-            match done {
-                Some(f) => format!("downloading {:.0}%", f * 100.0),
-                None => "downloading...".into(),
-            },
-            done,
-        ))
+        let done = map_download(&self.downloads, m)?;
+        Some((download_text(done), done))
     }
 
     /// Scores saved before pp get theirs worked out in the background, once, and the index is

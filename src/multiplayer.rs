@@ -1382,7 +1382,7 @@ fn status_text(p: &PlayerInfo, map_chosen: bool) -> (&'static str, u32) {
 /// settings (password, players, rate, Defense and its rules: the host's to change, a click or
 /// a key each) and the chat. Under them, what can be done.
 /// The lobby map's progress bar: how much is `done`, or a block going to and fro until that's known.
-fn draw_fetch_bar(c: &mut Canvas, x: f32, y: f32, w: f32, done: Option<f32>) {
+pub fn draw_fetch_bar(c: &mut Canvas, x: f32, y: f32, w: f32, done: Option<f32>) {
     c.round_rect(
         [x, y],
         [w, 5.0],

@@ -214,6 +214,48 @@ fn watched_play() -> online::SoloPlay {
 }
 
 #[test]
+fn watching_a_play_of_a_map_being_downloaded_shows_how_far_along_it_is() {
+    use std::sync::atomic::AtomicU64;
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let play = watched_play();
+    let (_tx, rx) = std::sync::mpsc::channel();
+    s.downloads.push(download::Job {
+        set: download::SetInfo {
+            id: 0,
+            artist: play.map.artist.clone(),
+            title: play.map.title.clone(),
+            creator: String::new(),
+            status: String::new(),
+            diffs: Vec::new(),
+            play_count: 0,
+            favourite_count: 0,
+            rating: 0.0,
+            ranked_date: String::new(),
+        },
+        done: Arc::new(AtomicU64::new(25)),
+        total: Arc::new(AtomicU64::new(100)),
+        rx,
+        maps: Vec::new(),
+        update: false,
+    });
+    let mut v = WatchView::new("bob".into());
+    v.play = Some(play);
+    v.fetching = true;
+    s.scene = Scene::Watch(Box::new(v));
+    let mut c = Canvas {
+        audit: true,
+        ..Default::default()
+    };
+    s.build_frame(&mut c, Instant::now(), 853.3);
+    assert!(
+        c.texts.iter().any(|(_, t)| t == "downloading 25%"),
+        "{:?}",
+        c.texts.iter().map(|t| &t.1).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
