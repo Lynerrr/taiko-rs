@@ -261,9 +261,14 @@ pub const SLIDE_MS: f32 = 240.0;
 /// How far the panel and the tab run on past the edge that cuts them off, to hide their corners.
 const EDGE_BLEED: f32 = 12.0;
 /// The tab on the right edge of the screen that pulls the overlay out, and rides on it.
-const TAB_W: f32 = 17.0;
-const TAB_MIDDLE: f32 = 240.0;
+const TAB_W: f32 = 22.0;
+pub const TAB_MIDDLE: f32 = 240.0;
+/// The main menu's panel reaches the sides at that height: under it.
+pub const TAB_MENU_MIDDLE: f32 = 360.0;
 const TAB_TEXT: f32 = 6.5;
+/// A row of the tab's text, and the room at its ends.
+const TAB_ROW: f32 = 8.0;
+const TAB_PAD: f32 = 6.0;
 
 impl Social {
     /// Closes the overlay; it slides away (`closing`).
@@ -752,7 +757,7 @@ pub fn draw(
     lobby: Option<&[(String, String)]>,
     lobby_unread: usize,
     dim: bool,
-    tab: bool,
+    tab: Option<f32>,
 ) {
     // It slides out of the edge of the screen, and back in there.
     let slide = match s.closing() {
@@ -774,8 +779,8 @@ pub fn draw(
             rgba(0x000000, 0.32 * slide),
         );
     }
-    if tab {
-        draw_tab(c, s, x, lobby_unread);
+    if let Some(middle) = tab {
+        draw_tab(c, s, x, middle, lobby_unread);
     }
     // A soft shadow on the left, then the panel and its header strip.
     for (i, alpha) in [0.10, 0.07, 0.04].into_iter().enumerate() {
@@ -2264,30 +2269,59 @@ pub fn panel_rect(width: f32) -> [f32; 4] {
 }
 
 /// The tab that opens the overlay (menus, when logged in), at the edge of the screen.
-pub fn draw_chip(c: &mut Canvas, s: &Social, lobby_unread: usize) {
-    draw_tab(c, s, c.width, lobby_unread);
+pub fn draw_chip(c: &mut Canvas, s: &Social, middle: f32, lobby_unread: usize) {
+    draw_tab(c, s, c.width, middle, lobby_unread);
 }
 
-/// The tab with its right side at `right`: unread messages and requests on it, and who's online
-/// reading up it. It's drawn past `right`, for the panel or the screen's edge to cut it off.
-fn draw_tab(c: &mut Canvas, s: &Social, right: f32, lobby_unread: usize) {
-    let unread = s.unread_total() + lobby_unread + s.requests.len();
-    let label = if s.connected {
-        format!("friends {}  F9", s.online_count())
-    } else {
-        "friends  F9".into()
-    };
+/// One row of the tab, top to bottom.
+enum TabRow {
+    Dot,
+    Text(String),
+    Gap,
+}
+
+impl TabRow {
+    fn height(&self) -> f32 {
+        match self {
+            TabRow::Dot => 9.0,
+            TabRow::Text(_) => TAB_ROW,
+            TabRow::Gap => 6.0,
+        }
+    }
+}
+
+/// `word`, a letter to a row.
+fn tab_letters(rows: &mut Vec<TabRow>, word: &str) {
+    rows.extend(word.chars().map(|l| TabRow::Text(l.to_string())));
+}
+
+/// What the tab says: who's online, friends and its key. Letters stack; a number and the key
+/// stay whole, each on a row of its own.
+fn tab_rows(s: &Social) -> Vec<TabRow> {
+    let mut rows = Vec::new();
     // Everyone online first, after a green dot (once the server says).
-    let online = s
-        .players
-        .as_ref()
-        .filter(|_| s.connected)
-        .map(|_| format!("{} online   ", s.online_total));
-    let online_w = online
-        .as_deref()
-        .map_or(0.0, |t| Canvas::text_width(TAB_TEXT, t) + 9.0);
-    let len = Canvas::text_width(TAB_TEXT, &label) + online_w + 22.0;
-    let (x, y) = (right - TAB_W, TAB_MIDDLE - len / 2.0);
+    if s.players.is_some() && s.connected {
+        rows.push(TabRow::Dot);
+        rows.push(TabRow::Text(s.online_total.to_string()));
+        tab_letters(&mut rows, "online");
+        rows.push(TabRow::Gap);
+    }
+    tab_letters(&mut rows, "friends");
+    if s.connected {
+        rows.push(TabRow::Text(s.online_count().to_string()));
+    }
+    rows.push(TabRow::Gap);
+    rows.push(TabRow::Text("F9".into()));
+    rows
+}
+
+/// The tab with its right side at `right` and its middle at `middle`, with unread messages and requests on it. It's drawn
+/// past `right`, for the panel or the screen's edge to cut it off.
+fn draw_tab(c: &mut Canvas, s: &Social, right: f32, middle: f32, lobby_unread: usize) {
+    let unread = s.unread_total() + lobby_unread + s.requests.len();
+    let rows = tab_rows(s);
+    let len = rows.iter().map(TabRow::height).sum::<f32>() + 2.0 * TAB_PAD;
+    let (x, y) = (right - TAB_W, middle - len / 2.0);
     let hover = c.hovered(x, y, TAB_W, len);
     c.round_rect(
         [x, y],
@@ -2297,23 +2331,28 @@ fn draw_tab(c: &mut Canvas, s: &Social, right: f32, lobby_unread: usize) {
         rgba(0x3a3a4e, 1.0),
         1.0,
     );
-    // Laid out along a line from (0, 0), then stood up to read from the bottom.
-    let start = c.shapes.len();
-    let mut along = 0.0;
-    if let Some(online) = &online {
-        c.circle(2.5, 0.0, 2.5, rgba(GREEN, 1.0), rgba(0x000000, 0.0), 0.0);
-        c.text(9.0, -TAB_TEXT / 2.0, TAB_TEXT, rgba(0xc8c8d8, 1.0), online);
-        along = online_w;
+    let cx = x + TAB_W / 2.0;
+    let mut ry = y + TAB_PAD;
+    for row in &rows {
+        match row {
+            TabRow::Dot => c.circle(
+                cx,
+                ry + 3.5,
+                2.5,
+                rgba(GREEN, 1.0),
+                rgba(0x000000, 0.0),
+                0.0,
+            ),
+            TabRow::Text(text) => {
+                // A long count comes out smaller rather than past the tab's sides.
+                let size = Canvas::fit_size(TAB_TEXT, 4.0, TAB_W - 2.0, text);
+                let top = ry + (TAB_ROW - size) / 2.0;
+                c.text_centered(cx, top, size, rgba(0xc8c8d8, 1.0), text);
+            }
+            TabRow::Gap => {}
+        }
+        ry += row.height();
     }
-    c.text(
-        along,
-        -TAB_TEXT / 2.0,
-        TAB_TEXT,
-        rgba(0xc8c8d8, 1.0),
-        &label,
-    );
-    let dest = [x + TAB_W / 2.0, y + len - 11.0];
-    c.rotate_since(start, [0.0, 0.0], -std::f32::consts::FRAC_PI_2, 1.0, dest);
     c.hit(x, y, TAB_W, len, Hit::SocialToggle);
     badge(c, x + 3.0, y + 1.0, unread, 1.0);
 }
@@ -2327,9 +2366,9 @@ mod tests {
         let mut c = Canvas::default();
         c.clear(853.0);
         if open {
-            draw(&mut c, s, true, None, 0, true, true);
+            draw(&mut c, s, true, None, 0, true, Some(TAB_MIDDLE));
         } else {
-            draw_chip(&mut c, s, 0);
+            draw_chip(&mut c, s, TAB_MIDDLE, 0);
         }
         c.hits
             .iter()
@@ -2345,6 +2384,19 @@ mod tests {
         let [x, _, w, h] = tab_rect(&s, false);
         assert_eq!(x + w, 853.0, "against the edge of the screen");
         assert!(h > w, "taller than it's wide");
+        s.connected = true;
+        s.players = Some(Vec::new());
+        s.online_total = 123_456;
+        let rows = tab_rows(&s);
+        let row = |text: &str| {
+            rows.iter()
+                .any(|r| matches!(r, TabRow::Text(t) if t == text))
+        };
+        assert!(row("F9"), "the key stays on one row");
+        assert!(row("123456"), "so does a count");
+        assert!(row("o") && !row("online"), "words stack a letter to a row");
+        let size = Canvas::fit_size(TAB_TEXT, 4.0, TAB_W - 2.0, "123456");
+        assert!(Canvas::text_width(size, "123456") <= TAB_W);
         s.open = true;
         let [x, _, w, _] = tab_rect(&s, true);
         assert_eq!(x + w, panel_rect(853.0)[0], "on the panel's left side");

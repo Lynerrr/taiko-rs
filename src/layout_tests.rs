@@ -15,6 +15,11 @@ thread_local! {
     static PHONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+thread_local! {
+    /// How many frames the friends tab was checked on: none would mean it was never looked at.
+    static TAB_SEEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn widths() -> &'static [f32] {
     if PHONE.with(std::cell::Cell::get) {
         &PHONE_WIDTHS
@@ -120,6 +125,21 @@ fn check(s: &mut State, what: &str, out: &mut Vec<String>) {
             let (iw, ih, rgb) = debug::rasterize(&c, 2.0);
             let name = format!("{}-{w:.0}.png", what.replace([' ', '/'], "_"));
             debug::write_png(&std::path::Path::new(&dir).join(name), iw, ih, &rgb).unwrap();
+        }
+        // The friends tab shows once logged in, on every screen: logged in, nothing's under it.
+        let account = s.mp_menu.account.clone();
+        s.mp_menu.account = account.clone().or(Some("Player".into()));
+        let mut c = Canvas {
+            audit: true,
+            ..Default::default()
+        };
+        s.build_frame(&mut c, Instant::now() + Duration::from_millis(32), w);
+        s.mp_menu.account = account;
+        if let Some(problems) = debug::edge_tab_problems(&c, &s.hits) {
+            TAB_SEEN.with(|n| n.set(n.get() + 1));
+            for p in problems {
+                out.push(format!("[{what} @{w:.0}] {p}"));
+            }
         }
     }
 }
@@ -1306,6 +1326,10 @@ fn assert_every_screen_fits() {
         eprintln!("{p}");
     }
     assert!(out.is_empty(), "{} layout problems", out.len());
+    assert!(
+        TAB_SEEN.with(std::cell::Cell::get) > 100,
+        "the friends tab was hardly ever on screen to be checked"
+    );
 }
 
 #[test]

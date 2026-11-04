@@ -10246,6 +10246,29 @@ impl State {
         !self.in_song() || matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_))
     }
 
+    /// Where the friends tab goes on this screen, if it shows: not over a play, or over anything
+    /// that takes up the whole screen (F9 still opens the panel there).
+    fn social_tab_middle(&self) -> Option<f32> {
+        let covered = self.in_song()
+            || self.player.is_some()
+            || self.mod_select.is_some()
+            || self.random_setup.is_some()
+            || self.universe_setup.is_some()
+            || matches!(
+                self.scene,
+                Scene::Settings { .. }
+                    | Scene::LayoutEdit { .. }
+                    | Scene::HudEdit { .. }
+                    | Scene::Preview { .. }
+            );
+        let middle = if self.on_menu() {
+            social::TAB_MENU_MIDDLE
+        } else {
+            social::TAB_MIDDLE
+        };
+        (!covered).then_some(middle)
+    }
+
     fn open_social(&mut self) {
         if !self.social.open {
             self.social.open = true;
@@ -14333,7 +14356,7 @@ impl State {
             };
             // The screen behind darkens, but not a play being watched.
             let dim = !self.in_song();
-            let tab = logged_in && !self.in_song() && self.player.is_none();
+            let tab = self.social_tab_middle().filter(|_| logged_in);
             if self.social.open {
                 social::draw(
                     canvas,
@@ -14356,8 +14379,8 @@ impl State {
                     tab,
                 );
                 canvas.hits.truncate(hits);
-            } else if tab {
-                social::draw_chip(canvas, &self.social, lobby_unread);
+            } else if let Some(middle) = tab {
+                social::draw_chip(canvas, &self.social, middle, lobby_unread);
             }
             social::draw_notes(canvas, &self.social);
         }
