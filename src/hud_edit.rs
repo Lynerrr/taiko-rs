@@ -900,9 +900,9 @@ impl Editor {
 
     fn draw_help(&self, c: &mut Canvas) {
         let help = tr!(
-            "Drag: attaches to the lane (Shift: free).  Wheel: size.  Arrows: nudge.  H: show.  P: panel",
-            "ドラッグ: レーンに取り付け (Shift: 自由)。ホイール: サイズ。矢印: 微調整。H: 表示。P: パネル",
-            "Тяните: крепится к дорожке (Shift: свободно). Колесо: размер. Стрелки: сдвиг. H: показать. P: панель"
+            "Drag: near the lane it attaches to it (Shift: free).  Wheel: size.  Arrows: nudge.  H: show.  P: panel",
+            "ドラッグ: レーン付近で取り付け (Shift: 自由)。ホイール: サイズ。矢印: 微調整。H: 表示。P: パネル",
+            "Тяните: у дорожки крепится к ней (Shift: свободно). Колесо: размер. Стрелки: сдвиг. H: показать. P: панель"
         );
         let panel = if self.panel_hidden {
             0.0
