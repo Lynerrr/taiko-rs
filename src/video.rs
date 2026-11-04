@@ -491,7 +491,7 @@ impl Editor {
             ],
         );
         c.button_row(
-            y + 24.0,
+            y + 26.0,
             &[
                 (&crop, Hit::Key(KeyCode::KeyC), false),
                 (&size, Hit::Key(KeyCode::KeyZ), false),
@@ -500,7 +500,7 @@ impl Editor {
             ],
         );
         c.button_row(
-            y + 48.0,
+            y + 52.0,
             &[
                 (&quality, Hit::Key(quality_key), self.typing.is_some()),
                 (&speed, Hit::Key(KeyCode::KeyE), false),
@@ -513,7 +513,7 @@ impl Editor {
             actions.push(("Show in folder  (S)", Hit::Key(KeyCode::KeyS), false));
         }
         actions.push(("Back  (Esc)", Hit::Key(KeyCode::Escape), false));
-        c.button_row(y + 72.0, &actions);
+        c.button_row(y + 78.0, &actions);
         // What the settings come to, unless there's something to say.
         let (line, col) = if !status.is_empty() {
             (status.to_string(), 0xFFD34D)

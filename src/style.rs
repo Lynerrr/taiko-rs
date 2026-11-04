@@ -263,7 +263,7 @@ pub fn pill(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32, col: u32) {
     c.round_rect(
         [x, y],
         [w, h],
-        h / 2.0,
+        (h * 0.3).min(5.0),
         rgba(crate::menu::tint(col, 0x000000, 0.25), 0.95),
         rgba(0xffffff, 0.35),
         1.0,

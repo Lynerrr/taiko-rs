@@ -2662,6 +2662,8 @@ pub enum Hit {
     /// A text field (a search box, the message box): on Android, tapping it brings up the
     /// on-screen keyboard.
     TextField,
+    /// The line to write on under the lobby's chat.
+    LobbyChat,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2669,7 +2671,7 @@ pub struct HitBox {
     pub rect: [f32; 4],
     pub hit: Hit,
     /// Shapes drawn before it, so a transform of later shapes (the playfield area) moves it too.
-    shape: usize,
+    pub(crate) shape: usize,
 }
 
 impl HitBox {
@@ -2948,7 +2950,16 @@ impl Canvas {
             (false, false) => (0x23232f, 0x3a3a4e),
             (false, true) => (0x34344a, 0x6a6a88),
         };
-        self.round_rect([x, y], [w, h], 6.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
+        // Small buttons get a small radius too: never a pill.
+        let radius = (h * 0.3).min(6.0);
+        self.round_rect(
+            [x, y],
+            [w, h],
+            radius,
+            rgba(bg, 1.0),
+            rgba(border, 1.0),
+            1.0,
+        );
         // A label too long for the button shrinks a little, then gets cut short.
         let room = w - 8.0;
         let size = Self::fit_size(size, size * 0.8, room, label);

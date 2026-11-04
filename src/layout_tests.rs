@@ -2167,3 +2167,139 @@ fn update_notes_open_when_ready_without_replacing_a_manual_view() {
     assert!(s.pending_changelog.is_none());
     assert!(!s.changelog.as_ref().unwrap().after_update);
 }
+
+#[test]
+fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
+    let mut s = state();
+    let mut room = session(false);
+    room.client.id = Some(0);
+    s.mp = Some(room);
+    s.scene = Scene::Lobby;
+    let at = Instant::now();
+    let key = |s: &mut State, code, text: Option<&str>| s.key_inner(code, false, text, at, None);
+
+    key(&mut s, KeyCode::KeyT, Some("t"));
+    assert_eq!(s.mp.as_ref().unwrap().chat_input.as_deref(), Some(""));
+    // Space would toggle ready and digits would step Defense's rules.
+    key(&mut s, KeyCode::KeyH, Some("h"));
+    key(&mut s, KeyCode::Space, Some(" "));
+    key(&mut s, KeyCode::Digit1, Some("1"));
+    let mp = s.mp.as_ref().unwrap();
+    assert_eq!(mp.chat_input.as_deref(), Some("h 1"));
+    assert!(!mp.ready, "Space typed a space");
+
+    // Esc only puts the line away; the lobby stays.
+    key(&mut s, KeyCode::Escape, None);
+    assert!(s.mp.as_ref().unwrap().chat_input.is_none());
+    assert!(matches!(s.scene, Scene::Lobby));
+
+    // Enter sends and closes.
+    key(&mut s, KeyCode::KeyT, Some("t"));
+    key(&mut s, KeyCode::KeyO, Some("o"));
+    key(&mut s, KeyCode::Backspace, None);
+    key(&mut s, KeyCode::KeyK, Some("k"));
+    assert_eq!(s.mp.as_ref().unwrap().chat_input.as_deref(), Some("k"));
+    key(&mut s, KeyCode::Enter, None);
+    assert!(s.mp.as_ref().unwrap().chat_input.is_none());
+    assert!(
+        matches!(s.scene, Scene::Lobby),
+        "Enter didn't start a match"
+    );
+
+    // A click on the line focuses it; a click elsewhere puts it away.
+    s.click(render::Hit::LobbyChat, None);
+    assert!(s.mp.as_ref().unwrap().chat_input.is_some());
+    s.click(render::Hit::ListBack, None);
+    assert!(s.mp.as_ref().unwrap().chat_input.is_none());
+}
+
+#[test]
+fn the_audit_reports_touching_buttons_and_pills_but_not_spaced_ones() {
+    use crate::render::Hit;
+    let audit = |draw: &dyn Fn(&mut Canvas)| {
+        let mut c = Canvas {
+            audit: true,
+            ..Default::default()
+        };
+        c.clear(640.0);
+        c.mouse = (-1000.0, -1000.0);
+        draw(&mut c);
+        debug::layout_problems(&c)
+    };
+    let spaced = audit(&|c| {
+        c.button(
+            20.0,
+            100.0,
+            60.0,
+            20.0,
+            "One",
+            8.0,
+            Hit::Key(KeyCode::KeyA),
+            false,
+        );
+        c.button(
+            88.0,
+            100.0,
+            60.0,
+            20.0,
+            "Two",
+            8.0,
+            Hit::Key(KeyCode::KeyB),
+            false,
+        );
+    });
+    assert!(spaced.is_empty(), "{spaced:?}");
+    let touching = audit(&|c| {
+        c.button(
+            20.0,
+            100.0,
+            60.0,
+            20.0,
+            "One",
+            8.0,
+            Hit::Key(KeyCode::KeyA),
+            false,
+        );
+        c.button(
+            82.0,
+            100.0,
+            60.0,
+            20.0,
+            "Two",
+            8.0,
+            Hit::Key(KeyCode::KeyB),
+            false,
+        );
+    });
+    assert!(
+        touching.iter().any(|p| p.contains("buttons touch")),
+        "{touching:?}"
+    );
+    let pill = audit(&|c| {
+        c.round_rect(
+            [20.0, 100.0],
+            [60.0, 14.0],
+            7.0,
+            render::rgba(0x23232f, 1.0),
+            render::rgba(0x3a3a4e, 1.0),
+            1.0,
+        );
+        c.hit(20.0, 100.0, 60.0, 14.0, Hit::Key(KeyCode::KeyA));
+    });
+    assert!(pill.iter().any(|p| p.contains("pill")), "{pill:?}");
+    // Plain rows of a list sit one on another by design.
+    let rows = audit(&|c| {
+        for (k, y) in [100.0, 120.0].into_iter().enumerate() {
+            c.round_rect(
+                [20.0, y],
+                [200.0, 20.0],
+                4.0,
+                render::rgba(0x23232f, 1.0),
+                render::rgba(0, 0.0),
+                0.0,
+            );
+            c.hit(20.0, y, 200.0, 20.0, Hit::SongRow(k));
+        }
+    });
+    assert!(rows.is_empty(), "{rows:?}");
+}

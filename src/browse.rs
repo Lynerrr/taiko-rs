@@ -385,7 +385,7 @@ impl Browse {
                 label,
             );
             c.hit(x, y, w, 15.0, hit);
-            w + 3.0
+            w + 6.0
         };
         // Each group on its own line, wrapping onto more when the column is narrow; the list
         // starts under them.
@@ -396,11 +396,11 @@ impl Browse {
             for (label, on, hit) in chips {
                 if x > x0 + 32.0 && x + Canvas::text_width(6.0, &label) + 8.0 > x0 + col {
                     x = x0 + 32.0;
-                    *y += 18.0;
+                    *y += 19.0;
                 }
                 x += chip(c, x, *y, &label, on, hit);
             }
-            *y += 19.0;
+            *y += 20.0;
         };
         let cats = Category::ALL
             .iter()

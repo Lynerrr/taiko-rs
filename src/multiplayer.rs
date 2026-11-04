@@ -30,6 +30,9 @@ pub struct Session {
     /// Lobby chat: (name, line), oldest first; and lines not seen yet.
     pub chat: Vec<(String, String)>,
     pub chat_unread: usize,
+    /// A chat line being typed in the lobby (T or a click on its line), and its caret.
+    pub chat_input: Option<String>,
+    pub chat_caret: usize,
     /// The lobby's id on the online server (friends can join it from their list).
     pub online_room: Option<u32>,
     /// The room plays mapguessr; how many maps every player has (None: a list is missing).
@@ -65,6 +68,8 @@ impl Session {
             inputs_sent: 0,
             chat: Vec::new(),
             chat_unread: 0,
+            chat_input: None,
+            chat_caret: 0,
             online_room: None,
             mapguessr: false,
             common: None,
@@ -1568,7 +1573,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
                 let bw = Canvas::text_width(6.5, label) + 10.0;
                 name_end -= bw;
                 c.button(name_end, y + 6.0, bw, 14.0, label, 6.5, hit, false);
-                name_end -= 4.0;
+                name_end -= 6.0;
             }
         } else {
             let (st, colour) = status_text(p, s.map.is_some());
@@ -1719,7 +1724,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
     // The chat.
     let cy = top + room_h + 8.0;
     let ch = bottom - cy;
-    if ch > 30.0 {
+    if ch > 44.0 {
         c.round_rect(
             [rx, cy],
             [rw, ch],
@@ -1733,13 +1738,55 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             cy + 10.0,
             8.0,
             rgba(0x4fb4ff, 1.0),
-            tr!(
-                "CHAT  (F9 to write)",
-                "チャット  (F9で書く)",
-                "ЧАТ  (F9 — написать)"
-            ),
+            tr!("CHAT", "チャット", "ЧАТ"),
         );
-        let lines = ((ch - 30.0) / 11.0).max(0.0) as usize;
+        // The line to write on, along the bottom of the box.
+        let (ix, iw, ih) = (rx + 8.0, rw - 16.0, 16.0);
+        let iy = cy + ch - ih - 6.0;
+        let focused = s.chat_input.is_some();
+        let hover = c.hovered(ix, iy, iw, ih);
+        c.round_rect(
+            [ix, iy],
+            [iw, ih],
+            4.0,
+            rgba(0x0e0e14, 0.9),
+            rgba(
+                if focused {
+                    crate::render::accent()
+                } else if hover {
+                    0x6a6a88
+                } else {
+                    0x2a2a38
+                },
+                1.0,
+            ),
+            1.0,
+        );
+        match &s.chat_input {
+            Some(typed) => {
+                let room = iw - 16.0;
+                let shown = Canvas::fit_end(7.0, room, typed);
+                c.text(ix + 8.0, iy + 4.5, 7.0, rgba(0xffffff, 1.0), &shown);
+                // The caret sits in the text when all of it fits, else at the end.
+                let at = if shown == *typed {
+                    crate::settings::caret_x(7.0, typed, s.chat_caret)
+                } else {
+                    Canvas::text_width(7.0, &shown)
+                };
+                c.rect(ix + 8.0 + at, iy + 3.0, 1.0, ih - 6.0, rgba(0xffffff, 1.0));
+            }
+            None => {
+                c.text(
+                    ix + 8.0,
+                    iy + 4.5,
+                    7.0,
+                    rgba(0x6f6f86, 1.0),
+                    tr!("T - write", "T - 書く", "T - написать"),
+                );
+            }
+        }
+        c.hit(ix, iy, iw, ih, Hit::LobbyChat);
+        let lines = ((ch - 30.0 - ih - 6.0) / 11.0).max(0.0) as usize;
         for (k, (from, text)) in s
             .chat
             .iter()
@@ -1816,10 +1863,12 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
                 ("Leave  (Esc)", Hit::Key(KeyCode::Escape), false),
             ],
         );
-        let hint = if s.edit_password.is_some() {
+        let hint = if s.chat_input.is_some() {
+            "type a message   Enter send   Esc cancel"
+        } else if s.edit_password.is_some() {
             "type the new password   Enter save (empty: none)   Esc cancel"
         } else {
-            "S spectate   [ ] rate   C defense (1-5 its rules)   K password   L players   F1 mods   Tab songs"
+            "T chat   S spectate   [ ] rate   C defense (1-5 its rules)   K password   L players   F1 mods   Tab songs"
         };
         c.text_centered(
             w / 2.0,

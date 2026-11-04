@@ -562,6 +562,135 @@ pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
             }
         }
     }
+    out.extend(button_problems(c));
+    out
+}
+
+fn gap_y_of(a: &[f32; 4], b: &[f32; 4]) -> f32 {
+    a[1].max(b[1]) - a[3].min(b[3])
+}
+
+/// Buttons (a clickable rect with a rounded box of the same size) that touch each other, and
+/// buttons rounded into pills. Lists of rows (same x and width, no border) are left alone, and so
+/// are round icon buttons (as wide as tall).
+fn button_problems(c: &crate::render::Canvas) -> Vec<String> {
+    const GAP: f32 = 3.5;
+    // (box rect x0 y0 x1 y1, hit, bordered, label)
+    let mut buttons: Vec<([f32; 4], crate::render::Hit, bool)> = Vec::new();
+    let mut out = Vec::new();
+    for h in &c.hits {
+        let [hx, hy, hw, hh] = h.rect;
+        if hw < 12.0 || hh < 8.0 || hh > 40.0 {
+            continue;
+        }
+        // The topmost visible box drawn before the hit with the hit's own size.
+        let Some(&b) = c.boxes.iter().rev().filter(|&&b| b < h.shape).find(|&&b| {
+            let sh = &c.shapes[b];
+            (sh.center[0] - sh.half[0] - hx).abs() < 1.5
+                && (sh.center[1] - sh.half[1] - hy).abs() < 1.5
+                && (sh.half[0] * 2.0 - hw).abs() < 1.5
+                && (sh.half[1] * 2.0 - hh).abs() < 1.5
+        }) else {
+            continue;
+        };
+        let sh = &c.shapes[b];
+        if sh.fill[3] < 0.1 && sh.border[3] < 0.1 {
+            continue;
+        }
+        // Covered by something drawn later, bigger and opaque (a dialog over a screen).
+        let covered = (h.shape..c.shapes.len()).any(|k| {
+            let o = &c.shapes[k];
+            o.fill[3] >= 0.6
+                && o.params[3] < 0.5
+                && o.half[0] * 2.0 > hw + 2.0
+                && o.half[1] * 2.0 > hh + 2.0
+                && {
+                    let ix =
+                        (hx + hw).min(o.center[0] + o.half[0]) - hx.max(o.center[0] - o.half[0]);
+                    let iy =
+                        (hy + hh).min(o.center[1] + o.half[1]) - hy.max(o.center[1] - o.half[1]);
+                    ix > 0.0 && iy > 0.0 && ix * iy >= 0.15 * hw * hh
+                }
+        });
+        // Or under a later, bigger clickable area (an overlay panel takes the clicks there).
+        let (cx, cy) = (hx + hw / 2.0, hy + hh / 2.0);
+        let shadowed = c.hits.iter().any(|o| {
+            o.shape > h.shape
+                && o.rect[2] * o.rect[3] > hw * hh * 2.0
+                && cx >= o.rect[0]
+                && cx <= o.rect[0] + o.rect[2]
+                && cy >= o.rect[1]
+                && cy <= o.rect[1] + o.rect[3]
+        });
+        // Or scrolled out of the list that clips it.
+        let clipped = c.clips.iter().any(|(r, [x, y, w, h2])| {
+            r.contains(&b) && {
+                let ix = (hx + hw).min(x + w) - hx.max(*x);
+                let iy = (hy + hh).min(y + h2) - hy.max(*y);
+                ix <= 0.0 || iy <= 0.0 || ix * iy < 0.6 * hw * hh
+            }
+        });
+        if covered || shadowed || clipped {
+            continue;
+        }
+        let bordered = sh.border[3] > 0.1 && sh.params[1] > 0.0;
+        let radius = sh.params[0].min(sh.half[0]).min(sh.half[1]);
+        let (w, hgt) = (sh.half[0] * 2.0, sh.half[1] * 2.0);
+        if radius >= 0.4 * hgt.min(w) && (w - hgt).abs() > 2.0 {
+            out.push(format!(
+                "pill: button {:?} {:.0}x{:.0} at {:.0},{:.0} is rounded all the way (radius {:.0})",
+                h.hit, w, hgt, hx, hy, radius
+            ));
+        }
+        buttons.push(([hx, hy, hx + hw, hy + hh], h.hit, bordered));
+    }
+    for (i, (a, ha, ba)) in buttons.iter().enumerate() {
+        for (b, hb, bb) in &buttons[i + 1..] {
+            if ha == hb {
+                continue;
+            }
+            // The friends panel floats over whatever screen is behind it.
+            let overlay = |h: &crate::render::Hit| {
+                matches!(
+                    h,
+                    crate::render::Hit::SocialRow(_) | crate::render::Hit::SocialPanel
+                )
+            };
+            if overlay(ha) != overlay(hb) {
+                continue;
+            }
+            // Rows of a list: same x and width, one above the other.
+            let column = (a[0] - b[0]).abs() < 1.0 && (a[2] - b[2]).abs() < 1.0;
+            if column && (!ba && !bb || gap_y_of(a, b) >= 1.0) {
+                continue;
+            }
+            // One inside the other (a button on a row).
+            let inside = |p: &[f32; 4], q: &[f32; 4]| {
+                p[0] >= q[0] - 1.0 && p[1] >= q[1] - 1.0 && p[2] <= q[2] + 1.0 && p[3] <= q[3] + 1.0
+            };
+            if inside(a, b) || inside(b, a) {
+                continue;
+            }
+            let ox = a[2].min(b[2]) - a[0].max(b[0]);
+            let oy = a[3].min(b[3]) - a[1].max(b[1]);
+            // Overlapping on one axis by more than a hair, and closer than GAP on the other.
+            let gap_x = -ox;
+            let gap_y = -oy;
+            // Deeper overlaps are screens drawn over each other (a dialog's own hits are on top).
+            let touching = (ox > 2.0 && (-0.5..GAP).contains(&gap_y))
+                || (oy > 2.0 && (-0.5..GAP).contains(&gap_x));
+            if touching {
+                out.push(format!(
+                    "buttons touch: {:?} {:?} and {:?} {:?} (gap {:.0})",
+                    ha,
+                    a,
+                    hb,
+                    b,
+                    if ox > 2.0 { gap_y } else { gap_x }
+                ));
+            }
+        }
+    }
     out
 }
 
