@@ -695,6 +695,10 @@ fn assert_every_screen_fits() {
     s.open_layout_editor();
     check(&mut s, "layout editor", &mut out);
     s.scene = Scene::Select;
+    s.open_hud_editor();
+    check(&mut s, "interface editor", &mut out);
+    s.close_hud_editor();
+    s.scene = Scene::Select;
     s.start_calibration();
     check(&mut s, "calibration", &mut out);
     let estimate = calibrate::Estimate {

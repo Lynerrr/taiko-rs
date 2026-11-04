@@ -181,6 +181,10 @@ pub struct Config {
     /// The interface during play is hidden (the toggle), and what that hides.
     pub interface_hidden: bool,
     pub interface_hides: crate::hud::Parts,
+    /// Where the interface's parts go, from the interface editor.
+    pub hud: crate::hud::Layout,
+    /// The player's own interface layouts.
+    pub hud_presets: Vec<(String, crate::hud::Layout)>,
     /// The interface toggle's key, with Shift or not.
     pub interface_key: (bool, KeyCode),
     /// 0 = uncapped. Only applies to mailbox/immediate; vsync paces itself.
@@ -361,6 +365,8 @@ impl Default for Config {
             bg_dim_black: true,
             interface_hidden: false,
             interface_hides: crate::hud::Parts::DEFAULT_HIDES,
+            hud: crate::hud::Layout::default(),
+            hud_presets: Vec::new(),
             interface_key: (true, KeyCode::Tab),
             fps_cap: 0,
             calibration_bpm: 120.0,
@@ -1026,6 +1032,8 @@ impl Config {
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
                 "interface_hidden" => cfg.interface_hidden = v == "true",
                 "interface_hides" => cfg.interface_hides = crate::hud::Parts::parse_saved(v),
+                "hud_layout" => cfg.hud = crate::hud::Layout::parse(v).unwrap_or_default(),
+                "hud_preset" => cfg.hud_presets.extend(crate::hud::parse_preset(v)),
                 "interface_key" => {
                     let (shift, name) = match v.strip_prefix("Shift+") {
                         Some(rest) => (true, rest),
@@ -1298,7 +1306,7 @@ impl Config {
         out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
         out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));
         out.push_str(&format!(
-            "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators; ! before one that came later: not hidden) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
+            "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators, ur, counts; ! before one that came later: not hidden) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
             self.interface_hidden,
             self.interface_hides.format_saved(),
             interface_key_name(self.interface_key)
@@ -1317,6 +1325,16 @@ impl Config {
             "# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (C in the mod select)\nmultiverse = {}\n",
             crate::multiverse::format(&self.universes)
         ));
+        out.push_str(&format!(
+            "# where the interface's parts go (the interface editor), and your own layouts, one per line: name: layout\nhud_layout = {}\n",
+            self.hud.format()
+        ));
+        for (name, layout) in &self.hud_presets {
+            out.push_str(&format!(
+                "hud_preset = {}\n",
+                crate::hud::format_preset(name, layout)
+            ));
+        }
         out.push_str("# your own Multiverse presets, one per line: name: universes as above\n");
         for p in &self.universe_presets {
             out.push_str(&format!("multiverse_preset = {}\n", p.format()));
