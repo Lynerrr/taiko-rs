@@ -1381,8 +1381,78 @@ fn status_text(p: &PlayerInfo, map_chosen: bool) -> (&'static str, u32) {
 /// columns, up to 16; the host can hand the role over or take a player out). Right, the room's
 /// settings (password, players, rate, Defense and its rules: the host's to change, a click or
 /// a key each) and the chat. Under them, what can be done.
-/// `download`: progress of fetching the lobby map, when it's being downloaded.
-pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<String>) {
+/// The lobby map's progress bar: how much is `done`, or a block going to and fro until that's known.
+pub fn draw_fetch_bar(c: &mut Canvas, x: f32, y: f32, w: f32, done: Option<f32>) {
+    c.round_rect(
+        [x, y],
+        [w, 5.0],
+        2.5,
+        rgba(0x15151d, 1.0),
+        rgba(0x3a3a4e, 1.0),
+        1.0,
+    );
+    let (from, len) = match done {
+        Some(f) => (0.0, (w - 2.0) * f.clamp(0.0, 1.0)),
+        None => ((w - 2.0) * 0.75 * crate::style::pulse(), (w - 2.0) * 0.25),
+    };
+    if len > 0.5 {
+        c.round_rect(
+            [x + 1.0 + from, y + 1.0],
+            [len, 3.0],
+            1.5,
+            rgba(accent(), 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
+    }
+}
+
+/// How long the host gets to start sending the map before the mirrors are tried.
+pub const HOST_PATIENCE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// What to do about the lobby's map.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Fetch {
+    Nothing,
+    /// A download's already going for this map: it counts as tried.
+    Tried(u64),
+    AskHost(u64),
+    Mirrors,
+}
+
+/// The next step in getting a lobby map we don't have by ourselves. `missing`: its hash, if it's
+/// missing and someone else has it. `tried`: the map this was last done for: each is tried once, so
+/// one that can't be had doesn't go round and round (D and M still ask again). `busy`: something's
+/// on its way. `waiting`: how long the host's been asked for, with no answer yet.
+pub fn next_fetch(
+    missing: Option<u64>,
+    tried: Option<u64>,
+    busy: bool,
+    waiting: Option<std::time::Duration>,
+) -> Fetch {
+    let Some(map) = missing else {
+        return Fetch::Nothing;
+    };
+    if tried != Some(map) {
+        return if busy {
+            Fetch::Tried(map)
+        } else {
+            Fetch::AskHost(map)
+        };
+    }
+    match waiting {
+        Some(w) if w >= HOST_PATIENCE => Fetch::Mirrors,
+        _ => Fetch::Nothing,
+    }
+}
+
+/// `download`: what's happening with the lobby map while it's fetched, and how far along it is.
+pub fn draw_lobby(
+    c: &mut Canvas,
+    s: &Session,
+    have_map: bool,
+    download: Option<(String, Option<f32>)>,
+) {
     let w = c.width;
     let right = format!("{}   ping {:.0} ms", s.label, s.client.rtt_ms);
     crate::settings::tab_bar(c, 2, &right);
@@ -1481,7 +1551,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
             );
             // How it is for us: being fetched, missing, or there to preview.
             let (note, colour) = match (&download, have_map) {
-                (Some(d), _) => (d.clone(), 0xFFD34D),
+                (Some((d, _)), _) => (d.clone(), 0xFFD34D),
                 (None, false) => (
                     tr!(
                         "not in your Songs folder - D: from the host   M: the mirrors",
@@ -1508,6 +1578,9 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, have_map: bool, download: Option<
                 rgba(colour, 1.0),
                 &Canvas::fit(7.0, iw, &note),
             );
+            if let Some((_, done)) = &download {
+                draw_fetch_bar(c, ix, top + 95.0, iw, *done);
+            }
         }
         None => {
             let t = if s.is_host() {
@@ -2338,4 +2411,30 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
             final_results.is_some(),
         )],
     );
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_map_is_asked_for_once_and_falls_back_on_a_silent_host() {
+        use std::time::Duration;
+        let long = HOST_PATIENCE + Duration::from_secs(1);
+        assert_eq!(next_fetch(None, None, false, None), Fetch::Nothing);
+        assert_eq!(next_fetch(Some(1), None, false, None), Fetch::AskHost(1));
+        // The next map is asked for too, but the same one isn't again.
+        assert_eq!(next_fetch(Some(2), Some(1), false, None), Fetch::AskHost(2));
+        assert_eq!(next_fetch(Some(1), Some(1), false, None), Fetch::Nothing);
+        // Asked by hand already.
+        assert_eq!(next_fetch(Some(1), None, true, None), Fetch::Tried(1));
+        let soon = Some(Duration::from_secs(1));
+        assert_eq!(next_fetch(Some(1), Some(1), false, soon), Fetch::Nothing);
+        assert_eq!(
+            next_fetch(Some(1), Some(1), false, Some(long)),
+            Fetch::Mirrors
+        );
+        // Got it, or nothing to get.
+        assert_eq!(next_fetch(None, Some(1), false, Some(long)), Fetch::Nothing);
+    }
 }

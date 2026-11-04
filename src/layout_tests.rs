@@ -1272,7 +1272,15 @@ fn assert_every_screen_fits() {
             c,
             &room,
             false,
-            Some("downloading the map: 45% of 12.3 MB".into()),
+            Some(("downloading the map: 45% of 12.3 MB".into(), Some(0.45))),
+        )
+    });
+    check_draw("lobby, asking the host", &mut out, |c| {
+        multiplayer::draw_lobby(
+            c,
+            &room,
+            false,
+            Some(("asking the host for the map...".into(), None)),
         )
     });
     check_draw("match waiting", &mut out, |c| {
