@@ -974,7 +974,7 @@ impl Player {
 }
 
 /// A small heart, its top left at (`x`, `y`).
-fn draw_heart(c: &mut Canvas, x: f32, y: f32, px: f32, colour: u32) {
+pub fn draw_heart(c: &mut Canvas, x: f32, y: f32, px: f32, colour: u32) {
     let (x, y) = (snap_to_grid(x), snap_to_grid(y));
     for (row, line) in HEART.iter().skip(1).enumerate() {
         for (col, b) in line.bytes().enumerate() {

@@ -85,15 +85,6 @@ impl Playlist {
                 .unwrap_or(std::path::Path::new("."))
                 .join(&e.meta.audio_file)
         };
-        let key = |e: &Entry| {
-            let folder = e
-                .path
-                .parent()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            format!("{folder}/{}", e.meta.audio_file)
-        };
         let mut tracks: Vec<Track> = library
             .iter()
             .enumerate()
@@ -104,7 +95,7 @@ impl Playlist {
                     find: label.to_lowercase(),
                     label,
                     audio: audio(e),
-                    key: key(e),
+                    key: favourite_key(e),
                     genres: e.meta.genres,
                 }
             })
@@ -328,7 +319,7 @@ fn favourites_file() -> Option<PathBuf> {
     Some(crate::config::data_dir()?.join("favourite-songs.txt"))
 }
 
-fn load_favourites() -> HashSet<String> {
+pub fn load_favourites() -> HashSet<String> {
     #[cfg(test)]
     return HashSet::new();
     #[cfg(not(test))]
@@ -344,6 +335,17 @@ fn load_favourites() -> HashSet<String> {
 }
 
 /// Keeps the favourites, sorted, so the file only changes by what changed.
+/// What the favourites know the song of `e` by: its folder and audio file, wherever Songs is.
+pub fn favourite_key(e: &Entry) -> String {
+    let folder = e
+        .path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!("{folder}/{}", e.meta.audio_file)
+}
+
 pub fn save_favourites(favourites: &HashSet<String>) {
     let Some(path) = favourites_file() else {
         return;

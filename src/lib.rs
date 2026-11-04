@@ -1493,6 +1493,11 @@ fn fetch_board(server: String, map: u64) -> Receiver<Result<Vec<online::OnlineSc
 }
 
 /// Opens a web page in the browser; false where that can't be done.
+/// Where a player's profile is on the website.
+fn profile_url(name: &str) -> String {
+    format!("{}/u/{name}", online::WEBSITE)
+}
+
 fn open_url(url: &str) -> bool {
     if cfg!(target_os = "android") {
         return false;
@@ -3314,6 +3319,7 @@ impl State {
         if let Some(p) = &mut self.player {
             p.list.toggle_favourite(track, fresh_seed());
             playlist::save_favourites(&p.list.favourites);
+            self.select.favourites = p.list.favourites.clone();
         }
     }
 
@@ -12130,6 +12136,13 @@ impl State {
             } else if code == KeyCode::KeyM {
                 let name = self.profile.take().map(|p| p.name);
                 self.open_medals(name);
+            } else if code == KeyCode::KeyB
+                && let Some(p) = &self.profile
+            {
+                let url = profile_url(&p.name);
+                if !open_url(&url) {
+                    self.toast(url);
+                }
             }
             return;
         }
@@ -13138,6 +13151,10 @@ impl State {
                     let status = self.select.selected().and_then(|i| self.map_status(i));
                     // No taller than leaves the leaderboard three rows (its tabs, rows and gaps).
                     let panel_h = 436.0 - 54.0 - 8.0 - (16.0 + 3.0 * 18.0 + 14.0);
+                    let liked = self
+                        .preview_target()
+                        .and_then(|i| self.library.get(i))
+                        .map(|e| self.select.is_liked(e));
                     if let Some(clip) = self.preview.draw_panel(
                         canvas,
                         &self.library,
@@ -13149,6 +13166,7 @@ impl State {
                         selected_stars,
                         Some(("Play from", "Shift+Enter")),
                         status,
+                        liked,
                     ) {
                         self.frame_clip = Some(clip);
                     }
@@ -13616,6 +13634,7 @@ impl State {
                         380.0,
                         self.cfg.scroll_speed,
                         stars,
+                        None,
                         None,
                         None,
                     ) {
@@ -15530,6 +15549,11 @@ impl State {
             }
             Hit::PlayerRow(track) => self.music_play(track),
             Hit::PlayerFavourite(track) => self.music_favourite(track),
+            Hit::SelectLike => {
+                if let Some(e) = self.preview_target().and_then(|i| self.library.get(i)) {
+                    self.select.toggle_like(e);
+                }
+            }
             Hit::PlayerFolders => {
                 if let Some(p) = &mut self.player {
                     p.folders_open = !p.folders_open;
@@ -15671,12 +15695,7 @@ impl State {
             Hit::BoardTab(online) => self.board_online = online,
             Hit::Changelog => self.changelog = Some(changelog::View::recent(false)),
             Hit::Account => match self.mp_menu.account.clone() {
-                Some(name) => {
-                    let url = format!("{}/u/{name}", online::WEBSITE);
-                    if !open_url(&url) {
-                        self.toast(url);
-                    }
-                }
+                Some(name) => self.open_profile(name),
                 // Logging in is in the multiplayer tab.
                 None => self.goto_tab(2),
             },
@@ -15776,6 +15795,17 @@ impl State {
                 } else if action == Some(ui::MenuAction::UpdateSong) {
                     if let Some(i) = self.select.menu_map() {
                         self.update_set(i);
+                    }
+                    self.select.menu = None;
+                } else if action == Some(ui::MenuAction::Like) {
+                    if let Some(e) = self.select.menu_map().and_then(|i| self.library.get(i)) {
+                        let title = e.meta.title.clone();
+                        let liked = self.select.toggle_like(e);
+                        self.toast(if liked {
+                            tr!("liked {title}", "{title}をお気に入りに追加", "в любимых: {title}";)
+                        } else {
+                            tr!("unliked {title}", "{title}をお気に入りから削除", "убрано из любимых: {title}";)
+                        });
                     }
                     self.select.menu = None;
                 } else if let Some(what) = action.and_then(|a| self.select.hide(a, &self.library)) {
