@@ -15466,6 +15466,7 @@ impl State {
                 render::Hit::HudRow(i) => return ed.select(i),
                 render::Hit::HudToggle(i) => return ed.toggle_part(i, &mut self.cfg),
                 render::Hit::HudPreset(i) => return ed.load_preset(i, &mut self.cfg),
+                render::Hit::HudColour(colour) => return ed.set_colour(colour, &mut self.cfg),
                 render::Hit::HudButton(b) => {
                     let outcome = ed.press_button(b, &mut self.cfg);
                     return self.hud_outcome(outcome);
@@ -15492,6 +15493,7 @@ impl State {
             | render::Hit::HudRow(_)
             | render::Hit::HudToggle(_)
             | render::Hit::HudPreset(_)
+            | render::Hit::HudColour(_)
             | render::Hit::HudButton(_) => {}
             Hit::LobbyChat => self.focus_lobby_chat(),
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),

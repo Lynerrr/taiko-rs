@@ -108,6 +108,22 @@ impl Part {
         }
     }
 
+    /// Whether it has text to colour.
+    pub fn has_text(self) -> bool {
+        matches!(
+            self,
+            Part::Score
+                | Part::Accuracy
+                | Part::Pp
+                | Part::Combo
+                | Part::Mods
+                | Part::OffsetHint
+                | Part::Judgements
+                | Part::Ur
+                | Part::Counts
+        )
+    }
+
     /// For the config.
     fn key(self) -> &'static str {
         match self {
@@ -244,14 +260,14 @@ impl Target {
         Target::Drum,
         Target::HitPoint,
     ];
-    /// The order snapping prefers them in when lines coincide, as the playfield's edges do the
-    /// screen's while it fills it: what moves with the playfield comes first, so that a part
-    /// placed on a full screen still follows the playfield when it's made smaller.
+    /// The order snapping prefers them in when lines coincide, as the lane's sides do the
+    /// playfield's and the screen's: the lane first, the one that mods move too, so that a part
+    /// placed on a full screen still follows it when it's bent or made smaller.
     const SNAP_ORDER: [Target; 5] = [
-        Target::Playfield,
         Target::Lane,
         Target::Drum,
         Target::HitPoint,
+        Target::Playfield,
         Target::Screen,
     ];
 
@@ -469,8 +485,9 @@ impl Frames {
     }
 
     /// `place`, whose box is `b`, dragged to `x`, `y`. With `snap`, each axis of the box catches
-    /// on a target's edges and centre within `tol` units, and is attached there; or on a line
-    /// of `snap`'s own (the other parts'), where it stays attached as it was.
+    /// on a target's edges and centre within `tol` units, and is attached there; on a line of
+    /// `snap`'s own (the other parts') or on nothing, it's attached to the lane, so that it goes
+    /// where the lane does under mods. Without `snap` it stays attached as it was.
     pub fn dragged(
         &self,
         place: &Place,
@@ -486,18 +503,42 @@ impl Frames {
         let (mut ax, mut ay) = (place.x, place.y);
         let mut guides = Vec::new();
         if let Some(s) = snap {
+            let (mut on_x, mut on_y) = (None, None);
             if let Some((line, on)) = self.catch(to.x, to.w, 0, &s.xs, s.tol) {
                 to.x = line - on.map_or(snap_pivot(line, to.x, to.w), |a| a.pivot) * to.w;
-                ax = on.unwrap_or(ax);
+                on_x = on;
                 guides.push(Guide::Vertical(line / self.w.max(1.0)));
             }
             if let Some((line, on)) = self.catch(to.y, to.h, 1, &s.ys, s.tol) {
                 to.y = line - on.map_or(snap_pivot(line, to.y, to.h), |a| a.pivot) * to.h;
-                ay = on.unwrap_or(ay);
+                on_y = on;
                 guides.push(Guide::Horizontal(line / VIRTUAL_HEIGHT));
             }
+            ax = on_x.unwrap_or_else(|| self.along_lane(to));
+            ay = on_y.unwrap_or_else(|| self.off_lane(to));
         }
         (self.placing(ax, ay, to), guides)
+    }
+
+    /// Attached along the lane: by its left end, middle or right end, whichever `b` is nearest.
+    fn along_lane(&self, b: Placed) -> Axis {
+        let r = self.rect(Target::Lane);
+        let middle = b.x + b.w / 2.0;
+        let at = ((middle - r[0]) / r[2].max(1.0) * 2.0)
+            .round()
+            .clamp(0.0, 2.0)
+            / 2.0;
+        axis(Target::Lane, at, at, 0.0)
+    }
+
+    /// Attached across the lane: over it from above its middle, else under it.
+    fn off_lane(&self, b: Placed) -> Axis {
+        let r = self.rect(Target::Lane);
+        if b.y + b.h / 2.0 < r[1] + r[3] / 2.0 {
+            axis(Target::Lane, 0.0, 1.0, 0.0)
+        } else {
+            axis(Target::Lane, 1.0, 0.0, 0.0)
+        }
     }
 
     /// The nearest line a box from `lo`, `len` long, catches on along one axis (`start`: 0 for
@@ -577,19 +618,70 @@ pub struct Snapping {
     pub ys: Vec<f32>,
 }
 
+/// What the hit counter shows: which counts, and whether each has its title. Without titles, the
+/// counts' colours say which is which.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Counter {
+    pub great: bool,
+    pub ok: bool,
+    pub miss: bool,
+    pub titles: bool,
+}
+
+impl Default for Counter {
+    fn default() -> Counter {
+        Counter {
+            great: true,
+            ok: true,
+            miss: true,
+            titles: true,
+        }
+    }
+}
+
+impl Counter {
+    fn format(self) -> String {
+        [
+            (self.great, "300"),
+            (self.ok, "100"),
+            (self.miss, "miss"),
+            (self.titles, "titles"),
+        ]
+        .iter()
+        .filter(|w| w.0)
+        .map(|w| w.1)
+        .collect::<Vec<_>>()
+        .join(",")
+    }
+
+    fn parse(s: &str) -> Counter {
+        let on = |word: &str| s.split(',').any(|w| w.trim() == word);
+        Counter {
+            great: on("300"),
+            ok: on("100"),
+            miss: on("miss"),
+            titles: on("titles"),
+        }
+    }
+}
+
 /// Where everything goes: a place for each part the player moved (the rest are where the game
 /// puts them), and the parts switched off.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Layout {
     places: [Option<Place>; Part::ALL.len()],
+    colours: [Option<u32>; Part::ALL.len()],
     pub off: Parts,
+    pub counter: Counter,
 }
 
 impl Default for Layout {
     fn default() -> Layout {
         Layout {
             places: [None; Part::ALL.len()],
+            colours: [None; Part::ALL.len()],
             off: Parts(Part::Ur.bit() | Part::Counts.bit()),
+            counter: Counter::default(),
         }
     }
 }
@@ -607,6 +699,15 @@ impl Layout {
         self.places[Layout::index(p)] = place;
     }
 
+    /// The colour the player picked for a part's text.
+    pub fn colour(&self, p: Part) -> Option<u32> {
+        self.colours[Layout::index(p)]
+    }
+
+    pub fn set_colour(&mut self, p: Part, colour: Option<u32>) {
+        self.colours[Layout::index(p)] = colour;
+    }
+
     pub fn shown(&self, p: Part) -> bool {
         !self.off.has(p)
     }
@@ -614,9 +715,15 @@ impl Layout {
     /// `off=ur,counts|score=screen,1,1,-18,screen,0,0,18,1|...`
     pub fn format(&self) -> String {
         let mut out = format!("off={}", self.off.format());
+        if self.counter != Counter::default() {
+            out.push_str(&format!("|counter={}", self.counter.format()));
+        }
         for p in Part::ALL {
             if let Some(place) = self.place(p) {
                 out.push_str(&format!("|{}={}", p.key(), place.format()));
+            }
+            if let Some(colour) = self.colour(p) {
+                out.push_str(&format!("|colour:{}={colour:06x}", p.key()));
             }
         }
         out
@@ -631,7 +738,16 @@ impl Layout {
             let Some((key, place)) = section.split_once('=') else {
                 continue;
             };
-            if let Some(&p) = Part::ALL.iter().find(|p| p.key() == key.trim()) {
+            let key = key.trim();
+            if key == "counter" {
+                out.counter = Counter::parse(place);
+                continue;
+            }
+            let part = |k: &str| Part::ALL.into_iter().find(|p| p.key() == k);
+            if let Some(p) = key.strip_prefix("colour:").and_then(part) {
+                let colour = u32::from_str_radix(place.trim(), 16).ok();
+                out.set_colour(p, colour.filter(|&c| c <= 0xffffff));
+            } else if let Some(p) = part(key) {
                 out.set_place(p, Place::parse(place));
             }
         }
@@ -829,7 +945,7 @@ mod tests {
         let (moved, guides) = f.dragged(&p, b, (352.0, lane_bottom + 3.0), Some(&snap));
         assert_eq!(moved.y.target, Target::Lane);
         assert_eq!((moved.y.at, moved.y.pivot), (1.0, 0.0));
-        assert_eq!(moved.x.target, Target::Playfield);
+        assert_eq!(moved.x.target, Target::Lane);
         assert_eq!((moved.x.at, moved.x.pivot), (0.5, 0.5));
         near(moved.x.off, 0.0);
         near(moved.y.off, 0.0);
@@ -839,6 +955,37 @@ mod tests {
         let there = small.resolve(&moved, size, true);
         near(there.x + there.w / 2.0, 400.0);
         near(there.y, 120.0 + lane_bottom * 0.5);
+    }
+
+    #[test]
+    fn a_part_dropped_anywhere_hangs_on_the_lane_from_the_side_its_on() {
+        let f = Frames::new(800.0, FULL);
+        let p = Place::new(on_screen(0.0, 100.0), on_screen(0.0, 100.0));
+        let size = [100.0, 20.0];
+        let b = f.resolve(&p, size, true);
+        let snap = Snapping {
+            tol: 6.0,
+            xs: Vec::new(),
+            ys: Vec::new(),
+        };
+        let lane_top = LANE_Y - LANE_H / 2.0;
+        for (to, at_y, at_x) in [
+            ((20.0, lane_top - 70.0), 0.0, 0.0),
+            ((620.0, lane_top - 70.0), 0.0, 1.0),
+            ((20.0, 400.0), 1.0, 0.0),
+            ((340.0, 400.0), 1.0, 0.5),
+        ] {
+            let (moved, guides) = f.dragged(&p, b, to, Some(&snap));
+            assert!(guides.is_empty(), "nothing near {to:?}");
+            assert_eq!(
+                (moved.x.target, moved.y.target),
+                (Target::Lane, Target::Lane)
+            );
+            assert_eq!((moved.y.at, moved.x.at), (at_y, at_x), "{to:?}");
+            let there = f.resolve(&moved, size, true);
+            near(there.x, to.0);
+            near(there.y, to.1);
+        }
     }
 
     #[test]
@@ -874,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn another_parts_line_aligns_without_changing_what_its_attached_to() {
+    fn another_parts_line_lines_a_part_up_and_it_hangs_on_the_lane() {
         let f = Frames::new(800.0, FULL);
         let p = Place::new(on_screen(0.0, 100.0), on_screen(0.0, 100.0));
         let b = f.resolve(&p, [50.0, 10.0], true);
@@ -884,7 +1031,7 @@ mod tests {
             ys: Vec::new(),
         };
         let (moved, guides) = f.dragged(&p, b, (200.0, 70.0), Some(&snap));
-        assert_eq!(moved.x.target, Target::Screen);
+        assert_eq!(moved.x.target, Target::Lane);
         near(f.resolve(&moved, [50.0, 10.0], true).x, 203.0);
         assert_eq!(guides.len(), 1);
     }
@@ -932,6 +1079,37 @@ mod tests {
         );
         assert_eq!(Layout::parse("not a layout"), None);
         assert_eq!(parse_preset("no layout here"), None);
+    }
+
+    #[test]
+    fn colours_go_through_the_config_and_tell_layouts_apart() {
+        let mut l = Layout::default();
+        l.set_colour(Part::Ur, Some(0xff8800));
+        let back = Layout::parse(&l.format()).unwrap();
+        assert_eq!(back, l);
+        assert_eq!(back.colour(Part::Ur), Some(0xff8800));
+        assert_ne!(l, Layout::default());
+        let bad = Layout::parse("off=|colour:ur=nonsense|colour:score=fffffffff").unwrap();
+        assert_eq!(
+            (bad.colour(Part::Ur), bad.colour(Part::Score)),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn the_hit_counters_options_go_through_the_config() {
+        let mut l = Layout::default();
+        assert!(!l.format().contains("counter"), "nothing said till changed");
+        l.counter.ok = false;
+        l.counter.titles = false;
+        assert_eq!(Layout::parse(&l.format()), Some(l));
+        l.counter = Counter {
+            great: false,
+            ok: false,
+            miss: false,
+            titles: false,
+        };
+        assert_eq!(Layout::parse(&l.format()), Some(l));
     }
 
     #[test]
