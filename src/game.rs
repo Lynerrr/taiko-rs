@@ -977,6 +977,16 @@ const RAIL_LIFT: f32 = LANE_Y - 160.0;
 
 /// Most ticks one roll keeps (`NoteState::ticks`).
 const MAX_ROLL_TICKS: usize = 360_000;
+/// How much of a bent lane (units) counts as one stretch of it for roll bodies stacked there.
+const BODY_CELL: f32 = 6.0;
+
+/// How many of those there are on a lane `lane_len` long, past both ends.
+fn body_cells(lane_len: f32) -> usize {
+    ((lane_len + HIT_X + 2.0 * BIG_R) / BODY_CELL).max(0.0) as usize + 2
+}
+
+/// The closest two roll ticks are drawn (lane units): they're 8 across.
+const TICK_GAP: f32 = 2.0;
 
 /// Shapeshift's shapes, by the index `shapeshift::SHAPES` names them with.
 const SHAPESHIFT: [RailShape; 7] = [
@@ -3990,6 +4000,8 @@ impl Game {
             cracks: self.cracks_at(t, lane_len),
         };
         let bent = geo.bent() || portal.is_some();
+        // The stretches of a bent lane a solid roll body lies on already.
+        let mut body_laid = vec![false; if bent { body_cells(lane_len) } else { 0 }];
         // Where on screen something `s` along the lane is drawn, `side` off its middle: through
         // the portal, onto the (bent, broken) lane. Also its heading and size.
         let place = |s: f32, side: f32| -> (f32, f32, f32, f32) {
@@ -4687,17 +4699,38 @@ impl Game {
                     };
                     let body_r = r * 0.86;
                     if bent {
-                        // The body follows the lane in short pieces (none across a portal).
+                        // The body follows the lane in short pieces (none across a portal). Where
+                        // a body already lies, another adds nothing to see: gimmick maps stack
+                        // hundreds along a long rail, millions of pieces a frame, more than a
+                        // graphics card can hold.
                         let (from, to) = (s0.max(-HIT_X - r), s1.min(lane_len + r));
                         let steps = ((to - from) / 6.0).ceil().max(1.0) as usize;
-                        let pts: Vec<(f32, f32)> = (0..=steps)
-                            .map(|k| place(from + (to - from) * k as f32 / steps as f32, 0.0))
-                            .map(|p| (p.0, p.1))
+                        let along = |k: usize| from + (to - from) * k as f32 / steps as f32;
+                        let at = |s: f32| {
+                            let p = place(s, 0.0);
+                            (p.0, p.1)
+                        };
+                        let cell = |s: f32| ((s + HIT_X + BIG_R) / BODY_CELL).max(0.0) as usize;
+                        let pieces: Vec<_> = (0..steps)
+                            .filter(|&k| {
+                                let mid = (along(k) + along(k + 1)) / 2.0;
+                                !body_laid.get(cell(mid)).is_some_and(|&laid| laid)
+                            })
+                            .map(|k| (at(along(k)), at(along(k + 1))))
                             .collect();
                         for (rr, col) in [(body_r + 2.5, rgba(WHITE, a)), (body_r, rgba(ROLL, a))] {
-                            for p in pts.windows(2) {
-                                if (p[1].0 - p[0].0).hypot(p[1].1 - p[0].1) < 20.0 {
-                                    segment(c, p[0], p[1], rr, col);
+                            for (p0, p1) in &pieces {
+                                if (p1.0 - p0.0).hypot(p1.1 - p0.1) < 20.0 {
+                                    segment(c, *p0, *p1, rr, col);
+                                }
+                            }
+                        }
+                        // Only a solid body hides what's under it.
+                        if a >= 0.99 {
+                            for k in 0..steps {
+                                let mid = (along(k) + along(k + 1)) / 2.0;
+                                if let Some(laid) = body_laid.get_mut(cell(mid)) {
+                                    *laid = true;
                                 }
                             }
                         }
@@ -4748,9 +4781,14 @@ impl Game {
                     }
                     // Ticks in sliderscorepoint's own colour, as stable draws them, and only on
                     // the body: a last one rounded past the end isn't drawn beyond it.
+                    // Ticks too close to tell apart are one: a gimmick roll can have hundreds of
+                    // thousands on screen, more than a frame can hold.
+                    let mut drawn_at = None;
                     for (k, hit) in st.ticks.iter().enumerate() {
                         let ts = s_of(n.time + k as f64 * n.tick_spacing, n.velocity);
-                        if !hit && ts > s0 && ts <= s1 && ts < lane_len {
+                        let apart = drawn_at.is_none_or(|at| ts - at >= TICK_GAP);
+                        if !hit && ts > s0 && ts <= s1 && ts < lane_len && apart {
+                            drawn_at = Some(ts);
                             let (x, y, ..) = place(ts, 0.0);
                             if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(WHITE, a)) {
                                 c.circle(x, y, 4.0, rgba(WHITE, 0.85 * a), rgba(WHITE, 0.0), 0.0);
@@ -7308,6 +7346,64 @@ mod tests {
             }),
             None,
         )
+    }
+
+    /// A map of `rolls` drumrolls with ticks a hair apart, on screen together: the kind of gimmick
+    /// that once asked the graphics card for more shapes in a frame than it can hold.
+    fn map_of_dense_rolls(rolls: usize) -> Game {
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let template = map.notes[0].clone();
+        map.notes = (0..rolls)
+            .map(|i| beatmap::Note {
+                kind: Kind::Roll,
+                time: 2000.0 + i as f64,
+                end_time: 200_000.0,
+                tick_spacing: 0.5,
+                velocity: 0.02,
+                ..template.clone()
+            })
+            .collect();
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        Game::new(map, track, None)
+    }
+
+    #[test]
+    fn roll_bodies_stacked_on_a_bent_lane_dont_flood_the_frame() {
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        let template = map.notes[0].clone();
+        // As Kikuo - Gakkou o Yasunda Hi no Koto [Aspire]: long rolls, all at once, on the Maze.
+        map.notes = (0..400)
+            .map(|i| beatmap::Note {
+                kind: Kind::Roll,
+                time: 2000.0 + i as f64,
+                end_time: 400_000.0,
+                velocity: 0.4,
+                ..template.clone()
+            })
+            .collect();
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        let mut g = Game::with_seed(map, track, None, Mods::parse("MZ"), 42);
+        g.time = 1990.0;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        assert!(c.shapes.len() < 100_000, "{} shapes", c.shapes.len());
+    }
+
+    #[test]
+    fn ticks_too_close_to_tell_apart_dont_flood_the_frame() {
+        let mut g = map_of_dense_rolls(8);
+        g.time = 1990.0;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        assert!(c.shapes.len() < 50_000, "{} shapes", c.shapes.len());
     }
 
     #[test]
