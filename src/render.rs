@@ -1392,6 +1392,12 @@ impl Renderer {
         avg
     }
 
+    /// The most shapes a frame can have: what the graphics card takes in one buffer. A frame with
+    /// more loses the rest for that frame, rather than the game crashing on it.
+    fn shape_limit(&self) -> usize {
+        limit_of(self.device.limits().max_buffer_size)
+    }
+
     fn make_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("instances"),
@@ -1893,7 +1899,7 @@ impl Renderer {
             ok
         });
         if shapes.len() > self.capacity {
-            self.capacity = shapes.len().next_power_of_two();
+            self.capacity = shapes.len().next_power_of_two().min(self.shape_limit());
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
         let globals = Globals {
@@ -2092,6 +2098,7 @@ impl Renderer {
         h: u32,
         clear: [f64; 3],
     ) -> Option<Vec<u8>> {
+        let shapes = &shapes[..shapes.len().min(self.shape_limit())];
         let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = clips
             .iter()
             .filter(|(range, _)| range.start < range.end && range.end <= shapes.len())
@@ -2105,7 +2112,7 @@ impl Renderer {
             })
             .collect();
         if shapes.len() > self.capacity {
-            self.capacity = shapes.len().next_power_of_two();
+            self.capacity = shapes.len().next_power_of_two().min(self.shape_limit());
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
         let globals = Globals {
@@ -2411,6 +2418,11 @@ impl Renderer {
             pass.draw(0..4, at..count as u32);
         }
     }
+}
+
+/// How many shapes fit in a buffer of `bytes`.
+fn limit_of(bytes: u64) -> usize {
+    (bytes / std::mem::size_of::<Shape>() as u64) as usize
 }
 
 thread_local! {
@@ -3638,5 +3650,20 @@ mod tests {
             .validate(&module)
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod shape_limit_tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_never_asks_for_a_bigger_buffer_than_the_card_has() {
+        // The crash: 2^22 shapes wanted 285212672 bytes of a card's 268435456.
+        let max = 268_435_456;
+        let limit = limit_of(max);
+        assert!((limit * std::mem::size_of::<Shape>()) as u64 <= max);
+        let capacity = (limit + 1000).next_power_of_two().min(limit);
+        assert!((capacity * std::mem::size_of::<Shape>()) as u64 <= max);
     }
 }
