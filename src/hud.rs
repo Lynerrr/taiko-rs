@@ -362,6 +362,15 @@ pub struct Placed {
     pub k: f32,
 }
 
+/// Where mods have taken the lane, the drum and the hit point this frame: x, y, width, height in
+/// the playfield's own units.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct FieldBoxes {
+    pub lane: [f32; 4],
+    pub drum: [f32; 4],
+    pub hit: [f32; 4],
+}
+
 /// Where the targets are on a screen `w` wide with the playfield at `area` (x, y, width, height).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Frames {
@@ -393,6 +402,18 @@ impl Frames {
             k,
             w,
         }
+    }
+
+    /// With the lane, drum and hit point where mods put them, in the playfield `area`.
+    pub fn with_field(mut self, area: Area, boxes: Option<FieldBoxes>) -> Frames {
+        let Some(b) = boxes else { return self };
+        let (ox, oy) = (area.x * self.w, area.y * VIRTUAL_HEIGHT);
+        let on_screen =
+            |[x, y, w, h]: [f32; 4]| [ox + x * self.k, oy + y * self.k, w * self.k, h * self.k];
+        self.rects[2] = on_screen(b.lane);
+        self.rects[3] = on_screen(b.drum);
+        self.rects[4] = on_screen(b.hit);
+        self
     }
 
     pub fn rect(&self, t: Target) -> [f32; 4] {
@@ -574,7 +595,7 @@ impl Default for Layout {
 }
 
 impl Layout {
-    fn index(p: Part) -> usize {
+    pub fn index(p: Part) -> usize {
         Part::ALL.iter().position(|&a| a == p).unwrap_or(0)
     }
 
