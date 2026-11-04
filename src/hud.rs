@@ -291,6 +291,11 @@ impl Target {
         }
     }
 
+    /// One of what mods move about with the lane.
+    fn on_the_lane(self) -> bool {
+        matches!(self, Target::Lane | Target::Drum | Target::HitPoint)
+    }
+
     pub fn next(self) -> Target {
         let i = Target::ALL.iter().position(|&t| t == self).unwrap_or(0);
         Target::ALL[(i + 1) % Target::ALL.len()]
@@ -333,6 +338,9 @@ pub struct Place {
     pub y: Axis,
     pub scale: f32,
 }
+
+/// How close to the lane (units) a dragged part has to be to go on it.
+const NEAR_LANE: f32 = 40.0;
 
 pub const MIN_SCALE: f32 = 0.25;
 pub const MAX_SCALE: f32 = 4.0;
@@ -485,9 +493,10 @@ impl Frames {
     }
 
     /// `place`, whose box is `b`, dragged to `x`, `y`. With `snap`, each axis of the box catches
-    /// on a target's edges and centre within `tol` units, and is attached there; on a line of
-    /// `snap`'s own (the other parts') or on nothing, it's attached to the lane, so that it goes
-    /// where the lane does under mods. Without `snap` it stays attached as it was.
+    /// on a target's edges and centre within `tol` units, and is attached there; or on a line of
+    /// `snap`'s own (the other parts'). Close to the lane, a part goes on it, whatever it caught
+    /// on or if nothing, so that it goes where the lane does under mods. Away from it, nothing of
+    /// the lane catches it and it lets go of the lane. Without `snap` it stays attached as it was.
     pub fn dragged(
         &self,
         place: &Place,
@@ -503,21 +512,41 @@ impl Frames {
         let (mut ax, mut ay) = (place.x, place.y);
         let mut guides = Vec::new();
         if let Some(s) = snap {
+            let near = self.near_lane(to);
             let (mut on_x, mut on_y) = (None, None);
-            if let Some((line, on)) = self.catch(to.x, to.w, 0, &s.xs, s.tol) {
+            if let Some((line, on)) = self.catch(to.x, to.w, 0, &s.xs, s.tol, near) {
                 to.x = line - on.map_or(snap_pivot(line, to.x, to.w), |a| a.pivot) * to.w;
                 on_x = on;
                 guides.push(Guide::Vertical(line / self.w.max(1.0)));
             }
-            if let Some((line, on)) = self.catch(to.y, to.h, 1, &s.ys, s.tol) {
+            if let Some((line, on)) = self.catch(to.y, to.h, 1, &s.ys, s.tol, near) {
                 to.y = line - on.map_or(snap_pivot(line, to.y, to.h), |a| a.pivot) * to.h;
                 on_y = on;
                 guides.push(Guide::Horizontal(line / VIRTUAL_HEIGHT));
             }
-            ax = on_x.unwrap_or_else(|| self.along_lane(to));
-            ay = on_y.unwrap_or_else(|| self.off_lane(to));
+            ax = on_x.unwrap_or_else(|| {
+                if near {
+                    self.along_lane(to)
+                } else {
+                    off_the_lane(ax, (to.x + to.w / 2.0) / self.w.max(1.0))
+                }
+            });
+            ay = on_y.unwrap_or_else(|| {
+                if near {
+                    self.off_lane(to)
+                } else {
+                    off_the_lane(ay, (to.y + to.h / 2.0) / VIRTUAL_HEIGHT)
+                }
+            });
         }
         (self.placing(ax, ay, to), guides)
+    }
+
+    /// Whether `b` is over the lane, or this close above or under it.
+    fn near_lane(&self, b: Placed) -> bool {
+        let r = self.rect(Target::Lane);
+        let reach = NEAR_LANE * self.k;
+        b.y < r[1] + r[3] + reach && b.y + b.h > r[1] - reach
     }
 
     /// Attached along the lane: by its left end, middle or right end, whichever `b` is nearest.
@@ -550,6 +579,7 @@ impl Frames {
         start: usize,
         others: &[f32],
         tol: f32,
+        near: bool,
     ) -> Option<(f32, Option<Axis>)> {
         const STOPS: [f32; 3] = [0.0, 0.5, 1.0];
         let mut best: Option<(f32, f32, Option<Axis>)> = None;
@@ -560,6 +590,9 @@ impl Frames {
             }
         };
         for target in Target::SNAP_ORDER {
+            if !near && target.on_the_lane() {
+                continue;
+            }
             let r = self.rect(target);
             for at in STOPS {
                 let line = r[start] + at * r[start + 2];
@@ -596,6 +629,15 @@ impl Frames {
         } else {
             self.placing(place.x, new, b)
         }
+    }
+}
+
+/// `a`, or if it's on the lane the screen instead, by the side `at` (a fraction of it) is on.
+fn off_the_lane(a: Axis, at: f32) -> Axis {
+    if a.target.on_the_lane() {
+        on_screen((at * 2.0).round().clamp(0.0, 2.0) / 2.0, 0.0)
+    } else {
+        a
     }
 }
 
@@ -958,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn a_part_dropped_anywhere_hangs_on_the_lane_from_the_side_its_on() {
+    fn a_part_dropped_near_the_lane_goes_on_it_from_the_side_its_on() {
         let f = Frames::new(800.0, FULL);
         let p = Place::new(on_screen(0.0, 100.0), on_screen(0.0, 100.0));
         let size = [100.0, 20.0];
@@ -968,15 +1010,15 @@ mod tests {
             xs: Vec::new(),
             ys: Vec::new(),
         };
-        let lane_top = LANE_Y - LANE_H / 2.0;
+        let (top, bottom) = (LANE_Y - LANE_H / 2.0, LANE_Y + LANE_H / 2.0);
         for (to, at_y, at_x) in [
-            ((20.0, lane_top - 70.0), 0.0, 0.0),
-            ((620.0, lane_top - 70.0), 0.0, 1.0),
-            ((20.0, 400.0), 1.0, 0.0),
-            ((340.0, 400.0), 1.0, 0.5),
+            ((20.0, top - 45.0), 0.0, 0.0),
+            ((620.0, top - 45.0), 0.0, 1.0),
+            ((20.0, bottom + 20.0), 1.0, 0.0),
+            ((340.0, bottom + 20.0), 1.0, 0.5),
         ] {
             let (moved, guides) = f.dragged(&p, b, to, Some(&snap));
-            assert!(guides.is_empty(), "nothing near {to:?}");
+            assert!(guides.is_empty(), "nothing to catch at {to:?}");
             assert_eq!(
                 (moved.x.target, moved.y.target),
                 (Target::Lane, Target::Lane)
@@ -986,6 +1028,47 @@ mod tests {
             near(there.x, to.0);
             near(there.y, to.1);
         }
+    }
+
+    #[test]
+    fn a_part_dropped_away_from_the_lane_isnt_on_it() {
+        let f = Frames::new(800.0, FULL);
+        let size = [100.0, 20.0];
+        let snap = Snapping {
+            tol: 6.0,
+            xs: Vec::new(),
+            ys: Vec::new(),
+        };
+        let to = (340.0, 400.0);
+        // Left where it was attached, off the lane...
+        let p = Place::new(on_screen(0.0, 100.0), on_screen(0.0, 100.0));
+        let (moved, _) = f.dragged(&p, f.resolve(&p, size, true), to, Some(&snap));
+        assert_eq!(
+            (moved.x.target, moved.y.target),
+            (Target::Screen, Target::Screen)
+        );
+        // ...and let go by the lane, staying where it's dropped and at its size.
+        let on = Place::new(
+            axis(Target::Lane, 0.5, 0.5, 0.0),
+            axis(Target::Lane, 1.0, 0.0, 0.0),
+        );
+        let b = f.resolve(&on, size, true);
+        let (moved, _) = f.dragged(&on, b, to, Some(&snap));
+        assert!(!moved.follows_playfield());
+        let there = f.resolve(&moved, size, true);
+        near(there.x, to.0);
+        near(there.y, to.1);
+        near(there.w, b.w);
+        // Nothing of the lane catches it there, its ends in line with the screen's or not.
+        let edge = (0.0, 400.0);
+        let (moved, _) = f.dragged(&p, f.resolve(&p, size, true), edge, Some(&snap));
+        assert_eq!(moved.x.target, Target::Playfield);
+        // Holding Shift leaves it attached as it was.
+        let (moved, _) = f.dragged(&on, b, to, None);
+        assert_eq!(
+            (moved.x.target, moved.y.target),
+            (Target::Lane, Target::Lane)
+        );
     }
 
     #[test]
@@ -1021,7 +1104,7 @@ mod tests {
     }
 
     #[test]
-    fn another_parts_line_lines_a_part_up_and_it_hangs_on_the_lane() {
+    fn another_parts_line_aligns_without_changing_what_its_attached_to() {
         let f = Frames::new(800.0, FULL);
         let p = Place::new(on_screen(0.0, 100.0), on_screen(0.0, 100.0));
         let b = f.resolve(&p, [50.0, 10.0], true);
@@ -1031,7 +1114,7 @@ mod tests {
             ys: Vec::new(),
         };
         let (moved, guides) = f.dragged(&p, b, (200.0, 70.0), Some(&snap));
-        assert_eq!(moved.x.target, Target::Lane);
+        assert_eq!(moved.x.target, Target::Screen);
         near(f.resolve(&moved, [50.0, 10.0], true).x, 203.0);
         assert_eq!(guides.len(), 1);
     }
