@@ -2575,6 +2575,8 @@ pub enum Hit {
     PlayerRow(usize),
     /// Its heart on a song, the folders button, and a folder (index into `Playlist::folders`).
     PlayerFavourite(usize),
+    /// Song select's heart on the song it's showing.
+    SelectLike,
     PlayerFolders,
     PlayerFolder(usize),
     PlayerQueue(usize),

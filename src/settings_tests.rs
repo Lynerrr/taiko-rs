@@ -334,6 +334,62 @@ fn watching_a_play_of_a_map_being_downloaded_shows_how_far_along_it_is() {
 }
 
 #[test]
+fn the_account_button_opens_your_profile_in_the_game() {
+    let mut s = layout_tests::state();
+    s.mp_menu.account = Some("Player".into());
+    s.click(render::Hit::Account, None);
+    assert_eq!(s.profile.as_ref().map(|p| p.name.as_str()), Some("Player"));
+    // And the profile offers the website.
+    let mut c = Canvas::default();
+    s.build_frame(&mut c, Instant::now(), 853.3);
+    assert!(
+        s.hits
+            .iter()
+            .any(|h| h.hit == render::Hit::Key(winit::keyboard::KeyCode::KeyB))
+    );
+    assert!(profile_url("Player").ends_with("/u/Player"));
+}
+
+#[test]
+fn a_song_liked_on_song_select_is_a_favourite_for_the_player_too() {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let i = s.preview_target().expect("a song is showing");
+    assert!(!s.select.is_liked(&s.library[i]));
+    s.click(render::Hit::SelectLike, None);
+    assert!(s.select.is_liked(&s.library[i]));
+    assert!(
+        s.select
+            .favourites
+            .contains(&playlist::favourite_key(&s.library[i]))
+    );
+    s.click(render::Hit::SelectLike, None);
+    assert!(!s.select.is_liked(&s.library[i]));
+}
+
+#[test]
+fn a_songs_menu_likes_it() {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.select.menu = Some(ui::SongMenu {
+        row: s.select.cursor(),
+        header: true,
+        x: 100.0,
+        y: 100.0,
+    });
+    let i = s.select.menu_map().unwrap();
+    let items = s.select.menu_items(&s.library);
+    assert!(items[0].0.starts_with("Like") && items[0].1 == ui::MenuAction::Like);
+    s.click(render::Hit::SongMenu(0), None);
+    assert!(s.select.is_liked(&s.library[i]));
+    assert!(s.select.menu.is_none());
+}
+
+#[test]
 fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);

@@ -11,7 +11,7 @@ use crate::beatmap::{self, Beatmap, Kind};
 use crate::difficulty::{self, Graph};
 use crate::game::{self, Game};
 use crate::library::Entry;
-use crate::render::{Canvas, VIRTUAL_HEIGHT, accent, rgba};
+use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, accent, rgba};
 
 /// While scrolling, wait this long after the selection settles before loading, so scrolling
 /// stays cheap. A single change after a quiet moment loads at once.
@@ -831,6 +831,7 @@ impl Preview {
         stars: Option<f32>,
         button: Option<(&str, &str)>,
         status: Option<(&str, u32)>,
+        liked: Option<bool>,
     ) -> Option<(std::ops::Range<usize>, crate::layout::Area)> {
         // The preview shows ~640 units of lane (several notes ahead), so its height follows the
         // panel width; the panel shrinks to fit instead of leaving empty space.
@@ -1019,7 +1020,28 @@ impl Preview {
             }
             None => 0.0,
         };
-        let mapper = Canvas::fit(8.0, iw - status_w, &format!("mapped by {}", e.meta.creator));
+        // The heart, left of the status: whether the song's liked, and a click changes it.
+        let heart_w = match liked {
+            Some(liked) => {
+                const HEART_W: f32 = 16.0;
+                let hx = x + w - 14.0 - status_w - HEART_W;
+                let hover = c.hovered(hx, cy, HEART_W, 13.0);
+                let colour = match (liked, hover) {
+                    (true, _) => 0xff5fa2,
+                    (false, true) => 0xc8c8d8,
+                    (false, false) => 0x5a5a70,
+                };
+                crate::player::draw_heart(c, hx + 3.5, cy + 2.5, 1.0, colour);
+                c.hit(hx, cy, HEART_W, 13.0, Hit::SelectLike);
+                HEART_W + 6.0
+            }
+            None => 0.0,
+        };
+        let mapper = Canvas::fit(
+            8.0,
+            iw - status_w - heart_w,
+            &format!("mapped by {}", e.meta.creator),
+        );
         c.text(
             lx,
             cy + (13.0 - th_small) / 2.0,
@@ -1353,6 +1375,7 @@ mod beat_tests {
                     1.0,
                     None,
                     Some(("Play from", "Shift+Enter")),
+                    None,
                     None,
                 )
                 .is_some();
